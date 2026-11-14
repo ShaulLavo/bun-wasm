@@ -1,0 +1,42 @@
+name: Restore CI cache
+description: Restore isolated working paths from local snapshots on PC or GitHub caches on hosted runners
+inputs:
+  path:
+    description: Newline-separated paths and globs to restore
+    required: true
+  key:
+    description: Existing effective cache key
+    required: true
+  restore-keys:
+    description: Ordered compatible key prefixes
+    default: ''
+outputs:
+  cache-hit:
+    description: True only for an exact cache key match
+    value: ${{ steps.local.outputs.cache-hit || steps.hosted.outputs.cache-hit }}
+  cache-primary-key:
+    description: Requested key, including on a miss
+    value: ${{ inputs.key }}
+  cache-matched-key:
+    description: Matched immutable snapshot key, empty on a miss
+    value: ${{ steps.local.outputs.cache-matched-key || steps.hosted.outputs.cache-matched-key }}
+runs:
+  using: composite
+  steps:
+    - id: local
+      if: runner.environment == 'self-hosted'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BUN_WASM_PC_CACHE_ROOT: /work/ci-runner/bun-wasm/cache
+        CACHE_PATHS: ${{ inputs.path }}
+        CACHE_KEY: ${{ inputs.key }}
+        CACHE_RESTORE_KEYS: ${{ inputs.restore-keys }}
+      run: node "$GITHUB_WORKSPACE/scripts/ci-runner/cache.ts" restore
+    - id: hosted
+      if: runner.environment != 'self-hosted'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}
+        restore-keys: ${{ inputs.restore-keys }}

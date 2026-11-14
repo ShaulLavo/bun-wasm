@@ -15,14 +15,14 @@ runs:
         SNAPSHOT_PATH: ${{ runner.temp }}/sccache-inventory.json
       run: |
         bun "$GITHUB_WORKSPACE/scripts/ci-sccache-cache.ts" plan "$CACHE_PATH" "$SNAPSHOT_PATH"
-    - uses: actions/cache/save@v4
+    - uses: ./.github/actions/save-ci-cache
       id: publish
       if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.budget.outputs.changed == 'true' && steps.budget.outputs.fits == 'true'
       with:
         path: ${{ runner.temp }}/sccache
         key: ${{ inputs.key }}-${{ steps.budget.outputs.fingerprint }}-${{ github.run_id }}-${{ github.run_attempt }}
     - name: Retain two compiler object snapshots after replacement is visible
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.budget.outputs.changed == 'true' && steps.budget.outputs.fits == 'true' && steps.publish.outcome == 'success'
+      if: runner.environment != 'self-hosted' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.budget.outputs.changed == 'true' && steps.budget.outputs.fits == 'true' && steps.publish.outcome == 'success'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}

@@ -88,6 +88,11 @@
         "scripts/stream-polyfill-node-hooks.ts",
         "scripts/http-suite-report.ts",
         "scripts/ci-report.ts",
+        "scripts/ci-runner/controller.ts",
+        "scripts/ci-runner/host.ts",
+        "scripts/ci-runner/source-proof.ts",
+        "scripts/ci-runner/verify-vm.ts",
+        "scripts/ci-runner/verify-cache-vm.ts",
         "tests/shell-consumer/{main,worker,fs-worker,notification-worker,sw}.ts"
       ],
       "project": [
@@ -173,6 +178,7 @@
     }
   },
   "ignoreBinaries": [
+    "systemd-run",
     "flock",
     "mkfifo",
     "unshare",

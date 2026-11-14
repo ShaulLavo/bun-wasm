@@ -22,14 +22,14 @@ const groups = files.flatMap(file => {
   if (document.runs) return [{ file, job: "composite", steps: steps(record(document.runs).steps) }];
   return Object.entries(record(document.jobs)).map(([job, value]) => ({ file, job, steps: steps(record(value).steps) }));
 });
-const caches = groups.flatMap(group => group.steps.filter(step => /^actions\/cache(?:\/|@)/.test(String(step.uses))).map(step => ({ ...group, step, label: String(step.name ?? step.id ?? step.uses) })));
-const writers = caches.filter(({ step }) => step.uses !== "actions/cache/restore@v4");
+const caches = groups.flatMap(group => group.steps.filter(step => /^\.\/\.github\/actions\/(?:restore|save)-ci-cache$/.test(String(step.uses))).map(step => ({ ...group, step, label: String(step.name ?? step.id ?? step.uses) })));
+const writers = caches.filter(({ step }) => step.uses !== "./.github/actions/restore-ci-cache");
 
-function allows(step: Record<string, unknown>, event: string, ref: string, hit = "false", changed = "true"): boolean {
-  const values: Record<string, string> = { "github.event_name": event, "github.ref": ref, "inputs.cache-hit": hit, "inputs.sysroot": "build", "inputs.shared-native": "true", "steps.budget.outputs.fits": "true", "steps.publish.outcome": "success" };
+function allows(step: Record<string, unknown>, event: string, ref: string, hit = "false", changed = "true", runner = "github-hosted"): boolean {
+  const values: Record<string, string> = { "runner.environment": runner, "github.event_name": event, "github.ref": ref, "inputs.cache-hit": hit, "inputs.sysroot": "build", "inputs.shared-native": "true", "steps.budget.outputs.fits": "true", "steps.publish.outcome": "success" };
   const expression = String(step.if ?? "true").replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replace(/success\(\)/g, "true").replace(/cancelled\(\)/g, "false")
-    .replace(/(?:github|steps|needs|inputs)\.[\w.-]+/g, name => {
+    .replace(/(?:runner|github|steps|needs|inputs)\.[\w.-]+/g, name => {
       if (name in values) return JSON.stringify(values[name]);
       if (name.endsWith(".cache-hit")) return JSON.stringify(hit);
       if (name.endsWith(".cache-matched-key")) return JSON.stringify("");
@@ -52,17 +52,21 @@ test("cache audit includes every local workflow and composite writer", () => {
 });
 
 test.each(writers)("$file $job $label saves only reusable main caches", ({ step }) => {
-  expect(step.uses).toBe("actions/cache/save@v4");
-  expect(allows(step, "push", "refs/heads/main")).toBe(true);
-  expect(allows(step, "pull_request", "refs/pull/598/merge")).toBe(false);
-  expect(allows(step, "pull_request_target", "refs/heads/main")).toBe(false);
-  expect(allows(step, "push", "refs/heads/feature")).toBe(false);
-  expect(allows(step, "workflow_dispatch", "refs/heads/main")).toBe(false);
-  if (String(step.if).includes("cache-hit")) expect(allows(step, "push", "refs/heads/main", "true")).toBe(false);
+  expect(step.uses).toBe("./.github/actions/save-ci-cache");
+  const runners = ["github-hosted", "self-hosted"];
+  const expected = step.name === "Save completed PC Bun dependency cache" ? ["self-hosted"] : runners;
+  expect(runners.filter(runner => allows(step, "push", "refs/heads/main", "false", "true", runner))).toEqual(expected);
+  for (const runner of runners) {
+    expect(allows(step, "pull_request", "refs/pull/598/merge", "false", "true", runner)).toBe(false);
+    expect(allows(step, "pull_request_target", "refs/heads/main", "false", "true", runner)).toBe(false);
+    expect(allows(step, "push", "refs/heads/feature", "false", "true", runner)).toBe(false);
+    expect(allows(step, "workflow_dispatch", "refs/heads/main", "false", "true", runner)).toBe(false);
+    if (String(step.if).includes("cache-hit")) expect(allows(step, "push", "refs/heads/main", "true", "true", runner)).toBe(false);
+  }
 });
 
 test("PRs can still restore all shared caches, including compiler objects and tools", () => {
-  for (const { step } of caches.filter(({ step }) => step.uses === "actions/cache/restore@v4")) {
+  for (const { step } of caches.filter(({ step }) => step.uses === "./.github/actions/restore-ci-cache")) {
     expect(String(step.if ?? "")).not.toContain("github.event_name");
     expect(String(step.if ?? "")).not.toContain("github.ref");
   }
@@ -71,14 +75,14 @@ test("PRs can still restore all shared caches, including compiler objects and to
     const restore = group?.steps.find(step => step.uses === "./.github/actions/rust-build-cache");
     expect(restore).toBeDefined();
     expect(restore).not.toHaveProperty("if");
-    expect(group?.steps.find(step => step.id === "wasm-tools-cache")?.uses).toBe("actions/cache/restore@v4");
+    expect(group?.steps.find(step => step.id === "wasm-tools-cache")?.uses).toBe("./.github/actions/restore-ci-cache");
   }
 });
 
 test("Rust objects restore compatible generations and save only changed inventories", () => {
   const group = groups.find(group => group.file === "actions/rust-build-cache/action.yml");
   const restore = group?.steps.find(step => step.id === "objects");
-  expect(restore?.uses).toBe("actions/cache/restore@v4");
+  expect(restore?.uses).toBe("./.github/actions/restore-ci-cache");
   const config = record(restore?.with);
   expect(config.path).toBe("${{ runner.temp }}/sccache");
   const action = record(Bun.YAML.parse(readFileSync(resolve(github, "actions/rust-build-cache/action.yml"), "utf8")));
@@ -106,7 +110,7 @@ test("Rust objects restore compatible generations and save only changed inventor
 
 test("release download saves still require a changed inventory", () => {
   const group = groups.find(group => group.file === "actions/save-release-downloads/action.yml");
-  const saves = group?.steps.filter(step => step.uses === "actions/cache/save@v4") ?? [];
+  const saves = group?.steps.filter(step => step.uses === "./.github/actions/save-ci-cache") ?? [];
   expect(saves).toHaveLength(2);
   for (const save of saves) expect(allows(save, "push", "refs/heads/main", "false", "false")).toBe(false);
 });
@@ -132,7 +136,7 @@ test("compiler-object rotation is main-only and waits for a successful changed s
 test("Rust snapshot plans reject oversized learned objects and suppress unchanged archives", async () => {
   const group = groups.find(group => group.file === "actions/save-rust-build-cache/action.yml");
   const budget = group?.steps.find(step => step.id === "budget");
-  const save = group?.steps.find(step => step.uses === "actions/cache/save@v4");
+  const save = group?.steps.find(step => step.uses === "./.github/actions/save-ci-cache");
   const command = budget?.run;
   if (typeof command !== "string" || !save) throw new Error("Missing Rust seed size gate");
   expect(String(save.if)).toContain("steps.budget.outputs.fits == 'true'");

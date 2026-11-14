@@ -7,6 +7,24 @@ import { join } from "node:path";
 import { changedPaths, needsJsc, needsRust, needsSharedNative, needsSharedSysroot } from "./ci-changes";
 import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
+test.each([
+  ".github/actions/restore-ci-cache/action.yml", ".github/actions/save-ci-cache/action.yml",
+  "scripts/ci-runner/cache.ts", "scripts/ci-runner/controller.ts", "scripts/ci-runner/vm/lifecycle.ts",
+])("future cache or runner-only change %s selects every affected native producer", path => {
+  const paths = [path];
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(true);
+  expect(needsSharedSysroot(paths)).toBe(true);
+  expect(needsSharedNative(paths)).toBe(true);
+});
+
+test.each(["scripts/ci-runner-other/cache.ts", ".github/actions/restore-other-cache/action.yml"])("PC classifier does not capture unrelated lookalike %s", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsJsc([path])).toBe(false);
+  expect(needsSharedSysroot([path])).toBe(false);
+  expect(needsSharedNative([path])).toBe(false);
+});
+
 test("ordinary SpiderMonkey recipes, nested runtime inputs and each reviewed fixture select Rust", () => {
   const paths = ["spidermonkey/mozconfig.in", "spidermonkey/prepare-engine-inputs.ts", "spidermonkey/unresolved-symbols.json",
     "scripts/spidermonkey-ordinary-ci.ts", "scripts/spidermonkey-ordinary-ci.test.ts", "scripts/spidermonkey-ordinary-fixtures.ts",

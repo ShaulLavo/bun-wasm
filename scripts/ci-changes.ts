@@ -3,13 +3,16 @@ import { discoverChecks } from "./test-checks";
 import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-check-inputs";
 import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
+function pcRunnerInput(path: string): boolean {
+  return path.startsWith("scripts/ci-runner/") || /^\.github\/actions\/(?:restore|save)-ci-cache\/action\.yml$/.test(path);
+}
+
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "scripts/ci-program-delivery.ts",
   "scripts/ci-browser-program.ts", "scripts/build-bun-browser.sh",
   "scripts/ci-ordinary-jsc-program.ts",
   "scripts/ci-jsc-artifact.ts",
-  "scripts/ci-main-coverage.ts",
   "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js",
   "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml", ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
@@ -35,7 +38,7 @@ const sharedSysrootFiles = new Set([
   "scripts/ci-build-tools.ts", "scripts/ci-binaryen.ts",
   ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
   ".github/actions/shared-jsc-setup/action.yml", ".github/actions/shared-jsc-prebuild/action.yml",
-  "scripts/ci-main-coverage.ts", "scripts/ci-check-inputs.ts", "scripts/ci-refs.ts",
+  "scripts/ci-check-inputs.ts", "scripts/ci-refs.ts",
   ".github/workflows/ci.yml", "env.sh", "scripts/ci-changes.ts", "scripts/build-wasi-sysroot.ts",
   "scripts/build-shared-wasi-libc.sh", "scripts/test-shared-sysroot.sh", "scripts/shared-sysroot-proof.ts",
   "scripts/shared-sysroot-native.ts", "tests/fixtures/shared-sysroot/member.c", "patches/wasi-libc/group-grow.patch",
@@ -45,7 +48,7 @@ const sharedSysrootFiles = new Set([
 ]);
 
 export function needsSharedSysroot(paths: readonly string[]): boolean {
-  return paths.some(path => sharedSysrootFiles.has(path));
+  return paths.some(path => pcRunnerInput(path) || sharedSysrootFiles.has(path));
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
@@ -54,8 +57,10 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   ".github/actions/shared-jsc-setup/action.yml", ".github/actions/shared-jsc-prebuild/action.yml",
   "scripts/producer-diagnostics.ts",
   "scripts/ci-jsc-artifact.ts",
-  "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
+  "scripts/ci-refs.ts",
   "scripts/ci-spidermonkey-prebuild.ts", "scripts/ci-spidermonkey-prebuild.test.ts", "checks/quality-ci-spidermonkey-prebuild.json",
+  "scripts/ci-bootstrap-tools.ts", "scripts/ci-install.ts", "scripts/ci-stage-release-packages.ts",
+  "scripts/ci-release-download.ts", "scripts/ci-build-tools.ts",
   "scripts/spidermonkey-browser-ci.test.ts", "checks/quality-spidermonkey-browser-ci.json",
   "scripts/spidermonkey-browser-stack.test.ts", "checks/quality-spidermonkey-browser-stack.json",
   "web/tests/shared-wasm-agent/spidermonkey-stack-proof.ts",
@@ -86,10 +91,11 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   // The parent-and-Worker parser reserve ownership case that consumer runs in each group.
   "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",
 ]);
-const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/", "spidermonkey/"];
+const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/", "spidermonkey/",
+  ".github/actions/setup-tools/", ".github/actions/release-downloads/", ".github/actions/spidermonkey-", "scripts/ci-spidermonkey-"];
 export function needsSharedNative(paths: readonly string[], inputs: readonly string[] = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
-  return paths.some(path => !excludedNativeInput(path) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
+  return paths.some(path => !excludedNativeInput(path) && (pcRunnerInput(path) || sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
 }
 
 const nativeChecks = discoverChecks();
@@ -106,7 +112,7 @@ const jscFiles = new Set([
   "scripts/ci-program-delivery.ts",
   "scripts/ci-ordinary-jsc-program.ts",
   "scripts/ci-jsc-artifact.ts",
-  "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
+  "scripts/ci-refs.ts",
   "scripts/install-tarballs.test.ts", "scripts/install-metadata.test.ts", "scripts/install-fixture-command.ts", "scripts/install-fixture-command.test.ts",
   "scripts/install-download-fixture.ts", "scripts/install-demand-fixture.ts",
   "checks/runtime-install-tarballs.json", "checks/runtime-install-metadata.json", "checks/quality-install-fixture-command.json",
@@ -180,7 +186,7 @@ function ordinarySpiderMonkeyInput(path: string): boolean {
 }
 
 export function needsJsc(paths: readonly string[], inputs: readonly string[] = jscNativeCheckInputs): boolean {
-  return paths.some(path => path !== "jsc/README.md" && (sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs)));
+  return paths.some(path => path !== "jsc/README.md" && (pcRunnerInput(path) || sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs)));
 }
 
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {

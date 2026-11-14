@@ -13,7 +13,7 @@ runs:
         echo "CI_BOOTSTRAP_CACHE=$RUNNER_TEMP/github-release-bootstrap" >> "$GITHUB_ENV"
         echo "CI_BOOTSTRAP_CACHE_KEY=release-bootstrap-v1-${{ runner.os }}-${{ runner.arch }}" >> "$GITHUB_ENV"
         echo "CI_RELEASE_CACHE_KEY=release-assets-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.scope }}-${{ hashFiles('**/bun.lock', 'scripts/waffle-release-inputs.json', 'scripts/ci-*.ts', '.github/workflows/ci.yml', '.github/actions/rust-build-cache/action.yml') }}" >> "$GITHUB_ENV"
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       with:
         path: ${{ runner.temp }}/github-release-assets
         key: ${{ env.CI_RELEASE_CACHE_KEY }}-restore
@@ -25,7 +25,7 @@ runs:
         mkdir -p "$CI_RELEASE_CACHE"
         fingerprint=$(find "$CI_RELEASE_CACHE" -type f -printf '%P %s\n' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
         echo "CI_RELEASE_CACHE_INITIAL=$fingerprint" >> "$GITHUB_ENV"
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       with:
         path: ${{ runner.temp }}/github-release-bootstrap
         key: ${{ env.CI_BOOTSTRAP_CACHE_KEY }}-restore

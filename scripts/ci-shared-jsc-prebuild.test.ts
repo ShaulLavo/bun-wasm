@@ -307,6 +307,8 @@ function admitted(id: string, state: GraphState): boolean {
   const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("github.event_name", '"pull_request"')
     .replaceAll("github.event.pull_request.draft", "false")
+    .replaceAll("github.event.pull_request.head.repo.full_name", '"ShaulLavo/bun-wasm"')
+    .replaceAll("github.repository", '"ShaulLavo/bun-wasm"')
     .replaceAll("!cancelled()", String(!state.cancelled))
     .replaceAll("needs.selection.result", JSON.stringify(state.quality))
     .replaceAll("needs.selection.outputs.shared-native", JSON.stringify(String(state.sharedNative)))

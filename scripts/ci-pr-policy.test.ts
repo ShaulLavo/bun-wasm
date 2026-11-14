@@ -1,3 +1,4 @@
+import { ciRunner } from "./fixtures/ci-expressions";
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 
@@ -14,6 +15,8 @@ function admitted(job: Record<string, unknown>, event: string, draft: boolean, r
   const expression = job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("github.event_name", JSON.stringify(event))
     .replaceAll("github.event.pull_request.draft", String(draft))
+    .replaceAll("github.event.pull_request.head.repo.full_name", '"ShaulLavo/bun-wasm"')
+    .replaceAll("github.repository", '"ShaulLavo/bun-wasm"')
     .replaceAll("!cancelled()", "true")
     .replaceAll("always()", "true")
     .replaceAll("github.ref", JSON.stringify(ref))
@@ -37,7 +40,7 @@ test("draft PRs defer native and browser work until ready without changing push 
   }
 });
 
-test("main pushes replace pending runs while PR cancellation and isolated manual groups remain", () => {
+test("main pushes keep the running run and newest pending run while PR cancellation and manual groups remain", () => {
   expect(record(workflow.concurrency)).toEqual({
     group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref == 'refs/heads/main' && 'push-main' || format('run-{0}', github.run_id) }}",
     "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
@@ -55,6 +58,15 @@ test("main pushes replace pending runs while PR cancellation and isolated manual
   expect(group("workflow_dispatch", 1)).toBe("run-1");
   expect(group("workflow_dispatch", 2)).toBe("run-2");
   expect(group("push", 3, 0, "refs/heads/other")).toBe("run-3");
+  const cancels = (event: string, ref = "refs/heads/main") => {
+    const expression = String(record(workflow.concurrency)["cancel-in-progress"]).replace(/^\$\{\{ | }}$/g, "")
+      .replaceAll("github.event_name", JSON.stringify(event)).replaceAll("github.ref", JSON.stringify(ref));
+    return new Function(`return (${expression})`)();
+  };
+  expect(cancels("push")).toBe(false);
+  expect(cancels("pull_request")).toBe(true);
+  expect(cancels("workflow_dispatch")).toBe(false);
+  expect(cancels("push", "refs/heads/other")).toBe(false);
 });
 
 test("update statuses run only for manual checks of the standing update branch", () => {
@@ -71,7 +83,7 @@ test("update statuses run only for manual checks of the standing update branch",
 
 test("no job runs on Boat runners", () => {
   const formerBoatJobs = ["jsc-prebuild", "native-quality", "rust", "package", "shared-sysroot", "web", "browser-process"];
-  for (const id of formerBoatJobs) expect(record(jobs[id])["runs-on"], id).toBe("ubuntu-latest");
+  for (const id of formerBoatJobs) expect(ciRunner(record(jobs[id])["runs-on"]), id).toEqual(["ubuntu-latest"]);
   const boatJobs = Object.entries(jobs).filter(([, value]) => JSON.stringify(record(value)["runs-on"]).includes("boat"));
   expect(boatJobs.map(([id]) => id)).toEqual([]);
 });

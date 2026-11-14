@@ -160,7 +160,7 @@ test("native and Chromium consumers retain their selection, profile, launcher an
     expect(namedStep(consumer.name)).toEqual({ name: consumer.name, if: selection, run: consumer.run });
   }
   expect(shared.needs).toEqual(["selection", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
-  expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
+  expect(shared.if).toContain("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') &&");
   expect(shared["timeout-minutes"]).toBe(30);
   expect(namedStep("Produce the shared JSC profile once").env).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });
 });

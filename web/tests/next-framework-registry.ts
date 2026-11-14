@@ -56,12 +56,12 @@ function missingRegistryResponse(key: string, misses: string[], headers: Readonl
   return new Response(`Unrecorded ${key}`, { status: 503, headers: { ...headers, [recorderErrorHeader]: "1" } });
 }
 
-export function nextRegistry(directory: string, port: number, overlay?: string, originalIndexes?: readonly string[]) {
+export function nextRegistry(directory: string, port: number, overlay?: string, originalIndexes?: readonly string[], sharedDirectory = shared) {
   if (originalIndexes && originalIndexes.length !== (overlay ? 3 : 2)) throw new Error("Original replay index selection mismatch");
-  const borrowed = readRegistryIndex(shared, originalIndexes?.[0]);
+  const borrowed = readRegistryIndex(sharedDirectory, originalIndexes?.[0]);
   const supplemental = readRegistryIndex(directory, originalIndexes?.[1]);
   const advisories = overlay ? readRegistryIndex(overlay, originalIndexes?.[2]) : {};
-  verifyRegistryInventory(shared, borrowed, "shared");
+  verifyRegistryInventory(sharedDirectory, borrowed, "shared");
   verifyRegistryInventory(directory, supplemental, "supplemental");
   if (overlay) verifyRegistryInventory(overlay, advisories, "overlay");
   const requests: string[] = [];
@@ -77,7 +77,7 @@ export function nextRegistry(directory: string, port: number, overlay?: string, 
         requests.push(key);
         const entry = method === "POST" ? advisories[key] : supplemental[key] ?? borrowed[key];
         if (!entry) return missingRegistryResponse(key, misses, headers);
-        const root = method === "POST" && overlay ? overlay : supplemental[key] ? directory : shared;
+        const root = method === "POST" && overlay ? overlay : supplemental[key] ? directory : sharedDirectory;
         const filename = join(root, "objects", entry.sha256);
         if (method === "POST" && statSync(filename).size > advisoryResponseLimit) throw new Error("Advisory response exceeds limit");
         const bytes = readFileSync(filename);

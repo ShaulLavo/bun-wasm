@@ -24,9 +24,9 @@ function cacheKey(step: Record<string, unknown>): string {
   return cacheKey(restore);
 }
 
-const caches = steps.filter(step => typeof step.uses === "string" && step.uses.startsWith("actions/cache"));
+const caches = steps.filter(step => typeof step.uses === "string" && /^\.\/\.github\/actions\/(?:restore|save)-ci-cache$/.test(step.uses));
 const heavy = caches.filter(step => /^(?:native-|jsc-(?:prebuild|cargo)-|bash-web-shell-)/.test(cacheKey(step)));
-const saves = heavy.filter(step => step.uses === "actions/cache/save@v4");
+const saves = heavy.filter(step => step.uses === "./.github/actions/save-ci-cache");
 const healthy: Record<string, string> = {
   "github.event_name": "push", "github.ref": "refs/heads/main",
   "needs.selection.outputs.jsc": "true",
@@ -56,7 +56,7 @@ test("all heavy cache actions explicitly separate restoring from saving", () => 
   expect(heavy.length).toBeGreaterThan(8);
   for (const step of heavy) {
     if (typeof step.uses !== "string") throw new Error("Missing cache action");
-    expect(["actions/cache/restore@v4", "actions/cache/save@v4"]).toContain(step.uses);
+    expect(["./.github/actions/restore-ci-cache", "./.github/actions/save-ci-cache"]).toContain(step.uses);
   }
   expect(saves).toHaveLength(6);
 });
@@ -72,11 +72,11 @@ test.each(saves)("$name reserves heavy writes for main pushes", step => {
 });
 
 test("PRs retain all heavy restore paths and native/JSC checks remain blocking", () => {
-  for (const step of heavy.filter(step => step.uses === "actions/cache/restore@v4")) {
+  for (const step of heavy.filter(step => step.uses === "./.github/actions/restore-ci-cache")) {
     expect(String(step.if ?? "")).not.toContain("github.event_name");
     expect(String(step.if ?? "")).not.toContain("github.ref");
   }
-  expect(source).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') }}");
+  expect(source).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') &&");
   expect(source).toContain("name: Blocking native quality checks");
   expect(source).toContain("name: Blocking native fixture checks");
   expect(source).toContain("name: Blocking JSC embedding and allocation checks\n        if: needs.selection.outputs.jsc == 'true'");

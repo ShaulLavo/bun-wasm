@@ -1,0 +1,17 @@
+[Unit]
+Description=bun-wasm trusted ephemeral CI VM controller
+ConditionPathExists=/work/ci-runner/bun-wasm/reviewed-source.sha256
+
+[Service]
+Type=exec
+WorkingDirectory=/work/ci-runner/bun-wasm
+ExecStart=/work/ci-runner/bun-wasm/bin/bun /work/ci-runner/bun-wasm/source/controller.ts serve
+Restart=on-failure
+RestartSec=60s
+KillMode=control-group
+TimeoutStopSec=45s
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

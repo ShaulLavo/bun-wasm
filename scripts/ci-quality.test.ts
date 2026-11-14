@@ -754,10 +754,10 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
 });
 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
-  expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
-  expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
-  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(14);
-  expect(prebuild.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(5);
+  expect(rust).toContain("uses: ./.github/actions/restore-ci-cache\n        id: native-cache");
+  expect(rust).toContain("uses: ./.github/actions/restore-ci-cache\n        id: native-cargo-cache");
+  expect(rust.match(/uses: \.\/\.github\/actions\/save-ci-cache/g)).toHaveLength(14);
+  expect(prebuild.match(/uses: \.\/\.github\/actions\/save-ci-cache/g)).toHaveLength(5);
   expect(prebuild).not.toContain("github.run_id");
   expect(rust).toContain("steps.native-cargo-cache.outputs.cache-matched-key == ''");
   for (const key of nativeCacheExpressions()) {
@@ -881,7 +881,7 @@ function workflowString(value: unknown): string {
 
 function cacheStepExpressions(step: unknown): string[] {
   if (!step || typeof step !== "object" || !("uses" in step)) return [];
-  if (typeof step.uses !== "string" || !step.uses.startsWith("actions/cache/")) return [];
+  if (typeof step.uses !== "string" || !/^\.\/\.github\/actions\/(?:restore|save)-ci-cache$/.test(step.uses)) return [];
   const settings = workflowField(step, "with");
   if (!settings || typeof settings !== "object") throw new Error("Missing cache settings");
   return ["key", "restore-keys"].flatMap(key => key in settings ? [workflowString(Reflect.get(settings, key))] : []);

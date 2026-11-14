@@ -1,3 +1,4 @@
+import { ciRunner } from "./fixtures/ci-expressions";
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -31,7 +32,7 @@ test("Web host and every Processes leg use one browser dependency cache owner", 
   const jobs = record(record(Bun.YAML.parse(workflow)).jobs);
   for (const id of ["web", "web-browser", "browser-process", "browser-guest"]) {
     const job = record(jobs[id]);
-    expect(job["runs-on"]).toBe("ubuntu-latest");
+    expect(ciRunner(job["runs-on"])).toEqual(["ubuntu-latest"]);
     expect(job["timeout-minutes"]).toBe(10);
     expect(JSON.stringify(job)).not.toContain("browser-apt-v2");
     const steps = job.steps;
@@ -50,7 +51,7 @@ test("Web host and every Processes leg use one browser dependency cache owner", 
 test("cache identity is browser-set independent and refreshed for runner and Playwright updates", () => {
   const steps = actionSteps();
   const restore = steps.find(step => step.id === "browser-cache");
-  expect(restore?.uses).toBe("actions/cache/restore@v4");
+  expect(restore?.uses).toBe("./.github/actions/restore-ci-cache");
   const config = record(restore?.with);
   expect(config.path).toBe("${{ runner.temp }}/browser-apt/*.deb");
   expect(String(config.key)).not.toContain("inputs.browsers");
@@ -59,7 +60,7 @@ test("cache identity is browser-set independent and refreshed for runner and Pla
   expect(String(config.key)).toContain("steps.browser-image.outputs.playwright");
   expect(config["restore-keys"]).toBeUndefined();
   const fallback = steps.find(step => record(step.with ?? {})["restore-keys"] !== undefined);
-  expect(fallback?.uses).toBe("actions/cache/restore@v4");
+  expect(fallback?.uses).toBe("./.github/actions/restore-ci-cache");
   expect(fallback?.if).toBe("steps.browser-cache.outputs.cache-hit != 'true'");
   expect(record(fallback?.with).key).toBe("${{ steps.browser-cache.outputs.cache-primary-key }}");
   expect(record(fallback?.with).path).toBe(config.path);
@@ -91,7 +92,7 @@ test("only main seeds the shared archive cache, before browser downloads or test
   const steps = actionSteps();
   const restore = steps.findIndex(step => step.id === "browser-cache");
   const setup = steps.findIndex(step => String(step.run).includes("ci-browser-deps.ts"));
-  const save = steps.findIndex(step => step.uses === "actions/cache/save@v4");
+  const save = steps.findIndex(step => step.uses === "./.github/actions/save-ci-cache");
   expect(restore).toBeGreaterThanOrEqual(0);
   expect(setup).toBeGreaterThan(restore);
   expect(save).toBeGreaterThan(setup);
@@ -119,7 +120,7 @@ function dependencyFixture(directory: string): void {
   writeFileSync(join(directory, "ubuntu.sources"), "Types: deb\nURIs: https://archive.ubuntu.com/ubuntu\nSuites: resolute resolute-updates resolute-backports resolute-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n");
   writeFileSync(join(directory, "node_modules/playwright/cli.js"), `
     const browsers = process.argv.slice(4);
-    if (process.env.INSTALLED_BROWSER && browsers.length === 1 && browsers[0] === process.env.INSTALLED_BROWSER) {
+    if (process.env.INSTALLED_BROWSER === "all" || (process.env.INSTALLED_BROWSER && browsers.length === 1 && browsers[0] === process.env.INSTALLED_BROWSER)) {
       process.stdout.write("All system dependencies are installed.\\n");
       process.exit(0);
     }
@@ -134,7 +135,7 @@ function dependencyFixture(directory: string): void {
   `, { mode: 0o755 });
 }
 
-function setupDependencies(directory: string, browsers: string[], failUpdate = false, installed = "") {
+function setupDependencies(directory: string, browsers: readonly string[], failUpdate = false, installed = "") {
   return spawnSync(process.execPath, [join(directory, "scripts/ci-browser-deps.ts")].concat(browsers), {
     encoding: "utf8", env: { ...process.env, PATH: directory + ":" + process.env.PATH,
       GITHUB_ACTIONS: "true", RUNNER_TEMP: directory, APT_CALLS: join(directory, "apt-calls"), FAIL_UPDATE: failUpdate ? "1" : "0", INSTALLED_BROWSER: installed },
@@ -221,5 +222,18 @@ test("a preinstalled browser still fills the complete pool without installing ot
     expect(calls).toHaveLength(2);
     expect(calls[1]).toContain("--print-uris");
     expect(calls[1]).toContain("libwebkit");
+  });
+});
+
+test.each([{ browsers: ["chromium"] }, { browsers: ["firefox"] }, { browsers: ["webkit"] }, { browsers: ["chromium", "firefox", "webkit"] }])("a complete base verifies %j without apt refresh, downloads or installation", ({ browsers }) => {
+  fixture(directory => {
+    dependencyFixture(directory);
+    mkdirSync(join(directory, "browser-apt"));
+    writeFileSync(join(directory, "browser-apt/stale.deb"), "unneeded archive");
+    const result = setupDependencies(directory, browsers, true, "all");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("All system dependencies are installed.");
+    expect(readdirSync(directory)).not.toContain("apt-calls");
+    expect(readdirSync(join(directory, "browser-apt"))).toEqual([]);
   });
 });

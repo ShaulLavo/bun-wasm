@@ -114,13 +114,19 @@ async function main(): Promise<void> {
   if (!(await readFile(ubuntuSources, "utf8")).trim()) throw new Error(`Empty Ubuntu apt sources: ${ubuntuSources}`);
   const directory = join(temporary, "browser-apt");
   await mkdir(directory, { recursive: true });
-  apt(["update", "--error-on=any"]);
-  const packages = dependencyPackages(browsers);
-  const pool = dependencyPackages(["chromium", "firefox", "webkit"]);
-  if (!pool.length) {
+  let complete = false;
+  try {
+    complete = dependencyPackages(["chromium", "firefox", "webkit"]).length === 0;
+  } catch {
+    console.log("Dependency inspection needs fresh signed Ubuntu indexes");
+  }
+  if (complete) {
     await pruneArchives([], directory);
     return;
   }
+  apt(["update", "--error-on=any"]);
+  const packages = dependencyPackages(browsers);
+  const pool = dependencyPackages(["chromium", "firefox", "webkit"]);
   const install = ["install", "--yes", "--no-install-recommends", "-o", `Dir::Cache::archives=${directory}`, "-o", "Acquire::ForceHash=SHA256", "-o", "APT::Keep-Downloaded-Packages=true"];
   const archives = await planArchives(install.concat(pool), temporary);
   console.log(`Prefetch ${archives.length} signed-index apt archives with concurrency 16`);

@@ -26,7 +26,7 @@ runs:
         EXPECTED_KEY: ${{ inputs.expected-key }}
         ACTUAL_KEY: ${{ inputs.key }}
       run: test -n "$EXPECTED_KEY" && test "$EXPECTED_KEY" = "$ACTUAL_KEY"
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       id: jsc-prebuild-cache
       with:
         path: ${{ runner.temp }}/jsc/prebuild
@@ -84,7 +84,7 @@ runs:
         echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
     - name: Save the JSC prebuild cache once per input revision
       if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v4
+      uses: ./.github/actions/save-ci-cache
       with:
         path: ${{ runner.temp }}/jsc/prebuild
         key: ${{ inputs.key }}

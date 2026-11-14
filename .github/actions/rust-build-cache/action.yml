@@ -13,7 +13,7 @@ runs:
         echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
         echo "SCCACHE_CACHE_SIZE=512M" >> "$GITHUB_ENV"
         echo "key=rust-objects-v3-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}" >> "$GITHUB_OUTPUT"
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       id: objects
       with:
         path: ${{ runner.temp }}/sccache

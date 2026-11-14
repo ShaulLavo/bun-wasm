@@ -15,7 +15,7 @@ const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0
 
 test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
   expect(shared).toContain("needs: [selection, rust, shared-prebuild, shared-spidermonkey-prebuild]");
-  expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
+  expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') &&");
   expect(shared).toContain("node-version: ${{ env.CI_NODE_VERSION }}");
   expect(shared).toContain('echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"');
   expect(shared).toContain("bun scripts/build-wasi-sysroot.ts --shared-pic --inputs");
@@ -59,7 +59,7 @@ test("workflow job environments cannot reference the step-only runner context", 
 test("shared setup publishes the same private paths before the first cache restore", () => {
   const setup = shared.match(/      - name: Configure private shared sysroot paths\n        run: \|\n((?:          .*\n)+)/)?.[1];
   assert(setup);
-  expect(shared.indexOf(setup)).toBeLessThan(shared.indexOf("uses: actions/cache/restore@v4"));
+  expect(shared.indexOf(setup)).toBeLessThan(shared.indexOf("uses: ./.github/actions/restore-ci-cache"));
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-shared-workflow-"));
   try {
     const output = join(scratch, "github-env");
@@ -124,7 +124,7 @@ function sharedCacheSaves(source: string): { name: string; condition: string }[]
   assert(job && typeof job === "object" && "steps" in job && Array.isArray(job.steps));
   return job.steps.flatMap((step: unknown) => {
     assert(step && typeof step === "object");
-    if (!("uses" in step) || step.uses !== "actions/cache/save@v4") return [];
+    if (!("uses" in step) || step.uses !== "./.github/actions/save-ci-cache") return [];
     assert("name" in step && typeof step.name === "string" && "if" in step && typeof step.if === "string");
     return [{ name: step.name, condition: step.if }];
   });

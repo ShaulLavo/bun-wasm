@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { needsRust, needsSharedNative } from './ci-changes.ts';
 import { sharedSpiderMonkeyRecipes, verifyPrebuild, writePrebuild } from './ci-spidermonkey-prebuild.ts';
 import { selectChecks } from './test-checks.ts';
@@ -78,6 +78,182 @@ test('exact cache identity covers recipes, tool bytes, pinned SDK and native hos
   expect(producer).toContain('spidermonkey-shared-group-v2-');
 });
 
+const recipeBindings = ['env.sh', 'Cargo.lock', 'rust-toolchain.toml', 'package.json', 'bun.lock',
+  'spidermonkey/common.sh', 'spidermonkey/mozconfig.in', 'spidermonkey/build-shared-group.sh', 'spidermonkey/shared-group.ts',
+  'spidermonkey/spidermonkey-wasi.patch', 'spidermonkey/spidermonkey-shared-group.patch',
+  'crates/bunwasm-spidermonkey/build.rs', 'scripts/src/program-profile.ts', 'src/engine-kind.ts',
+  'scripts/ci-spidermonkey-prebuild.ts', 'scripts/ci-runner/cache.ts', 'scripts/ci-bootstrap-tools.ts', 'scripts/ci-install.ts',
+  'scripts/ci-stage-release-packages.ts', 'scripts/ci-release-download.ts', 'scripts/ci-build-tools.ts', 'scripts/waffle-release-inputs.json', 'scripts/build-wasi-sysroot.ts'];
+
+function recipeFixture(run: (root: string, source: string) => void): void {
+  const root = mkdtempSync(join(tmpdir(), 'bun-wasm-sm-recipe-'));
+  try {
+    for (const path of recipeBindings) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), `// fixture ${path}\n`);
+    }
+    cpSync('.github/actions', join(root, '.github/actions'), { recursive: true });
+    mkdirSync(join(root, '.github/workflows'));
+    const source = readFileSync('.github/workflows/ci.yml', 'utf8');
+    writeFileSync(join(root, '.github/workflows/ci.yml'), source);
+    execFileSync('git', ['init', '-q', root]);
+    execFileSync('git', ['-C', root, 'add', '.']);
+    run(root, source);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('consumer supervision, routing and reports leave the compiled recipe unchanged', () => recipeFixture((root, source) => {
+  const original = sharedSpiderMonkeyRecipes(root);
+  const consumerCommand = 'bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group';
+  expect(source).toContain(consumerCommand);
+  const supervision = "${{ matrix.engine == 'spidermonkey' && 660 || 420 }}";
+  const before = source.replaceAll(consumerCommand, consumerCommand.replace('420', supervision));
+  writeFileSync(join(root, '.github/workflows/ci.yml'), before);
+  expect(sharedSpiderMonkeyRecipes(root)).toBe(original);
+  const updated = before.replaceAll('&& 660 ||', '&& 1320 ||');
+  expect(updated).not.toBe(before);
+  writeFileSync(join(root, '.github/workflows/ci.yml'), updated);
+  expect(sharedSpiderMonkeyRecipes(root)).toBe(original);
+  const consumerStart = updated.indexOf('\n  shared-sysroot:\n');
+  const consumer = updated.slice(consumerStart).replace('runs-on: ubuntu-latest', 'runs-on: [self-hosted, linux]')
+    .replace('name: Shared PIC sysroot proof', 'name: Consumer report');
+  expect(consumer).not.toBe(updated.slice(consumerStart));
+  writeFileSync(join(root, '.github/workflows/ci.yml'), updated.slice(0, consumerStart) + consumer);
+  expect(sharedSpiderMonkeyRecipes(root)).toBe(original);
+}));
+
+test.each(recipeBindings)('compiled recipe binds source, flags, patches and tool setup: %s', path => recipeFixture(root => {
+  const original = sharedSpiderMonkeyRecipes(root);
+  writeFileSync(join(root, path), readFileSync(join(root, path), 'utf8') + '\n// changed input\n');
+  expect(sharedSpiderMonkeyRecipes(root)).not.toBe(original);
+}));
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function object(value: unknown): Record<string, unknown> {
+  assert(isObject(value));
+  return value;
+}
+
+function producerSteps(value: unknown): unknown[] {
+  const producer = object(object(object(value).jobs)['shared-spidermonkey-prebuild']);
+  assert(Array.isArray(producer.steps));
+  return producer.steps;
+}
+
+test('every producer setup/build step and its environment remains part of the recipe', () => recipeFixture((root, source) => {
+  const original = sharedSpiderMonkeyRecipes(root);
+  const parsed: unknown = Bun.YAML.parse(source);
+  const boundary = producerSteps(parsed).findIndex(step => object(step).id === 'shared-sm-artifact');
+  expect(boundary).toBeGreaterThan(0);
+  for (let index = 0; index < boundary; index++) {
+    const changed = structuredClone(parsed);
+    const steps = producerSteps(changed);
+    const step = object(steps[index]);
+    steps[index] = { ...step, env: { ...object(step.env ?? {}), CXXFLAGS: '-DCHANGED_PRODUCER=1' } };
+    writeFileSync(join(root, '.github/workflows/ci.yml'), Bun.YAML.stringify(changed));
+    expect(sharedSpiderMonkeyRecipes(root)).not.toBe(original);
+  }
+  for (const [before, after] of [
+    ['bash spidermonkey/build-shared-group.sh', 'CXXFLAGS=-O0 bash spidermonkey/build-shared-group.sh'],
+    ['CARGO_INCREMENTAL: "0"', 'CARGO_INCREMENTAL: "1"'],
+    ['CI_NODE_VERSION: \'26.13.1\'', 'CI_NODE_VERSION: \'26.13.2\''],
+    ['wasi-sdk-34.0-x86_64-linux', 'wasi-sdk-35.0-x86_64-linux'],
+    ['JOBS: "2"', 'JOBS: "3"'],
+  ] satisfies [string, string][]) {
+    // Scope identical setup strings to the producer, except the global Node pin.
+    const start = before.startsWith('CI_NODE_VERSION') ? 0 : source.indexOf('\n  shared-spidermonkey-prebuild:\n');
+    const updated = source.slice(0, start) + source.slice(start).replace(before, after);
+    expect(updated).not.toBe(source);
+    writeFileSync(join(root, '.github/workflows/ci.yml'), updated);
+    expect(sharedSpiderMonkeyRecipes(root)).not.toBe(original);
+  }
+}));
+
+test('canonical YAML and producer metadata preserve identity; missing boundaries fail closed', () => recipeFixture((root, source) => {
+  const original = sharedSpiderMonkeyRecipes(root);
+  const parsed: unknown = Bun.YAML.parse(source);
+  const producer = object(object(object(parsed).jobs)['shared-spidermonkey-prebuild']);
+  producer.name = 'Producer display name';
+  producer['timeout-minutes'] = 60;
+  writeFileSync(join(root, '.github/workflows/ci.yml'), Bun.YAML.stringify(parsed));
+  expect(sharedSpiderMonkeyRecipes(root)).toBe(original);
+  writeFileSync(join(root, '.github/workflows/ci.yml'), source.replace('id: shared-sm-artifact', 'id: removed-boundary'));
+  expect(() => sharedSpiderMonkeyRecipes(root)).toThrow('transfer boundary');
+}));
+
+test('new nested local producer actions are hashed and select both blocking owners', () => recipeFixture((root, source) => {
+  const path = '.github/actions/spidermonkey-future-helper/action.yml';
+  mkdirSync(dirname(join(root, path)), { recursive: true });
+  writeFileSync(join(root, path), 'runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo helper\n');
+  const setup = join(root, '.github/actions/setup-tools/action.yml');
+  writeFileSync(setup, readFileSync(setup, 'utf8') + '    - uses: ./.github/actions/spidermonkey-future-helper\n');
+  execFileSync('git', ['-C', root, 'add', '.']);
+  const original = sharedSpiderMonkeyRecipes(root);
+  writeFileSync(join(root, path), readFileSync(join(root, path), 'utf8').replace('echo helper', 'echo changed'));
+  expect(sharedSpiderMonkeyRecipes(root)).not.toBe(original);
+  expect(needsSharedNative([path])).toBe(true);
+  expect(needsRust([path])).toBe(true);
+  const updated = source.replaceAll('uses: ./.github/actions/setup-tools', 'uses: ./.github/actions/missing');
+  writeFileSync(join(root, '.github/workflows/ci.yml'), updated);
+  expect(() => sharedSpiderMonkeyRecipes(root)).toThrow();
+}));
+
+test('extracting a producer tool helper keeps subsequent helper changes in the identity', () => recipeFixture(root => {
+  const helper = 'scripts/ci-spidermonkey-future-helper.ts';
+  writeFileSync(join(root, helper), 'export const flags = "-O2";\n');
+  writeFileSync(join(root, 'scripts/ci-build-tools.ts'), 'import { flags } from "./ci-spidermonkey-future-helper";\nexport { flags };\n');
+  const original = sharedSpiderMonkeyRecipes(root);
+  writeFileSync(join(root, helper), 'export const flags = "-O0";\n');
+  expect(sharedSpiderMonkeyRecipes(root)).not.toBe(original);
+  expect(needsSharedNative([helper])).toBe(true);
+  expect(needsRust([helper])).toBe(true);
+}));
+
+test.each(recipeBindings.filter(path => path.startsWith('scripts/ci-')))('%s selects both shared producer owners', path => {
+  expect(needsSharedNative([path])).toBe(true);
+  expect(needsRust([path])).toBe(true);
+});
+
+test('the maintained native-input command changes identity for tool, SDK and sysroot bytes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'bun-wasm-sm-tools-'));
+  try {
+    const tools = join(root, 'tools'), cargo = join(root, 'cargo'), sysroot = join(root, 'sysroot');
+    for (const path of ['bin', 'tools/wasi-sdk/bin', 'cargo/bin', 'sysroot/lib/wasm32-wasip1', 'host']) mkdirSync(join(root, path), { recursive: true });
+    const programs = ['rustc', 'cargo', 'clang', 'clang++', 'llvm-readobj', 'python3', 'autoconf2.13', 'make', 'perl', 'dpkg-query'];
+    const binary = '#!/bin/sh\nprintf "fixture tool\\n"\n';
+    for (const program of programs) writeFileSync(join(root, 'bin', program), binary, { mode: 0o755 });
+    for (const path of ['tools/wasi-sdk/bin/clang++', 'cargo/bin/cbindgen', 'host/clang', 'host/clang++']) writeFileSync(join(root, path), binary, { mode: 0o755 });
+    for (const path of ['bun-wasm-sysroot.json', 'lib/wasm32-wasip1/libc.a']) writeFileSync(join(sysroot, path), 'fixture sysroot');
+    const input = command('shared-spidermonkey-prebuild', 'Identify shared SpiderMonkey native inputs').replaceAll('/usr/bin/clang', join(root, 'host/clang'));
+    const output = join(root, 'output');
+    const identity = () => {
+      writeFileSync(output, '');
+      execFileSync('bash', ['-euo', 'pipefail', '-c', input], { env: { ...process.env, WASM_TOOLS: tools, WASI_SDK_PATH: join(tools, 'wasi-sdk'),
+        CARGO_HOME: cargo, BUN_WASM_SYSROOT: sysroot, PATH: join(root, 'bin') + ':' + process.env.PATH,
+        RUNNER_TEMP: root, GITHUB_ENV: join(root, 'environment'), GITHUB_OUTPUT: output } });
+      const result = readFileSync(output, 'utf8').match(/^hash=([a-f0-9]{64})$/m)?.[1];
+      assert(result);
+      return result;
+    };
+    const original = identity();
+    const paths = programs.filter(program => program !== 'clang++').map(program => join(root, 'bin', program)).concat(
+      ['tools/wasi-sdk/bin/clang++', 'cargo/bin/cbindgen', 'host/clang', 'host/clang++', 'sysroot/bun-wasm-sysroot.json', 'sysroot/lib/wasm32-wasip1/libc.a'].map(path => join(root, path)));
+    for (const path of paths) {
+      const before = readFileSync(path);
+      writeFileSync(path, before.toString().replace('fixture', 'changed'));
+      expect(identity()).not.toBe(original);
+      writeFileSync(path, before);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function restoreEnvironment(before: Record<string, string | undefined>): void {
   for (const [key, value] of Object.entries(before)) {
     if (value === undefined) delete process.env[key];
@@ -112,6 +288,16 @@ function fixture(run: (value: { root: string; received: string; sysroot: string;
 
 test('the exact archive/header/receipt closure survives transfer without source or object trees', () => fixture(({ received, sysroot, digest }) => {
   expect(() => verifyPrebuild(received, sysroot, digest)).not.toThrow();
+}));
+
+test('the maintained transfer verifier rejects stale sysroot receipts and corrupt libc', () => fixture(({ received, sysroot, digest }) => {
+  const receipt = join(sysroot, 'bun-wasm-sysroot.json');
+  const before = readFileSync(receipt, 'utf8');
+  writeFileSync(receipt, before.replace('a'.repeat(64), 'c'.repeat(64)));
+  expect(() => verifyPrebuild(received, sysroot, digest)).toThrow('sharedSysroot changed');
+  writeFileSync(receipt, before);
+  writeFileSync(join(sysroot, 'lib/wasm32-wasip1/libc.a'), 'corrupt');
+  expect(() => verifyPrebuild(received, sysroot, digest)).toThrow('libc bytes do not match');
 }));
 
 test.each(['native/libspidermonkey_bunwasm.a', 'native/include/js.h', 'native/js-confdefs.h', 'receipt/headers.json'])('changed %s fails before side linking', path => fixture(({ received, sysroot, digest }) => {

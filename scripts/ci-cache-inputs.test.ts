@@ -53,8 +53,8 @@ test("native-only selections provision the tools JSC prerequisite without enabli
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
   }
-  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') }}");
-  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true') }}");
+  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toContain("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') &&");
+  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toContain("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true') &&");
   for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps)]) {
     expect(prerequisite).not.toHaveProperty("if");
   }
@@ -233,7 +233,7 @@ function boundaryCommands(failure: string, cancelled: boolean, controller = true
   return ordered.map(([name, marker]) => {
     const item = named(name, list);
     if (name.startsWith("Save ")) {
-      expect(field(item, "uses")).toBe("actions/cache/save@v4");
+      expect(field(item, "uses")).toBe("./.github/actions/save-ci-cache");
       return `printf '%s\\n' '${marker}' >> "$CHECKPOINT_RECORDS"`;
     }
     const signal = controller ? 'kill -TERM "$$"; sleep 30' : 'kill -TERM "$BASHPID"';

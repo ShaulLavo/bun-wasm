@@ -27,7 +27,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      actions: read
     outputs:
       base: ${{ steps.refs.outputs.base }}
       head: ${{ steps.refs.outputs.head }}
@@ -56,22 +55,15 @@ jobs:
           EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           EVENT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bun scripts/ci-refs.ts >> "$GITHUB_OUTPUT"
-      - name: Resolve cumulative main coverage v1
-        id: main-coverage
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          HEAD: ${{ steps.refs.outputs.head }}
-        run: bun scripts/ci-main-coverage.ts "$HEAD" >> "$GITHUB_OUTPUT"
       - name: Select native checks from the complete change list
         id: changes
         env:
           BASE: ${{ steps.refs.outputs.base }}
           HEAD: ${{ steps.refs.outputs.head }}
-          MAIN_SELECTION: ${{ steps.main-coverage.outputs.selection }}
         run: |
           if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
-            test -n "$MAIN_SELECTION"
-            printf '%s\n' "$MAIN_SELECTION" >> "$GITHUB_OUTPUT"
+            # Every green main run publishes the complete current program set.
+            printf 'rust=true\njsc=true\nshared=true\nshared_native=true\n' >> "$GITHUB_OUTPUT"
           else
             bun scripts/ci-changes.ts "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
           fi
@@ -107,7 +99,7 @@ jobs:
         with:
           bun-version: 1.4.4
           node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: bun-dependencies
         with:
           path: .ci-bun-cache
@@ -120,7 +112,7 @@ jobs:
           (cd site && bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile)
       - name: Publish the completed dependency cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.bun-dependencies.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: .ci-bun-cache
           key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}
@@ -155,8 +147,8 @@ jobs:
   jsc-identity:
     name: Resolve effective JSC inputs
     needs: selection
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') }}
-    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
+    runs-on: &pc-runner ${{ fromJSON(vars.BUN_WASM_PC_RUNNER == 'true' && (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && '["self-hosted","linux","x64","pc","bun-wasm"]' || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     outputs:
       key: ${{ steps.setup.outputs.key }}
@@ -185,8 +177,8 @@ jobs:
   jsc-prebuild:
     name: JSC C/C++ prebuild
     needs: [selection, jsc-identity]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') }}
-    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
+    runs-on: *pc-runner
     concurrency:
       group: ${{ needs.jsc-identity.outputs.key }}
       cancel-in-progress: false
@@ -225,8 +217,8 @@ jobs:
     name: Native quality checkpoint
     needs: [selection, jsc-prebuild]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true') }}
-    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true') && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
+    runs-on: *pc-runner
     permissions:
       contents: read
       actions: write
@@ -275,7 +267,7 @@ jobs:
           node-version: ${{ env.CI_NODE_VERSION }}
       - uses: ./.github/actions/rust-build-cache
         id: rust-objects
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: rustup-cache
         with:
           path: ${{ env.RUSTUP_HOME }}
@@ -290,7 +282,7 @@ jobs:
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - name: Save completed rustup-cache setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rustup-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.RUSTUP_HOME }}
           key: ${{ steps.rustup-cache.outputs.cache-primary-key }}
@@ -309,7 +301,7 @@ jobs:
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
       # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
       # land on different runner images. Every producer and consumer uses the same pinned bytes.
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: build-tools-cache
         with:
           path: |
@@ -320,7 +312,7 @@ jobs:
         run: bun scripts/ci-build-tools.ts
       - name: Save completed build-tools-cache setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: |
             ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
@@ -342,7 +334,7 @@ jobs:
           } > "$report"
           cat "$report"
           echo "hash=$(sha256sum "$report" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: sdk
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -359,11 +351,11 @@ jobs:
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed sdk setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
           key: ${{ steps.sdk.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: binaryen-cache
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
@@ -372,11 +364,11 @@ jobs:
         run: bun scripts/ci-binaryen.ts
       - name: Save completed binaryen-cache setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
           key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: wasm-tools-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
@@ -404,11 +396,11 @@ jobs:
           echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
       - name: Save completed wasm-tools setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasm-tools-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
           key: ${{ steps.wasm-tools-cache.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: wasmtime-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
@@ -438,18 +430,18 @@ jobs:
           echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
       - name: Save completed wasmtime-cache setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasmtime-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
           key: ${{ steps.wasmtime-cache.outputs.cache-primary-key }}
       - name: Check transpiler example command prerequisites
         run: bash scripts/test-transpiler-example.sh --check-tools
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: sources-cache
         with:
           path: |
@@ -463,7 +455,7 @@ jobs:
           bash scripts/sync-crypto.sh
       - name: Save completed sources-cache setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sources-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: |
             vendor/bun
@@ -543,7 +535,7 @@ jobs:
       # guarded by the sysroot/JSC receipts, effective tools, and native source hashes below.
       # These three audited Cargo sources change exact keys, not dependency compatibility.
       # All other native inputs remain hard guards; the new partition needs one cold seed.
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: native-cargo-cache
         with:
           path: |
@@ -554,7 +546,7 @@ jobs:
           key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp', 'scripts/build-bun-tools.sh', 'scripts/build-bun-browser.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
           restore-keys: |
             native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: native-cache
         if: steps.native-cargo-cache.outputs.cache-matched-key == ''
         with:
@@ -648,7 +640,7 @@ jobs:
           compression-level: 0
       - name: Save the native quality checkpoint
         if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.tls-artifact.outputs.tls-sha256 != '' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: |
             ${{ env.CARGO_HOME }}/registry
@@ -686,8 +678,8 @@ jobs:
     name: Rust workspace tests (QuickJS host)
     needs: [selection, jsc-prebuild, native-quality]
     # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true') }}
-    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true') && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
+    runs-on: *pc-runner
     permissions:
       contents: read
       actions: write
@@ -730,7 +722,7 @@ jobs:
           node-version: ${{ env.CI_NODE_VERSION }}
       - uses: ./.github/actions/rust-build-cache
         id: rust-objects
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: rustup-cache
         with:
           path: ${{ env.RUSTUP_HOME }}
@@ -745,7 +737,7 @@ jobs:
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - name: Save completed rustup-cache setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rustup-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.RUSTUP_HOME }}
           key: ${{ steps.rustup-cache.outputs.cache-primary-key }}
@@ -760,7 +752,7 @@ jobs:
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
       # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
       # land on different runner images. Every producer and consumer uses the same pinned bytes.
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: build-tools-cache
         with:
           path: |
@@ -771,7 +763,7 @@ jobs:
         run: bun scripts/ci-build-tools.ts
       - name: Save completed build-tools-cache setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: |
             ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
@@ -793,7 +785,7 @@ jobs:
           } > "$report"
           cat "$report"
           echo "hash=$(sha256sum "$report" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: sdk
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -810,11 +802,11 @@ jobs:
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed sdk setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
           key: ${{ steps.sdk.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: binaryen-cache
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
@@ -823,11 +815,11 @@ jobs:
         run: bun scripts/ci-binaryen.ts
       - name: Save completed binaryen-cache setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
           key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: wasm-tools-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
@@ -855,11 +847,11 @@ jobs:
           echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
       - name: Save completed wasm-tools setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasm-tools-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
           key: ${{ steps.wasm-tools-cache.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: wasmtime-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
@@ -889,13 +881,13 @@ jobs:
           echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
       - name: Save completed wasmtime-cache setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasmtime-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
           key: ${{ steps.wasmtime-cache.outputs.cache-primary-key }}
       - name: Check transpiler example command prerequisites
         run: bash scripts/test-transpiler-example.sh --check-tools
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -1024,7 +1016,7 @@ jobs:
           copy_jsc_config_inputs
           inputs=$(jsc_inputs_hash)
           echo "hash=$inputs" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         if: needs.selection.outputs.jsc == 'true'
         id: jsc-cargo-cache
         with:
@@ -1033,7 +1025,7 @@ jobs:
           restore-keys: |
             jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
       - name: Restore the bash-web shell guest build
-        uses: actions/cache/restore@v4
+        uses: ./.github/actions/restore-ci-cache
         id: shell-cache
         with:
           path: |
@@ -1047,7 +1039,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y llvm autoconf2.13 python3-dev python3-venv python3-packaging python3-setuptools libffi-dev zlib1g-dev
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: ordinary-cbindgen-cache
         with:
           path: ${{ env.CARGO_HOME }}/bin/cbindgen
@@ -1071,7 +1063,7 @@ jobs:
           echo "SPIDERMONKEY_PAIR_DIR=$RUNNER_TEMP/ordinary-pair" >> "$GITHUB_ENV"
           echo "SPIDERMONKEY_WASM=$RUNNER_TEMP/ordinary-pair/bun-spidermonkey.wasm" >> "$GITHUB_ENV"
           echo "hash=$(bun scripts/spidermonkey-ordinary-ci.ts identity)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: ordinary-spidermonkey-cache
         with:
           path: ${{ runner.temp }}/spidermonkey/ordinary
@@ -1082,7 +1074,7 @@ jobs:
           source env.sh
           bun scripts/spidermonkey-ordinary-ci.ts native
           echo "ordinary SpiderMonkey exact cache hit=${{ steps.ordinary-spidermonkey-cache.outputs.cache-hit }}; matched=${{ steps.ordinary-spidermonkey-cache.outputs.cache-matched-key }}"
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: ordinary-spidermonkey-cargo
         with:
           # Only Cargo objects persist. Completed side/pair outputs must be fresh.
@@ -1162,7 +1154,7 @@ jobs:
           bun scripts/ci-jsc-worker.ts stop "$RUNNER_TEMP/jsc-guest"
       - name: Save the JSC Cargo cache once per input revision
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.jsc == 'true' && steps.jsc-cargo-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ runner.temp }}/jsc/engine
           key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts') }}
@@ -1216,19 +1208,19 @@ jobs:
           retention-days: 7
       - name: Save verified ordinary SpiderMonkey native generation
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ordinary-spidermonkey-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ runner.temp }}/spidermonkey/ordinary
           key: ${{ steps.ordinary-spidermonkey-cache.outputs.cache-primary-key }}
       - name: Save ordinary SpiderMonkey side Cargo objects
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ordinary-spidermonkey-cargo.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ runner.temp }}/ordinary-side-cargo
           key: ${{ steps.ordinary-spidermonkey-cargo.outputs.cache-primary-key }}
       - name: Save ordinary pinned cbindgen
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ordinary-cbindgen-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.CARGO_HOME }}/bin/cbindgen
           key: ${{ steps.ordinary-cbindgen-cache.outputs.cache-primary-key }}
@@ -1238,7 +1230,7 @@ jobs:
 
       - name: Save the completed bash-web shell guest build
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shell-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: |
             ${{ env.CARGO_TARGET_DIR }}/bash-web-source
@@ -1252,7 +1244,7 @@ jobs:
       # PR-scoped archives cannot be shared with other PRs and evict main's warm builds.
       - name: Save the refined native Cargo cache once per input revision
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-matched-key == ''
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: |
             ${{ env.CARGO_HOME }}/registry
@@ -1331,7 +1323,7 @@ jobs:
         with:
           bun-version: 1.4.4
           node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -1347,8 +1339,8 @@ jobs:
   shared-jsc-identity:
     name: Resolve effective shared JSC inputs
     needs: selection
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
-    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
+    runs-on: *pc-runner
     timeout-minutes: 15
     env:
       WASI_LIBC_JOBS: "2"
@@ -1381,8 +1373,8 @@ jobs:
   shared-prebuild:
     name: Shared PIC sysroot and JSC prebuild
     needs: [selection, shared-jsc-identity]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
-    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
+    runs-on: *pc-runner
     concurrency:
       group: ${{ needs.shared-jsc-identity.outputs.key }}
       cancel-in-progress: false
@@ -1445,8 +1437,8 @@ jobs:
   shared-spidermonkey-prebuild:
     name: Shared SpiderMonkey library prebuild
     needs: [selection, shared-prebuild]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.selection.outputs.shared-native == 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.selection.outputs.shared-native == 'true' && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
+    runs-on: *pc-runner
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -1472,14 +1464,14 @@ jobs:
         with:
           bun-version: 1.4.4
           node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
       - name: Install pinned shared build tools
         run: bun scripts/ci-build-tools.ts
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: shared-sdk
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -1497,11 +1489,11 @@ jobs:
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed shared-sdk setup
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sdk.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
           key: ${{ steps.shared-sdk.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         if: needs.selection.outputs.shared-native == 'true'
         id: shared-rustup-cache
         with:
@@ -1556,7 +1548,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang llvm autoconf2.13 pkg-config python3-dev python3-venv python3-packaging python3-setuptools libffi-dev zlib1g-dev
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         if: needs.selection.outputs.shared-native == 'true'
         id: shared-cbindgen-cache
         with:
@@ -1574,7 +1566,7 @@ jobs:
           "$CARGO_HOME/bin/cbindgen" --version | grep -Fx 'cbindgen 0.29.4'
       - name: Save pinned cbindgen
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-cbindgen-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.CARGO_HOME }}/bin/cbindgen
           key: ${{ steps.shared-cbindgen-cache.outputs.cache-primary-key }}
@@ -1601,7 +1593,7 @@ jobs:
           } | sha256sum | cut -d' ' -f1)
           echo "hash=$inputs" >> "$GITHUB_OUTPUT"
           echo "recipes=$(bun scripts/ci-spidermonkey-prebuild.ts recipes)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         if: needs.selection.outputs.shared-native == 'true'
         id: shared-spidermonkey-cache
         with:
@@ -1649,7 +1641,7 @@ jobs:
           retention-days: 1
       - name: Save the verified shared SpiderMonkey source and native work
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-spidermonkey-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ runner.temp }}/spidermonkey/shared
           key: ${{ steps.shared-spidermonkey-cache.outputs.cache-primary-key }}
@@ -1661,8 +1653,8 @@ jobs:
   shared-sysroot:
     name: Shared PIC sysroot proof
     needs: [selection, rust, shared-prebuild, shared-spidermonkey-prebuild]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
-    runs-on: ubuntu-latest
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
+    runs-on: *pc-runner
     permissions:
       contents: read
       actions: write
@@ -1730,7 +1722,7 @@ jobs:
         with:
           bun-version: 1.4.4
           node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -1742,7 +1734,7 @@ jobs:
           sudo apt-get install -y cmake ninja-build
       - name: Install pinned shared build tools
         run: bun scripts/ci-build-tools.ts
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: shared-sdk
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -1760,11 +1752,11 @@ jobs:
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed shared-sdk setup
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sdk.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
           key: ${{ steps.shared-sdk.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: shared-wasm-tools
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
@@ -1787,11 +1779,11 @@ jobs:
           echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
       - name: Save completed shared-wasm-tools setup
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-wasm-tools.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
           key: ${{ steps.shared-wasm-tools.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: shared-wasmtime
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
@@ -1814,7 +1806,7 @@ jobs:
           echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
       - name: Save completed shared-wasmtime setup
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-wasmtime.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
           key: ${{ steps.shared-wasmtime.outputs.cache-primary-key }}
@@ -1824,7 +1816,7 @@ jobs:
           source env.sh
           inputs=$(bun scripts/build-wasi-sysroot.ts --shared-pic --inputs)
           echo "hash=$inputs" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         if: needs.selection.outputs.shared-native == 'true'
         id: shared-binaryen
         with:
@@ -1882,7 +1874,7 @@ jobs:
           source env.sh
           bash scripts/test-shared-sysroot.sh "$RUNNER_TEMP/shared-sysroot-proof"
 
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         if: needs.selection.outputs.shared-native == 'true'
         id: shared-rustup-cache
         with:
@@ -1897,7 +1889,7 @@ jobs:
       - uses: ./.github/actions/rust-build-cache
         id: rust-objects
         if: needs.selection.outputs.shared-native == 'true'
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         if: needs.selection.outputs.shared-native == 'true'
         id: shared-native-cache
         with:
@@ -2010,7 +2002,7 @@ jobs:
           retention-days: 1
       - name: Save the completed shared native profile
         if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-native-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: |
             ${{ env.CARGO_HOME }}/registry
@@ -2065,9 +2057,9 @@ jobs:
 
   web:
     needs: [selection, web-unit, web-browser]
-    if: ${{ always() && needs.selection.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ always() && !cancelled() && needs.selection.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
     name: Web host
-    runs-on: ubuntu-latest
+    runs-on: *pc-runner
     timeout-minutes: 10
     defaults:
       run:
@@ -2087,7 +2079,7 @@ jobs:
         with:
           bun-version: 1.4.4
           node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -2106,9 +2098,9 @@ jobs:
 
   web-unit:
     needs: selection
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
     name: Web host unit and types
-    runs-on: ubuntu-latest
+    runs-on: *pc-runner
     timeout-minutes: 10
     defaults:
       run:
@@ -2123,7 +2115,8 @@ jobs:
         with:
           bun-version: 1.4.4
           node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
+        id: bun-dependencies
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -2132,7 +2125,7 @@ jobs:
           echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
           echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
           echo "RUSTUP_TOOLCHAIN=nightly-2026-09-15" >> "$GITHUB_ENV"
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         id: web-rustup-cache
         with:
           path: ${{ env.RUSTUP_HOME }}
@@ -2144,7 +2137,7 @@ jobs:
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
       - name: Save completed Web compiler setup
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.web-rustup-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: ./.github/actions/save-ci-cache
         with:
           path: ${{ env.RUSTUP_HOME }}
           key: ${{ steps.web-rustup-cache.outputs.cache-primary-key }}
@@ -2152,6 +2145,12 @@ jobs:
         env:
           C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures
         run: bash ../scripts/test-web-host.sh --unit
+      - name: Save completed PC Bun dependency cache
+        if: runner.environment == 'self-hosted' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.bun-dependencies.outputs.cache-hit != 'true'
+        uses: ./.github/actions/save-ci-cache
+        with:
+          path: .ci-bun-cache
+          key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}
       - name: Retain first C1 WebKit admission failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -2165,9 +2164,9 @@ jobs:
 
   web-browser:
     needs: selection
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
     name: Web browser (${{ matrix.batch }})
-    runs-on: ubuntu-latest
+    runs-on: *pc-runner
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -2185,7 +2184,7 @@ jobs:
         with:
           bun-version: 1.4.4
           node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -2218,7 +2217,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -2236,9 +2235,9 @@ jobs:
 
   browser-guest:
     needs: [selection, rust]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.rust.result == 'success' }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.rust.result == 'success' && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
     name: Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})
-    runs-on: ubuntu-latest
+    runs-on: *pc-runner
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -2255,7 +2254,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -2295,9 +2294,9 @@ jobs:
 
   browser-process:
     needs: [selection, rust, process-bundles, browser-guest]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (always() && !cancelled() && needs.selection.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped')) }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (always() && !cancelled() && needs.selection.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped')) && ((github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch') }}
     name: Processes (${{ matrix.browser }})
-    runs-on: ubuntu-latest
+    runs-on: *pc-runner
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -2324,7 +2323,7 @@ jobs:
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
-      - uses: actions/cache/restore@v4
+      - uses: ./.github/actions/restore-ci-cache
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -2388,7 +2387,7 @@ jobs:
   ci-result:
     name: Code quality
     needs: [selection, quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
-    if: ${{ always() }}
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

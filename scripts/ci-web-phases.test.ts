@@ -1,3 +1,4 @@
+import { ciRunner } from "./fixtures/ci-expressions";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -34,7 +35,7 @@ test("unit, discovered browser shards and smoke checks retain separate blocking 
   expect(all.filter(step => step.run === "bash ../scripts/test-web-host.sh --browser")).toHaveLength(0);
   for (const job of [unit, browser, shards]) {
     expect(job["timeout-minutes"]).toBe(10);
-    expect(job["runs-on"]).toBe("ubuntu-latest");
+    expect(ciRunner(job["runs-on"])).toEqual(["ubuntu-latest"]);
     expect(job).not.toHaveProperty("continue-on-error");
   }
   expect(JSON.stringify(unit)).not.toContain("playwright install");
@@ -46,9 +47,12 @@ test.each(["web-unit", "web-browser"])("required Web host gate rejects every non
   expect(browser.if).toContain("always()");
   const condition = browser.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("always()", "true")
+    .replaceAll("cancelled()", "false")
     .replaceAll("needs.selection.result", JSON.stringify("success"))
     .replaceAll("github.event_name", JSON.stringify("pull_request"))
-    .replaceAll("github.event.pull_request.draft", "false");
+    .replaceAll("github.event.pull_request.draft", "false")
+    .replaceAll("github.event.pull_request.head.repo.full_name", '"ShaulLavo/bun-wasm"')
+    .replaceAll("github.repository", '"ShaulLavo/bun-wasm"');
   expect(new Function(`return (${condition})`)()).toBe(true);
   const entries = steps(browser);
   const guard = entries.find(step => step.name === "Require all Web host unit and browser gates");

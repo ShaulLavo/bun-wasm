@@ -54,7 +54,7 @@ test("quality owns one native Cargo restore and every quality command, not a sec
   }
   for (const id of ["native-cargo-cache", "native-cache"]) {
     const restore = steps("native-quality").find(step => step.id === id)!;
-    expect(restore.uses).toBe("actions/cache/restore@v4");
+    expect(restore.uses).toBe("./.github/actions/restore-ci-cache");
     expect(steps("rust").find(step => step.id === id)?.uses).toBeUndefined();
   }
   for (const command of ["bash scripts/build-bun-core.sh", "bash scripts/build-bun-jsc.sh", "bash scripts/build.sh", "bash scripts/build-bun-tools.sh"]) {
@@ -86,6 +86,8 @@ function runs(job: Record<string, unknown>, needs: Record<string, Need>, cancell
   const expression = job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "").replaceAll("!cancelled()", String(!cancelled))
     .replaceAll("github.event_name", JSON.stringify("pull_request"))
     .replaceAll("github.event.pull_request.draft", "false")
+    .replaceAll("github.event.pull_request.head.repo.full_name", '"ShaulLavo/bun-wasm"')
+    .replaceAll("github.repository", '"ShaulLavo/bun-wasm"')
     .replace(/needs\.([\w-]+)\.(result|outputs\.([\w-]+))/g, (_whole, id: string, _field: string, key: string | undefined) => JSON.stringify(key ? needs[id]?.outputs?.[key] : needs[id]?.result));
   const result: unknown = new Function(`return (${expression})`)();
   if (typeof result !== "boolean") throw new Error("Non-boolean condition");
