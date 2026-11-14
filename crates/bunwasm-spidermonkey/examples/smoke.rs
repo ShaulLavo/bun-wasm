@@ -85,6 +85,22 @@ pub fn main() {
     );
     assert_eq!(number("6 * 7"), 42.0);
     println!("ok evaluation and second recursion after caught overflow");
+    // Generated validators nest hundreds of blocks; the frontend bound admits them. Deeper input,
+    // nested functions (weighted) and compiles under deep runtime recursion are refused with a
+    // catchable RangeError, and evaluation continues.
+    assert_eq!(
+        number(
+            "var nested = (open, close, n) => 'if (false) {' + Array.from({ length: n }, (_, i) => open.split('#').join(i)).join('') + '1;' + close.repeat(n) + '}';
+            var accepts = (s) => { try { (0, eval)(s); return 1; } catch (e) { if (e instanceof RangeError) return 0; throw e; } };
+            var down = (d, s) => d ? String({ toString() { return down(d - 1, s); } }) : String(accepts(s));
+            Number([accepts(nested('l#: while (true) {', '}', 300)), accepts(nested('if (ok) {', '}', 400)),
+              accepts(nested('{', '}', 5000)), accepts(nested('() => ', '', 1000)),
+              accepts(nested('l#: ', '', 1000)), down(80, nested('l#: ', '', 1000))].join(''))"
+        ),
+        110010.0
+    );
+    assert_eq!(number("6 * 7"), 42.0);
+    println!("ok nested compile limits and recovery");
     for (label, code) in [
         (
             "loop",
