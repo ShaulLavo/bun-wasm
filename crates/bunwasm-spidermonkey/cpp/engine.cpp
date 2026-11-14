@@ -800,7 +800,9 @@ bool require_loaded(JSContext* cx, unsigned argc, JS::Value* vp) {
   if (!JS::ModuleLink(cx, module)) return false;
   SnapshotScope scope;
   EntryVector candidates;
-  bool pinned = !snapshot(module, candidates);
+  bool freshRoot = js::GetFunctionNativeReserved(&args.callee(), 1).toBoolean();
+  if (!freshRoot) recovery_outcome("pinned at a boundary");
+  bool pinned = !freshRoot || !snapshot(module, candidates);
   control_observe("require-before-evaluate");
   JS::RootedValue evaluation(cx);
   if (!JS::ModuleEvaluate(cx, module, &evaluation)) {
@@ -1264,6 +1266,7 @@ extern "C" bool bsm_require(const char* specifier, size_t length, bsm_handle* ou
   control_reset_require();
   std::string name;
   if (!resolve(specifier, length, "", &name)) return failure(out);
+  uint64_t firstGeneration = nextGeneration;
   JS::RootedObject module(context, load_module(name));
   if (!module) return failure(out);
   JS::RootedValue hostDefined(context, JS::ObjectValue(*module));
@@ -1277,6 +1280,8 @@ extern "C" bool bsm_require(const char* specifier, size_t length, bsm_handle* ou
   if (control_fault("require-handler")) return failure(out);
   JS::RootedObject handler(context, module_handler(module, require_loaded, "requireLoaded"));
   if (!handler) return failure(out);
+  js::SetFunctionNativeReserved(handler, 1,
+      JS::BooleanValue(modules.find(name)->second->generation >= firstGeneration));
   JS::RootedObject bridge(context, JS::CallOriginalPromiseThen(context, loading, handler, nullptr));
   if (!bridge) return failure(out);
   ensure_handled(bridge);
