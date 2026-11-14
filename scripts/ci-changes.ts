@@ -3,7 +3,7 @@ import { discoverChecks } from "./test-checks";
 import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-check-inputs";
 import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
-const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
+const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/wasm-validation/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "scripts/ci-program-delivery.ts",
   "scripts/ci-browser-program.ts", "scripts/build-bun-browser.sh",

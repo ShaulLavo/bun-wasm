@@ -35,7 +35,7 @@ test.each([
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "crates/bunwasm-runtime/src/lib.rs", "vendor/bun/src/parser.rs", "patches/bun/001.patch",
   "third_party/libc/src/lib.rs", "Cargo.lock", "Cargo.toml", ".cargo/config.toml", "rust-toolchain.toml",
-  "tests/install/package-options.ts", "tests/install/registry.mjs", "tests/wasm-tables/table.wasm", "tests/fixtures/webassembly/module.wasm",
+  "tests/install/package-options.ts", "tests/install/registry.mjs", "tests/wasm-tables/table.wasm", "tests/wasm-validation/native.rs", "tests/fixtures/webassembly/module.wasm",
   "env.sh", "tests/fixtures/node-misc/main.js", "scripts/test.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts",
   "scripts/quality-wasi-probe.ts", "scripts/quality.ts", "scripts/ci-changes.ts", "package.json", "bun.lock",
   ".github/workflows/ci.yml", "scripts/build.sh", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",

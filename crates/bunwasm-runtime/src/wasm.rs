@@ -545,7 +545,9 @@ pub fn install(table: &mut Table) {
         if nested::shared(bytes) {
             return Ok(Val::Bool(nested::validate(bytes)));
         }
-        Ok(Val::Bool(Module::new(&rt.borrow().engine, bytes).is_ok()))
+        Ok(Val::Bool(
+            Module::validate(&rt.borrow().engine, bytes).is_ok(),
+        ))
     });
     let rt = runtime.clone();
     table.add("wasm.compile", move |a| {
