@@ -127,11 +127,12 @@ async function captureFailure(transport: Transport, options: Execution, results:
     if (capture.terminal.status === "unavailable") capture.terminal = { status: "unavailable", reason: String(error) };
     if (capture.terminal.status === "observed" && !capture.diagnostic) capture.diagnostic = memoryBudgetFallback(options.box.engine, "failure");
   } finally { scope.close(); }
-  if (capture.terminal.status === "unavailable") return capture;
-  const text = capture.terminal.text;
-  const concrete = text.split("\n").find(line => /(?:Error:|error:|panic|Exception|RuntimeError|TypeError)/.test(line));
-  const failed = results.find(result => result.status === "fail");
-  if (concrete && failed?.status === "fail") failed.error += `; terminal: ${concrete.slice(0, 1000)}`;
+  if (capture.terminal.status === "unavailable" && !capture.preview) return capture;
+  if (capture.terminal.status === "observed") {
+    const concrete = capture.terminal.text.split("\n").find(line => /(?:Error:|error:|panic|Exception|RuntimeError|TypeError)/.test(line));
+    const failed = results.find(result => result.status === "fail");
+    if (concrete && failed?.status === "fail") failed.error += `; terminal: ${concrete.slice(0, 1000)}`;
+  }
   try {
     await bounded(() => options.saveLog(failureObservation(capture)), 2000);
     capture.saved = true;

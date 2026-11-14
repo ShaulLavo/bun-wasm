@@ -12,6 +12,12 @@ function listenerCount(page: Page, event: string): number {
 }
 function listeners(page: Page): number[] { return observedEvents.map(event => listenerCount(page, event)); }
 
+async function overflowPreview(page: Page): Promise<void> {
+  await page.evaluate(() => { for (let index = 0; index < 40; index++) console.error("overflow control ".repeat(200)); });
+}
+
+function stalledEvaluation(): Promise<never> { return new Promise(() => {}); }
+
 for (const browserType of [chromium, firefox]) {
   test(`${browserType.name()} retains initiating preview failures and releases listeners`, async () => {
     let refusedURL = "";
@@ -52,14 +58,14 @@ for (const browserType of [chromium, firefox]) {
       expect(failure).toContain('"status":503');
       expect(failure).toContain('"readyState":"complete"');
       expect(failure).toContain('"message":null');
-      await first.page.evaluate(() => { for (let index = 0; index < 40; index++) console.error("overflow control ".repeat(200)); });
+      await overflowPreview(first.page);
       await first.page.waitForFunction("document.readyState === 'complete'");
       const bounded = await withAdmission(readPreview);
       expect((bounded.match(/"kind":/g) ?? []).length).toBe(32);
       expect(bounded).not.toContain('"dropped":0');
       expect(bounded.length).toBeLessThan(90_000);
       const evaluate = first.page.evaluate;
-      first.page.evaluate = () => new Promise<never>(() => {});
+      first.page.evaluate = stalledEvaluation;
       const started = performance.now();
       try {
         const stalled = await withAdmission(readPreview, 1000);

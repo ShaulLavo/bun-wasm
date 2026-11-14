@@ -10,6 +10,8 @@ at most 32 page errors, console errors, failed requests and HTTP error response
 records, with bounded text. It serializes these records only when a cell fails.
 URL and DOM readiness are read within 250 ms of the existing two-second failure
 observation budget. A failed DOM read retains the already observed events.
+Available preview evidence is saved before cleanup even when every later host
+evaluation fails, so a failed server stop cannot discard it.
 Closing or replacing the preview, or closing the transport, detaches listeners
 and clears the retained records. Success behavior, templates, assertions and
 phase deadlines are unchanged.
