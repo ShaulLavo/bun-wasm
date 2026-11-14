@@ -9,12 +9,20 @@ export function installPortObserver(endpoint: string): void {
   let next = 0;
   let sequence = 0;
   let queued: unknown[] = [];
+  const nativeFetch = globalThis.fetch.bind(globalThis);
+  const pending = new Set<Promise<unknown>>();
   const flush = () => {
     if (!queued.length) return;
     const batch = queued;
     queued = [];
-    void fetch(endpoint, { method: "POST", body: JSON.stringify(batch), keepalive: true }).catch(() => {});
+    const sent = nativeFetch(endpoint, { method: "POST", body: JSON.stringify(batch), keepalive: true }).catch(() => {});
+    pending.add(sent);
+    void sent.finally(() => pending.delete(sent));
   };
+  Reflect.set(globalThis, Symbol.for("bun-wasm.storage-firefox-drain"), async () => {
+    flush();
+    await Promise.all(Array.from(pending));
+  });
   const emit = (event: unknown) => {
     queued.push({ realm, sequence: ++sequence, at: performance.timeOrigin + performance.now(), url: location.href, event });
     if (queued.length >= 16) flush();
@@ -38,7 +46,7 @@ export function installPortObserver(endpoint: string): void {
     const generation: unknown = requests && typeof requests === "object" ? Reflect.get(requests, "generation") : undefined;
     const state = { id: ++next, owner: typeof owner === "number" ? owner : undefined, generation: typeof generation === "number" ? generation : undefined, recent: [] as unknown[], seen: 0 };
     ports.set(port, state);
-    emit({ kind: "port", ...state, role });
+    emit({ kind: "port", id: state.id, owner: state.owner, generation: state.generation, role });
     port.addEventListener("message", event => note(port, "receive", event.data));
     port.addEventListener("messageerror", event => {
       emit({ kind: "messageerror", port: state.id, owner: state.owner, generation: state.generation, trusted: event.isTrusted, recent: state.recent.slice() });
@@ -97,6 +105,12 @@ function waitFor(worker: Worker, expected: string): Promise<unknown> {
   });
 }
 
+async function drainObserver(): Promise<void> {
+  const drain: unknown = Reflect.get(globalThis, Symbol.for("bun-wasm.storage-firefox-drain"));
+  if (typeof drain !== "function") throw Error("observer drain missing");
+  await drain();
+}
+
 export async function qualify(url: string): Promise<unknown> {
   const root = createFilesystemConnection();
   const owner = new Worker(`${url}?role=service`, { type: "module" });
@@ -118,6 +132,10 @@ export async function qualify(url: string): Promise<unknown> {
     child.postMessage({ inject: true });
     const after = await injected;
     const healthyRoot = await fs.asyncCall("preopen", ["/"]);
+    const flushed = waitFor(owner, "flushed");
+    owner.postMessage({ flush: true });
+    await flushed;
+    await drainObserver();
     return { before, after, healthyRoot, isolated: crossOriginIsolated };
   } finally {
     child?.terminate();
@@ -132,7 +150,11 @@ export async function qualify(url: string): Promise<unknown> {
 function qualificationWorker(role: string): void {
   if (role === "service") {
     const service = new FilesystemService(new MemoryBackend());
-    globalThis.onmessage = ({ data }: MessageEvent<{ connect: FilesystemConnection }>) => service.connect(data.connect);
+    globalThis.onmessage = async ({ data }: MessageEvent<{ connect?: FilesystemConnection; flush?: boolean }>) => {
+      if (data.connect) return service.connect(data.connect);
+      await drainObserver();
+      self.postMessage({ type: "flushed" });
+    };
     return;
   }
   let fs: FilesystemClient;
@@ -145,13 +167,16 @@ function qualificationWorker(role: string): void {
     const root = await fs.asyncCall("preopen", ["/"]);
     self.postMessage({ type: "positive", root });
   };
-  function inject(): void {
+  async function inject(): Promise<void> {
     port.dispatchEvent(new MessageEvent("messageerror"));
-    try { fs.preopen("/"); self.postMessage({ type: "injected", missed: true }); }
+    let result: Record<string, unknown>;
+    try { fs.preopen("/"); result = { type: "injected", missed: true }; }
     catch (error) {
       const closed = error instanceof Error && "code" in error && error.code === "CLOSED";
-      self.postMessage({ type: "injected", closed, error: String(error) });
+      result = { type: "injected", closed, error: String(error) };
     }
+    await drainObserver();
+    self.postMessage(result);
   }
 }
 if (typeof location !== "undefined" && location.pathname === "/probe.js") {
