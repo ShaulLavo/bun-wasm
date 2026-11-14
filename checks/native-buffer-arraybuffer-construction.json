@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/buffer-arraybuffer-construction",
+  "engines": ["quickjs", "jsc", "browser"]
+}

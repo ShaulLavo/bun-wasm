@@ -2,7 +2,8 @@
 import { describe, expect, test } from "bun:test";
 import { GroupOp } from "../node_modules/waffle/group/protocol.ts";
 import { MEMORY_PUBLICATION, MODULE_PUBLICATION } from "../src/nested/publication";
-import { BACKEND, MAX_RESOURCES } from "../src/nested/wire";
+import type { RegionProvider } from "../src/nested/host";
+import { BACKEND, MAX_RESOURCES, WITHDRAWN, WITHDRAW_ABSENT, WITHDRAW_REFUSED } from "../src/nested/wire";
 import { PAGE, count, counters, errorText, group, handle, type Member, type ReplyOf } from "./nested-host-owner";
 
 const encoder = new TextEncoder();
@@ -88,12 +89,74 @@ describe("published memories", () => {
     expect(first).toBe(0xfffffffe);
     const attached = handle(receiver.send({ AttachMemory: { token: first } }));
     expect(attached >>> 0).toBeGreaterThanOrEqual(BACKEND);
-    expect(count(sender.send({ Withdraw: { token: first } }))).toBe(0);
+    expect(count(sender.send({ Withdraw: { token: first } }))).toBe(WITHDRAWN);
     expect(errorText(receiver.send({ AttachMemory: { token: first } }))).toContain("BadF");
-    expect(errorText(sender.send({ Withdraw: { token: first } }))).toContain("BadF");
+    // A withdrawal asked again, as after a lost reply, is answered "absent" and changes nothing.
+    const settled = counters(sender.owner);
+    expect(count(sender.send({ Withdraw: { token: first } }))).toBe(WITHDRAW_ABSENT);
+    expect(count(sender.send({ Withdraw: { token: first } }))).toBe(WITHDRAW_ABSENT);
+    expect(counters(sender.owner)).toEqual(settled);
     const second = count(sender.send({ PublishMemory: { memory } }));
     expect(second).toBe(0xffffffff);
+    // The repeat cannot reach a later publication: a token is issued once.
+    expect(count(sender.send({ Withdraw: { token: first } }))).toBe(WITHDRAW_ABSENT);
+    expect(sender.owner.snapshot().published).toBe(1);
     expect(errorText(sender.send({ PublishMemory: { memory } }))).toContain("Again");
+  });
+
+  test("only a caller the group no longer serves is answered as refused; another status is no answer", () => {
+    const { join } = group();
+    const sender = join();
+    const provider = Reflect.get(sender.host, "provider") as RegionProvider;
+    sender.host.bindProvider({ ...provider, shm_withdraw: () => -71 });
+    expect(count(sender.send({ Withdraw: { token: 1 } }))).toBe(WITHDRAW_REFUSED);
+    // A status that may pass is an error reply, which the guest does not settle on.
+    for (const [status, name] of [[-6, "Again"], [-48, "NoMem"], [-28, "Inval"], [-99, "-99"]] as const) {
+      sender.host.bindProvider({ ...provider, shm_withdraw: () => status });
+      expect(errorText(sender.send({ Withdraw: { token: 1 } }))).toContain(name);
+    }
+    // A guest with no group member can never withdraw: refused, not thrown.
+    Reflect.set(sender.host, "provider", undefined);
+    expect(count(sender.send({ Withdraw: { token: 1 } }))).toBe(WITHDRAW_REFUSED);
+  });
+
+  test("a host exception before the owner acted is no answer, and asking again withdraws", () => {
+    const { join } = group();
+    const sender = join();
+    const provider = Reflect.get(sender.host, "provider") as RegionProvider;
+    const memory = handle(sender.send({ Reserve: { initial: 1, maximum: 1 } }));
+    const token = count(sender.send({ PublishMemory: { memory } }));
+    let fail = true;
+    sender.host.bindProvider({ ...provider, shm_withdraw(value) {
+      if (fail) { fail = false; throw new RangeError("Maximum call stack size exceeded"); }
+      return provider.shm_withdraw(value);
+    } });
+    // An error reply, not a count: nothing in it says the publication is gone, and it is not.
+    expect(errorText(sender.send({ Withdraw: { token } }))).toContain("Maximum call stack size exceeded");
+    expect(sender.owner.snapshot().published).toBe(1);
+    expect(count(sender.send({ Withdraw: { token } }))).toBe(WITHDRAWN);
+    expect(sender.owner.snapshot().published).toBe(0);
+  });
+
+  test("a host exception after the owner acted is no answer either, and asking again is answered absent", () => {
+    const { join } = group();
+    const sender = join();
+    const provider = Reflect.get(sender.host, "provider") as RegionProvider;
+    const memory = handle(sender.send({ Reserve: { initial: 1, maximum: 1 } }));
+    const token = count(sender.send({ PublishMemory: { memory } }));
+    const later = count(sender.send({ PublishMemory: { memory } }));
+    let fail = true;
+    sender.host.bindProvider({ ...provider, shm_withdraw(value) {
+      const status = provider.shm_withdraw(value);
+      if (fail) { fail = false; throw new RangeError("reply lost"); }
+      return status;
+    } });
+    expect(errorText(sender.send({ Withdraw: { token } }))).toContain("reply lost");
+    expect(sender.owner.snapshot().published).toBe(1);
+    // The same token again reaches nothing else: the later publication stays.
+    expect(count(sender.send({ Withdraw: { token } }))).toBe(WITHDRAW_ABSENT);
+    expect(sender.owner.snapshot().published).toBe(1);
+    expect(count(sender.send({ Withdraw: { token: later } }))).toBe(WITHDRAWN);
   });
 
   test("only the publishing incarnation withdraws, and a token from another group names nothing", () => {
@@ -101,7 +164,7 @@ describe("published memories", () => {
     const sender = join(), peer = join(sender), foreign = join();
     const memory = handle(sender.send({ Reserve: { initial: 1, maximum: 1 } }));
     const token = count(sender.send({ PublishMemory: { memory } }));
-    expect(errorText(peer.send({ Withdraw: { token } }))).toContain("BadF");
+    expect(count(peer.send({ Withdraw: { token } }))).toBe(WITHDRAW_ABSENT);
     expect(errorText(foreign.send({ AttachMemory: { token } }))).toContain("BadF");
     expect(sender.owner.snapshot().published).toBe(1);
   });

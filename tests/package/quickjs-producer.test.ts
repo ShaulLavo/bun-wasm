@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, copyFile, readFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseProgramReceipt, record } from "../../scripts/guest-core-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
@@ -19,6 +19,8 @@ async function producer(fetchStatus: number) {
     const trace = join(root, "private/trace");
     await writeFile(trace, "");
     await copyFile(new URL("../../scripts/build-engine-quickjs.sh", import.meta.url), join(root, "scripts/build-engine-quickjs.sh"));
+    await mkdir(join(root, "scripts/src"), { recursive: true });
+    await copyFile(new URL("../../scripts/src/transfer-fault.sh", import.meta.url), join(root, "scripts/src/transfer-fault.sh"));
     await writeFile(join(root, "env.sh"), 'export CC_wasm32_wasip1="$WASI_SDK_PATH/bin/clang"\n');
     await writeFile(join(root, "private/quickjs.wasm"), quickjsPair().side);
     await executable(fixture.rustc, 'printf "compiler %s\\n" "$*" >> "$TRACE"\n' + (await readFile(fixture.rustc, "utf8")).replace(/^#![^\n]*\n/, "").replace('case "$2"', 'case "${2:-}"'));

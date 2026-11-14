@@ -21,6 +21,9 @@ mod crypto;
 pub(crate) mod data;
 mod directory;
 mod encoding;
+#[cfg(all(test, feature = "engine-split"))]
+#[allow(dead_code, unused_imports)]
+mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;
 mod glob;
@@ -37,6 +40,10 @@ mod node_path;
 #[cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 pub(crate) mod ops;
 mod parse_env;
+#[cfg(all(test, feature = "engine-split"))]
+#[allow(dead_code)]
+#[path = "../../bunwasm-engine-quickjs/src/vm.rs"]
+mod quickjs_embedding;
 mod resolve;
 mod semver;
 mod sourcemap;
@@ -45,6 +52,12 @@ mod streams;
 mod tls;
 pub mod transpiler;
 mod wasm;
+// Declared here and not in `wasm.rs`: `scripts/wasm-tables.test.ts` builds `wasm.rs` into a
+// crate of its own, and that crate has no `compression` module, whose test allocator this
+// test counts with.
+#[cfg(test)]
+#[path = "wasm/lane_allocation_tests.rs"]
+mod lane_allocation_tests;
 mod x509;
 mod zlib_ffi;
 

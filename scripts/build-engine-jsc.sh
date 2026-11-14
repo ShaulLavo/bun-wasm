@@ -38,12 +38,24 @@ export CARGO_TARGET_DIR="$out/target"
 export JSC_BUILD_DIR
 export WASI_SDK="$WASI_SDK_PATH"
 inputs=''
-trap 'rm -f -- "$inputs"' EXIT
+trap 'if [[ -n "$inputs" ]]; then rm -f -- "$inputs"; fi' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-inputs=$(mktemp "$TMPDIR/bun-jsc-engine-inputs-XXXXXX")
-bun "$root/scripts/guest-engine-receipt.ts" inputs jsc "${profile_argument[@]}" > "$inputs"
 side="$out/engine.wasm"
+# JSC_TRANSFER_FAULT=1: a validation side (scripts/src/transfer-fault.sh). Never a release: it
+# gets no receipt and is not made in a directory that holds a release side.
+# shellcheck source=scripts/src/transfer-fault.sh
+source "$root/scripts/src/transfer-fault.sh"
+select_transfer_fault JSC_TRANSFER_FAULT
+if [[ $transfer_fault == 1 ]]; then
+  if [[ -e "$side" || -e "$side.engine.json" ]]; then
+    echo 'error: use a separate JSC_ENGINE_BUILD_DIR for a transfer-fault side' >&2
+    exit 1
+  fi
+else
+  inputs=$(mktemp "$TMPDIR/bun-jsc-engine-inputs-XXXXXX")
+  bun "$root/scripts/guest-engine-receipt.ts" inputs jsc "${profile_argument[@]}" > "$inputs"
+fi
 # No side leaves this producer unless its interpreter keeps the measured guarded frame
 # (docs/stack-limits.md): every native reentry path's depth depends on it.
 check_interpreter_frame() {
@@ -73,7 +85,7 @@ if [[ ${#group_errno_wraps[@]} -gt 0 ]]; then
 fi
 # Undefined symbols are emitted as imports, never accepted as proof of closure.
 # The separately released real gate must admit every retained import against core.
-"$WASI_SDK_PATH/bin/wasm-ld" --shared "${link_profile[@]}" --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
+"$WASI_SDK_PATH/bin/wasm-ld" --shared "${link_profile[@]}" "${transfer_fault_wraps[@]}" --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
   --import-memory=env,memory --import-table --allow-undefined \
   --export=jsc_ctor_value --export=__stack_pointer --export=__wasm_call_ctors \
   --export=jsc_register --export=jsc_run \
@@ -83,4 +95,6 @@ fi
 node "$root/scripts/src/engine-explicit-init.ts" jsc "$out/engine.spilled.wasm" "$side" "${explicit_profile[@]}"
 wasm-tools validate "$side"
 check_interpreter_frame
-bun "$root/scripts/guest-engine-receipt.ts" write "$side" "$inputs"
+if [[ -n "$inputs" ]]; then
+  bun "$root/scripts/guest-engine-receipt.ts" write "$side" "$inputs"
+fi

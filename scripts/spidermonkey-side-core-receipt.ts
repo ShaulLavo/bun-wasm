@@ -68,6 +68,9 @@ export function parseInputs(value: unknown): SideCoreInputs {
 }
 
 export function captureInputs(repository: string, nativeDirectory: string): SideCoreInputs {
+  if ((process.env.SPIDERMONKEY_TRANSFER_FAULT ?? "0") !== "0" || process.env.BUN_WASM_TRANSFER_FAULT !== undefined) {
+    throw new Error("Qualified SpiderMonkey program receipts require SPIDERMONKEY_TRANSFER_FAULT=0 and no BUN_WASM_TRANSFER_FAULT");
+  }
   verifyEngineInputs(nativeDirectory);
   const receipt = readFileSync(resolve(nativeDirectory, "native-inputs.json"));
   const native: Record<string, unknown> = JSON.parse(receipt.toString("utf8"));
