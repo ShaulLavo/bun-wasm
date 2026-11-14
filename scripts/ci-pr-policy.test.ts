@@ -40,10 +40,10 @@ test("draft PRs defer native and browser work until ready without changing push 
   }
 });
 
-test("main pushes replace running and pending runs while PR cancellation and isolated manual groups remain", () => {
+test("main pushes keep the running run and newest pending run while PR cancellation and manual groups remain", () => {
   expect(record(workflow.concurrency)).toEqual({
     group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref == 'refs/heads/main' && 'push-main' || format('run-{0}', github.run_id) }}",
-    "cancel-in-progress": "${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}",
+    "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
   });
   const group = (event: string, run: number, pr = 0, ref = "refs/heads/main") => {
     const expression = String(record(workflow.concurrency).group).split("-${{ ")[1]?.replace(/ }}$/, "")
@@ -63,7 +63,7 @@ test("main pushes replace running and pending runs while PR cancellation and iso
       .replaceAll("github.event_name", JSON.stringify(event)).replaceAll("github.ref", JSON.stringify(ref));
     return new Function(`return (${expression})`)();
   };
-  expect(cancels("push")).toBe(true);
+  expect(cancels("push")).toBe(false);
   expect(cancels("pull_request")).toBe(true);
   expect(cancels("workflow_dispatch")).toBe(false);
   expect(cancels("push", "refs/heads/other")).toBe(false);

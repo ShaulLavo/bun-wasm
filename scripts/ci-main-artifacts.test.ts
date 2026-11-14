@@ -165,7 +165,7 @@ test.each(["failure", "cancelled", "skipped"])("the final main gate rejects %s f
   expect(object(jobs["ci-result"]).if).toContain("always()");
 }));
 
-test("superseded main cancellation stops every job, including always-guarded aggregates", () => {
+test("explicit main cancellation stops every job, including always-guarded aggregates", () => {
   const outputs = { ...all, "shared-native": "true" };
   for (const [id, value] of Object.entries(jobs)) {
     expect(admitted(object(value).if, outputs, { cancelled: true }), id).toBe(false);

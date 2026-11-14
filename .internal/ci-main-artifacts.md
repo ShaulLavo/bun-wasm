@@ -1,9 +1,9 @@
-# Latest main CI and artifacts
+# Main CI and artifacts
 
 Status: Approved.
 
-Main pushes share `CI-push-main` and cancel the running and pending superseded
-main runs. PRs still cancel earlier runs of the same PR. Manual dispatches keep
+Main pushes share `CI-push-main` and let the running run finish. GitHub retains
+only the newest pending main run. PRs still cancel earlier runs of the same PR. Manual dispatches keep
 their unique run groups. The separate native identity locks are unchanged.
 The Web host and Code quality aggregates qualify their job-level `always()` with
 a main-only cancellation guard. Processes already rejects cancellation. Failed
