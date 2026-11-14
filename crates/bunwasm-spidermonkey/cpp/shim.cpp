@@ -2,10 +2,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include <vector>
 #include "jsapi.h"
 #include "js/CompilationAndEvaluation.h"
 #include "js/Context.h"
+#include "js/Conversions.h"
 #include "js/Exception.h"
 #include "js/GCAPI.h"
 #include "js/GlobalObject.h"
@@ -84,6 +86,25 @@ extern "C" bsm_handle bsm_eval(const char* source, size_t len, uint32_t* status)
   if (!ok) { require(JS_GetPendingException(context, &result), "pending exception failed"); JS_ClearPendingException(context); }
   handles.push_back(new JS::PersistentRootedValue(context, result));
   return handles.size();
+}
+// Probe support for the smoke's parser corpus (scripts/spidermonkey-parser-semantics.ts).
+extern "C" bool bsm_set_global(const char* name, size_t len, bsm_handle handle) {
+  JSAutoRealm realm(context, *global);
+  JS::RootedObject object(context, *global);
+  JS::RootedValue value(context, handles.at(handle - 1)->get());
+  std::string key(name, len);
+  return JS_SetProperty(context, object, key.c_str(), value);
+}
+extern "C" bool bsm_print(bsm_handle handle) {
+  JSAutoRealm realm(context, *global);
+  JS::RootedValue value(context, handles.at(handle - 1)->get());
+  JS::RootedString text(context, JS::ToString(context, value));
+  if (!text) return false;
+  JS::UniqueChars bytes = JS_EncodeStringToUTF8(context, text);
+  if (!bytes) return false;
+  fputs(bytes.get(), stdout);
+  fflush(stdout);
+  return true;
 }
 extern "C" void bsm_release(bsm_handle handle) {
   if (!handle) return;
