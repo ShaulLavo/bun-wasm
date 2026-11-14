@@ -91,6 +91,35 @@ test.each([0, 23])("cache startup and teardown preserve command exit %s and laun
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test.each([0, 23])("producer diagnostics retain cache phases and counters for exit %s", status => {
+  const { root, env } = fixture();
+  try {
+    const result = run({ ...env, BUN_WASM_PRODUCER_DIAGNOSTICS: root, BUN_WASM_PRODUCER_STARTED_MS: String(Date.now()) },
+      ["bash", "-c", `sccache --check-live; exit ${status}`]);
+    expect(result.status, result.stderr).toBe(status);
+    expect(result.stdout).toContain("Compile requests 0");
+    const phases = readFileSync(join(root, "phases.log"), "utf8");
+    expect(phases.match(/phase=cache-(?:start|stop) (?:start|end)/g)).toEqual([
+      "phase=cache-start start", "phase=cache-start end", "phase=cache-stop start", "phase=cache-stop end",
+    ]);
+    expectStopped(root);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the producer deadline bounds cache startup and retains its last phase", () => {
+  const { root, env } = fixture();
+  try {
+    writeFileSync(join(root, "bin/sccache"), '#!/usr/bin/env bash\necho cache-start-stalled; exec sleep 60\n', { mode: 0o755 });
+    const diagnostics = join(root, "diagnostics");
+    const result = Bun.spawnSync([process.execPath, join(import.meta.dir, "producer-diagnostics.ts"), "run", diagnostics,
+      String(Date.now() + 2000), "bash", wrapper, "true"], { env, timeout: 15000 });
+    expect(result.exitCode, result.stderr.toString()).toBe(124);
+    expect(readFileSync(join(diagnostics, "phases.log"), "utf8")).toContain("phase=cache-start start");
+    expect(readFileSync(join(diagnostics, "output-tail.log"), "utf8")).toContain("cache-start-stalled");
+    expect(readdirSync(join(root, "sockets"))).toEqual([]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 20000);
+
 test("commands without compiler requests still have truthful zero-request stats", () => {
   const { root, env } = fixture();
   try {

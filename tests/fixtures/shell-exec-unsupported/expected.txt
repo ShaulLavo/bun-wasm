@@ -1,0 +1,1 @@
+unsupported exec preserves ordinary spawn and explicit status 126

@@ -177,6 +177,68 @@ fn runtime_proc_inherited_fds_are_a_stable_launch_snapshot() {
     }
 }
 
+#[test]
+fn runtime_proc_exec_links_and_rejects_replacement_without_committing() {
+    use wasm_encoder::{
+        EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
+    };
+
+    let mut types = TypeSection::new();
+    types
+        .ty()
+        .function([ValType::I32, ValType::I32], [ValType::I32]);
+    let mut imports = ImportSection::new();
+    imports.import("runtime_proc", "exec", EntityType::Function(0));
+    let mut exports = ExportSection::new();
+    exports.export("exec", ExportKind::Func, 0);
+    let mut binary = wasm_encoder::Module::new();
+    binary.section(&types).section(&imports).section(&exports);
+    let binary = binary.finish();
+
+    for mut f in Fixture::both() {
+        let module = Module::new(f.store.engine(), &binary).unwrap();
+        let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+        let exec = instance
+            .get_typed_func::<(i32, i32), i32>(&mut f.store, "exec")
+            .unwrap();
+        let pid = f.store.data().processes.pid;
+        let inherited = [0, 1, 2].map(|index| f.call("runtime_proc", "inherited_fd", index));
+        let [reader, writer] = f.pipe();
+        let request = br#"{"executable":"/bin/bun","argv":["bun"],"env":{},"cwd":"/","fds":[]}"#;
+        f.write(1024, request);
+        assert_eq!(
+            exec.call(&mut f.store, (1024, request.len() as i32))
+                .unwrap(),
+            process::NOTSUP
+        );
+        assert!(f.store.data().cancel.check().is_ok());
+        assert_eq!(f.store.data().processes.pid, pid);
+        assert_eq!(
+            [0, 1, 2].map(|index| f.call("runtime_proc", "inherited_fd", index)),
+            inherited
+        );
+        assert_eq!(f.call("runtime_proc", "write", (writer, 1024, 1)), 1);
+        assert_eq!(f.call("runtime_proc", "read", (reader, 2048, 1)), 1);
+        assert_eq!(f.bytes(2048, 1), b"{");
+        let detail = f.call("runtime_proc", "spawn_error", (0, 2048, 1024));
+        assert!(
+            String::from_utf8(f.bytes(2048, detail as usize))
+                .unwrap()
+                .contains("not supported")
+        );
+
+        f.store.data().cancel.kill(15);
+        assert!(
+            exec.call(&mut f.store, (1024, request.len() as i32))
+                .is_err()
+        );
+        assert_eq!(
+            f.store.data().cancel.select(FinalOutcome::Exit(126)),
+            FinalOutcome::Signal(15)
+        );
+    }
+}
+
 struct Fixture {
     store: Store<Host>,
     linker: Linker<Host>,
