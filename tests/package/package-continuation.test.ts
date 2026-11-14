@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import type { Runtime, RuntimeProcessContext } from "../../node_modules/waffle/index.ts";
-import type { Stream } from "../../node_modules/waffle/core/descriptors.ts";
-import { setSignalDisposition, SignalDisposition } from "../../node_modules/waffle/proc/signals.ts";
+import type { Runtime, RuntimeProcessContext } from "waffle";
+import type { Stream } from "waffle/core/descriptors";
+import { setSignalDisposition, SignalDisposition } from "waffle/proc/signals";
 import { packageContinuation, admittedIdentity } from "../../src/package-continuation.js";
 import { parsePackagePlan } from "../../src/package-continuation-plan.js";
 import { startupDiagnostic } from "../../src/package-continuation-diagnostics.js";
@@ -86,7 +86,7 @@ test("captured missing/denied startup error is emitted once; disposal never echo
 
 testRuntime("malformed committed plan reports original execution failure once and stop does not rethrow", async f => {
     const run = await f.shell.spawn("/continuation", ["/continuation", "not json"]);
-    expect(await run.exit).toMatchObject({ kind: "exited", code: 126 });
+    expect(await run.exit).toMatchObject({ kind: "start-failed", error: "EIO" });
 });
 
 for (const silent of [false, true]) {
@@ -318,13 +318,13 @@ test("revocation while service readiness is held prevents late admission", async
   } finally { ready.resolve(); await f.dispose(); }
 });
 
-test("an exception inside the continuation body is reported once and stop joins a successful fence", async () => {
+test("an exception before entry selects startup failure once and stop joins the caught fence", async () => {
   const original = new Error("original adapter-body failure");
   let runtime: Runtime;
   const f = await fixture((context, service) => packageContinuation({ filesystem: { ...runtime.filesystem, connect() { throw original; } } })(context, service));
   runtime = f.runtime;
   try {
-    expect(await (await f.start()).exit).toMatchObject({ kind: "exited", code: 126 });
+    expect(await (await f.start()).exit).toMatchObject({ kind: "start-failed", error: "EIO" });
     expect(f.errors).toEqual([original]);
   } finally { await f.dispose(); }
 });

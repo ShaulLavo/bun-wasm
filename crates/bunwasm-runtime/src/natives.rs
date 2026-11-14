@@ -422,6 +422,11 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::html_rewriter::install(&mut t);
     crate::x509::install(&mut t);
     install_process(&mut t, state);
+    t.add("packageScriptsHandoff", |a| {
+        Ok(Val::Num(
+            crate::host::package_scripts_handoff(a.str(0)?) as f64
+        ))
+    });
     install_fs(&mut t);
     install_fds(&mut t, state);
     crate::directory::install(&mut t, state);

@@ -28,6 +28,7 @@ function runtime(cwd: string, name: string, args: string[] = [], options: { exit
   };
   const scripts = factory({
     native: {
+      platformInfo: { version: "1.4.4", arch: "wasm32" },
       mainArg: () => name, setMainPath() {}, exists: existsSync, readFileUtf8: (file: string) => readFileSync(file, "utf8"),
       stat: (file: string, lstat: boolean) => lstat ? lstatSync(file) : statSync(file), readlink: readlinkSync,
       readdir: (file: string) => readdirSync(file, { withFileTypes: true }).map(entry => [entry.name, entry.isDirectory() ? "dir" : entry.isSymbolicLink() ? "symlink" : "file"]),
@@ -68,6 +69,28 @@ test("a package script runs in the system shell with pre and post hooks and esca
   expect(guest.env.npm_execpath).toBe("/bin/bun");
   expect(guest.env.PATH!.split(":").slice(0, 2)).toEqual([path.join(cwd, "node_modules/.bin"), path.join(path.dirname(cwd), "node_modules/.bin")]);
   expect(guest.exitCode).toBeUndefined();
+}));
+
+test("private continuation preparation snapshots the guest environment and prepared commands without enabling handoff", () => project({ prebuild: "npm run before", build: "npx vite", postbuild: "pnpm run after" }, async cwd => {
+  const f = runtime(cwd, "build", ["a b", "$HOME"], { execArgv: ["--silent"] });
+  const command = f.scripts.resolve(path.join(cwd, "build"));
+  f.guest.env.ACTUAL = "after resolve";
+  f.guest.env.EMPTY = "";
+  const value = f.scripts.continuationPlan(command);
+  expect(value).toMatchObject({ version: 1, cwd, silent: true, color: false,
+    pre: { name: "prebuild", original: "npm run before", command: "bun run before" },
+    main: { name: "build", original: "npx vite", command: 'bun x vite "a b" "\\$HOME"' },
+    post: { name: "postbuild", original: "pnpm run after", command: "bun run after" },
+    env: { ACTUAL: "after resolve", EMPTY: "", npm_execpath: "/bin/bun", PATH: f.guest.env.PATH }, footer: "Bun v1.4.4 (WASI wasm32)\n" });
+  f.guest.env.ACTUAL = "later";
+  expect(value.env.ACTUAL).toBe("after resolve");
+  expect(Object.isFrozen(value.env)).toBe(true);
+  expect(f.guest.env.npm_execpath).toBeUndefined();
+  expect(f.guest.env.npm_lifecycle_event).toBeUndefined();
+  expect(f.spawned).toHaveLength(0);
+  expect(f.stderr()).toBe("");
+  await f.scripts.run(command);
+  expect(f.spawned).toHaveLength(3);
 }));
 
 test("a failing script stops the run with Bun's message and its exit code", () => project({ test: "exit 3", posttest: "echo never", quiet: "exit 2", killed: "sleep 9", interrupted: "sleep 9" }, async cwd => {

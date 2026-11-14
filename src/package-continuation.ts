@@ -1,11 +1,11 @@
 import type { GuestLauncher, Runtime, RuntimeSupervisor } from "waffle";
 import type { ProcessContext, ProcessExit } from "waffle/proc/types";
-import { ProcessError } from "../node_modules/waffle/proc/types.ts";
-import { startFailureErrno } from "../node_modules/waffle/proc/start-errno.js";
-import { describeStartError, diagnosticBytes, diagnosticText } from "../node_modules/waffle/proc/start-diagnostic.ts";
+import { ProcessError } from "waffle/proc/types";
+import { startFailureErrno } from "./package-start-diagnostic.js";
+import { describeStartError, diagnosticBytes, diagnosticText } from "./package-start-diagnostic.js";
 import { normalize } from "waffle/core/path";
 import { ContinuationIO } from "./package-continuation-io.js";
-import { FilesystemClient } from "../node_modules/waffle/fs/client.ts";
+import { FilesystemClient } from "waffle/fs/client";
 import type { FilesystemIdentity, FilesystemReservation } from "waffle/fs/protocol";
 import { announcement, scriptDiagnostic, startupDiagnostic } from "./package-continuation-diagnostics.js";
 import { PackageChildren } from "./package-continuation-children.js";
@@ -215,6 +215,7 @@ function launchContinuation(runtime: Pick<Runtime, "filesystem">, context: Param
     let children: PackageChildren | undefined;
     let settlement: Promise<void> | undefined;
     let reported: { readonly error: unknown } | undefined;
+    let entered = false;
     const settle = () => settlement ??= io?.settle() ?? Promise.resolve();
     const work = Promise.resolve().then(async () => {
       const plan = parsePackagePlan(JSON.parse(context.request.argv[1] ?? "null"));
@@ -230,6 +231,7 @@ function launchContinuation(runtime: Pick<Runtime, "filesystem">, context: Param
       children = new PackageChildren(filesystem, service, context, transport, identity);
       service.registerController(context.pid, { filesystem: identity });
       if (!context.started()) return;
+      entered = true;
       const result = await run(supervisor, context, owner, io, children, plan);
       await settle();
       owner.check();
@@ -239,7 +241,8 @@ function launchContinuation(runtime: Pick<Runtime, "filesystem">, context: Param
     const fence = work.catch(error => {
       if (owner.abort.signal.aborted) return;
       reported = { error };
-      context.fail(error);
+      if (entered) context.fail(error);
+      else context.startFailed(error);
     });
     return { async terminate() {
       owner.revoke();

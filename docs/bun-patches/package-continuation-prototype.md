@@ -1,8 +1,8 @@
 # Private package continuation prototype
 
-This source component is unenabled. The package entrypoints and `installBunAdapters`
-do not import or register it. No guest import, package-script trigger or native binding
-uses it. Production package scripts continue through the existing guest loop.
+The package-script trigger is unenabled. The next bounded unit installs a private target
+and binding, recorded in `package-continuation-handoff.md`. Production package scripts
+continue through the existing guest loop.
 
 | Local source | Classification | Source and revision |
 | --- | --- | --- |
@@ -16,10 +16,9 @@ The continuation allocates no WebAssembly memory and launches no Worker. Bash ch
 still use their ordinary process memory and Worker. The prepared command is passed to
 Bash unchanged; the guest remains responsible for rewriting and argument quoting.
 
-The prototype uses pinned Waffle source internals where the release has no package
-subpath export. It is not added to the published package file list. A production binding
-requires independent implementation review, native precommit fallback, live descriptor
-handoff and actual maintained-engine acceptance. Child controllers belong to their
+The installed component uses published Waffle entrypoints, with its restricted reservation
+diagnostic adaptation recorded separately. Trigger enablement requires independent
+implementation review and actual maintained-engine acceptance. Child controllers belong to their
 installed launchers; runtime-proc diagnostic retention supplies startup details without
 an extra continuation controller. Synchronous reservation errors use the release's
 bounded diagnostic encoding.

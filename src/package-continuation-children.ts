@@ -1,11 +1,11 @@
 import type { ProcessService, RuntimeProcessContext } from "waffle";
-import { FilesystemClient } from "../node_modules/waffle/fs/client.ts";
-import { createProcessFilesystemIdentity, reapFilesystem, revokeFilesystem, type FilesystemIdentity } from "../node_modules/waffle/fs/protocol.ts";
-import { createFilesystemDescriptorCodec } from "../node_modules/waffle/proc/filesystem-codec.ts";
-import { createRuntimeTerminalCodec } from "../node_modules/waffle/browser/runtime-terminals.ts";
-import { createWorkerPipeCodec } from "../node_modules/waffle/proc/worker-pipes.ts";
-import { attachPipePublicationRegistry } from "../node_modules/waffle/proc/pipes.ts";
-import { WorkerProcessClient, workerProcessPipeRegistry, type WorkerProcessMessage, type WorkerProcessTransport } from "../node_modules/waffle/proc/worker-client.ts";
+import { FilesystemClient } from "waffle/fs/client";
+import { createProcessFilesystemIdentity, reapFilesystem, revokeFilesystem, type FilesystemIdentity } from "waffle/fs/protocol";
+import { createFilesystemDescriptorCodec } from "waffle/proc/filesystem-codec";
+import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
+import { createWorkerPipeCodec } from "waffle/proc/worker-pipes";
+import { attachPipePublicationRegistry } from "waffle/proc/pipes";
+import { WorkerProcessClient, workerProcessPipeRegistry, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { SpawnRequest } from "waffle/proc/types";
 
 function prepare(filesystem: FilesystemClient, identity: FilesystemIdentity, registry: ReturnType<typeof attachPipePublicationRegistry>, pid: number) {

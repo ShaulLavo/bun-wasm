@@ -1,7 +1,7 @@
 import type { DescriptorTable, Resource } from "waffle/core/descriptors";
-import { FilesystemClient } from "../node_modules/waffle/fs/client.ts";
-import { shareFileResource, withFileOffset } from "../node_modules/waffle/core/open-file.ts";
-import { CommandStdioError } from "../node_modules/waffle/proc/command.ts";
+import { FilesystemClient } from "waffle/fs/client";
+import { shareFileResource, withFileOffset } from "waffle/core/open-file";
+import { CommandStdioError } from "waffle/proc/command";
 
 /** Restricted CommandStdio adaptation: one awaited stderr writer shares its process's FS client. */
 export class ContinuationIO {

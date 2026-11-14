@@ -228,6 +228,27 @@
       if (!await runScript(name, body, args, silent)) return;
     }
   }
+
+  /** Private preparation only. The current run loop does not invoke the handoff binding. */
+  function continuationPlan(command: BunWasm.ScriptRuntimeCommand) {
+    const cwd = process.cwd();
+    const table = scripts(cwd);
+    function phase(name: string, args: readonly string[]) {
+      const original = table[name];
+      if (typeof original !== "string") return null;
+      return Object.freeze({ name, original, command: [replacePackageManagerRun(original)].concat(args.map(quote)).join(" ") });
+    }
+    const main = phase(command.name, command.args);
+    if (!main) return null;
+    const env: Record<string, string> = Object.create(null);
+    for (const [name, value] of Object.entries(process.env)) {
+      if (typeof value === "string") env[name] = value;
+    }
+    env.npm_execpath = process.execPath;
+    return Object.freeze({ version: 1, pre: phase(`pre${command.name}`, []), main, post: phase(`post${command.name}`, []),
+      env: Object.freeze(env), cwd, silent: process.execArgv.includes("--silent"), color: Boolean(Reflect.get(process.stderr, "isTTY")),
+      footer: `Bun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})\n` });
+  }
   function spawnArguments(argv: string[], directory: unknown): string[] {
     if (["bunx", "/bunx"].includes(argv[0])) return ["bun", "x"].concat(argv.slice(1));
     const cwd = directory instanceof URL ? decodeURIComponent(directory.pathname) : path.resolve(process.cwd(), String(directory || process.cwd()));
@@ -235,5 +256,5 @@
     if (!executable) return argv;
     return ["bun", dereference(executable)].concat(argv.slice(1));
   }
-  return { resolve, run, spawnArguments };
+  return { resolve, run, spawnArguments, continuationPlan };
 })

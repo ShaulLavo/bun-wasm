@@ -1,10 +1,10 @@
-import { createRuntime, type GuestLauncher, type Runtime, type RuntimeProcessContext } from "../../../node_modules/waffle/index.ts";
-import { DescriptorTable, type Stream } from "../../../node_modules/waffle/core/descriptors.ts";
-import { createProgramShell } from "../../../node_modules/waffle/tests/fixtures/program-shell.js";
-import { createRuntimeTerminalCodec } from "../../../node_modules/waffle/browser/runtime-terminals.ts";
-import { createWorkerPipeCodec } from "../../../node_modules/waffle/proc/worker-pipes.ts";
-import { BrowserProcessBroker } from "../../../node_modules/waffle/browser/process-broker.ts";
-import { FilesystemClient } from "../../../node_modules/waffle/fs/client.ts";
+import { createRuntime, type GuestLauncher, type Runtime, type RuntimeProcessContext } from "waffle";
+import { DescriptorTable, type Stream } from "waffle/core/descriptors";
+import { createProgramShell } from "./program-shell.js";
+import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
+import { createWorkerPipeCodec } from "waffle/proc/worker-pipes";
+import { BrowserProcessBroker } from "waffle/browser/process-broker";
+import { FilesystemClient } from "waffle/fs/client";
 import { packageContinuation, admittedIdentity } from "../../../src/package-continuation.js";
 import type { PackagePlan } from "../../../src/package-continuation-plan.js";
 
@@ -34,7 +34,10 @@ export async function fixture(launch?: GuestLauncher, setup?: (context: RuntimeP
     client.reserve(handle, admittedIdentity(context, service));
     context.descriptors.openAt(3, { kind: "directory", handle }, (1n << 29n) - 1n, (1n << 29n) - 1n, () => client.release(handle), "/");
     setup?.(context, client);
-    return (launch ?? continuation)({ ...context, fail(error) { errors.push(error); context.fail(error); } }, service); }));
+    return (launch ?? continuation)({ ...context,
+      fail(error) { errors.push(error); context.fail(error); },
+      startFailed(error) { errors.push(error); context.startFailed(error); },
+    }, service); }));
   unregister.push(runtime.registerProgram("/continuation", { module: empty, adapter: "continuation", cooperative: true }));
   await runtime.filesystem.writeFile("/continuation", "prototype");
   await runtime.filesystem.drain();
