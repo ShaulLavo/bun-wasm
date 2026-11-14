@@ -14,7 +14,6 @@ const contexts: BrowserContext[] = [];
 const { verifySite } = await import(pathToFileURL(join(subject, "scripts/browser-guest-site.ts")).href);
 const { preservationScenario }: { preservationScenario(browser: Browser, base: string): Promise<void> } = await import(pathToFileURL(join(subject, "sandbox/tests/storage-browser.ts")).href);
 const { session } = await import(pathToFileURL(join(subject, "web/tests/playground.mjs")).href);
-const task = session("storage-firefox-diagnostic-");
 let collector: ReturnType<typeof Bun.serve> | undefined;
 const previousRoot = process.env.ROOT;
 const pages = new Map<Page, number>();
@@ -24,6 +23,7 @@ if (!bundle.success) throw new AggregateError(bundle.logs);
 const probe = await bundle.outputs[0]!.text();
 const identity = verifySite(artifact);
 writeFileSync(join(report, "identity.json"), JSON.stringify({ diagnosticHead: process.env.DIAGNOSTIC_HEAD, subject: identity.source, guest: identity.guest, artifactRun: 43530616509, artifactId: 14088892486 }, null, 2));
+const task = session("storage-firefox-diagnostic-");
 async function retain(page: Page): Promise<void> {
   const id = pages.get(page);
   if (id === undefined || page.isClosed()) return;
