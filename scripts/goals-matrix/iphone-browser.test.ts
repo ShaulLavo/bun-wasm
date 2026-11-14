@@ -221,6 +221,13 @@ function attachedPreview() {
   return { bus, key, origin: new URL(url).origin };
 }
 
+function expireDelivery({ bus, key, origin }: ReturnType<typeof attachedPreview>): void {
+  const now = Date.now();
+  const clock = spyOn(Date, "now").mockReturnValue(now + 3001);
+  try { expect(bus.poll("preview", key, origin)).toBeNull(); }
+  finally { clock.mockRestore(); }
+}
+
 test.each(["expiry", "close"] as const)("reload delivery wait propagates %s and restores its poll spy", async scenario => {
   const { bus, key, origin } = attachedPreview();
   const poll = bus.poll;
@@ -231,12 +238,7 @@ test.each(["expiry", "close"] as const)("reload delivery wait propagates %s and 
   const guarded = Promise.race([waiting, guard.promise]);
   try {
     if (scenario === "close") bus.close();
-    else {
-      const now = Date.now();
-      const clock = spyOn(Date, "now").mockReturnValue(now + 3001);
-      try { expect(bus.poll("preview", key, origin)).toBeNull(); }
-      finally { clock.mockRestore(); }
-    }
+    else expireDelivery({ bus, key, origin });
     await expect(guarded).rejects.toThrow(scenario === "expiry" ? "delivery deadline expired" : "expired or closed");
     expect(reload.called).toBe(false);
     expect(bus.poll).toBe(poll);
