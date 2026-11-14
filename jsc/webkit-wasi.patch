@@ -3411,7 +3411,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openContainer(JSCell&);
 +    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openObject(JSObject&, Structure&);
 +    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openArray(JSArray&);
-+    template<HasGap hasGap, bool testing> ALWAYS_INLINE bool appendProperty(unsigned, const PropertyTableEntry&);
++    template<HasGap hasGap, bool testing, typename Entry> ALWAYS_INLINE bool appendProperty(unsigned, const Entry&);
 +    template<HasGap hasGap> ALWAYS_INLINE bool appendPropertyName(std::span<const Latin1Character>);
 +    ALWAYS_INLINE bool appendPropertyString(JSValue);
 +    ALWAYS_INLINE bool appendLatin1PropertyString(JSValue);
@@ -3913,8 +3913,8 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +}
 +
 +template<typename CharType, BufferMode bufferMode>
-+template<HasGap hasGap, bool testing>
-+ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::appendProperty(unsigned index, const PropertyTableEntry& entry)
++template<HasGap hasGap, bool testing, typename Entry>
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::appendProperty(unsigned index, const Entry& entry)
 +{
 +    auto& object = *m_frames[index].container;
 +    const unsigned newLineAndIndent = hasGap == HasGap::Yes ? newLineAndIndentSize() : 0;

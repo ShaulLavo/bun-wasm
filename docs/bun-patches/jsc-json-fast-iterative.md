@@ -15,6 +15,9 @@ Only the root `append` specialization starts the drain. Nested appends use a sep
 compile-time specialization that opens a container without starting another drain. This
 removes the hot traversal's recursive call graph and its per-container `m_draining` test.
 The test-only resume accounting is a separate helper with guard returns.
+Container checks, reservation, opening, advancement, and closing stay inline on the hot
+path. The property body retains the table entry's concrete type, including compact entries,
+instead of constructing a full property entry for each callback.
 
 A container opens only after frame and root capacity succeed. Frame growth uses fallible vector
 reservation, and root growth records overflow. The 4096-frame nesting cap and either allocation
@@ -43,6 +46,10 @@ Original adapters, none of which retains upstream implementation code:
   `checks/runtime-json-fast-controls.json` assigns it to the blocking runtime owner.
 - `tests/fixtures/json-fast-iterative` compares ordinary and forced-general results on all engines.
   `checks/native-json-fast-iterative.json` assigns that fixture to the native owner.
+- `scripts/bench-jsc-json.ts` measures pinned, alternating donor and candidate products.
+  Its guest fixture warms up, then waits for stdin at both boundaries of the serialization
+  loop. Linux per-thread CPU counters exclude compilation, startup, and waiting. Every
+  measured loop must consume at least one CPU second, and the median ratio must not exceed 1.03.
 
 The original `stack-getter-headroom` fixture and its 200000-deep `jsonplain` assertion remain
 unchanged. Stack budgets, output limits, and the general serializer's recursion limit are unchanged.
