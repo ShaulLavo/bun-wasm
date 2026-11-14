@@ -1,0 +1,126 @@
+# Package continuation prototype
+
+Status: Approved guest-trigger implementation after independent host, binding and root
+reviews. Implemented, with installed-guest acceptance blocked at the explicit boundaries
+below. The parent owns fresh independent review, hosted CI, merge and later native acceptance.
+
+The private target and binding are installed by the bounded handoff unit below. The guest
+now prepares the plan and calls the native before any lifecycle mutation or announcement.
+Only NOTSUP/NOSYS may enter the existing loop once. Successful exec never returns, and
+other errors cannot resume the loop. The remaining sections record the earlier reviewed
+units and their acceptance boundaries.
+
+## Guest-trigger qualification gates
+
+The actual maintained QuickJS guest passes the same PID/job handoff, final-only completion,
+absence of its Worker at shell launch, actual environment/cwd, lifecycle order, quoting,
+file aliases/offsets, root rights, silent diagnostics, typed signals and installer lifetime.
+The source VM tests allow only precommit NOTSUP/NOSYS fallback before side effects.
+Reports and rerunnable controls live in
+`/work/reports/goals/safari-memory/package-script-enabled/`.
+
+- A real Chromium Browser guest exposed resizable Wasm input rejected by WebIDL's
+  TextDecoder. The private binding now takes a fixed-byte copy before decoding.
+- After that correction, Browser reaches exec but reports `process image replaced` as
+  an ordinary script error and exits 1. `engine-host.js` `runEntry` routes the async
+  rejection through `uncaught`, whose special case covers only its own ExitSignal.
+  Its Promise<number>/onExit interface does not deliver the image transition to Waffle
+  bootstrap. This is the precise engine-owned integration boundary; no engine file is
+  changed and no feature flag hides it.
+- Caller-only KILL with an actual held Bun phase/descendant and an actual unrelated
+  same-job Bun sibling retains the owned Worker through a 120-second hang cap.
+  The sibling remains live. The earlier host test manually completed its held child.
+  Active-child retirement needs a bounded consumer correction that preserves sibling
+  ownership; job-wide kill or another controller is not an acceptable substitute.
+- `kill -TERM $$` in the pinned Bash shell exits 2 in both the enabled route and old-loop
+  comparison. This is Product shell's external gate, not a tagged SIGTERM or exit 143.
+- The local JSC prebuild fails its maintained input stamp. Matching ordinary JSC and any
+  ordinary-supplied SpiderMonkey programs remain required. Root/group/thread/publication
+  guards retain their existing controlled-context coverage; actual group/publication
+  acceptance is not established by the split QuickJS transition.
+- The maintained Node Browser fixture host lacks the mandatory `bun_package_scripts`
+  namespace. The minimal seam is `createNodeProcess.install`, next to `runtime_proc`,
+  using its existing cancellation guard around a no-pointer NOTSUP result. A separately
+  retained candidate patch and passing cancellation controls belong to the parent after
+  this writer releases the checkout. They are not included in this source checkpoint.
+  With that candidate applied, the existing behavior fixture advances to the Node host's
+  missing `/bin/sh` registration. Neither failure is a guest handoff qualification pass.
+
+## Required before any guest binding
+
+1. Review the child admission correction. `supervisor.reserveSpawn` alone produces no
+   Worker transport, so a real Bash Worker fails with `process has no admitted worker
+   transport`. The prototype uses `WorkerProcessClient.spawn`, the broker's real admitted
+   reservation/start path, a removable
+   child listener and one consuming client wait followed by its receipt. Do not restore
+   the host-only dummy-child path to claim real shell support.
+2. Leave child controller ownership with the installed launcher. Released Waffle retains
+   runtime-proc startup diagnostics for the typed parent wait without another controller.
+   The removed extra controller conflicted with Bash's actual controller. Synchronous
+   reservation failures use Waffle's bounded diagnostic encoding before rendering.
+   Keep installed-launcher acceptance distinct from direct shell parsing controls.
+3. Keep one successor filesystem connection and client. A second `connect(identity)`
+   consumes no already-adopted reservations and its service session rejects those
+   handles with EBADF. A second client on one connection also replaces the port handler.
+   The private stderr adaptation shares its single client with cwd and child transfer.
+4. Implement the reviewed live-WASI census at the executor, after inherited bindings.
+   Track the original root Descriptor by object identity through successful close and
+   renumber; transfer its current rights only while still live. Carry `inheritable()` plus
+   that original binding synchronously into standard exec. Never use inherited_fd, scan
+   a fixed maximum, revive a dup as the preopen or reopen `/`. The current host tests grant
+   initial fixture authority; they are not a guest census qualification.
+5. Snapshot the existing guest table, prepared pre/main/post commands, actual environment
+   after PATH/npm_execpath updates, cwd, silent/color and platform footer. Add the private
+   native import on both hosts only after review. Native checks cancellation before
+   pointers and returns NOTSUP. Root/group/thread callers, caught signal dispositions,
+   unsupported filesystem modes or unqualified shell launchers must return precommit
+   NOTSUP/NOSYS to the untouched loop exactly once, before announcements or phase mutation.
+   Missing private registration is an installation failure, not fallback. Do not claim
+   caught-handler fidelity from exec resetting those handlers.
+6. Preserve Waffle .130's resolved foreign-launch contract: arbitrary throws without
+   ownership proof correctly fail disposal. Do not wrap them in dummy handles or add a
+   stop-only controller. Our owned continuation returns its handle immediately, selects
+   startFailed before entry or fail afterward, and joins its caught work fence. A distinct
+   cleanup rejection remains observable. No Waffle patch, API or pin is needed.
+7. Test the actual guest transition on every maintained engine and the native unsupported
+   route, ignored and pending signals across exec, caller-only versus job-wide signals,
+   descendants, file/pipe stderr, denied cwd, each cancellation window and installer
+   rollback/uninstall/reinstall. No memory-benefit, Safari or framework result is established.
+
+Focused source tests run with `source env.sh && bun test tests/package/package-continuation.test.ts`.
+The package's existing test glob owns them, so no extra check manifest is needed.
+The report at `/work/reports/goals/safari-memory/package-continuation-prototype/RESULT.md`
+contains actual shell controls, negative controls and cleanup.
+
+## Bounded handoff unit
+
+The executor captures the original root Descriptor after inherited binding application.
+Successful DescriptorTable close/renumber operations update the tracked object; direct
+reuse is also rejected by identity at census. This covers every WASI namespace linked
+through the executor. The live census is inheritable descriptions plus the still-live
+original root at current rights. No fixed-range fd scan or path reopen occurs.
+
+Private `bun_package_scripts.handoff(plan_ptr, plan_len, scratch_ptr, scratch_capacity)`
+returns a positive required scratch size without retaining references, or a negative
+precommit errno. The second synchronous native call reparses primitive JSON, captures a
+fresh census, serializes standard exec data into caller-owned memory and calls ordinary
+exec before another guest callback or await. Successful commit never returns. Only
+NOTSUP/NOSYS permit the future caller to retain its loop. Other private-target admission
+errors are installation failures. Native cancellation wins before NOTSUP or pointers.
+
+`continuationPlan` snapshots actual guest PATH/environment, planned npm_execpath, cwd,
+silent/color/footer and existing pre/main/post rewrite/quoting results without mutating
+lifecycle environment or emitting output. It is not invoked by `run`; the native method
+is registered but unused there. No host shell parsing or rewriting is added.
+
+Uninstall removes the private executable and ordinary Bun registrations. A single
+resource-free private launcher remains in the Runtime adapter registry until Runtime
+disposal because Waffle resolves that name after admission. It captures the Runtime's
+filesystem service, never the installer's disposed filesystem client. Reinstall reuses
+the launcher; failed first installation rolls it back. Actual controls cover uninstall
+during held admission and a later reinstall.
+
+The remaining integration boundary is wiring the prepared guest plan and errno handling
+into `run` only after review, then actual maintained-engine transitions, full signal and
+descendant acceptance, and end-to-end shell self-signal qualification. No memory saving
+or Safari/framework result follows from the tiny runtime controls in this unit.

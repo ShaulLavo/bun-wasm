@@ -1,4 +1,5 @@
 {
   "owner": "native",
-  "path": "tests/fixtures/package-script-behavior"
+  "path": "tests/fixtures/package-script-behavior",
+  "engines": ["quickjs", "jsc", "browser"]
 }
