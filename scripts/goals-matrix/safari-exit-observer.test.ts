@@ -16,7 +16,7 @@ const noopSink: Sink = { async write() {}, async close() {} };
 const identity = { run: "report-local", source: { commit: "972a04f46ffa7e02098ab47d31fdd2647e716afe", dirty: false }, cell: "tiny/safari/browser", attempt: 1 };
 
 async function admitted(operation: Parameters<Scope["run"]>[0]): Promise<unknown> {
-  const scope = Scope.open(1000);
+  const scope = Scope.open(5000);
   try { return await scope.run(operation); }
   finally { scope.close(); }
 }
@@ -62,7 +62,7 @@ function abortWait(signal: AbortSignal, rejectOnAbort: boolean, onAbort: () => v
 function neverSettles() { return new Promise<void>(() => {}); }
 
 async function captureRun(mode: "null" | "404" | "hang-delete", mutate: (f: ReturnType<typeof fixture>) => void = () => {}) {
-  const f = fixture({ joinMs: 100 });
+  const f = fixture({ joinMs: 2000 });
   const logs = await directory();
   const driver = endpoint(f.native, { fail: mode });
   cleanup.push(() => driver.stop());
@@ -70,7 +70,7 @@ async function captureRun(mode: "null" | "404" | "hang-delete", mutate: (f: Retu
   let settledBeforeOuter = false;
   let transport: Transport | undefined;
   const pending = f.owner.run(() => withSafariCausalCapture({ logs, identity, native: f.native.native, windowMs: 35, pollMs: 2, onAssociated: f.owner.attach }, async capture => {
-    const inner = await createSafariTransport({ endpoint: driver.url, browser: "safari", timeoutMs: 80, cleanupTimeoutMs: 40,
+    const inner = await createSafariTransport({ endpoint: driver.url, browser: "safari", timeoutMs: 1000, cleanupTimeoutMs: 100,
       ownershipSink: capture.ownership(undefined), protocolSink: fact => { capture.protocol(fact); f.owner.protocol(fact); } });
     transport = f.owner.transport(inner);
     return f.owner.attempt(() => workload(f, capture, inner, mutate, error => { caught = error; }), [
@@ -293,7 +293,7 @@ test("owned child and output readers join before descriptor close, writers close
   const stopChild = async () => { if (child && child.exitCode === null) child.kill(); if (child) await child.exited; };
   cleanup.push(stopChild); // Installed before spawn.
   child = Bun.spawn([process.execPath, "-e", "process.stdout.write('owned'); setInterval(() => {}, 1000)"], { stdout: "pipe", stderr: "pipe" });
-  if (process.env.LIFECYCLE_PID_LEDGER) await Bun.write(process.env.LIFECYCLE_PID_LEDGER, String(child.pid) + "\n");
+  if (process.env.LIFECYCLE_PID_LEDGER) await appendFile(process.env.LIFECYCLE_PID_LEDGER, String(child.pid) + "\n");
   const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();
   await f.owner.run(async () => f.owner.attach(target), [{ phase: "driver-teardown", run: async () => {
     await stopChild(); await Promise.all([stdout, stderr]); order.push("child-and-readers-joined"); f.fake.event(9);

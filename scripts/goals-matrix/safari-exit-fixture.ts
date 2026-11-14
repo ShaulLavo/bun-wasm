@@ -28,7 +28,7 @@ const raw = (pid: number, flags: number, data: number, fflags: number) => {
 };
 
 export function fakeSubscription(pid = 101) {
-  const interest: "status-detail" = "status-detail";
+  const interest = "status-detail" as const;
   const mask = (NOTE_EXIT | NOTE_EXITSTATUS | NOTE_EXIT_DETAIL) >>> 0;
   const registration = { interest, dispatched: clock(), settled: clock(), count: 1, errno: 0,
     change: raw(pid, 0x41, 0, mask), receipt: raw(pid, 0x4041, 0, mask) };
@@ -67,7 +67,7 @@ export function endpoint(native: ReturnType<typeof fakeNative>, options: { fail?
     if (path === "/session") return Response.json({ value: { sessionId: "owned", capabilities: { browserName: "Safari", platformName: "macOS" } } });
     if (path.endsWith("/window")) return Response.json({ value: "host" });
     if (path.endsWith("/execute/async")) return evaluation(await request.json());
-    if (path === "/session/owned" && options.fail === "hang-delete") await Bun.sleep(300);
+    if (path === "/session/owned" && options.fail === "hang-delete") await Bun.sleep(500);
     if (path === "/session/owned" && options.fail === "404") return invalid();
     return Response.json({ value: null });
   } });

@@ -43,6 +43,7 @@ export class ExitOwner {
   private timer: ReturnType<typeof setInterval> | undefined;
   private writes = Promise.resolve();
   private writerJoined = true;
+  private writerFailed = false;
   private writerClosed = false;
   private descriptor: "not-opened" | "open" | "closed" | "unproved" = "not-opened";
   private finishing: Promise<void> | undefined;
@@ -63,10 +64,13 @@ export class ExitOwner {
   }
 
   private async write(entry: RecordEntry): Promise<void> {
-    if (!this.writerJoined) return;
-    const result = await bounded(signal => this.options.sink.write(entry, signal), this.options.joinMs ?? 10_000);
+    if (!this.writerJoined || this.writerFailed) return;
+    const result = await bounded(signal => this.options.sink.write(entry, signal), this.options.joinMs ?? 20_000);
     if (result.kind === "unjoined") this.writerJoined = false;
-    if (result.kind === "unjoined" || result.timedOut || result.outcome.kind === "error") this.degraded.push({ source: "writer", error: result });
+    if (result.kind === "unjoined" || result.timedOut || result.outcome.kind === "error") {
+      this.writerFailed = true;
+      this.degraded.push({ source: "writer", error: result });
+    }
   }
 
   // Called only by the snapshot hook after unique association and the maintained final check.
@@ -143,7 +147,7 @@ export class ExitOwner {
 
   private async step<T>(step: CleanupStep, result: Outcome<T>): Promise<Outcome<T>> {
     this.boundary(step.phase);
-    const settled = await bounded(step.run, this.options.joinMs ?? 10_000);
+    const settled = await bounded(step.run, this.options.joinMs ?? 20_000);
     this.cleanup.push({ phase: step.phase, result: settled });
     this.emit("cleanup-settled", { phase: step.phase, result: settled });
     if (result.kind === "error") return result;
@@ -162,7 +166,7 @@ export class ExitOwner {
     this.emit("observer-settled", { descriptor: this.descriptor });
     await this.writes;
     if (!this.writerJoined) { this.settled = true; return; }
-    const closed = await bounded(signal => this.options.sink.close(signal), this.options.joinMs ?? 10_000);
+    const closed = await bounded(signal => this.options.sink.close(signal), this.options.joinMs ?? 20_000);
     if (closed.kind === "unjoined") this.writerJoined = false;
     this.writerClosed = closed.kind === "joined" && closed.outcome.kind === "ok" && !closed.timedOut;
     if (!this.writerClosed) this.degraded.push({ source: "writer-close", error: closed });

@@ -36,7 +36,7 @@ export function openExit(system: ExitSyscalls, pid: number, now: () => Clock = c
     closeReceipt = { count, errno: failure, dispatched, settled: now() };
     if (count !== 0) throw new NativeExitError("close failed", closeReceipt);
   };
-  const interest: "status-detail" = "status-detail";
+  const interest = "status-detail" as const;
   const change = new Uint8Array(48), event = new Uint8Array(48), timeout = new BigInt64Array(2);
   const view = new DataView(change.buffer);
   view.setBigUint64(0, BigInt(pid), true); view.setInt16(8, -5, true);
