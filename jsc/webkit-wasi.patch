@@ -3711,6 +3711,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +{
 +    bool array = cell.type() == ArrayType;
 +    auto& object = *asObject(&cell);
++    auto& structure = *object.structure();
 +    if (array ? !checkArray(*asArray(&cell)) : !checkObject(object))
 +        return;
 +    if (!reserveContainerSlot<testing>())
@@ -3720,7 +3721,6 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +        return;
 +    }
 +    buffer()[m_length++] = array ? '[' : '{';
-+    auto& structure = *object.structure();
 +    if (!array && !structure.canPerformFastPropertyEnumeration()) [[unlikely]] {
 +        recordFastPropertyEnumerationFailure(object);
 +        return;
