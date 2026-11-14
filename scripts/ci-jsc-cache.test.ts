@@ -54,7 +54,9 @@ for (const [jobs, identity, transfer] of [[ciJobs, "jsc-identity", "true"], [war
   test(`${transfer === "true" ? "full CI" : "independent producer"} locks the same existing effective cache identity before restore`, () => {
     const producer = record(jobs["jsc-prebuild"]);
     expect(producer.concurrency).toEqual({ group: `\${{ needs.${identity}.outputs.key }}`, "cancel-in-progress": false, queue: "max" });
-    expect(record(jobs[identity]).outputs).toEqual({ key: "${{ steps.setup.outputs.key }}", "sysroot-sha256": "${{ steps.sysroot.outputs.sha256 }}" });
+    const outputs: Record<string, string> = { key: "${{ steps.setup.outputs.key }}", "sysroot-sha256": "${{ steps.sysroot.outputs.sha256 }}" };
+    if (transfer === "false") outputs["cache-hit"] = "${{ steps.published.outputs.cache-hit }}";
+    expect(record(jobs[identity]).outputs).toEqual(outputs);
     for (const job of [record(jobs[identity]), producer]) expect(step(job, "id", "setup").uses).toBe("./.github/actions/jsc-setup");
     expect(step(producer, "id", "setup").with).toEqual({ sysroot: `\${{ needs.${identity}.outputs.sysroot-sha256 }}` });
     expect(step(producer, "uses", "actions/download-artifact@v8").with).toEqual({ name: "jsc-identity-sysroot.tar.zst", path: "${{ runner.temp }}" });
@@ -67,6 +69,40 @@ for (const [jobs, identity, transfer] of [[ciJobs, "jsc-identity", "true"], [war
     expect(steps(build)[0]?.name).toBe("Require the identity used to serialize producers");
   });
 }
+
+test("the ordinary identity looks up the exact published cache without downloading or saving it", () => {
+  const identity = record(warmJobs.identity);
+  expect(record(identity.outputs)["cache-hit"]).toBe("${{ steps.published.outputs.cache-hit }}");
+  const lookup = step(identity, "id", "published");
+  expect(lookup.uses).toBe("actions/cache/restore@v4");
+  expect(lookup.with).toEqual({
+    path: "${{ runner.temp }}/jsc/prebuild",
+    key: "${{ steps.setup.outputs.key }}",
+    "lookup-only": true,
+  });
+  const identitySteps = steps(identity);
+  expect(identitySteps.findIndex(item => item.id === "published")).toBeGreaterThan(identitySteps.findIndex(item => item.id === "setup"));
+  expect(steps(identity).some(item => item.uses === "actions/cache/save@v4")).toBe(false);
+  expect(record(ciJobs["jsc-identity"]).outputs).not.toHaveProperty("cache-hit");
+  expect(JSON.stringify(ciJobs)).not.toContain("needs.jsc-identity.outputs.cache-hit");
+  expect(step(build, "id", "jsc-prebuild-cache").with).not.toHaveProperty("lookup-only");
+});
+
+test.each([
+  { lookup: "exact", hit: "true", runs: false },
+  { lookup: "miss", hit: "", runs: true },
+  { lookup: "compatible prefix only", hit: "false", runs: true },
+  { lookup: "cache unavailable", hit: "false", runs: true },
+])("the standalone ordinary warmer handles $lookup", ({ hit, runs }) => {
+  const producer = record(warmJobs["jsc-prebuild"]);
+  expect(producer.if).toBe("needs.identity.outputs.cache-hit != 'true'");
+  const expression = String(producer.if).replaceAll("needs.identity.outputs.cache-hit", JSON.stringify(hit));
+  const selected: unknown = new Function(`return (${expression})`)();
+  expect(selected).toBe(runs);
+  // The default success() guard still excludes a failed or cancelled identity.
+  expect(String(producer.if)).not.toMatch(/always\(|failure\(|cancelled\(|success\(/);
+  expect(producer.needs).toBe("identity");
+});
 
 test("the existing key, compatible prefix and run-bound handoff stay intact", () => {
   const identity = record(step(setup, "id", "identity").env);
@@ -183,4 +219,14 @@ test("an unavailable prebuild keeps the cold fallback, while a mismatched restor
   expect(bad.result.status).not.toBe(0);
   expect(existsSync(bad.output)).toBe(false);
   expect(readFileSync(join(root, "builds"), "utf8")).toBe("build\n");
+}));
+
+test("full CI builds and verifies when the cache disappears after the standalone exact lookup", () => withFixture(root => {
+  expect(record(warmJobs["jsc-prebuild"]).if).toBe("needs.identity.outputs.cache-hit != 'true'");
+  // Full CI uses its own restore outcome, never the standalone lookup result.
+  const cold = runProducer(root, "full-ci-after-eviction", false);
+  expect(cold.result.status, cold.result.stderr).toBe(0);
+  expect(readFileSync(cold.output, "utf8")).toBe("jsc-ready=true\n");
+  expect(readFileSync(join(root, "builds"), "utf8")).toBe("build\n");
+  expect(readFileSync(join(root, "verifications"), "utf8")).toBe("verify\n");
 }));
