@@ -16,7 +16,9 @@ output/accounting assertions and cleanup remain blocking. Speed belongs in
 separate benchmarks; no calibration run is needed for these hang caps.
 
 
-Status: Approved. November 11, 2026. Native integration in J11 PR 599 and Browser integration in PR 600.
+## Historical PR 599/600 integration
+
+Status: Approved at that checkpoint, November 11, 2026. Current supervision is described above.
 
 The existing `shared-sysroot` job owns the experimental SpiderMonkey library,
 side and native fixture. It keeps its 30-minute deadline. The existing JSC
@@ -52,9 +54,8 @@ consumer. It passes that same `program-spidermonkey/bun.wasm` to the existing
 discovered `browser-guest --profile shared-group` owner. Chromium installation
 and Web dependencies come from the earlier QuickJS Browser step. No extra core,
 library, side or site producer is added. The selected wrapper registers separate
-interpreter and portable-baseline tests, each with its original 330-second test
-deadline and the driver's original 300-second process deadline. The owner keeps
-its 420-second outer deadline. QuickJS and JSC retain one Browser execution each.
+interpreter and portable-baseline tests. Their original limits were superseded
+by the outcome-only hang caps above. QuickJS and JSC retain one Browser execution each.
 
 Each SpiderMonkey Browser test runs the actual production worker host, requires
 the exact 8 MiB carve and stack Global identity, observes real tier counters,
