@@ -180,6 +180,6 @@ async function runFailureFixture(framework: Framework, fixture: Transport, held:
   expect(deviceCommands()).toEqual([]);
   const final = held.evidence().filter(row => row.event === "iphone-preview").at(-1);
   expect(final).toMatchObject({ stage: scenario === "held-timeout" ? "document" : "focus" });
-  if (scenario === "held-timeout") expect(["failed", "cancelled"]).toContain(final?.outcome);
+  if (scenario === "held-timeout") expect(final?.outcome === "failed" || final?.outcome === "cancelled").toBe(true);
   else expect(final?.outcome).toBe("cancelled");
 }
