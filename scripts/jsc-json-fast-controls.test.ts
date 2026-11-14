@@ -4,7 +4,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { nativeProducerEngines } from "./test-checks";
 
-const test = bunTest.skipIf(!nativeProducerEngines().includes("jsc"));
+const jscSelected = nativeProducerEngines().includes("jsc");
+const test = jscSelected ? bunTest : bunTest.skip;
+const longTest = jscSelected && process.env.BUN_WASM_JSON_LONG_STRESS === "1" ? bunTest : bunTest.skip;
 const root = resolve(import.meta.dir, "..");
 const launcher = process.env.BUN_WASM_LAUNCHER ?? `${process.env.CARGO_TARGET_DIR ?? "/work/tmp/bun-wasm-target"}/release/bun-wasm`;
 const wasm = process.env.BUN_WASM_JSON_FAST_WASM ?? join(root, "dist/bun-jsc.wasm");
@@ -225,7 +227,7 @@ console.log("collection passed");
   collectionSuccess(result, 2000);
 }, 600_000);
 
-test.if(process.env.BUN_WASM_JSON_LONG_STRESS === "1")("JSC slow-allocation GC pressure reaches the running guest", () => {
+longTest("JSC slow-allocation GC pressure reaches the running guest", () => {
   const result = run("record", String.raw`
 const graph = stressGraph(20, 20);
 assert.equal(JSON.stringify(graph), JSON.stringify(graph, (_k, v) => v));
