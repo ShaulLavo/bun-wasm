@@ -133,10 +133,15 @@ void control_reset_require() {
 
 void control_phase(const char* phase) { controlPhase = phase; }
 
+// A fault armed as "*:<site>" matches that site in any phase, for sites reached from script
+// code that sets no phase of its own.
 bool control_fault(const char* site) {
   std::string key = controlPhase + ":" + site;
   uint32_t use = ++controlUses[key];
-  if (key != controlFaultSite || use != controlFaultNth) return false;
+  std::string anyPhase = std::string("*:") + site;
+  if (controlFaultSite == anyPhase) use = ++controlUses[anyPhase];
+  else if (key != controlFaultSite) return false;
+  if (use != controlFaultNth) return false;
   if (controlFaultKind == 1) JS_ReportOutOfMemory(context);
   if (controlFaultKind == 3) terminating = true;
   return true;
@@ -432,7 +437,9 @@ struct SnapshotScope {
   ~SnapshotScope() { if (--activeSnapshots == 0) free_retired(); }
 };
 
+// Fallible: the private name's UTF-8 copy allocates, so null can carry a pending OOM.
 ModuleEntry* mapped_entry(JS::HandleObject module) {
+  if (control_fault("holder-lookup")) return nullptr;
   JS::RootedValue privateValue(context, JS::GetModulePrivate(module));
   std::string name;
   if (!to_utf8(privateValue, &name)) return nullptr;
@@ -445,6 +452,7 @@ ModuleEntry* mapped_entry(JS::HandleObject module) {
 bool control_hold(const char* site, JS::HandleObject module) {
   if (controlHoldSite != site) return false;
   ModuleEntry* entry = mapped_entry(module);
+  if (!entry) JS_ClearPendingException(context);
   return entry && entry->name == controlHoldName;
 }
 #endif
@@ -623,7 +631,7 @@ JSObject* load_module(const std::string& name) {
 }
 
 bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,
-                        JS::HandleValue payload, JS::HandleObject module);
+                        JS::HandleValue payload, JS::HandleObject module, ModuleEntry* entry);
 
 bool module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,
                  JS::HandleValue, JS::HandleValue payload, uint32_t, JS::ColumnNumberOneOrigin) {
@@ -640,10 +648,12 @@ bool module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject reque
   if (control_fault("module-load")) return false;
   JS::RootedObject module(cx, load_module(name));
   if (!module) return false;
+  // load_module maps `name` to this record, so its entry is known without another lookup.
+  ModuleEntry* entry = modules.find(name)->second;
   JS::RootedObject payloadObject(cx, payload.isObject() ? &payload.toObject() : nullptr);
   bool dynamic = payloadObject && JS::IsPromiseObject(payloadObject);
-  if (!dynamic && !record_edge(ref, referrer, modules.find(name)->second)) return false;
-  return finish_module_load(cx, referrer, request, payload, module);
+  if (!dynamic && !record_edge(ref, referrer, entry)) return false;
+  return finish_module_load(cx, referrer, request, payload, module, entry);
 }
 
 bool metadata(JSContext*, JS::HandleObject module, JS::HandleObject meta) {
@@ -711,13 +721,13 @@ bool dynamic_module_loaded(JSContext* cx, unsigned argc, JS::Value* vp) {
 }
 
 bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,
-                        JS::HandleValue payload, JS::HandleObject module) {
+                        JS::HandleValue payload, JS::HandleObject module, ModuleEntry* entry) {
   JS::RootedObject promise(cx, payload.isObject() ? &payload.toObject() : nullptr);
   if (!promise || !JS::IsPromiseObject(promise)) {
     return JS::FinishLoadingImportedModule(cx, referrer, request, payload, module, true);
   }
-  ModuleEntry* entry = mapped_entry(module);
-  if (entry) entry->importAcquired = true;
+  // Infallible: the mark is set before any allocation the import continuation needs.
+  entry->importAcquired = true;
   static const JSClass closureClass = {
       "BunDynamicImport", JSCLASS_HAS_RESERVED_SLOTS(4), nullptr, nullptr, nullptr, nullptr};
   JS::RootedObject closure(cx, JS_NewObjectWithGivenProto(cx, &closureClass, nullptr));

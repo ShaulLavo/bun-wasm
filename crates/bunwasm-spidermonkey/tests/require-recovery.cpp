@@ -295,15 +295,75 @@ void retry_after_pending(const std::string& root) {
   check(retry.kind == 0, "retry returns the namespace once the dependency settles");
 }
 
+void report_tracker(const Run& run) {
+  if (rejected.empty()) return;
+  Value reason(bsm_promise_result(rejected[0]));
+  fprintf(stderr, "%s: %zu tracker entries after [%d %s], first reason kind %u refusal %d\n", run.root.c_str(),
+          rejected.size(), run.kind, run.outcome.c_str(), bsm_kind(reason.handle), recursion_error(reason.handle));
+}
+
+// Rollback: nothing failed stays mapped, the retry compiles a fresh root generation, and every
+// retired record runs exactly once on that retry.
+void verify_rollback(Run& run, const std::vector<std::string>& own, Retry retry) {
+  check(!info(run.root).mapped, "rollback retires the root");
+  for (size_t i = 0; i < run.names.size(); ++i) {
+    bool checked = !contains(own, run.names[i]) && run.start[i].mapped;
+    check(!checked || run.start[i].state != kFailed, "rollback leaves no failed record mapped");
+  }
+  uint64_t generation = run.before(run.root).generation;
+  retry(run.root);
+  check(info(run.root).generation > generation, "the retry compiles a fresh generation");
+  for (size_t i = 0; i < run.names.size(); ++i) {
+    bool retired = run.seen.before.at(0)[i].mapped && !run.start[i].mapped && !contains(own, run.names[i]);
+    check(!retired || body_runs(run.names[i]) == 1, "a retired record runs once on retry");
+  }
+}
+
+void verify_pinned(Run& run) {
+  bool known = run.outcome.rfind("pinned", 0) == 0 && run.outcome != "pinned because evaluation returned false";
+  if (!known) fprintf(stderr, "unexpected outcome %s\n", run.outcome.c_str());
+  check(known, "known require outcome");
+  bsm_module_info root = info(run.root);
+  check(root.mapped && root.state == kFailed, "a pinned failure stays cached");
+  repeat_cached(run.root, run.value);
+}
+
+// A rejected require: the outcome decides between a retry, a rollback check and a cached repeat.
+void verify_rejection(Run& run, const std::vector<std::string>& own, Retry retry, bsm_handle inherited) {
+  bool refusal = recursion_error(run.value);
+  check(refusal || (inherited && bsm_same_value(run.value, inherited)), "the require rejects with a refusal or the inherited error");
+  bsm_module_info root = info(run.root);
+  if (run.outcome == "not entered" || run.outcome == "link failed") {
+    // The root may already be linked by an import that holds it (S8); otherwise it is not.
+    check(root.mapped && root.state == kUnevaluated && run.seen.before.empty(), "a refusal before evaluation leaves the root unevaluated");
+    retry(run.root);
+    return;
+  }
+  if (run.outcome == "no failure" && root.state == kFailed) {
+    // The evaluation was still pending when ModuleEvaluate returned and failed later inside
+    // the drain (condition 1): never rolled back, cached like any asynchronous failure.
+    repeat_cached(run.root, run.value);
+    return;
+  }
+  if (run.outcome == "no failure") {
+    // A refusal after evaluation (the namespace step, or the pending branch's handler) leaves
+    // the evaluation itself fulfilled or still pending and owned.
+    check(root.mapped && (root.state == kFulfilled || root.state == kPending), "a refusal after evaluation leaves the records evaluated");
+    retry(run.root);
+    return;
+  }
+  if (run.outcome == "rolled back") {
+    verify_rollback(run, own, retry);
+    return;
+  }
+  verify_pinned(run);
+}
+
 // The generic assertions every sweep iteration satisfies (8.2.3), followed by the repeat or the
 // retry its observed outcome calls for. `own` lists records the schedule checks itself.
 void verify(Run& run, const std::vector<std::string>& own, Retry retry = retry_plain, bsm_handle inherited = 0) {
   check(uncaught.empty() && !bsm_terminated(), "no uncaught exception");
-  if (!rejected.empty()) {
-    Value reason(bsm_promise_result(rejected[0]));
-    fprintf(stderr, "%s: %zu tracker entries after [%d %s], first reason kind %u refusal %d\n", run.root.c_str(),
-            rejected.size(), run.kind, run.outcome.c_str(), bsm_kind(reason.handle), recursion_error(reason.handle));
-  }
+  report_tracker(run);
   check(rejected.empty(), "the require path leaves the tracker empty");
   bsm_module_info root = info(run.root);
   if (run.kind == 0) {
@@ -313,45 +373,10 @@ void verify(Run& run, const std::vector<std::string>& own, Retry retry = retry_p
     retry(run.root);
   } else {
     check(run.kind == 1, "the require settles inside its drain");
-    bool refusal = recursion_error(run.value);
-    check(refusal || (inherited && bsm_same_value(run.value, inherited)), "the require rejects with a refusal or the inherited error");
-    if (run.outcome == "not entered" || run.outcome == "link failed") {
-      // The root may already be linked by an import that holds it (S8); otherwise it is not.
-      check(root.mapped && root.state == kUnevaluated && run.seen.before.empty(), "a refusal before evaluation leaves the root unevaluated");
-      retry(run.root);
-    } else if (run.outcome == "no failure" && root.state == kFailed) {
-      // The evaluation was still pending when ModuleEvaluate returned and failed later inside
-      // the drain (condition 1): never rolled back, cached like any asynchronous failure.
-      repeat_cached(run.root, run.value);
-    } else if (run.outcome == "no failure") {
-      // A refusal after evaluation (the namespace step, or the pending branch's handler) leaves
-      // the evaluation itself fulfilled or still pending and owned.
-      check(root.mapped && (root.state == kFulfilled || root.state == kPending), "a refusal after evaluation leaves the records evaluated");
-      retry(run.root);
-    } else if (run.outcome == "rolled back") {
-      check(!root.mapped, "rollback retires the root");
-      for (size_t i = 0; i < run.names.size(); ++i) {
-        if (contains(own, run.names[i]) || !run.start[i].mapped) continue;
-        check(run.start[i].state != kFailed, "rollback leaves no failed record mapped");
-      }
-      uint64_t generation = run.before(run.root).generation;
-      retry(run.root);
-      check(info(run.root).generation > generation, "the retry compiles a fresh generation");
-      for (size_t i = 0; i < run.names.size(); ++i) {
-        bool retired = run.seen.before.at(0)[i].mapped && !run.start[i].mapped;
-        if (retired && !contains(own, run.names[i])) check(body_runs(run.names[i]) == 1, "a retired record runs once on retry");
-      }
-    } else {
-      if (run.outcome.rfind("pinned", 0) != 0 || run.outcome == "pinned because evaluation returned false") {
-        fprintf(stderr, "unexpected outcome %s\n", run.outcome.c_str());
-      }
-      check(run.outcome.rfind("pinned", 0) == 0 && run.outcome != "pinned because evaluation returned false", "known require outcome");
-      check(root.mapped && root.state == kFailed, "a pinned failure stays cached");
-      repeat_cached(run.root, run.value);
-    }
+    verify_rejection(run, own, retry, inherited);
   }
   for (const auto& name : run.names) {
-    if (!contains(own, name)) check(body_runs(name) <= 1, "successful bodies run at most once");
+    check(contains(own, name) || body_runs(name) <= 1, "successful bodies run at most once");
   }
   check(rejected.empty() && uncaught.empty(), "verification leaves no report");
 }
@@ -946,6 +971,49 @@ void nested_iteration(Sweep& sweep, size_t depth, bool coarse) {
   hit(sweep, 0);
 }
 
+// One fixture graph shape (8.1.4): returns its modules, writing their sources under `prefix`.
+std::vector<std::string> js_depth_graph(const std::string& prefix, const std::string& shape) {
+  std::string ok = prefix + "-ok", leaf = prefix + "-leaf", deep = prefix + "-deep";
+  std::string a = prefix + "-a", b = prefix + "-b", root = prefix + "-root";
+  bool sibling = shape == "sibling" || shape == "combined";
+  bool chain = shape == "chain" || sibling;
+  bool cycle = shape == "cycle" || shape == "combined";
+  std::vector<std::string> deps, graph = {root};
+  if (sibling) deps.push_back(ok);
+  if (chain) deps.push_back(deep);
+  if (cycle) deps.push_back(a);
+  if (sibling) graph.push_back(ok);
+  if (chain) graph.insert(graph.end(), {deep, leaf});
+  if (cycle) graph.insert(graph.end(), {a, b});
+  counted_module(ok, {}, "export const marker = {};");
+  counted_module(leaf, {}, "export const value = 3;");
+  counted_module(deep, {leaf}, "export const value = 3;");
+  counted_module(a, {b}, "export const a = 4;");
+  counted_module(b, {a}, "export const b = 5;");
+  counted_module(root, deps, "export const value = 42;");
+  return graph;
+}
+
+void js_depth_shape(const std::string& shape, bool every) {
+  std::string prefix = fresh(std::string("js-") + (every ? "every-" : "single-") + shape);
+  std::vector<std::string> graph = js_depth_graph(prefix, shape);
+  const std::string& root = graph[0];
+  reset_reports();
+  std::string call = "recoveryLimit(" + literal(root) + ", " + (every ? "true" : "false") + ")";
+  Value failures(script(call.c_str()));
+  jobs();
+  check(rejected.empty() && uncaught.empty(), "JS-depth require leaves no report");
+  RequireOutcome shallow = control_require(root.c_str());
+  check(shallow.kind == 0 && namespace_value(shallow.value) == 42, "JS-depth schedule recovers");
+  if (every) {
+    Value recovered(global_value_handle("recoveredNamespace"));
+    check(bsm_same_value(recovered.handle, shallow.value), "every-level recovery returns the cached namespace");
+  }
+  for (const auto& module : graph) check(body_runs(module) == 1, "JS-depth schedule runs each body once");
+  printf("JS-depth %s %s recovered after %d refusals, each body once\n", every ? "every-level" : "single", shape.c_str(),
+         static_cast<int>(bsm_number(failures.handle)));
+}
+
 // The JavaScript-depth form (8.2.1): recursion in JavaScript, then hostRequire at the deepest
 // catch only or at every unwind level until it succeeds. The every-level schedule is an accepted
 // departure from native Bun, which caches the RangeError there; SpiderMonkey recovers and every
@@ -965,42 +1033,8 @@ void js_depth_schedules() {
       "  return failures;"
       "};"));
   const std::string shapes[] = {"plain", "chain", "sibling", "cycle", "combined"};
-  for (int every = 0; every < 2; ++every) {
-    for (const auto& shape : shapes) {
-      std::string prefix = fresh(std::string("js-") + (every ? "every-" : "single-") + shape);
-      auto name = [&](const char* part) { return prefix + "-" + part; };
-      bool sibling = shape == "sibling" || shape == "combined";
-      bool chain = shape == "chain" || sibling;
-      bool cycle = shape == "cycle" || shape == "combined";
-      std::vector<std::string> deps, graph = {name("root")};
-      if (sibling) deps.push_back(name("ok"));
-      if (chain) deps.push_back(name("deep"));
-      if (cycle) deps.push_back(name("a"));
-      if (sibling) graph.push_back(name("ok"));
-      if (chain) graph.insert(graph.end(), {name("deep"), name("leaf")});
-      if (cycle) graph.insert(graph.end(), {name("a"), name("b")});
-      counted_module(name("ok"), {}, "export const marker = {};");
-      counted_module(name("leaf"), {}, "export const value = 3;");
-      counted_module(name("deep"), {name("leaf")}, "export const value = 3;");
-      counted_module(name("a"), {name("b")}, "export const a = 4;");
-      counted_module(name("b"), {name("a")}, "export const b = 5;");
-      counted_module(name("root"), deps, "export const value = 42;");
-      reset_reports();
-      std::string call = "recoveryLimit(" + literal(name("root")) + ", " + (every ? "true" : "false") + ")";
-      Value failures(script(call.c_str()));
-      jobs();
-      check(rejected.empty() && uncaught.empty(), "JS-depth require leaves no report");
-      RequireOutcome shallow = control_require(name("root").c_str());
-      check(shallow.kind == 0 && namespace_value(shallow.value) == 42, "JS-depth schedule recovers");
-      if (every) {
-        Value recovered(global_value_handle("recoveredNamespace"));
-        check(bsm_same_value(recovered.handle, shallow.value), "every-level recovery returns the cached namespace");
-      }
-      for (const auto& module : graph) check(body_runs(module) == 1, "JS-depth schedule runs each body once");
-      printf("JS-depth %s %s recovered after %d refusals, each body once\n", every ? "every-level" : "single", shape.c_str(),
-             static_cast<int>(bsm_number(failures.handle)));
-    }
-  }
+  for (const auto& shape : shapes) js_depth_shape(shape, false);
+  for (const auto& shape : shapes) js_depth_shape(shape, true);
 }
 
 // The JavaScript-depth sweep (8.2.1): recursion in JavaScript down `frames` levels, then
@@ -1122,6 +1156,27 @@ void unit3_faults() {
   puts("F13-F15 passed");
 }
 
+// Holder mark of a pending dynamic import (5.1). The adapter's name lookup allocates; a failed
+// lookup while a dynamic import loads its module must neither drop the import's acquisition mark
+// nor leave an exception pending behind a successful hook. Found by the PR 751 review.
+void holder_lookup_fault() {
+  S6Graph graph = s6_graph("holder-lookup", false);
+  reset_reports();
+  arm_fault("*:holder-lookup");
+  bsm_handle ip = native_import_setup(graph.p);
+  bool pendingException = JS_IsExceptionPending(context);
+  clear_fault();
+  bsm_module_info p = info(graph.p);
+  int state = bsm_promise_state(ip);
+  printf("holder lookup: acquired=%d import-state=%d pending-exception=%d\n", p.importAcquired, state, pendingException);
+  check(!pendingException, "a holder lookup failure leaves no pending exception");
+  check(p.mapped && p.importAcquired && state == 0, "a pending dynamic import keeps its acquisition mark");
+  jobs();
+  check(bsm_promise_state(ip) == 1 && info(graph.p).state == kFulfilled && rejected.empty(), "the import then completes");
+  bsm_release(ip);
+  puts("holder lookup control passed");
+}
+
 void recovery_globals() {
   Value initialize(script("globalThis.recoveryRuns = {}; globalThis.recoveryResolvers = {}; globalThis.recoveryRejecters = {}; globalThis.recoveryCaught = {}; globalThis.recoveryImports = {}; globalThis.recoveryGates = {};"));
   hostImportFunction = bsm_function("hostImport", 10, 200);
@@ -1141,6 +1196,7 @@ void recovery_controls() {
   setvbuf(stdout, nullptr, _IONBF, 0);
   recovery_globals();
   unit3_faults();
+  holder_lookup_fault();
   s10_cases();
   s6d_poisoned();
   Sweep sweeps[] = {
