@@ -266,6 +266,12 @@ function rootClient(request: RunRequest, deliver: (message: object) => void) {
   }, dispose: () => descriptors.dispose() };
 }
 
+function expectedPairUrls(engine: "quickjs" | "jsc", builds: Readonly<Record<string, string>>) {
+  const names = [ENGINES[engine].wasm, programProfile(engine).side];
+  return names.map(name => `http://localhost/${name}.gz?v=${builds[name]}`)
+    .concat(names.map(name => `http://localhost/${name}`));
+}
+
 const engines: Engine[] = ["quickjs", "jsc", "browser"];
 
 for (const engine of engines) {
@@ -337,7 +343,7 @@ for (const engine of engines) {
       }
       expect(loaded.size).toBe(available.length);
       expect(urls).toEqual(available.filter(selected => selected !== engine).flatMap(selected => selected === "quickjs" || selected === "jsc"
-        ? [ENGINES[selected].wasm, programProfile(selected).side].flatMap(name => [`http://localhost/${name}.gz?v=${builds[name]}`, `http://localhost/${name}`])
+        ? expectedPairUrls(selected, builds)
         : [`http://localhost/${ENGINES[selected].wasm}.gz`, `http://localhost/${ENGINES[selected].wasm}`]));
     } finally {
       try { await state.dispose(); }
@@ -745,7 +751,7 @@ test("run.done waits for deferred root activation and descriptor release", async
   class DescriptorSupervisor extends proc.ProcessSupervisor {
     override createRoot(options: RootProcessOptions): number {
       const pid = super.createRoot(options);
-      this.get(pid)!.descriptors.open({
+      this.get(pid)!.image.descriptors.open({
         kind: "terminal", read: () => 0, write: () => 0,
         readiness: () => ({ readable: false, writable: true, hangup: false }),
       }, 0n, 0n, () => { released = true; });
@@ -795,7 +801,7 @@ for (const partial of [false, true]) test(`run.done safely handles rejected defe
   class PartialSupervisor extends proc.ProcessSupervisor {
     override createRoot(options: RootProcessOptions): never {
       const pid = super.createRoot(options);
-      this.get(pid)!.descriptors.open({
+      this.get(pid)!.image.descriptors.open({
         kind: "terminal", read: () => 0, write: () => 0,
         readiness: () => ({ readable: false, writable: true, hangup: false }),
       }, 0n, 0n, () => { released = true; });

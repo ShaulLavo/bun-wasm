@@ -170,6 +170,7 @@ export async function preservationScenario(browser: Browser, base: string): Prom
     page.on("pageerror", error => { errors.push(error.message); });
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   });
+  let checkpoint: "setup" | "vanilla-config-restart" | "first-vite-vue-startup" | "preservation" = "setup";
   try {
     const active = await context.newPage();
     const page = await context.newPage();
@@ -185,11 +186,15 @@ export async function preservationScenario(browser: Browser, base: string): Prom
     const main = original.replace('import "./App.css";\n', "").replace("Hello from vanilla TypeScript", "Storage source one");
     await edit(page, "src/main.ts", main);
     await edit(page, "vite.config.ts", guestWriter);
+    checkpoint = "vanilla-config-restart";
     await restart(page);
+    checkpoint = "preservation";
     await page.frameLocator("#preview").getByRole("heading", { name: "Storage source one", exact: true }).waitFor({ timeout: 30_000 });
     await page.evaluate(() => sandbox.fs.flush());
     await openTemplate(page, base, "vite-react");
+    checkpoint = "first-vite-vue-startup";
     await openTemplate(page, base, "vite-vue");
+    checkpoint = "preservation";
     assert.equal(await stored(page, "vanilla"), false, "oldest eligible install was not evicted");
     assert.equal(await stored(page, "vite-react"), true, "newest idle install was not retained");
     assert.equal(await stored(page, "hono"), true, "active workspace was evicted");
@@ -213,12 +218,32 @@ export async function preservationScenario(browser: Browser, base: string): Prom
     await unsupportedData(page, base);
   } catch (error) {
     const pages = await Promise.all(context.pages().map(page => diagnostic(page)));
-    console.error(JSON.stringify({ error: String(error), errors, pages }, null, 2));
-    throw error;
+    const report = { checkpoint, error: String(error), errors, pages };
+    console.error(JSON.stringify(report, null, 2));
+    throw new StoragePreservationFailure(report, error);
   } finally { await context.close(); }
 }
 
-async function diagnostic(page: Page): Promise<unknown> {
+export class StoragePreservationFailure extends Error {
+  constructor(readonly report: {
+    checkpoint: "setup" | "vanilla-config-restart" | "first-vite-vue-startup" | "preservation";
+    error: string; errors: readonly string[]; pages: readonly (StoragePageDiagnostic | string)[];
+  }, cause: unknown) {
+    super(report.error, { cause });
+    this.name = "StoragePreservationFailure";
+  }
+}
+
+interface StoragePageDiagnostic {
+  url: string; status: string | null | undefined; storage?: string | null;
+  terminal: string; frames: readonly { src: string; body?: string }[];
+  runtime: null | {
+    filesystem: { status: string; error?: string }; started: boolean | null;
+    editorPath: string | null; pending: boolean;
+  };
+}
+
+async function diagnostic(page: Page): Promise<StoragePageDiagnostic | string> {
   if (page.isClosed()) return "closed";
   return page.evaluate(() => {
     const api = typeof sandbox === "undefined" ? null : sandbox;

@@ -131,7 +131,7 @@ test("preview1 roots keep their explicit module and Bun executable paths launch 
         expect(state.urlFor(child!)).toBe("http://localhost/worker.js");
         expect(child!.module).not.toBe(state.request().module);
         const record = (await state.runtime.processes().then(service => service.ready())).get(pid)!;
-        expect(registrations.get(record.request!.executable)).toMatchObject({ adapter: "bun", engine: "browser" });
+        expect(registrations.get(record.image.request!.executable)).toMatchObject({ adapter: "bun", engine: "browser" });
       }
     } finally { descriptors.dispose(); }
     for (const engine of ["quickjs", "jsc", "browser"]) {

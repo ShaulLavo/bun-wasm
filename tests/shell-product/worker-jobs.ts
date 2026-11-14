@@ -3,7 +3,7 @@ import { captureProcessObserver } from "waffle/proc/observation";
 import type { ProcessRecord } from "waffle/proc";
 import { workerProcessDirectoryId, workerProcessState, type WorkerProcessTransport } from "waffle/proc/worker-client";
 
-type ProcessWorker = Pick<ReturnType<typeof workerProcessState>, "pid" | "parentPid" | "rootPid" | "job" | "jobOwner" | "jobLeaderPid"> & { directory: string; adapter: unknown };
+type ProcessWorker = Pick<ReturnType<typeof workerProcessState>, "pid" | "parentPid" | "rootPid" | "job" | "jobOwner" | "jobLeaderPid"> & { generation: number; directory: string; adapter: unknown };
 type Scope<W> = { baseline: ReadonlySet<W>; root: ProcessWorker; after: number };
 type Admission = Pick<ProcessAdmissionEvent, "pid" | "parentPid" | "job"> & { stage: ProcessAdmissionEvent["stage"]; sequence: number; request?: { job: number; jobLifetime?: "independent" | "caller-fatal"; rootPid: number | undefined } };
 
@@ -17,11 +17,12 @@ function processWorker(message: unknown): ProcessWorker | undefined {
     !("identity" in value) || !(value.identity instanceof SharedArrayBuffer) ||
     !("slot" in value) || typeof value.slot !== "number" ||
     !("pid" in value) || typeof value.pid !== "number" ||
+    !("generation" in value) || typeof value.generation !== "number" || !Number.isSafeInteger(value.generation) || value.generation < 1 ||
     !("cwd" in value) || typeof value.cwd !== "string") throw new Error("Invalid worker process transport");
-  const transport = { kind: value.kind, lifetime: value.lifetime, directory: value.directory, identity: value.identity, slot: value.slot, pid: value.pid, cwd: value.cwd, bindings: [], resources: [] } satisfies WorkerProcessTransport;
+  const transport = { kind: value.kind, generation: value.generation, lifetime: value.lifetime, directory: value.directory, identity: value.identity, slot: value.slot, pid: value.pid, cwd: value.cwd, bindings: [], resources: [] } satisfies WorkerProcessTransport;
   captureProcessObserver(transport);
   const { pid, parentPid, rootPid, job, jobOwner, jobLeaderPid } = workerProcessState(transport);
-  return { directory: workerProcessDirectoryId(transport), pid, parentPid, rootPid, job, jobOwner, jobLeaderPid, adapter: "adapter" in message ? message.adapter : undefined };
+  return { generation: transport.generation, directory: workerProcessDirectoryId(transport), pid, parentPid, rootPid, job, jobOwner, jobLeaderPid, adapter: "adapter" in message ? message.adapter : undefined };
 }
 
 function describe(message: unknown) {
@@ -38,14 +39,15 @@ export class WorkerJobs<W extends object> {
   private sequence = 0;
   constructor(private readonly live: ReadonlySet<W>, private readonly isIdleWorker: (worker: W) => boolean) {}
 
-  admission(event: ProcessAdmissionEvent, record?: Pick<ProcessRecord, "request" | "rootPid">) {
+  admission(event: ProcessAdmissionEvent, record?: Pick<ProcessRecord, "rootPid"> & { image: Pick<ProcessRecord["image"], "request"> }) {
     let entry = this.admissions.get(event.pid);
     if (!entry) {
       entry = { pid: event.pid, parentPid: event.parentPid, job: event.job, stage: event.stage, sequence: ++this.sequence };
       this.admissions.set(event.pid, entry);
     }
     entry.stage = event.stage;
-    if (!entry.request && record?.request) entry.request = { job: record.request.job, jobLifetime: record.request.jobLifetime, rootPid: record.rootPid };
+    const request = record?.image.request;
+    if (!entry.request && record && request) entry.request = { job: request.job, jobLifetime: request.jobLifetime, rootPid: record.rootPid };
   }
 
   observe(worker: W, message: unknown) {

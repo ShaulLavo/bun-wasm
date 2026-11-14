@@ -43,7 +43,7 @@ for (const cancel of [false, true]) test(`Node startup diagnostic is asynchronou
   let blocked = true, writes = 0, released = false;
   try {
     const record = broker.supervisor.get(1)!;
-    record.descriptors.openAt(2, {
+    record.image.descriptors.openAt(2, {
       kind: "pipe", read: () => -6, write() { throw new Error("blocking write must not run"); },
       tryWrite(bytes) {
         writes++;

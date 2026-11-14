@@ -414,9 +414,9 @@ has room for about 45 activations at any budget.
 ([record](bun-patches/jsc-getter-dispatch.md)). Such a getter costs what a plain call
 costs, and its depth is bounded by the C-loop frame stack's own check, which throws the
 same `RangeError`. Budgets, reserves and every other path are unchanged. The `getter`
-probe therefore no longer measures reentry on JSC. `computedgetter` reads the same getter
-through a key the compiler cannot see, which JSC still calls from C++, and takes over
-that role. `ajvnames` is the Ajv walk reduced to its getters, and `ajv` runs the real
+probe therefore no longer measures reentry on JSC. `computedgetter` originally took over
+that role by reading through a key the compiler cannot see. Ordinary computed getters now
+also call from the loop, as measured below. `ajvnames` is the Ajv walk reduced to its getters, and `ajv` runs the real
 package.
 
 Measured on November 11, 2026 on the native launcher: the split JSC pair from main's CI
@@ -447,6 +447,15 @@ change and is not fixed here.
 
 These are launcher measurements of the guest's own guards. They are not Safari or Firefox
 runs and do not show that Angular starts there.
+
+On November 13, computed getter dispatch reuses the loop protocol. Native launcher results
+at 192, 208 and 800 KiB are 39,930 completed levels followed by a caught `RangeError`, also
+with 256 and 512 KiB host stacks at the 192 KiB budget. Proxy and `toString` results stay
+29/31, 32/34 and 125/133 at those budgets. Linux Chrome and WebKit cold controls at 512 KiB
+host stack, 240 KiB guest budget and parser reserve 2048 complete 45 and catch at 200000,
+then continue. The original warm prefix measures 39,930 and a caught boundary. WebKit's
+Proxy forwarding and warm plain-JSON failures remain separate work. These are Linux results;
+Safari and iPhone confirmation consumes the normal merged delivery.
 
 ### Bound functions called in the loop
 
@@ -489,8 +498,8 @@ catchable `RangeError`, at every budget and on every host.
 The guard counts shadow bytes, and `CLoop::execute` supplies 4,896 of the roughly 5.8 KB
 one reentry level spends: an 80-byte block for spilled pointers and a 4,816-byte frame
 that is mostly one 8-byte result slot per slow-path call site, with one live at a time.
-Those bytes are what stops computed getters at 35 levels and Proxy traps at 29 at
-192 KiB, below what Safari's worker stack holds. A compiler upgrade or flag change that
+Those bytes still limit Proxy traps, numeric-index getters, setters and coercion reentry.
+Ordinary computed getters use the frame stack and no longer set this floor's stopping depth. A compiler upgrade or flag change that
 merged the slots would let every reentry path go several times deeper with no source
 change of ours.
 
@@ -509,7 +518,7 @@ a missing stack pointer export, or more than one such function.
 The two builds differ, which is why the check follows paths and does not match a fixed
 prologue. The split side allocates once at entry and releases once at its end: 684 calls,
 all at 4,896 bytes. The shared-group side has callees inlined into the loop with their
-own frames: 1,050 calls, between 4,896 and 5,344 bytes. The same check bounds the
+own frames: 1,066 calls after computed getter dispatch, between 4,896 and 5,344 bytes. The same check bounds the
 function's wasm parameters and locals at 328, because a first-tier wasm interpreter keeps
 each of them on the host stack. The split side has 293 and the bound is that plus 12%.
 The shared-group side has 52.
