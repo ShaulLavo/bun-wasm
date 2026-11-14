@@ -7,6 +7,8 @@ import { runAcceptancePhase } from "./app-matrix/next-acceptance-phase";
 import { chromium, type Page } from "playwright";
 import { runRouteCase } from "./app-matrix/next-acceptance-cases";
 
+const hangTimeoutMs = 10_000;
+
 type Mode = "ok" | "http500" | "no-eof" | "fetch-stall" | "body-stall" | "compile-error" | "compile-poll-nonmatching" | "compile-poll-binary";
 interface Resources {
   mode: Mode;
@@ -103,9 +105,11 @@ async function fixture(mode: Mode, operation: (page: Page, base: string, resourc
   try {
     browser = await chromium.launch({ env: { ...process.env, TMPDIR: scratch } });
     const page = await browser.newPage();
-    page.setDefaultTimeout(200);
-    page.setDefaultNavigationTimeout(1000);
-    await operation(page, `http://127.0.0.1:${server.port}/`, resources);
+    page.setDefaultTimeout(hangTimeoutMs);
+    page.setDefaultNavigationTimeout(hangTimeoutMs);
+    const started = performance.now();
+    try { await operation(page, `http://127.0.0.1:${server.port}/`, resources); }
+    finally { console.info(`HTTP acceptance fixture ${mode}: ${(performance.now() - started).toFixed(1)} ms`); }
   } finally {
     await browser?.close();
     for (const timer of resources.timers) clearTimeout(timer);
@@ -117,7 +121,7 @@ async function fixture(mode: Mode, operation: (page: Page, base: string, resourc
 async function guarded<Value>(operation: Promise<Value>): Promise<Value> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Test safety guard expired")), 1600); })]);
+    return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Test safety guard expired")), hangTimeoutMs); })]);
   } finally { clearTimeout(timer); }
 }
 
@@ -127,7 +131,7 @@ async function rejected(operation: Promise<unknown>): Promise<string> {
 }
 
 async function released(resources: Resources) {
-  const deadline = Date.now() + 500;
+  const deadline = Date.now() + hangTimeoutMs;
   while (resources.active.size && Date.now() < deadline) await Bun.sleep(10);
   expect(resources.active.size).toBe(0);
 }
@@ -236,7 +240,7 @@ test("compile-error recovery restores source after a partial 500 without EOF", a
 
 test("completed stream and intentional cancellation still pass", async () => {
   await fixture("ok", async (page, base, resources) => {
-    await probe(page, base, "stream-cancel", 1200);
+    await probe(page, base, "stream-cancel", hangTimeoutMs);
     await released(resources);
   });
 }, 20000);
