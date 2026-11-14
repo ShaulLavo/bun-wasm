@@ -16,6 +16,7 @@ fn main() {
         return;
     }
     let standalone = env::var_os("CARGO_FEATURE_STANDALONE").is_some();
+    let controls = env::var_os("CARGO_FEATURE_CONTROLS").is_some();
     let native = PathBuf::from(
         env::var(if standalone {
             "SPIDERMONKEY_G2_DIR"
@@ -56,6 +57,9 @@ fn main() {
     if shared_group {
         shim.define("BUN_WASM_SHARED_GROUP", "1");
     }
+    if controls {
+        shim.define("BUNSM_CONTROLS", "1");
+    }
     shim.cpp(true)
         .file(if env::var_os("CARGO_FEATURE_STANDALONE").is_some() {
             "cpp/shim.cpp"
@@ -75,12 +79,13 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/shim.h");
     println!("cargo:rerun-if-changed=cpp/engine.cpp");
     println!("cargo:rerun-if-changed=cpp/engine.h");
+    println!("cargo:rerun-if-changed=tests/engine-semantics.cpp");
     println!("cargo:rustc-link-search=native={}", native.display());
     println!("cargo:rustc-link-search=native={}", libcxx.display());
     println!("cargo:rustc-link-lib=static=spidermonkey_g2");
     println!("cargo:rustc-link-lib=static=c++");
     println!("cargo:rustc-link-lib=static=c++abi");
-    for lib in if standalone {
+    for lib in if standalone || controls {
         [
             "wasi-emulated-signal",
             "wasi-emulated-getpid",

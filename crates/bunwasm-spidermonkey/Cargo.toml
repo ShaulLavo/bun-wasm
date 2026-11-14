@@ -26,6 +26,10 @@ name = "smoke"
 required-features = ["standalone"]
 
 [[example]]
+name = "engine-semantics"
+required-features = ["controls"]
+
+[[example]]
 name = "side"
 required-features = ["standalone"]
 crate-type = ["staticlib"]
@@ -36,6 +40,7 @@ required-features = ["unicode-generator"]
 
 [features]
 standalone = []
+controls = []
 unicode-controls = []
 unicode-generator = []
 

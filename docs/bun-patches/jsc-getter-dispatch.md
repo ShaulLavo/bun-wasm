@@ -8,7 +8,7 @@ WebKit fork at `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`. Class **Port**.
 ## The problem
 
 JSC's C-loop interpreter runs plain JavaScript calls inside one `CLoop::execute` activation.
-A getter is different: the `get_by_id` slow path finds it and calls it from C++, which enters
+Originally the `get_by_id` slow path found a getter and called it from C++, which entered
 the interpreter again. Each nested getter therefore starts a new `CLoop::execute` on the host
 stack, about 2 KB there and 5.8 KB of guarded shadow stack ([Stack overflow in wasm](../stack-limits.md)).
 At the browser budgets that allows 34 nested getters. Ajv 8.17.1's code generator reads
@@ -18,7 +18,7 @@ whose worker stack has room for about 45 interpreter activations.
 
 ## The change
 
-When `object.name` (`op_get_by_id`) or `super.name` (`op_get_by_id_with_this`) finds an accessor
+When `object.name` (`op_get_by_id`) or `super.name` (`op_get_by_id_with_this`) or `object[key]` (`op_get_by_val`) finds an accessor
 whose getter is a JavaScript function, the slow path does not call it. It builds the getter's
 call frame on the interpreter's own frame stack and hands the entry point back to the running
 loop, which calls it the way it calls any JavaScript function. A getter level then costs what a
@@ -49,7 +49,7 @@ no pointer to the getter or its result is kept.
 
 ### Three outcomes
 
-The two slow paths keep the signature and the two-word result every slow path has. They end in
+The three slow paths keep the signature and the two-word result every slow path has. They end in
 one of three ways, which `callGetterInLoop` (C++) produces and `callGetByIdSlowPath` (assembly)
 reads:
 
@@ -76,8 +76,9 @@ null code block, an argument count of one, the getter as callee and the receiver
 caller's bytecode position is already stored, by the assembly and by the slow path prologue.
 
 `setUpCall` can compile the getter. A collection scans the frame stack from its published
-pointer, zeroes what lies below it (`CLoopStack::sanitizeStack`) and cannot see wasm locals, so
-a frame staged below that pointer would be neither a root nor safe. Three things cover it.
+pointer and zeroes what lies below it (`CLoopStack::sanitizeStack`), so a frame staged below
+that pointer would not be protected. The finalizer also spills pointer-sized Wasm locals into
+linear memory; that does not publish or protect the staged frame. Three things cover it.
 Nothing allocates between the lookup and the finished frame. At this pin
 `ScriptExecutable::prepareForExecutionImpl` defers collection for the whole compile
 (`DeferGCForAWhile`). And without relying on that, the finished frame is published as the frame
@@ -91,19 +92,30 @@ frame's own stack check, `op_enter` and debugger hooks run as for any call. When
 the loop restores the caller's stack pointer and uses the existing `dispatchAfterRegularCall`:
 it reloads the caller's position, stores the result, records the value profile and advances
 once. A getter that throws unwinds like any callee; the caller's handler is found from the
-stored position of the `get_by_id`.
+stored position of the property read.
 
-### Six return labels
+### Generated return labels
 
 A C-loop call site returns to a label declared in `BytecodeList.rb`'s `CLoopReturnHelpers`
-section. The two bytecodes have three operand widths each, so the section gains six labels,
-`llint_cloop_did_return_from_js_38` to `_43`. They are appended after every existing id. They
-are C-loop internals: no bytecode is added or renumbered, and the bytecode cache format is
-unchanged.
+section. The three bytecodes expand once per operand width. Computed reads add three
+continuations, bringing the declared and emitted set to 47. Full offlineasm generation assigns
+the private site numbers, including existing getter, direct-eval and bound-call sites. Their
+numbers can change. The generated definitions and references must agree in both profiles.
+No bytecode is added or renumbered, and the bytecode cache format is unchanged.
+
+### Computed keys
+
+`getByVal` keeps the fast data read, numeric-index path and array profiling, negative-one miss,
+receiver coercibility check and property-key coercion in their original order. Only the final
+generic lookup may return an ordinary JavaScript getter uncalled. Numeric-index accessors,
+host and bound getters, callable proxies, custom accessors and Proxy bases retain their native
+paths. String index keys can use the loop route. Primitive receivers remain primitive until
+the getter applies its strict or sloppy `this` conversion. The common frame staging, exception
+protocol and profiled result dispatch above also serve computed reads.
 
 ## What still enters the interpreter again
 
-Setters, `object[key]`, getters reached from C++ (`JSON.stringify`, `Reflect.get`, spread),
+Setters, numeric-index getters, `super[key]`, enumerator reads, getters reached from C++ (`JSON.stringify`, `Reflect.get`, spread),
 Proxy traps, `toString` and `valueOf`, and bound, host and callable-proxy getters keep their
 path. Their measured depths are unchanged with one exception: a Proxy `get` trap read as
 `proxy.name` passes through the `get_by_id` slow path this change edits, whose frames came out
@@ -145,6 +157,24 @@ With the host stack cut to 256 and 512 KiB and the guard out of the way, wasmtim
 3 to 15% deeper on the three reentry paths after the change, so no path costs more host stack
 per level there.
 
+### Computed reads, November 13, 2026
+
+The native launcher now completes 39,930 computed getter levels at 192, 208 and 800 KiB,
+then catches the frame stack's `RangeError`. It also does so with 256 and 512 KiB host stacks
+at the 192 KiB budget. Proxy-trap and `toString` capacities remain 29/31, 32/34 and 125/133
+at those three budgets.
+
+On Linux Chrome and WebKit with a 512 KiB host stack, 240 KiB guest budget and 2,048-byte
+parser reserve, the original cold computed-getter control completes at 45 and catches
+`RangeError` at 200000, with recovery after both. The original warm prefix measures 39,930
+and a caught boundary in both browsers. WebKit's empty-handler Proxy and warm plain-JSON
+traps remain separate units; these results do not claim that every stack path is safe.
+
+The finalized split side holds 4,896 bytes at all 684 calls and has 293 value slots. The
+finalized shared-group side holds at least 4,896 bytes (5,344 maximum), at 1,066 calls, and
+has 52 value slots. Its inlining adds 16 calls relative to the earlier 1,050-call record.
+The floor and 328-slot bound are unchanged.
+
 ## Tests
 
 - `tests/fixtures/getter-dispatch` runs on all three engines: receivers, missing properties,
@@ -154,10 +184,19 @@ per level there.
   Proxy targets, one read site across data, accessor and prototype changes, a self-replacing
   getter, nested returns, a hot site, callers with many live locals, first calls under
   allocation and near the stack limit, unbounded recursion, and the reduced Ajv walk. Each
-  static read has a computed-key twin.
+  static read has a computed-key twin. Computed reads also cover key coercion order and
+  failure, symbol and index keys, typed-array bounds, destination aliases, mixed data/accessor
+  sites, fresh compilation under allocation, and value/failure/recovery at each operand width.
 - `scripts/jsc-embedding.ts` runs that fixture on the matched JSC pair at 192 KiB on a 1 MiB
   host stack, with the Ajv walk 2,000 levels deep and a caller with 33,000 locals, which needs
-  the widest operand form.
+  the widest operand form. `scripts/jsc-getter-continuations.ts source` emits the same
+  generated functions for the JSC shell. Its `bytecode` command checks the actual read
+  instruction, including the `*` and `**` width markers, rather than counting locals. The
+  measured destinations are loc13, loc2005 and loc33005 for narrow, wide16 and wide32.
+- `scripts/build-jsc.sh` checks all generated continuation declarations, references and
+  definitions in each profile. The checker derives operand offsets and instruction length
+  from the actual BytecodeList, checks all getter widths, direct eval and bound returns, and
+  rejects wrong destination/profile operands and missing stack restoration in the real output.
 - `tests/stack-depth.js` gained `computedgetter`, `ajvnames` and, for an installed package,
   `ajv`. The first two join every launcher and browser sweep.
 
@@ -165,9 +204,10 @@ per level there.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`jsc/webkit-wasi.patch`, getter calls in the loop](#jsc-getter-calls-inside-the-interpreter-loop) | Port | Call JavaScript getters found by `op_get_by_id` and `op_get_by_id_with_this` from the running C loop. |
+| [`jsc/webkit-wasi.patch`, getter calls in the loop](#jsc-getter-calls-inside-the-interpreter-loop) | Port | Call JavaScript getters found by `op_get_by_id`, `op_get_by_id_with_this` and the generic `op_get_by_val` lookup from the running C loop. |
 | `tests/stack-depth.js`, `ajvnames`; `tests/fixtures/getter-dispatch`, the names walk | Adapted upstream implementation | The recursion of `Node`, `ParentNode`, `BlockNode` and `If` `names` getters from Ajv 8.17.1 `lib/compile/codegen/index.ts` (MIT), reduced to the getters and their counts. |
 | `scripts/jsc-cloop-frame.ts`, `scripts/src/wasm-code.ts` | Original adapter | Read one function's instructions from a linked side and enforce the interpreter frame floor. |
+| `scripts/jsc-getter-continuations.ts` | Original adapter | Validate full offlineasm continuations and actual computed-read bytecode widths. |
 | `tests/fixtures/getter-dispatch`, the rest | Original adapter | Getter semantics through the guest entry point. |
 
 [Ledger scope and pinned revisions](scope.md).

@@ -9,11 +9,13 @@
 #   args                        optional extra program arguments, one per line
 #   cmd                         optional: bun arguments replacing `run /index.*`, one per line
 #   stdin                       optional file piped to stdin
+#   jsc-current-behavior         optional reason for a non-parity JSC assertion; requires expected-jsc.txt
 #   expected_stderr.txt         optional expected stderr (e.g. `bun test` reports)
 #   host                        optional marker: start the local networking test server;
 #                               all native-engine fixtures use crates/bunwasm-host.
 #                               TEST_SERVER=http://127.0.0.1:<port> points at
 #                               tests/servers/http.ts, which this script starts
+#   skip-browser                 optional one-line reason to skip this fixture on Browser
 #   show                        optional list of files (one per line) the run creates; their
 #                               contents are appended to stdout as `--- <path>` sections
 #   manual                      optional marker: expected.txt is hand-written because native
@@ -227,6 +229,7 @@ native_bun=""
 
 pass=0
 fail=0
+skipped=0
 failed=()
 for name in "${names[@]}"; do
   if [[ $engine == spidermonkey ]]; then
@@ -247,6 +250,12 @@ for name in "${names[@]}"; do
       failed+=("$name")
       continue
     fi
+  fi
+  if [[ "$engine" == browser && -f "$root/tests/fixtures/$name/skip-browser" ]]; then
+    IFS= read -r reason < "$root/tests/fixtures/$name/skip-browser"
+    printf 'SKIP %s (browser: %s)\n' "$name" "$reason"
+    skipped=$((skipped + 1))
+    continue
   fi
   harness_tier=()
   harness_env=()
@@ -397,7 +406,14 @@ for name in "${names[@]}"; do
   normalize <"$scratch/out" >"$scratch/out.n"
   normalize <"$scratch/err" >"$scratch/err.n"
   ok=1
-  diff -u "$src/expected.txt" "$scratch/out.n" >"$scratch/diff" || ok=0
+  expected="$src/expected.txt"
+  current_reason=""
+  if [[ "$engine" == jsc && -f "$src/jsc-current-behavior" ]]; then
+    [[ -f "$src/expected-jsc.txt" ]] || { echo "missing $src/expected-jsc.txt"; exit 1; }
+    expected="$src/expected-jsc.txt"
+    IFS= read -r current_reason < "$src/jsc-current-behavior"
+  fi
+  diff -u "$expected" "$scratch/out.n" >"$scratch/diff" || ok=0
   if [[ -f "$src/expected_stderr.txt" ]]; then
     diff -u "$src/expected_stderr.txt" "$scratch/err.n" >>"$scratch/diff" || ok=0
   elif [[ $engine == spidermonkey ]]; then
@@ -405,7 +421,11 @@ for name in "${names[@]}"; do
   fi
   if [[ $ok == 1 && "$code" == "$expected_exit" ]]; then
     pass=$((pass + 1))
-    printf 'PASS %s\n' "$name"
+    if [[ -n "$current_reason" ]]; then
+      printf 'PASS %s (jsc current behavior, not Bun parity: %s)\n' "$name" "$current_reason"
+    else
+      printf 'PASS %s\n' "$name"
+    fi
     continue
   fi
   fail=$((fail + 1))
@@ -423,4 +443,5 @@ done
 [[ $update == 1 ]] && exit 0
 echo
 echo "$pass passed, $fail failed"
+[[ "$skipped" == 0 ]] || echo "$skipped skipped"
 [[ $fail == 0 ]] || { printf 'failed: %s\n' "${failed[*]}"; exit 1; }

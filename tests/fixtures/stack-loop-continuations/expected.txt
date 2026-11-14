@@ -1,0 +1,16 @@
+nested CALL completed
+CALL exception and finally preserved
+unbounded CALL caught
+nested reduce and reduceRight completed
+Ajv-shaped callback walk completed
+reduce exception and finally preserved
+unbounded reduce caught
+continued
+nested CALL completed
+CALL exception and finally preserved
+unbounded CALL caught
+nested reduce and reduceRight completed
+Ajv-shaped callback walk completed
+reduce exception and finally preserved
+unbounded reduce caught
+continued

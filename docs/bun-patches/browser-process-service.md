@@ -157,6 +157,18 @@ The Node adapter captures each Worker's native termination separately from logic
 process exit. Pending stops remain owned after an exit event, and rejected stops
 retain their exact reason instead of reporting successful disposal.
 
+The 0.0.129 consumer migration reads requests and descriptors from the current
+`ProcessRecord.image` and forwards each posted transport's actual generation.
+The Node adapter captures its process record and image before installing Worker
+callbacks. Messages, errors and exits from a retired image cannot affect its
+successor at the same PID. A retired Worker's native return cannot terminate the
+successor's process observation or remove its Worker from cleanup ownership.
+Focused controls retain the existing startup diagnostic and physical-stop checks.
+These are original caller adaptations to
+`packages/waffle/proc/{table,worker-client,supervisor,observation}.ts` at
+`557d0f2502ad2e2d2dd9042486e1b25c101cbcda`, host interface 2. No upstream
+implementation is copied or patched, and this migration adds no Node exec path.
+
 The published runtime source reference is `ShaulLavo/waffle`,
 `packages/waffle/proc/{observation,worker-client}.ts` and
 `packages/waffle/browser/{worker,process-broker}.ts` at
@@ -169,3 +181,10 @@ module as eager lifecycle control alongside outcome and directory cells. Its rea
 browser bundle must not import the supervisor, registry or Worker service. Unknown
 observation-related modules still fail closed, and observation bytes remain in the
 measured bundle contributions and size totals. No producer implementation is copied.
+
+Waffle 0.0.129's `packages/waffle/proc/exec.ts` at
+`557d0f2502ad2e2d2dd9042486e1b25c101cbcda` contains completion-word helpers
+and the `ProcessReplaced` unwind type. The bundle gate classifies that exact
+module as lifecycle control. A real browser bundle checks its dependency graph
+while supervisor, registry, worker-client and unknown exec service modules remain
+rejected. Its bytes remain in the measured size totals.

@@ -165,16 +165,17 @@ async function compileCached(response: Response, key: string) {
 }
 
 async function loadPaired(url: string, expected: PairedEngine, progress: (text: string) => void, memoryProfile?: ProgramMemoryProfile) {
-  const core = await loadVerifiedFile(url, profileAsset(programProfile(expected).core, memoryProfile ?? "split"), progress, true, memoryProfile);
+  const core = loadVerifiedFile(url, profileAsset(programProfile(expected).core, memoryProfile ?? "split"), progress, true, memoryProfile);
   // Preparation compiles asynchronously and rejects a core that declares another engine.
   const loaded = await loadProgramSide(url, expected, core, progress, true, memoryProfile);
   verifyMemoryProfile(loaded.module, memoryProfile ?? "split");
   return loaded;
 }
 
-async function loadProgramSide(url: string, kind: PairedEngine, core: { bytes: Uint8Array<ArrayBuffer>; build: string | null }, progress: (text: string) => void, verifyBuild: boolean, memoryProfile?: ProgramMemoryProfile) {
+async function loadProgramSide(url: string, kind: PairedEngine, core: Awaited<ReturnType<typeof loadVerifiedFile>> | ReturnType<typeof loadVerifiedFile>, progress: (text: string) => void, verifyBuild: boolean, memoryProfile?: ProgramMemoryProfile) {
   const profile = programProfile(kind);
   if (kind === "spidermonkey" && !verifyBuild) {
+    core = await core;
     const build = assetBuild(profile.core);
     if (build === null) throw new Error(`${profile.core}: build manifest fingerprint is missing`);
     await verifyArtifact(profile.core, core.bytes, build);
@@ -182,9 +183,9 @@ async function loadProgramSide(url: string, kind: PairedEngine, core: { bytes: U
     verifyBuild = true;
   }
   const sideUrl = new URL(profile.side, new URL(url, location.href));
-  const side = await loadVerifiedFile(sideUrl.href, profileAsset(profile.side, memoryProfile ?? "split"), progress, verifyBuild, memoryProfile);
-  const module = await withoutCompileSpans(() => prepareProgram({ kind, core: core.bytes, side: side.bytes }));
-  return { module, size: core.bytes.length + side.bytes.length, build: core.build };
+  const [loadedCore, side] = await Promise.all([core, loadVerifiedFile(sideUrl.href, profileAsset(profile.side, memoryProfile ?? "split"), progress, verifyBuild, memoryProfile)]);
+  const module = await withoutCompileSpans(() => prepareProgram({ kind, core: loadedCore.bytes, side: side.bytes }));
+  return { module, size: loadedCore.bytes.length + side.bytes.length, build: loadedCore.build };
 }
 
 async function loadVerifiedTools(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string }> {

@@ -1,0 +1,1 @@
+ok native-only handler and fresh trap

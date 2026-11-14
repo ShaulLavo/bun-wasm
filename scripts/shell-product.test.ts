@@ -45,7 +45,7 @@ function workerJobFixture() {
   }
   function admit(transport: WorkerProcessTransport, request: SpawnRequest, stage: "reserved" | "launched" = "reserved") {
     const state = workerProcessState(transport);
-    jobs.admission({ pid: state.pid, parentPid: state.parentPid, job: state.job, stage }, { request, rootPid: state.rootPid });
+    jobs.admission({ pid: state.pid, parentPid: state.parentPid, job: state.job, stage }, { image: { request }, rootPid: state.rootPid });
   }
   function reserve(parent: typeof root, job = 0, jobLifetime?: "caller-fatal") {
     let child: WorkerProcessTransport | undefined;
@@ -173,8 +173,8 @@ test("Ctrl-C tracks positive requested ownership even when runtime assignment is
   const baseline = broken.baseline(23);
   broken.observe(dev, { runtimeProcess: dev.transport, adapter: "bun" });
   const devState = workerProcessState(dev.transport);
-  broken.admission({ pid: devState.pid, parentPid: devState.parentPid, job: devState.job, stage: "launched" }, { rootPid: devState.rootPid, request: { ...wrong.request, job: 0 } });
-  broken.admission({ pid: state.pid, parentPid: state.parentPid, job: state.job, stage: "reserved" }, { rootPid: state.rootPid, request: { ...wrong.request, job: requested } });
+  broken.admission({ pid: devState.pid, parentPid: devState.parentPid, job: devState.job, stage: "launched" }, { rootPid: devState.rootPid, image: { request: { ...wrong.request, job: 0 } } });
+  broken.admission({ pid: state.pid, parentPid: state.parentPid, job: state.job, stage: "reserved" }, { rootPid: state.rootPid, image: { request: { ...wrong.request, job: requested } } });
   const handle = probe.launch(wrong);
   live.add(handle);
   broken.observe(handle, { runtimeProcess: handle.transport, adapter: "bun" });

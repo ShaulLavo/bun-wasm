@@ -108,6 +108,15 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
   }
 
   function capability(): Capability {
+    const owned = native.owned;
+    if (owned !== undefined) {
+      const promise = owned.create<void>();
+      return {
+        promise,
+        resolve: () => owned.resolve(promise, undefined),
+        reject: error => owned.reject(promise, error),
+      };
+    }
     let resolve!: () => void;
     let reject!: (error: unknown) => void;
     const promise = new NativePromise<void>((res, rej) => {
@@ -711,7 +720,24 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
     }
   }
 
-  return {
+  function requireModule(specifier: string, referrer: string): Promise<object> {
+    const owned = native.owned!;
+    const bridge = owned.create<object>();
+    let mod: Mod;
+    let source: Promise<void>;
+    try {
+      if (!active()) return bridge;
+      mod = loadGraph(added => load(specifier, referrer, added));
+      source = evaluate(mod);
+    } catch (error) {
+      if (error !== EXITED && active()) owned.reject(bridge, error);
+      return bridge;
+    }
+    owned.forward(source, () => namespaceOf(mod), bridge);
+    return bridge;
+  }
+
+  const api = {
     // The engine's `import_module`: loads, links and starts evaluating now.
     importModule(specifier: string, referrer: string): Promise<object> {
       return settleGraph(added => load(specifier, referrer, added));
@@ -722,6 +748,7 @@ type RecordSessionBindings = BunWasm.RecordSessionBindings;
     dynamicImport,
     newSession,
   };
+  return native.owned === undefined ? api : { ...api, requireModule };
   }
   return newSession(native, installHook !== false);
 })
