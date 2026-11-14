@@ -720,6 +720,7 @@ void natives() {
 
 extern "C" bool bunsm_host_call(uint32_t id, bsm_handle, const bsm_handle* args, size_t argc, bsm_handle* out) {
   if (id == 1) { *out = bsm_async_context(); return true; }
+  if (id == 200 || id == 201) return recovery_host_call(id, args, argc, out);
   check(id == 100 && argc == 1, "native callback arguments");
   *out = bsm_number_value(bsm_number(args[0]) * 2);
   return true;
@@ -755,7 +756,8 @@ extern "C" void bunsm_host_rejection(bsm_handle promise, bsm_handle, bool handle
 extern "C" void bunsm_host_uncaught(bsm_handle value) { uncaught.push_back(bsm_dup(value)); }
 extern "C" [[noreturn]] void bunsm_host_fatal(const char* text, size_t length) {
   fprintf(stderr, "fatal %.*s\n", static_cast<int>(length), text);
-  abort();
+  // abort() is redirected through mozalloc back into this hook; trap so the backtrace survives.
+  __builtin_trap();
 }
 
 extern "C" int engine_semantics_main() {
@@ -779,9 +781,20 @@ extern "C" int engine_semantics_main() {
     return 0;
   }
   if (mode && !strcmp(mode, "recovery")) {
-    Value initialize(script("globalThis.recoveryRuns = {};"));
-    recovery_sweep(1);
+    recovery_controls();
+    bsm_shutdown();
+    puts("SpiderMonkey require recovery controls passed");
     return 0;
+  }
+  if (mode && !strcmp(mode, "recovery-terminate")) {
+    recovery_termination();
+    bsm_shutdown();
+    puts("SpiderMonkey require termination control passed");
+    return 0;
+  }
+  if (mode && !strcmp(mode, "recovery-map-trap")) {
+    recovery_map_trap();
+    return 1;
   }
   {
     Value read(bsm_function("readFrame", 9, 1));

@@ -79,6 +79,7 @@ void bsm_control_observe(void (*)(const char*));
 void bsm_control_hold(const char*, const char*);
 bool bsm_control_held(const char*);
 bool bsm_control_resume(const char*, bsm_handle*);
+bool bsm_control_load(const char*);
 bool bsm_control_edge(const char*, const char*);
 void bsm_control_retirement(size_t*, uint32_t*);
 void bsm_control_require_promises(bsm_handle*, bsm_handle*, bsm_handle*, bsm_handle*);

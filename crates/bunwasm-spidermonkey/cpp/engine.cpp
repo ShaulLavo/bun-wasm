@@ -822,6 +822,9 @@ bool require_loaded(JSContext* cx, unsigned argc, JS::Value* vp) {
     JS::RootedValue reason(cx, JS::GetPromiseResult(evaluated));
     if (!pinned) rollback(candidates);
     control_observe("require-after-evaluate");
+    // Termination fails the record with no catchable error; keep it uncatchable so the bridge
+    // stays pending and the drain stops.
+    if (terminating) return false;
     JS_SetPendingException(cx, reason, JS::ExceptionStackBehavior::DoNotCapture);
     return false;
   }
@@ -1356,6 +1359,12 @@ extern "C" void bsm_control_module_info(const char* name, bsm_module_info* out) 
   out->linked = JS::ModuleIsLinked(entry->record);
   out->bodyEntered = info.bodyEntered;
   out->overRecursed = info.overRecursed;
+}
+// Compiles and maps a module without evaluating it, so a schedule's nested require of it starts
+// from an existing record.
+extern "C" bool bsm_control_load(const char* name) {
+  JSAutoRealm realm(context, global->get());
+  return load_module(name) != nullptr;
 }
 extern "C" bool bsm_control_edge(const char* source, const char* target) {
   auto a = modules.find(source), b = modules.find(target);
