@@ -54,7 +54,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git i/js/src/vm/Interpreter.cpp w/js/src/vm/Interpreter.cpp
-index 6241cd45d..6b71917fa 100644
+index 6241cd45d..4da58a1d2 100644
 --- i/js/src/vm/Interpreter.cpp
 +++ w/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -64,11 +64,11 @@ index 6241cd45d..6b71917fa 100644
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +extern "C" void bunsm_poll_interrupt(JSContext*, uint8_t);
 +#endif
-
+ 
  using namespace js;
-
+ 
 @@ -1781,6 +1784,10 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
-
+ 
  bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
                                                             RunState& state) {
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
@@ -92,15 +92,28 @@ index 6241cd45d..6b71917fa 100644
 +    BUNWASM_POLL_INTERRUPT(cx);              \
      if (!CheckForInterrupt(cx)) goto error; \
    JS_END_MACRO
-
+ 
+@@ -1984,6 +1997,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+   INIT_COVERAGE();
+   COUNT_COVERAGE_MAIN();
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  if (!state.isGeneratorResume() && script->isModule()) {
++    script->module()->noteBodyEntered();
++  }
++#endif
++
+   // Enter the interpreter loop starting at the current pc.
+   ADVANCE_AND_DISPATCH(0);
+ 
 diff --git i/js/src/vm/PortableBaselineInterpret.cpp w/js/src/vm/PortableBaselineInterpret.cpp
-index d38cebe3e..f51f56979 100644
+index d38cebe3e..a6ebdedcb 100644
 --- i/js/src/vm/PortableBaselineInterpret.cpp
 +++ w/js/src/vm/PortableBaselineInterpret.cpp
 @@ -105,8 +105,13 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
  #  define ENABLE_COMPUTED_GOTO_DISPATCH
  #endif
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +extern "C" void bunsm_poll_interrupt(JSContext*, uint8_t);
 +extern "C" void bunsm_pbl_entry();
@@ -112,21 +125,24 @@ index d38cebe3e..f51f56979 100644
  // On WASI, with a single thread, there is no possibility for an
  // interrupt to come asynchronously.
  #  define ENABLE_INTERRUPT_CHECKS
-@@ -6034,7 +6039,13 @@ PBIResult PortableBaselineInterpret(
+@@ -6034,7 +6039,16 @@ PBIResult PortableBaselineInterpret(
      }
    }
    COUNT_COVERAGE_MAIN();
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  bunsm_pbl_entry();
++  if (frame->script()->isModule()) {
++    frame->script()->module()->noteBodyEntered();
++  }
 +#endif
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  bunsm_poll_interrupt(ctx.frameMgr.cxForLocalUseOnly(), 1);
 +#endif
  #ifdef ENABLE_INTERRUPT_CHECKS
    if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
      PUSH_EXIT_FRAME();
-@@ -7909,6 +7920,9 @@ PBIResult PortableBaselineInterpret(
+@@ -7909,6 +7923,9 @@ PBIResult PortableBaselineInterpret(
                }
              }
              // 11. Check for interrupts.
@@ -136,7 +152,7 @@ index d38cebe3e..f51f56979 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
              if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
                PUSH_EXIT_FRAME();
-@@ -8231,6 +8245,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8231,6 +8248,9 @@ PBIResult PortableBaselineInterpret(
        CASE(LoopHead) {
          int32_t icIndex = GET_INT32(pc);
          icEntry = icEntries + icIndex;
@@ -146,9 +162,9 @@ index d38cebe3e..f51f56979 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
          if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
            PUSH_EXIT_FRAME();
-@@ -8499,6 +8516,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8499,6 +8519,9 @@ PBIResult PortableBaselineInterpret(
        }
-
+ 
        CASE(Finally) {
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  bunsm_poll_interrupt(ctx.frameMgr.cxForLocalUseOnly(), 1);
@@ -367,4 +383,152 @@ diff --git a/js/src/util/DiagnosticAssertions.h b/js/src/util/DiagnosticAssertio
 +     !(defined(__wasi__) && defined(BUNWASM_EMBED)))
  #  define JS_CRASH_DIAGNOSTICS 1
  #endif
+ 
+diff --git i/js/public/Modules.h w/js/public/Modules.h
+index 6f3c3cd68..176dd32a8 100644
+--- i/js/public/Modules.h
++++ w/js/public/Modules.h
+@@ -34,6 +34,26 @@ union Utf8Unit;
+ 
+ namespace JS {
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++enum class ModuleEvaluationState : uint8_t {
++  Unevaluated,
++  Pending,
++  Fulfilled,
++  Failed
++};
++
++struct ModuleEvaluationInfo {
++  ModuleEvaluationState state;
++  bool bodyEntered;
++  bool overRecursed;
++};
++
++// The caller owns a live, unwrapped module record. This read never runs script,
++// allocates, GCs, unwraps objects or reads properties.
++// Synthetic records report Fulfilled with both flags false.
++extern JS_PUBLIC_API ModuleEvaluationInfo GetModuleEvaluationInfo(JSObject* module);
++#endif
++
+ // This enum is used to index into an array, and we assume that we have
+ // sequential numbers starting at zero for the unknown type.
+ enum class ModuleType : uint32_t {
+diff --git i/js/src/builtin/ModuleObject.cpp w/js/src/builtin/ModuleObject.cpp
+index 0e97fa421..11346e8e8 100644
+--- i/js/src/builtin/ModuleObject.cpp
++++ w/js/src/builtin/ModuleObject.cpp
+@@ -1012,6 +1012,9 @@ class js::CyclicModuleFields {
+   ModuleStatus status = ModuleStatus::New;
+ 
+   bool hasTopLevelAwait : 1;
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  bool bodyEntered : 1;
++#endif
+ 
+  private:
+   // Flag bits that determine whether other fields are present.
+@@ -1064,6 +1067,9 @@ class js::CyclicModuleFields {
+ 
+ CyclicModuleFields::CyclicModuleFields()
+     : hasTopLevelAwait(false),
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++      bodyEntered(false),
++#endif
+       hasDfsAncestorIndex(false),
+       hasPendingAsyncDependencies(false) {}
+ 
+@@ -1448,6 +1454,18 @@ bool ModuleObject::hasTopLevelAwait() const {
+   return cyclicModuleFields()->hasTopLevelAwait;
+ }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++void ModuleObject::noteBodyEntered() {
++  if (hasCyclicModuleFields()) {
++    cyclicModuleFields()->bodyEntered = true;
++  }
++}
++
++bool ModuleObject::bodyEntered() const {
++  return hasCyclicModuleFields() && cyclicModuleFields()->bodyEntered;
++}
++#endif
++
+ AsyncEvaluationOrder& ModuleObject::asyncEvaluationOrder() {
+   return cyclicModuleFields()->asyncEvaluationOrder;
+ }
+diff --git i/js/src/builtin/ModuleObject.h w/js/src/builtin/ModuleObject.h
+index 4cf98d2d5..d23d13cf8 100644
+--- i/js/src/builtin/ModuleObject.h
++++ w/js/src/builtin/ModuleObject.h
+@@ -567,6 +567,10 @@ class ModuleObject : public NativeObject {
+   static PromiseObject* createTopLevelCapability(JSContext* cx,
+                                                  Handle<ModuleObject*> module);
+   bool hasTopLevelAwait() const;
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  void noteBodyEntered();
++  bool bodyEntered() const;
++#endif
+   void setEvaluationError(HandleValue newValue);
+   void setPendingAsyncDependencies(uint32_t newValue);
+   void setInitialTopLevelCapability(Handle<PromiseObject*> capability);
+diff --git i/js/src/vm/Modules.cpp w/js/src/vm/Modules.cpp
+index f1ce887af..00c9ecad1 100644
+--- i/js/src/vm/Modules.cpp
++++ w/js/src/vm/Modules.cpp
+@@ -30,6 +30,9 @@
+ #include "js/Value.h"       // JS::Value
+ #include "js/WasmModule.h"  // JS::WasmModule
+ #include "vm/EnvironmentObject.h"  // js::ModuleEnvironmentObject
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++#  include "vm/ErrorObject.h"
++#endif
+ #include "vm/JSAtomUtils.h"        // AtomizeString
+ #include "vm/JSContext.h"          // CHECK_THREAD, JSContext
+ #include "vm/JSObject.h"           // JSObject
+@@ -677,6 +680,44 @@ JS_PUBLIC_API bool JS::ModuleIsLinked(JSObject* moduleObj) {
+          moduleObj->as<ModuleObject>().status() != ModuleStatus::Unlinked;
+ }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++JS_PUBLIC_API JS::ModuleEvaluationInfo JS::GetModuleEvaluationInfo(
++    JSObject* moduleObj) {
++  AssertHeapIsIdle();
++  const auto& module = moduleObj->as<ModuleObject>();
++  if (!module.hasCyclicModuleFields()) {
++    return {ModuleEvaluationState::Fulfilled, false, false};
++  }
++
++  const bool entered = module.bodyEntered();
++  if (module.hadEvaluationError()) {
++    const Value error = module.evaluationError();
++    const JSErrorReport* report =
++        error.isObject() && error.toObject().is<ErrorObject>()
++            ? error.toObject().as<ErrorObject>().getErrorReport()
++            : nullptr;
++    return {ModuleEvaluationState::Failed, entered,
++            report && report->errorNumber == JSMSG_OVER_RECURSED};
++  }
++
++  switch (module.status()) {
++    case ModuleStatus::New:
++    case ModuleStatus::Unlinked:
++    case ModuleStatus::Linking:
++    case ModuleStatus::Linked:
++      return {ModuleEvaluationState::Unevaluated, entered, false};
++    case ModuleStatus::Evaluating:
++    case ModuleStatus::EvaluatingAsync:
++      return {ModuleEvaluationState::Pending, entered, false};
++    case ModuleStatus::Evaluated:
++      return {ModuleEvaluationState::Fulfilled, entered, false};
++    case ModuleStatus::Evaluated_Error:
++      MOZ_CRASH("ModuleObject::status normalizes evaluation errors");
++  }
++  MOZ_CRASH("Invalid module evaluation status");
++}
++#endif
++
+ ////////////////////////////////////////////////////////////////////////////////
+ // Internal implementation
  

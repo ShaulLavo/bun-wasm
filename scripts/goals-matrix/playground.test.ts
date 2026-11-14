@@ -2,12 +2,19 @@ import { admit, awaitWithin, type Admission } from "./scope";
 import { withScoped, withAdmission } from "./scope-fixture";
 import { test, expect } from "bun:test";
 import { createContext, runInContext } from "node:vm";
-import { command, foreground, start, terminal } from "./playground";
+import { command, foreground, ObservationTimeout, start, terminal, until } from "./playground";
 import { execute } from "./execute";
 import { frameworks } from "./catalog";
 import type { Transport } from "./transport";
 import { createSafariTransport } from "./safari-transport";
 import { withPlayground } from "./test-fixture";
+
+test("an expired observation bound does not dispatch another operation", async () => {
+  let dispatched = 0;
+  await expect(until(async () => ++dispatched, () => true, 0)).rejects.toBeInstanceOf(ObservationTimeout);
+  expect(dispatched).toBe(0);
+});
+
 function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>, previewReady = Promise.resolve("ready"), lines: readonly { text: string; isWrapped: boolean }[] = [], listeningPort = 5173): Transport {
   const shell = { running: false, lastExit: 0, submit: async (_text: string) => submit(shell, () => { listening = true; }), input() {} };
   let listening = false;

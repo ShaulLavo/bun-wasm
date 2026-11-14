@@ -1974,11 +1974,11 @@ index ad10ba11..1eec7afc 100644
  }
  
 +#if ENABLE(C_LOOP) && OS(WASI)
-+// Hands a JavaScript getter that op_get_by_id or op_get_by_id_with_this found back to the C loop.
++// Hands a JavaScript getter found by op_get_by_id, op_get_by_id_with_this or op_get_by_val to the C loop.
 +// The loop calls it as it calls any JavaScript function, so a getter starts no new CLoop::execute
 +// on the host stack.
 +//
-+// Those two slow paths end in one of three ways, read by callGetByIdSlowPath in
++// Those slow paths end in one of three ways, read by callGetByIdSlowPath in
 +// LowLevelInterpreter64.asm:
 +//   completed:     (pc, nullptr), as LLINT_END_IMPL
 +//   threw:         (returnToThrow(vm), exceptionSignal()), as LLINT_THROW_IMPL
@@ -2064,7 +2064,7 @@ index 7187af71..f78f579a 100644
  end
  
 +if C_LOOP and WASI
-+    # A get_by_id slow path that can hand a JavaScript getter back to this loop
++    # A property-read slow path that can hand a JavaScript getter back to this loop
 +    # (callGetterInLoop in LLIntSlowPaths.cpp). It ends in one of three ways, and the
 +    # exception signal is tested before either register is used as a pointer:
 +    #   r1 is LLInt::exceptionSignal (all ones): an exception is pending.
@@ -3061,11 +3061,14 @@ index fab0e74..79215b0 100644
  
  end_section :NativeHelpers
  
-@@ -1605,5 +1606,6 @@ op :llint_cloop_did_return_from_js_40
+@@ -1605,5 +1606,9 @@ op :llint_cloop_did_return_from_js_40
  op :llint_cloop_did_return_from_js_41
  op :llint_cloop_did_return_from_js_42
  op :llint_cloop_did_return_from_js_43
 +op :llint_cloop_did_return_from_js_44
++op :llint_cloop_did_return_from_js_45
++op :llint_cloop_did_return_from_js_46
++op :llint_cloop_did_return_from_js_47
  
  end_section :CLoopReturnHelpers
 diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
@@ -4230,3 +4233,67 @@ new file mode 100644
 +JS_EXPORT_PRIVATE void setWASIJSONFastTestControl(WASIJSONFastTestControl);
 +}
 +#endif
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+@@ -1284,7 +1284,11 @@
+     LLINT_RETURN(jsBoolean(couldDelete));
+ }
+ 
++#if ENABLE(C_LOOP) && OS(WASI)
++static ALWAYS_INLINE JSValue getByVal(VM& vm, JSGlobalObject* globalObject, CodeBlock* codeBlock, JSValue baseValue, JSValue subscript, OpGetByVal bytecode, JSFunction*& javaScriptGetter)
++#else
+ static ALWAYS_INLINE JSValue getByVal(VM& vm, JSGlobalObject* globalObject, CodeBlock* codeBlock, JSValue baseValue, JSValue subscript, OpGetByVal bytecode)
++#endif
+ {
+     auto scope = DECLARE_THROW_SCOPE(vm);
+ 
+@@ -1345,8 +1349,13 @@
+     RETURN_IF_EXCEPTION(scope, JSValue());
+     auto property = subscript.toPropertyKey(globalObject);
+     RETURN_IF_EXCEPTION(scope, JSValue());
++#if ENABLE(C_LOOP) && OS(WASI)
++    PropertySlot slot(baseValue, PropertySlot::InternalMethodType::Get);
++    RELEASE_AND_RETURN(scope, getOrFindJavaScriptGetter<false>(globalObject, baseValue, property, slot, javaScriptGetter));
++#else
+     scope.release();
+     return baseValue.get(globalObject, property);
++#endif
+ }
+ 
+ LLINT_SLOW_PATH_DECL(slow_path_get_by_val)
+@@ -1355,7 +1364,16 @@
+     auto bytecode = pc->as<OpGetByVal>();
+     JSValue baseValue = getOperand(callFrame, bytecode.m_base);
+     JSValue subscript = getOperand(callFrame, bytecode.m_property);
++#if ENABLE(C_LOOP) && OS(WASI)
++    JSFunction* getter = nullptr;
++    JSValue result = getByVal(vm, globalObject, codeBlock, baseValue, subscript, bytecode, getter);
++    LLINT_CHECK_EXCEPTION();
++    if (getter)
++        RELEASE_AND_RETURN(throwScope, callGetterInLoop(callFrame, pc, getter, baseValue));
++    LLINT_RETURN_PROFILED(result);
++#else
+     LLINT_RETURN_PROFILED(getByVal(vm, globalObject, codeBlock, baseValue, subscript, bytecode));
++#endif
+ }
+ 
+ LLINT_SLOW_PATH_DECL(slow_path_get_private_name)
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+@@ -1906,8 +1906,12 @@
+     getByValTypedArray(t0, t1, finishIntGetByVal, finishDoubleGetByVal, setLargeTypedArray, .opGetByValSlow)
+ 
+ .opGetByValSlow:
+-    callSlowPath(_llint_slow_path_get_by_val)
+-    dispatch()
++    if C_LOOP and WASI
++        callGetByIdSlowPath(_llint_slow_path_get_by_val, size, OpGetByVal, dispatch)
++    else
++        callSlowPath(_llint_slow_path_get_by_val)
++        dispatch()
++    end
+ 
+ .osrReturnPoint:
+     getterSetterOSRExitReturnPoint(op_get_by_val, size)
