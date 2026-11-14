@@ -123,7 +123,8 @@ function verifyUnrelatedPackages(original: string, updated: string, locations: R
   for (const [name, entry] of Object.entries(before)) {
     if (!Array.isArray(entry) || typeof entry[0] !== "string") throw new Error("Invalid locked package");
     const spec = entry[0].slice(entry[0].indexOf("@", 1) + 1);
-    if (locations.has(spec) || requestedGitRevision(name, spec, after[name], root, manifest, inputs)) continue;
+    if (locations.has(spec) && !gitPattern.test(spec)) continue;
+    if (requestedGitRevision(name, spec, after[name], root, manifest, inputs)) continue;
     if (!isDeepStrictEqual(entry, after[name])) throw new Error(`Lock update changed an unrelated package: ${name}`);
   }
 }

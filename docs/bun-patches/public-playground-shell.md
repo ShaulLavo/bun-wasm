@@ -55,6 +55,9 @@ physical memory reclamation nor Safari framework acceptance.
 The new shell revision delegates `env` to the published Waffle coreutils family.
 `scripts/build-bash-web-shell.sh` builds only the shell and stages the matching
 family `env.wasm`; the existing receipt still hashes both staged guests.
+The builder retains function names for Waffle's strict filesystem-adapter and
+memory-cap verifier, then strips custom sections before staging the shell.
+This preserves the normal shipping bytes while verifying the named link output.
 `scripts/waffle-release-inputs.json` records the published runtime/program
 archives and unchanged libc builder/patch hashes for the selected tuple.
 

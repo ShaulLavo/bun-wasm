@@ -23,8 +23,8 @@ clang="$WASI_SDK_PATH/bin/clang"
 flags=(-C link-self-contained=no -C linker-flavor=gcc -C "linker=$clang" -C link-arg=--target=wasm32-wasip1
   -C "link-arg=--sysroot=$BUN_WASM_SYSROOT" -C link-arg=-Wl,--max-memory=268435456
   "--remap-path-prefix=$source_dir=/bash-web" "--remap-path-prefix=$CARGO_HOME=/cargo"
-  # The name section carries LLVM symbol suffixes derived from those paths; the guests ship without it.
-  -C strip=symbols)
+  # Keep names until the strict verifier has inspected libc and filesystem imports.
+  -C strip=debuginfo)
 toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' "$root/rust-toolchain.toml")
 target="$CARGO_TARGET_DIR/bash-web-shell"
 (cd "$source_dir" && RUSTUP_TOOLCHAIN="$toolchain" CARGO_TARGET_DIR="$target" \
@@ -32,6 +32,9 @@ target="$CARGO_TARGET_DIR/bash-web-shell"
   cargo build --locked --release --target wasm32-wasip1 --manifest-path shell/Cargo.toml \
   -j "${JOBS:-2}" -p shell-engine --bin shell-runtime)
 mkdir -p "$root/dist"
-cp "$target/wasm32-wasip1/release/shell-runtime.wasm" "$root/dist/bash-web-shell.wasm"
+guest="$target/wasm32-wasip1/release/shell-runtime.wasm"
+(cd "$root" && bun --eval 'import { verifyWasiGuest } from "waffle/program-build-tools"; verifyWasiGuest(process.argv[1], { filesystemAdapter: "waffle_program_support::runtime::wasi" });' "$guest")
+# LLVM symbol suffixes carry build paths. Ship the verified guest without custom sections.
+wasm-tools strip --all "$guest" -o "$root/dist/bash-web-shell.wasm"
 bun "$root/scripts/bash-web-guests.ts" stage-env "$root" "$root/dist"
 bun "$root/scripts/bash-web-guests.ts" write "$root/dist" "$commit" "$toolchain"

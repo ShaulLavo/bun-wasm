@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +14,13 @@ const otherGit = `git+https://github.com/owner/other.git#${revision}`;
 const otherGitUrl = `https://codeload.github.com/owner/other/legacy.tar.gz/${revision}`;
 const releaseUrl = "https://github.com/owner/project/releases/download/v1/released.tgz";
 const integrity = (bytes: Uint8Array) => `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+
+function packageEntries(text: string): Record<string, unknown> {
+  const lock: unknown = Bun.JSONC.parse(text);
+  assert.ok(lock && typeof lock === "object" && "packages" in lock);
+  assert.ok(lock.packages && typeof lock.packages === "object");
+  return Object.fromEntries(Object.entries(lock.packages));
+}
 
 async function archive(root: string, name: string, prefix = "package") {
   const source = join(root, name);
@@ -134,13 +142,14 @@ test("a requested Git revision replaces its old lock entry without refreshing un
     const manifest = f.manifest.replace(revision, next);
     await writeFile(join(f.source, "package.json"), manifest);
     await updateReleaseLock(f.source, url => url === gitUrl.replace(revision, next) ? Promise.resolve(new Response(bytes)) : f.download(url));
-    const updated = Bun.JSONC.parse(await readFile(join(f.source, "bun.lock"), "utf8"));
-    const original = Bun.JSONC.parse(f.lock);
-    expect(updated.packages["git-parent"]).toEqual(["git-parent@github:owner/project#abcdef0", {}, nextArchive, integrity(bytes)]);
-    expect(updated.packages.ranged).toEqual(original.packages.ranged);
-    expect(updated.packages["other-git"]).toEqual(original.packages["other-git"]);
-    expect(updated.packages.released).toEqual(original.packages.released);
-    expect(updated.workspaces[""].dependencies["git-parent"]).toBe(git.replace(revision, next));
+    const text = await readFile(join(f.source, "bun.lock"), "utf8");
+    const updated = packageEntries(text);
+    const original = packageEntries(f.lock);
+    expect(updated["git-parent"]).toEqual(["git-parent@github:owner/project#abcdef0", {}, nextArchive, integrity(bytes)]);
+    expect(updated.ranged).toEqual(original.ranged);
+    expect(updated["other-git"]).toEqual(original["other-git"]);
+    expect(updated.released).toEqual(original.released);
+    expect(text).toContain(git.replace(revision, next));
     expect(f.requests).toEqual([]);
     expect(await readFile(join(f.source, "package.json"), "utf8")).toBe(manifest);
     const published = await readFile(join(f.source, "bun.lock"), "utf8");
@@ -151,6 +160,13 @@ test("a requested Git revision replaces its old lock entry without refreshing un
     await writeFile(join(f.source, "bun.lock"), invalid);
     await expect(updateReleaseLock(f.source, download)).rejects.toThrow("unrelated package: ranged");
     expect(await readFile(join(f.source, "bun.lock"), "utf8")).toBe(invalid);
+    expect(await readFile(join(f.source, "package.json"), "utf8")).toBe(manifest);
+    const other = original["other-git"];
+    assert.ok(Array.isArray(other) && typeof other[3] === "string");
+    const changedOther = f.lock.replace(other[3], `sha512-${"A".repeat(86)}==`);
+    await writeFile(join(f.source, "bun.lock"), changedOther);
+    await expect(updateReleaseLock(f.source, download)).rejects.toThrow("unrelated package: other-git");
+    expect(await readFile(join(f.source, "bun.lock"), "utf8")).toBe(changedOther);
     expect(await readFile(join(f.source, "package.json"), "utf8")).toBe(manifest);
   } finally {
     server?.stop(true);
