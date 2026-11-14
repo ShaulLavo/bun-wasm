@@ -30,7 +30,7 @@ use crate::resolve;
 use crate::{Entry, State};
 
 #[cfg(test)]
-pub(crate) mod tests;
+pub(crate) mod polyfill_tests;
 
 const T_UNDEFINED: u8 = 0;
 const T_NULL: u8 = 1;

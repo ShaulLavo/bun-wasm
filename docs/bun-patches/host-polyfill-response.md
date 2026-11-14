@@ -5,7 +5,7 @@
 | Source | Class | Local change |
 | --- | --- | --- |
 | `crates/bunwasm-runtime/src/engine_host.rs` | Host feature | Serialize the selected static polyfill directly into the owned result buffer. |
-| `crates/bunwasm-runtime/src/engine_host/tests.rs` | Test fixture | Exercise registration, exported dispatch, wire bytes, result ownership and native reentry. |
+| `crates/bunwasm-runtime/src/engine_host/polyfill_tests.rs` | Test fixture | Exercise registration, exported dispatch, wire bytes, result ownership and native reentry. |
 | `crates/bunwasm-runtime/src/modules.rs` | Test fixture | Select those regressions through the existing host-native quality filter. |
 
 These are original bun-wasm adapters and fixtures. There is no copied upstream

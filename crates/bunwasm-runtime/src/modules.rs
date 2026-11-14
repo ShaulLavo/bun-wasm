@@ -766,25 +766,25 @@ mod tests {
     #[cfg(feature = "engine-host")]
     #[test]
     fn host_polyfill_registration_and_dispatch() {
-        crate::engine_host::tests::registration_and_dispatch();
+        crate::engine_host::polyfill_tests::registration_and_dispatch();
     }
 
     #[cfg(feature = "engine-host")]
     #[test]
     fn host_polyfill_source_and_errors() {
-        crate::engine_host::tests::source_and_errors();
+        crate::engine_host::polyfill_tests::source_and_errors();
     }
 
     #[cfg(feature = "engine-host")]
     #[test]
     fn host_polyfill_string_wire_and_result_ownership() {
-        crate::engine_host::tests::string_wire_and_result_ownership();
+        crate::engine_host::polyfill_tests::string_wire_and_result_ownership();
     }
 
     #[cfg(feature = "engine-host")]
     #[test]
     fn host_polyfill_reentry() {
-        crate::engine_host::tests::reentry();
+        crate::engine_host::polyfill_tests::reentry();
     }
 
     use super::*;
