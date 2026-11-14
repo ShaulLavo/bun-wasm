@@ -38,4 +38,12 @@ prefixes still acquire their random suffix before path resolution. The
 `fs-empty-path` fixture and source-boundary check exercise these contracts; this
 is an original adapter correction, with no copied upstream code.
 
+The stat accessor-order and materialization-order source tests preserve both
+`bigint` reads, the original catch, flag/code read order and eager Error
+construction, including inherited property setters. The `fs-stat-missing`
+guest fixture checks fresh errors, getter-thrown identity and deferred callback
+and promise delivery. The direct split error writer is documented separately
+in [Native error reply encoding](native-error-encoding.md); it changes no stat
+option handling or JavaScript Error construction.
+
 Waffle at `b20fad173ebaa225cb87c51776f35edaaafd4a40` already supplies create, exclusive, truncate and append semantics. NONBLOCK support remains Waffle #111; unsupported open bits fail explicitly here. Link-count accuracy remains Waffle #115. Cold persistent-file hydration remains Waffle #112. Bigint representation does not repair incorrect underlying metadata. This change does not implement those capabilities in the consumer.

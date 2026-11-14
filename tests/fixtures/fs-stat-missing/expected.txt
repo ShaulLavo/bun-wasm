@@ -1,0 +1,1 @@
+missing stat suppression preserves errors and delivery
