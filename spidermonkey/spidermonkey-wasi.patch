@@ -54,7 +54,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git i/js/src/vm/Interpreter.cpp w/js/src/vm/Interpreter.cpp
-index 6241cd45d..4d1b2046a 100644
+index 6241cd45d..ea7534680 100644
 --- i/js/src/vm/Interpreter.cpp
 +++ w/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -67,15 +67,17 @@ index 6241cd45d..4d1b2046a 100644
  
  using namespace js;
  
-@@ -436,6 +439,7 @@ static void AssertExceptionResult(JSContext* cx) {
+@@ -436,6 +439,9 @@ static void AssertExceptionResult(JSContext* cx) {
  #  pragma optimize("g", off)
  #endif
  bool js::RunScript(JSContext* cx, RunState& state) {
-+  BUNWASM_RESERVE_STACK(bunwasm::RunScriptReserve);
++  BUNWASM_RESERVE_STACK_DYNAMIC(jit::JitOptions.portableBaselineInterpreter
++                                    ? bunwasm::RunScriptPBLReserve
++                                    : bunwasm::RunScriptReserve);
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
-@@ -1781,6 +1785,10 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
+@@ -1781,6 +1787,10 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
  
  bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
                                                             RunState& state) {
@@ -86,7 +88,7 @@ index 6241cd45d..4d1b2046a 100644
  /*
   * Define macros for an interpreter loop. Opcode dispatch is done by
   * indirect goto (aka a threaded interpreter), which is technically
-@@ -1839,8 +1847,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1839,8 +1849,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
     * Prepare to call a user-supplied branch handler, and abort the script
     * if it returns false.
     */
@@ -101,7 +103,7 @@ index 6241cd45d..4d1b2046a 100644
      if (!CheckForInterrupt(cx)) goto error; \
    JS_END_MACRO
  
-@@ -1984,6 +1998,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1984,6 +2000,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
    INIT_COVERAGE();
    COUNT_COVERAGE_MAIN();
  
@@ -585,10 +587,10 @@ index f1ce887af..00c9ecad1 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..7f81c008f 100644
+index 9524c5d6a..5bfda277e 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
-@@ -5,6 +5,24 @@
+@@ -5,6 +5,29 @@
  #ifndef js_friend_StackLimits_h
  #define js_friend_StackLimits_h
  
@@ -605,38 +607,48 @@ index 9524c5d6a..7f81c008f 100644
 +    asm volatile("" : : "r"(bunwasmShadowFrame) : "memory")
 +#  define BUNWASM_RESERVED_CALL(bytes, ...) \
 +    ::js::CallWithWasmStackReservation<bytes>([&] { return __VA_ARGS__; })
++// A size chosen at run time, such as by tier. Released when the frame returns.
++#  define BUNWASM_RESERVE_STACK_DYNAMIC(bytes)                 \
++    void* bunwasmShadowFrame = __builtin_alloca(bytes);        \
++    asm volatile("" : : "r"(bunwasmShadowFrame) : "memory")
 +#else
 +#  define BUNWASM_RESERVE_STACK(bytes) ((void)0)
 +#  define BUNWASM_RESERVED_CALL(bytes, ...) (__VA_ARGS__)
++#  define BUNWASM_RESERVE_STACK_DYNAMIC(bytes) ((void)0)
 +#endif
 +
  #include "mozilla/Attributes.h"  // MOZ_ALWAYS_INLINE, MOZ_COLD
  #include "mozilla/Likely.h"      // MOZ_LIKELY
  #include "mozilla/Variant.h"     // mozilla::Variant, mozilla::AsVariant
-@@ -30,6 +48,39 @@ struct JS_PUBLIC_API JSContext;
+@@ -30,6 +53,44 @@ struct JS_PUBLIC_API JSContext;
  
  namespace js {
  
 +namespace bunwasm {
 +// Native reentry into scripts (call/apply, getters, setters, bound and proxy
-+// targets, self-hosted callbacks), both tiers.
-+inline constexpr size_t RunScriptReserve = 720;
++// targets). PBL enters through its trampoline and a much larger frame.
++inline constexpr size_t RunScriptReserve = 1280;
++inline constexpr size_t RunScriptPBLReserve = 2304;
 +// Portable baseline inline caches calling a scripted getter, setter or callee.
 +inline constexpr size_t PBLCallReserve = 384;
-+// JSON.stringify's recursive serializer, one level per nested object or array.
-+inline constexpr size_t JSONSerializeReserve = 224;
-+// Parser levels, the same on both tiers.
++// Native-only recursion: JSON.stringify's serializer and Array.prototype.join
++// reached again through an element's toString.
++inline constexpr size_t JSONSerializeReserve = 512;
++inline constexpr size_t ArrayJoinReserve = 1536;
++// Parser levels, the same on both tiers. Statement nesting stays at the
++// size Next's generated validators allow (docs/stack-limits.md).
 +inline constexpr size_t StatementReserve = 336;
 +inline constexpr size_t StatementListItemReserve = 352;
-+inline constexpr size_t FunctionBodyReserve = 448;
-+inline constexpr size_t ArgumentListReserve = 832;
-+inline constexpr size_t ArrayLiteralReserve = 624;
-+inline constexpr size_t ObjectLiteralReserve = 576;
-+inline constexpr size_t ElementAccessReserve = 720;
-+inline constexpr size_t TemplateLiteralReserve = 768;
-+inline constexpr size_t ConditionalReserve = 288;
-+inline constexpr size_t ParenthesizedReserve = 688;
-+inline constexpr size_t UnaryReserve = 192;
++inline constexpr size_t FunctionBodyReserve = 976;
++inline constexpr size_t FunctionExpressionReserve = 1664;
++inline constexpr size_t ArgumentListReserve = 1936;
++inline constexpr size_t ArrayLiteralReserve = 1664;
++inline constexpr size_t ObjectLiteralReserve = 1712;
++inline constexpr size_t ElementAccessReserve = 1808;
++inline constexpr size_t TemplateLiteralReserve = 2112;
++inline constexpr size_t ConditionalReserve = 704;
++inline constexpr size_t ParenthesizedReserve = 1904;
++inline constexpr size_t UnaryReserve = 368;
 +}  // namespace bunwasm
 +
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
@@ -654,7 +666,7 @@ index 9524c5d6a..7f81c008f 100644
  
  #ifdef __wasi__
 diff --git i/js/src/frontend/Parser.cpp w/js/src/frontend/Parser.cpp
-index 34f4dee86..9f17e3eac 100644
+index 34f4dee86..71160225a 100644
 --- i/js/src/frontend/Parser.cpp
 +++ w/js/src/frontend/Parser.cpp
 @@ -2996,6 +2996,7 @@ template <class ParseHandler, typename Unit>
@@ -665,7 +677,24 @@ index 34f4dee86..9f17e3eac 100644
    NameNodeType literal = MOZ_TRY(noSubstitutionUntaggedTemplate());
  
    ListNodeType nodeList =
-@@ -3460,6 +3461,7 @@ bool GeneralParser<ParseHandler, Unit>::functionFormalParametersAndBody(
+@@ -3267,6 +3268,16 @@ GeneralParser<ParseHandler, Unit>::innerFunctionForFunctionBox(
+     return errorResult();
+   }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  // A nested function spends about three counted parser levels of host stack.
++  // Hold two more WASI depth units so the frontend depth limit bounds it.
++  AutoCheckRecursionLimit functionWeight(this->fc_);
++  AutoCheckRecursionLimit functionWeightSecond(this->fc_);
++  if (!functionWeightSecond.check(this->fc_)) {
++    return errorResult();
++  }
++#endif
++
+   if (!functionFormalParametersAndBody(inHandling, yieldHandling, &funNode,
+                                        kind)) {
+     return errorResult();
+@@ -3460,6 +3471,7 @@ bool GeneralParser<ParseHandler, Unit>::functionFormalParametersAndBody(
      FunctionNodeType* funNode, FunctionSyntaxKind kind,
      const Maybe<uint32_t>& parameterListEnd /* = Nothing() */,
      bool isStandaloneFunction /* = false */) {
@@ -673,7 +702,7 @@ index 34f4dee86..9f17e3eac 100644
    // Given a properly initialized parse context, try to parse an actual
    // function without concern for conversion to strict mode, use of lazy
    // parsing and such.
-@@ -9299,6 +9301,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
+@@ -9299,6 +9311,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
  template <class ParseHandler, typename Unit>
  typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
      YieldHandling yieldHandling) {
@@ -681,7 +710,7 @@ index 34f4dee86..9f17e3eac 100644
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -9546,6 +9549,7 @@ template <class ParseHandler, typename Unit>
+@@ -9546,6 +9559,7 @@ template <class ParseHandler, typename Unit>
  typename ParseHandler::NodeResult
  GeneralParser<ParseHandler, Unit>::statementListItem(
      YieldHandling yieldHandling, bool canHaveDirectives /* = false */) {
@@ -689,7 +718,7 @@ index 34f4dee86..9f17e3eac 100644
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -10114,15 +10118,17 @@ GeneralParser<ParseHandler, Unit>::condExpr(InHandling inHandling,
+@@ -10114,15 +10128,17 @@ GeneralParser<ParseHandler, Unit>::condExpr(InHandling inHandling,
      return condition;
    }
  
@@ -711,7 +740,7 @@ index 34f4dee86..9f17e3eac 100644
  
    return handler_.newConditional(condition, thenExpr, elseExpr);
  }
-@@ -10493,6 +10499,7 @@ typename ParseHandler::UnaryNodeResult
+@@ -10493,6 +10509,7 @@ typename ParseHandler::UnaryNodeResult
  GeneralParser<ParseHandler, Unit>::unaryOpExpr(YieldHandling yieldHandling,
                                                 ParseNodeKind kind,
                                                 uint32_t begin) {
@@ -719,7 +748,7 @@ index 34f4dee86..9f17e3eac 100644
    Node kid = MOZ_TRY(unaryExpr(yieldHandling, TripledotProhibited));
    return handler_.newUnary(kind, begin, kid);
  }
-@@ -10762,6 +10769,7 @@ typename ParseHandler::ListNodeResult
+@@ -10762,6 +10779,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::argumentList(
      YieldHandling yieldHandling, bool* isSpread,
      PossibleError* possibleError /* = nullptr */) {
@@ -727,7 +756,7 @@ index 34f4dee86..9f17e3eac 100644
    ListNodeType argsList = MOZ_TRY(handler_.newArguments(pos()));
  
    bool matched;
-@@ -11149,6 +11157,7 @@ GeneralParser<ParseHandler, Unit>::memberElemAccess(
+@@ -11149,6 +11167,7 @@ GeneralParser<ParseHandler, Unit>::memberElemAccess(
      Node lhs, YieldHandling yieldHandling,
      OptionalKind optionalKind /* = OptionalKind::NonOptional */) {
    MOZ_ASSERT(anyChars.currentToken().type == TokenKind::LeftBracket);
@@ -735,7 +764,7 @@ index 34f4dee86..9f17e3eac 100644
    Node propExpr = MOZ_TRY(expr(InAllowed, yieldHandling, TripledotProhibited));
  
    if (!mustMatchToken(TokenKind::RightBracket, JSMSG_BRACKET_IN_INDEX)) {
-@@ -11724,6 +11733,7 @@ typename ParseHandler::ListNodeResult
+@@ -11724,6 +11743,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::arrayInitializer(
      YieldHandling yieldHandling, PossibleError* possibleError) {
    MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftBracket));
@@ -743,7 +772,7 @@ index 34f4dee86..9f17e3eac 100644
  
    uint32_t begin = pos().begin;
    ListNodeType literal = MOZ_TRY(handler_.newArrayLiteral(begin));
-@@ -12145,6 +12155,7 @@ typename ParseHandler::ListNodeResult
+@@ -12145,6 +12165,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::objectLiteral(YieldHandling yieldHandling,
                                                   PossibleError* possibleError) {
    MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftCurly));
@@ -751,7 +780,19 @@ index 34f4dee86..9f17e3eac 100644
  
    uint32_t openedPos = pos().begin;
  
-@@ -12638,8 +12649,10 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+@@ -12588,8 +12609,9 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+ 
+   switch (tt) {
+     case TokenKind::Function:
+-      return functionExpr(pos().begin, invoked,
+-                          FunctionAsyncKind::SyncFunction);
++      return BUNWASM_RESERVED_CALL(
++          bunwasm::FunctionExpressionReserve,
++          functionExpr(pos().begin, invoked, FunctionAsyncKind::SyncFunction));
+ 
+     case TokenKind::Class:
+       return classDefinition(yieldHandling, ClassExpression, NameRequired);
+@@ -12638,8 +12660,10 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
        }
  
        // Pass |possibleError| to support destructuring in arrow parameters.
@@ -843,23 +884,23 @@ diff --git a/js/src/frontend/FrontendContext.h b/js/src/frontend/FrontendContext
   public:
    FrontendContext()
        : alloc_(this),
-diff --git a/js/src/frontend/Parser.cpp b/js/src/frontend/Parser.cpp
---- a/js/src/frontend/Parser.cpp
-+++ b/js/src/frontend/Parser.cpp
-@@ -3267,6 +3267,16 @@ GeneralParser<ParseHandler, Unit>::innerFunctionForFunctionBox(
-     return errorResult();
-   }
-
-+#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+  // A nested function spends about three counted parser levels of host stack.
-+  // Hold two more WASI depth units so the frontend depth limit bounds it.
-+  AutoCheckRecursionLimit functionWeight(this->fc_);
-+  AutoCheckRecursionLimit functionWeightSecond(this->fc_);
-+  if (!functionWeightSecond.check(this->fc_)) {
-+    return errorResult();
-+  }
-+#endif
-+
-   if (!functionFormalParametersAndBody(inHandling, yieldHandling, &funNode,
-                                        kind)) {
-     return errorResult();
+diff --git i/js/src/builtin/Array.cpp w/js/src/builtin/Array.cpp
+index d544b13e3..fcd15e4ad 100644
+--- i/js/src/builtin/Array.cpp
++++ w/js/src/builtin/Array.cpp
+@@ -25,6 +25,7 @@
+ #include "js/Conversions.h"
+ #include "js/experimental/JitInfo.h"  // JSJitGetterOp, JSJitInfo
+ #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
++#include "js/friend/StackLimits.h"    // BUNWASM_RESERVE_STACK
+ #include "js/PropertySpec.h"
+ #include "util/Poison.h"
+ #include "util/StringBuilder.h"
+@@ -1362,6 +1363,7 @@ static bool ArrayJoinKernel(JSContext* cx, SeparatorOp sepOp, HandleObject obj,
+ // ES2017 draft rev 1b0184bc17fc09a8ddcf4aeec9b6d9fcac4eafce
+ // 22.1.3.13 Array.prototype.join ( separator )
+ bool js::array_join(JSContext* cx, unsigned argc, Value* vp) {
++  BUNWASM_RESERVE_STACK(bunwasm::ArrayJoinReserve);
+   AutoJSMethodProfilerEntry pseudoFrame(cx, "Array.prototype", "join");
+   CallArgs args = CallArgsFromVp(argc, vp);
+ 
