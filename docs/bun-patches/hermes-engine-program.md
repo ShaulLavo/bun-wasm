@@ -31,6 +31,8 @@ Restoration requirements are in [Dormant Hermes source](../hermes-engine.md).
 | `crates/bunwasm-host/src/linked.rs`, `src/engine-kind.ts`, `scripts/src/engine-explicit-init.ts`, `scripts/guest-{core,engine,build}-receipt.ts`, `scripts/guest-source-manifest.ts`, `scripts/test.sh` | Host feature | The third paired kind `hermes`: section tag, companion `hermes-engine.wasm`, initializer and RUN names, receipt scope, and the `hermes-prebuild` input group (`$HERMES_BUILD_DIR/wasi/lib/libhermesvm_bunwasm.a` and its compile commands). Opt-in: nothing builds or registers it by default. |
 | `scripts/build-engine-hermes.sh`, `scripts/build-bun-hermes.sh`, `scripts/hermes-import-delta.ts` | Host feature | The JSC build recipe without pointer spilling or `jsc/finalize.sh` (Hermes roots precisely), plus two checks: no exception tags in the side, and every `env`/`GOT` import is a core export or a side definition. |
 
+The engine also captures and deletes the private tracker installer and owned-promise hooks before user code. It passes those hooks to the record loader and implements `require_module` through the loader's owned `requireModule` bridge. No Rust promise-identity ownership set is retained.
+
 ## Registration modules
 
 The original Hermes adapter now consumes the shared registration loader through

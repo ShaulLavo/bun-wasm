@@ -3,7 +3,7 @@ import { artifactIdentity } from "./guest-build-receipt";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { parseEngineAllocationFault, refusingAllocator } from "../web/scripts/node-linked";
-import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt } from "./jsc-embedding";
+import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, proxyGetForwardingFixture, proxyGetLifetimeFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt } from "./jsc-embedding";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
 
@@ -39,10 +39,10 @@ test("the JSC artifact check runs the busy-loop stdout handshake on the same gue
 
 test("only the four parser sites read the parser reserve; every other reservation stays constant", () => {
   const sites = patch.match(/^\+ *WASM_RESERVE_STACK\(.*\);$/gm) ?? [];
-  expect(sites).toHaveLength(24);
+  expect(sites).toHaveLength(25);
   // parseStatement, parseAssignmentExpression, parseAssignmentChainLevel and parseAssignmentChainRest.
   expect(sites.filter(site => site.includes("2048 - wasmParserReserveDiscount"))).toHaveLength(4);
-  expect(sites.filter(site => /WASM_RESERVE_STACK\((?:512|1024|2048)\);$/.test(site))).toHaveLength(20);
+  expect(sites.filter(site => /WASM_RESERVE_STACK\((?:512|1024|2048)\);$/.test(site))).toHaveLength(21);
   const parser = patch.split("diff --git a/Source/JavaScriptCore/parser/Parser.cpp")[1]?.split("diff --git")[0] ?? "";
   // The discount is zero-initialized data: no initializer, so zero-filled memory means 2048.
   expect(parser).toContain("+static uint32_t wasmParserReserveDiscount;\n");
@@ -140,6 +140,69 @@ test("JSC stack controls use their discovered fixture with a small real host sta
     path: "tests/fixtures/stack-getter-headroom",
     hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"],
   });
+});
+
+test("the JSC gate runs Proxy forwarding semantics and recovery on a small host stack", () => {
+  expect(proxyGetForwardingFixture()).toEqual({
+    path: "tests/fixtures/proxy-get-forwarding",
+    hostOptions: ["--stack-mb", "0.3125", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"],
+  });
+});
+
+test("native-only Proxy captures cross targeted lookup, key-conversion and call collections", () => {
+  expect(proxyGetLifetimeFixture()).toEqual({
+    path: "tests/jsc-embedding/proxy-get-lifetime",
+    hostOptions: ["--env", "BUN_WASM_JSC_PROXY_GET_GC=1"],
+  });
+  const section = patch.split("diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp")[1]?.split("diff --git")[0] ?? "";
+  expect(section.match(/^\+ +collectForProxyGetLifetimeTest\(vm, propertyName\);$/gm)).toHaveLength(2);
+  expect(section.match(/Strong<JSObject>/g)).toHaveLength(6);
+  expect(section).toContain('propertyName.uid()->utf8() == "bunWasmNativeLifetime"_s');
+  expect(section.match(/bun-wasm Proxy get lifetime collection/g)).toHaveLength(1);
+  const loop = section.split("+#if OS(WASI)\n+    if (propertyName.isPrivateName())")[1]?.split("+#else")[0] ?? "";
+  const capturedTarget = loop.indexOf("JSObject* target =");
+  const targetScope = loop.indexOf("Strong<JSObject> targetRoot(vm, target);");
+  const capturedHandler = loop.indexOf("JSObject* handler =");
+  const handlerScope = loop.indexOf("Strong<JSObject> handlerRoot(vm, handler);");
+  const lookup = loop.indexOf("getHandlerTrap(");
+  const trapScope = loop.indexOf("Strong<JSObject> trapRoot(vm, getHandler);");
+  const lookupReturn = loop.indexOf("RETURN_IF_EXCEPTION", lookup);
+  const afterLookup = loop.indexOf("collectForProxyGetLifetimeTest(vm, propertyName);", lookupReturn);
+  const trappedCall = loop.indexOf("callProxyGetTrap(", afterLookup);
+  expect(capturedTarget).toBeGreaterThanOrEqual(0);
+  expect(targetScope).toBeGreaterThan(capturedTarget);
+  expect(capturedHandler).toBeGreaterThan(targetScope);
+  expect(handlerScope).toBeGreaterThan(capturedHandler);
+  expect(lookup).toBeGreaterThan(handlerScope);
+  expect(trapScope).toBeGreaterThan(lookup);
+  expect(lookupReturn).toBeGreaterThan(trapScope);
+  expect(afterLookup).toBeGreaterThan(lookupReturn);
+  expect(trappedCall).toBeGreaterThan(afterLookup);
+  const helper = section.split("+static JSValue callProxyGetTrap")[1]?.split("+static JSValue performProxyGet")[0] ?? "";
+  const keyConversion = helper.indexOf("identifierToSafePublicJSValue");
+  const receiverConversion = helper.indexOf("receiver.toThis");
+  const beforeCall = helper.indexOf("collectForProxyGetLifetimeTest(vm, propertyName);");
+  const nativeCall = helper.indexOf("JSValue trapResult = call(");
+  expect(keyConversion).toBeGreaterThanOrEqual(0);
+  expect(receiverConversion).toBeGreaterThan(keyConversion);
+  expect(beforeCall).toBeGreaterThan(receiverConversion);
+  expect(nativeCall).toBeGreaterThan(beforeCall);
+});
+
+test("WASI Proxy forwarding charges each iterative level before its guard", () => {
+  const section = patch.split("diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp")[1]?.split("diff --git")[0] ?? "";
+  const loop = section.split("+#if OS(WASI)\n+    if (propertyName.isPrivateName())")[1]?.split("+#else")[0] ?? "";
+  const next = loop.indexOf("+        auto* next = dynamicDowncast<ProxyObject>(target);");
+  const fallback = loop.indexOf("performDefaultProxyGet(globalObject, target, receiver, propertyName)", next);
+  const reserve = loop.indexOf("+        WASM_RESERVE_STACK(512);", fallback);
+  const guard = loop.indexOf("+        if (!vm.isSafeToRecurseSoft())", reserve);
+  expect(loop).toContain("for (ProxyObject* current = proxyObject;;)");
+  expect(next).toBeGreaterThanOrEqual(0);
+  expect(fallback).toBeGreaterThan(next);
+  expect(reserve).toBeGreaterThan(fallback);
+  expect(guard).toBeGreaterThan(reserve);
+  expect(loop).toContain("+        current = next;");
+  expect(loop).not.toContain("performProxyGet(globalObject, next");
 });
 
 test("the JSC gate runs getter semantics at the smallest browser budget, past the old getter depth", () => {

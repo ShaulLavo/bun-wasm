@@ -18,6 +18,8 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
+bun test ./tests/hermes/promise-ownership.test.ts
+
 run() { "$launcher" --wasm "$core" -- "$@"; }
 
 # expect NAME EXPECTED-STDOUT bun-arguments...: exit 0, exact stdout, empty stderr.

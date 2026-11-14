@@ -1353,14 +1353,160 @@ diff --git a/Source/JavaScriptCore/runtime/JSArray.cpp b/Source/JavaScriptCore/r
 diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCore/runtime/ProxyObject.cpp
 --- a/Source/JavaScriptCore/runtime/ProxyObject.cpp
 +++ b/Source/JavaScriptCore/runtime/ProxyObject.cpp
-@@ -26,2 +26,3 @@
+@@ -24,6 +24,7 @@
+  */
+
  #include "config.h"
 +#include <wtf/StackBounds.h>
  #include "ProxyObject.h"
-@@ -156,2 +157,3 @@
+
+ #include "GetterSetter.h"
+@@ -152,47 +153,42 @@ void ProxyObject::clearHandlerTrapsOffsetsCache()
+
+ static const ASCIILiteral s_proxyAlreadyRevokedErrorMessage { "Proxy has already been revoked. No more operations are allowed to be performed on it"_s };
+
++#if OS(WASI)
++static void collectForProxyGetLifetimeTest(VM& vm, PropertyName propertyName)
++{
++    static const bool enabled = getenv("BUN_WASM_JSC_PROXY_GET_GC") != nullptr;
++    if (enabled && propertyName.uid()->utf8() == "bunWasmNativeLifetime"_s) {
++        fprintf(stderr, "bun-wasm Proxy get lifetime collection\n");
++        vm.heap.collectNow(Sync, CollectionScope::Full);
++    }
++}
++
++#endif
++
+-static JSValue performProxyGet(JSGlobalObject* globalObject, ProxyObject* proxyObject, JSValue receiver, PropertyName propertyName)
++static JSValue performDefaultProxyGet(JSGlobalObject* globalObject, JSObject* target, JSValue receiver, PropertyName propertyName)
  {
+-    NO_TAIL_CALLS();
+-
+     VM& vm = globalObject->vm();
+     auto scope = DECLARE_THROW_SCOPE(vm);
+-    if (!vm.isSafeToRecurseSoft()) [[unlikely]] {
+-        throwStackOverflowError(globalObject, scope);
+-        return { };
+-    }
++    PropertySlot slot(receiver, PropertySlot::InternalMethodType::Get);
++    bool hasProperty = target->getPropertySlot(globalObject, propertyName, slot);
++    EXCEPTION_ASSERT(!scope.exception() || !hasProperty);
++    RETURN_IF_EXCEPTION(scope, { });
++    if (hasProperty)
++        RELEASE_AND_RETURN(scope, slot.getValue(globalObject, propertyName));
+
+-    JSObject* target = proxyObject->target();
+-
+-    auto performDefaultGet = [&] {
+-        scope.release();
+-        PropertySlot slot(receiver, PropertySlot::InternalMethodType::Get);
+-        bool hasProperty = target->getPropertySlot(globalObject, propertyName, slot);
+-        EXCEPTION_ASSERT(!scope.exception() || !hasProperty);
+-        if (hasProperty)
+-            RELEASE_AND_RETURN(scope, slot.getValue(globalObject, propertyName));
+-
+-        return jsUndefined();
+-    };
+-
+-    if (propertyName.isPrivateName())
+-        return jsUndefined();
+-
+-    JSValue handlerValue = proxyObject->handler();
+-    if (handlerValue.isNull())
+-        return throwTypeError(globalObject, scope, s_proxyAlreadyRevokedErrorMessage);
+-
+-    JSObject* handler = uncheckedDowncast<JSObject>(handlerValue);
+-    CallData callData;
+-    JSObject* getHandler = proxyObject->getHandlerTrap(globalObject, handler, callData, vm.propertyNames->get, ProxyObject::HandlerTrap::Get);
+-    RETURN_IF_EXCEPTION(scope, { });
+-    if (!getHandler)
+-        return performDefaultGet();
++    return jsUndefined();
++}
+
++static JSValue callProxyGetTrap(JSGlobalObject* globalObject, JSObject* target, JSObject* handler, JSObject* getHandler, const CallData& callData, JSValue receiver, PropertyName propertyName)
++{
++    VM& vm = globalObject->vm();
++    auto scope = DECLARE_THROW_SCOPE(vm);
+     auto arguments = WTF::toArray<EncodedJSValue>({
+         JSValue::encode(target),
+         JSValue::encode(identifierToSafePublicJSValue(vm, Identifier::fromUid(vm, propertyName.uid()))),
+         JSValue::encode(receiver.toThis(globalObject, ECMAMode::strict())),
+     });
++#if OS(WASI)
++    collectForProxyGetLifetimeTest(vm, propertyName);
++#endif
+     JSValue trapResult = call(globalObject, getHandler, callData, handler, ArgList { arguments.data(), arguments.size() });
+@@ -206,6 +202,69 @@ static JSValue performProxyGet(JSGlobalObject* globalObject, ProxyObject* proxyO
+     return trapResult;
+ }
+
++static JSValue performProxyGet(JSGlobalObject* globalObject, ProxyObject* proxyObject, JSValue receiver, PropertyName propertyName)
++{
 +    WASM_RESERVE_STACK(512);
-     NO_TAIL_CALLS();
++    NO_TAIL_CALLS();
++
++    VM& vm = globalObject->vm();
++    auto scope = DECLARE_THROW_SCOPE(vm);
++    if (!vm.isSafeToRecurseSoft()) [[unlikely]] {
++        throwStackOverflowError(globalObject, scope);
++        return { };
++    }
++
++#if OS(WASI)
++    if (propertyName.isPrivateName())
++        return jsUndefined();
++    for (ProxyObject* current = proxyObject;;) {
++        JSObject* target = current->target();
++        Strong<JSObject> targetRoot(vm, target);
++        JSValue handlerValue = current->handler();
++        if (handlerValue.isNull())
++            return throwTypeError(globalObject, scope, s_proxyAlreadyRevokedErrorMessage);
++        JSObject* handler = uncheckedDowncast<JSObject>(handlerValue);
++        Strong<JSObject> handlerRoot(vm, handler);
++        CallData callData;
++        JSObject* getHandler = current->getHandlerTrap(globalObject, handler, callData, vm.propertyNames->get, ProxyObject::HandlerTrap::Get);
++        Strong<JSObject> trapRoot(vm, getHandler);
++        RETURN_IF_EXCEPTION(scope, { });
++        collectForProxyGetLifetimeTest(vm, propertyName);
++        if (getHandler)
++            RELEASE_AND_RETURN(scope, callProxyGetTrap(globalObject, target, handler, getHandler, callData, receiver, propertyName));
++        auto* next = dynamicDowncast<ProxyObject>(target);
++        if (!next)
++            RELEASE_AND_RETURN(scope, performDefaultProxyGet(globalObject, target, receiver, propertyName));
++        // One level of the old recursion: same shadow charge and guard, no host frames.
++        WASM_RESERVE_STACK(512);
++        if (!vm.isSafeToRecurseSoft()) [[unlikely]] {
++            throwStackOverflowError(globalObject, scope);
++            return { };
++        }
++        current = next;
++    }
++#else
++    JSObject* target = proxyObject->target();
++    Strong<JSObject> targetRoot(vm, target);
++    if (propertyName.isPrivateName())
++        return jsUndefined();
++
++    JSValue handlerValue = proxyObject->handler();
++    if (handlerValue.isNull())
++        return throwTypeError(globalObject, scope, s_proxyAlreadyRevokedErrorMessage);
++
++    JSObject* handler = uncheckedDowncast<JSObject>(handlerValue);
++    Strong<JSObject> handlerRoot(vm, handler);
++    CallData callData;
++    JSObject* getHandler = proxyObject->getHandlerTrap(globalObject, handler, callData, vm.propertyNames->get, ProxyObject::HandlerTrap::Get);
++    Strong<JSObject> trapRoot(vm, getHandler);
++    RETURN_IF_EXCEPTION(scope, { });
++    if (!getHandler)
++        RELEASE_AND_RETURN(scope, performDefaultProxyGet(globalObject, target, receiver, propertyName));
++    RELEASE_AND_RETURN(scope, callProxyGetTrap(globalObject, target, handler, getHandler, callData, receiver, propertyName));
++#endif
++}
++
+ void ProxyObject::validateGetTrapResult(JSGlobalObject* globalObject, JSValue trapResult, JSObject* target, PropertyName propertyName)
+ {
+     VM& vm = globalObject->vm();
 diff --git a/Source/JavaScriptCore/parser/Parser.cpp b/Source/JavaScriptCore/parser/Parser.cpp
 --- a/Source/JavaScriptCore/parser/Parser.cpp
 +++ b/Source/JavaScriptCore/parser/Parser.cpp

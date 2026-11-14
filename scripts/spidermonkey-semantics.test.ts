@@ -21,7 +21,7 @@ test("module evaluation waits for graph loading and keeps the namespace reaction
   const evaluate = definition(shim, "bool evaluate_module(");
   expect(evaluate).toContain("JS::LoadRequestedModules(context, module, hostDefined, &loading)");
   expect(evaluate).toContain("module_evaluate_handler");
-  expect(evaluate).toContain("JS::AddPromiseReactions(context, loading");
+  expect(evaluate).toContain("JS::CallOriginalPromiseThen(context, loading");
   expect(definition(shim, "bool module_evaluate_handler(")).toContain("JS::ModuleLink");
   expect(definition(shim, "bool module_evaluate_handler(")).toContain("JS::ModuleEvaluate");
   expect(definition(shim, 'extern "C" bool bsm_import(')).toContain("namespace_promise");
@@ -143,13 +143,13 @@ test("deferred native destruction permits destructor reentry into the registry",
   expect(run.exitCode).toBe(0);
 });
 
-test("module evaluation forwards settlement without adopting its internal promise", () => {
+test("module evaluation uses a result capability and sealed forwarding", () => {
   const evaluate = definition(shim, "bool evaluate_module(");
   const handler = definition(shim, "bool module_evaluate_handler(");
-  expect(evaluate).toContain("JS::NewPromiseObject");
-  expect(evaluate).toContain("JS::AddPromiseReactions");
-  expect(handler).toContain("JS::AddPromiseReactions");
-  expect(handler).not.toContain("args.rval())");
+  expect(evaluate).toContain("JS::CallOriginalPromiseThen");
+  expect(handler).toContain("forward_internal(evaluated)");
+  expect(handler).toContain("args.rval().setObject(*forwarded)");
+  expect(handler).not.toContain("JS::AddPromiseReactions");
 });
 
 test("CommonJS uses its original named expression, not a with-object self binding", () => {

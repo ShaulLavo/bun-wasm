@@ -26,7 +26,8 @@ while retaining JSC's exception reserve. Its separate C-loop JavaScript frame
 reservation keeps its existing capacity. This extends the platform hunk in
 `jsc/webkit-wasi.patch`; it changes no upstream JavaScript algorithms. The
 browser executor's choice of budget in `web/src/engine-stack-budget.ts` is original
-adapter code. It retains QuickJS's default on desktop Gecko Firefox after cold
+adapter code. [Proxy [[Get]] forwarding](jsc-proxy-get-forwarding.md) separately removes
+native recursion from empty-trap chains without changing their observable behavior. It retains QuickJS's default on desktop Gecko Firefox after cold
 overflow-safety checks at 1.25 times that budget. Positively observed desktop
 Safari uses 36 KiB after native-call frame removal and parser exception
 preservation, with 29 cold controls passing at both 36 and 45 KiB on Safari 26.4.
@@ -56,6 +57,7 @@ fixed recovery marker instead of spawning a child test process.
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, WASI stack checks](#wasm-stack-guards) | Port | Restore the stack checks on WASI and reserve shadow stack for host frames, so recursion throws before the host wasm stack runs out. |
 | [`third_party/rquickjs-sys/quickjs/libregexp.c`, WASI stack reservation](#wasm-stack-guards) | Port | Reserve shadow stack per regexp group nesting level, so the parser's stack check trips before the host wasm stack runs out. |
 | [`jsc/webkit-wasi.patch`, `StackBounds.cpp` budget](#wasm-stack-guards) | Port | Bound JSC's native recursion to a host-configurable budget below the host wasm stack. |
+| [`jsc/webkit-wasi.patch`, Proxy [[Get]] forwarding](jsc-proxy-get-forwarding.md) | Port | Forward empty-trap chains iteratively on WASI with the existing per-level stack charge. |
 | [Console recursion fixture](#wasm-stack-guards) | Port | Adapt Bun's console-constructor stack exhaustion control to a standalone fixture. |
 | [`jsc/webkit-wasi.patch`, unary and regexp accounting](#jsc-unary-and-regexp-accounting) | Port | Reserve shadow stack in unary bytecode generation and Yarr's recursive passes, and add the parser's stack check to `await` chains. |
 | [`jsc/webkit-wasi.patch`, regexp matching errors](#jsc-regexp-matching-errors) | Port | Preserve interpreter recursion failures and report the existing catchable error instead of an ordinary no-match result. |
@@ -72,8 +74,9 @@ The WASI additions to the same pinned WebKit's `JSArray.cpp`, `ProxyObject.cpp`,
 exception returns. It changes neither the upstream recursion algorithm nor the
 C-loop's JavaScript frame capacity.
 
-The two fast flattening functions and default Proxy property reads reserve
-512 shadow bytes per native frame. Fast JSON serialization reserves 1024 bytes. The assignment and
+The two fast flattening functions reserve 512 shadow bytes per native frame. Default Proxy
+property reads reserve 512 at entry and at each iterative forwarding level, as
+[Proxy [[Get]] forwarding](jsc-proxy-get-forwarding.md) records. Fast JSON serialization reserves 1024 bytes. The assignment and
 statement parsers reserve 2048 bytes. Fast JSON's static-buffer path also checks
 the VM's soft limit. Its upstream stack estimate assumes native frames and cannot
 by itself protect Wasm's separate host stack. Non-WASI builds add no reservation.
@@ -165,7 +168,7 @@ declares the one setter, `setWasmParserReserve`, which takes the reserve in byte
 through 2048 in multiples of 16 and stores the discount. The recursive path loads the variable and
 subtracts. It reads no environment, allocates nothing and initializes nothing lazily.
 
-Nothing else in the patch moves. The other 20 `WASM_RESERVE_STACK` sites keep their constants,
+Nothing else in the patch moves. The other 21 `WASM_RESERVE_STACK` sites keep their constants,
 including `parseAwaitExpression`. `StackBounds.cpp`, the hard and soft limits, the 128 KiB
 exception reserve, the regexp matching errors and every budget are unchanged, and no upstream
 algorithm changes. Non-WASI builds compile as before: the macro discards its argument there.

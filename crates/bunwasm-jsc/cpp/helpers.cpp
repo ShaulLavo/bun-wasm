@@ -522,6 +522,18 @@ JSValueRef bunjsc_promise_result(JSContextRef ctx, JSValueRef value)
     return toRef(global, promise->result());
 }
 
+void bunjsc_promise_mark_handled(JSContextRef ctx, JSValueRef value, JSValueRef* exception)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    auto* promise = dynamicDowncast<JSPromise>(toJS(global, value));
+    if (!promise) {
+        *exception = toRef(global, createTypeError(global, "Expected a promise"_s));
+        return;
+    }
+    promise->markAsHandled();
+}
+
 JSValueRef bunjsc_promise_then(JSContextRef ctx, JSValueRef value, JSValueRef fulfilled, JSValueRef rejected, JSValueRef* exception)
 {
     JSGlobalObject* global = toJS(ctx);
