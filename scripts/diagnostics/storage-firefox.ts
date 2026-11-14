@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, appendFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, appendFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { firefox, type BrowserContext, type Page, type Browser } from "playwright";
@@ -108,10 +108,11 @@ try {
   finally {
     if (previousRoot === undefined) delete process.env.ROOT;
     else process.env.ROOT = previousRoot;
-    try { await task.cleanup(); }
+    let cleaned = false;
+    try { await task.cleanup(); cleaned = true; }
     finally {
       collector?.stop(true);
-      writeFileSync(join(report, "cleanup.json"), JSON.stringify({ scratch: task.scratch, cleanup: "completed", events: events.length }));
+      writeFileSync(join(report, "cleanup.json"), JSON.stringify({ scratch: task.scratch, scratchRemoved: !existsSync(task.scratch), cleanup: cleaned ? "completed" : "failed", events: events.length }));
     }
   }
 }

@@ -44,7 +44,8 @@ export function installPortObserver(endpoint: string): void {
     const owner: unknown = connection && Reflect.get(connection, "owner");
     const requests: unknown = connection && Reflect.get(connection, "requests");
     const generation: unknown = requests && typeof requests === "object" ? Reflect.get(requests, "generation") : undefined;
-    const state = { id: ++next, owner: typeof owner === "number" ? owner : undefined, generation: typeof generation === "number" ? generation : undefined, recent: [] as unknown[], seen: 0 };
+    const recent: unknown[] = [];
+    const state = { id: ++next, owner: typeof owner === "number" ? owner : undefined, generation: typeof generation === "number" ? generation : undefined, recent, seen: 0 };
     ports.set(port, state);
     emit({ kind: "port", id: state.id, owner: state.owner, generation: state.generation, role });
     port.addEventListener("message", event => note(port, "receive", event.data));
@@ -73,20 +74,20 @@ export function installPortObserver(endpoint: string): void {
     scan(value);
   }
   const post = MessagePort.prototype.postMessage;
-  MessagePort.prototype.postMessage = function (...args: Parameters<typeof post>) {
+  MessagePort.prototype.postMessage = function (...args: [unknown, (Transferable[] | StructuredSerializeOptions)?]) {
     note(this, "send", args[0]);
     return Reflect.apply(post, this, args);
   };
   if (typeof Worker !== "undefined") {
     const workerPost = Worker.prototype.postMessage;
-    Worker.prototype.postMessage = function (...args: Parameters<typeof workerPost>) {
+    Worker.prototype.postMessage = function (...args: [unknown, (Transferable[] | StructuredSerializeOptions)?]) {
       scan(args[0]);
       return Reflect.apply(workerPost, this, args);
     };
   }
   globalThis.addEventListener("message", event => scan(event.data));
-  globalThis.addEventListener("error", event => { emit({ kind: "error", message: event.message }); flush(); });
-  globalThis.addEventListener("unhandledrejection", event => { emit({ kind: "unhandledrejection", reason: String(event.reason) }); flush(); });
+  globalThis.addEventListener("error", event => { emit({ kind: "error", message: "message" in event ? String(event.message) : event.type }); flush(); });
+  globalThis.addEventListener("unhandledrejection", event => { emit({ kind: "unhandledrejection", reason: "reason" in event ? String(event.reason) : event.type }); flush(); });
   globalThis.addEventListener("pagehide", flush);
   setInterval(flush, 250);
   emit({ kind: "realm", isolated: crossOriginIsolated });
