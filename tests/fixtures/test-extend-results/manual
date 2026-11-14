@@ -1,0 +1,1 @@
+Unique inherited class methods and original async rejection values expose native Bun 1.4.4 gaps; keep the explicit expected output.

@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/test-extensions.test.ts",
+  "localRuntime": true
+}

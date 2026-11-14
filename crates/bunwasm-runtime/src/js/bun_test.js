@@ -710,6 +710,7 @@
    * the `expect(...)` line, even for `.resolves`/`.rejects`.
    */
   const matcherSupport = internal.require("test_matchers");
+  const extensions = internal.require("test_extensions");
 
   function defineMatcher(name, params, impl) {
     matcherParams[name] = params;
@@ -785,32 +786,17 @@
     throw new Error(message === undefined ? "reached unreachable code" : String(message));
   };
   expect.extend = (matchers) => {
-    for (const name of Object.keys(matchers)) defineCustomMatcher(name, matchers[name]);
+    extensions.register(matchers, defineCustomMatcher);
   };
 
   function matcherContext(not, promise) {
-    return {
-      isNot: not,
-      promise: promise || "",
-      equals: (a, b) => equals(a, b, false),
-      utils: {
-        printReceived: (v) => inspect(v),
-        printExpected: (v) => inspect(v),
-        stringify: (v) => inspect(v),
-        matcherHint: (name, received = "received", expected = "expected") => `expect(${received}).${name}(${expected})`,
-      },
-    };
+    return extensions.context(not, promise, (a, b) => equals(a, b, false));
   }
 
   function defineCustomMatcher(name, matcher) {
     defineMatcher(name, "", (ctx, received, ...args) => {
       const result = matcher.call(matcherContext(ctx.not, ctx.promise), received, ...args);
-      if (!result || typeof result.pass !== "boolean") {
-        throw new Error(`Unexpected return from matcher function \`${name}\`.\nMatcher functions should return an object in the following format:\n  {message?: string | function, pass: boolean}`);
-      }
-      if (result.pass !== ctx.not) return null;
-      const message = typeof result.message === "function" ? result.message() : result.message;
-      return { raw: true, body: message === undefined ? "No message was specified for this matcher." : String(message) };
+      return extensions.result(name, result, ctx.not);
     });
     expect[name] = (...args) => new CustomAsymmetricMatcher(name, matcher, args);
     expect.not[name] = (...args) => new CustomAsymmetricMatcher(name, matcher, args, true);
