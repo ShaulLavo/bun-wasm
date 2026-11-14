@@ -82,6 +82,14 @@ test("an unchanged preview still fails its original render bound", async () => {
   });
 }, 10_000);
 
+test("a pending DOM observation still fails its original render bound", async () => {
+  await withPreview(async transport => {
+    const evaluate = transport.evaluate.bind(transport);
+    transport.evaluate = (expression, admission, options) => evaluate(options?.observation ? "new Promise(() => {})" : expression, admission, options);
+    await expect(withScoped(transport, page => render(page, framework, framework.text, 100))).rejects.toThrow("Timed out after 100 ms");
+  });
+}, 10_000);
+
 test("a one-shot action is not replayed when navigation destroys its result", async () => {
   await withPreview(async (transport, state) => {
     await expect(withScoped(transport, page => page.evaluate("(async () => { await fetch('/observing'); return new Promise(() => {}); })()"))).rejects.toThrow("Execution context was destroyed");

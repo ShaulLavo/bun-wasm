@@ -19,6 +19,7 @@ fi
 rm -f "$JSC_INPUTS_STAMP"
 "$jsc/configure.sh"
 "$jsc/build.sh"
+bun "$REPO/scripts/jsc-getter-continuations.ts" generated "$JSC_OBJ" "$WEBKIT_DIR"
 if [[ "$JSC_PROFILE" == split ]]; then
   "$jsc/finalize.sh" "$JSC_OBJ/bin/jsc" "$JSC_BUILD_DIR/jsc.wasm"
   ls -l "$JSC_BUILD_DIR/jsc.wasm"
