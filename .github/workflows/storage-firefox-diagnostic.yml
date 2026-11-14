@@ -1,0 +1,75 @@
+name: Firefox storage diagnostic
+on:
+  push:
+    branches: [t3/diagnose-firefox-storage-failure]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/storage-firefox-bun-cache
+      BUN_WASM_BROWSER_REPORT_DIR: ${{ runner.temp }}/storage-firefox-report
+      BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/storage-firefox-site
+      STORAGE_SUBJECT: ${{ github.workspace }}/subject
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/storage-firefox-browsers
+    steps:
+      - name: Create failure directory before prerequisites
+        run: |
+          mkdir -p "$BUN_WASM_BROWSER_REPORT_DIR"
+          ps -eo pid,ppid,pgid,args > "$BUN_WASM_BROWSER_REPORT_DIR/processes-before.txt"
+          df -h > "$BUN_WASM_BROWSER_REPORT_DIR/disk-before.txt"
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: 5b7283918362394bf3dfec746261b9fb5b060caf
+          path: subject
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+      - name: Install root, web, and exact subject dependencies
+        run: |
+          bun scripts/ci-install.ts --frozen-lockfile --linker=isolated --ignore-scripts
+          bun scripts/ci-install.ts --cwd web --frozen-lockfile --linker=isolated --ignore-scripts
+          bun scripts/ci-install.ts --cwd subject --frozen-lockfile --linker=isolated --ignore-scripts
+          bun scripts/ci-install.ts --cwd subject/web --frozen-lockfile --linker=isolated --ignore-scripts
+      - uses: ./.github/actions/browser-deps
+        with:
+          browsers: firefox
+      - name: Install Firefox
+        working-directory: web
+        run: bunx playwright install firefox
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 43530616509
+          name: browser-guest-site
+          path: ${{ runner.temp }}/storage-firefox-site
+      - name: Qualify observation and run unchanged preservation once
+        env:
+          DIAGNOSTIC_HEAD: ${{ github.sha }}
+        run: |
+          diagnostic_group=0
+          trap 'if [ "$diagnostic_group" -gt 0 ]; then kill -- -"$diagnostic_group" 2>/dev/null || true; fi' EXIT
+          source env.sh
+          setsid timeout --signal=TERM --kill-after=20s 900 bun scripts/diagnostics/storage-firefox.ts > "$BUN_WASM_BROWSER_REPORT_DIR/run.log" 2>&1 &
+          diagnostic_group=$!
+          wait "$diagnostic_group"
+      - name: Clean task-created setup and execution files
+        if: always()
+        run: |
+          rm -rf -- "$BUN_WASM_BROWSER_SITE" "$RUNNER_TEMP/storage-firefox-bun-cache" "$PLAYWRIGHT_BROWSERS_PATH" "$GITHUB_WORKSPACE/subject" "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/web/node_modules"
+          ps -eo pid,ppid,pgid,args > "$BUN_WASM_BROWSER_REPORT_DIR/processes-after.txt"
+      - name: Retain diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-firefox-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/storage-firefox-report
+          retention-days: 7
+          if-no-files-found: error
