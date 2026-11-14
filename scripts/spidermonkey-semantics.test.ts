@@ -9,9 +9,12 @@ const shim = readFileSync("crates/bunwasm-spidermonkey/cpp/engine.cpp", "utf8");
 const adapter = readFileSync("crates/bunwasm-engine-spidermonkey/src/vm.rs", "utf8");
 
 test("dynamic imports load their dependency graph before finishing the native import", () => {
-  expect(definition(shim, "bool module_load(")).toContain("finish_module_load(cx, referrer, request, payload, module)");
-  const load = definition(shim, "bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,\n                        JS::HandleValue payload, JS::HandleObject module) {");
+  expect(definition(shim, "bool module_load(")).toContain("finish_module_load(cx, referrer, request, payload, module, entry)");
+  const load = definition(shim, "bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,\n                        JS::HandleValue payload, JS::HandleObject module, ModuleEntry* entry) {");
   expect(load).toContain("JS::IsPromiseObject");
+  // The dynamic-import holder mark uses the entry module_load resolved; a fallible lookup could drop it.
+  expect(load).toContain("entry->importAcquired = true;");
+  expect(load).not.toContain("mapped_entry(");
   expect(load).toContain("JS::LoadRequestedModules(cx, module, JS::UndefinedHandleValue, &loading)");
   expect(load).toContain("JS::AddPromiseReactions(cx, loading, fulfilled, rejected)");
   expect(definition(shim, "bool dynamic_module_loaded(")).toContain("JS::FinishLoadingImportedModule(cx, referrer, request, payload, module, true)");
