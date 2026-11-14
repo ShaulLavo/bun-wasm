@@ -10,7 +10,7 @@ capability, not Nuxt acceptance or shared-memory support in the Wasmi interprete
 
 | Source | Class | Local change |
 | --- | --- | --- |
-| Bun `src/js/node/wasi.ts` | Patch and port | Include the generated factory as module 188; add reactor initialization and a shared one-time startup guard. |
+| Bun `src/js/node/wasi.ts` | Patch and port | Include the generated factory as module 188; add reactor initialization, a shared one-time startup guard, and refresh cached views when the memory buffer changes. |
 | Builtin registration, constants hook, and selection policy | Original adapter | Route `node:wasi` to the factory, supply existing filesystem constants lazily, and retain existing adapters for unselected public dependencies. |
 
 The source comes from pinned Bun revision
@@ -21,6 +21,16 @@ The source comes from pinned Bun revision
 startup guard with `start`. This is needed by WASI reactor loaders, including
 the unmodified Oxc 0.94.0 fallback with stable emnapi 1.11.3. The previous source
 and native Bun 1.4.4 both throw `wasi.initialize is not a function` there.
+
+`0026-node-wasi-refresh-views-when-the-memory-buffer-chang.patch` changes
+`refreshMemory()` to compare the cached view's buffer with the current memory
+buffer. Shared memory growth replaces the buffer without detaching the old one,
+so the previous zero-length check kept a view of the original page. The same
+identity check handles `setMemory()` rebinding without a second invalidation.
+Unshared growth still refreshes the detached view. Import signatures and memory
+binding behavior stay unchanged. This defect is verified against the pinned
+source, without a claim about current native Bun or the cause of application CI
+failures.
 
 The catalog records the patched source SHA256 and preprocessed source SHA256.
 Headers and the catalog name the pinned upstream revision, so rebuilding the
