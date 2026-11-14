@@ -59,7 +59,10 @@ try { require('./then.mjs'); } catch (error) { show(error); }
 setTimeout(() => console.log('done'), 20);
 `,
     },
-    expected: "Error: settled adoption\ndone\n",,
+    expected: "Error: settled adoption\ndone\n",
+  },
+  {
+    name: "inspection",
     files: {
       "then.mjs": "export function then(resolve) { resolve(globalThis.q); }\n",
       "index.ts": `${show}
