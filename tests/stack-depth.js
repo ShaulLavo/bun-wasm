@@ -73,6 +73,10 @@ actions.require = () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 };
+actions.reduce = () => {
+  function visit(a, remaining) { return remaining === 0 ? 0 : 1 + [remaining - 1].reduce(visit, 0); }
+  if (visit(0, n) !== n) throw new Error('reduce changed its result');
+};
 // The names walk of Ajv 8.17.1's code generator (lib/compile/codegen/index.ts, MIT), reduced to
 // its recursion: n nested `if` nodes, each read through `node.names` in a reduce callback and
 // through `super.names` in the subclass getter. Eight condition names keep the merges small.
