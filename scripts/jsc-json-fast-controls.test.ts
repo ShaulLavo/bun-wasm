@@ -190,13 +190,15 @@ function collectionSuccess(result: Run, materializations: number): RecordLine {
 }
 
 for (const ordinal of [1, 7]) {
+  // Ordinal 1 forces two full collections at every open (about 4 ms each), so it walks 4 leaves per level instead of 19.
+  const leaves = ordinal === 1 ? 4 : 19;
   test(`collection resumes deep rooted frames at open ordinal ${ordinal}`, () => {
     const result = run(`collect-at-open:${ordinal}`, String.raw`
-const graph = stressGraph();
+const graph = stressGraph(1000, ${leaves});
 assert.equal(JSON.stringify(graph), JSON.stringify(graph, (_k, v) => v));
 console.log("collection passed");
 `);
-    const record = collectionSuccess(result, 20000);
+    const record = collectionSuccess(result, 1000 * (leaves + 1));
     expect(record.rootsEverRegistered).toBe(true);
   }, 600_000);
 
