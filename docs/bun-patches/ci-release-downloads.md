@@ -71,10 +71,37 @@ The updater's explicit record downloads keep their existing 120-second bound.
 
 ## Cache lifetime
 
-The release cache restores before tool bootstrap and saves at job end only if its
-URL-addressed file inventory grew. The inventory digest gives a new immutable cache
-key after a partial restore gains assets. An unchanged warm inventory never invokes
-`actions/cache/save`, so repeated runs do not store duplicate full caches.
+The release caches restore before tool bootstrap and save at job end only if their
+URL-addressed file inventories changed, and only on main pushes. The inventory
+digest gives a new immutable cache key after a partial restore gains assets or
+retention removes them. An unchanged warm inventory never invokes
+`actions/cache/save`, including after source-only edits.
+
+Linux x64 Bun and Node bootstrap archives share a separate platform-scoped pool.
+Other release URLs keep the existing job-scoped pools and warm restore prefixes.
+The downloader checks the shared bootstrap pool, then moves matching bytes from
+the restored job pool before considering a download. Full original URL keys,
+transport deadlines, cancellation, staging and installer validation stay the same.
+
+Migration is idempotent across concurrent callers and processes. If another caller
+moves the local archive first, a reader accepts that result only when the shared
+file exists. Removing an already redundant local copy tolerates its absence.
+Other filesystem errors still propagate. Maintained Bun and Node controls cover
+parallel migration and real cold and warm bootstrap installation.
+
+The original `scripts/ci-release-cache.ts` adapter owns runner-local retention
+before publication. Bootstrap snapshots contain at most 201,326,592 asset bytes;
+job snapshots contain at most 536,870,912. It removes local duplicates present in
+the bootstrap pool, interrupted `.download-*` staging, and job-pool files whose
+stored timestamp is over seven days old unless read in the current job. Reads
+refresh that timestamp locally. It then keeps the newest files within each byte cap.
+The bootstrap pool uses only its byte cap, so Bun-only jobs preserve reusable Node
+archives. New bootstrap versions displace older files when that cap is reached.
+Timestamp changes alone never publish an archive, so timestamps in an unchanged
+immutable snapshot do not track usage across runs. An expired, unrequested file
+can leave the next snapshot even if another recent job used it. Missing files use
+the existing authenticated download path. GitHub owns expiry and eviction of
+older immutable snapshots; this adapter never deletes shared cache entries.
 
 The ordinary Bun cache retains its checkout-relative `BUN_INSTALL_CACHE_DIR` and frozen
 lock-based keys. It can accelerate registry and Git inputs, but release acquisition no

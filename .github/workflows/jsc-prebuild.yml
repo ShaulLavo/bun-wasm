@@ -8,6 +8,7 @@ permissions:
   contents: read
 
 env:
+  CI_NODE_VERSION: '26.13.1'
   GITHUB_TOKEN: ${{ github.token }}
   BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache
 
@@ -78,4 +79,66 @@ jobs:
           prefix: ${{ steps.setup.outputs.prefix }}
           expected-key: ${{ needs.identity.outputs.key }}
           transfer: 'false'
+      - uses: ./.github/actions/save-release-downloads
+
+  shared-identity:
+    name: Resolve effective shared JSC inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WASI_LIBC_JOBS: "2"
+    outputs:
+      key: ${{ steps.setup.outputs.key }}
+      sysroot-sha256: ${{ steps.sysroot.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/shared-jsc-setup
+        id: setup
+      - name: Package this run's prepared shared sysroot
+        id: sysroot
+        shell: bash
+        run: |
+          source env.sh
+          transfer="$RUNNER_TEMP/shared-jsc-identity-sysroot.tar.zst"
+          tar --posix -C "$RUNNER_TEMP" -cf - bun-wasm-shared-sysroot | zstd -T0 -q -o "$transfer"
+          echo "sha256=$(sha256sum "$transfer" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          path: ${{ runner.temp }}/shared-jsc-identity-sysroot.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+          archive: false
+      - uses: ./.github/actions/save-release-downloads
+
+  shared-prebuild:
+    name: Warm verified shared JSC cache
+    needs: shared-identity
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ needs.shared-identity.outputs.key }}
+      cancel-in-progress: false
+      queue: max
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+    # The ordinary JSC producer budgets 45 minutes for cold C++ and its hand-off.
+    timeout-minutes: 45
+    env:
+      WASI_LIBC_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v8
+        timeout-minutes: 5
+        with:
+          name: shared-jsc-identity-sysroot.tar.zst
+          path: ${{ runner.temp }}
+      - uses: ./.github/actions/shared-jsc-setup
+        id: setup
+        with:
+          sysroot: ${{ needs.shared-identity.outputs.sysroot-sha256 }}
+      - uses: ./.github/actions/shared-jsc-prebuild
+        with:
+          key: ${{ steps.setup.outputs.key }}
+          expected-key: ${{ needs.shared-identity.outputs.key }}
       - uses: ./.github/actions/save-release-downloads
