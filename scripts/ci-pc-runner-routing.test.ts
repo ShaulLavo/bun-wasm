@@ -15,7 +15,7 @@ const warm = read("jsc-prebuild.yml");
 const warmJobs = record(warm.jobs);
 const pcLabels = ["self-hosted", "linux", "x64", "pc", "bun-wasm"];
 const routed = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "web-browser", "browser-guest", "browser-process"];
-const light = ["quality", "package", "process-bundles", "ci-result", "update-status"];
+const light = ["selection", "quality", "package", "process-bundles", "ci-result", "update-status"];
 const trust = "github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'";
 
 type Selection = { rust: boolean; shared: boolean; native: boolean };
@@ -32,9 +32,9 @@ function values(input: Scenario, selection = selected): Record<string, unknown> 
     "github.repository": "ShaulLavo/bun-wasm",
     "github.event.pull_request.head.repo.full_name": input.repository,
     "github.event.pull_request.draft": input.draft,
-    "needs.quality.outputs.rust": String(selection.rust),
-    "needs.quality.outputs.shared": String(selection.shared),
-    "needs.quality.outputs.shared-native": String(selection.native),
+    "needs.selection.outputs.rust": String(selection.rust),
+    "needs.selection.outputs.shared": String(selection.shared),
+    "needs.selection.outputs.shared-native": String(selection.native),
   };
 }
 
@@ -63,9 +63,9 @@ function graph(input: Scenario, selection: Selection, failed = ""): Record<strin
   for (const [id, value] of Object.entries(jobs)) {
     if (id === "ci-result" || id === "update-status") continue;
     const run = admitted(record(value), input, selection, results);
-    const result = run ? id === failed || (id === "quality" && input.draft) ? "failure" : "success" : "skipped";
+    const result = run ? id === failed || (id === "selection" && input.draft) ? "failure" : "success" : "skipped";
     results[id] = result;
-    summary[id] = { result, outputs: id === "quality" ? { rust: String(selection.rust), shared: String(selection.shared), "shared-native": String(selection.native) } : {} };
+    summary[id] = { result, outputs: id === "selection" ? { rust: String(selection.rust), shared: String(selection.shared), "shared-native": String(selection.native) } : {} };
   }
   return summary;
 }
@@ -73,9 +73,9 @@ function graph(input: Scenario, selection: Selection, failed = ""): Record<strin
 test("one existing job per check retains the dependency graph and every blocker", () => {
   expect(Object.keys(jobs).sort()).toEqual(routed.concat(light).sort());
   expect(Object.keys(warmJobs).sort()).toEqual(["identity", "jsc-prebuild", "shared-identity", "shared-prebuild"]);
-  expect(record(jobs.rust).needs).toEqual(["quality", "jsc-prebuild", "native-quality"]);
-  expect(record(jobs["shared-sysroot"]).needs).toEqual(["quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
-  expect(record(jobs["browser-process"]).needs).toEqual(["quality", "rust", "process-bundles", "browser-guest"]);
+  expect(record(jobs.rust).needs).toEqual(["selection", "jsc-prebuild", "native-quality"]);
+  expect(record(jobs["shared-sysroot"]).needs).toEqual(["selection", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
+  expect(record(jobs["browser-process"]).needs).toEqual(["selection", "rust", "process-bundles", "browser-guest"]);
   expect(dependencies(record(jobs["ci-result"])).toSorted()).toEqual(Object.keys(jobs).filter(id => id !== "ci-result" && id !== "update-status").sort());
   for (const value of Object.values(jobs).concat(Object.values(warmJobs))) expect(record(value)).not.toHaveProperty("continue-on-error");
   expect(record(workflow.on)).not.toHaveProperty("pull_request_target");
@@ -132,7 +132,7 @@ test("forks keep equivalent blocking checks for all eight source selections with
 
 test("fork failures and drafts cannot turn skipped work into a passing aggregate", () => {
   const fork = { ...scenario, repository: "fork/bun-wasm" };
-  for (const id of routed) expect(() => requireCiSuccess(graph(fork, selected, id)), id).toThrow();
+  for (const id of routed.concat(["quality", "selection"])) expect(() => requireCiSuccess(graph(fork, selected, id)), id).toThrow();
   expect(() => requireCiSuccess(graph({ ...fork, draft: true }, selected))).toThrow("Source quality");
   for (const id of routed.filter(id => id !== "web")) {
     const job = record(jobs[id]);

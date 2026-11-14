@@ -28,7 +28,7 @@ export function expandedCiWorkflow(): string {
     (_step, action: string) => actionSteps(action === "setup" ? sharedSetup : sharedBuild)
       .replaceAll("${{ inputs.key }}", sharedKey)
       .replaceAll("${{ inputs.expected-key }}", "${{ needs.shared-jsc-identity.outputs.key }}")
-      .replaceAll("inputs.shared-native", "needs.quality.outputs.shared-native"),
+      .replaceAll("inputs.shared-native", "needs.selection.outputs.shared-native"),
   );
   return expand(shared)
     .replaceAll("${{ inputs.key }}", key)

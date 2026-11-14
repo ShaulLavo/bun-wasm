@@ -82,7 +82,7 @@ const recipeBindings = ['env.sh', 'Cargo.lock', 'rust-toolchain.toml', 'package.
   'spidermonkey/common.sh', 'spidermonkey/mozconfig.in', 'spidermonkey/build-shared-group.sh', 'spidermonkey/shared-group.ts',
   'spidermonkey/spidermonkey-wasi.patch', 'spidermonkey/spidermonkey-shared-group.patch',
   'crates/bunwasm-spidermonkey/build.rs', 'scripts/src/program-profile.ts', 'src/engine-kind.ts',
-  'scripts/ci-spidermonkey-prebuild.ts', 'scripts/ci-bootstrap-tools.ts', 'scripts/ci-install.ts',
+  'scripts/ci-spidermonkey-prebuild.ts', 'scripts/ci-runner/cache.ts', 'scripts/ci-bootstrap-tools.ts', 'scripts/ci-install.ts',
   'scripts/ci-stage-release-packages.ts', 'scripts/ci-release-download.ts', 'scripts/ci-build-tools.ts', 'scripts/waffle-release-inputs.json', 'scripts/build-wasi-sysroot.ts'];
 
 function recipeFixture(run: (root: string, source: string) => void): void {

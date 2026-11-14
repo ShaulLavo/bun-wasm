@@ -14,7 +14,7 @@ const smProducer = workflow.split("\n  shared-spidermonkey-prebuild:\n")[1]!.spl
 const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0]!;
 
 test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
-  expect(shared).toContain("needs: [quality, rust, shared-prebuild, shared-spidermonkey-prebuild]");
+  expect(shared).toContain("needs: [selection, rust, shared-prebuild, shared-spidermonkey-prebuild]");
   expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') &&");
   expect(shared).toContain("node-version: ${{ env.CI_NODE_VERSION }}");
   expect(shared).toContain('echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"');

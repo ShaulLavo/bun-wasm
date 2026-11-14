@@ -13,7 +13,7 @@ function object(value: unknown): Record<string, unknown> {
 
 const workflow = object(Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")));
 const jobs = object(workflow.jobs);
-const selector = object(jobs.selection ?? jobs.quality);
+const selector = object(jobs.selection);
 
 function steps(job: Record<string, unknown>): Record<string, unknown>[] {
   if (!Array.isArray(job.steps)) throw new Error("Expected workflow steps");

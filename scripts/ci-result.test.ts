@@ -95,18 +95,14 @@ test.each(["refs", "changes", "browser-guest-batches", "web-browser-shards"])("s
   expect(execution.status, execution.stderr).toBe(42);
 });
 
-test("draft admission and missing cumulative main selection fail closed", () => {
+test("draft admission fails closed before selection or source probes", () => {
   const draft = steps("selection").find(step => step.name === "Require a ready PR");
   expect(draft?.if).toBe("github.event_name == 'pull_request' && github.event.pull_request.draft");
-  const changes = steps("selection").find(step => step.id === "changes");
-  for (const command of [draft?.run, changes?.run]) {
-    if (typeof command !== "string") throw new Error("Missing selection guard");
-    const execution = spawnSync("bash", ["-euc", command], {
-      env: { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main", MAIN_SELECTION: "", GITHUB_OUTPUT: "/dev/null" },
-      encoding: "utf8", timeout: 3000,
-    });
-    expect(execution.status).toBe(1);
-  }
+  if (typeof draft?.run !== "string") throw new Error("Missing draft guard");
+  const execution = spawnSync("bash", ["-euc", draft.run], {
+    env: { ...process.env, GITHUB_OUTPUT: "/dev/null" }, encoding: "utf8", timeout: 3000,
+  });
+  expect(execution.status).toBe(1);
 });
 
 test("existing required Code quality name is a final non-skippable gate over every real job", () => {
