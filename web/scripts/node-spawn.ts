@@ -28,6 +28,10 @@ function nodeMountedPath(mounts: readonly [string, string][], path: string) {
   return mount && `${mount[1]}/${path.slice(mount[0] === "/" ? 1 : mount[0].length + 1)}`;
 }
 
+function denyNonRegularExecutable(): never {
+  throw Object.assign(new Error("executable must be a regular file"), { code: "EACCES" });
+}
+
 /** Registry shebang admission reads only its bounded first line, after guest symlink resolution. */
 function nodeExecutableHeader(preopens: Record<string, string>, path: string) {
   const file = nodeExecutableLookup(preopens, path);
@@ -35,7 +39,7 @@ function nodeExecutableHeader(preopens: Record<string, string>, path: string) {
   if (!native) return undefined;
   const fd = openSync(native, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    if (!fstatSync(fd).isFile()) throw new ProcessError(ProcessErrno.ACCES, "executable must be a regular file");
+    if (!fstatSync(fd).isFile()) denyNonRegularExecutable();
     const bytes = new Uint8Array(260);
     return bytes.subarray(0, readSync(fd, bytes));
   } finally { closeSync(fd); }
@@ -79,7 +83,7 @@ function nodeExecutableLookup(preopens: Record<string, string>, absolute: string
     }
   }
   if (absolute.endsWith("/") && kind !== "dir") throw Object.assign(new Error("not a directory"), { errno: 54 });
-  if (kind === "file" && !regular) throw new ProcessError(ProcessErrno.ACCES, "executable must be a regular file");
+  if (kind === "file" && !regular) denyNonRegularExecutable();
   return { path: `/${components.join("/")}`, kind };
 }
 
