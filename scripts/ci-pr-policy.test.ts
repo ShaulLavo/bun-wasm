@@ -37,10 +37,10 @@ test("draft PRs defer native and browser work until ready without changing push 
   }
 });
 
-test("main pushes replace pending runs while PR cancellation and isolated manual groups remain", () => {
+test("main pushes replace running and pending runs while PR cancellation and isolated manual groups remain", () => {
   expect(record(workflow.concurrency)).toEqual({
     group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref == 'refs/heads/main' && 'push-main' || format('run-{0}', github.run_id) }}",
-    "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+    "cancel-in-progress": "${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}",
   });
   const group = (event: string, run: number, pr = 0, ref = "refs/heads/main") => {
     const expression = String(record(workflow.concurrency).group).split("-${{ ")[1]?.replace(/ }}$/, "")
@@ -55,6 +55,15 @@ test("main pushes replace pending runs while PR cancellation and isolated manual
   expect(group("workflow_dispatch", 1)).toBe("run-1");
   expect(group("workflow_dispatch", 2)).toBe("run-2");
   expect(group("push", 3, 0, "refs/heads/other")).toBe("run-3");
+  const cancels = (event: string, ref = "refs/heads/main") => {
+    const expression = String(record(workflow.concurrency)["cancel-in-progress"]).replace(/^\$\{\{ | }}$/g, "")
+      .replaceAll("github.event_name", JSON.stringify(event)).replaceAll("github.ref", JSON.stringify(ref));
+    return new Function(`return (${expression})`)();
+  };
+  expect(cancels("push")).toBe(true);
+  expect(cancels("pull_request")).toBe(true);
+  expect(cancels("workflow_dispatch")).toBe(false);
+  expect(cancels("push", "refs/heads/other")).toBe(false);
 });
 
 test("update statuses run only for manual checks of the standing update branch", () => {

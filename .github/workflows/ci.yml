@@ -18,7 +18,7 @@ env:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref == 'refs/heads/main' && 'push-main' || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   quality:
@@ -27,7 +27,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      actions: read
     outputs:
       rust: ${{ steps.changes.outputs.rust }}
       jsc: ${{ steps.changes.outputs.jsc }}
@@ -55,22 +54,15 @@ jobs:
           EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           EVENT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bun scripts/ci-refs.ts >> "$GITHUB_OUTPUT"
-      - name: Resolve cumulative main coverage v1
-        id: main-coverage
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          HEAD: ${{ steps.refs.outputs.head }}
-        run: bun scripts/ci-main-coverage.ts "$HEAD" >> "$GITHUB_OUTPUT"
       - name: Select native checks from the complete change list
         id: changes
         env:
           BASE: ${{ steps.refs.outputs.base }}
           HEAD: ${{ steps.refs.outputs.head }}
-          MAIN_SELECTION: ${{ steps.main-coverage.outputs.selection }}
         run: |
           if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then
-            test -n "$MAIN_SELECTION"
-            printf '%s\n' "$MAIN_SELECTION" >> "$GITHUB_OUTPUT"
+            # Every green main run publishes the complete current program set.
+            printf 'rust=true\njsc=true\nshared=true\nshared_native=true\n' >> "$GITHUB_OUTPUT"
           else
             bun scripts/ci-changes.ts "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
           fi
@@ -2045,7 +2037,7 @@ jobs:
 
   web:
     needs: [quality, web-unit, web-browser]
-    if: ${{ always() && needs.quality.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ always() && (github.event_name != 'push' || github.ref != 'refs/heads/main' || !cancelled()) && needs.quality.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Web host
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2368,7 +2360,7 @@ jobs:
   ci-result:
     name: Code quality
     needs: [quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
-    if: ${{ always() }}
+    if: ${{ always() && (github.event_name != 'push' || github.ref != 'refs/heads/main' || !cancelled()) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
