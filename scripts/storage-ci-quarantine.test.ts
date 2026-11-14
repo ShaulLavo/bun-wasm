@@ -59,27 +59,28 @@ test("all hosted React optimizer protocols match only WebKit's first React start
   }
 });
 
-test("React quarantine rejects added output at every position in either complete terminal", () => {
-  const report = reactFailure().report;
+test.each(webkitReactProtocols)("React quarantine rejects added output at every position in either complete terminal, protocol %#", record => {
+  const report = reactFailure({}, record).report;
   for (const [index, page] of report.pages.entries()) {
     if (typeof page === "string") throw new Error("Invalid fixture");
     for (let position = 0; position <= page.terminal.length; position++) {
       const terminal = page.terminal.slice(0, position) + "unknown output\n" + page.terminal.slice(position);
       const pages = report.pages.map((item, itemIndex) => itemIndex === index ? { ...page, terminal } : item);
-      expect(storageQuarantine("webkit", reactFailure({ pages }))).toBeUndefined();
+      expect(storageQuarantine("webkit", reactFailure({ pages }, record))).toBeUndefined();
     }
   }
 });
 
-test("React quarantine preserves every stack frame, dependency, optimizer message, and exit status", () => {
-  const report = reactFailure().report;
+test.each(webkitReactProtocols)("React quarantine preserves every stack frame, dependency, optimizer message, and exit status, protocol %#", record => {
+  const report = reactFailure({}, record).report;
   const page = report.pages[1];
   if (!page || typeof page === "string") throw new Error("Invalid fixture");
   const replacements = [
     ["host:130:17", "host:130:18"], ["host:15:27", "host:16:27"],
     ["guard (bun-wasm:host:11:9471)", "guard (bun-wasm:host:11:9472)"],
     ["pump (bun-wasm:host:11:8296)", "pump (bun-wasm:host:11:8297)"],
-    ["host:9:90764", "host:9:90765"], ["<anonymous>", "differentSource"],
+    [page.terminal.includes("host:9:91027") ? "host:9:91027" : "host:9:90764", "host:9:91028"],
+    ["<anonymous>", "differentSource"],
     ["Out of bounds access", "Maximum call stack size exceeded"],
     ["RangeError:", "TypeError:"], ["[optimizer] bundling dependencies...", "[optimizer] dependencies bundled"],
     ["react@19.3.1", "react@19.3.2"], ["VITE v8.3.5", "VITE v8.3.6"],
@@ -87,13 +88,14 @@ test("React quarantine preserves every stack frame, dependency, optimizer messag
     ["[dev exited with code 1]", "[dev exited with code 0]"],
   ] satisfies readonly (readonly [string, string])[];
   for (const [before, after] of replacements) {
-    expect(storageQuarantine("webkit", reactFailure({ pages: target(report, { terminal: page.terminal.replace(before, after) }) }))).toBeUndefined();
+    expect(page.terminal).toContain(before);
+    expect(storageQuarantine("webkit", reactFailure({ pages: target(report, { terminal: page.terminal.replace(before, after) }) }, record))).toBeUndefined();
   }
-  expect(storageQuarantine("webkit", reactFailure({ pages: target(report, { terminal: page.terminal.replace(/RangeError:[\s\S]*?\n\nBun/, "Bun") }) }))).toBeUndefined();
+  expect(storageQuarantine("webkit", reactFailure({ pages: target(report, { terminal: page.terminal.replace(/RangeError:[\s\S]*?\n\nBun/, "Bun") }) }, record))).toBeUndefined();
 });
 
-test("React quarantine rejects missing controls, pending edits, preview content, unknown errors and later assertions", () => {
-  const report = reactFailure().report;
+test.each(webkitReactProtocols)("React quarantine rejects missing controls, pending edits, preview content, unknown errors and later assertions, protocol %#", record => {
+  const report = reactFailure({}, record).report;
   const [active, page] = report.pages;
   if (!active || !page || typeof active === "string" || typeof page === "string" || !page.runtime || !active.runtime) throw new Error("Invalid fixture");
   const variants: Partial<Report>[] = [
@@ -116,24 +118,28 @@ test("React quarantine rejects missing controls, pending edits, preview content,
     { error: "Error: unsupported user symlink was destroyed" },
     { error: "Error: receipt mismatch" }, { error: "Error: cleanup failed" },
   ];
-  for (const patch of variants) expect(storageQuarantine("webkit", reactFailure(patch))).toBeUndefined();
+  for (const patch of variants) expect(storageQuarantine("webkit", reactFailure(patch, record))).toBeUndefined();
 });
 
-test("React quarantine normalizes only elapsed times, optimizer clock, worker ID and loopback ports", () => {
-  const report = reactFailure().report;
+test.each(webkitReactProtocols)("React quarantine normalizes only elapsed times, optimizer clock, worker ID and loopback ports, protocol %#", record => {
+  const report = reactFailure({}, record).report;
   const pages = report.pages.map(page => typeof page === "string" ? page : {
     ...page,
     terminal: page.terminal.replace(/\[\d+ms\]/g, "[98765ms]").replace(/ready in \d+ ms/g, "ready in 98765 ms")
-      .replace(/127\.0\.0\.1:\d+/g, "127.0.0.1:45678").replace("3:38:19 AM", "11:59:59 PM").replace("tid = 55", "tid = 123"),
+      .replace(/127\.0\.0\.1:\d+/g, "127.0.0.1:45678").replace(/\d{1,2}:\d{2}:\d{2} [AP]M/g, "11:59:59 PM").replace(/tid = \d+/g, "tid = 123"),
   });
-  expect(storageQuarantine("webkit", reactFailure({ pages }))).toBe("webkit-first-react-optimizer-bounds");
+  expect(storageQuarantine("webkit", reactFailure({ pages }, record))).toBe("webkit-first-react-optimizer-bounds");
 });
 
-test("React quarantine retains raw diagnostics and requires CI, report and summary writes before acceptance", async () => {
+test.each(webkitReactProtocols)("React quarantine retains raw diagnostics and requires CI, report and summary writes before acceptance, protocol %#", async record => {
   const env = await evidence();
-  const original = reactFailure();
+  const original = reactFailure({}, record);
   const warnings = spyOn(console, "error").mockImplementation(() => {});
-  try { await handleStorageFailure("webkit", original, env); }
+  try {
+    await handleStorageFailure("webkit", original, env);
+    expect(warnings).toHaveBeenCalledTimes(1);
+    expect(warnings.mock.calls[0]?.[0]).toContain("::warning title=Storage quarantine::webkit-first-react-optimizer-bounds");
+  }
   finally { warnings.mockRestore(); }
   const saved = JSON.parse(await readFile(join(env.BUN_WASM_BROWSER_REPORT_DIR!, "sandbox-storage-webkit-preservation.json"), "utf8"));
   expect(saved).toEqual({ browser: "webkit", quarantine: "webkit-first-react-optimizer-bounds", ...original.report });

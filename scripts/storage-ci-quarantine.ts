@@ -66,9 +66,9 @@ export function storageQuarantine(browser: string, failure: StoragePreservationF
   if (new URL(active.url).origin !== new URL(page.url).origin) return;
   const origin = new URL(active.url).origin;
   if (page.frames.length !== 1) return;
-  const original = reactStartup ? webkitReactProtocols[0]?.report.pages : protocols[browser].pages;
+  const originals = reactStartup ? webkitReactProtocols.map(record => record.report.pages) : [protocols[browser].pages];
   const normalize = reactStartup ? normalizedReactTerminal : normalizedTerminal;
-  if (!matchesTerminal(active.terminal, original?.[0]?.terminal, normalize) || !matchesTerminal(page.terminal, original?.[1]?.terminal, normalize)) return;
+  if (!originals.some(original => matchesTerminal(active.terminal, original[0]?.terminal, normalize) && matchesTerminal(page.terminal, original[1]?.terminal, normalize))) return;
   if (reactStartup) return reactStartupQuarantine(page, error, origin);
   if (browser === "firefox") {
     if (checkpoint !== "first-vite-vue-startup" || !error.startsWith("Error: waitForFunction: Dev server stopped before it was ready (exit 254).")) return;
