@@ -22,5 +22,7 @@ shared-buffer churn: pass
 table-global: pass
 table-global guest: pass
 shared-wasm-memory worker transport: pass
+shared-wasm-memory group lanes: pass
+shared-wasm-memory group lane lifetime: pass
 shared-wasm-memory membership: pass
 shared-wasm-memory membership forgery: pass

@@ -3,6 +3,16 @@ import assert from 'node:assert/strict';
 export const spiderMonkeyTiers = ['interp', 'pbl'] as const;
 export type SpiderMonkeyTier = typeof spiderMonkeyTiers[number];
 
+/** Generous hang caps; correctness is determined by the fixture output and ownership checks. */
+export function sharedBrowserClocks(kind: string, entry = "browser-guest.ts") {
+  const spiderMonkey = kind === "spidermonkey";
+  return {
+    pageMs: spiderMonkey && entry === "browser-guest.ts" ? 480_000 : 240_000,
+    driverMs: spiderMonkey ? 540_000 : 300_000,
+    consumerSeconds: spiderMonkey ? 1320 : 420,
+  };
+}
+
 /** Marker offsets may change with Rust layout; host observations independently bind the carved stack. */
 export function verifySpiderMonkeyStackWitness(stderr: string, hostStacks: readonly unknown[]) {
   const match = /stack_low=(0x[\da-f]+) stack_high=(0x[\da-f]+) stack_bytes=(\d+) register_depth=(\d+) entry_depth=(\d+) interrupt_polls=(\d+) portable_baseline_entries=(\d+)/.exec(stderr);

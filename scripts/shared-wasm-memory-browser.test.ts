@@ -28,4 +28,4 @@ const tiers: readonly (SpiderMonkeyTier | "default")[] = selectedKind() === "spi
 test.each(tiers)("the shared Wasm memory fixture passes in a real group guest on the Browser host, tier %s", tier => {
   const env = tier === "default" ? process.env : spiderMonkeyTierOptions(tier, process.env).env;
   execFileSync(process.execPath, ["tests/shared-wasm-memory-browser.ts", "chromium"], { cwd: join(root, "web"), stdio: "inherit", env });
-}, 330_000);
+}, 600_000);
