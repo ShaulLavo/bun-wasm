@@ -11,6 +11,7 @@ import { nativeProfile } from './test-checks.ts';
 import { checkGroupFeatures, groupFlags } from '../spidermonkey/shared-group.ts';
 import { archiveMembers } from '../spidermonkey/check-build.ts';
 import { pin } from '../spidermonkey/native-profile.ts';
+import { producerEvent, producerPhase } from './producer-diagnostics.ts';
 
 const repository = fileURLToPath(new URL('..', import.meta.url));
 function run(command: string[]) {
@@ -58,7 +59,7 @@ export function spiderMonkeyNativeInputs(native: string, libcxx: string, sysroot
 }
 
 export function spiderMonkeySources(directory: string = repository) {
-  const paths = execFileSync('git', ['ls-files', '-z', '--', 'spidermonkey', 'scripts/build-native-profile.ts',
+  const paths = execFileSync('git', ['ls-files', '-z', '--', 'spidermonkey', 'scripts/build-native-profile.ts', 'scripts/producer-diagnostics.ts',
     'scripts/build-engine-spidermonkey-shared.sh', 'scripts/spidermonkey-side-core-receipt.ts',
     'crates/bunwasm-engine-quickjs/build/transfer_fault.rs', 'crates/bunwasm-engine-quickjs/src/transfer_fault.rs',
     'scripts/src/transfer-fault.sh'], { cwd: directory, encoding: 'utf8' });
@@ -81,7 +82,8 @@ async function buildSpiderMonkeyProfile(root: string, sysroot: string): Promise<
       native: spiderMonkeyNativeInputs(native, libcxx, sysroot), recipes: spiderMonkeySources(),
       environment: sharedGroupEnvironment(sysroot, 'core') };
   };
-  const { coreInputs, ...inputs } = await capture();
+  producerEvent('target', `directory=${join(root, 'spidermonkey/target')}`);
+  const { coreInputs, ...inputs } = await producerPhase('initial-capture', capture);
   const side = join(root, 'spidermonkey');
   const program = join(root, 'program-spidermonkey');
   mkdirSync(side, { recursive: true });
@@ -90,20 +92,24 @@ async function buildSpiderMonkeyProfile(root: string, sysroot: string): Promise<
   rmSync(join(side, 'engine.wasm'), { force: true });
   writeFileSync(join(side, 'inputs.json'), JSON.stringify(inputs, null, 2) + '\n');
   process.env.SPIDERMONKEY_ENGINE_BUILD_DIR = side;
-  run(['bash', 'scripts/build-engine-spidermonkey-shared.sh']);
-  assert.deepEqual(await capture(), { coreInputs, ...inputs }, 'SpiderMonkey source or native inputs changed during build');
-  const bytes = readFileSync(join(side, 'engine.wasm'));
-  verifyProgramSide('spidermonkey', new WebAssembly.Module(bytes));
-  assert(sharedGroupPair(new WebAssembly.Module(readFileSync(core)), bytes), 'Expected a shared-group SpiderMonkey pair');
-  writeFileSync(join(program, 'bun.wasm'), tagProgramCore(readFileSync(core), 'spidermonkey'));
-  copyFileSync(join(side, 'engine.wasm'), join(program, programProfile('spidermonkey').side));
-  copyFileSync(`${core}.core.json`, join(program, 'bun-core.wasm.core.json'));
-  copyFileSync(join(side, 'shared-group-library.json'), join(program, 'shared-group-library.json'));
-  writeFileSync(join(program, 'spidermonkey-shared.json'), JSON.stringify({ schema: 1, experimental: true, profile: 'shared-group',
-    inputs, program: fileIdentity(join(program, 'bun.wasm')), side: fileIdentity(join(side, 'engine.wasm')) }, null, 2) + '\n');
-  writeFileSync(join(program, 'source.txt'), inputs.source.head + '\n');
-  writeFileSync(join(program, 'current-inputs.json'), JSON.stringify([coreInputs], null, 2) + '\n');
-  return program;
+  await producerPhase('side-build', () => run(['bash', 'scripts/build-engine-spidermonkey-shared.sh']));
+  await producerPhase('final-capture', async () => {
+    assert.deepEqual(await capture(), { coreInputs, ...inputs }, 'SpiderMonkey source or native inputs changed during build');
+  });
+  return producerPhase('composition', () => {
+    const bytes = readFileSync(join(side, 'engine.wasm'));
+    verifyProgramSide('spidermonkey', new WebAssembly.Module(bytes));
+    assert(sharedGroupPair(new WebAssembly.Module(readFileSync(core)), bytes), 'Expected a shared-group SpiderMonkey pair');
+    writeFileSync(join(program, 'bun.wasm'), tagProgramCore(readFileSync(core), 'spidermonkey'));
+    copyFileSync(join(side, 'engine.wasm'), join(program, programProfile('spidermonkey').side));
+    copyFileSync(`${core}.core.json`, join(program, 'bun-core.wasm.core.json'));
+    copyFileSync(join(side, 'shared-group-library.json'), join(program, 'shared-group-library.json'));
+    writeFileSync(join(program, 'spidermonkey-shared.json'), JSON.stringify({ schema: 1, experimental: true, profile: 'shared-group',
+      inputs, program: fileIdentity(join(program, 'bun.wasm')), side: fileIdentity(join(side, 'engine.wasm')) }, null, 2) + '\n');
+    writeFileSync(join(program, 'source.txt'), inputs.source.head + '\n');
+    writeFileSync(join(program, 'current-inputs.json'), JSON.stringify([coreInputs], null, 2) + '\n');
+    return program;
+  });
 }
 
 export async function buildNativeProfile(profile: unknown, directory: string, selectedEngine: unknown = 'quickjs') {

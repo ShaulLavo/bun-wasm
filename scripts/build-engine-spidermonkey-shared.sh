@@ -35,8 +35,7 @@ fi
 [[ "$(readlink "$SPIDERMONKEY_NATIVE_DIR/libspidermonkey_g2.a")" == libspidermonkey_bunwasm.a ]] || exit 1
 side="$out/engine.wasm"
 [[ ! -e "$side" ]] || { echo "Refusing to overwrite existing experimental side: $side" >&2; exit 1; }
-# SPIDERMONKEY_TRANSFER_FAULT=1: a validation side (scripts/src/transfer-fault.sh). Never a
-# release: it leaves without the library record a program is staged with.
+# SPIDERMONKEY_TRANSFER_FAULT=1: a validation side, never a release.
 # shellcheck source=scripts/src/transfer-fault.sh
 source "$root/scripts/src/transfer-fault.sh"
 select_transfer_fault SPIDERMONKEY_TRANSFER_FAULT
@@ -44,13 +43,14 @@ if [[ $transfer_fault == 1 && -e "$out/shared-group-library.json" ]]; then
   echo "Refusing a validation side beside an existing release record: $out/shared-group-library.json" >&2
   exit 2
 fi
+phase() { bun scripts/producer-diagnostics.ts phase "$@"; }
 sysroot_rust=$($RUSTC --print sysroot)
-$GUEST_CARGO fetch --locked --offline --manifest-path "$sysroot_rust/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
-$GUEST_CARGO build --locked --offline -Zbuild-std=std,panic_abort --release --target wasm32-wasip1 -j "$jobs" -p bunwasm-engine-spidermonkey
+phase cargo-fetch $GUEST_CARGO fetch --locked --offline --manifest-path "$sysroot_rust/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
+phase cargo-build $GUEST_CARGO build --locked --offline -Zbuild-std=std,panic_abort --release --target wasm32-wasip1 -j "$jobs" -p bunwasm-engine-spidermonkey
 archive="$CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_engine_spidermonkey.a"
-"$CC_wasm32_wasip1" --target=wasm32-wasip1 --sysroot="$sysroot" -fPIC "${features[@]}" -O2 -fno-builtin-malloc -fno-builtin-free \
+phase compile-init "$CC_wasm32_wasip1" --target=wasm32-wasip1 --sysroot="$sysroot" -fPIC "${features[@]}" -O2 -fno-builtin-malloc -fno-builtin-free \
   -DENGINE_CTOR_VALUE=spidermonkey_ctor_value -c scripts/src/engine-init.c -o "$out/engine-init.o"
-"$CC_wasm32_wasip1" --target=wasm32-wasip1 --sysroot="$sysroot" -fPIC "${features[@]}" -O2 \
+phase compile-errno "$CC_wasm32_wasip1" --target=wasm32-wasip1 --sysroot="$sysroot" -fPIC "${features[@]}" -O2 \
   -c crates/bunwasm-engine-quickjs/group-errno.c -o "$out/group-errno.o"
 # shellcheck source=scripts/src/group-errno-wraps.sh
 source "$root/scripts/src/group-errno-wraps.sh"
@@ -59,12 +59,12 @@ wraps=()
 for name in "${group_errno_wraps[@]}"; do wraps+=("--wrap=$name"); done
 # The side declares the group address space, like its core (program-profile.ts sharedGroupSideLink).
 group_address_space=$(bun scripts/src/program-profile.ts group-address-space)
-"$WASI_SDK_PATH/bin/wasm-ld" --shared --shared-memory "--max-memory=$group_address_space" "${wraps[@]}" "${transfer_fault_wraps[@]}" --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
+phase side-link "$WASI_SDK_PATH/bin/wasm-ld" --shared --shared-memory "--max-memory=$group_address_space" "${wraps[@]}" "${transfer_fault_wraps[@]}" --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
   --import-memory=env,memory --import-table --allow-undefined --export=spidermonkey_ctor_value \
   --export=__stack_pointer --export=__wasm_call_ctors --export=spidermonkey_register --export=spidermonkey_run \
   -Map="$out/engine-link.map" -o "$out/engine.implicit.wasm" "$out/engine-init.o" "$out/group-errno.o" "$archive"
-bun scripts/spidermonkey-side-core-receipt.ts convert-side "$out/engine.implicit.wasm" "$side" --group
-wasm-tools validate --features all "$side"
+phase side-conversion bun scripts/spidermonkey-side-core-receipt.ts convert-side "$out/engine.implicit.wasm" "$side" --group
+phase side-validation wasm-tools validate --features all "$side"
 if [[ $transfer_fault == 0 ]]; then
   cp "$SPIDERMONKEY_NATIVE_DIR/shared-group-library.json" "$out/shared-group-library.json"
 fi
