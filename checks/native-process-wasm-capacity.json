@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/process-wasm-capacity",
+  "engines": ["quickjs", "jsc", "spidermonkey"]
+}

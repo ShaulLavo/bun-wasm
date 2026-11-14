@@ -1546,6 +1546,7 @@ dependencies = [
  "pbkdf2",
  "pkcs8",
  "rand_core 0.6.4",
+ "rquickjs",
  "serde",
  "serde_json",
  "sha1",

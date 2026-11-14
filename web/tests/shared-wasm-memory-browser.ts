@@ -2,6 +2,7 @@
 // Browser host. No mock: Chromium instantiates the group core and side through Waffle's worker.
 // source env.sh && BUN_WASM_PROFILE_PROGRAM=<group>/bun.wasm bun web/tests/shared-wasm-memory-browser.ts chromium
 import { strict as assert } from "node:assert";
+import { verifySpiderMonkeyStackWitness } from "../../scripts/spidermonkey-native-qualification";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Browser, BrowserType, Page } from "playwright";
@@ -172,16 +173,10 @@ function assertSpiderMonkeyCanary({ value, pageErrors }: EntryRun): void {
   assert.equal(value.code, 0, value.stderr ?? String(value.error));
   assert.deepEqual(pageErrors, []);
   assert.equal(value.stdout, "spidermonkey canary 599994\n");
-  const match = /stack_low=(0x[\da-f]+) stack_high=(0x[\da-f]+) stack_bytes=(\d+) register_depth=(\d+) entry_depth=(\d+) interrupt_polls=(\d+) portable_baseline_entries=(\d+)/.exec(value.stderr ?? "");
-  assert.ok(match, "missing actual SpiderMonkey execution counters");
-  const [, low, high, bytes, register, , polls, entries] = match.map(Number);
-  assert.equal(register, 16);
-  assert.equal(bytes, 8 << 20);
-  assert.ok(polls! > 0);
+  const { polls, entries } = verifySpiderMonkeyStackWitness(value.stderr ?? "", value.hostStacks ?? []);
+  assert.ok(polls > 0);
   if (process.env.BUN_WASM_SPIDERMONKEY_TIER === "interp") assert.equal(entries, 0);
-  else assert.ok(entries! > 0, "selected portable baseline never executed");
-  assert.ok((value.hostStacks?.length ?? 0) >= 2, "core and side imports were not observed");
-  for (const stack of value.hostStacks!) assert.deepEqual(stack, { type: "spidermonkey-stack-proof", low, high, stackBytes: bytes, pointer: high, samePointer: true });
+  else assert.ok(entries > 0, "selected portable baseline never executed");
   assertRetired(value);
 }
 
