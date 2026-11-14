@@ -47,7 +47,7 @@ test("original Firefox and WebKit protocols match only their explicit source che
   expect(storageQuarantine("webkit", failure("webkit"))).toBe("webkit-vanilla-config-restart");
 });
 
-test("all four hosted React optimizer protocols match only WebKit's first React startup", () => {
+test("all hosted React optimizer protocols match only WebKit's first React startup", () => {
   for (const record of webkitReactProtocols) {
     const original = reactFailure({}, record);
     expect(storageQuarantine("webkit", original)).toBe("webkit-first-react-optimizer-bounds");
