@@ -10,15 +10,15 @@ entrypoints or installer as a completed feature. The Safari memory parent owns f
 
 1. Review the child admission correction. `supervisor.reserveSpawn` alone produces no
    Worker transport, so a real Bash Worker fails with `process has no admitted worker
-   transport`. The prototype uses `WorkerProcessClient.spawn`, controller registration
-   before message delivery, the broker's real admitted reservation/start path, a removable
+   transport`. The prototype uses `WorkerProcessClient.spawn`, the broker's real admitted
+   reservation/start path, a removable
    child listener and one consuming client wait followed by its receipt. Do not restore
    the host-only dummy-child path to claim real shell support.
-2. Compose startup capture with the installed Bash launcher's own controller. Released
-   `bash-web` `src/runtime/worker-launcher.ts:116` registers a controller unconditionally;
-   our earlier registration makes it throw `Process N already has a controller`.
-   The direct shell Worker control tests parsing but does not qualify this installer.
-   Do not enable the guest trigger until parent chooses and reviews the integration.
+2. Leave child controller ownership with the installed launcher. Released Waffle retains
+   runtime-proc startup diagnostics for the typed parent wait without another controller.
+   The removed extra controller conflicted with Bash's actual controller. Synchronous
+   reservation failures use Waffle's bounded diagnostic encoding before rendering.
+   Keep installed-launcher acceptance distinct from direct shell parsing controls.
 3. Keep one successor filesystem connection and client. A second `connect(identity)`
    consumes no already-adopted reservations and its service session rejects those
    handles with EBADF. A second client on one connection also replaces the port handler.

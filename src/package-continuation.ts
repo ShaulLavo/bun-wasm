@@ -2,6 +2,7 @@ import type { GuestLauncher, Runtime, RuntimeSupervisor } from "waffle";
 import type { ProcessContext, ProcessExit } from "waffle/proc/types";
 import { ProcessError } from "../node_modules/waffle/proc/types.ts";
 import { startFailureErrno } from "../node_modules/waffle/proc/start-errno.js";
+import { describeStartError, diagnosticBytes, diagnosticText } from "../node_modules/waffle/proc/start-diagnostic.ts";
 import { normalize } from "waffle/core/path";
 import { ContinuationIO } from "./package-continuation-io.js";
 import { FilesystemClient } from "../node_modules/waffle/fs/client.ts";
@@ -125,12 +126,11 @@ async function cwdError(context: ProcessContext, owner: LocalWork, children: Pac
   }
 }
 
-async function child(supervisor: RuntimeSupervisor, service: Service, context: ProcessContext, owner: LocalWork, children: PackageChildren, executable: string, phase: PackagePhase, plan: PackagePlan): Promise<ChildResult> {
+async function child(supervisor: RuntimeSupervisor, context: ProcessContext, owner: LocalWork, children: PackageChildren, executable: string, phase: PackagePhase, plan: PackagePlan): Promise<ChildResult> {
   owner.check();
   const pid = children.reserve({ executable, argv: [executable, "-c", phase.command],
     env: { ...plan.env, npm_lifecycle_event: phase.name, npm_lifecycle_script: phase.original }, cwd: plan.cwd, job: context.job,
     fds: [0, 1, 2].map(fd => ({ parent: fd, child: fd })) });
-  service.registerController(pid, { startFailed() {} });
   const completed = Promise.withResolvers<void>();
   const remove = supervisor.onChildExit(event => { if (event.pid === pid) completed.resolve(); });
   try {
@@ -158,7 +158,7 @@ function admissionErrno(error: unknown): number | null {
   return error instanceof ProcessError ? error.errno : null;
 }
 
-async function phaseResult(supervisor: RuntimeSupervisor, service: Service, context: ProcessContext, owner: LocalWork, io: ContinuationIO, children: PackageChildren, plan: PackagePlan, phase: PackagePhase): Promise<ProcessExit> {
+async function phaseResult(supervisor: RuntimeSupervisor, context: ProcessContext, owner: LocalWork, io: ContinuationIO, children: PackageChildren, plan: PackagePlan, phase: PackagePhase): Promise<ProcessExit> {
   await write(io, owner, announcement(plan, phase));
   const executable = await findShell(supervisor, context, owner, plan);
   const cwdErrno = await cwdError(context, owner, children, plan.cwd);
@@ -167,11 +167,12 @@ async function phaseResult(supervisor: RuntimeSupervisor, service: Service, cont
     return { kind: "exited", code: 1, status: 1 };
   }
   let result: ChildResult;
-  try { result = await child(supervisor, service, context, owner, children, executable, phase, plan); }
+  try { result = await child(supervisor, context, owner, children, executable, phase, plan); }
   catch (error) {
     const errno = admissionErrno(error);
     if (errno === null) throw error;
-    await write(io, owner, startupDiagnostic(executable, errno, "", plan.footer));
+    const diagnostic = diagnosticText(diagnosticBytes(describeStartError(error)));
+    await write(io, owner, startupDiagnostic(executable, errno, diagnostic, plan.footer));
     return { kind: "exited", code: 1, status: 1 };
   }
   owner.check();
@@ -183,11 +184,11 @@ async function phaseResult(supervisor: RuntimeSupervisor, service: Service, cont
   return result.exit;
 }
 
-async function run(supervisor: RuntimeSupervisor, service: Service, context: ProcessContext, owner: LocalWork, io: ContinuationIO, children: PackageChildren, plan: PackagePlan): Promise<ProcessExit> {
+async function run(supervisor: RuntimeSupervisor, context: ProcessContext, owner: LocalWork, io: ContinuationIO, children: PackageChildren, plan: PackagePlan): Promise<ProcessExit> {
   for (const phase of [plan.pre, plan.main, plan.post]) {
     if (!phase) continue;
     owner.check();
-    const result = await phaseResult(supervisor, service, context, owner, io, children, plan, phase);
+    const result = await phaseResult(supervisor, context, owner, io, children, plan, phase);
     if (result.kind !== "exited" || result.code !== 0) return result;
   }
   return { kind: "exited", code: 0, status: 0 };
@@ -229,7 +230,7 @@ function launchContinuation(runtime: Pick<Runtime, "filesystem">, context: Param
       children = new PackageChildren(filesystem, service, context, transport, identity);
       service.registerController(context.pid, { filesystem: identity });
       if (!context.started()) return;
-      const result = await run(supervisor, service, context, owner, io, children, plan);
+      const result = await run(supervisor, context, owner, io, children, plan);
       await settle();
       owner.check();
       publish(context, result);

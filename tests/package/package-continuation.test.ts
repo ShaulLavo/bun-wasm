@@ -89,6 +89,30 @@ testRuntime("malformed committed plan reports original execution failure once an
     expect(await run.exit).toMatchObject({ kind: "exited", code: 126 });
 });
 
+for (const silent of [false, true]) {
+  test(`synchronous reservation failure preserves detail with silent=${silent}`, async () => {
+    const f = await fixture(undefined, context => { context.descriptors.close(0); });
+    try {
+      await f.register("/bin/bash", exit(0));
+      expect(await (await f.start(plan({ silent }))).exit).toMatchObject({ kind: "exited", code: 1 });
+      const output = f.shell.output.join("");
+      expect(output).toContain("spawn /bin/bash EBADF:");
+      expect(output).toContain("missing inherited descriptor");
+      expect(output.match(/error: spawn/g)?.length).toBe(1);
+      expect(output).not.toContain("runtime: process start failed");
+    } finally { await f.dispose(); }
+  });
+}
+
+testRuntime("asynchronous preparation retains detail without an extra child controller", async f => {
+  await f.register("/bin/bash", exit(0), () => Promise.reject(Object.assign(new Error("denied preparation"), { code: "EACCES" })));
+  expect(await (await f.start(plan({ silent: true }))).exit).toMatchObject({ kind: "exited", code: 1 });
+  const output = f.shell.output.join("");
+  expect(output).toContain("EACCES: Error: denied preparation");
+  expect(output.match(/error: spawn/g)?.length).toBe(1);
+  expect(output).not.toContain("runtime: process start failed");
+});
+
 test("live inherited stderr rights and partial/EAGAIN writes finish before child admission", async () => {
   const notification = new Int32Array(new SharedArrayBuffer(4));
   const entered = Promise.withResolvers<void>();

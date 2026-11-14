@@ -19,5 +19,7 @@ Bash unchanged; the guest remains responsible for rewriting and argument quoting
 The prototype uses pinned Waffle source internals where the release has no package
 subpath export. It is not added to the published package file list. A production binding
 requires independent implementation review, native precommit fallback, live descriptor
-handoff and actual maintained-engine acceptance. In particular, the normal Bash
-installer's controller must compose with startup-error capture before enablement.
+handoff and actual maintained-engine acceptance. Child controllers belong to their
+installed launchers; runtime-proc diagnostic retention supplies startup details without
+an extra continuation controller. Synchronous reservation errors use the release's
+bounded diagnostic encoding.
