@@ -797,7 +797,10 @@ bool require_loaded(JSContext* cx, unsigned argc, JS::Value* vp) {
 #endif
   recovery_outcome("no failure");
   JS::RootedObject module(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
-  if (!JS::ModuleLink(cx, module)) return false;
+  if (!JS::ModuleLink(cx, module)) {
+    recovery_outcome("link failed");
+    return false;
+  }
   SnapshotScope scope;
   EntryVector candidates;
   bool pinned = !snapshot(module, candidates);
