@@ -11,6 +11,8 @@
 mod next_swc;
 #[path = "oxc_memory.rs"]
 mod oxc_memory;
+#[path = "rolldown_memory.rs"]
+mod rolldown_memory;
 
 use std::io::Read as _;
 use std::rc::Rc;
@@ -419,7 +421,8 @@ impl State {
             return Ok((Rc::from(code), Format::Esm));
         }
         let stdin = self.main_arg.borrow().as_str() == "-" && self.main.borrow().as_str() == path;
-        let cacheable = !oxc_memory::depends_on_binary(path);
+        let cacheable =
+            !oxc_memory::depends_on_binary(path) && !rolldown_memory::depends_on_binary(path);
         if stdin && let Some(hit) = self.sources.borrow().get(path) {
             return Ok(hit.clone());
         }
@@ -496,6 +499,7 @@ impl State {
     ) -> Result<crate::Transpiled, NativeError> {
         let adapted = next_swc::adapt(raw, path);
         let adapted = oxc_memory::adapt(&adapted, path);
+        let adapted = rolldown_memory::adapt(&adapted, path);
         self.transpiler
             .prepare_module(&adapted, path, loader, &mut |request| {
                 self.intern_import_request(request)
@@ -975,7 +979,7 @@ mod tests {
     }
 
     #[test]
-    fn oxc_loaders_requalify_after_prepared_source_cache_hits() {
+    fn host_oxc_loaders_requalify_after_prepared_source_cache_hits() {
         let fixture = TestModule::new("oxc-external-cache");
         let directory = fixture
             .0
@@ -1012,6 +1016,51 @@ mod tests {
         let first = state.load_source(&unrelated).unwrap().0;
         let second = state.load_source(&unrelated).unwrap().0;
         assert!(Rc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn host_rolldown_loaders_requalify_after_prepared_source_cache_hits() {
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        for filename in [
+            "rolldown-binding.wasi.cjs",
+            "rolldown-binding.wasi-browser.js",
+        ] {
+            let fixture = TestModule::new("rolldown-external-cache");
+            let directory = fixture.0.join("node_modules/@rolldown/binding-wasm32-wasi");
+            std::fs::create_dir_all(&directory).unwrap();
+            let loader = directory.join(filename);
+            let path = loader.to_str().unwrap();
+            let stock = "module.exports = { initial: 16384 };";
+            std::fs::write(&loader, stock).unwrap();
+            let load = || state.load_source(path).unwrap().0.to_string();
+            assert_eq!(load(), stock);
+            let seed_prepared_reduction = || {
+                state.sources.borrow_mut().insert(
+                    path.to_owned(),
+                    (Rc::from("module.exports = { initial: 1001 };"), Format::Cjs),
+                );
+            };
+            let binary = directory.join("rolldown-binding.wasm32-wasi.wasm");
+            seed_prepared_reduction();
+            std::fs::write(&binary, b"changed").unwrap();
+            assert_eq!(load(), stock);
+            seed_prepared_reduction();
+            std::fs::write(
+                directory.join("rolldown-binding.wasm32-wasi.debug.wasm"),
+                b"debug",
+            )
+            .unwrap();
+            assert_eq!(load(), stock);
+            seed_prepared_reduction();
+            std::fs::remove_file(&binary).unwrap();
+            assert_eq!(load(), stock);
+            seed_prepared_reduction();
+            std::fs::remove_file(&loader).unwrap();
+            assert!(state.load_source(path).is_err());
+        }
     }
 
     #[cfg(feature = "engine-host")]

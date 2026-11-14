@@ -2,6 +2,7 @@ import type { ScopedTransport } from "./transport";
 import { ENGINES, isEngine } from "../../web/src/engine-loader";
 import type { Framework } from "./catalog";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
+import { admit, awaitWithin, type Admission } from "./scope";
 interface Playground {
   profile: PlaygroundProfile;
   shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void };
@@ -17,8 +18,14 @@ function expression<A, R>(operation: (input: A) => R, input: A): string { return
 export class ObservationTimeout extends Error {}
 export async function until<T>(operation: () => Promise<T>, accept: (value: T) => boolean, timeoutMs: number): Promise<T> {
   const end = Date.now() + timeoutMs;
+  const admission: Admission = {
+    signal: new AbortController().signal,
+    deadline: end,
+    expiryReason: new ObservationTimeout(`Timed out after ${timeoutMs} ms waiting for an observation`),
+  };
   while (true) {
-    const value = await operation();
+    admit(admission);
+    const value = await awaitWithin(operation(), admission);
     if (accept(value)) return value;
     if (Date.now() >= end) throw new ObservationTimeout(`Timed out after ${timeoutMs} ms; last observation: ${JSON.stringify(value)}`);
     await Bun.sleep(Math.min(100, end - Date.now()));
