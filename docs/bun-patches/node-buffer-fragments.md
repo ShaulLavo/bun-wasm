@@ -14,6 +14,32 @@ before web initialization. This is a browser-target Port change motivated by the
 Node/Bun-compatible export contract, with no new Blob or File implementation copied
 from upstream.
 
+Raw encoding helper installation delegates to the original TypeScript adapter
+documented in [Buffer encoding bindings](buffer-encoding-bindings.md). It keeps
+the raw binding range and coercion policies separate from public `write` and
+`toString` overload handling.
+
+`fromArrayBuffer` preserves an omitted or undefined length when constructing
+`FastBuffer`. Passing the computed remaining byte count instead creates a fixed
+length typed-array view, which becomes out of bounds after a backing-store
+shrink. Negative integer offsets now fail with `ERR_BUFFER_OUT_OF_BOUNDS`
+before length coercion, while negative fractions that truncate to zero remain
+valid. Native Bun 1.4.4 and Uint8Array controls confirm tracking through shrink,
+regrow and growable shared storage, while explicit lengths remain fixed and all
+views share the original storage. This is an original adapter correction, with
+no newly copied upstream source. The regression fixture and production-factory
+tests are `tests/fixtures/buffer-resizable-construction` and
+`scripts/buffer-resizable-construction.test.ts`. They cover the three subprocess
+programs at Bun `9510e74152073d850a18758ca41114d8f214ffa6`,
+`test/js/node/buffer.test.js` lines 4415 and 4691, in the factory directly.
+The encoding and ordinary ArrayBuffer constructor fixtures select QuickJS, JSC
+and Browser. Every resizable ArrayBuffer assertion remains in the RAB fixture,
+which selects QuickJS and Browser. The JSC WASI patch explicitly returns null
+from `tryAllocateResizableMemory`, so RAB and GSAB construction fail before
+Buffer is used. The full shared-growth assertion remains in the blocking
+host/source controls. Those unavailable guest capabilities are not passing
+coverage. No constructor probe, error catch or OOM suppression selects tests.
+
 
 `buffer_fill_args.ts` is an original adapter, not copied upstream code. It selects
 Buffer.fill's encoding overload before the existing Buffer adapter validates the
@@ -34,7 +60,7 @@ TypeScript stripping script. No upstream source was copied for this fix.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays; preserve native empty-copy range ordering, delegate fill overload selection to the original typed adapter, and re-export the shared web `Blob`/`File` constructors without wrapping them. |
+| [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays; preserve omitted-length tracking and empty-copy range ordering, delegate fill overload selection to the original typed adapter, and re-export the shared web `Blob`/`File` constructors without wrapping them. |
 
 [Parent context](bun-patch-series.md).
 
