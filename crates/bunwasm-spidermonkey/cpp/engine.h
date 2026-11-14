@@ -67,6 +67,20 @@ void bsm_gc(void);
 void bsm_heap_info(double*, double*, double*);
 void bsm_tier_counts(uint32_t*, uint64_t*);
 #if defined(BUNSM_CONTROLS)
+typedef struct {
+  uint64_t generation;
+  uint32_t state;
+  bool mapped, linked, bodyEntered, overRecursed, importAcquired, untrackedImporter, retired;
+  size_t imports, importers;
+} bsm_module_info;
+void bsm_control_module_info(const char*, bsm_module_info*);
+const char* bsm_control_last_outcome(void);
+void bsm_control_observe(void (*)(const char*));
+void bsm_control_hold(const char*, const char*);
+bool bsm_control_held(const char*);
+bool bsm_control_resume(const char*, bsm_handle*);
+bool bsm_control_edge(const char*, const char*);
+void bsm_control_retirement(size_t*, uint32_t*);
 void bsm_control_require_promises(bsm_handle*, bsm_handle*, bsm_handle*, bsm_handle*);
 bool bsm_control_mark_handled(bsm_handle);
 bool bsm_control_require_entered(void);

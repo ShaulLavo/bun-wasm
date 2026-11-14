@@ -715,6 +715,7 @@ void natives() {
   bsm_gc();
   check(finalized.size() == 1 && finalized[0] == 100, "native finalizer exactly once");
 }
+#include "require-recovery.cpp"
 }  // namespace
 
 extern "C" bool bunsm_host_call(uint32_t id, bsm_handle, const bsm_handle* args, size_t argc, bsm_handle* out) {
@@ -775,6 +776,11 @@ extern "C" int engine_semantics_main() {
     heap_fault(!strcmp(mode, "heap-pending"));
     bsm_shutdown();
     puts("SpiderMonkey heap-exhaustion control passed");
+    return 0;
+  }
+  if (mode && !strcmp(mode, "recovery")) {
+    Value initialize(script("globalThis.recoveryRuns = {};"));
+    recovery_sweep(1);
     return 0;
   }
   {

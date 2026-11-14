@@ -18,6 +18,16 @@ The adapter targets `mozilla-firefox/firefox` revision
 
 ## Changes and reasons
 
+- The require recovery work keeps a generation entry for each mapped module,
+  with static import edges in both directions and sticky acquisition marks for
+  import operations. A snapshot follows unevaluated dependencies after linking.
+  Only a synchronous pre-entry recursion refusal can retire failed records and
+  their unevaluated importers. Validation precedes all map or edge mutation.
+  Retirement allocates nothing, and active snapshots defer entry deletion.
+  The embed-only `GetModuleEvaluationInfo` API supplies the native body-entry
+  and over-recursion classification. Pending evaluations, body failures and
+  acquired graphs keep their cached outcomes. Control-only exports inspect
+  generations, edges and retirement and park import continuations for schedules.
 - Module evaluation waits on `LoadRequestedModules` before linking and evaluating.
   Both import evaluation and synchronous require return the result capability of
   the reaction that performs the work. A handler refusal therefore rejects that
