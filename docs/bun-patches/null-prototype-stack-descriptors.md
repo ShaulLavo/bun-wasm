@@ -4,7 +4,7 @@ Successful stack values are memoized in an original WeakMap adapter, independent
 of the holder's descriptor. Mutable holders may receive a data property;
 frozen and sealed holders keep their accessor. Capture rejects non-extensible
 or non-configurable targets before native capture mutates them, matching the
-Node/V8 public contract. The two runtime-owned `stack` descriptor records are
+Node/V8 public contract. The runtime-owned `stack` descriptor records are
 constructed with null prototypes, so synthetic inherited `get` or `value` fields
 cannot change a data descriptor into an accessor or vice versa. This is a local
 data-shape correction; the hook operations, receiver identity, and property order
@@ -25,6 +25,6 @@ uses a null-prototype descriptor too. Its checked native contract is Mozilla
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`crates/bunwasm-runtime/src/js/stack_trace.ts`](#null-prototype-stack-descriptors) | Host feature | Keep the two runtime-owned `stack` descriptor records on null-prototype objects so inherited descriptor fields cannot alter their shape. |
+| [`crates/bunwasm-runtime/src/js/stack_trace.ts`](#null-prototype-stack-descriptors) | Host feature | Keep runtime-owned `stack` descriptor records on null-prototype objects so inherited descriptor fields cannot alter their shape. |
 
 [Ledger scope and pinned revisions](scope.md).

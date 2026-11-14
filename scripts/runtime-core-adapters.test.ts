@@ -125,7 +125,7 @@ const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
   bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
 };
-const originalEmbeddedBytes = { stack_trace: 5300, bun_builtins: 4092 };
+const originalEmbeddedBytes = { stack_trace: 4330, bun_builtins: 4092 };
 test("stack descriptor records are the only executable delta", () => {
   const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/stack_trace.ts"), "utf8");
   const records = stackDescriptorRecords(source);
