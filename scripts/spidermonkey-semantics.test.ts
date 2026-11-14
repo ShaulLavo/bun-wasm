@@ -23,7 +23,8 @@ test("module evaluation waits for graph loading and keeps the namespace reaction
   expect(evaluate).toContain("module_evaluate_handler");
   expect(evaluate).toContain("JS::CallOriginalPromiseThen(context, loading");
   expect(definition(shim, "bool module_evaluate_handler(")).toContain("JS::ModuleLink");
-  expect(definition(shim, "bool module_evaluate_handler(")).toContain("JS::ModuleEvaluate");
+  expect(definition(shim, "bool module_evaluate_handler(")).toContain("continue_module_evaluate(module)");
+  expect(definition(shim, "JSObject* continue_module_evaluate(")).toContain("JS::ModuleEvaluate");
   expect(definition(shim, 'extern "C" bool bsm_import(')).toContain("namespace_promise");
 });
 
@@ -147,7 +148,8 @@ test("module evaluation uses a result capability and sealed forwarding", () => {
   const evaluate = definition(shim, "bool evaluate_module(");
   const handler = definition(shim, "bool module_evaluate_handler(");
   expect(evaluate).toContain("JS::CallOriginalPromiseThen");
-  expect(handler).toContain("forward_internal(evaluated)");
+  expect(handler).toContain("continue_module_evaluate(module)");
+  expect(definition(shim, "JSObject* continue_module_evaluate(")).toContain("forward_internal(evaluated)");
   expect(handler).toContain("args.rval().setObject(*forwarded)");
   expect(handler).not.toContain("JS::AddPromiseReactions");
 });
