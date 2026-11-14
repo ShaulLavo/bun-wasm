@@ -12,7 +12,7 @@ import { admit, awaitWithin, type Admission } from "./scope";
 import type { ScopedTransport } from "./transport";
 
 export type CaptureIdentity = Readonly<{ run: string; source: Pick<Report["source"], "commit" | "dirty">; cell: string; attempt: number }>;
-export type CaptureOptions = Readonly<{ logs: string; identity: CaptureIdentity; native?: NativePort; windowMs?: number; pollMs?: number }>;
+export type CaptureOptions = Readonly<{ logs: string; identity: CaptureIdentity; native?: NativePort; windowMs?: number; pollMs?: number; onAssociated?: (target: Target) => void }>;
 export interface SafariCausalCapture {
   ownership(inner: SafariOwnershipSink | undefined): SafariOwnershipSink;
   readonly protocol: SafariProtocolSink;
@@ -166,6 +166,7 @@ class CaptureController {
     }
     const { target, scores } = association;
     if (this.native.read(target.pid)?.birth !== target.birth) throw this.block("target identity changed at attachment");
+    this.options.onAssociated?.(target);
     this.state = { kind: "armed", target, at: clock(), wall: new Date(), scores };
     this.lastConfirmed = this.state.at;
     this.append("native", { kind: "armed", target, scores, session: this.session, host: this.host, at: this.state.at });
