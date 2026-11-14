@@ -1,0 +1,8 @@
+PASS inherited registration
+PASS class registration
+PASS invalid registration
+PASS invalid result diagnostics
+PASS truthy pass and message coercion
+PASS color context
+PASS async result
+PASS async rejection
