@@ -186,18 +186,26 @@ subprocesses as well as browser cleanup. If remote shutdown cannot be proved,
 the runner retains its unique staging directory and records its removal condition
 in `fleet-cleanup.json` instead of deleting files under a live process.
 
-## Choose an install deadline
+## Phase hang caps and explicit overrides
 
-The default policy is fixed per framework, browser and engine. Reports record
-its provenance and effective limits. Campaigns never learn new budgets while
-running. An explicit
+Every framework, browser and engine gets 300,000 ms for startup, dev, render,
+click, hot reload and preview, and 600,000 ms for install and build. These caps
+catch hangs. Reports record actual elapsed times for separate speed work.
+The checked-in policy has no measurement margin or engine exceptions.
+Regenerate it with `bun scripts/goals-matrix/generate-deadlines.ts`, or verify it
+with `--check`. Campaigns never derive limits from passing attempts.
+
+An explicit
 `--timeout-ms=90000` still gives every framework install 90,000 ms unless you
 also set an install override. Cleanup keeps its existing 20,000 ms outer bound
-and shorter inner bounds. No install override changes startup, dev, render,
+and shorter inner bounds. `--build-timeout-ms=600000` sets an independent build
+limit for every framework. Builds default to 600,000 ms even when `--timeout-ms`
+is supplied. No install override changes startup, dev, render,
 click, hot reload, build, preview, browser navigation, or cleanup deadlines.
 
 To choose 110,000 ms for Nuxt's cold install while keeping the other selected
-framework installs and campaign phases at 90,000 ms, use a new report directory:
+framework installs and campaign phases at 90,000 ms, with a separate 600,000 ms
+build cap, use a new report directory:
 
 ```sh
 source env.sh
@@ -206,7 +214,7 @@ bun /work/heavy-runner/current/run.js --class browser goals-install-policy -- \
 	--asset-source=/absolute/delivery-manifest.json \
 	--output=/absolute/new-campaign --browsers=chrome,safari --engines=browser \
 	--frameworks=nuxt,astro,react-router,solidstart,tanstack-start,angular \
-	--timeout-ms=90000 --install-timeout-ms=nuxt:110000 \
+	--timeout-ms=90000 --install-timeout-ms=nuxt:110000 --build-timeout-ms=600000 \
 	--mac-lane=YOUR-LANE --mac-thread=YOUR-T3-THREAD-ID
 ```
 
@@ -223,7 +231,7 @@ For a read-only summary of independent historical runs, use the
 [framework evidence view](goals-report-view.md). It never creates a resumable campaign.
 
 Reports use schema 2. `TABLE.json` records effective phase, install and build
-deadlines for every cell, calibration provenance, explicit CLI overrides and the fixed cleanup deadline in
+deadlines for every cell, policy metadata, explicit CLI overrides and the fixed cleanup deadline in
 `deadlines`. Each phase records its own `timeoutMs`, checked against that policy
 when the report is read. `TABLE.md` shows the command and effective deadlines.
 Continuation and shard combination reject different effective policies, even
@@ -234,7 +242,7 @@ files, not continuation inputs. Start a new output directory rather than copying
 old rows into a campaign with a changed policy. Failed attempts within an
 unchanged campaign remain in the JSON when retried.
 
-### Why the Nuxt campaign chooses 110 seconds
+### Historical Nuxt install diagnostics
 
 The November 8, 2026 diagnostics completed Nuxt's install in 85.433 seconds on
 Google Chrome 157 and 97.990 seconds on native desktop Safari 26.4. These were
@@ -257,14 +265,13 @@ The exact measurement evidence is `/work/reports/goals/installs/nuxt-tail/RESULT
 Those runs used source `c55a206ed38e8cc0737bfea5f8eec1a357015cf6` and guest SHA-256
 `05952225469a7647ff726149236561cc9f54a90f6f96f0a65b2b86002eb853db`.
 
-## Measured Next build bound
+## Build hang cap
 
-Cells without a complete pass retain the original 90 second defaults and
-110 second Next build bound. Measured cells use the fixed reviewed calibration;
-Next on SpiderMonkey retains its lane's existing limits and explicit overrides.
-Cleanup retains its separate 20 second limit and shorter inner bounds.
-Reports include effective phase, install and build bounds for every cell. Historical
-90 second failures are not rewritten or resumed with a different policy.
+Every framework build defaults to 600,000 ms, including Next on SpiderMonkey.
+Cleanup retains its separate 20,000 ms limit and shorter inner bounds.
+Reports include effective phase, install and build bounds for every cell.
+Historical failures and their recorded limits are preserved. Resume requires the
+same effective policy, so changed caps require a new report directory.
 
 The Pages starter excludes only the pinned unused Turbopack and experimental
 React production runtime files from Next server tracing. A restricted-dependency
@@ -355,15 +362,38 @@ target, caller name and PID, and signal or exit code. `logs/causal-capture-settl
 names the first invalid response, any identity loss and the first initiating
 event, or `unknown`. Capture failures after arming are recorded there and never
 change the cell or cleanup result. Fleet keeps the staging directory unless that
-receipt is settled.
+receipt and the outer native-exit receipt are settled.
 
-Attribution accepts only timestamped events strictly inside the interval between
+Launchd-log attribution accepts only timestamped events strictly inside the interval between
 attachment and the last confirmed read of that same PID and kernel start time.
 An event in the uncertain interval before disappearance or PID reuse stays
 unattributed. A reader exception stops observation and records a degraded capture.
 After interrupted collection, fleet validates and saves the complete report,
 history, logs and native cleanup receipt before removing settled staging.
 
-Native qualification is pending. The first controlled run stopped before
-installation because its own control process was unreadable. Source checks
-do not establish that the current native reader or event control works on Safari.
+The same opt-in also attaches one public `EVFILT_PROC` exit subscription after
+the unique association, checking the kernel birth immediately before and after
+registration. A mismatch blocks workload admission. Exit polling continues
+independently after rusage loss, PID reuse and an invalid protocol reply. It keeps
+the original birth and never registers a replacement PID.
+
+`logs/native-exit-<uuid>.jsonl` retains all 48 raw event bytes and fields,
+registration receipts, observer clocks, protocol facts and cleanup dispatch
+boundaries. The inner capture settles first. Driver and application teardown are
+then attempted independently, preserving an original operation error if cleanup
+also fails. Only afterward does the outer owner stop polling, perform a finite
+nonblocking drain, close once and join the writer. It never waits for target death
+before cleanup. Outer teardown and writer joins use finite allowances; a resource
+that does not join remains unproved. `logs/native-exit-settlement.json` reports
+descriptor closure, resource/writer joins, cleanup failures and degraded
+observation. Fleet requires this receipt as well as the inner capture and native
+resource receipts before removing staging.
+
+Normal nonchild exit delivery is qualified on one owned launchd target exiting
+23. Safari exit delivery, nonchild signals and a native positive memory-detail bit
+remain unqualified. Missing status/detail fields stay null; no event means no
+event was observed. An exit before binding can be missed, and birth checks are
+not atomic with registration. Receipt times do not identify the kernel exit time
+or the initiating actor. A cleanup-phase receipt cannot establish that cleanup
+caused death. See [the ABI record](bun-patches/goals-safari-native-exit.md) for
+source pins, qualification and interpretation limits.

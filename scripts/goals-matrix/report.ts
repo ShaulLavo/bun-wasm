@@ -24,9 +24,10 @@ export function deadlineMarkdown(policy: DeadlinePolicy): string {
   for (const framework of frameworks) lines.push(`| ${framework.label} | ${policy.installTimeouts[framework.id]} | ${policy.buildTimeouts[framework.id]} |`);
   if (!policy.calibration) return lines.concat([""]).join("\n");
   const metadata = policy.calibration;
-  lines.push("", `${metadata.decision}. Decision date: ${metadata.decisionDate}. Margin: ${metadata.margin * 100}%. ${metadata.selection}.`, "",
-    `Frozen input: ${metadata.source.path}. SHA-256: ${metadata.source.sha256}. Run: ${metadata.source.run}. Recorded: ${metadata.source.createdAt}.`, "",
-    "Fixed reviewed limits; campaign execution never recalibrates. No complete pass retains defaults. In-guest engines never widen. Next/SpiderMonkey is exempt. Explicit CLI overrides take precedence and are recorded below. Cleanup and inner bounds are unchanged.", "", "```json", JSON.stringify(policy.overrides, null, 2), "```", "",
+  lines.push("", `${metadata.decision}. Decision date: ${metadata.decisionDate}.`);
+  if (!("kind" in metadata)) lines.push("", `Historical calibration margin: ${metadata.margin * 100}%. ${metadata.selection}.`, "",
+    `Frozen input: ${metadata.source.path}. SHA-256: ${metadata.source.sha256}. Run: ${metadata.source.run}. Recorded: ${metadata.source.createdAt}.`);
+  lines.push("", "Limits catch hangs. Actual phase times remain recorded for speed work. Explicit CLI overrides take precedence and are recorded below. Cleanup and inner bounds are unchanged.", "", "```json", JSON.stringify(policy.overrides, null, 2), "```", "",
     "| Framework | Browser | Engine | Phase in ms | Install in ms | Build in ms |", "| --- | --- | --- | ---: | ---: | ---: |");
   for (const framework of frameworks) {
     lines.push(...browsers.flatMap(browser => engines.map(engine => {

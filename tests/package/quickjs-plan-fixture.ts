@@ -45,12 +45,12 @@ export function quickjsPair(kind: PairedEngine = "quickjs", maximumPages?: numbe
 }
 
 /** Synthetic decoder/receipt inputs only; no executable worker or production proof. */
-export function sharedQuickjsPair(): { core: Uint8Array<ArrayBuffer>; side: Uint8Array<ArrayBuffer> } {
+export function sharedQuickjsPair(kind: PairedEngine = "quickjs"): { core: Uint8Array<ArrayBuffer>; side: Uint8Array<ArrayBuffer> } {
   const memory = section(2, [1].concat(name("env"), name("memory"), [2, 3, 1, 0x80, 0x40]));
   const parts = [section(1, [1, 0x60, 0, 0]), memory, section(3, [1, 0])];
   const code = section(10, [1].concat(body([])));
   const exported = (names: string[]) => section(7, [names.length].concat(...names.map(label => entry(label, 0, 0))));
   const core = module(parts.concat([exported(["bun_core_bind_engine", "core_initialize_memory", "__wasm_apply_data_relocs", "__wasm_call_ctors"]), code]));
-  const side = module(parts.concat([exported(["quickjs_initialize_memory", "quickjs_apply_data_relocs", "quickjs_call_ctors", "quickjs_register", "quickjs_run"]), code]));
-  return { core: tagProgramCore(appendCustomSection(core, "dylink.0", new Uint8Array()), "quickjs"), side };
+  const side = module(parts.concat([exported([`${kind}_initialize_memory`, `${kind}_apply_data_relocs`, `${kind}_call_ctors`, `${kind}_register`, `${kind}_run`]), code]));
+  return { core: tagProgramCore(appendCustomSection(core, "dylink.0", new Uint8Array()), kind), side };
 }

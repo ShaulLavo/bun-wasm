@@ -53646,11 +53646,13 @@ JSValue JS_JSONStringify(JSContext *ctx, JSValueConst obj,
                     JS_FreeValue(ctx, v);
                     goto exception;
                 }
-                if (!JS_ToBoolFree(ctx, present)) {
-                    JS_SetPropertyInt64(ctx, jsc->property_list, j++, v);
-                } else {
+                if (JS_ToBoolFree(ctx, present)) {
                     JS_FreeValue(ctx, v);
+                    continue;
                 }
+                if (JS_DefinePropertyValueInt64(ctx, jsc->property_list, j++, v,
+                                                JS_PROP_C_W_E | JS_PROP_THROW) < 0)
+                    goto exception;
             }
         }
     }
@@ -61313,7 +61315,8 @@ bool JS_bunwasm_IsArrayBufferLike(JSValueConst obj) {
 
 bool JS_bunwasm_IsDetachableArrayBuffer(JSValueConst obj) {
     JSArrayBuffer *buffer = JS_GetOpaque(obj, JS_CLASS_ARRAY_BUFFER);
-    return buffer && !buffer->detached && !buffer->wasm_memory;
+    /* An immutable buffer cannot be transferred. JS_DetachArrayBuffer would not refuse it. */
+    return buffer && !buffer->detached && !buffer->wasm_memory && !buffer->immutable;
 }
 
 /* A non-resizable WebAssembly.Memory buffer over 'len' bytes at 'buf', which

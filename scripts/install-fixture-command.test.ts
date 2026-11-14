@@ -63,7 +63,7 @@ function workflowStep(name: string): string {
 function ciTargets(paths: readonly string[]) {
   const selection = workflowStep("Blocking native fixture checks").match(/INSTALL_ENGINES: \$\{\{ (.+) && '([^']+)' \|\| '([^']+)' \}\}/);
   if (!selection) throw new Error("Missing explicit installer producer selection");
-  expect(selection[1]).toBe("needs.quality.outputs.jsc == 'true'");
+  expect(selection[1]).toBe("needs.selection.outputs.jsc == 'true'");
   for (const name of ["Start the JSC Cargo guest build", "Build the JSC Cargo guest"]) {
     expect(workflowStep(name)).toContain(`if: ${selection[1]}\n`);
   }

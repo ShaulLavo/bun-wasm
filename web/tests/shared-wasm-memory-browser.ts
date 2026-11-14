@@ -2,6 +2,7 @@
 // Browser host. No mock: Chromium instantiates the group core and side through Waffle's worker.
 // source env.sh && BUN_WASM_PROFILE_PROGRAM=<group>/bun.wasm bun web/tests/shared-wasm-memory-browser.ts chromium
 import { strict as assert } from "node:assert";
+import { sharedBrowserClocks, verifySpiderMonkeyStackWitness } from "../../scripts/spidermonkey-native-qualification";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Browser, BrowserType, Page } from "playwright";
@@ -10,14 +11,13 @@ import { stageFixtureTree } from "../../scripts/fixture-tree";
 import { oxcOutputs, oxcTreeVariable, requireOxcEnvironment, requireOxcTree } from "../../scripts/real-oxc-consumer";
 import { buildBrowserEntries } from "../../scripts/browser-build";
 import { assertOwnership, OWNERSHIP_ENTRY, pageHost, type PageHost } from "./parser-reserve-ownership.ts";
+import { ADDRESS_SPACE, ADDRESS_SPACE_ENTRY, DEBT_ENTRY, sharedWasmBrowserPlan } from "./shared-wasm-browser-plan";
 
 const web = resolve(import.meta.dir, "..");
 const repository = resolve(web, "..");
 const fixtureSource = join(repository, "tests/fixtures/shared-wasm-memory");
 /** The 2 GiB address-space fixture the native host also runs, staged beside the shared one. */
 const addressSpaceSource = join(repository, "tests/fixtures/shared-group-address-space");
-const ADDRESS_SPACE = "address-space";
-const ADDRESS_SPACE_ENTRY = `${ADDRESS_SPACE}/guest.ts`;
 const oxcTree = process.env[oxcTreeVariable];
 
 let selectedSpiderMonkey = false;
@@ -37,7 +37,9 @@ const cleanup = () => cleaning ??= (async () => {
   }
 })();
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
-const deadline = setTimeout(() => { console.error("shared Wasm memory browser deadline"); void cleanup().finally(() => process.exit(1)); }, 300_000);
+const driverStarted = performance.now();
+const expired = () => { console.error("shared Wasm memory browser deadline"); void cleanup().finally(() => process.exit(1)); };
+let deadline = setTimeout(expired, sharedBrowserClocks("quickjs").driverMs);
 
 async function prepareSite(program: string): Promise<string> {
   const coreBytes = await Bun.file(program).bytes();
@@ -71,6 +73,10 @@ async function prepareSite(program: string): Promise<string> {
   if (kind === "spidermonkey" && tier !== "interp" && tier !== "pbl") throw new Error("Select an explicit SpiderMonkey tier: interp or pbl");
   await Bun.write(join(out, "program/env.json"), JSON.stringify(kind === "spidermonkey" ? { BUN_WASM_SPIDERMONKEY_TIER: tier, BUN_WASM_SPIDERMONKEY_TRACE: "1" } : {}));
   selectedSpiderMonkey = kind === "spidermonkey";
+  if (selectedSpiderMonkey) {
+    clearTimeout(deadline);
+    deadline = setTimeout(expired, Math.max(0, sharedBrowserClocks(kind).driverMs - (performance.now() - driverStarted)));
+  }
 
   return out;
 }
@@ -90,7 +96,6 @@ function serve(out: string): number {
 type OwnerCounters = { members: number; retained: number; regions: number; holds: number; pins: number; watches: number; published: number };
 type StackProof = { low: number; high: number; stackBytes: number; pointer: number; samePointer: boolean };
 type Result = { hostStacks?: readonly StackProof[]; done: true; thrown?: string; code?: number; error?: string; stdout?: string; stderr?: string; wallMs?: number; peak?: { groups: number; regions: number; holds: number; committedBytes: number }; groups?: readonly OwnerCounters[]; ended?: readonly OwnerCounters[]; budget?: number; agentCloseDelays?: Readonly<Record<string, number>> };
-const DEBT_ENTRY = "failed-stop.ts";
 
 /** Every owner this run created has ended and holds nothing; the page budget is back to zero. */
 function assertRetired(value: Result): void {
@@ -101,12 +106,12 @@ function assertRetired(value: Result): void {
   assert.equal(value.budget, 0, "the page budget is released with the last group");
 }
 
-async function result(page: Page): Promise<Result> {
+async function result(page: Page, entry: string): Promise<Result> {
   // A blocked guest cannot explain itself, so the page reports what it has seen so far.
   const report = () => void page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryProgress")?.()).then(progress => console.log(JSON.stringify({ progress })), () => {});
   const progress = setInterval(report, 20_000);
   try {
-    await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: oxcTree === undefined ? 240_000 : 90_000 });
+    await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: oxcTree === undefined ? sharedBrowserClocks(selectedSpiderMonkey ? "spidermonkey" : "quickjs", entry).pageMs : 90_000 });
     return await page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryResult"));
   } finally { clearInterval(progress); }
 }
@@ -118,7 +123,7 @@ async function runEntry(name: string, port: number, entry: string): Promise<Entr
   const pageErrors: string[] = [];
   page.on("pageerror", error => pageErrors.push(error.message));
   await page.goto(`http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}${oxcTree === undefined ? "" : "&oxc=1"}`);
-  const value = await result(page);
+  const value = await result(page, entry);
   const host = await pageHost(page, name);
   console.log(JSON.stringify({ browser: name, version: browser!.version(), entry, host, ...value, pageErrors }));
   await page.close();
@@ -176,16 +181,10 @@ function assertSpiderMonkeyCanary({ value, pageErrors }: EntryRun): void {
   assert.equal(value.code, 0, value.stderr ?? String(value.error));
   assert.deepEqual(pageErrors, []);
   assert.equal(value.stdout, "spidermonkey canary 599994\n");
-  const match = /stack_low=(0x[\da-f]+) stack_high=(0x[\da-f]+) stack_bytes=(\d+) register_depth=(\d+) entry_depth=(\d+) interrupt_polls=(\d+) portable_baseline_entries=(\d+)/.exec(value.stderr ?? "");
-  assert.ok(match, "missing actual SpiderMonkey execution counters");
-  const [, low, high, bytes, register, , polls, entries] = match.map(Number);
-  assert.equal(register, 16);
-  assert.equal(bytes, 8 << 20);
-  assert.ok(polls! > 0);
+  const { polls, entries } = verifySpiderMonkeyStackWitness(value.stderr ?? "", value.hostStacks ?? []);
+  assert.ok(polls > 0);
   if (process.env.BUN_WASM_SPIDERMONKEY_TIER === "interp") assert.equal(entries, 0);
-  else assert.ok(entries! > 0, "selected portable baseline never executed");
-  assert.ok((value.hostStacks?.length ?? 0) >= 2, "core and side imports were not observed");
-  for (const stack of value.hostStacks!) assert.deepEqual(stack, { type: "spidermonkey-stack-proof", low, high, stackBytes: bytes, pointer: high, samePointer: true });
+  else assert.ok(entries > 0, "selected portable baseline never executed");
   assertRetired(value);
 }
 
@@ -215,7 +214,7 @@ function assertSpiderMonkeyReentry({ value, pageErrors }: EntryRun): void {
 function assertOxc(entry: string, { value, pageErrors }: EntryRun): void {
   assert.equal(value.thrown, undefined, String(value.thrown));
   assert.equal(value.code, 0, value.stderr ?? String(value.error));
-  assert.ok(entry === "index.ts" || entry === "direct.ts");
+  assert.ok(entry === "index.ts" || entry === "direct.ts" || entry === "async.ts");
   assert.equal(value.stdout, oxcOutputs[entry]);
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(value.groups, [], "the Oxc group is released after the supported stop");
@@ -225,15 +224,14 @@ function assertOxc(entry: string, { value, pageErrors }: EntryRun): void {
 async function runBrowser(type: BrowserType, name: string, port: number, kind: string): Promise<void> {
   launching = type.launch({ headless: true, downloadsPath: join(scratch!, "downloads") });
   browser = await launching;
-  if (selectedSpiderMonkey) {
+  const plan = sharedWasmBrowserPlan(kind, oxcTree, process.env.SHARED_WASM_ENTRY);
+  if (plan.spiderMonkeyCanaries) {
     assertSpiderMonkeyCanary(await runEntry(name, port, "spidermonkey-canary.ts"));
     assertSpiderMonkeyRecursion(await runEntry(name, port, "spidermonkey-recursion.ts"));
     assertSpiderMonkeyReentry(await runEntry(name, port, "spidermonkey-reentry.ts"));
   }
-  const override = process.env.SHARED_WASM_ENTRY;
-  const entries = oxcTree !== undefined ? Object.keys(oxcOutputs) : override ? [override] : ["browser-guest.ts", OWNERSHIP_ENTRY, DEBT_ENTRY, ADDRESS_SPACE_ENTRY];
   const runs = [];
-  for (const entry of entries) runs.push({ entry, run: await runEntry(name, port, entry) });
+  for (const entry of plan.entries) runs.push({ entry, run: await runEntry(name, port, entry) });
   await browser.close();
   browser = undefined;
   launching = undefined;

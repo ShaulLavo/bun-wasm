@@ -597,7 +597,7 @@ test("DELETE session timeout propagates and remains the cached close outcome", a
 });
 
 test.each(["safari", "iphone-safari"] as const)("%s session cleanup retains its inner allowance when phase deadlines tighten", async browser => {
-  const limits = cellDeadlines(campaignDeadlines(), { framework: "hono", browser: "safari", engine: "browser" });
+  const limits = cellDeadlines(campaignDeadlines(1470), { framework: "hono", browser: "safari", engine: "browser" });
   expect(limits.timeoutMs).toBe(1470);
   const driver = fixture({ capabilities: browser === "safari" ? desktop : iphone, intercept: async call => {
     if (call.path === "/session/owned" && call.method === "DELETE") await Bun.sleep(1800);

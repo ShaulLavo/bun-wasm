@@ -34,7 +34,7 @@ function checkout(): { head: string; tree: string } {
 }
 
 /** sha256 of every file under `dir`, by `/`-separated relative path, sorted. */
-function inventory(dir: string): Record<string, string> {
+export function siteInventory(dir: string): Record<string, string> {
   const files: Record<string, string> = {};
   const walk = (at: string) => {
     for (const entry of readdirSync(at).sort()) {
@@ -69,7 +69,7 @@ export function buildSite(out: string): SiteIdentity {
     source,
     receipt,
     guest: { sha256: sha256(guest), bytes: guest.byteLength, gzipSha256: sha256(readFileSync(join(out, "site/bun-browser.wasm.gz"))) },
-    files: inventory(join(out, "site")),
+    files: siteInventory(join(out, "site")),
   };
   writeFileSync(join(out, "site.json"), `${JSON.stringify(identity, null, 1)}\n`);
   return verifySite(out);
@@ -80,7 +80,7 @@ export function verifySite(out: string): SiteIdentity {
   const source = checkout();
   if (identity.source.head !== source.head || identity.source.tree !== source.tree) throw new Error(`Site built for ${identity.source.head}, not this checkout ${source.head}`);
   const site = join(out, "site");
-  const files = inventory(site);
+  const files = siteInventory(site);
   const listed = Object.keys(identity.files);
   const extra = Object.keys(files).filter(path => !(path in identity.files));
   const changed = listed.filter(path => files[path] !== identity.files[path]);

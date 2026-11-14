@@ -649,17 +649,6 @@ fn call_loader(method: &str, args: &[HVal]) -> Result<HVal, HVal> {
     call(&get(&loader, method)?, &loader, args)
 }
 
-fn wasm_capacity() -> Val {
-    #[cfg(target_arch = "wasm32")]
-    {
-        Val::Num((core::arch::wasm32::memory_size(0) * 65536) as f64)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Val::Null
-    }
-}
-
 /// Hermes. A unit handle: the runtime is a thread-local in the shim (one per process).
 #[derive(Clone, Copy)]
 pub struct Hermes;
@@ -968,7 +957,7 @@ impl Engine for Hermes {
             .set("external", memory_counter(snapshot.external))
             .set("arrayBuffers", Val::Null)
             .set("arrayBufferCount", Val::Null)
-            .set("wasmCapacity", wasm_capacity())
+            .set("wasmCapacity", crate::engine::wasm_capacity())
             .set("failedAllocation", Val::Null)
             .into()
     }

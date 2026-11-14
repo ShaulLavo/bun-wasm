@@ -20,7 +20,7 @@
         "scripts/performance/lifecycle-selection.ts",
         "scripts/performance/lifecycle-profile.ts",
         "scripts/performance/fixtures/lifecycle-process.ts",
-        "scripts/goals-matrix/calibrate-deadlines.ts",
+        "scripts/goals-matrix/generate-deadlines.ts",
         "scripts/goals-matrix/policy-metadata.ts",
         "scripts/goals-matrix/iphone-mac.ts",
         "scripts/c1/contract-fixture.ts",

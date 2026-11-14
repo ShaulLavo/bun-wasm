@@ -423,8 +423,20 @@
   const localMemories = new Map<number, number>();
   const localModules = new Map<number, BunWasm.WasmModule>();
   const moduleTokens = new WeakMap<BunWasm.WasmModule, number>();
-  type PendingPublication = { token: number; users: number; committed: boolean; forget: () => void };
+  /** One prepared send: the publications it refers to, and whether it committed once it is known. */
+  type PublicationPlan = { used: Set<PendingPublication>; outcome: boolean | null };
+  /**
+   * A publication no committed send has named yet. `holders` are the plans that refer to it.
+   * `spacing` and `skip` pace the withdrawal of one nobody holds while the host gives no answer.
+   */
+  type PendingPublication = { token: number; holders: Set<PublicationPlan>; committed: boolean; forget: () => void; spacing: number; skip: number };
   const pendingPublications = new Map<number, PendingPublication>();
+  /** Plans that refer to a publication and have not released every reference. */
+  const openPlans = new Set<PublicationPlan>();
+  /** A withdrawal's third answer (nested_wire.rs): the group will never withdraw it for this member. */
+  const WITHDRAW_REFUSED = 2;
+  /** The most settles an unanswered withdrawal lets pass between two tries. */
+  const MAX_SPACING = 1024;
   function cloneError(reason: unknown) { return new DOMException(message(reason), 'DataCloneError'); }
   function directoryToken(id: string, kind: string) {
     const [prefix, value] = id.split('/');
@@ -477,52 +489,110 @@
     memoryBufferStates.set(buffer, state);
     return state;
   }
-  function settlePublication(pending: PendingPublication, committed: boolean) {
-    pending.committed ||= committed;
-    if (--pending.users !== 0) return;
+  // Settling a send can be interrupted anywhere and is then run again. So nothing below counts:
+  // each step is an assignment or a set or map operation that does nothing the second time,
+  // and whatever names the work still owed is removed last.
+  function withdrawalRefused(token: number) {
+    if (typeof process === 'undefined' || typeof process.emitWarning !== 'function') return;
+    process.emitWarning(`Shared publication ${token} could not be withdrawn and stays until its group ends: the group no longer serves this member`);
+  }
+  /**
+   * Whether an uncommitted publication is settled. Only the host's own answer settles it:
+   * withdrawn, absent, or refused for good. Anything thrown is no answer, whatever it says. The
+   * bridge, the nested exchange or the host failed the call somewhere on its way in or out, an
+   * error reply is only what the host caught, and none of that says whether the group owner
+   * acted. A token is issued once, so asking again withdraws that one publication or is answered
+   * "absent", and reaches nothing else.
+   */
+  function withdraw(pending: PendingPublication) {
+    pending.forget();
+    let answer: number;
+    try { answer = native.withdrawShared(pending.token); }
+    catch { return false; }
+    // The host's word that this member can never withdraw it: given up, and said so.
+    if (answer === WITHDRAW_REFUSED) withdrawalRefused(pending.token);
+    return true;
+  }
+  /** The record itself is the debt: it stays listed until the publication is committed or gone. */
+  function finishPublication(pending: PendingPublication) {
+    if (pending.holders.size) return;
+    // A token of 0 was never published: the native refused, and there is nothing to withdraw.
+    if (pending.token && !pending.committed && !withdraw(pending)) {
+      // Still owed, with no limit on how long. Listed, so the debt outlives the plan that is
+      // about to forget it. Each try that gets no answer doubles the settles until the next,
+      // so a host that never answers is asked ever more rarely, not on every loop step.
+      pendingPublications.set(pending.token, pending);
+      pending.spacing = Math.min(pending.spacing * 2 || 1, MAX_SPACING);
+      pending.skip = pending.spacing - 1;
+      return;
+    }
     pendingPublications.delete(pending.token);
-    if (pending.committed) return;
-    // Cleanup cannot replace the clone error when a member is stopping.
-    try { pending.forget(); native.withdrawShared(pending.token); } catch { /* member stopping */ }
+  }
+  function finishPlan(plan: PublicationPlan) {
+    for (const pending of plan.used) {
+      // Recorded before the reference goes, so one committed send keeps the publication.
+      if (plan.outcome) pending.committed = true;
+      pending.holders.delete(plan);
+      finishPublication(pending);
+      plan.used.delete(pending);
+    }
+    openPlans.delete(plan);
+  }
+  /** Finishes what an interrupted settlement left: plans with an outcome, then records nobody holds. */
+  function settlePublications() {
+    for (const plan of openPlans) if (plan.outcome !== null) finishPlan(plan);
+    for (const pending of pendingPublications.values()) {
+      if (pending.skip > 0) pending.skip--;
+      else finishPublication(pending);
+    }
   }
   function beginPublication(): BunWasm.SharedPublication {
-    const used = new Set<PendingPublication>();
-    let settled = false;
+    const plan: PublicationPlan = { used: new Set(), outcome: null };
+    /** Refers to a publication another plan staged and nobody committed yet. The plan lists the
+     * record before the record lists the plan, so an interruption leaves nothing unreleasable. */
     function using(token: number) {
       const pending = pendingPublications.get(token);
-      if (pending && !used.has(pending)) { used.add(pending); pending.users++; }
+      if (!pending) return token;
+      openPlans.add(plan); plan.used.add(pending); pending.holders.add(plan);
       return token;
     }
-    function staging(token: number, forget: () => void) {
-      pendingPublications.set(token, { token, users: 0, committed: false, forget });
-      return using(token);
+    /** A record for a publication about to be made. The plan lists it before the native runs, so
+     * the plan's abort finds the token whatever interrupts the bookkeeping that follows. */
+    function draft(forget: (token: number) => void) {
+      openPlans.add(plan);
+      const pending: PendingPublication = { token: 0, holders: new Set([plan]), committed: false, forget: () => forget(pending.token), spacing: 0, skip: 0 };
+      plan.used.add(pending);
+      return pending;
     }
     function settle(committed: boolean) {
-      if (settled) return;
-      settled = true;
-      for (const pending of used) settlePublication(pending, committed);
-      used.clear();
+      if (plan.outcome === null) plan.outcome = committed;
+      // What an interruption leaves is still listed, and the service's `settle` finishes it.
+      try { finishPlan(plan); } catch { /* still listed */ }
     }
     function publishedMemory(state: MemoryState) {
       if (state.kind !== 'shared') throw cloneError('Only shared WebAssembly memories can be sent to a worker');
       if (state.token !== undefined) return using(state.token);
-      let token: number;
-      try { token = native.publishSharedMemory(state.resource); }
+      // Only this token's traces: the memory may have been published again under another.
+      const pending = draft(token => { if (state.token === token) state.token = undefined; localMemories.delete(token); });
+      try { pending.token = native.publishSharedMemory(state.resource); }
       catch (error) { throw cloneError(error); }
-      state.token = token;
-      if (!state.plain) localMemories.set(token, state.resource);
-      return staging(token, () => { state.token = undefined; localMemories.delete(token); });
+      // Other plans find the token through `state` only once its record is listed.
+      pendingPublications.set(pending.token, pending);
+      state.token = pending.token;
+      if (!state.plain) localMemories.set(pending.token, state.resource);
+      return pending.token;
     }
     function publishedModule(info: BunWasm.WasmModule) {
       if (info.backend !== 'nested') throw cloneError('Only WebAssembly modules with a shared memory can be sent to a worker');
       const known = moduleTokens.get(info);
       if (known !== undefined) return using(known);
-      let token: number;
-      try { token = native.publishSharedModule(info.id); }
+      const pending = draft(token => { if (moduleTokens.get(info) === token) moduleTokens.delete(info); localModules.delete(token); });
+      try { pending.token = native.publishSharedModule(info.id); }
       catch (error) { throw cloneError(error); }
-      moduleTokens.set(info, token);
-      localModules.set(token, info);
-      return staging(token, () => { moduleTokens.delete(info); localModules.delete(token); });
+      pendingPublications.set(pending.token, pending);
+      moduleTokens.set(info, pending.token);
+      localModules.set(pending.token, info);
+      return pending.token;
     }
     function reference(buffer: SharedArrayBuffer): BunWasm.SharedReference {
       const state = memoryBufferStates.get(buffer) ?? plainBufferState(buffer);
@@ -538,6 +608,7 @@
   }
   internal.groupSharedObjects = {
     begin: beginPublication,
+    settle: settlePublications,
     read: reference => deliveredBuffer(attachedMemory(directoryToken(reference.id, 'buf')), reference.byteLength),
     readWasm(reference) {
       if (reference.id.startsWith('mod/')) return attachedModule(directoryToken(reference.id, 'mod'));
