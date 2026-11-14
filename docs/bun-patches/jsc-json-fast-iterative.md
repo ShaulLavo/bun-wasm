@@ -19,7 +19,14 @@ Container checks, reservation, opening, advancement, and closing stay inline on 
 path. A frame index comes from the nonempty drain stack and remains valid across a push;
 the accessor reloads vector storage and checks that invariant in debug builds. Publication
 uses the capacity already reserved before opening the container. A pop shrinks its roots
-once. Property enumeration tests for descent only after a value can push a frame.
+once. Property enumeration tests for descent after the generic value append. Its callback
+keeps the rooted container and structure cells, while the parent cursor is stored by frame
+index after descent. The physical table walk uses a local entry pointer and returns its next
+index. Output positions and finished-frame counts are cached across buffer stores.
+
+Root publication and table acquisition are inlined at their JSON call sites, retaining
+`MarkedVector` registration and overflow handling. Fixed leaf output is forced inline only
+on WASI. The existing buffer checks, stack reservations, and failure order stay intact.
 
 A container opens only after frame and root capacity succeed. Frame growth uses fallible vector
 reservation, and root growth records overflow. The 4096-frame nesting cap and either allocation
