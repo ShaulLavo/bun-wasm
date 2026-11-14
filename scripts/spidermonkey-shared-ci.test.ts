@@ -8,11 +8,11 @@ import { needsRust, needsSharedNative } from './ci-changes.ts';
 import { discoverChecks, selectChecks } from './test-checks.ts';
 
 const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-const shared = workflow.split('\n  shared-sysroot:\n')[1]!.split('\n  web:\n')[0]!;
+const shared = workflow.split('\n  shared-sysroot:\n')[1]!.split('\n  shared-native:\n')[0]!;
 const libraryProducer = workflow.split('\n  shared-spidermonkey-prebuild:\n')[1]!.split('\n  shared-sysroot:\n')[0]!;
 
 function step(name: string): string {
-  const result = workflow.split(`      - name: ${name}\n`)[1]?.split('\n      - ')[0];
+  const result = workflow.split(`      - name: ${name}\n`)[1]?.split(/\n(?:      - |  [\w-]+:\n)/)[0];
   assert(result, `missing workflow step: ${name}`);
   return result;
 }
@@ -35,10 +35,10 @@ test('SM uses the existing discovered fixture and blocking owner, not a Browser 
   expect(selectChecks('native', undefined, 'shared-group')).toContain('tests/fixtures/shared-wasm-memory');
   expect(discoverChecks().filter(check => check.path === 'scripts/build-native-profile.test.ts')).toHaveLength(1);
   expect(discoverChecks().filter(check => check.path === 'scripts/spidermonkey-shared-ci.test.ts')).toHaveLength(1);
-  const consumer = step('Consume the shared SpiderMonkey native feature checks');
-  expect(consumer).toContain("if: needs.selection.outputs.shared-native == 'true'");
+  const consumer = step('Consume the discovered shared native checks sequentially');
+  expect(workflow.split("\n  shared-native:\n")[1]!).toContain("needs.selection.outputs.shared-native == 'true'");
   expect(consumer).toContain('bun scripts/test-checks.ts native --profile shared-group');
-  expect(consumer).toContain('program-spidermonkey/bun.wasm');
+  expect(workflow).toContain('shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm');
   expect(consumer).toContain('native-profile-launcher/bun-wasm');
   expect(consumer).not.toMatch(/browser-guest|continue-on-error|BUN_WASM_SPIDERMONKEY_TIER|test -[ef]/);
   expect(shared).not.toContain('shared-wasm-memory');
@@ -57,7 +57,7 @@ test('SM has one library producer and one side consumer and never builds another
   expect(sm).not.toContain('build-bun-core.sh');
   expect(sm.match(/run\(\['bash', 'scripts\/build-engine-spidermonkey-shared.sh'\]\)/g)).toHaveLength(1);
   expect(sm).toContain('verifyProgramReceipt');
-  expect(sm).toContain('assert.deepEqual(await capture(), inputs');
+  expect(sm).toContain('assert.deepEqual(await capture(), { coreInputs, ...inputs }');
 });
 
 test('SM caches exact source and native work and replays patch and library verification on a hit', () => {
@@ -124,7 +124,7 @@ test('real workflow steps wire the library, existing core, side and discovered c
     const env = { ...process.env, RECORD: join(root, 'record'), RECORDER_BIN: bin, SPIDERMONKEY_BUILD_DIR: join(root, 'sm'),
       SPIDERMONKEY_NATIVE_DIR: join(root, 'sm/native'), SPIDERMONKEY_LIBCXX_DIR: join(root, 'jsc/libcxx/lib'), CARGO_TARGET_DIR: join(root, 'target'), RUNNER_TEMP: root,
       SHARED_PRODUCER_DEADLINE_MS: String(Date.now() + 60000) };
-    const commands = ['Produce or verify the shared SpiderMonkey library once', 'Produce the shared SpiderMonkey profile once', 'Consume the shared SpiderMonkey native feature checks'];
+    const commands = ['Produce or verify the shared SpiderMonkey library once', 'Produce the shared SpiderMonkey profile once', 'Consume the discovered shared native checks sequentially'];
     const result = spawnSync('/bin/bash', ['-euo', 'pipefail', '-c', commands.map(command).join('\n')], { cwd: root, env, encoding: 'utf8' });
     expect(result.status, result.stderr).toBe(0);
     const calls = readFileSync(env.RECORD, 'utf8').trim().split('\n');
@@ -141,11 +141,12 @@ test('real workflow steps wire the library, existing core, side and discovered c
 test('the discovered native consumer qualifies both SM tiers without a second producer or a changed clock', () => {
   const driver = readFileSync(new URL('./native-profile-fixtures.ts', import.meta.url), 'utf8');
   expect(driver).toContain("artifacts.engine === 'spidermonkey'");
-  expect(driver).toContain('spiderMonkeyTiers.map(tier => runFixture(path, artifacts, env, tier))');
+  expect(driver).toContain('spiderMonkeyTiers.map(tier => runFixture(id, directory, artifacts, env, tier))');
   expect(driver).toContain('verifySpiderMonkeyQualification(result.stderr, tier)');
-  expect(driver).toContain('timeout: 120_000');
+  expect(driver).toContain('const COMMAND_TIMEOUT_MS = 120_000');
+  expect(driver).toContain('timeout: profileFixtureTimeoutMs(id)');
   expect(driver).toContain('result.stdout !== expected');
-  expect(driver).toContain("process.stderr.write(result.stderr ?? '')");
+  expect(driver).toContain("writeSync(2, result.stderr ?? '')");
   expect(driver).not.toMatch(/build-native|build-bun|build-engine|\.replace\(|\.filter\(/);
   expect(discoverChecks().filter(check => check.path === 'scripts/spidermonkey-native-qualification.test.ts')).toHaveLength(1);
 });

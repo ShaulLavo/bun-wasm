@@ -185,7 +185,7 @@ test("the side exports a cached record and arms only in its own VM before progra
   expect(vm).toContain('std::env::var_os("BUN_WASM_JSC_ALLOCATION_BOUNDARY")');
   expect(vm).toContain('std::env::var("BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION")');
   expect(vm).toContain("bunjsc_allocation_boundary_qualify(context, generation)");
-  expect(vm).toMatch(/qualify_allocation_boundary\(c\);\s+#\[cfg\(test\)\]\s+install_regression_natives\(&Jsc\);\s+Jsc\s+\}/);
+  expect(vm).toMatch(/qualify_allocation_boundary\(c\);\s+#\[cfg\(bun_wasm_transfer_fault\)\]\s+install_transfer_fault\(\);\s+#\[cfg\(test\)\]\s+install_regression_natives\(&Jsc\);\s+Jsc\s+\}/);
   const helpers = source("crates/bunwasm-jsc/cpp/helpers.cpp");
   expect(helpers).toMatch(/BunjscAllocationBoundary\* bunjsc_allocation_boundary\(\)\s+\{\s+return &bunjscAllocationBoundary;\s+\}/);
   expect(helpers).toContain("JSUint8Array::create(globalObject, structure, bunjscBoundaryControlLength)");

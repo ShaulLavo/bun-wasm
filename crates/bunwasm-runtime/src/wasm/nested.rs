@@ -193,8 +193,15 @@ pub(super) fn attach_module(token: u32) -> NativeResult {
     MODULES.with(|modules| modules.borrow_mut().insert(id, description));
     Ok(record)
 }
+/// The host's answer, one of the three `wire` counts. Nothing this throws is an answer, and
+/// nothing it throws is marked as final: an error reply is whatever the host caught, before or
+/// after the group owner acted, and a failed exchange (the reply could not be read, the
+/// transport refused) says as little. The caller asks again; only a count settles it.
 pub(super) fn withdraw(token: u32) -> NativeResult {
-    count(Request::Withdraw { token })
+    let reply = request(Request::Withdraw { token })?;
+    let answer =
+        wire::withdraw_answer(&reply).ok_or_else(|| error("invalid nested withdrawal reply"))?;
+    Ok(Val::Num(f64::from(answer)))
 }
 pub(super) fn create_memory(initial: u32, maximum: u32) -> NativeResult {
     Ok(Val::Num(f64::from(handle(Request::Reserve {

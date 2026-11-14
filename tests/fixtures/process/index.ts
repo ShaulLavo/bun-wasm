@@ -1,5 +1,5 @@
 console.log("argv:", JSON.stringify(process.argv.slice(2)));
-console.log("argv0/1:", typeof process.argv[0], process.argv[1].endsWith("index.js"));
+console.log("argv0/1:", typeof process.argv[0], process.argv[1].endsWith("index.ts"));
 console.log("Bun.argv same:", JSON.stringify(Bun.argv.slice(2)) === JSON.stringify(process.argv.slice(2)));
 console.log("env HOME:", process.env.HOME);
 process.env.MY_VAR = "set";
@@ -9,7 +9,18 @@ console.log("platform:", process.platform);
 console.log("version prefix:", process.version.startsWith("v"), typeof process.versions.bun);
 console.log("types:", typeof process.pid, typeof process.hrtime(), typeof process.hrtime.bigint(), typeof process.uptime());
 const mem = process.memoryUsage();
-console.log("memoryUsage keys:", Object.keys(mem).sort().join(","));
+const { arrayBufferCount, wasmCapacity, failedAllocation, ...base } = mem;
+console.log("memoryUsage keys:", Object.keys(base).sort().join(","));
+function counter(value: unknown): boolean {
+  return value === null || typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+console.log("memoryUsage base values:", Object.values(base).every(counter));
+console.log("memoryUsage extensions:",
+  (arrayBufferCount === undefined || counter(arrayBufferCount)) &&
+  (wasmCapacity === undefined || wasmCapacity === null || typeof wasmCapacity === "number" &&
+    Number.isSafeInteger(wasmCapacity) && wasmCapacity > 0 && wasmCapacity % 65536 === 0) &&
+  (failedAllocation === undefined || failedAllocation === null ||
+    counter(failedAllocation.size) && typeof failedAllocation.category === "string" && failedAllocation.category.length > 0));
 const [s, ns] = process.hrtime();
 console.log("hrtime:", Number.isInteger(s), Number.isInteger(ns));
 process.stdout.write("stdout.write works\n");

@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, w
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { programProfile, sharedGroupPair, tagProgramCore, verifyProgramSide } from '../src/engine-kind.ts';
-import { captureProgramInputs, parseProgramReceipt, prepareProgramOutputs, record, verifyProgramReceipt } from './guest-core-receipt.ts';
+import { assertQualifiedEnvironment, captureProgramInputs, parseProgramReceipt, prepareProgramOutputs, record, verifyProgramReceipt } from './guest-core-receipt.ts';
 import { hash, sourceOptions } from './guest-source-manifest.ts';
 import { sharedGroupEnvironment, verifySharedSysroot } from './src/program-profile.ts';
 import { nativeProfile } from './test-checks.ts';
@@ -58,10 +58,12 @@ export function spiderMonkeyNativeInputs(native: string, libcxx: string, sysroot
   return { library, receipt: fileIdentity(receiptPath), headers: receipt.headers, confdefsSha256: receipt.confdefsSha256, archives };
 }
 
-function spiderMonkeySources() {
+export function spiderMonkeySources(directory: string = repository) {
   const paths = execFileSync('git', ['ls-files', '-z', '--', 'spidermonkey', 'scripts/build-native-profile.ts', 'scripts/producer-diagnostics.ts',
-    'scripts/build-engine-spidermonkey-shared.sh', 'scripts/spidermonkey-side-core-receipt.ts'], { cwd: repository, encoding: 'utf8' });
-  return paths.split('\0').filter(Boolean).map(path => ({ path, ...fileIdentity(join(repository, path)) }));
+    'scripts/build-engine-spidermonkey-shared.sh', 'scripts/spidermonkey-side-core-receipt.ts',
+    'crates/bunwasm-engine-quickjs/build/transfer_fault.rs', 'crates/bunwasm-engine-quickjs/src/transfer_fault.rs',
+    'scripts/src/transfer-fault.sh'], { cwd: directory, encoding: 'utf8' });
+  return paths.split('\0').filter(Boolean).map(path => ({ path, ...fileIdentity(join(directory, path)) }));
 }
 
 /** This experiment consumes the existing common core; it never becomes a publication profile. */
@@ -76,12 +78,12 @@ async function buildSpiderMonkeyProfile(root: string, sysroot: string): Promise<
     const expected = await captureProgramInputs(sourceOptions(repository, sysroot, 'browser'), 'core',
       { features: ['engine-split', 'bun-transpiler', 'bun-build'], profile: 'shared-group' });
     verifyProgramReceipt(readFileSync(core), coreReceipt, expected);
-    return { source: expected.source, core: fileIdentity(core), coreReceipt,
+    return { coreInputs: expected, source: expected.source, core: fileIdentity(core), coreReceipt,
       native: spiderMonkeyNativeInputs(native, libcxx, sysroot), recipes: spiderMonkeySources(),
       environment: sharedGroupEnvironment(sysroot, 'core') };
   };
   producerEvent('target', `directory=${join(root, 'spidermonkey/target')}`);
-  const inputs = await producerPhase('initial-capture', capture);
+  const { coreInputs, ...inputs } = await producerPhase('initial-capture', capture);
   const side = join(root, 'spidermonkey');
   const program = join(root, 'program-spidermonkey');
   mkdirSync(side, { recursive: true });
@@ -92,7 +94,7 @@ async function buildSpiderMonkeyProfile(root: string, sysroot: string): Promise<
   process.env.SPIDERMONKEY_ENGINE_BUILD_DIR = side;
   await producerPhase('side-build', () => run(['bash', 'scripts/build-engine-spidermonkey-shared.sh']));
   await producerPhase('final-capture', async () => {
-    assert.deepEqual(await capture(), inputs, 'SpiderMonkey source or native inputs changed during build');
+    assert.deepEqual(await capture(), { coreInputs, ...inputs }, 'SpiderMonkey source or native inputs changed during build');
   });
   return producerPhase('composition', () => {
     const bytes = readFileSync(join(side, 'engine.wasm'));
@@ -105,6 +107,7 @@ async function buildSpiderMonkeyProfile(root: string, sysroot: string): Promise<
     writeFileSync(join(program, 'spidermonkey-shared.json'), JSON.stringify({ schema: 1, experimental: true, profile: 'shared-group',
       inputs, program: fileIdentity(join(program, 'bun.wasm')), side: fileIdentity(join(side, 'engine.wasm')) }, null, 2) + '\n');
     writeFileSync(join(program, 'source.txt'), inputs.source.head + '\n');
+    writeFileSync(join(program, 'current-inputs.json'), JSON.stringify([coreInputs], null, 2) + '\n');
     return program;
   });
 }
@@ -112,6 +115,7 @@ async function buildSpiderMonkeyProfile(root: string, sysroot: string): Promise<
 export async function buildNativeProfile(profile: unknown, directory: string, selectedEngine: unknown = 'quickjs') {
   const engine = nativeProfileEngine(selectedEngine);
   if (nativeProfile(profile) !== 'shared-group') throw new Error('Split production remains owned by scripts/build.sh');
+  assertQualifiedEnvironment(engine, process.env);
   const sysroot = process.env.BUN_WASM_SYSROOT;
   if (!sysroot || sysroot !== process.env.BUN_WASM_SHARED_SYSROOT) throw new Error('Explicit matching shared-pic sysroot paths are required');
   verifySharedSysroot(sysroot);
@@ -126,7 +130,7 @@ export async function buildNativeProfile(profile: unknown, directory: string, se
     : { JSC_ENGINE_BUILD_DIR: side, JSC_PROFILE: 'shared-group' };
   Object.assign(process.env, sharedGroupEnvironment(sysroot, engine), { BUN_CORE_BUILD_DIR: core }, engineEnvironment);
   // The existing retirement helper validates each cached profile before replacing stale outputs.
-  await prepareProgramOutputs([
+  const inputs = await prepareProgramOutputs([
     { artifact: join(core, 'bun-core.wasm'), scope: 'core', selection: { features: ['engine-split', 'bun-transpiler', 'bun-build'], profile: 'shared-group' }, options: sourceOptions(repository, sysroot, 'browser') },
     { artifact: join(side, 'engine.wasm'), scope: engine, profile: 'shared-group', options: sourceOptions(repository, sysroot, engine) },
   ]);
@@ -140,6 +144,7 @@ export async function buildNativeProfile(profile: unknown, directory: string, se
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' });
   if (head.status !== 0) throw new Error('Cannot identify native profile source');
   writeFileSync(join(program, 'source.txt'), head.stdout);
+  writeFileSync(join(program, 'current-inputs.json'), JSON.stringify(inputs, null, 2) + '\n');
   return program;
 }
 
