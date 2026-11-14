@@ -21,7 +21,7 @@ export function loadBufferSource() {
       return modules.get(name);
     };
     const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/buffer.js", import.meta.url), "utf8");
-    return runInNewContext(source, { TextEncoder, TextDecoder })({ require });
+    return runInNewContext(source, { TextEncoder, TextDecoder, ArrayBuffer, SharedArrayBuffer })({ require });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

@@ -14,6 +14,11 @@ before web initialization. This is a browser-target Port change motivated by the
 Node/Bun-compatible export contract, with no new Blob or File implementation copied
 from upstream.
 
+Raw encoding helper installation delegates to the original TypeScript adapter
+documented in [Buffer encoding bindings](buffer-encoding-bindings.md). It keeps
+the raw binding range and coercion policies separate from public `write` and
+`toString` overload handling.
+
 
 `buffer_fill_args.ts` is an original adapter, not copied upstream code. It selects
 Buffer.fill's encoding overload before the existing Buffer adapter validates the

@@ -21,6 +21,14 @@ function codeOf(callback: () => unknown): unknown {
   return "DID NOT THROW";
 }
 
+function typeError(callback: () => unknown): void {
+  try { callback(); } catch (error) {
+    if (typeof error === "object" && error !== null && "name" in error && error.name === "TypeError") return;
+    throw error;
+  }
+  throw new Error("Expected TypeError");
+}
+
 function call(receiver: unknown, prototype: object, method: string, ...args: unknown[]): unknown {
   const fn: unknown = Reflect.get(prototype, method);
   if (typeof fn !== "function") throw new Error(`Missing ${method}`);
@@ -97,11 +105,7 @@ export function encodingChecks(Buffer: BufferFactory): Check[] {
       const offset = { valueOf() { structuredClone(ab, { transfer: [ab] }); return 5; } };
       if (strict) equal(codeOf(() => invoke(buf, method, text, offset)), "ERR_BUFFER_OUT_OF_BOUNDS");
       if (strict) return;
-      try { invoke(buf, method, text, offset); } catch (error) {
-        if (error instanceof Error && error.name === "TypeError") return;
-        throw error;
-      }
-      throw new Error("Expected detached-view TypeError");
+      typeError(() => invoke(buf, method, text, offset));
     });
     add(`${slice} checks raw ranges`, () => {
       const buf = Buffer.from("68656c6c6f21", "hex");
@@ -119,11 +123,7 @@ export function encodingChecks(Buffer: BufferFactory): Check[] {
     equal(invoke(view, "hexWrite", "6869"), 2);
     equal(invoke(view, "hexSlice", 0, 2), "6869");
     for (const receiver of [{}, [], null, Symbol("receiver")]) {
-      try { invoke(receiver, "hexSlice", 1); } catch (error) {
-        if (error instanceof Error && error.name === "TypeError") continue;
-        throw error;
-      }
-      throw new Error("Expected invalid receiver TypeError");
+      typeError(() => invoke(receiver, "hexSlice", 1));
     }
   });
   add("raw writes preserve fractions and complete UTF-8 and UTF-16 characters", () => {
