@@ -23,8 +23,8 @@ async function lifecycle(framework: Framework, fixture: Transport, held: HeldPre
   const events: Event[] = [];
   const settled = Promise.withResolvers<unknown>();
   const logs: string[] = [];
-  let cancelledAt = 0, cleanup = false, heldId: number | undefined;
-  const state = { shells: 0, rejected: 0, deliverByMs: 0 };
+  let cancelledAt = 0, cleanup = false, holding = false;
+  const state = { shells: 0, rejected: 0, deliverByMs: 0, installDeadlineMs: 0, deliveryError: "" };
   await page.evaluate(({ text, unfinished }) => {
     Object.assign(globalThis, { fixtureSubmits: 0, playground: {
       shell: { lastExit: 0, async submit() {
@@ -36,26 +36,27 @@ async function lifecycle(framework: Framework, fixture: Transport, held: HeldPre
   }, { text: transcript, unfinished: scenario === "undelivered" });
   const poll = bus.poll.bind(bus);
   bus.poll = (role, value, origin) => {
-    if (scenario === "undelivered" && role === "host" && heldId !== undefined) return null;
+    if (role === "host" && holding) return null;
     return poll(role, value, origin);
   };
   const original = bus.execute.bind(bus);
   bus.execute = (role, source, timeoutMs, observation, deliverByMs) => {
     const operation = source.includes("function shellState") ? "shellState" : source.includes("function transcript") ? "transcript" : "launch";
-    const hold = scenario === "undelivered" && operation === "shellState" && deliverByMs - Date.now() < 100;
+    // Arm at enqueue, independently of the cadence of later shell-state polls.
+    const hold = scenario === "undelivered" && operation === "shellState";
     const replacement = operation === "shellState" && scenario === "stalled" ? "new Promise(() => {})"
       : operation === "shellState" && scenario === "late" ? "new Promise(resolve => setTimeout(() => resolve({ done: true, code: 0, error: null }), 2500))" : source;
     events.push({ event: "enqueue", operation, at: performance.now() });
     let pending: Promise<unknown>;
     try { pending = original(role, replacement, timeoutMs, observation, deliverByMs); }
     catch (error) { state.rejected++; throw error; }
-    if (hold) { heldId = 1; state.deliverByMs = deliverByMs; }
+    if (hold) { holding = true; state.deliverByMs = deliverByMs; }
     const tracked = pending.then(value => {
-      if (hold) heldId = undefined;
+      if (hold) holding = false;
       events.push({ event: "settled", operation, at: performance.now() });
       return value;
     }, error => {
-      if (hold) heldId = undefined;
+      if (hold) { holding = false; state.deliveryError = String(error); }
       events.push({ event: "rejected", operation, at: performance.now() });
       throw error;
     });
@@ -69,7 +70,10 @@ async function lifecycle(framework: Framework, fixture: Transport, held: HeldPre
     return tracked;
   };
   const facade: Transport = { ...transport, navigate: fixture.navigate,
-    evaluate: (source, admission, options) => source.includes("function readyState") ? fixture.evaluate(source, admission, options) : transport.evaluate(source, admission, options),
+    evaluate: (source, admission, options) => {
+      if (source.includes("function launch(")) state.installDeadlineMs = admission.deadline;
+      return source.includes("function readyState") ? fixture.evaluate(source, admission, options) : transport.evaluate(source, admission, options);
+    },
     async cleanup(timeoutMs) { cleanup = true; return transport.cleanup!(timeoutMs); },
   };
   const result = await execute({ framework, box: { framework: framework.id, browser: "iphone-safari", engine: "browser" },
@@ -99,7 +103,14 @@ async function lifecycle(framework: Framework, fixture: Transport, held: HeldPre
   expect(logs.join("\n")).toContain(transcript);
   if (scenario === "undelivered") {
     expect(state.deliverByMs).toBeGreaterThan(0);
+    expect(state.deliverByMs).toBe(state.installDeadlineMs);
+    expect(state.shells).toBe(1);
+    expect(state.deliveryError).toBe("Error: iPhone observer delivery deadline expired");
     expect(events.some(row => row.event === "rejected" && row.operation === "shellState")).toBe(true);
+    expect(events.filter(row => row.operation === "shellState").map(row => row.event)).toEqual(["enqueue", "rejected"]);
+    expect(terminals()).toHaveLength(2);
+    expect(logs.join("\n")).toContain("--- Failure-time terminal observation ---");
+    expect(logs.join("\n")).toContain("--- Cleanup-time terminal observation (before owned transport cleanup) ---");
     return;
   }
   await settled.promise;
