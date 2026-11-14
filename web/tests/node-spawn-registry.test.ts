@@ -1,8 +1,45 @@
 import { expect, test } from "bun:test";
 import { ProcessSupervisor } from "waffle/proc/supervisor";
+import { existsSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createNodeExecutableRegistry, nodeExecutables, nodeModule, NodeProcessBroker } from "../scripts/node-spawn.ts";
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+test("Node shell and env use explicit registrations and live private files", async () => {
+  const utility = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  const broker = new NodeProcessBroker({ module, shell: { shell: utility, env: utility }, launch() { throw new Error("unexpected launch"); } });
+  const bin = broker.preopens["/bin"]!, usr = broker.preopens["/usr/bin"]!;
+  try {
+    for (const path of ["/bin/sh", "/bin/bash", "/bin/env", "/usr/bin/env"]) {
+      expect(await broker.registry.resolve(path)).toMatchObject({ kind: "module", module: utility });
+    }
+    await expect(broker.registry.resolve("/bin/host-shell")).rejects.toMatchObject({ code: "ENOENT" });
+    broker.registry.unregister("/bin/sh");
+    await expect(broker.registry.resolve("/bin/sh")).rejects.toMatchObject({ code: "ENOEXEC" });
+    rmSync(join(usr, "env"));
+    await expect(broker.registry.resolve("/usr/bin/env")).rejects.toMatchObject({ code: "ENOENT" });
+  } finally { await broker.dispose(); }
+  expect(existsSync(bin)).toBe(false);
+  expect(existsSync(usr)).toBe(false);
+});
+
+test("Node shebang admission preserves argv and guest symlinks and requires a registered interpreter", async () => {
+  const broker = new NodeProcessBroker({ module, launch() { throw new Error("unexpected launch"); } });
+  const bin = broker.preopens["/bin"]!;
+  try {
+    writeFileSync(join(bin, "tool"), "#!/bin/node --flag\nconsole.log('guest');\n");
+    symlinkSync("/bin/tool", join(bin, "alias"));
+    expect(await broker.registry.resolve("/bin/alias", "/", () => {}, ["/bin/alias", "tail"]))
+      .toMatchObject({ module, adapter: "bun", argv: ["/bin/node", "--flag", "/bin/alias", "tail"] });
+    writeFileSync(join(bin, "tool"), "#!/bin/missing\n");
+    await expect(broker.registry.resolve("/bin/tool")).rejects.toMatchObject({ code: "ENOENT" });
+    writeFileSync(join(bin, "tool"), "#!/bin/node " + "x".repeat(300) + "\n");
+    await expect(broker.registry.resolve("/bin/tool")).rejects.toMatchObject({ code: "ENOEXEC" });
+    broker.registry.unregister("/bin/node");
+    writeFileSync(join(bin, "tool"), "#!/bin/node\n");
+    await expect(broker.registry.resolve("/bin/tool")).rejects.toMatchObject({ code: "ENOEXEC" });
+  } finally { await broker.dispose(); }
+});
 for (const executable of nodeExecutables) test(`Node host registry explicitly resolves ${executable}`, async () => {
   const broker = new NodeProcessBroker({ module, launch() { throw new Error("unexpected launch"); } });
   try {

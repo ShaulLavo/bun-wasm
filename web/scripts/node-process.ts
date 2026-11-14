@@ -126,6 +126,7 @@ export function createNodeProcess(options: NodeProcessOptions) {
     const resource = nativeStdio(fd), description = new OpenDescription(resource);
     descriptors.inherit(fd, { description, resource, rightsBase: (fd === 0 ? READ : WRITE) | POLL, rightsInheriting: 0n });
   }
+  const inherited = descriptors.inheritable();
   let abi: ProcessABI;
   const guard = <T extends (...args: number[]) => number>(fn: T) => (...args: number[]) => {
     try {
@@ -151,10 +152,18 @@ export function createNodeProcess(options: NodeProcessOptions) {
       abi = new ProcessABI({ memory, descriptors, fs: new MemFS(), pid: client.pid, service: client,
         signals: client.signals, wake: client.wake, createPipe: () => client.createPipe() });
       const proc = Object.fromEntries(Object.entries(abi.imports).map(([name, fn]) => [name, guard(fn)]));
+      proc.inherited_fd = guard(index => inherited[index >>> 0] ?? -44);
       proc.close = fd => descriptors.close(fd!) ? 0 : -8;
       imports.runtime_proc = proc;
       imports.bun_package_scripts = { handoff: guard(() => -58) };
       imports.runtime_fs = watchImports(memory, descriptors, guard);
+      imports.runtime_fs.path_permissions_get = guard(() => 58);
+      imports.shell_terminal = {
+        inherited_fd: guard(index => index >= 0 && index < 3 ? index : -1),
+        columns: guard(() => 80), rows: guard(() => 24), phase: guard(() => 0),
+        prompt_names: guard(() => -1), prompt: guard(() => -1), prompt_update: guard(() => -1),
+        output_position: guard(() => 0),
+      };
       // Waffle captures fd_close for native release, then installs guest close itself.
       // Startup failure can dispose Bun's host before Node WASI binds guest memory.
       const wasi = imports.wasi_snapshot_preview1;

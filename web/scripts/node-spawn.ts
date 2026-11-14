@@ -1,6 +1,6 @@
 import { pairedEngineKinds } from "../../src/engine-kind.ts";
 import { isToolCommand } from "../src/tool-command.ts";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, constants, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, readSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
@@ -19,14 +19,33 @@ import { ProcessErrno, ProcessError } from "waffle/proc/types";
 
 export const nodeExecutables = ["/bin/bun", "/bin/node", "/bin/nodejs"] as const;
 export type NodeEngineModules = Partial<Record<import("../../src/engine-kind.ts").PairedEngine, WebAssembly.Module>>;
+export interface NodeShellModules { shell: WebAssembly.Module; env: WebAssembly.Module }
+const shellPaths = ["/bin/sh", "/bin/bash"];
+const envPaths = ["/bin/env", "/usr/bin/env"];
+
+function nodeMountedPath(mounts: readonly [string, string][], path: string) {
+  const mount = mounts.find(([guest]) => guest === "/" || path === guest || path.startsWith(`${guest}/`));
+  return mount && `${mount[1]}/${path.slice(mount[0] === "/" ? 1 : mount[0].length + 1)}`;
+}
+
+/** Registry shebang admission reads only its bounded first line, after guest symlink resolution. */
+function nodeExecutableHeader(preopens: Record<string, string>, path: string) {
+  const file = nodeExecutableLookup(preopens, path);
+  const native = file && nodeMountedPath(Object.entries(preopens).sort(([a], [b]) => b.length - a.length), file.path);
+  if (!native) return undefined;
+  const fd = openSync(native, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const bytes = new Uint8Array(260);
+    return bytes.subarray(0, readSync(fd, bytes));
+  } finally { closeSync(fd); }
+}
 
 /** Resolve guest path components before normalization: file/.. must remain ENOTDIR.
  * Symlink targets live in the guest namespace, just as they do in preview1. */
 function nodeExecutableLookup(preopens: Record<string, string>, absolute: string) {
   const mounts = Object.entries(preopens).sort(([a], [b]) => b.length - a.length);
   const lookup = (path: string) => {
-    const mount = mounts.find(([guest]) => guest === "/" || path === guest || path.startsWith(`${guest}/`));
-    const native = mount && `${mount[1]}/${path.slice(mount[0] === "/" ? 1 : mount[0].length + 1)}`;
+    const native = nodeMountedPath(mounts, path);
     try { return native ? { native, stat: lstatSync(native) } : undefined; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT" && mounts.some(([guest]) => guest.startsWith(`${path === "/" ? "" : path}/`))) return undefined;
@@ -59,31 +78,43 @@ function nodeExecutableLookup(preopens: Record<string, string>, absolute: string
   return { path: `/${components.join("/")}`, kind };
 }
 
-export function createNodeExecutableRegistry(module: WebAssembly.Module, preopens: Record<string, string>, engines: NodeEngineModules = {}): ExecutableRegistry {
-  const registry = new ExecutableRegistry(path => nodeExecutableLookup(preopens, path));
+export function createNodeExecutableRegistry(module: WebAssembly.Module, preopens: Record<string, string>, engines: NodeEngineModules = {}, shell?: NodeShellModules): ExecutableRegistry {
+  const registry = new ExecutableRegistry(path => nodeExecutableLookup(preopens, path), path => nodeExecutableHeader(preopens, path));
   for (const name of nodeExecutables) registry.register(name, { module, adapter: "bun" });
   for (const engine of pairedEngineKinds) {
     const module = engines[engine];
     if (module) for (const name of ["bun", "node", "nodejs"]) registry.register(`/opt/bun/${engine}/bin/${name}`, { module, adapter: "bun" });
   }
+  if (shell) {
+    for (const path of shellPaths) registry.register(path, { module: shell.shell, adapter: "wasi" });
+    for (const path of envPaths) registry.register(path, { module: shell.env, adapter: "wasi" });
+  }
   return registry;
 }
 
 /** Private files, not aliases. Mount order is shared with the native host's preview1 ABI. */
-function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngineModules) {
-  for (const guest of Object.keys(preopens)) if (guest === "/bin" || guest.startsWith("/bin/") || guest === "/opt/bun" || guest.startsWith("/opt/bun/")) {
+function nodeShellFiles(root: string, shell?: NodeShellModules) {
+  if (!shell) return;
+  mkdirSync(join(root, "usr/bin"), { recursive: true });
+  for (const path of shellPaths.concat(envPaths)) writeFileSync(join(root, path), new Uint8Array());
+}
+
+function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngineModules, shell?: NodeShellModules) {
+  for (const guest of Object.keys(preopens)) if (guest === "/bin" || guest.startsWith("/bin/") || guest === "/opt/bun" || guest.startsWith("/opt/bun/") || (shell && (guest === "/usr/bin" || guest.startsWith("/usr/bin/")))) {
     throw new Error(`reserved executable mount: ${guest}`);
   }
   const root = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-node-executables-"));
   try {
     mkdirSync(join(root, "bin")); mkdirSync(join(root, "opt/bun"), { recursive: true });
     for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(root, "bin", name), new Uint8Array());
+    nodeShellFiles(root, shell);
     for (const engine of pairedEngineKinds) {
       if (!engines[engine]) continue;
       const bin = join(root, "opt/bun", engine, "bin"); mkdirSync(bin, { recursive: true });
       for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(bin, name), new Uint8Array());
     }
     const mounted: Record<string, string> = { "/": preopens["/"] ?? root, "/bin": join(root, "bin"), "/opt/bun": join(root, "opt/bun") };
+    if (shell) mounted["/usr/bin"] = join(root, "usr/bin");
     for (const [guest, host] of Object.entries(preopens)) if (guest !== "/") mounted[guest] = host;
     return { preopens: mounted, dispose() { rmSync(root, { recursive: true, force: true }); } };
   } catch (error) { rmSync(root, { recursive: true, force: true }); throw error; }
@@ -119,13 +150,14 @@ export class NodeProcessBroker {
   constructor(options: {
     module: WebAssembly.Module;
     engines?: NodeEngineModules;
+    shell?: NodeShellModules;
     preopens?: Record<string, string>;
     launch(context: ProcessContext, transport: WorkerProcessTransport): Worker;
     onError?(error: unknown): void;
   }) {
-    this.files = nodeExecutableFiles(options.preopens ?? {}, options.engines ?? {});
+    this.files = nodeExecutableFiles(options.preopens ?? {}, options.engines ?? {}, options.shell);
     this.preopens = this.files.preopens;
-    const registry = this.registry = createNodeExecutableRegistry(options.module, this.preopens, options.engines);
+    const registry = this.registry = createNodeExecutableRegistry(options.module, this.preopens, options.engines, options.shell);
     this.supervisor = new ProcessSupervisor({
       registry,
       launch: context => {
