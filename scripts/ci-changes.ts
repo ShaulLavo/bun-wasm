@@ -164,6 +164,7 @@ function ordinarySpiderMonkeyInput(path: string): boolean {
   if (path.endsWith(".md")) return false;
   return path.startsWith("spidermonkey/") || path.startsWith("scripts/spidermonkey-ordinary-")
     || path === "scripts/spidermonkey-side-core-receipt.ts" || path === "scripts/spidermonkey-side-inputs.ts"
+    || path === "scripts/spidermonkey-engine-semantics.sh"
     || ordinaryFixtures.some(name => path.startsWith(`tests/fixtures/${name}/`));
 }
 

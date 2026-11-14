@@ -26,8 +26,14 @@ The adapter targets `mozilla-firefox/firefox` revision
   Retirement allocates nothing, and active snapshots defer entry deletion.
   The embed-only `GetModuleEvaluationInfo` API supplies the native body-entry
   and over-recursion classification. Pending evaluations, body failures and
-  acquired graphs keep their cached outcomes. Control-only exports inspect
-  generations, edges and retirement and park import continuations for schedules.
+  acquired graphs keep their cached outcomes. A retry at every unwind level
+  therefore recovers on SpiderMonkey, where native Bun replays a cached
+  RangeError; that departure is accepted. Termination fails a module record
+  with no catchable error, so require keeps it uncatchable: the bridge stays
+  pending and the drain stops. Control-only exports inspect generations, edges
+  and retirement, preload a module without evaluating it, report each require's
+  outcome and park import continuations for the schedules in
+  `crates/bunwasm-spidermonkey/tests/require-recovery.cpp`.
 - Module evaluation waits on `LoadRequestedModules` before linking and evaluating.
   Both import evaluation and synchronous require return the result capability of
   the reaction that performs the work. A handler refusal therefore rejects that
