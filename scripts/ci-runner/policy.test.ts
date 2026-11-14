@@ -31,6 +31,17 @@ test("allocation requires a server-validated queued job", async () => {
   expect(await eligibleQueuedJob(f.api, 101)).toEqual({ jobId: 101, runId: 202, attempt: 3, headSha: "a".repeat(40) });
 });
 
+test.each(["pending", "queued"])("workflow %s does not hide the current job assignment", async status => {
+  const f = fixture();
+  f.run.status = status;
+  f.job.status = "queued";
+  f.job.runner_id = 0;
+  expect(await eligibleQueuedJob(f.api, f.session.jobId)).toEqual({ jobId: 101, runId: 202, attempt: 3, headSha: f.session.headSha });
+  f.job.status = "in_progress";
+  f.job.runner_id = f.session.runnerId;
+  await approveAssignedJob(f.api, f.session);
+});
+
 test("fork YAML cannot forge the target registered-runner binding", async () => {
   const f = fixture();
   f.job.runner_id = 999;

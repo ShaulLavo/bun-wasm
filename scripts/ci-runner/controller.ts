@@ -4,11 +4,11 @@ import { readFile, readdir } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { github } from "./github.ts";
 import { root } from "./host.ts";
-import { eligibleQueuedJob } from "./policy.ts";
+import { activeRunStatuses, eligibleQueuedJob } from "./policy.ts";
 import { launchRunner } from "./vm.ts";
 
 async function queuedJob(): Promise<number | undefined> {
-  for (const status of ["in_progress", "queued"]) {
+  for (const status of activeRunStatuses) {
     const runs: unknown = await github(`/repos/ShaulLavo/bun-wasm/actions/runs?status=${status}&per_page=20`);
     if (typeof runs !== "object" || runs === null || !("workflow_runs" in runs) || !Array.isArray(runs.workflow_runs)) throw new Error("Invalid run inventory");
     const match = await jobInRuns(runs.workflow_runs);
