@@ -26,14 +26,14 @@ function attempt(minute: number, failure?: "install" | "render" | "click" | "dev
   return result;
 }
 function report(run = "first", minute = 1, failure?: Parameters<typeof attempt>[1]): Report {
-  return { schema: 2, run, createdAt: "2026-11-08T10:00:00.000Z", command: "original command", source: { commit: run, dirty: false, assets: { hostSource: "product", engineBuilds: { browser: "digest" }, files: [{ path: "original", sha256: "original digest" }] } }, deadlines: deadlinePolicy(180_000),
+  return { schema: 2, run, createdAt: "2026-11-08T10:00:00.000Z", command: "original command", source: { commit: run, dirty: false, assets: { hostSource: "product", engineBuilds: { browser: "digest" }, files: [{ path: "original", sha256: "original digest" }] } }, deadlines: deadlinePolicy(180_000, {}, 180_000),
     cells: initialCells().map(cell => cell.framework === box.framework && cell.browser === box.browser && cell.engine === box.engine ? finish(box, attempt(minute, failure)) : cell) };
 }
 function input(result: unknown, path = "/reports/first/TABLE.json") { return { path, contents: Buffer.from(JSON.stringify(result)) }; }
 
 test("read-only projection preserves separate runner, product and policy identities without weakening combine", () => {
   const first = report(), second = report("second", 2, "install");
-  second.deadlines = deadlinePolicy(180_000, { nuxt: 200_000 });
+  second.deadlines = deadlinePolicy(180_000, { nuxt: 200_000 }, 180_000);
   expect(() => combine(first, second)).toThrow("sources");
   expect(() => combine(first, { ...second, source: first.source })).toThrow("deadline");
   const view = project([input(first), input(second, "/reports/second/TABLE.json")], [box]);
@@ -134,7 +134,7 @@ test("rejects wrong schema, malformed histories, phase evidence, times, inventor
   malformed.cells.find((cell: { attempts: unknown[] }) => cell.attempts.length).attempts[0].phases[1].evidence.code = 1;
   expect(() => project([input(malformed)])).toThrow();
   const mismatched = report();
-  mismatched.deadlines = deadlinePolicy(170_000);
+  mismatched.deadlines = deadlinePolicy(170_000, {}, 170_000);
   expect(() => project([input(mismatched)])).toThrow("Phase timeout differs");
 });
 
