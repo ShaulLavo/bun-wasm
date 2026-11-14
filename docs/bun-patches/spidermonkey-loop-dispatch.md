@@ -15,7 +15,10 @@ change keeps it at main's size: 432 bytes of shadow stack. A first version that
 put the owned-frame branch into the inlined return path grew it to 464 bytes,
 and with it the residual proxy recursion on the 512 KiB WebKit model fell from 86
 to 77 levels. The owned pop, the frame push and delazification therefore stay out
-of line, and the deferred lookups are never inlined.
+of line. The deferred lookup keeps upstream's call shape: one out-of-line entry
+like `js::GetProperty(Value)`, with the object step inlined as upstream inlines
+it. A version that added a second out-of-line step cost proxy recursion one more
+native frame per level (Chromium 482 to 438 levels).
 
 The getter must be interpreted, in the current realm, and callable without
 construction. A realm observing native calls retains synchronous dispatch. A

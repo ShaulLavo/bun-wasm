@@ -54,7 +54,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git a/js/src/vm/Interpreter.cpp b/js/src/vm/Interpreter.cpp
-index 6241cd45d..94b0824a2 100644
+index 6241cd45d..06959976e 100644
 --- a/js/src/vm/Interpreter.cpp
 +++ b/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -67,7 +67,7 @@ index 6241cd45d..94b0824a2 100644
  
  using namespace js;
  
-@@ -1779,8 +1782,40 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
+@@ -1779,8 +1782,56 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
                            JS::ObjectValue(*disposableRecord));
  }
 
@@ -80,6 +80,22 @@ index 6241cd45d..94b0824a2 100644
 +#endif
 +
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
++// ObjectOperations-inl.h's inline GetProperty(obj, receiver, name), except that
++// a native object's eligible scripted getter is returned instead of called.
++// Exotic objects keep the ordinary synchronous route. Inline like the original,
++// so the lookup adds no native frame.
++static MOZ_ALWAYS_INLINE bool GetPropertyDeferredFrom(
++    JSContext* cx, HandleObject obj, HandleValue receiver,
++    Handle<PropertyName*> name, MutableHandleValue vp,
++    MutableHandleFunction getter) {
++  RootedId id(cx, NameToId(name));
++  if (GetPropertyOp op = obj->getOpsGetProperty()) {
++    return op(cx, obj, receiver, id, vp);
++  }
++  return NativeGetPropertyDeferred(cx, obj.as<NativeObject>(), receiver, id,
++                                   vp, getter);
++}
++
 +// Delazifies a deferred getter and publishes its owned-arguments frame. The
 +// getter stays in the interpreter's mutable function root and the receiver in
 +// the case's rooted copy until the frame holds both. Out of line, so that
@@ -108,7 +124,7 @@ index 6241cd45d..94b0824a2 100644
  /*
   * Define macros for an interpreter loop. Opcode dispatch is done by
   * indirect goto (aka a threaded interpreter), which is technically
-@@ -1839,8 +1874,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1839,8 +1890,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
     * Prepare to call a user-supplied branch handler, and abort the script
     * if it returns false.
     */
@@ -123,7 +139,7 @@ index 6241cd45d..94b0824a2 100644
      if (!CheckForInterrupt(cx)) goto error; \
    JS_END_MACRO
  
-@@ -1984,6 +2025,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1984,6 +2041,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
    INIT_COVERAGE();
    COUNT_COVERAGE_MAIN();
  
@@ -136,7 +152,7 @@ index 6241cd45d..94b0824a2 100644
    // Enter the interpreter loop starting at the current pc.
    ADVANCE_AND_DISPATCH(0);
  
-@@ -2229,7 +2276,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2229,7 +2292,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
  
        jit_return:
  
@@ -149,7 +165,7 @@ index 6241cd45d..94b0824a2 100644
          MOZ_ASSERT(cx->realm() == script->realm());
  
          /* Resume execution in the calling frame. */
-@@ -2238,8 +2290,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2238,8 +2306,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
              ADVANCE_AND_DISPATCH(JSOpLength_Resume);
            }
  
@@ -162,7 +178,7 @@ index 6241cd45d..94b0824a2 100644
          }
  
          goto error;
-@@ -2944,9 +3000,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2944,9 +3016,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
        ReservedRooted<Value> lval(&rootValue0, REGS.sp[-1]);
        MutableHandleValue res = REGS.stackHandleAt(-1);
        ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
@@ -185,13 +201,13 @@ index 6241cd45d..94b0824a2 100644
        cx->debugOnlyCheck(res);
      }
      END_CASE(GetProp)
-@@ -2964,9 +3033,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2964,9 +3049,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
          goto error;
        }
 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +      ReservedRooted<JSFunction*> fun(&rootFunction0);
-+      if (!GetPropertyDeferred(cx, obj, receiver, name, rref, &fun)) {
++      if (!GetPropertyDeferredFrom(cx, obj, receiver, name, rref, &fun)) {
 +        goto error;
 +      }
 +      if (fun) {
@@ -208,7 +224,7 @@ index 6241cd45d..94b0824a2 100644
  
        cx->debugOnlyCheck(rref);
  
-@@ -3366,8 +3448,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -3366,8 +3464,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
                                      // call popInlineFrame.
        }
  
@@ -228,7 +244,7 @@ index 6241cd45d..94b0824a2 100644
        if (!REGS.fp()->prologue(cx)) {
          goto prologue_error;
        }
-@@ -4619,8 +4712,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
+@@ -4619,8 +4728,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
    return cx->getPendingExceptionStack(vp);
  }
  
@@ -245,38 +261,27 @@ index 6241cd45d..94b0824a2 100644
    if (name == cx->names().length) {
      // Fast path for strings, arrays and arguments.
      if (::GetLengthProperty(v, vp)) {
-@@ -4674,9 +4773,41 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
+@@ -4674,9 +4789,30 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
      return false;
    }
- 
+
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  if constexpr (deferGetter) {
-+    return GetPropertyDeferred(cx, obj, receiver, name, vp, *deferredGetter);
++    return GetPropertyDeferredFrom(cx, obj, receiver, name, vp,
++                                   *deferredGetter);
 +  }
 +#endif
    return GetProperty(cx, obj, receiver, name, vp);
  }
- 
+
 +bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
 +                     MutableHandleValue vp) {
 +  return GetPropertyOperation<false>(cx, v, name, vp);
 +}
 +
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+// Both lookups stay out of line: inlined into js::Interpret, their rooted
-+// locals would enlarge the frame every remaining native reentry pays for.
-+MOZ_NEVER_INLINE bool js::GetPropertyDeferred(
-+    JSContext* cx, HandleObject obj, HandleValue receiver,
-+    Handle<PropertyName*> name, MutableHandleValue vp,
-+    MutableHandleFunction getter) {
-+  if (obj->getOpsGetProperty()) {
-+    return GetProperty(cx, obj, receiver, name, vp);
-+  }
-+  RootedId id(cx, NameToId(name));
-+  return NativeGetPropertyDeferred(cx, obj.as<NativeObject>(), receiver, id,
-+                                    vp, getter);
-+}
-+
++// Out of line like js::GetProperty above: inlined into js::Interpret, its
++// rooted locals would enlarge the frame every remaining native reentry pays for.
 +MOZ_NEVER_INLINE bool js::GetPropertyDeferred(
 +    JSContext* cx, HandleValue v, Handle<PropertyName*> name,
 +    MutableHandleValue vp, MutableHandleFunction getter) {
@@ -835,17 +840,16 @@ diff --git a/js/src/frontend/Parser.cpp b/js/src/frontend/Parser.cpp
      return errorResult();
 
 diff --git a/js/src/vm/Interpreter.h b/js/src/vm/Interpreter.h
-index 87e79b096..ade48876b 100644
+index 87e79b096..03b82f863 100644
 --- a/js/src/vm/Interpreter.h
 +++ b/js/src/vm/Interpreter.h
-@@ -477,6 +477,15 @@ bool ThrowWithStackOperation(JSContext* cx, HandleValue v, HandleValue stack);
- 
+@@ -477,6 +477,14 @@ bool ThrowWithStackOperation(JSContext* cx, HandleValue v, HandleValue stack);
+
  bool GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp);
- 
+
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+bool GetPropertyDeferred(JSContext* cx, HandleObject obj, HandleValue receiver,
-+                         Handle<PropertyName*> name, MutableHandleValue vp,
-+                         MutableHandleFunction getter);
++// GetProperty, except that an eligible scripted getter on a native object is
++// stored in |getter| instead of being called; |vp| is then undefined.
 +bool GetPropertyDeferred(JSContext* cx, HandleValue value,
 +                         Handle<PropertyName*> name, MutableHandleValue vp,
 +                         MutableHandleFunction getter);
