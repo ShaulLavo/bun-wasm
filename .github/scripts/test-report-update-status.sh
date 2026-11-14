@@ -25,7 +25,7 @@ run_report() {
   test "$(grep -c '^api --method POST repos/ShaulLavo/fixture/statuses/tested-head ' "$STATUS_LOG")" = 11
 }
 baseline=$(cat <<'JSON'
-{"quality":{"result":"success","outputs":{"rust":"true","shared":"true"}},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-sysroot":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
+{"selection":{"result":"success","outputs":{"rust":"true","shared":"true"}},"quality":{"result":"success"},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-sysroot":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
 JSON
 )
 export RESULTS="$baseline"
@@ -39,10 +39,10 @@ while IFS='|' read -r context job selection; do
     grep -Fq -- "-f context=$context -f state=failure " "$STATUS_LOG"
   done
   [[ -n "$selection" ]] || continue
-  RESULTS=$(jq --arg job "$job" --arg selection "$selection" '.[$job].result = "skipped" | .quality.outputs[$selection] = "false"' <<< "$baseline")
+  RESULTS=$(jq --arg job "$job" --arg selection "$selection" '.[$job].result = "skipped" | .selection.outputs[$selection] = "false"' <<< "$baseline")
   run_report
   test "$(grep -c -- '-f state=success ' "$STATUS_LOG")" = 11
-  RESULTS=$(jq '.quality.result = "failure"' <<< "$RESULTS")
+  RESULTS=$(jq '.selection.result = "failure"' <<< "$RESULTS")
   run_report
   grep -Fq -- "-f context=$context -f state=failure " "$STATUS_LOG"
 done <<'CASES'

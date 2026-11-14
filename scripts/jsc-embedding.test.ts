@@ -62,6 +62,23 @@ test("the adapter sets the parser reserve once, inside the existing JSC initiali
   expect(helpers.indexOf("JSC::setWasmParserReserve")).toBeLessThan(helpers.indexOf("VM::createContextGroup()"));
 });
 
+test("WASI JSON frames reserve capacity and root tables before publication", () => {
+  const json = patch.split("diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp").at(-1) ?? "";
+  const open = json.split("::openContainer(JSCell& cell)")[1]?.split("::openObject(JSObject&")[0] ?? "";
+  expect(open.indexOf("reserveContainerSlot<testing>()")).toBeLessThan(open.indexOf("buffer()[m_length++]"));
+  expect(open.indexOf("m_roots.append(&object)")).toBeGreaterThan(open.indexOf("buffer()[m_length++]"));
+  expect(json.indexOf("m_roots.append(table)")).toBeGreaterThan(json.indexOf("acquirePropertyTableForJSONFastPath"));
+  expect(json.indexOf("m_frames.unsafeAppendWithoutCapacityCheck")).toBeGreaterThan(json.indexOf("m_roots.append(table)"));
+  expect(json).toContain("frameAt(index).cursor = next;");
+  expect(json).toContain("frameAt(index).cursor = i + 1;");
+  expect(json).not.toContain("DeferGCForAWhile");
+  expect(json).toContain("FailureReason::FastNesting");
+  expect(json).toContain("FailureReason::FastFrameAllocation");
+  const helpers = readFileSync(new URL("../crates/bunwasm-jsc/cpp/helpers.cpp", import.meta.url), "utf8");
+  expect(helpers.match(/BUN_WASM_JSC_JSON_FAST_TEST"/g)).toHaveLength(1);
+  expect(helpers).not.toContain("BUN_WASM_JSC_GC_EVERY_SLOW_ALLOCS");
+});
+
 test("a refused constant array buffer falls back to ordinary array construction on WASI only", () => {
   const codegen = patch.split("diff --git a/Source/JavaScriptCore/bytecompiler/NodesCodegen.cpp")[1]?.split("diff --git")[0] ?? "";
   // The fallback sits between upstream's allocation and its assertion, which other platforms keep.
