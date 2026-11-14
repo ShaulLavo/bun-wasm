@@ -6,15 +6,16 @@ import { runCheck } from "./test-checks.ts";
 export const ordinaryFixtures: readonly string[] = [
   "cli-eval", "engine-modules", "esm-async-dependency-reimport", "cjs-interop",
   "net-serve", "self-spawn", "async-local-storage", "errors-rejection",
-  "promise-rejection-identity", "host-gc-capture", "array-buffer-sink-detached", "stack-overflow",
+  "promise-rejection-identity", "host-gc-capture", "array-buffer-sink-detached", "stack-overflow", "stack-statement-nesting",
   "require-esm-caught-failure", "rejection-inspect-still-unhandled",
   "require-esm-after-lowered-import", "require-esm-after-native-import",
+  "require-esm-failure-cache", "require-esm-limit-recovery",
 ];
 
 // test.sh owns each 60s TERM / 5s KILL deadline and every output/exit assertion.
 export const ordinaryFixtureTimeout = ordinaryFixtures.length * 65_000 + 30_000;
 
-export function ordinaryFixtureCommand(repository: string, env: NodeJS.ProcessEnv): string[] {
+export function ordinaryFixtureCommand(repository: string, env: NodeJS.ProcessEnv, tier: "interp" | "pbl"): string[] {
   for (const name of ["SPIDERMONKEY_WASM", "BUN_WASM_LAUNCHER", "BUN_WASM_SHELL", "BUN_WASM_ENV_UTILITY"]) {
     const path = env[name];
     assert(path && isAbsolute(path), `Ordinary SpiderMonkey requires absolute ${name}`);
@@ -22,12 +23,15 @@ export function ordinaryFixtureCommand(repository: string, env: NodeJS.ProcessEn
   }
   const core = env.SPIDERMONKEY_WASM;
   assert(core);
-  return ["bash", join(repository, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", core, "--tier", "interp"].concat(ordinaryFixtures);
+  return ["bash", join(repository, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", core, "--tier", tier].concat(ordinaryFixtures);
 }
 
-export function runOrdinaryFixtures(repository: string, env = process.env): void {
+export function runAdapterControls(repository: string, env = process.env): void {
   const controls = runCheck(["bash", join(repository, "scripts/spidermonkey-engine-semantics.sh")], env);
   assert.equal(controls, 0, "SpiderMonkey engine-semantic controls failed");
-  const status = runCheck(ordinaryFixtureCommand(repository, env), env);
-  assert.equal(status, 0, "Ordinary SpiderMonkey interpreter fixtures failed");
+}
+
+export function runOrdinaryFixtures(repository: string, tier: "interp" | "pbl", env = process.env): void {
+  const status = runCheck(ordinaryFixtureCommand(repository, env, tier), env);
+  assert.equal(status, 0, `Ordinary SpiderMonkey ${tier} fixtures failed`);
 }

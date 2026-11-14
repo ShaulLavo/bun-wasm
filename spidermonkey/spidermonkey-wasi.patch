@@ -107,16 +107,25 @@ index 6241cd45d..4da58a1d2 100644
    ADVANCE_AND_DISPATCH(0);
  
 diff --git i/js/src/vm/PortableBaselineInterpret.cpp w/js/src/vm/PortableBaselineInterpret.cpp
-index d38cebe3e..a6ebdedcb 100644
+index d38cebe3e..645370535 100644
 --- i/js/src/vm/PortableBaselineInterpret.cpp
 +++ w/js/src/vm/PortableBaselineInterpret.cpp
-@@ -105,8 +105,13 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
+@@ -105,8 +105,22 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
  #  define ENABLE_COMPUTED_GOTO_DISPATCH
  #endif
- 
+
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +extern "C" void bunsm_poll_interrupt(JSContext*, uint8_t);
 +extern "C" void bunsm_pbl_entry();
++// An IC that calls a scripted function, getter, setter or bound function
++// re-enters this interpreter in C. WASI counts recursion instead of reading
++// the native stack, and the callee's entry check releases its unit at once, so
++// the caller holds one unit until the callee returns, as RunScript does for
++// frames entered from C++.
++#  define BUNWASM_HOLD_RECURSION_UNIT(cx) \
++    AutoCheckRecursionLimit bunwasmNestedFrame(cx)
++#else
++#  define BUNWASM_HOLD_RECURSION_UNIT(cx) ((void)0)
 +#endif
 +
  // Whether to compile in interrupt checks in the main interpreter loop.
@@ -125,7 +134,31 @@ index d38cebe3e..a6ebdedcb 100644
  // On WASI, with a single thread, there is no possibility for an
  // interrupt to come asynchronously.
  #  define ENABLE_INTERRUPT_CHECKS
-@@ -6034,7 +6039,16 @@ PBIResult PortableBaselineInterpret(
+@@ -2419,6 +2433,7 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+             ImmutableScriptData* isd = script->immutableScriptData();
+             PBIResult result;
+             Value ret;
++            BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
+             result = PortableBaselineInterpret<false, kHybridICsInterp>(
+                 cx, ctx.state, ctx.stack, sp,
+                 /* envChain = */ nullptr, &ret, pc, isd, nullptr, nullptr,
+@@ -2508,6 +2523,7 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+           ImmutableScriptData* isd = script->immutableScriptData();
+           PBIResult result;
+           Value ret;
++          BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
+           result = PortableBaselineInterpret<false, kHybridICsInterp>(
+               cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
+               isd, nullptr, nullptr, nullptr, PBIResult::Ok);
+@@ -2602,6 +2618,7 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+           ImmutableScriptData* isd = script->immutableScriptData();
+           PBIResult result;
+           Value ret;
++          BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
+           result = PortableBaselineInterpret<false, kHybridICsInterp>(
+               cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
+               isd, nullptr, nullptr, nullptr, PBIResult::Ok);
+@@ -6034,7 +6051,16 @@ PBIResult PortableBaselineInterpret(
      }
    }
    COUNT_COVERAGE_MAIN();
@@ -142,7 +175,7 @@ index d38cebe3e..a6ebdedcb 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
    if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
      PUSH_EXIT_FRAME();
-@@ -7909,6 +7923,9 @@ PBIResult PortableBaselineInterpret(
+@@ -7909,6 +7935,9 @@ PBIResult PortableBaselineInterpret(
                }
              }
              // 11. Check for interrupts.
@@ -152,7 +185,7 @@ index d38cebe3e..a6ebdedcb 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
              if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
                PUSH_EXIT_FRAME();
-@@ -8231,6 +8248,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8231,6 +8260,9 @@ PBIResult PortableBaselineInterpret(
        CASE(LoopHead) {
          int32_t icIndex = GET_INT32(pc);
          icEntry = icEntries + icIndex;
@@ -162,7 +195,7 @@ index d38cebe3e..a6ebdedcb 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
          if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
            PUSH_EXIT_FRAME();
-@@ -8499,6 +8519,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8499,6 +8531,9 @@ PBIResult PortableBaselineInterpret(
        }
  
        CASE(Finally) {
@@ -531,4 +564,91 @@ index f1ce887af..00c9ecad1 100644
 +
  ////////////////////////////////////////////////////////////////////////////////
  // Internal implementation
- 
+
+diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendContext.cpp
+--- a/js/src/frontend/FrontendContext.cpp
++++ b/js/src/frontend/FrontendContext.cpp
+@@ -203,6 +203,9 @@ void FrontendContext::setCurrentJSContext(JSContext* cx) {
+   nameCollectionPool_ = &cx->frontendCollectionPool();
+   scriptDataTableHolder_ = &cx->runtime()->scriptDataTableHolder();
+   stackLimit_ = cx->stackLimitForCurrentPrincipal();
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  wasiEntryDepth_ = JS::RootingContext::get(cx)->wasiRecursionDepth;
++#endif
+
+ #ifdef DEBUG
+   setNativeStackLimitThread();
+@@ -297,9 +300,38 @@ void FrontendContext::decWasiRecursionDepth() {
+   }
+ }
+
++#  if defined(BUNWASM_EMBED)
++// The parser and bytecode emitter spend far less host stack per depth unit
++// than runtime reentry, so they get their own bound on the shared counter,
++// sized from Chromium's worker stack, the smallest measured browser host.
++// A runtime unit held when the compile began can cost four frontend units of
++// host stack, so each one beyond an ordinary entry depth removes three units
++// of the bound, which never drops below the runtime limit.
++static constexpr uint32_t BunwasmFrontendDepthLimit = 1300u;
++static constexpr uint32_t BunwasmFrontendFreeEntryDepth = 32u;
++static constexpr uint32_t BunwasmFrontendEntryDepthWeight = 3u;
++
++static uint32_t BunwasmFrontendLimit(uint32_t entryDepth) {
++  constexpr uint32_t runtimeLimit = JS::RootingContext::wasiRecursionDepthLimit;
++  constexpr uint32_t room = BunwasmFrontendDepthLimit - runtimeLimit;
++  uint32_t excess = entryDepth > BunwasmFrontendFreeEntryDepth
++                        ? entryDepth - BunwasmFrontendFreeEntryDepth
++                        : 0;
++  if (excess >= room / BunwasmFrontendEntryDepthWeight) {
++    return runtimeLimit;
++  }
++  return BunwasmFrontendDepthLimit - BunwasmFrontendEntryDepthWeight * excess;
++}
++#  endif
++
+ bool FrontendContext::checkWasiRecursionLimit() {
+   if (maybeCx_) {
++#  if defined(BUNWASM_EMBED)
++    return JS::RootingContext::get(maybeCx_)->wasiRecursionDepth <
++           BunwasmFrontendLimit(wasiEntryDepth_);
++#  else
+     return CheckWasiRecursionLimit(maybeCx_);
++#  endif
+   }
+   return true;
+ }
+diff --git a/js/src/frontend/FrontendContext.h b/js/src/frontend/FrontendContext.h
+--- a/js/src/frontend/FrontendContext.h
++++ b/js/src/frontend/FrontendContext.h
+@@ -119,6 +119,11 @@ class FrontendContext {
+   // Set by setCurrentJSContext.
+   JSContext* maybeCx_ = nullptr;
+
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  // The JSContext's WASI recursion depth when this compile attached to it.
++  uint32_t wasiEntryDepth_ = 0;
++#endif
++
+  public:
+   FrontendContext()
+       : alloc_(this),
+diff --git a/js/src/frontend/Parser.cpp b/js/src/frontend/Parser.cpp
+--- a/js/src/frontend/Parser.cpp
++++ b/js/src/frontend/Parser.cpp
+@@ -3267,6 +3267,16 @@ GeneralParser<ParseHandler, Unit>::innerFunctionForFunctionBox(
+     return errorResult();
+   }
+
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  // A nested function spends about three counted parser levels of host stack.
++  // Hold two more WASI depth units so the frontend depth limit bounds it.
++  AutoCheckRecursionLimit functionWeight(this->fc_);
++  AutoCheckRecursionLimit functionWeightSecond(this->fc_);
++  if (!functionWeightSecond.check(this->fc_)) {
++    return errorResult();
++  }
++#endif
++
+   if (!functionFormalParametersAndBody(inHandling, yieldHandling, &funNode,
+                                        kind)) {
+     return errorResult();
