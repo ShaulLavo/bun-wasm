@@ -3431,7 +3431,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openObject(JSObject&, Structure&);
 +    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openArray(JSArray&);
 +    template<HasGap hasGap, bool testing> ALWAYS_INLINE bool appendProperty(JSObject&, Structure&, const PropertyTableEntry&);
-+    template<HasGap hasGap> ALWAYS_INLINE bool appendPropertyName(std::span<const Latin1Character>);
++    template<HasGap hasGap> ALWAYS_INLINE bool appendPropertyName(std::span<const Latin1Character>, bool needComma);
 +    ALWAYS_INLINE bool appendPropertyString(JSValue);
 +    ALWAYS_INLINE bool appendLatin1PropertyString(JSValue);
 +    template<HasGap hasGap, bool testing> ALWAYS_INLINE bool advanceObject(unsigned);
@@ -3506,7 +3506,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
      case JSFunctionType:
          recordFailure("function"_s);
          return;
-@@ -1830,6 +1990,566 @@
+@@ -1830,6 +1990,565 @@
      }
  }
 
@@ -3965,7 +3965,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +        return false;
 +    }
 +
-+    if (!appendPropertyName<hasGap>(span))
++    if (!appendPropertyName<hasGap>(span, needComma))
 +        return false;
 +    if (appendPropertyString(value))
 +        return !haveFailure();
@@ -3987,9 +3987,8 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +
 +template<typename CharType, BufferMode bufferMode>
 +template<HasGap hasGap>
-+ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::appendPropertyName(std::span<const Latin1Character> span)
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::appendPropertyName(std::span<const Latin1Character> span, bool needComma)
 +{
-+    bool needComma = buffer()[m_length - 1] != '{';
 +    // m_dynamicBuffer has inline capacity, so buffer() can point inside this object
 +    // next to m_length: stores through it may-alias the members, forcing the compiler
 +    // to reload both after every store. Cache them instead. Scoped because the pointer
@@ -4073,7 +4072,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
  template<typename CharType, BufferMode bufferMode>
  inline String FastStringifier<CharType, bufferMode>::stringify(JSGlobalObject& globalObject, JSValue value, JSValue replacer, JSValue space, std::optional<FailureReason>& failureReason)
  {
-@@ -1844,10 +2564,22 @@
+@@ -1844,10 +2563,22 @@
              return { };
          }
      }
@@ -4100,7 +4099,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
      failureReason = stringifier.m_failureReason;
      return stringifier.result();
  }
-@@ -1855,6 +2587,19 @@
+@@ -1855,6 +2586,19 @@
  static NEVER_INLINE String stringify(JSGlobalObject& globalObject, JSValue value, JSValue replacer, JSValue space)
  {
      VM& vm = globalObject.vm();
@@ -4120,7 +4119,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
      uint8_t* stackLimit = std::bit_cast<uint8_t*>(vm.softStackLimit());
      if (std::bit_cast<uint8_t*>(currentStackPointer()) >= stackLimit) [[likely]] {
          std::optional<FailureReason> failureReason;
-@@ -1877,6 +2622,13 @@
+@@ -1877,6 +2621,13 @@
                  return result;
          }
      }

@@ -23,6 +23,7 @@ once. Property enumeration tests for descent after the generic value append. Its
 keeps the rooted container and structure cells, while the parent cursor is stored by frame
 index after descent. The physical table walk uses a local entry pointer and returns its next
 index. Output positions and finished-frame counts are cached across buffer stores.
+The property-name helper reuses the comma decision made before buffer reservation.
 
 Root publication and table acquisition are inlined at their JSON call sites, retaining
 `MarkedVector` registration and overflow handling. Fixed leaf output is forced inline only
