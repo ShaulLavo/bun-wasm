@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { emitTiming } from "./timing-observation.ts";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -110,6 +111,7 @@ async function fixture(mode: Mode, operation: (page: Page, base: string, resourc
     const started = performance.now();
     try { await operation(page, `http://127.0.0.1:${server.port}/`, resources); }
     finally { console.info(`HTTP acceptance fixture ${mode}: ${(performance.now() - started).toFixed(1)} ms`); }
+    if (mode === "ok") emitTiming("http-stream-cancel", performance.now() - started, browser.version());
   } finally {
     await browser?.close();
     for (const timer of resources.timers) clearTimeout(timer);
