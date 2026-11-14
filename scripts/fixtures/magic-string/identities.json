@@ -1,0 +1,45 @@
+[
+  {
+    "path": "LICENSE",
+    "bytes": 1051,
+    "sha256": "1cbe51b907662f6cb1492b16c359384a595180bf0e4d101603ed525e75c4e484"
+  },
+  {
+    "path": "candidate.mjs.gz",
+    "bytes": 10038,
+    "sha256": "203d12ddba48d93332435615ba93e99ccb0a8671dd7d504ee3d688769dbadc4b",
+    "sourceBytes": 44036,
+    "sourceSha256": "0ff3919bd96940bb50b71f040f394432564c67da541c0b9f7d7998cf7eab7af0"
+  },
+  {
+    "path": "codec-LICENSE",
+    "bytes": 1080,
+    "sha256": "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c"
+  },
+  {
+    "path": "codec.mjs.gz",
+    "bytes": 3237,
+    "sha256": "99bde3a3d2ba2afb50d23a33db2cede75de5215841457836f2909b54ba5a1e2d",
+    "sourceBytes": 14399,
+    "sourceSha256": "2768e18f3bf937a0111c98872ff3e8ec8f5165d103a082b91f5127351beab7d0"
+  },
+  {
+    "path": "corrected.mjs.gz",
+    "bytes": 10061,
+    "sha256": "80e42657d1fc8ee7af50df0e399107d78d8a1a7103704f4bc22a281463c0e65e",
+    "sourceBytes": 44091,
+    "sourceSha256": "31b9f7f42a733b1646a344933f167f3825dc58517f83682acbbd65f7e1d83395"
+  },
+  {
+    "path": "magic-string.d.mts",
+    "bytes": 10017,
+    "sha256": "2be2227c3810dfd84e46674fd33b8d09a4a28ad9cb633ed536effd411665ea1e"
+  },
+  {
+    "path": "original.mjs.gz",
+    "bytes": 8866,
+    "sha256": "c5298987451561eace2caf6ba07b8fbb181eadbacd46883913dc1207861b407e",
+    "sourceBytes": 38739,
+    "sourceSha256": "d637092a6c7dd947e1b27aef30e97d1a5f59dc39b69ef8f4f0e37e766e4df159"
+  }
+]

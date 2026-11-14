@@ -9,6 +9,8 @@
 
 #[path = "esbuild_packet.rs"]
 mod esbuild_packet;
+#[path = "magic_string_encoded.rs"]
+mod magic_string_encoded;
 #[path = "next_swc.rs"]
 mod next_swc;
 #[path = "oxc_memory.rs"]
@@ -503,6 +505,7 @@ impl State {
         let adapted = oxc_memory::adapt(&adapted, path);
         let adapted = rolldown_memory::adapt(&adapted, path);
         let adapted = esbuild_packet::adapt(&adapted, path);
+        let adapted = magic_string_encoded::adapt(&adapted, path);
         self.transpiler
             .prepare_module(&adapted, path, loader, &mut |request| {
                 self.intern_import_request(request)
@@ -766,6 +769,7 @@ pub fn eval_entry(state: &State, code: &str) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
+    include!("magic_string_encoded_tests.rs");
     #[cfg(feature = "engine-host")]
     #[test]
     fn host_polyfill_registration_and_dispatch() {
