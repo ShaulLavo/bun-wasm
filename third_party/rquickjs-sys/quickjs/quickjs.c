@@ -51461,8 +51461,9 @@ static JSValue js_regexp_escape(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
-static JSValue js_regexp_exec(JSContext *ctx, JSValueConst this_val,
-                              int argc, JSValueConst *argv)
+static JSValue js_regexp_exec_internal(JSContext *ctx, JSValueConst this_val,
+                                       int argc, JSValueConst *argv,
+                                       bool test_only)
 {
     int rc, capture_count, alloc_count, shift, index, i, re_flags, prop_flags;
     JSRegExp *re = js_get_regexp(ctx, this_val, true);
@@ -51550,6 +51551,10 @@ static JSValue js_regexp_exec(JSContext *ctx, JSValueConst this_val,
             if (JS_SetProperty(ctx, this_val, JS_ATOM_lastIndex,
                                js_int32((capture[1] - str_buf) >> shift)) < 0)
                 goto fail;
+        }
+        if (test_only) {
+            ret = JS_TRUE;
+            goto fail;
         }
         group_name_ptr = lre_get_groupnames(re_bytecode);
         if (group_name_ptr) {
@@ -51690,6 +51695,12 @@ fail:
     return ret;
 }
 
+static JSValue js_regexp_exec(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv)
+{
+    return js_regexp_exec_internal(ctx, this_val, argc, argv, false);
+}
+
 /* delete portions of a string that match a given regex */
 static JSValue JS_RegExpDelete(JSContext *ctx, JSValueConst this_val, JSValue arg)
 {
@@ -51800,13 +51811,45 @@ fail:
     return JS_EXCEPTION;
 }
 
-static JSValue JS_RegExpExec(JSContext *ctx, JSValueConst r, JSValueConst s)
+/* The intrinsic test call keeps the native call's realm, frame, interrupt
+   poll and stack guard while omitting only its unused match result. */
+static JSValue js_regexp_test_intrinsic(JSContext *ctx, JSValueConst method,
+                                       JSValueConst r, JSValueConst s)
+{
+    JSRuntime *rt = ctx->rt;
+    JSStackFrame sf;
+    JSValue ret;
+
+    if (js_poll_interrupts(ctx))
+        return JS_EXCEPTION;
+    if (js_check_stack_overflow(rt, sizeof(JSValue)))
+        return JS_ThrowStackOverflow(ctx);
+    sf.prev_frame = rt->current_stack_frame;
+    sf.is_strict_mode = false;
+    sf.is_constructor = false;
+    sf.cur_func = unsafe_unconst(method);
+    sf.arg_count = 1;
+    sf.arg_buf = (JSValue *)&s;
+    rt->current_stack_frame = &sf;
+    ctx = JS_VALUE_GET_OBJ(method)->u.cfunc.realm;
+    ret = js_regexp_exec_internal(ctx, r, 1, &s, true);
+    rt->current_stack_frame = sf.prev_frame;
+    return ret;
+}
+
+static JSValue JS_RegExpExecInternal(JSContext *ctx, JSValueConst r,
+                                    JSValueConst s, bool test_only)
 {
     JSValue method, ret;
 
     method = JS_GetProperty(ctx, r, JS_ATOM_exec);
     if (JS_IsException(method))
         return method;
+    if (test_only && JS_IsCFunction(ctx, method, js_regexp_exec, 0)) {
+        ret = js_regexp_test_intrinsic(ctx, method, r, s);
+        JS_FreeValue(ctx, method);
+        return ret;
+    }
     if (JS_IsFunction(ctx, method)) {
         ret = JS_CallFree(ctx, method, r, 1, &s);
         if (JS_IsException(ret))
@@ -51818,7 +51861,12 @@ static JSValue JS_RegExpExec(JSContext *ctx, JSValueConst r, JSValueConst s)
         return ret;
     }
     JS_FreeValue(ctx, method);
-    return js_regexp_exec(ctx, r, 1, &s);
+    return js_regexp_exec_internal(ctx, r, 1, &s, test_only);
+}
+
+static JSValue JS_RegExpExec(JSContext *ctx, JSValueConst r, JSValueConst s)
+{
+    return JS_RegExpExecInternal(ctx, r, s, false);
 }
 
 static JSValue js_regexp_test(JSContext *ctx, JSValueConst this_val,
@@ -51827,7 +51875,7 @@ static JSValue js_regexp_test(JSContext *ctx, JSValueConst this_val,
     JSValue val;
     bool ret;
 
-    val = JS_RegExpExec(ctx, this_val, argv[0]);
+    val = JS_RegExpExecInternal(ctx, this_val, argv[0], true);
     if (JS_IsException(val))
         return JS_EXCEPTION;
     ret = !JS_IsNull(val);
