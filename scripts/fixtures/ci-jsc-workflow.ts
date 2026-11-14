@@ -20,7 +20,10 @@ export function expandedCiWorkflow(): string {
   const sharedBuild = read(".github/actions/shared-jsc-prebuild/action.yml");
   const sharedKey = sharedSetup.match(/^        JSC_KEY: (.+)$/m)?.[1];
   if (!sharedKey) throw new Error("Missing effective shared JSC cache identity");
-  const shared = read(".github/workflows/ci.yml").replace(
+  const ci = read(".github/workflows/ci.yml");
+  const runner = ci.match(/^    runs-on: &pc-runner (.+)$/m)?.[1];
+  if (!runner) throw new Error("Missing centralized PC runner policy");
+  const shared = ci.replace("runs-on: &pc-runner ", "runs-on: ").replaceAll("runs-on: *pc-runner", `runs-on: ${runner}`).replace(
     /^      - uses: \.\/\.github\/actions\/shared-jsc-(setup|prebuild)\n(?: {8,}.+\n)*/gm,
     (_step, action: string) => actionSteps(action === "setup" ? sharedSetup : sharedBuild)
       .replaceAll("${{ inputs.key }}", sharedKey)

@@ -58,12 +58,12 @@ test("every JSC stamp and sysroot job installs the pinned tools before identifyi
     const install = steps.findIndex(step => step.name === installName);
     expect(install, id).toBeGreaterThan(0);
     const restore = steps[install - 1]!, save = steps[install + 1]!;
-    expect(restore.uses).toBe("actions/cache/restore@v4");
+    expect(restore.uses).toBe("./.github/actions/restore-ci-cache");
     expect(restore.id).toBe("build-tools-cache");
     const paths = buildToolPins.map(pin => `\${{ env.WASM_TOOLS }}/${pin.archive}`).join("\n") + "\n";
     expect((restore.with as Step).path).toBe(paths);
     expect((restore.with as Step).key).toBe("build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}");
-    expect(save.uses).toBe("actions/cache/save@v4");
+    expect(save.uses).toBe("./.github/actions/save-ci-cache");
     expect(save.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'");
     expect((save.with as Step).path).toBe(paths);
     expect(steps[install]!.run).toBe("bun scripts/ci-build-tools.ts");

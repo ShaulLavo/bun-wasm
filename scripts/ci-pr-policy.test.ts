@@ -1,3 +1,4 @@
+import { ciRunner } from "./fixtures/ci-expressions";
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 
@@ -14,6 +15,8 @@ function admitted(job: Record<string, unknown>, event: string, draft: boolean, r
   const expression = job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("github.event_name", JSON.stringify(event))
     .replaceAll("github.event.pull_request.draft", String(draft))
+    .replaceAll("github.event.pull_request.head.repo.full_name", '"ShaulLavo/bun-wasm"')
+    .replaceAll("github.repository", '"ShaulLavo/bun-wasm"')
     .replaceAll("!cancelled()", "true")
     .replaceAll("always()", "true")
     .replaceAll("github.ref", JSON.stringify(ref))
@@ -71,7 +74,7 @@ test("update statuses run only for manual checks of the standing update branch",
 
 test("no job runs on Boat runners", () => {
   const formerBoatJobs = ["jsc-prebuild", "native-quality", "rust", "package", "shared-sysroot", "web", "browser-process"];
-  for (const id of formerBoatJobs) expect(record(jobs[id])["runs-on"], id).toBe("ubuntu-latest");
+  for (const id of formerBoatJobs) expect(ciRunner(record(jobs[id])["runs-on"]), id).toEqual(["ubuntu-latest"]);
   const boatJobs = Object.entries(jobs).filter(([, value]) => JSON.stringify(record(value)["runs-on"]).includes("boat"));
   expect(boatJobs.map(([id]) => id)).toEqual([]);
 });

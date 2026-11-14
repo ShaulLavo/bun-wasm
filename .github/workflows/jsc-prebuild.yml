@@ -15,7 +15,8 @@ env:
 jobs:
   identity:
     name: Resolve effective JSC inputs
-    runs-on: ubuntu-latest
+    if: ${{ (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch' }}
+    runs-on: &pc-runner ${{ fromJSON(vars.BUN_WASM_PC_RUNNER == 'true' && (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') && (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && '["self-hosted","linux","x64","pc","bun-wasm"]' || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     outputs:
       key: ${{ steps.setup.outputs.key }}
@@ -44,7 +45,8 @@ jobs:
   jsc-prebuild:
     name: Warm verified JSC cache
     needs: identity
-    runs-on: ubuntu-latest
+    if: ${{ (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch' }}
+    runs-on: *pc-runner
     concurrency:
       group: ${{ needs.identity.outputs.key }}
       cancel-in-progress: false
@@ -74,7 +76,8 @@ jobs:
 
   shared-identity:
     name: Resolve effective shared JSC inputs
-    runs-on: ubuntu-latest
+    if: ${{ (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch' }}
+    runs-on: *pc-runner
     timeout-minutes: 15
     env:
       WASI_LIBC_JOBS: "2"
@@ -105,7 +108,8 @@ jobs:
   shared-prebuild:
     name: Warm verified shared JSC cache
     needs: shared-identity
-    runs-on: ubuntu-latest
+    if: ${{ (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || github.event_name == 'workflow_dispatch' }}
+    runs-on: *pc-runner
     concurrency:
       group: ${{ needs.shared-identity.outputs.key }}
       cancel-in-progress: false

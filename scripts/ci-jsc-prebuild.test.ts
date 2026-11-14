@@ -57,6 +57,8 @@ function jobRuns(job: Job, needs: Readonly<Record<string, Need>>, cancelled: boo
   const expression = condition.replaceAll("!cancelled()", String(!cancelled))
     .replaceAll("github.event_name", JSON.stringify("pull_request"))
     .replaceAll("github.event.pull_request.draft", "false")
+    .replaceAll("github.event.pull_request.head.repo.full_name", '"ShaulLavo/bun-wasm"')
+    .replaceAll("github.repository", '"ShaulLavo/bun-wasm"')
     .replace(/needs\.([\w-]+)\.(result|outputs\.([\w-]+))/g, (_whole, id: string, _field: string, key: string | undefined) => JSON.stringify(key ? needs[id]?.outputs?.[key] : needs[id]?.result));
   const result: unknown = new Function(`return (${expression})`)();
   if (typeof result !== "boolean") throw new Error("Non-boolean condition");
@@ -71,7 +73,7 @@ function guard(result: string): number | null {
 
 test("the prebuild job runs for every native selection, independent of the JSC engine gates", () => {
   expect(producer.needs).toEqual(["quality", "jsc-identity"]);
-  expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
+  expect(producer.if).toContain("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') &&");
   expect(JSON.stringify(producer)).not.toContain("needs.quality.outputs.jsc");
   expect(native.needs).toEqual(["quality", "jsc-prebuild", "native-quality"]);
   // A native-only change still builds the tools fixture, which links the prebuild.
@@ -118,7 +120,7 @@ test("both jobs run byte-identical setup, so the native job can re-verify in the
       "Save completed sdk setup", "Install pinned Binaryen", "Save completed binaryen-cache setup", "Identify JSC prebuild inputs"].includes(name)
       || ["sdk", "binaryen-cache"].includes(id) || uses === "./.github/actions/setup-tools" || uses === "actions/checkout@v4"
       || item.run === 'bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts'
-      || (uses === "actions/cache/restore@v4" && JSON.stringify(item.with).includes(".ci-bun-cache"));
+      || (uses === "./.github/actions/restore-ci-cache" && JSON.stringify(item.with).includes(".ci-bun-cache"));
   });
   const bunSetup = (items: Job[]) => items.map(item => Object.fromEntries(Object.entries(item).filter(([key]) => key !== "shell"))).map(item => item.uses === "./.github/actions/setup-tools"
     ? { ...item, with: { "bun-version": record(item.with)["bun-version"] } } : item);

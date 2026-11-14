@@ -1,0 +1,25 @@
+name: Save CI cache
+description: Publish immutable local snapshots on PC or GitHub caches on hosted runners after the caller's gates
+inputs:
+  path:
+    description: Newline-separated paths and globs to save
+    required: true
+  key:
+    description: Existing effective cache key
+    required: true
+runs:
+  using: composite
+  steps:
+    - if: runner.environment == 'self-hosted' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BUN_WASM_PC_CACHE_ROOT: /work/ci-runner/bun-wasm/cache
+        CACHE_PATHS: ${{ inputs.path }}
+        CACHE_KEY: ${{ inputs.key }}
+      run: node "$GITHUB_WORKSPACE/scripts/ci-runner/cache.ts" save
+    - if: runner.environment != 'self-hosted' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}

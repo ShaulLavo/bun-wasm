@@ -26,13 +26,13 @@ runs:
         playwright=$(grep -o '"playwright-core@[0-9][^"]*"' bun.lock | sort -u | tr -d '"')
         [[ -n "$playwright" && "$playwright" != *$'\n'* ]]
         echo "playwright=$playwright" >> "$GITHUB_OUTPUT"
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       id: browser-cache
       with:
         path: ${{ runner.temp }}/browser-apt/*.deb
         key: browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-all-${{ steps.browser-image.outputs.playwright }}-${{ hashFiles('web/scripts/ci-browser-deps.ts') }}
     # Search the exact main key before any PR-scoped prefix can shadow it.
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       if: steps.browser-cache.outputs.cache-hit != 'true'
       with:
         path: ${{ runner.temp }}/browser-apt/*.deb
@@ -48,7 +48,7 @@ runs:
       run: |
         read -r -a browsers <<< "$CI_BROWSERS"
         bun scripts/ci-browser-deps.ts "${browsers[@]}"
-    - uses: actions/cache/save@v4
+    - uses: ./.github/actions/save-ci-cache
       if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browser-cache.outputs.cache-hit != 'true'
       with:
         path: ${{ runner.temp }}/browser-apt/*.deb

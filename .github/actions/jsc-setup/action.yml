@@ -38,7 +38,7 @@ runs:
         sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
     # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
     # land on different runner images. Every producer and consumer uses the same pinned bytes.
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       id: build-tools-cache
       with:
         path: |
@@ -50,7 +50,7 @@ runs:
       run: bun scripts/ci-build-tools.ts
     - name: Save completed build-tools-cache setup
       if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: ./.github/actions/save-ci-cache
       with:
         path: |
           ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
@@ -73,7 +73,7 @@ runs:
         } > "$report"
         cat "$report"
         echo "hash=$(sha256sum "$report" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       id: sdk
       with:
         path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -91,11 +91,11 @@ runs:
         tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
     - name: Save completed sdk setup
       if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: ./.github/actions/save-ci-cache
       with:
         path: ${{ env.WASM_TOOLS }}/wasi-sdk
         key: ${{ steps.sdk.outputs.cache-primary-key }}
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       id: binaryen-cache
       with:
         path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
@@ -105,11 +105,11 @@ runs:
       run: bun scripts/ci-binaryen.ts
     - name: Save completed binaryen-cache setup
       if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: ./.github/actions/save-ci-cache
       with:
         path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
         key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       with:
         path: .ci-bun-cache
         key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -122,7 +122,7 @@ runs:
         source env.sh
         inputs=$(bun scripts/build-wasi-sysroot.ts --inputs)
         echo "hash=$inputs" >> "$GITHUB_OUTPUT"
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       id: sysroot-cache
       if: inputs.sysroot == 'build'
       with:
@@ -150,7 +150,7 @@ runs:
         time bun scripts/build-wasi-sysroot.ts
     - name: Save the verified sysroot cache
       if: inputs.sysroot == 'build' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sysroot-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: ./.github/actions/save-ci-cache
       with:
         path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
         key: ${{ steps.sysroot-cache.outputs.cache-primary-key }}

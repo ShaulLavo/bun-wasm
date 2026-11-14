@@ -3,6 +3,10 @@ import { discoverChecks } from "./test-checks";
 import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-check-inputs";
 import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
+function pcRunnerInput(path: string): boolean {
+  return path.startsWith("scripts/ci-runner/") || /^\.github\/actions\/(?:restore|save)-ci-cache\/action\.yml$/.test(path);
+}
+
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "scripts/ci-program-delivery.ts",
@@ -43,7 +47,7 @@ const sharedSysrootFiles = new Set([
 ]);
 
 export function needsSharedSysroot(paths: readonly string[]): boolean {
-  return paths.some(path => sharedSysrootFiles.has(path));
+  return paths.some(path => pcRunnerInput(path) || sharedSysrootFiles.has(path));
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
@@ -85,7 +89,7 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
 const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/", "spidermonkey/"];
 export function needsSharedNative(paths: readonly string[], inputs: readonly string[] = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
-  return paths.some(path => !excludedNativeInput(path) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
+  return paths.some(path => !excludedNativeInput(path) && (pcRunnerInput(path) || sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
 }
 
 const nativeChecks = discoverChecks();
@@ -171,7 +175,7 @@ function ordinarySpiderMonkeyInput(path: string): boolean {
 }
 
 export function needsJsc(paths: readonly string[]): boolean {
-  return paths.some(path => sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
+  return paths.some(path => pcRunnerInput(path) || sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
 }
 
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {

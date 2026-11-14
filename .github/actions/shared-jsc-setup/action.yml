@@ -29,7 +29,7 @@ runs:
       with:
         bun-version: 1.4.4
         node-version: ${{ env.CI_NODE_VERSION }}
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       with:
         path: .ci-bun-cache
         key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
@@ -44,7 +44,7 @@ runs:
     - name: Install pinned shared build tools
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: bun scripts/ci-build-tools.ts
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       id: shared-sdk
       with:
         path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -63,7 +63,7 @@ runs:
         tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
     - name: Save completed shared-sdk setup
       if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sdk.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v4
+      uses: ./.github/actions/save-ci-cache
       with:
         path: ${{ env.WASM_TOOLS }}/wasi-sdk
         key: ${{ steps.shared-sdk.outputs.cache-primary-key }}
@@ -74,7 +74,7 @@ runs:
         source env.sh
         inputs=$(bun scripts/build-wasi-sysroot.ts --shared-pic --inputs)
         echo "hash=$inputs" >> "$GITHUB_OUTPUT"
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       id: shared-sysroot-cache
       if: inputs.sysroot == 'build'
       with:
@@ -100,7 +100,7 @@ runs:
         bun scripts/build-wasi-sysroot.ts --shared-pic
     - name: Save shared profile cache
       if: ${{ inputs.sysroot == 'build' && success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sysroot-cache.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v4
+      uses: ./.github/actions/save-ci-cache
       with:
         path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
         key: ${{ steps.shared-sysroot-cache.outputs.cache-primary-key }}
@@ -111,7 +111,7 @@ runs:
         if command -v ruby && command -v gperf && command -v bison; then exit 0; fi
         sudo apt-get update
         sudo apt-get install -y ruby gperf bison
-    - uses: actions/cache/restore@v4
+    - uses: ./.github/actions/restore-ci-cache
       if: inputs.shared-native == 'true'
       id: shared-binaryen
       with:

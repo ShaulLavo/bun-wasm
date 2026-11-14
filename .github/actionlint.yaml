@@ -1,2 +1,2 @@
 self-hosted-runner:
-  labels: [boat, boat-large]
+  labels: [pc, bun-wasm]
