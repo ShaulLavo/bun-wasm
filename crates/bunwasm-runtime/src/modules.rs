@@ -7,6 +7,8 @@
 //! importers through a tiny generated wrapper module that re-exports the keys
 //! of an object handed over through the wrapper's `import.meta.m`.
 
+#[path = "esbuild_packet.rs"]
+mod esbuild_packet;
 #[path = "next_swc.rs"]
 mod next_swc;
 #[path = "oxc_memory.rs"]
@@ -500,6 +502,7 @@ impl State {
         let adapted = next_swc::adapt(raw, path);
         let adapted = oxc_memory::adapt(&adapted, path);
         let adapted = rolldown_memory::adapt(&adapted, path);
+        let adapted = esbuild_packet::adapt(&adapted, path);
         self.transpiler
             .prepare_module(&adapted, path, loader, &mut |request| {
                 self.intern_import_request(request)
@@ -1149,6 +1152,32 @@ mod tests {
         assert!(second[0].start > first[0].start);
         assert_eq!(&changed[second[0].start..second[0].end], "import");
         assert!(!state.positions.borrow().contains_key(&path));
+    }
+
+    #[test]
+    fn host_esbuild_packet_preparation_adapts_published_source() {
+        use std::io::Read as _;
+
+        let compressed = include_bytes!("../../../scripts/fixtures/esbuild-packet/main.js.gz");
+        let mut source = String::new();
+        flate2::read::GzDecoder::new(compressed.as_slice())
+            .read_to_string(&mut source)
+            .unwrap();
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        let path = "/project/node_modules/esbuild/lib/main.js";
+        let expected = esbuild_packet::adapt(&source, path);
+        assert_ne!(expected, source);
+        let prepared = state
+            .prepare_javascript(&source, path, SourceLoader::Js)
+            .unwrap();
+        assert_eq!(prepared.code, expected);
+        let unrelated = state
+            .prepare_javascript(&source, "/project/main.js", SourceLoader::Js)
+            .unwrap();
+        assert_eq!(unrelated.code, source);
     }
 
     #[cfg(feature = "engine-host")]
