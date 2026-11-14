@@ -42,6 +42,23 @@ impl Reads {
     }
 }
 
+fn install_native(
+    engine: &QuickJs,
+    native: &Value,
+    groups: &mut std::collections::HashMap<String, Value>,
+    name: &str,
+    function: Value,
+) {
+    let Some((group, short)) = name.split_once('.') else {
+        engine.set(native, name, function).unwrap();
+        return;
+    };
+    let target = groups
+        .entry(group.to_owned())
+        .or_insert_with(|| engine.new_object());
+    engine.set(target, short, function).unwrap();
+}
+
 fn natives(engine: &QuickJs, reads: &Rc<Reads>) -> Value {
     let (state, _) = crate::new_state(
         &crate::Entry::Eval(String::new()),
@@ -53,6 +70,7 @@ fn natives(engine: &QuickJs, reads: &Rc<Reads>) -> Value {
     );
     let table = super::super::table(&state);
     let native = engine.new_object();
+    let mut groups = std::collections::HashMap::new();
     for (id, (name, function)) in table.functions.into_iter().enumerate() {
         let dispatch =
             Dispatcher::new(NonZeroU32::MIN, u32::try_from(id).unwrap(), function).unwrap();
@@ -61,9 +79,16 @@ fn natives(engine: &QuickJs, reads: &Rc<Reads>) -> Value {
             reads.record(name, &args);
             dispatch.call(args)
         });
-        engine
-            .set(&native, name, engine.new_function(name, call))
-            .unwrap();
+        install_native(
+            engine,
+            &native,
+            &mut groups,
+            name,
+            engine.new_function(name, call),
+        );
+    }
+    for (name, group) in groups {
+        engine.set(&native, &name, group).unwrap();
     }
     for (name, value) in table.constants {
         engine.set(&native, name, engine.value_from(value)).unwrap();
