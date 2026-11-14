@@ -4,7 +4,7 @@ function quickjsDepth(): number {
   try { new Function("let let = 1"); } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
     if (error.message === "'let' is not a valid lexical identifier") return 4096;
-    if (error.message.includes("Cannot use 'let' as an identifier name") || error.message === "let is disallowed as a lexically bound name") return 48;
+    if (error.message.includes("Cannot use 'let' as an identifier name") || error.message === "let is disallowed as a lexically bound name" || error.message === "a lexical declaration can't define a 'let' binding") return 48;
     throw new Error("Unrecognized parser fingerprint", { cause: error });
   }
   throw new Error("Invalid lexical declaration was accepted");

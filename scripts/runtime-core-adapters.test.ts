@@ -64,7 +64,9 @@ function withoutStackCapabilityDeltas(source: string) {
   expect(source.split(awaitingCaller)).toHaveLength(2);
   expect(source.split("custom && parseCapturedStack")).toHaveLength(2);
   expect(source.split('native.engine === "quickjs" || parseCapturedStack')).toHaveLength(2);
-  return source.replace(declaration, "")
+  const prototypeWrapper = /  if \(native.engine === "spidermonkey"\) \{\n[\s\S]*?\n  \}\n\n/;
+  expect(source.match(prototypeWrapper)).not.toBeNull();
+  return source.replace(prototypeWrapper, "").replace(declaration, "")
     .replace(awaitingCaller, 'this.#frame.name.startsWith("async ")')
     .replace("custom && parseCapturedStack", 'custom && native.engine === "jsc"')
     .replace('native.engine === "quickjs" || parseCapturedStack', 'native.engine === "quickjs" || native.engine === "jsc"');
@@ -123,13 +125,14 @@ const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
   bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
 };
-const originalEmbeddedBytes = { stack_trace: 4330, bun_builtins: 4092 };
+const originalEmbeddedBytes = { stack_trace: 5300, bun_builtins: 4092 };
 test("stack descriptor records are the only executable delta", () => {
   const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/stack_trace.ts"), "utf8");
   const records = stackDescriptorRecords(source);
   expect(records).toEqual([
     { target: "target", properties: ["__proto__", "value", "writable", "configurable", "enumerable"], nullPrototype: true },
     { target: "Error.prototype", properties: ["configurable", "get", "set"], nullPrototype: false },
+    { target: "Error.prototype", properties: ["__proto__", "configurable", "enumerable", "get", "set"], nullPrototype: true },
     { target: "target", properties: ["__proto__", "configurable", "enumerable", "get", "set"], nullPrototype: true },
   ]);
 });

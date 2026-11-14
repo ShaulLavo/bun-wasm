@@ -13,6 +13,14 @@ reads memoize the default stack, successful outer formatters may replace that
 value, and throwing formatters clear the guard in finally. These are original
 adapters derived from behavior probes, with no Node/V8 implementation copied.
 
+SpiderMonkey's ordinary Error stack getter now passes its native string through
+the same formatter and memoization as explicit capture. The original constructor,
+setter and accessor attributes stay intact. The getter runs first, preserving
+its receiver checks and empty string for non-Error objects. This original wrapper
+uses a null-prototype descriptor too. Its checked native contract is Mozilla
+`a5df22d986d4b626f771b4f8885241941601c35c`,
+`js/src/vm/ErrorObject.cpp`, `ErrorObject::getStack_impl` and `setStack_impl`.
+
 ## Classification
 
 | Patch or source | Class | Change |

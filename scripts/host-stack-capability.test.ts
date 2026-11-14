@@ -7,7 +7,8 @@ const read = (name: string) => readFileSync(new URL(name, directory), "utf8");
 const bootstrap = read("bootstrap.js").split("  // --- async context")[0] + "return internal; })";
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 function factory(name: string) {
-  return transpiler.transformSync(`globalThis.factory = ${read(name)};`).replace("globalThis.factory =", "").trim().replace(/;$/, "");
+  return transpiler.transformSync(`globalThis.factory = ${read(name)};`).replace("globalThis.factory =", "").trim().replace(/;$/, "")
+    .replace(/^(function[^\{]*\{)/, '$1"use strict";');
 }
 const factories = { stack_trace: factory("stack_trace.ts"), stack_capability: factory("stack_capability.ts"), inspect: read("inspect.js") };
 const initialize = (engine: string) => `

@@ -1442,7 +1442,7 @@
     const stack = internal.hotErrorStacks?.get(error) ?? formattedStack;
     if (native.engine !== "spidermonkey" || typeof savedErrorFrames !== "function") return parseStack(stack);
     let frames;
-    try { frames = savedErrorFrames(error, stack); }
+    try { frames = savedErrorFrames(error, stack, true); }
     catch { return parseStack(stack); }
     if (!Array.isArray(frames)) return parseStack(stack);
     return frames.map(frame => nativeFrame(frame.name, frame.file, frame.line, frame.column)).filter(frame => frame !== null);

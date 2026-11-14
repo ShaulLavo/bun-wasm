@@ -22,6 +22,11 @@ It neither reads a public stack getter again nor changes the error, rejection,
 stack text or prototype. The capability stays in SpiderMonkey initialization;
 no shared Engine ABI, other engine adapter or public Waffle interface changes.
 
+Exception formatting requests the reader's existing self-hosted exclusion option.
+Mozilla's SavedFrame APIs omit internal `apply` frames by native classification.
+User frames whose filename is `self-hosted` remain visible, and native stack text
+still retains its original contents.
+
 Synchronous CommonJS wrappers keep their location but not their synthetic name.
 After source mapping, a SpiderMonkey constructor column advances only for the
 simple same-line `new` plus horizontal whitespace and identifier form. Comments,
