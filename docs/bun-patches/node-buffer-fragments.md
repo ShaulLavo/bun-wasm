@@ -19,6 +19,20 @@ documented in [Buffer encoding bindings](buffer-encoding-bindings.md). It keeps
 the raw binding range and coercion policies separate from public `write` and
 `toString` overload handling.
 
+`fromArrayBuffer` preserves an omitted or undefined length when constructing
+`FastBuffer`. Passing the computed remaining byte count instead creates a fixed
+length typed-array view, which becomes out of bounds after a backing-store
+shrink. The existing offset and explicit-length coercion and validation stay in
+place. Native Bun 1.4.4 and Uint8Array controls confirm tracking through shrink,
+regrow and growable shared storage, while explicit lengths remain fixed and all
+views share the original storage. This is an original adapter correction, with
+no newly copied upstream source. The regression fixture and production-factory
+tests are `tests/fixtures/buffer-resizable-construction` and
+`scripts/buffer-resizable-construction.test.ts`. They cover the three subprocess
+programs at Bun `9510e74152073d850a18758ca41114d8f214ffa6`,
+`test/js/node/buffer.test.js` lines 4415 and 4691, in the factory directly.
+Resizable and growable-shared checks run only where those operations exist.
+
 
 `buffer_fill_args.ts` is an original adapter, not copied upstream code. It selects
 Buffer.fill's encoding overload before the existing Buffer adapter validates the
@@ -39,7 +53,7 @@ TypeScript stripping script. No upstream source was copied for this fix.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays; preserve native empty-copy range ordering, delegate fill overload selection to the original typed adapter, and re-export the shared web `Blob`/`File` constructors without wrapping them. |
+| [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays; preserve omitted-length tracking and empty-copy range ordering, delegate fill overload selection to the original typed adapter, and re-export the shared web `Blob`/`File` constructors without wrapping them. |
 
 [Parent context](bun-patch-series.md).
 

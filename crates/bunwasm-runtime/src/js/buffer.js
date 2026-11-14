@@ -461,7 +461,8 @@
     }
     const maxLength = ab.byteLength - offset;
     if (maxLength < 0) throw bufferOutOfBounds("offset");
-    let len = maxLength;
+    // An undefined length keeps resizable backing stores length-tracking.
+    let len;
     if (length !== undefined) {
       len = +length;
       if (len > 0) {

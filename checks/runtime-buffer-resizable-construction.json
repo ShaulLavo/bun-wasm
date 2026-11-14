@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/buffer-resizable-construction.test.ts",
+  "localRuntime": true
+}
