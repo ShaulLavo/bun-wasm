@@ -75,7 +75,7 @@ function virtualEval(): void {
   if (!nodeOnly) record("pair/virtual-eval", guest(["-e", source]), expected);
 }
 function nativeFixtures(): void {
-  const names = ["cjs-interop", "commonjs-builtin-resolution", "esm-async-dependency-reimport", "package-resolution", "timer-promises", "timer-promises-pending-close", "timer-promises-unref", "wasm-memory-growth"];
+  const names = ["cjs-interop", "commonjs-builtin-resolution", "esm-async-dependency-reimport", "package-resolution", "require-esm-caught-failure", "require-esm-after-lowered-import", "require-esm-after-native-import", "timer-promises", "timer-promises-pending-close", "timer-promises-unref", "wasm-memory-growth"];
   const discovered = new Set(selectChecks("native"));
   for (const name of names) {
     const path = `tests/fixtures/${name}`;

@@ -47,6 +47,9 @@ struct Slot {
 JSContext* context = nullptr;
 JS::PersistentRootedObject* global = nullptr;
 JS::PersistentRootedValue* asyncContext = nullptr;
+JS::PersistentRootedValue* originalThen = nullptr;
+JS::PersistentRootedId* thenId = nullptr;
+JS::PersistentRootedId* constructorId = nullptr;
 JS::PersistentRootedValue* objectKeys = nullptr;
 JS::PersistentRootedValue* errorConstructors[4] = {};
 std::vector<Slot*> slots;
@@ -384,11 +387,21 @@ JSObject* module_handler(JS::HandleObject target, JSNative callback, const char*
   return handler;
 }
 
-bool module_fulfilled(JSContext* cx, unsigned argc, JS::Value* vp) {
-  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
-  JS::RootedObject promise(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
-  args.rval().setUndefined();
-  return JS::ResolvePromise(cx, promise, JS::UndefinedHandleValue);
+void ensure_handled(JS::HandleObject promise) {
+  require(JS::SetAnyPromiseIsHandled(context, promise), "SpiderMonkey promise ownership failed");
+}
+
+bool seal(JS::HandleObject promise) {
+  constexpr unsigned attrs = JSPROP_READONLY | JSPROP_PERMANENT;
+  return JS_DefinePropertyById(context, promise, *thenId, *originalThen, attrs) &&
+         JS_DefinePropertyById(context, promise, *constructorId, JS::UndefinedHandleValue, attrs);
+}
+
+JSObject* forward_internal(JS::HandleObject source) {
+  JS::RootedObject forwarded(context, JS::CallOriginalPromiseThen(context, source, nullptr, nullptr));
+  if (!forwarded) return nullptr;
+  ensure_handled(forwarded);
+  return seal(forwarded) ? forwarded.get() : nullptr;
 }
 
 bool module_rejected(JSContext* cx, unsigned argc, JS::Value* vp) {
@@ -432,25 +445,25 @@ bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObjec
   return JS::AddPromiseReactions(cx, loading, fulfilled, rejected);
 }
 
-bool reject_module_failure(JSContext* cx, JS::HandleObject promise) {
-  if (!JS_IsExceptionPending(cx)) return false;
-  JS::RootedValue exception(cx);
-  if (!JS_GetPendingException(cx, &exception)) return false;
-  JS_ClearPendingException(cx);
-  return JS::RejectPromise(cx, promise, exception);
-}
-
 bool module_evaluate_handler(JSContext* cx, unsigned argc, JS::Value* vp) {
   JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
   JS::RootedObject module(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
-  JS::RootedObject promise(cx, &js::GetFunctionNativeReserved(&args.callee(), 1).toObject());
-  args.rval().setUndefined();
   JS::RootedValue evaluation(cx);
-  if (!JS::ModuleLink(cx, module) || !JS::ModuleEvaluate(cx, module, &evaluation)) return reject_module_failure(cx, promise);
+  if (!JS::ModuleLink(cx, module) || !JS::ModuleEvaluate(cx, module, &evaluation)) return false;
   JS::RootedObject evaluated(cx, &evaluation.toObject());
-  JS::RootedObject fulfilled(cx, module_handler(promise, module_fulfilled, "moduleFulfilled"));
-  JS::RootedObject rejected(cx, module_handler(promise, module_rejected, "moduleRejected"));
-  if (!fulfilled || !rejected || !JS::AddPromiseReactions(cx, evaluated, fulfilled, rejected)) return reject_module_failure(cx, promise);
+  ensure_handled(evaluated);
+  JS::RootedObject forwarded(cx, forward_internal(evaluated));
+  if (!forwarded) return false;
+  args.rval().setObject(*forwarded);
+  return true;
+}
+
+bool require_namespace(JSContext* cx, unsigned argc, JS::Value* vp) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+  JS::RootedObject module(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
+  JS::RootedObject ns(cx, JS::GetModuleNamespace(cx, module));
+  if (!ns) return false;
+  args.rval().setObject(*ns);
   return true;
 }
 
@@ -463,17 +476,44 @@ bool namespace_handler(JSContext* cx, unsigned argc, JS::Value* vp) {
   return true;
 }
 
+bool require_loaded(JSContext* cx, unsigned argc, JS::Value* vp) {
+  JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
+  JS::RootedObject module(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
+  if (!JS::ModuleLink(cx, module)) return false;
+  JS::RootedValue evaluation(cx);
+  if (!JS::ModuleEvaluate(cx, module, &evaluation)) return false;
+  JS::RootedObject evaluated(cx, &evaluation.toObject());
+  ensure_handled(evaluated);
+  JS::PromiseState state = JS::GetPromiseState(evaluated);
+  if (state == JS::PromiseState::Rejected) {
+    JS::RootedValue reason(cx, JS::GetPromiseResult(evaluated));
+    JS_SetPendingException(cx, reason, JS::ExceptionStackBehavior::DoNotCapture);
+    return false;
+  }
+  if (state == JS::PromiseState::Fulfilled) {
+    JS::RootedObject ns(cx, JS::GetModuleNamespace(cx, module));
+    if (!ns) return false;
+    args.rval().setObject(*ns);
+    return true;
+  }
+  JS::RootedObject handler(cx, module_handler(module, require_namespace, "requireNamespace"));
+  if (!handler) return false;
+  JS::RootedObject derived(cx, JS::CallOriginalPromiseThen(cx, evaluated, handler, nullptr));
+  if (!derived) return false;
+  ensure_handled(derived);
+  if (!seal(derived)) return false;
+  args.rval().setObject(*derived);
+  return true;
+}
+
 bool evaluate_module(JS::HandleObject module, bsm_handle* out) {
   JS::RootedValue hostDefined(context, JS::ObjectValue(*module));
   JS::RootedObject loading(context);
   if (!JS::LoadRequestedModules(context, module, hostDefined, &loading)) return failure(out);
-  JS::RootedObject evaluation(context, JS::NewPromiseObject(context, nullptr));
-  if (!evaluation) return failure(out);
   JS::RootedObject handler(context, module_handler(module, module_evaluate_handler, "moduleEvaluate"));
-  JS::RootedObject rejected(context, module_handler(evaluation, module_rejected, "moduleLoadRejected"));
-  if (!handler || !rejected) return failure(out);
-  js::SetFunctionNativeReserved(handler, 1, JS::ObjectValue(*evaluation));
-  if (!JS::AddPromiseReactions(context, loading, handler, rejected)) return failure(out);
+  if (!handler) return failure(out);
+  JS::RootedObject evaluation(context, JS::CallOriginalPromiseThen(context, loading, handler, nullptr));
+  if (!evaluation) return failure(out);
   *out = hold_object(evaluation);
   return true;
 }
@@ -588,6 +628,19 @@ extern "C" void bsm_init(const bsm_config* config) {
   global = new JS::PersistentRootedObject(context, object);
   JSAutoRealm realm(context, object);
   require(JS::InitRealmStandardClasses(context), "standard classes failed");
+  JS::RootedObject promisePrototype(context, JS::GetPromisePrototype(context));
+  require(promisePrototype != nullptr, "Promise prototype missing");
+  JS::RootedId capturedThenId(context);
+  JS::RootedId capturedConstructorId(context);
+  require(property_id("then", 4, &capturedThenId) &&
+              property_id("constructor", 11, &capturedConstructorId),
+          "Promise property atoms failed");
+  JS::RootedValue capturedThen(context);
+  require(JS_GetPropertyById(context, promisePrototype, capturedThenId, &capturedThen),
+          "Promise.prototype.then missing");
+  originalThen = new JS::PersistentRootedValue(context, capturedThen);
+  thenId = new JS::PersistentRootedId(context, capturedThenId);
+  constructorId = new JS::PersistentRootedId(context, capturedConstructorId);
   // Keep async allocation ancestry distinguishable from live frames for the runtime formatter.
   js::SetStackFormat(context, js::StackFormat::SpiderMonkey);
   require(install_error_frames(context, object), "saved-frame reader installation failed");
@@ -624,6 +677,9 @@ extern "C" void bsm_shutdown(void) {
   slots.clear();
   freeSlots.clear();
   delete objectKeys;
+  delete constructorId;
+  delete thenId;
+  delete originalThen;
   delete asyncContext;
   delete global;
   JS_DestroyContext(context);
@@ -840,6 +896,24 @@ extern "C" bool bsm_import(const char* specifier, size_t length, bsm_handle* out
   if (!resolve(specifier, length, "", &name)) return failure(out);
   JS::RootedObject module(context, load_module(name));
   return module ? namespace_promise(module, out) : failure(out);
+}
+extern "C" bool bsm_require(const char* specifier, size_t length, bsm_handle* out) {
+  JSAutoRealm realm(context, global->get());
+  std::string name;
+  if (!resolve(specifier, length, "", &name)) return failure(out);
+  JS::RootedObject module(context, load_module(name));
+  if (!module) return failure(out);
+  JS::RootedValue hostDefined(context, JS::ObjectValue(*module));
+  JS::RootedObject loading(context);
+  if (!JS::LoadRequestedModules(context, module, hostDefined, &loading)) return failure(out);
+  ensure_handled(loading);
+  JS::RootedObject handler(context, module_handler(module, require_loaded, "requireLoaded"));
+  if (!handler) return failure(out);
+  JS::RootedObject bridge(context, JS::CallOriginalPromiseThen(context, loading, handler, nullptr));
+  if (!bridge) return failure(out);
+  ensure_handled(bridge);
+  *out = hold_object(bridge);
+  return true;
 }
 extern "C" bool bsm_drain_jobs(bsm_handle* out) {
   JSAutoRealm realm(context, global->get());

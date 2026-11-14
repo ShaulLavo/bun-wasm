@@ -43,6 +43,7 @@ bool bsm_call(bsm_handle, bsm_handle, const bsm_handle*, size_t, bsm_handle*);
 bool bsm_eval_script(const char*, size_t, const char*, int32_t, bsm_handle*);
 bool bsm_eval_module(const char*, size_t, const char*, size_t, bsm_handle*);
 bool bsm_import(const char*, size_t, bsm_handle*);
+bool bsm_require(const char*, size_t, bsm_handle*);
 bool bsm_drain_jobs(bsm_handle*);
 bool bsm_terminated(void);
 void bunsm_host_free(char*);

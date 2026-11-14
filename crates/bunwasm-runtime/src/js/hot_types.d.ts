@@ -25,6 +25,13 @@ declare namespace BunWasm {
     resolveImport?(specifier: string, referrer: string, mode: BunWasm.ImportMode): string;
     load(name: string): { record: ModuleRecord } | { namespace: unknown; default: unknown };
     initMeta(name: string, meta: object): void;
+    /** Hermes's private promises carry ownership through adoption. */
+    owned?: {
+      create<T>(): Promise<T>;
+      forward(source: Promise<void>, onFulfilled: () => object, result: Promise<object>): void;
+      reject(promise: Promise<unknown>, reason: unknown): void;
+      resolve(promise: Promise<unknown>, value: unknown): void;
+    };
     /** False once the process has exited: nothing new loads, links, evaluates or resumes. */
     active?(): boolean;
     /** Keeps the host's event loop alive while a loader-started dynamic import is pending. */

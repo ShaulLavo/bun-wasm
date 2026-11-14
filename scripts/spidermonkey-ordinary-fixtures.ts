@@ -7,6 +7,8 @@ export const ordinaryFixtures: readonly string[] = [
   "cli-eval", "engine-modules", "esm-async-dependency-reimport", "cjs-interop",
   "net-serve", "self-spawn", "async-local-storage", "errors-rejection",
   "promise-rejection-identity", "host-gc-capture", "array-buffer-sink-detached", "stack-overflow",
+  "require-esm-caught-failure", "rejection-inspect-still-unhandled",
+  "require-esm-after-lowered-import", "require-esm-after-native-import",
 ];
 
 // test.sh owns each 60s TERM / 5s KILL deadline and every output/exit assertion.
