@@ -54,7 +54,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git i/js/src/vm/Interpreter.cpp w/js/src/vm/Interpreter.cpp
-index 6241cd45d..65a916e67 100644
+index 6241cd45d..219dcbc55 100644
 --- i/js/src/vm/Interpreter.cpp
 +++ w/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -71,7 +71,7 @@ index 6241cd45d..65a916e67 100644
  #  pragma optimize("g", off)
  #endif
  bool js::RunScript(JSContext* cx, RunState& state) {
-+  BUNWASM_RESERVE_STACK(1536);
++  BUNWASM_RESERVE_STACK(2048);
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
@@ -115,10 +115,10 @@ index 6241cd45d..65a916e67 100644
    ADVANCE_AND_DISPATCH(0);
  
 diff --git i/js/src/vm/PortableBaselineInterpret.cpp w/js/src/vm/PortableBaselineInterpret.cpp
-index d38cebe3e..2c0038c41 100644
+index d38cebe3e..b0703a14b 100644
 --- i/js/src/vm/PortableBaselineInterpret.cpp
 +++ w/js/src/vm/PortableBaselineInterpret.cpp
-@@ -105,8 +105,23 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
+@@ -105,8 +105,28 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
  #  define ENABLE_COMPUTED_GOTO_DISPATCH
  #endif
  
@@ -131,10 +131,15 @@ index d38cebe3e..2c0038c41 100644
 +// the caller holds one unit until the callee returns, as RunScript does for
 +// frames entered from C++.
 +#  define BUNWASM_HOLD_RECURSION_UNIT(cx) \
-+    BUNWASM_RESERVE_STACK(1536); \
 +    AutoCheckRecursionLimit bunwasmNestedFrame(cx)
++#  define BUNWASM_RESERVED_PBL_CALL(...) \
++    CallWithWasmStackReservation<1536>([&] { \
++      return PortableBaselineInterpret<false, kHybridICsInterp>(__VA_ARGS__); \
++    })
 +#else
 +#  define BUNWASM_HOLD_RECURSION_UNIT(cx) ((void)0)
++#  define BUNWASM_RESERVED_PBL_CALL(...) \
++    PortableBaselineInterpret<false, kHybridICsInterp>(__VA_ARGS__)
 +#endif
 +
  // Whether to compile in interrupt checks in the main interpreter loop.
@@ -143,31 +148,37 @@ index d38cebe3e..2c0038c41 100644
  // On WASI, with a single thread, there is no possibility for an
  // interrupt to come asynchronously.
  #  define ENABLE_INTERRUPT_CHECKS
-@@ -2419,6 +2434,7 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+@@ -2419,7 +2439,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
              ImmutableScriptData* isd = script->immutableScriptData();
              PBIResult result;
              Value ret;
+-            result = PortableBaselineInterpret<false, kHybridICsInterp>(
 +            BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
-             result = PortableBaselineInterpret<false, kHybridICsInterp>(
++            result = BUNWASM_RESERVED_PBL_CALL(
                  cx, ctx.state, ctx.stack, sp,
                  /* envChain = */ nullptr, &ret, pc, isd, nullptr, nullptr,
-@@ -2508,6 +2524,7 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+                 nullptr, PBIResult::Ok);
+@@ -2508,7 +2529,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
            ImmutableScriptData* isd = script->immutableScriptData();
            PBIResult result;
            Value ret;
+-          result = PortableBaselineInterpret<false, kHybridICsInterp>(
 +          BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
-           result = PortableBaselineInterpret<false, kHybridICsInterp>(
++          result = BUNWASM_RESERVED_PBL_CALL(
                cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
                isd, nullptr, nullptr, nullptr, PBIResult::Ok);
-@@ -2602,6 +2619,7 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+           if (result != PBIResult::Ok) {
+@@ -2602,7 +2624,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
            ImmutableScriptData* isd = script->immutableScriptData();
            PBIResult result;
            Value ret;
+-          result = PortableBaselineInterpret<false, kHybridICsInterp>(
 +          BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
-           result = PortableBaselineInterpret<false, kHybridICsInterp>(
++          result = BUNWASM_RESERVED_PBL_CALL(
                cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
                isd, nullptr, nullptr, nullptr, PBIResult::Ok);
-@@ -6034,7 +6052,16 @@ PBIResult PortableBaselineInterpret(
+           if (result != PBIResult::Ok) {
+@@ -6034,7 +6057,16 @@ PBIResult PortableBaselineInterpret(
      }
    }
    COUNT_COVERAGE_MAIN();
@@ -184,7 +195,7 @@ index d38cebe3e..2c0038c41 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
    if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
      PUSH_EXIT_FRAME();
-@@ -7909,6 +7936,9 @@ PBIResult PortableBaselineInterpret(
+@@ -7909,6 +7941,9 @@ PBIResult PortableBaselineInterpret(
                }
              }
              // 11. Check for interrupts.
@@ -194,7 +205,7 @@ index d38cebe3e..2c0038c41 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
              if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
                PUSH_EXIT_FRAME();
-@@ -8231,6 +8261,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8231,6 +8266,9 @@ PBIResult PortableBaselineInterpret(
        CASE(LoopHead) {
          int32_t icIndex = GET_INT32(pc);
          icEntry = icEntries + icIndex;
@@ -204,7 +215,7 @@ index d38cebe3e..2c0038c41 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
          if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
            PUSH_EXIT_FRAME();
-@@ -8499,6 +8532,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8499,6 +8537,9 @@ PBIResult PortableBaselineInterpret(
        }
  
        CASE(Finally) {
@@ -575,7 +586,7 @@ index f1ce887af..00c9ecad1 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..ea7f1f692 100644
+index 9524c5d6a..b1884cda3 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,14 @@
@@ -593,3 +604,57 @@ index 9524c5d6a..ea7f1f692 100644
  #include "mozilla/Attributes.h"  // MOZ_ALWAYS_INLINE, MOZ_COLD
  #include "mozilla/Likely.h"      // MOZ_LIKELY
  #include "mozilla/Variant.h"     // mozilla::Variant, mozilla::AsVariant
+@@ -30,6 +38,17 @@ struct JS_PUBLIC_API JSContext;
+ 
+ namespace js {
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++template <size_t Bytes, typename Call>
++MOZ_NEVER_INLINE auto CallWithWasmStackReservation(Call&& call) {
++  alignas(16) unsigned char reservation[Bytes];
++  asm volatile("" : : "r"(reservation) : "memory");
++  auto result = call();
++  asm volatile("" : : "r"(reservation) : "memory");
++  return result;
++}
++#endif
++
+ class FrontendContext;
+ 
+ #ifdef __wasi__
+diff --git i/js/src/frontend/Parser.cpp w/js/src/frontend/Parser.cpp
+index 34f4dee86..148fc9402 100644
+--- i/js/src/frontend/Parser.cpp
++++ w/js/src/frontend/Parser.cpp
+@@ -3460,6 +3460,7 @@ bool GeneralParser<ParseHandler, Unit>::functionFormalParametersAndBody(
+     FunctionNodeType* funNode, FunctionSyntaxKind kind,
+     const Maybe<uint32_t>& parameterListEnd /* = Nothing() */,
+     bool isStandaloneFunction /* = false */) {
++  BUNWASM_RESERVE_STACK(768);
+   // Given a properly initialized parse context, try to parse an actual
+   // function without concern for conversion to strict mode, use of lazy
+   // parsing and such.
+@@ -9299,6 +9300,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
+ template <class ParseHandler, typename Unit>
+ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
+     YieldHandling yieldHandling) {
++  BUNWASM_RESERVE_STACK(768);
+   MOZ_ASSERT(checkOptionsCalled_);
+ 
+   AutoCheckRecursionLimit recursion(this->fc_);
+@@ -9546,6 +9548,7 @@ template <class ParseHandler, typename Unit>
+ typename ParseHandler::NodeResult
+ GeneralParser<ParseHandler, Unit>::statementListItem(
+     YieldHandling yieldHandling, bool canHaveDirectives /* = false */) {
++  BUNWASM_RESERVE_STACK(640);
+   MOZ_ASSERT(checkOptionsCalled_);
+ 
+   AutoCheckRecursionLimit recursion(this->fc_);
+@@ -10133,6 +10136,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::assignExpr(
+     TripledotHandling tripledotHandling,
+     PossibleError* possibleError /* = nullptr */,
+     InvokedPrediction invoked /* = PredictUninvoked */) {
++  BUNWASM_RESERVE_STACK(1024);
+   AutoCheckRecursionLimit recursion(this->fc_);
+   if (!recursion.check(this->fc_)) {
+     return errorResult();
