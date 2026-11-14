@@ -1,8 +1,21 @@
 import { expect, test } from 'bun:test';
-import { spiderMonkeyTierOptions, verifySpiderMonkeyQualification } from './spidermonkey-native-qualification.ts';
+import { spiderMonkeyTierOptions, verifySpiderMonkeyQualification, verifySpiderMonkeyStackWitness } from './spidermonkey-native-qualification.ts';
 
 const trace = (polls = '123', entries = '0') => `bun-wasm spidermonkey: stack_low=0x7a0000 stack_high=0xfa0000 stack_bytes=8388608 register_depth=16 entry_depth=1392 interrupt_polls=${polls} portable_baseline_entries=${entries}\n`;
 const stopped = 'bun-wasm nested resources: {}\nbun-wasm group before physical stop: GroupSnapshot {}\nbun-wasm group after physical stop: GroupSnapshot { members: 0, reserved: 0, retained: 0, regions: 0, pins: 0, holds: 0, watches: 0, waiters: 0, committed_bytes: 166002688, free_bytes: 165937152, bypassed: false, published: 0 }\n';
+
+test('stack witnesses accept compiler marker placement and reject wrong page inference', () => {
+  const host = { type: 'spidermonkey-stack-proof', low: 0x7a0000, high: 0xfa0000, stackBytes: 8 << 20, pointer: 0xfa0000, samePointer: true };
+  const hosts = [host, host];
+  for (const depth of [16, 24, 65_536]) expect(verifySpiderMonkeyStackWitness(trace().replace('register_depth=16', `register_depth=${depth}`), hosts).registerDepth).toBe(depth);
+  for (const depth of [0, 15, 65_537]) expect(() => verifySpiderMonkeyStackWitness(trace().replace('register_depth=16', `register_depth=${depth}`), hosts)).toThrow();
+  for (const depth of [0, 15, 8 << 20]) expect(() => verifySpiderMonkeyStackWitness(trace().replace('entry_depth=1392', `entry_depth=${depth}`), hosts)).toThrow();
+  expect(() => verifySpiderMonkeyStackWitness(trace(), [host])).toThrow();
+  expect(() => verifySpiderMonkeyStackWitness(trace(), [host, { ...host, samePointer: false }])).toThrow();
+  expect(() => verifySpiderMonkeyStackWitness(trace().replace('stack_low=0x7a0000 stack_high=0xfa0000', 'stack_low=0x790000 stack_high=0xf90000'), hosts)).toThrow();
+  expect(() => verifySpiderMonkeyStackWitness(trace().replace('stack_bytes=8388608', 'stack_bytes=8388607'), hosts)).toThrow();
+  expect(() => verifySpiderMonkeyStackWitness(trace().replace('stack_low=0x7a0000', 'stack_low=0x7a0001'), hosts)).toThrow();
+});
 
 test('each tier is explicitly selected in both launcher and guest environments', () => {
   const ambient = { BUN_WASM_SPIDERMONKEY_TIER: 'wrong', BUN_WASM_SPIDERMONKEY_TRACE: '0', BUN_WASM_TRACE: '0' };

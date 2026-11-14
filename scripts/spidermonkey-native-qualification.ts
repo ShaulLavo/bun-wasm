@@ -3,6 +3,26 @@ import assert from 'node:assert/strict';
 export const spiderMonkeyTiers = ['interp', 'pbl'] as const;
 export type SpiderMonkeyTier = typeof spiderMonkeyTiers[number];
 
+/** Marker offsets may change with Rust layout; host observations independently bind the carved stack. */
+export function verifySpiderMonkeyStackWitness(stderr: string, hostStacks: readonly unknown[]) {
+  const match = /stack_low=(0x[\da-f]+) stack_high=(0x[\da-f]+) stack_bytes=(\d+) register_depth=(\d+) entry_depth=(\d+) interrupt_polls=(\d+) portable_baseline_entries=(\d+)/.exec(stderr);
+  assert(match, 'Missing actual SpiderMonkey execution counters');
+  const layout = { low: Number(match[1]), high: Number(match[2]), stackBytes: Number(match[3]),
+    registerDepth: Number(match[4]), entryDepth: Number(match[5]), polls: Number(match[6]), entries: Number(match[7]) };
+  assert(Object.values(layout).every(Number.isSafeInteger), 'Invalid SpiderMonkey stack witness');
+  assert(layout.low >= 0 && layout.high > layout.low);
+  assert.equal(layout.low % 65_536, 0);
+  assert.equal(layout.high % 65_536, 0);
+  assert.equal(layout.stackBytes, 8 << 20);
+  assert.equal(layout.high - layout.low, layout.stackBytes);
+  assert(layout.registerDepth >= 16 && layout.registerDepth <= 65_536, 'Registration marker must fit in the top stack page');
+  assert(layout.entryDepth >= 16 && layout.entryDepth < layout.stackBytes, 'Entry marker must fit inside the member stack');
+  assert(hostStacks.length >= 2, 'Core and side imports were not observed');
+  for (const stack of hostStacks) assert.deepEqual(stack, { type: 'spidermonkey-stack-proof', low: layout.low, high: layout.high,
+    stackBytes: layout.stackBytes, pointer: layout.high, samePointer: true });
+  return layout;
+}
+
 export function spiderMonkeyTierOptions(tier: SpiderMonkeyTier, env: NodeJS.ProcessEnv) {
   const selection = `BUN_WASM_SPIDERMONKEY_TIER=${tier}`;
   return {

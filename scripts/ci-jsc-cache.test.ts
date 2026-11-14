@@ -46,8 +46,8 @@ test("main warms effective JSC generations outside the full push queue without c
   expect(record(warmJobs["jsc-prebuild"]).name).toBe("Warm verified JSC cache");
   expect(record(ciJobs["jsc-prebuild"]).name).toBe("JSC C/C++ prebuild");
   expect(record(ciJobs["jsc-identity"]).if).toBe(record(ciJobs["jsc-prebuild"]).if);
-  expect(record(ciJobs["jsc-identity"]).needs).toBe("quality");
-  expect(record(ciJobs["jsc-prebuild"]).needs).toEqual(["quality", "jsc-identity"]);
+  expect(record(ciJobs["jsc-identity"]).needs).toBe("selection");
+  expect(record(ciJobs["jsc-prebuild"]).needs).toEqual(["selection", "jsc-identity"]);
 });
 
 for (const [jobs, identity, transfer] of [[ciJobs, "jsc-identity", "true"], [warmJobs, "identity", "false"]] as const) {

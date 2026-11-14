@@ -650,7 +650,7 @@ impl Engine for QuickJs {
             .set("arrayBuffers", usage.array_buffer_size as f64)
             .set("arrayBufferCount", usage.array_buffer_count as f64)
             .set("failedAllocation", allocation_failure(self.raw()))
-            .set("wasmCapacity", wasm_memory_bytes())
+            .set("wasmCapacity", crate::engine::wasm_capacity())
             .into()
     }
 }
@@ -677,17 +677,6 @@ fn allocation_failure(ctx: *mut qjs::JSContext) -> Val {
         .set("size", size)
         .set("category", category)
         .into()
-}
-
-fn wasm_memory_bytes() -> Val {
-    #[cfg(target_arch = "wasm32")]
-    {
-        Val::Num((core::arch::wasm32::memory_size(0) * 65536) as f64)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Val::Null
-    }
 }
 
 fn utf16_string_val(value: &Value<'_>) -> Val {
