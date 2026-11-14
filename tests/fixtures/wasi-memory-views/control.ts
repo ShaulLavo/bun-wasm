@@ -76,7 +76,6 @@ export function checkMemoryGrowth(constructor: unknown, memory: WebAssembly.Memo
   assert.ok(written(memory, 65544));
   assert.equal(clock(24), 0);
   assert.ok(written(memory, 24));
-  console.log(`PASS WASI ${shared ? "shared" : "unshared"} memory growth`);
 }
 
 export function checkMemoryRebinding(constructor: unknown) {
@@ -91,5 +90,4 @@ export function checkMemoryRebinding(constructor: unknown) {
   assert.ok(written(next, 16));
   assert.equal(written(previous, 16), false);
   assert.equal(api.view?.buffer, next.buffer);
-  console.log("PASS WASI memory rebinding");
 }

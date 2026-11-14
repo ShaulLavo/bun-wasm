@@ -188,8 +188,11 @@ function closeWasi(api: Wasi) {
 try {
   checkReactor();
   checkMemoryGrowth(WASI, new WebAssembly.Memory({ initial: 1, maximum: 4 }), false);
+  console.log("PASS WASI unshared memory growth");
   checkMemoryRebinding(WASI);
+  console.log("PASS WASI memory rebinding");
   checkMemoryGrowth(WASI, new WebAssembly.Memory({ initial: 1, maximum: 4, shared: true }), true);
+  console.log("PASS WASI shared memory growth");
   const api = wasi({ args: ["runner", "é"], env: { TEST: "✓" }, preopens: { "/sandbox": scratch } });
   handles.push(api);
   const instance = new WebAssembly.Instance(module, { wasi_snapshot_preview1: api.wasiImport });
