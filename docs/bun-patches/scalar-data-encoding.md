@@ -18,3 +18,4 @@ bytes when scalar prefixes surround nested containers and encoding through
 | Source | Class | Local change |
 | --- | --- | --- |
 | `crates/bunwasm-runtime/src/data/codec.rs` | Host feature | Encode scalar roots and container prefixes without queuing them. |
+| `crates/bunwasm-runtime/src/ops/abi.rs` | Host feature | Snapshot the validated generic frame on the stack across native dispatch, preserving its ownership and reply semantics. No upstream source or revision applies. |
