@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
@@ -600,12 +600,20 @@ pub fn archive_manifest(bytes: &[u8]) -> Result<Value> {
 }
 
 pub fn extract(bytes: &[u8], destination: &Path) -> Result<()> {
+    let mut directories = BTreeSet::new();
     visit_archive(bytes, |entry, path| {
         let target = destination.join(path);
         if entry.header().entry_type().is_dir() {
             return fs::create_dir_all(target).map_err(|e| e.to_string());
         }
-        fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+        let parent = target.parent().unwrap();
+        let needs_parent = !directories.contains(parent);
+        if needs_parent {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        if needs_parent && directories.len() < 1024 {
+            directories.insert(parent.to_path_buf());
+        }
         let mut out = fs::File::create(&target).map_err(|e| e.to_string())?;
         std::io::copy(entry, &mut out).map_err(|e| e.to_string())?;
         out.flush().map_err(|e| e.to_string())

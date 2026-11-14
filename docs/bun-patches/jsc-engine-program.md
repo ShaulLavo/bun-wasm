@@ -54,8 +54,11 @@ authority remains local even with separate root and web SDK installations.
 It prepares the Waffle plan once, then checks the exact compiled companion
 through the public `PreparedLinkPlan.memberModule` accessor before returning
 the plan or publishing program metadata. The side is not separately compiled
-for validation. The initial core inspection, shared/split agreement, pair
-digests and custom section, and ordered memory/constructor stages are unchanged.
+for validation. The host reads only custom section names to select the shared or split
+initialization stages before preparation. It checks the authoritative engine declaration
+and profile again on the prepared core before returning. Only the decorated core
+compiles, avoiding a separate compilation for inspection. Pair digests still cover the
+exact original snapshots. The appended identity section and ordered stages are unchanged.
 Public `ENOEXEC` errors retain the asset-error brand without importing the process
 service into startup; unknown host errors retain their original identity.
 Receipts bind core and side byte identities to engine origin and compatible

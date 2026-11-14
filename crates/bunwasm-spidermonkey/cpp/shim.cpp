@@ -53,7 +53,14 @@ extern "C" void bsm_init(const bsm_config* config) {
   JS_SetGlobalJitCompilerOption(context, JSJITCOMPILER_PORTABLE_BASELINE_ENABLE, config->tier);
   JS_SetGlobalJitCompilerOption(context, JSJITCOMPILER_PORTABLE_BASELINE_WARMUP_THRESHOLD, 0);
   require(config->stack_high > config->stack_low + 65536, "invalid stack bounds");
-  JS_SetNativeStackQuota(context, config->stack_high - config->stack_low - 65536);
+  const size_t quota = config->stack_high - config->stack_low - 65536;
+  JS_SetNativeStackQuota(context, quota);
+  const uintptr_t expected = JS::GetNativeStackLimit(stackBase, quota - 1);
+  for (const auto limit : JS::RootingContext::get(context)->nativeStackLimit) {
+    require(limit > config->stack_low && limit < config->stack_high,
+            "native stack limit outside member bounds");
+    require(limit == expected, "native stack limit differs from requested quota");
+  }
   require(JS::InitSelfHostedCode(context), "self-hosted initialization failed");
   JS::RealmOptions options;
   JS::RootedObject object(context, JS_NewGlobalObject(context, &globalClass, nullptr, JS::FireOnNewGlobalHook, options));
