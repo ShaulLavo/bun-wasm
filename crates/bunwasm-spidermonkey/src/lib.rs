@@ -95,6 +95,7 @@ extern "C" {
         out: *mut Handle,
     ) -> bool;
     pub fn bsm_import(specifier: *const c_char, len: usize, out: *mut Handle) -> bool;
+    pub fn bsm_require(specifier: *const c_char, len: usize, out: *mut Handle) -> bool;
     pub fn bsm_drain_jobs(out: *mut Handle) -> bool;
     pub fn bsm_terminated() -> bool;
     pub fn bsm_promise_state(handle: Handle) -> i32;

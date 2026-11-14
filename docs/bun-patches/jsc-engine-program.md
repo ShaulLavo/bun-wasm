@@ -76,6 +76,15 @@ reentry, and native/Node/browser admission remain separate actual-pair gates.
 Captured-value roots are described below. Source review and synthetic controls
 do not establish a real-pair pass.
 
+## Synchronous require ownership
+
+The original `bunjsc_promise_mark_handled` adapter calls WebKit
+`JSPromise::markAsHandled()` under the VM lock and reports a TypeError for a
+non-promise. `Engine::require_module` uses it only for the require result, then
+removes that promise from the adapter's pending rejection list. Generic promise
+inspection and ordinary imports do not mark promises handled. The helper is an
+original adapter to the pinned WebKit API, not a copied implementation.
+
 ## Captured values and immediate native error reporting
 
 `vm.rs::array_items` snapshots owned `JsVal` roots, including the input array,
