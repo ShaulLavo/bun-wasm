@@ -1,0 +1,8 @@
+1 | import { inspect } from "node:util";
+2 | 
+3 | const error = new Error("inspected rejection");
+                      ^
+error: inspected rejection
+      at /index.ts:3:19
+
+Bun vVERSION (PLATFORM)

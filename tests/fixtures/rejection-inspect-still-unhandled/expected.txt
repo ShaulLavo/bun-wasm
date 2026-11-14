@@ -1,0 +1,2 @@
+peek same true
+inspect rejected true
