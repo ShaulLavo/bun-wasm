@@ -1,10 +1,11 @@
-import { expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nextRegistry } from "../../web/tests/next-framework-registry";
+import { nextRegistry, type RegistryEntry } from "../../web/tests/next-framework-registry";
 import { request, type Route } from "playwright";
 import { registry } from "./registry.mjs";
 import { browserRegistryRoute, registryBrokerResponse } from "./registry-request";
@@ -13,52 +14,171 @@ import { advisoryBodyLimit, advisoryResponseLimit, boundedRegistryBody, registry
 const path = "/-/npm/v1/security/advisories/bulk";
 const body = '{"next":["16.4.3"]}';
 const sha256 = (bytes: string) => createHash("sha256").update(bytes).digest("hex");
+const cleanups = new Set<() => Promise<void>>();
+
+afterEach(async () => {
+  for (const close of cleanups) await close();
+});
+
+async function disposeAll(disposers: (() => void | Promise<unknown>)[]) {
+  const failures: unknown[] = [];
+  for (const dispose of disposers.reverse()) {
+    try { await dispose(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, "Replay fixture cleanup failed");
+}
+
+function replayFixture(prefix: string) {
+  const directory = mkdtempSync(join(tmpdir(), prefix));
+  const controller = new AbortController();
+  const disposers: (() => void | Promise<unknown>)[] = [];
+  const pending = new Set<Promise<unknown>>();
+  let closing: Promise<void> | undefined;
+  const dispose = async () => {
+    controller.abort();
+    await Promise.allSettled(pending);
+    try { await disposeAll(disposers); } finally {
+      rmSync(directory, { recursive: true, force: true });
+      cleanups.delete(close);
+    }
+  };
+  const close = () => closing ??= dispose();
+  cleanups.add(close);
+  const response = async (target: string, options?: RequestInit) => {
+    controller.signal.throwIfAborted();
+    const task = fetch(target, { ...options, signal: controller.signal }).then(async response => ({ status: response.status, body: await response.text() }));
+    pending.add(task);
+    try { return await task; } finally { pending.delete(task); }
+  };
+  return { directory, close, response, signal: controller.signal, defer: (dispose: () => void | Promise<unknown>) => disposers.push(dispose) };
+}
+
+function stageRegistry(directory: string, entries: Record<string, { body: string; type: string }>) {
+  mkdirSync(join(directory, "objects"), { recursive: true });
+  const index: Record<string, RegistryEntry> = {};
+  for (const [key, { body, type }] of Object.entries(entries)) {
+    const digest = sha256(body);
+    writeFileSync(join(directory, "objects", digest), body);
+    index[key] = { status: 200, type, sha256: digest };
+  }
+  writeFileSync(join(directory, "index.json"), JSON.stringify(index));
+}
+
+function ownedRegistry(directory: string, originalIndexes?: readonly string[]) {
+  const exists = fs.existsSync;
+  const checked: string[] = [];
+  const guard = spyOn(fs, "existsSync").mockImplementation(filename => {
+    const path = String(filename);
+    if (!path.startsWith(`${directory}/`)) throw new Error(`Unowned registry read ${path}`);
+    checked.push(path);
+    return exists(filename);
+  });
+  try {
+    const mirror = nextRegistry(join(directory, "extra"), 0, join(directory, "overlay"), originalIndexes, join(directory, "shared"));
+    expect(checked).toContain(join(directory, "shared", "index.json"));
+    return mirror;
+  } finally { guard.mockRestore(); }
+}
 
 test("composed registry replays only the exact advisory POST and preserves GET integrity", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "advisory-replay-"));
-  let mirror: ReturnType<typeof nextRegistry> | undefined;
+  const fixture = replayFixture("advisory-replay-");
+  const { directory } = fixture;
   try {
     const extra = join(directory, "extra");
     const overlay = join(directory, "overlay");
-    for (const root of [extra, overlay]) mkdirSync(join(root, "objects"), { recursive: true });
     const advisory = '{"next":[{"id":123,"severity":"high","title":"Fixture advisory"}]}';
     const tarball = "checksum-verified tarball";
-    writeFileSync(join(extra, "objects", sha256(tarball)), tarball);
-    writeFileSync(join(extra, "index.json"), JSON.stringify({ "/pkg/-/pkg.tgz": { status: 200, type: "application/octet-stream", sha256: sha256(tarball) } }));
-    writeFileSync(join(overlay, "objects", sha256(advisory)), advisory);
-    writeFileSync(join(overlay, "index.json"), JSON.stringify({ [`POST ${path} ${sha256(body)}`]: { status: 200, type: "application/json", sha256: sha256(advisory) } }));
-    mirror = nextRegistry(extra, 0, overlay);
+    stageRegistry(join(directory, "shared"), { "/borrowed.tgz": { body: "borrowed tarball", type: "application/octet-stream" }, "/pkg/-/pkg.tgz": { body: "shadowed tarball", type: "application/octet-stream" } });
+    stageRegistry(extra, { "/pkg/-/pkg.tgz": { body: tarball, type: "application/octet-stream" } });
+    stageRegistry(overlay, { [`POST ${path} ${sha256(body)}`]: { body: advisory, type: "application/json" } });
+    const mirror = ownedRegistry(directory);
+    fixture.defer(() => mirror.close());
     const base = mirror.base;
-    const post = (target: string, payload: string, method = "POST") => fetch(`${base}${target}`, { method, body: payload, headers: { "content-type": "application/json" } });
+    const post = (target: string, payload: string, method = "POST") => fixture.response(`${base}${target}`, { method, body: payload, headers: { "content-type": "application/json" } });
     const response = await post(path, body);
     expect(response.status).toBe(200);
-    expect(await response.text()).toBe(advisory);
+    expect(response.body).toBe(advisory);
     const mismatches: [string, string, string][] = [[path, `${body} `, "POST"], [path, body, "PUT"], [`${path}/`, body, "POST"], [`${path}?x=1`, body, "POST"]];
     for (const [target, payload, method] of mismatches) {
       expect((await post(target, payload, method)).status).toBeGreaterThanOrEqual(400);
     }
-    expect((await fetch(`${mirror.base}${path}`)).status).toBeGreaterThanOrEqual(400);
-    expect(await (await fetch(`${mirror.base}/pkg/-/pkg.tgz`)).text()).toBe(tarball);
+    expect((await fixture.response(`${base}${path}`)).status).toBeGreaterThanOrEqual(400);
+    expect((await fixture.response(`${base}/pkg/-/pkg.tgz`)).body).toBe(tarball);
+    expect((await fixture.response(`${base}/borrowed.tgz`)).body).toBe("borrowed tarball");
     expect((await post("/pkg/-/pkg.tgz", body)).status).toBeGreaterThanOrEqual(400);
     writeFileSync(join(extra, "objects", sha256(tarball)), "corrupt");
-    expect((await fetch(`${mirror.base}/pkg/-/pkg.tgz`)).status).toBe(502);
+    expect((await fixture.response(`${base}/pkg/-/pkg.tgz`)).status).toBe(502);
     writeFileSync(join(overlay, "objects", sha256(advisory)), "corrupt");
     expect((await post(path, body)).status).toBe(502);
-  } finally { await mirror?.close(); rmSync(directory, { recursive: true, force: true }); }
+  } finally { await fixture.close(); }
 });
 
 const fixture = fileURLToPath(new URL("./fixtures/next-advisory/", import.meta.url));
 
-async function browserPost(mirror: string, payload: string, target = `https://registry.npmjs.org${path}`, method = "POST") {
+test("owned registry inputs still verify every original index and object before serving", async () => {
+  const scope = replayFixture("advisory-integrity-");
+  try {
+    const roots = ["shared", "extra", "overlay"].map(name => join(scope.directory, name));
+    for (const root of roots) stageRegistry(root, { "/pkg": { body: "object", type: "application/json" } });
+    const originals = roots.map(root => sha256(readFileSync(join(root, "index.json"), "utf8")));
+    const mirror = ownedRegistry(scope.directory, originals);
+    scope.defer(() => mirror.close());
+    for (const root of roots) {
+      const index = join(root, "index.json");
+      const text = readFileSync(index, "utf8");
+      writeFileSync(index, `${text}\n`);
+      expect(() => ownedRegistry(scope.directory, originals)).toThrow("Original replay index mismatch");
+      writeFileSync(index, text);
+      const object = join(root, "objects", sha256("object"));
+      writeFileSync(object, "corrupt");
+      expect(() => ownedRegistry(scope.directory, originals)).toThrow("Replay digest mismatch");
+      rmSync(object);
+      expect(() => ownedRegistry(scope.directory, originals)).toThrow("Missing replay object");
+      writeFileSync(object, "object");
+      writeFileSync(index, '{"/pkg":{"sha256":"invalid","status":200,"type":"application/json"}}');
+      expect(() => ownedRegistry(scope.directory)).toThrow("Invalid registry entry");
+      writeFileSync(index, text);
+    }
+    expect(() => ownedRegistry(scope.directory, originals.slice(1))).toThrow("Original replay index selection mismatch");
+  } finally { await scope.close(); }
+});
+
+test("fixture teardown aborts and drains pending bodies before the next fetch mock", async () => {
+  const scope = replayFixture("advisory-teardown-");
+  const started = Promise.withResolvers<void>();
+  const mirror = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode("unfinished body"));
+    started.resolve();
+  } })) });
+  scope.defer(() => mirror.stop(true));
+  try {
+    const result = scope.response(`http://127.0.0.1:${mirror.port}`).then(() => "finished", () => "aborted");
+    await started.promise;
+    await scope.close();
+    expect(await result).toBe("aborted");
+    expect(mirror.pendingRequests).toBe(0);
+    const network = spyOn(globalThis, "fetch");
+    try {
+      await expect(scope.response("http://127.0.0.1:1")).rejects.toThrow();
+      expect(network).not.toHaveBeenCalled();
+    } finally { network.mockRestore(); }
+  } finally { await scope.close(); }
+});
+
+async function browserPost(scope: ReturnType<typeof replayFixture>, mirror: string, payload: string, target = `https://registry.npmjs.org${path}`, method = "POST") {
+  scope.signal.throwIfAborted();
   const client = await request.newContext();
+  scope.defer(() => client.dispose());
   const external: string[] = [];
   let fulfilled: { status: number; body: string } | undefined;
   let aborted = false;
   const requests: string[] = [];
   try {
+    scope.signal.throwIfAborted();
     await browserRegistryRoute({
       request: () => ({ url: () => target, method: () => method, headers: () => ({ "content-type": "application/json", authorization: "must-not-forward", cookie: "must-not-forward" }), postDataBuffer: () => Buffer.from(payload) }),
       fetch: async (options: Parameters<Route["fetch"]>[0] = {}) => {
+        scope.signal.throwIfAborted();
         if (!options.url?.startsWith(`${mirror}/`)) throw new Error("Replay escaped loopback");
         expect(options.headers).toEqual({ accept: "application/json", "content-type": "application/json" });
         requests.push(options.url);
@@ -76,12 +196,16 @@ async function browserPost(mirror: string, payload: string, target = `https://re
 }
 
 test("browser replay is offline, preserves captured bytes, and fails closed on every mismatch", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "advisory-offline-"));
-  const mirror = nextRegistry(directory, 0, fixture);
-  const offline = Object.assign(() => { throw new Error("Replay attempted live fetch"); }, { preconnect: globalThis.fetch.preconnect });
-  const network = spyOn(globalThis, "fetch").mockImplementation(offline);
+  const scope = replayFixture("advisory-offline-");
   try {
-    const replay = await browserPost(mirror.base, body);
+    for (const root of ["shared", "extra"]) stageRegistry(join(scope.directory, root), {});
+    cpSync(fixture, join(scope.directory, "overlay"), { recursive: true });
+    const mirror = ownedRegistry(scope.directory);
+    const offline = Object.assign(() => { throw new Error("Replay attempted live fetch"); }, { preconnect: globalThis.fetch.preconnect });
+    const network = spyOn(globalThis, "fetch").mockImplementation(offline);
+    scope.defer(() => { network.mockRestore(); });
+    scope.defer(() => mirror.close());
+    const replay = await browserPost(scope, mirror.base, body);
     expect(replay).toMatchObject({ fulfilled: { status: 200, body: "{}" }, aborted: false, external: [] });
     const mismatches: [string, string, string][] = [
       [`https://registry.npmjs.org${path}`, `${body} `, "POST"],
@@ -92,17 +216,18 @@ test("browser replay is offline, preserves captured bytes, and fails closed on e
       [`https://registry.npmjs.org.evil.invalid${path}`, body, "POST"],
     ];
     for (const [target, payload, method] of mismatches) {
-      const rejected = await browserPost(mirror.base, payload, target, method);
+      const rejected = await browserPost(scope, mirror.base, payload, target, method);
       expect(rejected.aborted).toBe(true);
       expect(rejected.fulfilled).toBeUndefined();
       expect(rejected.external).toEqual([target]);
     }
     expect(network).not.toHaveBeenCalled();
-  } finally { network.mockRestore(); await mirror.close(); rmSync(directory, { recursive: true, force: true }); }
+  } finally { await scope.close(); }
 });
 
 test("recording forwards exact advisory bytes through the Unix broker and replays without it", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "advisory-record-"));
+  const scope = replayFixture("advisory-record-");
+  const { directory } = scope;
   const previous = process.env.MATRIX_RECORDER_SOCKET;
   const socket = join(directory, "broker.sock");
   const received: { method: string; path: string; body: string }[] = [];
@@ -111,26 +236,28 @@ test("recording forwards exact advisory bytes through the Unix broker and replay
     return new Response('{"error":"authoritative non-success"}', { status: 429, headers: { "content-type": "application/json" } });
   } });
   let mirror: Awaited<ReturnType<typeof registry>> | undefined;
+  scope.defer(() => {
+    if (previous === undefined) delete process.env.MATRIX_RECORDER_SOCKET;
+    else process.env.MATRIX_RECORDER_SOCKET = previous;
+  });
+  scope.defer(() => broker.stop(true));
+  scope.defer(() => mirror?.close());
   try {
     process.env.MATRIX_RECORDER_SOCKET = socket;
     mirror = await registry({ directory, record: true });
-    const recorded = await browserPost(mirror.base, body);
+    const recorded = await browserPost(scope, mirror.base, body);
     expect(recorded.fulfilled).toEqual({ status: 429, body: '{"error":"authoritative non-success"}' });
     expect(received).toEqual([{ method: "POST", path, body }]);
     await mirror.close();
     await broker.stop(true);
     delete process.env.MATRIX_RECORDER_SOCKET;
     mirror = await registry({ directory, record: false });
-    expect((await browserPost(mirror.base, body)).fulfilled).toEqual(recorded.fulfilled);
-    expect((await browserPost(mirror.base, `${body} `)).aborted).toBe(true);
+    expect((await browserPost(scope, mirror.base, body)).fulfilled).toEqual(recorded.fulfilled);
+    expect((await browserPost(scope, mirror.base, `${body} `)).aborted).toBe(true);
     expect(received).toHaveLength(1);
     const entries = JSON.parse(readFileSync(join(directory, "index.json"), "utf8"));
     expect(Object.keys(entries)).toEqual([`POST ${path} ${sha256(body)}`]);
-  } finally {
-    if (previous === undefined) delete process.env.MATRIX_RECORDER_SOCKET;
-    else process.env.MATRIX_RECORDER_SOCKET = previous;
-    await mirror?.close(); await broker.stop(true); rmSync(directory, { recursive: true, force: true });
-  }
+  } finally { await scope.close(); }
 });
 
 test("the public broker preserves POST identity and never forwards supplied credentials", async () => {

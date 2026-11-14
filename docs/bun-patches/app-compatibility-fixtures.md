@@ -19,6 +19,14 @@ client has mounted. No framework implementation, watcher or runtime API changes.
 
 The browser driver calls the existing playground test helpers. Recorded dependency tarballs remain unmodified in the external cache, verified by SHA-256; registry metadata is rewritten only in loopback responses to point tarballs at that mirror.
 
+`web/tests/next-framework-registry.ts` is an original host adapter, with no copied
+upstream implementation. Its optional final shared-directory argument lets unit
+tests supply all three registry roots from owned fixtures. The default remains
+the app-matrix recording. Both selections verify every index and object, including
+the supplied original index hashes. Advisory tests guard filesystem access to
+their owned roots and abort and drain pending bodies before closing servers and
+restoring network mocks. No recorded cache or replay policy is changed.
+
 
 The browser network guard in `registry-request.ts` recognizes the root adapter's
 single-label `bw-<counter>-<UUID>.localhost` hosts as local loopback requests.
