@@ -1,7 +1,7 @@
-fresh 2
-root 3 ok runs 1
-marker true
-cycle 4 5
-unwind cached true true body runs 0
+plain 42 once true same true
+chain 42 once true same true
+sibling 42 once true same true
+cycle 42 once true same true
+combined 42 once true same true
 commonjs 6
 second recursion RangeError

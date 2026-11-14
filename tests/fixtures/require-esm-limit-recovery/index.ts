@@ -2,55 +2,44 @@ import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-writeFileSync("once.mjs", "export const value = 1;");
-writeFileSync("fresh.mjs", "export const value = 2;");
-writeFileSync("ok.mjs", "globalThis.okRuns = (globalThis.okRuns || 0) + 1; globalThis.okMarker = {}; export const marker = globalThis.okMarker;");
-writeFileSync("leaf.mjs", "export const value = 3;");
-writeFileSync("deep.mjs", "export { value } from './leaf.mjs';");
-writeFileSync("cyc-a.mjs", "import './cyc-b.mjs'; export const a = 4;");
-writeFileSync("cyc-b.mjs", "import './cyc-a.mjs'; export const b = 5;");
-writeFileSync("root.mjs", "export { marker } from './ok.mjs'; export { value } from './deep.mjs'; export { a } from './cyc-a.mjs'; export { b } from './cyc-b.mjs';");
-writeFileSync("control.cjs", "module.exports = 6;");
+const runs: Record<string, number> = {};
+Reflect.set(globalThis, "limitRuns", runs);
 
-let attempted = false;
-function onceAtLimit() {
-  try { onceAtLimit(); } catch {
+function atLimit(path: string) {
+  let attempted = false;
+  function recurse() {
+    try { recurse(); } catch (error) { if (!(error instanceof RangeError)) throw error; }
     if (attempted) return;
     attempted = true;
-    try { require("./once.mjs"); } catch (error) { if (!(error instanceof RangeError)) throw error; }
+    try { require(path); } catch (error) { if (!(error instanceof RangeError)) throw error; }
   }
+  recurse();
 }
-onceAtLimit();
-console.log("fresh", require("./fresh.mjs").value);
 
-let recovered = false;
-let rootAttempted = false;
-function unwind() {
-  try { unwind(); } catch (error) { if (!(error instanceof RangeError)) throw error; }
-  if (rootAttempted) return;
-  rootAttempted = true;
-  try { require("./root.mjs"); recovered = true; } catch (error) { if (!(error instanceof RangeError)) throw error; }
+for (const shape of ["plain", "chain", "sibling", "cycle", "combined"]) {
+  const name = (part: string) => `${shape}-${part}`;
+  const load = (part: string) => `import './${name(part)}.mjs';`;
+  const write = (part: string, body: string) => {
+    const key = JSON.stringify(name(part));
+    writeFileSync(`${name(part)}.mjs`, `globalThis.limitRuns[${key}] = (globalThis.limitRuns[${key}] || 0) + 1; ${body}`);
+  };
+  write("ok", "export const marker = {};");
+  write("leaf", "export const value = 3;");
+  write("deep", `${load("leaf")} export const value = 3;`);
+  write("a", `${load("b")} export const a = 4;`);
+  write("b", `${load("a")} export const b = 5;`);
+  let imports = "";
+  if (shape === "sibling" || shape === "combined") imports += load("ok");
+  if (shape === "chain" || shape === "sibling" || shape === "combined") imports += load("deep");
+  if (shape === "cycle" || shape === "combined") imports += load("a");
+  write("root", `${imports} export const value = 42;`);
+  const path = `./${name("root")}.mjs`;
+  atLimit(path);
+  const root = require(path);
+  const relevant = Object.keys(runs).filter(key => key.startsWith(`${shape}-`));
+  console.log(shape, root.value, "once", relevant.every(key => runs[key] === 1), "same", root === require(path));
 }
-unwind();
-const root = require("./root.mjs");
-console.log("root", root.value, "ok runs", Reflect.get(globalThis, "okRuns"));
-console.log("marker", root.marker === require("./ok.mjs").marker && root.marker === Reflect.get(globalThis, "okMarker"));
-console.log("cycle", root.a, root.b);
-
-writeFileSync("cached-leaf.mjs", "globalThis.cachedRuns = (globalThis.cachedRuns || 0) + 1; export const value = 7;");
-writeFileSync("cached-root.mjs", "import './cached-leaf.mjs'; export const value = 8;");
-recovered = false;
-function everyLevel() {
-  try { everyLevel(); } catch (error) { if (!(error instanceof RangeError)) throw error; }
-  if (recovered) return;
-  try { require("./cached-root.mjs"); recovered = true; } catch (error) { if (!(error instanceof RangeError)) throw error; }
-}
-everyLevel();
-let cached: unknown;
-try { require("./cached-root.mjs"); } catch (error) { cached = error; }
-let repeated: unknown;
-try { require("./cached-root.mjs"); } catch (error) { repeated = error; }
-console.log("unwind cached", cached instanceof RangeError, cached === repeated, "body runs", Reflect.get(globalThis, "cachedRuns") || 0);
+writeFileSync("control.cjs", "module.exports = 6;");
 console.log("commonjs", require("./control.cjs"));
 function recurse(): number { return 1 + recurse(); }
 try { recurse(); } catch (error) {
