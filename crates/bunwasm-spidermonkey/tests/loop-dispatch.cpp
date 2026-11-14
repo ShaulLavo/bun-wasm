@@ -72,8 +72,24 @@ void moving_getter_gc() {
   puts("ok moving GC before getter frame publication");
 }
 
-void debugger_evaluate(const char* source) {
+// Debugger hook exceptions are recorded and rethrown by the evaluation, so a
+// failing hook reports its message instead of reaching the embed's
+// unconfigured uncaught-exception reporter.
+const char* debuggerPrelude = R"JS(
+  var hookFailure;
+  // Only frames of the debuggee: the harness's own call sites differ per run.
+  var debuggeeFrames = stack => stack.split('\n').filter(line => line && !line.includes('debugger-control.js')).join('\n');
+  function watch(dbg) {
+    dbg.uncaughtExceptionHook = e => { hookFailure = hookFailure || String(e) + '\n' + e.stack; };
+    return dbg;
+  }
+)JS";
+const char* debuggerEpilogue = "\nif (hookFailure) throw new Error('hook: ' + hookFailure);\n";
+
+void debugger_evaluate(const char* body) {
   auto entry = loop_stack();
+  std::string combined = std::string(debuggerPrelude) + body + debuggerEpilogue;
+  const char* source = combined.c_str();
   {
     JS::RealmOptions options;
     options.creationOptions().setNewCompartmentAndZone();
@@ -107,8 +123,8 @@ void debugger_evaluate(const char* source) {
 
 void debugger_getters() {
   debugger_evaluate(R"JS(
-    function assert(v, label) { if (!v) throw new Error(label); }
-    var dbg = new Debugger(debuggee);
+    function assert(v, label) { if (!v) throw new Error(label + (hookFailure ? ' after hook failure ' + hookFailure : '')); }
+    var dbg = watch(new Debugger(debuggee));
     var g = dbg.makeGlobalObjectReference(debuggee);
     var entered = 0, left = 0, exceptions = 0;
     dbg.onEnterFrame = frame => {
@@ -136,15 +152,16 @@ void debugger_getters() {
     dbg.onEnterFrame = frame => {
       if (frame.callee?.name !== 'getter') return;
       var caller = frame.older;
-      var location = caller.script.getOffsetLocation(caller.offset);
+      var location = caller.script.getOffsetMetadata(caller.offset);
       locations.push(JSON.stringify([location.lineNumber, location.columnNumber]));
     };
     var source = 'function getter(){return new Error().stack;}\nObject.defineProperty(obj,"value",{get:getter});\nfunction caller(){return obj.value;}\ncaller();';
-    stacks.push(g.executeInGlobal(source, {url:'getter-location.js'}).return);
+    var locate = () => stacks.push(g.executeInGlobal(source, {url:'getter-location.js'}).return);
+    locate();
     dbg.onNativeCall = () => {};
-    stacks.push(g.executeInGlobal(source, {url:'getter-location.js'}).return);
-    assert(locations.length === 2 && locations[0] === locations[1], 'caller line and column');
-    assert(stacks[0] === stacks[1], 'saved getter stack');
+    locate();
+    assert(locations.length === 2 && locations[0] === locations[1], 'caller line and column ' + locations.join(' '));
+    assert(debuggeeFrames(stacks[0]) === debuggeeFrames(stacks[1]) && stacks[0].includes('caller@getter-location.js:3:'), 'saved getter stack ' + JSON.stringify(stacks));
     dbg.onNativeCall = undefined;
     dbg.onEnterFrame = undefined;
     debuggee.crossGetter = function crossGetter() { return this.marker; };
@@ -158,7 +175,7 @@ void debugger_getters() {
 void native_observer_exclusion() {
   size_t before = deferredGetters;
   debugger_evaluate(R"JS(
-    var dbg = new Debugger(debuggee);
+    var dbg = watch(new Debugger(debuggee));
     var g = dbg.makeGlobalObjectReference(debuggee);
     dbg.onNativeCall = () => {};
     var result = g.executeInGlobal('({get value(){return 42;}}).value;');
@@ -181,12 +198,13 @@ void async_getter_stacks() {
     check(stack != nullptr, "async parent saved frame");
     JS::AutoSetAsyncStackForNewCalls async(context, stack, "getter-parent", JS::AutoSetAsyncStackForNewCalls::AsyncCallKind::EXPLICIT);
     debugger_evaluate(R"JS(
-      var dbg = new Debugger(debuggee), g = dbg.makeGlobalObjectReference(debuggee);
+      var dbg = watch(new Debugger(debuggee)), g = dbg.makeGlobalObjectReference(debuggee);
       var source = 'var asyncObject={get value(){return new Error().stack;}}; asyncObject.value;';
-      var loop = g.executeInGlobal(source, {url:'async-getter.js'}).return;
+      var run = () => g.executeInGlobal(source, {url:'async-getter.js'}).return;
+      var loop = run();
       dbg.onNativeCall = () => {};
-      var generic = g.executeInGlobal(source, {url:'async-getter.js'}).return;
-      if (loop !== generic || !loop.includes('getter-parent')) throw new Error('async parent stack');
+      var generic = run();
+      if (debuggeeFrames(loop) !== debuggeeFrames(generic) ||!loop.includes('getter-parent')) throw new Error('async parent stack ' + JSON.stringify([loop, generic]));
       dbg.removeAllDebuggees();
     )JS");
   }
@@ -195,10 +213,12 @@ void async_getter_stacks() {
 }
 
 void loop_controls() {
+  setvbuf(stdout, nullptr, _IONBF, 0);
   bool pbl = getenv("BUN_WASM_SPIDERMONKEY_TIER") && !strcmp(getenv("BUN_WASM_SPIDERMONKEY_TIER"), "pbl");
   {
     JSAutoRealm realm(context, global->get());
-    check(JS_DefineFunction(context, global->get(), "stackUnits", stack_stats, 0, 0), "stack unit accessor");
+    JS::RootedObject target(context, global->get());
+    check(JS_DefineFunction(context, target, "stackUnits", stack_stats, 0, 0), "stack unit accessor");
   }
   loop_success("var units=stackUnits(); var left=48; var o={get value(){if(left--)return this.value; return stackUnits();}}; if(!(" 
                "o.value >= units))throw 1;");
@@ -218,7 +238,9 @@ void loop_controls() {
   async_getter_stacks();
   puts("ok frame and recursion-unit balance on success, throw, exhaustion and prologue failure");
   interruptAt = 1;
-  loop_failure("var o={get value(){return this.value;}};o.value;");
+  // The host interrupt is polled at loop back-edges and returns, so it lands in
+  // the loop under 48 live getter frames, which termination must unwind.
+  loop_failure("var left=48;var o={get value(){if(left--)return this.value;for(;;){}}};o.value;");
   check(bsm_terminated(), "getter interruption terminates");
   puts("ok frame and recursion-unit balance on interruption");
 }
