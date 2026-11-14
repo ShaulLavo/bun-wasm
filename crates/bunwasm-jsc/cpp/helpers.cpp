@@ -45,9 +45,13 @@
 #include "Parser.h"
 #include "SimpleTypedArrayController.h"
 #include "WASIMemoryTelemetry.h"
+#include "WASIJSONFastTest.h"
+#include <wtf/DataLog.h>
 #include <wtf/URL.h>
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <string_view>
 
 using namespace JSC;
 
@@ -245,6 +249,46 @@ static unsigned parserReserveSetting(const char* text)
     return (value + 15) & ~15u;
 }
 
+static WASIJSONFastTestControl jsonFastTestSetting(const char* text)
+{
+    WASIJSONFastTestControl off { WASIJSONFastTestMode::Off, 0 };
+    if (!text)
+        return off;
+    if (!strcmp(text, "record"))
+        return { WASIJSONFastTestMode::Record, 0 };
+    const char* colon = strchr(text, ':');
+    if (!colon)
+        return off;
+    unsigned value = 0;
+    size_t digits = 0;
+    for (const char* p = colon + 1; *p; ++p) {
+        if (++digits > 4 || *p < '0' || *p > '9')
+            return off;
+        value = value * 10 + static_cast<unsigned>(*p - '0');
+    }
+    if (!digits || !value)
+        return off;
+    std::string_view name(text, colon - text);
+    if (name == "fail-frame-growth")
+        return { WASIJSONFastTestMode::FailFrameGrowth, value };
+    if (name == "fail-root-growth")
+        return { WASIJSONFastTestMode::FailRootGrowth, value };
+    if (name == "collect-at-open")
+        return { WASIJSONFastTestMode::CollectAtOpen, value };
+    return off;
+}
+
+static bool jsonFastTestEnabled;
+
+static void logJSONFastMemory(const BunjscMemoryTelemetry& snapshot)
+{
+    if (!jsonFastTestEnabled)
+        return;
+    BunjscCoreAllocatorSample allocator { };
+    RELEASE_ASSERT(sampleCoreAllocator(allocator));
+    dataLogF("bunwasm-json-fast-memory {\"heapUsed\":%llu,\"extraMemory\":%llu,\"live\":%llu,\"capacity\":%llu,\"maximum\":%llu}\n", static_cast<unsigned long long>(snapshot.heapUsed), static_cast<unsigned long long>(snapshot.extraMemory), static_cast<unsigned long long>(allocator.live), static_cast<unsigned long long>(allocator.capacity), static_cast<unsigned long long>(BUN_WASM_MAX_MEMORY));
+}
+
 extern "C" {
 
 // A global context whose global object has the module loader hooks above.
@@ -272,6 +316,9 @@ JSGlobalContextRef bunjsc_create_context()
         // environment, before its only VM exists and so before any parse.
         if (unsigned reserve = parserReserveSetting(getenv("BUN_WASM_JSC_PARSER_RESERVE")))
             JSC::setWasmParserReserve(reserve);
+        WASIJSONFastTestControl jsonFastControl = jsonFastTestSetting(getenv("BUN_WASM_JSC_JSON_FAST_TEST"));
+        jsonFastTestEnabled = jsonFastControl.mode != WASIJSONFastTestMode::Off;
+        JSC::setWASIJSONFastTestControl(jsonFastControl);
     });
     Ref<VM> vm = VM::createContextGroup();
     JSLockHolder locker(vm.ptr());
@@ -410,6 +457,7 @@ void bunjsc_refresh_memory_telemetry(JSContextRef ctx)
     snapshot.generationalGcEnabled = Options::useGenerationalGC();
     snapshot.concurrentGcEnabled = Options::useConcurrentGC();
     ++snapshot.snapshotSequence;
+    logJSONFastMemory(snapshot);
 }
 
 BunjscAllocationBoundary* bunjsc_allocation_boundary()
