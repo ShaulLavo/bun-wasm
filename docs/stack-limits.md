@@ -634,9 +634,10 @@ Both engine policies use that one field. QuickJS retains its positively observed
 | Android Firefox | 192 KiB | Default | Full |
 | A Macintosh Safari identity with no touch-point fact, anything else unknown | 192 KiB | Default | 188 KiB |
 
-A family without its own passing measurement keeps the default, and the catch-all never carries
-a reduced value. Playwright WebKit on Linux and a phone device descriptor on a desktop qualify
-nothing.
+For JSC's parser reserve, a family without its own passing measurement keeps the default, and the
+catch-all never carries a reduced value. Playwright WebKit on Linux and a phone device descriptor
+on a desktop qualify nothing. SpiderMonkey's quota is the exception by design: every non-Gecko,
+non-V8 host, unknown ones included, gets the WebKit value ("SpiderMonkey on small stacks" below).
 
 Safari reports the same user agent on Apple silicon and Intel Macs. The observations used here
 do not establish which processor is running, and 832 was measured only on Apple silicon.
@@ -820,9 +821,13 @@ parentheses, objects, unary operators, element access and templates.
 The native launcher has no host limit, so it gives the quota each workload needs: the guest's
 bootstrap 97 KiB (interp) and 106 KiB (PBL), and loading Next's webpack hook (`require-hook` and
 `loadWebpackHook()`) 165 and 184 KiB. 188 KiB sits about 2 percent above Next's need and
-3 percent below the Mac's lowest capacity. The reservations cost no measurable CPU: a
-recursion-heavy script under the launcher, pinned to one core with 10 interleaved runs, took a
-median 1.42 s on main and 1.45 s here on interp, and 1.28 s and 1.26 s on PBL.
+3 percent below the Mac's lowest capacity. The reservations run on every WASI host, with or
+without a budget, so the emitted code differs from main everywhere; no CPU regression was
+measured. A recursion-heavy script under the launcher, pinned to one core with 10 interleaved
+runs, took a median 1.42 s on main and 1.45 s here on interp, and 1.28 s and 1.26 s on PBL.
+`scripts/spidermonkey-stack-quota.test.ts` also runs the smoke under the WebKit value on both
+tiers: every reserved path must end in a caught `RangeError` that the quota, not the counter,
+raises.
 
 ### Known gap: cold statement nesting
 
