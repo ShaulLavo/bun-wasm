@@ -21,6 +21,7 @@
 #include "js/GCAPI.h"
 #include "js/GlobalObject.h"
 #include "js/Initialization.h"
+#include "js/MemoryCallbacks.h"
 #include "js/Interrupt.h"
 #include "js/Modules.h"
 #include "js/Object.h"
@@ -76,6 +77,16 @@ uint32_t controlFaultKind = 0;
 std::string controlObserved;
 JS::PersistentRootedObject* controlHeapRoot = nullptr;
 JS::AutoDisableGenerationalGC* controlHeapGuard = nullptr;
+std::vector<JS::GCReason> controlGcReasons;
+struct ControlOom {
+  uint64_t jobsEntered;
+  bool inJob;
+};
+std::vector<ControlOom> controlOoms;
+uint64_t controlJobsEntered = 0;
+bool controlInJob = false;
+uint32_t controlHeapParameters[3] = {};
+JS::GCSliceCallback controlPreviousSlice = nullptr;
 
 void control_reset_require() {
   bsm_release(controlLoading);
@@ -333,7 +344,14 @@ bool run_task(JS::Handle<mozilla::Maybe<JS::MicroTask>> task) {
   if (!task->asJS().maybeGetHostDefinedData(&incumbent, &captured)) return false;
   JS::RootedValue previous(context, asyncContext->get());
   asyncContext->set(captured ? JS::GetReservedSlot(captured, 0) : JS::UndefinedValue());
+#if defined(BUNSM_CONTROLS)
+  ++controlJobsEntered;
+  controlInJob = true;
+#endif
   bool ok = JS::RunJSMicroTask(context, task);
+#if defined(BUNSM_CONTROLS)
+  controlInJob = false;
+#endif
   asyncContext->set(previous);
   return ok;
 }
@@ -1049,6 +1067,14 @@ extern "C" bool bsm_control_run_until(const char* point) {
   }
   return false;
 }
+void control_gc_slice(JSContext*, GCProgress progress, const GCDescription& description) {
+  if (progress == GC_CYCLE_BEGIN) controlGcReasons.push_back(description.reason_);
+}
+
+void control_oom(JSContext*, void*) {
+  controlOoms.push_back({controlJobsEntered, controlInJob});
+}
+
 bool control_heap_native(JSContext* cx, unsigned argc, JS::Value* vp) {
   JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
   args.rval().setUndefined();
@@ -1056,6 +1082,21 @@ bool control_heap_native(JSContext* cx, unsigned argc, JS::Value* vp) {
 }
 extern "C" void bsm_control_fill_heap() {
   if (controlHeapGuard) return;
+  JSAutoRealm realm(context, global->get());
+  require(JS::CurrentGlobalOrNull(context) == global->get(), "heap fill needs the adapter realm");
+  const JSGCParamKey keys[] = {JSGC_INCREMENTAL_GC_ENABLED, JSGC_COMPACTING_ENABLED,
+                               JSGC_MIN_LAST_DITCH_GC_PERIOD};
+  const uint32_t values[] = {0, 0, 1000000000};
+  for (size_t i = 0; i < 3; ++i) {
+    controlHeapParameters[i] = JS_GetGCParameter(context, keys[i]);
+    JS_SetGCParameter(context, keys[i], values[i]);
+  }
+  controlGcReasons.clear();
+  controlOoms.clear();
+  controlGcReasons.reserve(16);
+  controlOoms.reserve(16);
+  controlPreviousSlice = JS::SetGCSliceCallback(context, control_gc_slice);
+  JS::SetOutOfMemoryCallback(context, control_oom, nullptr);
   controlHeapGuard = new JS::AutoDisableGenerationalGC(context);
   JS_GC(context);
   JS::RootedObject previous(context);
@@ -1074,12 +1115,39 @@ extern "C" void bsm_control_fill_heap() {
     }
     previous = next;
   }
+  require(JS::CurrentGlobalOrNull(context) == global->get(), "heap fill left the adapter realm");
+  size_t lastDitch = 0;
+  for (auto reason : controlGcReasons) {
+    if (reason == JS::GCReason::LAST_DITCH) ++lastDitch;
+  }
+  require(lastDitch == 1 && !controlOoms.empty(), "heap fill did not reach one real last-ditch OOM");
+  controlGcReasons.clear();
+  controlOoms.clear();
+  controlJobsEntered = 0;
+}
+extern "C" void bsm_control_heap_report(bsm_control_heap_report* report) {
+  report->gcCycles = controlGcReasons.size();
+  report->lastDitchCycles = 0;
+  for (auto reason : controlGcReasons) {
+    if (reason == JS::GCReason::LAST_DITCH) ++report->lastDitchCycles;
+  }
+  report->ooms = controlOoms.size();
+  report->firstOomJobsEntered = controlOoms.empty() ? 0 : controlOoms[0].jobsEntered;
+  report->firstOomInJob = !controlOoms.empty() && controlOoms[0].inJob;
+  report->jobsEntered = controlJobsEntered;
 }
 extern "C" void bsm_control_release_heap() {
+  JSAutoRealm realm(context, global->get());
   delete controlHeapRoot;
   controlHeapRoot = nullptr;
   delete controlHeapGuard;
   controlHeapGuard = nullptr;
+  const JSGCParamKey keys[] = {JSGC_INCREMENTAL_GC_ENABLED, JSGC_COMPACTING_ENABLED,
+                               JSGC_MIN_LAST_DITCH_GC_PERIOD};
+  for (size_t i = 0; i < 3; ++i) JS_SetGCParameter(context, keys[i], controlHeapParameters[i]);
+  JS::SetGCSliceCallback(context, controlPreviousSlice);
+  controlPreviousSlice = nullptr;
+  JS::SetOutOfMemoryCallback(context, nullptr, nullptr);
   JS_GC(context);
 }
 #endif

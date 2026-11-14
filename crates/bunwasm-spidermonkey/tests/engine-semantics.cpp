@@ -556,16 +556,27 @@ void heap_fault(bool pending) {
   Value owned(bridge);
   check(bsm_control_run_until(pending ? "require-namespace-returned" : "require-loaded-returned"), "F19 thenable job queued");
   reset_reports();
+  RequirePromises promises;
   bsm_control_fill_heap();
   drain_observed();
-  RequirePromises promises;
+  bsm_control_heap_report report;
+  bsm_control_heap_report(&report);
+  check(report.gcCycles == 0 && report.lastDitchCycles == 0 && report.ooms == 1 &&
+        report.firstOomJobsEntered == 1 && report.firstOomInJob && report.jobsEntered == 1,
+        "F19 refusal occurs in the first drained job without GC");
   check(uncaught.size() == 1 && rejected.empty() && bsm_promise_state(bridge) == 0, "F19 resolving-function exhaustion");
   if (pending) check(bsm_promise_state(promises.derived) == 0, "F19 derived stays pending");
+  bsm_control_release_heap();
+  size_t oomLength = 0;
+  const char* oom = bsm_string_data(uncaught[0], &oomLength);
+  check(oomLength == 13 && memcmp(oom, "out of memory", 13) == 0, "F19 exact OOM value");
   Value global(bsm_global());
   bsm_handle calls = 0;
   check(bsm_get(global.handle, "thenCalls", 9, &calls) && bsm_number(calls) == 0, "F19 user then not entered");
   bsm_release(calls);
-  bsm_control_release_heap();
+  drain_observed();
+  check(uncaught.size() == 1 && rejected.empty() && bsm_promise_state(bridge) == 0, "F19 extra drain leaves the bridge pending");
+  if (pending) check(bsm_promise_state(promises.derived) == 0, "F19 derived pending after release");
   reset_reports();
   RequireOutcome retry = control_require(name);
   check(retry.kind == 0 && bsm_number(retry.value) == 7 && rejected.empty() && uncaught.empty(), "F19 shallow repeat");

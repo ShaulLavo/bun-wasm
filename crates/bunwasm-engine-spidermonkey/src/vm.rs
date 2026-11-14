@@ -647,9 +647,7 @@ impl Engine for SpiderMonkey {
     fn require_module(&self, name: &str) -> Result<SmVal, SmVal> {
         let mut out = 0;
         // SAFETY: valid pointer and length; out is an out-parameter.
-        let ok = unsafe {
-            sys::bsm_require(name.as_ptr().cast::<c_char>(), name.len(), &mut out)
-        };
+        let ok = unsafe { sys::bsm_require(name.as_ptr().cast::<c_char>(), name.len(), &mut out) };
         checked(ok, out)
     }
     fn eval_module(&self, name: &str, source: &str) -> Result<SmVal, SmVal> {

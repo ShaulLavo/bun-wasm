@@ -74,7 +74,13 @@ bool bsm_control_module_linked(const char*, size_t);
 void bsm_control_fault(const char*, uint32_t, uint32_t);
 int bsm_control_run_one_job(void);
 bool bsm_control_run_until(const char*);
+typedef struct {
+  uint64_t gcCycles, lastDitchCycles, ooms, firstOomJobsEntered;
+  bool firstOomInJob;
+  uint64_t jobsEntered;
+} bsm_control_heap_report;
 void bsm_control_fill_heap(void);
+void bsm_control_heap_report(bsm_control_heap_report*);
 void bsm_control_release_heap(void);
 #endif
 
