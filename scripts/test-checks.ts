@@ -1,14 +1,16 @@
 import { spawn, spawnSync } from "node:child_process";
 import { availableParallelism } from "node:os";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "browser-guest", "native", "native-probe"] as const;
 type Owner = typeof owners[number];
 export type NativeProfile = "split" | "shared-group";
+export type NativeFixtureEngine = "quickjs" | "jsc" | "spidermonkey";
 type Check = { path: string; localRuntime: boolean; batch: string } & (
   | { owner: "native-probe"; inputs: string[] }
-  | { owner: "native"; profile?: "shared-group"; inputs?: never }
+  | { owner: "native"; profile: "shared-group"; engines?: never; inputs?: never }
+  | { owner: "native"; profile?: never; engines?: NativeFixtureEngine[]; inputs?: never }
   | { owner: "browser-guest"; profile?: "shared-group"; inputs: string[] }
   | { owner: Exclude<Owner, "native-probe" | "native" | "browser-guest">; inputs?: never; profile?: never }
 );
@@ -30,13 +32,32 @@ function inputFiles(inputs: unknown, file: string): string[] {
   return inputs;
 }
 
+export function nativeFixtureEngines(value: unknown): NativeFixtureEngine[] {
+  if (!Array.isArray(value) || value.length === 0) throw new Error("Native fixture engines must be a nonempty array");
+  const engines = value.map(engine => {
+    if (engine === "quickjs" || engine === "jsc" || engine === "spidermonkey") return engine;
+    throw new Error(`Unknown native fixture engine: ${String(engine)}`);
+  });
+  if (new Set(engines).size !== engines.length) throw new Error("Duplicate native fixture engine");
+  return engines;
+}
+
+function checkEngines(value: object, owner: Owner, profile: NativeProfile, file: string): NativeFixtureEngine[] | undefined {
+  if (!("engines" in value)) return undefined;
+  if (owner !== "native" || profile !== "split") throw new Error(`Only split native checks declare engines: ${file}`);
+  const engines = nativeFixtureEngines(value.engines);
+  if (!engines.includes("quickjs")) throw new Error(`Native checks must retain QuickJS coverage: ${file}`);
+  return engines;
+}
+
 export function parseCheck(value: unknown, file: string): Check {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid check: ${file}`);
   if (!("owner" in value) || !("path" in value)) throw new Error(`Missing check fields: ${file}`);
-  if (Object.keys(value).some(key => !["owner", "path", "localRuntime", "batch", "inputs", "profile"].includes(key))) throw new Error(`Unknown check fields: ${file}`);
+  if (Object.keys(value).some(key => !["owner", "path", "localRuntime", "batch", "inputs", "profile", "engines"].includes(key))) throw new Error(`Unknown check fields: ${file}`);
   const owner = parseOwner(value.owner);
   if ("profile" in value && !hasProfile(owner)) throw new Error(`Only native and browser-guest checks select a profile: ${file}`);
   const profile = "profile" in value ? nativeProfile(value.profile) : "split";
+  const engines = checkEngines(value, owner, profile, file);
   if (!file.startsWith(`${owner}-`)) throw new Error(`Owner must match manifest prefix: ${file}`);
   const path = value.path;
   const pattern = owner === "native" ? /^tests\/fixtures\/[a-z0-9][a-z0-9-]*$/ : /^scripts\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.test\.ts$/;
@@ -52,7 +73,11 @@ export function parseCheck(value: unknown, file: string): Check {
   }
   if (owner !== "native-probe") {
     if ("inputs" in value) throw new Error(`Only native-probe and browser-guest checks declare input files: ${file}`);
-    if (owner === "native" && profile === "shared-group") return { owner, path, localRuntime, batch, profile };
+    if (owner === "native") {
+      if (profile === "shared-group") return { owner, path, localRuntime, batch, profile };
+      if (engines) return { owner, path, localRuntime, batch, engines };
+      return { owner, path, localRuntime, batch };
+    }
     return { owner, path, localRuntime, batch };
   }
   const inputs = inputFiles("inputs" in value ? value.inputs : undefined, file);
@@ -124,6 +149,21 @@ export function checkCommand(owner: string, paths?: readonly string[], profile: 
   return ["bun", "test"].concat(selected.map(path => join(root, path)));
 }
 
+export function nativeEngineChecks(engine: NativeFixtureEngine, checks: readonly Check[] = discoverChecks()): string[] {
+  return checks.filter(check => check.owner === "native" && check.profile !== "shared-group" && (check.engines ?? ["quickjs"]).includes(engine)).map(check => check.path);
+}
+
+export function nativeEngineCommand(engine: NativeFixtureEngine, paths: readonly string[], env = process.env): string[] {
+  if (engine === "quickjs") return checkCommand("native", paths);
+  const command = ["bash", join(root, "scripts/test.sh"), "--no-build", "--engine", engine];
+  if (engine === "spidermonkey") {
+    const core = env.SPIDERMONKEY_WASM;
+    if (!core || !isAbsolute(core)) throw new Error("SpiderMonkey fixture checks require absolute SPIDERMONKEY_WASM");
+    command.push("--wasm", core, "--tier", "interp");
+  }
+  return command.concat(paths.map(path => path.slice("tests/fixtures/".length)));
+}
+
 export function runCheck(command: readonly string[], env = process.env): number {
   const [executable, ...args] = command;
   if (!executable) throw new Error("Missing check command");
@@ -161,14 +201,23 @@ async function runNative(paths: readonly string[], profile: NativeProfile): Prom
   if (profile === "shared-group") return runCheck(checkCommand("native", paths.slice(), profile));
   const count = Number(process.env.BUN_WASM_CHECK_JOBS ?? availableParallelism());
   if (!Number.isInteger(count) || count < 1) throw new Error(`Invalid BUN_WASM_CHECK_JOBS: ${String(count)}`);
-  const env = { ...process.env, BUN_WASM_CI_CHECKS: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, BUN_WASM_CI_CHECKS: "1" };
+  const engines = nativeFixtureEngines((env.BUN_WASM_CHECK_ENGINES ?? "quickjs").split(","));
   // Each test.sh would otherwise run the whole runtime suite again, in parallel.
   const runtime = runCheck(["bash", join(root, "scripts/check-runtime.sh")], env);
   if (runtime !== 0) return runtime;
   const grouped = { ...env, BUN_WASM_RUNTIME_CHECKED: "1" };
-  const results = await Promise.all(nativeGroups(paths, count).map(group => runBuffered(checkCommand("native", group), grouped)));
-  for (const result of results) process.stdout.write(result.output);
-  return results.find(result => result.status !== 0)?.status ?? 0;
+  const requested = new Set(paths);
+  const checks = discoverChecks();
+  for (const engine of engines) {
+    const selected = nativeEngineChecks(engine, checks).filter(path => requested.has(path));
+    if (selected.length === 0) continue;
+    const results = await Promise.all(nativeGroups(selected, count).map(group => runBuffered(nativeEngineCommand(engine, group, grouped), grouped)));
+    for (const result of results) process.stdout.write(result.output);
+    const failed = results.find(result => result.status !== 0);
+    if (failed) return failed.status;
+  }
+  return 0;
 }
 
 async function runOwner(owner: string, profile: NativeProfile, selectedBatch?: string): Promise<void> {

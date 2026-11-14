@@ -28,3 +28,8 @@ The shared helper converts the page count before multiplying by 65,536 so
 the 4 GiB wasm32 limit remains representable. The native fixture checks the
 JS binding. Rust controls check native `null` and an exact one-page guest
 growth through the same helper.
+
+Feature manifests require the capacity, process-field and large-I/O fixtures on
+the existing ordinary QuickJS, JSC and SpiderMonkey pairs. The native gate runs
+these assertions after its producers and shell registration, with no additional
+engine build. The large-I/O assertions run after the capacity prerequisite.

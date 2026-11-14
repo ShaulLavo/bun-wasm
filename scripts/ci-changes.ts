@@ -87,6 +87,7 @@ export function needsSharedNative(paths: readonly string[], inputs: readonly str
 
 const nativeChecks = discoverChecks();
 const nativeCheckInputs = nativeChecks.flatMap(checkInputPaths);
+const jscCheckInputs = nativeChecks.filter(check => check.owner === "native" && check.engines?.includes("jsc")).flatMap(checkInputPaths);
 const sharedNativeCheckInputs = nativeChecks.filter(check => (check.owner === "native" || check.owner === "browser-guest") && check.profile === "shared-group").flatMap(checkInputPaths);
 const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
@@ -110,7 +111,7 @@ const jscFiles = new Set([
   "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",
   "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
   "scripts/src/program-profile.ts", "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
-  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "checks/native-stack-getter-headroom.json", "checks/native-parser-literal-overflow.json", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", "scripts/ci-native-handoff.ts", "scripts/ci-native-handoff-paths.ts", ".github/workflows/ci.yml",
+  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "scripts/test-checks.ts", "checks/native-stack-getter-headroom.json", "checks/native-parser-literal-overflow.json", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", "scripts/ci-native-handoff.ts", "scripts/ci-native-handoff-paths.ts", ".github/workflows/ci.yml",
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json", "scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
   // The parser reserve's host policy, executor defaults, probe and consumers (docs/stack-limits.md).
   "web/src/engine-stack-budget.ts", "web/src/bun-executor.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts", "scripts/jsc-parser-reserve.ts",
@@ -167,8 +168,8 @@ function ordinarySpiderMonkeyInput(path: string): boolean {
     || ordinaryFixtures.some(name => path.startsWith(`tests/fixtures/${name}/`));
 }
 
-export function needsJsc(paths: readonly string[]): boolean {
-  return paths.some(path => sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
+export function needsJsc(paths: readonly string[], inputs: readonly string[] = jscCheckInputs): boolean {
+  return paths.some(path => sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs));
 }
 
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
@@ -204,8 +205,8 @@ export interface CheckSelection {
   shared_native: boolean;
 }
 
-function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[]): CheckSelection {
-  return { rust: native.length > 0, jsc: needsJsc(paths), shared: needsSharedSysroot(paths), shared_native: needsSharedNative(native, profileInputs) };
+function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[], jscInputs: readonly string[]): CheckSelection {
+  return { rust: native.length > 0, jsc: needsJsc(paths, jscInputs), shared: needsSharedSysroot(paths), shared_native: needsSharedNative(native, profileInputs) };
 }
 
 export function selectChanges(base: string, head: string, pullRequest = false, inputsAt = nativeCheckInputsAt): CheckSelection {
@@ -216,7 +217,8 @@ export function selectChanges(base: string, head: string, pullRequest = false, i
   const native = nativeChanges(paths, base, head, refs.flatMap(ref => inputsAt(ref)));
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
   const profileInputs = refs.flatMap(ref => inputsAt(ref, "shared-group"));
-  return classifyChanges(paths, native, profileInputs);
+  const jscInputs = refs.flatMap(ref => inputsAt(ref, "split", "jsc"));
+  return classifyChanges(paths, native, profileInputs, jscInputs);
 }
 
 export function selectionOutput(selection: CheckSelection): string {
