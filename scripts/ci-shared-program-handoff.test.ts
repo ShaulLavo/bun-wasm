@@ -167,7 +167,7 @@ test("native and Browser consumers use ready artifacts on separate runners and d
     expect(job["continue-on-error"]).toBeUndefined();
     const owner = id === "shared-native" ? "native" : "browser-guest";
     expect(commands.match(new RegExp(`test-checks.ts ${owner} --profile shared-group`, "g"))).toHaveLength(1);
-    if (id === "shared-browser") expect(commands).toContain("run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 660 || 420 }} bun scripts/test-checks.ts");
+    if (id === "shared-browser") expect(commands).toContain("run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }} bun scripts/test-checks.ts");
     else expect(commands).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   }
   expect(shared["timeout-minutes"]).toBe(30);
