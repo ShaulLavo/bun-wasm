@@ -1,7 +1,5 @@
 name: Firefox storage diagnostic
 on:
-  push:
-    branches: [t3/diagnose-firefox-storage-failure]
   workflow_dispatch:
 permissions:
   contents: read
@@ -66,8 +64,16 @@ jobs:
       - name: Clean task-created setup and execution files
         if: always()
         run: |
+          cleanup_failed=0
+          while read -r helper; do
+            [[ -n "$helper" ]] || continue
+            [[ "$(readlink "/proc/$helper/cwd" 2>/dev/null || true)" == "$GITHUB_WORKSPACE/web" ]] || continue
+            if awk -v pid="$helper" '$1 == pid { found = 1 } END { exit !found }' "$BUN_WASM_BROWSER_REPORT_DIR/processes-before.txt"; then continue; fi
+            timeout 60 tail --pid="$helper" -f /dev/null || cleanup_failed=1
+          done < <(pgrep -f '^bun scripts/ci-browser-deps.ts firefox$' || true)
           rm -rf -- "$BUN_WASM_BROWSER_SITE" "$RUNNER_TEMP/storage-firefox-bun-cache" "$PLAYWRIGHT_BROWSERS_PATH" "$GITHUB_WORKSPACE/subject" "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/web/node_modules"
           ps -eo pid,ppid,pgid,args > "$BUN_WASM_BROWSER_REPORT_DIR/processes-after.txt"
+          exit "$cleanup_failed"
       - name: Retain diagnostic artifacts
         if: always()
         uses: actions/upload-artifact@v4
