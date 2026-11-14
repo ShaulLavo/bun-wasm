@@ -115,8 +115,9 @@ const packed = (length: number) => {
   for (let index = 0; index < length; index++) list.push(index);
   return list;
 };
-const long = report.apply(token, packed(100_000));
-check(long.length === 100_002 && long[1] === 100_000 && long[100_001] === 99_999, "long packed list");
+// Under QuickJS's 65,535-argument limit; SpiderMonkey's is 500,000.
+const long = report.apply(token, packed(60_000));
+check(long.length === 60_002 && long[1] === 60_000 && long[60_001] === 59_999, "long packed list");
 try { report.apply(token, packed(500_001)); caught = undefined; } catch (error) { caught = error; }
 check(caught instanceof RangeError, "over-limit list");
 try { report.apply(token, 1 as unknown as unknown[]); caught = undefined; } catch (error) { caught = error; }

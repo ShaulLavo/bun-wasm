@@ -257,7 +257,8 @@ void moving_apply_gc() {
   puts("ok moving GC before apply frame publication");
 }
 
-void debugger_calls() {
+void debugger_calls(bool pbl) {
+  size_t before = loopCalls;
   debugger_evaluate(R"JS(
     function assert(v, label) { if (!v) throw new Error(label + (hookFailure ? ' after hook failure ' + hookFailure : '')); }
     var dbg = watch(new Debugger(debuggee));
@@ -270,7 +271,7 @@ void debugger_calls() {
       entered++;
       frame.onPop = completion => { left++; };
     };
-    var expected = ["1,2,3,3", ",,,0", "1,2,3,2", "1,,,0", "1,2,3,2"];
+    var expected = ["1,2,3,2", ",,,0", "1,2,3,2", "1,,,0", "1,2,3,2"];
     shapes.forEach((shape, i) => {
       var result = g.executeInGlobal(shape, {url:'call-site.js'});
       assert(result.return === expected[i] && entered === i + 1 && left === i + 1, 'one enter and leave for ' + shape + ': ' + JSON.stringify(result));
@@ -314,6 +315,8 @@ void debugger_calls() {
     assert(result.return === '42,42', 'cross-realm targets');
     dbg.removeAllDebuggees();
   )JS");
+  // Five shapes, five forced, two throws and two unobserved locations.
+  check(pbl || loopCalls >= before + 14, "Debugger call cases take the loop route");
   puts("ok call and apply Debugger hooks, forced return, exception, caller PC, saved stack and realm");
 }
 
@@ -404,7 +407,7 @@ void loop_controls() {
   check(pbl || (ownedLoopCalls && loopCalls > ownedLoopCalls), "call and apply routes taken on the interpreter tier");
   debugger_getters();
   async_getter_stacks();
-  debugger_calls();
+  debugger_calls(pbl);
   async_call_stacks();
   puts("ok frame and recursion-unit balance on success, throw, exhaustion and prologue failure");
   interruptAt = 1;
