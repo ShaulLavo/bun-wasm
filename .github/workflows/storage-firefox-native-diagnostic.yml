@@ -19,15 +19,18 @@ jobs:
     timeout-minutes: 55
     env:
       SF_SUBJECT: ${{ github.workspace }}/subject
-      SF_ROOT: ${{ runner.temp }}/storage-firefox-native
-      SF_EVIDENCE: ${{ runner.temp }}/storage-firefox-evidence
-      TMPDIR: ${{ runner.temp }}
-      BUN_WASM_TEST_TMP: ${{ runner.temp }}
-      BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/storage-firefox-native/bun-cache
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/storage-firefox-native/browsers
     steps:
       - name: Initialize evidence before setup
-        run: mkdir -p "$SF_EVIDENCE"
+        run: |
+          mkdir -p "$RUNNER_TEMP/storage-firefox-evidence"
+          {
+            echo "SF_ROOT=$RUNNER_TEMP/storage-firefox-native"
+            echo "SF_EVIDENCE=$RUNNER_TEMP/storage-firefox-evidence"
+            echo "TMPDIR=$RUNNER_TEMP"
+            echo "BUN_WASM_TEST_TMP=$RUNNER_TEMP"
+            echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/storage-firefox-native/bun-cache"
+            echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/storage-firefox-native/browsers"
+          } >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
