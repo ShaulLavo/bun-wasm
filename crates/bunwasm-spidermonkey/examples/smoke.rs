@@ -152,7 +152,10 @@ pub fn main() {
             "missing argument",
             "function f(a, b) { d++; return f(1) + 1; } f(1);",
         ),
-        ("call", "function f() { d++; return f.call(this) + 1; } f();"),
+        (
+            "call",
+            "function f() { d++; return f.call(this) + 1; } f();",
+        ),
         (
             "apply",
             "function f() { d++; return f.apply(this, arguments) + 1; } f(1);",
@@ -166,7 +169,10 @@ pub fn main() {
         let counted = pbl || (label != "missing argument" && !framed);
         assert!(depth > 100.0, "{label} recursion depth {depth}");
         assert!(!counted || depth < 350.0, "{label} recursion depth {depth}");
-        assert!(pbl || !framed || depth > 4096.0, "{label} recursion depth {depth}");
+        assert!(
+            pbl || !framed || depth > 4096.0,
+            "{label} recursion depth {depth}"
+        );
 
         assert_eq!(number("6 * 7"), 42.0);
     }
