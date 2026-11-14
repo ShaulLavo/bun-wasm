@@ -63,6 +63,13 @@ snapshots for existing cache keys and prefixes. It restores into job-private
 paths and publishes only for main pushes. Hosted cache behavior and all existing
 compiler, receipt, checksum and blocking-check guards remain in place.
 
+The restore wrapper forwards `lookup-only` to either backend, defaulting to
+ordinary restore. Local lookups select exact or ordered-prefix snapshots under
+the same lock and retention policy without hashing or extracting the archive or
+writing job paths. They report the original matched key and an exact-hit flag.
+The standalone ordinary JSC identity supplies only its full key and restore path;
+only an exact published hit skips that warmer. Full CI still restores and verifies.
+
 Local snapshots are limited to 32 GiB and 256 entries on the 128 GiB cache disk.
 Successful restores update the snapshot directory's last-use time without
 changing archived files. Publication removes the least recently used snapshots
