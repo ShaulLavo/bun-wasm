@@ -78,9 +78,9 @@ typedef struct {
   uint64_t gcCycles, lastDitchCycles, ooms, firstOomJobsEntered;
   bool firstOomInJob;
   uint64_t jobsEntered;
-} bsm_control_heap_report;
+} bsm_heap_report;
 void bsm_control_fill_heap(void);
-void bsm_control_heap_report(bsm_control_heap_report*);
+void bsm_control_heap_report(bsm_heap_report*);
 void bsm_control_release_heap(void);
 #endif
 

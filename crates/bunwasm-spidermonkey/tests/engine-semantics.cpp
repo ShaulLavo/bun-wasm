@@ -559,7 +559,7 @@ void heap_fault(bool pending) {
   RequirePromises promises;
   bsm_control_fill_heap();
   drain_observed();
-  bsm_control_heap_report report;
+  bsm_heap_report report;
   bsm_control_heap_report(&report);
   check(report.gcCycles == 0 && report.lastDitchCycles == 0 && report.ooms == 1 &&
         report.firstOomJobsEntered == 1 && report.firstOomInJob && report.jobsEntered == 1,

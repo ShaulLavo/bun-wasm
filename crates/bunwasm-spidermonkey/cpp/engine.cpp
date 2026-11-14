@@ -1067,8 +1067,8 @@ extern "C" bool bsm_control_run_until(const char* point) {
   }
   return false;
 }
-void control_gc_slice(JSContext*, GCProgress progress, const GCDescription& description) {
-  if (progress == GC_CYCLE_BEGIN) controlGcReasons.push_back(description.reason_);
+void control_gc_slice(JSContext*, JS::GCProgress progress, const JS::GCDescription& description) {
+  if (progress == JS::GC_CYCLE_BEGIN) controlGcReasons.push_back(description.reason_);
 }
 
 void control_oom(JSContext*, void*) {
@@ -1125,7 +1125,7 @@ extern "C" void bsm_control_fill_heap() {
   controlOoms.clear();
   controlJobsEntered = 0;
 }
-extern "C" void bsm_control_heap_report(bsm_control_heap_report* report) {
+extern "C" void bsm_control_heap_report(bsm_heap_report* report) {
   report->gcCycles = controlGcReasons.size();
   report->lastDitchCycles = 0;
   for (auto reason : controlGcReasons) {
