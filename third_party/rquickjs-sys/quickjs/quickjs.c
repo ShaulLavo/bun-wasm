@@ -19005,6 +19005,37 @@ static JSValue JS_CallInternal(JSContext *ctx, JSValueConst func_obj,
 static JSValue js_function_call(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv);
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((always_inline))
+#endif
+static inline JSObject *js_inline_getter(JSShapeProperty *prs, JSProperty *pr)
+{
+    JSObject *getter;
+
+    if ((prs->flags & JS_PROP_TMASK) != JS_PROP_GETSET)
+        return NULL;
+    getter = pr->u.getset.getter;
+    if (!getter || !js_frame_inline_callee(JS_MKPTR(JS_TAG_OBJECT, getter)))
+        return NULL;
+    return getter;
+}
+
+static no_inline JSObject *js_find_inline_getter(JSObject *p, JSAtom atom)
+{
+    JSShapeProperty *prs;
+    JSProperty *pr;
+
+    while (p) {
+        if (p->is_exotic)
+            return NULL;
+        prs = find_own_property(&pr, p, atom);
+        if (prs)
+            return js_inline_getter(prs, pr);
+        p = p->shape->proto;
+    }
+    return NULL;
+}
+
 static inline JSContKind js_cont_kind(JSValueConst builtin, JSValueConst this_obj)
 {
     JSObject *p;
@@ -19114,7 +19145,9 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     uint8_t *pc;
     int opcode, arg_allocated_size, i;
     /* the call being made; shared by the call opcodes and inline_call */
-    int call_argc, call_kind, st;
+    int call_argc, call_kind, call_release, st;
+    JSObject *getter;
+    JSValueConst getter_receiver;
     JSValue *call_argv;
     JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
     JSVarRef **var_refs;
@@ -20660,7 +20693,7 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                         if (prs) {
                             /* found */
                             if (unlikely(prs->flags & JS_PROP_TMASK))
-                                goto get_field_slow_path;
+                                goto get_field_accessor;
                             val = js_dup(pr->u.value);
                             break;
                         }
@@ -20686,8 +20719,15 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = val;
+                BREAK;
+
+        get_field_accessor:
+            if (!owned || !(getter = js_inline_getter(prs, pr)))
+                goto get_field_slow_path;
+            call_release = 1;
+            getter_receiver = sp[-1];
+            goto inline_getter;
             }
-            BREAK;
 
         CASE(OP_get_field2):
             {
@@ -20708,7 +20748,7 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                         if (prs) {
                             /* found */
                             if (unlikely(prs->flags & JS_PROP_TMASK))
-                                goto get_field2_slow_path;
+                                goto get_field2_accessor;
                             val = js_dup(pr->u.value);
                             break;
                         }
@@ -20733,8 +20773,15 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                         goto exception;
                 }
                 *sp++ = val;
+                BREAK;
+
+        get_field2_accessor:
+            if (!owned || !(getter = js_inline_getter(prs, pr)))
+                goto get_field2_slow_path;
+            call_release = 0;
+            getter_receiver = sp[-1];
+            goto inline_getter;
             }
-            BREAK;
 
         CASE(OP_put_field):
             {
@@ -21044,6 +21091,13 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                 atom = JS_ValueToAtom(ctx, sp[-1]);
                 if (unlikely(atom == JS_ATOM_NULL))
                     goto exception;
+                if (owned && JS_IsObject(sp[-2]) &&
+                    (getter = js_find_inline_getter(JS_VALUE_GET_OBJ(sp[-2]), atom))) {
+                    JS_FreeAtom(ctx, atom);
+                    call_release = 3;
+                    getter_receiver = sp[-3];
+                    goto inline_getter;
+                }
                 val = JS_GetPropertyInternal(ctx, sp[-2], atom, sp[-3], false);
                 JS_FreeAtom(ctx, atom);
                 if (unlikely(JS_IsException(val)))
@@ -22050,6 +22104,7 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     if (owned->owns_func) {
         JS_FreeValueRT(rt, sf->cur_func);
         sf->cur_func = JS_UNDEFINED;
+        owned->owns_func = 0;
     }
     js_frame_pop(rt, owned);
 
@@ -22136,6 +22191,49 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
         argv = c->next_argv;
         new_target = JS_UNDEFINED;
         flags = 0;
+        owned = callee;
+        goto enter_frame;
+    }
+
+ inline_getter:
+    {
+        /* The property can disappear during the interrupt callback or a GC
+           triggered by allocation. Own the selected function first. */
+        JSValue selected = js_dup(JS_MKPTR(JS_TAG_OBJECT, getter));
+        JSExecFrame *callee;
+        JSFunctionBytecode *callee_b;
+
+        sf->cur_pc = pc;
+        if (unlikely(js_poll_interrupts(ctx))) {
+            JS_FreeValue(ctx, selected);
+            goto exception;
+        }
+        getter = JS_VALUE_GET_OBJ(selected);
+        callee_b = getter->u.func.function_bytecode;
+        arg_allocated_size = callee_b->arg_count;
+        callee = js_frame_push(ctx,
+                               (size_t)arg_allocated_size + callee_b->var_count +
+                               callee_b->stack_size,
+                               callee_b->var_ref_count);
+        if (unlikely(!callee)) {
+            JS_FreeValue(ctx, selected);
+            goto exception;
+        }
+        owned->saved_sp = sp;
+        owned->call_release = call_release;
+        owned->call_kind = 0;
+        callee->resume_record = owned;
+        callee->record_kind = JS_RECORD_ORDINARY;
+        callee->owns_func = 1;
+        caller_ctx = ctx;
+        func_obj = selected;
+        this_obj = getter_receiver;
+        new_target = JS_UNDEFINED;
+        argc = 0;
+        argv = NULL;
+        flags = 0;
+        p = getter;
+        b = callee_b;
         owned = callee;
         goto enter_frame;
     }

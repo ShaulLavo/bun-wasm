@@ -1,4 +1,4 @@
-# QuickJS builtin loop continuations
+# QuickJS getter dispatch and builtin loop continuations
 
 Class **Port**. Upstream is QuickJS-ng 0.16.2 in rquickjs-sys 0.13.0,
 imported at `902364cf9`. The adapted implementation is
@@ -35,7 +35,31 @@ rounds its actual structure's tail up to value slots, with compile-time layout,
 alignment and containment assertions. This unit adds no reduce or apply state.
 Budgets, backing limits and native entry reservations are unchanged.
 
+Ordinary JavaScript getters selected by `OP_get_field`, `OP_get_field2` and
+`OP_get_super_value` also enter the running interpreter. Their result replaces
+one, zero or three caller operand slots respectively. Lookup keeps the original
+receiver, including inherited and `super` reads. `super` coerces its key once
+before searching ordinary prototypes. Exotics, computed ordinary keys, data,
+VARREF and AUTOINIT properties, native getters, async functions and generators
+retain the existing property lookup and native call paths. Coroutine callers
+retain native dispatch.
+
+The selected getter is duplicated before interrupt polling or frame allocation.
+The callee record owns that reference until its normal or exceptional teardown.
+Interrupt and allocation refusal release it before unwinding the caller, whose
+operands remain intact. No property pointer is used after a poll. Zero actual
+arguments use a NULL vector and declared formal slots receive undefined.
+
 Original regression adapters are `scripts/fixtures/quickjs-frame-stack.c` and
 `.ts`, driven by `scripts/check-quickjs-frame-stack.ts`, plus the engine-neutral
 native fixture `tests/fixtures/stack-loop-continuations`. The semantic snapshot
 was captured from the engine before this dispatch change.
+
+Getter-specific original adapters extend those same bare-engine fixtures and
+add `tests/fixtures/stack-getter-loop`, discovered by
+`checks/native-stack-getter-loop.json`. They cover selected-getter collection
+during an interrupt, accessor mutation, receiver and key semantics, formal
+padding, escaping references, refused allocations, unbounded recursion and
+recovery at the unchanged 32 and 36 KiB native budgets. Getter dispatch removes
+only one part of Ajv's getter/reduce recursion; Angular acceptance also needs
+the separate reduce continuation unit.
