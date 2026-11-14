@@ -57,6 +57,8 @@
         "scripts/fixtures/runtime-js-child.ts",
         "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",
+        "scripts/bench-jsc-json.ts",
+        "scripts/fixtures/jsc-json-bench.ts",
         "scripts/engine-comparison.ts",
         "scripts/esm-loader-*.ts",
         "scripts/bun-suite-small-causes.ts",

@@ -28,7 +28,8 @@ test.each(["scripts/ci-runner-other/cache.ts", ".github/actions/restore-other-ca
 test("ordinary SpiderMonkey recipes, nested runtime inputs and each reviewed fixture select Rust", () => {
   const paths = ["spidermonkey/mozconfig.in", "spidermonkey/prepare-engine-inputs.ts", "spidermonkey/unresolved-symbols.json",
     "scripts/spidermonkey-ordinary-ci.ts", "scripts/spidermonkey-ordinary-ci.test.ts", "scripts/spidermonkey-ordinary-fixtures.ts",
-    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "checks/runtime-spidermonkey-ordinary-fixtures.json",
+    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "scripts/spidermonkey-engine-semantics.sh",
+    "checks/runtime-spidermonkey-ordinary-fixtures.json",
     "crates/bunwasm-runtime/src/data/codec.rs", "crates/bunwasm-runtime/src/ops/client.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs"]
     .concat(ordinaryFixtures.map(name => `tests/fixtures/${name}/expected.txt`));
   for (const path of paths) expect(needsRust([path])).toBe(true);
@@ -199,6 +200,8 @@ beforeAll(() => {
   git(["init", "-q"]);
   mkdirSync(join(fixture, "crates"));
   writeFileSync(join(fixture, "crates/lib.rs"), "owned native input\n");
+  mkdirSync(join(fixture, "checks"));
+  writeFileSync(join(fixture, "checks/native-json-fast-iterative.json"), readFileSync(new URL("../checks/native-json-fast-iterative.json", import.meta.url), "utf8"));
   git(["add", "."]);
   git(["commit", "-qm", "base"]);
   base = git(["rev-parse", "HEAD"]);
@@ -243,6 +246,19 @@ function commitInput(path: string, content = "changed input\n"): string {
   git(["add", "."]);
   git(["commit", "-qm", `change ${path}`]);
   return git(["rev-parse", "HEAD"]);
+}
+
+for (const path of [
+  "scripts/jsc-json-fast-controls.test.ts", "checks/runtime-json-fast-controls.json",
+  "scripts/bench-jsc-json.ts", "scripts/fixtures/jsc-json-bench.ts",
+  "tests/fixtures/json-fast-iterative/index.ts", "tests/fixtures/json-fast-iterative/expected.txt",
+  "checks/native-json-fast-iterative.json", "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects the compiled JSON controls' JSC producer for %s`, event => {
+    const content = path.endsWith(".json")
+      ? readFileSync(new URL(`../${path}`, import.meta.url), "utf8") + "\n" : "changed input\n";
+    expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
+  });
 }
 
 for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh", ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml"]) {

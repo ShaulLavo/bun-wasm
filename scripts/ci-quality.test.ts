@@ -20,6 +20,32 @@ const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-identity:\n"
 const { prebuild, ordered: rust } = nativePipeline(workflow);
 const importStepName = "Import the verified JSC prebuild and sysroot";
 
+test("compiled JSON runtime controls follow the selected JSC producer", () => {
+  expect(selectChecks("runtime")).toContain("scripts/jsc-json-fast-controls.test.ts");
+  const start = nativeWorkflowStep("name", "Start the JSC Cargo guest build");
+  const wait = nativeWorkflowStep("name", "Build the JSC Cargo guest");
+  const controls = nativeWorkflowStep("name", "Blocking native fixture checks");
+  const outputs = { "needs.quality.outputs.jsc": "true" };
+  for (const step of [start, wait]) expect(cacheCondition(workflowString(workflowField(step, "if")), outputs, true)).toBe(true);
+  expect(controls).not.toHaveProperty("if");
+  expect(workflowString(workflowField(controls, "run"))).toContain("bun scripts/test-checks.ts native");
+  expect(workflowString(workflowField(workflowField(controls, "env"), "INSTALL_ENGINES")))
+    .toBe("${{ needs.quality.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
+  expect(rust.indexOf("name: Start the JSC Cargo guest build")).toBeLessThan(rust.indexOf("name: Build the JSC Cargo guest\n"));
+  expect(rust.indexOf("name: Build the JSC Cargo guest\n")).toBeLessThan(rust.indexOf("name: Blocking native fixture checks"));
+});
+
+test("JSON runtime controls skip unselected JSC and fail when its selected launcher is missing", () => {
+  const path = new URL("./jsc-json-fast-controls.test.ts", import.meta.url).pathname;
+  const env = { ...process.env, BUN_WASM_LAUNCHER: new URL("../dist/missing-json-control-launcher", import.meta.url).pathname, BUN_WASM_JSON_LONG_STRESS: "1" };
+  const unselected = spawnSync(process.execPath, ["test", path], { encoding: "utf8", env: { ...env, INSTALL_ENGINES: "quickjs,browser" } });
+  expect(unselected.status).toBe(0);
+  expect(unselected.stderr).toMatch(/0 pass\s+\d+ skip\s+0 fail/);
+  const selected = spawnSync(process.execPath, ["test", path, "--test-name-pattern", "general depth limit remains authoritative"], { encoding: "utf8", env: { ...env, INSTALL_ENGINES: "quickjs,jsc,browser" } });
+  expect(selected.status).toBe(1);
+  expect(selected.stderr).toContain("ENOENT");
+});
+
 test("CI shares one exact Node patch across TLS handoff jobs and preserves direct spread eval scope", () => {
   const pin = workflowField(workflowField(Bun.YAML.parse(workflow), "env"), "CI_NODE_VERSION");
   expect(pin).toMatch(/^26\.\d+\.\d+$/);
