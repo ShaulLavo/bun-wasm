@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { effectiveParserReserve, engineStackBudgets, jscParserReserve, pageFacts, qualifiedParserReserves, stackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
+import { effectiveParserReserve, engineStackBudgets, jscParserReserve, pageFacts, qualifiedParserReserves, spiderMonkeyWebKitStackKib, stackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
 
 const firefox = "Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0";
 const firefoxMac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0";
@@ -11,6 +11,8 @@ const geckoStack = "engineStackBudgets@http://localhost/worker.js:10:2\n@http://
 const v8Stack = "Error\n    at createBunExecutor (worker.js:10:2)";
 const noTouch = { maxTouchPoints: 0 };
 const conservative = { quickjs: "32", jsc: "192" };
+// WebKit (Safari, iPhone, iPad and every iOS browser) also bounds SpiderMonkey; Gecko never does.
+const webkit = { ...conservative, spidermonkey: spiderMonkeyWebKitStackKib };
 // A value for every family that may ever carry one, so each row shows what it would select.
 const everyFamily: QualifiedParserReserves = {
   "firefox-linux": { bytes: "1024" }, "firefox-desktop": { bytes: "1040" }, "safari-macos": { bytes: "1056", minimumSafariMajor: 26 },
@@ -24,10 +26,10 @@ test.each([
   expect(engineStackBudgets(geckoStack, agent)).toEqual({ jsc: "208" });
 });
 
-test("Safari and unmeasured hosts retain both conservative stack budgets", () => {
-  expect(engineStackBudgets(geckoStack, safari)).toEqual(conservative);
-  expect(engineStackBudgets(geckoStack, "Mozilla/5.0 AppleWebKit/605.1.15 FxiOS/144.0 Mobile Safari/605.1.15")).toEqual(conservative);
-  expect(engineStackBudgets("", "")).toEqual(conservative);
+test("Safari and unmeasured hosts retain the conservative budgets and bound SpiderMonkey", () => {
+  expect(engineStackBudgets(geckoStack, safari)).toEqual(webkit);
+  expect(engineStackBudgets(geckoStack, "Mozilla/5.0 AppleWebKit/605.1.15 FxiOS/144.0 Mobile Safari/605.1.15")).toEqual(webkit);
+  expect(engineStackBudgets("", "")).toEqual(webkit);
 });
 
 test("V8 gives JSC getter reentry room while keeping QuickJS at its default", () => {
@@ -49,16 +51,16 @@ test.each([
   { row: "desktop Firefox on Linux", stack: geckoStack, agent: firefox, page: undefined, host: "firefox-linux", budgets: { jsc: "208" }, reserve: "1024" },
   { row: "desktop Firefox on macOS", stack: geckoStack, agent: firefoxMac, page: noTouch, host: "firefox-desktop", budgets: { jsc: "208" }, reserve: "1040" },
   { row: "desktop Firefox on Windows", stack: geckoStack, agent: firefoxWindows, page: noTouch, host: "firefox-desktop", budgets: { jsc: "208" }, reserve: "1040" },
-  { row: "macOS Safari with the zero-touch fact", stack: geckoStack, agent: safari, page: noTouch, host: "safari-macos", budgets: conservative, reserve: "1056" },
-  { row: "iPhone", stack: geckoStack, agent: iphone, page: { maxTouchPoints: 5 }, host: "other", budgets: conservative, reserve: undefined },
-  { row: "iPad in mobile mode", stack: geckoStack, agent: ipad, page: { maxTouchPoints: 5 }, host: "other", budgets: conservative, reserve: undefined },
-  { row: "iPad in desktop mode, reporting its touch points", stack: geckoStack, agent: safari, page: { maxTouchPoints: 5 }, host: "other", budgets: conservative, reserve: undefined },
-  { row: "iPad in desktop mode, or any Macintosh Safari, with no touch-point fact", stack: geckoStack, agent: safari, page: undefined, host: "other", budgets: conservative, reserve: undefined },
-  { row: "Chrome on iOS", stack: geckoStack, agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4 like Mac OS X) AppleWebKit/605.1.15 CriOS/157.0 Mobile/15E148 Safari/604.1", page: noTouch, host: "other", budgets: conservative, reserve: undefined },
-  { row: "Firefox on iOS", stack: geckoStack, agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4 like Mac OS X) AppleWebKit/605.1.15 FxiOS/147.0 Mobile/15E148 Safari/605.1.15", page: noTouch, host: "other", budgets: conservative, reserve: undefined },
-  { row: "Edge on iOS with a desktop-style agent", stack: geckoStack, agent: `${safari} EdgiOS/131.0`, page: noTouch, host: "other", budgets: conservative, reserve: undefined },
+  { row: "macOS Safari with the zero-touch fact", stack: geckoStack, agent: safari, page: noTouch, host: "safari-macos", budgets: webkit, reserve: "1056" },
+  { row: "iPhone", stack: geckoStack, agent: iphone, page: { maxTouchPoints: 5 }, host: "other", budgets: webkit, reserve: undefined },
+  { row: "iPad in mobile mode", stack: geckoStack, agent: ipad, page: { maxTouchPoints: 5 }, host: "other", budgets: webkit, reserve: undefined },
+  { row: "iPad in desktop mode, reporting its touch points", stack: geckoStack, agent: safari, page: { maxTouchPoints: 5 }, host: "other", budgets: webkit, reserve: undefined },
+  { row: "iPad in desktop mode, or any Macintosh Safari, with no touch-point fact", stack: geckoStack, agent: safari, page: undefined, host: "other", budgets: webkit, reserve: undefined },
+  { row: "Chrome on iOS", stack: geckoStack, agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4 like Mac OS X) AppleWebKit/605.1.15 CriOS/157.0 Mobile/15E148 Safari/604.1", page: noTouch, host: "other", budgets: webkit, reserve: undefined },
+  { row: "Firefox on iOS", stack: geckoStack, agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_4 like Mac OS X) AppleWebKit/605.1.15 FxiOS/147.0 Mobile/15E148 Safari/605.1.15", page: noTouch, host: "other", budgets: webkit, reserve: undefined },
+  { row: "Edge on iOS with a desktop-style agent", stack: geckoStack, agent: `${safari} EdgiOS/131.0`, page: noTouch, host: "other", budgets: webkit, reserve: undefined },
   { row: "Android Firefox", stack: geckoStack, agent: "Mozilla/5.0 (Android 14; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0", page: noTouch, host: "other", budgets: conservative, reserve: undefined },
-  { row: "unknown host", stack: geckoStack, agent: "Unknown/1.0", page: noTouch, host: "other", budgets: conservative, reserve: undefined },
+  { row: "unknown host", stack: geckoStack, agent: "Unknown/1.0", page: noTouch, host: "other", budgets: webkit, reserve: undefined },
 ] as const)("$row selects its own row of the host table", ({ stack, agent, page, host, budgets, reserve }) => {
   expect(stackHost(stack, agent, page)).toBe(host);
   expect(engineStackBudgets(stack, agent)).toEqual(budgets);
@@ -114,7 +116,7 @@ const desktopSafari = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebK
 const desktopHost = { platform: "MacIntel", vendor: "Apple Computer, Inc.", maxTouchPoints: 0 };
 
 test("positively observed desktop Safari selects only the measured QuickJS headroom", () => {
-  expect(engineStackBudgets(geckoStack, desktopSafari, desktopHost)).toEqual({ quickjs: "36", jsc: "192" });
+  expect(engineStackBudgets(geckoStack, desktopSafari, desktopHost)).toEqual({ quickjs: "36", jsc: "192", spidermonkey: spiderMonkeyWebKitStackKib });
 });
 
 test.each([
@@ -132,7 +134,7 @@ test.each([
   { name: "Safari-lookalike with Firefox iOS", agent: desktopSafari + " FxiOS/157.0", host: desktopHost },
   { name: "Safari-lookalike with Edge", agent: desktopSafari + " Edg/157.0", host: desktopHost },
 ])("$name retains conservative budgets", ({ agent, host }) => {
-  expect(engineStackBudgets(geckoStack, agent, host)).toEqual({ quickjs: "32", jsc: "192" });
+  expect(engineStackBudgets(geckoStack, agent, host)).toEqual(webkit);
 });
 
 test("page observations do not change V8 or Firefox choices", () => {
