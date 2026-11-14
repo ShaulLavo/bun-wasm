@@ -9,9 +9,12 @@ const shim = readFileSync("crates/bunwasm-spidermonkey/cpp/engine.cpp", "utf8");
 const adapter = readFileSync("crates/bunwasm-engine-spidermonkey/src/vm.rs", "utf8");
 
 test("dynamic imports load their dependency graph before finishing the native import", () => {
-  expect(definition(shim, "bool module_load(")).toContain("finish_module_load(cx, referrer, request, payload, module)");
-  const load = definition(shim, "bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,\n                        JS::HandleValue payload, JS::HandleObject module) {");
+  expect(definition(shim, "bool module_load(")).toContain("finish_module_load(cx, referrer, request, payload, module, entry)");
+  const load = definition(shim, "bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,\n                        JS::HandleValue payload, JS::HandleObject module, ModuleEntry* entry) {");
   expect(load).toContain("JS::IsPromiseObject");
+  // The dynamic-import holder mark uses the entry module_load resolved; a fallible lookup could drop it.
+  expect(load).toContain("entry->importAcquired = true;");
+  expect(load).not.toContain("mapped_entry(");
   expect(load).toContain("JS::LoadRequestedModules(cx, module, JS::UndefinedHandleValue, &loading)");
   expect(load).toContain("JS::AddPromiseReactions(cx, loading, fulfilled, rejected)");
   expect(definition(shim, "bool dynamic_module_loaded(")).toContain("JS::FinishLoadingImportedModule(cx, referrer, request, payload, module, true)");
@@ -23,7 +26,8 @@ test("module evaluation waits for graph loading and keeps the namespace reaction
   expect(evaluate).toContain("module_evaluate_handler");
   expect(evaluate).toContain("JS::CallOriginalPromiseThen(context, loading");
   expect(definition(shim, "bool module_evaluate_handler(")).toContain("JS::ModuleLink");
-  expect(definition(shim, "bool module_evaluate_handler(")).toContain("JS::ModuleEvaluate");
+  expect(definition(shim, "bool module_evaluate_handler(")).toContain("continue_module_evaluate(module)");
+  expect(definition(shim, "JSObject* continue_module_evaluate(")).toContain("JS::ModuleEvaluate");
   expect(definition(shim, 'extern "C" bool bsm_import(')).toContain("namespace_promise");
 });
 
@@ -147,7 +151,8 @@ test("module evaluation uses a result capability and sealed forwarding", () => {
   const evaluate = definition(shim, "bool evaluate_module(");
   const handler = definition(shim, "bool module_evaluate_handler(");
   expect(evaluate).toContain("JS::CallOriginalPromiseThen");
-  expect(handler).toContain("forward_internal(evaluated)");
+  expect(handler).toContain("continue_module_evaluate(module)");
+  expect(definition(shim, "JSObject* continue_module_evaluate(")).toContain("forward_internal(evaluated)");
   expect(handler).toContain("args.rval().setObject(*forwarded)");
   expect(handler).not.toContain("JS::AddPromiseReactions");
 });
