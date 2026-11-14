@@ -283,11 +283,13 @@ bookkeeping for a mapping is not counted.
 ## What stays native
 
 The inline route is deliberately narrow: an ordinary record calling an object
-of the ordinary bytecode function class through a call opcode. A class
+of the ordinary bytecode function class through a call opcode or an ordinary
+property or `super` getter read. A class
 constructor called without `new` qualifies, and fails in its own bytecode with
 the upstream error. Everything else keeps its C call and the native guard:
 constructors (`new`, `super`, `Reflect.construct`), `Function.prototype.apply`,
-`eval`, accessors, native functions and their callbacks
+`eval`, computed ordinary property reads, setters, native accessors and getters
+reached through C APIs, native functions and their callbacks
 (`Array.prototype.map`, `sort`), bound functions, proxies, and
 generator and async functions, both as callers and as callees. A recursion
 that passes through any of these still costs native stack at every level and
@@ -410,6 +412,6 @@ byte-identical bytecode with the engine before the change.
 | `scripts/check-quickjs-frame-stack.ts`, `scripts/quickjs-native-check.ts`, `scripts/fixtures/quickjs-frame-stack.c`, `scripts/fixtures/quickjs-frame-stack.ts` | Original adapter | Exercise the frame limit, what allocators acquire and hold against what is charged, allocation failures and call semantics on the bare engine. |
 | `scripts/check-quickjs-frame-wasi.ts`, `scripts/fixtures/quickjs-frame-wasi.c` | Original adapter | Compare linear-memory growth with the declared bound on wasm32 under the split-profile libc. |
 | `scripts/fixtures/quickjs-async-context.c`, `quickjs-memory-telemetry.c`, `quickjs-parser-stack.c` | Original adapter | Forward their counting callbacks to the default callbacks and declare the default bound, at all four runtime sites. |
-| `tests/fixtures/stack-frame-storage`, `tests/fixtures/stack-inline-calls` | Original adapter | Exercise large frames and deep ordinary calls through the guest entry point at the browser budgets. |
+| `tests/fixtures/stack-frame-storage`, `tests/fixtures/stack-inline-calls` | Original adapter | Exercise large frames and deep ordinary calls through the guest entry point at the browser budgets. Recognize SpiderMonkey's exact invalid lexical declaration message as non-QuickJS while preserving the unknown-parser guard. |
 
 [Ledger scope and pinned revisions](scope.md).

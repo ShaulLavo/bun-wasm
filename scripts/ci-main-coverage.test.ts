@@ -283,7 +283,8 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
     "native-quality": { needs: ["quality", "jsc-prebuild"], minutes: 45 },
     rust: { needs: ["quality", "jsc-prebuild", "native-quality"], minutes: 60 },
     package: { needs: "quality", minutes: 10 },
-    "shared-prebuild": { needs: "quality", minutes: 45 },
+    "shared-jsc-identity": { needs: "quality", minutes: 15 },
+    "shared-prebuild": { needs: ["quality", "shared-jsc-identity"], minutes: 45 },
     "shared-spidermonkey-prebuild": { needs: ["quality", "shared-prebuild"], minutes: 30 },
     "shared-sysroot": { needs: ["quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"], minutes: 30 },
     web: { needs: ["quality", "web-unit", "web-browser"], minutes: 10 },
@@ -292,8 +293,8 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
     "process-bundles": { needs: "quality", minutes: 10 },
     "browser-guest": { needs: ["quality", "rust"], minutes: 10 },
     "browser-process": { needs: ["quality", "rust", "process-bundles", "browser-guest"], minutes: 10 },
-    "ci-result": { needs: ["quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process"], minutes: 5 },
-    "update-status": { needs: ["quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process", "ci-result"], minutes: 5 },
+    "ci-result": { needs: ["quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process"], minutes: 5 },
+    "update-status": { needs: ["quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process", "ci-result"], minutes: 5 },
   });
   const browser = object(jobs["browser-process"]);
   expect(object(browser.strategy).matrix).toEqual({ browser: ["chromium", "firefox", "webkit"] });

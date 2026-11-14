@@ -230,9 +230,19 @@ one:
   32 KiB budget as at 4096 KiB. One more throws the same catchable `RangeError`.
   The shared-group profile is not qualified by these split measurements.
 - **The native budget** still bounds every call that re-enters the interpreter
-  from C: constructors, `call` and `apply`, accessors, proxies, native
+  from C: constructors, `apply`, computed ordinary property getters, setters,
+  getters reached through C APIs, proxies, native
   callbacks such as `Array.prototype.map`, and generator and async functions.
   Those cost host stack at every level, as before.
+
+Ordinary JavaScript getters read through `object.name` or `super.name` now run
+on the frame stack, as ordinary calls do. The original receiver, selected getter
+lifetime, key coercion and exception behavior remain unchanged
+([dispatch record](bun-patches/quickjs-loop-dispatch.md)). The `getter` probe
+therefore measures frame storage; `computedgetter` and `proxy` still measure
+native reentry. `Function.prototype.call` to an ordinary target also runs in
+the loop. Reduce callbacks retain their native path in this unit, so getter
+completion alone does not qualify Angular's Ajv workload.
 
 A function's size is no longer depth. A function with 5,300 captured locals
 runs at 32 KiB (`tests/fixtures/stack-frame-storage`); before, its frame alone

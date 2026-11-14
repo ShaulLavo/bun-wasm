@@ -1,0 +1,45 @@
+name: Verified shared JSC prebuild
+description: Restore or build shared JSC under the effective-identity lock and verify before publishing
+inputs:
+  key:
+    description: Existing complete shared JSC cache identity
+    required: true
+  expected-key:
+    description: Identity used by the caller's concurrency group
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Require the identity used to serialize shared producers
+      shell: bash
+      env:
+        EXPECTED_KEY: ${{ inputs.expected-key }}
+        ACTUAL_KEY: ${{ inputs.key }}
+      run: test -n "$EXPECTED_KEY" && test "$EXPECTED_KEY" = "$ACTUAL_KEY"
+    - uses: actions/cache/restore@v4
+      id: shared-jsc-cache
+      with:
+        path: ${{ runner.temp }}/jsc/shared
+        key: ${{ inputs.key }}
+    - name: Build or verify the shared JSC prebuild
+      id: shared-jsc-producer
+      env:
+        JSC_PROFILE: shared-group
+        JOBS: "2"
+        CAGE: ""
+        CI_SHARED_JSC_HIT: ${{ steps.shared-jsc-cache.outputs.cache-hit }}
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        if [[ "$CI_SHARED_JSC_HIT" != true ]]; then
+          JSC_PROFILE=shared-group bash scripts/build-jsc.sh
+        fi
+        source jsc/common.sh
+        check_jsc_inputs_stamp
+        echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
+    - name: Save the shared JSC prebuild
+      if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-jsc-producer.outputs.jsc-ready == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/jsc/shared
+        key: ${{ steps.shared-jsc-cache.outputs.cache-primary-key }}

@@ -60,6 +60,15 @@ split patch, recipe files and admitted split archive are not changed.
   still uses `MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=system` and runs its real package checks
   against the invoking environment and vendored packages. Unrelated runner tools stay outside
   that environment. No upstream Python source or dependency requirement changes.
+- `scripts/build-native-profile.ts`, `scripts/producer-diagnostics.ts`: original producer
+  diagnostics. Elapsed start/end markers cover input capture, Cargo, side compilation/link,
+  conversion/validation and final composition, with the selected private target path.
+  The existing timeout supervisor wraps the SpiderMonkey invocation and private cache lifecycle,
+  retaining phase history, status and the last 64 KiB of output in an always-uploaded diagnostic
+  artifact. Its deadline is 27 minutes after the job's first step, leaving cleanup and upload
+  time inside the unchanged 30-minute job limit. Deadline expiry returns failure. Hard runner
+  cancellation can still prevent final status or artifact upload; absent evidence proves no phase.
+  Receipt checks, commands, flags, cache namespaces and consumer deadlines are unchanged.
 - `crates/bunwasm-spidermonkey/cpp/engine.cpp`, `engine.h`, `build.rs`, `src/lib.rs`: the region
   view, the storage lookup that lets the core name a buffer's region, and wait permission.
 - `crates/bunwasm-engine-spidermonkey/`: the shared region view, nested execution and stack base.
@@ -129,3 +138,9 @@ SpiderMonkey's C++ reads the side's own errno, so a core libc failure it inspect
 
 The interpreter and portable-baseline tiers use the same program bytes and are qualified
 separately. Neither result stands in for the other.
+
+Diagnostic retention is best effort. A tail or phase-log write failure is reported
+separately and cannot replace build output, the build status or the original
+capture exception. The supervisor still waits for descendant cleanup. Its helper
+is included in shared-native selection, recipe capture and the existing target
+cache input key. This records failures; it does not establish their cause.
