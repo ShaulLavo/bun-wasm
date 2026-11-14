@@ -1227,6 +1227,9 @@ class EngineHost {
 
   uncaught(err) {
     if (this.exited || err instanceof ExitSignal) return;
+    try {
+      this.o.onUncaughtDiagnostic?.(err, this.diagnosticSources?.slice() ?? []);
+    } catch {}
     let handled = false;
     try {
       handled = this.internal.handleUncaught(err);

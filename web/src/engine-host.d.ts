@@ -3,11 +3,17 @@
 
 import type { SharedObjectService } from "./shared-objects/service";
 
+export type EngineHostEvaluatedSource =
+  | { readonly kind: "eval"; readonly filename: string; readonly source: string }
+  | { readonly kind: "module"; readonly filename: string; readonly url: string; readonly source: string };
+
 export interface EngineHostOptions {
   /** The bun-browser.wasm instance, after `_start` returned. */
   instance: WebAssembly.Instance;
   /** Synchronous host diagnostic before a bunwasm_call trap propagates. Observer errors are ignored. */
   onWasmCallTrap?: (error: WebAssembly.RuntimeError, index: number) => void;
+  /** Internal opt-in observer before guest error formatting. Observer failures are ignored. */
+  onUncaughtDiagnostic?: (error: unknown, sources: readonly EngineHostEvaluatedSource[]) => void;
   /** The URLs native ES modules get with a module store: blob: URLs in browsers, data: URLs in Node. */
   moduleUrls: "blob" | "data";
   /**
