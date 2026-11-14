@@ -20,6 +20,32 @@ const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-identity:\n"
 const { prebuild, ordered: rust } = nativePipeline(workflow);
 const importStepName = "Import the verified JSC prebuild and sysroot";
 
+test("compiled JSON runtime controls follow the selected JSC producer", () => {
+  expect(selectChecks("runtime")).toContain("scripts/jsc-json-fast-controls.test.ts");
+  const start = nativeWorkflowStep("name", "Start the JSC Cargo guest build");
+  const wait = nativeWorkflowStep("name", "Build the JSC Cargo guest");
+  const controls = nativeWorkflowStep("name", "Blocking native fixture checks");
+  const outputs = { "needs.selection.outputs.jsc": "true" };
+  for (const step of [start, wait]) expect(cacheCondition(workflowString(workflowField(step, "if")), outputs, true)).toBe(true);
+  expect(controls).not.toHaveProperty("if");
+  expect(workflowString(workflowField(controls, "run"))).toContain("bun scripts/test-checks.ts native");
+  expect(workflowString(workflowField(workflowField(controls, "env"), "INSTALL_ENGINES")))
+    .toBe("${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
+  expect(rust.indexOf("name: Start the JSC Cargo guest build")).toBeLessThan(rust.indexOf("name: Build the JSC Cargo guest\n"));
+  expect(rust.indexOf("name: Build the JSC Cargo guest\n")).toBeLessThan(rust.indexOf("name: Blocking native fixture checks"));
+});
+
+test("JSON runtime controls skip unselected JSC and fail when its selected launcher is missing", () => {
+  const path = new URL("./jsc-json-fast-controls.test.ts", import.meta.url).pathname;
+  const env = { ...process.env, BUN_WASM_LAUNCHER: new URL("../dist/missing-json-control-launcher", import.meta.url).pathname, BUN_WASM_JSON_LONG_STRESS: "1" };
+  const unselected = spawnSync(process.execPath, ["test", path], { encoding: "utf8", env: { ...env, INSTALL_ENGINES: "quickjs,browser" } });
+  expect(unselected.status).toBe(0);
+  expect(unselected.stderr).toMatch(/0 pass\s+\d+ skip\s+0 fail/);
+  const selected = spawnSync(process.execPath, ["test", path, "--test-name-pattern", "general depth limit remains authoritative"], { encoding: "utf8", env: { ...env, INSTALL_ENGINES: "quickjs,jsc,browser" } });
+  expect(selected.status).toBe(1);
+  expect(selected.stderr).toContain("ENOENT");
+});
+
 test("CI shares one exact Node patch across TLS handoff jobs and preserves direct spread eval scope", () => {
   const pin = workflowField(workflowField(Bun.YAML.parse(workflow), "env"), "CI_NODE_VERSION");
   expect(pin).toMatch(/^26\.\d+\.\d+$/);
@@ -76,7 +102,7 @@ test("Web parser probe uses the pinned compiler and restored toolchain before it
 });
 
 test("native checks share one cached target through the quality checkpoint", () => {
-  expect(rust).toContain("needs.quality.outputs.rust == 'true'");
+  expect(rust).toContain("needs.selection.outputs.rust == 'true'");
   expect(rust).toContain("CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target");
   expect(rust).toContain("${{ env.CARGO_TARGET_DIR }}");
   expect(rust).toContain("${{ env.CARGO_HOME }}/registry");
@@ -92,11 +118,11 @@ test("native job budgets and names stay unchanged beside the lightweight update 
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
+    selection: 5, quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
-    quality: "Source quality", "jsc-identity": "Resolve effective JSC inputs", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
+    selection: "CI selection", quality: "Source quality", "jsc-identity": "Resolve effective JSC inputs", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
     package: "Browser adapter package", "shared-jsc-identity": "Resolve effective shared JSC inputs", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
     "web-browser": "Web browser (${{ matrix.batch }})", "process-bundles": "Shared process browser bundles", "browser-guest": "Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})", "browser-process": "Processes (${{ matrix.browser }})", "ci-result": "Code quality", "update-status": "Report automated update statuses",
   });
@@ -497,7 +523,8 @@ test("merged main keeps its CMake and package identity checks with one owner eac
 test("CMake preflight has one always-on lightweight owner, independent of native selection", () => {
   expect(quality).toContain("run: bun scripts/test-checks.ts cmake");
   expect(quality).toContain("sudo apt-get install -y cmake ninja-build g++");
-  expect(quality).not.toMatch(/^ {4}(?:if|needs):/m);
+  expect(quality).toContain("    needs: selection");
+  expect(quality).not.toMatch(/^ {4}if:/m);
   expect(rust).not.toContain("scripts/cmake-cache.test.ts");
 });
 
@@ -680,7 +707,7 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
   const browsers = workflow.split("\n  browser-process:\n")[1]!;
   expect(producer).toContain("bun web/scripts/ci-process-bundles.ts");
   expect(producer).toContain("actions/upload-artifact@v4");
-  expect(browsers).toContain("needs: [quality, rust, process-bundles, browser-guest]");
+  expect(browsers).toContain("needs: [selection, rust, process-bundles, browser-guest]");
   expect(browsers).toContain("actions/download-artifact@v4");
   expect(browsers).toContain("BUN_WASM_PROCESS_BUNDLES:");
   expect(browsers).toContain("BUN_WASM_RUNTIME_PROC_BUNDLE:");
@@ -794,7 +821,7 @@ test("cold and restored JSC setup install Binaryen before sourcing common.sh", (
   for (const [job, consumer] of [[prebuild, "name: Identify JSC prebuild inputs"], [rust, `name: ${importStepName}`]] satisfies [string, string][]) {
     const setup = job.match(/      - name: Install pinned Binaryen\n((?:        .*\n|          .*\n)+)/)?.[0] ?? "";
     expect(setup).toContain("bun scripts/ci-binaryen.ts");
-    expect(setup).not.toContain("needs.quality.outputs.jsc");
+    expect(setup).not.toContain("needs.selection.outputs.jsc");
     expect(setup).not.toContain("cache-hit");
     expect(job.indexOf(setup)).toBeLessThan(job.indexOf(consumer));
   }
@@ -816,7 +843,7 @@ test("source cache runs in real browsers using one source-built host guest", () 
   expect(rust).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
   expect(rust).toContain("uses: actions/upload-artifact@v4");
   expect(processes).toContain("uses: actions/download-artifact@v4");
-  expect(processes).toContain("needs: [quality, rust, process-bundles, browser-guest]");
+  expect(processes).toContain("needs: [selection, rust, process-bundles, browser-guest]");
   expect(processes).toContain("needs.rust.result == 'skipped'");
   expect(processes).toContain("BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache");
   expect(processes).toContain("BUN_WASM_RUNTIME_PROC_PORT: \"4187\"");
@@ -1007,7 +1034,7 @@ function cacheCondition(condition: string, outputs: Readonly<Record<string, stri
 }
 
 function comparison(clause: string, outputs: Readonly<Record<string, string>>): boolean {
-  const match = /^(steps\.[\w-]+\.outputs\.[\w-]+|needs\.quality\.outputs\.jsc|github\.(?:event_name|ref)) (==|!=) '([^']*)'$/.exec(clause);
+  const match = /^(steps\.[\w-]+\.outputs\.[\w-]+|needs\.selection\.outputs\.jsc|github\.(?:event_name|ref)) (==|!=) '([^']*)'$/.exec(clause);
   if (!match || !(match[1]! in outputs)) throw new Error(`Unsupported cache condition: ${clause}`);
   return match[2] === "==" ? outputs[match[1]!] === match[3] : outputs[match[1]!] !== match[3];
 }
@@ -1057,7 +1084,7 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
       "steps.jsc-cargo-cache.outputs.cache-matched-key": "",
       "github.event_name": "push",
       "github.ref": "refs/heads/main",
-      "needs.quality.outputs.jsc": "true",
+      "needs.selection.outputs.jsc": "true",
       "steps.native-producers.outputs.native-ready": "true",
       "steps.jsc-producer.outputs.jsc-ready": "true",
       "steps.tls-artifact.outputs.tls-sha256": "a".repeat(64),
@@ -1079,7 +1106,7 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
 
 function assertJscSaveSelection(conditions: readonly string[], outputs: Readonly<Record<string, string>>) {
   expect(conditions.map(condition => cacheCondition(condition, outputs, true))).toEqual([true, true]);
-  const nativeOnly = { ...outputs, "needs.quality.outputs.jsc": "false" };
+  const nativeOnly = { ...outputs, "needs.selection.outputs.jsc": "false" };
   expect(conditions.map(condition => cacheCondition(condition, nativeOnly, true))).toEqual([true, false]);
   const incomplete = { ...nativeOnly, "steps.jsc-producer.outputs.jsc-ready": "" };
   expect(conditions.map(condition => cacheCondition(condition, incomplete, true))).toEqual([false, false]);

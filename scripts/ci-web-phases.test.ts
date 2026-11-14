@@ -23,9 +23,9 @@ function steps(job: Record<string, unknown>) {
 
 test("unit, discovered browser shards and smoke checks retain separate blocking jobs", () => {
   expect(browser.name).toBe("Web host");
-  expect(browser.needs).toEqual(["quality", "web-unit", "web-browser"]);
-  expect(shards.needs).toBe("quality");
-  expect(unit.needs).toBe("quality");
+  expect(browser.needs).toEqual(["selection", "web-unit", "web-browser"]);
+  expect(shards.needs).toBe("selection");
+  expect(unit.needs).toBe("selection");
   const all = Object.values(jobs).flatMap(job => steps(object(job)));
   for (const phase of ["unit", "smoke"]) {
     expect(all.filter(step => step.run === `bash ../scripts/test-web-host.sh --${phase}`)).toHaveLength(1);
@@ -46,7 +46,7 @@ test.each(["web-unit", "web-browser"])("required Web host gate rejects every non
   expect(browser.if).toContain("always()");
   const condition = browser.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("always()", "true")
-    .replaceAll("needs.quality.result", JSON.stringify("success"))
+    .replaceAll("needs.selection.result", JSON.stringify("success"))
     .replaceAll("github.event_name", JSON.stringify("pull_request"))
     .replaceAll("github.event.pull_request.draft", "false");
   expect(new Function(`return (${condition})`)()).toBe(true);
@@ -97,8 +97,8 @@ test("parallel browser shards discover every owned check exactly once and requir
   for (const shard of matrix) expect(shard.timeoutSeconds).toBeLessThanOrEqual(300);
   expect(() => webBrowserShards(selected.concat([{ name: "default", paths: ["scripts/new-browser.test.ts"] }]))).toThrow("measured deadlines");
   expect(() => webBrowserShards(selected.map(batch => ({ ...batch, name: "unmeasured" })))).toThrow("Unmeasured");
-  expect(object(shards.strategy)).toEqual({ "fail-fast": false, matrix: "${{ fromJSON(needs.quality.outputs.web-browser-shards) }}" });
-  const discovery = steps(object(jobs.quality)).find(step => step.id === "web-browser-shards");
+  expect(object(shards.strategy)).toEqual({ "fail-fast": false, matrix: "${{ fromJSON(needs.selection.outputs.web-browser-shards) }}" });
+  const discovery = steps(object(jobs.selection)).find(step => step.id === "web-browser-shards");
   assert(discovery && typeof discovery.run === "string");
   expect(discovery.run).toContain("bun scripts/ci-web-browser-shards.ts");
   const execution = spawnSync("bun", [new URL("./ci-web-browser-shards.ts", import.meta.url).pathname], { encoding: "utf8" });
