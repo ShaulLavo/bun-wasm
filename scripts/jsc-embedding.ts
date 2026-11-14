@@ -73,6 +73,11 @@ export function proxyGetForwardingFixture() {
   return { path: check.path, hostOptions: ["--stack-mb", "0.3125", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] };
 }
 
+/** Collect after native trap lookup and key conversion, with no JavaScript handler or trap local left alive. */
+export function proxyGetLifetimeFixture() {
+  return { path: "tests/jsc-embedding/proxy-get-lifetime", hostOptions: ["--env", "BUN_WASM_JSC_PROXY_GET_GC=1"] };
+}
+
 /**
  * Bound-function call semantics at the smallest browser budget on a small real host stack, with
  * Babel's printer cycle (a bound callback per level) far deeper than the 30 levels it reached while
@@ -138,6 +143,8 @@ function testFixtures(artifact: string): void {
     runFixture(artifact, stack.path, scratch, stack.hostOptions);
     const forwarding = proxyGetForwardingFixture();
     runFixture(artifact, forwarding.path, scratch, forwarding.hostOptions);
+    const lifetime = proxyGetLifetimeFixture();
+    runFixture(artifact, lifetime.path, scratch, lifetime.hostOptions);
     const getters = getterDispatchFixture();
     runFixture(artifact, getters.path, scratch, getters.hostOptions);
     const bound = boundCallDispatchFixture();

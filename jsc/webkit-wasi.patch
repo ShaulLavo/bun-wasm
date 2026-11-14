@@ -1361,10 +1361,22 @@ diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCo
  #include "ProxyObject.h"
 
  #include "GetterSetter.h"
-@@ -152,44 +153,24 @@ void ProxyObject::clearHandlerTrapsOffsetsCache()
+@@ -152,47 +153,42 @@ void ProxyObject::clearHandlerTrapsOffsetsCache()
 
  static const ASCIILiteral s_proxyAlreadyRevokedErrorMessage { "Proxy has already been revoked. No more operations are allowed to be performed on it"_s };
 
++#if OS(WASI)
++static void collectForProxyGetLifetimeTest(VM& vm, PropertyName propertyName)
++{
++    static const bool enabled = getenv("BUN_WASM_JSC_PROXY_GET_GC") != nullptr;
++    if (enabled && propertyName.uid()->utf8() == "bunWasmNativeLifetime"_s) {
++        fprintf(stderr, "bun-wasm Proxy get lifetime collection\n");
++        vm.heap.collectNow(Sync, CollectionScope::Full);
++    }
++}
++
++#endif
++
 -static JSValue performProxyGet(JSGlobalObject* globalObject, ProxyObject* proxyObject, JSValue receiver, PropertyName propertyName)
 +static JSValue performDefaultProxyGet(JSGlobalObject* globalObject, JSObject* target, JSValue receiver, PropertyName propertyName)
  {
@@ -1419,7 +1431,13 @@ diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCo
      auto arguments = WTF::toArray<EncodedJSValue>({
          JSValue::encode(target),
          JSValue::encode(identifierToSafePublicJSValue(vm, Identifier::fromUid(vm, propertyName.uid()))),
-@@ -206,6 +187,62 @@ static JSValue performProxyGet(JSGlobalObject* globalObject, ProxyObject* proxyO
+         JSValue::encode(receiver.toThis(globalObject, ECMAMode::strict())),
+     });
++#if OS(WASI)
++    collectForProxyGetLifetimeTest(vm, propertyName);
++#endif
+     JSValue trapResult = call(globalObject, getHandler, callData, handler, ArgList { arguments.data(), arguments.size() });
+@@ -206,6 +202,69 @@ static JSValue performProxyGet(JSGlobalObject* globalObject, ProxyObject* proxyO
      return trapResult;
  }
 
@@ -1440,13 +1458,17 @@ diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCo
 +        return jsUndefined();
 +    for (ProxyObject* current = proxyObject;;) {
 +        JSObject* target = current->target();
++        Strong<JSObject> targetRoot(vm, target);
 +        JSValue handlerValue = current->handler();
 +        if (handlerValue.isNull())
 +            return throwTypeError(globalObject, scope, s_proxyAlreadyRevokedErrorMessage);
 +        JSObject* handler = uncheckedDowncast<JSObject>(handlerValue);
++        Strong<JSObject> handlerRoot(vm, handler);
 +        CallData callData;
 +        JSObject* getHandler = current->getHandlerTrap(globalObject, handler, callData, vm.propertyNames->get, ProxyObject::HandlerTrap::Get);
++        Strong<JSObject> trapRoot(vm, getHandler);
 +        RETURN_IF_EXCEPTION(scope, { });
++        collectForProxyGetLifetimeTest(vm, propertyName);
 +        if (getHandler)
 +            RELEASE_AND_RETURN(scope, callProxyGetTrap(globalObject, target, handler, getHandler, callData, receiver, propertyName));
 +        auto* next = dynamicDowncast<ProxyObject>(target);
@@ -1462,6 +1484,7 @@ diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCo
 +    }
 +#else
 +    JSObject* target = proxyObject->target();
++    Strong<JSObject> targetRoot(vm, target);
 +    if (propertyName.isPrivateName())
 +        return jsUndefined();
 +
@@ -1470,8 +1493,10 @@ diff --git a/Source/JavaScriptCore/runtime/ProxyObject.cpp b/Source/JavaScriptCo
 +        return throwTypeError(globalObject, scope, s_proxyAlreadyRevokedErrorMessage);
 +
 +    JSObject* handler = uncheckedDowncast<JSObject>(handlerValue);
++    Strong<JSObject> handlerRoot(vm, handler);
 +    CallData callData;
 +    JSObject* getHandler = proxyObject->getHandlerTrap(globalObject, handler, callData, vm.propertyNames->get, ProxyObject::HandlerTrap::Get);
++    Strong<JSObject> trapRoot(vm, getHandler);
 +    RETURN_IF_EXCEPTION(scope, { });
 +    if (!getHandler)
 +        RELEASE_AND_RETURN(scope, performDefaultProxyGet(globalObject, target, receiver, propertyName));
