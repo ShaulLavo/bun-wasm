@@ -1,0 +1,69 @@
+name: Storage Firefox native diagnostic
+
+on:
+  push:
+    branches: [t3/firefox-storage-diagnostic]
+    paths:
+      - .github/workflows/storage-firefox-native-diagnostic.yml
+      - .internal/diagnostics/storage-firefox/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  capture:
+    name: One Firefox preservation capture after native controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      SF_SUBJECT: ${{ github.workspace }}/subject
+      SF_ROOT: ${{ runner.temp }}/storage-firefox-native
+      SF_EVIDENCE: ${{ runner.temp }}/storage-firefox-evidence
+      TMPDIR: ${{ runner.temp }}
+      BUN_WASM_TEST_TMP: ${{ runner.temp }}
+      BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/storage-firefox-native/bun-cache
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/storage-firefox-native/browsers
+    steps:
+      - name: Initialize evidence before setup
+        run: mkdir -p "$SF_EVIDENCE"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 84ff8588028edcc013eb67aa4bb740b3a518b96d
+          path: subject
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.13.1
+      - name: Use the normal Ubuntu HTTPS dependency sources
+        run: |
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
+          if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
+            sudo sed -i 's|http://archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+      - name: Qualify the exact hosted tuple, then capture the original scenario once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source env.sh
+          git rev-parse HEAD HEAD^{tree} > "$SF_EVIDENCE/instrumentation-source.txt"
+          git -C "$SF_SUBJECT" rev-parse HEAD HEAD^{tree} > "$SF_EVIDENCE/producer-source.txt"
+          bun .internal/diagnostics/storage-firefox/supervise.ts hosted
+      - name: Outer actual-host teardown
+        if: always()
+        run: bun .internal/diagnostics/storage-firefox/teardown.ts
+      - name: Preserve all raw diagnostics and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-firefox-native-first-event
+          path: ${{ runner.temp }}/storage-firefox-evidence
+          retention-days: 7
+          if-no-files-found: error
