@@ -94,7 +94,7 @@ printf '%s\\n' "$engine $*" >> "$RECORD"
   manifest(directory, { owner: "native", path: "tests/fixtures/matrix", engines: ["quickjs", "jsc", "spidermonkey"] }, "native-matrix.json");
   const record = join(directory, "record");
   const env: NodeJS.ProcessEnv = { ...process.env, RECORD: record, BUN_WASM_CHECK_JOBS: "1", BUN_WASM_CHECK_ENGINES: "quickjs,jsc,spidermonkey", SPIDERMONKEY_WASM: "/ordinary/core.wasm" };
-  const run = () => spawnSync("bun", [join(directory, "scripts/test-checks.ts"), "native"], { env, encoding: "utf8" });
+  const run = () => spawnSync(process.execPath, [join(directory, "scripts/test-checks.ts"), "native"], { env, encoding: "utf8" });
   expect(run().status).toBe(0);
   expect(readFileSync(record, "utf8").trim().split("\n")).toEqual([
     "quickjs --no-build matrix plain",
