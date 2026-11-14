@@ -3373,11 +3373,10 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +    RELEASE_ASSERT_NOT_REACHED();
 +}
 +#endif
- 
+
  template<typename CharType, BufferMode bufferMode>
  class FastStringifier {
-@@ -711,7 +796,7 @@
- 
+@@ -711,13 +796,18 @@
  private:
      explicit FastStringifier(JSGlobalObject&);
 -    template<HasGap hasGap> void append(JSValue);
@@ -3385,7 +3384,19 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
      void appendInt32(int32_t);
      template<HasGap hasGap> void appendInt32Array(JSArray&);
      String result();
-@@ -758,6 +843,54 @@
+
+     static constexpr unsigned maxInt32StringLength = ("-2147483648"_s).length();
+
+     // FIXME These should probably just take an ASCIILiteral.
++#if OS(WASI)
++    ALWAYS_INLINE void append(char, char, char, char);
++    ALWAYS_INLINE void append(char, char, char, char, char);
++#else
+     void append(char, char, char, char);
+     void append(char, char, char, char, char);
++#endif
+     bool setGap(JSValue space);
+@@ -758,6 +848,54 @@
      std::optional<FailureReason> m_failureReason;
      Vector<CharType, dynamicBufferInlineCapacity, CrashOnOverflow, 16, WTF::StringImplMalloc> m_dynamicBuffer;
      uint8_t* m_stackLimit { nullptr };
@@ -3437,10 +3448,10 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +    unsigned m_rootCapacity { 16 };
 +    WASIJSONFastRecord m_test;
 +#endif
- 
+
      CharType m_buffer[staticBufferSize];
  };
-@@ -944,6 +1077,17 @@
+@@ -944,6 +1082,17 @@
  {
      if (!haveFailure())
          logOutcome(std::forward<T>(reason));
@@ -3457,20 +3468,20 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +#endif
      m_failureReason = failureReason;
  }
- 
-@@ -1343,7 +1487,7 @@
+
+@@ -1343,7 +1492,7 @@
  #undef JSON_STRING_COPY_HAS_SIMD
- 
+
  template<typename CharType, BufferMode bufferMode>
 -template<HasGap hasGap>
 +template<HasGap hasGap, bool testing, bool startTraversal>
  void FastStringifier<CharType, bufferMode>::append(JSValue value)
  {
      WASM_RESERVE_STACK(1024);
-@@ -1492,6 +1636,15 @@
+@@ -1492,6 +1641,15 @@
          return;
      }
- 
+
 +#if OS(WASI)
 +    case ObjectType:
 +    case FinalObjectType:
@@ -3483,19 +3494,19 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
      case ObjectType:
      case FinalObjectType: {
          auto& object = *asObject(&cell);
-@@ -1791,6 +1944,8 @@
+@@ -1791,6 +1949,8 @@
          return;
      }
- 
+
 +#endif
 +
      case JSFunctionType:
          recordFailure("function"_s);
          return;
-@@ -1830,6 +1985,564 @@
+@@ -1830,6 +1990,565 @@
      }
  }
- 
+
 +#if OS(WASI)
 +template<typename CharType, BufferMode bufferMode>
 +void FastStringifier<CharType, bufferMode>::startTestRecord()
@@ -3715,7 +3726,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +        recordFailure("object has non-reified static properties"_s);
 +        return;
 +    }
-+    m_roots.append(&object);
++    [[clang::always_inline]] m_roots.append(&object);
 +    RELEASE_ASSERT(!m_roots.hasOverflowed());
 +    if (array) {
 +        openArray<hasGap, testing>(*asArray(&cell));
@@ -3729,7 +3740,8 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::openObject(JSObject& object, Structure& structure)
 +{
 +    bool materialized;
-+    PropertyTable* table = structure.acquirePropertyTableForJSONFastPath(m_vm, materialized);
++    PropertyTable* table;
++    [[clang::always_inline]] table = structure.acquirePropertyTableForJSONFastPath(m_vm, materialized);
 +    bool collect = false;
 +    if constexpr (testing) {
 +        m_test.materializations += materialized;
@@ -3738,7 +3750,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +            collectForTest(false);
 +    }
 +    if (table) {
-+        m_roots.append(table);
++        [[clang::always_inline]] m_roots.append(table);
 +        RELEASE_ASSERT(!m_roots.hasOverflowed());
 +    }
 +    if constexpr (hasGap == HasGap::Yes)
@@ -4057,7 +4069,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
  template<typename CharType, BufferMode bufferMode>
  inline String FastStringifier<CharType, bufferMode>::stringify(JSGlobalObject& globalObject, JSValue value, JSValue replacer, JSValue space, std::optional<FailureReason>& failureReason)
  {
-@@ -1844,10 +2557,22 @@
+@@ -1844,10 +2563,22 @@
              return { };
          }
      }
@@ -4084,7 +4096,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
      failureReason = stringifier.m_failureReason;
      return stringifier.result();
  }
-@@ -1855,6 +2580,19 @@
+@@ -1855,6 +2586,19 @@
  static NEVER_INLINE String stringify(JSGlobalObject& globalObject, JSValue value, JSValue replacer, JSValue space)
  {
      VM& vm = globalObject.vm();
@@ -4104,7 +4116,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
      uint8_t* stackLimit = std::bit_cast<uint8_t*>(vm.softStackLimit());
      if (std::bit_cast<uint8_t*>(currentStackPointer()) >= stackLimit) [[likely]] {
          std::optional<FailureReason> failureReason;
-@@ -1877,6 +2615,13 @@
+@@ -1877,6 +2621,13 @@
                  return result;
          }
      }
