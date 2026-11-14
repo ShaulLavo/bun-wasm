@@ -10,7 +10,8 @@ import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 test("ordinary SpiderMonkey recipes, nested runtime inputs and each reviewed fixture select Rust", () => {
   const paths = ["spidermonkey/mozconfig.in", "spidermonkey/prepare-engine-inputs.ts", "spidermonkey/unresolved-symbols.json",
     "scripts/spidermonkey-ordinary-ci.ts", "scripts/spidermonkey-ordinary-ci.test.ts", "scripts/spidermonkey-ordinary-fixtures.ts",
-    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "checks/runtime-spidermonkey-ordinary-fixtures.json",
+    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "scripts/spidermonkey-engine-semantics.sh",
+    "checks/runtime-spidermonkey-ordinary-fixtures.json",
     "crates/bunwasm-runtime/src/data/codec.rs", "crates/bunwasm-runtime/src/ops/client.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs"]
     .concat(ordinaryFixtures.map(name => `tests/fixtures/${name}/expected.txt`));
   for (const path of paths) expect(needsRust([path])).toBe(true);

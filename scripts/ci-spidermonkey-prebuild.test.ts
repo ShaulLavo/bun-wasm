@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import assert from 'node:assert/strict';
 import { expect, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -10,7 +11,7 @@ import { sharedSpiderMonkeyRecipes, verifyPrebuild, writePrebuild } from './ci-s
 import { selectChecks } from './test-checks.ts';
 
 const hash = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
-const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+const workflow = expandedCiWorkflow();
 function job(name: string): string {
   const result = workflow.split(`\n  ${name}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0];
   assert(result);

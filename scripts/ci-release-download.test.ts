@@ -123,7 +123,7 @@ test("the supported Bun cache uses a workspace-relative archive path on both run
   const workflow = expandedCiWorkflow();
   expect(workflow).toContain("BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache");
   expect(workflow).not.toContain("path: ~/.bun/install/cache");
-  expect(workflow.match(/path: \.ci-bun-cache/g)).toHaveLength(16);
+  expect(workflow.match(/path: \.ci-bun-cache/g)).toHaveLength(17);
 });
 
 
@@ -175,7 +175,8 @@ test.each([process.execPath, "node"])("bootstrap exposes bunx and can provision 
     const url = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip";
     await writeFile(join(cache, releaseCacheKey(url)), await readFile(archive));
     const output = join(root, "path");
-    const env = { ...process.env, RUNNER_TEMP: root, GITHUB_PATH: output, CI_RELEASE_CACHE: cache, CI_BUN_VERSION: "1.4.4", CI_NODE_VERSION: "", GITHUB_ACTIONS: "true", GITHUB_TOKEN: "" };
+    const bootstrap = join(root, "bootstrap");
+    const env = { ...process.env, RUNNER_TEMP: root, GITHUB_PATH: output, CI_RELEASE_CACHE: cache, CI_BOOTSTRAP_CACHE: bootstrap, CI_BUN_VERSION: "1.4.4", CI_NODE_VERSION: "", GITHUB_ACTIONS: "true", GITHUB_TOKEN: "" };
     const script = new URL("./ci-bootstrap-tools.ts", import.meta.url).pathname;
     for (let attempt = 0; attempt < 2; attempt++) {
       const install = spawnSync(host, [script], { env, encoding: "utf8" });
@@ -186,6 +187,8 @@ test.each([process.execPath, "node"])("bootstrap exposes bunx and can provision 
       const bunx = spawnSync(join(bin, "bunx"), ["--version"], { encoding: "utf8" });
       expect(bunx.status, bunx.stderr).toBe(0);
       expect(bunx.stdout.trim()).toBe("1.4.4");
+      expect(await Bun.file(join(cache, releaseCacheKey(url))).exists()).toBe(false);
+      expect(await Bun.file(join(bootstrap, releaseCacheKey(url))).exists()).toBe(true);
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });

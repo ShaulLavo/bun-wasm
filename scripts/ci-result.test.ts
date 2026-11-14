@@ -5,7 +5,7 @@ import { requireCiSuccess } from "./ci-result";
 
 const always = ["selection", "quality", "package", "web", "web-unit", "web-browser", "process-bundles", "browser-process"];
 const rustJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "browser-guest"];
-const sharedJobs = ["shared-prebuild", "shared-sysroot"];
+const sharedJobs = ["shared-jsc-identity", "shared-prebuild", "shared-sysroot"];
 const jobIds = always.concat(rustJobs, sharedJobs, ["shared-spidermonkey-prebuild"]);
 
 function fixture(rust = true, shared = true, sharedNative = true) {

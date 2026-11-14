@@ -78,11 +78,11 @@ function pageItems(value: unknown, key: string): { items: unknown[]; total: numb
 
 function selectionAcross(chain: readonly string[], distance: number, checkTime: () => void): CheckSelection {
   const cache = new Map<string, string[]>();
-  const inputsAt: typeof nativeCheckInputsAt = (ref, profile) => {
+  const inputsAt: typeof nativeCheckInputsAt = (ref, selection = {}) => {
     checkTime();
-    const key = `${ref}:${profile ?? "all"}`;
+    const key = `${ref}:${JSON.stringify(selection)}`;
     let inputs = cache.get(key);
-    if (!inputs) { inputs = nativeCheckInputsAt(ref, profile); cache.set(key, inputs); }
+    if (!inputs) { inputs = nativeCheckInputsAt(ref, selection); cache.set(key, inputs); }
     return inputs;
   };
   const selection: CheckSelection = { rust: false, jsc: false, shared: false, shared_native: false };

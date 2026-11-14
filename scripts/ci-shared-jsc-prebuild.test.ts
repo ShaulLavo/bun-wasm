@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -6,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { excludedJscSentinels, excludedSharedSentinels, seedJscArtifact } from "./fixtures/jsc-artifact";
 
-const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const workflow = expandedCiWorkflow();
 
 function job(id: string): string {
   const body = workflow.split(`\n  ${id}:\n`)[1];
@@ -17,7 +18,7 @@ function job(id: string): string {
 test("shared C++ production starts independently of Rust and has one owner outside the bounded consumer", () => {
   const producer = job("shared-prebuild");
   const consumer = job("shared-sysroot");
-  expect(producer).toContain("needs: selection");
+  expect(producer).toContain("needs: [selection, shared-jsc-identity]");
   expect(producer).not.toContain("needs.rust");
   expect(producer).toContain("timeout-minutes: 45");
   expect(consumer).toContain("needs: [selection, rust, shared-prebuild, shared-spidermonkey-prebuild]");
@@ -59,7 +60,7 @@ test("the producer keeps the old exact cache identity and validates warm bytes b
   const save = producer.findIndex(item => item.name === "Save the shared JSC prebuild");
   expect(save).toBeGreaterThan(verify);
   expect(producer.findIndex(item => item.name === packageName)).toBeGreaterThan(save);
-  expect(producer[save]?.if).toBe("${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}");
+  expect(producer[save]?.if).toBe("${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-jsc-producer.outputs.jsc-ready == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}");
   expect(command("shared-prebuild", buildName)).toContain("check_jsc_inputs_stamp");
   expect(job("shared-prebuild")).not.toMatch(/test-checks|test-shared-sysroot|build-native-profile|rust-toolchain/);
 });

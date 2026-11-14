@@ -26,7 +26,7 @@ const caches = groups.flatMap(group => group.steps.filter(step => /^actions\/cac
 const writers = caches.filter(({ step }) => step.uses !== "actions/cache/restore@v4");
 
 function allows(step: Record<string, unknown>, event: string, ref: string, hit = "false", changed = "true"): boolean {
-  const values: Record<string, string> = { "github.event_name": event, "github.ref": ref, "inputs.cache-hit": hit, "inputs.sysroot": "build", "steps.budget.outputs.fits": "true", "steps.publish.outcome": "success" };
+  const values: Record<string, string> = { "github.event_name": event, "github.ref": ref, "inputs.cache-hit": hit, "inputs.sysroot": "build", "inputs.shared-native": "true", "steps.budget.outputs.fits": "true", "steps.publish.outcome": "success" };
   const expression = String(step.if ?? "true").replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replace(/success\(\)/g, "true").replace(/cancelled\(\)/g, "false")
     .replace(/(?:github|steps|needs|inputs)\.[\w.-]+/g, name => {
@@ -106,9 +106,9 @@ test("Rust objects restore compatible generations and save only changed inventor
 
 test("release download saves still require a changed inventory", () => {
   const group = groups.find(group => group.file === "actions/save-release-downloads/action.yml");
-  const save = group?.steps.find(step => step.uses === "actions/cache/save@v4");
-  if (!save) throw new Error("Missing release download save");
-  expect(allows(save, "push", "refs/heads/main", "false", "false")).toBe(false);
+  const saves = group?.steps.filter(step => step.uses === "actions/cache/save@v4") ?? [];
+  expect(saves).toHaveLength(2);
+  for (const save of saves) expect(allows(save, "push", "refs/heads/main", "false", "false")).toBe(false);
 });
 
 test("compiler-object rotation is main-only and waits for a successful changed snapshot", () => {
