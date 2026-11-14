@@ -1,40 +1,40 @@
 {
   "hostInterface": 2,
-  "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.129/waffle-0.0.129.tgz",
-  "sha256": "7a35c93128bc09096715b520927e80e1bc0adc1a9d965764c27ede552ae5506e",
-  "bytes": 4021803,
-  "version": "0.0.129",
-  "sourceCommit": "557d0f2502ad2e2d2dd9042486e1b25c101cbcda",
+  "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.130/waffle-0.0.130.tgz",
+  "sha256": "f3fbcdb86a8b547062cc8788368de0d6bc984995e71cc87bb1d731e225174a0b",
+  "bytes": 4029316,
+  "version": "0.0.130",
+  "sourceCommit": "b6ce9c22e4032637814a3985fab934915be02bcc",
   "packagePath": "packages/waffle",
   "files": {
-    "package.json": "ededb9a0fd127966b62c22b4a732c3eb8410b3ff752c87ba3292a1152d2445bc",
+    "package.json": "cedef24a34872b3ff2b33a2d2423bf87e533b26d9d2246329b806ec5bfe25cc2",
     "scripts/build-wasi-libc.sh": "85d6a1e6793390fe6c8c36762168f673cfe8fc7ecd5abc6daf27c05d82f7cf0e",
     "patches/wasi-libc/preopen-scan.patch": "856730a158d7fdaa08a787c572883a57baaf09a4d967b366c9d198a9c98de302"
   },
   "programs": {
-    "tag": "programs-v0.0.20",
+    "tag": "programs-v0.0.16",
     "sourceCommit": "3050f69d810fe7c851e487135517698b5dfd93e5",
     "manifest": {
-      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.20/program-release.json",
-      "bytes": 616919,
-      "sha256": "60854e4b421005a4f45b9435be9d0735b031351bb2e5338ef7e7eeddef77a3e9"
+      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/program-release.json",
+      "bytes": 617767,
+      "sha256": "c502306e1c5e2931ae14b2a7f0a9975a05cb5345032f7ae4540e7a53be8357ce"
     },
     "base": {
-      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.20/waffle-base-0.0.20.tgz",
+      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-base-0.0.16.tgz",
       "bytes": 1662,
-      "sha256": "b1961e68569524423cd45c0e7c718b3353a9af6be5f86a50a560c7d5154452e2",
+      "sha256": "52dc39f922c07bc173c520f8442edadf619061a6d9e6c28055459f15eddb44e9",
       "sourceDirectory": "packages/base",
       "sourceTree": "a2795f209dd23bfac9161e9abeede51da25cad97",
-      "version": "0.0.20"
+      "version": "0.0.16"
     },
     "schema": "waffle-program-release/2",
-    "toolCommit": "6e0608451a3f89c1fa0e4f17dacdc6edc5cbc900"
+    "toolCommit": "3bf98e950ea0e53bc9a2a35d503b08d5a1117e00"
   },
   "relay": {
-    "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.129/waffle-relay-0.0.129.tgz",
-    "version": "0.0.129",
-    "sourceCommit": "557d0f2502ad2e2d2dd9042486e1b25c101cbcda",
-    "sha256": "cbfebd80a8cdc1ef9982627171e1a4b416cfa23a5b81a6b526ccc3c2049c421d",
+    "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.130/waffle-relay-0.0.130.tgz",
+    "version": "0.0.130",
+    "sourceCommit": "b6ce9c22e4032637814a3985fab934915be02bcc",
+    "sha256": "aebcc5b82c1c5765ad4fd449541b72b05674c6d9d6931359b50f9d141f1b87b7",
     "bytes": 110376,
     "hostInterface": 2
   }

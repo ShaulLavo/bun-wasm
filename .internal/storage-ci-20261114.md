@@ -40,8 +40,9 @@ hashes and stack coordinates. Any added terminal output, including an error
 before the expected failure footer or in the active Hono terminal, stays blocking.
 The React entry uses a separate, stricter normalizer. Only elapsed install/ready
 times, the optimizer clock, worker thread ID, and terminal loopback ports vary.
-Whitespace, dependency versions, error text, and all five host stack coordinates
-stay exact. No React stack hash or source frame is normalized.
+Whitespace, dependency versions, error text, and each complete recorded sequence
+of five host stack coordinates stay exact. Both terminals must match the same
+recorded protocol. No React stack hash or source frame is normalized.
 
 ## Evidence
 
@@ -68,6 +69,20 @@ JSON preserves the historical checkpoint, which predated explicit first React
 startup tracking. Tests replay these reports at the new source checkpoint only.
 New mitigation evidence is retained under
 `/work/reports/goals/storage-ci-20261114/react-quarantine/`.
+
+PR 738 head `355ecaff6631714a01841921d0cfe0df0788d057`, run 43566104389,
+job 132367629898 records the same failure with final callback frame 9:91027.
+Artifact 14102859682 matches its published archive digest; the original site
+verifier passes against tested merge `ed2bdf1bef0ea3c2191291e3aac8b422080c794b`.
+Actual old and new worker source maps resolve 9:90764 and 9:91027 to the same
+MessageChannel callback calling `this.pump()` at EngineHost line 447, column 14.
+Both embedded EngineHost sources are byte-identical and the new source matches
+the producer commit. The complete new original protocol is an explicit fixture,
+not a coordinate normalization. The top throwing frames remain unresolved; this
+mapping establishes no connection to the independently proved WASI source bug.
+Small receipt, mapping, protocol, and red/green evidence is retained under
+`/work/reports/goals/storage-ci-20261114/fingerprint-drift/`. The downloaded
+archive and extracted site were removed without a browser workload retry.
 
 ## Permanent repair and removal
 

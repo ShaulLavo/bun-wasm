@@ -306,7 +306,7 @@ fn run(options: Options) -> Result<i32> {
         ticker: Some(ticker),
     };
     let result = std::thread::Builder::new()
-        .name("bun-wasm".into())
+        .name("bun-wasm-guest".into())
         .stack_size(thread_stack)
         .spawn(move || {
             run_instance(

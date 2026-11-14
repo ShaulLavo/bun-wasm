@@ -58,9 +58,9 @@ function mainWorkflow(run: ReturnType<typeof runIdentity>, workflow: number): bo
   return run.workflow === workflow && run.path === workflowPath && run.event === "push" && run.branch === "main";
 }
 
-function markedQuality(value: unknown, head: string): boolean {
+function markedSelection(value: unknown, head: string): boolean {
   const job = record(value);
-  if (job.name !== "Source quality" || job.head_sha !== head || job.status !== "completed" || job.conclusion !== "success") return false;
+  if (job.name !== "CI selection" || job.head_sha !== head || job.status !== "completed" || job.conclusion !== "success") return false;
   if (!Array.isArray(job.steps)) throw new Error("Missing Actions job steps");
   return job.steps.some(value => {
     const step = record(value);
@@ -78,11 +78,11 @@ function pageItems(value: unknown, key: string): { items: unknown[]; total: numb
 
 function selectionAcross(chain: readonly string[], distance: number, checkTime: () => void): CheckSelection {
   const cache = new Map<string, string[]>();
-  const inputsAt: typeof nativeCheckInputsAt = (ref, profile) => {
+  const inputsAt: typeof nativeCheckInputsAt = (ref, selection = {}) => {
     checkTime();
-    const key = `${ref}:${profile ?? "all"}`;
+    const key = `${ref}:${JSON.stringify(selection)}`;
     let inputs = cache.get(key);
-    if (!inputs) { inputs = nativeCheckInputsAt(ref, profile); cache.set(key, inputs); }
+    if (!inputs) { inputs = nativeCheckInputsAt(ref, selection); cache.set(key, inputs); }
     return inputs;
   };
   const selection: CheckSelection = { rust: false, jsc: false, shared: false, shared_native: false };
@@ -116,7 +116,7 @@ export async function mainCoverage(input: CoverageInput): Promise<Coverage> {
     if (++inspections > bounds.jobInspections) throw new Error("Coverage job inspection bound reached");
     for (let page = 1; ; page++) {
       const jobs = pageItems(await request(`actions/runs/${run.id}/attempts/${run.attempt}/jobs?per_page=100&page=${page}`), "jobs");
-      if (jobs.items.some(job => markedQuality(job, run.head))) return true;
+      if (jobs.items.some(job => markedSelection(job, run.head))) return true;
       if (page * 100 >= jobs.total) return false;
       if (jobs.items.length !== 100) throw new Error("Incomplete Actions jobs page");
     }

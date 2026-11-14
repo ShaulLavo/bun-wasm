@@ -3,7 +3,9 @@
   "batch": "10-storage",
   "path": "scripts/sandbox-storage-browser.test.ts",
   "inputs": [
+    "sandbox/tests/storage-document.ts",
     "scripts/storage-ci-quarantine.ts",
+    "scripts/storage-browser-evidence.ts",
     "scripts/fixtures/storage-ci/firefox.json",
     "scripts/fixtures/storage-ci/webkit.json",
     "scripts/fixtures/storage-ci/webkit-react.json",

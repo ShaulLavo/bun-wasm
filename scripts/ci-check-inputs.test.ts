@@ -38,13 +38,56 @@ function repository() {
   return { directory, git, write, commit, select };
 }
 
+for (const event of ["pull_request", "push"]) {
+  test(`${event} a Browser-only native fixture does not compile JSC`, () => {
+    const repo = repository();
+    const input = "tests/fixtures/browser-engine-case/index.ts";
+    repo.write("checks/native-browser-engine-case.json", JSON.stringify({ owner: "native", path: "tests/fixtures/browser-engine-case", engines: ["browser"] }));
+    repo.write(input, "before\n");
+    const base = repo.commit();
+    repo.write(input, "after\n");
+    expect(repo.select(base, repo.commit(), event).output).toBe("rust=true\njsc=false\nshared=false");
+  });
+}
+
 const compiledChecks = discoverChecks().filter(check => check.owner === "native" || check.owner === "runtime" || check.owner === "browser-guest");
+
+for (const event of ["pull_request", "push"]) {
+  test(`${event} preserves JSC production for declared engine fixtures through edits and removal`, () => {
+    const repo = repository();
+    const manifest = "checks/native-engine-case.json";
+    const input = "tests/fixtures/engine-case/index.ts";
+    repo.write(manifest, JSON.stringify({ owner: "native", path: "tests/fixtures/engine-case", engines: ["quickjs", "jsc", "browser"] }));
+    repo.write(input, "before\n");
+    const registered = repo.commit();
+    repo.write(input, "after\n");
+    const changed = repo.commit();
+    expect(repo.select(registered, changed, event).output).toBe("rust=true\njsc=true\nshared=false");
+    repo.git(["rm", manifest, input]);
+    expect(repo.select(changed, repo.commit(), event).output).toBe("rust=true\njsc=true\nshared=false");
+  });
+}
 test.each(compiledChecks)("declared $owner check $path retains its blocking Rust owner", check => {
   const path = check.owner === "native" ? `${check.path}/index.ts` : check.path;
   expect(needsRust([path])).toBe(true);
 });
 
 for (const event of ["pull_request", "push"]) {
+  test(`${event} retains JSC selection for declared native engines and removed targets`, () => {
+    const repo = repository();
+    const base = repo.commit();
+    const manifest = "checks/native-matrix.json";
+    const input = "tests/fixtures/new-matrix/index.ts";
+    repo.write(manifest, JSON.stringify({ owner: "native", path: "tests/fixtures/new-matrix", engines: ["quickjs", "jsc", "spidermonkey"] }));
+    repo.write(input, "before\n");
+    const registered = repo.commit();
+    expect(repo.select(base, registered, event).output).toBe("rust=true\njsc=true\nshared=false");
+    repo.write(input, "changed\n");
+    const changed = repo.commit();
+    expect(repo.select(registered, changed, event).output).toBe("rust=true\njsc=true\nshared=false");
+    repo.write(manifest, JSON.stringify({ owner: "native", path: "tests/fixtures/new-matrix" }));
+    expect(repo.select(changed, repo.commit(), event).output).toBe("rust=true\njsc=true\nshared=false");
+  });
   for (const owner of ["native", "runtime", "browser-guest"] as const) {
     const input = owner === "native" ? "tests/fixtures/new-owned-case/index.ts" : "scripts/new-owned-case.test.ts";
     const checkPath = owner === "native" ? "tests/fixtures/new-owned-case" : input;

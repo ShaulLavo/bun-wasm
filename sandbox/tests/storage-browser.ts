@@ -7,6 +7,8 @@ import type { Terminal } from "@xterm/xterm";
 import { workspaceName } from "../src/workspace-policy";
 import type { PreviewNavigation, Status } from "../src/sandbox";
 import { frameworks } from "../../scripts/goals-matrix/catalog";
+import { storageStep, type StorageObservation } from "../../scripts/storage-browser-evidence";
+import { assertPreviewDocumentPreserved } from "./storage-document";
 
 declare const sandbox: {
   fs: Runtime["filesystem"]; editor: Editor; term?: Terminal; started?: () => boolean;
@@ -85,15 +87,15 @@ export function storageReportPath(env = process.env): string | undefined {
   return env.BUN_WASM_STORAGE_REPORT ?? (directory ? join(directory, "sandbox-storage.json") : undefined);
 }
 
-export async function openTemplate(page: Page, base: string, template: string): Promise<void> {
+export async function openTemplate(page: Page, base: string, template: string, observer?: StorageObservation): Promise<void> {
   const deadline = Date.now() + STARTUP_MS;
-  await observeReadiness(page);
+  await storageStep(observer, `${template}.observe-readiness`, () => observeReadiness(page));
   const url = new URL(base);
   url.searchParams.set("template", template);
   url.searchParams.set("engine", "browser");
-  await page.bringToFront();
-  await page.goto(url.href, { timeout: remaining(deadline) });
-  await ready(page, template, deadline);
+  await storageStep(observer, `${template}.bring-to-front`, () => page.bringToFront());
+  await storageStep(observer, `${template}.navigate`, () => page.goto(url.href, { timeout: remaining(deadline) }));
+  await ready(page, template, deadline, observer);
 }
 
 function remaining(deadline: number): number {
@@ -102,37 +104,40 @@ function remaining(deadline: number): number {
   return ms;
 }
 
-async function checkpoint(page: Page, selector: string, deadline: number): Promise<boolean> {
-  const candidate = await page.waitForFunction(selector => storageReadiness.candidate(selector), selector, { timeout: remaining(deadline) });
-  try { return await candidate.evaluate(candidate => candidate ? candidate.checkpoint() : false); }
-  finally { await candidate.dispose(); }
+async function checkpoint(page: Page, selector: string, deadline: number, observer?: StorageObservation): Promise<boolean> {
+  const candidate = await storageStep(observer, "readiness.candidate", () => page.waitForFunction(selector => storageReadiness.candidate(selector), selector, { timeout: remaining(deadline) }));
+  const release = observer ? observer.own("readiness.candidate.dispose", () => candidate.dispose()) : () => candidate.dispose();
+  try { return await storageStep(observer, "readiness.filesystem-checkpoint", () => candidate.evaluate(candidate => candidate ? candidate.checkpoint() : false)); }
+  finally { await release(); }
 }
 
-export async function ready(page: Page, template: string, deadline = Date.now() + STARTUP_MS): Promise<void> {
+export async function ready(page: Page, template: string, deadline = Date.now() + STARTUP_MS, observer?: StorageObservation): Promise<void> {
   const selector = previewSelector(template);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Storage readiness deadline: ${template}`)), remaining(deadline)); });
-  try { await Promise.race([waitUntilReady(page, selector, deadline), expired]); }
+  try { await storageStep(observer, `${template}.ready`, () => Promise.race([waitUntilReady(page, selector, deadline, observer), expired])); }
   finally { clearTimeout(timer); }
 }
 
-async function waitUntilReady(page: Page, selector: string, deadline: number): Promise<void> {
+async function waitUntilReady(page: Page, selector: string, deadline: number, observer?: StorageObservation): Promise<void> {
   while (remaining(deadline)) {
-    try { if (await checkpoint(page, selector, deadline)) return; }
+    try { if (await checkpoint(page, selector, deadline, observer)) return; }
     catch (error) {
       if (!(error instanceof Error) || !/Execution context was destroyed|Cannot find context with specified id/.test(error.message)) throw error;
     }
   }
 }
 
-export async function restart(page: Page): Promise<void> {
+export async function restart(page: Page, observer?: StorageObservation): Promise<void> {
   const deadline = Date.now() + STARTUP_MS;
-  const previous = await page.evaluateHandle(() => sandbox.server());
+  const previous = await storageStep(observer, "restart.previous-server", () => page.evaluateHandle(() => sandbox.server()));
+  const release = observer ? observer.own("restart.previous-server.dispose", () => previous.dispose()) : () => previous.dispose();
   try {
-    await page.locator("#restart").click({ timeout: remaining(deadline) });
-    await page.waitForFunction(previous => sandbox.server() !== previous, previous, { timeout: remaining(deadline) });
-    await ready(page, await page.evaluate(() => sandbox.template), deadline);
-  } finally { await previous.dispose(); }
+    await storageStep(observer, "restart.click", () => page.locator("#restart").click({ timeout: remaining(deadline) }));
+    await storageStep(observer, "restart.server-replaced", () => page.waitForFunction(previous => sandbox.server() !== previous, previous, { timeout: remaining(deadline) }));
+    const template = await storageStep(observer, "restart.template", () => page.evaluate(() => sandbox.template));
+    await ready(page, template, deadline, observer);
+  } finally { await release(); }
 }
 
 async function edit(page: Page, path: string, text: string): Promise<void> {
@@ -163,8 +168,11 @@ if (!existsSync("/home/user/app/.config/written")) {
 export default {};
 `;
 
-export async function preservationScenario(browser: Browser, base: string): Promise<void> {
-  const context = await browser.newContext();
+export async function preservationScenario(browser: Browser, base: string, observer?: StorageObservation): Promise<void> {
+  const acquired = observer ? await observer.acquire("context.create", () => browser.newContext(), context => context.close()) : undefined;
+  const context = acquired ? acquired.value : await browser.newContext();
+  observer?.observeContext(context);
+  const step = <T>(phase: string, operation: () => Promise<T>) => storageStep(observer, phase, operation);
   const errors: string[] = [];
   context.on("page", page => {
     page.on("pageerror", error => { errors.push(error.message); });
@@ -172,57 +180,67 @@ export async function preservationScenario(browser: Browser, base: string): Prom
   });
   let checkpoint: StoragePreservationFailure["report"]["checkpoint"] = "setup";
   try {
-    const active = await context.newPage();
-    const page = await context.newPage();
-    await openTemplate(active, base, "hono");
-    const server = await active.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/server.ts")));
+    const active = await step("hono.page.create", () => context.newPage());
+    const page = await step("preservation.page.create", () => context.newPage());
+    await openTemplate(active, base, "hono", observer);
+    const server = await step("hono.read-source", () => active.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/server.ts"))));
+    observer?.event("assert", { phase: "hono.source-port" });
     assert.match(server, /port: 5173/);
-    await edit(active, "server.ts", server.replace("port: 5173", "port: 5174"));
-    await restart(active);
-    assert.match(await active.locator("#preview").getAttribute("src") ?? "", /\/5174\//);
-    await active.frameLocator("#preview").locator("#increment:not([disabled])").click();
-    await openTemplate(page, base, "vanilla");
-    const original = await page.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/src/main.ts")));
+    await step("hono.edit-port", () => edit(active, "server.ts", server.replace("port: 5173", "port: 5174")));
+    await restart(active, observer);
+    observer?.event("assert", { phase: "hono.preview-port" });
+    assert.match(await step("hono.preview-src", () => active.locator("#preview").getAttribute("src")) ?? "", /\/5174\//);
+    await step("hono.increment", () => active.frameLocator("#preview").locator("#increment:not([disabled])").click());
+    await openTemplate(page, base, "vanilla", observer);
+    const original = await step("vanilla.read-source", () => page.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/src/main.ts"))));
     const main = original.replace('import "./App.css";\n', "").replace("Hello from vanilla TypeScript", "Storage source one");
-    await edit(page, "src/main.ts", main);
-    await edit(page, "vite.config.ts", guestWriter);
+    await step("vanilla.edit-source", () => edit(page, "src/main.ts", main));
+    await step("vanilla.edit-config", () => edit(page, "vite.config.ts", guestWriter));
     checkpoint = "vanilla-config-restart";
-    await restart(page);
+    await restart(page, observer);
     checkpoint = "preservation";
-    await page.frameLocator("#preview").getByRole("heading", { name: "Storage source one", exact: true }).waitFor({ timeout: 30_000 });
-    await page.evaluate(() => sandbox.fs.flush());
+    await step("vanilla.source-one", () => page.frameLocator("#preview").getByRole("heading", { name: "Storage source one", exact: true }).waitFor({ timeout: 30_000 }));
+    await step("vanilla.flush", () => page.evaluate(() => sandbox.fs.flush()));
     checkpoint = "first-vite-react-startup";
-    await openTemplate(page, base, "vite-react");
+    await openTemplate(page, base, "vite-react", observer);
     checkpoint = "first-vite-vue-startup";
-    await openTemplate(page, base, "vite-vue");
+    await openTemplate(page, base, "vite-vue", observer);
     checkpoint = "preservation";
-    assert.equal(await stored(page, "vanilla"), false, "oldest eligible install was not evicted");
-    assert.equal(await stored(page, "vite-react"), true, "newest idle install was not retained");
-    assert.equal(await stored(page, "hono"), true, "active workspace was evicted");
-    assert.equal(await active.locator("#server-dot").getAttribute("data-state"), "up", "active Hono server was stopped");
-    assert.equal(await active.frameLocator("#preview").locator("#count").textContent(), "1");
-    await openTemplate(page, base, "vanilla");
-    await retainedUserTree(page);
+    observer?.event("assert", { phase: "preservation.eviction-and-active-tab" });
+    assert.equal(await step("vanilla.stored", () => stored(page, "vanilla")), false, "oldest eligible install was not evicted");
+    assert.equal(await step("vite-react.stored", () => stored(page, "vite-react")), true, "newest idle install was not retained");
+    assert.equal(await step("hono.stored", () => stored(page, "hono")), true, "active workspace was evicted");
+    assert.equal(await step("hono.server-state", () => active.locator("#server-dot").getAttribute("data-state")), "up", "active Hono server was stopped");
+    assert.equal(await step("hono.counter", () => active.frameLocator("#preview").locator("#count").textContent()), "1");
+    await openTemplate(page, base, "vanilla", observer);
+    await step("vanilla.retained-tree", () => retainedUserTree(page));
     const preview = page.frameLocator("#preview");
-    await preview.locator("button.counter").click();
-    const documentId = await preview.locator("body").evaluate(() => performance.timeOrigin);
-    await edit(page, "src/main.ts", main.replace("Storage source one", "Storage source two"));
-    await page.frameLocator("#preview").getByRole("heading", { name: "Storage source two", exact: true }).waitFor({ timeout: 30_000 });
-    assert.equal(await preview.locator("body").evaluate(() => performance.timeOrigin), documentId, "restored source HMR replaced the document");
-    await preview.locator("button.counter", { hasText: "count is 1" }).waitFor();
-    await openTemplate(page, base, "vite-react");
-    await openTemplate(page, base, "vite-vue");
-    assert.equal(await stored(page, "vanilla"), false, "edited restored source was not evicted again");
-    await openTemplate(page, base, "vanilla");
-    await page.frameLocator("#preview").getByRole("heading", { name: "Storage source two", exact: true }).waitFor({ timeout: 30_000 });
-    await retainedUserTree(page);
-    await unsupportedData(page, base);
+    await step("vanilla.increment", () => preview.locator("button.counter").click());
+    await assertPreviewDocumentPreserved(page, async () => {
+      await step("vanilla.edit-hmr", () => edit(page, "src/main.ts", main.replace("Storage source one", "Storage source two")));
+      await step("vanilla.source-two", () => page.frameLocator("#preview").getByRole("heading", { name: "Storage source two", exact: true }).waitFor({ timeout: 30_000 }));
+    }, observer);
+    await step("vanilla.counter-after-hmr", () => preview.locator("button.counter", { hasText: "count is 1" }).waitFor());
+    await openTemplate(page, base, "vite-react", observer);
+    await openTemplate(page, base, "vite-vue", observer);
+    observer?.event("assert", { phase: "vanilla.repeated-eviction" });
+    assert.equal(await step("vanilla.stored-after-hmr", () => stored(page, "vanilla")), false, "edited restored source was not evicted again");
+    await openTemplate(page, base, "vanilla", observer);
+    await step("vanilla.restored-source-two", () => page.frameLocator("#preview").getByRole("heading", { name: "Storage source two", exact: true }).waitFor({ timeout: 30_000 }));
+    await step("vanilla.restored-tree-two", () => retainedUserTree(page));
+    await unsupportedData(page, base, observer);
   } catch (error) {
-    const pages = await Promise.all(context.pages().map(page => diagnostic(page)));
+    observer?.event("preservation-error", { checkpoint, error: String(error), stack: error instanceof Error ? error.stack : undefined });
+    const pages = await Promise.all(context.pages().map((page, index) => step(`diagnostic.page-${index}`, () => diagnostic(page)))).catch(failure => {
+      if (!observer) throw failure;
+      observer.secondary("preservation.diagnostics", failure);
+      throw error;
+    });
     const report = { checkpoint, error: String(error), errors, pages };
+    observer?.event("preservation-report", report);
     console.error(JSON.stringify(report, null, 2));
     throw new StoragePreservationFailure(report, error);
-  } finally { await context.close(); }
+  } finally { await (acquired ? acquired.release() : context.close()); }
 }
 
 export class StoragePreservationFailure extends Error {
@@ -270,15 +288,16 @@ async function retainedUserTree(page: Page): Promise<void> {
   assert.deepEqual(result, { env: "USER_DOTFILE=kept", config: "guest data", build: "user build data", dist: "user dist data", binary: [0, 255, 128, 1], empty: "dir", deleted: true });
 }
 
-async function unsupportedData(page: Page, base: string): Promise<void> {
+async function unsupportedData(page: Page, base: string, observer?: StorageObservation): Promise<void> {
   const code = 'import { symlinkSync } from "node:fs";\n' + guestWriter.replace("export default", 'if (!existsSync("/home/user/app/user-link")) symlinkSync("/home/user/app/.env", "/home/user/app/user-link");\nexport default');
-  await edit(page, "vite.config.ts", code);
-  await restart(page);
-  await page.evaluate(() => sandbox.fs.flush());
-  await openTemplate(page, base, "vite-react");
-  await openTemplate(page, base, "vite-vue");
-  assert.equal(await stored(page, "vanilla"), true, "unsupported user symlink was destroyed");
-  assert.match(await page.locator("#storage-status").textContent() ?? "", /symlink.*cannot be restored/i);
+  await storageStep(observer, "symlink.edit-config", () => edit(page, "vite.config.ts", code));
+  await restart(page, observer);
+  await storageStep(observer, "symlink.flush", () => page.evaluate(() => sandbox.fs.flush()));
+  await openTemplate(page, base, "vite-react", observer);
+  await openTemplate(page, base, "vite-vue", observer);
+  observer?.event("assert", { phase: "symlink.preserved" });
+  assert.equal(await storageStep(observer, "symlink.stored", () => stored(page, "vanilla")), true, "unsupported user symlink was destroyed");
+  assert.match(await storageStep(observer, "symlink.status", () => page.locator("#storage-status").textContent()) ?? "", /symlink.*cannot be restored/i);
 }
 
 export async function quotaRefusalScenario(browser: Browser, base: string): Promise<void> {

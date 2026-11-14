@@ -3,6 +3,7 @@ import { frameworks, inventory, boxId, type Box } from "./catalog";
 import { object, text } from "./evidence";
 import reviewed from "./cell-deadlines.json";
 import type { CalibrationMetadata, CellLimits } from "./calibration-model";
+import { hangCaps } from "./generate-deadlines";
 
 export const cleanupTimeoutMs = 20_000;
 interface FrameworkDeadlinePolicy {
@@ -14,7 +15,7 @@ interface FrameworkDeadlinePolicy {
 interface CellDeadlinePolicy {
   calibration: CalibrationMetadata;
   cellTimeouts: Record<string, CellLimits>;
-  overrides: { timeoutMs: number | null; installTimeouts: Record<string, number> };
+  overrides: { timeoutMs: number | null; installTimeouts: Record<string, number>; buildTimeoutMs?: number | null };
 }
 type PolicyCalibration = CellDeadlinePolicy | { calibration?: never; cellTimeouts?: never; overrides?: never };
 export type DeadlinePolicy = FrameworkDeadlinePolicy & PolicyCalibration;
@@ -36,18 +37,18 @@ export function parseInstallTimeouts(value: string | undefined): Record<string, 
   }
   return Object.fromEntries(entries);
 }
-export function deadlinePolicy(timeoutMs = 90_000, overrides: Readonly<Record<string, number>> = {}): FrameworkDeadlinePolicy {
-  return { timeoutMs, installTimeouts: Object.fromEntries(frameworks.map(framework => [framework.id, overrides[framework.id] ?? timeoutMs])),
-    buildTimeouts: Object.fromEntries(frameworks.map(framework => [framework.id, framework.id === "next" ? Math.max(timeoutMs, 110_000) : timeoutMs])), cleanupTimeoutMs };
+export function deadlinePolicy(timeoutMs?: number, overrides: Readonly<Record<string, number>> = {}, buildTimeoutMs = hangCaps.buildTimeoutMs): FrameworkDeadlinePolicy {
+  return { timeoutMs: timeoutMs ?? hangCaps.timeoutMs, installTimeouts: Object.fromEntries(frameworks.map(framework => [framework.id, overrides[framework.id] ?? timeoutMs ?? hangCaps.installTimeoutMs])),
+    buildTimeouts: Object.fromEntries(frameworks.map(framework => [framework.id, buildTimeoutMs])), cleanupTimeoutMs };
 }
-export function campaignDeadlines(timeoutMs?: number, installs: Readonly<Record<string, number>> = {}): FrameworkDeadlinePolicy & CellDeadlinePolicy {
-  const defaults = deadlinePolicy(timeoutMs, installs);
+export function campaignDeadlines(timeoutMs?: number, installs: Readonly<Record<string, number>> = {}, buildTimeoutMs?: number): FrameworkDeadlinePolicy & CellDeadlinePolicy {
+  const defaults = deadlinePolicy(timeoutMs, installs, buildTimeoutMs);
   const cellTimeouts = Object.fromEntries(reviewed.cells.map(cell => [`${cell.framework}/${cell.browser}/${cell.engine}`, {
     timeoutMs: timeoutMs ?? cell.limits.timeoutMs,
     installTimeoutMs: installs[cell.framework] ?? (timeoutMs === undefined ? cell.limits.installTimeoutMs : timeoutMs),
-    buildTimeoutMs: timeoutMs === undefined ? cell.limits.buildTimeoutMs : defaults.buildTimeouts[cell.framework]!,
+    buildTimeoutMs: buildTimeoutMs ?? cell.limits.buildTimeoutMs,
   }]));
-  return { ...defaults, calibration: structuredClone(reviewed.metadata), cellTimeouts, overrides: { timeoutMs: timeoutMs ?? null, installTimeouts: { ...installs } } };
+  return { ...defaults, calibration: calibrationMetadata(reviewed.metadata), cellTimeouts, overrides: { timeoutMs: timeoutMs ?? null, installTimeouts: { ...installs }, buildTimeoutMs: buildTimeoutMs ?? null } };
 }
 export function cellDeadlines(policy: RecordedDeadlinePolicy, box: Pick<Box, "framework" | "browser"> & { engine: string }): CellLimits {
   if (policy.cellTimeouts) {
@@ -58,11 +59,13 @@ export function cellDeadlines(policy: RecordedDeadlinePolicy, box: Pick<Box, "fr
   return { timeoutMs: policy.timeoutMs, installTimeoutMs: policy.installTimeouts[box.framework] ?? policy.timeoutMs, buildTimeoutMs: policy.buildTimeouts?.[box.framework] ?? policy.timeoutMs };
 }
 function positiveTimeout(value: unknown): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) throw new Error("Invalid calibrated timeout");
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) throw new Error("Invalid cell timeout");
   return value;
 }
 function calibrationMetadata(value: unknown): CalibrationMetadata {
-  const data = object(value), source = object(data.source);
+  const data = object(value);
+  if (data.kind === "hang-caps") return { kind: "hang-caps", decision: text(data.decision), decisionDate: text(data.decisionDate) };
+  const source = object(data.source);
   if (typeof data.margin !== "number" || data.margin < 0 || data.margin > 1 || !/^[a-f0-9]{64}$/.test(text(source.sha256))) throw new Error("Invalid calibration provenance");
   return { decision: text(data.decision), decisionDate: text(data.decisionDate), margin: data.margin, selection: text(data.selection),
     source: { path: text(source.path), sha256: text(source.sha256), run: text(source.run), createdAt: text(source.createdAt) } };
@@ -72,6 +75,11 @@ function validateCellPolicy(data: Record<string, unknown>, policy: DeadlinePolic
   const cells = object(data.cellTimeouts), overrides = object(data.overrides), installs = object(overrides.installTimeouts);
   if (overrides.timeoutMs !== null && typeof overrides.timeoutMs !== "number") throw new Error("Invalid phase override");
   if (overrides.timeoutMs !== null) parseTimeout(String(overrides.timeoutMs));
+  if (overrides.buildTimeoutMs !== undefined && overrides.buildTimeoutMs !== null) {
+    if (typeof overrides.buildTimeoutMs !== "number") throw new Error("Invalid build override");
+    parseTimeout(String(overrides.buildTimeoutMs), "build-timeout-ms");
+  }
+  const buildOverride = overrides.buildTimeoutMs === undefined ? {} : { buildTimeoutMs: overrides.buildTimeoutMs === null ? null : Number(overrides.buildTimeoutMs) };
   const installTimeouts = Object.fromEntries(Object.entries(installs).map(([id, value]) => {
     if (!frameworks.some(framework => framework.id === id) || typeof value !== "number") throw new Error("Unknown or invalid install override");
     return [id, parseTimeout(String(value))];
@@ -81,23 +89,26 @@ function validateCellPolicy(data: Record<string, unknown>, policy: DeadlinePolic
     const cell = object(cells[boxId(box)]);
     return [boxId(box), { timeoutMs: positiveTimeout(cell.timeoutMs), installTimeoutMs: positiveTimeout(cell.installTimeoutMs), buildTimeoutMs: positiveTimeout(cell.buildTimeoutMs) }];
   }));
-  return { ...policy, calibration: calibrationMetadata(data.calibration), cellTimeouts, overrides: { timeoutMs: overrides.timeoutMs === null ? null : Number(overrides.timeoutMs), installTimeouts } };
+  return { ...policy, calibration: calibrationMetadata(data.calibration), cellTimeouts, overrides: { timeoutMs: overrides.timeoutMs === null ? null : Number(overrides.timeoutMs), installTimeouts, ...buildOverride } };
 }
 export function validateDeadlines(value: unknown): DeadlinePolicy {
-  const data = object(value), installs = object(data.installTimeouts);
+  const data = object(value);
   if (typeof data.timeoutMs !== "number" || data.cleanupTimeoutMs !== cleanupTimeoutMs) throw new Error("Invalid deadline policy");
   parseTimeout(String(data.timeoutMs));
-  if (Object.keys(installs).length !== frameworks.length) throw new Error("Deadline policy must include every framework install");
+  const policy: FrameworkDeadlinePolicy = { timeoutMs: data.timeoutMs, installTimeouts: frameworkTimeouts(data.installTimeouts, "install"),
+    buildTimeouts: frameworkTimeouts(data.buildTimeouts, "build"), cleanupTimeoutMs };
+  return validateCellPolicy(data, policy);
+}
+function frameworkTimeouts(value: unknown, phase: string): Record<string, number> {
+  const timeouts = object(value);
+  if (Object.keys(timeouts).length !== frameworks.length) throw new Error(`Deadline policy must include every framework ${phase}`);
   const normalized: Record<string, number> = {};
   for (const framework of frameworks) {
-    const timeout = installs[framework.id];
-    if (typeof timeout !== "number") throw new Error(`Missing install deadline for ${framework.id}`);
+    const timeout = timeouts[framework.id];
+    if (typeof timeout !== "number") throw new Error(`Missing ${phase} deadline for ${framework.id}`);
     normalized[framework.id] = parseTimeout(String(timeout));
   }
-  const policy = deadlinePolicy(data.timeoutMs, normalized);
-  const builds = object(data.buildTimeouts);
-  if (Object.keys(builds).length !== frameworks.length || frameworks.some(framework => builds[framework.id] !== policy.buildTimeouts[framework.id])) throw new Error("Invalid framework build deadline policy");
-  return validateCellPolicy(data, policy);
+  return normalized;
 }
 export function sameDeadlines(first: DeadlinePolicy, second: DeadlinePolicy): boolean {
   return isDeepStrictEqual(first, second);

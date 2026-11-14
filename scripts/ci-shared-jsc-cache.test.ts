@@ -46,8 +46,8 @@ test("shared warming bypasses full CI admission and keeps main-only publication 
   expect(record(warmJobs["shared-prebuild"]).name).toBe("Warm verified shared JSC cache");
   expect(record(ciJobs["shared-prebuild"]).name).toBe("Shared PIC sysroot and JSC prebuild");
   expect(record(ciJobs["shared-jsc-identity"]).if).toBe(record(ciJobs["shared-prebuild"]).if);
-  expect(record(ciJobs["shared-jsc-identity"]).needs).toBe("quality");
-  expect(record(ciJobs["shared-prebuild"]).needs).toEqual(["quality", "shared-jsc-identity"]);
+  expect(record(ciJobs["shared-jsc-identity"]).needs).toBe("selection");
+  expect(record(ciJobs["shared-prebuild"]).needs).toEqual(["selection", "shared-jsc-identity"]);
   expect(record(warm.env).CI_NODE_VERSION).toBe(record(ci.env).CI_NODE_VERSION);
   expect(discoverChecks().filter(check => check.path === "scripts/ci-shared-jsc-cache.test.ts").map(check => check.owner)).toEqual(["quality"]);
 });
@@ -75,7 +75,7 @@ test("the existing exact JSC key follows effective inputs and preserves sysroot-
   expect(step(setup, "id", "shared-jsc-inputs").env).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });
   expect(script(step(setup, "id", "shared-jsc-inputs"))).toContain("inputs=$(jsc_inputs_hash)");
   expect(step(setup, "id", "shared-jsc-inputs").if).toBe("inputs.shared-native == 'true'");
-  expect(step(record(ciJobs["shared-prebuild"]), "uses", "./.github/actions/shared-jsc-prebuild").if).toBe("needs.quality.outputs.shared-native == 'true'");
+  expect(step(record(ciJobs["shared-prebuild"]), "uses", "./.github/actions/shared-jsc-prebuild").if).toBe("needs.selection.outputs.shared-native == 'true'");
   for (const path of [".github/actions/shared-jsc-setup/action.yml", ".github/actions/shared-jsc-prebuild/action.yml"]) {
     expect(needsSharedNative([path])).toBe(true);
     expect(needsSharedSysroot([path])).toBe(true);
