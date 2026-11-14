@@ -219,7 +219,7 @@ test("Web subprocess boundaries and fail-fast order are preserved by manifest ba
 test("native-probe inputs are typed and the source utility retains its lightweight owner", () => {
   const checks = discoverChecks();
   expect(selectChecks("cmake", checks)).toContain("scripts/tls-probe.test.ts");
-  expect(selectChecks("native-probe", checks)).toEqual(["scripts/tls-probe-live.test.ts"]);
+  expect(selectChecks("native-probe", checks)).toEqual(["scripts/quickjs-regexp-test.test.ts", "scripts/tls-probe-live.test.ts"]);
   const directory = fixture();
   writeFileSync(join(directory, "scripts/probe.test.ts"), "");
   const invalid = [undefined, [], ["../secret"], ["source.ts", "source.ts"], "source.ts"];

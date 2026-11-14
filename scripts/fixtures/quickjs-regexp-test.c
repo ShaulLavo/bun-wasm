@@ -108,7 +108,7 @@ static void native_checks(JSContext *ctx)
     assert(JS_IsUncatchableError(exception));
     JS_FreeValue(ctx, exception);
     JS_FreeValue(ctx, result);
-    function = evaluate(ctx, "(()=>/a/.test('a'))");
+    function = evaluate(ctx, "(()=>{const re=/a/;return ()=>re.test('a');})()");
     assert(!JS_IsException(function));
     JS_SetMemoryLimit(rt, 1);
     result = JS_Call(ctx, function, JS_UNDEFINED, 0, NULL);

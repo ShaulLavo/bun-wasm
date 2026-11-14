@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | `third_party/rquickjs-sys/quickjs/quickjs.c`, regexp helpers | QuickJS-ng 0.16.2 shipped in rquickjs-sys 0.13.0; local base `412f340a44fac7c0e32795aacbc1bab84ee9c9db` | Host feature |
 | `scripts/quickjs-regexp-test.test.ts`, `scripts/fixtures/quickjs-regexp-test.*` | Original native embedding and semantic controls | Original adapter |
+| `scripts/check-quickjs-frame-stack.ts` | Exact intrinsic frame-writer allowance | Original adapter |
 
 The upstream regexp matcher and its bytecode are unchanged. This patch changes
 only the private regexp helpers in `quickjs.c`. There is no public C API change.
@@ -47,9 +48,13 @@ Cases include custom and noncallable `exec`, getters, input and index coercion,
 global/sticky state, nonwritable indices, Unicode, captures, backreferences,
 named groups, indices, reentry, proxies, bound functions and invalid receivers.
 The native embedding also checks foreign-realm errors and state, the active
-`exec` frame, native stack refusal, matcher interruption, allocation failure,
+`exec` frame, native stack refusal, uncatchable interruption, allocation failure,
 recovery and complete allocator teardown. Its C fixture directly uses the
 engine's C API and default allocator callbacks.
+
+The allocation control creates its regexp and callable before lowering the
+memory limit. The frame-stack contract admits only the intrinsic helper's exact
+`sf.arg_buf = (JSValue *)&s;` write and still rejects other argument readers.
 
 The baseline has **20 existing differences from Node** in these traces:
 `test` passes an unconverted input to a custom method and looks up `exec` before

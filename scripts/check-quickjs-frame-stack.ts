@@ -48,6 +48,7 @@ function checkNativeArgumentReaders(): void {
       const line = source.slice(source.lastIndexOf("\n", match.index) + 1, source.indexOf("\n", match.index));
       if (owner && bytecodeReaders.has(owner)) continue;
       if (owner && nativeWriters.has(owner) && /^\s*sf->arg_buf\s*=\s*\(JSValue \*\)(?:arg_buf|argv);$/.test(line)) continue;
+      if (owner === "js_regexp_test_intrinsic" && line.trim() === "sf.arg_buf = (JSValue *)&s;") continue;
       throw new Error(`Unreviewed native argument reader in ${name}, function ${owner ?? "unknown"}: ${line.trim()}`);
     }
   }
