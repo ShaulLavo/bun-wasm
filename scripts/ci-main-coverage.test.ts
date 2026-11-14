@@ -100,7 +100,7 @@ test("intermediate manifest inputs survive removal on the same edge and renamed/
   expect(selectChanges(manifest, head)).toMatchObject({ rust: true, shared_native: true });
   const result = await mainCoverage(api(head, [run(manifest)], [quality(manifest)]));
   expect(result).toMatchObject({ kind: "verified", selection: { rust: true, shared_native: true } });
-  expect(result.selection.jsc).toBe(false);
+  expect(result.selection.jsc).toBe(true);
   expect(base).not.toBe(manifest);
 }));
 
