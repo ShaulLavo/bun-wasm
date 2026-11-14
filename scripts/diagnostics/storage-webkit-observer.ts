@@ -1,5 +1,5 @@
 import { captureProcessObserver, type ProcessObserver } from "waffle/proc/observation";
-import { directoryState } from "waffle/proc/directory";
+import { workerProcessState } from "waffle/proc/worker-client";
 
 type Event = { time: number; kind: string; detail: unknown };
 type Identity = { owner: number; sections: SharedArrayBuffer; ownerStates: SharedArrayBuffer; revocations: SharedArrayBuffer[] };
@@ -35,9 +35,10 @@ function capture(worker: number, message: unknown): void {
   identity(message.connect);
   const value = message.runtimeProcess;
   if (!object(value) || value.kind !== "directory" || typeof value.pid !== "number" || typeof value.slot !== "number" || !(value.directory instanceof SharedArrayBuffer) || !(value.lifetime instanceof SharedArrayBuffer)) return;
-  const transfer = { kind: "directory", pid: value.pid, slot: value.slot, directory: value.directory, lifetime: value.lifetime } as const;
+  if (!(value.identity instanceof SharedArrayBuffer) || typeof value.cwd !== "string") throw new Error("Process transport omitted identity or cwd");
+  const transfer = { kind: "directory", pid: value.pid, slot: value.slot, directory: value.directory, lifetime: value.lifetime, identity: value.identity, cwd: value.cwd, bindings: [], resources: [] } as const;
   const observer = captureProcessObserver(transfer);
-  const state = directoryState(transfer);
+  const state = workerProcessState(transfer);
   const owner = object(message.filesystem) && typeof message.filesystem.owner === "number" ? message.filesystem.owner : undefined;
   processes.push({ worker, pid: value.pid, parentPid: state.parentPid, rootPid: state.rootPid, job: state.job, owner, args: message.args, observer });
   if (object(value.data)) identity(value.data.filesystem);
