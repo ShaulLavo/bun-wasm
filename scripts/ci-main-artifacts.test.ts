@@ -85,6 +85,7 @@ test("docs replacements keep all main exports while PR and manual runs retain pa
 interface ConditionContext {
   event?: string;
   ref?: string;
+  fork?: boolean;
   cancelled?: boolean;
   results?: Record<string, string>;
 }
@@ -95,6 +96,8 @@ function admitted(condition: unknown, outputs: Record<string, string>, context: 
   if (typeof condition !== "string") throw new Error("Expected workflow condition");
   if (!/\b(?:always|cancelled|success|failure)\(\)/.test(condition) && !success) return false;
   const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+    .replaceAll("github.event.pull_request.head.repo.full_name", JSON.stringify(context.fork ? "outside/bun-wasm" : "ShaulLavo/bun-wasm"))
+    .replaceAll("github.repository", JSON.stringify("ShaulLavo/bun-wasm"))
     .replaceAll("github.event_name", JSON.stringify(context.event ?? "push")).replaceAll("github.event.pull_request.draft", "false")
     .replaceAll("github.ref", JSON.stringify(context.ref ?? "refs/heads/main"))
     .replace(/needs\.[\w-]+\.outputs\.([\w-]+)/g, (_match, flag: string) => JSON.stringify(outputs[flag]))

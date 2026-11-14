@@ -32,6 +32,12 @@ The guest uses stock WorkFolder `/work/w`, workspace
 and TMPDIR can use `/work/t`. Logical paths remain stable between private jobs;
 input stamps are verified rather than rewritten.
 
+VM requests use the installed heavy runner's public settings-home option with
+the same production queue and policy. The CI snapshot reserves the known 8/10
+GiB VM budget without raising configured ceilings; insufficient ceilings fail.
+Other machine policy is preserved. `systemd-run` is an OS dependency rather than
+an npm binary, which accounts for its Knip binary exclusion.
+
 `scripts/ci-runner/cache.ts` implements immutable, checksum-verified local
 snapshots for existing cache keys and prefixes. It restores into job-private
 paths and publishes only for main pushes. Hosted cache behavior and all existing

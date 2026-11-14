@@ -176,6 +176,7 @@
     }
   },
   "ignoreBinaries": [
+    "systemd-run",
     "flock",
     "mkfifo",
     "unshare",

@@ -1,12 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 
 const scratch: string[] = [];
 afterEach(() => { for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 function fixture() {
-  const directory = mkdtempSync("/work/tmp/bun-wasm-pc-cache-");
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-pc-cache-"));
   scratch.push(directory);
   const workspace = `${directory}/workspace`;
   mkdirSync(`${workspace}/target`, { recursive: true });

@@ -5,6 +5,10 @@ export const repository = "ShaulLavo/bun-wasm";
 export const activeRunStatuses = ["in_progress", "queued", "pending"] as const;
 const endpoint = `/repos/${repository}`;
 
+export function targetsPcPool(labels: unknown): boolean {
+  return Array.isArray(labels) && ["self-hosted", "linux", "x64", "pc", "bun-wasm"].every(label => labels.includes(label));
+}
+
 function activeRun(run: Record<string, unknown>): boolean {
   return run.conclusion === null && activeRunStatuses.some(status => run.status === status);
 }
@@ -40,8 +44,7 @@ async function facts(api: GitHubApi, jobId: number) {
   const runId = positive(job.run_id);
   const run = record(await api(`${endpoint}/actions/runs/${runId}`));
   if (job.id !== jobId || run.id !== runId || job.run_attempt !== run.run_attempt || job.head_sha !== run.head_sha || !activeRun(run)) throw new Error("Job/run binding is stale");
-  const labels = job.labels;
-  if (!Array.isArray(labels) || !["self-hosted", "linux", "x64", "pc", "bun-wasm"].every(label => labels.includes(label))) throw new Error("Job does not target this PC pool");
+  if (!targetsPcPool(job.labels)) throw new Error("Job does not target this PC pool");
   await trustedRun(api, run);
   return { job, admission: { jobId, runId, attempt: positive(run.run_attempt), headSha: String(run.head_sha) } };
 }

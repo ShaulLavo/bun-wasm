@@ -4,7 +4,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { github } from "./github.ts";
 import { root } from "./host.ts";
-import { activeRunStatuses, eligibleQueuedJob } from "./policy.ts";
+import { activeRunStatuses, eligibleQueuedJob, targetsPcPool } from "./policy.ts";
 import { launchRunner } from "./vm.ts";
 
 async function queuedJob(): Promise<number | undefined> {
@@ -30,7 +30,7 @@ async function jobInRuns(runs: unknown[]): Promise<number | undefined> {
 
 async function jobInList(jobs: unknown[]): Promise<number | undefined> {
   for (const job of jobs) {
-    if (typeof job !== "object" || job === null || !("id" in job) || !("status" in job) || job.status !== "queued" || typeof job.id !== "number") continue;
+    if (typeof job !== "object" || job === null || !("id" in job) || !("status" in job) || job.status !== "queued" || typeof job.id !== "number" || !("labels" in job) || !targetsPcPool(job.labels)) continue;
     try { await eligibleQueuedJob(github, job.id); return job.id; } catch { continue; }
   }
   return undefined;

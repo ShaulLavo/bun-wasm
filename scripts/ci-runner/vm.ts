@@ -11,6 +11,7 @@ import { removeRunner } from "./github.ts";
 import type { Admission } from "./policy.ts";
 import { readAdmission, revalidateAdmission, setupSession } from "./session.ts";
 import { continuationControl, controlGuard, type GuardControl } from "./controls.ts";
+import { prepareVmSettings } from "./resources.ts";
 
 type Profile = "native" | "browser";
 type Job = { id: string; profile: Profile; prepare: boolean; control: boolean; argv: string[] };
@@ -211,7 +212,8 @@ async function launch(job: Job, admission?: Admission): Promise<void> {
   await mkdir(jobPath(job.id), { recursive: true, mode: 0o700 });
   await writeFile(`${jobPath(job.id)}/request.json`, JSON.stringify(job), { mode: 0o600 });
   if (admission) await writeFile(`${jobPath(job.id)}/admission.json`, JSON.stringify(admission), { mode: 0o600 });
-  const args = ["--user", "--wait", "--pipe", "--collect", "--quiet", `--unit=${outerUnit}`, "--service-type=exec", "-p", "PartOf=bun-wasm-ci-controller.service", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=20s", "-p", "RuntimeMaxSec=3h", "-p", `ExecStopPost=${runtime} ${source} finalize ${job.id}`, runtime, "/work/heavy-runner/current/run.js", "--host", "local", "--class", job.profile === "native" ? "suite" : "browser", `pc-ci-${job.prepare ? "prepare" : job.profile}-${job.id}`, "--", runtime, source, "admitted", job.id];
+  const settingsHome = await prepareVmSettings();
+  const args = ["--user", "--wait", "--pipe", "--collect", "--quiet", `--unit=${outerUnit}`, "--service-type=exec", "-p", "PartOf=bun-wasm-ci-controller.service", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=20s", "-p", "RuntimeMaxSec=3h", "-p", `ExecStopPost=${runtime} ${source} finalize ${job.id}`, runtime, "/work/heavy-runner/current/run.js", "--host", "local", "--settings-home", settingsHome, "--class", job.profile === "native" ? "suite" : "browser", `pc-ci-${job.prepare ? "prepare" : job.profile}-${job.id}`, "--", runtime, source, "admitted", job.id];
   const child = spawn("systemd-run", args, { stdio: "inherit" });
   const cancel = () => { stopUnit(outerUnit); };
   process.once("SIGINT", cancel);

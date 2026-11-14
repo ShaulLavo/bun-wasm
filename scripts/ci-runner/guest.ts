@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 
-export const imageVersion = "ubuntu-24.04-node26.13.1-v1";
-export const workspace = "/work/w/bun-wasm/bun-wasm";
-export const cacheRoot = "/work/ci-runner/bun-wasm/cache";
+const imageVersion = "ubuntu-24.04-node26.13.1-v1";
+const workspace = "/work/w/bun-wasm/bun-wasm";
+const cacheRoot = "/work/ci-runner/bun-wasm/cache";
 
-export function quote(value: string): string {
+function quote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
