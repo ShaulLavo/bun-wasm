@@ -29,6 +29,11 @@ Root publication and table acquisition are inlined at their JSON call sites, ret
 `MarkedVector` registration and overflow handling. Fixed leaf output is forced inline only
 on WASI. The existing buffer checks, stack reservations, and failure order stay intact.
 
+The WASI append specialization checks native stack headroom at traversal entry.
+Nested values run at constant native depth, so they reuse that check. Each append
+keeps its fixed shadow-stack reservation. Non-WASI recursion keeps its per-value
+headroom checks.
+
 A container opens only after frame and root capacity succeed. Frame growth uses fallible vector
 reservation, and root growth records overflow. The 4096-frame nesting cap and either allocation
 refusal restart the existing general `Stringifier` from the root. The fast path runs no JavaScript,

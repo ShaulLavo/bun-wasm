@@ -3472,15 +3472,34 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
      m_failureReason = failureReason;
  }
 
-@@ -1343,7 +1492,7 @@
- #undef JSON_STRING_COPY_HAS_SIMD
-
+@@ -1343,20 +1492,24 @@
  template<typename CharType, BufferMode bufferMode>
 -template<HasGap hasGap>
 +template<HasGap hasGap, bool testing, bool startTraversal>
  void FastStringifier<CharType, bufferMode>::append(JSValue value)
  {
      WASM_RESERVE_STACK(1024);
+ #if OS(WASI)
+-    // Static buffers estimate native stack use. Wasm needs the shadow-stack guard too.
+-    if (!m_vm.isSafeToRecurseSoft()) [[unlikely]] {
++    // The WASI traversal has constant native depth. Check its entry, not every value.
++    if (startTraversal && !m_vm.isSafeToRecurseSoft()) [[unlikely]] {
+         recordFailure(FailureReason::StackOverflow, "stack overflow"_s);
+         return;
+     }
+ #endif
+
++#if OS(WASI)
++    if constexpr (bufferMode == BufferMode::DynamicBuffer && startTraversal) {
++#else
+     if constexpr (bufferMode == BufferMode::DynamicBuffer) {
++#endif
+         if (std::bit_cast<uint8_t*>(currentStackPointer()) < m_stackLimit) [[unlikely]] {
+             recordFailure(FailureReason::StackOverflow, "stack overflow"_s);
+             return;
+         }
+     }
+
 @@ -1492,6 +1641,15 @@
          return;
      }
