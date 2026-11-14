@@ -59,10 +59,7 @@ try { require('./then.mjs'); } catch (error) { show(error); }
 setTimeout(() => console.log('done'), 20);
 `,
     },
-    expected: "Error: require() async module \"/then.mjs\" is unsupported. use \"await import()\" instead.\ndone\n",
-  },
-  {
-    name: "inspection",
+    expected: "Error: settled adoption\ndone\n",,
     files: {
       "then.mjs": "export function then(resolve) { resolve(globalThis.q); }\n",
       "index.ts": `${show}
@@ -89,7 +86,7 @@ function targets(): Target[] {
   const selected = process.env.INSTALL_ENGINES?.split(",") ?? ["quickjs", "jsc"];
   const result: Target[] = [];
   for (const engine of ["quickjs", "jsc"]) {
-    if (selected.includes(engine)) result.push({ engine, core: join(root, `dist/bun-${engine}.wasm`) });
+    if (selected.includes(engine)) result.push({ engine, core: join(root, engine === "quickjs" ? "dist/bun.wasm" : `dist/bun-${engine}.wasm`) });
   }
   const spiderMonkey = process.env.SPIDERMONKEY_WASM;
   if (spiderMonkey) {

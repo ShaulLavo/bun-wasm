@@ -1107,7 +1107,7 @@ jobs:
           export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
           export SPIDERMONKEY_CARGO_TARGET_DIR="$RUNNER_TEMP/ordinary-side-cargo/${{ steps.ordinary-spidermonkey-native.outputs.generation }}"
           CARGO_BUILD_JOBS=2 bash scripts/build-bun-spidermonkey.sh
-          if llvm-nm "$SPIDERMONKEY_CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_spidermonkey.a" | grep -q 'bsm_control_'; then
+          if llvm-nm "$SPIDERMONKEY_CARGO_TARGET_DIR/wasm32-wasip1/release/build/bunwasm-spidermonkey/"*/out/libspidermonkey_shim.a | grep -q 'bsm_control_'; then
             echo 'Production SpiderMonkey adapter contains control symbols' >&2
             exit 1
           fi
