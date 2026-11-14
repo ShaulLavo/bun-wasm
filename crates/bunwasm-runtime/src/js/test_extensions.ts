@@ -12,6 +12,10 @@
     if (matchers === null || typeof matchers !== "object" && typeof matchers !== "function") {
       throw new TypeError("expect.extend(matchers)\n\nExpected an object containing matchers");
     }
+    if (Array.isArray(matchers)) {
+      for (const name of Object.keys(matchers)) registerProperty(matchers, name, define);
+      return;
+    }
     const seen = new Set<string>();
     let owner = matchers;
     while (owner && owner !== Object.prototype && owner !== Function.prototype) {

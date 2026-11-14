@@ -14,6 +14,8 @@ and built-in object/function prototypes, and keeps the nearest property when
 names are shadowed. Invalid matcher values fail during registration.
 Primitive collections fail at registration. Function collections retain their
 enumerable matcher entries without treating built-in function metadata as matchers.
+Array collections register their enumerable entries, excluding length metadata
+and built-in prototype methods.
 
 Symmetric results use the existing promise-settlement adapter before validation.
 An object must have a defined `pass` property, whose truthiness determines the

@@ -32,6 +32,14 @@ const cases: [string, () => unknown][] = [
     }
     expect(() => expect.extend(() => {})).not.toThrow();
   }],
+  ["array collections", () => {
+    const before = Reflect.get(expect(1), "map");
+    const collections = [[], [() => ({ pass: true })], Object.assign([], { arrayCollection: () => ({ pass: true }) })];
+    for (const collection of collections) Reflect.apply(expect.extend, expect, [collection]);
+    call("0");
+    call("arrayCollection");
+    expect(Reflect.get(expect(1), "map")).toBe(before);
+  }],
   ["proxy result properties", () => {
     let reads = 0;
     const result = new Proxy({ get pass() { reads++; return true; } }, {
