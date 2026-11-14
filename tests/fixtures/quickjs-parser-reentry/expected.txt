@@ -1,0 +1,4 @@
+nested callbacks and assignments loaded
+deep parser overflow caught
+nested callbacks and assignments reloaded
+continued

@@ -18,14 +18,22 @@ if [[ -z ${RUSTC_WRAPPER:-} || ${RUSTC_WRAPPER:-} == sccache || "$RUSTC_WRAPPER"
 fi
 export CMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER:-$(command -v sccache)}
 export CMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER:-$(command -v sccache)}
+cache_phase() {
+  if [[ -n ${BUN_WASM_PRODUCER_DIAGNOSTICS:-} ]]; then
+    bun "$root/scripts/producer-diagnostics.ts" phase "$@"
+    return
+  fi
+  shift
+  "$@"
+}
 cleanup() {
   if [[ -S $SCCACHE_SERVER_UDS ]]; then
-    sccache --stop-server || true
+    cache_phase cache-stop sccache --stop-server || true
   fi
   rm -rf -- "$socket_dir"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-sccache --start-server
+cache_phase cache-start sccache --start-server
 "$@"
