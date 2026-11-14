@@ -460,8 +460,9 @@
       if (offset !== offset) offset = 0;
     }
     const maxLength = ab.byteLength - offset;
-    if (maxLength < 0) throw bufferOutOfBounds("offset");
-    let len = maxLength;
+    if (maxLength < 0 || Math.trunc(offset) < 0) throw bufferOutOfBounds("offset");
+    // An undefined length keeps resizable backing stores length-tracking.
+    let len;
     if (length !== undefined) {
       len = +length;
       if (len > 0) {
@@ -1147,28 +1148,9 @@
   }
 
   // Node's internal per-encoding helpers (used by some libraries directly).
-  const sliceEncodings = {
-    utf8: "utf8",
-    latin1: "latin1",
-    ascii: "ascii",
-    hex: "hex",
-    base64: "base64",
-    base64url: "base64url",
-    ucs2: "utf16le",
-  };
-  for (const prefix of Object.keys(sliceEncodings)) {
-    const enc = sliceEncodings[prefix];
-    defineMethods(proto, {
-      [`${prefix}Slice`](start, end) {
-        return toStringRange(this, enc, start, end);
-      },
-      [`${prefix}Write`](string, offset, length) {
-        const off = offset === undefined ? 0 : offset;
-        const len = length === undefined ? this.length - off : length;
-        return writeString(this, string, off, len, enc);
-      },
-    });
-  }
+  internal.require("buffer_encoding_bindings")({
+    proto, defineMethods, bytesToString, writeString, makeError, bufferOutOfBounds,
+  });
 
   Object.defineProperty(proto, "parent", {
     configurable: true,

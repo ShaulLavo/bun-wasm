@@ -38,10 +38,10 @@ test("compiled JSON runtime controls follow the selected JSC producer", () => {
 test("JSON runtime controls skip unselected JSC and fail when its selected launcher is missing", () => {
   const path = new URL("./jsc-json-fast-controls.test.ts", import.meta.url).pathname;
   const env = { ...process.env, BUN_WASM_LAUNCHER: new URL("../dist/missing-json-control-launcher", import.meta.url).pathname, BUN_WASM_JSON_LONG_STRESS: "1" };
-  const unselected = spawnSync(process.execPath, ["test", path], { encoding: "utf8", env: { ...env, INSTALL_ENGINES: "quickjs,browser" } });
+  const unselected = spawnSync(process.execPath, ["test", path], { encoding: "utf8", env: { ...env, BUN_WASM_CHECK_ENGINES: "quickjs,browser" } });
   expect(unselected.status).toBe(0);
   expect(unselected.stderr).toMatch(/0 pass\s+\d+ skip\s+0 fail/);
-  const selected = spawnSync(process.execPath, ["test", path, "--test-name-pattern", "general depth limit remains authoritative"], { encoding: "utf8", env: { ...env, INSTALL_ENGINES: "quickjs,jsc,browser" } });
+  const selected = spawnSync(process.execPath, ["test", path, "--test-name-pattern", "general depth limit remains authoritative"], { encoding: "utf8", env: { ...env, BUN_WASM_CHECK_ENGINES: "quickjs,jsc,browser" } });
   expect(selected.status).toBe(1);
   expect(selected.stderr).toContain("ENOENT");
 });

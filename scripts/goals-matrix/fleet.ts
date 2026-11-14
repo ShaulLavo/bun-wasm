@@ -11,6 +11,7 @@ import { buildNextBuildReaderSource } from "./next-build-observer";
 import { CommandExitError, ownedCommand, withSignals } from "./lifetime";
 import { quote, admission, nativeQueueScript } from "./mac-queue";
 import { settlementFile } from "./safari-causal-capture";
+import { exitSettlementFile } from "./safari-exit-capture";
 class NativeUnavailable extends Error {}
 async function discoverMac(signal: AbortSignal): Promise<string> {
   try {
@@ -62,10 +63,11 @@ async function verifyRemoteStopped(remote: string, waitForQueueExit: boolean, ca
 }
 async function verifyNativeStopped(remote: string, capture: boolean): Promise<boolean> {
   const settlement = `report/logs/${settlementFile}`;
-  const script = `set -eu; cd ${quote(remote)}; started=false; if [ -e queue-workload-started ]; then started=true; fi; cleanup=null; if [ -e report/native-cleanup.json ]; then cleanup=$(cat report/native-cleanup.json); fi; capture=null; if [ -e ${settlement} ]; then capture=$(cat ${settlement}); fi; printf '{"workloadStarted":%s,"cleanup":%s,"capture":%s}\n' "$started" "$cleanup" "$capture"`;
+  const exitSettlement = `report/logs/${exitSettlementFile}`;
+  const script = `set -eu; cd ${quote(remote)}; started=false; if [ -e queue-workload-started ]; then started=true; fi; cleanup=null; if [ -e report/native-cleanup.json ]; then cleanup=$(cat report/native-cleanup.json); fi; capture=null; if [ -e ${settlement} ]; then capture=$(cat ${settlement}); fi; nativeExit=null; if [ -e ${exitSettlement} ]; then nativeExit=$(cat ${exitSettlement}); fi; printf '{"workloadStarted":%s,"cleanup":%s,"capture":%s,"nativeExit":%s}\n' "$started" "$cleanup" "$capture" "$nativeExit"`;
   const proof: unknown = JSON.parse(await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", script], undefined, 20_000));
   if (!proof || typeof proof !== "object" || !("workloadStarted" in proof) || typeof proof.workloadStarted !== "boolean" || !("cleanup" in proof) || !("capture" in proof)) throw new Error("Remote native shutdown is unproved; retaining staging");
-  if (capture) requireCaptureSettled(proof.capture);
+  if (capture) { requireCaptureSettled(proof.capture); requireExitCaptureSettled("nativeExit" in proof ? proof.nativeExit : undefined); }
   if (proof.cleanup === null && !proof.workloadStarted) return false;
   const cleanup = proof.cleanup;
   if (!cleanup || typeof cleanup !== "object" || !("driverExited" in cleanup) || cleanup.driverExited !== true
@@ -77,6 +79,14 @@ export function requireCaptureSettled(receipt: unknown): void {
   if (receipt === null) return;
   if (!receipt || typeof receipt !== "object" || !("state" in receipt) || receipt.state !== "settled" || !("childrenJoined" in receipt) || receipt.childrenJoined !== true
     || !("writersClosed" in receipt) || receipt.writersClosed !== true) throw new Error("Safari causal capture settlement is unproved; retaining staging");
+}
+export function requireExitCaptureSettled(receipt: unknown): void {
+  if (receipt === null) return;
+  if (!receipt || typeof receipt !== "object" || !("state" in receipt) || receipt.state !== "settled"
+    || !("childrenJoined" in receipt) || receipt.childrenJoined !== true || !("cleanupCompleted" in receipt) || receipt.cleanupCompleted !== true
+    || !("writersJoined" in receipt) || receipt.writersJoined !== true || !("writersClosed" in receipt) || receipt.writersClosed !== true
+    || !("adapterClosed" in receipt) || receipt.adapterClosed !== true
+    || !("descriptor" in receipt) || receipt.descriptor !== "closed" && receipt.descriptor !== "not-opened") throw new Error("Safari native exit capture settlement is unproved; retaining staging");
 }
 export async function removeStaging(remote: string, started: boolean, config: Options, waitForQueueExit = false): Promise<void> {
   if (started) await verifyRemoteStopped(remote, waitForQueueExit, config.safariCausalCapture);
