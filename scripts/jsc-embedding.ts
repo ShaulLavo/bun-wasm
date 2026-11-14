@@ -65,6 +65,19 @@ export function getterDispatchFixture() {
   return { path: check.path, hostOptions: ["--stack-mb", "1", "--env", "BUN_WASM_STACK_KIB=192", "--env", "GETTER_DISPATCH_AJV_DEPTH=2000", "--env", "GETTER_DISPATCH_WIDE_LOCALS=33000"] };
 }
 
+/** Forwarded Proxy reads keep their semantics and overflow as a catchable error on a small host stack. */
+export function proxyGetForwardingFixture() {
+  const manifest = "native-proxy-get-forwarding.json";
+  const check = parseCheck(JSON.parse(readFileSync(join(root, "checks", manifest), "utf8")), manifest);
+  if (check.owner !== "native") throw new Error("JSC Proxy forwarding fixture needs its native check owner");
+  return { path: check.path, hostOptions: ["--stack-mb", "0.3125", "--env", "BUN_WASM_STACK_KIB=800", "--env", "BUNWASM_STACK_EXPECT_CAUGHT=1"] };
+}
+
+/** Collect after native trap lookup and key conversion, with no JavaScript handler or trap local left alive. */
+export function proxyGetLifetimeFixture() {
+  return { path: "tests/jsc-embedding/proxy-get-lifetime", hostOptions: ["--env", "BUN_WASM_JSC_PROXY_GET_GC=1"] };
+}
+
 /**
  * Bound-function call semantics at the smallest browser budget on a small real host stack, with
  * Babel's printer cycle (a bound callback per level) far deeper than the 30 levels it reached while
@@ -128,6 +141,10 @@ function testFixtures(artifact: string): void {
     runFixture(artifact, literal.path, scratch, literal.hostOptions);
     const stack = stackFixture();
     runFixture(artifact, stack.path, scratch, stack.hostOptions);
+    const forwarding = proxyGetForwardingFixture();
+    runFixture(artifact, forwarding.path, scratch, forwarding.hostOptions);
+    const lifetime = proxyGetLifetimeFixture();
+    runFixture(artifact, lifetime.path, scratch, lifetime.hostOptions);
     const getters = getterDispatchFixture();
     runFixture(artifact, getters.path, scratch, getters.hostOptions);
     const bound = boundCallDispatchFixture();

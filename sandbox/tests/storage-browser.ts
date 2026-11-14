@@ -170,7 +170,7 @@ export async function preservationScenario(browser: Browser, base: string): Prom
     page.on("pageerror", error => { errors.push(error.message); });
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   });
-  let checkpoint: "setup" | "vanilla-config-restart" | "first-vite-vue-startup" | "preservation" = "setup";
+  let checkpoint: StoragePreservationFailure["report"]["checkpoint"] = "setup";
   try {
     const active = await context.newPage();
     const page = await context.newPage();
@@ -191,6 +191,7 @@ export async function preservationScenario(browser: Browser, base: string): Prom
     checkpoint = "preservation";
     await page.frameLocator("#preview").getByRole("heading", { name: "Storage source one", exact: true }).waitFor({ timeout: 30_000 });
     await page.evaluate(() => sandbox.fs.flush());
+    checkpoint = "first-vite-react-startup";
     await openTemplate(page, base, "vite-react");
     checkpoint = "first-vite-vue-startup";
     await openTemplate(page, base, "vite-vue");
@@ -226,7 +227,7 @@ export async function preservationScenario(browser: Browser, base: string): Prom
 
 export class StoragePreservationFailure extends Error {
   constructor(readonly report: {
-    checkpoint: "setup" | "vanilla-config-restart" | "first-vite-vue-startup" | "preservation";
+    checkpoint: "setup" | "vanilla-config-restart" | "first-vite-react-startup" | "first-vite-vue-startup" | "preservation";
     error: string; errors: readonly string[]; pages: readonly (StoragePageDiagnostic | string)[];
   }, cause: unknown) {
     super(report.error, { cause });
