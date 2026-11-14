@@ -54,6 +54,8 @@ jobs:
       - name: Qualify observation and run unchanged preservation once
         env:
           DIAGNOSTIC_HEAD: ${{ github.sha }}
+          TMPDIR: ${{ runner.temp }}
+          BUN_WASM_TEST_TMP: ${{ runner.temp }}
         run: |
           diagnostic_group=0
           trap 'if [ "$diagnostic_group" -gt 0 ]; then kill -- -"$diagnostic_group" 2>/dev/null || true; fi' EXIT
