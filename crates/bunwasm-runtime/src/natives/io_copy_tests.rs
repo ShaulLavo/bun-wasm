@@ -1,4 +1,4 @@
-//! Rust allocation coverage only: the JS read loop and engine heaps are not executed here.
+//! Direct Rust allocation coverage, with a companion shared-JS embedding check.
 
 use super::*;
 use crate::compression::tests::measure;
@@ -12,6 +12,9 @@ use std::path::PathBuf;
 const MIB: usize = 1 << 20;
 const SIZE: usize = 40 * MIB;
 const LIMIT: usize = 8 * MIB;
+
+#[path = "io_embedding_tests.rs"]
+mod embedding;
 
 struct Fixture(PathBuf);
 

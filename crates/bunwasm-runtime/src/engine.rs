@@ -32,6 +32,16 @@ pub fn wasm_capacity() -> Val {
 pub type ValueFn<E> =
     Rc<dyn Fn(&E, &[<E as Engine>::Value]) -> Result<<E as Engine>::Value, <E as Engine>::Value>>;
 
+/// Convert a plain-data native at the engine value boundary.
+pub(crate) fn data_fn<E: Engine>(call: impl Fn(Vec<Val>) -> NativeResult + 'static) -> ValueFn<E> {
+    Rc::new(move |e: &E, args: &[E::Value]| {
+        let values = args.iter().map(|value| e.to_val(value)).collect();
+        call(values)
+            .map(|value| e.value_from(value))
+            .map_err(|error| e.error_value(&error))
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromiseState {
     Pending,

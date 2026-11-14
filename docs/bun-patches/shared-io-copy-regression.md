@@ -13,10 +13,24 @@ below 8 MiB. A second arm inserts a discarded whole-file copy before the first
 native read, keeps the same requests and data checks, and must fail the same
 limit. Bounded wire requests alone would accept that control.
 
-These tests do not execute the shared JavaScript read loop, its borrowed
-destination conversion, engine `ValueFn` conversion or engine C++ allocation.
-They establish a Rust native/transport regression check, not a universal
-allocation check for the complete read call. The historical Wasm-capacity
-fixture assertion remains until a direct replacement covers the intended
-shared read/copy contract. The existing Rust test owner discovers these tests;
-the ordinary three-engine large-I/O fixture remains with its existing owner.
+The companion `io_embedding_tests.rs` loads the actual `web.js`, `buffer.js`
+and `node_fs.js` factories into the production QuickJS Rust embedding. The
+existing plain-data-to-`ValueFn` adapter moved unchanged into the shared private
+`engine::data_fn` helper, so the embedding and engine programs use the same
+argument and result conversion. Native reads run through the real runtime
+registry, dispatcher and physical transport. The fixture owns timer delivery.
+
+After file, data and destination setup, the test sets QuickJS's existing
+`JS_SetMemoryLimit` to measured heap bytes plus 8 MiB and arms the Rust allocator
+witness. Ordinary JavaScript ArrayBuffer backing is charged to that QuickJS
+limit. Native result backing transferred from a Rust Vec is covered by the
+Rust witness. The deliberate `new Uint8Array(target)` control runs before the
+first bounded native read under the same allowance and must report the exact
+ArrayBuffer backing refusal. No collection is forced, and no production memory
+limit, GC policy, engine source or upstream patch changes.
+
+This bounds the shared JavaScript, borrowed conversion, `ValueFn` and native
+read path in this QuickJS embedding. Engine-specific allocation and collector
+overhead on other engines remain separate. The existing Rust test owner
+discovers the direct checks. The ordinary three-engine large-I/O fixture keeps
+its existing owner and all read and codec correctness assertions.
