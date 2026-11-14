@@ -3,7 +3,9 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, u
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-function fixture(run: (root: string, shell: (command: string, env?: Record<string, string>) => string) => void) {
+type Shell = (command: string, env?: Record<string, string>) => string;
+
+function fixture(run: (root: string, shell: Shell) => void) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-jsc-inputs-"));
   try {
     mkdirSync(join(root, "jsc", "shim"), { recursive: true });
@@ -84,7 +86,7 @@ test("JSC config refresh preserves identical input timestamps and copies changed
 });
 
 
-test("warm JSC stamp rejects partial archives, dirty sources, changed SDK and stale CMake", () => {
+function warmFixture(run: (inputs: { shell: Shell; reject: Shell }) => void) {
   fixture((root, shell) => {
     const webkit = join(root, "build/webkit");
     mkdirSync(webkit, { recursive: true });
@@ -100,21 +102,48 @@ for file in "\${JSC_ARTIFACTS[@]}"; do mkdir -p "$(dirname "$file")"; printf 'bu
     shell(setup);
     const pin = 'WEBKIT_COMMIT=$(git -C "$WEBKIT_DIR" rev-parse HEAD); ';
     shell(pin + "write_jsc_inputs_stamp; check_jsc_inputs_stamp");
-    const reject = (command: string, env?: Record<string, string>) => shell(pin + command + "; if check_jsc_inputs_stamp >/dev/null 2>&1; then exit 91; fi", env);
+    const stamped: Shell = (command, env) => shell(pin + command, env);
+    const reject: Shell = (command, env) => stamped(command + "; if check_jsc_inputs_stamp >/dev/null 2>&1; then exit 91; fi", env);
+    run({ shell: stamped, reject });
+  });
+}
+
+test("warm JSC stamp rejects partial and corrupt archives", () => {
+  warmFixture(({ shell, reject }) => {
     reject('rm "$JSC_OBJ/lib/libWTF.a"');
-    shell(pin + 'printf "built archive\\n" > "$JSC_OBJ/lib/libWTF.a"; check_jsc_inputs_stamp');
+    shell('printf "built archive\\n" > "$JSC_OBJ/lib/libWTF.a"; check_jsc_inputs_stamp');
     reject('printf "corrupt archive\\n" > "$JSC_OBJ/lib/libWTF.a"');
-    shell(pin + 'printf "built archive\\n" > "$JSC_OBJ/lib/libWTF.a"; check_jsc_inputs_stamp');
+    shell('printf "built archive\\n" > "$JSC_OBJ/lib/libWTF.a"; check_jsc_inputs_stamp');
+  });
+});
+
+test("warm JSC stamp refuses dirty sources and cannot stamp them as reusable", () => {
+  warmFixture(({ shell, reject }) => {
     reject('echo changed >> "$WEBKIT_DIR/tracked.cpp"');
-    shell(pin + 'if write_jsc_inputs_stamp >/dev/null 2>&1; then exit 93; fi');
-    shell(pin + 'git -C "$WEBKIT_DIR" checkout -- tracked.cpp; git -C "$WEBKIT_DIR" apply "$JSC_SRC/webkit-wasi.patch"; check_jsc_inputs_stamp');
+    shell('if write_jsc_inputs_stamp >/dev/null 2>&1; then exit 93; fi');
+    shell('git -C "$WEBKIT_DIR" checkout -- tracked.cpp; git -C "$WEBKIT_DIR" apply "$JSC_SRC/webkit-wasi.patch"; check_jsc_inputs_stamp');
+  });
+});
+
+test("warm JSC stamp rejects untracked sources", () => {
+  warmFixture(({ shell, reject }) => {
     reject('echo untracked > "$WEBKIT_DIR/untracked.cpp"');
-    shell(pin + 'rm "$WEBKIT_DIR/untracked.cpp"; check_jsc_inputs_stamp');
+    shell('rm "$WEBKIT_DIR/untracked.cpp"; check_jsc_inputs_stamp');
+  });
+});
+
+test("warm JSC stamp rejects stale CMake state and compile metadata", () => {
+  warmFixture(({ shell, reject }) => {
     reject(':', { FIXTURE_BAD_CMAKE: "true" });
     reject('rm "$JSC_OBJ/compile_commands.json"');
-    shell(pin + 'printf "built archive\\n" > "$JSC_OBJ/compile_commands.json"; check_jsc_inputs_stamp');
+    shell('printf "built archive\\n" > "$JSC_OBJ/compile_commands.json"; check_jsc_inputs_stamp');
     reject('echo changed >> "$JSC_OBJ/cmakeconfig.h"');
-    shell(pin + 'printf "built archive\\n" > "$JSC_OBJ/cmakeconfig.h"; check_jsc_inputs_stamp');
+    shell('printf "built archive\\n" > "$JSC_OBJ/cmakeconfig.h"; check_jsc_inputs_stamp');
+  });
+});
+
+test("warm JSC stamp rejects changed SDK inputs", () => {
+  warmFixture(({ reject }) => {
     reject('echo changed >> "$WASI_SDK_PATH/VERSION"');
   });
 });

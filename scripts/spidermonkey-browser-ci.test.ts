@@ -21,7 +21,7 @@ function browserStep(): string {
 
 test("the selected native producer feeds the discovered Browser group consumer once", () => {
   const step = browserStep();
-  expect(step).toContain("if: needs.quality.outputs.shared-native == 'true'");
+  expect(step).toContain("if: needs.selection.outputs.shared-native == 'true'");
   expect(step).toContain('BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"');
   expect(step).toContain("bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group");
   expect(step).not.toMatch(/continue-on-error|build-native|build-bun|build-engine|native --profile|BUN_WASM_SPIDERMONKEY_TIER/);
