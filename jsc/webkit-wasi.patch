@@ -3381,7 +3381,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
  private:
      explicit FastStringifier(JSGlobalObject&);
 -    template<HasGap hasGap> void append(JSValue);
-+    template<HasGap hasGap, bool testing = false> void append(JSValue);
++    template<HasGap hasGap, bool testing = false, bool startTraversal = false> void append(JSValue);
      void appendInt32(int32_t);
      template<HasGap hasGap> void appendInt32Array(JSArray&);
      String result();
@@ -3426,11 +3426,11 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +    void collectForTest(bool pointB);
 +    bool shouldCollectAtOpen(PropertyTable*);
 +    void publishedFrameForTest();
++    void resumedFrameForTest(unsigned);
 +    size_t growthTargetForTest(bool roots, size_t);
 +    Vector<Frame, 16> m_frames;
 +    MarkedVector<JSCell*, 16, RecordOverflow> m_roots;
 +    unsigned m_rootCapacity { 16 };
-+    bool m_draining { false };
 +    WASIJSONFastRecord m_test;
 +#endif
  
@@ -3459,7 +3459,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
  
  template<typename CharType, BufferMode bufferMode>
 -template<HasGap hasGap>
-+template<HasGap hasGap, bool testing>
++template<HasGap hasGap, bool testing, bool startTraversal>
  void FastStringifier<CharType, bufferMode>::append(JSValue value)
  {
      WASM_RESERVE_STACK(1024);
@@ -3472,7 +3472,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +    case FinalObjectType:
 +    case ArrayType:
 +        openContainer<hasGap, testing>(cell);
-+        if (!m_draining && !haveFailure())
++        if (startTraversal && !haveFailure())
 +            drainContainers<hasGap, testing>();
 +        return;
 +#else
@@ -3488,7 +3488,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
      case JSFunctionType:
          recordFailure("function"_s);
          return;
-@@ -1830,6 +1981,567 @@
+@@ -1830,6 +1981,570 @@
      }
  }
  
@@ -3770,6 +3770,16 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +}
 +
 +template<typename CharType, BufferMode bufferMode>
++void FastStringifier<CharType, bufferMode>::resumedFrameForTest(unsigned index)
++{
++    if (!m_test.collectionResumePending || index >= m_test.collectionResumeLimit)
++        return;
++    m_test.collectionResumePending = false;
++    if (!m_frames[index].structure->cachesPropertyTableForJSONFastPath())
++        ++m_test.resumesOfClearedTableFrames;
++}
++
++template<typename CharType, BufferMode bufferMode>
 +template<HasGap hasGap, bool testing>
 +void FastStringifier<CharType, bufferMode>::openArray(JSArray& array)
 +{
@@ -3833,7 +3843,6 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +template<HasGap hasGap, bool testing>
 +void FastStringifier<CharType, bufferMode>::drainContainers()
 +{
-+    m_draining = true;
 +    while (!m_frames.isEmpty()) {
 +        unsigned index = m_frames.size() - 1;
 +        bool finished = m_frames[index].kind == Frame::Kind::Object ? advanceObject<hasGap, testing>(index) : advanceArray<hasGap, testing>(index);
@@ -3846,20 +3855,14 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +            return;
 +        popFrame();
 +    }
-+    m_draining = false;
 +}
 +
 +template<typename CharType, BufferMode bufferMode>
 +template<HasGap hasGap, bool testing>
 +bool FastStringifier<CharType, bufferMode>::advanceObject(unsigned index)
 +{
-+    if constexpr (testing) {
-+        if (m_test.collectionResumePending && index < m_test.collectionResumeLimit) {
-+            m_test.collectionResumePending = false;
-+            if (!m_frames[index].structure->cachesPropertyTableForJSONFastPath())
-+                ++m_test.resumesOfClearedTableFrames;
-+        }
-+    }
++    if constexpr (testing)
++        resumedFrameForTest(index);
 +    unsigned count = m_frames.size();
 +    bool descended = false;
 +    unsigned next = m_frames[index].table->forEachPropertyFrom(m_frames[index].cursor, [&](const auto& entry) {
@@ -4056,7 +4059,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
  template<typename CharType, BufferMode bufferMode>
  inline String FastStringifier<CharType, bufferMode>::stringify(JSGlobalObject& globalObject, JSValue value, JSValue replacer, JSValue space, std::optional<FailureReason>& failureReason)
  {
-@@ -1844,10 +2556,22 @@
+@@ -1844,10 +2559,22 @@
              return { };
          }
      }
@@ -4068,22 +4071,22 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +    if (wasiJSONFastControl.mode != WASIJSONFastTestMode::Off) {
 +        stringifier.startTestRecord();
 +        if (stringifier.m_gapLength)
-+            stringifier.append<HasGap::Yes, true>(value);
++            stringifier.append<HasGap::Yes, true, true>(value);
 +        else
-+            stringifier.append<HasGap::No, true>(value);
++            stringifier.append<HasGap::No, true, true>(value);
 +        stringifier.finishTestRecord();
 +    } else
 +#endif
 +    {
 +        if (stringifier.m_gapLength)
-+            stringifier.append<HasGap::Yes>(value);
++            stringifier.append<HasGap::Yes, false, true>(value);
 +        else
-+            stringifier.append<HasGap::No>(value);
++            stringifier.append<HasGap::No, false, true>(value);
 +    }
      failureReason = stringifier.m_failureReason;
      return stringifier.result();
  }
-@@ -1855,6 +2579,19 @@
+@@ -1855,6 +2582,19 @@
  static NEVER_INLINE String stringify(JSGlobalObject& globalObject, JSValue value, JSValue replacer, JSValue space)
  {
      VM& vm = globalObject.vm();
@@ -4103,7 +4106,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
      uint8_t* stackLimit = std::bit_cast<uint8_t*>(vm.softStackLimit());
      if (std::bit_cast<uint8_t*>(currentStackPointer()) >= stackLimit) [[likely]] {
          std::optional<FailureReason> failureReason;
-@@ -1877,6 +2614,13 @@
+@@ -1877,6 +2617,13 @@
                  return result;
          }
      }

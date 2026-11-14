@@ -11,6 +11,11 @@ frames retain their opening length and re-read element storage for every step. T
 1024-byte reservation and soft-stack check remain at `append` entry, but now run at constant
 native depth.
 
+Only the root `append` specialization starts the drain. Nested appends use a separate
+compile-time specialization that opens a container without starting another drain. This
+removes the hot traversal's recursive call graph and its per-container `m_draining` test.
+The test-only resume accounting is a separate helper with guard returns.
+
 A container opens only after frame and root capacity succeed. Frame growth uses fallible vector
 reservation, and root growth records overflow. The 4096-frame nesting cap and either allocation
 refusal restart the existing general `Stringifier` from the root. The fast path runs no JavaScript,
