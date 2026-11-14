@@ -12,6 +12,7 @@ export interface Transport {
   readonly capabilities: Record<string, unknown>;
   readonly processRoot?: number;
   beginCleanup?(admission: Admission): void | Promise<void>;
+  previewFailure?(admission: Admission): Promise<string>;
   nativeClick?(button: string, clicked: string, admission: Admission): Promise<unknown>;
   cleanup?(timeoutMs: number): Promise<CleanupEvidence>;
   navigate(url: string, admission: Admission): Promise<void>;
