@@ -36,7 +36,7 @@
   ],
   "lock": {
     "path": "Cargo.lock",
-    "sha256": "8e71f914b2e6bc09e4234a5041dba7b06118b82ae9072acfb3a16aa18a0a91d1"
+    "sha256": "09f65e560ee4ac0a0ebd14dfb991eabbfe4ccefc37fcf91b8b86686ea9a8b205"
   },
   "crates": [
     {

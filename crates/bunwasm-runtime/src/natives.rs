@@ -998,6 +998,9 @@ fn close_descriptor(state: &State, args: Args<'_>) -> NativeResult {
 
 mod descriptor_read;
 
+#[cfg(all(test, unix, feature = "engine-split"))]
+mod io_copy_tests;
+
 fn read_descriptor(args: Args<'_>) -> NativeResult {
     let fd = args.i32(0)?;
     let length = args.num(1)? as usize;
