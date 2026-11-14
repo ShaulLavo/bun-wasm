@@ -718,6 +718,22 @@ impl Engine for Jsc {
         checked(exc, v)
     }
 
+    fn require_module(&self, name: &str) -> Result<JsVal, JsVal> {
+        let promise = self.import_module(name)?;
+        let mut exc = ptr::null();
+        // SAFETY: the helper holds the VM lock and checks the promise brand.
+        unsafe { bunjsc_promise_mark_handled(ctx(), promise.raw(), &mut exc) };
+        if !exc.is_null() {
+            return Err(JsVal::new(exc));
+        }
+        REJECTIONS.with(|rejections| {
+            rejections
+                .borrow_mut()
+                .retain(|(current, _)| current.raw() != promise.raw());
+        });
+        Ok(promise)
+    }
+
     fn eval_module(&self, name: &str, source: &str) -> Result<JsVal, JsVal> {
         VIRTUAL.with(|v| v.borrow_mut().insert(name.to_owned(), source.to_owned()));
         self.import_module(name)

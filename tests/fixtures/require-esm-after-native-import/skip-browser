@@ -1,0 +1,1 @@
+Browser require uses Bun's CommonJS conversion, so require and import are separate instances (docs/engine-browser.md:125).

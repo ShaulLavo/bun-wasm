@@ -44,8 +44,9 @@ test("ordinary live gate has one runtime owner, no local selection and serial gu
   expect(selectChecks("runtime", checks)).toContain(live);
   expect(selectChecks("quality", checks)).not.toContain(live);
   expect(selectChecks("local-runtime", checks)).not.toContain(live);
-  expect(ordinaryFixtures).toHaveLength(12);
-  expect(ordinaryFixtureTimeout).toBeGreaterThanOrEqual(12 * 65_000);
+  expect(readFileSync(resolve("scripts/spidermonkey-ordinary-fixtures.ts"), "utf8")).toContain("scripts/spidermonkey-engine-semantics.sh");
+  expect(ordinaryFixtures).toHaveLength(16);
+  expect(ordinaryFixtureTimeout).toBeGreaterThanOrEqual(16 * 65_000);
 });
 
 test("ordinary invocation passes explicit inputs once and forces the interpreter", () => {
@@ -69,6 +70,7 @@ test("workflow caches only native work and Cargo objects and exports after its s
   expect(rust.match(/bun scripts\/test-checks.ts native\n/g)).toHaveLength(1);
   expect(rust.indexOf("Export the live-gated ordinary SpiderMonkey pair")).toBeGreaterThan(rust.indexOf("bun scripts/test-checks.ts native\n"));
   expect(rust).toContain("path: ${{ runner.temp }}/ordinary-spidermonkey-program/");
+  expect(rust).toContain("Production SpiderMonkey adapter contains control symbols");
   const cacheKey = rust.split("\n").find(line => line.includes("key: spidermonkey-ordinary-v1-"));
   expect(cacheKey).toContain("steps.ordinary-spidermonkey-inputs.outputs.hash");
   expect(cacheKey).not.toContain("crates/**");

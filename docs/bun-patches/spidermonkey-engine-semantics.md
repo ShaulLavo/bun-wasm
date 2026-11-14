@@ -19,8 +19,15 @@ The adapter targets `mozilla-firefox/firefox` revision
 ## Changes and reasons
 
 - Module evaluation waits on `LoadRequestedModules` before linking and evaluating.
-  Internal reactions forward evaluation settlement without adopting its promise
-  through public `then`. Top-level import adds the namespace reaction afterward.
+  Both import evaluation and synchronous require return the result capability of
+  the reaction that performs the work. A handler refusal therefore rejects that
+  result instead of stranding it and reporting a temporary promise. Require marks
+  its loading promise, result bridge, evaluation capability and pending derived
+  promise handled at birth. Internal promises forwarded to a result capability
+  carry own permanent `then` and `constructor` data properties captured before
+  user code. Mozilla's built-in adoption reads those slots instead of public
+  prototypes. Generic promise-result inspection remains observational.
+  Top-level import adds the namespace reaction afterward.
   Dynamic imports first load the imported module's dependency graph, then finish
   the import from an internal loading-promise reaction. Static graph loads finish
   directly. The opaque native payload is preserved. The earlier direct-path
@@ -130,9 +137,10 @@ the cause or exact expiry state of historical timeouts. Preparation owns child
 groups through cleanup and retains scratch with an error if writers cannot be
 proved stopped. Forced job termination remains the runner's responsibility.
 
-`crates/bunwasm-spidermonkey/tests/engine-semantics.cpp` was initially a deferred
-native regression driver, checked only for syntax against retained headers.
-It does not add a native library build recipe or CI build demand.
+`crates/bunwasm-spidermonkey/tests/engine-semantics.cpp` builds into the
+`engine-semantics` control example when the `controls` feature compiles
+`BUNSM_CONTROLS`. The ordinary SpiderMonkey fixture check builds it once and runs
+both tiers. Control exports and fault sites are absent from production builds.
 
 The November 8 development runs reused the retained Unicode native archive and
 rebuilt the side, core, and launcher. Both tiers passed twelve focused runtime
