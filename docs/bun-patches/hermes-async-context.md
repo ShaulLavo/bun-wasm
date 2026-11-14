@@ -8,7 +8,7 @@
 | Private `_I`, `_O`, `_F`, `_R` and `_V` hooks | Original adapter | Tracker installation and branded owned promises using the same Promise implementation |
 | `OWNED` reaction and private tracker variables | Adapted implementation | Same upstream Promise reaction, adoption and rejection paths |
 | `scripts/fixtures/hermes-promise/01-Promise.js.txt` | Upstream test input | Unchanged `lib/InternalJavaScript/01-Promise.js` at the same pin, SHA-256 `f93d6779a98ee2fa7845dfcd1f9037254e7fa2711cbfcc2bb0e120eeab2b84f2`. Its MIT license is retained beside it. |
-| `scripts/hermes-promise-ownership.test.ts` | Original test adapter | Applies the Promise patch to that input and runs source controls with an explicit job queue and simulated tracker-entry refusal. No live Hermes stack-limit sweep is claimed. |
+| `tests/hermes/promise-ownership.test.ts` | Original test adapter | Applies the Promise patch to that input and runs source controls with an explicit job queue and simulated tracker-entry refusal through the dormant `tests/hermes/run.sh` route, outside normal CI. No live Hermes stack-limit sweep is claimed. |
 
 Each Promise reaction captures the current embedder async context when registered. Queued reactions dispatch without recapturing the resolver's context. The reaction job temporarily installs the captured context and restores the prior context in `finally`. Async functions use the same internal registration path, so `await` follows the same rule.
 

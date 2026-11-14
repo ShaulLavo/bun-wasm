@@ -6,13 +6,13 @@ import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 
 function patchedPromise(): string {
-  const root = resolve(import.meta.dir, "..");
+  const root = resolve(import.meta.dir, "../..");
   const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-hermes-promise-"));
   try {
     const directory = join(scratch, "lib/InternalJavaScript");
     mkdirSync(directory, { recursive: true });
     const output = join(directory, "01-Promise.js");
-    writeFileSync(output, readFileSync(join(import.meta.dir, "fixtures/hermes-promise/01-Promise.js.txt")));
+    writeFileSync(output, readFileSync(join(root, "scripts/fixtures/hermes-promise/01-Promise.js.txt")));
     const patch = readFileSync(join(root, "hermes/hermes-wasi.patch"), "utf8");
     const start = patch.indexOf("diff --git i/lib/InternalJavaScript/01-Promise.js ");
     assert.notEqual(start, -1);

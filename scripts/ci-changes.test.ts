@@ -403,10 +403,10 @@ for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-
 
 for (const event of ["pull_request", "push"]) {
   test(`dormant Hermes recipes do not select native production through an actual ${event} diff`, () => {
-    expect(selectionOutput(base, commitInput("hermes/build.sh"), event))
-      .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
-    expect(selectionOutput(base, commitInput("docs/hermes-engine.md"), event))
-      .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
+    for (const path of ["hermes/build.sh", "docs/hermes-engine.md", "tests/hermes/run.sh", "tests/hermes/promise-ownership.test.ts", "scripts/fixtures/hermes-promise/01-Promise.js.txt"]) {
+      expect(selectionOutput(base, commitInput(path), event))
+        .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
+    }
   });
 }
 
