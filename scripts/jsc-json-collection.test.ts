@@ -54,8 +54,8 @@ test.each(flags.slice(0, 2))("selected JSC keeps the long control opt-in with lo
   expect(result.stderr).not.toContain("ENOENT");
 }, 90_000);
 
-test("explicitly selected JSC fails its existing normal control when the launcher is absent", () => {
-  const result = collect({ ...process.env, BUN_WASM_CHECK_ENGINES: "jsc", BUN_WASM_JSON_LONG_STRESS: "1" }, normalPattern);
+test.each([{ label: "normal", pattern: normalPattern }, { label: "enabled long", pattern: longPattern }])("explicitly selected JSC fails its $label control when the launcher is absent", ({ pattern }) => {
+  const result = collect({ ...process.env, BUN_WASM_CHECK_ENGINES: "jsc", BUN_WASM_JSON_LONG_STRESS: "1" }, pattern);
   expect(result.status, result.stderr).toBe(1);
   expect(result.stderr).toContain("ENOENT");
   expect(result.stderr).toContain("absent-launcher");
