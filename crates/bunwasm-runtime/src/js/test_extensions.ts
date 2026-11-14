@@ -8,11 +8,15 @@
   const inspect = internal.require("inspect").bunInspect;
   const { settle } = internal.require("test_matchers");
 
-  function register(matchers: object, define: (name: string, matcher: Matcher) => void) {
+  function register(matchers: unknown, define: (name: string, matcher: Matcher) => void) {
+    if (matchers === null || typeof matchers !== "object" && typeof matchers !== "function") {
+      throw new TypeError("expect.extend(matchers)\n\nExpected an object containing matchers");
+    }
     const seen = new Set<string>();
     let owner = matchers;
     while (owner && owner !== Object.prototype && owner !== Function.prototype) {
-      for (const name of Object.getOwnPropertyNames(owner)) {
+      const names = typeof owner === "function" ? Object.keys(owner) : Object.getOwnPropertyNames(owner);
+      for (const name of names) {
         if (seen.has(name) || (name === "constructor" && owner !== matchers)) continue;
         seen.add(name);
         registerProperty(matchers, name, define);
@@ -30,12 +34,16 @@
     define(name, matcher as Matcher);
   }
 
+  function invalidResult(name: string, result: unknown): never {
+    throw new Error(`Unexpected return from matcher function \`${name}\`.\nMatcher functions should return an object in the following format:\n  {message?: string | function, pass: boolean}\n'${inspect(result)}' was returned`);
+  }
+
   function failure(name: string, result: unknown, not: boolean) {
-    if (result === null || typeof result !== "object" || !("pass" in result) || result.pass === undefined) {
-      throw new Error(`Unexpected return from matcher function \`${name}\`.\nMatcher functions should return an object in the following format:\n  {message?: string | function, pass: boolean}\n'${inspect(result)}' was returned`);
-    }
-    if (!!result.pass !== not) return null;
-    const message = "message" in result ? result.message : undefined;
+    if (result === null || typeof result !== "object") invalidResult(name, result);
+    const pass: unknown = Reflect.get(result, "pass");
+    if (pass === undefined) invalidResult(name, result);
+    if (!!pass !== not) return null;
+    const message: unknown = Reflect.get(result, "message");
     const value: unknown = typeof message === "function" ? message.call(result) : message;
     return { raw: true, body: value === undefined ? "No message was specified for this matcher." : String(value) };
   }

@@ -26,6 +26,25 @@ const cases: [string, () => unknown][] = [
       );
     }
   }],
+  ["registration collections", () => {
+    for (const value of [null, undefined, 0, false, "matchers"]) {
+      expect(() => Reflect.apply(expect.extend, expect, [value])).toThrow("Expected an object containing matchers");
+    }
+    expect(() => expect.extend(() => {})).not.toThrow();
+  }],
+  ["proxy result properties", () => {
+    let reads = 0;
+    const result = new Proxy({ get pass() { reads++; return true; } }, {
+      has() { throw new Error("unexpected has trap"); },
+    });
+    expect.extend({ proxyPass: () => result });
+    call("proxyPass");
+    expect(reads).toBe(1);
+    expect.extend({ proxyFailure: () => new Proxy({ pass: false, message: "proxy custom failure" }, {
+      has: (_target, name) => name === "pass",
+    }) });
+    expect(() => call("proxyFailure")).toThrow("proxy custom failure");
+  }],
   ["invalid result diagnostics", () => {
     for (const value of [undefined, 42, {}]) {
       expect.extend(Object.fromEntries([["invalidResult", () => value]]));

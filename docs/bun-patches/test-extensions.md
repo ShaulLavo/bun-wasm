@@ -12,12 +12,16 @@ Registration visits string properties through the supplied object's prototype
 chain, including non-enumerable class methods. It skips inherited constructors
 and built-in object/function prototypes, and keeps the nearest property when
 names are shadowed. Invalid matcher values fail during registration.
+Primitive collections fail at registration. Function collections retain their
+enumerable matcher entries without treating built-in function metadata as matchers.
 
 Symmetric results use the existing promise-settlement adapter before validation.
 An object must have a defined `pass` property, whose truthiness determines the
 result. Invalid results include their inspected value in the diagnostic. Failure
 messages are evaluated lazily and converted to strings, preserving conversion
 errors. The color helpers use the existing colorless inspector.
+Result fields use property reads without Proxy existence checks. The pass value
+is read once, and the message is read only for a failing result.
 
 The native oracle does not register a uniquely named inherited class method.
 The pinned upstream class test reuses the preceding prototype test's matcher
