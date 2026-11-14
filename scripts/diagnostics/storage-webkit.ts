@@ -21,7 +21,6 @@ const contexts: BrowserContext[] = [];
 const bundle = await Bun.build({ entrypoints: [join(import.meta.dir, "storage-webkit-observer.ts")], target: "browser" });
 if (!bundle.success) throw new Error(String(bundle.logs));
 const observer = await bundle.outputs[0]!.text();
-const task = session("storage-webkit-diagnostic-");
 const pageReports = new Map<Page, { label: string; console: unknown[]; errors: string[] }>();
 let nextPage = 0;
 async function observe(context: BrowserContext, label: string) {
@@ -51,6 +50,7 @@ async function edit(page: Page, path: string, text: string) {
   await marker(page, `after edit ${path}`);
 }
 const beforeRoot = process.env.ROOT;
+const task = session("storage-webkit-diagnostic-");
 try {
   browser = await task.launch(webkit);
   process.env.ROOT = join(artifact, "site");
@@ -86,9 +86,10 @@ try {
     });
     const close = context.close.bind(context);
     context.close = async options => {
-      await Promise.all(context.pages().map(retain));
-      await context.tracing.stop({ path: join(report, "preservation-trace.zip") });
-      await close(options);
+      try {
+        await Promise.all(context.pages().map(retain));
+        await context.tracing.stop({ path: join(report, "preservation-trace.zip") });
+      } finally { await close(options); }
     };
     return context;
   };
@@ -99,10 +100,13 @@ try {
   writeFileSync(join(report, "result.json"), JSON.stringify({ outcome: "failed", error: String(error), stack: error instanceof Error ? error.stack : undefined }));
   throw error;
 } finally {
-  await Promise.all(Array.from(pageReports.keys(), retain));
-  await Promise.all(contexts.map(context => context.tracing.stop({ path: join(report, `final-trace-${contexts.indexOf(context)}.zip`) }).catch(() => {})));
-  if (beforeRoot === undefined) delete process.env.ROOT;
-  else process.env.ROOT = beforeRoot;
-  await task.cleanup();
-  writeFileSync(join(report, "cleanup.json"), JSON.stringify({ taskScratch: task.scratch, taskScratchRemoved: !existsSync(task.scratch), taskCleanup: "resolved" }));
+  try {
+    await Promise.all(Array.from(pageReports.keys(), retain));
+    await Promise.all(contexts.map(context => context.tracing.stop({ path: join(report, `final-trace-${contexts.indexOf(context)}.zip`) }).catch(() => {})));
+  } finally {
+    if (beforeRoot === undefined) delete process.env.ROOT;
+    else process.env.ROOT = beforeRoot;
+    await task.cleanup();
+    writeFileSync(join(report, "cleanup.json"), JSON.stringify({ taskScratch: task.scratch, taskScratchRemoved: !existsSync(task.scratch), taskCleanup: "resolved" }));
+  }
 }
