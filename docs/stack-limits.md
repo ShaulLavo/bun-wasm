@@ -789,6 +789,31 @@ Angular stops in Ajv's getter recursion. The budget stays 192 KiB. The existing
 `BUN_WASM_JSC_PARSER_RESERVE=832` override remains available for experiments on the measured host;
 other hosts are not qualified by these results.
 
+## SpiderMonkey on small stacks
+
+SpiderMonkey's logical counter (350 units) does not fire before a 512 KiB WebKit worker stack
+runs out on any reentry path, so unbounded getter, `.call` or Ajv-style recursion traps there.
+The engine's own byte check (`JS_SetNativeStackQuota`) counts shadow bytes, so
+`BUN_WASM_STACK_KIB` now sets it, and the recursive paths that hold few shadow bytes per host
+byte reserve more (`docs/bun-patches/spidermonkey-stack-budget.md` lists each site and size).
+With the reservations, every path holds about 0.2 shadow bytes per host byte on a cold worker.
+
+Measured on Playwright WebKit 27.2 under `ulimit -s 512`, one fresh page per attempt, the guest
+catches unbounded input on every runtime and compile path at quotas up to 91 KiB (nested
+parentheses and function expressions, interp) to 256 KiB (paths the counter stops first).
+Statement nesting such as Ajv's generated validators is caught up to 109 KiB (interp) and
+115 KiB (PBL). In the native launcher, loading Next's webpack hook needs 117 KiB (interp) and
+129 KiB (PBL), and the guest's bootstrap 43 and 48 KiB.
+
+The two conflict, and no reservation size resolves it. Next's deepest compile path is the same
+statement nesting, 83 levels of an Ajv validator in `next/dist/compiled/webpack/bundle5.js`. Cold,
+those 83 levels need about 460 KiB of host stack. They fit in Safari only because the 2.5 MB
+bundle has warmed the parser's wasm into JavaScriptCore's optimized tier by then: compiled
+alone with no quota, the bundle needs 256 to 320 KiB of host stack. A byte budget cannot see that
+tier. A value at Next's need leaves cold statement nesting deeper than about 85 levels trapping.
+A value safe for cold nesting refuses Next. Until that choice is made, no host family passes a
+SpiderMonkey quota.
+
 ## Historical nested require measurements
 
 This common-loader snapshot predates the native-call dispatcher split, parser
