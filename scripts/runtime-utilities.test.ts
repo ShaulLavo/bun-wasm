@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
+import { loadBufferSource } from "./buffer-source.ts";
 
 const root = resolve(import.meta.dir, "..");
 const scratch = mkdtempSync(join(process.env.RUNNER_TEMP ?? process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-typed-utilities-"));
@@ -16,9 +17,7 @@ function factory(name: string) {
 }
 
 test("Buffer.copyBytesFrom validates offsets and lengths before slicing a view", () => {
-  const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/buffer.js"), "utf8");
-  const adapter = runInNewContext(source, { TextEncoder, TextDecoder });
-  const { Buffer: RuntimeBuffer } = adapter({ describe: String, require: () => { throw new Error("unexpected inspect"); } });
+  const { Buffer: RuntimeBuffer } = loadBufferSource();
   const input = Uint16Array.of(0x0201, 0x0403);
   expect(Array.from(RuntimeBuffer.copyBytesFrom(input, 1, 1))).toEqual(Array.from(Buffer.copyBytesFrom(input, 1, 1)));
   for (const [offset, length] of [[-1, undefined], [1.5, undefined], [1, -1], [1, 1.5]] as const) {
@@ -39,9 +38,7 @@ test.each([
   ["offset past end with negative length", Uint16Array.of(1, 2), 3, -1],
   ["offset past end with fractional length", Uint16Array.of(1, 2), 3, 1.5],
 ] as const)("Buffer.copyBytesFrom preserves %s", (_name, input, offset, length) => {
-  const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/buffer.js"), "utf8");
-  const adapter = runInNewContext(source, { TextEncoder, TextDecoder });
-  const { Buffer: RuntimeBuffer } = adapter({ describe: String, require: () => { throw new Error("unexpected inspect"); } });
+  const { Buffer: RuntimeBuffer } = loadBufferSource();
   const native = Buffer.copyBytesFrom(input, offset, length);
   expect(native.length).toBe(0);
   const copied = RuntimeBuffer.copyBytesFrom(input, offset, length);

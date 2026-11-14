@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/wasm-validation.test.ts",
+  "localRuntime": true
+}

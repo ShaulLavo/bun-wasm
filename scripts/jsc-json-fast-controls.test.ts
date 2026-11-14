@@ -242,20 +242,25 @@ const graph = stressGraph();
 const deep = chain(4095);
 const ballastBytes = Number(process.env.BUN_WASM_JSON_BALLAST_BYTES || 0);
 const ballast = ballastBytes ? new Uint8Array(ballastBytes) : null;
+const retainedBytes = Number(process.env.BUN_WASM_JSON_RETAIN_BYTES || 0);
+let retained = null;
 const donor = process.env.BUN_WASM_JSON_DONOR === "1";
 Bun.gc(true);
 sampleMemory("pre");
-for (let batch = 0; batch < 2; batch++) {
+for (let batch = 0; batch < 3; batch++) {
   for (let run = 0; run < 50; run++) {
     assert.equal(JSON.stringify(graph), JSON.stringify(graph, (_k, v) => v));
     assert.equal(JSON.stringify(deep, donor ? (_k, v) => v : undefined), JSON.stringify(deep, (_k, v) => v));
   }
+  if (batch === 1 && retainedBytes) retained = new Uint8Array(retainedBytes);
+  sampleMemory("peak " + batch);
   Bun.gc(true);
-  sampleMemory("batch " + batch);
+  sampleMemory("recovered " + batch);
 }
 assert.ok(graph);
 assert.ok(deep);
 assert.equal(ballast ? ballast.length : 0, ballastBytes);
+assert.equal(retained ? retained.length : 0, retainedBytes);
 console.log("pressure passed");
 `;
 
@@ -265,64 +270,76 @@ const ballastBytes = Number(process.env.BUN_WASM_JSON_BALLAST_BYTES || 0);
 const ballast = ballastBytes ? new Uint8Array(ballastBytes) : null;
 Bun.gc(true);
 sampleMemory("pre");
-for (let batch = 0; batch < 2; batch++) {
+for (let batch = 0; batch < 3; batch++) {
   for (let run = 0; run < 3; run++)
     assert.equal(JSON.stringify(graph), JSON.stringify(graph, (_k, v) => v));
+  sampleMemory("peak " + batch);
   Bun.gc(true);
-  sampleMemory("batch " + batch);
+  sampleMemory("recovered " + batch);
 }
 assert.ok(graph);
 assert.equal(ballast ? ballast.length : 0, ballastBytes);
 console.log("pressure passed");
 `;
 
-function assertRecovery(result: Run, noBallastPre?: RecordLine): RecordLine {
-  expect(result.memory).toHaveLength(3);
-  expect(result.linear).toHaveLength(3);
-  const ownPre = result.memory[0];
-  const allowancePre = noBallastPre ?? ownPre;
-  assert.ok(ownPre && allowancePre);
-  for (const post of result.memory.slice(1)) {
-    expect(Number(post.heapUsed) - Number(ownPre.heapUsed)).toBeLessThanOrEqual(256 * 1024 + Number(allowancePre.heapUsed) * 0.1);
-    expect(Number(post.live) - Number(ownPre.live)).toBeLessThanOrEqual(256 * 1024 + Number(allowancePre.live) * 0.1);
-    assert.ok("extraMemory" in post);
+function assertRecovery(result: Run): void {
+  const readings = result.memory.map((memory, index) => ({ label: result.linear[index]?.label, ...memory }));
+  const diagnostics = JSON.stringify(readings);
+  expect(result.memory, diagnostics).toHaveLength(7);
+  expect(result.linear, diagnostics).toHaveLength(7);
+  const pre = result.memory[0];
+  const recovered = result.memory.filter((_, index) => index > 0 && index % 2 === 0);
+  const first = recovered[0];
+  assert.ok(pre && first, diagnostics);
+  // JSC retains warmed tables and arenas. Their one-time cost must not become a per-cycle allowance.
+  for (const metric of ["live", "heapUsed"]) {
+    for (const post of recovered) {
+      const recovery: number = Number(post[metric]) - Number(pre[metric]);
+      const growth: number = Number(post[metric]) - Number(first[metric]);
+      assert.ok(recovery <= 8 * 1024 * 1024, `${metric} did not recover within 8 MiB: ${diagnostics}`);
+      assert.ok(growth <= 256 * 1024, `${metric} recovery grew by more than 256 KiB: ${diagnostics}`);
+    }
   }
-  return result.memory[0]!;
 }
 
-function assertRecordPressure(result: Run, noBallastPre?: RecordLine): RecordLine {
+function assertRecordPressure(result: Run): void {
   expect(result.stdout).toContain("pressure passed");
   const stress = result.records.filter(record => record.outcome === "success" && record.maxFrames === 1001);
-  expect(stress).toHaveLength(100);
+  expect(stress).toHaveLength(150);
   const attempts = result.records.filter(record => record.maxFrames === 305 || record.maxFrames === 1001);
-  expect(attempts).toHaveLength(200);
-  for (const index of [0, 50]) {
+  expect(attempts).toHaveLength(300);
+  for (const index of [0, 50, 100]) {
     const materializations = Number(attempts[index * 2]?.materializations) + Number(attempts[index * 2 + 1]?.materializations);
     expect(materializations).toBeGreaterThanOrEqual(20000);
   }
-  return assertRecovery(result, noBallastPre);
+  assertRecovery(result);
 }
 
-function assertCollectionPressure(result: Run, noBallastPre?: RecordLine): RecordLine {
+function assertCollectionPressure(result: Run): void {
   expect(result.stdout).toContain("pressure passed");
   const stress = result.records.filter(record => record.outcome === "success" && record.maxFrames === 21);
-  expect(stress).toHaveLength(6);
+  expect(stress).toHaveLength(9);
   for (const record of stress) {
     expect(Number(record.collectionsWithLiveFrames)).toBeGreaterThan(0);
     expect(Number(record.materializations)).toBeGreaterThanOrEqual(1);
     expect(record.rootsEverRegistered).toBe(true);
   }
-  return assertRecovery(result, noBallastPre);
+  assertRecovery(result);
 }
 
 const ballast = { BUN_WASM_JSON_BALLAST_BYTES: String(Math.floor(1073741824 * 0.7)) };
 
 test("repeated record pressure recovers heap and allocator bytes with ballast", () => {
-  const pre = assertRecordPressure(run("record", pressureSource));
-  assertRecordPressure(run("record", pressureSource, ballast), pre);
+  assertRecordPressure(run("record", pressureSource));
+  assertRecordPressure(run("record", pressureSource, ballast));
 }, 600_000);
 
 test("bounded collection pressure recovers heap and allocator bytes with ballast", () => {
-  const pre = assertCollectionPressure(run("collect-at-open:7", collectionPressureSource));
-  assertCollectionPressure(run("collect-at-open:7", collectionPressureSource, ballast), pre);
+  assertCollectionPressure(run("collect-at-open:7", collectionPressureSource));
+  assertCollectionPressure(run("collect-at-open:7", collectionPressureSource, ballast));
+}, 600_000);
+
+test("recovery rejects a 384 KiB buffer retained across pressure cycles with ballast", () => {
+  const result = run("record", pressureSource, { ...ballast, BUN_WASM_JSON_RETAIN_BYTES: String(384 * 1024) });
+  expect(() => assertRecovery(result)).toThrow("live recovery grew by more than 256 KiB");
 }, 600_000);

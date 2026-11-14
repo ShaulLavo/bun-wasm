@@ -1,4 +1,4 @@
-use crate::data::{NativeError, NativeResult, Val, codec, drop_tree};
+use crate::data::{NativeError, NativeResult, Val, WORD_ARGS, codec, drop_tree};
 use crate::ops;
 use crate::transport::{
     TransportBuffer, bun_core_dispatch, bun_core_exit, bun_core_idle, bun_core_poll,
@@ -7,9 +7,44 @@ use crate::transport::{
 #[derive(Clone, Copy)]
 pub(crate) struct CoreClient {
     pub(crate) session: u32,
+    /// The one frame every word call reuses, allocated before any program code runs.
+    word_frame: u32,
 }
 
 impl CoreClient {
+    pub(crate) fn new(session: u32) -> Self {
+        let frame = TransportBuffer::new(ops::WordFrame::SIZE as u32).expect("word call frame");
+        let word_frame = frame.pointer;
+        // Kept for the life of the process, like the engine itself.
+        std::mem::forget(frame);
+        Self {
+            session,
+            word_frame,
+        }
+    }
+
+    /// Calls a word native through the preallocated frame. This function allocates nothing and
+    /// returns no error: the call yields its result, or the guest ends on a broken transport.
+    pub(crate) fn word(self, op: u32, words: [u32; WORD_ARGS]) -> i64 {
+        let frame = self.word_frame as *mut u32;
+        // SAFETY: core allocated WordFrame::SIZE bytes, 8-aligned, at word_frame for this
+        // client's life. Word natives never reenter the engine, so one call uses it at a time.
+        unsafe {
+            frame.write(op);
+            frame.add(1).write(self.session);
+            std::ptr::copy_nonoverlapping(words.as_ptr(), frame.add(2), WORD_ARGS);
+        }
+        let status = unsafe { bun_core_dispatch(self.word_frame) };
+        assert_eq!(status, ops::Status::Ok as u32, "terminal core word call");
+        // SAFETY: as above; core wrote the result at this 8-aligned offset.
+        unsafe {
+            (self.word_frame as *const u8)
+                .add(ops::WordFrame::RESULT)
+                .cast::<i64>()
+                .read()
+        }
+    }
+
     pub(crate) fn call(self, op: u32, args: Vec<Val>) -> NativeResult {
         let args = Val::Array(args);
         let request = request(&args);
@@ -77,6 +112,8 @@ fn allocation_failed<T>() -> Result<T, NativeError> {
 
 pub(crate) struct NativeTable {
     pub(crate) functions: Vec<String>,
+    /// Word natives, in operation order.
+    pub(crate) words: Vec<String>,
     pub(crate) constants: Vec<(String, Val)>,
 }
 
@@ -143,11 +180,13 @@ impl CoreClient {
     pub(crate) fn natives(self) -> Result<NativeTable, NativeError> {
         let description = self.call(crate::split_api::DESCRIBE, vec![])?;
         let functions = strings(field(description.clone(), "functions")?)?;
+        let words = strings(field(description.clone(), "words")?)?;
         let Val::Object(constants) = field(description, "constants")? else {
             return Err(malformed());
         };
         Ok(NativeTable {
             functions,
+            words,
             constants,
         })
     }

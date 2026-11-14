@@ -15,7 +15,7 @@ const warm = read("jsc-prebuild.yml");
 const warmJobs = record(warm.jobs);
 const pcLabels = ["self-hosted", "linux", "x64", "pc", "bun-wasm"];
 const routed = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "web", "web-unit", "web-browser", "browser-guest", "browser-process"];
-const light = ["selection", "quality", "package", "process-bundles", "ci-result", "update-status"];
+const hosted = ["selection", "quality", "package", "process-bundles", "shared-native", "shared-browser", "shared-proof", "ci-result", "update-status"];
 const trust = "github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'";
 
 type Selection = { rust: boolean; shared: boolean; native: boolean };
@@ -71,7 +71,7 @@ function graph(input: Scenario, selection: Selection, failed = ""): Record<strin
 }
 
 test("one existing job per check retains the dependency graph and every blocker", () => {
-  expect(Object.keys(jobs).sort()).toEqual(routed.concat(light).sort());
+  expect(Object.keys(jobs).sort()).toEqual(routed.concat(hosted).sort());
   expect(Object.keys(warmJobs).sort()).toEqual(["identity", "jsc-prebuild", "shared-identity", "shared-prebuild"]);
   expect(record(jobs.rust).needs).toEqual(["selection", "jsc-prebuild", "native-quality"]);
   expect(record(jobs["shared-sysroot"]).needs).toEqual(["selection", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
@@ -109,7 +109,7 @@ for (const event of events) test(`scheduler routes ${event.event} ${event.ref} $
       expect(ciRunner(job["runs-on"], values(input)), id).toEqual(labels);
       expect(admitted(job, input, selected, Object.fromEntries(dependencies(job).map(id => [id, "success"]))), id).toBe(true);
     }
-    for (const id of light) expect(ciRunner(record(jobs[id])["runs-on"], values(input)), id).toEqual(["ubuntu-latest"]);
+    for (const id of hosted) expect(ciRunner(record(jobs[id])["runs-on"], values(input)), id).toEqual(["ubuntu-latest"]);
     for (const value of Object.values(warmJobs)) {
       expect(record(value).if).toContain(trust);
       expect(ciRunner(record(value)["runs-on"], values(input))).toEqual(labels);

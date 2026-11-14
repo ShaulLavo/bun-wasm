@@ -19,18 +19,25 @@ in `BUN_WASM_BROWSER_SITE`; each check verifies the site's closed inventory, gue
 receipt against the checkout before and after the browsers run, and never bundles it again.
 A local run without that variable builds a site in scratch from `dist/bun-browser.wasm`.
 Split native manifests default to QuickJS and may declare an `engines` array
-containing a nonempty, unique subset of `quickjs`, `jsc` and `browser`.
+containing a nonempty, unique subset of `quickjs`, `jsc`, `browser` and `spidermonkey`.
 The native runner runs the runtime preflight once, then executes each
 declared engine's fixtures without rebuilding guests or increasing fixture-group
 concurrency. CI consumes only the producers selected by its explicit
-`INSTALL_ENGINES` subset; missing artifacts for selected engines fail. Without
+`BUN_WASM_CHECK_ENGINES` subset; missing artifacts for selected engines fail. Without
 that subset, local runs consume every declared engine. JSC selections require
 its normal producer, including when the
 manifest or fixture is removed. Shared-group manifests continue to infer their
 engine from their matching producer and cannot declare `engines`.
 
-Native paths name a directory under
-`tests/fixtures/`. Native manifests may select `"profile": "shared-group"`; omission
+Native paths name a directory under `tests/fixtures/`. The existing native gate
+compares stdout, stderr and the expected exit through `test.sh`. SpiderMonkey
+requires an absolute `SPIDERMONKEY_WASM` and runs the interpreter tier. CI includes
+that producer in `BUN_WASM_CHECK_ENGINES`. The separate installer matrix and the
+installer checks inside runtime preflight use `INSTALL_ENGINES`, retaining their
+three supported engines.
+Changed targeted fixtures and manifests select JSC from the verified base, head
+and merge ancestor, including removals. Missing selected inputs fail the gate.
+Native manifests may select `"profile": "shared-group"`; omission
 keeps the ordinary split producer and selection. The shared PIC job consumes the
 Rust job's launcher and one matching group core/QuickJS pair through
 `bun scripts/test-checks.ts native --profile shared-group`. A `browser-guest` manifest may
@@ -91,7 +98,7 @@ A selected missing artifact fails the check. No file-existence filter changes se
 
 Package tests and Web's own test directory keep their existing narrow globs.
 Do not also register those files. Browser matrix jobs, deadlines, environment,
-engine selection, cache inputs, conditional gates and shared artifact producers
+producer selection, cache inputs, conditional gates and shared artifact producers
 stay in their existing scripts and workflow steps. The CMake probe remains after
 its prerequisite step. No discovered native fixture can request a rebuild.
 
@@ -114,6 +121,28 @@ Feature PRs also run `scripts/feature-versions.ts <base-sha> <head-sha>` in qual
 CI. It rejects package, Cargo and local lockfile version churn. Release and
 required consumer-pin PRs use their corresponding `release` or `consumer-pin`
 label to identify the deliberate exception. No label is needed for feature work.
+
+## A shared-group fixture with more than one command
+
+A native check with `"profile": "shared-group"` may add `"entry": "<name>"` in a second
+manifest for the same fixture directory. The entry names another command of the fixture: the
+runner reads `cmd.<name>` and compares stdout with `expected.<name>.txt`, where a manifest
+without an entry uses `cmd` and `expected.txt`. Each command runs once, or once per
+SpiderMonkey tier, with the same 120,000 ms bound, and a wrong exit, wrong output or timeout
+of either fails the native shared-group owner.
+
+- A check's identity is its owner, profile, path and entry. Its id is the path, or
+  `path#entry`, and that id is what selection, batching, the runner's arguments and its
+  result labels carry. Two commands of one fixture share a path, so nothing compares paths.
+- An entry name is lowercase letters and digits in words joined by single hyphens, at most
+  32 characters. Both of its files must be regular files in the fixture, checked at discovery
+  and again before launch. The command is passed as an argument vector.
+- The same id twice is an error, and so are two manifests without an entry for one path.
+  Only native shared-group checks may share a path. No other owner or profile takes an entry.
+
+`tests/fixtures/shared-wasm-memory` uses this for its 200-worker lane lifetime run
+(`checks/native-shared-wasm-memory-lifetime.json`, `cmd.lifetime`), which then starts one
+more guest to show that the launcher still serves a new group.
 
 ## Native probes consume a producer checkpoint
 

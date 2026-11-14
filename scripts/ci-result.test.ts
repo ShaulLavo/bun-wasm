@@ -5,11 +5,12 @@ import { requireCiSuccess } from "./ci-result";
 
 const always = ["selection", "quality", "package", "web", "web-unit", "web-browser", "process-bundles", "browser-process"];
 const rustJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "browser-guest"];
-const sharedJobs = ["shared-jsc-identity", "shared-prebuild", "shared-sysroot"];
-const jobIds = always.concat(rustJobs, sharedJobs, ["shared-spidermonkey-prebuild"]);
+const sharedJobs = ["shared-jsc-identity", "shared-prebuild", "shared-sysroot", "shared-proof"];
+const sharedNativeJobs = ["shared-spidermonkey-prebuild", "shared-native", "shared-browser"];
+const jobIds = always.concat(rustJobs, sharedJobs, sharedNativeJobs);
 
 function fixture(rust = true, shared = true, sharedNative = true) {
-  const enabled = new Set(always.concat(rust ? rustJobs : [], shared || sharedNative ? sharedJobs : [], sharedNative ? ["shared-spidermonkey-prebuild"] : []));
+  const enabled = new Set(always.concat(rust ? rustJobs : [], shared || sharedNative ? sharedJobs : [], sharedNative ? sharedNativeJobs : []));
   return Object.fromEntries(jobIds.map(id => [id, { result: enabled.has(id) ? "success" : "skipped",
     outputs: id === "selection" ? { rust: String(rust), shared: String(shared), "shared-native": String(sharedNative) } : {} }]));
 }
@@ -70,7 +71,7 @@ test("selection fans out before source probes, with both results retained by the
   expect(object(jobs.quality).needs).toBe("selection");
   expect(object(jobs.selection).outputs).toMatchObject({ base: "${{ steps.refs.outputs.base }}", head: "${{ steps.refs.outputs.head }}" });
   for (const [id, value] of Object.entries(jobs)) {
-    if (["quality", "ci-result", "update-status"].includes(id)) continue;
+    if (["quality", "shared-proof", "ci-result", "update-status"].includes(id)) continue;
     const job = object(value);
     const dependencies = Array.isArray(job.needs) ? job.needs : [job.needs];
     expect(dependencies, id).not.toContain("quality");
