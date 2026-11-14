@@ -1,0 +1,61 @@
+name: Storage WebKit diagnostic
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened]
+    paths:
+      - .github/workflows/storage-webkit-diagnostic.yml
+      - scripts/diagnostics/storage-webkit.ts
+      - scripts/diagnostics/storage-webkit-observer.ts
+permissions:
+  contents: read
+  actions: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+      - name: Install locked diagnostic dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+      - uses: actions/checkout@v4
+        with:
+          ref: 36e8a3bcdf7bcb31835adf15991f71b10c608c03
+          path: subject
+      - name: Attach identical locked tools to the read-only subject
+        run: ln -s "$GITHUB_WORKSPACE/node_modules" subject/node_modules
+      - uses: ./.github/actions/browser-deps
+        with:
+          browsers: webkit
+      - run: bunx playwright install webkit
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 43516069702
+          artifact-ids: 14082579799
+          path: ${{ runner.temp }}/producer
+          merge-multiple: true
+      - name: Qualify observer then run preservation once
+        env:
+          DIAGNOSTIC_HEAD: ${{ github.sha }}
+          STORAGE_SUBJECT: ${{ github.workspace }}/subject
+          BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/producer
+          BUN_WASM_BROWSER_REPORT_DIR: ${{ runner.temp }}/storage-webkit-report
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          source env.sh
+          bun scripts/run-with-timeout.mts 600 bun scripts/diagnostics/storage-webkit.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: storage-webkit-diagnostic-${{ github.run_id }}
+          path: ${{ runner.temp }}/storage-webkit-report
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove owned subject and producer
+        if: always()
+        run: |
+          rm -rf "$GITHUB_WORKSPACE/subject" "$RUNNER_TEMP/producer"
