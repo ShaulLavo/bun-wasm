@@ -213,7 +213,7 @@ fn require_esm<E: Engine>(e: &E, core: &Core<E>, path: &str) -> Result<E::Value,
     }
     match e.promise_state(&promise) {
         Some(PromiseState::Rejected) => Err(e.promise_result(&promise)),
-        Some(PromiseState::Pending) => Err(e.error_value(&NativeError::error(format!(
+        Some(PromiseState::Pending) => Err(e.error_value(&NativeError::type_error(format!(
             "require() async module \"{path}\" is unsupported. use \"await import()\" instead."
         )))),
         _ => Ok(e.promise_result(&promise)),

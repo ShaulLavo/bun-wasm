@@ -87,6 +87,7 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/engine.cpp");
     println!("cargo:rerun-if-changed=cpp/engine.h");
     println!("cargo:rerun-if-changed=tests/engine-semantics.cpp");
+    println!("cargo:rerun-if-changed=tests/require-recovery.cpp");
     println!("cargo:rustc-link-search=native={}", native.display());
     println!("cargo:rustc-link-search=native={}", libcxx.display());
     println!("cargo:rustc-link-lib=static=spidermonkey_g2");

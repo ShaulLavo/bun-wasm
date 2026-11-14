@@ -276,3 +276,6 @@ mod transfer_fault;
 #[cfg(test)]
 #[path = "../build/transfer_fault.rs"]
 mod transfer_fault_option;
+
+#[cfg(test)]
+mod json_tests;

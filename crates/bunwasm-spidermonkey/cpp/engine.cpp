@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <new>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -37,6 +38,8 @@
 #include "js/WeakMap.h"
 #include "js/experimental/TypedData.h"
 #include "js/friend/MicroTask.h"
+#include "js/AllocPolicy.h"
+#include "mozilla/Vector.h"
 
 namespace {
 struct Slot {
@@ -55,7 +58,24 @@ JS::PersistentRootedValue* objectKeys = nullptr;
 JS::PersistentRootedValue* errorConstructors[4] = {};
 std::vector<Slot*> slots;
 std::vector<uint32_t> freeSlots;
-std::unordered_map<std::string, JS::PersistentRootedObject*> modules;
+struct ModuleEntry;
+using EntryVector = mozilla::Vector<ModuleEntry*, 0, js::SystemAllocPolicy>;
+struct ModuleEntry {
+  std::string name;
+  JS::PersistentRootedObject record;
+  uint64_t generation;
+  EntryVector imports, importers;
+  bool importAcquired = false, untrackedImporter = false, retired = false;
+  uint64_t mark = 0;
+  ModuleEntry* nextWork = nullptr;
+  ModuleEntry* nextRetired = nullptr;
+  ModuleEntry(const std::string& name, JS::HandleObject module, uint64_t generation)
+      : name(name), record(context, module), generation(generation) {}
+};
+std::unordered_map<std::string, ModuleEntry*> modules;
+ModuleEntry* retiredHead = nullptr;
+uint32_t activeSnapshots = 0;
+uint64_t nextGeneration = 1, passEpoch = 0;
 JS::PersistentRootedObject* externalBuffers = nullptr;
 uintptr_t stackBase = 0;
 bool interruptible = false;
@@ -69,6 +89,8 @@ bsm_handle controlBridge = 0;
 bsm_handle controlEvaluation = 0;
 bsm_handle controlDerived = 0;
 bool controlRequireEntered = false;
+const char* controlOutcome = "not entered";
+void (*controlObserver)(const char*) = nullptr;
 std::string controlPhase;
 std::unordered_map<std::string, uint32_t> controlUses;
 std::string controlFaultSite;
@@ -87,6 +109,15 @@ uint64_t controlJobsEntered = 0;
 bool controlInJob = false;
 uint32_t controlHeapParameters[3] = {};
 JS::GCSliceCallback controlPreviousSlice = nullptr;
+std::string controlHoldSite, controlHoldName;
+struct ControlHold {
+  std::string name;
+  JS::PersistentRootedObject module, closure, promise;
+  ControlHold(const std::string& name, JS::HandleObject module,
+              JS::HandleObject closure, JS::HandleObject promise)
+      : name(name), module(context, module), closure(context, closure), promise(context, promise) {}
+};
+std::vector<ControlHold*> controlHolds;
 
 void control_reset_require() {
   bsm_release(controlLoading);
@@ -95,24 +126,39 @@ void control_reset_require() {
   bsm_release(controlDerived);
   controlLoading = controlBridge = controlEvaluation = controlDerived = 0;
   controlRequireEntered = false;
+  controlOutcome = "not entered";
   controlPhase = "requireSetup";
   controlObserved.clear();
 }
 
 void control_phase(const char* phase) { controlPhase = phase; }
 
+// A fault armed as "*:<site>" matches that site in any phase, for sites reached from script
+// code that sets no phase of its own.
 bool control_fault(const char* site) {
   std::string key = controlPhase + ":" + site;
   uint32_t use = ++controlUses[key];
-  if (key != controlFaultSite || use != controlFaultNth) return false;
+  std::string anyPhase = std::string("*:") + site;
+  if (controlFaultSite == anyPhase) use = ++controlUses[anyPhase];
+  else if (key != controlFaultSite) return false;
+  if (use != controlFaultNth) return false;
   if (controlFaultKind == 1) JS_ReportOutOfMemory(context);
   if (controlFaultKind == 3) terminating = true;
   return true;
 }
+void recovery_outcome(const char* outcome) { controlOutcome = outcome; }
+void control_observe(const char* point) {
+  controlObserved = point;
+  if (controlObserver) controlObserver(point);
+}
+bool control_hold(const char*, JS::HandleObject);
 #else
 void control_reset_require() {}
 void control_phase(const char*) {}
 bool control_fault(const char*) { return false; }
+void recovery_outcome(const char*) {}
+void control_observe(const char*) {}
+constexpr bool control_hold(const char*, JS::HandleObject) { return false; }
 #endif
 
 [[noreturn]] void fatal(const char* message) {
@@ -378,9 +424,177 @@ bool resolve(const char* specifier, size_t length, const std::string& referrer,
   return true;
 }
 
+void free_retired() {
+  while (retiredHead) {
+    ModuleEntry* entry = retiredHead;
+    retiredHead = entry->nextRetired;
+    delete entry;
+  }
+}
+
+struct SnapshotScope {
+  SnapshotScope() { ++activeSnapshots; }
+  ~SnapshotScope() { if (--activeSnapshots == 0) free_retired(); }
+};
+
+// Fallible: the private name's UTF-8 copy allocates, so null can carry a pending OOM.
+ModuleEntry* mapped_entry(JS::HandleObject module) {
+  if (control_fault("holder-lookup")) return nullptr;
+  JS::RootedValue privateValue(context, JS::GetModulePrivate(module));
+  std::string name;
+  if (!to_utf8(privateValue, &name)) return nullptr;
+  auto found = modules.find(name);
+  if (found == modules.end() || found->second->record != module) return nullptr;
+  return found->second;
+}
+
+#if defined(BUNSM_CONTROLS)
+bool control_hold(const char* site, JS::HandleObject module) {
+  if (controlHoldSite != site) return false;
+  ModuleEntry* entry = mapped_entry(module);
+  if (!entry) JS_ClearPendingException(context);
+  return entry && entry->name == controlHoldName;
+}
+#endif
+
+void remove_edges(EntryVector& edges, ModuleEntry* removed) {
+  size_t kept = 0;
+  for (auto* edge : edges) {
+    if (edge != removed) edges[kept++] = edge;
+  }
+  edges.shrinkBy(edges.length() - kept);
+}
+
+bool record_edge(const std::string& ref, JS::HandleValue referrer, ModuleEntry* target) {
+  auto found = modules.find(ref);
+  if (found == modules.end() || !referrer.isObject() ||
+      found->second->record != &referrer.toObject()) {
+    target->untrackedImporter = true;
+    return true;
+  }
+  ModuleEntry* source = found->second;
+  if (control_fault("edge-reserve") || !source->imports.reserve(source->imports.length() + 1) ||
+      control_fault("edge-reserve") || !target->importers.reserve(target->importers.length() + 1)) {
+    JS_ReportOutOfMemory(context);
+    return false;
+  }
+  source->imports.infallibleAppend(target);
+  target->importers.infallibleAppend(source);
+  return true;
+}
+
+bool snapshot_add(ModuleEntry* entry, EntryVector& candidates) {
+  auto info = JS::GetModuleEvaluationInfo(entry->record);
+  if (info.state == JS::ModuleEvaluationState::Fulfilled) return true;
+  if (info.state != JS::ModuleEvaluationState::Unevaluated) {
+    recovery_outcome("pinned at a boundary");
+    return false;
+  }
+  if (entry->mark == passEpoch) return true;
+  entry->mark = passEpoch;
+  if (!control_fault("snapshot-append") && candidates.append(entry)) return true;
+  JS_ClearPendingException(context);
+  recovery_outcome("pinned on snapshot OOM");
+  return false;
+}
+
+bool snapshot(JS::HandleObject module, EntryVector& candidates) {
+  ++passEpoch;
+  ModuleEntry* root = mapped_entry(module);
+  if (!root) {
+    JS_ClearPendingException(context);
+    recovery_outcome("pinned at a boundary");
+    return false;
+  }
+  if (!snapshot_add(root, candidates)) return false;
+  for (size_t i = 0; i < candidates.length(); ++i) {
+    for (auto* target : candidates[i]->imports) {
+      if (!snapshot_add(target, candidates)) return false;
+    }
+  }
+  return true;
+}
+
+bool unheld(ModuleEntry* entry) {
+  if (!entry->importAcquired && !entry->untrackedImporter) return true;
+  recovery_outcome("pinned on acquisition");
+  return false;
+}
+
+void enqueue_retirement(ModuleEntry* entry, ModuleEntry*& head, ModuleEntry*& tail) {
+  if (entry->mark == passEpoch) return;
+  entry->mark = passEpoch;
+  entry->nextWork = nullptr;
+  if (tail) tail->nextWork = entry;
+  else head = entry;
+  tail = entry;
+}
+
+bool classify_candidate(ModuleEntry* entry, ModuleEntry*& head, ModuleEntry*& tail) {
+  if (entry->retired) {
+    recovery_outcome("pinned at a boundary");
+    return false;
+  }
+  auto info = JS::GetModuleEvaluationInfo(entry->record);
+  if (info.state == JS::ModuleEvaluationState::Pending) {
+    recovery_outcome("pinned on a pending candidate");
+    return false;
+  }
+  if (info.state != JS::ModuleEvaluationState::Failed) return true;
+  if (info.bodyEntered || !info.overRecursed) {
+    recovery_outcome(info.bodyEntered ? "pinned on body entry" : "pinned on a non-overflow error");
+    return false;
+  }
+  if (!unheld(entry)) return false;
+  enqueue_retirement(entry, head, tail);
+  return true;
+}
+
+bool close_importer(ModuleEntry* entry, ModuleEntry*& head, ModuleEntry*& tail) {
+  auto info = JS::GetModuleEvaluationInfo(entry->record);
+  if (info.state == JS::ModuleEvaluationState::Pending ||
+      info.state == JS::ModuleEvaluationState::Fulfilled) {
+    recovery_outcome("pinned on a pending importer");
+    return false;
+  }
+  if (info.state == JS::ModuleEvaluationState::Failed) return true;
+  if (!unheld(entry)) return false;
+  enqueue_retirement(entry, head, tail);
+  return true;
+}
+
+void retire_entry(ModuleEntry* entry) {
+  modules.erase(modules.find(entry->name));
+  for (auto* target : entry->imports) remove_edges(target->importers, entry);
+  for (auto* importer : entry->importers) remove_edges(importer->imports, entry);
+  entry->imports.clear();
+  entry->importers.clear();
+  entry->record.reset();
+  entry->retired = true;
+  entry->nextRetired = retiredHead;
+  retiredHead = entry;
+}
+
+void rollback(const EntryVector& candidates) {
+  ++passEpoch;
+  ModuleEntry* head = nullptr;
+  ModuleEntry* tail = nullptr;
+  for (auto* entry : candidates) {
+    if (!classify_candidate(entry, head, tail)) return;
+  }
+  if (!head) return;
+  for (auto* entry = head; entry; entry = entry->nextWork) {
+    for (auto* importer : entry->importers) {
+      if (!close_importer(importer, head, tail)) return;
+    }
+  }
+  for (auto* entry = head; entry; entry = entry->nextWork) retire_entry(entry);
+  recovery_outcome("rolled back");
+}
+
 JSObject* compile_module(const std::string& name, const char* source, size_t length) {
   auto found = modules.find(name);
-  if (found != modules.end()) return found->second->get();
+  if (found != modules.end()) return found->second->record;
   JS::SourceText<mozilla::Utf8Unit> text;
   if (!text.init(context, source, length, JS::SourceOwnership::Borrowed)) return nullptr;
   JS::CompileOptions options(context);
@@ -390,13 +604,20 @@ JSObject* compile_module(const std::string& name, const char* source, size_t len
   JS::RootedString privateName(context, utf8(name.data(), name.size()));
   if (!privateName) return nullptr;
   JS::SetModulePrivate(module, JS::StringValue(privateName));
-  modules.emplace(name, new JS::PersistentRootedObject(context, module));
+  ModuleEntry* entry = control_fault("entry-allocation") ? nullptr
+      : new (std::nothrow) ModuleEntry(name, module, nextGeneration++);
+  if (!entry) {
+    JS_ReportOutOfMemory(context);
+    return nullptr;
+  }
+  if (control_fault("map-insertion")) fatal("module map allocation failure");
+  modules.emplace(name, entry);
   return module;
 }
 
 JSObject* load_module(const std::string& name) {
   auto found = modules.find(name);
-  if (found != modules.end()) return found->second->get();
+  if (found != modules.end()) return found->second->record;
   char* source = nullptr;
   size_t length = 0;
   bsm_handle exception = 0;
@@ -410,7 +631,7 @@ JSObject* load_module(const std::string& name) {
 }
 
 bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,
-                        JS::HandleValue payload, JS::HandleObject module);
+                        JS::HandleValue payload, JS::HandleObject module, ModuleEntry* entry);
 
 bool module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,
                  JS::HandleValue, JS::HandleValue payload, uint32_t, JS::ColumnNumberOneOrigin) {
@@ -427,7 +648,12 @@ bool module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject reque
   if (control_fault("module-load")) return false;
   JS::RootedObject module(cx, load_module(name));
   if (!module) return false;
-  return finish_module_load(cx, referrer, request, payload, module);
+  // load_module maps `name` to this record, so its entry is known without another lookup.
+  ModuleEntry* entry = modules.find(name)->second;
+  JS::RootedObject payloadObject(cx, payload.isObject() ? &payload.toObject() : nullptr);
+  bool dynamic = payloadObject && JS::IsPromiseObject(payloadObject);
+  if (!dynamic && !record_edge(ref, referrer, entry)) return false;
+  return finish_module_load(cx, referrer, request, payload, module, entry);
 }
 
 bool metadata(JSContext*, JS::HandleObject module, JS::HandleObject meta) {
@@ -484,15 +710,24 @@ bool dynamic_module_loaded(JSContext* cx, unsigned argc, JS::Value* vp) {
   JS::RootedValue payload(cx, JS::GetReservedSlot(closure, 2));
   JS::RootedObject module(cx, &JS::GetReservedSlot(closure, 3).toObject());
   args.rval().setUndefined();
+#if defined(BUNSM_CONTROLS)
+  if (control_hold("dynamic-loaded", module)) {
+    if (!JS::ModuleLink(cx, module)) return false;
+    controlHolds.push_back(new ControlHold(controlHoldName, module, closure, nullptr));
+    return true;
+  }
+#endif
   return JS::FinishLoadingImportedModule(cx, referrer, request, payload, module, true);
 }
 
 bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObject request,
-                        JS::HandleValue payload, JS::HandleObject module) {
+                        JS::HandleValue payload, JS::HandleObject module, ModuleEntry* entry) {
   JS::RootedObject promise(cx, payload.isObject() ? &payload.toObject() : nullptr);
   if (!promise || !JS::IsPromiseObject(promise)) {
     return JS::FinishLoadingImportedModule(cx, referrer, request, payload, module, true);
   }
+  // Infallible: the mark is set before any allocation the import continuation needs.
+  entry->importAcquired = true;
   static const JSClass closureClass = {
       "BunDynamicImport", JSCLASS_HAS_RESERVED_SLOTS(4), nullptr, nullptr, nullptr, nullptr};
   JS::RootedObject closure(cx, JS_NewObjectWithGivenProto(cx, &closureClass, nullptr));
@@ -509,16 +744,32 @@ bool finish_module_load(JSContext* cx, JS::HandleValue referrer, JS::HandleObjec
   return JS::AddPromiseReactions(cx, loading, fulfilled, rejected);
 }
 
+JSObject* continue_module_evaluate(JS::HandleObject module) {
+  JS::RootedValue evaluation(context);
+  if (!JS::ModuleEvaluate(context, module, &evaluation)) return nullptr;
+  JS::RootedObject evaluated(context, &evaluation.toObject());
+  ensure_handled(evaluated);
+  control_phase("importForward");
+  return forward_internal(evaluated);
+}
+
 bool module_evaluate_handler(JSContext* cx, unsigned argc, JS::Value* vp) {
   JS::CallArgs args = JS::CallArgsFromVp(argc, vp);
   control_phase("importEvaluate");
   JS::RootedObject module(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
-  JS::RootedValue evaluation(cx);
-  if (!JS::ModuleLink(cx, module) || !JS::ModuleEvaluate(cx, module, &evaluation)) return false;
-  JS::RootedObject evaluated(cx, &evaluation.toObject());
-  ensure_handled(evaluated);
-  control_phase("importForward");
-  JS::RootedObject forwarded(cx, forward_internal(evaluated));
+  if (!JS::ModuleLink(cx, module)) return false;
+#if defined(BUNSM_CONTROLS)
+  if (control_hold("import-evaluate", module)) {
+    JS::RootedObject parked(cx, JS::NewPromiseObject(cx, nullptr));
+    if (!parked) return false;
+    ensure_handled(parked);
+    if (!seal(parked)) return false;
+    controlHolds.push_back(new ControlHold(controlHoldName, module, nullptr, parked));
+    args.rval().setObject(*parked);
+    return true;
+  }
+#endif
+  JS::RootedObject forwarded(cx, continue_module_evaluate(module));
   if (!forwarded) return false;
   control_phase("importAdoptE");
   args.rval().setObject(*forwarded);
@@ -554,10 +805,22 @@ bool require_loaded(JSContext* cx, unsigned argc, JS::Value* vp) {
 #if defined(BUNSM_CONTROLS)
   controlRequireEntered = true;
 #endif
+  recovery_outcome("no failure");
   JS::RootedObject module(cx, &js::GetFunctionNativeReserved(&args.callee(), 0).toObject());
-  if (!JS::ModuleLink(cx, module)) return false;
+  if (!JS::ModuleLink(cx, module)) {
+    recovery_outcome("link failed");
+    return false;
+  }
+  SnapshotScope scope;
+  EntryVector candidates;
+  bool pinned = !snapshot(module, candidates);
+  control_observe("require-before-evaluate");
   JS::RootedValue evaluation(cx);
-  if (!JS::ModuleEvaluate(cx, module, &evaluation)) return false;
+  if (!JS::ModuleEvaluate(cx, module, &evaluation)) {
+    recovery_outcome("pinned because evaluation returned false");
+    control_observe("require-after-evaluate");
+    return false;
+  }
   if (control_fault("silent-return") || control_fault("terminate-return")) return false;
   JS::RootedObject evaluated(cx, &evaluation.toObject());
   ensure_handled(evaluated);
@@ -567,9 +830,15 @@ bool require_loaded(JSContext* cx, unsigned argc, JS::Value* vp) {
   JS::PromiseState state = JS::GetPromiseState(evaluated);
   if (state == JS::PromiseState::Rejected) {
     JS::RootedValue reason(cx, JS::GetPromiseResult(evaluated));
+    if (!pinned) rollback(candidates);
+    control_observe("require-after-evaluate");
+    // Termination fails the record with no catchable error; keep it uncatchable so the bridge
+    // stays pending and the drain stops.
+    if (terminating) return false;
     JS_SetPendingException(cx, reason, JS::ExceptionStackBehavior::DoNotCapture);
     return false;
   }
+  control_observe("require-after-evaluate");
   if (state == JS::PromiseState::Fulfilled) {
     control_phase("requireNamespaceGet");
     if (control_fault("namespace-get")) return false;
@@ -768,6 +1037,8 @@ extern "C" void bsm_init(const bsm_config* config) {
 
 extern "C" void bsm_shutdown(void) {
 #if defined(BUNSM_CONTROLS)
+  for (auto* held : controlHolds) delete held;
+  controlHolds.clear();
   delete controlHeapRoot;
   delete controlHeapGuard;
   controlHeapRoot = nullptr;
@@ -775,6 +1046,7 @@ extern "C" void bsm_shutdown(void) {
 #endif
   for (auto& entry : modules) delete entry.second;
   modules.clear();
+  free_retired();
   delete externalBuffers;
   for (auto* root : errorConstructors) delete root;
   for (auto* slot : slots) delete slot;
@@ -992,6 +1264,7 @@ extern "C" bool bsm_eval_module(const char* source, size_t length, const char* n
   JSAutoRealm realm(context, global->get());
   std::string filename(name, nameLength);
   JS::RootedObject module(context, compile_module(filename, source, length));
+  if (module) modules.find(filename)->second->importAcquired = true;
   return module ? evaluate_module(module, out) : failure(out);
 }
 extern "C" bool bsm_import(const char* specifier, size_t length, bsm_handle* out) {
@@ -999,6 +1272,7 @@ extern "C" bool bsm_import(const char* specifier, size_t length, bsm_handle* out
   std::string name;
   if (!resolve(specifier, length, "", &name)) return failure(out);
   JS::RootedObject module(context, load_module(name));
+  if (module) modules.find(name)->second->importAcquired = true;
   return module ? namespace_promise(module, out) : failure(out);
 }
 extern "C" bool bsm_require(const char* specifier, size_t length, bsm_handle* out) {
@@ -1029,6 +1303,93 @@ extern "C" bool bsm_require(const char* specifier, size_t length, bsm_handle* ou
   return true;
 }
 #if defined(BUNSM_CONTROLS)
+extern "C" const char* bsm_control_last_outcome() { return controlOutcome; }
+extern "C" void bsm_control_observe(void (*observer)(const char*)) { controlObserver = observer; }
+extern "C" void bsm_control_hold(const char* site, const char* name) {
+  controlHoldSite = site ? site : "";
+  controlHoldName = name ? name : "";
+}
+extern "C" bool bsm_control_held(const char* name) {
+  for (auto* held : controlHolds) {
+    if (held->name == name) return true;
+  }
+  return false;
+}
+bool resume_held(ControlHold* held) {
+  JS::RootedObject module(context, held->module);
+  if (held->closure) {
+    JS::RootedObject closure(context, held->closure);
+    JS::RootedValue referrer(context, JS::GetReservedSlot(closure, 0));
+    JS::RootedObject request(context, &JS::GetReservedSlot(closure, 1).toObject());
+    JS::RootedValue payload(context, JS::GetReservedSlot(closure, 2));
+    return JS::FinishLoadingImportedModule(context, referrer, request, payload, module, true);
+  }
+  JS::RootedObject promise(context, held->promise);
+  JS::RootedObject forwarded(context, continue_module_evaluate(module));
+  if (forwarded) {
+    JS::RootedValue output(context, JS::ObjectValue(*forwarded));
+    return JS::ResolvePromise(context, promise, output);
+  }
+  JS::RootedValue reason(context);
+  if (!JS_GetPendingException(context, &reason)) return false;
+  JS_ClearPendingException(context);
+  return JS::RejectPromise(context, promise, reason);
+}
+extern "C" bool bsm_control_resume(const char* name, bsm_handle* out) {
+  JSAutoRealm realm(context, global->get());
+  for (size_t i = 0; i < controlHolds.size(); ++i) {
+    if (controlHolds[i]->name != name) continue;
+    ControlHold* held = controlHolds[i];
+    controlHolds.erase(controlHolds.begin() + i);
+    bool ok = resume_held(held);
+    delete held;
+    *out = 0;
+    return ok || failure(out);
+  }
+  return false;
+}
+extern "C" void bsm_control_module_info(const char* name, bsm_module_info* out) {
+  *out = {};
+  auto found = modules.find(name);
+  ModuleEntry* entry = found == modules.end() ? nullptr : found->second;
+  out->mapped = entry != nullptr;
+  for (auto* retired = retiredHead; !entry && retired; retired = retired->nextRetired) {
+    if (retired->name == name) entry = retired;
+  }
+  if (!entry) return;
+  out->generation = entry->generation;
+  out->retired = entry->retired;
+  out->importAcquired = entry->importAcquired;
+  out->untrackedImporter = entry->untrackedImporter;
+  out->imports = entry->imports.length();
+  out->importers = entry->importers.length();
+  if (entry->retired) return;
+  auto info = JS::GetModuleEvaluationInfo(entry->record);
+  out->state = static_cast<uint32_t>(info.state);
+  out->linked = JS::ModuleIsLinked(entry->record);
+  out->bodyEntered = info.bodyEntered;
+  out->overRecursed = info.overRecursed;
+}
+// Compiles and maps a module without evaluating it, so a schedule's nested require of it starts
+// from an existing record.
+extern "C" bool bsm_control_load(const char* name) {
+  JSAutoRealm realm(context, global->get());
+  return load_module(name) != nullptr;
+}
+extern "C" bool bsm_control_edge(const char* source, const char* target) {
+  auto a = modules.find(source), b = modules.find(target);
+  if (a == modules.end() || b == modules.end()) return false;
+  bool forward = false, reverse = false;
+  for (auto* entry : a->second->imports) forward |= entry == b->second;
+  for (auto* entry : b->second->importers) reverse |= entry == a->second;
+  require(forward == reverse, "module edge is bidirectional");
+  return forward;
+}
+extern "C" void bsm_control_retirement(size_t* count, uint32_t* active) {
+  *active = activeSnapshots;
+  *count = 0;
+  for (auto* entry = retiredHead; entry; entry = entry->nextRetired) ++*count;
+}
 extern "C" void bsm_control_require_promises(bsm_handle* loading, bsm_handle* bridge,
                                               bsm_handle* evaluation, bsm_handle* derived) {
   *loading = controlLoading ? bsm_dup(controlLoading) : 0;
@@ -1044,7 +1405,7 @@ extern "C" bool bsm_control_mark_handled(bsm_handle handle) {
 extern "C" bool bsm_control_require_entered() { return controlRequireEntered; }
 extern "C" bool bsm_control_module_linked(const char* name, size_t length) {
   auto found = modules.find(std::string(name, length));
-  return found != modules.end() && JS::ModuleIsLinked(found->second->get());
+  return found != modules.end() && JS::ModuleIsLinked(found->second->record);
 }
 extern "C" void bsm_control_fault(const char* site, uint32_t nth, uint32_t kind) {
   controlUses.clear();
