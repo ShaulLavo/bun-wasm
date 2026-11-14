@@ -13,8 +13,8 @@ const smProducer = workflow.split("\n  shared-spidermonkey-prebuild:\n")[1]!.spl
 const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0]!;
 
 test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
-  expect(shared).toContain("needs: [quality, rust, shared-prebuild, shared-spidermonkey-prebuild]");
-  expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}");
+  expect(shared).toContain("needs: [selection, rust, shared-prebuild, shared-spidermonkey-prebuild]");
+  expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
   expect(shared).toContain("node-version: ${{ env.CI_NODE_VERSION }}");
   expect(shared).toContain('echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"');
   expect(shared).toContain("bun scripts/build-wasi-sysroot.ts --shared-pic --inputs");
@@ -131,7 +131,7 @@ function sharedCacheSaves(source: string): { name: string; condition: string }[]
 
 function sharedSaveAllowed(condition: string, state: SharedSaveContext): boolean {
   const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
-    .replace(/needs\.quality\.outputs\.shared-native/g, JSON.stringify("true"))
+    .replace(/needs\.selection\.outputs\.shared-native/g, JSON.stringify("true"))
     .replace(/success\(\)/g, String(state.success))
     .replace(/cancelled\(\)/g, String(state.cancelled))
     .replace(/github\.event_name/g, JSON.stringify(state.event))
@@ -212,7 +212,7 @@ test("shared production is fully cached before any of the five blocking consumer
   expect(Math.max(...saves)).toBeLessThan(Math.min(...consumers));
   expect(job).toHaveProperty("timeout-minutes", 30);
   for (const index of consumers) {
-    expect(steps[index]).toHaveProperty("if", "needs.quality.outputs.shared-native == 'true'");
+    expect(steps[index]).toHaveProperty("if", "needs.selection.outputs.shared-native == 'true'");
     expect(steps[index]).not.toHaveProperty("continue-on-error");
   }
 });

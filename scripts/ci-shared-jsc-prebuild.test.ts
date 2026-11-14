@@ -17,10 +17,10 @@ function job(id: string): string {
 test("shared C++ production starts independently of Rust and has one owner outside the bounded consumer", () => {
   const producer = job("shared-prebuild");
   const consumer = job("shared-sysroot");
-  expect(producer).toContain("needs: quality");
+  expect(producer).toContain("needs: selection");
   expect(producer).not.toContain("needs.rust");
   expect(producer).toContain("timeout-minutes: 45");
-  expect(consumer).toContain("needs: [quality, rust, shared-prebuild, shared-spidermonkey-prebuild]");
+  expect(consumer).toContain("needs: [selection, rust, shared-prebuild, shared-spidermonkey-prebuild]");
   expect(consumer).toContain("timeout-minutes: 30");
   expect(producer).toContain("JSC_PROFILE=shared-group bash scripts/build-jsc.sh");
   expect(consumer).not.toContain("bash scripts/build-jsc.sh");
@@ -59,7 +59,7 @@ test("the producer keeps the old exact cache identity and validates warm bytes b
   const save = producer.findIndex(item => item.name === "Save the shared JSC prebuild");
   expect(save).toBeGreaterThan(verify);
   expect(producer.findIndex(item => item.name === packageName)).toBeGreaterThan(save);
-  expect(producer[save]?.if).toBe("${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.shared-native == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}");
+  expect(producer[save]?.if).toBe("${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}");
   expect(command("shared-prebuild", buildName)).toContain("check_jsc_inputs_stamp");
   expect(job("shared-prebuild")).not.toMatch(/test-checks|test-shared-sysroot|build-native-profile|rust-toolchain/);
 });
@@ -262,7 +262,7 @@ test("import rejects a missing receipt instead of running a hidden sysroot build
 
 test("a failed prebuild keeps the selected consumer blocking", () => {
   const condition = steps("shared-sysroot");
-  expect(job("shared-sysroot")).toContain("!cancelled() && needs.quality.result == 'success'");
+  expect(job("shared-sysroot")).toContain("!cancelled() && needs.selection.result == 'success'");
   expect(condition[1]?.name).toBe("Require the shared prebuild producer");
   const guard = command("shared-sysroot", "Require the shared prebuild producer");
   for (const result of ["failure", "cancelled", "skipped", ""]) {
@@ -305,9 +305,9 @@ function admitted(id: string, state: GraphState): boolean {
     .replaceAll("github.event_name", '"pull_request"')
     .replaceAll("github.event.pull_request.draft", "false")
     .replaceAll("!cancelled()", String(!state.cancelled))
-    .replaceAll("needs.quality.result", JSON.stringify(state.quality))
-    .replaceAll("needs.quality.outputs.shared-native", JSON.stringify(String(state.sharedNative)))
-    .replaceAll("needs.quality.outputs.shared", JSON.stringify(String(state.shared)));
+    .replaceAll("needs.selection.result", JSON.stringify(state.quality))
+    .replaceAll("needs.selection.outputs.shared-native", JSON.stringify(String(state.sharedNative)))
+    .replaceAll("needs.selection.outputs.shared", JSON.stringify(String(state.shared)));
   const result: unknown = new Function(`return (${expression})`)();
   assert(typeof result === "boolean");
   return implicit && result;

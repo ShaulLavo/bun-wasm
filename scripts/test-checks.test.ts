@@ -252,12 +252,12 @@ test("Browser guest matrix discovers each profile batch and runs every check exa
 test("required Processes gates reject failed or cancelled guest batches and allow only producer-disabled skips", () => {
   const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   const guest = workflow.split("\n  browser-guest:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
-  expect(guest).toContain("batch: ${{ fromJSON(needs.quality.outputs.browser-guest-batches) }}");
+  expect(guest).toContain("batch: ${{ fromJSON(needs.selection.outputs.browser-guest-batches) }}");
   expect(guest).toContain("fail-fast: false");
   expect(guest).toContain("timeout-minutes: 10");
   expect(guest).not.toContain("browser-guest-site.ts build");
   const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
-  expect(processes).toContain("needs: [quality, rust, process-bundles, browser-guest]");
+  expect(processes).toContain("needs: [selection, rust, process-bundles, browser-guest]");
   expect(processes).toContain("always() && !cancelled()");
   const guard = processes.match(/run: \|\n([\s\S]*?)      - uses:/)?.[1];
   if (!guard) throw new Error("Missing required guest-result guard");

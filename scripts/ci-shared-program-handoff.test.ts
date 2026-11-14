@@ -12,7 +12,7 @@ const workflow = record(Bun.YAML.parse(readFileSync(new URL("../.github/workflow
 const jobs = record(workflow.jobs);
 const shared = record(jobs["shared-sysroot"]);
 const builder = readFileSync(new URL("./build-native-profile.ts", import.meta.url), "utf8");
-const selection = "needs.quality.outputs.shared-native == 'true'";
+const selection = "needs.selection.outputs.shared-native == 'true'";
 const exports = [
   { engine: "quickjs", id: "shared-quickjs-producer", directory: "program", producer: "Produce the shared native profile once", argument: "" },
   { engine: "jsc", id: "shared-jsc-producer", directory: "program-jsc", producer: "Produce the shared JSC profile once", argument: " jsc" },
@@ -145,8 +145,8 @@ test("native and Chromium consumers retain their selection, profile, launcher an
   for (const consumer of consumers) {
     expect(namedStep(consumer.name)).toEqual({ name: consumer.name, if: selection, run: consumer.run });
   }
-  expect(shared.needs).toEqual(["quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
-  expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}");
+  expect(shared.needs).toEqual(["selection", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
+  expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
   expect(shared["timeout-minutes"]).toBe(30);
   expect(namedStep("Produce the shared JSC profile once").env).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });
 });
