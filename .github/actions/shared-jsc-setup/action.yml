@@ -1,0 +1,147 @@
+name: Shared JSC build environment
+description: Prepare and verify the shared sysroot and resolve the existing effective shared JSC identity
+inputs:
+  shared-native:
+    description: Include the shared JSC prerequisites and identity
+    default: 'true'
+  sysroot:
+    description: Build locally, or verify and import this run's prepared sysroot by SHA256
+    default: build
+outputs:
+  key:
+    description: Existing shared JSC key, or shared sysroot key for sysroot-only checks
+    value: ${{ steps.identity.outputs.key }}
+runs:
+  using: composite
+  steps:
+    - name: Configure private shared sysroot paths
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
+        echo "BUN_WASM_SHARED_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
+        echo "BUN_WASM_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
+        echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+        echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+        echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+        echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/release-downloads
+    - uses: ./.github/actions/setup-tools
+      with:
+        bun-version: 1.4.4
+        node-version: ${{ env.CI_NODE_VERSION }}
+    - uses: actions/cache/restore@v4
+      with:
+        path: .ci-bun-cache
+        key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+    - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
+    - name: Install sysroot build tools
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        if command -v cmake && command -v ninja; then exit 0; fi
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build
+    - name: Install pinned shared build tools
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: bun scripts/ci-build-tools.ts
+    - uses: actions/cache/restore@v4
+      id: shared-sdk
+      with:
+        path: ${{ env.WASM_TOOLS }}/wasi-sdk
+        key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
+    - name: Install pinned WASI SDK
+      if: steps.shared-sdk.outputs.cache-hit != 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        set -euo pipefail
+        archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
+        trap 'rm -f -- "$archive"' EXIT
+        bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+          https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz "$archive"
+        echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
+        mkdir -p "$WASM_TOOLS/wasi-sdk"
+        tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
+    - name: Save completed shared-sdk setup
+      if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sdk.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.WASM_TOOLS }}/wasi-sdk
+        key: ${{ steps.shared-sdk.outputs.cache-primary-key }}
+    - name: Identify shared profile inputs
+      id: shared-inputs
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        inputs=$(bun scripts/build-wasi-sysroot.ts --shared-pic --inputs)
+        echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: shared-sysroot-cache
+      if: inputs.sysroot == 'build'
+      with:
+        path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
+        key: wasi-shared-pic-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'scripts/build-shared-wasi-libc.sh', 'patches/wasi-libc/group-grow.patch', 'patches/wasi-libc/.gitattributes') }}
+    - name: Import this run's prepared shared sysroot
+      if: inputs.sysroot != 'build'
+      shell: bash
+      env:
+        SYSROOT_SHA256: ${{ inputs.sysroot }}
+      run: |
+        source env.sh
+        transfer="$RUNNER_TEMP/shared-jsc-identity-sysroot.tar.zst"
+        [[ "$SYSROOT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+        printf '%s  %s\n' "$SYSROOT_SHA256" "$transfer" | sha256sum --check
+        [[ ! -e "$BUN_WASM_SYSROOT" && ! -L "$BUN_WASM_SYSROOT" ]]
+        zstd -dc "$transfer" | tar --posix -C "$RUNNER_TEMP" -xf -
+        rm -- "$transfer"
+    - name: Build or verify shared profile
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        bun scripts/build-wasi-sysroot.ts --shared-pic
+    - name: Save shared profile cache
+      if: ${{ inputs.sysroot == 'build' && success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sysroot-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
+        key: ${{ steps.shared-sysroot-cache.outputs.cache-primary-key }}
+    - name: Install the shared JSC producer tools
+      if: inputs.shared-native == 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        if command -v ruby && command -v gperf && command -v bison; then exit 0; fi
+        sudo apt-get update
+        sudo apt-get install -y ruby gperf bison
+    - uses: actions/cache/restore@v4
+      if: inputs.shared-native == 'true'
+      id: shared-binaryen
+      with:
+        path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+        key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
+    - name: Prepare shared-profile Binaryen
+      if: inputs.shared-native == 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: bun scripts/ci-binaryen.ts
+    - name: Identify the shared JSC prebuild inputs
+      if: inputs.shared-native == 'true'
+      id: shared-jsc-inputs
+      env:
+        JSC_PROFILE: shared-group
+        JOBS: "2"
+        CAGE: ""
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
+        export JSC_BUILD_DIR="$RUNNER_TEMP/jsc/shared"
+        source jsc/common.sh
+        copy_jsc_config_inputs
+        inputs=$(jsc_inputs_hash)
+        echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+    - name: Report the existing shared cache identity
+      id: identity
+      shell: bash
+      env:
+        SHARED_NATIVE: ${{ inputs.shared-native }}
+        JSC_KEY: shared-jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-jsc-inputs.outputs.hash }}
+        SYSROOT_KEY: wasi-shared-pic-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'scripts/build-shared-wasi-libc.sh', 'patches/wasi-libc/group-grow.patch', 'patches/wasi-libc/.gitattributes') }}
+      run: |
+        if [[ "$SHARED_NATIVE" == true ]]; then key="$JSC_KEY"; else key="$SYSROOT_KEY"; fi
+        echo "key=$key" >> "$GITHUB_OUTPUT"
