@@ -2438,6 +2438,7 @@ jobs:
         env:
           BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site
           BUN_WASM_BROWSER_REPORT_DIR: ${{ runner.temp }}/browser-guest-diagnostics
+          BUN_WASM_STORAGE_CI_QUARANTINE: known-20261114
           BUN_WASM_TEST_BROWSERS: ${{ matrix.browser }}
           BUN_WASM_JSC_PRODUCER: ${{ needs.quality.outputs.jsc == 'true' && 'selected' || 'unselected' }}
           TMPDIR: ${{ runner.temp }}

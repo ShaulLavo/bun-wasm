@@ -236,12 +236,244 @@ report("closures made by inline callees are closed at return", () => {
   return [pairs.length, pairs[0]![0](), pairs[800]![0]()].join();
 });
 
+report("call intrinsic identity", () => [Function.prototype.call.name, Function.prototype.call.length, String(Function.prototype.call).includes("[native code]")].join());
+report("call zero and padded arguments", () => [sloppy.counts.call(), sloppy.counts.call(null), sloppy.counts.call(null, 1), sloppy.counts.call(null, 1, 2, 3), sloppy.counts.call(null, 1, 2, 3, 4, 5), sloppy.none.call()].join(" | "));
+report("call mapped arguments and escaping closures", () => {
+  const [read, count, write] = sloppy.escape.call(null, "before", "b", "extra");
+  write("after");
+  collectGarbage();
+  return [sloppy.mapped.call(sloppy, "a", "b", "c"), read(), count(), sloppy.later.call(null, 4, 5, 6)()].join(" | ");
+});
+report("call primitive receivers", () => {
+  // oxlint-disable-next-line no-eval -- The untyped function permits a deliberate zero-argument call.
+  const strict = (0, eval)("(function () { 'use strict'; return typeof this + ':' + String(this); })");
+  return [strict.call(), strict.call(null), strict.call(7), strict.call("x"), sloppy.none.call(7), sloppy.counts.call("x", 1)].join(" | ");
+});
+report("call tail and constructor origin", () => {
+  function Made(this: { result: unknown }): void {
+    const local = 17;
+    this.result = (function (a: number, b: number, c: number, d: number, e: number, f: number) { return [new.target === undefined, a, b, c, d, e, f, arguments.length, local].join(); }).call(null, 1, 2, 3, 4, 5, 6);
+  }
+  // oxlint-disable-next-line no-eval -- Strict source is needed for the tail-call opcode.
+  const tail = (0, eval)("(function f(n) { 'use strict'; return n === 0 ? 7 : f.call(null, n - 1); })");
+  return [new (Made as unknown as new () => { result: unknown })().result, tail(20)].join(" | ");
+});
+report("call throw identity and finally", () => {
+  const error = { tag: "same" };
+  const log: string[] = [];
+  const fail = (): void => { try { throw error; } finally { log.push("inner"); } };
+  try { fail.call(null); } catch (caught) { log.push(String(caught === error)); } finally { log.push("outer"); }
+  return log.join();
+});
+report("call native frames and reentrant stack formatting", () => {
+  // oxlint-disable-next-line no-eval -- CallSite belongs to the engine's structured trace API.
+  return (0, eval)(`(function () {
+    var previous = Error.prepareStackTrace;
+    try {
+      Error.prepareStackTrace = function (error, frames) {
+        return frames.slice(0, 4).map(function (frame) { return frame.getFunctionName() + ':' + frame.isNative(); }).join();
+      };
+      function called() { return new Error('trace').stack; }
+      function outer() { return called.call(null); }
+      return outer();
+    } finally { Error.prepareStackTrace = previous; }
+  })()`);
+});
+report("call nested C entry and recovery", () => {
+  const marker = {};
+  function target(value: number): number {
+    const before = value;
+    const nested = callWith((n: number) => { try { return callWith(() => { throw marker; }, null); } catch (error) { return error === marker ? n : 0; } }, null, value);
+    collectGarbage();
+    return before + Number(nested);
+  }
+  return [target.call(null, 21), target.call(null, 7)].join();
+});
+report("call cross realm and class errors", () => {
+  const foreignCall = otherRealm("Function.prototype.call") as Function;
+  const Foreign = otherRealm("(class Foreign {})") as Function;
+  const foreignType = otherRealm("TypeError.prototype");
+  const results = [foreignCall.call(sloppy.counts, null, 1, 2, 3, 4)];
+  try { Foreign.call(null); } catch (error) { results.push([error instanceof TypeError, Object.getPrototypeOf(error) === foreignType].join()); }
+  return results.join(" | ");
+});
+report("call fallbacks and patched builtin", () => {
+  const ordinary = (n: number): number => n + 1;
+  const proxy = new Proxy(ordinary, { apply(target, receiver, args) { return Reflect.apply(target, receiver, args) + 10; } });
+  const patched = Object.assign((n: number) => n, { call: (receiver: unknown, n: number) => `${receiver}:${n}` });
+  const g = (function* () { yield 9; }).call(null);
+  return [ordinary.bind(null, 2).call(null), proxy.call(null, 2), Math.max.call(null, 2, 7), patched.call("patched", 5), g.next().value, g.next().done, Function.prototype.call.call(ordinary, null, 4)].join();
+});
+report("call collects cyclic and escaped arguments", () => {
+  const object: { self?: unknown; value: number } = { value: 41 };
+  object.self = object;
+  const read = (function (value: typeof object) { collectGarbage(); return () => (value.self as typeof object).value + 1; }).call(null, object);
+  collectGarbage();
+  return read();
+});
+report("call foreign intrinsic alias", () => {
+  const foreignCall = otherRealm("Function.prototype.call") as (...args: unknown[]) => unknown;
+  const target = Object.assign(function (this: unknown, a?: number, b?: number) {
+    "use strict";
+    collectGarbage();
+    return [this === 7, a, b, arguments.length, new.target === undefined].join();
+  }, { foreignCall });
+  return target.foreignCall(7, 1);
+});
+
+report("reduce sparse directions and initial values", () => {
+  // oxlint-disable-next-line no-sparse-arrays -- Holes must be skipped, rather than visited as undefined.
+  const values = [, 2, , 4];
+  const visit = (a: string, v: number | undefined, k: number): string => `${a}/${k}:${v}`;
+  return [values.reduce(visit, "start"), values.reduceRight(visit, "start"), values.reduce((a, b) => Number(a) + Number(b)), values.reduce<string | undefined>((a, b) => `${a}:${b}`, undefined)].join(" | ");
+});
+report("reduce empty and undefined receiver", () => {
+  const results: string[] = [];
+  for (const receiver of [[], Array(3), null, undefined]) {
+    try { results.push(String(Reflect.apply(Array.prototype.reduce, receiver, [(a: unknown) => a]))); }
+    catch (error) { results.push(`${(error as Error).name}: ${(error as Error).message}`); }
+  }
+  return results.concat([String([].reduce((a: unknown) => a, undefined))]).join(" | ");
+});
+report("reduce length snapshot and mutation", () => {
+  const forward = [1, 2, 3, 4];
+  const backward = [1, 2, 3, 4];
+  const left = forward.reduce((a, v, k, object) => {
+    if (k === 0) { object.push(99); delete object[1]; object[2] = 30; object.pop(); object.pop(); }
+    return `${a}/${k}:${v}`;
+  }, "");
+  const right = backward.reduceRight((a, v, k, object) => {
+    if (k === 3) { object.push(99); delete object[2]; object[1] = 20; }
+    return `${a}/${k}:${v}`;
+  }, "");
+  return [left, right].join(" | ");
+});
+report("reduce generic proxy and coercion order", () => {
+  // oxlint-disable-next-line no-eval -- This deliberately tests generic array-like and proxy receivers.
+  return (0, eval)(`(function () {
+    var log = [], object = { get length() { log.push('length'); return { valueOf() { log.push('valueOf'); return 3; } }; },
+      get 0() { log.push('zero'); return 2; }, get 2() { log.push('two'); return 4; } };
+    var proxy = new Proxy(object, { has(t, k) { log.push('has:' + k); return k in t; }, get(t, k, r) { log.push('get:' + k); return Reflect.get(t, k, r); } });
+    proxy.reduce = Array.prototype.reduce;
+    var result = proxy.reduce(function (a, v, k, o) { log.push('callback:' + k + ':' + (o === proxy)); return a + v; }, 1);
+    return result + '|' + log.join();
+  })()`);
+});
+report("reduce mapped arguments and escaped parameters", () => {
+  // oxlint-disable-next-line no-eval -- Sloppy mapped parameters must survive reuse of the callback vector.
+  return (0, eval)(`(function () {
+    var reads = [], object = [2, 3], initial = { n: 1 };
+    var result = object.reduce(function (a, v, k, o, padded, extra) {
+      var args = arguments;
+      reads.push(function () { return [a.n, v, k, o, padded, extra, args.length].join(':'); });
+      arguments[0] = { n: a.n + v }; v = 40 + k; k = 90 + k; o = 'changed';
+      collectGarbage(); return a;
+    }, initial);
+    collectGarbage(); return [initial.n, result.n, reads[0](), reads[1]() ].join('|');
+  })()`);
+});
+report("reduce record roots cyclic accumulator", () => {
+  const result = [1, 2, 3].reduce((acc: { n: number; self?: unknown }, v) => {
+    collectGarbage();
+    if (acc.self && acc.self !== acc) throw new Error("lost cycle");
+    const next: typeof acc = { n: acc.n + v };
+    next.self = next;
+    return next;
+  }, { n: 1 });
+  collectGarbage();
+  return [result.n, result.self === result].join();
+});
+report("reduce native frame and capture filter", () => {
+  // oxlint-disable-next-line no-eval -- CallSite and captureStackTrace test native builtin identity.
+  return (0, eval)(`(function () {
+    var previous = Error.prepareStackTrace;
+    try {
+      Error.prepareStackTrace = function (e, frames) { return frames.slice(0, 4).map(f => f.getFunctionName() + ':' + f.isNative()).join(); };
+      function callback() { var error = {}; Error.captureStackTrace(error, callback); return error.stack; }
+      return [0].reduce(callback, '');
+    } finally { Error.prepareStackTrace = previous; }
+  })()`);
+});
+report("reduce throws and finally", () => {
+  const marker = {};
+  const log: string[] = [];
+  try { [1, 2].reduce(() => { try { throw marker; } finally { log.push("inner"); } }, 0); }
+  catch (error) { log.push(String(error === marker)); }
+  finally { log.push("outer"); }
+  return log.concat([String([1, 2].reduce((a, b) => a + b, 0))]).join();
+});
+report("reduce lookup and coercion failures", () => {
+  // oxlint-disable-next-line no-eval -- Throwing accessors distinguish all reduce initialization and lookup exits.
+  return (0, eval)(`(function () {
+    var marker = {}, results = [];
+    for (var object of [ { get length() { throw marker; } }, { length: { valueOf() { throw marker; } } },
+      { length: 1, get 0() { throw marker; } }, { length: 2, 0: 1, get 1() { throw marker; } } ]) {
+      object.reduce = Array.prototype.reduce;
+      try { object.reduce(function (a, b) { return a + b; }); } catch (e) { results.push(e === marker); }
+      try { object.reduce(function (a, b) { return a + b; }, 0); } catch (e) { results.push(e === marker); }
+    }
+    return results.join();
+  })()`);
+});
+report("reduce cross realm empty error and alias", () => {
+  const reduce = otherRealm("Array.prototype.reduce") as Function;
+  const receiver = Object.assign({ length: 0 }, { reduce });
+  try { receiver.reduce((a: unknown) => a); }
+  catch (error) { return [error instanceof TypeError, Object.getPrototypeOf(error) === otherRealm("TypeError.prototype"), reduce.name, reduce.length, String(reduce).includes("[native code]")].join(); }
+  return "no throw";
+});
+report("reduce constructor origin and formal padding", () => {
+  // oxlint-disable-next-line no-eval -- Constructor-origin callbacks must receive no new.target.
+  return (0, eval)(`new (function Made() {
+    this.result = [1].reduce(function (a, b, k, o, fifth, sixth) {
+      return [new.target === undefined, this === globalThis, arguments.length, a, b, k, o[0], fifth, sixth].join();
+    }, 2);
+  })().result`);
+});
+report("reduce C entry, coroutine and next callback", () => {
+  function* generator(): Generator<number, number> { yield 7; return 8; }
+  const g = generator();
+  const token = {};
+  const value = [1, 2].reduce((a, v) => {
+    const nested = callWith(() => { try { return callWith(() => { throw token; }, null); } catch (error) { return error === token; } }, null);
+    collectGarbage();
+    return a + v + Number(g.next().value) + Number(nested);
+  }, 0);
+  return [value, [3].reduce((a, b) => a + b, 4)].join();
+});
+report("reduce native fallbacks", () => {
+  const sum = (a: number, b: number): number => a + b;
+  const proxy = new Proxy(sum, { apply(target, receiver, args) { return Reflect.apply(target, receiver, args) + 10; } });
+  const patched = Object.assign([1, 2], { reduce: () => "patched" });
+  const generic = Object.assign(new Uint8Array([2, 3]), { genericReduce: Array.prototype.reduce });
+  // oxlint-disable-next-line no-eval -- This deliberately passes a native function outside the typed reduce callback signature.
+  const max = (0, eval)("Math.max");
+  return [new Uint8Array([2, 3]).reduce(sum, 1), generic.genericReduce(sum, 1), [2, 3].reduce(sum.bind(null), 1), [2, 3].reduce(proxy, 1), [2, 3].reduce(max, 1), patched.reduce(), [1].reduce(function* () { yield 9; }, undefined)?.next().value].join();
+});
+report("reduce native C entry and strict callback receiver", () => {
+  const direct = callWith(Array.prototype.reduce, [2, 3], (a: number, b: number) => a + b, 1);
+  // oxlint-disable-next-line no-eval -- Sloppy outer code and a strict callback distinguish the callback receiver.
+  const receiver = (0, eval)(`[1].reduce(function (a, v) { 'use strict'; return this === undefined && arguments.length === 4 && v === 1; }, 0)`);
+  return [direct, receiver].join();
+});
+report("reduce inherited indices and empty right", () => {
+  // oxlint-disable-next-line no-eval -- Generic inherited indices deliberately use a non-array receiver.
+  return (0, eval)(`(function () {
+    var object = Object.assign(Object.create({ 1: 3, 3: 5 }), { length: 5, reduce: Array.prototype.reduce, reduceRight: Array.prototype.reduceRight });
+    var left = object.reduce(function (a, v, k) { return a + '/' + k + ':' + v; });
+    var right = object.reduceRight(function (a, v, k) { return a + '/' + k + ':' + v; });
+    try { [].reduceRight(function () {}); } catch (e) { return [left, right, e.name + ': ' + e.message].join('|'); }
+  })()`);
+});
+
 // Asynchronous functions.
 async function asyncCalls(): Promise<void> {
   const log: string[] = [];
   const step = async (value: number): Promise<number> => { await null; return plain(value); };
   async function* stream(): AsyncGenerator<number, void, void> { try { yield await step(1); gcInside(3); yield await step(2); } finally { log.push("closed"); } }
   for await (const value of stream()) { log.push(String(value)); if (value === 20) break; }
+  log.push(String(await step.call(null, 3)));
+  log.push(String(await [1, 2].reduce(async (a, b) => await a + b, Promise.resolve(0))));
   try { await (async () => { await null; level(2, log); })(); } catch (error) { log.push((error as Error).message); }
   print("async", "=>", log.join());
 }

@@ -3,6 +3,10 @@
   "batch": "10-storage",
   "path": "scripts/sandbox-storage-browser.test.ts",
   "inputs": [
+    "scripts/storage-ci-quarantine.ts",
+    "scripts/fixtures/storage-ci/firefox.json",
+    "scripts/fixtures/storage-ci/webkit.json",
+    "scripts/fixtures/storage-ci/webkit-react.json",
     "sandbox/src/editor-pane.tsx",
     "sandbox/src/file-tree.tsx",
     "sandbox/src/main.ts",

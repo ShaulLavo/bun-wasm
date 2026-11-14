@@ -303,6 +303,15 @@ activation. `Function.prototype.call` and `apply` no longer keep the unused fram
 while reentering JavaScript. Interrupt polling, native class dispatch, frame
 bookkeeping and the stack guards are unchanged.
 
+Ordinary targets of `Function.prototype.call` now stay in the interpreter loop
+through a [native builtin continuation](bun-patches/quickjs-loop-dispatch.md).
+Ordinary callbacks of Array `reduce` and `reduceRight` use the same mechanism.
+The native logical frame and builtin identity remain visible. `apply`, other
+callback builtins and other target classes keep their native calls. Array
+element getters and length coercions also keep native calls. Deep Ajv and Angular
+acceptance needs the separate getter unit. The historical measurements below
+describe the dispatcher extraction before this continuation change.
+
 At the unchanged 32 KiB budget, the `stack-native-call` fixture now completes
 55 nested calls through both methods, catches unbounded apply recursion and
 continues. The same production core with the old engine fails that fixture on
@@ -405,9 +414,9 @@ has room for about 45 activations at any budget.
 ([record](bun-patches/jsc-getter-dispatch.md)). Such a getter costs what a plain call
 costs, and its depth is bounded by the C-loop frame stack's own check, which throws the
 same `RangeError`. Budgets, reserves and every other path are unchanged. The `getter`
-probe therefore no longer measures reentry on JSC. `computedgetter` reads the same getter
-through a key the compiler cannot see, which JSC still calls from C++, and takes over
-that role. `ajvnames` is the Ajv walk reduced to its getters, and `ajv` runs the real
+probe therefore no longer measures reentry on JSC. `computedgetter` originally took over
+that role by reading through a key the compiler cannot see. Ordinary computed getters now
+also call from the loop, as measured below. `ajvnames` is the Ajv walk reduced to its getters, and `ajv` runs the real
 package.
 
 Measured on November 11, 2026 on the native launcher: the split JSC pair from main's CI
@@ -438,6 +447,37 @@ change and is not fixed here.
 
 These are launcher measurements of the guest's own guards. They are not Safari or Firefox
 runs and do not show that Angular starts there.
+
+On November 13, computed getter dispatch reuses the loop protocol. Native launcher results
+at 192, 208 and 800 KiB are 39,930 completed levels followed by a caught `RangeError`, also
+with 256 and 512 KiB host stacks at the 192 KiB budget. Proxy and `toString` results stay
+29/31, 32/34 and 125/133 at those budgets. Linux Chrome and WebKit cold controls at 512 KiB
+host stack, 240 KiB guest budget and parser reserve 2048 complete 45 and catch at 200000,
+then continue. The original warm prefix measures 39,930 and a caught boundary. WebKit's
+warm plain-JSON failure remains separate work. These are Linux results;
+Safari and iPhone confirmation consumes the normal merged delivery.
+
+### Proxy forwarding without native recursion
+
+On WASI, a Proxy with no `get` trap now forwards to a Proxy target in a loop rather than through
+another native property lookup ([record](bun-patches/jsc-proxy-get-forwarding.md)). Each forward
+still reserves 512 shadow bytes and checks the existing soft guard. Actual JavaScript `get` traps
+keep their native call path.
+
+Measured on November 14, 2026 on the native launcher, with the split pair from this change and the
+same pair before the engine hunk. A number is the deepest chain that completed; one level more threw
+a catchable `RangeError`.
+
+| Path | 192 KiB before | After | 208 KiB before | After | 800 KiB before | After |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `proxychain` | 197 | 369 | 214 | 401 | 846 | 1,585 |
+| `proxy` | 29 | 30 | 32 | 32 | 125 | 125 |
+
+The forwarding row gains capacity because it retains only the explicit 512-byte charge per level,
+not the old recursive frames. The trap row differs by one level at 192 KiB and is identical at the
+other budgets. Both rows throw and continue at 200,000 levels. On the Node host with a 320 KiB
+worker stack and an 800 KiB diagnostic guest budget, the old engine traps in the recursive property
+lookup cycle; the iterative pair catches the error and completes a later read.
 
 ### Bound functions called in the loop
 
@@ -480,8 +520,8 @@ catchable `RangeError`, at every budget and on every host.
 The guard counts shadow bytes, and `CLoop::execute` supplies 4,896 of the roughly 5.8 KB
 one reentry level spends: an 80-byte block for spilled pointers and a 4,816-byte frame
 that is mostly one 8-byte result slot per slow-path call site, with one live at a time.
-Those bytes are what stops computed getters at 35 levels and Proxy traps at 29 at
-192 KiB, below what Safari's worker stack holds. A compiler upgrade or flag change that
+Those bytes still limit Proxy traps, numeric-index getters, setters and coercion reentry.
+Ordinary computed getters use the frame stack and no longer set this floor's stopping depth. A compiler upgrade or flag change that
 merged the slots would let every reentry path go several times deeper with no source
 change of ours.
 
@@ -500,7 +540,7 @@ a missing stack pointer export, or more than one such function.
 The two builds differ, which is why the check follows paths and does not match a fixed
 prologue. The split side allocates once at entry and releases once at its end: 684 calls,
 all at 4,896 bytes. The shared-group side has callees inlined into the loop with their
-own frames: 1,050 calls, between 4,896 and 5,344 bytes. The same check bounds the
+own frames: 1,066 calls after computed getter dispatch, between 4,896 and 5,344 bytes. The same check bounds the
 function's wasm parameters and locals at 328, because a first-tier wasm interpreter keeps
 each of them on the host stack. The split side has 293 and the bound is that plus 12%.
 The shared-group side has 52.

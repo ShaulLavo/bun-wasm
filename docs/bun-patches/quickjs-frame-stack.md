@@ -286,12 +286,17 @@ The inline route is deliberately narrow: an ordinary record calling an object
 of the ordinary bytecode function class through a call opcode. A class
 constructor called without `new` qualifies, and fails in its own bytecode with
 the upstream error. Everything else keeps its C call and the native guard:
-constructors (`new`, `super`, `Reflect.construct`), `Function.prototype.call`
-and `apply`, `eval`, accessors, native functions and their callbacks
-(`Array.prototype.map`, `reduce`, `sort`), bound functions, proxies, and
+constructors (`new`, `super`, `Reflect.construct`), `Function.prototype.apply`,
+`eval`, accessors, native functions and their callbacks
+(`Array.prototype.map`, `sort`), bound functions, proxies, and
 generator and async functions, both as callers and as callees. A recursion
 that passes through any of these still costs native stack at every level and
 is still refused by the guard.
+
+`Function.prototype.call` to an ordinary target, and Array `reduce` and
+`reduceRight` with ordinary callbacks, now use a native logical frame and a
+loop continuation. Other targets still take native dispatch. See
+[builtin loop continuations](quickjs-loop-dispatch.md).
 
 The C entry reserves 48 shadow-stack bytes, once per C activation, not per
 inline call. The frame storage that left the shadow stack was also what made

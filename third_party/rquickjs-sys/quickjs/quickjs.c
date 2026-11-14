@@ -3629,16 +3629,37 @@ typedef struct JSExecFrame {
     JSValueConst *actual_argv;
     int actual_argc;
     JSContext *caller_ctx; /* the realm that made the call */
-    /* The ordinary record whose dispatch loop entered this one, or NULL when
+    /* The record whose dispatch loop entered this one, or NULL when
        this record was entered from C and ends its interpreter activation. */
-    struct JSExecFrame *ordinary_caller;
+    struct JSExecFrame *resume_record;
     /* Written by this record just before it enters an inline callee, and
        read when that callee returns. Its pc is frame.cur_pc. Coroutine
        frames are never inline callers, so their cur_sp is never used here. */
     JSValue *saved_sp;
-    int call_argc;
+    int call_release; /* operand slots replaced by the callee's result */
     uint8_t call_kind; /* JS_FRAME_CALL_* */
+    uint8_t record_kind;
+    uint8_t owns_func;
 } JSExecFrame;
+
+enum { JS_RECORD_ORDINARY, JS_RECORD_CONTINUATION };
+typedef enum { JS_CONT_NONE, JS_CONT_CALL, JS_CONT_REDUCE, JS_CONT_REDUCE_RIGHT } JSContKind;
+
+typedef struct JSReduceState {
+    JSValue obj, acc;
+    int64_t len, k;
+    JSValue args[4];
+} JSReduceState;
+
+typedef struct JSContFrame {
+    JSExecFrame base;
+    JSContKind kind;
+    JSValueConst next_func, next_this;
+    JSValueConst *next_argv;
+    int next_argc;
+    JSValue result;
+    JSReduceState reduce;
+} JSContFrame;
 
 /* True for a callee the dispatch loop may enter without a C call: an
    ordinary bytecode function. Generators and async functions have their
@@ -3660,6 +3681,22 @@ static inline bool js_frame_inline_callee(JSValueConst func_obj)
 
 #define JS_FRAME_HEADER_SIZE \
     ((sizeof(JSExecFrame) + JS_FRAME_ALIGN - 1) & ~(JS_FRAME_ALIGN - 1))
+
+#define JS_CONT_VALUE_SLOTS \
+    ((sizeof(JSContFrame) - JS_FRAME_HEADER_SIZE + sizeof(JSValue) - 1) / sizeof(JSValue))
+
+_Static_assert(JS_FRAME_HEADER_SIZE == (sizeof(void *) == 4 ? 104 : 168),
+               "ordinary frame header must not grow");
+_Static_assert(offsetof(JSExecFrame, record_kind) == (sizeof(void *) == 4 ? 97 : 165),
+               "record kind must use existing tail padding");
+_Static_assert(offsetof(JSExecFrame, owns_func) == (sizeof(void *) == 4 ? 98 : 166),
+               "owned function flag must use existing tail padding");
+_Static_assert(_Alignof(JSContFrame) <= JS_FRAME_ALIGN,
+               "continuation alignment must fit frame storage");
+_Static_assert(JS_FRAME_HEADER_SIZE + JS_CONT_VALUE_SLOTS * sizeof(JSValue) >= sizeof(JSContFrame),
+               "rounded continuation allocation must contain every field");
+_Static_assert(sizeof(JSContFrame) == (sizeof(void *) == 4 ? 208 : 352),
+               "reduce continuation layout must match its checked allocation");
 
 /* Gives a chunk back to the allocator. Its charge ends only once the
    allocator has the block again. */
@@ -18974,6 +19011,141 @@ static JSValue JS_CallInternal(JSContext *ctx, JSValueConst func_obj,
     return JS_CallBytecode(ctx, func_obj, this_obj, new_target, argc, argv, flags);
 }
 
+static JSValue js_function_call(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv);
+static JSValue js_array_reduce(JSContext *ctx, JSValueConst this_val,
+                               int argc, JSValueConst *argv, int special);
+static no_inline int js_cont_reduce_step(JSContFrame *c, JSValue in);
+
+#define special_reduce       0
+#define special_reduceRight  1
+
+static inline JSContKind js_cont_kind(JSValueConst builtin, JSValueConst this_obj,
+                                     int argc, JSValueConst *argv)
+{
+    JSObject *p;
+
+    if (JS_VALUE_GET_TAG(builtin) != JS_TAG_OBJECT)
+        return JS_CONT_NONE;
+    p = JS_VALUE_GET_OBJ(builtin);
+    if (p->class_id != JS_CLASS_C_FUNCTION)
+        return JS_CONT_NONE;
+    if (p->u.cfunc.cproto == JS_CFUNC_generic &&
+        p->u.cfunc.c_function.generic == js_function_call &&
+        js_frame_inline_callee(this_obj))
+        return JS_CONT_CALL;
+    if (p->u.cfunc.cproto != JS_CFUNC_generic_magic ||
+        p->u.cfunc.c_function.generic_magic != js_array_reduce ||
+        argc < 1 || !js_frame_inline_callee(argv[0]))
+        return JS_CONT_NONE;
+    if (p->u.cfunc.magic == special_reduce)
+        return JS_CONT_REDUCE;
+    if (p->u.cfunc.magic == special_reduceRight)
+        return JS_CONT_REDUCE_RIGHT;
+    return JS_CONT_NONE;
+}
+
+static void js_cont_clear_value(JSRuntime *rt, JSValue *value)
+{
+    JSValue old = *value;
+
+    *value = JS_UNDEFINED;
+    JS_FreeValueRT(rt, old);
+}
+
+static void js_cont_reduce_clear_args(JSRuntime *rt, JSReduceState *r)
+{
+    int i;
+
+    for (i = 0; i < 4; i++)
+        js_cont_clear_value(rt, &r->args[i]);
+}
+
+/* Native argument readers do not index native arg_buf: this is the actual,
+   unpadded vector, borrowed from the creating record's live operands. */
+static no_inline JSContFrame *js_cont_push(JSContext *ctx, JSExecFrame *resume_record,
+                                         JSContKind kind, JSValueConst builtin,
+                                         JSValueConst this_obj, int argc,
+                                         JSValueConst *argv)
+{
+    JSContFrame *c = (JSContFrame *)js_frame_push(ctx, JS_CONT_VALUE_SLOTS, 0);
+    JSStackFrame *sf;
+    int i;
+
+    if (!c)
+        return NULL;
+    c->base.resume_record = resume_record;
+    c->base.record_kind = JS_RECORD_CONTINUATION;
+    c->base.owns_func = 0;
+    c->base.this_obj = this_obj;
+    c->base.new_target = JS_UNDEFINED;
+    c->base.actual_argc = argc;
+    c->base.actual_argv = argv;
+    c->base.caller_ctx = JS_VALUE_GET_OBJ(builtin)->u.cfunc.realm;
+    c->base.saved_sp = NULL;
+    c->base.call_release = 0;
+    c->base.call_kind = 0;
+    c->kind = kind;
+    c->next_func = c->next_this = JS_UNDEFINED;
+    c->next_argv = NULL;
+    c->next_argc = 0;
+    c->result = JS_UNDEFINED;
+    c->reduce.obj = c->reduce.acc = JS_UNDEFINED;
+    c->reduce.len = c->reduce.k = 0;
+    for (i = 0; i < 4; i++)
+        c->reduce.args[i] = JS_UNDEFINED;
+    sf = &c->base.frame;
+    sf->cur_func = unsafe_unconst(builtin);
+    sf->arg_buf = (JSValue *)argv;
+    sf->arg_count = argc;
+    sf->var_buf = NULL;
+    sf->var_refs = NULL;
+    sf->var_ref_count = 0;
+    sf->is_strict_mode = false;
+    sf->is_constructor = false;
+    sf->cur_pc = NULL;
+    sf->cur_sp = NULL;
+    sf->cur_gc_obj = NULL;
+    sf->prev_frame = ctx->rt->current_stack_frame;
+    ctx->rt->current_stack_frame = sf;
+    return c;
+}
+
+/* The input is owned. Only the first step receives JS_UNINITIALIZED. */
+static no_inline int js_cont_step(JSContFrame *c, JSValue in)
+{
+    if (c->kind != JS_CONT_CALL)
+        return js_cont_reduce_step(c, in);
+    if (!JS_IsUninitialized(in)) {
+        c->result = in;
+        return 0;
+    }
+    c->next_func = c->base.this_obj;
+    c->next_this = JS_UNDEFINED;
+    c->next_argc = 0;
+    c->next_argv = NULL;
+    if (c->base.actual_argc > 0) {
+        c->next_this = c->base.actual_argv[0];
+        c->next_argc = c->base.actual_argc - 1;
+        c->next_argv = c->base.actual_argv + 1;
+    }
+    return 1;
+}
+
+static no_inline JSValue js_cont_finish(JSRuntime *rt, JSContFrame *c)
+{
+    JSValue result = c->result;
+
+    c->result = JS_UNDEFINED;
+    js_cont_reduce_clear_args(rt, &c->reduce);
+    js_cont_clear_value(rt, &c->reduce.acc);
+    js_cont_clear_value(rt, &c->reduce.obj);
+    assert(rt->current_stack_frame == &c->base.frame);
+    rt->current_stack_frame = c->base.frame.prev_frame;
+    js_frame_pop(rt, &c->base);
+    return result;
+}
+
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
 static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                                JSValueConst this_obj, JSValueConst new_target,
@@ -18987,10 +19159,13 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     /* the frame-stack record of an ordinary call; NULL while resuming a
        coroutine, whose frame belongs to its own heap allocation */
     JSExecFrame *owned = NULL;
+    JSExecFrame *caller;
+    JSContFrame *c;
+    JSContKind kind;
     uint8_t *pc;
     int opcode, arg_allocated_size, i;
     /* the call being made; shared by the call opcodes and inline_call */
-    int call_argc, call_kind;
+    int call_argc, call_kind, st;
     JSValue *call_argv;
     JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
     JSVarRef **var_refs;
@@ -19072,7 +19247,9 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                           b->var_ref_count);
     if (unlikely(!owned))
         return JS_EXCEPTION;
-    owned->ordinary_caller = NULL;
+    owned->resume_record = NULL;
+    owned->record_kind = JS_RECORD_ORDINARY;
+    owned->owns_func = 0;
 
     /* Entered from C above, and from inline_call below with the callee's
        record pushed and func_obj, this_obj, new_target, argc, argv,
@@ -19493,6 +19670,10 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                     call_kind = opcode == OP_tail_call ? JS_FRAME_CALL_TAIL : 0;
                     goto inline_call;
                 }
+                if (owned && (kind = js_cont_kind(call_argv[-1], JS_UNDEFINED, call_argc, vc(call_argv)))) {
+                    call_kind = opcode == OP_tail_call ? JS_FRAME_CALL_TAIL : 0;
+                    goto cont_begin;
+                }
                 ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc,
                                           vc(call_argv), 0);
@@ -19534,6 +19715,11 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                     call_kind = JS_FRAME_CALL_METHOD |
                         (opcode == OP_tail_call_method ? JS_FRAME_CALL_TAIL : 0);
                     goto inline_call;
+                }
+                if (owned && (kind = js_cont_kind(call_argv[-1], call_argv[-2], call_argc, vc(call_argv)))) {
+                    call_kind = JS_FRAME_CALL_METHOD |
+                        (opcode == OP_tail_call_method ? JS_FRAME_CALL_TAIL : 0);
+                    goto cont_begin;
                 }
                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc,
@@ -21911,43 +22097,98 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
        unlinked and its values are freed before its storage can be reused. */
     if (!owned)
         return ret_val;
-    {
-        JSExecFrame *caller = owned->ordinary_caller;
-        int below;
+    caller = owned->resume_record;
+    if (owned->owns_func) {
+        JS_FreeValueRT(rt, sf->cur_func);
+        sf->cur_func = JS_UNDEFINED;
+    }
+    js_frame_pop(rt, owned);
 
-        js_frame_pop(rt, owned);
-        if (!caller)
-            return ret_val;
-        /* The call was entered by inline_call: continue the calling record
-           where JS_CallInternal would have returned to it. */
-        owned = caller;
-        sf = &owned->frame;
-        func_obj = sf->cur_func;
-        this_obj = owned->this_obj;
-        new_target = owned->new_target;
-        argc = owned->actual_argc;
-        argv = owned->actual_argv;
-        caller_ctx = owned->caller_ctx;
-        p = JS_VALUE_GET_OBJ(func_obj);
+ record_return:
+    if (!caller)
+        return ret_val;
+    if (caller->record_kind == JS_RECORD_CONTINUATION) {
+        c = (JSContFrame *)caller;
+        st = js_cont_step(c, ret_val);
+        goto cont_dispatch;
+    }
+    owned = caller;
+    sf = &owned->frame;
+    func_obj = sf->cur_func;
+    this_obj = owned->this_obj;
+    new_target = owned->new_target;
+    argc = owned->actual_argc;
+    argv = owned->actual_argv;
+    caller_ctx = owned->caller_ctx;
+    p = JS_VALUE_GET_OBJ(func_obj);
+    b = p->u.func.function_bytecode;
+    ctx = b->realm;
+    var_refs = p->u.func.var_refs;
+    local_buf = (JSValue *)((uint8_t *)owned + JS_FRAME_HEADER_SIZE);
+    arg_buf = sf->arg_buf;
+    var_buf = sf->var_buf;
+    stack_buf = var_buf + b->var_count;
+    pc = sf->cur_pc;
+    sp = owned->saved_sp;
+    if (unlikely(JS_IsException(ret_val)))
+        goto exception;
+    if (owned->call_kind & JS_FRAME_CALL_TAIL)
+        goto done;
+    for(i = -owned->call_release; i < 0; i++)
+        JS_FreeValue(ctx, sp[i]);
+    sp -= owned->call_release;
+    *sp++ = ret_val;
+    goto restart;
+
+ cont_begin:
+    if (unlikely(js_poll_interrupts(ctx)))
+        goto exception;
+    c = js_cont_push(ctx, owned, kind, call_argv[-1],
+                     call_kind & JS_FRAME_CALL_METHOD ? call_argv[-2] : JS_UNDEFINED,
+                     call_argc, vc(call_argv));
+    if (unlikely(!c))
+        goto exception;
+    owned->saved_sp = sp;
+    owned->call_release = call_argc + (call_kind & JS_FRAME_CALL_METHOD ? 2 : 1);
+    owned->call_kind = call_kind & JS_FRAME_CALL_TAIL;
+    st = js_cont_step(c, JS_UNINITIALIZED);
+
+ cont_dispatch:
+    if (!st) {
+        caller = c->base.resume_record;
+        ret_val = js_cont_finish(rt, c);
+        goto record_return;
+    }
+    {
+        JSExecFrame *callee;
+
+        ctx = c->base.caller_ctx;
+        p = JS_VALUE_GET_OBJ(c->next_func);
         b = p->u.func.function_bytecode;
-        ctx = b->realm;
-        var_refs = p->u.func.var_refs;
-        local_buf = (JSValue *)((uint8_t *)owned + JS_FRAME_HEADER_SIZE);
-        arg_buf = sf->arg_buf;
-        var_buf = sf->var_buf;
-        stack_buf = var_buf + b->var_count;
-        pc = sf->cur_pc;
-        sp = owned->saved_sp;
-        if (unlikely(JS_IsException(ret_val)))
-            goto exception;
-        if (owned->call_kind & JS_FRAME_CALL_TAIL)
-            goto done;
-        below = owned->call_kind & JS_FRAME_CALL_METHOD ? 2 : 1;
-        for(i = -below; i < owned->call_argc; i++)
-            JS_FreeValue(ctx, sp[i - owned->call_argc]);
-        sp -= owned->call_argc + below;
-        *sp++ = ret_val;
-        goto restart;
+        arg_allocated_size = c->next_argc < b->arg_count ? b->arg_count : 0;
+        if (unlikely(js_poll_interrupts(ctx))) {
+            st = js_cont_step(c, JS_EXCEPTION);
+            goto cont_dispatch;
+        }
+        callee = js_frame_push(ctx,
+                               (size_t)arg_allocated_size + b->var_count + b->stack_size,
+                               b->var_ref_count);
+        if (unlikely(!callee)) {
+            st = js_cont_step(c, JS_EXCEPTION);
+            goto cont_dispatch;
+        }
+        callee->resume_record = &c->base;
+        callee->record_kind = JS_RECORD_ORDINARY;
+        callee->owns_func = 0;
+        caller_ctx = ctx;
+        func_obj = c->next_func;
+        this_obj = c->next_this;
+        argc = c->next_argc;
+        argv = c->next_argv;
+        new_target = JS_UNDEFINED;
+        flags = 0;
+        owned = callee;
+        goto enter_frame;
     }
 
     /* bun-wasm: an ordinary record calls an ordinary bytecode function
@@ -21971,9 +22212,11 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
         if (unlikely(!callee))
             goto exception;
         owned->saved_sp = sp;
-        owned->call_argc = call_argc;
-        owned->call_kind = call_kind;
-        callee->ordinary_caller = owned;
+        owned->call_release = call_argc + (call_kind & JS_FRAME_CALL_METHOD ? 2 : 1);
+        owned->call_kind = call_kind & JS_FRAME_CALL_TAIL;
+        callee->resume_record = owned;
+        callee->record_kind = JS_RECORD_ORDINARY;
+        callee->owns_func = 0;
         owned = callee;
         caller_ctx = ctx;
         func_obj = call_argv[-1];
@@ -45207,8 +45450,85 @@ exception:
     return JS_EXCEPTION;
 }
 
-#define special_reduce       0
-#define special_reduceRight  1
+static no_inline int js_cont_reduce_init(JSContFrame *c)
+{
+    JSContext *ctx = c->base.caller_ctx;
+    JSReduceState *r = &c->reduce;
+    int64_t k;
+    int present;
+
+    r->obj = JS_ToObject(ctx, c->base.this_obj);
+    if (js_get_length64(ctx, &r->len, r->obj))
+        return -1;
+    if (check_function(ctx, c->base.actual_argv[0]))
+        return -1;
+    if (c->base.actual_argc > 1) {
+        r->acc = js_dup(c->base.actual_argv[1]);
+        return 0;
+    }
+    for (;;) {
+        if (js_poll_interrupts(ctx))
+            return -1;
+        if (r->k >= r->len) {
+            JS_ThrowTypeError(ctx, "empty array");
+            return -1;
+        }
+        k = c->kind == JS_CONT_REDUCE_RIGHT ? r->len - r->k - 1 : r->k;
+        r->k++;
+        present = JS_TryGetPropertyInt64(ctx, r->obj, k, &r->acc);
+        if (present < 0)
+            return -1;
+        if (present)
+            return 0;
+    }
+}
+
+static no_inline int js_cont_reduce_step(JSContFrame *c, JSValue in)
+{
+    JSContext *ctx = c->base.caller_ctx;
+    JSReduceState *r = &c->reduce;
+    JSValue val;
+    int64_t k;
+    int present;
+
+    if (JS_IsUninitialized(in)) {
+        if (js_cont_reduce_init(c))
+            goto exception;
+    } else {
+        js_cont_reduce_clear_args(ctx->rt, r);
+        if (JS_IsException(in))
+            goto exception;
+        js_cont_clear_value(ctx->rt, &r->acc);
+        r->acc = in;
+    }
+    while (r->k < r->len) {
+        if (js_poll_interrupts(ctx))
+            goto exception;
+        k = c->kind == JS_CONT_REDUCE_RIGHT ? r->len - r->k - 1 : r->k;
+        r->k++;
+        present = JS_TryGetPropertyInt64(ctx, r->obj, k, &val);
+        if (present < 0)
+            goto exception;
+        if (!present)
+            continue;
+        r->args[0] = js_dup(r->acc);
+        r->args[1] = val;
+        r->args[2] = js_int64(k);
+        r->args[3] = js_dup(r->obj);
+        c->next_func = c->base.actual_argv[0];
+        c->next_this = JS_UNDEFINED;
+        c->next_argc = 4;
+        c->next_argv = vc(r->args);
+        return 1;
+    }
+    c->result = r->acc;
+    r->acc = JS_UNDEFINED;
+    return 0;
+
+ exception:
+    c->result = JS_EXCEPTION;
+    return 0;
+}
 
 static JSValue js_array_reduce(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv, int special)
