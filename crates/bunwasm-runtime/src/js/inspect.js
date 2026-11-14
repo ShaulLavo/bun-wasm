@@ -1425,7 +1425,8 @@
   }
 
   function nativeFrame(name, source, line, col) {
-    if (source.startsWith("bun-wasm:")) return null;
+    const constructed = native.engine === "spidermonkey" && /^bun-wasm:function line \d+ > (?:Function|AsyncFunction|GeneratorFunction|AsyncGenerator)(?:$| > )/.test(source);
+    if (source.startsWith("bun-wasm:") && !constructed) return null;
     const generated = native.engine === "host" && native.preparedSourceName(source) !== undefined;
     const url = source.startsWith("bunwasm:hot:") ? source : typeof internal.displayName === "function" ? internal.displayName(source) : source;
     let [file, lineNo, column] = [url, line, col];

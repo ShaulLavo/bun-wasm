@@ -145,6 +145,15 @@ test("SpiderMonkey maps anonymous module bodies without inventing a function nam
   ]);
 });
 
+for (const kind of ["Function", "AsyncFunction", "GeneratorFunction", "AsyncGenerator"]) {
+  test(`SpiderMonkey retains user frames created by ${kind} through the runtime wrapper`, () => {
+    const file = `bun-wasm:function line 26 > ${kind}`;
+    expect(inspector("spidermonkey").parseStack(`sloppyNamed@${file}:3:40\nconstructor@bun-wasm:function:26:16`)).toEqual([
+      { name: "sloppyNamed", file, line: 3, column: 40 },
+    ]);
+  });
+}
+
 for (const name of ["async*sync", "at sync", "async*__bunwasm_cjs__"]) {
   test(`SpiderMonkey preserves synchronous native display name ${name}`, () => {
     const stack = inspector("spidermonkey");

@@ -27,6 +27,12 @@ Mozilla's SavedFrame APIs omit internal `apply` frames by native classification.
 User frames whose filename is `self-hosted` remain visible, and native stack text
 still retains its original contents.
 
+Function constructors invoked through the runtime wrapper give user functions
+sources such as `bun-wasm:function line 26 > Function`. Retain those derived
+user frames while continuing to hide the wrapper's own `bun-wasm:function`
+frames. The checked constructor labels come from Mozilla's `js/src/vm/JSFunction.cpp`
+at the revision below, including its async and generator constructors.
+
 Synchronous CommonJS wrappers keep their location but not their synthetic name.
 After source mapping, a SpiderMonkey constructor column advances only for the
 simple same-line `new` plus horizontal whitespace and identifier form. Comments,
