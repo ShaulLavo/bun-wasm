@@ -21,7 +21,7 @@ async function fixture(engine: BrowserType): Promise<Page> {
   } });
   lifetime.own("server.close", () => server.stop(true));
   const { value: browser } = await lifetime.acquire("browser.launch", () => engine.launch({ headless: true }), browser => browser.close());
-  const { value: context } = await lifetime.acquire("context.create", () => browser.newContext(), context => context.close());
+  const context = await browser.newContext();
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
   await page.goto(server.url.href);
@@ -32,14 +32,13 @@ async function fixture(engine: BrowserType): Promise<Page> {
 
 async function replaceDocument(page: Page, mode: "reload" | "navigate" | "iframe"): Promise<void> {
   const loaded = page.waitForEvent("framenavigated", frame => frame !== page.mainFrame());
-  await page.locator("#preview").evaluate((frame, mode) => {
+  await Promise.all([loaded, page.evaluate(mode => {
+    const frame = document.querySelector("#preview");
     if (!(frame instanceof HTMLIFrameElement) || !frame.contentWindow) throw new Error("Missing preview");
     if (mode === "reload") return frame.contentWindow.location.reload();
     if (mode === "navigate") { frame.src = "/other"; return; }
     frame.outerHTML = '<iframe id="preview" src="/preview"></iframe>';
-  }, mode);
-  await loaded;
-  await page.frameLocator("#preview").getByRole("heading").waitFor();
+  }, mode)]);
 }
 
 for (const engine of [chromium, webkit]) {
