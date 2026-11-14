@@ -1,4 +1,5 @@
 {
   "owner": "native",
-  "path": "tests/fixtures/json-fast-iterative"
+  "path": "tests/fixtures/json-fast-iterative",
+  "engines": ["quickjs", "jsc", "browser"]
 }

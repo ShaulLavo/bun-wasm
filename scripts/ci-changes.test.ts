@@ -182,8 +182,7 @@ beforeAll(() => {
   mkdirSync(join(fixture, "crates"));
   writeFileSync(join(fixture, "crates/lib.rs"), "owned native input\n");
   mkdirSync(join(fixture, "checks"));
-  writeFileSync(join(fixture, "checks/runtime-json-fast-controls.json"), JSON.stringify({ owner: "runtime", path: "scripts/jsc-json-fast-controls.test.ts" }, null, 2));
-  writeFileSync(join(fixture, "checks/native-json-fast-iterative.json"), JSON.stringify({ owner: "native", path: "tests/fixtures/json-fast-iterative" }));
+  writeFileSync(join(fixture, "checks/native-json-fast-iterative.json"), readFileSync(new URL("../checks/native-json-fast-iterative.json", import.meta.url), "utf8"));
   git(["add", "."]);
   git(["commit", "-qm", "base"]);
   base = git(["rev-parse", "HEAD"]);
@@ -208,12 +207,12 @@ function select(start: string, end: string, event = "pull_request"): string {
 }
 
 test("real PR diff catches a native file renamed into JavaScript", () => {
-  expect(select(base, native)).toBe("rust=true\njsc=true");
+  expect(select(base, native)).toBe("rust=true\njsc=false");
   expect(select(native, javascript)).toBe("rust=false\njsc=false");
 });
 
 test("multi-commit main push includes earlier native changes", () => {
-  expect(select(base, javascript, "push")).toBe("rust=true\njsc=true");
+  expect(select(base, javascript, "push")).toBe("rust=true\njsc=false");
 });
 
 test("unavailable commit comparison fails rather than skipping native checks", () => {
@@ -232,20 +231,20 @@ function commitInput(path: string, content = "changed input\n"): string {
 
 for (const path of [
   "scripts/jsc-json-fast-controls.test.ts", "checks/runtime-json-fast-controls.json",
+  "scripts/bench-jsc-json.ts", "scripts/fixtures/jsc-json-bench.ts",
   "tests/fixtures/json-fast-iterative/index.ts", "tests/fixtures/json-fast-iterative/expected.txt",
-  "crates/bunwasm-host/src/main.rs", "scripts/check-encoded-slice.ts",
-  "scripts/quality-rust.ts", "scripts/browser-build.ts",
+  "checks/native-json-fast-iterative.json", "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp",
 ]) {
-  test.each(["pull_request", "push"])(`${path} produces JSC before the unconditional runtime controls for %s`, event => {
+  test.each(["pull_request", "push"])(`${path} selects the compiled JSON controls' JSC producer for %s`, event => {
     const content = path.endsWith(".json")
-      ? JSON.stringify({ owner: "runtime", path: "scripts/jsc-json-fast-controls.test.ts" }) : "changed input\n";
+      ? readFileSync(new URL(`../${path}`, import.meta.url), "utf8") + "\n" : "changed input\n";
     expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
   });
 }
 
 for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh", ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml"]) {
   test.each(["pull_request", "push"])(`${path} retains native checks through the real %s event CLI`, event => {
-    expect(select(base, commitInput(path), event)).toBe(`rust=true\njsc=true`);
+    expect(select(base, commitInput(path), event)).toBe(`rust=true\njsc=${needsJsc([path])}`);
   });
 }
 
@@ -263,7 +262,7 @@ for (const path of ["scripts/check-encoded-slice.ts", "tests/encoded-slice/probe
   test.each(["pull_request", "push"])(`${path} selects the blocking EncodedSlice native proof for %s`, event => {
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
-    expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=true");
+    expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=false");
   });
 }
 
@@ -284,7 +283,7 @@ for (const path of [
   "scripts/real-runtime-network-tls.sh", "jsc/shim/wasi-compat.h", "jsc/shim/wasi-compat.c", "jsc/shim/madvise.c",
 ]) {
   test.each(["pull_request", "push"])(`${path} keeps the blocking lightweight CMake owner for a real %s event`, event => {
-    expect(select(base, commitInput(path), event)).toBe(`rust=${needsRust([path])}\njsc=${needsRust([path])}`);
+    expect(select(base, commitInput(path), event)).toBe(`rust=${needsRust([path])}\njsc=${needsJsc([path])}`);
     expect(quality).toContain("run: bun scripts/test-checks.ts cmake");
     expect(quality).not.toMatch(/^ {4}(?:if|needs):/m);
   });
@@ -309,7 +308,7 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
   expect(selectionOutput(manifestBase, bumped, "push")).toEndWith("shared_native=false");
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.3", scripts: { quality: "bun changed-quality.ts" } }));
   git(["commit", "-qam", "change native driver"]);
-  expect(select(bumped, git(["rev-parse", "HEAD"]))).toBe("rust=true\njsc=true");
+  expect(select(bumped, git(["rev-parse", "HEAD"]))).toBe("rust=true\njsc=false");
   expect(selectionOutput(bumped, git(["rev-parse", "HEAD"]))).toEndWith("shared_native=true");
   expect(() => select(first, bumped)).toThrow();
 });
@@ -394,8 +393,8 @@ for (const path of ["web/src/main.ts", "sandbox/src/main.ts", "site/src/main.ts"
 }
 
 for (const path of ["web/guest-tests/quickjs.test.ts", "web/guest-tests/browser.test.ts", "web/guest-tests/jsc.test.ts"]) {
-  test.each(["pull_request", "push"])(`${path} selects its engine and the runtime controls' JSC prerequisite through the real %s event CLI`, event => {
-    expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=true");
+  test.each(["pull_request", "push"])(`${path} selects only its own engine owner through the real %s event CLI`, event => {
+    expect(select(base, commitInput(path), event)).toBe(`rust=true\njsc=${path.endsWith("jsc.test.ts")}`);
   });
 }
 
@@ -416,7 +415,7 @@ for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-
   test.each(["pull_request", "push"])(`${path} retains native-only selection for %s`, event => {
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
-    expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=true");
+    expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=false");
   });
 }
 

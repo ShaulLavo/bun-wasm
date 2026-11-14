@@ -58,6 +58,14 @@ function api(head: string, candidates: ReturnType<typeof run>[], jobs: unknown[]
   return { head, run: 999, request, requests };
 }
 
+test.each(["quickjs", "browser", "jsc"])("cumulative selection forwards the declared %s fixture engine", engine => fixture(async () => {
+  change("checks/native-engine-selection.json", JSON.stringify({ owner: "native", path: "tests/fixtures/engine-selection", engines: [engine] }));
+  const base = change("tests/fixtures/engine-selection/index.ts", "before");
+  const head = change("tests/fixtures/engine-selection/index.ts", "after");
+  const result = await mainCoverage(api(head, [run(base)], [quality(base)]));
+  expect(result).toMatchObject({ kind: "verified", selection: { ...none, rust: true, jsc: engine === "jsc" } });
+}));
+
 test("pending native followed by several docs replacements retains every owed family", () => fixture(async base => {
   change("jsc/changed.c", "native change");
   change("scripts/build-wasi-sysroot.ts", "sysroot change");
@@ -100,7 +108,7 @@ test("intermediate manifest inputs survive removal on the same edge and renamed/
   expect(selectChanges(manifest, head)).toMatchObject({ rust: true, shared_native: true });
   const result = await mainCoverage(api(head, [run(manifest)], [quality(manifest)]));
   expect(result).toMatchObject({ kind: "verified", selection: { rust: true, shared_native: true } });
-  expect(result.selection.jsc).toBe(true);
+  expect(result.selection.jsc).toBe(false);
   expect(base).not.toBe(manifest);
 }));
 

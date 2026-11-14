@@ -1,8 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, test as bunTest } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { nativeProducerEngines } from "./test-checks";
 
+const test = bunTest.skipIf(!nativeProducerEngines().includes("jsc"));
 const root = resolve(import.meta.dir, "..");
 const launcher = process.env.BUN_WASM_LAUNCHER ?? `${process.env.CARGO_TARGET_DIR ?? "/work/tmp/bun-wasm-target"}/release/bun-wasm`;
 const wasm = process.env.BUN_WASM_JSON_FAST_WASM ?? join(root, "dist/bun-jsc.wasm");

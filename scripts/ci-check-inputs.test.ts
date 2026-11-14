@@ -38,7 +38,35 @@ function repository() {
   return { directory, git, write, commit, select };
 }
 
+for (const event of ["pull_request", "push"]) {
+  test(`${event} a Browser-only native fixture does not compile JSC`, () => {
+    const repo = repository();
+    const input = "tests/fixtures/browser-engine-case/index.ts";
+    repo.write("checks/native-browser-engine-case.json", JSON.stringify({ owner: "native", path: "tests/fixtures/browser-engine-case", engines: ["browser"] }));
+    repo.write(input, "before\n");
+    const base = repo.commit();
+    repo.write(input, "after\n");
+    expect(repo.select(base, repo.commit(), event).output).toBe("rust=true\njsc=false\nshared=false");
+  });
+}
+
 const compiledChecks = discoverChecks().filter(check => check.owner === "native" || check.owner === "runtime" || check.owner === "browser-guest");
+
+for (const event of ["pull_request", "push"]) {
+  test(`${event} preserves JSC production for declared engine fixtures through edits and removal`, () => {
+    const repo = repository();
+    const manifest = "checks/native-engine-case.json";
+    const input = "tests/fixtures/engine-case/index.ts";
+    repo.write(manifest, JSON.stringify({ owner: "native", path: "tests/fixtures/engine-case", engines: ["quickjs", "jsc", "browser"] }));
+    repo.write(input, "before\n");
+    const registered = repo.commit();
+    repo.write(input, "after\n");
+    const changed = repo.commit();
+    expect(repo.select(registered, changed, event).output).toBe("rust=true\njsc=true\nshared=false");
+    repo.git(["rm", manifest, input]);
+    expect(repo.select(changed, repo.commit(), event).output).toBe("rust=true\njsc=true\nshared=false");
+  });
+}
 test.each(compiledChecks)("declared $owner check $path retains its blocking Rust owner", check => {
   const path = check.owner === "native" ? `${check.path}/index.ts` : check.path;
   expect(needsRust([path])).toBe(true);
@@ -55,8 +83,8 @@ for (const event of ["pull_request", "push"]) {
       repo.write(input, "first\n");
       const registered = repo.commit();
       repo.write(input, "changed\n");
-      expect(repo.select(registered, repo.commit(), event).output).toBe("rust=true\njsc=true\nshared=false");
-      expect(repo.select(base, registered, event).output).toBe("rust=true\njsc=true\nshared=false");
+      expect(repo.select(registered, repo.commit(), event).output).toBe("rust=true\njsc=false\nshared=false");
+      expect(repo.select(base, registered, event).output).toBe("rust=true\njsc=false\nshared=false");
     });
     test(`${event} reads removed ${owner} check paths from the base snapshot`, () => {
       const repo = repository();
@@ -68,7 +96,7 @@ for (const event of ["pull_request", "push"]) {
       repo.write("checks/web-new-owned-case.json", JSON.stringify({ owner: "web", path: "scripts/replacement.test.ts", localRuntime: true }));
       repo.write("scripts/replacement.test.ts", "replacement\n");
       const selected = repo.select(base, repo.commit(), event);
-      expect(selected.output).toBe("rust=true\njsc=true\nshared=false");
+      expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
       expect(selected.inputs).toContain(input);
     });
   }
@@ -99,7 +127,7 @@ for (const event of ["pull_request", "push"]) {
     const base = repo.commit();
     repo.write(path, path === largeMessageManifest ? `${readFileSync(join(repo.directory, path), "utf8")}\n` : "changed\n");
     const selected = repo.select(base, repo.commit(), event);
-    expect(selected.output).toBe("rust=true\njsc=true\nshared=false");
+    expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
     expect(selected.profile).toBe("shared_native=false");
     expect(selected.inputs).toBe(`Native inputs changed: ${path}`);
   });
@@ -114,12 +142,12 @@ for (const event of ["pull_request", "push"]) {
     repo.write(input, "changed\n");
     const changed = repo.commit();
     const selectedChange = repo.select(base, changed, event);
-    expect(selectedChange.output).toBe("rust=true\njsc=true\nshared=false");
+    expect(selectedChange.output).toBe("rust=true\njsc=false\nshared=false");
     expect(selectedChange.profile).toBe(`shared_native=${profile === "shared-group"}`);
     rmSync(join(repo.directory, manifest));
     rmSync(join(repo.directory, input));
     const selected = repo.select(changed, repo.commit(), event);
-    expect(selected.output).toBe("rust=true\njsc=true\nshared=false");
+    expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
     expect(selected.profile).toBe(`shared_native=${profile === "shared-group"}`);
     expect(selected.inputs).toContain(input);
   });
@@ -147,7 +175,7 @@ test("deleted native ownership still gates a renamed input in a later PR commit"
   repo.commit();
   repo.git(["mv", "scripts/old-harness.test.ts", "scripts/source-only.test.ts"]);
   const selected = repo.select(base, repo.commit(), "pull_request");
-  expect(selected.output).toBe("rust=true\njsc=true\nshared=false");
+  expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
   expect(selected.inputs).toContain("scripts/old-harness.test.ts");
 });
 
@@ -168,7 +196,7 @@ for (const event of ["pull_request", "push"]) {
     repo.write("checks/runtime-moved.json", JSON.stringify({ owner: "runtime", path: "scripts/new.test.ts" }));
     repo.git(["mv", "scripts/old.test.ts", "scripts/new.test.ts"]);
     const selected = repo.select(base, repo.commit(), event);
-    expect(selected.output).toBe("rust=true\njsc=true\nshared=false");
+    expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
     expect(selected.inputs).toContain("scripts/old.test.ts");
     expect(selected.inputs).toContain("scripts/new.test.ts");
   });
@@ -219,7 +247,7 @@ test("a diverged PR preserves compiled ownership introduced by the verified test
   repo.git(["merge", "--no-ff", "--no-edit", head]);
   expect(JSON.parse(readFileSync(join(repo.directory, "checks/runtime-target-owned.json"), "utf8")).owner).toBe("runtime");
   const selected = repo.select(verifiedBase, head, "pull_request");
-  expect(selected.output).toBe("rust=true\njsc=true\nshared=false");
+  expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
   expect(selected.inputs).toBe(`Native inputs changed: ${path}`);
 });
 
@@ -248,11 +276,11 @@ for (const event of ["pull_request", "push"]) test(`${event} retains native-prob
   const base = repo.commit();
   repo.write("scripts/fixture-byte-driver.ts", "changed fixture\n");
   const changed = repo.commit();
-  expect(repo.select(base, changed, event).output).toBe("rust=true\njsc=true\nshared=false");
+  expect(repo.select(base, changed, event).output).toBe("rust=true\njsc=false\nshared=false");
   rmSync(join(repo.directory, "checks/native-probe-fixture.json"));
   rmSync(join(repo.directory, "scripts/fixture-byte-driver.ts"));
   const deleted = repo.commit();
-  expect(repo.select(changed, deleted, event).output).toBe("rust=true\njsc=true\nshared=false");
+  expect(repo.select(changed, deleted, event).output).toBe("rust=true\njsc=false\nshared=false");
 });
 
 test("diverged TLS probe deletion still selects secondary inputs from its merge ancestor", () => {
@@ -272,7 +300,7 @@ test("diverged TLS probe deletion still selects secondary inputs from its merge 
   const head = repo.commit();
   expect(repo.git(["merge-base", base, head])).toBe(ancestor);
   const selected = repo.select(base, head, "pull_request");
-  expect(selected.output).toBe("rust=true\njsc=true\nshared=false");
+  expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
   expect(selected.inputs).toContain("scripts/fixture-ancestor-driver.ts");
 });
 

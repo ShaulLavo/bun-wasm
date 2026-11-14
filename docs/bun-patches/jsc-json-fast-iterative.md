@@ -58,7 +58,9 @@ Original adapters, none of which retains upstream implementation code:
 - `crates/bunwasm-jsc/cpp/helpers.cpp` strictly parses `BUN_WASM_JSC_JSON_FAST_TEST` and reports
   existing JSC telemetry plus the core allocator sample when the control is active.
 - `scripts/jsc-json-fast-controls.test.ts` owns the launcher cases and their embedded sources.
-  `checks/runtime-json-fast-controls.json` assigns it to the blocking runtime owner.
+  `checks/runtime-json-fast-controls.json` assigns it to the blocking runtime owner. It follows the
+  native job's `INSTALL_ENGINES` selection, so compiled controls run whenever JSC is selected.
+  The controls and benchmark paths select JSC without building it for unrelated native changes.
 - `tests/fixtures/json-fast-iterative` compares ordinary and forced-general results on all engines.
   `checks/native-json-fast-iterative.json` assigns that fixture to the native owner.
 - `scripts/bench-jsc-json.ts` measures pinned, alternating donor and candidate products.
