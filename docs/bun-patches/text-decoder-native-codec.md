@@ -52,3 +52,8 @@ local runtime preflight. `checks/native-text-decoder.json` owns the guest fixtur
 The source controls use native Bun as the codec oracle. The guest fixture checks
 the complete Rust binding on the existing native CI engines. Private JSC string
 storage hooks and worker subprocess behavior are outside this correction.
+
+Resizable-input assertions remain in the source regression and a separate
+QuickJS/Browser guest fixture. JSC's WASI patch explicitly rejects resizable
+backing allocation, so those guest assertions cannot qualify JSC. Its ordinary
+decoding, streaming, fatal, dictionary and detachment checks still run.

@@ -60,10 +60,6 @@ for (const kind of decoderInputKinds) {
   const during = new ArrayBuffer(4);
   const input = decoderInputView(during, kind);
   assert.equal(new TextDecoder().decode(input, { get stream() { during.transfer(); return false; } }), "");
-  if (kind === "ArrayBuffer") continue;
-  const resized = new ArrayBuffer(4, { maxByteLength: 8 });
-  const view = decoderInputView(resized, kind);
-  assert.equal(new TextDecoder().decode(view, { get stream() { resized.resize(1); return false; } }), "");
 }
 const swappedBuffer = Uint8Array.of(65, 66).buffer;
 Object.setPrototypeOf(swappedBuffer, SharedArrayBuffer.prototype);
