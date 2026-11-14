@@ -33,25 +33,35 @@
   Object.defineProperty(RealDate.prototype, "constructor", { value: MockDate, configurable: true, writable: true });
   globalThis.Date = MockDate;
 
-  // Native Intl uses the engine's wall clock when its date argument is omitted.
-  const dateTimePrototype = Intl.DateTimeFormat.prototype;
-  const formatGetter = Object.getOwnPropertyDescriptor(dateTimePrototype, "format")?.get;
-  const formats = new WeakMap<object, (value?: number | Date) => string>();
-  if (formatGetter) Object.defineProperty(dateTimePrototype, "format", {
-    configurable: true,
-    get() {
-      const nativeFormat: (value: number | Date) => string = formatGetter.call(this);
+  const installedDateTimePrototypes = new WeakSet<object>();
+
+  function formatGetter(get: (this: Intl.DateTimeFormat) => (value: number | Date) => string) {
+    const formats = new WeakMap<object, (value?: number | Date) => string>();
+    return function (this: Intl.DateTimeFormat) {
+      const nativeFormat = get.call(this);
       let format = formats.get(this);
       if (format) return format;
       format = (value) => nativeFormat(value === undefined ? now() : value);
       formats.set(this, format);
       return format;
-    },
-  });
-  const formatToParts = dateTimePrototype.formatToParts;
-  dateTimePrototype.formatToParts = function (value) {
-    return formatToParts.call(this, value === undefined ? now() : value);
-  };
+    };
+  }
+
+  // Install before the namespace becomes observable, without forcing a lazy Intl getter.
+  function installIntl(intl: Pick<typeof Intl, "DateTimeFormat">) {
+    const prototype = intl.DateTimeFormat.prototype;
+    if (installedDateTimePrototypes.has(prototype)) return;
+    const get = Object.getOwnPropertyDescriptor(prototype, "format")?.get;
+    if (get) Object.defineProperty(prototype, "format", { configurable: true, get: formatGetter(get) });
+    const formatToParts = prototype.formatToParts;
+    prototype.formatToParts = function (value) {
+      return formatToParts.call(this, value === undefined ? now() : value);
+    };
+    installedDateTimePrototypes.add(prototype);
+  }
+
+  const intlDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Intl");
+  if (intlDescriptor && "value" in intlDescriptor) installIntl(intlDescriptor.value);
 
   function activeClock() {
     if (!clock) throw new Error("Fake timers are not active. Call useFakeTimers() first.");
@@ -253,6 +263,7 @@
   }
 
   return {
+    installIntl,
     get active() { return clock !== null; },
     get elapsedNanoseconds() { return clock?.elapsed; },
     get timeOrigin() { return wallTime === null ? undefined : clock?.origin; },

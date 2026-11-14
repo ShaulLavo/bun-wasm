@@ -1290,6 +1290,9 @@
     return { body: `\n\nExpected: ${not}${inspect(expected)}\nReceived: ${inspect(last && last.value)}\n` };
   });
 
+  defineMatcher("toHaveNthReturnedWith", "n, expected", (ctx, received, nth, expected) =>
+    matcherSupport.nthReturned({ not: ctx.not, results: mockRecord(received).results, nth, expected, equals, inspect, formatDiff }));
+
   // Jest's aliases.
   for (const [alias, target] of [
     ["toBeCalled", "toHaveBeenCalled"],
@@ -1300,6 +1303,7 @@
     ["nthCalledWith", "toHaveBeenNthCalledWith"],
     ["toReturn", "toHaveReturned"],
     ["toReturnWith", "toHaveReturnedWith"],
+    ["nthReturnedWith", "toHaveNthReturnedWith"],
   ]) {
     if (!(alias in expectProto)) expectProto[alias] = expectProto[target];
   }
