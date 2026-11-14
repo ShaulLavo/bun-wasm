@@ -1,11 +1,6 @@
 name: Storage Firefox native diagnostic
 
 on:
-  push:
-    branches: [t3/firefox-storage-diagnostic]
-    paths:
-      - .github/workflows/storage-firefox-native-diagnostic.yml
-      - .internal/diagnostics/storage-firefox/**
   workflow_dispatch:
 
 permissions:
