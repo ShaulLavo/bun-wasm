@@ -33,7 +33,7 @@ async function main() {
 main().catch(error => { throw error; });
 `,
     },
-    expected: "Error: require() async module \"/tla-throws.mjs\" is unsupported. use \"await import()\" instead.\ndone\n",
+    expected: "TypeError: require() async module \"/tla-throws.mjs\" is unsupported. use \"await import()\" instead.\ndone\n",
   },
   {
     name: "pending-adoption",
@@ -46,7 +46,7 @@ setTimeout(() => rejectQ(new Error('late adoption')), 0);
 setTimeout(() => console.log('done'), 20);
 `,
     },
-    expected: "Error: require() async module \"/then.mjs\" is unsupported. use \"await import()\" instead.\ndone\n",
+    expected: "TypeError: require() async module \"/then.mjs\" is unsupported. use \"await import()\" instead.\ndone\n",
   },
   {
     name: "settled-adoption",
@@ -80,7 +80,7 @@ setTimeout(() => {
 }, 0);
 `,
     },
-    expected: "Error: require() async module \"/then.mjs\" is unsupported. use \"await import()\" instead.\npeek same true\ninspect rejected true\ndone\n",
+    expected: "TypeError: require() async module \"/then.mjs\" is unsupported. use \"await import()\" instead.\npeek same true\ninspect rejected true\ndone\n",
   },
 ] as const;
 
