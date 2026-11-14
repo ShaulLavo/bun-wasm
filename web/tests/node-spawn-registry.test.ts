@@ -1,10 +1,32 @@
 import { expect, test } from "bun:test";
 import { ProcessSupervisor } from "waffle/proc/supervisor";
-import { existsSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { createNodeExecutableRegistry, nodeExecutables, nodeModule, NodeProcessBroker } from "../scripts/node-spawn.ts";
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+
+for (const operation of ["check", "resolve"] as const) {
+  test.skipIf(process.platform === "win32")(`Node ${operation} rejects FIFO executables without blocking the broker`, () => {
+    const root = mkdtempSync(join(tmpdir(), "bun-wasm-node-fifo-"));
+    try {
+      mkdirSync(join(root, "bin"));
+      writeFileSync(join(root, "bin/node"), "");
+      writeFileSync(join(root, "script"), "#!/bin/node\n");
+      const made = spawnSync("mkfifo", [join(root, "fifo")], { encoding: "utf8" });
+      expect(made.status).toBe(0);
+      const child = spawnSync("node", ["--no-warnings", new URL("./fixtures/node-executable-fifo.ts", import.meta.url).pathname, root, operation],
+        { encoding: "utf8", timeout: 30000, killSignal: "SIGKILL" });
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      expect(child.stderr).toBe("");
+      expect(JSON.parse(child.stdout)).toEqual({ code: "EACCES", regular: true });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 60000);
+}
+
 test("Node shell and env use explicit registrations and live private files", async () => {
   const utility = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   const broker = new NodeProcessBroker({ module, shell: { shell: utility, env: utility }, launch() { throw new Error("unexpected launch"); } });

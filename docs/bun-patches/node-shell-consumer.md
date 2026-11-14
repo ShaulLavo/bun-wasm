@@ -24,6 +24,8 @@ admits its interpreter through the same strict registrations. It does not load
 arbitrary Wasm files or select a host executable. Invalid unregistered files
 still fail executable-access queries with EACCES; after inspecting their bytes,
 spawn now reports ENOEXEC. Tests retain both errors explicitly.
+Executable sources must be regular files. Nonblocking open and a descriptor-type
+recheck also reject a path replaced with a FIFO without blocking the broker.
 `runtime_proc.inherited_fd` enumerates a snapshot of launch descriptors taken
 after bindings and default root stdio, before preopens. Closing a descriptor
 does not rewrite that snapshot. This follows the original Waffle

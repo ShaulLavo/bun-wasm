@@ -1,6 +1,6 @@
 import { pairedEngineKinds } from "../../src/engine-kind.ts";
 import { isToolCommand } from "../src/tool-command.ts";
-import { closeSync, constants, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, readSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, readSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
@@ -33,8 +33,9 @@ function nodeExecutableHeader(preopens: Record<string, string>, path: string) {
   const file = nodeExecutableLookup(preopens, path);
   const native = file && nodeMountedPath(Object.entries(preopens).sort(([a], [b]) => b.length - a.length), file.path);
   if (!native) return undefined;
-  const fd = openSync(native, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const fd = openSync(native, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
+    if (!fstatSync(fd).isFile()) throw new ProcessError(ProcessErrno.ACCES, "executable must be a regular file");
     const bytes = new Uint8Array(260);
     return bytes.subarray(0, readSync(fd, bytes));
   } finally { closeSync(fd); }
@@ -54,7 +55,7 @@ function nodeExecutableLookup(preopens: Record<string, string>, absolute: string
   };
   let pending = absolute.split("/");
   const components: string[] = [];
-  let kind: "file" | "dir" = "dir", links = 0;
+  let kind: "file" | "dir" = "dir", links = 0, regular = false;
   while (pending.length) {
     const component = pending.shift()!;
     if (!component) continue;
@@ -72,9 +73,13 @@ function nodeExecutableLookup(preopens: Record<string, string>, absolute: string
       if (target.startsWith("/")) components.length = 0;
       pending = target.split("/").concat(pending);
       kind = "dir";
-    } else kind = node.stat.isDirectory() ? "dir" : "file";
+    } else {
+      kind = node.stat.isDirectory() ? "dir" : "file";
+      regular = node.stat.isFile();
+    }
   }
   if (absolute.endsWith("/") && kind !== "dir") throw Object.assign(new Error("not a directory"), { errno: 54 });
+  if (kind === "file" && !regular) throw new ProcessError(ProcessErrno.ACCES, "executable must be a regular file");
   return { path: `/${components.join("/")}`, kind };
 }
 
