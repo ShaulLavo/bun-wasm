@@ -10,7 +10,7 @@ capability, not Nuxt acceptance or shared-memory support in the Wasmi interprete
 
 | Source | Class | Local change |
 | --- | --- | --- |
-| Bun `src/js/node/wasi.ts` | Patch and port | Include the generated factory as module 188; add reactor initialization and a shared one-time startup guard. |
+| Bun `src/js/node/wasi.ts` | Patch and port | Include the generated factory as module 188; add reactor initialization, a shared one-time startup guard, and refresh cached views when the memory buffer changes. |
 | Builtin registration, constants hook, and selection policy | Original adapter | Route `node:wasi` to the factory, supply existing filesystem constants lazily, and retain existing adapters for unselected public dependencies. |
 
 The source comes from pinned Bun revision
@@ -21,6 +21,16 @@ The source comes from pinned Bun revision
 startup guard with `start`. This is needed by WASI reactor loaders, including
 the unmodified Oxc 0.94.0 fallback with stable emnapi 1.11.3. The previous source
 and native Bun 1.4.4 both throw `wasi.initialize is not a function` there.
+
+`0026-node-wasi-refresh-views-when-the-memory-buffer-chang.patch` changes
+`refreshMemory()` to compare the cached view's buffer with the current memory
+buffer. Shared memory growth replaces the buffer without detaching the old one,
+so the previous zero-length check kept a view of the original page. The same
+identity check handles `setMemory()` rebinding without a second invalidation.
+Unshared growth still refreshes the detached view. Import signatures and memory
+binding behavior stay unchanged. This defect is verified against the pinned
+source, without a claim about current native Bun or the cause of application CI
+failures.
 
 The catalog records the patched source SHA256 and preprocessed source SHA256.
 Headers and the catalog name the pinned upstream revision, so rebuilding the
@@ -55,6 +65,16 @@ generated module 188 loads. A real reactor calls a WASI import from `_initialize
 proving memory was bound before initialization. Additional controls cover the
 optional initializer, invalid exports, initializer exceptions, and repeated or
 mixed `start`/`initialize` calls.
+
+The same loader runs `tests/fixtures/wasi-memory-views/control.ts` against real
+host WebAssembly. It grows valid one-page shared and unshared memories inside
+WASM, then calls `clock_time_get` at offset 65544 before returning to JavaScript.
+It checks buffer replacement, detached versus retained old buffers, exact output
+placement, stable views without growth, and rebinding to a different memory.
+`checks/native-wasi-memory-views.json` runs those controls through the guest's
+WebAssembly wrapper. Split QuickJS and JSC explicitly report unavailable shared
+memory; their unshared growth and rebinding controls remain required. Browser
+expects the shared control to execute, so missing support fails its fixture.
 
 Focused generator tests exercise excluded public dependencies, explicit public
 selection, internal closure, and the existing guards. Interpreter threads,

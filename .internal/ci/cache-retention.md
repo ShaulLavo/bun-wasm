@@ -43,6 +43,13 @@ another compatible Cargo upload reduces this pressure without changing JSC
 identity, removing selected checks or deleting existing shared caches. It cannot
 guarantee that GitHub retains a cache.
 
+The process-bundle and Browser guest jobs share the existing `browser-guest`
+release pool. On November 14 their separate pools had identical URL-key filename
+and size inventories and hit the same seventeen release URLs. This stops
+refreshing the redundant 121,474,232-byte process-bundle entry. The old entry
+expires under GitHub's normal policy; this change deletes no caches and claims
+no immediate storage reclamation or measured runtime improvement.
+
 ## Verification
 
 The new policy regression failed on the original source with 16 passing and 22

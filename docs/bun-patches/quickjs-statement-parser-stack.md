@@ -134,6 +134,6 @@ previous compiler, so it is not a CI check.
 | --- | --- | --- |
 | `quickjs.c`, statement parser | Port | Parse nested statements in a loop over parser-owned records instead of recursive calls, with a limit of 10,000 suspended records. |
 | `scripts/check-quickjs-parser-stack.ts`, `scripts/fixtures/quickjs-parser-stack.c`, `scripts/fixtures/quickjs-parser-stack.ts` | Original adapter | Exercise the record limit, ownership and statement semantics on the bare engine. |
-| `tests/fixtures/stack-statement-nesting`, `tests/fixtures/quickjs-parser-deep` | Original adapter | Exercise deep statement nesting through the guest entry point at the browser budgets. |
+| `tests/fixtures/stack-statement-nesting`, `tests/fixtures/quickjs-parser-deep` | Original adapter | Exercise deep statement nesting through the guest entry point at the browser budgets. Recognize SpiderMonkey's exact invalid lexical declaration message as non-QuickJS while preserving the unknown-parser guard. |
 
 [Ledger scope and pinned revisions](scope.md).

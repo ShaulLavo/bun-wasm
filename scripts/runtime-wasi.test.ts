@@ -17,6 +17,9 @@ test("Bun WASI runs actual WASM imports through native host filesystem calls", (
     expect(result.stdout.toString()).toContain("PASS Bun WASI through real host WebAssembly");
     expect(result.stdout.toString()).toContain("generated modules=[188]");
     expect(result.stdout.toString()).toContain("PASS Bun WASI reactor initialization");
+    expect(result.stdout.toString()).toContain("PASS WASI unshared memory growth");
+    expect(result.stdout.toString()).toContain("PASS WASI shared memory growth");
+    expect(result.stdout.toString()).toContain("PASS WASI memory rebinding");
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
 
