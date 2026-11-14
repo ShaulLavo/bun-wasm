@@ -7,9 +7,9 @@ use std::cell::RefCell;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-use super::{Dispatcher, Frame, Status, error_status};
+use super::{Dispatcher, Frame, Reply, Status, error_status};
 use crate::data::codec::{self, CodecError};
-use crate::data::{Val, drop_tree};
+use crate::data::{NativeError, Val, drop_tree};
 
 struct Allocation {
     pointer: NonNull<u8>,
@@ -48,6 +48,13 @@ impl Allocation {
         let bytes =
             unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.layout.size()) };
         codec::encode_into(value, bytes)
+    }
+
+    fn encode_error(&self, error: &NativeError) -> Result<(), CodecError> {
+        // SAFETY: this fresh allocation owns exactly layout.size initialized bytes.
+        let bytes =
+            unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.layout.size()) };
+        codec::encode_error_into(error, bytes)
     }
 
     fn write(&self, bytes: &[u8]) {
@@ -145,16 +152,32 @@ impl Transport {
     /// Encodes `value` into one allocation of exactly its encoded length, the only copy of the
     /// encoded bytes. Returns the allocation's pointer and length.
     pub fn encode(&self, value: &Val) -> Result<(u32, u32), CodecError> {
-        let len = codec::encoded_len(value)?;
+        self.encode_payload(codec::encoded_len(value)?, |allocation| {
+            allocation.encode(value)
+        })
+    }
+
+    fn encode_error(&self, error: &NativeError) -> Result<(u32, u32), CodecError> {
+        self.encode_payload(codec::encoded_error_len(error)?, |allocation| {
+            allocation.encode_error(error)
+        })
+    }
+
+    fn encode_payload(
+        &self,
+        len: usize,
+        fill: impl FnOnce(&Allocation) -> Result<(), CodecError>,
+    ) -> Result<(u32, u32), CodecError> {
         let len = u32::try_from(len).map_err(|_| CodecError::Allocation)?;
         let pointer = self.alloc(len, Frame::ALIGN);
         if pointer == 0 {
             return Err(CodecError::Allocation);
         }
-        let encoded = self
-            .allocation(pointer, len)
-            .expect("fresh transport allocation")
-            .encode(value);
+        let encoded = fill(
+            &self
+                .allocation(pointer, len)
+                .expect("fresh transport allocation"),
+        );
         if let Err(error) = encoded {
             self.free(pointer, len, Frame::ALIGN)
                 .expect("fresh transport allocation");
@@ -200,16 +223,25 @@ impl Transport {
         let request = self.allocation(frame.request_ptr, frame.request_len)?;
         let reply = dispatcher.dispatch(frame.op, frame.session, request.bytes());
         drop(request);
-        let Some(value) = reply.value else {
-            return Ok(reply.status);
+        let status = reply.status();
+        let encoded = match reply {
+            Reply::Value(value) => {
+                let encoded = self.encode(&value);
+                drop_tree(value);
+                encoded
+            }
+            Reply::NativeError(error) => {
+                let encoded = self.encode_error(&error);
+                drop_tree(Val::Object(error.props));
+                encoded
+            }
+            Reply::Failed(status) => return Ok(status),
         };
-        let encoded = self.encode(&value);
-        drop_tree(value);
         let (pointer, len) = encoded.map_err(error_status)?;
         frame_bytes[16..20].copy_from_slice(&pointer.to_le_bytes());
         frame_bytes[20..24].copy_from_slice(&len.to_le_bytes());
         frame_owner.write(&frame_bytes);
-        Ok(reply.status)
+        Ok(status)
     }
 
     /// Makes every later synthetic offset overflow, as if core memory were exhausted.
@@ -304,6 +336,16 @@ fn call_error(status: Status) -> crate::data::NativeError {
 #[cfg(test)]
 mod nested_frame_controls {
     use super::*;
+
+    #[test]
+    fn failed_fill_releases_the_fresh_payload() {
+        let transport = Transport::default();
+        assert_eq!(
+            transport.encode_payload(8, |_| Err(CodecError::Allocation)),
+            Err(CodecError::Allocation)
+        );
+        assert_eq!(transport.live_allocations(), 0);
+    }
 
     #[test]
     fn validation_requires_an_exact_live_owned_frame_without_retaining_it() {

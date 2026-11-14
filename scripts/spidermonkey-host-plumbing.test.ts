@@ -135,7 +135,7 @@ test("browser loader verifies both SpiderMonkey files and preserves the executab
     const source = programMetadata(loaded.module).linkPlan;
     if (!source) throw new Error("Browser loader lost the paired link plan");
     expect(await initializedValue(source)).toBe(42);
-    expect(requests).toEqual(["/bun-spidermonkey.wasm.gz", "/bun-spidermonkey.wasm", "/spidermonkey-engine.wasm.gz", "/spidermonkey-engine.wasm"]);
+    expect(requests).toEqual(["/bun-spidermonkey.wasm.gz", "/spidermonkey-engine.wasm.gz", "/bun-spidermonkey.wasm", "/spidermonkey-engine.wasm"]);
   });
 });
 

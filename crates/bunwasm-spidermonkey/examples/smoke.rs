@@ -32,8 +32,14 @@ pub fn main() {
             static __stack_low: u8;
             static __stack_high: u8;
         }
+        let stack_low = std::ptr::addr_of!(__stack_low) as usize;
+        let stack_low = if std::env::args().any(|s| s == "--relocated-stack") {
+            stack_low + 1024 * 1024
+        } else {
+            stack_low
+        };
         sys::bsm_init(&sys::Config {
-            stack_low: std::ptr::addr_of!(__stack_low) as usize,
+            stack_low,
             stack_high: std::ptr::addr_of!(__stack_high) as usize,
             max_gc_bytes: 64 * 1024 * 1024,
             tier,
@@ -66,6 +72,14 @@ pub fn main() {
         ) > 0.0
     );
     println!("ok catchable stack overflow RangeError");
+    assert_eq!(number("40 + 2"), 42.0);
+    assert!(
+        number(
+            "var secondDepth=0; try { (function recurseAgain(){ secondDepth++; return recurseAgain(); })(); } catch(e) { e instanceof RangeError ? secondDepth : 0; }"
+        ) > 0.0
+    );
+    assert_eq!(number("6 * 7"), 42.0);
+    println!("ok evaluation and second recursion after caught overflow");
     for (label, code) in [
         (
             "loop",
