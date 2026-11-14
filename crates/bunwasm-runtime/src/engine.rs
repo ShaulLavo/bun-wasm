@@ -15,6 +15,18 @@ use std::rc::Rc;
 
 pub use crate::data::{Args, DataFn, ErrorKind, NativeError, NativeResult, Record, Val};
 
+/// Current guest linear-memory capacity in bytes, or unknown on a native host.
+pub fn wasm_capacity() -> Val {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Val::Num(core::arch::wasm32::memory_size(0) as f64 * 65536.0)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Val::Null
+    }
+}
+
 /// A native over engine values: gets the engine and the raw arguments;
 /// `Err` is the value to throw.
 pub type ValueFn<E> =
@@ -219,4 +231,24 @@ pub trait Engine: Sized + 'static {
 
     fn gc(&self);
     fn memory_usage(&self) -> Val;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn memory_telemetry_native_capacity_is_unknown() {
+        assert_eq!(wasm_capacity(), Val::Null);
+    }
+
+    #[test]
+    #[cfg(target_arch = "wasm32")]
+    fn memory_telemetry_capacity_tracks_guest_growth() {
+        let pages = core::arch::wasm32::memory_size(0);
+        assert_eq!(wasm_capacity(), Val::Num(pages as f64 * 65536.0));
+        assert_eq!(core::arch::wasm32::memory_grow(0, 1), pages);
+        assert_eq!(wasm_capacity(), Val::Num((pages as f64 + 1.0) * 65536.0));
+    }
 }
