@@ -587,7 +587,7 @@ index f1ce887af..00c9ecad1 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..5d313cbb1 100644
+index 9524c5d6a..7b1543e5f 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,29 @@
@@ -635,7 +635,7 @@ index 9524c5d6a..5d313cbb1 100644
 +inline constexpr size_t ProxyTrapPBLReserve = 1792;
 +// Native-only recursion: JSON.stringify's serializer and Array.prototype.join
 +// reached again through an element's toString.
-+inline constexpr size_t JSONSerializeReserve = 672;
++inline constexpr size_t JSONSerializeReserve = 896;
 +inline constexpr size_t ArrayJoinReserve = 1536;
 +// Parser levels, the same on both tiers. Statement nesting stays at the
 +// size Next's generated validators allow (docs/stack-limits.md).
@@ -644,7 +644,7 @@ index 9524c5d6a..5d313cbb1 100644
 +inline constexpr size_t FunctionBodyReserve = 1696;
 +inline constexpr size_t FunctionExpressionReserve = 2880;
 +inline constexpr size_t ArgumentListReserve = 2800;
-+inline constexpr size_t ArrayLiteralReserve = 2496;
++inline constexpr size_t ArrayLiteralReserve = 2816;
 +inline constexpr size_t ObjectLiteralReserve = 2784;
 +inline constexpr size_t ElementAccessReserve = 2784;
 +inline constexpr size_t TemplateLiteralReserve = 3248;

@@ -55,7 +55,7 @@ export const jscStackBudgets: Readonly<Record<StackHostFamily, string>> = {
  * iOS. It is the smallest value that still loads Next's webpack hook, so cold statement nesting
  * deeper than about 85 levels still overflows the host first (docs/stack-limits.md).
  */
-export const spiderMonkeyWebKitStackKib = "176";
+export const spiderMonkeyWebKitStackKib = "188";
 
 export function engineStackBudgets(stack: string, userAgent: string, host?: StackHost): Partial<Record<Engine, string>> | null {
   if (/\n\s+at /.test(stack)) return { jsc: "800" };
