@@ -8,6 +8,13 @@ The upstream contract is GitHub Actions Runner v2.338.2. Its relevant paths are
 `Handlers/ScriptHandler.cs`, and `src/Runner.Common/HostContext.cs`.
 `scripts/ci-runner/source-proof.ts` verifies the pinned source ordering and bytes.
 
+The settings reader also follows `src/Runner.Common/ConfigurationStore.cs` and
+`src/Runner.Sdk/Util/IOUtil.cs` at that revision. Stock `SaveSettings` writes
+`.runner` through `IOUtil.SaveObject` with `Encoding.UTF8`, including its byte
+order mark. The guest removes that single leading preamble before parsing JSON
+and still requires boolean `ephemeral` and `disableUpdate` fields to be true.
+This is an original file reader, not a runner patch.
+
 The repository-scoped controller starts a disposable Ubuntu VM only for an
 eligible queued job. The installed heavy runner accounts for the entire VM,
 including action preparation and Node processes. The administrator pre-job hook
