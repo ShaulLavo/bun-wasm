@@ -60,7 +60,7 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
   record("browserType.launchServer started");
   const server = scopedProcess ? await browserType.launchServer(launch) : null;
   record("browserType.launchServer finished; browserType.connect/launch started");
-  const browser = server ? await browserType.connect(server.wsEndpoint(), { logger }).catch(async error => { await server.close(); throw error; }) : await browserType.launch(launch);
+  const browser = server ? await browserType.connect(server.wsEndpoint()).catch(async error => { await server.close(); throw error; }) : await browserType.launch(launch);
   record("browserType.connect/launch finished");
   const close = async () => { try { await browser.close(); } finally { await server?.close(); } };
   try {
