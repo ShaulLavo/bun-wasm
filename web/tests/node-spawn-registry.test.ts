@@ -20,7 +20,7 @@ for (const operation of ["check", "resolve"] as const) {
       const child = spawnSync("node", ["--no-warnings", new URL("./fixtures/node-executable-fifo.ts", import.meta.url).pathname, root, operation],
         { encoding: "utf8", timeout: 30000, killSignal: "SIGKILL" });
       expect(child.error).toBeUndefined();
-      expect(child.status).toBe(0);
+      expect(child.status, child.stderr).toBe(0);
       expect(child.stderr).toBe("");
       expect(JSON.parse(child.stdout)).toEqual({ code: "EACCES", regular: true });
     } finally { rmSync(root, { recursive: true, force: true }); }
