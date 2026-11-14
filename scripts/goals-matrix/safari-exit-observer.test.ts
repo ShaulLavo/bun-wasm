@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { ExitOwner, type Sink } from "./safari-exit-observer";
 import { endpoint, fakeNative, fakeSubscription, targetRecords } from "./safari-exit-fixture";
 import { jsonlSink } from "./safari-exit-sink";
@@ -33,7 +34,7 @@ function fixture(options: { sink?: Sink; joinMs?: number; pollMs?: number } = {}
 }
 
 async function directory() {
-  const path = await mkdtemp("/work/tmp/bun-wasm-exit-lifecycle-");
+  const path = await mkdtemp(join(tmpdir(), "bun-wasm-exit-lifecycle-"));
   cleanup.push(() => rm(path, { recursive: true, force: true }));
   if (process.env.LIFECYCLE_DIRECTORY_LEDGER) await appendFile(process.env.LIFECYCLE_DIRECTORY_LEDGER, path + "\n");
   return path;

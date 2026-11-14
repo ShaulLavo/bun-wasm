@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { appendFile, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { withSafariExitCapture, exitSettlementFile } from "./safari-exit-capture";
 import { fakeNative, fakeSubscription } from "./safari-exit-fixture";
 import { requireExitCaptureSettled } from "./fleet";
@@ -12,7 +13,7 @@ import { needsRust } from "../ci-changes";
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 async function directory() {
-  const root = await mkdtemp("/work/tmp/bun-wasm-exit-capture-");
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-exit-capture-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   if (process.env.LIFECYCLE_DIRECTORY_LEDGER) await appendFile(process.env.LIFECYCLE_DIRECTORY_LEDGER, root + "\n");
   return root;

@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { withNativeDriver, type NativeHost } from "./native";
 import { ownSafariDriver } from "../../web/tests/engine-interruption-safari";
 import { ExitOwner } from "./safari-exit-observer";
@@ -17,7 +18,7 @@ async function fixture(joinMs = 1000) {
   const native = fakeNative();
   const pending: number[] = [];
   let closes = 0;
-  const root = await mkdtemp("/work/tmp/bun-wasm-native-exit-");
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-native-exit-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   if (process.env.LIFECYCLE_DIRECTORY_LEDGER) await appendFile(process.env.LIFECYCLE_DIRECTORY_LEDGER, root + "\n");
   const system: ExitSyscalls = {
