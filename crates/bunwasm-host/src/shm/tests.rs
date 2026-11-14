@@ -278,6 +278,38 @@ fn regions_alias_and_recycle_only_after_holds_and_pins_settle() {
 }
 
 #[test]
+fn reused_chunk_is_zeroed_without_changing_neighboring_regions() {
+    let group = group();
+    let owner = member(&group, 1);
+    let before = owner.group.create(owner.member, PAGE_BYTES, 4).unwrap();
+    let middle = owner.group.create(owner.member, 2 * PAGE_BYTES, 4).unwrap();
+    let after = owner.group.create(owner.member, PAGE_BYTES, 4).unwrap();
+    let last_before = before.addr + PAGE_BYTES - 4;
+    group.store32(last_before, 0x1357_2468).unwrap();
+    group.store32(after.addr, 0x7654_3210).unwrap();
+    for offset in (0..2 * PAGE_BYTES).step_by(4) {
+        group.store32(middle.addr + offset, 0x5bad_beef).unwrap();
+    }
+    owner.group.detach(owner.member, middle.handle).unwrap();
+    let reused = owner.group.create(owner.member, 2 * PAGE_BYTES, 4).unwrap();
+    assert_eq!(reused.addr, middle.addr);
+    for offset in (0..2 * PAGE_BYTES).step_by(4) {
+        assert_eq!(group.load32(reused.addr + offset).unwrap(), 0);
+    }
+    assert_eq!(group.load32(last_before).unwrap(), 0x1357_2468);
+    assert_eq!(group.load32(after.addr).unwrap(), 0x7654_3210);
+}
+
+#[test]
+#[should_panic(expected = "allocated chunk is in bounds")]
+fn zero_chunk_rejects_a_span_outside_memory_before_writing() {
+    let group = group();
+    let memory = &group.inner.backing.memory;
+    let page = u32::try_from(memory.size()).unwrap();
+    zero_chunk(memory, Chunk { page, pages: 1 });
+}
+
+#[test]
 fn concurrent_pins_route_to_one_receiver() {
     let group = MemoryGroup::new(
         &Engine::default(),
