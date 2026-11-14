@@ -19,6 +19,8 @@ existing plain-data-to-`ValueFn` adapter moved unchanged into the shared private
 `engine::data_fn` helper, so the embedding and engine programs use the same
 argument and result conversion. Native reads run through the real runtime
 registry, dispatcher and physical transport. The fixture owns timer delivery.
+The test registry expands dotted native names into their production namespaces,
+including the real `streams` decoder/push/release functions used by TextDecoder.
 
 After file, data and destination setup, the test sets QuickJS's existing
 `JS_SetMemoryLimit` to measured heap bytes plus 8 MiB and arms the Rust allocator
