@@ -23,6 +23,15 @@ head and registered runner to the trusted repository event. Forks and manual
 runs retain hosted execution. The workflow guard is supplemented by this host
 authority check because a fork can edit its own workflow.
 
+Queued admission does not reserve GitHub queue order. A session binds only its
+registered runner ID. Authenticated run/attempt hints locate the supported REST
+`actions/runs/{run_id}/attempts/{attempt_number}/jobs` inventory. Two complete
+inventories, bounded to 100 jobs each, must identify the same unique assignment
+to that runner. Exact job, current run and trusted-source reads follow each
+inventory before release. A different eligible job or trusted run can therefore
+use the VM. Incomplete, ambiguous, stale or untrusted API facts stop it. Result
+receipts retain the approved public job, run, attempt, head and runner identity.
+
 Before the hook, stock runner preparation downloads and extracts action archives
 inside the private VM. Container setup and workflow execution follow the hook.
 A rejected or uncertain assignment stops the VM instead of returning control to

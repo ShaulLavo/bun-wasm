@@ -1,6 +1,8 @@
 export type GitHubApi = (path: string) => Promise<unknown>;
 export type Admission = { jobId: number; runId: number; attempt: number; headSha: string };
-export type Session = Admission & { runnerId: number };
+export type Session = { runnerId: number };
+export type AssignmentHint = { runId: number; attempt: number };
+export type Assignment = Admission & Session;
 export const repository = "ShaulLavo/bun-wasm";
 export const activeRunStatuses = ["in_progress", "queued", "pending"] as const;
 const endpoint = `/repos/${repository}`;
@@ -55,12 +57,37 @@ export async function eligibleQueuedJob(api: GitHubApi, jobId: number): Promise<
   return admission;
 }
 
-export async function approveAssignedJob(api: GitHubApi, session: Session): Promise<void> {
+async function assignedJobId(api: GitHubApi, session: Session, hint: AssignmentHint): Promise<number> {
+  const result = record(await api(`${endpoint}/actions/runs/${hint.runId}/attempts/${hint.attempt}/jobs?per_page=100`));
+  if (!Array.isArray(result.jobs) || !Number.isSafeInteger(result.total_count) || result.total_count !== result.jobs.length || result.jobs.length > 100) throw new Error("Assignment inventory is incomplete");
+  const jobs = result.jobs.map(record);
+  const ids = new Set<number>();
+  for (const job of jobs) {
+    const id = positive(job.id);
+    if (ids.has(id) || job.run_id !== hint.runId || job.run_attempt !== hint.attempt || typeof job.status !== "string") throw new Error("Invalid assignment inventory");
+    if (job.runner_id !== null && (typeof job.runner_id !== "number" || !Number.isSafeInteger(job.runner_id) || job.runner_id < 0)) throw new Error("Invalid assignment runner");
+    ids.add(id);
+  }
+  const matches = jobs.filter(job => job.runner_id === session.runnerId);
+  const job = matches[0];
+  if (matches.length !== 1 || !job || job.status !== "in_progress") throw new Error("Assignment to this registered runner is not unique and active");
+  return positive(job.id);
+}
+
+async function assignedFacts(api: GitHubApi, session: Session, hint: AssignmentHint, jobId: number): Promise<Assignment> {
+  const { job, admission } = await facts(api, jobId);
+  if (admission.runId !== hint.runId || admission.attempt !== hint.attempt || job.runner_id !== session.runnerId || job.status !== "in_progress" || job.conclusion !== null) throw new Error("Assigned job is not bound to this VM session");
+  return { ...admission, runnerId: session.runnerId };
+}
+
+export async function approveAssignedJob(api: GitHubApi, session: Session, hint: AssignmentHint): Promise<Assignment> {
   positive(session.runnerId);
-  const { job, admission } = await facts(api, session.jobId);
-  if (admission.runId !== session.runId || admission.attempt !== session.attempt || admission.headSha !== session.headSha || job.runner_id !== session.runnerId || job.status !== "in_progress") throw new Error("Assigned job is not bound to this VM session");
-  const latestJob = record(await api(`${endpoint}/actions/jobs/${session.jobId}`));
-  const latestRun = record(await api(`${endpoint}/actions/runs/${session.runId}`));
-  if (latestJob.id !== session.jobId || latestJob.run_id !== session.runId || latestJob.head_sha !== session.headSha || latestJob.runner_id !== session.runnerId || latestJob.status !== "in_progress" || latestJob.run_attempt !== session.attempt || latestRun.id !== session.runId || latestRun.head_sha !== session.headSha || latestRun.run_attempt !== session.attempt || !activeRun(latestRun)) throw new Error("Job changed before approval");
-  await trustedRun(api, latestRun);
+  positive(hint.runId);
+  positive(hint.attempt);
+  const jobId = await assignedJobId(api, session, hint);
+  const assignment = await assignedFacts(api, session, hint, jobId);
+  if (await assignedJobId(api, session, hint) !== jobId) throw new Error("Assignment changed before approval");
+  const latest = await assignedFacts(api, session, hint, jobId);
+  if (latest.headSha !== assignment.headSha) throw new Error("Job changed before approval");
+  return latest;
 }

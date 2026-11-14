@@ -26,7 +26,7 @@ export async function setupSession(options: { id: string; ssh: string[]; admissi
   const runnerId = await namedRunner(name);
   if (runnerId === undefined) throw new Error("Registered runner missing from API");
   await writeFile(`${directory}/registration.json`, JSON.stringify({ name, runnerId }), { mode: 0o600 });
-  const guard = await createGuard({ session: { ...options.admission, runnerId }, api: github, stopVm: options.stopVm });
+  const guard = await createGuard({ session: { runnerId }, api: github, stopVm: options.stopVm });
   try {
     command(["ssh"].concat(options.ssh, ["sudo /usr/bin/install -m 0444 /dev/stdin /etc/bun-wasm-ci/session.json"]), { input: JSON.stringify({ url: guard.url, token: guard.token }) });
   } catch (error) {
