@@ -16,7 +16,7 @@ function project(scripts: Record<string, string>, check: (cwd: string) => Promis
   writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ scripts }));
   return Promise.resolve(check(cwd)).finally(() => rmSync(cwd, { recursive: true, force: true }));
 }
-function runtime(cwd: string, name: string, args: string[] = [], options: { exits?: Record<string, Exit>; execArgv?: string[] } = {}) {
+function runtime(cwd: string, name: string, args: string[] = [], options: { exits?: Record<string, Exit>; execArgv?: string[]; handoff?: (plan: string) => number } = {}) {
   const spawned: { argv: string[]; event: string | undefined; script: string | undefined }[] = [];
   const raised: string[] = [];
   let stderr = "";
@@ -28,6 +28,7 @@ function runtime(cwd: string, name: string, args: string[] = [], options: { exit
   };
   const scripts = factory({
     native: {
+      packageScriptsHandoff: options.handoff ?? (() => -58),
       platformInfo: { version: "1.4.4", arch: "wasm32" },
       mainArg: () => name, setMainPath() {}, exists: existsSync, readFileUtf8: (file: string) => readFileSync(file, "utf8"),
       stat: (file: string, lstat: boolean) => lstat ? lstatSync(file) : statSync(file), readlink: readlinkSync,
@@ -71,7 +72,7 @@ test("a package script runs in the system shell with pre and post hooks and esca
   expect(guest.exitCode).toBeUndefined();
 }));
 
-test("private continuation preparation snapshots the guest environment and prepared commands without enabling handoff", () => project({ prebuild: "npm run before", build: "npx vite", postbuild: "pnpm run after" }, async cwd => {
+test("private continuation preparation snapshots the guest environment and prepared commands", () => project({ prebuild: "npm run before", build: "npx vite", postbuild: "pnpm run after" }, async cwd => {
   const f = runtime(cwd, "build", ["a b", "$HOME"], { execArgv: ["--silent"] });
   const command = f.scripts.resolve(path.join(cwd, "build"));
   f.guest.env.ACTUAL = "after resolve";
@@ -91,6 +92,42 @@ test("private continuation preparation snapshots the guest environment and prepa
   expect(f.stderr()).toBe("");
   await f.scripts.run(command);
   expect(f.spawned).toHaveLength(3);
+}));
+
+for (const errno of [-58, -52]) {
+  test(`only precommit unsupported ${errno} enters the existing loop once`, () => project({ prebuild: "echo pre", build: "echo main", postbuild: "echo post" }, async cwd => {
+    const plans: unknown[] = [];
+    const f = runtime(cwd, "build", [], { handoff(plan) {
+      plans.push(JSON.parse(plan));
+      expect(f.guest.env.npm_lifecycle_event).toBeUndefined();
+      expect(f.guest.env.npm_execpath).toBeUndefined();
+      expect(f.stderr()).toBe("");
+      return errno;
+    } });
+    await f.scripts.run(f.scripts.resolve(path.join(cwd, "build")));
+    expect(plans).toHaveLength(1);
+    expect(f.spawned.map(child => child.event)).toEqual(["prebuild", "build", "postbuild"]);
+  }));
+}
+
+for (const result of [-21, -28, -44, 0, 128]) {
+  test(`handoff result ${result} cannot resume the old loop`, () => project({ build: "echo never" }, async cwd => {
+    const f = runtime(cwd, "build", [], { handoff: () => result });
+    await expect(f.scripts.run(f.scripts.resolve(path.join(cwd, "build")))).rejects.toThrow("Package continuation handoff failed");
+    expect(f.spawned).toHaveLength(0);
+    expect(f.stderr()).toBe("");
+    expect(f.guest.env.npm_lifecycle_event).toBeUndefined();
+    expect(f.guest.env.npm_execpath).toBeUndefined();
+  }));
+}
+
+test("committed replacement unwinds without running another phase", () => project({ prebuild: "echo never", build: "echo never" }, async cwd => {
+  const replacement = new Error("exec control transfer");
+  const f = runtime(cwd, "build", [], { handoff() { throw replacement; } });
+  await expect(f.scripts.run(f.scripts.resolve(path.join(cwd, "build")))).rejects.toBe(replacement);
+  expect(f.spawned).toHaveLength(0);
+  expect(f.stderr()).toBe("");
+  expect(f.guest.env.npm_lifecycle_event).toBeUndefined();
 }));
 
 test("a failing script stops the run with Bun's message and its exit code", () => project({ test: "exit 3", posttest: "echo never", quiet: "exit 2", killed: "sleep 9", interrupted: "sleep 9" }, async cwd => {

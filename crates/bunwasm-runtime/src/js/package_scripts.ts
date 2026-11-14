@@ -218,6 +218,11 @@
 
   /** pre<name>, <name> with the passthrough arguments, then post<name>, stopping at the first failure. */
   async function run(command: BunWasm.ScriptRuntimeCommand): Promise<void> {
+    const plan = continuationPlan(command);
+    if (plan) {
+      const result = native.packageScriptsHandoff(JSON.stringify(plan));
+      if (result !== -58 && result !== -52) throw new Error(`Package continuation handoff failed: WASI errno ${-result}`);
+    }
     const cwd = process.cwd();
     const silent = process.execArgv.includes("--silent");
     process.env.npm_execpath = process.execPath;
@@ -229,7 +234,7 @@
     }
   }
 
-  /** Private preparation only. The current run loop does not invoke the handoff binding. */
+  /** Prepare before announcements or lifecycle changes; successful handoff never returns. */
   function continuationPlan(command: BunWasm.ScriptRuntimeCommand) {
     const cwd = process.cwd();
     const table = scripts(cwd);
