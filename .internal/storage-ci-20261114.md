@@ -28,8 +28,10 @@ The quarantine admits a known failed scenario; it does not claim product success
 
 ## Evidence
 
-Firefox failed both hosted attempts. Four local controls passed. The retained
-protocol belongs to PR 738, run 43530616509, including job 132268805440.
+Firefox has one known hosted failure. Jobs 132260477153 and 132268805440 have
+identical timestamps and output despite different run-attempt metadata; whether
+the latter executed independently is unresolved. Four local controls passed.
+The retained protocol belongs to PR 738, run 43530616509.
 WebKit failed PR 730, run 43516069702, job 132216974765. The exact-site and
 current-main controls passed locally. Both paths select Browser native.
 
@@ -43,8 +45,10 @@ Mitigation checks and cleanup evidence belong under
 
 1. Firefox research owns the first failing filesystem transport operation.
    Capture the original MessagePort messageerror or workspace-bridge exception,
-   sender and receiver lifecycle, and fork preopen operation. CLOSED alone does
-   not establish the mechanism. Reproduce on GitHub-hosted Ubuntu with the
+   sender and receiver lifecycle, and fork preopen operation. Waffle .128's
+   bridge catch discards the initiating exception and labels it messageerror.
+   CLOSED and the deserialization text establish neither that mechanism nor
+   the root cause. Reproduce on GitHub-hosted Ubuntu with the
    receipt-verified site and unchanged scenario before choosing a runtime fix.
 2. WebKit research owns vanilla restart after config save. Capture the old and
    new process lifecycle, config evaluation, filesystem flush, preview request,
@@ -69,3 +73,23 @@ One bounded mitigation PR covers both signatures. Research runs independently.
 Local checks exercise historical protocols and counterexamples; CI provides the
 real-browser validation. Do not spend another diagnosis round retrying controls
 that have already passed locally.
+
+Quarantine is the authorized temporary treatment of a known unrelated failure,
+not a conclusion that a targeted retry has failed twice. The two signatures lack
+an established transient cause that would make a retry a demonstrated repair.
+
+## Mitigation verification
+
+`scripts/storage-ci-quarantine.test.ts` replays both original protocols at their
+source checkpoints. It rejects other checkpoints and browsers, unknown console
+errors, altered transport or restart output, a missing or changed Hono control,
+failed filesystem state, pending edits, ordinary assertions, and failed report
+or summary writes. `checks/quality-storage-ci-quarantine.json` keeps these tests
+blocking in Source quality. The existing browser manifest also selects the
+producer when the quarantine helper changes.
+
+Local verification runs the new tests with storage, discovery, and CI selection
+tests, then checks discovery, lint, TypeScript, unused code, and duplicates.
+GitHub-hosted CI validates the unchanged real scenarios on the verified site
+when the draft becomes ready. A matching failure remains a recorded quarantine,
+not a successful preservation result. The coordinator owns review and CI follow-up.
