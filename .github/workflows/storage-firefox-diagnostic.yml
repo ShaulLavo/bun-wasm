@@ -12,17 +12,18 @@ jobs:
     timeout-minutes: 20
     env:
       GITHUB_TOKEN: ${{ github.token }}
-      BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/storage-firefox-bun-cache
-      BUN_WASM_BROWSER_REPORT_DIR: ${{ runner.temp }}/storage-firefox-report
-      BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/storage-firefox-site
       STORAGE_SUBJECT: ${{ github.workspace }}/subject
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/storage-firefox-browsers
     steps:
       - name: Create failure directory before prerequisites
         run: |
-          mkdir -p "$BUN_WASM_BROWSER_REPORT_DIR"
-          ps -eo pid,ppid,pgid,args > "$BUN_WASM_BROWSER_REPORT_DIR/processes-before.txt"
-          df -h > "$BUN_WASM_BROWSER_REPORT_DIR/disk-before.txt"
+          report="$RUNNER_TEMP/storage-firefox-report"
+          mkdir -p "$report"
+          ps -eo pid,ppid,pgid,args > "$report/processes-before.txt"
+          df -h > "$report/disk-before.txt"
+          echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/storage-firefox-bun-cache" >> "$GITHUB_ENV"
+          echo "BUN_WASM_BROWSER_REPORT_DIR=$report" >> "$GITHUB_ENV"
+          echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/storage-firefox-site" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/storage-firefox-browsers" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
