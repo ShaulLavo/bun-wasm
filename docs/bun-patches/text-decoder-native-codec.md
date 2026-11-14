@@ -26,6 +26,11 @@ chains change. The Uint8Array fast path checks both its brand and prototype.
 The wire-format control resolves this decoder export and routes its host codec
 model through the production wire reader and writer. Unrelated Blob, fetch, URL
 and body-consumer fixtures register their existing host decoder as a module export.
+The full source bootstrap controls for stream consumers, HTTP/2, process bindings,
+async iterable bodies and host lookup share the native streams codec model with
+the decoder controls. They retain the production decoder factory and installer.
+The isolated Request-copy factory registers its host decoder export. These are
+source-host models, including URLs named `bun-wasm:`, rather than WASI execution.
 
 The single-byte test vectors come from Bun revision
 `9510e74152073d850a18758ca41114d8f214ffa6`,
@@ -40,6 +45,7 @@ fatal and dictionary controls adapt cases from that revision's
 | `crates/bunwasm-runtime/src/js/web.js` | Host feature | Install the typed decoder factory instead of the stateless implementation. |
 | `tests/fixtures/text-decoder/` | Test adaptation | Condense upstream encoding vectors and state regressions for every guest engine. |
 | `scripts/text-decoder-controls.ts`, `scripts/text-decoder.test.ts` | Test adaptation | Execute the full production Web factory with a native decoder boundary and check output, options, errors and handle cleanup. |
+| `scripts/fixtures/native-text-decoder.ts` | Test adaptation | Share the existing host codec model with full source-bootstrap fixtures at the native streams boundary. |
 
 `checks/web-text-decoder.json` owns the source-factory regression, including the
 local runtime preflight. `checks/native-text-decoder.json` owns the guest fixture.

@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { isatty } from "node:tty";
 import { createContext, runInContext } from "node:vm";
 import type { Readable } from "node:stream";
+import { nativeTextDecoderCodec } from "./native-text-decoder.ts";
 
 type ConsumedBlob = {
   readonly size: number;
@@ -99,6 +100,7 @@ export function sourceRuntime(scratch: string) {
   if (!list) throw new Error("Missing production builtin resolver table");
   const builtins = new Set(Array.from(list.matchAll(/"([^"]+)"/g), match => match[1]));
   const encoder = new TextEncoder();
+  const codec = nativeTextDecoderCodec();
   const bootstrap: (native: object) => Runtime = loadPolyfill("bootstrap");
   let tick: () => void;
   const runtime = bootstrap({
@@ -120,6 +122,7 @@ export function sourceRuntime(scratch: string) {
     nanoseconds: () => performance.now() * 1e6,
     utf8Encode: (value: string) => encoder.encode(value),
     utf8Decode: (value: Uint8Array, fatal: boolean) => new TextDecoder("utf-8", { fatal, ignoreBOM: true }).decode(value),
+    streams: codec.streams,
     loadPolyfill,
     mapPosition: () => null,
     resolve(specifier: string) {
@@ -135,6 +138,7 @@ export function sourceRuntime(scratch: string) {
     context,
     runtime,
     emitted,
+    decoderHandles: codec.handles,
     consumers(): Consumers { return runtime.makeRequire("/entry.ts")("node:stream/consumers"); },
     constructors() {
       const require = runtime.makeRequire("/entry.ts");

@@ -16,6 +16,7 @@ export function requestCopyFactory(kind: "polyfill" | "native" = "polyfill") {
   const streams: Pick<typeof globalThis, "ReadableStream" | "TransformStream"> = kind === "native" ? { ReadableStream, TransformStream } : factory("streams_polyfill", "js")();
   Object.assign(context, streams);
   const modules = new Map<string, unknown>([
+    ["text_decoder", TextDecoder],
     ["streams", streams], ["body_streams", factory("body_streams")({ native: { engine } })],
     ["url_search_params", factory("url_search_params")()], ["web_brand", () => {}],
     ["websocket", { clientClass: () => class {} }],
