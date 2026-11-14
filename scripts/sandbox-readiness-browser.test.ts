@@ -207,38 +207,44 @@ function gatedFlush(): void {
   });
 }
 
-async function repeatedInvalidation(browser: Browser): Promise<void> {
-  await model(browser, async page => {
-    await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
-    const checkpoints = Array.from({ length: 3 }, () => ({ entered: Promise.withResolvers<void>(), release: Promise.withResolvers<boolean>() }));
-    let attempts = 0;
-    await page.exposeFunction("flushCheckpoint", () => {
-      const checkpoint = checkpoints[attempts++];
-      if (!checkpoint) throw new Error("Unexpected extra checkpoint");
-      checkpoint.entered.resolve();
-      return checkpoint.release.promise;
-    });
-    await page.evaluate(gatedFlush);
-    let settled = false;
-    const completion = ready(page, "vanilla", Date.now() + 30_000).then(
-      () => { settled = true; return "ready"; },
-      error => { settled = true; return error; },
-    );
-    try {
-      for (const [index, checkpoint] of checkpoints.entries()) {
-        await Promise.race([checkpoint.entered.promise, completion.then(() => { throw new Error("Readiness settled before the next checkpoint"); })]);
-        expect(settled).toBe(false);
-        checkpoint.release.resolve(index < 2);
-      }
-      expect(await completion).toBe("ready");
-      expect(attempts).toBe(3);
-      expect(await page.evaluate(() => Reflect.get(globalThis, "flushes"))).toBe(4);
-    } finally {
-      for (const checkpoint of checkpoints) checkpoint.release.resolve(false);
-      await page.close();
-      await completion;
-    }
+function settledBeforeCheckpoint(): never {
+  throw new Error("Readiness settled before the next checkpoint");
+}
+
+async function retryCheckpoints(page: Page): Promise<void> {
+  await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
+  const checkpoints = Array.from({ length: 3 }, () => ({ entered: Promise.withResolvers<void>(), release: Promise.withResolvers<boolean>() }));
+  let attempts = 0;
+  await page.exposeFunction("flushCheckpoint", () => {
+    const checkpoint = checkpoints[attempts++];
+    if (!checkpoint) throw new Error("Unexpected extra checkpoint");
+    checkpoint.entered.resolve();
+    return checkpoint.release.promise;
   });
+  await page.evaluate(gatedFlush);
+  let settled = false;
+  const completion = ready(page, "vanilla", Date.now() + 30_000).then(
+    () => { settled = true; return "ready"; },
+    error => { settled = true; return error; },
+  );
+  try {
+    for (const [index, checkpoint] of checkpoints.entries()) {
+      await Promise.race([checkpoint.entered.promise, completion.then(settledBeforeCheckpoint)]);
+      expect(settled).toBe(false);
+      checkpoint.release.resolve(index < 2);
+    }
+    expect(await completion).toBe("ready");
+    expect(attempts).toBe(3);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "flushes"))).toBe(4);
+  } finally {
+    for (const checkpoint of checkpoints) checkpoint.release.resolve(false);
+    await page.close();
+    await completion;
+  }
+}
+
+async function repeatedInvalidation(browser: Browser): Promise<void> {
+  await model(browser, retryCheckpoints);
 }
 
 async function readinessDeadline(browser: Browser): Promise<void> {
@@ -260,6 +266,19 @@ async function readinessDeadline(browser: Browser): Promise<void> {
   });
 }
 
+function deliverTimer(entered: Promise<void>, callback: Parameters<typeof setTimeout>[0], receiver: ReturnType<typeof setTimeout>, args: unknown[]): void {
+  void entered.then(() => callback.apply(receiver, args));
+}
+
+function holdTimersUntil(entered: Promise<void>) {
+  const schedule = globalThis.setTimeout;
+  const timers: { setTimeout(...args: Parameters<typeof setTimeout>): ReturnType<typeof setTimeout> } = globalThis;
+  // Hold timer delivery until the real browser flush starts, including Playwright's poll timeout.
+  return spyOn(timers, "setTimeout").mockImplementation((callback, delay, ...args) => schedule(function (this: ReturnType<typeof setTimeout>) {
+    deliverTimer(entered, callback, this, args);
+  }, delay));
+}
+
 async function pendingFlushDeadline(browser: Browser): Promise<void> {
   await model(browser, async page => {
     await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
@@ -267,25 +286,22 @@ async function pendingFlushDeadline(browser: Browser): Promise<void> {
     const release = Promise.withResolvers<boolean>();
     await page.exposeFunction("flushCheckpoint", () => { entered.resolve(); return release.promise; });
     await page.evaluate(gatedFlush);
-    const schedule = globalThis.setTimeout;
-    // Hold timer delivery until the real browser flush starts, including Playwright's poll timeout.
-    const timer = spyOn(globalThis, "setTimeout").mockImplementation(Object.assign(
-      (...[callback, delay, ...args]: Parameters<typeof setTimeout>) => schedule(() => {
-        void entered.promise.then(() => callback(...args));
-      }, delay),
-      { __promisify__: schedule.__promisify__ },
-    ));
+    const hang = Promise.withResolvers<never>();
+    const hangTimer = setTimeout(() => hang.reject(new Error("Browser did not acknowledge the pending flush")), 30_000);
+    const timer = holdTimersUntil(entered.promise);
     const started = Date.now();
     const completion = ready(page, "vanilla", started + 150);
-    const expired = expect(completion).rejects.toThrow(/deadline|Timeout/);
+    const expired = expect(completion).rejects.toThrow("Storage readiness deadline: vanilla");
     try {
-      await Promise.race([entered.promise, completion.then(() => { throw new Error("Readiness resolved before its pending flush"); })]);
+      await Promise.race([entered.promise, hang.promise, completion.then(settledBeforeCheckpoint)]);
       timer.mockRestore();
       await expired;
       expect(await page.evaluate(() => Reflect.get(globalThis, "flushes"))).toBe(2);
       console.log(JSON.stringify({ browser: browser.browserType().name(), control: "pending flush deadline", elapsedMs: Date.now() - started }));
     } finally {
       timer.mockRestore();
+      clearTimeout(hangTimer);
+      entered.resolve();
       release.resolve(false);
       await page.close();
       await completion.catch(() => {});
