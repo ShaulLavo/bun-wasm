@@ -111,12 +111,12 @@ test("a transient failed GET retries while invalid redirect schemes remain bound
   expect(requests).toBe(2);
 });
 
-function reportTransport(archive?: Uint8Array, badLog = false): Transport {
+function reportTransport(archive?: Uint8Array, badLog = false, diagnostic = line(sample())): Transport {
   return async url => {
     const path = new URL(String(url)).pathname;
     if (path.endsWith("/actions/runs/1")) return Response.json(run);
     if (path.endsWith("/jobs")) return Response.json({ total_count: 3, jobs: [{ name: "Web host unit and types", id: 11, conclusion: "success" }, { name: "Web browser (20-preview)", id: 12, conclusion: "success" }, { name: "Rust", id: 13, conclusion: "success" }] });
-    if (path.endsWith("/jobs/11/logs")) return new Response(badLog ? TIMING_PREFIX + "broken" : line(sample()));
+    if (path.endsWith("/jobs/11/logs")) return new Response(badLog ? TIMING_PREFIX + "broken" : diagnostic);
     if (path.endsWith("/jobs/12/logs")) return new Response(line(sample("http-stream-cancel", 260)));
     if (path.endsWith("/runs")) return Response.json({ workflow_runs: archive ? [{ id: 8, event: "workflow_run", head_branch: "main" }] : [] });
     if (path.endsWith("/artifacts")) return Response.json({ artifacts: [{ name: "ci-timing-report", expired: false, id: 20, size_in_bytes: archive?.length }] });
@@ -143,6 +143,23 @@ test("the previous compact artifact is decompressed with bounds and compares rea
     const result = await collectReport({ workflow_run: run }, "token", 9, reportTransport(readFileSync(join(scratch, "report.zip"))));
     expect(result.issues).toEqual([]);
     expect(result.trends.map(row => row.changeMs)).toEqual([2, 10]);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test("the complete report retains only metric fields from current logs and previous artifacts", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-timing-fields-test-"));
+  const extra = { ...sample(), privateNote: "unrelated-top-level-sentinel", environment: { ...sample().environment, rawLog: "unrelated-environment-sentinel" } };
+  try {
+    writeFileSync(join(scratch, "timing-report.json"), JSON.stringify({ schema: 1, samples: [extra, sample("http-stream-cancel", 250)] }));
+    execFileSync("zip", ["-q", "report.zip", "timing-report.json"], { cwd: scratch, timeout: 5_000 });
+    const result = await collectReport({ workflow_run: run }, "token", 9, reportTransport(readFileSync(join(scratch, "report.zip")), false, line(extra)));
+    expect(result.issues).toEqual([]);
+    expect(result.samples).toEqual([sample(), sample("http-stream-cancel", 260)]);
+    expect(result.previousSamples).toEqual([sample(), sample("http-stream-cancel", 250)]);
+    expect(JSON.stringify(result)).not.toContain("unrelated-top-level-sentinel");
+    expect(JSON.stringify(result)).not.toContain("unrelated-environment-sentinel");
+    expect(result.samples[0]).not.toBe(extra);
+    expect(result.samples[0]?.environment).not.toBe(extra.environment);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
 

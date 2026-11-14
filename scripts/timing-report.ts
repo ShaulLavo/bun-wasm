@@ -24,18 +24,32 @@ function textField(value: unknown): value is string {
   return true;
 }
 
+function environmentText(value: unknown): string {
+  if (!textField(value)) throw new Error("Invalid timing environment");
+  return value;
+}
+
+function parseEnvironment(value: unknown): TimingSample["environment"] {
+  const environment = record(value);
+  if (typeof environment.cores !== "number" || !Number.isSafeInteger(environment.cores) || environment.cores <= 0) throw new Error("Invalid CPU count");
+  return {
+    os: environmentText(environment.os), arch: environmentText(environment.arch),
+    kernel: environmentText(environment.kernel), cpu: environmentText(environment.cpu), cores: environment.cores,
+    runner: environmentText(environment.runner), image: environmentText(environment.image),
+    imageVersion: environmentText(environment.imageVersion), runtime: environmentText(environment.runtime), browser: environmentText(environment.browser),
+  };
+}
+
 export function parseSample(value: unknown): TimingSample {
   const row = record(value);
   if (row.schema !== 1 || row.outcome !== "pass" || !textField(row.metric) || !metrics.includes(row.metric)) throw new Error("Invalid timing schema, outcome or metric");
   const metric = row.metric as TimingSample["metric"];
   if (row.workload !== timingWorkloads[metric] || !textField(row.sourceSha) || !/^(?:[a-f0-9]{40}|local)$/.test(row.sourceSha)) throw new Error("Invalid timing workload or source");
   if (typeof row.elapsedMs !== "number" || !Number.isFinite(row.elapsedMs) || row.elapsedMs < 0) throw new Error("Invalid elapsed observation");
-  const environment = record(row.environment);
-  for (const key of ["os", "arch", "kernel", "cpu", "runner", "image", "imageVersion", "runtime", "browser"]) {
-    if (!textField(environment[key])) throw new Error("Invalid timing environment");
-  }
-  if (!Number.isSafeInteger(environment.cores) || Number(environment.cores) <= 0) throw new Error("Invalid CPU count");
-  return row as TimingSample;
+  return {
+    schema: 1, metric, workload: timingWorkloads[metric], sourceSha: row.sourceSha,
+    elapsedMs: row.elapsedMs, outcome: "pass", environment: parseEnvironment(row.environment),
+  };
 }
 
 async function* responseChunks(response: Response, limit: number): AsyncGenerator<Uint8Array> {

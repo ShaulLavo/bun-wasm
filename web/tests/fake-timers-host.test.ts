@@ -9,10 +9,15 @@ const source = readFileSync(new URL("../src/engine-host.js", import.meta.url), "
   .replace(/^import .*;\n/gm, "")
   .replace("export function startEngineHost", "function startEngineHost");
 
-test("restoring guest Date replaces an armed host wakeup with the earlier real timer", () => {
+test.each([
+  { advanceMs: 100, replacesWake: true },
+  { advanceMs: 1001, replacesWake: false },
+])("restoring guest Date preserves the captured clock after $advanceMs ms", ({ advanceMs, replacesWake }) => {
+  let nativeNow = 10_000;
   const scheduled: { callback: () => void; delay: number }[] = [];
   const cancelled: number[] = [];
   const context = createContext({ TextEncoder, TextDecoder, URL, Blob,
+    Date: class extends Date { static override now() { return nativeNow; } },
     setTimeout(callback: () => void, delay: number) { return scheduled.push({ callback, delay }); },
     clearTimeout(handle: number) { cancelled.push(handle); },
     queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, createScriptEvaluation, SLOT_NAMES });
@@ -32,15 +37,15 @@ test("restoring guest Date replaces an armed host wakeup with the earlier real t
     expect(scheduled.map(timer => timer.delay)).toEqual([1000]);
     expect(cancelled).toEqual([]);
     expect(pumps).toBe(0);
+    nativeNow += advanceMs;
     runInContext("globalThis.Date = savedDate;", context);
     expect(runInContext("Date", context)).toBe(realDate);
     host.schedule(1);
-    expect(host.timer).not.toBe(armed);
-    expect(host.timer).toBe(2);
-    expect(cancelled).toEqual([armed]);
-    expect(scheduled.map(timer => timer.delay)).toEqual([1000, 1]);
+    expect(host.timer).toBe(replacesWake ? 2 : armed);
+    expect(cancelled).toEqual(replacesWake ? [armed] : []);
+    expect(scheduled.map(timer => timer.delay)).toEqual(replacesWake ? [1000, 1] : [1000]);
     expect(pumps).toBe(0);
-    scheduled[1]!.callback();
+    scheduled[replacesWake ? 1 : 0]!.callback();
     expect(pumps).toBe(1);
     expect(host.timer).toBeNull();
     expect(host.timerAt).toBe(Infinity);
