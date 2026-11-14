@@ -32,6 +32,7 @@ test("installed SpiderMonkey quotas and overflow recovery on both tiers and memb
       expect(stdout).toContain("ok catchable stack overflow RangeError");
       expect(stdout).toContain("ok evaluation and second recursion after caught overflow");
       expect(stdout).toContain("ok uncatchable interrupt inside finally; catch=0 finally=0");
+      expect(stdout).toContain("ok counted reentrant recursion");
       expect(stdout).toContain("ok tier evidence");
     }
   } finally {

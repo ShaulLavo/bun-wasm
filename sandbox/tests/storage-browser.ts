@@ -8,6 +8,7 @@ import { workspaceName } from "../src/workspace-policy";
 import type { PreviewNavigation, Status } from "../src/sandbox";
 import { frameworks } from "../../scripts/goals-matrix/catalog";
 import { storageStep, type StorageObservation } from "../../scripts/storage-browser-evidence";
+import { assertPreviewDocumentPreserved } from "./storage-document";
 
 declare const sandbox: {
   fs: Runtime["filesystem"]; editor: Editor; term?: Terminal; started?: () => boolean;
@@ -215,11 +216,10 @@ export async function preservationScenario(browser: Browser, base: string, obser
     await step("vanilla.retained-tree", () => retainedUserTree(page));
     const preview = page.frameLocator("#preview");
     await step("vanilla.increment", () => preview.locator("button.counter").click());
-    const documentId = await step("vanilla.document-before-hmr", () => preview.locator("body").evaluate(() => performance.timeOrigin));
-    await step("vanilla.edit-hmr", () => edit(page, "src/main.ts", main.replace("Storage source one", "Storage source two")));
-    await step("vanilla.source-two", () => page.frameLocator("#preview").getByRole("heading", { name: "Storage source two", exact: true }).waitFor({ timeout: 30_000 }));
-    observer?.event("assert", { phase: "vanilla.hmr-document" });
-    assert.equal(await step("vanilla.document-after-hmr", () => preview.locator("body").evaluate(() => performance.timeOrigin)), documentId, "restored source HMR replaced the document");
+    await assertPreviewDocumentPreserved(page, async () => {
+      await step("vanilla.edit-hmr", () => edit(page, "src/main.ts", main.replace("Storage source one", "Storage source two")));
+      await step("vanilla.source-two", () => page.frameLocator("#preview").getByRole("heading", { name: "Storage source two", exact: true }).waitFor({ timeout: 30_000 }));
+    }, observer);
     await step("vanilla.counter-after-hmr", () => preview.locator("button.counter", { hasText: "count is 1" }).waitFor());
     await openTemplate(page, base, "vite-react", observer);
     await openTemplate(page, base, "vite-vue", observer);

@@ -115,6 +115,7 @@ const jscFiles = new Set([
   "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
   "scripts/src/program-profile.ts", "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
   "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "checks/native-stack-getter-headroom.json", "checks/native-parser-literal-overflow.json", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", "scripts/ci-native-handoff.ts", "scripts/ci-native-handoff-paths.ts", ".github/workflows/ci.yml",
+  "scripts/jsc-json-fast-controls.test.ts", "checks/runtime-json-fast-controls.json", "scripts/bench-jsc-json.ts", "scripts/fixtures/jsc-json-bench.ts",
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json", "scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
   // The parser reserve's host policy, executor defaults, probe and consumers (docs/stack-limits.md).
   "web/src/engine-stack-budget.ts", "web/src/bun-executor.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts", "scripts/jsc-parser-reserve.ts",
@@ -168,6 +169,7 @@ function ordinarySpiderMonkeyInput(path: string): boolean {
   if (path.endsWith(".md")) return false;
   return path.startsWith("spidermonkey/") || path.startsWith("scripts/spidermonkey-ordinary-")
     || path === "scripts/spidermonkey-side-core-receipt.ts" || path === "scripts/spidermonkey-side-inputs.ts"
+    || path === "scripts/spidermonkey-engine-semantics.sh"
     || ordinaryFixtures.some(name => path.startsWith(`tests/fixtures/${name}/`));
 }
 
