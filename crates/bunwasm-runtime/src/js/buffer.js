@@ -460,7 +460,7 @@
       if (offset !== offset) offset = 0;
     }
     const maxLength = ab.byteLength - offset;
-    if (maxLength < 0) throw bufferOutOfBounds("offset");
+    if (maxLength < 0 || Math.trunc(offset) < 0) throw bufferOutOfBounds("offset");
     // An undefined length keeps resizable backing stores length-tracking.
     let len;
     if (length !== undefined) {

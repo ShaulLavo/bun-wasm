@@ -19,7 +19,7 @@ function constructionResult(factory: typeof Buffer, offset: unknown, length: unk
 }
 
 test("construction retains native offset and length coercion and error ordering", () => {
-  for (const offset of [0, 1.5, NaN, Infinity, 10]) {
+  for (const offset of [-Infinity, -2, -1, -0.5, -0, 0, 1.5, NaN, Infinity, 10]) {
     for (const length of [-1, 0, 2.5, NaN, Infinity, 10, null]) {
       expect(constructionResult(SourceBuffer, offset, length)).toEqual(constructionResult(Buffer, offset, length));
     }

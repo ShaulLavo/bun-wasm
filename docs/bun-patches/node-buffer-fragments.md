@@ -22,8 +22,9 @@ the raw binding range and coercion policies separate from public `write` and
 `fromArrayBuffer` preserves an omitted or undefined length when constructing
 `FastBuffer`. Passing the computed remaining byte count instead creates a fixed
 length typed-array view, which becomes out of bounds after a backing-store
-shrink. The existing offset and explicit-length coercion and validation stay in
-place. Native Bun 1.4.4 and Uint8Array controls confirm tracking through shrink,
+shrink. Negative integer offsets now fail with `ERR_BUFFER_OUT_OF_BOUNDS`
+before length coercion, while negative fractions that truncate to zero remain
+valid. Native Bun 1.4.4 and Uint8Array controls confirm tracking through shrink,
 regrow and growable shared storage, while explicit lengths remain fixed and all
 views share the original storage. This is an original adapter correction, with
 no newly copied upstream source. The regression fixture and production-factory
