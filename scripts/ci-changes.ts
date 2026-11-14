@@ -32,6 +32,7 @@ const nativeFiles = new Set([
   "web/src/native-direct-stream.ts",
 ]);
 const sharedSysrootFiles = new Set([
+  ".github/actions/shared-jsc-setup/action.yml", ".github/actions/shared-jsc-prebuild/action.yml",
   "scripts/ci-main-coverage.ts", "scripts/ci-check-inputs.ts", "scripts/ci-refs.ts",
   ".github/workflows/ci.yml", "env.sh", "scripts/ci-changes.ts", "scripts/build-wasi-sysroot.ts",
   "scripts/build-shared-wasi-libc.sh", "scripts/test-shared-sysroot.sh", "scripts/shared-sysroot-proof.ts",
@@ -47,6 +48,7 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "scripts/ci-shared-proof-inputs.ts", "scripts/ci-shared-proof-inputs.test.ts", "checks/quality-ci-shared-proof-inputs.json",
+  ".github/actions/shared-jsc-setup/action.yml", ".github/actions/shared-jsc-prebuild/action.yml",
   "scripts/producer-diagnostics.ts",
   "scripts/ci-jsc-artifact.ts",
   "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",

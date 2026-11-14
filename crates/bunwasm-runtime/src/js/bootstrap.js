@@ -963,7 +963,11 @@
   }
   const installIntlFallback = !hasRealIntl();
   if (installIntlFallback) {
-    defineLazyGlobal("Intl", () => internal.require("intl"));
+    defineLazyGlobal("Intl", () => {
+      const intl = internal.require("intl");
+      internal.fakeTimers?.installIntl(intl);
+      return intl;
+    });
   }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
