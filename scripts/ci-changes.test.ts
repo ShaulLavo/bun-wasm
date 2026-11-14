@@ -182,6 +182,8 @@ beforeAll(() => {
   git(["init", "-q"]);
   mkdirSync(join(fixture, "crates"));
   writeFileSync(join(fixture, "crates/lib.rs"), "owned native input\n");
+  mkdirSync(join(fixture, "checks"));
+  writeFileSync(join(fixture, "checks/native-json-fast-iterative.json"), readFileSync(new URL("../checks/native-json-fast-iterative.json", import.meta.url), "utf8"));
   git(["add", "."]);
   git(["commit", "-qm", "base"]);
   base = git(["rev-parse", "HEAD"]);
@@ -257,6 +259,19 @@ test.each(["pull_request", "push"])("the exact JSC README skips native jobs thro
   expect(needsSharedNative(["jsc/README.md"])).toBe(false);
   expect(needsSharedNative(["jsc/common.sh"])).toBe(true);
 });
+
+for (const path of [
+  "scripts/jsc-json-fast-controls.test.ts", "checks/runtime-json-fast-controls.json",
+  "scripts/bench-jsc-json.ts", "scripts/fixtures/jsc-json-bench.ts",
+  "tests/fixtures/json-fast-iterative/index.ts", "tests/fixtures/json-fast-iterative/expected.txt",
+  "checks/native-json-fast-iterative.json", "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects the compiled JSON controls' JSC producer for %s`, event => {
+    const content = path.endsWith(".json")
+      ? readFileSync(new URL(`../${path}`, import.meta.url), "utf8") + "\n" : "changed input\n";
+    expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
+  });
+}
 
 for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh", ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml"]) {
   test.each(["pull_request", "push"])(`${path} retains native checks through the real %s event CLI`, event => {
