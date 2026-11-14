@@ -16,8 +16,10 @@ compile-time specialization that opens a container without starting another drai
 removes the hot traversal's recursive call graph and its per-container `m_draining` test.
 The test-only resume accounting is a separate helper with guard returns.
 Container checks, reservation, opening, advancement, and closing stay inline on the hot
-path. The property body retains the table entry's concrete type, including compact entries,
-instead of constructing a full property entry for each callback.
+path. A frame index comes from the nonempty drain stack and remains valid across a push;
+the accessor reloads vector storage and checks that invariant in debug builds. Publication
+uses the capacity already reserved before opening the container. A pop shrinks its roots
+once. Property enumeration tests for descent only after a value can push a frame.
 
 A container opens only after frame and root capacity succeed. Frame growth uses fallible vector
 reservation, and root growth records overflow. The 4096-frame nesting cap and either allocation
