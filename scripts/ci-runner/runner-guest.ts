@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { imageVersion } from "./image.ts";
 
 async function input(): Promise<unknown> {
   let text = "";
@@ -12,7 +13,7 @@ async function input(): Promise<unknown> {
 }
 
 export function runnerEnvironment(): NodeJS.ProcessEnv {
-  return { HOME: "/home/runner", PATH: "/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", ImageVersion: "ubuntu-24.04-node26.13.1-v1", RUNNER_TEMP: "/work/t", TMPDIR: "/work/t" };
+  return { HOME: "/home/runner", PATH: "/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", ImageVersion: imageVersion, RUNNER_TEMP: "/work/t", TMPDIR: "/work/t" };
 }
 
 async function configure(): Promise<void> {

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
+import { browserPreparation, imageIdentityPath, imageVersion } from "./image.ts";
 
-const imageVersion = "ubuntu-24.04-node26.13.1-v1";
 const workspace = "/work/w/bun-wasm/bun-wasm";
 const cacheRoot = "/work/ci-runner/bun-wasm/cache";
 
@@ -9,6 +9,7 @@ function quote(value: string): string {
 }
 
 export function cloudConfig(publicKey: string, prepare: boolean, mountCache = true): string {
+  const cacheSetup = prepare ? "" : `if ! blkid /dev/disk/by-id/virtio-bunwasmcache >/dev/null; then mkfs.ext4 -q -L BUNWASMCACHE /dev/disk/by-id/virtio-bunwasmcache; fi; ${mountCache ? `mount /dev/disk/by-id/virtio-bunwasmcache ${cacheRoot}; chown runner:runner ${cacheRoot};` : ""}`;
   const configuration = {
     hostname: "bun-wasm-ci",
     ssh_pwauth: false,
@@ -21,11 +22,12 @@ export function cloudConfig(publicKey: string, prepare: boolean, mountCache = tr
       { path: "/opt/bun-wasm-ci/guard-hook.ts", owner: "root:root", permissions: "0444", content: readFileSync(new URL("./guard-hook.ts", import.meta.url), "utf8") },
       { path: "/opt/bun-wasm-ci/guard-hook.sh", owner: "root:root", permissions: "0555", content: "#!/bin/bash\nset +x\nunset BASH_ENV ENV NODE_OPTIONS NODE_PATH LD_PRELOAD LD_LIBRARY_PATH\nexec /opt/node/bin/node /opt/bun-wasm-ci/guard-hook.ts\n" },
       { path: "/opt/bun-wasm-ci/runner-guest.ts", owner: "root:root", permissions: "0444", content: readFileSync(new URL("./runner-guest.ts", import.meta.url), "utf8") },
+      { path: "/opt/bun-wasm-ci/image.ts", owner: "root:root", permissions: "0444", content: readFileSync(new URL("./image.ts", import.meta.url), "utf8") },
       { path: "/opt/bun-wasm-ci/cache.ts", owner: "root:root", permissions: "0444", content: readFileSync(new URL("./cache.ts", import.meta.url), "utf8") },
       { path: "/opt/bun-wasm-ci/host.ts", owner: "root:root", permissions: "0444", content: readFileSync(new URL("./host.ts", import.meta.url), "utf8") },
     ],
-    runcmd: preparation(prepare).concat([
-      ["bash", "-euc", `mkdir -p ${workspace} /work/w/_temp /work/t /work/runner /etc/bun-wasm-ci ${cacheRoot}; mount --bind /work/t /work/w/_temp; if ! blkid /dev/disk/by-id/virtio-bunwasmcache >/dev/null; then mkfs.ext4 -q -L BUNWASMCACHE /dev/disk/by-id/virtio-bunwasmcache; fi; ${mountCache ? `mount /dev/disk/by-id/virtio-bunwasmcache ${cacheRoot}; chown runner:runner ${cacheRoot};` : ""} chown -R runner:runner /work/w /work/t /work/runner; chmod 700 /work/t; touch /var/lib/bun-wasm-ci-ready`],
+    runcmd: preparation(prepare).concat(prepare ? [browserPreparation()] : [], [
+      ["bash", "-euc", `mkdir -p ${workspace} /work/w/_temp /work/t /work/runner /etc/bun-wasm-ci ${cacheRoot}; mount --bind /work/t /work/w/_temp; ${cacheSetup} chown -R runner:runner /work/w /work/t /work/runner; chmod 700 /work/t; touch /var/lib/bun-wasm-ci-ready`],
     ]),
   };
   return `#cloud-config\n${JSON.stringify(configuration)}\n`;
@@ -38,5 +40,5 @@ function preparation(prepare: boolean): string[][] {
 }
 
 export function guestCommand(argv: readonly string[]): string {
-  return `cd ${workspace} && exec env ImageVersion=${quote(imageVersion)} GITHUB_WORKSPACE=${workspace} RUNNER_TEMP=/work/t TMPDIR=/work/t BUN_WASM_PC_CACHE_ROOT=${cacheRoot} ${argv.map(quote).join(" ")}`;
+  return `test "$(cat ${imageIdentityPath})" = ${quote(imageVersion)} && cd ${workspace} && exec env ImageVersion=${quote(imageVersion)} GITHUB_WORKSPACE=${workspace} RUNNER_TEMP=/work/t TMPDIR=/work/t BUN_WASM_PC_CACHE_ROOT=${cacheRoot} ${argv.map(quote).join(" ")}`;
 }

@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -12,12 +12,13 @@ import type { Admission } from "./policy.ts";
 import { readAdmission, revalidateAdmission, setupSession } from "./session.ts";
 import { continuationControl, controlGuard, type GuardControl } from "./controls.ts";
 import { prepareVmSettings } from "./resources.ts";
+import { baseImage, publishPreparedImage, validatePreparationIdle, validatePreparationTarget } from "./image.ts";
 
 type Profile = "native" | "browser";
 type Job = { id: string; profile: Profile; prepare: boolean; control: boolean; argv: string[] };
 type Ownership = { slice: string; guest: string; cgroup: string };
 const outerUnit = "bun-wasm-ci-vm.service";
-const base = `${root}/images/ci-base-v1.qcow2`;
+const base = `${root}/images/${baseImage}`;
 const source = new URL(import.meta.url).pathname;
 const runtime = process.execPath;
 
@@ -81,7 +82,12 @@ async function finalize(id: string): Promise<void> {
   await cleanup(id);
   const job = await readJob(id);
   const succeeded = existsSync(`${jobPath(id)}/success`);
-  if (job.prepare && succeeded) await rename(`${jobPath(id)}/root.qcow2`, base);
+  let publicationError: unknown;
+  try {
+    if (job.prepare && succeeded) await publishPreparedImage(`${jobPath(id)}/root.qcow2`, base);
+  } catch (error) {
+    publicationError = error;
+  }
   await rm(`${jobPath(id)}/key`, { force: true });
   await rm(`${jobPath(id)}/root.qcow2`, { force: true });
   const registration = `${jobPath(id)}/registration.json`;
@@ -92,8 +98,9 @@ async function finalize(id: string): Promise<void> {
   const bootTail = succeeded ? "" : (await readFile(`${jobPath(id)}/serial.log`, "utf8").catch(() => "")).slice(-4096);
   const control = await readFile(`${jobPath(id)}/control.json`, "utf8").catch(() => "null");
   const guard = await readFile(`${jobPath(id)}/guard-evidence.json`, "utf8").catch(() => "null");
-  await writeFile(`${root}/results/${id}.json`, JSON.stringify({ id, profile: job.profile, prepare: job.prepare, succeeded, ownership: owner ?? null, cleanup: owner ? "drained" : "not-started", errors, bootTail, control: JSON.parse(control), guard: JSON.parse(guard), approvalPending: existsSync(`${jobPath(id)}/approval-pending`), checkedAt: new Date().toISOString() }));
+  await writeFile(`${root}/results/${id}.json`, JSON.stringify({ id, profile: job.profile, prepare: job.prepare, succeeded: succeeded && !publicationError, publicationError: publicationError instanceof Error ? publicationError.message : null, ownership: owner ?? null, cleanup: owner ? "drained" : "not-started", errors, bootTail, control: JSON.parse(control), guard: JSON.parse(guard), approvalPending: existsSync(`${jobPath(id)}/approval-pending`), checkedAt: new Date().toISOString() }));
   await rm(jobPath(id), { recursive: true, force: true });
+  if (publicationError) throw publicationError;
 }
 
 async function choosePort(): Promise<number> {
@@ -135,10 +142,11 @@ async function waitReady(job: Job, port: number, alive: () => boolean): Promise<
   throw new Error("Guest readiness deadline exceeded");
 }
 
-function qemuArgs(job: Job, port: number): string[] {
+export function qemuArgs(job: Pick<Job, "id" | "profile" | "prepare">, port: number): string[] {
   const directory = jobPath(job.id);
   const memory = job.profile === "native" ? 6144 : 8192;
-  return ["-enable-kvm", "-cpu", "host", "-smp", "4", "-m", String(memory), "-object", `memory-backend-ram,id=mem,size=${memory}M,prealloc=on`, "-machine", "q35,memory-backend=mem,dump-guest-core=off,mem-merge=off", "-display", "none", "-monitor", "none", "-qmp", `unix:${directory}/qmp.sock,server=on,wait=off`, "-boot", "c", "-serial", `file:${directory}/serial.log`, "-no-reboot", "-L", `${root}/tools/usr/share/qemu`, "-drive", `if=pflash,format=raw,readonly=on,file=${root}/tools/usr/share/edk2/x64/OVMF_CODE.4m.fd`, "-drive", `if=pflash,format=raw,file=${directory}/vars.fd`, "-drive", `file=${directory}/root.qcow2,format=qcow2,if=virtio`, "-drive", `file=${root}/cache/cache.raw,format=raw,if=none,id=cache`, "-device", "virtio-blk-pci,drive=cache,serial=bunwasmcache", "-drive", `file=${directory}/seed.img,format=raw,if=virtio,readonly=on`, "-netdev", `user,id=net,hostfwd=tcp:127.0.0.1:${port}-:22`, "-device", "virtio-net-pci,netdev=net"];
+  const cache = job.prepare ? [] : ["-drive", `file=${root}/cache/cache.raw,format=raw,if=none,id=cache`, "-device", "virtio-blk-pci,drive=cache,serial=bunwasmcache"];
+  return ["-enable-kvm", "-cpu", "host", "-smp", "4", "-m", String(memory), "-object", `memory-backend-ram,id=mem,size=${memory}M,prealloc=on`, "-machine", "q35,memory-backend=mem,dump-guest-core=off,mem-merge=off", "-display", "none", "-monitor", "none", "-qmp", `unix:${directory}/qmp.sock,server=on,wait=off`, "-boot", "c", "-serial", `file:${directory}/serial.log`, "-no-reboot", "-L", `${root}/tools/usr/share/qemu`, "-drive", `if=pflash,format=raw,readonly=on,file=${root}/tools/usr/share/edk2/x64/OVMF_CODE.4m.fd`, "-drive", `if=pflash,format=raw,file=${directory}/vars.fd`, "-drive", `file=${directory}/root.qcow2,format=qcow2,if=virtio`, ].concat(cache, ["-drive", `file=${directory}/seed.img,format=raw,if=virtio,readonly=on`, "-netdev", `user,id=net,hostfwd=tcp:127.0.0.1:${port}-:22`, "-device", "virtio-net-pci,netdev=net"]);
 }
 
 async function guest(job: Job): Promise<void> {
@@ -155,7 +163,7 @@ async function guest(job: Job): Promise<void> {
   await seed(job);
   command([`${root}/tools/usr/bin/qemu-img`, "create", "-f", "qcow2", "-F", "qcow2", "-b", job.prepare ? `${root}/images/ubuntu-noble.qcow2` : base, `${directory}/root.qcow2`], { env: toolEnvironment() });
   command([`${root}/tools/usr/bin/qemu-img`, "resize", `${directory}/root.qcow2`, "80G"], { env: toolEnvironment() });
-  if (!existsSync(`${root}/cache/cache.raw`)) command([`${root}/tools/usr/bin/qemu-img`, "create", "-f", "raw", `${root}/cache/cache.raw`, "128G"], { env: toolEnvironment() });
+  if (!job.prepare && !existsSync(`${root}/cache/cache.raw`)) command([`${root}/tools/usr/bin/qemu-img`, "create", "-f", "raw", `${root}/cache/cache.raw`, "128G"], { env: toolEnvironment() });
   const port = await choosePort();
   const qemu = spawn(`${root}/tools/usr/bin/qemu-system-x86_64`, qemuArgs(job, port), { env: { ...toolEnvironment(), QEMU_MODULE_DIR: `${root}/tools/usr/lib/qemu` }, stdio: ["ignore", "ignore", "pipe"] });
   const errors: Buffer[] = [];
@@ -246,7 +254,10 @@ async function main(): Promise<void> {
     return launch({ id: randomUUID(), profile: "native", prepare: false, control: true, argv: [`__guard-${id}__`] });
   }
   if (operation === "prepare") {
+    validatePreparationTarget(id);
+    if (process.argv.length !== 4) throw new Error("Unexpected preparation arguments");
     if (existsSync(base)) throw new Error("Offline base already exists");
+    validatePreparationIdle(unitProperty("bun-wasm-ci-controller.service", "ActiveState"), unitProperty(outerUnit, "ActiveState"), (await readdir(`${root}/jobs`)).length);
     return launch({ id: randomUUID(), profile: "native", prepare: true, control: false, argv: ["bash", "-euc", "sudo apt-get --version >/dev/null; command -v setpriv; test \"$(node --version)\" = v26.13.1; test -n \"$ImageVersion\"; printf 'Ubuntu VM prerequisites passed\\n'"] });
   }
   if ((operation !== "run" && operation !== "control") || (id !== "native" && id !== "browser") || process.argv[4] !== "--" || process.argv.length < 6) throw new Error("Expected prepare, or run|control native|browser -- COMMAND...");

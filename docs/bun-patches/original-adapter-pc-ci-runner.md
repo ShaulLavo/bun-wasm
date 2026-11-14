@@ -76,3 +76,20 @@ The cache CLI accepts absolute, separate storage and job directories so its
 behavioral tests also run on hosted machines. It rejects whole-job snapshots,
 outside job paths and cache storage aliases. The VM lifecycle fixes production
 directories under `/work`; the CLI does not change those locations.
+
+The versioned v2 Ubuntu base installs browser system packages with the unmodified
+Playwright Core 1.64.1 CLI (`packages/playwright-core/src/server/registry/dependencies.ts`
+and `nativeDeps.ts` in Microsoft's Playwright v1.64.1). Its npm archive is verified
+against both frozen lockfiles' SHA-512 integrity. The CLI selects Ubuntu 24.04's
+Chromium, Firefox, WebKit and common tools, installs through authenticated apt,
+then simulates the full install again. No upstream implementation is copied.
+Browser binaries remain per-job downloads or verified warm cache inputs.
+
+Preparation requires an explicit new image filename, stopped controller, idle VM
+service and empty jobs directory. Publication uses a no-overwrite hard link after
+VM shutdown and cgroup drain. The old installed image remains intact. The guest
+identity file is written only after closure verification and must match every
+guest command and Listener environment. Installing the reviewed source and
+accepting its digest between VMs selects the new image and its distinct cache
+identity. Per-job browser setup first simulates the complete pinned dependency
+closure; a complete base avoids network apt setup without a cache-hit stamp.

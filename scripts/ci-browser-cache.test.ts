@@ -120,7 +120,7 @@ function dependencyFixture(directory: string): void {
   writeFileSync(join(directory, "ubuntu.sources"), "Types: deb\nURIs: https://archive.ubuntu.com/ubuntu\nSuites: resolute resolute-updates resolute-backports resolute-security\nComponents: main universe restricted multiverse\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n");
   writeFileSync(join(directory, "node_modules/playwright/cli.js"), `
     const browsers = process.argv.slice(4);
-    if (process.env.INSTALLED_BROWSER && browsers.length === 1 && browsers[0] === process.env.INSTALLED_BROWSER) {
+    if (process.env.INSTALLED_BROWSER === "all" || (process.env.INSTALLED_BROWSER && browsers.length === 1 && browsers[0] === process.env.INSTALLED_BROWSER)) {
       process.stdout.write("All system dependencies are installed.\\n");
       process.exit(0);
     }
@@ -135,7 +135,7 @@ function dependencyFixture(directory: string): void {
   `, { mode: 0o755 });
 }
 
-function setupDependencies(directory: string, browsers: string[], failUpdate = false, installed = "") {
+function setupDependencies(directory: string, browsers: readonly string[], failUpdate = false, installed = "") {
   return spawnSync(process.execPath, [join(directory, "scripts/ci-browser-deps.ts")].concat(browsers), {
     encoding: "utf8", env: { ...process.env, PATH: directory + ":" + process.env.PATH,
       GITHUB_ACTIONS: "true", RUNNER_TEMP: directory, APT_CALLS: join(directory, "apt-calls"), FAIL_UPDATE: failUpdate ? "1" : "0", INSTALLED_BROWSER: installed },
@@ -222,5 +222,18 @@ test("a preinstalled browser still fills the complete pool without installing ot
     expect(calls).toHaveLength(2);
     expect(calls[1]).toContain("--print-uris");
     expect(calls[1]).toContain("libwebkit");
+  });
+});
+
+test.each([{ browsers: ["chromium"] }, { browsers: ["firefox"] }, { browsers: ["webkit"] }, { browsers: ["chromium", "firefox", "webkit"] }])("a complete base verifies %j without apt refresh, downloads or installation", ({ browsers }) => {
+  fixture(directory => {
+    dependencyFixture(directory);
+    mkdirSync(join(directory, "browser-apt"));
+    writeFileSync(join(directory, "browser-apt/stale.deb"), "unneeded archive");
+    const result = setupDependencies(directory, browsers, true, "all");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("All system dependencies are installed.");
+    expect(readdirSync(directory)).not.toContain("apt-calls");
+    expect(readdirSync(join(directory, "browser-apt"))).toEqual([]);
   });
 });
