@@ -1723,6 +1723,9 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
     steps:
+      - name: Reserve time for shared producer diagnostics
+        if: needs.quality.outputs.shared-native == 'true'
+        run: echo "SHARED_PRODUCER_DEADLINE_MS=$(( $(date +%s) * 1000 + 27 * 60 * 1000 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - name: Require the shared prebuild producer
         env:
@@ -1952,6 +1955,11 @@ jobs:
           key: shared-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'scripts/ci-build-tools.ts', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('Cargo.toml', '.cargo/**', 'crates/**', 'third_party/**', 'patches/**', 'scripts/build-native-profile.ts', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build-engine-spidermonkey-shared.sh', 'scripts/spidermonkey-side-core-receipt.ts', 'spidermonkey/**', 'scripts/guest-*.ts', 'scripts/src/program-profile.ts', 'scripts/src/engine-*.ts', 'scripts/src/engine-init.c', 'env.sh') }}
           restore-keys: |
             shared-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'scripts/ci-build-tools.ts', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ steps.shared-inputs.outputs.hash }}-
+      - name: Shared profile cache result
+        if: needs.quality.outputs.shared-native == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/shared-spidermonkey-producer"
+          echo "shared native exact cache hit=${{ steps.shared-native-cache.outputs.cache-hit }}; matched=${{ steps.shared-native-cache.outputs.cache-matched-key }}" | tee "$RUNNER_TEMP/shared-spidermonkey-producer/cache-result.log"
       - name: Prepare the shared native source dependencies
         if: needs.quality.outputs.shared-native == 'true'
         run: |
@@ -2021,10 +2029,19 @@ jobs:
       - name: Produce the shared SpiderMonkey profile once
         id: shared-spidermonkey-producer
         if: needs.quality.outputs.shared-native == 'true'
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
-          bun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" spidermonkey
+          bun scripts/producer-diagnostics.ts run "$RUNNER_TEMP/shared-spidermonkey-producer" "$SHARED_PRODUCER_DEADLINE_MS" \
+            bash scripts/with-build-cache.sh bun scripts/build-native-profile.ts shared-group "$CARGO_TARGET_DIR/shared-native" spidermonkey
+      - name: Retain shared SpiderMonkey producer diagnostics
+        if: ${{ always() && steps.shared-spidermonkey-producer.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 2
+        with:
+          name: shared-spidermonkey-producer-diagnostics
+          path: ${{ runner.temp }}/shared-spidermonkey-producer/
+          if-no-files-found: warn
+          retention-days: 1
       - name: Retain the matched shared SpiderMonkey program for qualification
         if: ${{ always() && steps.shared-spidermonkey-producer.outcome == 'success' }}
         uses: actions/upload-artifact@v4
@@ -2047,9 +2064,6 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_TARGET_DIR }}/shared-native
           key: ${{ steps.shared-native-cache.outputs.cache-primary-key }}
-      - name: Shared profile cache result
-        if: needs.quality.outputs.shared-native == 'true'
-        run: echo "shared native exact cache hit=${{ steps.shared-native-cache.outputs.cache-hit }}; matched=${{ steps.shared-native-cache.outputs.cache-matched-key }}"
       - uses: ./.github/actions/save-rust-build-cache
         if: needs.quality.outputs.shared-native == 'true'
         with:
