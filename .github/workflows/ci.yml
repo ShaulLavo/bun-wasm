@@ -2179,6 +2179,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/release-downloads
+        with:
+          scope: browser-guest
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
