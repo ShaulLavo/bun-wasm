@@ -53351,8 +53351,11 @@ static int js_json_to_str(JSContext *ctx, JSONStringifyContext *jsc,
             sep = js_dup(jsc->empty);
             sep1 = js_dup(jsc->empty);
         }
-        v = js_array_push(ctx, jsc->stack, 1, vc(&val), 0);
-        if (check_exception_free(ctx, v))
+        if (js_get_length64(ctx, &len, jsc->stack))
+            goto exception;
+        /* The ancestor list must not invoke inherited array index setters. */
+        if (JS_DefinePropertyValueInt64(ctx, jsc->stack, len, js_dup(val),
+                                       JS_PROP_C_W_E | JS_PROP_THROW) < 0)
             goto exception;
         ret = js_is_array(ctx, val);
         if (ret < 0)
