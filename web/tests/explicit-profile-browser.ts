@@ -40,7 +40,7 @@ async function site(): Promise<string> {
   const root = join(scratch, "site");
   await cp(source, root, { recursive: true });
   const program = process.env.BUN_WASM_PROFILE_PROGRAM;
-  if (program) {
+  if (program && process.env.BUN_WASM_PREPARED_SHARED_SITE !== "1") {
     const kind = programKind(new WebAssembly.Module(await Bun.file(program).bytes()));
     assert.ok(isPairedEngine(kind), "Existing shared paired producer required");
     const builds: Record<string, string> = await Bun.file(join(root, "engine-builds.json")).json();

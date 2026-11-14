@@ -14,8 +14,10 @@ both ArrayBuffer and SharedArrayBuffer class tags without invoking a getter.
 QuickJS's existing `JS_IsArrayBuffer` recognizes only the first class, so using it
 alone would lose the shared-buffer conversion that the getter already supports.
 `JS_bunwasm_IsDetachableArrayBuffer` is another original inspection helper. It
-checks the ordinary-buffer class and detached flag before a transfer mutates any
-buffer. It copies no upstream implementation.
+checks the ordinary-buffer class and the detached, WebAssembly-memory and immutable
+flags before a transfer mutates any buffer. `JS_DetachArrayBuffer` refuses nothing
+itself, so the helper is what keeps an immutable buffer from being transferred. It
+copies no upstream implementation.
 
 
 ## Classification

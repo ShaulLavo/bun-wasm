@@ -1602,6 +1602,12 @@ extern "C" bool bsm_is_detachable_buffer(bsm_handle handle) {
   JSAutoRealm realm(context, global->get());
   JS::RootedObject obj(context, object(handle));
   if (!obj || !JS::IsArrayBufferObject(obj) || JS::IsDetachedArrayBufferObject(obj)) return false;
+  // Every refusal of JS::DetachArrayBuffer is refused here first, so a caller that checks all
+  // its buffers before detaching any never meets one halfway: an unwrappable object and a
+  // detached buffer (above), an immutable buffer, a detach key, and a pinned length. This
+  // adapter pins a length only on its external buffers, and SpiderMonkey's own pins (wasm
+  // compilation) are held across no JavaScript.
+  if (JS::ArrayBufferOrView::unwrap(obj.get()).isImmutable()) return false;
   if (is_external_buffer(obj)) return false;
   bool keyed = false;
   require(JS::HasDefinedArrayBufferDetachKey(context, obj, &keyed), "buffer detach key inspection failed");
@@ -1639,6 +1645,9 @@ extern "C" void bsm_heap_info(double* used, double* total, double* external) {
   *total = JS_GetGCParameter(context, JSGC_TOTAL_CHUNKS) * static_cast<double>(js::gc::ChunkSize);
   *external = std::nan("");
 }
+// For glue compiled beside this file and not into it (cpp/transfer_fault.cpp).
+extern "C" JSContext* bsm_context() { return context; }
+extern "C" JSObject* bsm_global_object() { return global->get(); }
 
 #if defined(BUNSM_CONTROLS)
 #include "../tests/engine-semantics.cpp"

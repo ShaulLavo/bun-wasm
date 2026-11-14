@@ -1,6 +1,8 @@
 //! Peak allocation of the data transport, measured with the core crate's tracking allocator.
 
-use super::tests::{allocated_frame, dispatcher, release_frame};
+use super::tests::{
+    allocated_frame, dispatcher, release_frame, word_dispatcher, word_result, write_word_frame,
+};
 use super::*;
 use crate::compression::tests::measure;
 
@@ -75,4 +77,16 @@ fn transport_encoding_is_the_only_copy_and_frees_cleanly() {
     );
     transport.free(pointer, len, Frame::ALIGN).unwrap();
     assert_eq!(transport.live_allocations(), 0);
+}
+
+#[test]
+fn a_word_call_allocates_nothing() {
+    let transport = abi::Transport::default();
+    let dispatch = word_dispatcher();
+    let frame = transport.alloc(WordFrame::SIZE as u32, Frame::ALIGN);
+    write_word_frame(&transport, frame, 0, 1, [1; WORD_ARGS]);
+    let (status, largest, peak) = measure(|| transport.dispatch(&dispatch, frame));
+    assert_eq!(status, Status::Ok);
+    assert_eq!((largest, peak), (0, 0), "the word path made an allocation");
+    assert_eq!(word_result(&transport, frame), WORD_ARGS as i64);
 }

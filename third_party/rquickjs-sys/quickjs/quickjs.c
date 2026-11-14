@@ -61315,7 +61315,8 @@ bool JS_bunwasm_IsArrayBufferLike(JSValueConst obj) {
 
 bool JS_bunwasm_IsDetachableArrayBuffer(JSValueConst obj) {
     JSArrayBuffer *buffer = JS_GetOpaque(obj, JS_CLASS_ARRAY_BUFFER);
-    return buffer && !buffer->detached && !buffer->wasm_memory;
+    /* An immutable buffer cannot be transferred. JS_DetachArrayBuffer would not refuse it. */
+    return buffer && !buffer->detached && !buffer->wasm_memory && !buffer->immutable;
 }
 
 /* A non-resizable WebAssembly.Memory buffer over 'len' bytes at 'buf', which
