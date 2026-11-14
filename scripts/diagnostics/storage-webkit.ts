@@ -65,7 +65,7 @@ try {
   await restart(page);
   await marker(page, "control sandbox replacement ready");
   await edit(page, "vite.config.ts", `${config}\n// storage diagnostic self-restart control\n`);
-  await page.waitForFunction(() => __storageDiagnostic.snapshot().output.includes("server restarted"), undefined, { timeout: 30000 });
+  await page.waitForFunction(() => document.body.innerText.includes("server restarted"), undefined, { timeout: 30000 });
   await marker(page, "control Vite self-restart observed");
   const state = await page.evaluate(() => __storageDiagnostic.snapshot());
   assert.equal(state.dropped, 0);

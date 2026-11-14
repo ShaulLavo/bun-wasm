@@ -1,8 +1,9 @@
 import { captureProcessObserver, type ProcessObserver } from "waffle/proc/observation";
+import { directoryState } from "waffle/proc/directory";
 
 type Event = { time: number; kind: string; detail: unknown };
 type Identity = { owner: number; sections: SharedArrayBuffer; ownerStates: SharedArrayBuffer; revocations: SharedArrayBuffer[] };
-type Process = { worker: number; pid: number; args: unknown; observer: ProcessObserver };
+type Process = { worker: number; pid: number; parentPid: number; rootPid: number; job: number; owner?: number; args: unknown; observer: ProcessObserver };
 const events: Event[] = [];
 const identities = new Map<number, Identity>();
 const processes: Process[] = [];
@@ -24,7 +25,7 @@ function filesystem() {
 }
 function outcomes() {
   return processes.map(value => {
-    try { return { worker: value.worker, pid: value.pid, args: value.args, state: value.observer.read() }; }
+    try { return { worker: value.worker, pid: value.pid, parentPid: value.parentPid, rootPid: value.rootPid, job: value.job, owner: value.owner, args: value.args, state: value.observer.read() }; }
     catch (error) { return { worker: value.worker, pid: value.pid, error: String(error) }; }
   });
 }
@@ -34,10 +35,13 @@ function capture(worker: number, message: unknown): void {
   identity(message.connect);
   const value = message.runtimeProcess;
   if (!object(value) || value.kind !== "directory" || typeof value.pid !== "number" || typeof value.slot !== "number" || !(value.directory instanceof SharedArrayBuffer) || !(value.lifetime instanceof SharedArrayBuffer)) return;
-  const observer = captureProcessObserver({ kind: "directory", pid: value.pid, slot: value.slot, directory: value.directory, lifetime: value.lifetime });
-  processes.push({ worker, pid: value.pid, args: message.args, observer });
+  const transfer = { kind: "directory", pid: value.pid, slot: value.slot, directory: value.directory, lifetime: value.lifetime } as const;
+  const observer = captureProcessObserver(transfer);
+  const state = directoryState(transfer);
+  const owner = object(message.filesystem) && typeof message.filesystem.owner === "number" ? message.filesystem.owner : undefined;
+  processes.push({ worker, pid: value.pid, parentPid: state.parentPid, rootPid: state.rootPid, job: state.job, owner, args: message.args, observer });
   if (object(value.data)) identity(value.data.filesystem);
-  record("process-captured", { worker, pid: value.pid, args: message.args, filesystem: filesystem() });
+  record("process-captured", { worker, pid: value.pid, parentPid: state.parentPid, rootPid: state.rootPid, job: state.job, owner, args: message.args, filesystem: filesystem() });
 }
 function describe(message: unknown): unknown {
   if (!object(message)) return typeof message;
