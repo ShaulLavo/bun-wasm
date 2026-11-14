@@ -10,6 +10,9 @@ inputs:
   restore-keys:
     description: Ordered compatible key prefixes
     default: ''
+  lookup-only:
+    description: Report a matching snapshot without restoring its files
+    default: 'false'
 outputs:
   cache-hit:
     description: True only for an exact cache key match
@@ -32,6 +35,7 @@ runs:
         CACHE_PATHS: ${{ inputs.path }}
         CACHE_KEY: ${{ inputs.key }}
         CACHE_RESTORE_KEYS: ${{ inputs.restore-keys }}
+        CACHE_LOOKUP_ONLY: ${{ inputs.lookup-only }}
       run: node "$GITHUB_WORKSPACE/scripts/ci-runner/cache.ts" restore
     - id: hosted
       if: runner.environment != 'self-hosted'
@@ -40,3 +44,4 @@ runs:
         path: ${{ inputs.path }}
         key: ${{ inputs.key }}
         restore-keys: ${{ inputs.restore-keys }}
+        lookup-only: ${{ inputs.lookup-only }}

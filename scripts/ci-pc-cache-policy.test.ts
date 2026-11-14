@@ -46,7 +46,7 @@ test("local snapshots use the persistent cache root and preserve every caller pa
   expect(localSave?.run).toBe('node "$GITHUB_WORKSPACE/scripts/ci-runner/cache.ts" save');
   expect(localRestore?.["working-directory"]).toBe("${{ github.workspace }}");
   expect(localSave?.["working-directory"]).toBe("${{ github.workspace }}");
-  expect(localRestore?.env).toEqual({ BUN_WASM_PC_CACHE_ROOT: "/work/ci-runner/bun-wasm/cache", CACHE_PATHS: "${{ inputs.path }}", CACHE_KEY: "${{ inputs.key }}", CACHE_RESTORE_KEYS: "${{ inputs.restore-keys }}" });
+  expect(localRestore?.env).toEqual({ BUN_WASM_PC_CACHE_ROOT: "/work/ci-runner/bun-wasm/cache", CACHE_PATHS: "${{ inputs.path }}", CACHE_KEY: "${{ inputs.key }}", CACHE_RESTORE_KEYS: "${{ inputs.restore-keys }}", CACHE_LOOKUP_ONLY: "${{ inputs.lookup-only }}" });
   expect(localSave?.env).toEqual({ BUN_WASM_PC_CACHE_ROOT: "/work/ci-runner/bun-wasm/cache", CACHE_PATHS: "${{ inputs.path }}", CACHE_KEY: "${{ inputs.key }}" });
   expect(record(record(restoring.outputs)["cache-primary-key"]).value).toBe("${{ inputs.key }}");
   expect(record(record(restoring.outputs)["cache-hit"]).value).toBe("${{ steps.local.outputs.cache-hit || steps.hosted.outputs.cache-hit }}");
@@ -57,6 +57,12 @@ test("local snapshots use the persistent cache root and preserve every caller pa
     expect(record(hosted?.with).key).toBe("${{ inputs.key }}");
     expect(JSON.stringify(action)).not.toMatch(/continue-on-error|CARGO_TARGET_DIR=|touch |stamp/);
   }
+});
+
+test("lookup-only reaches either backend while ordinary callers still restore by default", () => {
+  expect(record(record(restoring.inputs)["lookup-only"]).default).toBe("false");
+  const hosted = steps(restoring).find(step => step.id === "hosted");
+  expect(hosted?.with).toEqual({ path: "${{ inputs.path }}", key: "${{ inputs.key }}", "restore-keys": "${{ inputs.restore-keys }}", "lookup-only": "${{ inputs.lookup-only }}" });
 });
 
 test("every workflow and composite cache uses the policy wrappers with no direct backend bypass", () => {

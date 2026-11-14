@@ -13,6 +13,7 @@ type CacheConfig = {
   patterns: string[];
   output: string;
   maxBytes: number;
+  lookupOnly: boolean;
 };
 type Snapshot = { key: string; patterns: string[]; created: number; sha256: string };
 const maximumBytes = 32 * 1024 ** 3;
@@ -50,7 +51,7 @@ function configuration(): CacheConfig {
   if (key.length > 512 || Array.from(key).some(character => character.charCodeAt(0) < 32)) throw new Error("Invalid cache key");
   const patterns = lines(input("CACHE_PATHS"));
   if (patterns.length === 0) throw new Error("Missing cache paths");
-  return { root, workspace, temporary, key, patterns, prefixes: lines(process.env.CACHE_RESTORE_KEYS), output: input("GITHUB_OUTPUT"), maxBytes };
+  return { root, workspace, temporary, key, patterns, prefixes: lines(process.env.CACHE_RESTORE_KEYS), output: input("GITHUB_OUTPUT"), maxBytes, lookupOnly: process.env.CACHE_LOOKUP_ONLY === "true" };
 }
 
 function snapshotDirectories(directory: string): string[] {
@@ -123,9 +124,11 @@ async function restore(config: CacheConfig, directory: string): Promise<void> {
   config.patterns.forEach(pattern => patternPath(pattern.replace(/^!/, ""), config));
   const match = selectSnapshot(config, directory);
   if (!match) return output(config, false, "");
-  const archive = `${match.directory}/snapshot.tar.zst`;
-  if (await digest(archive) !== match.snapshot.sha256) throw new Error("Corrupt cache archive");
-  tar(["--extract", "--zstd", "--file", archive, "--directory", "/", "--no-same-owner", "--delay-directory-restore"]);
+  if (!config.lookupOnly) {
+    const archive = `${match.directory}/snapshot.tar.zst`;
+    if (await digest(archive) !== match.snapshot.sha256) throw new Error("Corrupt cache archive");
+    tar(["--extract", "--zstd", "--file", archive, "--directory", "/", "--no-same-owner", "--delay-directory-restore"]);
+  }
   const now = new Date();
   utimesSync(match.directory, now, now);
   output(config, match.snapshot.key === config.key, match.snapshot.key);

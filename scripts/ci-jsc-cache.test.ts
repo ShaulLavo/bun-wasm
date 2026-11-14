@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ciExpression } from "./fixtures/ci-expressions";
 
 type RecordValue = Record<string, unknown>;
 
@@ -74,7 +75,7 @@ test("the ordinary identity looks up the exact published cache without downloadi
   const identity = record(warmJobs.identity);
   expect(record(identity.outputs)["cache-hit"]).toBe("${{ steps.published.outputs.cache-hit }}");
   const lookup = step(identity, "id", "published");
-  expect(lookup.uses).toBe("actions/cache/restore@v4");
+  expect(lookup.uses).toBe("./.github/actions/restore-ci-cache");
   expect(lookup.with).toEqual({
     path: "${{ runner.temp }}/jsc/prebuild",
     key: "${{ steps.setup.outputs.key }}",
@@ -86,6 +87,10 @@ test("the ordinary identity looks up the exact published cache without downloadi
   expect(record(ciJobs["jsc-identity"]).outputs).not.toHaveProperty("cache-hit");
   expect(JSON.stringify(ciJobs)).not.toContain("needs.jsc-identity.outputs.cache-hit");
   expect(step(build, "id", "jsc-prebuild-cache").with).not.toHaveProperty("lookup-only");
+  const restore = record(step(build, "id", "jsc-prebuild-cache").with);
+  expect(record(lookup.with).path).toBe(restore.path);
+  expect(record(lookup.with).key).toBe("${{ steps.setup.outputs.key }}");
+  expect(restore.key).toBe("${{ inputs.key }}");
 });
 
 test.each([
@@ -93,11 +98,17 @@ test.each([
   { lookup: "miss", hit: "", runs: true },
   { lookup: "compatible prefix only", hit: "false", runs: true },
   { lookup: "cache unavailable", hit: "false", runs: true },
+  { lookup: "missing output", hit: undefined, runs: true },
 ])("the standalone ordinary warmer handles $lookup", ({ hit, runs }) => {
   const producer = record(warmJobs["jsc-prebuild"]);
-  expect(producer.if).toBe("needs.identity.outputs.cache-hit != 'true'");
-  const expression = String(producer.if).replaceAll("needs.identity.outputs.cache-hit", JSON.stringify(hit));
-  const selected: unknown = new Function(`return (${expression})`)();
+  const condition = String(producer.if);
+  expect(condition).toContain("needs.identity.outputs.cache-hit != 'true'");
+  const selected = ciExpression(condition, {
+    "needs.identity.outputs.cache-hit": hit,
+    "github.event.pull_request.head.repo.full_name": "",
+    "github.repository": "ShaulLavo/bun-wasm",
+    "github.event_name": "push",
+  });
   expect(selected).toBe(runs);
   // The default success() guard still excludes a failed or cancelled identity.
   expect(String(producer.if)).not.toMatch(/always\(|failure\(|cancelled\(|success\(/);
@@ -227,7 +238,7 @@ test("an unavailable prebuild keeps the cold fallback, while a mismatched restor
 }));
 
 test("full CI builds and verifies when the cache disappears after the standalone exact lookup", () => withFixture(root => {
-  expect(record(warmJobs["jsc-prebuild"]).if).toBe("needs.identity.outputs.cache-hit != 'true'");
+  expect(String(record(warmJobs["jsc-prebuild"]).if)).toContain("needs.identity.outputs.cache-hit != 'true'");
   // Full CI uses its own restore outcome, never the standalone lookup result.
   const cold = runProducer(root, "full-ci-after-eviction", false);
   expect(cold.result.status, cold.result.stderr).toBe(0);

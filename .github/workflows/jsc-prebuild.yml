@@ -27,7 +27,7 @@ jobs:
       - uses: ./.github/actions/jsc-setup
         id: setup
       - name: Look up the published ordinary JSC cache
-        uses: actions/cache/restore@v4
+        uses: ./.github/actions/restore-ci-cache
         id: published
         with:
           path: ${{ runner.temp }}/jsc/prebuild
