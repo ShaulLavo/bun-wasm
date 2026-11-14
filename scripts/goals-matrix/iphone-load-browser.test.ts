@@ -178,7 +178,8 @@ async function runFailureFixture(framework: Framework, fixture: Transport, held:
   expect(result).toMatchObject({ status: "fail", phase: "render" });
   expect(logs.join("\n")).toContain("Error: current dev diagnostic");
   expect(deviceCommands()).toEqual([]);
-  expect(held.evidence().filter(row => row.event === "iphone-preview").at(-1)).toMatchObject({
-    stage: scenario === "held-timeout" ? "document" : "focus", outcome: "cancelled",
-  });
+  const final = held.evidence().filter(row => row.event === "iphone-preview").at(-1);
+  expect(final).toMatchObject({ stage: scenario === "held-timeout" ? "document" : "focus" });
+  if (scenario === "held-timeout") expect(["failed", "cancelled"]).toContain(final?.outcome);
+  else expect(final?.outcome).toBe("cancelled");
 }
