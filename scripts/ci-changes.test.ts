@@ -10,7 +10,8 @@ import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 test("ordinary SpiderMonkey recipes, nested runtime inputs and each reviewed fixture select Rust", () => {
   const paths = ["spidermonkey/mozconfig.in", "spidermonkey/prepare-engine-inputs.ts", "spidermonkey/unresolved-symbols.json",
     "scripts/spidermonkey-ordinary-ci.ts", "scripts/spidermonkey-ordinary-ci.test.ts", "scripts/spidermonkey-ordinary-fixtures.ts",
-    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "checks/runtime-spidermonkey-ordinary-fixtures.json",
+    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "scripts/spidermonkey-engine-semantics.sh",
+    "checks/runtime-spidermonkey-ordinary-fixtures.json",
     "crates/bunwasm-runtime/src/data/codec.rs", "crates/bunwasm-runtime/src/ops/client.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs"]
     .concat(ordinaryFixtures.map(name => `tests/fixtures/${name}/expected.txt`));
   for (const path of paths) expect(needsRust([path])).toBe(true);
@@ -181,6 +182,8 @@ beforeAll(() => {
   git(["init", "-q"]);
   mkdirSync(join(fixture, "crates"));
   writeFileSync(join(fixture, "crates/lib.rs"), "owned native input\n");
+  mkdirSync(join(fixture, "checks"));
+  writeFileSync(join(fixture, "checks/native-json-fast-iterative.json"), readFileSync(new URL("../checks/native-json-fast-iterative.json", import.meta.url), "utf8"));
   git(["add", "."]);
   git(["commit", "-qm", "base"]);
   base = git(["rev-parse", "HEAD"]);
@@ -227,6 +230,49 @@ function commitInput(path: string, content = "changed input\n"): string {
   return git(["rev-parse", "HEAD"]);
 }
 
+test.each([
+  ["web/src/dev-html-client.ts", false], ["scripts/generate-dev-html-client.ts", false],
+  ["scripts/ci-build-tools.ts", true], ["scripts/ci-binaryen.ts", true],
+  [".github/actions/save-rust-build-cache/action.yml", true], ["scripts/ci-sccache-cache.ts", true],
+  ["jsc/common.sh", false], ["jsc/shim/wasi-compat.c", false],
+] satisfies [string, boolean][])("immutable additions and removals of %s select every consuming native family", (path, shared) => {
+  if (!fixture) throw new Error("Fixture not initialized");
+  const before = commitInput("checks/native-shared-selection.json", JSON.stringify({ owner: "native", path: "tests/fixtures/shared-selection", profile: "shared-group" }));
+  mkdirSync(join(fixture, path, ".."), { recursive: true });
+  writeFileSync(join(fixture, path), "consumed input\n");
+  git(["add", "."]);
+  git(["commit", "-qm", `add ${path}`]);
+  const added = git(["rev-parse", "HEAD"]);
+  git(["rm", "-q", path]);
+  git(["commit", "-qm", `remove ${path}`]);
+  const removed = git(["rev-parse", "HEAD"]);
+  const expected = `rust=true\njsc=true\nshared=${shared}\nshared_native=true`;
+  for (const event of ["pull_request", "push"]) {
+    expect(selectionOutput(before, added, event)).toBe(expected);
+    expect(selectionOutput(added, removed, event)).toBe(expected);
+  }
+});
+
+test.each(["pull_request", "push"])("the exact JSC README skips native jobs through an immutable %s diff", event => {
+  const added = commitInput("jsc/README.md", "documentation\n");
+  expect(selectionOutput(base, added, event)).toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
+  expect(needsSharedNative(["jsc/README.md"])).toBe(false);
+  expect(needsSharedNative(["jsc/common.sh"])).toBe(true);
+});
+
+for (const path of [
+  "scripts/jsc-json-fast-controls.test.ts", "checks/runtime-json-fast-controls.json",
+  "scripts/bench-jsc-json.ts", "scripts/fixtures/jsc-json-bench.ts",
+  "tests/fixtures/json-fast-iterative/index.ts", "tests/fixtures/json-fast-iterative/expected.txt",
+  "checks/native-json-fast-iterative.json", "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects the compiled JSON controls' JSC producer for %s`, event => {
+    const content = path.endsWith(".json")
+      ? readFileSync(new URL(`../${path}`, import.meta.url), "utf8") + "\n" : "changed input\n";
+    expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
+  });
+}
+
 for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh", ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml"]) {
   test.each(["pull_request", "push"])(`${path} retains native checks through the real %s event CLI`, event => {
     expect(select(base, commitInput(path), event)).toBe(`rust=true\njsc=${needsJsc([path])}`);
@@ -270,7 +316,8 @@ for (const path of [
   test.each(["pull_request", "push"])(`${path} keeps the blocking lightweight CMake owner for a real %s event`, event => {
     expect(select(base, commitInput(path), event)).toBe(`rust=${needsRust([path])}\njsc=${needsJsc([path])}`);
     expect(quality).toContain("run: bun scripts/test-checks.ts cmake");
-    expect(quality).not.toMatch(/^ {4}(?:if|needs):/m);
+    expect(quality).toContain("    needs: selection");
+    expect(quality).not.toMatch(/^ {4}if:/m);
   });
 }
 
@@ -352,7 +399,7 @@ test("similarly named stack fixtures do not select the JSC producer", () => {
 
 test("unrelated page changes skip JSC; its selected gate builds and executes once", () => {
   expect(needsJsc(["web/src/page.ts", "docs/jsc-build.md"])).toBe(false);
-  expect(workflow).toContain("if: needs.quality.outputs.jsc == 'true'");
+  expect(workflow).toContain("if: needs.selection.outputs.jsc == 'true'");
   expect(workflow.match(/^\s+bash scripts\/build-jsc\.sh$/gm)).toHaveLength(1);
   expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
   expect(workflow).toContain("bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm");

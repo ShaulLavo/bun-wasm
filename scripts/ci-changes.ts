@@ -11,7 +11,7 @@ const nativeFiles = new Set([
   "scripts/ci-jsc-artifact.ts",
   "scripts/ci-main-coverage.ts",
   "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js",
-  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml",
+  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml", ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/engine-producer.ts", "scripts/producer-closure.ts", "src/bun-adapter.ts", "src/executable-paths.ts", "web/src/bun-executor.ts", "web/src/bun-launcher.ts",
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
@@ -32,6 +32,8 @@ const nativeFiles = new Set([
   "web/src/native-direct-stream.ts",
 ]);
 const sharedSysrootFiles = new Set([
+  "scripts/ci-build-tools.ts", "scripts/ci-binaryen.ts",
+  ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
   ".github/actions/shared-jsc-setup/action.yml", ".github/actions/shared-jsc-prebuild/action.yml",
   "scripts/ci-main-coverage.ts", "scripts/ci-check-inputs.ts", "scripts/ci-refs.ts",
   ".github/workflows/ci.yml", "env.sh", "scripts/ci-changes.ts", "scripts/build-wasi-sysroot.ts",
@@ -47,6 +49,8 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
+  "scripts/ci-build-tools.ts", "scripts/ci-binaryen.ts",
+  "web/src/dev-html-client.ts", "scripts/generate-dev-html-client.ts",
   ".github/actions/shared-jsc-setup/action.yml", ".github/actions/shared-jsc-prebuild/action.yml",
   "scripts/producer-diagnostics.ts",
   "scripts/ci-jsc-artifact.ts",
@@ -68,7 +72,7 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/transpile-runtime.ts",
   "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "scripts/generate-direct-stream.ts",
   "web/src/native-direct-stream.ts", "src/engine-kind.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake",
-  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml",
+  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml", ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
   // The shared Browser consumer's entry points, group-sensitive host and build/dependency inputs.
   "web/src/bun-executor.ts", "web/src/bun-launcher.ts", "src/quickjs-program.ts",
   "web/src/runner.ts", "web/src/worker.ts", "web/src/subprocess-broker.ts", "web/src/memory-telemetry.ts",
@@ -107,7 +111,7 @@ const jscFiles = new Set([
   "scripts/install-download-fixture.ts", "scripts/install-demand-fixture.ts",
   "checks/runtime-install-tarballs.json", "checks/runtime-install-metadata.json", "checks/quality-install-fixture-command.json",
   "scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs", "crates/bunwasm-engine-quickjs/src/nested_token.rs", "crates/bunwasm-engine-quickjs/group-errno.c",
-  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml",
+  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml", ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
   "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
   "crates/bunwasm-engine-quickjs/src/driver.rs", "crates/bunwasm-engine-quickjs/src/client.rs", "crates/bunwasm-engine-quickjs/src/natives.rs", "crates/bunwasm-engine-quickjs/src/allocator.rs", "crates/bunwasm-engine-quickjs/src/transport.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs",
   "crates/bunwasm-runtime/src/engine_jsc.rs", "scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "scripts/build-bun-core.sh", "scripts/build.sh", "scripts/quickjs-core-exports.txt", "scripts/build-jsc.sh",
@@ -115,6 +119,7 @@ const jscFiles = new Set([
   "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
   "scripts/src/program-profile.ts", "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
   "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "checks/native-stack-getter-headroom.json", "checks/native-parser-literal-overflow.json", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", "scripts/ci-native-handoff.ts", "scripts/ci-native-handoff-paths.ts", ".github/workflows/ci.yml",
+  "scripts/jsc-json-fast-controls.test.ts", "checks/runtime-json-fast-controls.json", "scripts/bench-jsc-json.ts", "scripts/fixtures/jsc-json-bench.ts",
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json", "scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
   // The parser reserve's host policy, executor defaults, probe and consumers (docs/stack-limits.md).
   "web/src/engine-stack-budget.ts", "web/src/bun-executor.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts", "scripts/jsc-parser-reserve.ts",
@@ -132,6 +137,7 @@ const webGuestDirectories = [
   "crates/bunwasm-semver/", "crates/bunwasm-crypto-sys/", "patches/", "third_party/", ".cargo/",
 ];
 const webGuestFiles = new Set([
+  "web/src/dev-html-client.ts", "scripts/generate-dev-html-client.ts",
   "scripts/test-web-guests.ts", "scripts/test-web-guests.test.ts", "scripts/guest-build-receipt.ts",
   "scripts/build-bun-tools.sh", "scripts/optimize-tools.ts", "scripts/transpile-runtime.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "web/bun.lock",
   "tests/fixtures/runtime-proc-spawn-requests.json", "web/guest-tests/compose.ts", "web/guest-tests/jsc.test.ts",
@@ -152,6 +158,7 @@ function sharedWebGuestInput(path: string): boolean {
 }
 
 function excludedNativeInput(path: string): boolean {
+  if (path === "jsc/README.md") return true;
   if (path.startsWith("spidermonkey/") && path.endsWith(".md")) return true;
   return runtimeDeclaration.test(path) || /^scripts\/build-(?:bun|engine)-hermes\.sh$/.test(path)
     || /^crates\/bunwasm-(?:engine-)?hermes\//.test(path) || /^checks\/(?:runtime|native)-hermes-/.test(path);
@@ -168,11 +175,12 @@ function ordinarySpiderMonkeyInput(path: string): boolean {
   if (path.endsWith(".md")) return false;
   return path.startsWith("spidermonkey/") || path.startsWith("scripts/spidermonkey-ordinary-")
     || path === "scripts/spidermonkey-side-core-receipt.ts" || path === "scripts/spidermonkey-side-inputs.ts"
+    || path === "scripts/spidermonkey-engine-semantics.sh"
     || ordinaryFixtures.some(name => path.startsWith(`tests/fixtures/${name}/`));
 }
 
 export function needsJsc(paths: readonly string[], inputs: readonly string[] = jscNativeCheckInputs): boolean {
-  return paths.some(path => sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs));
+  return paths.some(path => path !== "jsc/README.md" && (sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs)));
 }
 
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
