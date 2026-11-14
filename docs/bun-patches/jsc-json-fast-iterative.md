@@ -57,9 +57,10 @@ Original adapters, none of which retains upstream implementation code:
 - `tests/fixtures/json-fast-iterative` compares ordinary and forced-general results on all engines.
   `checks/native-json-fast-iterative.json` assigns that fixture to the native owner.
 - `scripts/bench-jsc-json.ts` measures pinned, alternating donor and candidate products.
-  Its guest fixture warms up, then waits for stdin at both boundaries of the serialization
+  `scripts/fixtures/jsc-json-bench.ts` warms up, then waits for stdin at both boundaries of the serialization
   loop. Linux per-thread CPU counters exclude compilation, startup, and waiting. Every
   measured loop must consume at least one CPU second, and the median ratio must not exceed 1.03.
+- `crates/bunwasm-host/src/main.rs` names the guest thread uniquely for direct counter selection.
 
 The original `stack-getter-headroom` fixture and its 200000-deep `jsonplain` assertion remain
 unchanged. Stack budgets, output limits, and the general serializer's recursion limit are unchanged.
