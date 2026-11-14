@@ -1,1 +1,1 @@
-{"owner":"native","path":"tests/fixtures/text-decoder"}
+{"owner":"native","path":"tests/fixtures/text-decoder","engines":["quickjs","jsc","browser"]}
