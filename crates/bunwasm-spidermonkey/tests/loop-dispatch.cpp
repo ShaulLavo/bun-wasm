@@ -1,5 +1,6 @@
 extern "C" size_t bunsm_test_interpreter_frames(JSContext* cx);
-bool collectBeforeGetter = false;
+// Counts down deferred getters; the one that brings it to zero gets a moving GC.
+unsigned collectBeforeGetter = 0;
 bool failGetterPrologue = false;
 bool failNextPrologue = false;
 size_t deferredGetters = 0;
@@ -11,8 +12,7 @@ extern "C" void bunsm_test_deferred_getter(JSContext* cx) {
     failGetterPrologue = false;
     failNextPrologue = true;
   }
-  if (!collectBeforeGetter) return;
-  collectBeforeGetter = false;
+  if (!collectBeforeGetter || --collectBeforeGetter) return;
   JS::PrepareForFullGC(cx);
   JS::NonIncrementalGC(cx, JS::GCOptions::Shrink, JS::GCReason::API);
   getterCollections++;
@@ -59,14 +59,21 @@ void loop_failure(const char* source) {
   balanced(entry, "stack balanced after failed evaluation");
 }
 
+struct GetterCollection {
+  const char* source;
+  unsigned getter;  // which deferred getter of the evaluation collects
+};
+
 void moving_getter_gc() {
-  for (const char* source : {
-      "if (({ marker: 42, get value() { return this.marker; } }).value !== 42) throw 1;",
-      "Object.defineProperty(Number.prototype, 'value', {configurable:true, get:function(){'use strict'; return this;}}); if ((7).value !== 7) throw 2; delete Number.prototype.value;",
-      "var base = {get value(){return this.marker;}}; var derived = {__proto__:base, get result(){return super.value;}}; if (Object.assign(Object.create(derived), {marker:42}).result !== 42) throw 3;"}) {
-    collectBeforeGetter = true;
+  for (GetterCollection test : {
+      GetterCollection{"if (({ marker: 42, get value() { return this.marker; } }).value !== 42) throw 1;", 1},
+      GetterCollection{"Object.defineProperty(Number.prototype, 'value', {configurable:true, get:function(){'use strict'; return this;}}); if ((7).value !== 7) throw 2; delete Number.prototype.value;", 1},
+      // The second deferred getter is the inner `super.value`: GetPropSuper with a
+      // lookup object (base) distinct from the receiver (a temporary object).
+      GetterCollection{"var base = {get value(){return this.marker;}}; var derived = {__proto__:base, get result(){return super.value;}}; if (Object.assign(Object.create(derived), {marker:42}).result !== 42) throw 3;", 2}}) {
+    collectBeforeGetter = test.getter;
     auto before = getterCollections;
-    loop_success(source);
+    loop_success(test.source);
     check(!collectBeforeGetter && getterCollections == before + 1, "shrinking GC between deferral and entry");
   }
   puts("ok moving GC before getter frame publication");

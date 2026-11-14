@@ -189,10 +189,10 @@ index 6241cd45d..178196132 100644
 +      if (!GetPropertyDeferred(cx, lval, name, res, &fun)) {
 +        goto error;
 +      }
++      if (fun && !PushDeferredGetterFrame(cx, activation, fun, lval)) {
++        goto error;
++      }
 +      if (fun) {
-+        if (!PushDeferredGetterFrame(cx, activation, fun, lval)) {
-+          goto error;
-+        }
 +        goto enter_inline_frame;
 +      }
 +#else
@@ -212,10 +212,10 @@ index 6241cd45d..178196132 100644
 +      if (!GetPropertyDeferredFrom(cx, obj, receiver, name, rref, &fun)) {
 +        goto error;
 +      }
++      if (fun && !PushDeferredGetterFrame(cx, activation, fun, receiver)) {
++        goto error;
++      }
 +      if (fun) {
-+        if (!PushDeferredGetterFrame(cx, activation, fun, receiver)) {
-+          goto error;
-+        }
 +        goto enter_inline_frame;
 +      }
 +#else

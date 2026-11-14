@@ -45,8 +45,26 @@ test("ordinary live gate has one runtime owner, no local selection and serial gu
   expect(selectChecks("quality", checks)).not.toContain(live);
   expect(selectChecks("local-runtime", checks)).not.toContain(live);
   expect(readFileSync(resolve("scripts/spidermonkey-ordinary-fixtures.ts"), "utf8")).toContain("scripts/spidermonkey-engine-semantics.sh");
-  expect(ordinaryFixtures).toHaveLength(19);
-  expect(ordinaryFixtureTimeout).toBe(19 * 65_000 + 30_000);
+  expect(ordinaryFixtures).toHaveLength(20);
+  expect(ordinaryFixtureTimeout).toBe(20 * 65_000 + 30_000);
+});
+
+test("the getter-loop fixture runs on both SpiderMonkey tiers through the ordinary gate", () => {
+  const fixture = "spidermonkey-getter-loop";
+  const checks = discoverChecks();
+  // Its native manifest selects only QuickJS; SpiderMonkey reaches it through the ordinary list.
+  expect(checks.filter(check => check.path === `tests/fixtures/${fixture}`)).toHaveLength(1);
+  expect(selectChecks("runtime", checks)).toContain("scripts/spidermonkey-ordinary-fixtures.test.ts");
+  const root = scratch();
+  const path = join(root, "input");
+  writeFileSync(path, "synthetic executable");
+  chmodSync(path, 0o755);
+  const env = { SPIDERMONKEY_WASM: path, BUN_WASM_LAUNCHER: path, BUN_WASM_SHELL: path, BUN_WASM_ENV_UTILITY: path };
+  for (const tier of ["interp", "pbl"] as const) {
+    const command = ordinaryFixtureCommand(root, env, tier);
+    expect(command.slice(0, 8)).toEqual(["bash", join(root, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", path, "--tier", tier]);
+    expect(command.filter(argument => argument === fixture)).toHaveLength(1);
+  }
 });
 
 test("ordinary invocation passes explicit inputs once on either tier", () => {
