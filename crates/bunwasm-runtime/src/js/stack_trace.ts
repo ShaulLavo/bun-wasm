@@ -111,6 +111,20 @@
     });
   }
 
+  if (native.engine === "spidermonkey") {
+    const nativeStack = Object.getOwnPropertyDescriptor(Error.prototype, "stack")!;
+    Object.defineProperty(Error.prototype, "stack", nullPrototypeDescriptor({
+      __proto__: null,
+      configurable: nativeStack.configurable,
+      enumerable: nativeStack.enumerable,
+      get() {
+        const raw = nativeStack.get!.call(this);
+        return raw ? formatStack(this, raw) : raw;
+      },
+      set: nativeStack.set,
+    }));
+  }
+
   if (native.engine === "quickjs" || parseCapturedStack) {
     internal.defineHidden(Error, {
       captureStackTrace: function captureStackTrace(target: { stack?: unknown }, constructorOpt?: unknown) {

@@ -11,7 +11,7 @@ interface StackFrame {
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/inspect.js", import.meta.url), "utf8");
 
-function inspector(engine: string, hooks: object = {}, frames?: (error: unknown, stack: unknown) => unknown) {
+function inspector(engine: string, hooks: object = {}, frames?: (error: unknown, stack: unknown, skipSelfHosted?: boolean) => unknown) {
   const factory: (internal: object) => {
     parseStack(stack: unknown): StackFrame[];
     formatError(error: unknown): string;
@@ -145,6 +145,15 @@ test("SpiderMonkey maps anonymous module bodies without inventing a function nam
   ]);
 });
 
+for (const kind of ["Function", "AsyncFunction", "GeneratorFunction", "AsyncGenerator"]) {
+  test(`SpiderMonkey retains user frames created by ${kind} through the runtime wrapper`, () => {
+    const file = `bun-wasm:function line 26 > ${kind}`;
+    expect(inspector("spidermonkey").parseStack(`sloppyNamed@${file}:3:40\nconstructor@bun-wasm:function:26:16`)).toEqual([
+      { name: "sloppyNamed", file, line: 3, column: 40 },
+    ]);
+  });
+}
+
 for (const name of ["async*sync", "at sync", "async*__bunwasm_cjs__"]) {
   test(`SpiderMonkey preserves synchronous native display name ${name}`, () => {
     const stack = inspector("spidermonkey");
@@ -171,6 +180,18 @@ test("SpiderMonkey saved-frame formatting keeps display name and source separate
   expect(stack.formatError(error)).toContain("at at sync (/index.cjs:10:29)");
   expect(stack.formatError(error)).not.toContain("creation");
   expect(error.stack).toBe(raw);
+});
+test("SpiderMonkey exception formatting excludes native self-hosted frames", () => {
+  const error = new Error("original");
+  error.stack = "fail@/index.ts:20:15\napply@self-hosted:2904:23";
+  const stack = inspector("spidermonkey", {}, (value, observed, skipSelfHosted) => {
+    expect(value).toBe(error);
+    expect(observed).toBe(error.stack);
+    expect(skipSelfHosted).toBe(true);
+    return [{ name: "fail", file: "self-hosted", line: 20, column: 15 }];
+  });
+  expect(stack.formatError(error)).toContain("at fail (self-hosted:20:15)");
+  expect(stack.formatError(error)).not.toContain("apply");
 });
 test("SpiderMonkey preserves overridden stack text or a failed metadata read", () => {
   const error = new Error("custom"); error.stack = "async*sync@/custom.js:4:7";
