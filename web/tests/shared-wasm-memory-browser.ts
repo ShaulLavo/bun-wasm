@@ -215,7 +215,7 @@ function assertSpiderMonkeyReentry({ value, pageErrors }: EntryRun): void {
 function assertOxc(entry: string, { value, pageErrors }: EntryRun): void {
   assert.equal(value.thrown, undefined, String(value.thrown));
   assert.equal(value.code, 0, value.stderr ?? String(value.error));
-  assert.ok(entry === "index.ts" || entry === "direct.ts");
+  assert.ok(entry === "index.ts" || entry === "direct.ts" || entry === "async.ts");
   assert.equal(value.stdout, oxcOutputs[entry]);
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(value.groups, [], "the Oxc group is released after the supported stop");
