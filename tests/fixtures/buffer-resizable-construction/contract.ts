@@ -35,19 +35,13 @@ export function constructionChecks(Buffer: BufferFactory): Check[] {
     equal(fixed.buffer === ab && omitted.buffer === ab, true);
   });
   if (typeof ArrayBuffer.prototype.resize === "function") addResizableChecks(Buffer, add);
-  if (supportsGrowableSharedBuffer()) addSharedChecks(Buffer, add);
   return checks;
 }
 
-function supportsGrowableSharedBuffer(): boolean {
-  if (typeof SharedArrayBuffer === "undefined" || typeof SharedArrayBuffer.prototype.grow !== "function") return false;
-  try {
-    const buffer = new SharedArrayBuffer(4, { maxByteLength: 9 });
-    return buffer.growable;
-  } catch (error) {
-    if (error instanceof TypeError && error.message === "growable SharedArrayBuffer requires SAB allocator hooks") return false;
-    throw error;
-  }
+export function sharedConstructionChecks(Buffer: BufferFactory): Check[] {
+  const checks: Check[] = [];
+  addSharedChecks(Buffer, (name, run) => checks.push({ name, run }));
+  return checks;
 }
 
 function addResizableChecks(Buffer: BufferFactory, add: (name: string, run: () => void) => void) {

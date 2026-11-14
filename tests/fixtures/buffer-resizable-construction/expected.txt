@@ -1,1 +1,1 @@
-Buffer construction checks passed
+Buffer resizable construction checks passed

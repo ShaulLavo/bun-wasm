@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { constructionChecks } from "../tests/fixtures/buffer-resizable-construction/contract.ts";
+import { constructionChecks, sharedConstructionChecks } from "../tests/fixtures/buffer-resizable-construction/contract.ts";
 import { loadBufferSource } from "./buffer-source.ts";
 
 const { Buffer: SourceBuffer } = loadBufferSource();
-for (const check of constructionChecks(SourceBuffer)) test(check.name, check.run);
+for (const check of constructionChecks(SourceBuffer).concat(sharedConstructionChecks(SourceBuffer))) test(check.name, check.run);
 
 function constructionResult(factory: typeof Buffer, offset: unknown, length: unknown) {
   const ab = new ArrayBuffer(9, { maxByteLength: 12 });
