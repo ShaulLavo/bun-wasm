@@ -13,9 +13,10 @@ const factories = { stack_trace: factory("stack_trace.ts"), stack_capability: fa
 const initialize = (engine: string) => `
 const nativeError = Error;
 const nativeCapture = Error.captureStackTrace;
+const nativeStack = Object.getOwnPropertyDescriptor(Error.prototype, "stack");
 const factories = Object.fromEntries(Object.entries(${JSON.stringify(factories)}).map(([name, source]) => [name, (0, eval)("(" + source + ")")]));
 const runtime = (${bootstrap})({ engine: ${JSON.stringify(engine)}, loadPolyfill: name => factories[name], mapPosition: () => undefined, preparedSourceName: () => undefined });
-globalThis.stackTest = { nativeError, nativeCapture, runtime };
+globalThis.stackTest = { nativeError, nativeCapture, nativeStack, runtime };
 `;
 const depd = `
 const saved = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
@@ -95,6 +96,44 @@ return awaitingParent().then(sites => ({
 // Firefox is SpiderMonkey. Under the guest's engine name it runs the adapter against the
 // native text capture the SpiderMonkey guest has, which ignores the formatter.
 const engines = [["webkit", webkit, "host"], ["chromium", chromium, "host"], ["firefox", firefox, "host"], ["firefox", firefox, "spidermonkey"]] as const;
+test("SpiderMonkey ordinary errors format lazily and preserve the native accessor contract", async () => {
+  const browser = await firefox.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.addScriptTag({ content: initialize("spidermonkey") });
+    const result = await page.evaluate(`(() => {
+      const { nativeError, nativeStack } = stackTest;
+      const descriptor = Object.getOwnPropertyDescriptor(Error.prototype, "stack");
+      const error = new Error("ordinary");
+      const raw = nativeStack.get.call(error);
+      let calls = 0;
+      let identity = false;
+      let receiver = false;
+      Error.prepareStackTrace = function (target, sites) { calls++; identity = target === error; receiver = this === Error; return sites; };
+      const lazy = calls === 0;
+      const sites = error.stack;
+      const memoized = error.stack === sites && descriptor.get.call(error) === sites && calls === 1;
+      const ordinary = {};
+      const empty = descriptor.get.call(ordinary) === nativeStack.get.call(ordinary) && calls === 1;
+      let invalid = false;
+      try { descriptor.get.call(null); } catch (error) { invalid = error instanceof TypeError; }
+      descriptor.set.call(ordinary, "assigned");
+      const assigned = Object.getOwnPropertyDescriptor(ordinary, "stack");
+      Error.prepareStackTrace = undefined;
+      const fallback = new Error("default");
+      const defaultStack = fallback.stack === nativeStack.get.call(fallback);
+      return { constructor: Error === nativeError, lazy, identity, receiver, memoized, empty, invalid,
+        structured: Array.isArray(sites) && sites.every(site => typeof site.isAsync === "function"),
+        raw: typeof raw === "string", defaultStack, setter: descriptor.set === nativeStack.set,
+        attributes: descriptor.configurable === nativeStack.configurable && descriptor.enumerable === nativeStack.enumerable,
+        assigned };
+    })()`);
+    expect(result).toEqual({ constructor: true, lazy: true, identity: true, receiver: true, memoized: true,
+      empty: true, invalid: true, structured: true, raw: true, defaultStack: true, setter: true, attributes: true,
+      assigned: { value: "assigned", writable: true, enumerable: true, configurable: true } });
+  } finally { await browser.close(); }
+}, 30_000);
+
 for (const [name, launcher, engine] of engines) {
   test(`${name} ${engine} supports the depd capture and structured formatter contract`, async () => {
     const browser = await launcher.launch({ headless: true });
