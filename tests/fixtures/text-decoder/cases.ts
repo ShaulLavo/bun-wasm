@@ -1,3 +1,12 @@
+export const decoderInputKinds = ["DataView", "Uint16Array", "Uint8Array", "ArrayBuffer"] as const;
+
+export function decoderInputView(buffer: ArrayBuffer, kind: typeof decoderInputKinds[number]) {
+  if (kind === "DataView") return new DataView(buffer, 1, 2);
+  if (kind === "Uint16Array") return new Uint16Array(buffer, 2, 1);
+  if (kind === "Uint8Array") return new Uint8Array(buffer, 1, 2);
+  return buffer;
+}
+
 export const singleByteCases: readonly [string, number[], string][] = [
   ["ibm866", [0x8f, 0xe0, 0xa8, 0xa2, 0xa5, 0xe2], "Привет"],
   ["iso-8859-3", [0xa1, 0x65, 0x6c, 0x6c, 0x6f], "Ħello"],

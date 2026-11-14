@@ -14,6 +14,13 @@ removes a Unicode BOM only after decoding succeeds, so a fatal chunk does not
 consume the stream's first output code point. Each completed stream resets that
 serialization state. The native codec implementation and public ABI are unchanged.
 
+The Web factory consumes the decoder class exported by the production polyfill
+loader. Source controls execute that loader's actual bootstrap block and the Web
+installer, so a factory/export mismatch fails before decoding assertions run.
+Captured view getters read byte ranges after options conversion. Detached stores
+and out-of-bounds views decode as empty, including when a stream getter detaches
+or resizes the input. These reads use intrinsic slots rather than user properties.
+
 The single-byte test vectors come from Bun revision
 `9510e74152073d850a18758ca41114d8f214ffa6`,
 `test/js/web/encoding/text-decoder-single-byte.test.ts`. They are condensed into

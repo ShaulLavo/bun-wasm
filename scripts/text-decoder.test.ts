@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { runtimeTextDecoder, singleByteCases } from "./text-decoder-controls";
+import { decoderInputKinds, decoderInputView } from "../tests/fixtures/text-decoder/cases";
 
 const { Decoder, handles } = runtimeTextDecoder();
 
@@ -109,6 +110,27 @@ test("options getters run before reading the input bytes", () => {
   const bytes = new Uint8Array(4).fill(65);
   expect(new Decoder().decode(bytes, { get stream() { bytes.fill(66); return false; } })).toBe("BBBB");
   expect(new Decoder().decode(bytes, { get stream() { bytes.buffer.transfer(); return false; } })).toBe("");
+});
+
+test.each(decoderInputKinds)("detached %s input decodes as empty before or during options conversion", kind => {
+  for (const Constructor of [TextDecoder, Decoder]) {
+    const before = new ArrayBuffer(4);
+    const detached = decoderInputView(before, kind);
+    before.transfer();
+    expect(new Constructor().decode(detached)).toBe("");
+    const during = new ArrayBuffer(4);
+    const input = decoderInputView(during, kind);
+    expect(new Constructor().decode(input, { get stream() { during.transfer(); return false; } })).toBe("");
+  }
+});
+
+test.each(decoderInputKinds.filter(kind => kind !== "ArrayBuffer"))("%s made out of bounds by the stream getter decodes as empty", kind => {
+  for (const Constructor of [TextDecoder, Decoder]) {
+    const buffer = new ArrayBuffer(4, { maxByteLength: 8 });
+    new Uint8Array(buffer).fill(65);
+    const input = decoderInputView(buffer, kind);
+    expect(new Constructor().decode(input, { get stream() { buffer.resize(1); return false; } })).toBe("");
+  }
 });
 
 test("non-streaming calls and native errors release their handles", () => {

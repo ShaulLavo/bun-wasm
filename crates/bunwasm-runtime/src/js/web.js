@@ -58,7 +58,7 @@
     }
   }
 
-  const TextDecoder = internal.require("text_decoder")(internal);
+  const TextDecoder = internal.require("text_decoder");
 
   // --- base64 -----------------------------------------------------------------
 

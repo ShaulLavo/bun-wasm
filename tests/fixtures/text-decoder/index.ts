@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { singleByteCases } from "./cases";
+import { decoderInputKinds, decoderInputView, singleByteCases } from "./cases";
 
 for (const [encoding, input, output] of singleByteCases) {
   const decoder = new TextDecoder(encoding);
@@ -52,4 +52,17 @@ assert.equal(pending.decode(Uint8Array.of(0x92, 0xa9)), "💩");
 assert.equal(Reflect.apply(pending.decode, pending, [Uint8Array.of(65), null]), "A");
 assert.throws(() => new TextDecoder("replacement"), RangeError);
 assert.equal(new TextDecoder("ascii").decode(Uint8Array.of(0x80)), "€");
+for (const kind of decoderInputKinds) {
+  const before = new ArrayBuffer(4);
+  const detached = decoderInputView(before, kind);
+  before.transfer();
+  assert.equal(new TextDecoder().decode(detached), "");
+  const during = new ArrayBuffer(4);
+  const input = decoderInputView(during, kind);
+  assert.equal(new TextDecoder().decode(input, { get stream() { during.transfer(); return false; } }), "");
+  if (kind === "ArrayBuffer") continue;
+  const resized = new ArrayBuffer(4, { maxByteLength: 8 });
+  const view = decoderInputView(resized, kind);
+  assert.equal(new TextDecoder().decode(view, { get stream() { resized.resize(1); return false; } }), "");
+}
 console.log("TextDecoder native codec, streaming, fatal and dictionary controls passed");
