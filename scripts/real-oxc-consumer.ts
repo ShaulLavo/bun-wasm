@@ -1,4 +1,3 @@
-// Test driver only. Uses the guest installer, the native launcher and the existing Browser host.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -97,7 +96,6 @@ async function runOxcConsumer(program: string, launcher: string, browser: string
     requireOxcTree(scratch);
     const failures: unknown[] = [];
     await runEntries({ rows, failures, kind, launcher, args, browser, scratch, signal: controller.signal });
-    // The same installed bytes enter the production Browser-host executor, not a new executor.
     const env = { ...process.env, BUN_WASM_PROFILE_PROGRAM: program, [oxcTreeVariable]: scratch };
     await observe(failures, () => command(rows, `browser-host-${kind}-group`, process.execPath, ["web/tests/shared-wasm-memory-browser.ts", "chromium"], env, controller.signal, 300_000));
     requireOxcTree(scratch);

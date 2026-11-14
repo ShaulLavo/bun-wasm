@@ -23,7 +23,10 @@ of all producer outputs remains the producer handoff's responsibility.
 The driver copies `tests/real-oxc-consumer` into private scratch and runs the
 selected guest's `install --frozen-lockfile`. Its lock pins official parser,
 transform and minify packages and their WASI bindings at 0.94.0. The lock was
-extended with host Bun's lockfile-only resolver. The live check still installs
+extended with host Bun's lockfile-only resolver and normalized to the existing
+guest installer metadata rules. Transform's WASI fallback is a required dependency
+in that lock, as parser's already was, and guest lock records omit `libc`. Public
+package manifests and selection logic are unchanged. The live check still installs
 with the guest and refuses changes to any fixture source or lock bytes. Package
 loaders and binaries remain unedited. No force-WASI environment override is used.
 

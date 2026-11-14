@@ -95,9 +95,9 @@ test("the canonical Oxc fixture pins all public families and freezes every entry
   expect(manifest.dependencies).toEqual({ "oxc-parser": "0.94.0", "oxc-transform": "0.94.0", "oxc-minify": "0.94.0" });
   expect(oxcFixtureFiles).toEqual(["package.json", "bun.lock", "api.ts", "index.ts", "direct.ts", "async.ts"]);
   const lock = Bun.JSONC.parse(readFileSync(join(oxcFixture, "bun.lock"), "utf8"));
-  expect(lock.workspaces[""].dependencies).toEqual(manifest.dependencies);
+  expect(lock).toHaveProperty(["workspaces", "", "dependencies"], manifest.dependencies);
   for (const name of oxcConsumers.flatMap(consumer => [consumer.package, consumer.binding])) {
-    expect(lock.packages[name][0]).toBe(`${name}@0.94.0`);
+    expect(lock).toHaveProperty(["packages", name, 0], `${name}@0.94.0`);
   }
 });
 
