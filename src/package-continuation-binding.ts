@@ -75,7 +75,8 @@ export function packageBinding(request: { readonly memoryGroup?: unknown; readon
     const output = range(bytes, out, capacity);
     if (!input || !output) return -21;
     let plan: PackagePlan;
-    try { plan = parsePackagePlan(JSON.parse(decode.decode(input))); }
+    // WebIDL TextDecoder rejects the Browser guest's resizable Wasm buffer.
+    try { plan = parsePackagePlan(JSON.parse(decode.decode(Uint8Array.from(input)))); }
     catch { return -28; }
     const argv = [PACKAGE_CONTINUATION, JSON.stringify(plan)];
     // No guest callbacks or asynchronous work between census and ordinary exec's transfer.

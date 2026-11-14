@@ -23,6 +23,11 @@ still-live root at its current rights. A root alias cannot restore a closed preo
 Serialization and standard exec transfer run synchronously on the caller's stack.
 Each Bash child receives only explicit stdio, while the continuation retains the census.
 
+Browser guests expose a resizable Wasm buffer. WebIDL's `TextDecoder` rejects a view
+of that buffer, so the binding copies the bounded prepared JSON into a fixed byte
+array before decoding. This is a BufferSource requirement at the private import,
+not an engine change. A real resizable-Wasm fixture covers the same route.
+
 Waffle resolves adapter names after executable admission. One private launcher therefore
 belongs to the Runtime, and survives installation disposal until Runtime disposal. It
 retains no filesystem client, handle, Worker or Wasm memory. Uninstall removes its program;

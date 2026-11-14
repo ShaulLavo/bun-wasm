@@ -68,7 +68,7 @@ async function cleanup(runtime: ReturnType<typeof createRuntime>, remove: Array<
   finally { for (const unregister of remove.reverse()) unregister(); for (const table of tables) table.dispose(); }
 }
 
-const successful = ["live", "file-stderr", "reserved-root", "failed-move"];
+const successful = ["live", "resizable", "file-stderr", "reserved-root", "failed-move"];
 for (const mode of successful.concat(["moved-reduced", "closed", "closed-reused", "overwritten", "closed-root-alias"])) {
   test(`executor transfers live descriptions and original root: ${mode}`, async () => using(mode, async f => {
     const child = await f.start();

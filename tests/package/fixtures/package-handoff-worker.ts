@@ -21,6 +21,12 @@ function prepare(context: WorkerExecutionContext, imports: WebAssembly.Imports, 
   while (table.get(rootFd) !== root) rootFd++;
   const memory = context.instance.exports.memory;
   if (!(memory instanceof WebAssembly.Memory)) throw new Error("No caller memory");
+  if (mode === "resizable") {
+    const resize = Reflect.get(memory, "toResizableBuffer");
+    if (typeof resize !== "function") throw new Error("No resizable Wasm buffer control");
+    Reflect.apply(resize, memory, []);
+    if (!Reflect.get(memory.buffer, "resizable")) throw new Error("Wasm buffer did not become resizable");
+  }
   new Uint8Array(memory.buffer).set(source.encode("later"), 128);
   const rights = 2n | 4n | 32n | 64n | (1n << 27n);
   const opened = call(imports, "wasi_snapshot_preview1", "path_open", rootFd, 0, 128, 5, 0, rights, 0n, 0, 256);
