@@ -83,6 +83,12 @@ The downloader checks the shared bootstrap pool, then moves matching bytes from
 the restored job pool before considering a download. Full original URL keys,
 transport deadlines, cancellation, staging and installer validation stay the same.
 
+Migration is idempotent across concurrent callers and processes. If another caller
+moves the local archive first, a reader accepts that result only when the shared
+file exists. Removing an already redundant local copy tolerates its absence.
+Other filesystem errors still propagate. Maintained Bun and Node controls cover
+parallel migration and real cold and warm bootstrap installation.
+
 The original `scripts/ci-release-cache.ts` adapter owns runner-local retention
 before publication. Bootstrap snapshots contain at most 201,326,592 asset bytes;
 job snapshots contain at most 536,870,912. It removes local duplicates present in

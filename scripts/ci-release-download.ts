@@ -28,15 +28,24 @@ function isBootstrapRelease(url: string): boolean {
 }
 
 async function cachedRelease(path: string, localPath: string | undefined): Promise<boolean> {
-  if (localPath && await exists(localPath)) {
-    await mkdir(dirname(path), { recursive: true });
-    if (await exists(path)) await rm(localPath);
-    else await rename(localPath, path);
-  }
+  if (localPath && await exists(localPath)) await migrateCachedRelease(localPath, path);
   if (!await exists(path)) return false;
   const now = new Date();
   await utimes(path, now, now);
   return true;
+}
+
+async function migrateCachedRelease(localPath: string, path: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  if (await exists(path)) return rm(localPath, { force: true });
+  try { await rename(localPath, path); }
+  catch (error) {
+    if (!missingFile(error) || !await exists(path)) throw error;
+  }
+}
+
+function missingFile(error: unknown): boolean {
+  return error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT";
 }
 
 async function request(url: string, accept: string, options: Options): Promise<Response> {
@@ -104,7 +113,7 @@ async function authenticatedRelease(url: string, options: Options): Promise<Resp
 async function exists(path: string): Promise<boolean> {
   try { await access(path); return true; }
   catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    if (missingFile(error)) return false;
     throw error;
   }
 }
