@@ -41,7 +41,7 @@ test("spawn requests keep their explicit executable without root-specific rewrit
       const pid = state.client.spawn(state.client.pid, { executable, argv: ["bun"], env: { PATH: "/opt/bun/quickjs/bin:/bin" }, cwd: "/", job: -1, fds: [] });
       await state.broker.runtimeMessage(state.messages.at(-1)!, state.client.pid);
       const supervisor = await state.broker.ready();
-      expect(supervisor.get(pid)!.request!.executable).toBe(executable);
+      expect(supervisor.get(pid)!.image.request!.executable).toBe(executable);
       for (let turn = 0; turn < 100 && requests.length < (executable === "/bin/bun" ? 1 : 2); turn++) await new Promise(resolve => setTimeout(resolve, 0));
       const request = requests.at(-1)!;
       expect({ engine: request.engine, adapter: request.adapter, args: request.args, env: request.env }).toMatchObject({ engine: executable === "/bin/bun" ? "browser" : "jsc", adapter: "bun",

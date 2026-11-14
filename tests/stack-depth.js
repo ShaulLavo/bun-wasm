@@ -11,6 +11,7 @@ function deepObject() { let o = {}; for (let i = 0; i < n; i++) o = { child: o }
 function deepArray() { let a = []; for (let i = 0; i < n; i++) a = [a]; return a; }
 const actions = {
   plain() { let d = 0; const f = () => (++d === n ? 0 : 1 + f()); f(); },
+  call() { let d = 0; const f = () => (++d === n ? 0 : 1 + f.call(null)); f(); },
   getter() { let d = 0; const o = { get v() { return ++d === n ? 0 : 1 + o.v; } }; void o.v; },
   // The same getter read through a key the compiler cannot see, so JSC calls it from C++
   // (docs/stack-limits.md): `getter` no longer measures that reentry there.
@@ -71,6 +72,10 @@ actions.require = () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+};
+actions.reduce = () => {
+  function visit(a, remaining) { return remaining === 0 ? 0 : 1 + [remaining - 1].reduce(visit, 0); }
+  if (visit(0, n) !== n) throw new Error('reduce changed its result');
 };
 // The names walk of Ajv 8.17.1's code generator (lib/compile/codegen/index.ts, MIT), reduced to
 // its recursion: n nested `if` nodes, each read through `node.names` in a reduce callback and

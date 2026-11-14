@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, test } from "bun:test";
+import assert from "node:assert/strict";
 import { chromium, type Browser, type Page } from "playwright";
 import { fits } from "../web/tests/phone-ui.mjs";
 
@@ -20,13 +21,13 @@ test("checks every phone control", async () => {
     element.style.position = "fixed";
     element.style.left = "400px";
   });
-  await expect(fits(page, "overflow")).rejects.toThrow("header a.nav outside viewport");
+  await assert.rejects(fits(page, "overflow"), /header a\.nav outside viewport/);
 }, 30000);
 
 test("requires each control group", async () => {
   for (const selector of ["header h1", "header a.nav", "#engine", "#run", "#copy-terminal"]) {
     await page.setContent(markup);
     await page.locator(selector).evaluateAll(elements => elements.forEach(element => element.remove()));
-    await expect(fits(page, "missing")).rejects.toThrow(selector);
+    await assert.rejects(fits(page, "missing"), new RegExp(RegExp.escape(selector)));
   }
 }, 30000);

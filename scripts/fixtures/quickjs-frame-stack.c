@@ -1076,7 +1076,141 @@ static void inline_calls(JSRuntime *rt, JSContext *ctx)
     check(set_limit(rt, 2 * 1024 * 1024) == 0, "the frame limit is restored after the inline checks");
 }
 
+static void continuation_calls(JSRuntime *rt, JSContext *ctx)
+{
+    static const char *const deep[] = {
+        "(function f(n) { return n === 0 ? 0 : 1 + f.call(null, n - 1); })(5000)",
+        "(function () { var n = 5000; function f() { return n-- === 0 ? 0 : 1 + f.call(); } return f(); })()",
+        "(function f(n, a, b, c, d, e) { return n === 0 ? 0 : 1 + f.call(null, n - 1); })(5000)",
+        "(function f(n) { 'use strict'; return n === 0 ? 5000 : f.call(null, n - 1, 1, 2, 3); })(5000)",
+    };
+    static const char unbounded[] = "(function f() { return 1 + f.call(null); })()";
+    static const char fan[] = "(function f(n) { return n < 2 ? n : f.call(null, n - 1) + f.call(null, n - 2); })(24)";
+    static const char recover[] =
+        "(function () { var token = { self: null }; token.self = token;"
+        " function f(n) { try { return 1 + f.call(null, n + 1); } catch (e) {"
+        " if (!(e instanceof RangeError)) throw e; return n > 100 ? 1 : 0; } }"
+        " var result = f(0); collectGarbage(); return result > 100 && (function (a) { return a.self === a ? 42 : 0; }).call(null, token); })()";
+    Interrupt state = { 0, 2 };
+    size_t live, committed, index;
+    long total, denied = 0, request;
+
+    check(trim_to(rt, 4 * 1024 * 1024), "storage is trimmed before continuation calls");
+    JS_UpdateStackTop(rt);
+    JS_SetMaxStackSize(rt, 32 * 1024);
+    for (index = 0; index < sizeof(deep) / sizeof(deep[0]); index++)
+        check(outcome(ctx, deep[index], 5000) == DONE, "CALL forwards deep zero, padded, extra and tail argument shapes in the loop");
+    JS_SetMaxStackSize(rt, AMPLE_STACK);
+    usage(rt, &live, &committed);
+    check(live == 0 && held_agrees(rt), "successful continuations release every live frame");
+    check(outcome(ctx, unbounded, 0) == REFUSED, "unbounded CALL is refused by frame storage");
+    usage(rt, &live, &committed);
+    check(live == 0 && committed <= segment_charge, "refused CALL leaves only permitted spare storage");
+    check(outcome(ctx, recover, 42) == DONE, "CALL recovers inside the refusing chain and returns a cyclic argument");
+
+    check(trim_to(rt, 4 * 1024 * 1024), "storage is trimmed before continuation fault counting");
+    memory.frame_requests = 0;
+    check(outcome(ctx, deep[2], 5000) == DONE, "padded CALL completes before fault injection");
+    total = memory.frame_requests;
+    for (request = 1; request <= total; request++) {
+        check(trim_to(rt, 4 * 1024 * 1024), "storage is trimmed before a continuation fault");
+        memory.frame_requests = 0;
+        memory.fail_at = request;
+        denied += outcome(ctx, deep[2], 5000) == NO_MEMORY;
+        memory.fail_at = -1;
+        usage(rt, &live, &committed);
+        check(live == 0 && held_agrees(rt), "a denied CALL segment leaves no live frame or accounting mismatch");
+        check(outcome(ctx, SHALLOW, 42) == DONE, "a clean call works after every denied continuation segment");
+    }
+    check(total > 1 && denied == total, "every continuation segment denial propagates the allocation exception");
+
+    JS_SetInterruptHandler(rt, interrupt, &state);
+    check(outcome(ctx, fan, 46368) == INTERRUPTED, "interrupts unwind active CALL continuations");
+    JS_SetInterruptHandler(rt, NULL, NULL);
+    check(state.calls == 2, "CALL polls until the interrupt handler requests termination");
+    usage(rt, &live, &committed);
+    check(live == 0 && held_agrees(rt), "interrupted continuations release every live frame");
+    check(outcome(ctx, fan, 46368) == DONE, "the interrupted CALL workload recovers");
+    check(trim_to(rt, 2 * 1024 * 1024), "storage is restored after continuation checks");
+}
+
 /* A refusal must survive error formatting, which calls back into JavaScript. */
+static void continuation_reduces(JSRuntime *rt, JSContext *ctx)
+{
+    static const char *const deep[] = {
+        "(function f(a, n) { return n === 0 ? 0 : 1 + [n - 1].reduce(f, 0); })(0, 5000)",
+        "(function f(a, n) { return n === 0 ? 0 : 1 + [n - 1,,].reduceRight(f, 0); })(0, 5000)",
+        "(function f(a, n, k, o, x, y) { return x !== undefined || y !== undefined ? -999 : n === 0 ? 0 : 1 + [0,,n - 1].reduce(f); })(0, 5000)",
+        "(function f(a, n) { 'use strict'; return n === 0 ? 5000 : [n - 1].reduce(f, 0); })(0, 5000)",
+    };
+    static const char unbounded[] = "(function f() { return [1].reduce(function (a) { return 1 + f(); }, 0); })()";
+    static const char fan[] = "(function f(n) { return n < 2 ? n : [n - 1, n - 2].reduce(function (a, v) { return a + f(v); }, 0); })(24)";
+    static const char recover[] =
+        "(function () { var token = { self: null }; token.self = token;"
+        " function f(n) { try { return [1].reduce(function () { return 1 + f(n + 1); }, token); } catch (e) {"
+        " if (!(e instanceof RangeError)) throw e; return n > 100 ? 1 : 0; } }"
+        " var result = f(0); collectGarbage(); return result > 100 && [1].reduce(function (a) { return a.self === a ? 42 : 0; }, token); })()";
+    static const char *const throws[] = {
+        "var o = { get length() { throw 42; }, reduce: Array.prototype.reduce }; o.reduce(function () {});",
+        "var o = { length: { valueOf() { throw 42; } }, reduce: Array.prototype.reduce }; o.reduce(function () {}, {});",
+        "var o = { length: 1, get 0() { throw 42; }, reduce: Array.prototype.reduce }; o.reduce(function () {});",
+        "var o = { length: 2, 0: {}, get 1() { throw 42; }, reduce: Array.prototype.reduce }; o.reduce(function () {}, {});",
+        "[1].reduce(function () { throw 42; }, {});",
+        "[].reduce(function () {});",
+    };
+    Interrupt state = { 0, 2 };
+    size_t live, committed, index;
+    long total, denied = 0, request;
+
+    check(trim_to(rt, 4 * 1024 * 1024), "storage is trimmed before reduce continuations");
+    JS_UpdateStackTop(rt);
+    JS_SetMaxStackSize(rt, 32 * 1024);
+    for (index = 0; index < sizeof(deep) / sizeof(deep[0]); index++)
+        check(outcome(ctx, deep[index], 5000) == DONE, "reduce and reduceRight run 5000 sparse, padded, initial-scan and tail callbacks in the loop");
+    JS_SetMaxStackSize(rt, AMPLE_STACK);
+    usage(rt, &live, &committed);
+    check(live == 0 && held_agrees(rt), "successful reduce continuations release every live frame");
+    check(outcome(ctx, unbounded, 0) == REFUSED, "unbounded reduce is refused by frame storage");
+    usage(rt, &live, &committed);
+    check(live == 0 && committed <= segment_charge, "refused reduce leaves only permitted spare storage");
+    check(outcome(ctx, recover, 42) == DONE, "reduce recovers inside the refusing chain with a cyclic accumulator");
+
+    check(trim_to(rt, 4 * 1024 * 1024), "storage is trimmed before reduce fault counting");
+    memory.frame_requests = 0;
+    check(outcome(ctx, deep[2], 5000) == DONE, "padded reduce completes before fault injection");
+    total = memory.frame_requests;
+    for (request = 1; request <= total; request++) {
+        check(trim_to(rt, 4 * 1024 * 1024), "storage is trimmed before a reduce allocation fault");
+        memory.frame_requests = 0;
+        memory.fail_at = request;
+        denied += outcome(ctx, deep[2], 5000) == NO_MEMORY;
+        memory.fail_at = -1;
+        usage(rt, &live, &committed);
+        check(live == 0 && held_agrees(rt), "a denied reduce segment leaves no live frame or accounting mismatch");
+        check(outcome(ctx, "[20,22].reduce(function (a, b) { return a + b; }, 0)", 42) == DONE,
+              "a clean reduce works after every denied continuation segment");
+    }
+    check(total > 1 && denied == total, "every reduce segment denial propagates the allocation exception");
+    for (index = 0; index < sizeof(throws) / sizeof(throws[0]); index++) {
+        JSValue value = JS_Eval(ctx, throws[index], strlen(throws[index]), "reduce-throw.js", JS_EVAL_TYPE_GLOBAL);
+        check(JS_IsException(value), "reduce propagates coercion, lookup, callback and empty-input exceptions");
+        JS_FreeValue(ctx, value);
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        usage(rt, &live, &committed);
+        check(live == 0 && held_agrees(rt), "every reduce throw releases its owned state");
+        check(outcome(ctx, "[20,22].reduceRight(function (a, b) { return a + b; }, 0)", 42) == DONE,
+              "reduceRight recovers after every initialization and callback throw");
+    }
+    JS_SetInterruptHandler(rt, interrupt, &state);
+    check(outcome(ctx, fan, 46368) == INTERRUPTED, "interrupts unwind active reduce continuations");
+    JS_SetInterruptHandler(rt, NULL, NULL);
+    check(state.calls == 2, "reduce polls until the interrupt handler requests termination");
+    usage(rt, &live, &committed);
+    check(live == 0 && held_agrees(rt), "interrupted reduce continuations release every live frame");
+    check(outcome(ctx, fan, 46368) == DONE, "the interrupted reduce workload recovers");
+    check(trim_to(rt, 2 * 1024 * 1024), "storage is restored after reduce checks");
+}
+
 static void refusal_formatting(JSRuntime *rt, JSContext *ctx)
 {
     static const char hook[] =
@@ -1472,6 +1606,8 @@ static void contract_on(const Profile *chosen)
     chunk_faults(rt, ctx);
     native_guard(rt, ctx);
     inline_calls(rt, ctx);
+    continuation_calls(rt, ctx);
+    continuation_reduces(rt, ctx);
     refusal_formatting(rt, ctx);
     if (chosen->byte_exact)
         fits_exactly(rt, ctx, SHALLOW, 42, segment_charge - 1);

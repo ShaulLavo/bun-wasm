@@ -584,10 +584,10 @@ index d832414..ac5b4bf 100644
  target_include_directories(hermesvmlean_a PUBLIC ${HERMESVM_PUBLIC_INCLUDE_DIRS})
  target_link_libraries(hermesvmlean_a PUBLIC
 diff --git i/lib/InternalJavaScript/01-Promise.js w/lib/InternalJavaScript/01-Promise.js
-index da64243..260dbf6 100644
+index da64243b8e601e690fbb7abdf646536e6cc7c8d7..20b1836394121fcf90f5decd084f7fcc2a0d6c0d 100644
 --- i/lib/InternalJavaScript/01-Promise.js
 +++ w/lib/InternalJavaScript/01-Promise.js
-@@ -8,6 +8,10 @@
+@@ -8,6 +8,14 @@
    // the input is an already-fulfilled core Promise.
    var test262Enabled = HermesInternal.test262Enabled();
    function noop() {}
@@ -595,12 +595,19 @@ index da64243..260dbf6 100644
 +  // Each reaction captures it when it is registered, and its job runs with
 +  // it, so the frame follows `then` and `await` (docs/bun-patches/hermes-async-context.md).
 +  var asyncContext;
-
++  var trackReject = null;
++  var trackHandle = null;
++  var OWNED;
++  var ownedBrand = new WeakSet();
+ 
    // States:
    //
-@@ -67,6 +71,13 @@
-     static _B = null;
-     static _C = null;
+@@ -64,9 +72,37 @@
+   //   writable, with NamedEvaluation-derived `.name`, and has no
+   //   [[Construct]] (so `new Promise.prototype.then()` throws).
+   class Promise {
+-    static _B = null;
+-    static _C = null;
      static _D = noop;
 +    static _G = function () { return asyncContext; };
 +    static _S = function (value) { asyncContext = value; };
@@ -609,10 +616,33 @@ index da64243..260dbf6 100644
 +      handle(promise, new Handler(onFulfilled, onRejected, res));
 +      return res;
 +    };
-
++    static _I = function (onReject, onHandle) {
++      trackReject = onReject;
++      trackHandle = onHandle;
++    };
++    static _O = function () {
++      var p = new Promise(noop);
++      p._x = 1;
++      p._A = OWNED;
++      ownedBrand.add(p);
++      return p;
++    };
++    static _F = function (source, onFulfilled, p) {
++      if (!ownedBrand.has(p)) throw new TypeError('Expected an owned Promise');
++      handle(source, new Handler(onFulfilled, null, p));
++    };
++    static _R = function (p, reason) {
++      if (!ownedBrand.has(p)) throw new TypeError('Expected an owned Promise');
++      rejectCore(p, reason);
++    };
++    static _V = function (p, value) {
++      if (!ownedBrand.has(p)) throw new TypeError('Expected an owned Promise');
++      resolveCore(p, value);
++    };
+ 
      constructor(fn) {
        if (typeof fn !== 'function') {
-@@ -554,7 +565,13 @@
+@@ -554,13 +590,16 @@
      }
      return { promise: promise, resolve: resolve, reject: reject };
    }
@@ -626,9 +656,24 @@ index da64243..260dbf6 100644
      while (self._y === 3) {
        self = self._z;
      }
-@@ -580,32 +597,41 @@
-
+-    if (Promise._B) {
+-      Promise._B(self);
+-    }
+     if (self._y === 0) {
+       if (self._x === 0) {
+         self._x = 1;
+@@ -575,37 +614,50 @@
+       self._A.push(deferred);
+       return;
+     }
++    if (self._y === 2 && self._x === 0 && trackHandle) {
++      trackHandle(self);
++    }
+     handleResolved(self, deferred);
+   }
+ 
    function handleResolved(self, deferred) {
++    if (deferred === OWNED) return;
      (useEngineQueue ? HermesInternal.enqueueJob : setImmediate)(function() {
 -      var cb = self._y === 1 ? deferred.onFulfilled : deferred.onRejected;
 -      var promise = deferred.promise;
@@ -675,24 +720,35 @@ index da64243..260dbf6 100644
 +    }
 +    if (cb === null) {
 +      if (self._y === 1) {
-+        resolve(promise, self._z);
++        resolveCore(promise, self._z);
 +      } else {
-+        reject(promise, self._z);
++        rejectCore(promise, self._z);
 +      }
 +      return;
 +    }
 +    var ret = tryCallOne(cb, self._z);
 +    if (ret === IS_ERROR) {
-+      reject(promise, LAST_ERROR);
++      rejectCore(promise, LAST_ERROR);
 +    } else {
-+      resolve(promise, ret);
++      resolveCore(promise, ret);
 +    }
 +  }
    function resolve(self, newValue) {
      // Promise Resolution Procedure: https://github.com/promises-aplus/promises-spec#the-promise-resolution-procedure
      if (newValue === self) {
-@@ -666,12 +692,12 @@
-
+@@ -644,8 +696,8 @@
+   function reject(self, newValue) {
+     self._y = 2;
+     self._z = newValue;
+-    if (Promise._C) {
+-      Promise._C(self, newValue);
++    if (self._x === 0 && trackReject) {
++      trackReject(self, newValue);
+     }
+     finale(self);
+   }
+@@ -666,12 +718,12 @@
+ 
    function finale(self) {
      if (self._x === 1) {
 -      handle(self, self._A);
@@ -706,6 +762,14 @@ index da64243..260dbf6 100644
        }
        self._A = null;
      }
+@@ -690,6 +742,7 @@
+       this.errorPromise = null;
+     }
+   }
++  OWNED = new Handler(null, null, null);
+ 
+   /**
+    * Take a potentially misbehaving resolver function and make sure
 diff --git i/lib/Support/CMakeLists.txt w/lib/Support/CMakeLists.txt
 index ea2f227..dcf2153 100644
 --- i/lib/Support/CMakeLists.txt

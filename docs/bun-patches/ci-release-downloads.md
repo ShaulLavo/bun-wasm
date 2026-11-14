@@ -6,7 +6,16 @@ upstream implementations.
 `scripts/ci-release-download.ts` resolves a public GitHub release URL to its
 release-asset API endpoint using the job's ephemeral token. It caches bytes under
 the SHA-256 of the complete original URL, never the token or temporary signed URL.
-Retries are limited to three HTTP attempts with one- and two-second backoff.
+Retries are limited to three complete download attempts with one- and two-second
+backoff. Each attempt has a 60-second deadline covering metadata, redirects, and
+the complete response body. The existing overall deadline remains 180 seconds by
+default and combines with caller cancellation. A timed-out or broken body restarts
+from the original release URL, obtaining a fresh signed redirect. HTTP 408, 429,
+500, 502, 503, and 504 also retry; permanent HTTP and metadata errors fail immediately.
+Bytes stream into a staging file before cache publication or delivery to a caller,
+so a partial attempt cannot contaminate the next one. Uncached staging files are
+removed when the returned response finishes or is cancelled. The retry regression
+uses actual stalled HTTP bodies under both Bun and Node.
 Redirects are bounded and restricted to GitHub's API and asset hosts. Authorization
 is sent only to the API. Cold CI requests fail without a token rather than falling
 back to public downloads. Cached bytes remain usable without a token. Node and Bun

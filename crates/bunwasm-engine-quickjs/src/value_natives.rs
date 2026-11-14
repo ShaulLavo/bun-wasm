@@ -219,7 +219,7 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
 /// `require()` of an ES module: import it and run the job queue until it
 /// settles. Modules waiting on timers (top-level await) can't be required.
 fn require_esm<E: Engine>(e: &E, core: &Core<E>, path: &str) -> Result<E::Value, E::Value> {
-    let promise = e.import_module(path)?;
+    let promise = e.require_module(path)?;
     while e.promise_state(&promise) == Some(PromiseState::Pending) {
         if !core.drain_jobs(e) {
             break;

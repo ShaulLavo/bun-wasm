@@ -7,10 +7,14 @@
 //! importers through a tiny generated wrapper module that re-exports the keys
 //! of an object handed over through the wrapper's `import.meta.m`.
 
+#[path = "esbuild_packet.rs"]
+mod esbuild_packet;
 #[path = "next_swc.rs"]
 mod next_swc;
 #[path = "oxc_memory.rs"]
 mod oxc_memory;
+#[path = "rolldown_memory.rs"]
+mod rolldown_memory;
 
 use std::io::Read as _;
 use std::rc::Rc;
@@ -419,7 +423,8 @@ impl State {
             return Ok((Rc::from(code), Format::Esm));
         }
         let stdin = self.main_arg.borrow().as_str() == "-" && self.main.borrow().as_str() == path;
-        let cacheable = !oxc_memory::depends_on_binary(path);
+        let cacheable =
+            !oxc_memory::depends_on_binary(path) && !rolldown_memory::depends_on_binary(path);
         if stdin && let Some(hit) = self.sources.borrow().get(path) {
             return Ok(hit.clone());
         }
@@ -496,6 +501,8 @@ impl State {
     ) -> Result<crate::Transpiled, NativeError> {
         let adapted = next_swc::adapt(raw, path);
         let adapted = oxc_memory::adapt(&adapted, path);
+        let adapted = rolldown_memory::adapt(&adapted, path);
+        let adapted = esbuild_packet::adapt(&adapted, path);
         self.transpiler
             .prepare_module(&adapted, path, loader, &mut |request| {
                 self.intern_import_request(request)
@@ -759,6 +766,30 @@ pub fn eval_entry(state: &State, code: &str) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_polyfill_registration_and_dispatch() {
+        crate::engine_host::polyfill_tests::registration_and_dispatch();
+    }
+
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_polyfill_source_and_errors() {
+        crate::engine_host::polyfill_tests::source_and_errors();
+    }
+
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_polyfill_string_wire_and_result_ownership() {
+        crate::engine_host::polyfill_tests::string_wire_and_result_ownership();
+    }
+
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_polyfill_reentry() {
+        crate::engine_host::polyfill_tests::reentry();
+    }
+
     use super::*;
 
     /// A record's invalid source is a SyntaxError with the source line and location; any other
@@ -975,7 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn oxc_loaders_requalify_after_prepared_source_cache_hits() {
+    fn host_oxc_loaders_requalify_after_prepared_source_cache_hits() {
         let fixture = TestModule::new("oxc-external-cache");
         let directory = fixture
             .0
@@ -1012,6 +1043,51 @@ mod tests {
         let first = state.load_source(&unrelated).unwrap().0;
         let second = state.load_source(&unrelated).unwrap().0;
         assert!(Rc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn host_rolldown_loaders_requalify_after_prepared_source_cache_hits() {
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        for filename in [
+            "rolldown-binding.wasi.cjs",
+            "rolldown-binding.wasi-browser.js",
+        ] {
+            let fixture = TestModule::new("rolldown-external-cache");
+            let directory = fixture.0.join("node_modules/@rolldown/binding-wasm32-wasi");
+            std::fs::create_dir_all(&directory).unwrap();
+            let loader = directory.join(filename);
+            let path = loader.to_str().unwrap();
+            let stock = "module.exports = { initial: 16384 };";
+            std::fs::write(&loader, stock).unwrap();
+            let load = || state.load_source(path).unwrap().0.to_string();
+            assert_eq!(load(), stock);
+            let seed_prepared_reduction = || {
+                state.sources.borrow_mut().insert(
+                    path.to_owned(),
+                    (Rc::from("module.exports = { initial: 1001 };"), Format::Cjs),
+                );
+            };
+            let binary = directory.join("rolldown-binding.wasm32-wasi.wasm");
+            seed_prepared_reduction();
+            std::fs::write(&binary, b"changed").unwrap();
+            assert_eq!(load(), stock);
+            seed_prepared_reduction();
+            std::fs::write(
+                directory.join("rolldown-binding.wasm32-wasi.debug.wasm"),
+                b"debug",
+            )
+            .unwrap();
+            assert_eq!(load(), stock);
+            seed_prepared_reduction();
+            std::fs::remove_file(&binary).unwrap();
+            assert_eq!(load(), stock);
+            seed_prepared_reduction();
+            std::fs::remove_file(&loader).unwrap();
+            assert!(state.load_source(path).is_err());
+        }
     }
 
     #[cfg(feature = "engine-host")]
@@ -1076,6 +1152,32 @@ mod tests {
         assert!(second[0].start > first[0].start);
         assert_eq!(&changed[second[0].start..second[0].end], "import");
         assert!(!state.positions.borrow().contains_key(&path));
+    }
+
+    #[test]
+    fn host_esbuild_packet_preparation_adapts_published_source() {
+        use std::io::Read as _;
+
+        let compressed = include_bytes!("../../../scripts/fixtures/esbuild-packet/main.js.gz");
+        let mut source = String::new();
+        flate2::read::GzDecoder::new(compressed.as_slice())
+            .read_to_string(&mut source)
+            .unwrap();
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        let path = "/project/node_modules/esbuild/lib/main.js";
+        let expected = esbuild_packet::adapt(&source, path);
+        assert_ne!(expected, source);
+        let prepared = state
+            .prepare_javascript(&source, path, SourceLoader::Js)
+            .unwrap();
+        assert_eq!(prepared.code, expected);
+        let unrelated = state
+            .prepare_javascript(&source, "/project/main.js", SourceLoader::Js)
+            .unwrap();
+        assert_eq!(unrelated.code, source);
     }
 
     #[cfg(feature = "engine-host")]

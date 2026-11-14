@@ -142,6 +142,18 @@ test("new script tests need an owner; existing non-CI probes remain outside the 
   for (const path of testFiles("scripts")) expect(before.has(path) || owned.has(path)).toBe(true);
 });
 
+test("dormant Hermes proof controls stay outside explicit and automatic CI discovery", () => {
+  const path = "tests/hermes/promise-ownership.test.ts";
+  expect(testFiles("tests/hermes")).toContain(path);
+  const paths = discoverChecks().map(check => check.path).concat(automaticChecks().map(check => check.path));
+  expect(paths.filter(path => /^scripts\/hermes-|^tests\/hermes\//.test(path))).toEqual([]);
+  const route = readFileSync(join(root, "tests/hermes/run.sh"), "utf8");
+  const command = "bun test ./tests/hermes/promise-ownership.test.ts";
+  expect(route.split(command)).toHaveLength(2);
+  expect(route.indexOf(command)).toBeLessThan(route.indexOf('expect eval "2"'));
+  expect(route).toContain("set -euo pipefail");
+});
+
 test("selected tests cannot import hidden test barrels that give a fixture a second owner", () => {
   const paths = discoverChecks().filter(check => check.owner !== "native").map(check => check.path).concat(automaticChecks().map(check => check.path));
   for (const path of paths) expect(readFileSync(join(root, path), "utf8")).not.toMatch(/^import\s+(?:.*from\s+)?["'][^"']+\.test\.[cm]?[jt]s["']/m);

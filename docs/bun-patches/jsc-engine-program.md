@@ -54,8 +54,11 @@ authority remains local even with separate root and web SDK installations.
 It prepares the Waffle plan once, then checks the exact compiled companion
 through the public `PreparedLinkPlan.memberModule` accessor before returning
 the plan or publishing program metadata. The side is not separately compiled
-for validation. The initial core inspection, shared/split agreement, pair
-digests and custom section, and ordered memory/constructor stages are unchanged.
+for validation. The host reads only custom section names to select the shared or split
+initialization stages before preparation. It checks the authoritative engine declaration
+and profile again on the prepared core before returning. Only the decorated core
+compiles, avoiding a separate compilation for inspection. Pair digests still cover the
+exact original snapshots. The appended identity section and ordered stages are unchanged.
 Public `ENOEXEC` errors retain the asset-error brand without importing the process
 service into startup; unknown host errors retain their original identity.
 Receipts bind core and side byte identities to engine origin and compatible
@@ -72,6 +75,15 @@ constructors, pointer spilling, Binaryen finalization, GC, promises, callback
 reentry, and native/Node/browser admission remain separate actual-pair gates.
 Captured-value roots are described below. Source review and synthetic controls
 do not establish a real-pair pass.
+
+## Synchronous require ownership
+
+The original `bunjsc_promise_mark_handled` adapter calls WebKit
+`JSPromise::markAsHandled()` under the VM lock and reports a TypeError for a
+non-promise. `Engine::require_module` uses it only for the require result, then
+removes that promise from the adapter's pending rejection list. Generic promise
+inspection and ordinary imports do not mark promises handled. The helper is an
+original adapter to the pinned WebKit API, not a copied implementation.
 
 ## Captured values and immediate native error reporting
 

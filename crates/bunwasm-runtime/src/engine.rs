@@ -129,6 +129,22 @@ pub trait Engine: Sized + 'static {
     ) -> Result<Self::Value, Self::Value>;
     /// `import(specifier)` from the top level: a promise of the namespace.
     fn import_module(&self, specifier: &str) -> Result<Self::Value, Self::Value>;
+    /// `require()` of an ES module: load, link and evaluate the resolved `name` for a
+    /// synchronous caller and return a promise of its namespace.
+    ///
+    /// The caller owns the returned promise's rejection. Before returning, the engine marks
+    /// it handled and drops any report its rejection tracker already holds for it, so a
+    /// caught failure is never reported as unhandled; failing to mark it is this call's
+    /// `Err`. Promises the engine creates internally for this call are owned the same way
+    /// on every exit.
+    ///
+    /// Evaluation failures stay cached for later `require_module` and `import_module` calls
+    /// of the same name, as for `import_module`. One exception is allowed: when this call's
+    /// own synchronous evaluation failed only because the engine refused to enter module
+    /// code for lack of stack, before any failed module's body began, and no other
+    /// operation holds the failed records, the engine may forget them so that a later load
+    /// compiles again. Records that evaluated successfully keep their identity.
+    fn require_module(&self, name: &str) -> Result<Self::Value, Self::Value>;
     /// Evaluate `source` as the ES module `name` (bun -e); `init_meta` runs
     /// for it like for loaded modules. Returns the evaluation promise.
     fn eval_module(&self, name: &str, source: &str) -> Result<Self::Value, Self::Value>;

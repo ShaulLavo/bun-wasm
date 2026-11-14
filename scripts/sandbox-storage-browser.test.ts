@@ -4,6 +4,7 @@ import { resolve, join } from "node:path";
 import { preservationScenario, quotaRefusalScenario } from "../sandbox/tests/storage-browser";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
+import { handleStorageFailure } from "./storage-ci-quarantine";
 
 const requested = (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",");
 const browsers = Array.from(new Set(requested.flatMap(name => name === "chromium" ? ["chromium", "firefox"] : [name])));
@@ -39,7 +40,10 @@ async function siteCheck(name: string, run: (browser: Browser, url: string) => P
   }
 }
 
-for (const name of browsers) test(`${name}: sandbox keeps active tabs and restores guest-created source after LRU eviction`, () => siteCheck(name, preservationScenario), 420_000);
+for (const name of browsers) test(`${name}: sandbox keeps active tabs and restores guest-created source after LRU eviction`, () => siteCheck(name, async (browser, url) => {
+  try { await preservationScenario(browser, url); }
+  catch (error) { await handleStorageFailure(name, error); }
+}), 420_000);
 
 test("chromium: full-origin preservation failure keeps idle source and pending editor text", async () => {
   if (!requested.includes("chromium")) return;

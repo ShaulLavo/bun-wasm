@@ -327,6 +327,9 @@ for (const [path, fixture] of [
   ["tests/fixtures/stack-getter-headroom/expected.txt", ""],
   ["checks/native-getter-dispatch.json", "tests/fixtures/getter-dispatch"],
   ["tests/fixtures/getter-dispatch/index.ts", ""],
+  ["checks/native-proxy-get-forwarding.json", "tests/fixtures/proxy-get-forwarding"],
+  ["tests/fixtures/proxy-get-forwarding/index.ts", ""],
+  ["tests/fixtures/proxy-get-forwarding/expected.txt", ""],
   ["checks/native-parser-literal-overflow.json", "tests/fixtures/parser-literal-overflow"],
   ["tests/fixtures/parser-literal-overflow/index.ts", ""],
   ["checks/native-assignment-chain-depth.json", "tests/fixtures/assignment-chain-depth"],
@@ -403,10 +406,10 @@ for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-
 
 for (const event of ["pull_request", "push"]) {
   test(`dormant Hermes recipes do not select native production through an actual ${event} diff`, () => {
-    expect(selectionOutput(base, commitInput("hermes/build.sh"), event))
-      .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
-    expect(selectionOutput(base, commitInput("docs/hermes-engine.md"), event))
-      .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
+    for (const path of ["hermes/build.sh", "docs/hermes-engine.md", "tests/hermes/run.sh", "tests/hermes/promise-ownership.test.ts", "scripts/fixtures/hermes-promise/01-Promise.js.txt"]) {
+      expect(selectionOutput(base, commitInput(path), event))
+        .toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
+    }
   });
 }
 

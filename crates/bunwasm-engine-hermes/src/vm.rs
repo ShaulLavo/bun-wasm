@@ -5,12 +5,11 @@
 //! never leave the shim, and none cross into the core.
 //!
 //! Promises are Hermes's own JS implementation (lib/InternalJavaScript/01-Promise.js): state
-//! `_y` (0 pending, 1 fulfilled, 2 rejected, 3 adopted `_z`), value `_z`, and the static
-//! `Promise._C(promise, reason)` / `Promise._B(promise)` hooks it calls on rejection and on
-//! every handler it attaches, which feed [`Engine::take_unhandled_rejections`]. Our patch to
-//! that file (docs/bun-patches/hermes-async-context.md) adds `Promise._G`/`_S` (the async
-//! context carried across reactions) and `_T` (an internal `then`); they are captured here
-//! once and deleted before any user code runs.
+//! `_y` (0 pending, 1 fulfilled, 2 rejected, 3 adopted `_z`), value `_z`. Closure-private
+//! tracker hooks feed [`Engine::take_unhandled_rejections`]. Our patch to that file
+//! (docs/bun-patches/hermes-async-context.md) adds `_G`/`_S` (the async context carried across
+//! reactions), `_T` (an internal `then`), and owned-promise hooks. The engine captures and deletes
+//! every private static before any user code runs.
 //!
 //! Hermes runs classic scripts. The core lowers ES modules to registration records;
 //! its loader owns linking, live bindings and top-level await inside this VM.
@@ -81,6 +80,11 @@ struct Intrinsics {
     /// `Promise._G()` / `Promise._S(frame)`: the current async context.
     context_get: HVal,
     context_set: HVal,
+    tracker_install: HVal,
+    owned_create: HVal,
+    owned_forward: HVal,
+    owned_reject: HVal,
+    owned_resolve: HVal,
 }
 
 fn intrinsic(f: impl FnOnce(&Intrinsics) -> &HVal) -> HVal {
@@ -480,11 +484,8 @@ fn promise_core(v: &HVal) -> Option<HVal> {
 
 fn track_rejection(_: &Hermes, args: &[HVal]) -> Result<HVal, HVal> {
     let promise = args.first().cloned().unwrap_or_else(undefined);
-    let handled = get(&promise, "_x").ok().map(|x| to_val(&x));
-    if handled == Some(Val::Num(0.0)) {
-        let reason = args.get(1).cloned().unwrap_or_else(undefined);
-        REJECTIONS.with(|r| r.borrow_mut().push((promise, reason)));
-    }
+    let reason = args.get(1).cloned().unwrap_or_else(undefined);
+    REJECTIONS.with(|r| r.borrow_mut().push((promise, reason)));
     Ok(undefined())
 }
 
@@ -526,6 +527,11 @@ fn capture_intrinsics() -> Intrinsics {
         then_internal: take_hook(&promise, &delete, "_T"),
         context_get: take_hook(&promise, &delete, "_G"),
         context_set: take_hook(&promise, &delete, "_S"),
+        tracker_install: take_hook(&promise, &delete, "_I"),
+        owned_create: take_hook(&promise, &delete, "_O"),
+        owned_forward: take_hook(&promise, &delete, "_F"),
+        owned_reject: take_hook(&promise, &delete, "_R"),
+        owned_resolve: take_hook(&promise, &delete, "_V"),
         promise,
     }
 }
@@ -625,6 +631,16 @@ fn record_loader(e: &Hermes) -> Result<HVal, HVal> {
     ] {
         e.set(&native, name, e.new_function(name, Rc::new(callback)))?;
     }
+    let owned = e.new_object();
+    for (name, hook) in [
+        ("create", intrinsic(|i| &i.owned_create)),
+        ("forward", intrinsic(|i| &i.owned_forward)),
+        ("reject", intrinsic(|i| &i.owned_reject)),
+        ("resolve", intrinsic(|i| &i.owned_resolve)),
+    ] {
+        e.set(&owned, name, hook)?;
+    }
+    e.set(&native, "owned", owned)?;
     call(&factory, &undefined(), &[native])
 }
 
@@ -665,10 +681,10 @@ impl Engine for Hermes {
         INTRINSICS.with(|i| {
             assert!(i.set(capture_intrinsics()).is_ok(), "one Hermes engine");
         });
-        let promise = intrinsic(|i| &i.promise);
         let rejection = Hermes.new_function("trackRejection", Rc::new(track_rejection));
         let handler = Hermes.new_function("trackHandler", Rc::new(track_handler));
-        assert!(set(&promise, "_C", &rejection).is_ok() && set(&promise, "_B", &handler).is_ok());
+        let installer = intrinsic(|i| &i.tracker_install);
+        assert!(call(&installer, &undefined(), &[rejection, handler]).is_ok());
         let loader = record_loader(&Hermes).unwrap_or_else(|error| {
             let message = get(&error, "message")
                 .map(|v| to_string(&v))
@@ -794,6 +810,10 @@ impl Engine for Hermes {
 
     fn import_module(&self, specifier: &str) -> Result<HVal, HVal> {
         call_loader("importModule", &[string(specifier), string("")])
+    }
+
+    fn require_module(&self, name: &str) -> Result<HVal, HVal> {
+        call_loader("requireModule", &[string(name), string("")])
     }
 
     fn eval_module(&self, name: &str, _source: &str) -> Result<HVal, HVal> {
