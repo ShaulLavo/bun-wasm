@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { producerPhase } from './producer-diagnostics.ts';
+import { needsRust, needsSharedNative } from './ci-changes.ts';
 import { selectChecks } from './test-checks.ts';
 
 const diagnostics = join(import.meta.dir, 'producer-diagnostics.ts');
@@ -12,6 +13,11 @@ const diagnostics = join(import.meta.dir, 'producer-diagnostics.ts');
 function execute(root: string, script: string, seconds = 15) {
   return spawnSync(process.execPath, [diagnostics, 'run', root, String(Date.now() + seconds * 1000), 'bash', '-c', script],
     { encoding: 'utf8', timeout: 20000 });
+}
+
+function stopRecordedChild(path: string): void {
+  if (!existsSync(path)) return;
+  try { process.kill(Number(readFileSync(path, 'utf8')), 'SIGKILL'); } catch {}
 }
 
 test('quality owns the producer diagnostics controls', () => {
@@ -90,3 +96,55 @@ test('interruption preserves output and returns the signal failure', async () =>
     rmSync(root, { recursive: true, force: true });
   }
 }, 20000);
+
+test('producer helper changes select the native proof owner and launcher', () => {
+  expect(needsSharedNative(['scripts/producer-diagnostics.ts'])).toBe(true);
+  expect(needsRust(['scripts/producer-diagnostics.ts'])).toBe(true);
+  const recipe = readFileSync(join(import.meta.dir, 'build-native-profile.ts'), 'utf8');
+  expect(recipe).toContain("'scripts/producer-diagnostics.ts'");
+  const workflow = readFileSync(join(import.meta.dir, '../.github/workflows/ci.yml'), 'utf8');
+  expect(workflow).toContain("'scripts/build-native-profile.ts', 'scripts/producer-diagnostics.ts', 'scripts/build-bun-core.sh'");
+});
+
+test('unwritable phase history preserves original action errors and successful results', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bun-wasm-producer-'));
+  const previous = process.env.BUN_WASM_PRODUCER_DIAGNOSTICS;
+  process.env.BUN_WASM_PRODUCER_DIAGNOSTICS = root;
+  mkdirSync(join(root, 'phases.log'));
+  const failure = new Error('ORIGINAL_CAPTURE_FAILURE');
+  try {
+    await expect(producerPhase('broken-log', () => { throw failure; })).rejects.toBe(failure);
+    expect(await producerPhase('successful-action', () => 42)).toBe(42);
+  } finally {
+    if (previous === undefined) delete process.env.BUN_WASM_PRODUCER_DIAGNOSTICS;
+    else process.env.BUN_WASM_PRODUCER_DIAGNOSTICS = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('failed tail retention forwards original output and preserves exit 23', () => {
+  const root = mkdtempSync(join(tmpdir(), 'bun-wasm-producer-'));
+  try {
+    const result = execute(root, `mkdir "${join(root, 'output-tail.log.tmp')}"; echo ORIGINAL_FAILURE_23; exit 23`);
+    expect(result.status, result.stderr).toBe(23);
+    expect(result.stdout).toContain('ORIGINAL_FAILURE_23');
+    expect(result.stderr).toContain('Producer diagnostic retention failed');
+    expect(JSON.parse(readFileSync(join(root, 'status.json'), 'utf8'))).toMatchObject({ state: 'finished', status: 23 });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('failed tail retention still supervises active detached descendants', () => {
+  const root = mkdtempSync(join(tmpdir(), 'bun-wasm-producer-'));
+  const pidFile = join(root, 'detached-pid');
+  try {
+    const result = execute(root, `mkdir "${join(root, 'output-tail.log.tmp')}"; setsid bash -c 'echo $$ > "${pidFile}"; exec sleep 60' & echo READY_WITH_BROKEN_RETENTION; wait`, 2);
+    expect(result.status, result.stderr).toBe(124);
+    expect(result.stdout).toContain('READY_WITH_BROKEN_RETENTION');
+    expect(result.stderr).toContain('Producer diagnostic retention failed');
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    expect(() => process.kill(pid, 0)).toThrow();
+  } finally {
+    stopRecordedChild(pidFile);
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 15000);

@@ -59,7 +59,7 @@ export function spiderMonkeyNativeInputs(native: string, libcxx: string, sysroot
 }
 
 function spiderMonkeySources() {
-  const paths = execFileSync('git', ['ls-files', '-z', '--', 'spidermonkey', 'scripts/build-native-profile.ts',
+  const paths = execFileSync('git', ['ls-files', '-z', '--', 'spidermonkey', 'scripts/build-native-profile.ts', 'scripts/producer-diagnostics.ts',
     'scripts/build-engine-spidermonkey-shared.sh', 'scripts/spidermonkey-side-core-receipt.ts'], { cwd: repository, encoding: 'utf8' });
   return paths.split('\0').filter(Boolean).map(path => ({ path, ...fileIdentity(join(repository, path)) }));
 }

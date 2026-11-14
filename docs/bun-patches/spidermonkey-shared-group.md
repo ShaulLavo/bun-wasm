@@ -138,3 +138,9 @@ SpiderMonkey's C++ reads the side's own errno, so a core libc failure it inspect
 
 The interpreter and portable-baseline tiers use the same program bytes and are qualified
 separately. Neither result stands in for the other.
+
+Diagnostic retention is best effort. A tail or phase-log write failure is reported
+separately and cannot replace build output, the build status or the original
+capture exception. The supervisor still waits for descendant cleanup. Its helper
+is included in shared-native selection, recipe capture and the existing target
+cache input key. This records failures; it does not establish their cause.
