@@ -15,7 +15,7 @@ const workflow = record(Bun.YAML.parse(readFileSync(new URL("../.github/workflow
 const jobs = record(workflow.jobs);
 const shared = record(jobs["shared-sysroot"]);
 const builder = readFileSync(new URL("./build-native-profile.ts", import.meta.url), "utf8");
-const selection = "needs.quality.outputs.shared-native == 'true'";
+const selection = "needs.selection.outputs.shared-native == 'true'";
 const exports = [
   { engine: "quickjs", id: "shared-quickjs-producer", directory: "program", producer: "Produce the shared native profile once", argument: "" },
   { engine: "jsc", id: "shared-jsc-producer", directory: "program-jsc", producer: "Produce the shared JSC profile once", argument: " jsc" },
@@ -154,7 +154,7 @@ test("native and Browser consumers use ready artifacts on separate runners and d
   for (const id of ["shared-native", "shared-browser"]) {
     const job = record(jobs[id]);
     expect(job.needs).toContain("shared-sysroot");
-    expect(job.if).toContain("!cancelled() && needs.quality.result == 'success'");
+    expect(job.if).toContain("!cancelled() && needs.selection.result == 'success'");
     expect(job.if).toContain(selection);
     expect(job["timeout-minutes"]).toBe(30);
     expect(record(job.strategy)).toEqual({ "fail-fast": false, matrix: { engine: ["quickjs", "jsc", "spidermonkey"] } });
@@ -170,6 +170,8 @@ test("native and Browser consumers use ready artifacts on separate runners and d
     if (id === "shared-browser") expect(commands).toContain("run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }} bun scripts/test-checks.ts");
     else expect(commands).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   }
+  expect(shared.needs).toEqual(["selection", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
+  expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
   expect(shared["timeout-minutes"]).toBe(30);
   expect(shared.name).toBe("Shared PIC program producer");
   expect(sharedSteps.some(step => String(step.run).includes("test-checks.ts"))).toBe(false);
@@ -205,14 +207,14 @@ test("the matching native launcher stays in its original source-verified artifac
 test("the protected proof requires every selected producer and consumer, including disabled skips", () => {
   const guard = record(jobs["shared-proof"]);
   expect(guard.name).toBe("Shared PIC sysroot proof");
-  expect(guard.needs).toEqual(["quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser"]);
+  expect(guard.needs).toEqual(["selection", "quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser"]);
   expect(guard.if).toContain("always()");
   expect(guard["continue-on-error"]).toBeUndefined();
   const check = steps(guard)[0]!;
   expect(check.if).toBeUndefined();
   expect(check["continue-on-error"]).toBeUndefined();
   if (typeof check.run !== "string") throw new Error("Missing final proof guard");
-  const base = { QUALITY_RESULT: "success", SHARED_PREBUILD_RESULT: "success", SHARED_PRODUCER_RESULT: "success", SHARED_NATIVE: "true", RUST_RESULT: "success", SM_RESULT: "success", NATIVE_RESULT: "success", BROWSER_RESULT: "success" };
+  const base = { SELECTION_RESULT: "success", QUALITY_RESULT: "success", SHARED_PREBUILD_RESULT: "success", SHARED_PRODUCER_RESULT: "success", SHARED_NATIVE: "true", RUST_RESULT: "success", SM_RESULT: "success", NATIVE_RESULT: "success", BROWSER_RESULT: "success" };
   const run = (env: Record<string, string>) => spawnSync("bash", ["-euo", "pipefail", "-c", String(check.run)], { env: { ...process.env, ...env } }).status;
   expect(run(base)).toBe(0);
   const disabled = { ...base, SHARED_NATIVE: "false", RUST_RESULT: "skipped", SM_RESULT: "skipped", NATIVE_RESULT: "skipped", BROWSER_RESULT: "skipped" };

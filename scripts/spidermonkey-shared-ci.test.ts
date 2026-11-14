@@ -36,7 +36,7 @@ test('SM uses the existing discovered fixture and blocking owner, not a Browser 
   expect(discoverChecks().filter(check => check.path === 'scripts/build-native-profile.test.ts')).toHaveLength(1);
   expect(discoverChecks().filter(check => check.path === 'scripts/spidermonkey-shared-ci.test.ts')).toHaveLength(1);
   const consumer = step('Consume the discovered shared native checks sequentially');
-  expect(workflow.split("\n  shared-native:\n")[1]!).toContain("needs.quality.outputs.shared-native == 'true'");
+  expect(workflow.split("\n  shared-native:\n")[1]!).toContain("needs.selection.outputs.shared-native == 'true'");
   expect(consumer).toContain('bun scripts/test-checks.ts native --profile shared-group');
   expect(workflow).toContain('shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm');
   expect(consumer).toContain('native-profile-launcher/bun-wasm');

@@ -13,12 +13,14 @@ export function requireCiSuccess(value: unknown): void {
   const results = object(value);
   const quality = object(results.quality);
   if (quality.result !== "success") throw new Error(`Source quality did not pass: ${String(quality.result)}`);
-  const outputs = object(quality.outputs);
+  const selection = object(results.selection);
+  if (selection.result !== "success") throw new Error(`CI selection did not pass: ${String(selection.result)}`);
+  const outputs = object(selection.outputs);
   const rust = selected(outputs, "rust");
   const sharedNative = selected(outputs, "shared-native");
   const shared = selected(outputs, "shared") || sharedNative;
   const expected = {
-    quality: true, "jsc-identity": rust, "jsc-prebuild": rust, "native-quality": rust, rust,
+    selection: true, quality: true, "jsc-identity": rust, "jsc-prebuild": rust, "native-quality": rust, rust,
     package: true, "shared-jsc-identity": shared, "shared-prebuild": shared, "shared-spidermonkey-prebuild": sharedNative,
     "shared-sysroot": shared, "shared-native": sharedNative, "shared-browser": sharedNative, "shared-proof": shared,
     web: true, "web-unit": true, "web-browser": true, "process-bundles": true, "browser-guest": rust, "browser-process": true,
