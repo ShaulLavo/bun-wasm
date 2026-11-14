@@ -106,9 +106,9 @@ test("Rust objects restore compatible generations and save only changed inventor
 
 test("release download saves still require a changed inventory", () => {
   const group = groups.find(group => group.file === "actions/save-release-downloads/action.yml");
-  const save = group?.steps.find(step => step.uses === "actions/cache/save@v4");
-  if (!save) throw new Error("Missing release download save");
-  expect(allows(save, "push", "refs/heads/main", "false", "false")).toBe(false);
+  const saves = group?.steps.filter(step => step.uses === "actions/cache/save@v4") ?? [];
+  expect(saves).toHaveLength(2);
+  for (const save of saves) expect(allows(save, "push", "refs/heads/main", "false", "false")).toBe(false);
 });
 
 test("compiler-object rotation is main-only and waits for a successful changed snapshot", () => {

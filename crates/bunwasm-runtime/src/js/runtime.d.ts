@@ -478,7 +478,7 @@ declare namespace BunWasm {
   }
   interface Internal {
     nextTick(callback: Function, ...args: unknown[]): void;
-    fakeTimers?: { elapsedNanoseconds: number };
+    fakeTimers?: { elapsedNanoseconds: number; installIntl(intl: Pick<typeof Intl, "DateTimeFormat">): void };
     emitExit(code: number): void;
     finalizeWorkerChildren?: () => void;
     traceExit(reason: string, code: number): void;

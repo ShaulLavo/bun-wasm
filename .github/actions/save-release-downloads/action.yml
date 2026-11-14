@@ -1,11 +1,12 @@
-name: Save grown release cache
-description: Save only when downloads added assets to the restored inventory
+name: Save bounded release caches
+description: Retain recent downloads and publish only changed inventories
 runs:
   using: composite
   steps:
     - id: inventory
       shell: bash
       run: |
+        bun "$GITHUB_WORKSPACE/scripts/ci-release-cache.ts" "$CI_RELEASE_CACHE" "$CI_BOOTSTRAP_CACHE"
         fingerprint=$(find "$CI_RELEASE_CACHE" -type f -printf '%P %s\n' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
         echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
         if [[ "$fingerprint" != "$CI_RELEASE_CACHE_INITIAL" ]]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
@@ -14,3 +15,14 @@ runs:
       with:
         path: ${{ env.CI_RELEASE_CACHE }}
         key: ${{ env.CI_RELEASE_CACHE_KEY }}-${{ steps.inventory.outputs.fingerprint }}
+    - id: bootstrap-inventory
+      shell: bash
+      run: |
+        fingerprint=$(find "$CI_BOOTSTRAP_CACHE" -type f -printf '%P %s\n' | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
+        echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+        if [[ "$fingerprint" != "$CI_BOOTSTRAP_CACHE_INITIAL" ]]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+    - uses: actions/cache/save@v4
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.bootstrap-inventory.outputs.changed == 'true'
+      with:
+        path: ${{ env.CI_BOOTSTRAP_CACHE }}
+        key: ${{ env.CI_BOOTSTRAP_CACHE_KEY }}-${{ steps.bootstrap-inventory.outputs.fingerprint }}
