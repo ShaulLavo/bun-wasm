@@ -25,8 +25,8 @@ const groups = files.flatMap(file => {
 const caches = groups.flatMap(group => group.steps.filter(step => /^\.\/\.github\/actions\/(?:restore|save)-ci-cache$/.test(String(step.uses))).map(step => ({ ...group, step, label: String(step.name ?? step.id ?? step.uses) })));
 const writers = caches.filter(({ step }) => step.uses !== "./.github/actions/restore-ci-cache");
 
-function allows(step: Record<string, unknown>, event: string, ref: string, hit = "false", changed = "true"): boolean {
-  const values: Record<string, string> = { "runner.environment": "github-hosted", "github.event_name": event, "github.ref": ref, "inputs.cache-hit": hit, "inputs.sysroot": "build", "inputs.shared-native": "true", "steps.budget.outputs.fits": "true", "steps.publish.outcome": "success" };
+function allows(step: Record<string, unknown>, event: string, ref: string, hit = "false", changed = "true", runner = "github-hosted"): boolean {
+  const values: Record<string, string> = { "runner.environment": runner, "github.event_name": event, "github.ref": ref, "inputs.cache-hit": hit, "inputs.sysroot": "build", "inputs.shared-native": "true", "steps.budget.outputs.fits": "true", "steps.publish.outcome": "success" };
   const expression = String(step.if ?? "true").replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replace(/success\(\)/g, "true").replace(/cancelled\(\)/g, "false")
     .replace(/(?:runner|github|steps|needs|inputs)\.[\w.-]+/g, name => {
@@ -53,12 +53,16 @@ test("cache audit includes every local workflow and composite writer", () => {
 
 test.each(writers)("$file $job $label saves only reusable main caches", ({ step }) => {
   expect(step.uses).toBe("./.github/actions/save-ci-cache");
-  expect(allows(step, "push", "refs/heads/main")).toBe(true);
-  expect(allows(step, "pull_request", "refs/pull/598/merge")).toBe(false);
-  expect(allows(step, "pull_request_target", "refs/heads/main")).toBe(false);
-  expect(allows(step, "push", "refs/heads/feature")).toBe(false);
-  expect(allows(step, "workflow_dispatch", "refs/heads/main")).toBe(false);
-  if (String(step.if).includes("cache-hit")) expect(allows(step, "push", "refs/heads/main", "true")).toBe(false);
+  const runners = ["github-hosted", "self-hosted"];
+  const expected = step.name === "Save completed PC Bun dependency cache" ? ["self-hosted"] : runners;
+  expect(runners.filter(runner => allows(step, "push", "refs/heads/main", "false", "true", runner))).toEqual(expected);
+  for (const runner of runners) {
+    expect(allows(step, "pull_request", "refs/pull/598/merge", "false", "true", runner)).toBe(false);
+    expect(allows(step, "pull_request_target", "refs/heads/main", "false", "true", runner)).toBe(false);
+    expect(allows(step, "push", "refs/heads/feature", "false", "true", runner)).toBe(false);
+    expect(allows(step, "workflow_dispatch", "refs/heads/main", "false", "true", runner)).toBe(false);
+    if (String(step.if).includes("cache-hit")) expect(allows(step, "push", "refs/heads/main", "true", "true", runner)).toBe(false);
+  }
 });
 
 test("PRs can still restore all shared caches, including compiler objects and tools", () => {
