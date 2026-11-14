@@ -120,10 +120,22 @@ pub fn main() {
     // interpreter tier, missing-argument calls stay in the loop and only the bytecode stack
     // bounds them.
     for (label, code) in [
-        ("getter", "var o = { get x() { d++; return this.x; } }; o.x;"),
-        ("setter", "var o = { set x(v) { d++; this.x = v; } }; o.x = 1;"),
-        ("bound", "var b; function f() { d++; return b(); } b = f.bind(null); b();"),
-        ("missing argument", "function f(a, b) { d++; return f(1) + 1; } f(1);"),
+        (
+            "getter",
+            "var o = { get x() { d++; return this.x; } }; o.x;",
+        ),
+        (
+            "setter",
+            "var o = { set x(v) { d++; this.x = v; } }; o.x = 1;",
+        ),
+        (
+            "bound",
+            "var b; function f() { d++; return b(); } b = f.bind(null); b();",
+        ),
+        (
+            "missing argument",
+            "function f(a, b) { d++; return f(1) + 1; } f(1);",
+        ),
     ] {
         let depth = number(&format!(
             "var d = 0; try {{ {code} }} catch (e) {{ if (!(e instanceof RangeError)) throw e; }} d"
