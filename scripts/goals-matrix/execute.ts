@@ -28,7 +28,7 @@ export interface Execution {
 }
 type TerminalCapture = { status: "observed"; text: string } | { status: "unavailable"; reason: string };
 type LogObservation = { terminal: TerminalCapture; diagnostic: string };
-type FailureLog = LogObservation & { saved: boolean };
+type FailureLog = LogObservation & { saved: boolean; preview: string };
 type ObservationTiming = "after server stop" | "before owned transport cleanup";
 async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, operation: (admission: Admission) => Promise<unknown>, signal?: AbortSignal): Promise<void> {
   const startedAt = new Date().toISOString();
@@ -117,9 +117,12 @@ async function lifecycle(transport: Transport, options: Execution, results: Phas
 
 async function captureFailure(transport: Transport, options: Execution, results: PhaseResult[]): Promise<FailureLog> {
   const scope = Scope.open(2000);
-  const capture: FailureLog = { terminal: { status: "unavailable", reason: "not completed" }, diagnostic: "", saved: false };
+  const capture: FailureLog = { terminal: { status: "unavailable", reason: "not completed" }, diagnostic: "", saved: false, preview: "" };
   try {
-    await scope.run(admission => observeFailure(transport, options, capture, admission));
+    await scope.run(async admission => {
+      capture.preview = await previewFailureLog(transport, admission);
+      await observeFailure(transport, options, capture, admission);
+    });
   } catch (error) {
     if (capture.terminal.status === "unavailable") capture.terminal = { status: "unavailable", reason: String(error) };
     if (capture.terminal.status === "observed" && !capture.diagnostic) capture.diagnostic = memoryBudgetFallback(options.box.engine, "failure");
@@ -134,6 +137,12 @@ async function captureFailure(transport: Transport, options: Execution, results:
     capture.saved = true;
   } catch { /* Final logging retains the observed terminal when a local save fails. */ }
   return capture;
+}
+
+async function previewFailureLog(transport: Transport, admission: Admission): Promise<string> {
+  if (!transport.previewFailure) return "";
+  try { return await awaitWithin(transport.previewFailure(admission), admission); }
+  catch (error) { return `\nPreview failure observation unavailable: ${String(error)}\n`; }
 }
 
 async function observeFailure(transport: Transport, options: Execution, capture: FailureLog, admission: Admission): Promise<void> {
@@ -243,13 +252,13 @@ function finalLogFallback(observation: LogObservation, engine: string, results: 
   if (terminal.status === "observed") return terminal.text + (failureLog?.diagnostic || diagnostic || memoryBudgetFallback(engine, "final"));
   if (failureLog?.terminal.status === "observed") return failureLog.terminal.text + failureLog.diagnostic;
   const capture = failureLog?.terminal.status === "unavailable" ? `\nFailure capture: ${failureLog.terminal.reason}` : "";
-  return `Final terminal observation unavailable: ${String(error)}${capture}\n\n${completedTranscript(results) ?? "No completed command transcript was available."}`;
+  return `Final terminal observation unavailable: ${String(error)}${capture}\n\n${completedTranscript(results) ?? "No completed command transcript was available."}${failureLog?.preview ?? ""}`;
 }
 
 function failureObservation(capture: FailureLog | undefined): string {
   if (!capture) return "--- Failure-time terminal observation unavailable ---\n";
-  if (capture.terminal.status === "unavailable") return `--- Failure-time terminal observation unavailable ---\n${capture.terminal.reason}\n`;
-  return `--- Failure-time terminal observation ---\n${capture.terminal.text}${capture.diagnostic}\n--- End failure-time terminal observation ---\n`;
+  if (capture.terminal.status === "unavailable") return `--- Failure-time terminal observation unavailable ---\n${capture.terminal.reason}\n${capture.preview}`;
+  return `--- Failure-time terminal observation ---\n${capture.terminal.text}${capture.diagnostic}${capture.preview}\n--- End failure-time terminal observation ---\n`;
 }
 
 function finalObservation(text: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, timing: ObservationTiming): string {
