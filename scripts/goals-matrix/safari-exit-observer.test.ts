@@ -8,6 +8,7 @@ import { withSafariCausalCapture, settlementFile, type SafariCausalCapture } fro
 import { createSafariTransport } from "./safari-transport";
 import { Scope } from "./scope";
 import { scoped, type Transport } from "./scoped-transport";
+import { clock, type SafariProtocolFact } from "./safari-protocol";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
@@ -303,4 +304,21 @@ test("owned child and output readers join before descriptor close, writers close
   expect(order.indexOf("child-and-readers-joined")).toBeLessThan(order.indexOf("writers-closed"));
   expect(order.at(-1)).toBe("proof");
   expect(await child.exited).not.toBe(0);
+});
+
+test("late protocol callbacks during writer close cannot enqueue writes or change final attribution", async () => {
+  const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const f = fixture({ joinMs: 1000, sink: { async write() {}, async close() { started.resolve(); await release.promise; } } });
+  cleanup.push(async () => { release.resolve(); });
+  const pending = f.owner.run(async () => f.owner.attach(target));
+  await started.promise;
+  const count = f.owner.records.length;
+  const fact = { request: 1, lane: "command", method: "POST", command: "execute-async", dispatched: clock(), settled: clock(), status: 200,
+    media: "json", envelope: "object", value: "null", result: { kind: "contract-failure" } } satisfies SafariProtocolFact;
+  f.owner.protocol(fact);
+  expect(f.owner.records.length).toBe(count);
+  expect(f.owner.proof()).toMatchObject({ lateFacts: 1, firstInvalid: null });
+  release.resolve();
+  await pending;
+  expect(f.owner.proof()).toMatchObject({ state: "settled", writersClosed: true });
 });

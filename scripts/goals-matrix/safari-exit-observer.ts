@@ -48,6 +48,7 @@ export class ExitOwner {
   private descriptor: "not-opened" | "open" | "closed" | "unproved" = "not-opened";
   private finishing: Promise<void> | undefined;
   private settled = false;
+  private recordsClosed = false;
   private lateFacts = 0;
   private firstInvalid: SafariProtocolFact | null = null;
 
@@ -57,7 +58,7 @@ export class ExitOwner {
   }) {}
 
   private emit(kind: string, value: unknown): void {
-    if (this.settled) { this.lateFacts++; return; }
+    if (this.recordsClosed) { this.lateFacts++; return; }
     const entry: RecordEntry = { sequence: this.records.length + 1, at: clock(), phase: this.phase, target: this.target, kind, value };
     this.records.push(entry);
     this.writes = this.writes.then(() => this.write(entry));
@@ -99,6 +100,7 @@ export class ExitOwner {
   }
 
   protocol = (fact: SafariProtocolFact): void => {
+    if (this.recordsClosed) { this.lateFacts++; return; }
     this.emit("protocol", fact);
     if (fact.result.kind === "valid" || this.firstInvalid) return;
     this.firstInvalid = fact;
@@ -164,6 +166,7 @@ export class ExitOwner {
     this.boundary("final-drain");
     if (this.subscription && this.descriptor === "open") this.closeDescriptor(this.subscription);
     this.emit("observer-settled", { descriptor: this.descriptor });
+    this.recordsClosed = true;
     await this.writes;
     if (!this.writerJoined) { this.settled = true; return; }
     const closed = await bounded(signal => this.options.sink.close(signal), this.options.joinMs ?? 20_000);
