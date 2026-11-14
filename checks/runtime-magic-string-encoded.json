@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/magic-string-encoded.test.ts",
+  "localRuntime": true
+}
