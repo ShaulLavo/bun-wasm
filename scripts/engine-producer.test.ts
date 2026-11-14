@@ -18,6 +18,7 @@ case "$tool" in
       program-profile.ts:max-memory) exec "$REAL_BUN" "$RECIPE_ROOT/scripts/src/program-profile.ts" max-memory ;;
       program-profile.ts:group-address-space) echo 2147483648 ;;
       spidermonkey-side-core-receipt.ts:convert-side) cp "$1" "$2" ;;
+      producer-diagnostics.ts:phase) shift; exec "$@" ;;
       guest-build-receipt.ts:environment)
         printf 'export GUEST_CARGO=%q RUSTC=%q\\n' "$RECIPE_BIN/selected-cargo" "$RECIPE_BIN/selected-rustc" ;;
       guest-core-receipt.ts:inputs|guest-engine-receipt.ts:inputs)
