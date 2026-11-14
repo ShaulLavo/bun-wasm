@@ -84,7 +84,7 @@ test("explicit recursive Preview1 programs retain inherited writers across ordin
     const descendantWorker = workers.get(descendantPid);
     expect(descendantWorker).toBeDefined();
     expect(descendantWorker!.url).toBe("https://example.test/preview1-worker.js");
-    expect(supervisor.get(descendantPid)!.request!.executable).toBe("/usr/libexec/test-guest");
+    expect(supervisor.get(descendantPid)!.image.request!.executable).toBe("/usr/libexec/test-guest");
     const descendant = makeClient(descendantWorker!.request.runtimeProcess!);
     const output = descendant.descriptors.get(1)!.resource as PipeEndpoint;
     expect(output.tryWrite([new Uint8Array([68])])).toBe(1);

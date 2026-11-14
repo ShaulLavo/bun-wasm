@@ -230,6 +230,7 @@ for (const dispatch of ["runtime", "rejected"] as const) test(`a committed job r
     const supervisor = await state.broker.ready();
     await supervisor.start(pid);
     state.workers.get(pid)!.message({ type: "exit", code: 23, sleep: "atomics" });
+    await supervisor.waitForExit(1, pid);
     const job = workerProcessState(transport).job;
     expect(state.client.waitJob(1, job)?.status).toBe(23);
     const reap = state.messages.pop()!;

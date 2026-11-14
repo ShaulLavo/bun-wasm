@@ -89,6 +89,47 @@ ok overflow caught inside a getter
 ok overflow caught inside a computed getter
 ok getters after the swallowed overflows
 ok nested Ajv names walk
+ok computed coercion receiver
+ok computed coercion order
+ok computed throwing key
+ok computed throwing key skips getter
+ok computed null before key coercion
+ok computed undefined before key coercion
+ok computed nullish key not coerced
+ok computed primitive key hook
+ok computed primitive key hint
+ok computed symbol receiver
+ok computed string index receiver
+ok computed numeric index receiver
+ok computed array negative one miss
+ok computed typed array string out of bounds
+ok computed typed array numeric out of bounds
+ok computed strict string receiver
+ok computed sloppy string receiver
+ok computed strict number receiver
+ok computed sloppy number receiver
+ok computed host accessor
+ok computed host accessor wrong receiver
+ok computed bound getter
+ok computed callable proxy getter
+ok computed proxy base receiver
+ok computed revoked proxy
+ok computed throw names read site
+ok computed throw catch and finally
+ok computed recovery after throw
+ok computed base destination alias
+ok computed key destination alias
+ok computedNarrow getter value and live locals
+ok computedNarrow getter failure
+ok computedNarrow recovery
+ok computedWide16 getter value and live locals
+ok computedWide16 getter failure
+ok computedWide16 recovery
+ok computedWide32 getter value and live locals
+ok computedWide32 getter failure
+ok computedWide32 recovery
+ok computed hot data and getter site
+ok computed fresh getter compilation under allocation
 ok getter running async code
 ok getter returning a promise
 continued

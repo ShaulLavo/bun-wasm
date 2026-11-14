@@ -5,6 +5,7 @@ import { copyLaunchFailure, errorFact, launchFailureFact, maxLaunchFailureBytes 
 import { beginMemorySnapshot, endMemorySnapshot, publishBrowserCallTrap, recordLaunchFailure, recordMemorySnapshot, retainedMemorySnapshots, retainedMemoryProcesses, type FrozenAllocatorFailure } from "../src/memory-telemetry.ts";
 import { createMemoryPublisher } from "../src/memory-channel.ts";
 import { bytes, pages, type SharedMemorySnapshot } from "waffle";
+import { createWorkerProcessTransport, workerProcessDirectoryId } from "waffle/proc/worker-client";
 
 type Holder = SharedMemorySnapshot["holders"][number];
 
@@ -55,8 +56,9 @@ test("shared alias metadata and guest declarations do not multiply backing count
   const shared = holder({ kind: "shared-guest", initialPages: pages(1), actualMaximumPages: pages(8), sourceMaximumPages: pages(8) }, "guest-memory");
   const declaration = holder({ kind: "guest", memories: [{ kind: "shared", origin: "imported", initialPages: pages(1), maximumPages: pages(8) }] }, "guest-memory");
   const fixture = launchFailureFixture();
+  const transport = createWorkerProcessTransport();
   fixture.runtime.sharedMemory.snapshot = () => ({ ...fixture.ledger, holders: [shared, declaration], sharedGuests: [{
-    id: Symbol("backing"), owner: { directory: "control", pid: 1 }, phase: "live", aliases: { reserved: 0, transferred: 4, retained: 0 },
+    id: Symbol("backing"), owner: { directory: workerProcessDirectoryId(transport), pid: transport.pid, generation: transport.generation }, phase: "live", aliases: { reserved: 0, transferred: 4, retained: 0 },
     continuations: { active: 0, retained: 0 }, fence: "pending", chargedBytes: 524288,
     initialPages: pages(1), actualMaximumPages: pages(8), sourceMaximumPages: pages(8),
   }] });
