@@ -23,6 +23,8 @@ import { appendFileSync } from "node:fs";
 import { playgroundProfile, requireProfileEngine, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { ownershipReceipt } from "./safari-ownership";
 import { verifyPreparedSiteInventory } from "./prepared-site";
+import type { ExitOwner } from "./safari-exit-observer";
+import { withSafariExitCapture } from "./safari-exit-capture";
 
 export interface Options {
   nextBuildObservation?: boolean;
@@ -100,7 +102,7 @@ function nativeAdmissionOptions(values: Map<string, string>): NativeAdmission | 
   };
   return { lane: values.get("mac-lane") ?? "", thread: values.get("mac-thread") ?? "", expectedSeconds: seconds("mac-expected-seconds", 600), waitSeconds: seconds("mac-wait-seconds", 3600), timeoutSeconds: seconds("mac-timeout-seconds", 900) };
 }
-async function nativeTransport(box: Cell, config: Options, timeoutMs: number, report: Report, capture?: SafariCausalCapture): Promise<Transport> {
+async function nativeTransport(box: Cell, config: Options, timeoutMs: number, report: Report, capture?: SafariCausalCapture, exit?: ExitOwner): Promise<Transport> {
   if (box.browser === "iphone-safari" && config.iphoneControlUrl && config.iphoneAgentCommand && config.deviceUDID) return createIphoneTransport({
     control: config.iphoneControlUrl, agent: config.iphoneAgentCommand, deviceUDID: config.deviceUDID, timeoutMs,
     cleanupTimeoutMs: report.deadlines.cleanupTimeoutMs,
@@ -111,8 +113,9 @@ async function nativeTransport(box: Cell, config: Options, timeoutMs: number, re
   if (!endpoint) throw new Error("Missing native WebDriver endpoint");
   const receipt = config.safariOwnership ? ownershipReceipt(config.output, captureIdentity(box, report)) : undefined;
   const ownershipSink = capture ? capture.ownership(receipt) : receipt;
-  return createSafariTransport({ ownershipSink, protocolSink: capture?.protocol, browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs,
+  const transport = await createSafariTransport({ ownershipSink, protocolSink: capture || exit ? fact => { capture?.protocol(fact); exit?.protocol(fact); } : undefined, browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs,
     cleanupTimeoutMs: Math.min(config.timeoutMs ?? 90_000, 10_000) });
+  return exit ? exit.transport(transport) : transport;
 }
 export async function initialReport(config: Options): Promise<Report> {
   const staged: Report["source"] | undefined = config.sourceFile ? JSON.parse(await readFile(config.sourceFile, "utf8")) : undefined;
@@ -148,7 +151,7 @@ export function playgroundURL(base: string, framework: Framework, engine: Engine
   if (framework.rootPreview) url.searchParams.set("root-previews", "");
   return url.href;
 }
-async function runCell(cell: Cell, config: Options, base: string, signal: AbortSignal, report: Report): Promise<Cell> {
+async function runCell(cell: Cell, config: Options, base: string, signal: AbortSignal, report: Report, exit?: ExitOwner): Promise<Cell> {
   const missing = prerequisites(cell, config);
   if (missing) return { framework: cell.framework, browser: cell.browser, engine: cell.engine, attempts: cell.attempts, status: "not runnable yet", ...missing };
   const framework = frameworks.find(framework => framework.id === cell.framework);
@@ -157,12 +160,12 @@ async function runCell(cell: Cell, config: Options, base: string, signal: AbortS
   const limits = cellDeadlines(report.deadlines, cell);
   const execution = (capture?: SafariCausalCapture): Execution => ({ box: cell, framework, port, profile: config.profile ?? "split", url: playgroundURL(base, framework, cell.engine, config.profile), ...limits, signal,
     nextBuildObservation: config.nextBuildObservation ? value => appendFileSync(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".next-build.jsonl"), JSON.stringify(value) + "\n") : undefined,
-    createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, limits.timeoutMs, Math.min(config.timeoutMs ?? 90_000, 10_000)) : nativeTransport(cell, config, limits.timeoutMs, report, capture),
+    createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, limits.timeoutMs, Math.min(config.timeoutMs ?? 90_000, 10_000)) : nativeTransport(cell, config, limits.timeoutMs, report, capture, exit),
     observeStartup: capture?.arm,
     saveLog: async text => { await writeFile(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".log"), text); },
   });
   if (!config.safariCausalCapture || cell.browser !== "safari") return execute(execution(), cell.attempts);
-  return withSafariCausalCapture({ logs: join(config.output, "logs"), identity: captureIdentity(cell, report) }, capture => execute(execution(capture), cell.attempts));
+  return withSafariCausalCapture({ logs: join(config.output, "logs"), identity: captureIdentity(cell, report), onAssociated: exit?.attach }, capture => execute(execution(capture), cell.attempts));
 }
 function captureIdentity(box: Cell, report: Report): CaptureIdentity {
   return { run: report.run, source: { commit: report.source.commit, dirty: report.source.dirty }, cell: boxId(box), attempt: box.attempts.length + 1 };
@@ -178,13 +181,13 @@ async function availablePort(): Promise<number> {
 function nativeCampaign(config: Options): boolean {
   return process.platform === "darwin" && config.browsers.some(browser => browser === "safari" || browser === "iphone-safari");
 }
-export async function run(config: Options): Promise<Report> {
+export async function run(config: Options, exit?: ExitOwner): Promise<Report> {
   if (nativeCampaign(config)) await requireNativeQueue();
   return withSignals(async signal => {
     await mkdir(config.output, { recursive: true });
     const lock = join(config.output, ".goals-matrix-lock");
     await mkdir(lock);
-    try { signal.throwIfAborted(); return await runLocked(config, signal); }
+    try { signal.throwIfAborted(); return await runLocked(config, signal, exit); }
     finally { await rmdir(lock); }
   }, config.signal);
 }
@@ -195,7 +198,7 @@ function seedBlockers(report: Report, blockers: Map<Browser, PlatformBlocker>): 
     if (blocker) blockers.set(cell.browser, blocker);
   }
 }
-async function runLocked(config: Options, signal: AbortSignal): Promise<Report> {
+async function runLocked(config: Options, signal: AbortSignal, exit?: ExitOwner): Promise<Report> {
   await preflight(config.root, config.engines, config.profile);
   const report = await initialReport(config);
   await mkdir(join(config.output, "logs"), { recursive: true });
@@ -216,7 +219,7 @@ async function runLocked(config: Options, signal: AbortSignal): Promise<Report> 
     for (const [index, cell] of report.cells.entries()) {
       if (!selectedCell(cell, config)) continue;
       if (signal.aborted) break;
-      const result = blockedCell(cell, blockers) ?? await runCell(cell, config, base, signal, report);
+      const result = blockedCell(cell, blockers) ?? await runCell(cell, config, base, signal, report, exit);
       report.cells[index] = result;
       const blocker = nativePlatformBlocker(result);
       if (blocker) blockers.set(cell.browser, blocker);
@@ -243,6 +246,14 @@ export async function unavailableReport(config: Options, error: unknown, current
   await saveReport(config.output, report);
   return report;
 }
+export async function runAutomaticNative(config: Options, io: {
+  driver?: typeof withNativeDriver; campaign?: typeof run; capture?: typeof withSafariExitCapture;
+} = {}): Promise<Report> {
+  const driver = io.driver ?? withNativeDriver, campaign = io.campaign ?? run;
+  const operation = (exitOwner?: ExitOwner) => driver((endpoint, signal) => campaign({ ...config, signal, safariEndpoint: endpoint, iphoneEndpoint: endpoint }, exitOwner),
+    { desktopSafari: config.browsers.includes("safari"), cleanupFile: join(config.output, "native-cleanup.json"), exitOwner });
+  return config.safariCausalCapture ? (io.capture ?? withSafariExitCapture)(config.output, operation) : operation();
+}
 if (import.meta.main) {
   const config = options(process.argv.slice(2));
   const automaticNative = nativeCampaign(config) && !config.safariEndpoint && !config.iphoneEndpoint && !config.iphoneControlUrl;
@@ -250,7 +261,7 @@ if (import.meta.main) {
     process.exitCode = await runQueuedNative(config, [process.execPath, process.argv[1] ?? ""].concat(process.argv.slice(2)), `bun-wasm goals ${config.output}`);
   } else {
     const report = automaticNative
-      ? await withNativeDriver((endpoint, signal) => run({ ...config, signal, safariEndpoint: endpoint, iphoneEndpoint: endpoint }), { desktopSafari: config.browsers.includes("safari"), cleanupFile: join(config.output, "native-cleanup.json") }).catch(async error => {
+      ? await runAutomaticNative(config).catch(async error => {
         if (await Bun.file(join(config.output, "TABLE.json")).exists()) throw error;
         return unavailableReport(config, error);
       })
