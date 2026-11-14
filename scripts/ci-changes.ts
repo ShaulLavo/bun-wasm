@@ -93,6 +93,7 @@ export function needsSharedNative(paths: readonly string[], inputs: readonly str
 
 const nativeChecks = discoverChecks();
 const nativeCheckInputs = nativeChecks.flatMap(checkInputPaths);
+const jscNativeCheckInputs = nativeChecks.filter(check => check.owner === "native" && check.engines?.includes("jsc")).flatMap(checkInputPaths);
 const sharedNativeCheckInputs = nativeChecks.filter(check => (check.owner === "native" || check.owner === "browser-guest") && check.profile === "shared-group").flatMap(checkInputPaths);
 const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
@@ -173,8 +174,8 @@ function ordinarySpiderMonkeyInput(path: string): boolean {
     || ordinaryFixtures.some(name => path.startsWith(`tests/fixtures/${name}/`));
 }
 
-export function needsJsc(paths: readonly string[]): boolean {
-  return paths.some(path => pcRunnerInput(path) || sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
+export function needsJsc(paths: readonly string[], inputs: readonly string[] = jscNativeCheckInputs): boolean {
+  return paths.some(path => pcRunnerInput(path) || sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs));
 }
 
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
@@ -210,8 +211,8 @@ export interface CheckSelection {
   shared_native: boolean;
 }
 
-function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[]): CheckSelection {
-  return { rust: native.length > 0, jsc: needsJsc(paths), shared: needsSharedSysroot(paths), shared_native: needsSharedNative(native, profileInputs) };
+function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[], jscInputs: readonly string[]): CheckSelection {
+  return { rust: native.length > 0, jsc: needsJsc(paths, jscInputs), shared: needsSharedSysroot(paths), shared_native: needsSharedNative(native, profileInputs) };
 }
 
 export function selectChanges(base: string, head: string, pullRequest = false, inputsAt = nativeCheckInputsAt): CheckSelection {
@@ -221,8 +222,9 @@ export function selectChanges(base: string, head: string, pullRequest = false, i
   const refs = Array.from(new Set([base, head, ancestor]));
   const native = nativeChanges(paths, base, head, refs.flatMap(ref => inputsAt(ref)));
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
-  const profileInputs = refs.flatMap(ref => inputsAt(ref, "shared-group"));
-  return classifyChanges(paths, native, profileInputs);
+  const profileInputs = refs.flatMap(ref => inputsAt(ref, { profile: "shared-group" }));
+  const jscInputs = refs.flatMap(ref => inputsAt(ref, { profile: "split", engine: "jsc" }));
+  return classifyChanges(paths, native, profileInputs, jscInputs);
 }
 
 export function selectionOutput(selection: CheckSelection): string {
