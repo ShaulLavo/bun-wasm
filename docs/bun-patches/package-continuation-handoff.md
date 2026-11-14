@@ -20,6 +20,11 @@ earlier exec remains discoverable beyond a gap without scanning sparse fd space.
 table close and renumber operations track its identity, including calls through every
 WASI import namespace. A fresh census includes live inheritable descriptors plus that
 still-live root at its current rights. A root alias cannot restore a closed preopen.
+
+The maintained Node Browser fixture host also provides the private namespace. It uses
+the existing process cancellation guard before returning NOTSUP without reading memory.
+This permits new guests to instantiate; native shell resolution remains a separate
+consumer requirement and is not supplied by this unsupported binding.
 Serialization and standard exec transfer run synchronously on the caller's stack.
 Each Bash child receives only explicit stdio, while the continuation retains the census.
 

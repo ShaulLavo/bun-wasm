@@ -153,6 +153,7 @@ export function createNodeProcess(options: NodeProcessOptions) {
       const proc = Object.fromEntries(Object.entries(abi.imports).map(([name, fn]) => [name, guard(fn)]));
       proc.close = fd => descriptors.close(fd!) ? 0 : -8;
       imports.runtime_proc = proc;
+      imports.bun_package_scripts = { handoff: guard(() => -58) };
       imports.runtime_fs = watchImports(memory, descriptors, guard);
       // Waffle captures fd_close for native release, then installs guest close itself.
       // Startup failure can dispose Bun's host before Node WASI binds guest memory.
