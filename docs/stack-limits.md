@@ -839,6 +839,34 @@ Not covered: iPhone Safari and Android Chrome were not measured. PBL getter recu
 overflows the host stack in all three browsers at any setting, because PBL does not hold a
 counter unit per inline frame. That predates this bound.
 
+## SpiderMonkey parser frames
+
+The counter bounds how deep the parser may go, not how much host stack each level costs. Every
+C++ function in a parser recursion cycle is one wasm frame, and a cold WebKit frame costs 0.6 to
+0.9 KiB. Under `BUNWASM_EMBED` the parser's statement and expression cycles are merged into
+fewer functions ([patch record](bun-patches/spidermonkey-frontend-frames.md)): a braced `if`
+level costs two frames instead of six, a block one instead of three, a parenthesised expression
+four instead of six or eight. Counter units per level are unchanged, so the bound above accepts
+and refuses at the same depths.
+
+`scripts/spidermonkey-parser.test.ts` checks that the merged functions stay gone in all four
+parser instantiations, in the smoke and the engine side, and that a differential corpus gives
+main's values, errors, positions and compile-limit boundaries.
+
+In the real guest on the M1 Mac (Playwright WebKit 26.6, 512 KiB worker stacks), Ajv's
+`validate16` from Angular's schema validation, measured November 14, 2026:
+
+| Tier | Before | After |
+| --- | --- | --- |
+| PBL, compile at the top | trapped in 3 of 3 | compiled 6 of 6, with and without calling the validator |
+| PBL, beneath 10 `.call` levels | not measured | compiled 3 of 3, both ways |
+| Interpreter, beneath 40 `.call` levels | not measured | compiled 3 of 3, both ways |
+| Observed deepest compile (of the wrapper-only ceiling) | PBL none, interpreter 10 of 80 (earlier Angular gate run) | PBL 16 of 29, interpreter 49 of 80 |
+
+After the merge the bytecode emitter is the deepest pass for braced statements compiled in full,
+at about 172 levels of the Ajv shape on the Mac. Unit 2 of the parser design re-places the small
+stack guard's reservations on the surviving frames and adds one for the emitter.
+
 ## Historical nested require measurements
 
 This common-loader snapshot predates the native-call dispatcher split, parser
