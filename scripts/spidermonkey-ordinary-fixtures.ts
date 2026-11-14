@@ -6,7 +6,7 @@ import { runCheck } from "./test-checks.ts";
 export const ordinaryFixtures: readonly string[] = [
   "cli-eval", "engine-modules", "esm-async-dependency-reimport", "cjs-interop",
   "net-serve", "self-spawn", "async-local-storage", "errors-rejection",
-  "promise-rejection-identity", "host-gc-capture", "array-buffer-sink-detached", "stack-overflow",
+  "promise-rejection-identity", "host-gc-capture", "array-buffer-sink-detached", "stack-overflow", "stack-statement-nesting",
   "require-esm-caught-failure", "rejection-inspect-still-unhandled",
   "require-esm-after-lowered-import", "require-esm-after-native-import",
   "require-esm-failure-cache", "require-esm-limit-recovery",
