@@ -1,3759 +1,2296 @@
 {
   "metadata": {
-    "decision": "Owner-approved per-framework/browser/engine deadlines",
-    "decisionDate": "2026-11-11",
-    "margin": 0.125,
-    "selection": "Latest complete pass by finishedAt, then startedAt",
-    "source": {
-      "path": "/work/reports/goals/TABLE.json",
-      "sha256": "96ebe1aba8032b12dc9e3077a9bad97f5e9c4967fd970d7cbc3b4e1bbf822ad2",
-      "run": "60ab3cfb-4da8-4782-aff1-e839ff1831a1",
-      "createdAt": "2026-11-11T20:01:42.710Z"
-    }
+    "kind": "hang-caps",
+    "decision": "Working first, speed later: uniform hang caps; actual phase times remain recorded",
+    "decisionDate": "2026-11-14"
   },
   "cells": [
     {
       "framework": "next",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4378,
-        "installTimeoutMs": 17584,
-        "buildTimeoutMs": 22286
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4926,
-        "installTimeoutMs": 19782,
-        "buildTimeoutMs": 25072
-      },
-      "attempt": {
-        "location": "cells[0].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:43:00.653Z",
-        "finishedAt": "2026-11-09T20:43:49.443Z",
-        "sha256": "8251cb7884463f31c3e64bb4df043588f149916ec510d4d08a3cb3f79196a094"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 19879,
-        "installTimeoutMs": 10992,
-        "buildTimeoutMs": 90808
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 22364,
-        "installTimeoutMs": 12366,
-        "buildTimeoutMs": 102159
-      },
-      "attempt": {
-        "location": "cells[1].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:43:49.444Z",
-        "finishedAt": "2026-11-09T20:45:59.607Z",
-        "sha256": "4452b7df38db4e31d31d6a9f57e92db10a86967dcfeeace15261f3977e32361d"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 26583,
-        "installTimeoutMs": 10990,
-        "buildTimeoutMs": 87362
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 29906,
-        "installTimeoutMs": 12364,
-        "buildTimeoutMs": 98283
-      },
-      "attempt": {
-        "location": "cells[2].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:45:59.609Z",
-        "finishedAt": "2026-11-09T20:48:13.805Z",
-        "sha256": "3b41fe63a326762c9ba037bc7cca8af9fc362a4bb6b2f00cada5a033f8e7fa8b"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "exempt-next-spidermonkey",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 110000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5059,
-        "installTimeoutMs": 17830,
-        "buildTimeoutMs": 38371
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 5692,
-        "installTimeoutMs": 20059,
-        "buildTimeoutMs": 43168
-      },
-      "attempt": {
-        "location": "cells[4].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:36:58.209Z",
-        "finishedAt": "2026-11-09T20:38:08.622Z",
-        "sha256": "2baacf88fa5bbfb126ac44a83f12b295e5820091aa832d71d2bf6e52b04be066"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 20873,
-        "installTimeoutMs": 11711,
-        "buildTimeoutMs": 94530
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 23483,
-        "installTimeoutMs": 13175,
-        "buildTimeoutMs": 106347
-      },
-      "attempt": {
-        "location": "cells[5].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:38:08.624Z",
-        "finishedAt": "2026-11-09T20:40:28.940Z",
-        "sha256": "b1ba12cd0aad3962bc66279daa794c2a3018f418b8a23b284e9ccd06d530f58a"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 23372,
-        "installTimeoutMs": 23431,
-        "buildTimeoutMs": 94714
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 26294,
-        "installTimeoutMs": 26360,
-        "buildTimeoutMs": 106554
-      },
-      "attempt": {
-        "location": "cells[6].attempts[1]",
-        "sourceReport": "/work/reports/goals/chrome-firefox/next-tracing/acceptance/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T19:21:25.633Z",
-        "startedAt": "2026-11-11T19:30:44.794Z",
-        "finishedAt": "2026-11-11T19:33:25.535Z",
-        "sha256": "dcfd3d8525ff2339df667cca0323355ac0cbf5b9f87450b8163454c1574cac5f"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "exempt-next-spidermonkey",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 110000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "safari",
       "engine": "browser",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 110000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 110000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 110000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "exempt-next-spidermonkey",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 110000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 110000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 110000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 110000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "next",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "exempt-next-spidermonkey",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 110000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 33998,
-        "installTimeoutMs": 74452,
-        "buildTimeoutMs": 10223
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 38248,
-        "installTimeoutMs": 83759,
-        "buildTimeoutMs": 11501
-      },
-      "attempt": {
-        "location": "cells[16].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:48:13.810Z",
-        "finishedAt": "2026-11-09T20:50:16.580Z",
-        "sha256": "56c60b24cbd756932d71271ea016d0f2972135331c9d1c144a5f77a883d002c2"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 56560,
-        "installTimeoutMs": 77097,
-        "buildTimeoutMs": 18863
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 63630,
-        "installTimeoutMs": 86735,
-        "buildTimeoutMs": 21221
-      },
-      "attempt": {
-        "location": "cells[20].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:40:47.266Z",
-        "finishedAt": "2026-11-09T20:43:28.862Z",
-        "sha256": "970b17de83a454ce5c7e4b820407b0254aa3cda42ccd87e71d9fd0592cc620c0"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "safari",
       "engine": "browser",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "nuxt",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 2640,
-        "installTimeoutMs": 8360,
-        "buildTimeoutMs": 10212
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 2970,
-        "installTimeoutMs": 9405,
-        "buildTimeoutMs": 11489
-      },
-      "attempt": {
-        "location": "cells[32].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:54:16.864Z",
-        "finishedAt": "2026-11-09T20:54:42.943Z",
-        "sha256": "b8d36dac043412b3ef18f5e1023530fcae5cd7887904ab35efa30e3ee70bee7f"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 8622,
-        "installTimeoutMs": 3960,
-        "buildTimeoutMs": 24670
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 9700,
-        "installTimeoutMs": 4455,
-        "buildTimeoutMs": 27754
-      },
-      "attempt": {
-        "location": "cells[33].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:54:42.944Z",
-        "finishedAt": "2026-11-09T20:55:27.135Z",
-        "sha256": "b1c3ac490ca1814ce74a0a09607c03a7c57c4b2d8bb5cd943ef245b3deadfb16"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 8665,
-        "installTimeoutMs": 4198,
-        "buildTimeoutMs": 27487
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 9749,
-        "installTimeoutMs": 4723,
-        "buildTimeoutMs": 30923
-      },
-      "attempt": {
-        "location": "cells[34].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:55:27.137Z",
-        "finishedAt": "2026-11-09T20:56:15.964Z",
-        "sha256": "3409e3092e48f3417bdb7367fb9ad2f199e6edef966d01ffbd4dc89814eff48e"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 10854,
-        "installTimeoutMs": 11333,
-        "buildTimeoutMs": 42183
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 12211,
-        "installTimeoutMs": 12750,
-        "buildTimeoutMs": 47456
-      },
-      "attempt": {
-        "location": "cells[35].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/chrome-current-core/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:38:05.429Z",
-        "startedAt": "2026-11-11T17:38:13.474Z",
-        "finishedAt": "2026-11-11T17:39:27.412Z",
-        "sha256": "3e85fe2989d398db511075eca8630464800d2be02d0bc0687e0c64347e357205"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4505,
-        "installTimeoutMs": 8451,
-        "buildTimeoutMs": 13816
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 5069,
-        "installTimeoutMs": 9508,
-        "buildTimeoutMs": 15543
-      },
-      "attempt": {
-        "location": "cells[36].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:48:02.158Z",
-        "finishedAt": "2026-11-09T20:48:38.897Z",
-        "sha256": "666e1f144eb2e24418b1ef8b03a59da15af7e46e83075ccfdcd0d8ebe80c60c8"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 9245,
-        "installTimeoutMs": 5058,
-        "buildTimeoutMs": 28018
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 10401,
-        "installTimeoutMs": 5691,
-        "buildTimeoutMs": 31521
-      },
-      "attempt": {
-        "location": "cells[37].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:48:38.900Z",
-        "finishedAt": "2026-11-09T20:49:33.611Z",
-        "sha256": "327d7bfde78486d39f62e2315fb84ac3f9baff0c209c689e524bf4352e788ad2"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 11800,
-        "installTimeoutMs": 6407,
-        "buildTimeoutMs": 31462
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 13275,
-        "installTimeoutMs": 7208,
-        "buildTimeoutMs": 35395
-      },
-      "attempt": {
-        "location": "cells[38].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:49:33.614Z",
-        "finishedAt": "2026-11-09T20:50:38.013Z",
-        "sha256": "f8165d895f058b73822b4a16683225d1fdc4f45cf87342f69c87394a31093f76"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 16759,
-        "installTimeoutMs": 12711,
-        "buildTimeoutMs": 49350
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 18854,
-        "installTimeoutMs": 14300,
-        "buildTimeoutMs": 55519
-      },
-      "attempt": {
-        "location": "cells[39].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/firefox-current/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:45:57.024Z",
-        "startedAt": "2026-11-11T17:45:57.043Z",
-        "finishedAt": "2026-11-11T17:47:33.696Z",
-        "sha256": "dd5d07dadb534fd30e95253e53671d3ce24d88d7b5a9721dd3c535e4210514ab"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 31338,
-        "installTimeoutMs": 11408,
-        "buildTimeoutMs": 25294
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 35256,
-        "installTimeoutMs": 12834,
-        "buildTimeoutMs": 28456
-      },
-      "attempt": {
-        "location": "cells[40].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:45:37.469Z",
-        "finishedAt": "2026-11-09T20:46:54.894Z",
-        "sha256": "c0a9eb709651d119d74aef068a73c990339c84b1dfd499b3f2220bee82a6033c"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 10457,
-        "installTimeoutMs": 7039,
-        "buildTimeoutMs": 37021
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 11765,
-        "installTimeoutMs": 7919,
-        "buildTimeoutMs": 41649
-      },
-      "attempt": {
-        "location": "cells[44].attempts[0]",
-        "sourceReport": "/work/reports/goals/iphone-installs-20261111/browser-small/sveltekit-reviewed-615/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T19:25:26.444Z",
-        "startedAt": "2026-11-11T19:25:26.466Z",
-        "finishedAt": "2026-11-11T19:26:49.408Z",
-        "sha256": "f9760e6bb9dfa114409aadf4afe8eb74d58fb2c6797b16643a243464d9c8a709"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "sveltekit",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3960,
-        "installTimeoutMs": 36389,
-        "buildTimeoutMs": 5370
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4455,
-        "installTimeoutMs": 40938,
-        "buildTimeoutMs": 6042
-      },
-      "attempt": {
-        "location": "cells[48].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:56:15.967Z",
-        "finishedAt": "2026-11-09T20:57:04.234Z",
-        "sha256": "d68ff0b8241950866198c5dcd52b3b7528e9f161011836a87f1dd694c5981803"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4173,
-        "installTimeoutMs": 41967,
-        "buildTimeoutMs": 11750
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4695,
-        "installTimeoutMs": 47213,
-        "buildTimeoutMs": 13219
-      },
-      "attempt": {
-        "location": "cells[49].attempts[0]",
-        "sourceReport": "/work/reports/goals/quickjs-safari-frameworks/render/chrome-control/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T09:28:44.984Z",
-        "startedAt": "2026-11-10T09:28:44.999Z",
-        "finishedAt": "2026-11-10T09:29:49.124Z",
-        "sha256": "11d129f4434748e781a1da7afcd15fcc73278f1979c73a2e41aec222bcc79c77"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5409,
-        "installTimeoutMs": 14123,
-        "buildTimeoutMs": 14799
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 6086,
-        "installTimeoutMs": 15889,
-        "buildTimeoutMs": 16649
-      },
-      "attempt": {
-        "location": "cells[50].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:57:41.267Z",
-        "finishedAt": "2026-11-09T20:58:22.987Z",
-        "sha256": "6735293d28e1ffbbf8f0a0c3d5507c8b4288ea79dce085f7529983bb80960389"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 6938,
-        "installTimeoutMs": 45107,
-        "buildTimeoutMs": 23208
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 7806,
-        "installTimeoutMs": 50746,
-        "buildTimeoutMs": 26109
-      },
-      "attempt": {
-        "location": "cells[51].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/chrome-callsite-preview/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T18:12:01.493Z",
-        "startedAt": "2026-11-11T18:12:01.521Z",
-        "finishedAt": "2026-11-11T18:13:28.280Z",
-        "sha256": "70b17f52c113032c86cb1c26b652ad0df01fe7569ee5807941ba255379a62b5f"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5307,
-        "installTimeoutMs": 37710,
-        "buildTimeoutMs": 7662
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 5971,
-        "installTimeoutMs": 42424,
-        "buildTimeoutMs": 8620
-      },
-      "attempt": {
-        "location": "cells[52].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:50:38.017Z",
-        "finishedAt": "2026-11-09T20:51:35.862Z",
-        "sha256": "49240512ec0d17dba8dde59cc7a465669671d2812899621a592644e1cf67a100"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5514,
-        "installTimeoutMs": 20824,
-        "buildTimeoutMs": 14035
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 6204,
-        "installTimeoutMs": 23427,
-        "buildTimeoutMs": 15790
-      },
-      "attempt": {
-        "location": "cells[53].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:51:35.864Z",
-        "finishedAt": "2026-11-09T20:52:26.397Z",
-        "sha256": "74e70363058434b5adc6a4be2e970eeb6e786c63ca30626896dbc792d1efa189"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 6438,
-        "installTimeoutMs": 17814,
-        "buildTimeoutMs": 17070
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 7243,
-        "installTimeoutMs": 20041,
-        "buildTimeoutMs": 19204
-      },
-      "attempt": {
-        "location": "cells[54].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:52:26.401Z",
-        "finishedAt": "2026-11-09T20:53:19.931Z",
-        "sha256": "0b31e4a9e89495419d75df6d69cbd2f710c7e1a6cc1ca75abd0e7e7765dc3bcb"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 10895,
-        "installTimeoutMs": 44183,
-        "buildTimeoutMs": 20000
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 12257,
-        "installTimeoutMs": 49706,
-        "buildTimeoutMs": 22500
-      },
-      "attempt": {
-        "location": "cells[55].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/firefox-callsite/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T18:58:00.164Z",
-        "startedAt": "2026-11-11T18:58:00.195Z",
-        "finishedAt": "2026-11-11T18:59:32.934Z",
-        "sha256": "bb75ff65e8f1ae4bba3b7d8e58d03455d9b5d8ba56cbea79b425610b61285cd5"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 17892,
-        "installTimeoutMs": 50779,
-        "buildTimeoutMs": 13107
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 20129,
-        "installTimeoutMs": 57127,
-        "buildTimeoutMs": 14746
-      },
-      "attempt": {
-        "location": "cells[56].attempts[0]",
-        "sourceReport": "/work/reports/goals/astro-angular/safari-current-main-60d13fdf/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T02:30:12.786Z",
-        "startedAt": "2026-11-10T02:30:19.025Z",
-        "finishedAt": "2026-11-10T02:31:54.168Z",
-        "sha256": "1affd792cbf549ca8830ccfd49a483f3a2ee9c957feccc947ade569908bd5227"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 28601,
-        "installTimeoutMs": 48512,
-        "buildTimeoutMs": 21117
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 32177,
-        "installTimeoutMs": 54576,
-        "buildTimeoutMs": 23757
-      },
-      "attempt": {
-        "location": "cells[57].attempts[0]",
-        "sourceReport": "/work/reports/goals/quickjs-safari-frameworks/render/safari-diagnostic/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T09:30:55.822Z",
-        "startedAt": "2026-11-10T09:31:01.536Z",
-        "finishedAt": "2026-11-10T09:32:55.730Z",
-        "sha256": "1f147f6b8ab3e578f05394c00b7dbad0cb60786bf65c774bff980bc39beaeb22"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 36075,
-        "installTimeoutMs": 22743,
-        "buildTimeoutMs": 27481
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 40585,
-        "installTimeoutMs": 25586,
-        "buildTimeoutMs": 30917
-      },
-      "attempt": {
-        "location": "cells[58].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:52:24.545Z",
-        "finishedAt": "2026-11-09T20:54:10.146Z",
-        "sha256": "02481176a6078f843d4a18ff73fce105de401051a77ecc156a46a93021554654"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 12765,
-        "installTimeoutMs": 56652,
-        "buildTimeoutMs": 18020
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 14361,
-        "installTimeoutMs": 63734,
-        "buildTimeoutMs": 20273
-      },
-      "attempt": {
-        "location": "cells[60].attempts[0]",
-        "sourceReport": "/work/reports/goals/astro-angular/iphone-c4d2-ae6302af/iphone/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T07:13:21.938Z",
-        "startedAt": "2026-11-10T07:13:21.957Z",
-        "finishedAt": "2026-11-10T07:15:21.493Z",
-        "sha256": "3c8a03725ac5e6fa0f043ed983592967980782838f375acfd05011abe589d8a7"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "astro",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 2034,
-        "installTimeoutMs": 22921,
-        "buildTimeoutMs": 3648
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 2289,
-        "installTimeoutMs": 25787,
-        "buildTimeoutMs": 4104
-      },
-      "attempt": {
-        "location": "cells[64].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:58:22.992Z",
-        "finishedAt": "2026-11-09T20:58:54.803Z",
-        "sha256": "7baedc708bb8c82865c5122379cb30ad81760865e4a98f6a4f35f18cb91784d3"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4347,
-        "installTimeoutMs": 10774,
-        "buildTimeoutMs": 14560
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4891,
-        "installTimeoutMs": 12121,
-        "buildTimeoutMs": 16380
-      },
-      "attempt": {
-        "location": "cells[65].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:58:54.808Z",
-        "finishedAt": "2026-11-09T20:59:39.247Z",
-        "sha256": "00ba0f2ca824a8ba6c502ca67aa8dee761491086243c62462b8ce835cf35041e"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 7700,
-        "installTimeoutMs": 11314,
-        "buildTimeoutMs": 16196
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 8663,
-        "installTimeoutMs": 12729,
-        "buildTimeoutMs": 18221
-      },
-      "attempt": {
-        "location": "cells[66].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:59:39.251Z",
-        "finishedAt": "2026-11-09T21:00:28.805Z",
-        "sha256": "7dc1be2dec1ffa5d2c1783b0fa65721cdb5994373d3527404096b536b7f98c16"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 7512,
-        "installTimeoutMs": 32712,
-        "buildTimeoutMs": 22255
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 8451,
-        "installTimeoutMs": 36801,
-        "buildTimeoutMs": 25037
-      },
-      "attempt": {
-        "location": "cells[67].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/chrome-callsite-preview/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T18:12:01.493Z",
-        "startedAt": "2026-11-11T18:13:28.294Z",
-        "finishedAt": "2026-11-11T18:14:52.602Z",
-        "sha256": "e2c8009171e9c8e29f926d86965507e91e84004cfa7f6120a8c6b0d47f466a13"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3479,
-        "installTimeoutMs": 25091,
-        "buildTimeoutMs": 4595
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 3914,
-        "installTimeoutMs": 28228,
-        "buildTimeoutMs": 5170
-      },
-      "attempt": {
-        "location": "cells[68].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:53:19.939Z",
-        "finishedAt": "2026-11-09T20:54:00.308Z",
-        "sha256": "70ba92de412c578d7a5b22ae771770745d7fc695bdf7a80b6c5e7595384ea645"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5988,
-        "installTimeoutMs": 12250,
-        "buildTimeoutMs": 16440
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 6737,
-        "installTimeoutMs": 13782,
-        "buildTimeoutMs": 18495
-      },
-      "attempt": {
-        "location": "cells[69].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:54:00.312Z",
-        "finishedAt": "2026-11-09T20:54:53.620Z",
-        "sha256": "65e613b2733739706a5da3cb55d9fa51de7ac3e620f0a6d6593ecfe1c894481a"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4806,
-        "installTimeoutMs": 11878,
-        "buildTimeoutMs": 18054
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 5407,
-        "installTimeoutMs": 13363,
-        "buildTimeoutMs": 20311
-      },
-      "attempt": {
-        "location": "cells[70].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:54:53.623Z",
-        "finishedAt": "2026-11-09T20:55:50.558Z",
-        "sha256": "3abe1b2e6b079d275ca4afd4d3ea7f2748f4845a9830d3ed8e74b45555550b7c"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 9565,
-        "installTimeoutMs": 33897,
-        "buildTimeoutMs": 28106
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 10761,
-        "installTimeoutMs": 38135,
-        "buildTimeoutMs": 31620
-      },
-      "attempt": {
-        "location": "cells[71].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/firefox-callsite/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T18:58:00.164Z",
-        "startedAt": "2026-11-11T18:59:32.940Z",
-        "finishedAt": "2026-11-11T19:01:08.778Z",
-        "sha256": "0b8bba3a14bea64a53dee0b9bf9d8152bfd325d7b154b7797de69ea5ac0df748"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 7628,
-        "installTimeoutMs": 27174,
-        "buildTimeoutMs": 7688
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 8582,
-        "installTimeoutMs": 30571,
-        "buildTimeoutMs": 8649
-      },
-      "attempt": {
-        "location": "cells[72].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:54:10.162Z",
-        "finishedAt": "2026-11-09T20:55:10.437Z",
-        "sha256": "8499bf73d2823352eb8864aa330f812d23104bce48bb8443166c7158f6667df1"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "react-router",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 7127,
-        "installTimeoutMs": 43363,
-        "buildTimeoutMs": 18643
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 8018,
-        "installTimeoutMs": 48784,
-        "buildTimeoutMs": 20974
-      },
-      "attempt": {
-        "location": "cells[80].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:00:28.812Z",
-        "finishedAt": "2026-11-09T21:01:42.308Z",
-        "sha256": "3fb15685a46a07c2da0a59163b8aa0ef8ca8abfed500c5e2836123ce131c8e80"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 11987,
-        "installTimeoutMs": 30366,
-        "buildTimeoutMs": 42675
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 13486,
-        "installTimeoutMs": 34162,
-        "buildTimeoutMs": 48010
-      },
-      "attempt": {
-        "location": "cells[81].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:01:42.312Z",
-        "finishedAt": "2026-11-09T21:03:21.418Z",
-        "sha256": "31d6ff9451454f1d4accdd518bf480c4de707436920688eed2064ee848695809"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 21848,
-        "installTimeoutMs": 23395,
-        "buildTimeoutMs": 42006
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 24579,
-        "installTimeoutMs": 26320,
-        "buildTimeoutMs": 47257
-      },
-      "attempt": {
-        "location": "cells[82].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:03:21.428Z",
-        "finishedAt": "2026-11-09T21:05:05.187Z",
-        "sha256": "7ee8a3e64caa3b53caba561d350516aaa29409fd889be7526bca5131852c4ac9"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 34296,
-        "installTimeoutMs": 71411,
-        "buildTimeoutMs": 67086
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 38583,
-        "installTimeoutMs": 80338,
-        "buildTimeoutMs": 75472
-      },
-      "attempt": {
-        "location": "cells[83].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/chrome-callsite-start/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T18:12:33.468Z",
-        "startedAt": "2026-11-11T18:12:33.525Z",
-        "finishedAt": "2026-11-11T18:15:52.825Z",
-        "sha256": "d44d2b3c5363a2fbab672c6e68f3f2464fbaca9793a9d528d4e463e739302cc9"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 9896,
-        "installTimeoutMs": 50766,
-        "buildTimeoutMs": 25822
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 11133,
-        "installTimeoutMs": 57112,
-        "buildTimeoutMs": 29050
-      },
-      "attempt": {
-        "location": "cells[84].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:55:50.563Z",
-        "finishedAt": "2026-11-09T20:57:27.382Z",
-        "sha256": "7da2cb8f488f9f40d759b659a10b9566681f80a7f7513453aa2078afd426c17f"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 14103,
-        "installTimeoutMs": 31791,
-        "buildTimeoutMs": 49646
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 15866,
-        "installTimeoutMs": 35765,
-        "buildTimeoutMs": 55852
-      },
-      "attempt": {
-        "location": "cells[85].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:57:27.387Z",
-        "finishedAt": "2026-11-09T20:59:22.534Z",
-        "sha256": "eb04041ba088842d1686d35edd02a03b7d3ad82a1ad3502d407d7931f7fe7098"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 26323,
-        "installTimeoutMs": 30636,
-        "buildTimeoutMs": 52082
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 29614,
-        "installTimeoutMs": 34466,
-        "buildTimeoutMs": 58593
-      },
-      "attempt": {
-        "location": "cells[86].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:59:22.538Z",
-        "finishedAt": "2026-11-09T21:01:34.705Z",
-        "sha256": "ec445041e26bc1826b17cfffbdef632f7c57d97a1fec1850e2f806d494c31725"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 24225,
-        "installTimeoutMs": 55098,
-        "buildTimeoutMs": 59849
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 27254,
-        "installTimeoutMs": 61986,
-        "buildTimeoutMs": 67331
-      },
-      "attempt": {
-        "location": "cells[88].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T20:55:51.643Z",
-        "finishedAt": "2026-11-09T20:58:45.075Z",
-        "sha256": "97bb04fc4014597e8b70ae7e33041576360ed7dba9408264bdcc7d337c166782"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "solidstart",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5879,
-        "installTimeoutMs": 35505,
-        "buildTimeoutMs": 7892
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 6614,
-        "installTimeoutMs": 39944,
-        "buildTimeoutMs": 8879
-      },
-      "attempt": {
-        "location": "cells[96].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:05:05.195Z",
-        "finishedAt": "2026-11-09T21:05:57.441Z",
-        "sha256": "32d02ec8f423f7f0cf5d90eaadf0b773f93b72d56daefd0a47bb16bce0508482"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 22694,
-        "installTimeoutMs": 29036,
-        "buildTimeoutMs": 28266
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 25531,
-        "installTimeoutMs": 32666,
-        "buildTimeoutMs": 31800
-      },
-      "attempt": {
-        "location": "cells[97].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:05:57.445Z",
-        "finishedAt": "2026-11-09T21:07:24.287Z",
-        "sha256": "6b277137d28e5a6b288d3ea8631b5ecf45c4d71ab479bc338a2d743618b550e6"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 39889,
-        "installTimeoutMs": 67177,
-        "buildTimeoutMs": 52405
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 44876,
-        "installTimeoutMs": 75575,
-        "buildTimeoutMs": 58956
-      },
-      "attempt": {
-        "location": "cells[98].attempts[0]",
-        "sourceReport": "/work/reports/goals/chrome-firefox/tanstack-http-import/identity-corrected/dev-cells.json",
-        "sourceCreatedAt": "2026-11-11T18:26:29.854Z",
-        "startedAt": "2026-11-11T18:26:29.879Z",
-        "finishedAt": "2026-11-11T18:29:24.913Z",
-        "sha256": "5ca9a48e54533db119e1f10d2cdccbe5aad4a30ef37af6d075c24c69c940a89c"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 29350,
-        "installTimeoutMs": 41346,
-        "buildTimeoutMs": 59574
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 33019,
-        "installTimeoutMs": 46515,
-        "buildTimeoutMs": 67021
-      },
-      "attempt": {
-        "location": "cells[99].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/chrome-callsite-start/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T18:12:33.468Z",
-        "startedAt": "2026-11-11T18:15:52.838Z",
-        "finishedAt": "2026-11-11T18:18:16.076Z",
-        "sha256": "9891f13fe5024d6a31c609f23daf02e0e9d0b825e88f11cf5720948cc3a29511"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 6944,
-        "installTimeoutMs": 44559,
-        "buildTimeoutMs": 13917
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 7812,
-        "installTimeoutMs": 50129,
-        "buildTimeoutMs": 15657
-      },
-      "attempt": {
-        "location": "cells[100].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:01:34.712Z",
-        "finishedAt": "2026-11-09T21:02:47.872Z",
-        "sha256": "a9bc26d137ebfa91f20d71dfc453995704f3366997e6dd27cb97ddf6a7666584"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 26598,
-        "installTimeoutMs": 66834,
-        "buildTimeoutMs": 34612
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 29923,
-        "installTimeoutMs": 75189,
-        "buildTimeoutMs": 38939
-      },
-      "attempt": {
-        "location": "cells[101].attempts[0]",
-        "sourceReport": "/work/reports/goals/chrome-firefox/tanstack-quickjs-control/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T19:35:07.299Z",
-        "startedAt": "2026-11-11T19:35:07.316Z",
-        "finishedAt": "2026-11-11T19:37:29.416Z",
-        "sha256": "daa0de5eba47cb90ac60c693f7af939f7e46446d8fff3d9157fe59ea6c77a97b"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 38921,
-        "installTimeoutMs": 83015,
-        "buildTimeoutMs": 37209
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 43787,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 41861
-      },
-      "attempt": {
-        "location": "cells[102].attempts[0]",
-        "sourceReport": "/work/reports/goals/chrome-firefox/firefox-process-start-fable/control-plain-fixed-jsc/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T19:21:34.224Z",
-        "startedAt": "2026-11-11T19:21:34.244Z",
-        "finishedAt": "2026-11-11T19:24:30.045Z",
-        "sha256": "3a2bb2c25e20d369f2151b1afbdeb43cce69d3b70bcc7a9469c67ec1d647bb03"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 52348,
-        "installTimeoutMs": 49196,
-        "buildTimeoutMs": 55264
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 58892,
-        "installTimeoutMs": 55346,
-        "buildTimeoutMs": 62172
-      },
-      "attempt": {
-        "location": "cells[103].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/firefox-callsite/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T18:58:00.164Z",
-        "startedAt": "2026-11-11T19:04:44.095Z",
-        "finishedAt": "2026-11-11T19:07:43.852Z",
-        "sha256": "3151b4933165a5dbb58f3c0ac8846b6c7dac035e37400082c120bb1c2c74b1ff"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 14498,
-        "installTimeoutMs": 43085,
-        "buildTimeoutMs": 21804
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 16311,
-        "installTimeoutMs": 48471,
-        "buildTimeoutMs": 24530
-      },
-      "attempt": {
-        "location": "cells[104].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:00:17.287Z",
-        "finishedAt": "2026-11-09T21:01:48.897Z",
-        "sha256": "09172aa495cda7021bd5bf08aa9f90acb1a2c228c62a0d7a631f41ccff60dd88"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "tanstack-start",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4774,
-        "installTimeoutMs": 51026,
-        "buildTimeoutMs": 7743
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 5371,
-        "installTimeoutMs": 57405,
-        "buildTimeoutMs": 8711
-      },
-      "attempt": {
-        "location": "cells[112].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:10:22.530Z",
-        "finishedAt": "2026-11-09T21:11:30.107Z",
-        "sha256": "95c595ec306218bafeb5bb7cc93cdcd027d2497cd56a2d60f5217234b7cdf580"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 6538,
-        "installTimeoutMs": 56668,
-        "buildTimeoutMs": 9972
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 7356,
-        "installTimeoutMs": 63752,
-        "buildTimeoutMs": 11219
-      },
-      "attempt": {
-        "location": "cells[116].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:07:37.860Z",
-        "finishedAt": "2026-11-09T21:09:00.393Z",
-        "sha256": "ef77ee596d901860aef35164676faa9610f342f1dfed432aaa6a0e9573d25d77"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 44685,
-        "installTimeoutMs": 64411,
-        "buildTimeoutMs": 24181
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 50271,
-        "installTimeoutMs": 72463,
-        "buildTimeoutMs": 27204
-      },
-      "attempt": {
-        "location": "cells[120].attempts[0]",
-        "sourceReport": "/work/reports/goals/astro-angular/safari-current-main-89a7e0c/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T01:48:42.572Z",
-        "startedAt": "2026-11-10T01:51:17.503Z",
-        "finishedAt": "2026-11-10T01:53:49.959Z",
-        "sha256": "aaaf29a9b1720093de9f4b9c3bdf417cad8de50e5173c5e314d3b44a402a7191"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 17954,
-        "installTimeoutMs": 79856,
-        "buildTimeoutMs": 29959
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 20199,
-        "installTimeoutMs": 89838,
-        "buildTimeoutMs": 33704
-      },
-      "attempt": {
-        "location": "cells[124].attempts[0]",
-        "sourceReport": "/work/reports/goals/astro-angular/iphone-c4d2-ae6302af/iphone/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T07:13:21.938Z",
-        "startedAt": "2026-11-10T07:15:21.495Z",
-        "finishedAt": "2026-11-10T07:17:58.320Z",
-        "sha256": "8b10f8bd56e77f9b5869cbd044ffd80f7feceef22459b4260e5d0e0aaeaf3d22"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "angular",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 1273,
-        "installTimeoutMs": 3746,
-        "buildTimeoutMs": 1937
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 1433,
-        "installTimeoutMs": 4215,
-        "buildTimeoutMs": 2180
-      },
-      "attempt": {
-        "location": "cells[128].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:15:25.387Z",
-        "finishedAt": "2026-11-09T21:15:34.683Z",
-        "sha256": "d09775b2cef566e6c8d4bf485c90527158a8fe082b6710e3294f195839dc963a"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 2244,
-        "installTimeoutMs": 2624,
-        "buildTimeoutMs": 5272
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 2525,
-        "installTimeoutMs": 2952,
-        "buildTimeoutMs": 5931
-      },
-      "attempt": {
-        "location": "cells[129].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:15:34.687Z",
-        "finishedAt": "2026-11-09T21:15:49.234Z",
-        "sha256": "6495225606790e268dc6a6aa7557496545d272fc866482eac7923c71e6d99eca"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 2989,
-        "installTimeoutMs": 2624,
-        "buildTimeoutMs": 6306
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 3363,
-        "installTimeoutMs": 2952,
-        "buildTimeoutMs": 7095
-      },
-      "attempt": {
-        "location": "cells[130].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:15:49.238Z",
-        "finishedAt": "2026-11-09T21:16:06.240Z",
-        "sha256": "3ad1edb5e00dcf7d915694adf670827b39f3cd4463e3a166ada3a3707f530eba"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 2850,
-        "installTimeoutMs": 5043,
-        "buildTimeoutMs": 8213
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 3207,
-        "installTimeoutMs": 5674,
-        "buildTimeoutMs": 9240
-      },
-      "attempt": {
-        "location": "cells[131].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/chrome-current-core/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:38:05.429Z",
-        "startedAt": "2026-11-11T17:40:49.767Z",
-        "finishedAt": "2026-11-11T17:41:12.049Z",
-        "sha256": "ac4fb431d9e3341050235ccf332d941fa893ece4efdf89b9926cc5253570d57a"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3419,
-        "installTimeoutMs": 6886,
-        "buildTimeoutMs": 2055
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 3847,
-        "installTimeoutMs": 7747,
-        "buildTimeoutMs": 2312
-      },
-      "attempt": {
-        "location": "cells[132].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:11:44.762Z",
-        "finishedAt": "2026-11-09T21:12:01.337Z",
-        "sha256": "3d91b792a7f8d23cb9d749a8f453426d7c58dd71f6bb0fac5b5c9849fb389259"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3989,
-        "installTimeoutMs": 2636,
-        "buildTimeoutMs": 6101
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4488,
-        "installTimeoutMs": 2966,
-        "buildTimeoutMs": 6864
-      },
-      "attempt": {
-        "location": "cells[133].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:12:01.340Z",
-        "finishedAt": "2026-11-09T21:12:22.377Z",
-        "sha256": "07dad11d545ef228d6ac05e3ec9eb4a8e767f80f7a801a1c7c2afb9388257ddd"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4545,
-        "installTimeoutMs": 2936,
-        "buildTimeoutMs": 7326
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 5114,
-        "installTimeoutMs": 3303,
-        "buildTimeoutMs": 8242
-      },
-      "attempt": {
-        "location": "cells[134].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:12:22.380Z",
-        "finishedAt": "2026-11-09T21:12:47.109Z",
-        "sha256": "52266114566404a0419fe5f6b4b8e1c6474098ec3c05b8011938eb28cdd90ce1"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 7654,
-        "installTimeoutMs": 6196,
-        "buildTimeoutMs": 9363
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 8611,
-        "installTimeoutMs": 6971,
-        "buildTimeoutMs": 10534
-      },
-      "attempt": {
-        "location": "cells[135].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/firefox-current/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:45:57.024Z",
-        "startedAt": "2026-11-11T17:47:33.698Z",
-        "finishedAt": "2026-11-11T17:48:09.129Z",
-        "sha256": "8a941d7c50ead361aeba97cbc7ec3827db0e1faf48e7b4ea99ee3d21e3e72fad"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 2952,
-        "installTimeoutMs": 4554,
-        "buildTimeoutMs": 3189
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 3321,
-        "installTimeoutMs": 5124,
-        "buildTimeoutMs": 3588
-      },
-      "attempt": {
-        "location": "cells[136].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:06:38.286Z",
-        "finishedAt": "2026-11-09T21:06:53.487Z",
-        "sha256": "a2ffc2fbe41a9fc623c33d88c8aee04c9dd0eb023bcd2c7ef8dbec40d1696291"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3850,
-        "installTimeoutMs": 6343,
-        "buildTimeoutMs": 9426
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4332,
-        "installTimeoutMs": 7136,
-        "buildTimeoutMs": 10605
-      },
-      "attempt": {
-        "location": "cells[137].attempts[0]",
-        "sourceReport": "/work/reports/goals/quickjs-safari-stack/policy-framework-replay/merged/framework-run/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T08:36:06.072Z",
-        "startedAt": "2026-11-10T08:47:19.424Z",
-        "finishedAt": "2026-11-10T08:47:46.781Z",
-        "sha256": "6fac57ed9da58b22c5aae1720e99186beaf0439ff99d0294e0cd5c050d627c6b"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5341,
-        "installTimeoutMs": 3590,
-        "buildTimeoutMs": 11648
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 6009,
-        "installTimeoutMs": 4039,
-        "buildTimeoutMs": 13104
-      },
-      "attempt": {
-        "location": "cells[138].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:07:10.842Z",
-        "finishedAt": "2026-11-09T21:07:42.984Z",
-        "sha256": "41763e5f0c6744fcb2298f1f8dc2b2dd3c6e7e8dd36c263266b4290c4136378c"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 14921,
-        "installTimeoutMs": 7045,
-        "buildTimeoutMs": 25958
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 16787,
-        "installTimeoutMs": 7926,
-        "buildTimeoutMs": 29203
-      },
-      "attempt": {
-        "location": "cells[142].attempts[0]",
-        "sourceReport": "/work/reports/goals/iphone-installs-20261111/jsc/qwik/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T19:06:23.401Z",
-        "startedAt": "2026-11-11T19:06:23.424Z",
-        "finishedAt": "2026-11-11T19:07:48.645Z",
-        "sha256": "a9ab7e3b1a2321737835ad321e83a367d332aa564eaefc2f53fe2c33f1ea519d"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "qwik",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5651,
-        "installTimeoutMs": 1924,
-        "buildTimeoutMs": 2261
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 6358,
-        "installTimeoutMs": 2165,
-        "buildTimeoutMs": 2544
-      },
-      "attempt": {
-        "location": "cells[144].attempts[0]",
-        "sourceReport": "/work/reports/goals/chrome-firefox/react-startup-audit/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:06:35.174Z",
-        "startedAt": "2026-11-11T17:06:35.174Z",
-        "finishedAt": "2026-11-11T17:06:51.337Z",
-        "sha256": "f1100b8a25ab0327c404c7c1c8ada48e6e3b7c1b0a105907478a0e425ca0ac88"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 7899,
-        "installTimeoutMs": 1862,
-        "buildTimeoutMs": 2574
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 8887,
-        "installTimeoutMs": 2095,
-        "buildTimeoutMs": 2896
-      },
-      "attempt": {
-        "location": "cells[148].attempts[0]",
-        "sourceReport": "/work/reports/goals/chrome-firefox/react-startup-audit/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:06:35.174Z",
-        "startedAt": "2026-11-11T17:06:51.340Z",
-        "finishedAt": "2026-11-11T17:07:11.465Z",
-        "sha256": "646771c90c66a86e3135622839cc0c74078ee4c09337a5daaede93baba0edc16"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 12824,
-        "installTimeoutMs": 3392,
-        "buildTimeoutMs": 3358
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 14427,
-        "installTimeoutMs": 3816,
-        "buildTimeoutMs": 3778
-      },
-      "attempt": {
-        "location": "cells[152].attempts[0]",
-        "sourceReport": "/work/reports/goals/desktop-safari/browser-lifecycle/baseline-native/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:15:03.349Z",
-        "startedAt": "2026-11-11T18:13:41.686Z",
-        "finishedAt": "2026-11-11T18:14:09.040Z",
-        "sha256": "428749f0d08226c7bf06c399e0caba24694ab23c7db5d1cc6f9716aeabc264b6"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-react",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 1323,
-        "installTimeoutMs": 3025,
-        "buildTimeoutMs": 1931
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 1489,
-        "installTimeoutMs": 3404,
-        "buildTimeoutMs": 2173
-      },
-      "attempt": {
-        "location": "cells[160].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:16:15.248Z",
-        "finishedAt": "2026-11-09T21:16:23.754Z",
-        "sha256": "9a61474506d3cc9dd0d172231ee845ce8186b3b661e5cac10b6e0c42c5b3b41b"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3092,
-        "installTimeoutMs": 2218,
-        "buildTimeoutMs": 6589
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 3479,
-        "installTimeoutMs": 2496,
-        "buildTimeoutMs": 7413
-      },
-      "attempt": {
-        "location": "cells[161].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:16:23.756Z",
-        "finishedAt": "2026-11-09T21:16:41.067Z",
-        "sha256": "4f03c4ee6bdf0034110f0c1be94a676f3c58ecf4c9cf6270785c95a9ed98ef8b"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3533,
-        "installTimeoutMs": 2622,
-        "buildTimeoutMs": 7531
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 3975,
-        "installTimeoutMs": 2950,
-        "buildTimeoutMs": 8473
-      },
-      "attempt": {
-        "location": "cells[162].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:16:41.070Z",
-        "finishedAt": "2026-11-09T21:17:01.695Z",
-        "sha256": "a3b0a33102190db263baadae4bdd55b6dd1caa7792f6f6e7f328c4f05046ddeb"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5510,
-        "installTimeoutMs": 5072,
-        "buildTimeoutMs": 10253
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 6199,
-        "installTimeoutMs": 5706,
-        "buildTimeoutMs": 11535
-      },
-      "attempt": {
-        "location": "cells[163].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/chrome-current-builds/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:39:20.202Z",
-        "startedAt": "2026-11-11T17:41:44.882Z",
-        "finishedAt": "2026-11-11T17:42:14.710Z",
-        "sha256": "de81682616cc468166a30c71e98894ba12c2b06f5981837e71b8cef31b2227c5"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3408,
-        "installTimeoutMs": 3840,
-        "buildTimeoutMs": 2149
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 3834,
-        "installTimeoutMs": 4320,
-        "buildTimeoutMs": 2418
-      },
-      "attempt": {
-        "location": "cells[164].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:13:18.386Z",
-        "finishedAt": "2026-11-09T21:13:31.685Z",
-        "sha256": "a6018c095f29c4b1da38e8ae355c31e8510e24cc2a34020712c467080c17df20"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3752,
-        "installTimeoutMs": 2749,
-        "buildTimeoutMs": 8048
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4221,
-        "installTimeoutMs": 3093,
-        "buildTimeoutMs": 9054
-      },
-      "attempt": {
-        "location": "cells[165].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:13:31.689Z",
-        "finishedAt": "2026-11-09T21:13:56.169Z",
-        "sha256": "68d0fdc0b3b8308f2c45474be074c1d959290a5da591746a43a1e2714672efee"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4219,
-        "installTimeoutMs": 3134,
-        "buildTimeoutMs": 8633
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4747,
-        "installTimeoutMs": 3526,
-        "buildTimeoutMs": 9713
-      },
-      "attempt": {
-        "location": "cells[166].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:13:56.174Z",
-        "finishedAt": "2026-11-09T21:14:23.518Z",
-        "sha256": "0033f10308e323ca59b77f07e19d86088e8a1e182af51ff4b980c9e4a5605f8b"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5035,
-        "installTimeoutMs": 6586,
-        "buildTimeoutMs": 10292
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 5665,
-        "installTimeoutMs": 7410,
-        "buildTimeoutMs": 11579
-      },
-      "attempt": {
-        "location": "cells[167].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/firefox-current/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:45:57.024Z",
-        "startedAt": "2026-11-11T17:48:09.132Z",
-        "finishedAt": "2026-11-11T17:48:44.855Z",
-        "sha256": "fbf89ee821872e7a6e420d41d7eca87bf82d62d9ed4a8a36156c0d44b30f4060"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 1868,
-        "installTimeoutMs": 4123,
-        "buildTimeoutMs": 3490
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 2102,
-        "installTimeoutMs": 4639,
-        "buildTimeoutMs": 3927
-      },
-      "attempt": {
-        "location": "cells[168].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:08:34.263Z",
-        "finishedAt": "2026-11-09T21:08:48.660Z",
-        "sha256": "7d6361b71bb4302137c572ef716e03ccbecec226e390d5e340652a8160d0e3cf"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 22013,
-        "installTimeoutMs": 3270,
-        "buildTimeoutMs": 14143
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 24765,
-        "installTimeoutMs": 3679,
-        "buildTimeoutMs": 15911
-      },
-      "attempt": {
-        "location": "cells[170].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:08:56.962Z",
-        "finishedAt": "2026-11-09T21:09:50.463Z",
-        "sha256": "a7a527f130b8bd89fa165b614daefefceb147f2b56b69a0fdbf00a456cfa752a"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 7722,
-        "installTimeoutMs": 5643,
-        "buildTimeoutMs": 6073
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 8688,
-        "installTimeoutMs": 6349,
-        "buildTimeoutMs": 6833
-      },
-      "attempt": {
-        "location": "cells[172].attempts[0]",
-        "sourceReport": "/work/reports/goals/iphone-installs-20261111/browser-small/remaining-607/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T19:20:42.692Z",
-        "startedAt": "2026-11-11T19:21:22.137Z",
-        "finishedAt": "2026-11-11T19:21:59.381Z",
-        "sha256": "d22b2924af510051b7f554140fc927b10639f06740576dc1a793eafc4432748e"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 14193,
-        "installTimeoutMs": 6761,
-        "buildTimeoutMs": 32458
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 15968,
-        "installTimeoutMs": 7607,
-        "buildTimeoutMs": 36516
-      },
-      "attempt": {
-        "location": "cells[174].attempts[0]",
-        "sourceReport": "/work/reports/goals/iphone-installs-20261111/jsc/vue/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T19:04:40.082Z",
-        "startedAt": "2026-11-11T19:04:40.104Z",
-        "finishedAt": "2026-11-11T19:06:05.697Z",
-        "sha256": "56e4efcade8c05e048df7069d12db65ac10eb7266f305e022f3fbc19d89b5614"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-vue",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 1730,
-        "installTimeoutMs": 3235,
-        "buildTimeoutMs": 2851
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 1947,
-        "installTimeoutMs": 3640,
-        "buildTimeoutMs": 3208
-      },
-      "attempt": {
-        "location": "cells[176].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:17:01.708Z",
-        "finishedAt": "2026-11-09T21:17:12.581Z",
-        "sha256": "abeeafc35dc62bbf9f482da279f0d0ed1c1ec66ce4c49e4e216d4f8e83d4584b"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5379,
-        "installTimeoutMs": 4642,
-        "buildTimeoutMs": 5775
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 6052,
-        "installTimeoutMs": 5223,
-        "buildTimeoutMs": 6497
-      },
-      "attempt": {
-        "location": "cells[177].attempts[0]",
-        "sourceReport": "/work/reports/goals/quickjs-safari-frameworks/render/chrome-control/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T09:28:44.984Z",
-        "startedAt": "2026-11-10T09:29:49.126Z",
-        "finishedAt": "2026-11-10T09:30:11.150Z",
-        "sha256": "475bcce4b2cdf0ca0044b3953669376d75ee84a841c6eb8496a96fb0d99d3db3"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 7023,
-        "installTimeoutMs": 2341,
-        "buildTimeoutMs": 7443
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 7901,
-        "installTimeoutMs": 2634,
-        "buildTimeoutMs": 8374
-      },
-      "attempt": {
-        "location": "cells[178].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-chrome/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:17:33.237Z",
-        "finishedAt": "2026-11-09T21:17:58.131Z",
-        "sha256": "83a32de7c0c2fb5401eb1f3c45e2be35d48931c202dbbfb7f25673e448764c4d"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 8550,
-        "installTimeoutMs": 4753,
-        "buildTimeoutMs": 9347
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 9619,
-        "installTimeoutMs": 5348,
-        "buildTimeoutMs": 10516
-      },
-      "attempt": {
-        "location": "cells[179].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/chrome-current-builds/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:39:20.202Z",
-        "startedAt": "2026-11-11T17:42:14.718Z",
-        "finishedAt": "2026-11-11T17:42:47.042Z",
-        "sha256": "31917cd0fc4cc6f6f004a150f9c3b54e24bb252ffa9f8978af3f1577666ce71e"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3497,
-        "installTimeoutMs": 3547,
-        "buildTimeoutMs": 3363
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 3935,
-        "installTimeoutMs": 3991,
-        "buildTimeoutMs": 3784
-      },
-      "attempt": {
-        "location": "cells[180].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:14:23.525Z",
-        "finishedAt": "2026-11-09T21:14:39.473Z",
-        "sha256": "bcb724aea274532451ceae77848b784a3cde6914a4c9f7284368156aa9227ea3"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 5806,
-        "installTimeoutMs": 2581,
-        "buildTimeoutMs": 6741
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 6532,
-        "installTimeoutMs": 2904,
-        "buildTimeoutMs": 7584
-      },
-      "attempt": {
-        "location": "cells[181].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:14:39.479Z",
-        "finishedAt": "2026-11-09T21:15:05.748Z",
-        "sha256": "1341ea0af635774646cd2ca083e16756bab29210377ead4d5b9f9dd34d3c3129"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 7050,
-        "installTimeoutMs": 2834,
-        "buildTimeoutMs": 8542
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 7932,
-        "installTimeoutMs": 3189,
-        "buildTimeoutMs": 9610
-      },
-      "attempt": {
-        "location": "cells[182].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/pc-firefox/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:15:05.751Z",
-        "finishedAt": "2026-11-09T21:15:37.497Z",
-        "sha256": "2583cd86f798f91e07b0d381a5a481f96f9bdc83e16e4e625f31e97add43476b"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 9599,
-        "installTimeoutMs": 3709,
-        "buildTimeoutMs": 10166
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 10799,
-        "installTimeoutMs": 4173,
-        "buildTimeoutMs": 11437
-      },
-      "attempt": {
-        "location": "cells[183].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/firefox-current/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:45:57.024Z",
-        "startedAt": "2026-11-11T17:48:44.856Z",
-        "finishedAt": "2026-11-11T17:49:25.378Z",
-        "sha256": "99e3b1ca07b32c1e0d8cf64687f5b048c0b3e0fba2da1bd41bb8cf504fef6c1b"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3778,
-        "installTimeoutMs": 4448,
-        "buildTimeoutMs": 4975
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4251,
-        "installTimeoutMs": 5004,
-        "buildTimeoutMs": 5597
-      },
-      "attempt": {
-        "location": "cells[184].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:09:50.488Z",
-        "finishedAt": "2026-11-09T21:10:11.384Z",
-        "sha256": "c4d123713531ddf425e0cc1f5883542a8666669fc8480ee4478ecd8f31a7bc94"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 58982,
-        "installTimeoutMs": 6064,
-        "buildTimeoutMs": 9627
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 66355,
-        "installTimeoutMs": 6822,
-        "buildTimeoutMs": 10831
-      },
-      "attempt": {
-        "location": "cells[185].attempts[0]",
-        "sourceReport": "/work/reports/goals/quickjs-safari-frameworks/render/safari-diagnostic/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T09:30:55.822Z",
-        "startedAt": "2026-11-10T09:32:55.751Z",
-        "finishedAt": "2026-11-10T09:34:22.313Z",
-        "sha256": "5e2558b0eb2cc05c05114aa34c621d741ff1af657a817bd9d49678fc3d3330ae"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 50358,
-        "installTimeoutMs": 3597,
-        "buildTimeoutMs": 13763
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 56653,
-        "installTimeoutMs": 4047,
-        "buildTimeoutMs": 15484
-      },
-      "attempt": {
-        "location": "cells[186].attempts[0]",
-        "sourceReport": "/work/reports/goals/rerun-20261109-69f7a2ac/desktop/TABLE.json",
-        "sourceCreatedAt": "2026-11-09T23:04:53.723Z",
-        "startedAt": "2026-11-09T21:11:10.636Z",
-        "finishedAt": "2026-11-09T21:12:33.771Z",
-        "sha256": "a82e32b32ee15c4a9b87516766061444d90ade8f3e02cb9c3c28be76ef6bdfab"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 7831,
-        "installTimeoutMs": 3509,
-        "buildTimeoutMs": 8046
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 8810,
-        "installTimeoutMs": 3948,
-        "buildTimeoutMs": 9052
-      },
-      "attempt": {
-        "location": "cells[188].attempts[0]",
-        "sourceReport": "/work/reports/goals/iphone-installs-20261111/browser-small/remaining-607/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T19:20:42.692Z",
-        "startedAt": "2026-11-11T19:21:59.383Z",
-        "finishedAt": "2026-11-11T19:22:37.978Z",
-        "sha256": "8b0f41ee33d20a5de8775ec652ca0a63289b66418d1412d997f197db938e3531"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "vite-svelte",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "chrome",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 996,
-        "installTimeoutMs": 1319,
-        "buildTimeoutMs": 418
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 1121,
-        "installTimeoutMs": 1484,
-        "buildTimeoutMs": 471
-      },
-      "attempt": {
-        "location": "cells[192].attempts[0]",
-        "sourceReport": "/work/reports/goals/hono-hot-reload/landed117/matrix/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T03:48:46.597Z",
-        "startedAt": "2026-11-10T03:48:46.613Z",
-        "finishedAt": "2026-11-10T03:48:50.583Z",
-        "sha256": "c96534fe787a170b4a4ba8536e7cce2ab8e0f42560d43b1224e73c6bc1e737c8"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "chrome",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 1121,
-        "installTimeoutMs": 814,
-        "buildTimeoutMs": 820
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 1262,
-        "installTimeoutMs": 916,
-        "buildTimeoutMs": 923
-      },
-      "attempt": {
-        "location": "cells[193].attempts[0]",
-        "sourceReport": "/work/reports/goals/hono-hot-reload/landed117/matrix/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T03:48:46.597Z",
-        "startedAt": "2026-11-10T03:48:50.586Z",
-        "finishedAt": "2026-11-10T03:48:55.284Z",
-        "sha256": "2415be9bee4629c39d16f9d422ab72acd1354f55d82ad891e487479f2bd87fd3"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "chrome",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 1546,
-        "installTimeoutMs": 1010,
-        "buildTimeoutMs": 1120
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 1740,
-        "installTimeoutMs": 1137,
-        "buildTimeoutMs": 1260
-      },
-      "attempt": {
-        "location": "cells[194].attempts[0]",
-        "sourceReport": "/work/reports/goals/hono-hot-reload/landed117/matrix/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T03:48:46.597Z",
-        "startedAt": "2026-11-10T03:48:55.285Z",
-        "finishedAt": "2026-11-10T03:49:01.539Z",
-        "sha256": "b030c37fa6a8e6cadd3c45f86e2233ddc0f4e6183a5fafb90658cd30e34325dd"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "chrome",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 1431,
-        "installTimeoutMs": 1621,
-        "buildTimeoutMs": 1028
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 1610,
-        "installTimeoutMs": 1824,
-        "buildTimeoutMs": 1157
-      },
-      "attempt": {
-        "location": "cells[195].history[2].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/chrome-current-core/TABLE.hono.json",
-        "sourceCreatedAt": "2026-11-11T17:38:05.429Z",
-        "startedAt": "2026-11-11T17:38:05.458Z",
-        "finishedAt": "2026-11-11T17:38:12.654Z",
-        "sha256": "c5f5eb5ec71e6def82c5ad424c5192a8672e2c03928cd69ce86dccaba4d8500a"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "firefox",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4300,
-        "installTimeoutMs": 1013,
-        "buildTimeoutMs": 525
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4838,
-        "installTimeoutMs": 1140,
-        "buildTimeoutMs": 591
-      },
-      "attempt": {
-        "location": "cells[196].attempts[0]",
-        "sourceReport": "/work/reports/goals/hono-hot-reload/landed117/matrix/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T03:48:46.597Z",
-        "startedAt": "2026-11-10T03:49:01.540Z",
-        "finishedAt": "2026-11-10T03:49:09.288Z",
-        "sha256": "7e8637726127970aa92c9e5af9a79cf8407ac24c7128208bae6a6ab65496f45b"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "firefox",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3616,
-        "installTimeoutMs": 1118,
-        "buildTimeoutMs": 1037
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4068,
-        "installTimeoutMs": 1258,
-        "buildTimeoutMs": 1167
-      },
-      "attempt": {
-        "location": "cells[197].attempts[0]",
-        "sourceReport": "/work/reports/goals/hono-hot-reload/landed117/matrix/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T03:48:46.597Z",
-        "startedAt": "2026-11-10T03:49:09.289Z",
-        "finishedAt": "2026-11-10T03:49:18.608Z",
-        "sha256": "3b2b57b3b13697cda1b07f9f589805d033bab9c2acfb06720571cb20a831933d"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "firefox",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4161,
-        "installTimeoutMs": 1223,
-        "buildTimeoutMs": 1447
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4682,
-        "installTimeoutMs": 1376,
-        "buildTimeoutMs": 1628
-      },
-      "attempt": {
-        "location": "cells[198].attempts[0]",
-        "sourceReport": "/work/reports/goals/hono-hot-reload/landed117/matrix/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T03:48:46.597Z",
-        "startedAt": "2026-11-10T03:49:18.609Z",
-        "finishedAt": "2026-11-10T03:49:30.213Z",
-        "sha256": "b6242be880fca2ebbff09f5bab98c1ad43c685747a7b23e8e23eb40a8f25770c"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "firefox",
       "engine": "spidermonkey",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 4130,
-        "installTimeoutMs": 2161,
-        "buildTimeoutMs": 1341
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4647,
-        "installTimeoutMs": 2432,
-        "buildTimeoutMs": 1509
-      },
-      "attempt": {
-        "location": "cells[199].attempts[0]",
-        "sourceReport": "/work/reports/goals/spidermonkey-frameworks/firefox-current/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T17:45:57.024Z",
-        "startedAt": "2026-11-11T17:49:25.382Z",
-        "finishedAt": "2026-11-11T17:49:37.541Z",
-        "sha256": "16e7070dc1362656ffc6a1f3e48d72a60917c364f732135bc5320c75a1e849cc"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 1306,
-        "installTimeoutMs": 1946,
-        "buildTimeoutMs": 603
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 1470,
-        "installTimeoutMs": 2190,
-        "buildTimeoutMs": 679
-      },
-      "attempt": {
-        "location": "cells[200].attempts[0]",
-        "sourceReport": "/work/reports/goals/hono-hot-reload/landed117/matrix/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T03:48:46.597Z",
-        "startedAt": "2026-11-10T03:49:36.632Z",
-        "finishedAt": "2026-11-10T03:49:42.500Z",
-        "sha256": "fad55e1e9f4a87e82ccebe0d38789b788a99e82eae19c008f6142dab8248bf1d"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "safari",
       "engine": "quickjs",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 1709,
-        "installTimeoutMs": 1497,
-        "buildTimeoutMs": 1273
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 1923,
-        "installTimeoutMs": 1685,
-        "buildTimeoutMs": 1433
-      },
-      "attempt": {
-        "location": "cells[201].attempts[0]",
-        "sourceReport": "/work/reports/goals/hono-hot-reload/landed117/matrix/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T03:48:46.597Z",
-        "startedAt": "2026-11-10T03:49:42.506Z",
-        "finishedAt": "2026-11-10T03:49:50.680Z",
-        "sha256": "b86e3d76224cd66b85850c10c75226004975b511a1e9f79e54b92814cf18d0b9"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "safari",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 2537,
-        "installTimeoutMs": 1605,
-        "buildTimeoutMs": 1912
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 2855,
-        "installTimeoutMs": 1806,
-        "buildTimeoutMs": 2151
-      },
-      "attempt": {
-        "location": "cells[202].attempts[0]",
-        "sourceReport": "/work/reports/goals/hono-hot-reload/landed117/matrix/TABLE.json",
-        "sourceCreatedAt": "2026-11-10T03:48:46.597Z",
-        "startedAt": "2026-11-10T03:49:50.685Z",
-        "finishedAt": "2026-11-10T03:50:01.537Z",
-        "sha256": "94285fa0745b3f222adc62e34b0c2e27664bd169488a46de36a3919030d5d2c0"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "iphone-safari",
       "engine": "browser",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 3592,
-        "installTimeoutMs": 1767,
-        "buildTimeoutMs": 944
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 4041,
-        "installTimeoutMs": 1988,
-        "buildTimeoutMs": 1062
-      },
-      "attempt": {
-        "location": "cells[204].attempts[0]",
-        "sourceReport": "/work/reports/goals/iphone-installs-20261111/browser-small/controls/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T19:19:19.083Z",
-        "startedAt": "2026-11-11T19:19:44.433Z",
-        "finishedAt": "2026-11-11T19:20:04.039Z",
-        "sha256": "dc7df042118a693a01f0acb32462aa893ad01a9bae32741e2c79ae3a21ffc331"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "iphone-safari",
       "engine": "quickjs",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "iphone-safari",
       "engine": "jsc",
-      "kind": "calibrated",
-      "measured": {
-        "timeoutMs": 9740,
-        "installTimeoutMs": 2808,
-        "buildTimeoutMs": 2839
-      },
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 10958,
-        "installTimeoutMs": 3159,
-        "buildTimeoutMs": 3194
-      },
-      "attempt": {
-        "location": "cells[206].attempts[0]",
-        "sourceReport": "/work/reports/goals/iphone-installs-20261111/jsc/baseline/TABLE.json",
-        "sourceCreatedAt": "2026-11-11T19:03:36.381Z",
-        "startedAt": "2026-11-11T19:03:36.410Z",
-        "finishedAt": "2026-11-11T19:04:16.844Z",
-        "sha256": "2afa3278f66274a9d40f9d919cde4ab04f4fa686afb0e6bd9e05ec55566835d1"
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     },
     {
       "framework": "hono",
       "browser": "iphone-safari",
       "engine": "spidermonkey",
-      "kind": "no-complete-pass",
+      "kind": "hang-cap",
       "limits": {
-        "timeoutMs": 90000,
-        "installTimeoutMs": 90000,
-        "buildTimeoutMs": 90000
+        "timeoutMs": 300000,
+        "installTimeoutMs": 600000,
+        "buildTimeoutMs": 600000
       }
     }
   ]
