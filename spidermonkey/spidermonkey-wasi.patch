@@ -54,7 +54,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git i/js/src/vm/Interpreter.cpp w/js/src/vm/Interpreter.cpp
-index 6241cd45d..4da58a1d2 100644
+index 6241cd45d..ea7534680 100644
 --- i/js/src/vm/Interpreter.cpp
 +++ w/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -67,7 +67,17 @@ index 6241cd45d..4da58a1d2 100644
  
  using namespace js;
  
-@@ -1781,6 +1784,10 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
+@@ -436,6 +439,9 @@ static void AssertExceptionResult(JSContext* cx) {
+ #  pragma optimize("g", off)
+ #endif
+ bool js::RunScript(JSContext* cx, RunState& state) {
++  BUNWASM_RESERVE_STACK_DYNAMIC(jit::JitOptions.portableBaselineInterpreter
++                                    ? bunwasm::RunScriptPBLReserve
++                                    : bunwasm::RunScriptReserve);
+   AutoCheckRecursionLimit recursion(cx);
+   if (!recursion.check(cx)) {
+     return false;
+@@ -1781,6 +1787,10 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
  
  bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
                                                             RunState& state) {
@@ -78,7 +88,7 @@ index 6241cd45d..4da58a1d2 100644
  /*
   * Define macros for an interpreter loop. Opcode dispatch is done by
   * indirect goto (aka a threaded interpreter), which is technically
-@@ -1839,8 +1846,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1839,8 +1849,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
     * Prepare to call a user-supplied branch handler, and abort the script
     * if it returns false.
     */
@@ -93,7 +103,7 @@ index 6241cd45d..4da58a1d2 100644
      if (!CheckForInterrupt(cx)) goto error; \
    JS_END_MACRO
  
-@@ -1984,6 +1997,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1984,6 +2000,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
    INIT_COVERAGE();
    COUNT_COVERAGE_MAIN();
  
@@ -107,13 +117,13 @@ index 6241cd45d..4da58a1d2 100644
    ADVANCE_AND_DISPATCH(0);
  
 diff --git i/js/src/vm/PortableBaselineInterpret.cpp w/js/src/vm/PortableBaselineInterpret.cpp
-index d38cebe3e..645370535 100644
+index d38cebe3e..39afaa2d9 100644
 --- i/js/src/vm/PortableBaselineInterpret.cpp
 +++ w/js/src/vm/PortableBaselineInterpret.cpp
-@@ -105,8 +105,22 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
+@@ -105,8 +105,27 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
  #  define ENABLE_COMPUTED_GOTO_DISPATCH
  #endif
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +extern "C" void bunsm_poll_interrupt(JSContext*, uint8_t);
 +extern "C" void bunsm_pbl_entry();
@@ -127,6 +137,11 @@ index d38cebe3e..645370535 100644
 +#else
 +#  define BUNWASM_HOLD_RECURSION_UNIT(cx) ((void)0)
 +#endif
++// The IC's call into the interpreter is native recursion the shadow stack
++// barely sees; reserve shadow bytes for its host frames until it returns.
++#define BUNWASM_RESERVED_PBL_CALL(...)          \
++  BUNWASM_RESERVED_CALL(bunwasm::PBLCallReserve, \
++                        PortableBaselineInterpret<false, kHybridICsInterp>(__VA_ARGS__))
 +
  // Whether to compile in interrupt checks in the main interpreter loop.
 -#ifndef __wasi__
@@ -134,31 +149,37 @@ index d38cebe3e..645370535 100644
  // On WASI, with a single thread, there is no possibility for an
  // interrupt to come asynchronously.
  #  define ENABLE_INTERRUPT_CHECKS
-@@ -2419,6 +2433,7 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+@@ -2419,7 +2438,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
              ImmutableScriptData* isd = script->immutableScriptData();
              PBIResult result;
              Value ret;
+-            result = PortableBaselineInterpret<false, kHybridICsInterp>(
 +            BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
-             result = PortableBaselineInterpret<false, kHybridICsInterp>(
++            result = BUNWASM_RESERVED_PBL_CALL(
                  cx, ctx.state, ctx.stack, sp,
                  /* envChain = */ nullptr, &ret, pc, isd, nullptr, nullptr,
-@@ -2508,6 +2523,7 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+                 nullptr, PBIResult::Ok);
+@@ -2508,7 +2528,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
            ImmutableScriptData* isd = script->immutableScriptData();
            PBIResult result;
            Value ret;
+-          result = PortableBaselineInterpret<false, kHybridICsInterp>(
 +          BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
-           result = PortableBaselineInterpret<false, kHybridICsInterp>(
++          result = BUNWASM_RESERVED_PBL_CALL(
                cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
                isd, nullptr, nullptr, nullptr, PBIResult::Ok);
-@@ -2602,6 +2618,7 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+           if (result != PBIResult::Ok) {
+@@ -2602,7 +2623,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
            ImmutableScriptData* isd = script->immutableScriptData();
            PBIResult result;
            Value ret;
+-          result = PortableBaselineInterpret<false, kHybridICsInterp>(
 +          BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
-           result = PortableBaselineInterpret<false, kHybridICsInterp>(
++          result = BUNWASM_RESERVED_PBL_CALL(
                cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
                isd, nullptr, nullptr, nullptr, PBIResult::Ok);
-@@ -6034,7 +6051,16 @@ PBIResult PortableBaselineInterpret(
+           if (result != PBIResult::Ok) {
+@@ -6034,7 +6056,16 @@ PBIResult PortableBaselineInterpret(
      }
    }
    COUNT_COVERAGE_MAIN();
@@ -175,7 +196,7 @@ index d38cebe3e..645370535 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
    if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
      PUSH_EXIT_FRAME();
-@@ -7909,6 +7935,9 @@ PBIResult PortableBaselineInterpret(
+@@ -7909,6 +7940,9 @@ PBIResult PortableBaselineInterpret(
                }
              }
              // 11. Check for interrupts.
@@ -185,7 +206,7 @@ index d38cebe3e..645370535 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
              if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
                PUSH_EXIT_FRAME();
-@@ -8231,6 +8260,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8231,6 +8265,9 @@ PBIResult PortableBaselineInterpret(
        CASE(LoopHead) {
          int32_t icIndex = GET_INT32(pc);
          icEntry = icEntries + icIndex;
@@ -195,7 +216,7 @@ index d38cebe3e..645370535 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
          if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
            PUSH_EXIT_FRAME();
-@@ -8499,6 +8531,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8499,6 +8536,9 @@ PBIResult PortableBaselineInterpret(
        }
  
        CASE(Finally) {
@@ -564,7 +585,240 @@ index f1ce887af..00c9ecad1 100644
 +
  ////////////////////////////////////////////////////////////////////////////////
  // Internal implementation
-
+ 
+diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
+index 9524c5d6a..7b1543e5f 100644
+--- i/js/public/friend/StackLimits.h
++++ w/js/public/friend/StackLimits.h
+@@ -5,6 +5,29 @@
+ #ifndef js_friend_StackLimits_h
+ #define js_friend_StackLimits_h
+ 
++// bun-wasm: the host call stack of a wasm module is invisible to it, so the
++// byte quota (JS_SetNativeStackQuota) only measures the shadow stack in linear
++// memory. Recursive paths whose host frames hold few shadow bytes reserve
++// extra shadow bytes per level, sized from the host stack one level uses, so
++// the quota fires before the host stack runs out. A reservation lasts until
++// the reserving frame returns. docs/bun-patches/spidermonkey-stack-budget.md
++// keeps the measurements behind each size.
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++#  define BUNWASM_RESERVE_STACK(bytes) \
++    alignas(16) unsigned char bunwasmShadowFrame[bytes]; \
++    asm volatile("" : : "r"(bunwasmShadowFrame) : "memory")
++#  define BUNWASM_RESERVED_CALL(bytes, ...) \
++    ::js::CallWithWasmStackReservation<bytes>([&] { return __VA_ARGS__; })
++// A size chosen at run time, such as by tier. Released when the frame returns.
++#  define BUNWASM_RESERVE_STACK_DYNAMIC(bytes)                 \
++    void* bunwasmShadowFrame = __builtin_alloca(bytes);        \
++    asm volatile("" : : "r"(bunwasmShadowFrame) : "memory")
++#else
++#  define BUNWASM_RESERVE_STACK(bytes) ((void)0)
++#  define BUNWASM_RESERVED_CALL(bytes, ...) (__VA_ARGS__)
++#  define BUNWASM_RESERVE_STACK_DYNAMIC(bytes) ((void)0)
++#endif
++
+ #include "mozilla/Attributes.h"  // MOZ_ALWAYS_INLINE, MOZ_COLD
+ #include "mozilla/Likely.h"      // MOZ_LIKELY
+ #include "mozilla/Variant.h"     // mozilla::Variant, mozilla::AsVariant
+@@ -30,6 +53,46 @@ struct JS_PUBLIC_API JSContext;
+ 
+ namespace js {
+ 
++namespace bunwasm {
++// Native reentry into scripts (call/apply, getters, setters, bound and proxy
++// targets). PBL enters through its trampoline and a much larger frame.
++inline constexpr size_t RunScriptReserve = 1840;
++inline constexpr size_t RunScriptPBLReserve = 2304;
++// Portable baseline inline caches calling a scripted getter, setter or callee.
++inline constexpr size_t PBLCallReserve = 384;
++// Proxy traps on PBL, whose scripted handlers enter the interpreter again.
++inline constexpr size_t ProxyTrapPBLReserve = 1792;
++// Native-only recursion: JSON.stringify's serializer and Array.prototype.join
++// reached again through an element's toString.
++inline constexpr size_t JSONSerializeReserve = 896;
++inline constexpr size_t ArrayJoinReserve = 1536;
++// Parser levels, the same on both tiers. Statement nesting stays at the
++// size Next's generated validators allow (docs/stack-limits.md).
++inline constexpr size_t StatementReserve = 336;
++inline constexpr size_t StatementListItemReserve = 352;
++inline constexpr size_t FunctionBodyReserve = 1696;
++inline constexpr size_t FunctionExpressionReserve = 2880;
++inline constexpr size_t ArgumentListReserve = 2800;
++inline constexpr size_t ArrayLiteralReserve = 2816;
++inline constexpr size_t ObjectLiteralReserve = 2784;
++inline constexpr size_t ElementAccessReserve = 2784;
++inline constexpr size_t TemplateLiteralReserve = 3248;
++inline constexpr size_t ConditionalReserve = 1088;
++inline constexpr size_t ParenthesizedReserve = 3072;
++inline constexpr size_t UnaryReserve = 464;
++}  // namespace bunwasm
++
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++template <size_t Bytes, typename Call>
++MOZ_NEVER_INLINE auto CallWithWasmStackReservation(Call&& call) {
++  alignas(16) unsigned char reservation[Bytes];
++  asm volatile("" : : "r"(reservation) : "memory");
++  auto result = call();
++  asm volatile("" : : "r"(reservation) : "memory");
++  return result;
++}
++#endif
++
+ class FrontendContext;
+ 
+ #ifdef __wasi__
+diff --git i/js/src/frontend/Parser.cpp w/js/src/frontend/Parser.cpp
+index 34f4dee86..71160225a 100644
+--- i/js/src/frontend/Parser.cpp
++++ w/js/src/frontend/Parser.cpp
+@@ -2996,6 +2996,7 @@ template <class ParseHandler, typename Unit>
+ typename ParseHandler::ListNodeResult
+ GeneralParser<ParseHandler, Unit>::templateLiteral(
+     YieldHandling yieldHandling) {
++  BUNWASM_RESERVE_STACK(bunwasm::TemplateLiteralReserve);
+   NameNodeType literal = MOZ_TRY(noSubstitutionUntaggedTemplate());
+ 
+   ListNodeType nodeList =
+@@ -3267,6 +3268,16 @@ GeneralParser<ParseHandler, Unit>::innerFunctionForFunctionBox(
+     return errorResult();
+   }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  // A nested function spends about three counted parser levels of host stack.
++  // Hold two more WASI depth units so the frontend depth limit bounds it.
++  AutoCheckRecursionLimit functionWeight(this->fc_);
++  AutoCheckRecursionLimit functionWeightSecond(this->fc_);
++  if (!functionWeightSecond.check(this->fc_)) {
++    return errorResult();
++  }
++#endif
++
+   if (!functionFormalParametersAndBody(inHandling, yieldHandling, &funNode,
+                                        kind)) {
+     return errorResult();
+@@ -3460,6 +3471,7 @@ bool GeneralParser<ParseHandler, Unit>::functionFormalParametersAndBody(
+     FunctionNodeType* funNode, FunctionSyntaxKind kind,
+     const Maybe<uint32_t>& parameterListEnd /* = Nothing() */,
+     bool isStandaloneFunction /* = false */) {
++  BUNWASM_RESERVE_STACK(bunwasm::FunctionBodyReserve);
+   // Given a properly initialized parse context, try to parse an actual
+   // function without concern for conversion to strict mode, use of lazy
+   // parsing and such.
+@@ -9299,6 +9311,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
+ template <class ParseHandler, typename Unit>
+ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
+     YieldHandling yieldHandling) {
++  BUNWASM_RESERVE_STACK(bunwasm::StatementReserve);
+   MOZ_ASSERT(checkOptionsCalled_);
+ 
+   AutoCheckRecursionLimit recursion(this->fc_);
+@@ -9546,6 +9559,7 @@ template <class ParseHandler, typename Unit>
+ typename ParseHandler::NodeResult
+ GeneralParser<ParseHandler, Unit>::statementListItem(
+     YieldHandling yieldHandling, bool canHaveDirectives /* = false */) {
++  BUNWASM_RESERVE_STACK(bunwasm::StatementListItemReserve);
+   MOZ_ASSERT(checkOptionsCalled_);
+ 
+   AutoCheckRecursionLimit recursion(this->fc_);
+@@ -10114,15 +10128,17 @@ GeneralParser<ParseHandler, Unit>::condExpr(InHandling inHandling,
+     return condition;
+   }
+ 
+-  Node thenExpr =
+-      MOZ_TRY(assignExpr(InAllowed, yieldHandling, TripledotProhibited));
++  Node thenExpr = MOZ_TRY(BUNWASM_RESERVED_CALL(
++      bunwasm::ConditionalReserve,
++      assignExpr(InAllowed, yieldHandling, TripledotProhibited)));
+ 
+   if (!mustMatchToken(TokenKind::Colon, JSMSG_COLON_IN_COND)) {
+     return errorResult();
+   }
+ 
+-  Node elseExpr =
+-      MOZ_TRY(assignExpr(inHandling, yieldHandling, TripledotProhibited));
++  Node elseExpr = MOZ_TRY(BUNWASM_RESERVED_CALL(
++      bunwasm::ConditionalReserve,
++      assignExpr(inHandling, yieldHandling, TripledotProhibited)));
+ 
+   return handler_.newConditional(condition, thenExpr, elseExpr);
+ }
+@@ -10493,6 +10509,7 @@ typename ParseHandler::UnaryNodeResult
+ GeneralParser<ParseHandler, Unit>::unaryOpExpr(YieldHandling yieldHandling,
+                                                ParseNodeKind kind,
+                                                uint32_t begin) {
++  BUNWASM_RESERVE_STACK(bunwasm::UnaryReserve);
+   Node kid = MOZ_TRY(unaryExpr(yieldHandling, TripledotProhibited));
+   return handler_.newUnary(kind, begin, kid);
+ }
+@@ -10762,6 +10779,7 @@ typename ParseHandler::ListNodeResult
+ GeneralParser<ParseHandler, Unit>::argumentList(
+     YieldHandling yieldHandling, bool* isSpread,
+     PossibleError* possibleError /* = nullptr */) {
++  BUNWASM_RESERVE_STACK(bunwasm::ArgumentListReserve);
+   ListNodeType argsList = MOZ_TRY(handler_.newArguments(pos()));
+ 
+   bool matched;
+@@ -11149,6 +11167,7 @@ GeneralParser<ParseHandler, Unit>::memberElemAccess(
+     Node lhs, YieldHandling yieldHandling,
+     OptionalKind optionalKind /* = OptionalKind::NonOptional */) {
+   MOZ_ASSERT(anyChars.currentToken().type == TokenKind::LeftBracket);
++  BUNWASM_RESERVE_STACK(bunwasm::ElementAccessReserve);
+   Node propExpr = MOZ_TRY(expr(InAllowed, yieldHandling, TripledotProhibited));
+ 
+   if (!mustMatchToken(TokenKind::RightBracket, JSMSG_BRACKET_IN_INDEX)) {
+@@ -11724,6 +11743,7 @@ typename ParseHandler::ListNodeResult
+ GeneralParser<ParseHandler, Unit>::arrayInitializer(
+     YieldHandling yieldHandling, PossibleError* possibleError) {
+   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftBracket));
++  BUNWASM_RESERVE_STACK(bunwasm::ArrayLiteralReserve);
+ 
+   uint32_t begin = pos().begin;
+   ListNodeType literal = MOZ_TRY(handler_.newArrayLiteral(begin));
+@@ -12145,6 +12165,7 @@ typename ParseHandler::ListNodeResult
+ GeneralParser<ParseHandler, Unit>::objectLiteral(YieldHandling yieldHandling,
+                                                  PossibleError* possibleError) {
+   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftCurly));
++  BUNWASM_RESERVE_STACK(bunwasm::ObjectLiteralReserve);
+ 
+   uint32_t openedPos = pos().begin;
+ 
+@@ -12588,8 +12609,9 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+ 
+   switch (tt) {
+     case TokenKind::Function:
+-      return functionExpr(pos().begin, invoked,
+-                          FunctionAsyncKind::SyncFunction);
++      return BUNWASM_RESERVED_CALL(
++          bunwasm::FunctionExpressionReserve,
++          functionExpr(pos().begin, invoked, FunctionAsyncKind::SyncFunction));
+ 
+     case TokenKind::Class:
+       return classDefinition(yieldHandling, ClassExpression, NameRequired);
+@@ -12638,8 +12660,10 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+       }
+ 
+       // Pass |possibleError| to support destructuring in arrow parameters.
+-      Node expr = MOZ_TRY(exprInParens(InAllowed, yieldHandling,
+-                                       TripledotAllowed, possibleError));
++      Node expr = MOZ_TRY(BUNWASM_RESERVED_CALL(
++          bunwasm::ParenthesizedReserve,
++          exprInParens(InAllowed, yieldHandling, TripledotAllowed,
++                       possibleError)));
+       if (!mustMatchToken(TokenKind::RightParen, JSMSG_PAREN_IN_PAREN)) {
+         return errorResult();
+       }
+diff --git i/js/src/builtin/JSON.cpp w/js/src/builtin/JSON.cpp
+index a60aef921..47c01b676 100644
+--- i/js/src/builtin/JSON.cpp
++++ w/js/src/builtin/JSON.cpp
+@@ -756,6 +756,7 @@ static bool SerializeJSONProperty(JSContext* cx, const Value& v,
+     return false;
+   }
+ 
++  BUNWASM_RESERVE_STACK(bunwasm::JSONSerializeReserve);
+   AutoCheckRecursionLimit recursion(cx);
+   if (!recursion.check(cx)) {
+     return false;
 diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendContext.cpp
 --- a/js/src/frontend/FrontendContext.cpp
 +++ b/js/src/frontend/FrontendContext.cpp
@@ -632,23 +886,82 @@ diff --git a/js/src/frontend/FrontendContext.h b/js/src/frontend/FrontendContext
   public:
    FrontendContext()
        : alloc_(this),
-diff --git a/js/src/frontend/Parser.cpp b/js/src/frontend/Parser.cpp
---- a/js/src/frontend/Parser.cpp
-+++ b/js/src/frontend/Parser.cpp
-@@ -3267,6 +3267,16 @@ GeneralParser<ParseHandler, Unit>::innerFunctionForFunctionBox(
-     return errorResult();
-   }
-
-+#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+  // A nested function spends about three counted parser levels of host stack.
-+  // Hold two more WASI depth units so the frontend depth limit bounds it.
-+  AutoCheckRecursionLimit functionWeight(this->fc_);
-+  AutoCheckRecursionLimit functionWeightSecond(this->fc_);
-+  if (!functionWeightSecond.check(this->fc_)) {
-+    return errorResult();
-+  }
-+#endif
+diff --git i/js/src/builtin/Array.cpp w/js/src/builtin/Array.cpp
+index d544b13e3..fcd15e4ad 100644
+--- i/js/src/builtin/Array.cpp
++++ w/js/src/builtin/Array.cpp
+@@ -25,6 +25,7 @@
+ #include "js/Conversions.h"
+ #include "js/experimental/JitInfo.h"  // JSJitGetterOp, JSJitInfo
+ #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
++#include "js/friend/StackLimits.h"    // BUNWASM_RESERVE_STACK
+ #include "js/PropertySpec.h"
+ #include "util/Poison.h"
+ #include "util/StringBuilder.h"
+@@ -1362,6 +1363,7 @@ static bool ArrayJoinKernel(JSContext* cx, SeparatorOp sepOp, HandleObject obj,
+ // ES2017 draft rev 1b0184bc17fc09a8ddcf4aeec9b6d9fcac4eafce
+ // 22.1.3.13 Array.prototype.join ( separator )
+ bool js::array_join(JSContext* cx, unsigned argc, Value* vp) {
++  BUNWASM_RESERVE_STACK(bunwasm::ArrayJoinReserve);
+   AutoJSMethodProfilerEntry pseudoFrame(cx, "Array.prototype", "join");
+   CallArgs args = CallArgsFromVp(argc, vp);
+ 
+diff --git i/js/src/proxy/Proxy.cpp w/js/src/proxy/Proxy.cpp
+index 4ecf3ef44..fccb197d6 100644
+--- i/js/src/proxy/Proxy.cpp
++++ w/js/src/proxy/Proxy.cpp
+@@ -12,6 +12,14 @@
+ #include "js/friend/WindowProxy.h"  // js::IsWindow, js::IsWindowProxy, js::ToWindowProxyIfWindow
+ #include "js/PropertySpec.h"
+ #include "js/Value.h"  // JS::ObjectValue
++#include "jit/JitOptions.h"  // js::jit::JitOptions
 +
-   if (!functionFormalParametersAndBody(inHandling, yieldHandling, &funNode,
-                                        kind)) {
-     return errorResult();
++// A scripted trap reached from PBL enters the interpreter again through its
++// trampoline; reserve shadow bytes for those host frames on that tier.
++#define BUNWASM_RESERVE_PROXY_TRAP()                                    \
++  BUNWASM_RESERVE_STACK_DYNAMIC(jit::JitOptions.portableBaselineInterpreter \
++                                    ? bunwasm::ProxyTrapPBLReserve       \
++                                    : 0)
+ #include "js/Wrapper.h"
+ #include "proxy/DeadObjectProxy.h"
+ #include "proxy/ScriptedProxyHandler.h"
+@@ -398,6 +406,7 @@ bool Proxy::isExtensible(JSContext* cx, HandleObject proxy, bool* extensible) {
+ }
+ 
+ bool Proxy::has(JSContext* cx, HandleObject proxy, HandleId id, bool* bp) {
++  BUNWASM_RESERVE_PROXY_TRAP();
+   AutoCheckRecursionLimit recursion(cx);
+   if (!recursion.check(cx)) {
+     return false;
+@@ -498,6 +507,7 @@ MOZ_ALWAYS_INLINE bool Proxy::getInternal(JSContext* cx, HandleObject proxy,
+                                           MutableHandleValue vp) {
+   MOZ_ASSERT_IF(receiver.isObject(), !IsWindow(&receiver.toObject()));
+ 
++  BUNWASM_RESERVE_PROXY_TRAP();
+   AutoCheckRecursionLimit recursion(cx);
+   if (!recursion.check(cx)) {
+     return false;
+@@ -572,6 +582,7 @@ MOZ_ALWAYS_INLINE bool Proxy::setInternal(JSContext* cx, HandleObject proxy,
+                                           ObjectOpResult& result) {
+   MOZ_ASSERT_IF(receiver.isObject(), !IsWindow(&receiver.toObject()));
+ 
++  BUNWASM_RESERVE_PROXY_TRAP();
+   AutoCheckRecursionLimit recursion(cx);
+   if (!recursion.check(cx)) {
+     return false;
+@@ -701,6 +712,7 @@ bool Proxy::enumerate(JSContext* cx, HandleObject proxy,
+ }
+ 
+ bool Proxy::call(JSContext* cx, HandleObject proxy, const CallArgs& args) {
++  BUNWASM_RESERVE_PROXY_TRAP();
+   AutoCheckRecursionLimit recursion(cx);
+   if (!recursion.check(cx)) {
+     return false;
+@@ -721,6 +733,7 @@ bool Proxy::call(JSContext* cx, HandleObject proxy, const CallArgs& args) {
+ }
+ 
+ bool Proxy::construct(JSContext* cx, HandleObject proxy, const CallArgs& args) {
++  BUNWASM_RESERVE_PROXY_TRAP();
+   AutoCheckRecursionLimit recursion(cx);
+   if (!recursion.check(cx)) {
+     return false;
