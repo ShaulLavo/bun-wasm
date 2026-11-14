@@ -45,20 +45,22 @@ test("ordinary live gate has one runtime owner, no local selection and serial gu
   expect(selectChecks("quality", checks)).not.toContain(live);
   expect(selectChecks("local-runtime", checks)).not.toContain(live);
   expect(readFileSync(resolve("scripts/spidermonkey-ordinary-fixtures.ts"), "utf8")).toContain("scripts/spidermonkey-engine-semantics.sh");
-  expect(ordinaryFixtures).toHaveLength(17);
-  expect(ordinaryFixtureTimeout).toBeGreaterThanOrEqual(17 * 65_000);
+  expect(ordinaryFixtures).toHaveLength(19);
+  expect(ordinaryFixtureTimeout).toBe(19 * 65_000 + 30_000);
 });
 
-test("ordinary invocation passes explicit inputs once and forces the interpreter", () => {
+test("ordinary invocation passes explicit inputs once on either tier", () => {
   const root = scratch();
   const path = join(root, "input with spaces");
   writeFileSync(path, "synthetic executable");
   chmodSync(path, 0o755);
   const env = { SPIDERMONKEY_WASM: path, BUN_WASM_LAUNCHER: path, BUN_WASM_SHELL: path, BUN_WASM_ENV_UTILITY: path };
-  const command = ordinaryFixtureCommand(root, env);
-  expect(command).toEqual(["bash", join(root, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", path, "--tier", "interp"].concat(ordinaryFixtures));
-  expect(() => ordinaryFixtureCommand(root, { ...env, BUN_WASM_SHELL: "relative.wasm" })).toThrow(/absolute/);
-  expect(() => ordinaryFixtureCommand(root, { ...env, SPIDERMONKEY_WASM: join(root, "missing") })).toThrow();
+  for (const tier of ["interp", "pbl"] as const) {
+    const command = ordinaryFixtureCommand(root, env, tier);
+    expect(command).toEqual(["bash", join(root, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", path, "--tier", tier].concat(ordinaryFixtures));
+  }
+  expect(() => ordinaryFixtureCommand(root, { ...env, BUN_WASM_SHELL: "relative.wasm" }, "interp")).toThrow(/absolute/);
+  expect(() => ordinaryFixtureCommand(root, { ...env, SPIDERMONKEY_WASM: join(root, "missing") }, "pbl")).toThrow();
 });
 
 test("workflow caches only native work and Cargo objects and exports after its single live gate", () => {

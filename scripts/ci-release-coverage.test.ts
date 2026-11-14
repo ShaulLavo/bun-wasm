@@ -161,14 +161,18 @@ test("release caches can grow after partial restore without saving duplicate war
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-cache-inventory-"));
   try {
     const cache = join(scratch, "assets");
+    const bootstrap = join(scratch, "bootstrap");
+    await mkdir(bootstrap);
     const environment = join(scratch, "environment");
     const output = join(scratch, "output");
     const restore = await Bun.file(new URL("../.github/actions/release-downloads/action.yml", import.meta.url)).text();
     const save = await Bun.file(new URL("../.github/actions/save-release-downloads/action.yml", import.meta.url)).text();
     const initialScript = actionSteps(restore)[2]?.run;
     const saveScript = actionSteps(save)[0]?.run;
-    if (typeof initialScript !== "string" || typeof saveScript !== "string") throw new Error("Missing cache inventory script");
-    const env = { ...process.env, CI_RELEASE_CACHE: cache, GITHUB_ENV: environment, GITHUB_OUTPUT: output };
+    const initialBootstrapScript = actionSteps(restore)[4]?.run;
+    const bootstrapScript = actionSteps(save).find(step => step.id === "bootstrap-inventory")?.run;
+    if (typeof initialScript !== "string" || typeof saveScript !== "string" || typeof initialBootstrapScript !== "string" || typeof bootstrapScript !== "string") throw new Error("Missing cache inventory script");
+    const env = { ...process.env, CI_RELEASE_CACHE: cache, CI_BOOTSTRAP_CACHE: bootstrap, GITHUB_WORKSPACE: join(import.meta.dir, ".."), GITHUB_ENV: environment, GITHUB_OUTPUT: output };
     expect(Bun.spawnSync(["bash", "-euo", "pipefail", "-c", initialScript], { env }).exitCode).toBe(0);
     const initial = (await readFile(environment, "utf8")).trim().split("=")[1]!;
     const run = async (fingerprint: string) => {
@@ -177,10 +181,22 @@ test("release caches can grow after partial restore without saving duplicate war
       return readFile(output, "utf8");
     };
     expect(await run(initial)).not.toContain("changed=true");
-    await writeFile(join(cache, "new-url-hash"), "verified archive");
+    await writeFile(join(cache, "a".repeat(64)), "verified archive");
     const grown = await run(initial);
     expect(grown).toContain("changed=true");
     expect(await run(grown.split("\n")[0]!.split("=")[1]!)).not.toContain("changed=true");
+    expect(Bun.spawnSync(["bash", "-euo", "pipefail", "-c", initialBootstrapScript], { env }).exitCode).toBe(0);
+    const sharedInitial = (await readFile(environment, "utf8")).trim().split("\n").at(-1)!.split("=")[1]!;
+    const runShared = async (fingerprint: string) => {
+      await writeFile(output, "");
+      expect(Bun.spawnSync(["bash", "-euo", "pipefail", "-c", bootstrapScript], { env: { ...env, CI_BOOTSTRAP_CACHE_INITIAL: fingerprint } }).exitCode).toBe(0);
+      return readFile(output, "utf8");
+    };
+    expect(await runShared(sharedInitial)).not.toContain("changed=true");
+    await writeFile(join(bootstrap, "b".repeat(64)), "bootstrap archive");
+    const sharedGrown = await runShared(sharedInitial);
+    expect(sharedGrown).toContain("changed=true");
+    expect(await runShared(sharedGrown.split("\n")[0]!.split("=")[1]!)).not.toContain("changed=true");
     expect(save).toContain("if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.inventory.outputs.changed == 'true'");
     expect(save).not.toContain("github.run_id");
     const workflow = expandedCiWorkflow();

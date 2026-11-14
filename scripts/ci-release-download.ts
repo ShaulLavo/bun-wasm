@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm, access } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, access, utimes } from "node:fs/promises";
 import { createReadStream, createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { setTimeout } from "node:timers/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 type Options = {
@@ -12,6 +12,7 @@ type Options = {
   attemptTimeoutMs?: number;
   signal?: AbortSignal;
   cache?: string;
+  bootstrapCache?: string;
   fetch?: (url: string, init?: RequestInit) => Promise<Response>;
   sleep?: (milliseconds: number) => Promise<void>;
 };
@@ -20,6 +21,32 @@ export const releaseCacheKey = (url: string): string => createHash("sha256").upd
 const releasePattern = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/releases\/download\/([^/?#]+)\/([^/?#]+)$/;
 const retryable = new Set([408, 429, 500, 502, 503, 504]);
 class RetryableDownloadError extends Error {}
+
+function isBootstrapRelease(url: string): boolean {
+  return /^https:\/\/github\.com\/oven-sh\/bun\/releases\/download\/bun-v\d+\.\d+\.\d+\/bun-linux-x64\.zip$/.test(url)
+    || /^https:\/\/github\.com\/actions\/node-versions\/releases\/download\/[^/?#]+\/node-[^/?#]+-linux-x64\.tar\.gz$/.test(url);
+}
+
+async function cachedRelease(path: string, localPath: string | undefined): Promise<boolean> {
+  if (localPath && await exists(localPath)) await migrateCachedRelease(localPath, path);
+  if (!await exists(path)) return false;
+  const now = new Date();
+  await utimes(path, now, now);
+  return true;
+}
+
+async function migrateCachedRelease(localPath: string, path: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  if (await exists(path)) return rm(localPath, { force: true });
+  try { await rename(localPath, path); }
+  catch (error) {
+    if (!missingFile(error) || !await exists(path)) throw error;
+  }
+}
+
+function missingFile(error: unknown): boolean {
+  return error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT";
+}
 
 async function request(url: string, accept: string, options: Options): Promise<Response> {
   const download = options.fetch ?? fetch;
@@ -86,7 +113,7 @@ async function authenticatedRelease(url: string, options: Options): Promise<Resp
 async function exists(path: string): Promise<boolean> {
   try { await access(path); return true; }
   catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    if (missingFile(error)) return false;
     throw error;
   }
 }
@@ -137,18 +164,21 @@ export async function releaseDownload(url: string, options: Options = {}): Promi
   const selected = {
     token: process.env.GITHUB_ACTIONS === "true" ? process.env.GITHUB_TOKEN : undefined,
     cache: process.env.CI_RELEASE_CACHE,
+    bootstrapCache: process.env.CI_BOOTSTRAP_CACHE,
     ...options,
     signal: AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? 180_000)].concat(options.signal ? [options.signal] : [])),
   };
   if (!releasePattern.test(url)) return (selected.fetch ?? fetch)(url, { signal: selected.signal });
-  const path = selected.cache ? join(selected.cache, releaseCacheKey(url)) : undefined;
-  if (path && await exists(path)) {
+  const cache = selected.cache && selected.bootstrapCache && isBootstrapRelease(url) ? selected.bootstrapCache : selected.cache;
+  const path = cache ? join(cache, releaseCacheKey(url)) : undefined;
+  const localPath = selected.cache && cache !== selected.cache ? join(selected.cache, releaseCacheKey(url)) : undefined;
+  if (path && await cachedRelease(path, localPath)) {
     console.error(`GitHub release cache hit: ${url}`);
     return fileResponse(path);
   }
   if (process.env.GITHUB_ACTIONS === "true" && !selected.token) throw new Error("CI release downloads require GITHUB_TOKEN");
-  if (selected.cache) await mkdir(selected.cache, { recursive: true });
-  const stage = await mkdtemp(join(selected.cache ?? tmpdir(), selected.cache ? ".download-" : "bun-wasm-release-"));
+  if (cache) await mkdir(cache, { recursive: true });
+  const stage = await mkdtemp(join(cache ?? tmpdir(), cache ? ".download-" : "bun-wasm-release-"));
   const staged = join(stage, "asset");
   const cleanup = () => rm(stage, { recursive: true, force: true });
   try {

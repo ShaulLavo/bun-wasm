@@ -1002,8 +1002,9 @@ class WASI {
         return fd;
     }
     refreshMemory() {
-        if (!this.view || this.view.buffer.byteLength === 0)
-            this.view = new DataView(this.memory.buffer);
+        let buffer = this.memory.buffer;
+        if (this.view?.buffer !== buffer)
+            this.view = new DataView(buffer);
     }
     setMemory(memory) {
         this.memory = memory;
