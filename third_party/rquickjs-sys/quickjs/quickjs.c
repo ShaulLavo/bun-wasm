@@ -53548,11 +53548,13 @@ JSValue JS_JSONStringify(JSContext *ctx, JSValueConst obj,
                     JS_FreeValue(ctx, v);
                     goto exception;
                 }
-                if (!JS_ToBoolFree(ctx, present)) {
-                    JS_SetPropertyInt64(ctx, jsc->property_list, j++, v);
-                } else {
+                if (JS_ToBoolFree(ctx, present)) {
                     JS_FreeValue(ctx, v);
+                    continue;
                 }
+                if (JS_DefinePropertyValueInt64(ctx, jsc->property_list, j++, v,
+                                                JS_PROP_C_W_E | JS_PROP_THROW) < 0)
+                    goto exception;
             }
         }
     }
