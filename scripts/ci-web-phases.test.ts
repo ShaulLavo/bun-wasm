@@ -47,6 +47,7 @@ test.each(["web-unit", "web-browser"])("required Web host gate rejects every non
   expect(browser.if).toContain("always()");
   const condition = browser.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("always()", "true")
+    .replaceAll("cancelled()", "false")
     .replaceAll("needs.selection.result", JSON.stringify("success"))
     .replaceAll("github.event_name", JSON.stringify("pull_request"))
     .replaceAll("github.event.pull_request.draft", "false")
