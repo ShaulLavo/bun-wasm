@@ -43,6 +43,8 @@ test("nth return validates the index with and without negation", () => {
     expect(() => expect(fn).toHaveNthReturnedWith(nth, "value")).toThrow("n must be greater than 0");
     expect(() => expect(fn).not.toHaveNthReturnedWith(nth, "value")).toThrow("n must be greater than 0");
   }
+  expect(fn).not.toHaveNthReturnedWith(2 ** 51 - 1, "value");
+  expect(() => expect(fn).toHaveNthReturnedWith(2 ** 51 - 1, "value")).toThrow("call 2147483647 was requested");
   expect(() => expect(() => 1).not.toHaveNthReturnedWith(1, 1)).toThrow("mock function");
 });
 

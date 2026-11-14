@@ -63,21 +63,22 @@
       throw new TypeError("toHaveNthReturnedWith() first argument must be an integer");
     }
     if (nth <= 0) throw new TypeError("toHaveNthReturnedWith() n must be greater than 0");
-    const result = results[nth - 1];
+    const call = Math.min(nth, 2 ** 31 - 1);
+    const result = results[call - 1];
     const record = result !== null && typeof result === "object" ? result : undefined;
     const type = record && "type" in record ? record.type : undefined;
     const value = record && "value" in record ? record.value : undefined;
     const pass = type === "return" && equals(value, expected, false);
     if (pass !== !!not) return null;
-    if (not) return { body: `\n\nExpected mock function not to have returned on call ${nth}: ${inspect(expected)}\nBut it did.\n` };
-    if (nth > results.length) {
-      return { body: `\n\nThe mock function was called ${results.length} time${results.length === 1 ? "" : "s"}, but call ${nth} was requested.\n` };
+    if (not) return { body: `\n\nExpected mock function not to have returned on call ${call}: ${inspect(expected)}\nBut it did.\n` };
+    if (call > results.length) {
+      return { body: `\n\nThe mock function was called ${results.length} time${results.length === 1 ? "" : "s"}, but call ${call} was requested.\n` };
     }
-    if (type === "throw") return { body: `\n\nCall ${nth} threw an error: ${inspect(value)}\n` };
+    if (type === "throw") return { body: `\n\nCall ${call} threw an error: ${inspect(value)}\n` };
     if (typeof value === "string" && typeof expected === "string") {
-      return { body: `\n\nCall ${nth}:\n${formatDiff(value, expected, false)}\n` };
+      return { body: `\n\nCall ${call}:\n${formatDiff(value, expected, false)}\n` };
     }
-    return { body: `\n\nCall ${nth}:\nExpected: ${inspect(expected)}\nReceived: ${inspect(value)}` };
+    return { body: `\n\nCall ${call}:\nExpected: ${inspect(expected)}\nReceived: ${inspect(value)}` };
   }
 
   function pending() {

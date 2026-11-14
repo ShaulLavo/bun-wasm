@@ -10,7 +10,8 @@ Sources: `src/runtime/test_runner/expect/toHaveNthReturnedWith.rs` and the
 `crates/bunwasm-runtime/src/js/test_matchers.ts` translates the selected-call
 lookup, integer validation, return-versus-throw distinction, negation and
 colorless diagnostics to TypeScript. Index validation preserves Bun's signed
-52-bit integer range and rejects negative zero. The existing runner supplies its mock
+52-bit integer range and rejects negative zero, then clamps accepted positive
+indices to the signed 32-bit maximum before lookup and diagnostics. The existing runner supplies its mock
 records, deep equality and formatting functions. Calls that throw or remain
 incomplete retain their positions; successful calls returning `undefined`
 still match. Both upstream matcher names use the same implementation.
