@@ -839,6 +839,27 @@ Not covered: iPhone Safari and Android Chrome were not measured. PBL getter recu
 overflows the host stack in all three browsers at any setting, because PBL does not hold a
 counter unit per inline frame. That predates this bound.
 
+## SpiderMonkey getters in the interpreter loop
+
+On SpiderMonkey's C++ interpreter tier, a scripted getter read by `a.b` or `super.b` used to
+call back into native code for every level, holding two counter units and native stack
+until it returned. It now runs as an ordinary interpreter frame that returns to the property read
+([patch record](bun-patches/spidermonkey-loop-dispatch.md)). Such frames hold no counter unit
+and use no host stack, so getter recursion ends at the interpreter's 50,000-frame limit with
+the same catchable `RangeError`.
+
+Measured with the standalone smoke probe in fresh workers of headless Chromium 156,
+Firefox 157 and WebKit 27.2 (WebKit under `ulimit -s 512`), interpreter tier:
+
+| Shape | Before | After |
+| --- | --- | --- |
+| Getter recursion | trap at 78 levels (WebKit 512 KiB) | caught at 50,997 in all three |
+| Ajv's getter walk (`names` through `super.names`) | trap at 70 (WebKit 512 KiB) | caught at 16,999 in all three |
+
+Computed-key getters (`a[k]`), setters, `Reflect.get`, getters on proxies or in another realm,
+and every PBL getter keep the native route and its counter. Those shapes, `call`, `apply`,
+proxy traps and `valueOf` coercion still recurse natively.
+
 ## Historical nested require measurements
 
 This common-loader snapshot predates the native-call dispatcher split, parser
