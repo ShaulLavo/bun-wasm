@@ -555,6 +555,11 @@ impl Processes {
         }
     }
 
+    pub fn exec_unsupported(&mut self) -> i32 {
+        self.spawn_detail = "Native process image replacement is not supported".into();
+        NOTSUP
+    }
+
     pub fn spawn_error(&self, pid: i32) -> Result<String, i32> {
         if pid < 0 {
             return Err(INVAL);

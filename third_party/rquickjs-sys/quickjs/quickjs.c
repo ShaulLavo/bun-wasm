@@ -19017,6 +19017,37 @@ static JSValue js_array_reduce(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv, int special);
 static no_inline int js_cont_reduce_step(JSContFrame *c, JSValue in);
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((always_inline))
+#endif
+static inline JSObject *js_inline_getter(JSShapeProperty *prs, JSProperty *pr)
+{
+    JSObject *getter;
+
+    if ((prs->flags & JS_PROP_TMASK) != JS_PROP_GETSET)
+        return NULL;
+    getter = pr->u.getset.getter;
+    if (!getter || !js_frame_inline_callee(JS_MKPTR(JS_TAG_OBJECT, getter)))
+        return NULL;
+    return getter;
+}
+
+static no_inline JSObject *js_find_inline_getter(JSObject *p, JSAtom atom)
+{
+    JSShapeProperty *prs;
+    JSProperty *pr;
+
+    while (p) {
+        if (p->is_exotic)
+            return NULL;
+        prs = find_own_property(&pr, p, atom);
+        if (prs)
+            return js_inline_getter(prs, pr);
+        p = p->shape->proto;
+    }
+    return NULL;
+}
+
 #define special_reduce       0
 #define special_reduceRight  1
 
@@ -19165,7 +19196,9 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     uint8_t *pc;
     int opcode, arg_allocated_size, i;
     /* the call being made; shared by the call opcodes and inline_call */
-    int call_argc, call_kind, st;
+    int call_argc, call_kind, call_release, st;
+    JSObject *getter;
+    JSValueConst getter_receiver;
     JSValue *call_argv;
     JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
     JSVarRef **var_refs;
@@ -20711,7 +20744,7 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                         if (prs) {
                             /* found */
                             if (unlikely(prs->flags & JS_PROP_TMASK))
-                                goto get_field_slow_path;
+                                goto get_field_accessor;
                             val = js_dup(pr->u.value);
                             break;
                         }
@@ -20737,8 +20770,15 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = val;
+                BREAK;
+
+        get_field_accessor:
+            if (!owned || !(getter = js_inline_getter(prs, pr)))
+                goto get_field_slow_path;
+            call_release = 1;
+            getter_receiver = sp[-1];
+            goto inline_getter;
             }
-            BREAK;
 
         CASE(OP_get_field2):
             {
@@ -20759,7 +20799,7 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                         if (prs) {
                             /* found */
                             if (unlikely(prs->flags & JS_PROP_TMASK))
-                                goto get_field2_slow_path;
+                                goto get_field2_accessor;
                             val = js_dup(pr->u.value);
                             break;
                         }
@@ -20784,8 +20824,15 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                         goto exception;
                 }
                 *sp++ = val;
+                BREAK;
+
+        get_field2_accessor:
+            if (!owned || !(getter = js_inline_getter(prs, pr)))
+                goto get_field2_slow_path;
+            call_release = 0;
+            getter_receiver = sp[-1];
+            goto inline_getter;
             }
-            BREAK;
 
         CASE(OP_put_field):
             {
@@ -21095,6 +21142,13 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
                 atom = JS_ValueToAtom(ctx, sp[-1]);
                 if (unlikely(atom == JS_ATOM_NULL))
                     goto exception;
+                if (owned && JS_IsObject(sp[-2]) &&
+                    (getter = js_find_inline_getter(JS_VALUE_GET_OBJ(sp[-2]), atom))) {
+                    JS_FreeAtom(ctx, atom);
+                    call_release = 3;
+                    getter_receiver = sp[-3];
+                    goto inline_getter;
+                }
                 val = JS_GetPropertyInternal(ctx, sp[-2], atom, sp[-3], false);
                 JS_FreeAtom(ctx, atom);
                 if (unlikely(JS_IsException(val)))
@@ -22101,6 +22155,7 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
     if (owned->owns_func) {
         JS_FreeValueRT(rt, sf->cur_func);
         sf->cur_func = JS_UNDEFINED;
+        owned->owns_func = 0;
     }
     js_frame_pop(rt, owned);
 
@@ -22187,6 +22242,49 @@ static JSValue JS_CallBytecode(JSContext *caller_ctx, JSValueConst func_obj,
         argv = c->next_argv;
         new_target = JS_UNDEFINED;
         flags = 0;
+        owned = callee;
+        goto enter_frame;
+    }
+
+ inline_getter:
+    {
+        /* The property can disappear during the interrupt callback or a GC
+           triggered by allocation. Own the selected function first. */
+        JSValue selected = js_dup(JS_MKPTR(JS_TAG_OBJECT, getter));
+        JSExecFrame *callee;
+        JSFunctionBytecode *callee_b;
+
+        sf->cur_pc = pc;
+        if (unlikely(js_poll_interrupts(ctx))) {
+            JS_FreeValue(ctx, selected);
+            goto exception;
+        }
+        getter = JS_VALUE_GET_OBJ(selected);
+        callee_b = getter->u.func.function_bytecode;
+        arg_allocated_size = callee_b->arg_count;
+        callee = js_frame_push(ctx,
+                               (size_t)arg_allocated_size + callee_b->var_count +
+                               callee_b->stack_size,
+                               callee_b->var_ref_count);
+        if (unlikely(!callee)) {
+            JS_FreeValue(ctx, selected);
+            goto exception;
+        }
+        owned->saved_sp = sp;
+        owned->call_release = call_release;
+        owned->call_kind = 0;
+        callee->resume_record = owned;
+        callee->record_kind = JS_RECORD_ORDINARY;
+        callee->owns_func = 1;
+        caller_ctx = ctx;
+        func_obj = selected;
+        this_obj = getter_receiver;
+        new_target = JS_UNDEFINED;
+        argc = 0;
+        argv = NULL;
+        flags = 0;
+        p = getter;
+        b = callee_b;
         owned = callee;
         goto enter_frame;
     }
@@ -29331,17 +29429,14 @@ static __exception int js_parse_unary(JSParseState *s, int parse_flags)
 }
 
 /* allowed parse_flags: PF_IN_ACCEPTED */
-static __exception int js_parse_expr_binary(JSParseState *s, int level,
+static __exception int js_parse_expr_binary(JSParseState *s, int max_level,
                                             int parse_flags)
 {
-    int op, opcode;
+    int op, opcode, level, min_level = 1;
     js_parse_reserve_wasm_frame();
 
-    if (level == 0) {
-        return js_parse_unary(s, PF_POW_ALLOWED);
-    } else if (s->token.val == TOK_PRIVATE_NAME &&
-               (parse_flags & PF_IN_ACCEPTED) && level == 4 &&
-               peek_token(s, false) == TOK_IN) {
+    if (max_level >= 4 && s->token.val == TOK_PRIVATE_NAME &&
+        (parse_flags & PF_IN_ACCEPTED) && peek_token(s, false) == TOK_IN) {
         JSAtom atom;
         atom = JS_DupAtom(s->ctx, s->token.u.ident.atom);
         if (next_token(s))
@@ -29350,7 +29445,7 @@ static __exception int js_parse_expr_binary(JSParseState *s, int level,
             goto fail_private_in;
         if (next_token(s))
             goto fail_private_in;
-        if (js_parse_expr_binary(s, level - 1, parse_flags)) {
+        if (js_parse_expr_binary(s, 3, parse_flags)) {
         fail_private_in:
             JS_FreeAtom(s->ctx, atom);
             return -1;
@@ -29359,132 +29454,44 @@ static __exception int js_parse_expr_binary(JSParseState *s, int level,
         emit_atom(s, atom);
         emit_u16(s, s->cur_func->scope_level);
         JS_FreeAtom(s->ctx, atom);
-        return 0;
-    } else {
-        if (js_parse_expr_binary(s, level - 1, parse_flags))
-            return -1;
+        /* The recursive parser resumes above the relational level. */
+        min_level = 5;
+    } else if (js_parse_unary(s, PF_POW_ALLOWED)) {
+        return -1;
     }
     for(;;) {
         op = s->token.val;
-        switch(level) {
-        case 1:
-            switch(op) {
-            case '*':
-                opcode = OP_mul;
-                break;
-            case '/':
-                opcode = OP_div;
-                break;
-            case '%':
-                opcode = OP_mod;
-                break;
-            default:
-                return 0;
-            }
+        switch(op) {
+        case '*': opcode = OP_mul; level = 1; break;
+        case '/': opcode = OP_div; level = 1; break;
+        case '%': opcode = OP_mod; level = 1; break;
+        case '+': opcode = OP_add; level = 2; break;
+        case '-': opcode = OP_sub; level = 2; break;
+        case TOK_SHL: opcode = OP_shl; level = 3; break;
+        case TOK_SAR: opcode = OP_sar; level = 3; break;
+        case TOK_SHR: opcode = OP_shr; level = 3; break;
+        case '<': opcode = OP_lt; level = 4; break;
+        case '>': opcode = OP_gt; level = 4; break;
+        case TOK_LTE: opcode = OP_lte; level = 4; break;
+        case TOK_GTE: opcode = OP_gte; level = 4; break;
+        case TOK_INSTANCEOF: opcode = OP_instanceof; level = 4; break;
+        case TOK_IN:
+            opcode = OP_in;
+            level = 4;
             break;
-        case 2:
-            switch(op) {
-            case '+':
-                opcode = OP_add;
-                break;
-            case '-':
-                opcode = OP_sub;
-                break;
-            default:
-                return 0;
-            }
-            break;
-        case 3:
-            switch(op) {
-            case TOK_SHL:
-                opcode = OP_shl;
-                break;
-            case TOK_SAR:
-                opcode = OP_sar;
-                break;
-            case TOK_SHR:
-                opcode = OP_shr;
-                break;
-            default:
-                return 0;
-            }
-            break;
-        case 4:
-            switch(op) {
-            case '<':
-                opcode = OP_lt;
-                break;
-            case '>':
-                opcode = OP_gt;
-                break;
-            case TOK_LTE:
-                opcode = OP_lte;
-                break;
-            case TOK_GTE:
-                opcode = OP_gte;
-                break;
-            case TOK_INSTANCEOF:
-                opcode = OP_instanceof;
-                break;
-            case TOK_IN:
-                if (parse_flags & PF_IN_ACCEPTED) {
-                    opcode = OP_in;
-                } else {
-                    return 0;
-                }
-                break;
-            default:
-                return 0;
-            }
-            break;
-        case 5:
-            switch(op) {
-            case TOK_EQ:
-                opcode = OP_eq;
-                break;
-            case TOK_NEQ:
-                opcode = OP_neq;
-                break;
-            case TOK_STRICT_EQ:
-                opcode = OP_strict_eq;
-                break;
-            case TOK_STRICT_NEQ:
-                opcode = OP_strict_neq;
-                break;
-            default:
-                return 0;
-            }
-            break;
-        case 6:
-            switch(op) {
-            case '&':
-                opcode = OP_and;
-                break;
-            default:
-                return 0;
-            }
-            break;
-        case 7:
-            switch(op) {
-            case '^':
-                opcode = OP_xor;
-                break;
-            default:
-                return 0;
-            }
-            break;
-        case 8:
-            switch(op) {
-            case '|':
-                opcode = OP_or;
-                break;
-            default:
-                return 0;
-            }
-            break;
+        case TOK_EQ: opcode = OP_eq; level = 5; break;
+        case TOK_NEQ: opcode = OP_neq; level = 5; break;
+        case TOK_STRICT_EQ: opcode = OP_strict_eq; level = 5; break;
+        case TOK_STRICT_NEQ: opcode = OP_strict_neq; level = 5; break;
+        case '&': opcode = OP_and; level = 6; break;
+        case '^': opcode = OP_xor; level = 7; break;
+        case '|': opcode = OP_or; level = 8; break;
         default:
-            abort();
+            return 0;
         }
+        if (level > max_level || level < min_level ||
+            (op == TOK_IN && !(parse_flags & PF_IN_ACCEPTED)))
+            return 0;
         if (next_token(s))
             return -1;
         emit_source_loc(s);
@@ -29492,7 +29499,6 @@ static __exception int js_parse_expr_binary(JSParseState *s, int level,
             return -1;
         emit_op(s, opcode);
     }
-    return 0;
 }
 
 /* allowed parse_flags: PF_IN_ACCEPTED */

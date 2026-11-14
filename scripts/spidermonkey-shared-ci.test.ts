@@ -122,14 +122,15 @@ test('real workflow steps wire the library, existing core, side and discovered c
     const recorder = '#!/bin/sh\nprintf "%s" "${0##*/}" >> "$RECORD"\nprintf " <%s>" "$@" >> "$RECORD"\nprintf "\\n" >> "$RECORD"\n';
     for (const name of ['git', 'bash', 'bun']) writeFileSync(join(bin, name), recorder, { mode: 0o755 });
     const env = { ...process.env, RECORD: join(root, 'record'), RECORDER_BIN: bin, SPIDERMONKEY_BUILD_DIR: join(root, 'sm'),
-      SPIDERMONKEY_NATIVE_DIR: join(root, 'sm/native'), SPIDERMONKEY_LIBCXX_DIR: join(root, 'jsc/libcxx/lib'), CARGO_TARGET_DIR: join(root, 'target'), RUNNER_TEMP: root };
+      SPIDERMONKEY_NATIVE_DIR: join(root, 'sm/native'), SPIDERMONKEY_LIBCXX_DIR: join(root, 'jsc/libcxx/lib'), CARGO_TARGET_DIR: join(root, 'target'), RUNNER_TEMP: root,
+      SHARED_PRODUCER_DEADLINE_MS: String(Date.now() + 60000) };
     const commands = ['Produce or verify the shared SpiderMonkey library once', 'Produce the shared SpiderMonkey profile once', 'Consume the shared SpiderMonkey native feature checks'];
     const result = spawnSync('/bin/bash', ['-euo', 'pipefail', '-c', commands.map(command).join('\n')], { cwd: root, env, encoding: 'utf8' });
     expect(result.status, result.stderr).toBe(0);
     const calls = readFileSync(env.RECORD, 'utf8').trim().split('\n');
     expect(calls.filter(line => line.startsWith('bash '))).toEqual(['bash <spidermonkey/build-shared-group.sh>']);
     expect(calls.filter(line => line.startsWith('bun '))).toEqual([
-      `bun <scripts/build-native-profile.ts> <shared-group> <${env.CARGO_TARGET_DIR}/shared-native> <spidermonkey>`,
+      `bun <scripts/producer-diagnostics.ts> <run> <${root}/shared-spidermonkey-producer> <${env.SHARED_PRODUCER_DEADLINE_MS}> <bash> <scripts/with-build-cache.sh> <bun> <scripts/build-native-profile.ts> <shared-group> <${env.CARGO_TARGET_DIR}/shared-native> <spidermonkey>`,
       'bun <scripts/test-checks.ts> <native> <--profile> <shared-group>',
     ]);
     expect(calls.filter(line => line.includes('remote.origin.promisor'))).toHaveLength(1);
