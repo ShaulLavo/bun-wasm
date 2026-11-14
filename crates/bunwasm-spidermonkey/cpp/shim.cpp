@@ -1,4 +1,5 @@
 #include "shim.h"
+#include "stack-budget.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,7 +54,7 @@ extern "C" void bsm_init(const bsm_config* config) {
   JS_SetGlobalJitCompilerOption(context, JSJITCOMPILER_PORTABLE_BASELINE_ENABLE, config->tier);
   JS_SetGlobalJitCompilerOption(context, JSJITCOMPILER_PORTABLE_BASELINE_WARMUP_THRESHOLD, 0);
   require(config->stack_high > config->stack_low + 65536, "invalid stack bounds");
-  const size_t quota = config->stack_high - config->stack_low - 65536;
+  const size_t quota = bunsm_stack_quota(config->stack_high - config->stack_low - 65536);
   JS_SetNativeStackQuota(context, quota);
   const uintptr_t expected = JS::GetNativeStackLimit(stackBase, quota - 1);
   for (const auto limit : JS::RootingContext::get(context)->nativeStackLimit) {
