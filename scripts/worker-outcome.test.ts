@@ -41,7 +41,7 @@ function receiver(execArgv: string[] | undefined = undefined) {
       if (!(name in modules)) throw new Error(`Unexpected module ${name}`);
       return modules[name];
     },
-    addIoWaiter() {}, messagePortRefs: 0,
+    addIoWaiter() {}, messagePortRefs: new Set<object>(),
   });
   const worker = new implementation.Worker("", { eval: true, stdout: true, stderr: true, execArgv });
   const errors: Error[] = [];
