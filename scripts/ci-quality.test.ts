@@ -20,6 +20,19 @@ const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-identity:\n"
 const { prebuild, ordered: rust } = nativePipeline(workflow);
 const importStepName = "Import the verified JSC prebuild and sysroot";
 
+test("unconditional native runtime controls wait for the selected compiled JSC producer", () => {
+  expect(selectChecks("runtime")).toContain("scripts/jsc-json-fast-controls.test.ts");
+  const start = nativeWorkflowStep("name", "Start the JSC Cargo guest build");
+  const wait = nativeWorkflowStep("name", "Build the JSC Cargo guest");
+  const controls = nativeWorkflowStep("name", "Blocking native fixture checks");
+  const outputs = { "needs.quality.outputs.jsc": "true" };
+  for (const step of [start, wait]) expect(cacheCondition(workflowString(workflowField(step, "if")), outputs, true)).toBe(true);
+  expect(controls).not.toHaveProperty("if");
+  expect(workflowString(workflowField(controls, "run"))).toContain("bun scripts/test-checks.ts native");
+  expect(rust.indexOf("name: Start the JSC Cargo guest build")).toBeLessThan(rust.indexOf("name: Build the JSC Cargo guest\n"));
+  expect(rust.indexOf("name: Build the JSC Cargo guest\n")).toBeLessThan(rust.indexOf("name: Blocking native fixture checks"));
+});
+
 test("CI shares one exact Node patch across TLS handoff jobs and preserves direct spread eval scope", () => {
   const pin = workflowField(workflowField(Bun.YAML.parse(workflow), "env"), "CI_NODE_VERSION");
   expect(pin).toMatch(/^26\.\d+\.\d+$/);

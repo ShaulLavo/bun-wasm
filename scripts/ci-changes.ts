@@ -205,7 +205,9 @@ export interface CheckSelection {
 }
 
 function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[]): CheckSelection {
-  return { rust: native.length > 0, jsc: needsJsc(paths), shared: needsSharedSysroot(paths), shared_native: needsSharedNative(native, profileInputs) };
+  // The native job always runs runtime checks, including compiled JSC allocation controls.
+  const rust = native.length > 0;
+  return { rust, jsc: rust, shared: needsSharedSysroot(paths), shared_native: needsSharedNative(native, profileInputs) };
 }
 
 export function selectChanges(base: string, head: string, pullRequest = false, inputsAt = nativeCheckInputsAt): CheckSelection {
