@@ -23,7 +23,7 @@ containing a nonempty, unique subset of `quickjs`, `jsc`, `browser` and `spiderm
 The native runner runs the runtime preflight once, then executes each
 declared engine's fixtures without rebuilding guests or increasing fixture-group
 concurrency. CI consumes only the producers selected by its explicit
-`INSTALL_ENGINES` subset; missing artifacts for selected engines fail. Without
+`BUN_WASM_CHECK_ENGINES` subset; missing artifacts for selected engines fail. Without
 that subset, local runs consume every declared engine. JSC selections require
 its normal producer, including when the
 manifest or fixture is removed. Shared-group manifests continue to infer their
@@ -31,9 +31,10 @@ engine from their matching producer and cannot declare `engines`.
 
 Native paths name a directory under `tests/fixtures/`. The existing native gate
 compares stdout, stderr and the expected exit through `test.sh`. SpiderMonkey
-requires an absolute `SPIDERMONKEY_WASM` and runs the interpreter tier. CI adds
-its already built SpiderMonkey producer to `INSTALL_ENGINES` only for the native
-fixture command; the separate installer matrix retains its three engines.
+requires an absolute `SPIDERMONKEY_WASM` and runs the interpreter tier. CI includes
+that producer in `BUN_WASM_CHECK_ENGINES`. The separate installer matrix and the
+installer checks inside runtime preflight use `INSTALL_ENGINES`, retaining their
+three supported engines.
 Changed targeted fixtures and manifests select JSC from the verified base, head
 and merge ancestor, including removals. Missing selected inputs fail the gate.
 Native manifests may select `"profile": "shared-group"`; omission

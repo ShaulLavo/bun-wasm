@@ -1154,6 +1154,7 @@ jobs:
       - name: Blocking native fixture checks
         env:
           INSTALL_ENGINES: ${{ needs.quality.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}
+          BUN_WASM_CHECK_ENGINES: ${{ needs.quality.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
           source env.sh
@@ -1164,7 +1165,7 @@ jobs:
           export BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm"
           export BUN_WASM_SHELL="$GITHUB_WORKSPACE/dist/bash-web-shell.wasm"
           export BUN_WASM_ENV_UTILITY="$GITHUB_WORKSPACE/dist/bash-web-env.wasm"
-          INSTALL_ENGINES="$INSTALL_ENGINES,spidermonkey" bun scripts/test-checks.ts native
+          bun scripts/test-checks.ts native
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/root-overrides.ts
 

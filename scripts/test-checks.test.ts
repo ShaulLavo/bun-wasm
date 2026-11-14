@@ -7,6 +7,7 @@ import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, 
 import { migrationBase } from "./migrations/split-bun-patches";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { needsJsc, needsRust } from "./ci-changes";
+import { installFixtureTargets } from "./install-fixture-command";
 
 const root = resolve(import.meta.dir, "..");
 const scratch: string[] = [];
@@ -78,18 +79,24 @@ test("native execution discovers each WASI engine command once without changing 
 
 test("native commands honor the CI producer subset without probing artifact presence", () => {
   const path = "tests/fixtures/wasi-memory-views";
-  const producers = nativeProducerEngines({ INSTALL_ENGINES: "quickjs,browser" });
+  const producers = nativeProducerEngines({ BUN_WASM_CHECK_ENGINES: "quickjs,browser" });
   const groups = nativeEngineGroups([path], { count: 2, producers });
   expect(groups.map(group => group.engine)).toEqual(["quickjs", "browser"]);
   for (const group of groups) expect(group.commands).toEqual([
     ["bash", join(root, "scripts/test.sh"), "--no-build", "--engine", group.engine, "wasi-memory-views"],
   ]);
-  const selected = nativeProducerEngines({ INSTALL_ENGINES: "quickjs,jsc,browser" });
+  const selected = nativeProducerEngines({ BUN_WASM_CHECK_ENGINES: "quickjs,jsc,browser" });
   expect(nativeEngineGroups([path], { count: 2, producers: selected }).map(group => group.engine)).toEqual(["quickjs", "jsc", "browser"]);
 });
 
 test("local native checks default to all declared producers", () => {
   expect(nativeProducerEngines({})).toEqual(["quickjs", "jsc", "browser", "spidermonkey"]);
+});
+
+test("native fixture engines and installer engines retain separate domains", () => {
+  const env = { INSTALL_ENGINES: "quickjs,jsc,browser", BUN_WASM_CHECK_ENGINES: "quickjs,jsc,browser,spidermonkey" };
+  expect(nativeProducerEngines(env)).toEqual(["quickjs", "jsc", "browser", "spidermonkey"]);
+  expect(installFixtureTargets(env).map(target => target.engine)).toEqual(["quickjs", "jsc", "browser"]);
 });
 
 test("capacity, process and large IO retain blocking coverage on three ordinary engines", () => {
@@ -105,18 +112,22 @@ test("capacity, process and large IO retain blocking coverage on three ordinary 
   expect(() => checkCommand("native", paths, "split", "spidermonkey", { SPIDERMONKEY_WASM: "relative.wasm" })).toThrow("absolute");
 });
 
-test("CI adds the built SpiderMonkey pair only to the native fixture command", () => {
+test("CI declares its native fixture and installer engine domains separately", () => {
   const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   const gate = workflow.split("name: Blocking native fixture checks")[1]!.split("\n      - name:")[0]!;
   expect(gate).toContain("INSTALL_ENGINES: ${{ needs.quality.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
-  expect(gate).toContain('INSTALL_ENGINES="$INSTALL_ENGINES,spidermonkey" bun scripts/test-checks.ts native');
-  expect(gate).not.toContain("BUN_WASM_CHECK_ENGINES");
+  expect(gate).toContain("BUN_WASM_CHECK_ENGINES: ${{ needs.quality.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}");
+  expect(gate).toContain("          bun scripts/test-checks.ts native\n");
 });
 
 test("native runner executes engine groups once and propagates the first failure", () => {
   const directory = fixture();
   copyFileSync(join(root, "scripts/test-checks.ts"), join(directory, "scripts/test-checks.ts"));
-  writeFileSync(join(directory, "scripts/check-runtime.sh"), "exit 0\n");
+  copyFileSync(join(root, "scripts/install-fixture-command.ts"), join(directory, "scripts/install-fixture-command.ts"));
+  writeFileSync(join(directory, "scripts/preflight.ts"), `import { installFixtureTargets } from "./install-fixture-command.ts";
+if (installFixtureTargets().map(target => target.engine).join(",") !== "quickjs,jsc,browser") throw new Error("Invalid installer preflight engines");
+`);
+  writeFileSync(join(directory, "scripts/check-runtime.sh"), 'exec "$BUN_TEST_EXECUTABLE" "$PREFLIGHT_FILE"\n');
   writeFileSync(join(directory, "scripts/test.sh"), `engine=quickjs
 case " $* " in
   *" --engine jsc "*) engine=jsc ;;
@@ -129,7 +140,7 @@ printf '%s\\n' "$engine $*" >> "$RECORD"
   manifest(directory, { owner: "native", path: "tests/fixtures/plain" }, "native-plain.json");
   manifest(directory, { owner: "native", path: "tests/fixtures/matrix", engines: ["quickjs", "jsc", "spidermonkey"] }, "native-matrix.json");
   const record = join(directory, "record");
-  const env: NodeJS.ProcessEnv = { ...process.env, RECORD: record, BUN_WASM_CHECK_JOBS: "1", INSTALL_ENGINES: "quickjs,jsc,spidermonkey", SPIDERMONKEY_WASM: "/ordinary/core.wasm" };
+  const env: NodeJS.ProcessEnv = { ...process.env, RECORD: record, BUN_WASM_CHECK_JOBS: "1", INSTALL_ENGINES: "quickjs,jsc,browser", BUN_WASM_CHECK_ENGINES: "quickjs,jsc,spidermonkey", SPIDERMONKEY_WASM: "/ordinary/core.wasm", BUN_TEST_EXECUTABLE: process.execPath, PREFLIGHT_FILE: join(directory, "scripts/preflight.ts") };
   const run = () => spawnSync(process.execPath, [join(directory, "scripts/test-checks.ts"), "native"], { env, encoding: "utf8" });
   expect(run().status).toBe(0);
   expect(readFileSync(record, "utf8").trim().split("\n")).toEqual([
@@ -144,7 +155,7 @@ printf '%s\\n' "$engine $*" >> "$RECORD"
 });
 
 test.each(["", "jsc,jsc", "unknown", "quickjs, jsc", ",browser"])("native producer selection rejects %s", value => {
-  expect(() => nativeProducerEngines({ INSTALL_ENGINES: value })).toThrow("Invalid native engines");
+  expect(() => nativeProducerEngines({ BUN_WASM_CHECK_ENGINES: value })).toThrow("Invalid native engines");
 });
 
 test("engine selection belongs only to split native fixtures", () => {

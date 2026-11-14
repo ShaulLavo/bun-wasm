@@ -49,7 +49,7 @@ function nativeSelection(value: object, profile: NativeProfile, file: string): N
 }
 
 export function nativeProducerEngines(env = process.env): readonly NativeEngine[] {
-  return env.INSTALL_ENGINES === undefined ? nativeEngines : engineSubset(env.INSTALL_ENGINES.split(","), "INSTALL_ENGINES");
+  return env.BUN_WASM_CHECK_ENGINES === undefined ? nativeEngines : engineSubset(env.BUN_WASM_CHECK_ENGINES.split(","), "BUN_WASM_CHECK_ENGINES");
 }
 
 export function parseCheck(value: unknown, file: string): Check {
