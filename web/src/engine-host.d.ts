@@ -12,7 +12,8 @@ export interface EngineHostOptions {
   instance: WebAssembly.Instance;
   /** Synchronous host diagnostic before a bunwasm_call trap propagates. Observer errors are ignored. */
   onWasmCallTrap?: (error: WebAssembly.RuntimeError, index: number) => void;
-  /** Internal opt-in observer before guest error formatting. Observer failures are ignored. */
+  /** Synchronous internal observer before guest error formatting. Retains evaluated source strings
+   * only when enabled, which can affect memory measurements. Observer failures are ignored. */
   onUncaughtDiagnostic?: (error: unknown, sources: readonly EngineHostEvaluatedSource[]) => void;
   /** The URLs native ES modules get with a module store: blob: URLs in browsers, data: URLs in Node. */
   moduleUrls: "blob" | "data";

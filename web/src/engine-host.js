@@ -414,6 +414,9 @@ export function startEngineHost(o) {
 class EngineHost {
   constructor(o, resolve) {
     this.o = o;
+    try {
+      if (typeof o.onUncaughtDiagnostic === "function") this.diagnosticSources = [];
+    } catch {}
     this.resolveDone = resolve;
     this.wasm = wasmCaller(o.instance.exports, o.onWasmCallTrap);
     this.exited = false;
@@ -640,6 +643,10 @@ class EngineHost {
   // Indirect eval: global scope, sloppy unless the code says otherwise; the
   // sourceURL names the file in stack traces.
   evalAt(code, filename) {
+    if (this.diagnosticSources) {
+      try { this.diagnosticSources.push(Object.freeze({ kind: "eval", filename, source: code })); }
+      catch {}
+    }
     return nativeEval(`${code}\n//# sourceURL=${filename}`);
   }
 
@@ -681,6 +688,10 @@ class EngineHost {
       ? nativeCreateObjectURL(new NativeBlob([source], { type: "text/javascript" }))
       : `data:text/javascript;charset=utf-8,${escapeParentheses(nativeEncodeURIComponent(source))}`;
     nativeMapSet(this.paths, base, key);
+    if (this.diagnosticSources) {
+      try { this.diagnosticSources.push(Object.freeze({ kind: "module", filename: key, url: base, source })); }
+      catch {}
+    }
     return `${base}#${nativeEncodeURIComponent(key)}`;
   }
 
