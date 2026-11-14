@@ -130,13 +130,13 @@ export class NodeProcessBroker {
       registry,
       launch: context => {
         const transport = this.broker.get(context.pid);
-        if (!transport) throw new Error(`missing process transport ${context.pid}`);
+        if (!transport || transport.generation !== context.generation) throw new Error(`missing process image transport ${context.pid}`);
         const worker = options.launch(context, transport);
         this.attach(worker, transport);
         return { terminate: () => worker.terminate().then(() => {}) };
       },
       startFailed: (pid, error, active) => {
-        const resource = this.supervisor.get(pid)?.descriptors.get(2)?.resource;
+        const resource = this.supervisor.get(pid)?.image.descriptors.get(2)?.resource;
         const bytes = new TextEncoder().encode(`bun-wasm: ${error instanceof Error ? error.message : error}\n`);
         if (resource?.kind === "pipe" || resource?.kind === "terminal") {
           const write = resource.tryWrite;
@@ -199,10 +199,19 @@ export class NodeProcessBroker {
     else this.inputSource?.resume();
   }
   attach(worker: Worker, transport: WorkerProcessTransport): void {
+    const { pid } = workerProcessState(transport);
+    const record = this.supervisor.get(pid);
+    if (!record || record.image.generation !== transport.generation) throw new Error(`missing process image ${pid}`);
+    const image = record.image;
+    const current = () => this.supervisor.get(pid) === record && record.image === image;
     const observer = captureProcessObserver(transport);
     const returned = captureNativeReturn(transport);
     const nativeTerminate = worker.terminate.bind(worker);
-    const { pid } = workerProcessState(transport);
+    const nativeReturned = () => {
+      if (record.image === image) returned();
+      if (this.workers.get(pid) === worker) this.workers.delete(pid);
+    };
+    const afterTermination = (code: number) => { nativeReturned(); return code; };
     let stopping: Promise<number> | undefined;
     worker.terminate = () => {
       if (stopping) return stopping;
@@ -210,33 +219,33 @@ export class NodeProcessBroker {
       stopping = completion.promise;
       void stopping.catch(() => {});
       try {
-        nativeTerminate().then(code => { returned(); this.workers.delete(pid); return code; })
-          .then(completion.resolve, completion.reject);
+        nativeTerminate().then(afterTermination).then(completion.resolve, completion.reject);
       } catch (error) { completion.reject(error); }
       return stopping;
     };
     this.workers.set(pid, worker);
     worker.on("message", (message: WorkerProcessMessage) => {
-      if (message?.type === "runtime-proc") void this.broker.handle(message, pid);
+      if (current() && message?.type === "runtime-proc") void this.broker.handle(message, pid);
     });
     worker.on("error", error => {
-      if (observer.read().kind !== "pending") return;
-      const record = this.supervisor.get(pid);
-      if (record && startStatus(record.outcome) !== 0) {
+      if (!current() || observer.read().kind !== "pending") return;
+      if (startStatus(record.outcome) !== 0) {
         // The supervisor's startup diagnostic sink runs only after terminal selection wins.
         this.supervisor.failStart(pid, error);
         return;
       }
       const bytes = new TextEncoder().encode(`node-host: ${error instanceof Error ? error.stack : error}\n`);
-      const stderr = record?.descriptors.get(2)?.resource;
+      const stderr = image.descriptors.get(2)?.resource;
       if (stderr?.kind === "pipe" || stderr?.kind === "terminal") stderr.write([bytes]);
       else if (pid === 1) writeSync(2, bytes);
       this.supervisor.exit(pid, 126);
     });
     worker.on("exit", code => {
-      this.supervisor.exit(pid, code);
-      this.broker.pump(); this.pipes.pump();
-      if (!stopping) { this.workers.delete(pid); queueMicrotask(returned); }
+      if (current()) {
+        this.supervisor.exit(pid, code);
+        this.broker.pump(); this.pipes.pump();
+      }
+      if (!stopping) queueMicrotask(nativeReturned);
     });
   }
   dispose(): Promise<void> {
