@@ -34,6 +34,7 @@ function runtime(capabilities = new WeakSet<object>()) {
       transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
     },
     require(name: string): unknown {
+      if (name === "text_decoder") return TextDecoder;
       if (name === "streams") return { ReadableStream };
       if (name === "body_streams") return { remember: (stream: unknown) => stream };
       if (name === "web_brand") return () => {};

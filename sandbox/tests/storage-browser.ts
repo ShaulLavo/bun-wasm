@@ -255,20 +255,24 @@ export class StoragePreservationFailure extends Error {
 
 interface StoragePageDiagnostic {
   url: string; status: string | null | undefined; storage?: string | null;
-  terminal: string; frames: readonly { src: string; body?: string }[];
+  terminal: string; frames: readonly { src: string; body?: string; documentUrl?: string; readyState?: string; acceptedDocument?: boolean }[];
   runtime: null | {
     filesystem: { status: string; error?: string }; started: boolean | null;
     editorPath: string | null; pending: boolean;
   };
 }
 
-async function diagnostic(page: Page): Promise<StoragePageDiagnostic | string> {
+export async function diagnostic(page: Page): Promise<StoragePageDiagnostic | string> {
   if (page.isClosed()) return "closed";
   return page.evaluate(() => {
     const api = typeof sandbox === "undefined" ? null : sandbox;
     const buffer = api?.term?.buffer.active;
     const terminal = buffer ? Array.from({ length: Math.min(buffer.length, 80) }, (_, index) => buffer.getLine(Math.max(0, buffer.length - 80) + index)?.translateToString(true) ?? "").join("\n") : "";
-    const frames = Array.from(document.querySelectorAll("iframe"), frame => ({ src: frame.src, body: frame.contentDocument?.body?.innerText.slice(0, 2000) }));
+    const frames = Array.from(document.querySelectorAll("iframe"), frame => {
+      const current = frame.contentDocument;
+      return { src: frame.src, body: current?.body?.innerText.slice(0, 2000), documentUrl: current?.URL,
+        readyState: current?.readyState, acceptedDocument: current !== null && api?.preview()?.loaded?.document === current };
+    });
     const runtime = api ? { filesystem: { ...api.fs.state, error: api.fs.state.error?.message }, started: api.started?.() ?? null, editorPath: api.editor.path, pending: api.editor.hasPending } : null;
     return { url: location.href, status: document.querySelector("#status")?.textContent, storage: document.querySelector("#storage-status")?.textContent, terminal, frames, runtime };
   }).catch(error => String(error));

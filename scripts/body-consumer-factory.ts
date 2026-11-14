@@ -16,6 +16,7 @@ export function bodyConsumerFactory(sources: ReturnType<typeof bodyConsumerSourc
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const modules = new Map<string, unknown>([
+    ["text_decoder", TextDecoder],
     ["streams", { ReadableStream, TransformStream, WritableStream }],
     ["url_search_params", new Function(sources.url)()()],
     ["web_brand", new Function(sources.brand)()()],
