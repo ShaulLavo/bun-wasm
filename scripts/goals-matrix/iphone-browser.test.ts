@@ -154,6 +154,25 @@ setInterval(async () => { if (await (await fetch('/revision')).text() !== String
 </script></body></html>`, { headers: { "content-type": "text/html" } });
 }
 
+async function reloadAfterDelivery(bus: IphoneBus, read: string, reload: () => void): Promise<unknown> {
+  const delivered = Promise.withResolvers<void>();
+  const poll = bus.poll.bind(bus);
+  const observedPoll = spyOn(bus, "poll").mockImplementation((...args) => {
+    const value = poll(...args);
+    if (value && typeof value === "object" && "source" in value && value.source === read) delivered.resolve();
+    return value;
+  });
+  try {
+    const pending = bus.execute("preview", read, 3000, true, Date.now() + 3000);
+    await Promise.race([delivered.promise, pending.then(() => { throw new Error("Preview observation settled before delivery"); })]);
+    reload();
+    return await pending;
+  } finally {
+    observedPoll.mockRestore();
+    bus.cancel("preview");
+  }
+}
+
 async function previewReload(engine: BrowserType): Promise<void> {
   const bus = new IphoneBus("/__goals_iphone/" + "d".repeat(64));
   let ownerOrigin = "";
@@ -166,14 +185,6 @@ async function previewReload(engine: BrowserType): Promise<void> {
   ownerOrigin = owner.url.origin;
   const revision = { value: 1 };
   const read = "new Promise(resolve => { const text = document.querySelector('h1').textContent; if (text === 'revision 2') resolve(text); })";
-  let acknowledge = () => {};
-  const delivered = new Promise<void>(resolve => { acknowledge = resolve; });
-  const poll = bus.poll.bind(bus);
-  const observedPoll = spyOn(bus, "poll").mockImplementation((...args) => {
-    const value = poll(...args);
-    if (value && typeof value === "object" && "source" in value && value.source === read) acknowledge();
-    return value;
-  });
   let browser: Browser | undefined;
   try {
     browser = await engine.launch({ headless: true });
@@ -187,14 +198,10 @@ async function previewReload(engine: BrowserType): Promise<void> {
     await waitReady(bus, "preview");
     const before = bus.state("preview");
     if (!before?.timeOrigin) throw new Error("Missing initial preview identity");
-    const pending = bus.execute("preview", read, 3000, true, Date.now() + 3000).catch(error => error);
-    await delivered;
-    revision.value = 2;
-    expect(await pending).toBe("revision 2");
+    expect(await reloadAfterDelivery(bus, read, () => { revision.value = 2; })).toBe("revision 2");
     expect(bus.state("preview")?.nonce).not.toBe(before.nonce);
     expect(bus.state("preview")?.timeOrigin).not.toBe(before.timeOrigin);
   } finally {
-    observedPoll.mockRestore();
     await browser?.close(); bus.close(); restore(); await origins.close(); await owner.stop(true); await control.stop(true);
   }
 }
@@ -202,3 +209,56 @@ async function previewReload(engine: BrowserType): Promise<void> {
 for (const engine of [chromium, webkit]) {
   test(`read-only preview observation follows a real automatic document reload in ${engine.name()}`, () => previewReload(engine), 15000);
 }
+
+function attachedPreview() {
+  const bus = new IphoneBus("/test");
+  const url = "http://127.0.0.1:1234/";
+  bus.configure("preview", url);
+  const page = bus.state("preview");
+  if (!page) throw new Error("Missing preview");
+  const key = { url, nonce: page.nonce, timeOrigin: 1, visible: true };
+  bus.poll("preview", key, new URL(url).origin);
+  return { bus, key, origin: new URL(url).origin };
+}
+
+test.each(["expiry", "close"] as const)("reload delivery wait propagates %s and restores its poll spy", async scenario => {
+  const { bus, key, origin } = attachedPreview();
+  const poll = bus.poll;
+  const reload = { called: false };
+  const waiting = reloadAfterDelivery(bus, "read()", () => { reload.called = true; });
+  const guard = Promise.withResolvers<never>();
+  const timer = setTimeout(() => guard.reject(new Error("Delivery wait stranded after command settlement")), 100);
+  const guarded = Promise.race([waiting, guard.promise]);
+  try {
+    if (scenario === "close") bus.close();
+    else {
+      const now = Date.now();
+      const clock = spyOn(Date, "now").mockReturnValue(now + 3001);
+      try { expect(bus.poll("preview", key, origin)).toBeNull(); }
+      finally { clock.mockRestore(); }
+    }
+    await expect(guarded).rejects.toThrow(scenario === "expiry" ? "delivery deadline expired" : "expired or closed");
+    expect(reload.called).toBe(false);
+    expect(bus.poll).toBe(poll);
+    if (scenario === "expiry") expect(bus.poll("preview", key, origin)).toBeNull();
+    else expect(bus.state("preview")).toBeNull();
+  } finally { clearTimeout(timer); bus.close(); }
+}, 1000);
+
+test("reload delivery wait observes delivery before reloading and cancels on reload failure", async () => {
+  const { bus, key, origin } = attachedPreview();
+  const poll = bus.poll;
+  const failure = new Error("reload fixture failed");
+  const waiting = reloadAfterDelivery(bus, "read()", () => { throw failure; });
+  void waiting.catch(() => {});
+  try {
+    expect(bus.poll("preview", key, origin)).toMatchObject({ source: "read()" });
+    await expect(waiting).rejects.toBe(failure);
+    expect(bus.poll).toBe(poll);
+    const next = bus.execute("preview", "next()", 3000, true, Date.now() + 3000);
+    const task = bus.poll("preview", key, origin);
+    expect(task).toMatchObject({ id: 2, source: "next()" });
+    bus.reply("preview", { ...key, id: 2, ok: true, value: "clean" }, origin);
+    expect(await next).toBe("clean");
+  } finally { bus.close(); }
+});
