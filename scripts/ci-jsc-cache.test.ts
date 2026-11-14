@@ -83,8 +83,13 @@ test("the existing key, compatible prefix and run-bound handoff stay intact", ()
 });
 
 test("JSC composite steps use runner-supported metadata", () => {
-  for (const composite of [setup, build]) {
-    for (const item of steps(composite)) expect(item).not.toHaveProperty("timeout-minutes");
+  const names = ["jsc-setup", "jsc-prebuild", "shared-jsc-setup", "shared-jsc-prebuild"];
+  const compositeSteps = names.flatMap(name => steps(record(document(`.github/actions/${name}/action.yml`).runs)));
+  for (const item of compositeSteps) {
+    expect(item).not.toHaveProperty("timeout-minutes");
+    if (item.run === undefined) continue;
+    expect(item.shell).toBeString();
+    expect(item.shell).not.toBe("");
   }
 });
 

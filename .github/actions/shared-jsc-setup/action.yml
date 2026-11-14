@@ -34,6 +34,7 @@ runs:
         path: .ci-bun-cache
         key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
     - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     - name: Install sysroot build tools
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
