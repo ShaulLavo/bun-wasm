@@ -1,7 +1,7 @@
 # JSC cache production
 
 The JSC cache producer workflow runs on each main push outside the full CI
-workflow's `push-main` queue. It resolves the existing effective JSC cache key
+workflow's latest-wins `push-main` group. It resolves the existing effective JSC cache key
 after preparing the pinned tools and patched sysroot. A source path filter cannot
 represent that identity because effective compiler flags and tool receipts also
 contribute to it. An unchanged identity restores and verifies without compiling JSC.

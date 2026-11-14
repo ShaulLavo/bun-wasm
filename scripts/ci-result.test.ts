@@ -59,7 +59,7 @@ test("existing required Code quality name is a final non-skippable gate over eve
   expect(gate.needs.toSorted()).toEqual(jobIds.toSorted());
   expect(gate.name).toBe("Code quality");
   expect(object(jobs.quality).name).toBe("Source quality");
-  expect(gate.if).toBe("${{ always() }}");
+  expect(gate.if).toBe("${{ always() && (github.event_name != 'push' || github.ref != 'refs/heads/main' || !cancelled()) }}");
   expect(gate["continue-on-error"]).toBeUndefined();
   expect(gate["timeout-minutes"]).toBe(5);
   if (!Array.isArray(gate.steps)) throw new Error("Missing aggregate steps");
