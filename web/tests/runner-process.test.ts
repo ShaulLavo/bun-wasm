@@ -266,6 +266,12 @@ function rootClient(request: RunRequest, deliver: (message: object) => void) {
   }, dispose: () => descriptors.dispose() };
 }
 
+function expectedPairUrls(engine: "quickjs" | "jsc", builds: Readonly<Record<string, string>>) {
+  const names = [ENGINES[engine].wasm, programProfile(engine).side];
+  return names.map(name => `http://localhost/${name}.gz?v=${builds[name]}`)
+    .concat(names.map(name => `http://localhost/${name}`));
+}
+
 const engines: Engine[] = ["quickjs", "jsc", "browser"];
 
 for (const engine of engines) {
@@ -337,7 +343,7 @@ for (const engine of engines) {
       }
       expect(loaded.size).toBe(available.length);
       expect(urls).toEqual(available.filter(selected => selected !== engine).flatMap(selected => selected === "quickjs" || selected === "jsc"
-        ? [ENGINES[selected].wasm, programProfile(selected).side].flatMap(name => [`http://localhost/${name}.gz?v=${builds[name]}`, `http://localhost/${name}`])
+        ? expectedPairUrls(selected, builds)
         : [`http://localhost/${ENGINES[selected].wasm}.gz`, `http://localhost/${ENGINES[selected].wasm}`]));
     } finally {
       try { await state.dispose(); }
