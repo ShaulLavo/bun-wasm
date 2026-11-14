@@ -1,10 +1,11 @@
 # Run the published Oxc consumer through a shared group
 
-Status: Approved. The source runner is ready for matched producer inputs. Runtime
-acceptance is pending. This check does not qualify Nuxt or later Oxc worker use.
+Status: Approved. The source runner accepts JSC, QuickJS and SpiderMonkey shared
+profiles. Live acceptance still needs matching producer inputs. Development
+Browser evidence does not qualify a native packet or Nuxt.
 
-Run from this checkout after the parent supplies a matching QuickJS group core,
-its adjacent `quickjs.wasm`, the native launcher, and a Browser-engine control guest:
+Run once per selected shared profile, with its matching adjacent engine side,
+native launcher, and Browser-engine control guest:
 
 ```sh
 source env.sh
@@ -12,48 +13,59 @@ bun /work/heavy-runner/current/run.js --class light --host local real-oxc-consum
   bun scripts/real-oxc-consumer.ts "$GROUP_CORE" "$LAUNCHER" "$BROWSER_GUEST" "$RESULT_JSON"
 ```
 
-Set each path explicitly. The driver never builds or downloads a guest. It fails
-on a missing or mixed split/group pair before starting an install. Artifact source
-matching remains the producer handoff's responsibility. Synthetic decoder tests do
-not establish that matching or qualify a runtime.
+The core tag selects JSC, QuickJS or SpiderMonkey and its expected side filename.
+For SpiderMonkey, set `BUN_WASM_SPIDERMONKEY_TIER=interp` or `pbl` explicitly. The
+driver passes that tier to the native guest and the existing Browser-host runner.
+It never builds or downloads a guest. Missing artifacts, split cores, mixed
+profiles and incorrect side exports fail before installation. Matching the source
+of all producer outputs remains the producer handoff's responsibility.
 
-The driver copies `tests/real-oxc-consumer` into private scratch and runs a genuine
-`install --frozen-lockfile` with the selected group guest. It never asks the host
-package manager to resolve Oxc. The fixture's four files match the authoritative
-Nuxt handoff byte for byte, including its guest-generated lock and Oxc 0.94.0 pin.
-The installed stock loader and official Wasm binding remain unedited.
+The driver copies `tests/real-oxc-consumer` into private scratch and runs the
+selected guest's `install --frozen-lockfile`. Its lock pins official parser,
+transform and minify packages and their WASI bindings at 0.94.0. The lock was
+extended with host Bun's lockfile-only resolver and normalized to the existing
+guest installer metadata rules. Transform's WASI fallback is a required dependency
+in that lock, as parser's already was, and guest lock records omit `libc`. Public
+package manifests and selection logic are unchanged. The live check still installs
+with the guest and refuses changes to any fixture source or lock bytes. Package
+loaders and binaries remain unedited. No force-WASI environment override is used.
 
-The native group and Browser-engine control each run `/index.ts` and `/direct.ts`
-on that same installed tree. Package parsing must print `ExportNamedDeclaration 0`.
-The direct control must load the official binding and construct the unchanged
-shared Memory descriptor with 4000 initial pages and 65536 maximum pages.
+A single consumer table defines package names, direct bindings, API methods,
+filenames, source, options and semantic checks. Every execution checks:
 
-The driver then passes the installed tree to
-`web/tests/shared-wasm-memory-browser.ts` through `SHARED_WASM_OXC_TREE`.
-That existing runner stages every directory and file, including nested scoped
-packages, binary Wasm, JSON, and CommonJS loaders. Its inventory lives outside the
-copied tree. The page recreates the tree at `/` and runs the unchanged entries
-through `startRun`, the production broker, and the production worker. Both natural
-exit statuses and exact outputs must pass. Every observed group must retire and
-release its budget. No pool, group policy, loader, or Memory descriptor changes.
+- `index.ts` evaluates all three public packages through their stock selection
+  logic and invokes their synchronous APIs.
+- `direct.ts` separately requires each official WASI binding and invokes the same
+  APIs. It also preserves the original shared Memory control with 4000 initial
+  pages and 65536 maximum pages. Direct failures retain their inner exceptions.
+- `async.ts` calls public `parseAsync` and `transformAsync`, verifies actual
+  promises, and checks resolved output. Both calls start before awaiting results.
+  Minify 0.94.0 exposes only its synchronous API.
 
-Symlinks and special files fail staging rather than being omitted or dereferenced.
-The current page filesystem API has no symlink creation operation. If the actual
-guest-installed Oxc tree contains one, report that failure. Do not rewrite it into
-a different tree. Source staging tests use synthetic files, not an installed Oxc
-package, and do not claim this case has passed at runtime.
+Parser checks inspect the exported variable and its value in the public AST or
+the direct binding's JSON envelope. Transform receives a TypeScript filename,
+`cwd` and `lang` options, and must emit runnable JavaScript without its type
+annotation. Generated transform and minify code must compute 42. Minify must also
+shorten its input. Export existence alone cannot pass these checks.
 
-Each native or Browser-engine command keeps the original 90-second limit. Each
-Oxc Browser-host entry also has a 90-second limit, within the existing runner's
-300-second overall limit. The aggregate Browser fixture keeps its existing
-240-second per-entry limit and unchanged clean/debt assertions. Its discovered
-qualification rejects Oxc selection, so this opt-in driver cannot replace either
-aggregate entry. Diagnostic overrides and `NAPI_RS_FORCE_WASI`, even empty, fail
-the Oxc driver. The driver writes observations for started commands to `RESULT_JSON` on failure
-and removes its scratch after its child exits. Signal cancellation reaches the
-child before scratch teardown.
+The native group and Browser-engine control run every entry on the same installed
+tree. A failed public command does not suppress the direct-binding or async
+observations. Any failure still fails the driver. The installed tree then enters
+`web/tests/shared-wasm-memory-browser.ts` through `SHARED_WASM_OXC_TREE`. That
+existing runner stages every file and directory and uses the production Browser
+executor. Exact outputs, natural exit, group retirement and budget release remain
+required. Symlinks and special files still fail staging.
 
-Source checks require no guests, browsers, or Oxc installation:
+Native and Browser-engine commands retain their 90-second bounds. Browser-host
+entries retain 90 seconds each and the existing 300-second overall bound. The
+aggregate shared-memory qualification retains its 240-second entry bound and
+clean/debt assertions. Its blocking check rejects Oxc diagnostic selection, so
+this opt-in driver cannot substitute for the qualification gate. Overrides,
+including an empty `NAPI_RS_FORCE_WASI`, fail before installation. Observations
+are saved on failure, and signal cancellation stops children before scratch
+teardown.
+
+Source checks require no engines, browser, or Oxc install:
 
 ```sh
 source env.sh
@@ -63,8 +75,8 @@ bun /work/heavy-runner/current/run.js --class light --host local real-oxc-source
 bun scripts/migrations/discover-checks.ts --check
 ```
 
-The staging script test belongs to Web and local-runtime discovery. The Oxc
-selection test belongs to Quality. The page inventory test uses Web's existing
-automatic directory discovery. No new runtime CI gate is claimed: adding the
-matched Browser control and launcher handoff to that gate is outside this bounded
-source unit. The existing shared-group producer and aggregate owners are unchanged.
+`checks/quality-real-oxc-consumer.json` retains the source check's Quality owner.
+Staging retains its Web and local-runtime owners, and the shared qualification
+keeps its existing blocking owner and protections. No workflow command or new
+runtime CI gate is added. Host API controls use report-only synthetic results;
+they do not establish real addon success.

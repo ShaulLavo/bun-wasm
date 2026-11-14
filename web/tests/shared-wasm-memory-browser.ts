@@ -11,14 +11,13 @@ import { stageFixtureTree } from "../../scripts/fixture-tree";
 import { oxcOutputs, oxcTreeVariable, requireOxcEnvironment, requireOxcTree } from "../../scripts/real-oxc-consumer";
 import { buildBrowserEntries } from "../../scripts/browser-build";
 import { assertOwnership, OWNERSHIP_ENTRY, pageHost, type PageHost } from "./parser-reserve-ownership.ts";
+import { ADDRESS_SPACE, ADDRESS_SPACE_ENTRY, DEBT_ENTRY, sharedWasmBrowserPlan } from "./shared-wasm-browser-plan";
 
 const web = resolve(import.meta.dir, "..");
 const repository = resolve(web, "..");
 const fixtureSource = join(repository, "tests/fixtures/shared-wasm-memory");
 /** The 2 GiB address-space fixture the native host also runs, staged beside the shared one. */
 const addressSpaceSource = join(repository, "tests/fixtures/shared-group-address-space");
-const ADDRESS_SPACE = "address-space";
-const ADDRESS_SPACE_ENTRY = `${ADDRESS_SPACE}/guest.ts`;
 const oxcTree = process.env[oxcTreeVariable];
 
 let selectedSpiderMonkey = false;
@@ -97,7 +96,6 @@ function serve(out: string): number {
 type OwnerCounters = { members: number; retained: number; regions: number; holds: number; pins: number; watches: number; published: number };
 type StackProof = { low: number; high: number; stackBytes: number; pointer: number; samePointer: boolean };
 type Result = { hostStacks?: readonly StackProof[]; done: true; thrown?: string; code?: number; error?: string; stdout?: string; stderr?: string; wallMs?: number; peak?: { groups: number; regions: number; holds: number; committedBytes: number }; groups?: readonly OwnerCounters[]; ended?: readonly OwnerCounters[]; budget?: number; agentCloseDelays?: Readonly<Record<string, number>> };
-const DEBT_ENTRY = "failed-stop.ts";
 
 /** Every owner this run created has ended and holds nothing; the page budget is back to zero. */
 function assertRetired(value: Result): void {
@@ -216,7 +214,7 @@ function assertSpiderMonkeyReentry({ value, pageErrors }: EntryRun): void {
 function assertOxc(entry: string, { value, pageErrors }: EntryRun): void {
   assert.equal(value.thrown, undefined, String(value.thrown));
   assert.equal(value.code, 0, value.stderr ?? String(value.error));
-  assert.ok(entry === "index.ts" || entry === "direct.ts");
+  assert.ok(entry === "index.ts" || entry === "direct.ts" || entry === "async.ts");
   assert.equal(value.stdout, oxcOutputs[entry]);
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(value.groups, [], "the Oxc group is released after the supported stop");
@@ -226,15 +224,14 @@ function assertOxc(entry: string, { value, pageErrors }: EntryRun): void {
 async function runBrowser(type: BrowserType, name: string, port: number, kind: string): Promise<void> {
   launching = type.launch({ headless: true, downloadsPath: join(scratch!, "downloads") });
   browser = await launching;
-  if (selectedSpiderMonkey) {
+  const plan = sharedWasmBrowserPlan(kind, oxcTree, process.env.SHARED_WASM_ENTRY);
+  if (plan.spiderMonkeyCanaries) {
     assertSpiderMonkeyCanary(await runEntry(name, port, "spidermonkey-canary.ts"));
     assertSpiderMonkeyRecursion(await runEntry(name, port, "spidermonkey-recursion.ts"));
     assertSpiderMonkeyReentry(await runEntry(name, port, "spidermonkey-reentry.ts"));
   }
-  const override = process.env.SHARED_WASM_ENTRY;
-  const entries = oxcTree !== undefined ? Object.keys(oxcOutputs) : override ? [override] : ["browser-guest.ts", OWNERSHIP_ENTRY, DEBT_ENTRY, ADDRESS_SPACE_ENTRY];
   const runs = [];
-  for (const entry of entries) runs.push({ entry, run: await runEntry(name, port, entry) });
+  for (const entry of plan.entries) runs.push({ entry, run: await runEntry(name, port, entry) });
   await browser.close();
   browser = undefined;
   launching = undefined;
