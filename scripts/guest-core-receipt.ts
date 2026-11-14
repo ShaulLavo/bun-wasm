@@ -144,7 +144,7 @@ async function retainedOutput(request: ProgramOutputRequest): Promise<ProgramBui
 }
 
 /** The composing caller owns retirement, only after every retained output and input is validated. */
-export async function prepareProgramOutputs(requests: readonly ProgramOutputRequest[]): Promise<void> {
+export async function prepareProgramOutputs(requests: readonly ProgramOutputRequest[]): Promise<readonly ProgramInputSnapshot[]> {
   const origins = await Promise.all(requests.map(retainedOutput));
   const capture = (request: ProgramOutputRequest) => request.scope === "core"
     ? captureProgramInputs(request.options, request.scope, request.selection)
@@ -158,6 +158,7 @@ export async function prepareProgramOutputs(requests: readonly ProgramOutputRequ
     await rm(request.artifact);
     await rm(outputReceiptPath(request));
   }
+  return inputs;
 }
 
 type ComposedBuild = "quickjs" | "quickjs-minimal" | "jsc";
@@ -186,9 +187,23 @@ export function engineEnvironment(kind: SupportedPairedEngine, sysroot: string, 
   return flags;
 }
 
+/**
+ * A receipt names a release. An environment that selects something else, or that could change
+ * what the compiler builds without this capture seeing it, is refused before anything is read.
+ */
+export function assertQualifiedEnvironment(scope: ProgramInputSnapshot["scope"] | "spidermonkey", env: Record<string, string | undefined>): void {
+  if (env.RUSTFLAGS !== undefined || env.CARGO_ENCODED_RUSTFLAGS !== undefined) throw new Error("Unset ambient RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS for qualified program inputs");
+  if (scope === "core") return;
+  if (scope === "quickjs" && (env.QUICKJS_SMOKE_EXPORTS ?? "0") !== "0") throw new Error("Qualified QuickJS program receipts require QUICKJS_SMOKE_EXPORTS=0");
+  // A validation side (crates/bunwasm-engine-quickjs/src/transfer_fault.rs) is never a release.
+  // The compiler's own variable is refused whatever it holds: only a side's producer sets it.
+  const [engine, option] = scope === "quickjs" ? ["QuickJS", "QUICKJS_TRANSFER_FAULT"]
+    : scope === "spidermonkey" ? ["SpiderMonkey", "SPIDERMONKEY_TRANSFER_FAULT"] : ["JSC", "JSC_TRANSFER_FAULT"];
+  if ((env[option] ?? "0") !== "0" || env.BUN_WASM_TRANSFER_FAULT !== undefined) throw new Error(`Qualified ${engine} program receipts require ${option}=0 and no BUN_WASM_TRANSFER_FAULT`);
+}
+
 export async function captureProgramInputs(options: SourceOptions, scope: ProgramInputSnapshot["scope"], selection?: unknown, engineProfile: ProgramProfile = "split"): Promise<ProgramInputSnapshot> {
-  if (process.env.RUSTFLAGS !== undefined || process.env.CARGO_ENCODED_RUSTFLAGS !== undefined) throw new Error("Unset ambient RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS for qualified program inputs");
-  if (scope === "quickjs" && (process.env.QUICKJS_SMOKE_EXPORTS ?? "0") !== "0") throw new Error("Qualified QuickJS program receipts require QUICKJS_SMOKE_EXPORTS=0");
+  assertQualifiedEnvironment(scope, process.env);
   run(["bash", join(options.repository, "scripts/sync-bun.sh"), "--check"], options.repository);
   const core = scope === "core" ? coreSelection(selection) : undefined;
   const profile = core ? core.profile ?? "split" : engineProfile;

@@ -36,10 +36,9 @@ test('one bounded SM library prebuild feeds the original blocking owner and all 
   expect(consumer).toContain('timeout-minutes: 30');
   expect(consumer).not.toContain('spidermonkey/build-shared-group.sh');
   expect(consumer).not.toContain('id: shared-spidermonkey-cache');
-  for (const name of ['Consume the shared native feature checks', 'Consume the shared Browser feature checks',
-    'Consume the shared JSC feature checks', 'Consume the shared SpiderMonkey native feature checks', 'Consume the shared SpiderMonkey Browser feature checks']) {
+  for (const [id, name] of [['shared-native', 'Consume the discovered shared native checks sequentially'], ['shared-browser', 'Consume the discovered shared Browser checks sequentially']]) {
     expect(workflow.match(new RegExp(`name: ${name}\\n`, 'g'))).toHaveLength(1);
-    expect(consumer).toContain(`name: ${name}\n`);
+    expect(job(id!)).toContain(`name: ${name}\n`);
   }
   expect(command('shared-spidermonkey-prebuild', 'Import only the verified shared sysroot for SpiderMonkey')).not.toContain('tar --posix -xOf "$transfer" prebuild.tar.zst |');
   const upload = producer.split('          name: shared-spidermonkey-prebuild\n')[1]!.split('      - name:')[0]!;

@@ -673,3 +673,87 @@ fn reply_allocation_failure_is_a_resource_limit_without_a_reply() {
         .unwrap();
     assert_eq!(transport.live_allocations(), 0);
 }
+
+thread_local! {
+    static WORD_CALLS: Cell<u32> = const { Cell::new(0) };
+}
+
+fn counted_sum(words: &[u32; WORD_ARGS]) -> i64 {
+    WORD_CALLS.with(|calls| calls.set(calls.get() + 1));
+    words.iter().map(|word| i64::from(*word)).sum()
+}
+
+pub(super) fn word_dispatcher() -> Dispatcher {
+    let words: [WordFn; 2] = [counted_sum, |words| -i64::from(words[0])];
+    dispatcher(|_| Ok(Val::Bytes(vec![3; 1024]))).with_words(words.to_vec())
+}
+
+pub(super) fn write_word_frame(
+    transport: &abi::Transport,
+    frame: u32,
+    op: u32,
+    session: u32,
+    words: [u32; WORD_ARGS],
+) {
+    let mut bytes = [0; WordFrame::SIZE];
+    let input = [op, session].into_iter().chain(words);
+    for (chunk, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(input) {
+        *chunk = word.to_le_bytes();
+    }
+    transport.write(frame, &bytes).unwrap();
+}
+
+pub(super) fn word_result(transport: &abi::Transport, frame: u32) -> i64 {
+    let bytes = transport.read(frame, WordFrame::SIZE as u32).unwrap();
+    i64::from_le_bytes(bytes[WordFrame::RESULT..].try_into().unwrap())
+}
+
+#[test]
+fn a_word_call_returns_through_its_frame_when_nothing_can_be_allocated() {
+    let transport = abi::Transport::default();
+    let dispatch = word_dispatcher();
+    let frame = transport.alloc(WordFrame::SIZE as u32, Frame::ALIGN);
+    let data = allocated_frame(&transport, dispatch.op(), vec![]);
+    transport.exhaust();
+    // The allocating bridge now fails after its native ran. The word call beside it cannot.
+    assert_eq!(transport.dispatch(&dispatch, data.0), Status::ResourceLimit);
+    let before = WORD_CALLS.with(Cell::get);
+    for round in 0..3 {
+        let words = [round, 2, 3, 4, 5, 6, 7, u32::MAX];
+        write_word_frame(&transport, frame, 0, 1, words);
+        assert_eq!(transport.dispatch(&dispatch, frame), Status::Ok);
+        assert_eq!(
+            word_result(&transport, frame),
+            i64::from(round) + 27 + i64::from(u32::MAX)
+        );
+    }
+    assert_eq!(WORD_CALLS.with(Cell::get), before + 3);
+    write_word_frame(&transport, frame, 1, 1, [9, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(transport.dispatch(&dispatch, frame), Status::Ok);
+    assert_eq!(
+        word_result(&transport, frame),
+        -9,
+        "a result keeps its sign"
+    );
+    assert_eq!(
+        transport.live_allocations(),
+        3,
+        "no call left an allocation"
+    );
+}
+
+#[test]
+fn a_word_call_from_a_wrong_session_or_for_an_unknown_operation_runs_nothing() {
+    let transport = abi::Transport::default();
+    let dispatch = word_dispatcher();
+    let frame = transport.alloc(WordFrame::SIZE as u32, Frame::ALIGN);
+    let before = WORD_CALLS.with(Cell::get);
+    write_word_frame(&transport, frame, 0, 2, [1; WORD_ARGS]);
+    assert_eq!(transport.dispatch(&dispatch, frame), Status::BadCall);
+    write_word_frame(&transport, frame, 2, 1, [1; WORD_ARGS]);
+    assert_eq!(transport.dispatch(&dispatch, frame), Status::BadCall);
+    assert_eq!(WORD_CALLS.with(Cell::get), before);
+    // A frame of neither size is not a call.
+    let odd = transport.alloc(WordFrame::SIZE as u32 + 8, Frame::ALIGN);
+    assert_eq!(transport.dispatch(&dispatch, odd), Status::BadCall);
+}

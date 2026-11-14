@@ -15,11 +15,9 @@ impl Fixture {
             vec!["bun".into(), "entry.mjs".into()],
             Box::new(crate::PassthroughTranspiler),
         ));
-        let mut names: Vec<_> = crate::natives::table(&state)
-            .functions
-            .iter()
-            .map(|(name, _)| *name)
-            .collect();
+        let table = crate::natives::table(&state);
+        let mut names: Vec<_> = table.functions.iter().map(|(name, _)| *name).collect();
+        names.extend(table.words.iter().map(|(name, _)| *name));
         names.extend([
             "hostModuleSource",
             "hostUseModuleRecords",

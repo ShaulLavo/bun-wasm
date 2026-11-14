@@ -40,24 +40,21 @@ pub(super) fn select<'a>(versions: &'a Map<String, Value>, range: &str) -> Optio
     }
     versions
         .keys()
-        .filter(|version| {
-            let bytes = version.as_bytes();
-            let Some(version) = Version::parse_exact(SlicedString::init(bytes, bytes)) else {
-                return false;
-            };
-            match group.get_exact_version() {
+        .filter_map(|text| {
+            let bytes = text.as_bytes();
+            let version = Version::parse_exact(SlicedString::init(bytes, bytes))?;
+            let matches = match group.get_exact_version() {
                 Some(exact) => version.eql(exact),
                 None => group.satisfies(version, range_bytes, bytes),
-            }
+            };
+            matches.then_some((text.as_str(), version))
         })
-        .max_by(|a, b| is_release(a).cmp(&is_release(b)).then_with(|| order(a, b)))
-        .map(String::as_str)
-}
-
-fn is_release(version: &str) -> bool {
-    let bytes = version.as_bytes();
-    Version::parse_exact(SlicedString::init(bytes, bytes))
-        .is_some_and(|version| !version.tag.has_pre())
+        .max_by(|(a_text, a), (b_text, b)| {
+            (!a.tag.has_pre())
+                .cmp(&!b.tag.has_pre())
+                .then_with(|| a.order_without_build(*b, a_text.as_bytes(), b_text.as_bytes()))
+        })
+        .map(|(text, _)| text)
 }
 
 #[cfg(test)]
@@ -95,5 +92,26 @@ mod tests {
     fn semver_order_is_unchanged_for_non_install_consumers() {
         assert!(order("2.0.0-beta.2", "1.11.3").is_gt());
         assert!(matches("2.0.0-beta.2", "^1.7.1 || ^2.0.0-alpha.4"));
+    }
+
+    #[test]
+    fn equivalent_build_versions_keep_the_last_registry_entry() {
+        for names in [["1.2.3+first", "1.2.3+last"], ["1.2.3+last", "1.2.3+first"]] {
+            let mut versions = Map::new();
+            for name in names {
+                versions.insert(name.into(), Value::Null);
+            }
+            versions.insert("invalid".into(), Value::Null);
+            assert_eq!(select(&versions, "^1.0.0"), Some(names[1]));
+        }
+    }
+
+    #[test]
+    fn invalid_versions_and_ranges_do_not_match() {
+        let versions = json!({"invalid": {}, "1.2": {}, "1.2.3": {}});
+        let versions = versions.as_object().unwrap();
+        assert_eq!(select(versions, "^1.0.0"), Some("1.2.3"));
+        assert_eq!(select(versions, "latest"), None);
+        assert_eq!(select(versions, "^1.0.0 invalid"), None);
     }
 }

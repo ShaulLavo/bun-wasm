@@ -61,6 +61,11 @@ Original adapters, none of which retains upstream implementation code:
   `checks/runtime-json-fast-controls.json` assigns it to the blocking runtime owner. It follows the
   native job's `INSTALL_ENGINES` selection, so compiled controls run whenever JSC is selected.
   The controls and benchmark paths select JSC without building it for unrelated native changes.
+  Recovery controls record the cold baseline and each of three pressure peaks and post-GC readings.
+  Recovered heap and allocator live bytes stay within 8 MiB of their own cold baseline, allowing
+  one-time JSC table and arena allocation. Later recovered readings may grow by at most 256 KiB
+  from the first recovered reading. Neither bound scales with unrelated startup allocations or
+  ballast. A 384 KiB buffer retained after the first cycle proves that the growth check fails.
 - `tests/fixtures/json-fast-iterative` compares ordinary and forced-general results on all engines.
   `checks/native-json-fast-iterative.json` assigns that fixture to the native owner.
 - `scripts/bench-jsc-json.ts` measures pinned, alternating donor and candidate products.

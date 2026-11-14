@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { captureProgramInputs, parseProgramInputs, verifyProgramReceipt, type ProgramBuildReceipt } from "../../scripts/guest-core-receipt";
+import { captureProgramInputs, parseProgramInputs, prepareProgramOutputs, verifyProgramReceipt, type ProgramBuildReceipt } from "../../scripts/guest-core-receipt";
 import { artifactIdentity } from "../../scripts/guest-build-receipt";
 import { fixtureGit, withReceiptFixture } from "./guest-receipt-fixture";
 import { quickjsPair } from "./quickjs-plan-fixture";
@@ -22,6 +22,15 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} reusable side reta
     expect(current.source).not.toEqual(origin.source);
     expect(current.contentSha256).toBe(origin.contentSha256);
     expect(verifyProgramReceipt(side, receipt, current).inputs.source).toEqual(origin.source);
+    const artifact = join(options.repository, `dist/${kind}-cached.wasm`);
+    await mkdir(dirname(artifact), { recursive: true });
+    await writeFile(artifact, side);
+    const originalReceipt = JSON.stringify(receipt);
+    await writeFile(`${artifact}.engine.json`, originalReceipt);
+    const prepared = await prepareProgramOutputs([{ artifact, scope: kind, options: selected }]);
+    expect(prepared).toEqual([current]);
+    expect(await readFile(`${artifact}.engine.json`, "utf8")).toBe(originalReceipt);
+    expect(new Uint8Array(await readFile(artifact))).toEqual(side);
     const coreAfter = await captureProgramInputs(options, "core", { features: ["engine-split"] });
     expect(coreAfter.contentSha256).not.toBe(coreBefore.contentSha256);
     const lock = join(options.repository, "Cargo.lock");
