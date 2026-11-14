@@ -546,6 +546,102 @@ static JSValue collect(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
     return JS_UNDEFINED;
 }
 
+typedef struct {
+    JSContext *ctx;
+    JSValue target;
+    JSAtom atom;
+    int armed;
+    int replace;
+    int abort;
+} GetterInterrupt;
+
+static GetterInterrupt getter_interrupt;
+
+static void clear_getter_interrupt(void)
+{
+    if (!getter_interrupt.armed)
+        return;
+    JS_FreeValue(getter_interrupt.ctx, getter_interrupt.target);
+    JS_FreeAtom(getter_interrupt.ctx, getter_interrupt.atom);
+    getter_interrupt.armed = 0;
+    JS_SetInterruptHandler(JS_GetRuntime(getter_interrupt.ctx), NULL, NULL);
+}
+
+static int interrupt_getter(JSRuntime *rt, void *opaque)
+{
+    GetterInterrupt *state = opaque;
+    int abort = state->abort;
+
+    if (state->replace) {
+        JS_DefinePropertyValue(state->ctx, state->target, state->atom,
+                                  JS_NewString(state->ctx, "replacement"), JS_PROP_C_W_E);
+    } else {
+        JS_DeleteProperty(state->ctx, state->target, state->atom, 0);
+    }
+    JS_RunGC(rt);
+    clear_getter_interrupt();
+    return abort;
+}
+
+static int sync_polls(JSRuntime *rt, void *opaque)
+{
+    int *polls = opaque;
+    (*polls)++;
+    return 0;
+}
+
+static JSValue empty_call(JSContext *ctx, JSValueConst receiver, int argc, JSValueConst *argv)
+{
+    return JS_UNDEFINED;
+}
+
+/* Measure the poll interval through public APIs, then leave exactly one
+   entry until the next poll. No context layout or counter constant is assumed. */
+static void prime_getter_interrupt(JSContext *ctx)
+{
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JSValue empty = JS_NewCFunction(ctx, empty_call, "empty", 0);
+    int polls = 0, interval = 0, i;
+
+    JS_SetInterruptHandler(rt, sync_polls, &polls);
+    while (!polls)
+        JS_Call(ctx, empty, JS_UNDEFINED, 0, NULL);
+    while (polls == 1) {
+        JS_Call(ctx, empty, JS_UNDEFINED, 0, NULL);
+        interval++;
+    }
+    for (i = 1; i < interval; i++)
+        JS_Call(ctx, empty, JS_UNDEFINED, 0, NULL);
+    JS_FreeValue(ctx, empty);
+    JS_SetInterruptHandler(rt, interrupt_getter, &getter_interrupt);
+}
+
+/* armGetterInterrupt(object, "delete" | "replace" | "abort") roots the
+   object until the next interrupt poll mutates its value accessor. */
+static JSValue arm_getter_interrupt(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    const char *mode;
+
+    if (argc < 2 || !JS_IsObject(argv[0]) || getter_interrupt.armed)
+        return JS_ThrowTypeError(ctx, "armGetterInterrupt needs an idle target and mode");
+    mode = JS_ToCString(ctx, argv[1]);
+    if (!mode)
+        return JS_EXCEPTION;
+    getter_interrupt.replace = !strcmp(mode, "replace");
+    getter_interrupt.abort = !strcmp(mode, "abort");
+    if (strcmp(mode, "delete") && !getter_interrupt.replace && !getter_interrupt.abort) {
+        JS_FreeCString(ctx, mode);
+        return JS_ThrowTypeError(ctx, "unknown getter interrupt mode");
+    }
+    JS_FreeCString(ctx, mode);
+    getter_interrupt.ctx = ctx;
+    getter_interrupt.target = JS_DupValue(ctx, argv[0]);
+    getter_interrupt.atom = JS_NewAtom(ctx, "value");
+    getter_interrupt.armed = 1;
+    prime_getter_interrupt(ctx);
+    return JS_UNDEFINED;
+}
+
 /* callWith(fn, thisValue, ...args): a C caller passing its own argument vector */
 static JSValue call_with(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -632,6 +728,7 @@ static void install(JSContext *ctx)
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, print, "print", 1));
     JS_SetPropertyStr(ctx, global, "collectGarbage",JS_NewCFunction(ctx, collect, "collectGarbage", 0));
+    JS_SetPropertyStr(ctx, global, "armGetterInterrupt", JS_NewCFunction(ctx, arm_getter_interrupt, "armGetterInterrupt", 2));
     JS_SetPropertyStr(ctx, global, "callWith", JS_NewCFunction(ctx, call_with, "callWith", 2));
     JS_SetPropertyStr(ctx, global, "otherRealm", JS_NewCFunction(ctx, other_realm, "otherRealm", 1));
     JS_SetPropertyStr(ctx, global, "frameUsage", JS_NewCFunction(ctx, frame_usage, "frameUsage", 0));
@@ -1134,6 +1231,75 @@ static void continuation_calls(JSRuntime *rt, JSContext *ctx)
     check(trim_to(rt, 2 * 1024 * 1024), "storage is restored after continuation checks");
 }
 
+static void inline_getters(JSRuntime *rt, JSContext *ctx)
+{
+    static const char *const deep[] = {
+        "(function () { var n = 5000; var o = { get v() { return n-- === 0 ? 0 : 1 + o.v; } }; return o.v; })()",
+        "(function () { var o = { n: 5000, get v() { return this.n-- === 0 ? 0 : 1 + this.v; } }; return o.v; })()",
+        "(function () { var n = 2500; class A { get v() { return n-- === 0 ? -1 : 1 + this.v; } }"
+        " class B extends A { get v() { return 1 + super.v; } } return new B().v; })()",
+        "(function () { var n = 5000; var o = {}; Object.defineProperty(o, 'v', { get: function(a, b, c, d) { return n-- === 0 ?"
+        " (a === undefined && b === undefined && c === undefined && d === undefined && arguments.length === 0 ? 0 : 99) : 1 + o.v; } }); return o.v; })()",
+    };
+    static const char unbounded[] = "(function () { var o = { get v() { return 1 + o.v; } }; return o.v; })()";
+    static const char recover[] =
+        "(function () { var o = { get v() { return 1 + o.v; } };"
+        " try { return o.v; } catch (e) { return e instanceof RangeError ? 42 : 0; } })()";
+    static const char abort[] =
+        "(function () { var o = { get value() { return 1; } };"
+        " armGetterInterrupt(o, 'abort'); return o.value; })()";
+    static const char fan[] =
+        "(function () { var n = 100000; var o = { get v() { return n-- === 0 ? 0 : 1 + o.v; } }; return o.v; })()";
+    Interrupt state = { 0, 2 };
+    size_t live, committed, index;
+    long total, denied = 0, request;
+
+    check(trim_to(rt, 4 * 1024 * 1024), "storage is trimmed before getter dispatch");
+    JS_UpdateStackTop(rt);
+    JS_SetMaxStackSize(rt, 32 * 1024);
+    for (index = 0; index < sizeof(deep) / sizeof(deep[0]); index++)
+        check(outcome(ctx, deep[index], 5000) == DONE,
+              "own, receiver-preserving, super and padded getters run in the loop");
+    JS_SetMaxStackSize(rt, AMPLE_STACK);
+    usage(rt, &live, &committed);
+    check(live == 0 && held_agrees(rt), "successful getter records release every live frame");
+    check(outcome(ctx, unbounded, 0) == REFUSED, "unbounded getter recursion is refused by frame storage");
+    usage(rt, &live, &committed);
+    check(live == 0 && committed <= segment_charge, "refused getter records leave only permitted spare storage");
+    check(outcome(ctx, recover, 42) == DONE, "a getter chain catches its frame refusal and recovers");
+
+    check(trim_to(rt, 4 * 1024 * 1024), "storage is trimmed before getter fault counting");
+    memory.frame_requests = 0;
+    check(outcome(ctx, deep[0], 5000) == DONE, "a deep getter completes before fault injection");
+    total = memory.frame_requests;
+    for (request = 1; request <= total; request++) {
+        check(trim_to(rt, 4 * 1024 * 1024), "storage is trimmed before a getter fault");
+        memory.frame_requests = 0;
+        memory.fail_at = request;
+        denied += outcome(ctx, deep[0], 5000) == NO_MEMORY;
+        memory.fail_at = -1;
+        usage(rt, &live, &committed);
+        check(live == 0 && held_agrees(rt), "a denied getter segment leaves no live frame or accounting mismatch");
+        check(outcome(ctx, SHALLOW, 42) == DONE, "a clean call works after every denied getter segment");
+    }
+    check(total > 1 && denied == total, "every getter segment denial propagates the allocation exception");
+
+    JS_SetInterruptHandler(rt, interrupt, &state);
+    check(outcome(ctx, fan, 100000) == INTERRUPTED, "interrupts unwind active getter records");
+    JS_SetInterruptHandler(rt, NULL, NULL);
+    check(state.calls == 2, "getter entries poll until the interrupt handler requests termination");
+    usage(rt, &live, &committed);
+    check(live == 0 && held_agrees(rt), "interrupted getter records release every live frame");
+    check(outcome(ctx, deep[0], 5000) == DONE, "the interrupted getter workload recovers");
+
+    check(outcome(ctx, abort, 0) == INTERRUPTED, "an abort releases the getter selected before its interrupt");
+    check(!getter_interrupt.armed, "the aborting getter interrupt disposed its saved target");
+    usage(rt, &live, &committed);
+    check(live == 0 && held_agrees(rt), "the aborted getter leaves no live frame or accounting mismatch");
+    check(outcome(ctx, SHALLOW, 42) == DONE, "a clean call works after the getter interrupt abort");
+    check(trim_to(rt, 2 * 1024 * 1024), "storage is restored after getter checks");
+}
+
 /* A refusal must survive error formatting, which calls back into JavaScript. */
 static void refusal_formatting(JSRuntime *rt, JSContext *ctx)
 {
@@ -1531,6 +1697,7 @@ static void contract_on(const Profile *chosen)
     native_guard(rt, ctx);
     inline_calls(rt, ctx);
     continuation_calls(rt, ctx);
+    inline_getters(rt, ctx);
     refusal_formatting(rt, ctx);
     if (chosen->byte_exact)
         fits_exactly(rt, ctx, SHALLOW, 42, segment_charge - 1);

@@ -3,6 +3,7 @@
 // engine. quickjs-frame-stack.expected.txt holds what the engine printed before the change.
 declare function print(...values: unknown[]): void;
 declare function collectGarbage(): void;
+declare function armGetterInterrupt(target: object, mode: "delete" | "replace" | "abort"): void;
 declare function callWith(fn: unknown, receiver: unknown, ...args: unknown[]): unknown;
 declare function otherRealm(source: string): unknown;
 
@@ -57,6 +58,81 @@ report("new.target", () => [new (Target as unknown as new () => { made: string }
 report("class called without new", () => (Derived as unknown as () => unknown)());
 report("receiver from a C caller", () => callWith(function (this: unknown) { return String(this); }, "receiver"));
 report("bound function", () => (function (this: { v: number }, a: number, b: number) { return this.v + a + b; }).bind({ v: 1 }, 2)(3));
+
+report("getter survives interrupt-time deletion and collection", () => {
+  const target = { get value(): string { return "selected"; } };
+  armGetterInterrupt(target, "delete");
+  const selected = target.value;
+  return `${selected} ${target.value}`;
+});
+report("getter survives interrupt-time replacement and collection", () => {
+  const target = { get value(): string { return "selected"; } };
+  armGetterInterrupt(target, "replace");
+  const selected = target.value;
+  return `${selected} ${target.value}`;
+});
+report("getter method survives interrupt-time replacement", () => {
+  const target = { tag: "receiver", get value(): () => string { return function (this: { tag: string }) { return this.tag; }; } };
+  armGetterInterrupt(target, "replace");
+  return target.value();
+});
+report("inherited getter survives interrupt-time deletion", () => {
+  const prototype = { get value(): unknown { return this; } };
+  const target = Object.create(prototype);
+  armGetterInterrupt(prototype, "delete");
+  return target.value === target;
+});
+report("super getter survives interrupt-time deletion and collection", () => {
+  const prototype = { get value(): string { return `selected ${(this as { tag: string }).tag}`; } };
+  const home = {
+    __proto__: prototype,
+    tag: "receiver",
+    read(): unknown { armGetterInterrupt(prototype, "delete"); return super.value; },
+    again(): unknown { return super.value; },
+  };
+  return `${home.read()} ${home.again()}`;
+});
+report("getter deleting itself keeps its receiver and reference", () => {
+  const target = { tag: "own", get value(): string { delete (this as { value?: unknown }).value; collectGarbage(); return this.tag; } };
+  const first = target.value;
+  return `${first} ${target.value}`;
+});
+report("super key coercion precedes getter selection", () => {
+  const token = { tag: "key" };
+  const log: string[] = [];
+  const prototype = { get value(): string { log.push("getter"); return "wrong"; } };
+  const home = {
+    __proto__: prototype,
+    read(key: unknown): unknown { return super[key as keyof typeof prototype]; },
+  };
+  const key = { toString(): string { log.push("key"); throw token; } };
+  try { home.read(key); } catch (error) { log.push(String(error === token)); }
+  return log.join();
+});
+report("class constructor getter uses its own realm", () => {
+  const Foreign = otherRealm("(class Foreign {})") as Function;
+  const foreignType = otherRealm("TypeError.prototype");
+  const target = {};
+  Object.defineProperty(target, "value", { get: Foreign });
+  try { return (target as { value: unknown }).value; } catch (error) {
+    return [error instanceof TypeError, Object.getPrototypeOf(error) === foreignType].join();
+  }
+});
+report("getter formal padding and escaping parameters", () => {
+  const target = {};
+  const getter = new Function("a", "b", "c", "d", "e", "f", "g", 'a = "kept"; arguments[0] = "unmapped"; return () => [a, b, c, d, e, f, g, arguments.length, new.target].join();');
+  Object.defineProperty(target, "value", { get: getter });
+  const later = (target as { value: () => string }).value;
+  collectGarbage();
+  return later();
+});
+report("super key coercion selects the replacement once", () => {
+  const log: string[] = [];
+  const prototype = { get value(): string { return "old"; } };
+  const home = { __proto__: prototype, tag: "receiver", read(key: unknown): unknown { return super[key as keyof typeof prototype]; } };
+  const key = { toString(): string { log.push("key"); Object.defineProperty(prototype, "value", { get() { collectGarbage(); return this.tag; } }); return "value"; } };
+  return `${home.read(key)} ${log.join()}`;
+});
 
 // Exceptions through several frames, with finally and native reentry.
 function level(depth: number, log: string[]): number {
