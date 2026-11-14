@@ -17,28 +17,34 @@ export async function createProgramShell(runtime: Runtime, tables: DescriptorTab
   });
   transport.data = { filesystem: runtime.filesystem.createIdentity() };
   const output: string[] = [];
+  const outputEvents: Array<{ fd: number; text: string }> = [];
+  const emit = (fd: number, bytes: Uint8Array) => {
+    const text = new TextDecoder().decode(bytes);
+    output.push(text);
+    outputEvents.push({ fd, text });
+  };
   await service.adoptRuntimeRoot(transport, {
     memory: [],
-    output: (_fd, bytes) => output.push(new TextDecoder().decode(bytes)),
+    output: emit,
   });
   const notices: WorkerProcessMessage[] = [];
   // The root's own terminal at fd 1 and 2. Children get stdio only through explicit bindings;
   // the terminal codec transfers it, and child writes come back through the root's output.
   const descriptors = new DescriptorTable();
   tables.push(descriptors);
-  const write = (chunks: readonly Uint8Array[]) => {
-    for (const chunk of chunks) output.push(new TextDecoder().decode(chunk));
+  const write = (fd: number, chunks: readonly Uint8Array[]) => {
+    for (const chunk of chunks) emit(fd, chunk);
     return chunks.reduce((total, chunk) => total + chunk.length, 0);
   };
-  const terminal: Stream = {
+  const terminal = (fd: number): Stream => ({
     kind: "terminal",
     read: () => 0,
-    write,
-    tryWrite: write,
+    write: chunks => write(fd, chunks),
+    tryWrite: chunks => write(fd, chunks),
     readiness: () => ({ readable: true, writable: true, hangup: false }),
-  };
-  descriptors.openAt(1, terminal, 64n, 0n);
-  descriptors.inherit(2, descriptors.get(1)!);
+  });
+  descriptors.openAt(1, terminal(1), 64n, 0n);
+  descriptors.openAt(2, terminal(2), 64n, 0n);
   const codec = createRuntimeTerminalCodec({ descriptors, fallback: createWorkerPipeCodec() });
   const client = new WorkerProcessClient({
     transport,
@@ -51,6 +57,7 @@ export async function createProgramShell(runtime: Runtime, tables: DescriptorTab
   const pid = transport.pid;
   return {
     output,
+    outputEvents,
     /** The guest-facing access query a shell uses for `command -v`: metadata only. */
     async access(path: string): Promise<number> {
       const id = supervisor.accessStart(pid, path, "/");
@@ -65,8 +72,9 @@ export async function createProgramShell(runtime: Runtime, tables: DescriptorTab
         { parent: 1, child: 1 },
         { parent: 2, child: 2 },
       ],
+      cwd = "/",
     ) {
-      const child = client.spawn(pid, { executable, argv, env, cwd: "/", job: -1, fds });
+      const child = client.spawn(pid, { executable, argv, env, cwd, job: -1, fds });
       await flush(service, notices, pid);
       await supervisor.start(child);
       return {

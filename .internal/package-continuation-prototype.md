@@ -1,11 +1,14 @@
 # Package continuation prototype
 
-Status: Approved bounded host-only prototype; guest enablement remains pending parent
-disposition and independent implementation review.
+Status: Approved guest-trigger implementation after independent host, binding and root
+reviews. Installed-guest qualification is in progress; the parent owns fresh independent
+review, hosted CI, merge and later native acceptance.
 
-The private target and binding are installed by the bounded handoff unit below. This is
-not a completed feature: the package-script trigger remains disabled. The Safari memory
-parent owns independent review and actual-engine integration.
+The private target and binding are installed by the bounded handoff unit below. The guest
+now prepares the plan and calls the native before any lifecycle mutation or announcement.
+Only NOTSUP/NOSYS may enter the existing loop once. Successful exec never returns, and
+other errors cannot resume the loop. The remaining sections record the earlier reviewed
+units and their acceptance boundaries.
 
 ## Required before any guest binding
 
