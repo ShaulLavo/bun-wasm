@@ -65,4 +65,10 @@ for (const kind of decoderInputKinds) {
   const view = decoderInputView(resized, kind);
   assert.equal(new TextDecoder().decode(view, { get stream() { resized.resize(1); return false; } }), "");
 }
+const swappedBuffer = Uint8Array.of(65, 66).buffer;
+Object.setPrototypeOf(swappedBuffer, SharedArrayBuffer.prototype);
+assert.equal(new TextDecoder().decode(swappedBuffer), "AB");
+const swappedView = new DataView(Uint8Array.of(88, 65, 66, 89).buffer, 1, 2);
+Object.setPrototypeOf(swappedView, Uint8Array.prototype);
+assert.equal(new TextDecoder().decode(swappedView), "AB");
 console.log("TextDecoder native codec, streaming, fatal and dictionary controls passed");

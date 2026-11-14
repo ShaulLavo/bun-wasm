@@ -20,6 +20,12 @@ installer, so a factory/export mismatch fails before decoding assertions run.
 Captured view getters read byte ranges after options conversion. Detached stores
 and out-of-bounds views decode as empty, including when a stream getter detaches
 or resizes the input. These reads use intrinsic slots rather than user properties.
+Intrinsic brand checks also preserve valid buffers and views when their prototype
+chains change. The Uint8Array fast path checks both its brand and prototype.
+
+The wire-format control resolves this decoder export and routes its host codec
+model through the production wire reader and writer. Unrelated Blob, fetch, URL
+and body-consumer fixtures register their existing host decoder as a module export.
 
 The single-byte test vectors come from Bun revision
 `9510e74152073d850a18758ca41114d8f214ffa6`,

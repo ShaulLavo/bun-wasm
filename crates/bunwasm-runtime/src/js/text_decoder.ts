@@ -4,13 +4,14 @@
   const finalizers = new FinalizationRegistry<number>(id => native.release(id));
   const empty = new Uint8Array(0);
   const typedReaders = viewReaders(Object.getPrototypeOf(Uint8Array.prototype));
+  const typedTag = getter<string | undefined>(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag);
   const dataReaders = viewReaders(DataView.prototype);
   const bufferLength = getter<number>(ArrayBuffer.prototype, "byteLength");
   const sharedLength = typeof SharedArrayBuffer === "undefined" ? undefined : getter<number>(SharedArrayBuffer.prototype, "byteLength");
 
-  function getter<T>(prototype: object, name: string): (this: unknown) => T {
+  function getter<T>(prototype: object, name: PropertyKey): (this: unknown) => T {
     const read = Object.getOwnPropertyDescriptor(prototype, name)?.get;
-    if (typeof read !== "function") throw new TypeError(`Missing ${name} getter`);
+    if (typeof read !== "function") throw new TypeError(`Missing ${String(name)} getter`);
     return read;
   }
 
@@ -38,10 +39,24 @@
   }
 
   function inputBytes(input: ArrayBufferLike | ArrayBufferView): Uint8Array {
-    if (input instanceof Uint8Array) return typedReaders.length.call(input) === 0 ? empty : input;
+    if (isUint8Array(input)) return typedReaders.length.call(input) === 0 ? empty : input;
     if (ArrayBuffer.isView(input)) return viewBytes(input);
-    const length = input instanceof ArrayBuffer ? bufferLength.call(input) : sharedLength?.call(input);
-    return length === 0 ? empty : new Uint8Array(input);
+    return bufferSize(input) === 0 ? empty : new Uint8Array(input);
+  }
+
+  function isUint8Array(input: unknown): input is Uint8Array {
+    return input instanceof Uint8Array && typedTag.call(input) === "Uint8Array";
+  }
+
+  function bufferSize(input: unknown): number {
+    try { return bufferLength.call(input); } catch (error) {
+      if (!sharedLength) throw error;
+      return sharedLength.call(input);
+    }
+  }
+
+  function isBuffer(input: unknown): input is ArrayBufferLike {
+    try { bufferSize(input); return true; } catch { return false; }
   }
 
   function dictionary(value: unknown): { fatal?: unknown; ignoreBOM?: unknown; stream?: unknown } {
@@ -51,8 +66,7 @@
   }
 
   function validateInput(input: unknown) {
-    if (input === undefined || ArrayBuffer.isView(input) || input instanceof ArrayBuffer) return input;
-    if (typeof SharedArrayBuffer !== "undefined" && input instanceof SharedArrayBuffer) return input;
+    if (input === undefined || ArrayBuffer.isView(input) || isBuffer(input)) return input;
     throw new TypeError("Expected an ArrayBuffer or ArrayBufferView");
   }
 

@@ -142,3 +142,20 @@ test("non-streaming calls and native errors release their handles", () => {
   for (let index = 0; index < 10; index++) expect(decoder.decode(Uint8Array.of(65))).toBe("A");
   expect(handles.size).toBe(before);
 });
+
+test("ArrayBuffer intrinsic slots remain valid after its prototype changes", () => {
+  for (const Constructor of [TextDecoder, Decoder]) {
+    const buffer = Uint8Array.of(65, 66).buffer;
+    Object.setPrototypeOf(buffer, SharedArrayBuffer.prototype);
+    expect(new Constructor().decode(buffer)).toBe("AB");
+  }
+});
+
+test("DataView intrinsic slots remain valid with a Uint8Array prototype", () => {
+  for (const Constructor of [TextDecoder, Decoder]) {
+    const buffer = Uint8Array.of(88, 65, 66, 89).buffer;
+    const view = new DataView(buffer, 1, 2);
+    Object.setPrototypeOf(view, Uint8Array.prototype);
+    expect(new Constructor().decode(view)).toBe("AB");
+  }
+});
