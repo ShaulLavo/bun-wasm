@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as tty from "node:tty";
 import dns from "node:dns";
 import { runInThisContext } from "node:vm";
+import { checkMemoryGrowth, checkMemoryRebinding } from "../../tests/fixtures/wasi-memory-views/control.ts";
 
 const root = process.env.WASI_SOURCE_ROOT ?? process.cwd();
 const directory = path.join(root, "crates/bunwasm-runtime/generated/builtins");
@@ -186,6 +187,9 @@ function closeWasi(api: Wasi) {
 }
 try {
   checkReactor();
+  checkMemoryGrowth(WASI, new WebAssembly.Memory({ initial: 1, maximum: 4 }), false);
+  checkMemoryRebinding(WASI);
+  checkMemoryGrowth(WASI, new WebAssembly.Memory({ initial: 1, maximum: 4, shared: true }), true);
   const api = wasi({ args: ["runner", "é"], env: { TEST: "✓" }, preopens: { "/sandbox": scratch } });
   handles.push(api);
   const instance = new WebAssembly.Instance(module, { wasi_snapshot_preview1: api.wasiImport });

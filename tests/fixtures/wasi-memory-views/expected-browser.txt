@@ -1,0 +1,3 @@
+PASS WASI unshared memory growth
+PASS WASI memory rebinding
+PASS WASI shared memory growth

@@ -66,6 +66,16 @@ proving memory was bound before initialization. Additional controls cover the
 optional initializer, invalid exports, initializer exceptions, and repeated or
 mixed `start`/`initialize` calls.
 
+The same loader runs `tests/fixtures/wasi-memory-views/control.ts` against real
+host WebAssembly. It grows valid one-page shared and unshared memories inside
+WASM, then calls `clock_time_get` at offset 65544 before returning to JavaScript.
+It checks buffer replacement, detached versus retained old buffers, exact output
+placement, stable views without growth, and rebinding to a different memory.
+`checks/native-wasi-memory-views.json` runs those controls through the guest's
+WebAssembly wrapper. Split QuickJS and JSC explicitly report unavailable shared
+memory; their unshared growth and rebinding controls remain required. Browser
+expects the shared control to execute, so missing support fails its fixture.
+
 Focused generator tests exercise excluded public dependencies, explicit public
 selection, internal closure, and the existing guards. Interpreter threads,
 shared-memory behavior and application execution are separate gates. The exact
