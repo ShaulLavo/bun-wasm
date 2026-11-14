@@ -267,8 +267,17 @@ pub extern "C" fn quickjs_run(session: u32) -> i32 {
     driver::run::<vm::QuickJs>(session)
 }
 
+#[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+mod allocation_probe;
 #[cfg(test)]
 mod native_contract_tests;
+#[cfg(bun_wasm_transfer_fault)]
+mod transfer_fault;
+#[cfg(test)]
+#[path = "../build/transfer_fault.rs"]
+mod transfer_fault_option;
+#[cfg(test)]
+mod transfer_tests;
 
 #[cfg(test)]
 mod json_tests;

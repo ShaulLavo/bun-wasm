@@ -12,6 +12,8 @@ for (const name of [
   'table-global',
   'table-global-guest',
   'worker-transport',
+  'group-lane',
+  'group-lane-lifetime',
   'membership',
 ]) {
   const child = Bun.spawn([process.execPath, 'run', `${import.meta.dir}/${name}.ts`, memberTag(`root-${name}`)], { stdout: 'pipe', stderr: 'inherit' });

@@ -164,8 +164,14 @@ fn dispatcher(state: &Rc<State>, entry: &Entry, main_path: &str) -> Rc<ops::Disp
             Val::Array(args.iter().map(|arg| Val::from(arg.as_str())).collect()),
         ]),
     };
+    let (word_names, words): (Vec<Val>, Vec<_>) = table
+        .words
+        .into_iter()
+        .map(|(name, function)| (Val::from(name), function))
+        .unzip();
     let description: Val = Record::new()
         .set("functions", names)
+        .set("words", Val::Array(word_names))
         .set("constants", constants)
         .set("entry", entry)
         .set("main", main_path)
@@ -226,7 +232,9 @@ fn dispatcher(state: &Rc<State>, entry: &Entry, main_path: &str) -> Rc<ops::Disp
         split_api::MAIN_PATH,
         Rc::new(move |_| Ok(st.main.borrow().clone().into())),
     ));
-    Rc::new(ops::Dispatcher::registry(NonZeroU32::MIN, entries).expect("unique data operations"))
+    let dispatcher =
+        ops::Dispatcher::registry(NonZeroU32::MIN, entries).expect("unique data operations");
+    Rc::new(dispatcher.with_words(words))
 }
 
 pub(crate) fn run(options: Options) -> i32 {

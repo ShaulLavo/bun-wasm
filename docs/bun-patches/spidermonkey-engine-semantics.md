@@ -63,6 +63,19 @@ The adapter targets `mozilla-firefox/firefox` revision
   fail as well as the host transfer path. A private weak map preserves their
   identity after detachment without keeping unreachable buffers alive. Unrelated
   detached buffers are no longer accepted as host-owned memory.
+- `bsm_is_detachable_buffer` refuses everything `JS::DetachArrayBuffer` refuses:
+  an unwrappable object, a detached buffer, an immutable buffer
+  (`JS::ArrayBufferOrView::isImmutable`), a detach key, and the adapter's own
+  length-pinned external buffers. A transfer checks every buffer with it before
+  detaching any, so the primitive never fails after another buffer has moved.
+- `cpp/engine.cpp` exports `bsm_context` and `bsm_global_object` for glue that is compiled
+  beside it and not into it. The one user is `cpp/transfer_fault.cpp`, which the build
+  script compiles only for a validation side (`SPIDERMONKEY_TRANSFER_FAULT=1` to
+  `scripts/build-engine-spidermonkey-shared.sh`; see
+  `original-adapter-group-lane.md`). It defines `__transferFault` and
+  `__transferFaultWatch` as natives of their own, because the adapter's `native_dispatch`
+  holds `this` and every argument in a handle before it calls Rust, which asks for memory.
+  A release compiles neither that file nor the Rust module behind it.
 - Classic scripts preserve nonnegative first lines, including zero. The exact
   runtime CommonJS wrapper with first line -1 keeps its original named function
   expression. Removing one synthetic header newline and compiling at line zero

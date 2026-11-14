@@ -6,7 +6,7 @@ use std::ops::Range;
 #[cfg(any(test, not(feature = "engine-split")))]
 use crate::data::ErrorKind;
 use crate::data::codec::{self, CodecError};
-use crate::data::{Args, DataFn, NativeError, Val, drop_tree};
+use crate::data::{Args, DataFn, NativeError, Val, WORD_ARGS, WordFn, drop_tree};
 
 pub(crate) const DATA_NATIVE: u32 = 65_536;
 
@@ -78,6 +78,35 @@ impl Frame {
     }
 }
 
+/// The frame of a word call: operation, session and the argument words as little-endian u32s,
+/// then the i64 result. Its size tells the transport which kind of call a frame carries.
+pub(crate) struct WordFrame {
+    pub op: u32,
+    pub session: u32,
+    pub words: [u32; WORD_ARGS],
+}
+
+impl WordFrame {
+    pub const RESULT: usize = 8 + WORD_ARGS * 4;
+    pub const SIZE: usize = Self::RESULT + 8;
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, Status> {
+        if bytes.len() != Self::SIZE {
+            return Err(Status::BadCall);
+        }
+        let mut input = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| u32::from_le_bytes(*word));
+        let op = input.next().unwrap();
+        let session = input.next().unwrap();
+        let mut words = [0; WORD_ARGS];
+        words.fill_with(|| input.next().unwrap());
+        Ok(Self { op, session, words })
+    }
+}
+
 fn span(ptr: u32, len: u32, memory_len: usize) -> Result<Range<usize>, Status> {
     if ptr == 0 {
         return Err(Status::BadCall);
@@ -110,6 +139,8 @@ impl Reply {
 pub(crate) struct Dispatcher {
     session: NonZeroU32,
     functions: std::collections::HashMap<u32, DataFn>,
+    /// Word natives by operation number.
+    words: Vec<WordFn>,
 }
 
 impl Dispatcher {
@@ -122,7 +153,25 @@ impl Dispatcher {
         if functions.len() != count {
             return None;
         }
-        Some(Self { session, functions })
+        Some(Self {
+            session,
+            functions,
+            words: Vec::new(),
+        })
+    }
+
+    pub fn with_words(mut self, words: Vec<WordFn>) -> Self {
+        self.words = words;
+        self
+    }
+
+    /// Runs a word native. `None` is a wrong session or operation: a broken engine, which the
+    /// engine side treats as terminal and never turns into a JavaScript exception.
+    pub fn word(&self, op: u32, session: u32, words: &[u32; WORD_ARGS]) -> Option<i64> {
+        if session != self.session.get() {
+            return None;
+        }
+        self.words.get(op as usize).map(|function| function(words))
     }
 
     #[cfg(test)]

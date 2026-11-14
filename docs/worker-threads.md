@@ -113,9 +113,11 @@ Their physical stack retains the minimum required to run the wasm engine.
 enforce V8 heap-generation or code-range limits. `resourceLimits` reports the
 requested values; it does not claim engine-specific limits were enforced.
 
-Cross-guest SharedArrayBuffer and WebAssembly.Module cloning are unsupported and
-throw `DataCloneError`. SharedArrayBuffer sharing needs a host object table rather
-than a byte copy. `SHARE_ENV` propagates ordered updates before message and exit
+A SharedArrayBuffer, `WebAssembly.Memory` or `WebAssembly.Module` crosses guests as a
+shared reference, never a byte copy: the Browser engine through its shared-objects
+service (above), the shared-group engines through their group's directory. Both sides
+then see the same bytes and the same Module. Engines without either, such as the split
+profile, throw `DataCloneError` for these values. `SHARE_ENV` propagates ordered updates before message and exit
 events. It does not support synchronous polling loops across guests. The control
 channel bounds an incoming frame at 64 MiB. VM contexts remain unsupported, so
 `moveMessagePortToContext` validates its arguments and then throws.
@@ -242,3 +244,55 @@ without GSAB keep their existing small-message path. Native public backing
 identity, fixed-length stock quotas and fresh-backing attachment limits do not
 change. Private slots are never application-visible shared objects. This bounded
 policy does not promise native burst parity or qualify framework memory usage.
+
+## Shared-group lanes
+
+On the shared-group engines (QuickJS, JSC and SpiderMonkey built with the shared-group
+profile), every channel whose two ends are in different guests of one memory group carries
+its messages in group memory instead of on the worker control pipe. The runtime core owns
+the format (`crates/bunwasm-runtime/src/wasm/lane.rs`); `worker_lane.ts` wraps its natives.
+
+- Visibility: once `postMessage` returns, the whole message is in the destination's lane.
+  The destination's next `receiveMessageOnPort` reads it with no further work by the sender,
+  the root or the page thread, including when the sender then blocks, exits or is killed.
+  This holds for small and large messages, for channels between sibling or nested workers,
+  and for messages that carry ports. Decoding plain values, ordinary ArrayBuffers, carried
+  ports and shared objects the receiver already holds needs no host call. A
+  SharedArrayBuffer, `WebAssembly.Memory` or `Module` the receiver has never attached still
+  attaches through the group directory, synchronously, as before.
+- Storage: a lane is one 128 KiB region with a 65,472-byte ring per direction. A frame over
+  16 KiB, or one sent while the ring is full, goes to a chain of spill segments, each at
+  least one page and up to 16 pages unless the frame needs more. A flood is limited by the
+  group's backing budget and region table, not by the ring. Read segments return to a
+  reuse pool and the pool keeps at most 1 MiB; the rest goes back to the host at the next
+  event-loop step.
+- Lifetime: lanes, segments and the group's ledger are pinned by the group
+  (`runtime_shm.shm_route_group`), so they outlive whichever guest created them, including
+  the root. Which guest owns each end, and where a port in flight waits, is recorded in the
+  ledger. A worker reported exited has its ends closed at once; its storage is reclaimed
+  only after the host has released that worker.
+- Waking: an idle receiver's event loop is woken by a small `port-wake` hint through the
+  existing broker. The hint only affects how soon a `message` listener runs, and the sender
+  sends it when it next enters the runtime or takes a loop step, not inside `postMessage`. A
+  receiver's own idle loop looks at its lanes at least every 25 ms it asks to wait.
+  `Atomics.wait` and the wait provider are unchanged.
+- Failure: a `postMessage` that throws has moved nothing, and one that returns has published
+  the whole message. The last thing `postMessage` does is one native call that checks
+  everything once more, then detaches the buffers, moves the carried ports and publishes the
+  frame, and nothing runs between its first detach and its return. A receive that fails while
+  returning frames gets the same frames at the next receive, and the event loop reports that
+  failure as the thread's uncaught error and keeps pumping.
+  [The lane's record](bun-patches/original-adapter-group-lane.md) describes that path.
+
+Observable changes on these engines:
+
+1. A frame over 64 MiB is refused at the sender with `DataCloneError` before anything
+   detaches. The bound counts UTF-8 bytes of the encoded message (base64 ArrayBuffers and
+   JSON included), where the pipe counted UTF-16 code units at the receiver.
+2. When the group's backing budget, region table or ledger is full, `postMessage` throws
+   `DataCloneError`, also before anything detaches.
+3. Port messages no longer appear on the control pipe. Lifecycle frames, environment
+   updates and `BroadcastChannel` still do.
+
+Engines without a shared group keep the pipe. The Browser engine keeps its own lanes,
+described above.

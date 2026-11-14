@@ -30,7 +30,7 @@ test('shared fixtures cannot silently become an ordinary split passing skip', ()
   expect(status).toMatchObject({ status: 'shared-profile-blocking' });
   const runner = source('scripts/shared-nested-native.ts');
   expect(source('scripts/native-profile-fixtures.ts')).toContain('-shared-group-native');
-  expect(source('scripts/native-profile-fixtures.ts')).toContain('output differs from expected.txt');
+  expect(source('scripts/native-profile-fixtures.ts')).toContain('shared native output differs from ${files.expected}');
   expect(runner).not.toMatch(/\bskip\(/);
 });
 

@@ -171,6 +171,20 @@ fn index(id: u32) -> Result<usize> {
     ensure!(id & BACKEND != 0, "mixed-backend WebAssembly resource");
     Ok((id & !BACKEND) as usize)
 }
+/// What the group owner answered to a withdrawal, as `wire::Request::Withdraw` documents it.
+/// Three outcomes are final and are answered as counts: withdrawn, no such publication, and
+/// a caller that is no member the group serves (`Search`, or `None` for a guest in no group
+/// at all), which can never withdraw anything. Any other status is not known to be final, so
+/// it stays an error reply: the guest takes that as no answer and asks again.
+fn withdrawal(result: Option<Result<(), shm::Errno>>) -> Result<u32> {
+    match result {
+        Some(Ok(())) => Ok(wire::WITHDRAWN),
+        Some(Err(shm::Errno::BadF)) => Ok(wire::WITHDRAW_ABSENT),
+        Some(Err(shm::Errno::Search)) | None => Ok(wire::WITHDRAW_REFUSED),
+        Some(Err(other)) => Err(anyhow!("shared publication withdrawal: {other:?}")),
+    }
+}
+
 fn insert<T>(items: &mut Vec<T>, value: T) -> Result<u32> {
     ensure!(items.len() < MAX_RESOURCES, "nested resource limit");
     let id = items.len() as u32 | BACKEND;
@@ -415,9 +429,14 @@ fn execute(caller: &mut Caller<'_, Host>, request: Request) -> Result<Reply> {
             })
         }
         Request::Withdraw { token } => {
-            shm::nested::withdraw(member(caller)?, token)
-                .map_err(|error| anyhow!("shared publication withdrawal: {error:?}"))?;
-            Ok(Reply::Count(0))
+            let reply = Reply::Count(withdrawal(
+                member(caller)
+                    .ok()
+                    .map(|member| shm::nested::withdraw(member, token)),
+            )?);
+            // Exactly what the guest settles on. Everything else leaves as an error reply.
+            debug_assert!(wire::withdraw_answer(&reply).is_some());
+            Ok(reply)
         }
         Request::TableExport { instance, name } => table_export(caller, instance, &name),
         Request::TableLength { table } => Ok(Reply::Count(u32::try_from(

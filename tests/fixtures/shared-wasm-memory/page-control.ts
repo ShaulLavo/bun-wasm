@@ -3,7 +3,7 @@
 // native terminate returns, which still precedes the agent's end. Each boundary is named for what
 // it proves. Off the Browser host there is no page, and a guest's own view is already the stop.
 // A guest's process.pid is a fixed 1, so a member is named by a tag in its argv, read by the page.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 const root = process.env.SHARED_WASM_PAGE_CONTROL;
 const TAG = '--shared-wasm-member=';
@@ -76,4 +76,20 @@ export function attachStalled(name: string): OwnerHolds {
 export function stopFailed(name: string): void {
   if (root === undefined) throw new Error('A failed stop needs the embedding page');
   published(`${root}/retained/${name}`);
+}
+
+/** The group owner's own counters, from Waffle's GroupOwner.snapshot() on the page. */
+export interface OwnerSnapshot { readonly pins: number; readonly regions: number; readonly holds: number; readonly published: number; readonly members: number; }
+let snapshotRequests = 0;
+
+/**
+ * Asks the page for the tagged member's group owner counters and blocks for the answer. The page
+ * samples the owner only after reading this request, under a name used once, so the answer is
+ * never older than the call. Off the Browser host there is no owner to ask.
+ */
+export function ownerSnapshot(name: string): OwnerSnapshot | undefined {
+  if (root === undefined) return undefined;
+  const request = `${name}.${Date.now()}-${snapshotRequests++}`;
+  writeFileSync(`${root}/snapshot-request/${request}`, '');
+  return JSON.parse(published(`${root}/snapshot/${request}`));
 }

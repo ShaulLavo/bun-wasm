@@ -11,6 +11,8 @@ declare namespace BunWasm {
     closing: number | null;
     closed: boolean;
     lane?: PortLane | null;
+    /** A shared-group engine's lane: the end this port owns, in flight at `epoch` while it moves. */
+    groupLane?: GroupPortLane | null;
   }
   /** A channel's shared lane and which of its two rings this end reads. */
   interface LaneBacking { buffer: SharedArrayBuffer; poolIndex: number | null; }
@@ -22,6 +24,72 @@ declare namespace BunWasm {
     close(): void;
     peerClosed(): boolean;
   }
+  /** A group lane by its ledger slot and the generation of its current use. */
+  interface GroupLaneRef { slot: number; generation: number; }
+  interface GroupPortLane extends GroupLaneRef { side: 0 | 1; epoch: number; }
+  /** Who holds a port end while it travels: the carrying lane's reading end, a worker's cell, or this thread. */
+  type LaneCustody =
+    | { kind: "lane"; lane: GroupLaneRef; side: 0 | 1 }
+    | { kind: "cell"; cell: LaneCell }
+    | { kind: "local" };
+  type LaneCell = [index: number, generation: number];
+  interface GroupLaneFrame { commit(): boolean; abort(): void; }
+  interface GroupLaneDrain { frames: string[]; more: boolean; terminal: boolean; }
+  /** One owned end of a group lane. `reserve`, `drain` and `transferEpoch` can throw, leaving nothing unsettled; the rest are word natives, which the native bridge cannot fail. */
+  interface GroupSharedLane {
+    readonly ref: GroupLaneRef;
+    readonly side: 0 | 1;
+    /** Throws DataCloneError when the frame cannot be stored whole. */
+    reserve(text: string): GroupLaneFrame;
+    drain(limit: number): GroupLaneDrain;
+    closeRead(): void;
+    /** True when the peer was armed and needs a wake hint. */
+    closeEnd(): boolean;
+    peerClosed(): boolean;
+    transferEpoch(): number;
+    transfer(custody: LaneCustody): void;
+    /** Stages a frame under this end for the engine's transfer native to commit. Throws DataCloneError when it cannot be stored whole. */
+    stage(text: string): void;
+    /** Names an end the staged frame carries; the epoch it will travel at. Throws DataCloneError when it cannot move. */
+    stageEnd(carried: GroupPortLane | (GroupLaneRef & { side: 0 | 1 })): number;
+    /** Drops the staged frame and the ends it named. Nothing had moved. */
+    abort(): void;
+  }
+  interface GroupLanes {
+    ledger(): number;
+    join(ledger: number, cell: LaneCell): boolean;
+    /**
+     * Makes a lane and writes its name into `ref`. The caller opens both ends over `ref` and
+     * makes whatever will hold them first: after this returns it may only store them.
+     */
+    create(ref: GroupLaneRef): void;
+    /** An end of the lane `ref` names, or will name once `create` has filled it in. Changes nothing in the ledger. */
+    open(ref: GroupLaneRef, side: 0 | 1): GroupSharedLane;
+    /** Takes a carried end for this thread: true when it was still in flight at that epoch. The caller opens the end first. */
+    adopt(lane: GroupPortLane, version: number): boolean;
+    /**
+     * Closes the end of one flight that will never be delivered: still in flight, or taken by
+     * this thread for a port it never finished. True when the end is closed afterward, false
+     * when it is open or in flight again for a later transfer, which is left alone. Repeating
+     * it changes nothing.
+     */
+    discard(lane: GroupPortLane, version: number): boolean;
+    cell(): LaneCell;
+    exited(cell: LaneCell): void;
+    sweep(full: boolean): void;
+    end(ref: GroupLaneRef, side: 0 | 1): [state: number, version: number];
+    sever(ref: GroupLaneRef, side: 0 | 1): void;
+    /** The sum of every end's epoch, which rises with each closure; the root rescans its records on a change. */
+    epochs(): number;
+    /** Ledger counts for tests (`internal/bunwasm/group-lanes`); null before this member has a ledger. */
+    census(): GroupLaneCensus | null;
+    /** This thread's last staged commit: its nonce (0 before any) and whether its reader was due a wake. */
+    committed(): [nonce: number, wake: boolean];
+  }
+  interface GroupLaneCensus {
+    liveLanes: number; openEnds: number; inFlight: number; deadEnds: number; linkedSegments: number;
+    cells: number; busy: number; pooled: number; pooledBytes: number; pins: number; awaiting: number;
+  }
   type WorkerNode =
     | ["undefined"] | ["null"] | ["string", string] | ["number", string] | ["boolean", boolean] | ["bigint", string]
     | ["object", [string, number][]] | ["array", number, [string, number][]]
@@ -30,7 +98,9 @@ declare namespace BunWasm {
     | ["node-buffer", number, number, number] | ["shared", string, number]
     | ["wasm-module", string] | ["wasm-memory", string, number]
     | ["error", string, string, string | null, number] | ["boxed", number]
-    | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side?: never; poolIndex?: never }, number] | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side: 0 | 1; poolIndex: number | null }, number, number];
+    | ["port", Omit<PortSnapshot, "queue" | "lane" | "groupLane"> & { side?: never; poolIndex?: never; lane?: never }, number]
+    | ["port", Omit<PortSnapshot, "queue" | "lane" | "groupLane"> & { side: 0 | 1; poolIndex: number | null; lane?: never }, number, number]
+    | ["port", Omit<PortSnapshot, "queue" | "lane" | "groupLane"> & { side?: never; poolIndex?: never; lane: [slot: number, generation: number, side: 0 | 1, epoch: number] }, number];
   interface WorkerGraph { root: number; nodes: WorkerNode[]; }
   interface PortTransfer {
     snapshot: PortSnapshot;
@@ -38,10 +108,21 @@ declare namespace BunWasm {
     /** `toward`: the port this transfer travels to over its channel lane, which holds it until restored. */
     publish?(toward?: string): void;
     beforeCommit?(): void;
-    commit(): void;
+    commit(custody: LaneCustody): void;
+    /**
+     * A post that commits in the engine's transfer native. `detach` takes the port's local state
+     * off its object before that call, `restore` puts it back when the call refuses, and `moved`
+     * tells the broker once the call has returned. `restore` and `moved` do nothing harmful when
+     * repeated, and `restore` is safe after a `detach` that did not finish or never ran.
+     */
+    stage?(): StagedPort;
   }
+  interface StagedPort { detach(): void; restore(): void; moved(): void; }
+  /** What a caller that commits a prepared send itself needs: the buffers to detach and the ports it carries. */
+  interface StagedSend { buffers: ArrayBuffer[]; ports: PortTransfer[]; }
   interface WorkerCodecHooks {
     sharedObjects?: SharedObjects;
+    groupLanes?: GroupLanes;
     buffer?: { isBuffer(value: unknown): boolean; from(buffer: ArrayBuffer, offset: number, length: number): Uint8Array };
     isPort(value: unknown): boolean;
     prepare(value: unknown): PortTransfer;
@@ -59,6 +140,8 @@ declare namespace BunWasm {
   interface SharedObjects {
     readonly mailbox?: { drain(consume: (bytes: Uint8Array) => void | boolean): number; close(): void };
     readonly lanes?: { create(): LaneBacking; open(backing: LaneBacking, side: 0 | 1): SharedLane };
+    /** Shared-group engines: lanes in group memory driven by the runtime core. */
+    readonly groupLanes?: GroupLanes;
     readonly routes?: {
       readonly owner: string;
       readonly enabled: boolean;
@@ -70,12 +153,25 @@ declare namespace BunWasm {
       credit(): void;
     };
     begin(): SharedPublication;
+    /** Shared-group engines: finishes publication settlements an interruption left unfinished. */
+    settle?(): void;
     read(reference: SharedReference): SharedArrayBuffer;
     readWasm?(reference: SharedReference): WebAssembly.Module | WebAssembly.Memory;
     wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
   }
+  interface PreparedSend {
+    graph: WorkerGraph;
+    commit(deliver?: () => void, toward?: string, reserved?: boolean): void;
+    abort(): void;
+    /** Every check `commit` makes, with nothing moved, for a caller that commits the send itself. */
+    stage(): StagedSend;
+    /** After `stage`: the caller's commit happened, or did not. Safe to repeat. */
+    settle(committed: boolean): void;
+  }
   interface WorkerCodec {
-    prepare(value: unknown, transfer?: unknown, forbidden?: readonly string[]): { graph: WorkerGraph; commit(deliver?: () => void, toward?: string): void; abort(): void };
+    /** `custody`: where transferred ports wait while the message travels. `reserved`: `deliver` only
+     * stages a frame that is published after the commit, so publications stay revocable until then. */
+    prepare(value: unknown, transfer?: unknown, forbidden?: readonly string[], custody?: LaneCustody): PreparedSend;
     encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]): WorkerGraph;
     decode(value: unknown): unknown;
     wait(value: unknown, ready: () => void): (() => void) | null;
@@ -127,6 +223,10 @@ declare namespace BunWasm {
     /** Bytes, 0 at end of file, or a negative errno. */
     procRead(fd: number, capacity?: number): Uint8Array | number;
     procWrite(fd: number, bytes: Uint8Array): number;
+    /** As `procWrite`, with its result kept under this attempt (`fd` and `token`) for `procWriteResult`. `token` is never reused by this guest. */
+    procWriteOnce(fd: number, bytes: Uint8Array, token: number): number;
+    /** A word native: the result of that same attempt, its token as two 32-bit words, or -(2 ** 63) when it never ran. */
+    procWriteResult(fd: number, tokenHigh: number, tokenLow: number): number;
     /** 0 entered, -6 pending, positive WASI startup errno, -11 canceled, -12 unknown/collected. Non-consuming. */
     procStartStatus(pid: number): number;
     /** [kind, value]: 0 exit, 1 signal, 2 positive WASI startup errno; or a negative errno. */
@@ -140,7 +240,14 @@ declare namespace BunWasm {
     utf8Decode(bytes: Uint8Array): string;
     base64Encode(bytes: Uint8Array, url: boolean): string;
     base64Decode(value: string): Uint8Array<ArrayBuffer>;
-    transferArrayBuffers(buffers: ArrayBuffer[]): void;
+    /**
+     * Detaches `buffers`. With a sender end and a nonce it also commits the message staged
+     * under that end, in the same call: it throws with nothing moved or returns with the whole
+     * message published. `refuse` makes the error a refusal throws.
+     */
+    transferArrayBuffers(buffers: ArrayBuffer[], slot?: number, generation?: number, side?: number, nonceHigh?: number, nonceLow?: number, refuse?: (message: string) => unknown): void;
+    /** Releases what the last `transferArrayBuffers` kept referenced across its return. */
+    transferSettled?(): void;
     isWasmMemoryBuffer?(value: unknown): boolean;
     isWasmCapability?(value: unknown): boolean;
     hostPoll(timeout: number): number;
@@ -154,6 +261,8 @@ declare namespace BunWasm {
     subscriptions?(): Uint8Array;
     /** A filesystem watch, stepped before the other waiters in each pump (see net.js pumpIo). */
     watch?: boolean;
+    /** The loop keeps this waiter registered when its step throws; `fail` still gets the error. */
+    permanent?: boolean;
   }
   /** The frame a resource's own callbacks run in, captured when it starts (resource_frame.ts). */
   interface ResourceFrame {
@@ -185,6 +294,7 @@ declare namespace BunWasm {
     require(name: "process"): GuestProcess;
     require(name: "worker_codec"): { create(hooks: WorkerCodecHooks): WorkerCodec };
     require(name: "worker_channel"): { open(input: number, output: number): WorkerChannel };
+    require(name: "worker_lane"): GroupLanes;
     require(name: "worker_threads"): { isMainThread: boolean; initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
     require(name: "net"): NetWaiterModule;
     removeIoWaiter(waiter: IoWaiter): void;

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { spiderMonkeyTierOptions, verifySpiderMonkeyQualification, verifySpiderMonkeyStackWitness } from './spidermonkey-native-qualification.ts';
+import { sharedBrowserClocks, spiderMonkeyTierOptions, verifySpiderMonkeyQualification, verifySpiderMonkeyStackWitness } from './spidermonkey-native-qualification.ts';
 
 const trace = (polls = '123', entries = '0') => `bun-wasm spidermonkey: stack_low=0x7a0000 stack_high=0xfa0000 stack_bytes=8388608 register_depth=16 entry_depth=1392 interrupt_polls=${polls} portable_baseline_entries=${entries}\n`;
 const stopped = 'bun-wasm nested resources: {}\nbun-wasm group before physical stop: GroupSnapshot {}\nbun-wasm group after physical stop: GroupSnapshot { members: 0, reserved: 0, retained: 0, regions: 0, pins: 0, holds: 0, watches: 0, waiters: 0, committed_bytes: 166002688, free_bytes: 165937152, bypassed: false, published: 0 }\n';
@@ -82,4 +82,15 @@ test('intermediate live members are allowed but the last snapshot must be empty'
 
 test('child traces do not substitute for the final returning member observation', () => {
   expect(() => verifySpiderMonkeyQualification(trace() + stopped + stopped, 'interp')).toThrow('Missing final member tier trace');
+});
+
+test('Browser hang caps preserve page, driver and sequential-tier supervision', () => {
+  const clock = sharedBrowserClocks('spidermonkey');
+  expect(clock).toEqual({ pageMs: 480_000, driverMs: 540_000, consumerSeconds: 1320 });
+  expect(clock.driverMs).toBeGreaterThan(clock.pageMs);
+  expect(clock.consumerSeconds * 1000).toBeGreaterThan(clock.driverMs * 2);
+  for (const kind of ['quickjs', 'jsc']) expect(sharedBrowserClocks(kind)).toEqual({ pageMs: 240_000, driverMs: 300_000, consumerSeconds: 420 });
+  for (const entry of ['spidermonkey-canary.ts', 'spidermonkey-recursion.ts', 'spidermonkey-reentry.ts', 'parser-reserve-ownership.ts', 'failed-stop.ts', 'address-space/guest.ts']) {
+    expect(sharedBrowserClocks('spidermonkey', entry).pageMs).toBe(240_000);
+  }
 });

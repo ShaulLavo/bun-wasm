@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { discoverChecks, automaticChecks, checkCommand, nativeGroups, selectChecks } from "./test-checks";
+import { discoverChecks, automaticChecks, checkCommand, checkId, nativeGroups, selectChecks } from "./test-checks";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { qualityGates } from "./quality";
 import { rustTestPackages } from "./rust-test-packages";
@@ -118,12 +118,12 @@ test("native job budgets and names stay unchanged beside the lightweight update 
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    selection: 5, quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
+    selection: 5, quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, "shared-native": 30, "shared-browser": 30, "shared-proof": 5, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
     selection: "CI selection", quality: "Source quality", "jsc-identity": "Resolve effective JSC inputs", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
-    package: "Browser adapter package", "shared-jsc-identity": "Resolve effective shared JSC inputs", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
+    package: "Browser adapter package", "shared-jsc-identity": "Resolve effective shared JSC inputs", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC program producer", "shared-native": "Shared native (${{ matrix.engine }})", "shared-browser": "Shared Browser (${{ matrix.engine }})", "shared-proof": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
     "web-browser": "Web browser (${{ matrix.batch }})", "process-bundles": "Shared process browser bundles", "browser-guest": "Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})", "browser-process": "Processes (${{ matrix.browser }})", "ci-result": "Code quality", "update-status": "Report automated update statuses",
   });
   expect(rust).not.toContain("Whole-job guard");
@@ -185,7 +185,8 @@ test("CMake owner migration accepts new features and rejects missing original ow
 test("every migrated selection retains one blocking owner and the original local runtime set", () => {
   expect(proveCheckMigration().deduplicated).toHaveLength(7);
   expectOriginalCmakeOwners(selectChecks("cmake"));
-  const checks = discoverChecks().map(check => check.path).concat(automaticChecks().map(check => check.path));
+  // By check id: two commands of one shared-group fixture share a path and are two executions.
+  const checks = discoverChecks().map(checkId).concat(automaticChecks().map(check => check.path));
   expect(new Set(checks).size).toBe(checks.length);
   expect(selectChecks("quality")).toContain("scripts/runtime-ts-small.test.ts");
   expect(selectChecks("web")).toContain("scripts/runtime-sqlite.test.ts");

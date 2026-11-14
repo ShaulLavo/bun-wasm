@@ -1659,7 +1659,7 @@ jobs:
       - uses: ./.github/actions/save-release-downloads
 
   shared-sysroot:
-    name: Shared PIC sysroot proof
+    name: Shared PIC program producer
     needs: [selection, rust, shared-prebuild, shared-spidermonkey-prebuild]
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
@@ -1695,17 +1695,6 @@ jobs:
         env:
           SM_PREBUILD_RESULT: ${{ needs.shared-spidermonkey-prebuild.result }}
         run: test "$SM_PREBUILD_RESULT" = success
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        if: needs.selection.outputs.shared-native == 'true'
-        with:
-          name: native-profile-launcher
-          path: ${{ runner.temp }}/native-profile-launcher
-      - name: Verify the native launcher source
-        if: needs.selection.outputs.shared-native == 'true'
-        run: |
-          test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"
-          chmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
       - name: Reuse the production playground for shared profile checks
         if: needs.selection.outputs.shared-native == 'true'
         uses: actions/download-artifact@v4
@@ -2023,45 +2012,169 @@ jobs:
           key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
-      - name: Consume the shared native feature checks
+      - name: Prepare the same-source shared proof handoff
         if: needs.selection.outputs.shared-native == 'true'
         run: |
           source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
+          bun scripts/ci-shared-proof-inputs.ts prepare "$RUNNER_TEMP/shared-proof-inputs" "$CARGO_TARGET_DIR/shared-native" "$BUN_WASM_BROWSER_SITE"
+      - name: Export ready shared proof inputs
+        if: needs.selection.outputs.shared-native == 'true'
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: shared-proof-inputs
+          path: ${{ runner.temp }}/shared-proof-inputs/
+          if-no-files-found: error
+          retention-days: 1
+
+  shared-native:
+    name: Shared native (${{ matrix.engine }})
+    needs: [selection, rust, shared-sysroot]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.selection.outputs.shared-native == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [quickjs, jsc, spidermonkey]
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require the ready shared producer
+        env:
+          SHARED_PRODUCER_RESULT: ${{ needs.shared-sysroot.result }}
+        run: test "$SHARED_PRODUCER_RESULT" = success
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+          node-version: ${{ env.CI_NODE_VERSION }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: shared-proof-inputs
+          path: ${{ runner.temp }}/shared-proof-inputs
+      - name: Verify the ready shared inputs
+        run: |
+          source env.sh
+          bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"
+          echo "BUN_WASM_PROFILE_PROGRAM=$RUNNER_TEMP/shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm" >> "$GITHUB_ENV"
+          echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/shared-proof-inputs/browser" >> "$GITHUB_ENV"
+          echo "BUN_WASM_PREPARED_SHARED_SITE=1" >> "$GITHUB_ENV"
+      - name: Require the native launcher producer
+        env:
+          PROFILE_LAUNCHER_RESULT: ${{ needs.rust.result }}
+        run: test "$PROFILE_LAUNCHER_RESULT" = success
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: native-profile-launcher
+          path: ${{ runner.temp }}/native-profile-launcher
+      - name: Verify the native launcher source
+        run: |
+          test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"
+          chmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+      - name: Consume the discovered shared native checks sequentially
+        env:
+          TMPDIR: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+        run: |
+          source env.sh
           export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
           export BUN_WASM_TRACE=1
           bun scripts/test-checks.ts native --profile shared-group
-      - name: Consume the shared Browser feature checks
-        if: needs.selection.outputs.shared-native == 'true'
+
+  shared-browser:
+    name: Shared Browser (${{ matrix.engine }})
+    needs: [selection, shared-sysroot]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.selection.outputs.shared-native == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [quickjs, jsc, spidermonkey]
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require the ready shared producer
+        env:
+          SHARED_PRODUCER_RESULT: ${{ needs.shared-sysroot.result }}
+        run: test "$SHARED_PRODUCER_RESULT" = success
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+          node-version: ${{ env.CI_NODE_VERSION }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: shared-proof-inputs
+          path: ${{ runner.temp }}/shared-proof-inputs
+      - name: Verify the ready shared inputs
         run: |
           source env.sh
+          bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"
+          echo "BUN_WASM_PROFILE_PROGRAM=$RUNNER_TEMP/shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm" >> "$GITHUB_ENV"
+          echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/shared-proof-inputs/browser" >> "$GITHUB_ENV"
+          echo "BUN_WASM_PREPARED_SHARED_SITE=1" >> "$GITHUB_ENV"
+      - name: Prepare Chromium dependencies
+        run: |
           bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
           (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"
-          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
-      - name: Consume the shared JSC feature checks
-        if: needs.selection.outputs.shared-native == 'true'
+      - name: Consume the discovered shared Browser checks sequentially
+        env:
+          TMPDIR: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-jsc/bun.wasm"
-          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
-          export BUN_WASM_TRACE=1
-          bun scripts/test-checks.ts native --profile shared-group
-          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
-      - name: Consume the shared SpiderMonkey native feature checks
-        if: needs.selection.outputs.shared-native == 'true'
+          bun scripts/run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }} bun scripts/test-checks.ts browser-guest --profile shared-group
+
+  shared-proof:
+    name: Shared PIC sysroot proof
+    needs: [selection, quality, rust, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser]
+    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected shared producer and consumer
+        env:
+          SELECTION_RESULT: ${{ needs.selection.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          SHARED_PREBUILD_RESULT: ${{ needs.shared-prebuild.result }}
+          SHARED_PRODUCER_RESULT: ${{ needs.shared-sysroot.result }}
+          SHARED_NATIVE: ${{ needs.selection.outputs.shared-native }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          SM_RESULT: ${{ needs.shared-spidermonkey-prebuild.result }}
+          NATIVE_RESULT: ${{ needs.shared-native.result }}
+          BROWSER_RESULT: ${{ needs.shared-browser.result }}
         run: |
-          source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
-          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
-          export BUN_WASM_TRACE=1
-          bun scripts/test-checks.ts native --profile shared-group
-      - name: Consume the shared SpiderMonkey Browser feature checks
-        if: needs.selection.outputs.shared-native == 'true'
-        run: |
-          source env.sh
-          export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program-spidermonkey/bun.wasm"
-          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
+          test "$SELECTION_RESULT" = success
+          test "$QUALITY_RESULT" = success
+          test "$SHARED_PREBUILD_RESULT" = success
+          test "$SHARED_PRODUCER_RESULT" = success
+          case "$SHARED_NATIVE" in
+            true) test "$RUST_RESULT" = success; expected=success ;;
+            false) expected=skipped ;;
+            *) exit 1 ;;
+          esac
+          test "$SM_RESULT" = "$expected"
+          test "$NATIVE_RESULT" = "$expected"
+          test "$BROWSER_RESULT" = "$expected"
 
   web:
     needs: [selection, web-unit, web-browser]
@@ -2387,7 +2500,7 @@ jobs:
 
   ci-result:
     name: Code quality
-    needs: [selection, quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
+    needs: [selection, quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2404,7 +2517,7 @@ jobs:
 
   update-status:
     name: Report automated update statuses
-    needs: [selection, quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, web, web-unit, web-browser, process-bundles, browser-guest, browser-process, ci-result]
+    needs: [selection, quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process, ci-result]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2438,7 +2551,7 @@ jobs:
           Native quality checkpoint|native-quality|rust
           Rust workspace tests (QuickJS host)|rust|rust
           Browser adapter package|package|
-          Shared PIC sysroot proof|shared-sysroot|shared
+          Shared PIC sysroot proof|shared-proof|shared
           Web host|web|
           Shared process browser bundles|process-bundles|
           Processes (chromium)|browser-process|

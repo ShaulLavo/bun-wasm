@@ -49,6 +49,7 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
+  "scripts/ci-shared-proof-inputs.ts", "scripts/ci-shared-proof-inputs.test.ts", "checks/quality-ci-shared-proof-inputs.json",
   "scripts/ci-build-tools.ts", "scripts/ci-binaryen.ts",
   "web/src/dev-html-client.ts", "scripts/generate-dev-html-client.ts",
   ".github/actions/shared-jsc-setup/action.yml", ".github/actions/shared-jsc-prebuild/action.yml",
@@ -62,6 +63,7 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "checks/browser-guest-shared-wasm-memory.json",
   "scripts/spidermonkey-native-qualification.ts", "scripts/spidermonkey-native-qualification.test.ts", "checks/quality-spidermonkey-native-qualification.json",
   "scripts/src/group-errno-wraps.sh", "scripts/build-engine-spidermonkey-shared.sh", "scripts/spidermonkey-side-core-receipt.ts",
+  "scripts/src/transfer-fault.sh", "crates/bunwasm-engine-quickjs/src/transfer_fault.rs", "crates/bunwasm-engine-quickjs/build/transfer_fault.rs",
   "scripts/build-native-profile.test.ts", "scripts/spidermonkey-shared-ci.test.ts", "checks/quality-build-native-profile.json", "checks/quality-spidermonkey-shared-ci.json",
   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/build-native-profile.ts", "scripts/native-profile-fixtures.ts", "scripts/test-checks.ts", "scripts/test.sh",
@@ -111,8 +113,9 @@ const jscFiles = new Set([
   "scripts/install-download-fixture.ts", "scripts/install-demand-fixture.ts",
   "checks/runtime-install-tarballs.json", "checks/runtime-install-metadata.json", "checks/quality-install-fixture-command.json",
   "scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs", "crates/bunwasm-engine-quickjs/src/nested_token.rs", "crates/bunwasm-engine-quickjs/group-errno.c",
+  "scripts/src/transfer-fault.sh", "crates/bunwasm-engine-quickjs/src/transfer_fault.rs", "crates/bunwasm-engine-quickjs/build/transfer_fault.rs",
   "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml", ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
-  "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
+  "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs", "crates/bunwasm-engine-quickjs/src/transfer.rs",
   "crates/bunwasm-engine-quickjs/src/driver.rs", "crates/bunwasm-engine-quickjs/src/client.rs", "crates/bunwasm-engine-quickjs/src/natives.rs", "crates/bunwasm-engine-quickjs/src/allocator.rs", "crates/bunwasm-engine-quickjs/src/transport.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs",
   "crates/bunwasm-runtime/src/engine_jsc.rs", "scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "scripts/build-bun-core.sh", "scripts/build.sh", "scripts/quickjs-core-exports.txt", "scripts/build-jsc.sh",
   "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",

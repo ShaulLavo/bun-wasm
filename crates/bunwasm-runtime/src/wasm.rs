@@ -9,6 +9,10 @@ mod nested_invocation;
 
 #[cfg(bun_wasm_shared_group)]
 mod group;
+// Visible to the crate for `lane_allocation_tests`, which the crate root declares.
+#[cfg(any(test, bun_wasm_shared_group))]
+#[path = "wasm/lane.rs"]
+pub(crate) mod lane;
 #[cfg(any(test, bun_wasm_shared_group))]
 #[path = "wasm/nested_description.rs"]
 mod nested_description;
@@ -499,6 +503,7 @@ fn install_group_transport(table: &mut Table) {
         nested::attach_module(a.u32(0)?)
     });
     table.add("wasm.withdrawShared", |a| nested::withdraw(a.u32(0)?));
+    lane::guest::install(table);
 }
 
 pub fn install(table: &mut Table) {

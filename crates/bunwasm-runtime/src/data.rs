@@ -262,5 +262,17 @@ fn describe(v: &Val) -> &'static str {
 /// A native over plain data.
 pub type DataFn = Rc<dyn Fn(Args<'_>) -> NativeResult>;
 
+/// Scalar arguments of one word native.
+pub(crate) const WORD_ARGS: usize = 8;
+
+/// A native whose call and return cannot fail at the bridge: scalar arguments in and one scalar
+/// out, through a frame the engine allocated once at startup. The transport makes no request
+/// or reply buffer and no checked allocation for it and has no error status, so an effect it
+/// made is never followed by a failed return. An engine's own callback wrapper may still
+/// allocate around the call (an argument vector, a rooted handle); that is not a checked
+/// allocation and never comes back as a catchable failure. An operation that can be refused
+/// says so in its result.
+pub(crate) type WordFn = fn(&[u32; WORD_ARGS]) -> i64;
+
 #[path = "data/codec.rs"]
 pub(crate) mod codec;

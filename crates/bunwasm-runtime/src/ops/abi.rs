@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-use super::{Dispatcher, Frame, Reply, Status, error_status};
+use super::{Dispatcher, Frame, Reply, Status, WordFrame, error_status};
 use crate::data::codec::{self, CodecError};
 use crate::data::{NativeError, Val, drop_tree};
 
@@ -60,11 +60,32 @@ impl Allocation {
 
     fn write(&self, bytes: &[u8]) {
         assert_eq!(bytes.len(), self.layout.size());
-        // SAFETY: allocation owns exactly layout.size initialized bytes, disjoint from bytes.
+        self.write_at(0, bytes);
+    }
+
+    fn write_at(&self, offset: usize, bytes: &[u8]) {
+        assert!(offset + bytes.len() <= self.layout.size());
+        // SAFETY: the range lies inside the layout.size initialized bytes this allocation owns,
+        // disjoint from bytes.
         unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.pointer.as_ptr(), bytes.len())
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.pointer.as_ptr().add(offset),
+                bytes.len(),
+            )
         };
     }
+}
+
+/// Runs a word call inside its frame. Nothing on this path allocates, so the call ends with
+/// its result in the frame or as a broken call, never as a resource limit.
+fn word(dispatcher: &Dispatcher, frame: &Allocation) -> Result<Status, Status> {
+    let call = WordFrame::decode(frame.bytes())?;
+    let result = dispatcher
+        .word(call.op, call.session, &call.words)
+        .ok_or(Status::BadCall)?;
+    frame.write_at(WordFrame::RESULT, &result.to_le_bytes());
+    Ok(Status::Ok)
 }
 
 impl Drop for Allocation {
@@ -136,18 +157,25 @@ impl Transport {
         Ok(())
     }
 
-    fn allocation(&self, pointer: u32, bytes: u32) -> Result<Rc<Allocation>, Status> {
+    /// The live frame-aligned allocation at `pointer`, whatever its size.
+    fn owned(&self, pointer: u32) -> Result<Rc<Allocation>, Status> {
         let allocations = self.allocations.borrow();
         let (_, allocation) = allocations
             .iter()
             .find(|(p, _)| *p == pointer)
             .ok_or(Status::BadCall)?;
-        if allocation.layout.size() != bytes as usize
-            || allocation.layout.align() < Frame::ALIGN as usize
-        {
+        if allocation.layout.align() < Frame::ALIGN as usize {
             return Err(Status::BadCall);
         }
         Ok(allocation.clone())
+    }
+
+    fn allocation(&self, pointer: u32, bytes: u32) -> Result<Rc<Allocation>, Status> {
+        let allocation = self.owned(pointer)?;
+        if allocation.layout.size() != bytes as usize {
+            return Err(Status::BadCall);
+        }
+        Ok(allocation)
     }
 
     /// Encodes `value` into one allocation of exactly its encoded length, the only copy of the
@@ -212,9 +240,15 @@ impl Transport {
     }
 
     fn call(&self, dispatcher: &Dispatcher, frame_ptr: u32) -> Result<Status, Status> {
-        let frame_owner = self.allocation(frame_ptr, Frame::SIZE as u32)?;
+        let frame_owner = self.owned(frame_ptr)?;
         // A live call pins its frame, rejecting free/reuse and recursive entry of that frame.
         if Rc::strong_count(&frame_owner) != 2 {
+            return Err(Status::BadCall);
+        }
+        if frame_owner.layout.size() == WordFrame::SIZE {
+            return word(dispatcher, &frame_owner);
+        }
+        if frame_owner.layout.size() != Frame::SIZE {
             return Err(Status::BadCall);
         }
         let mut frame_bytes = [0; Frame::SIZE];

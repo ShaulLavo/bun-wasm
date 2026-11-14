@@ -304,7 +304,8 @@ async function quickjsWrapperFixture(fixture: Parameters<typeof receiptCli>[0], 
   const temporary = join(root, "private/t");
   await mkdir(temporary, { recursive: true });
   await mkdir(join(root, "jsc"));
-  for (const path of ["scripts/build.sh", "scripts/build-bun-core.sh", "scripts/build-engine-quickjs.sh", "scripts/build-engine-jsc.sh", "scripts/build-bun-jsc.sh", "jsc/common.sh", "jsc/finalize.sh"]) {
+  await mkdir(join(root, "scripts/src"), { recursive: true });
+  for (const path of ["scripts/build.sh", "scripts/build-bun-core.sh", "scripts/build-engine-quickjs.sh", "scripts/build-engine-jsc.sh", "scripts/build-bun-jsc.sh", "scripts/src/transfer-fault.sh", "jsc/common.sh", "jsc/finalize.sh"]) {
     await copyFile(new URL(`../../${path}`, import.meta.url), join(root, path));
     await chmod(join(root, path), 0o700);
   }

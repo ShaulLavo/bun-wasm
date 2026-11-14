@@ -10,6 +10,7 @@ const directories = [
 const recipes = [
   "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain", "env.sh",
   "crates/bunwasm-engine-quickjs/build.rs", "crates/bunwasm-runtime/build.rs",
+  "crates/bunwasm-engine-quickjs/build/transfer_fault.rs",
   "scripts/build-engine-spidermonkey.sh", "scripts/build-bun-spidermonkey.sh",
   "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts",
   "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts",

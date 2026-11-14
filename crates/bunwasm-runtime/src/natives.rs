@@ -32,11 +32,53 @@ fn required_path<'a>(path: &'a str, syscall: &str) -> Result<&'a str, NativeErro
     fs_path::required(path).map_err(|error| io_error(error, syscall, Some(path)))
 }
 
+/// One write attempt: the descriptor it wrote to and the token its caller gave it. A guest
+/// counts its tokens up from 1 for its whole life and never reuses one, so an attempt has one
+/// name however many channels the guest writes to.
+type WriteAttempt = (i32, u64);
+
+thread_local! {
+    /// The last `procWriteOnce` that ran in this guest and its result.
+    static WRITE_ONCE: std::cell::Cell<(WriteAttempt, i64)> =
+        const { std::cell::Cell::new(((0, 0), 0)) };
+}
+
+/// `procWriteResult` for an attempt that never ran.
+const UNWRITTEN: i64 = i64::MIN;
+
+/// The worker control channel's write. `procWriteOnce(fd, bytes, token)` writes like
+/// `procWrite` and keeps its result under its attempt. A caller whose reply was lost after the
+/// bytes went out asks the word native `procWriteResult(fd, token high, token low)`, which
+/// returns that result only for that same attempt: a call that never reached the core, or
+/// another channel's write, reads [`UNWRITTEN`].
+fn write_once_natives(t: &mut Table, write: fn(i32, &[u8]) -> i32) {
+    t.add("procWriteOnce", move |a| {
+        let (fd, bytes, token) = (a.i32(0)?, a.bytes(1)?, a.num(2)? as u64);
+        let result = write(fd, bytes);
+        WRITE_ONCE.with(|last| last.set(((fd, token), i64::from(result))));
+        Ok(result.into())
+    });
+    t.add_word("procWriteResult", |words| {
+        let asked = (
+            words[0] as i32,
+            (u64::from(words[1]) << 32) | u64::from(words[2]),
+        );
+        let (attempt, result) = WRITE_ONCE.with(std::cell::Cell::get);
+        if asked.1 != 0 && asked == attempt {
+            result
+        } else {
+            UNWRITTEN
+        }
+    });
+}
+
 /// Natives by name, plus constant properties of the `native` object.
 #[derive(Default)]
 pub struct Table {
     pub functions: Vec<(&'static str, DataFn)>,
     pub constants: Vec<(&'static str, Val)>,
+    /// Natives called through the scalar bridge, which has no failure status.
+    pub(crate) words: Vec<(&'static str, crate::data::WordFn)>,
 }
 
 impl Table {
@@ -46,6 +88,10 @@ impl Table {
         f: impl Fn(Args<'_>) -> NativeResult + 'static,
     ) {
         self.functions.push((name, Rc::new(f)));
+    }
+
+    pub(crate) fn add_word(&mut self, name: &'static str, f: crate::data::WordFn) {
+        self.words.push((name, f));
     }
 }
 
@@ -1606,6 +1652,7 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     t.add("procWrite", |a| {
         Ok(host::proc_write(a.i32(0)?, a.bytes(1)?).into())
     });
+    write_once_natives(t, host::proc_write);
     t.add("procWait", |a| {
         Ok(match host::proc_wait(a.i32(0)?) {
             Ok((kind, code)) => Val::Array(vec![Val::Num(kind as f64), Val::Num(code as f64)]),
@@ -2251,6 +2298,64 @@ mod builtin_tests {
                 crate::data::ErrorKind::TypeError
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod write_once_tests {
+    use super::*;
+
+    fn natives() -> Table {
+        let mut table = Table::default();
+        write_once_natives(&mut table, |fd, bytes| fd * 100 + bytes.len() as i32);
+        table
+    }
+
+    fn write(table: &Table, fd: i32, bytes: &[u8], token: u64) -> Val {
+        let args = [
+            fd.into(),
+            Val::Bytes(bytes.to_vec()),
+            Val::Num(token as f64),
+        ];
+        (table.functions[0].1)(Args(&args)).unwrap()
+    }
+
+    fn result(table: &Table, fd: u32, token: u64) -> i64 {
+        let mut words = [0; crate::data::WORD_ARGS];
+        words[..3].copy_from_slice(&[fd, (token >> 32) as u32, token as u32]);
+        (table.words[0].1)(&words)
+    }
+
+    #[test]
+    fn a_write_result_answers_only_the_attempt_that_made_it() {
+        let table = natives();
+        assert_eq!(result(&table, 4, 1), UNWRITTEN, "nothing has run yet");
+        // Channel A writes on descriptor 4 and gets its reply.
+        assert_eq!(write(&table, 4, b"moving", 1), Val::from(406));
+        assert_eq!(result(&table, 4, 1), 406);
+        // Channel B's first write never reached the core. Neither A's token on B's descriptor
+        // nor a token of B's own may read A's count.
+        assert_eq!(result(&table, 6, 1), UNWRITTEN, "another channel's attempt");
+        assert_eq!(result(&table, 6, 2), UNWRITTEN);
+        assert_eq!(
+            result(&table, 4, 2),
+            UNWRITTEN,
+            "a later attempt that never ran"
+        );
+        // B's write runs, and its lost reply is read back by B alone.
+        assert_eq!(write(&table, 6, b"wake", 2), Val::from(604));
+        assert_eq!(result(&table, 6, 2), 604);
+        assert_eq!(
+            result(&table, 4, 1),
+            UNWRITTEN,
+            "only the last attempt is kept"
+        );
+        // A token is 53 bits wide and both of its words count.
+        let wide = (1 << 40) | 2;
+        assert_eq!(write(&table, 6, b"x", wide), Val::from(601));
+        assert_eq!(result(&table, 6, wide), 601);
+        assert_eq!(result(&table, 6, 2), UNWRITTEN);
+        assert_eq!(result(&table, 6, 0), UNWRITTEN, "zero names no attempt");
     }
 }
 

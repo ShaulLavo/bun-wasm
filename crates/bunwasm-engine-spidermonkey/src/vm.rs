@@ -538,6 +538,15 @@ impl Engine for SpiderMonkey {
         };
         HOST.with(|current| *current.borrow_mut() = Some(host));
         unsafe { sys::bsm_init(&config) };
+        // A validation side: `__transferFault()` and `__transferFaultWatch()`, natives of
+        // their own in `cpp/transfer_fault.cpp` (see `transfer_fault.rs`).
+        #[cfg(bun_wasm_transfer_fault)]
+        unsafe {
+            unsafe extern "C" {
+                fn bsm_install_transfer_fault();
+            }
+            bsm_install_transfer_fault();
+        }
         SpiderMonkey
     }
 
@@ -715,6 +724,9 @@ impl Engine for SpiderMonkey {
         unsafe { sys::bsm_is_detachable_buffer(value.raw()) }
     }
     fn detach_buffer(&self, value: &SmVal) {
+        // A validation side refuses every allocation from the first detach on.
+        #[cfg(bun_wasm_transfer_fault)]
+        crate::transfer_fault::enter();
         unsafe { sys::bsm_detach_buffer(value.raw()) }
     }
     unsafe fn wasm_memory_buffer(&self, data: *mut u8, length: usize) -> SmVal {

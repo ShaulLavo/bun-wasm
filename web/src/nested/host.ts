@@ -7,6 +7,7 @@ import { FunctionTypes, type WasmFunction } from "./function-type.js";
 import { isReference, readModuleInfo, type FunctionType, type GlobalType, type ImportInfo, type ModuleInfo, type ValueName } from "./module-info.js";
 import {
   BACKEND, BAD_FRAME, FRAME_ALIGN, FRAME_BYTES, MAX_DEPTH, MAX_RESOURCES, MAX_VALUES, OK, PENDING_EXCEPTION,
+  WITHDRAWN, WITHDRAW_ABSENT, WITHDRAW_REFUSED,
   decodeRequest, encodeReply, type Binding, type Reply, type Request, type WasmNumber,
 } from "./wire.js";
 import {
@@ -23,7 +24,9 @@ const PREFERRED_FALLBACK_HEADROOM_PAGES = 1024;
 const SLOT_BITS = 12;
 const MAX_GENERATION = (BACKEND - 1) >>> SLOT_BITS;
 const NO_MEMORY = 48;
-const SHM_ERRORS = new Map([[6, "Again"], [8, "BadF"], [28, "Inval"], [NO_MEMORY, "NoMem"], [71, "Search"]]);
+const BAD_HANDLE = 8;
+const NO_MEMBER = 71;
+const SHM_ERRORS = new Map([[6, "Again"], [BAD_HANDLE, "BadF"], [28, "Inval"], [NO_MEMORY, "NoMem"], [NO_MEMBER, "Search"]]);
 const MODULE_ALIGN = 16;
 const encoder = new TextEncoder();
 
@@ -577,10 +580,21 @@ export class NestedHost {
     return { AttachedModule: { id: pushResource(this.modules, compileRegionized(code)), description } };
   }
 
+  /**
+   * Three outcomes are final and are answered as counts: withdrawn, no such publication of
+   * this member, and a caller the group no longer serves or a guest with no group member,
+   * neither of which can ever withdraw. Any other status is not known to be final and is
+   * thrown. Whatever is thrown here or on the way to the owner and back becomes an error
+   * reply in `reply`. That is no answer: nothing says whether the owner acted, so the guest
+   * keeps the withdrawal owed and asks again.
+   */
   private withdraw(token: number): Reply {
-    const status = this.region().shm_withdraw(token);
-    if (status < 0) throw new Error(`shared publication withdrawal: ${shmError(status)}`);
-    return { Count: 0 };
+    if (!this.provider) return { Count: WITHDRAW_REFUSED };
+    const status = this.provider.shm_withdraw(token);
+    if (status >= 0) return { Count: WITHDRAWN };
+    if (status === -BAD_HANDLE) return { Count: WITHDRAW_ABSENT };
+    if (status === -NO_MEMBER) return { Count: WITHDRAW_REFUSED };
+    throw new Error(`shared publication withdrawal: ${shmError(status)}`);
   }
 
   private span(id: number): Reply {

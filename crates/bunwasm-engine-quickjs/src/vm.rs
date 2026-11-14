@@ -279,6 +279,22 @@ fn stack_budget() -> usize {
     kib.filter(|&kib| kib > 0).unwrap_or(152).min(MAX_KIB) * 1024
 }
 
+/// `__transferFault()` and `__transferFaultWatch()` of a validation side
+/// (`transfer_fault.rs`). Neither takes arguments, so the wrapper allocates nothing on entry.
+#[cfg(bun_wasm_transfer_fault)]
+fn install_transfer_fault(ctx: &Ctx<'_>) {
+    use crate::transfer_fault::{bunwasm_transfer_fault_leave, bunwasm_transfer_fault_watch};
+    let report = Function::new(ctx.clone(), || bunwasm_transfer_fault_leave());
+    let watch = Function::new(ctx.clone(), || bunwasm_transfer_fault_watch());
+    let globals = ctx.globals();
+    globals
+        .set("__transferFault", report.expect("transfer fault report"))
+        .expect("transfer fault report global");
+    globals
+        .set("__transferFaultWatch", watch.expect("transfer fault watch"))
+        .expect("transfer fault watch global");
+}
+
 impl Engine for QuickJs {
     type Value = V;
 
@@ -296,6 +312,8 @@ impl Engine for QuickJs {
             install_shared_buffer_storage(runtime_raw);
         };
         TELEMETRY_RUNTIME.with(|active| active.set(runtime_raw));
+        #[cfg(bun_wasm_transfer_fault)]
+        install_transfer_fault(&ctx);
         let has_interrupt_handler = host.has_interrupt_handler();
         let engine = QuickJs(Rc::new(Inner {
             _runtime: runtime.clone(),
@@ -548,6 +566,9 @@ impl Engine for QuickJs {
     }
 
     fn detach_buffer(&self, v: &V) {
+        // A validation build refuses every allocation from the first detach on.
+        #[cfg(bun_wasm_transfer_fault)]
+        crate::transfer_fault::enter();
         // SAFETY: the transfer native validated every buffer before detaching any.
         unsafe { qjs::JS_DetachArrayBuffer(self.raw(), v.as_raw()) }
     }
@@ -832,22 +853,22 @@ fn unerase<'js>(v: V) -> Value<'js> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    enum InterruptMode {
+    pub(crate) enum InterruptMode {
         Continue,
         Terminate,
         OneShot(Rc<std::cell::Cell<bool>>),
     }
 
-    struct InterruptHost {
+    pub(crate) struct InterruptHost {
         polls: std::cell::Cell<u32>,
         mode: InterruptMode,
     }
 
     impl InterruptHost {
-        fn new(mode: InterruptMode) -> Self {
+        pub(crate) fn new(mode: InterruptMode) -> Self {
             Self {
                 polls: std::cell::Cell::new(0),
                 mode,

@@ -122,6 +122,28 @@ CI. It rejects package, Cargo and local lockfile version churn. Release and
 required consumer-pin PRs use their corresponding `release` or `consumer-pin`
 label to identify the deliberate exception. No label is needed for feature work.
 
+## A shared-group fixture with more than one command
+
+A native check with `"profile": "shared-group"` may add `"entry": "<name>"` in a second
+manifest for the same fixture directory. The entry names another command of the fixture: the
+runner reads `cmd.<name>` and compares stdout with `expected.<name>.txt`, where a manifest
+without an entry uses `cmd` and `expected.txt`. Each command runs once, or once per
+SpiderMonkey tier, with the same 120,000 ms bound, and a wrong exit, wrong output or timeout
+of either fails the native shared-group owner.
+
+- A check's identity is its owner, profile, path and entry. Its id is the path, or
+  `path#entry`, and that id is what selection, batching, the runner's arguments and its
+  result labels carry. Two commands of one fixture share a path, so nothing compares paths.
+- An entry name is lowercase letters and digits in words joined by single hyphens, at most
+  32 characters. Both of its files must be regular files in the fixture, checked at discovery
+  and again before launch. The command is passed as an argument vector.
+- The same id twice is an error, and so are two manifests without an entry for one path.
+  Only native shared-group checks may share a path. No other owner or profile takes an entry.
+
+`tests/fixtures/shared-wasm-memory` uses this for its 200-worker lane lifetime run
+(`checks/native-shared-wasm-memory-lifetime.json`, `cmd.lifetime`), which then starts one
+more guest to show that the launcher still serves a new group.
+
 ## Native probes consume a producer checkpoint
 
 `native-probe` names a script test and a nonempty `inputs` list of exact

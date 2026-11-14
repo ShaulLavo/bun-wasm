@@ -166,6 +166,40 @@ receiver. Only the last abort of an undelivered token removes its directory entr
 The codec commits publication when direct delivery succeeds, before later transfer
 finalization can fail. Broker routing commits only after its transaction succeeds.
 
+A `Withdraw` request has three answers, each a count: 0 the publication was withdrawn, 1
+the token names no publication (`BadF`: it is gone already), 2 the caller is no member the
+group serves (`Search`, or a guest in no group), which can never withdraw anything. Nothing
+else is an answer. Another status stays an error reply, and so does anything the host
+catches on its way to the group owner or back, before the owner acted or after. The guest's
+native throws an error reply on without marking it, and `nested_wire.rs`'s
+`withdraw_answer` accepts only the three counts. So the guest settles on an answer and keeps
+everything else owed. Asking again is safe because a token is issued once
+(`Directory::insert`): the second request withdraws that publication or is answered 1, and
+touches no other. The browser host answers the same way.
+
+`webassembly.ts` settles a prepared send so that an interruption anywhere leaves work it
+can finish later, not a wrong count:
+
+- A pending record lists the plans that refer to it, and a plan lists its records. Releasing
+  a reference marks the record committed first if the plan committed, removes the plan from
+  the record, finishes the record, and only then removes the record from the plan. Each of
+  those does nothing when repeated.
+- A record with no plans left is dropped if it is committed. Otherwise it is withdrawn, and
+  it stays listed until the host has answered. An answer of 0 or 1 settles it. An answer of
+  2 gives the publication up with a process warning, since it then stays in the directory
+  until the group ends. Anything the call throws is no answer, whatever its name, text or
+  code: the record stays owed, with no limit, and is asked again. Each try that gets no
+  answer doubles the number of settles before the next, up to 1,024, so a host that never
+  answers is not asked on every loop step.
+- A plan lists the record for a publication before the native makes it, so its abort finds
+  the token even when the bookkeeping after the native is interrupted.
+- The service's `settle()` finishes whatever is still listed. The worker loop's step calls
+  it, so a withdrawal that got no answer is asked again on a later step.
+
+One case is not covered: a `publishSharedMemory` or `publishSharedModule` whose reply is
+lost has published under a token the guest never learned, and that entry stays until the
+group ends.
+
 The core checks serialized request size against the same 1 MiB limit as the native
 host before crossing the import boundary, including checked conversion to its
 32-bit wire length. A valid module with an oversized publication description is

@@ -3,13 +3,28 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, checkBatches, namedCheckBatches, selectCheckBatch, checkArguments, parseCheck, nativeEngineGroups, nativeProducerEngines } from "./test-checks";
+import { automaticChecks, checkCommand, checkId, discoverChecks, parseCheckId, selectChecks, runCheck, checkBatches, namedCheckBatches, selectCheckBatch, checkArguments, parseCheck, nativeEngineGroups, nativeProducerEngines } from "./test-checks";
 import { migrationBase } from "./migrations/split-bun-patches";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { needsJsc, needsRust } from "./ci-changes";
 import { installFixtureTargets } from "./install-fixture-command";
 
 const root = resolve(import.meta.dir, "..");
+
+test("named batches retain their allowed owners and reject malformed names", () => {
+  const path = "scripts/example.test.ts";
+  for (const owner of ["web", "browser-guest", "web-browser"]) {
+    expect(parseCheck({ owner, path, batch: "10-interface" }, `${owner}-example.json`).batch).toBe("10-interface");
+  }
+  for (const owner of ["runtime", "quality", "package-extra", "cmake", "native", "native-probe"]) {
+    const input = owner === "native" ? "tests/fixtures/example" : path;
+    expect(() => parseCheck({ owner, path: input, batch: "10-interface", inputs: [path] }, `${owner}-example.json`)).toThrow("Invalid check batch");
+  }
+  for (const batch of [null, 1, [], {}, "", "interface", "10-", "10-Interface"]) {
+    expect(() => parseCheck({ owner: "web-browser", path, batch }, "web-browser-example.json")).toThrow("Invalid check batch");
+  }
+});
+
 const scratch: string[] = [];
 afterEach(() => { for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
@@ -33,8 +48,9 @@ test("immutable old selections match the discovered sets, with seven overlapping
   const original = oldSelections();
   const historical = new Set(Object.values(original).flat());
   expect(selectChecks("local-runtime").filter(path => historical.has(path))).toEqual(original.runtime.toSorted());
-  const paths = proof.explicit.map(check => check.path).concat(proof.automatic.map(check => check.path));
-  expect(new Set(paths).size).toBe(paths.length);
+  // One execution, one owner: compared by check id, since two commands of one fixture share a path.
+  const ids = proof.explicit.map(checkId).concat(proof.automatic.map(check => check.path));
+  expect(new Set(ids).size).toBe(ids.length);
 });
 
 test("CI's native command runs the busy-loop stdout handshake fixture", () => {
@@ -163,6 +179,15 @@ test("engine selection belongs only to split native fixtures", () => {
   expect(() => parseCheck({ owner: "native", path: "tests/fixtures/example", profile: "shared-group", engines: ["jsc"] }, "native-example.json")).toThrow();
 });
 
+test("named shared commands keep their identity and reject split engine selection", () => {
+  const value = { owner: "native", path: "tests/fixtures/example", profile: "shared-group", entry: "lifetime" };
+  const check = parseCheck(value, "native-example.json");
+  expect(checkId(check)).toBe("tests/fixtures/example#lifetime");
+  expect(nativeEngineGroups([checkId(check)], { count: 1, checks: [check] })).toEqual([]);
+  expect(() => parseCheck({ ...value, engines: ["jsc"] }, "native-example.json")).toThrow("Only split native checks select engines");
+  expect(() => parseCheck({ ...value, profile: "split", engines: ["jsc"] }, "native-example.json")).toThrow("Only native shared-group checks name an entry");
+});
+
 test("import-specifier collection runs through the shared QuickJS and JSC native gates", () => {
   const path = "tests/fixtures/esm-import-specifier-collection";
   expect(discoverChecks().find(check => check.path === path)).toEqual({
@@ -221,6 +246,40 @@ test("missing, duplicate and linked inputs fail closed", () => {
   expect(() => discoverChecks(directory)).toThrow();
   symlinkSync(join(root, "scripts/test-checks.test.ts"), join(directory, "scripts/example.test.ts"));
   expect(() => discoverChecks(directory)).toThrow("Unsafe linked check");
+});
+
+test("a fixture's second command needs its own files, one owner and one declaration", () => {
+  const directory = fixture();
+  const path = "tests/fixtures/shared";
+  const files = (names: readonly string[]) => { for (const name of names) writeFileSync(join(directory, path, name), "run\n"); };
+  mkdirSync(join(directory, path), { recursive: true });
+  files(["cmd", "expected.txt", "cmd.lifetime", "expected.lifetime.txt"]);
+  manifest(directory, { owner: "native", path, profile: "shared-group" }, "native-shared.json");
+  manifest(directory, { owner: "native", path, profile: "shared-group", entry: "lifetime" }, "native-shared-lifetime.json");
+  expect(discoverChecks(directory).filter(check => check.path === path).map(checkId)).toEqual([path, `${path}#lifetime`]);
+  // The same entry twice, or two default commands, is one execution with two owners.
+  manifest(directory, { owner: "native", path, profile: "shared-group", entry: "lifetime" }, "native-shared-again.json");
+  expect(() => discoverChecks(directory)).toThrow(`Duplicate check owner: ${path}#lifetime`);
+  manifest(directory, { owner: "native", path, profile: "shared-group" }, "native-shared-again.json");
+  expect(() => discoverChecks(directory)).toThrow(`Duplicate check owner: ${path}`);
+  // A split owner cannot share the fixture with the shared-group commands.
+  manifest(directory, { owner: "native", path }, "native-shared-again.json");
+  expect(() => discoverChecks(directory)).toThrow(`Conflicting check owners: ${path}`);
+  rmSync(join(directory, "checks/native-shared-again.json"));
+  // An entry's command and expected output are regular files in the fixture.
+  for (const name of ["cmd.lifetime", "expected.lifetime.txt"]) {
+    rmSync(join(directory, path, name));
+    expect(() => discoverChecks(directory), name).toThrow(`needs ${name}`);
+    symlinkSync(join(directory, path, "cmd"), join(directory, path, name));
+    expect(() => discoverChecks(directory), name).toThrow(`needs ${name}`);
+    rmSync(join(directory, path, name));
+    mkdirSync(join(directory, path, name));
+    expect(() => discoverChecks(directory), name).toThrow(`needs ${name}`);
+    rmSync(join(directory, path, name), { recursive: true });
+    files([name]);
+  }
+  expect(discoverChecks(directory).map(checkId)).toContain(`${path}#lifetime`);
+  expect(parseCheckId(`${path}#lifetime`)).toEqual({ path, entry: "lifetime" });
 });
 
 test("Browser guest secondary inputs preserve the blocking owner and profile selection", () => {
