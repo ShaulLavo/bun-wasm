@@ -54,7 +54,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git a/js/src/vm/Interpreter.cpp b/js/src/vm/Interpreter.cpp
-index 6241cd45d..06959976e 100644
+index 6241cd45d..178196132 100644
 --- a/js/src/vm/Interpreter.cpp
 +++ b/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -165,20 +165,22 @@ index 6241cd45d..06959976e 100644
          MOZ_ASSERT(cx->realm() == script->realm());
  
          /* Resume execution in the calling frame. */
-@@ -2238,8 +2306,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2238,6 +2306,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
              ADVANCE_AND_DISPATCH(JSOpLength_Resume);
            }
- 
+
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+          ADVANCE_AND_DISPATCH(GetBytecodeLength(REGS.pc));
-+#else
++          static_assert(JSOpLength_GetProp == JSOpLength_GetPropSuper,
++                        "getter frames return to opcodes of one length");
++          if (MOZ_UNLIKELY(JSOp(*REGS.pc) == JSOp::GetProp ||
++                           JSOp(*REGS.pc) == JSOp::GetPropSuper)) {
++            ADVANCE_AND_DISPATCH(JSOpLength_GetProp);
++          }
++#endif
            MOZ_ASSERT(GetBytecodeLength(REGS.pc) == JSOpLength_Call);
            ADVANCE_AND_DISPATCH(JSOpLength_Call);
-+#endif
          }
- 
-         goto error;
-@@ -2944,9 +3016,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2944,9 +3020,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
        ReservedRooted<Value> lval(&rootValue0, REGS.sp[-1]);
        MutableHandleValue res = REGS.stackHandleAt(-1);
        ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
@@ -201,7 +203,7 @@ index 6241cd45d..06959976e 100644
        cx->debugOnlyCheck(res);
      }
      END_CASE(GetProp)
-@@ -2964,9 +3049,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2964,9 +3053,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
          goto error;
        }
 
@@ -224,7 +226,7 @@ index 6241cd45d..06959976e 100644
  
        cx->debugOnlyCheck(rref);
  
-@@ -3366,8 +3464,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -3366,8 +3468,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
                                      // call popInlineFrame.
        }
  
@@ -244,7 +246,7 @@ index 6241cd45d..06959976e 100644
        if (!REGS.fp()->prologue(cx)) {
          goto prologue_error;
        }
-@@ -4619,8 +4728,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
+@@ -4619,8 +4732,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
    return cx->getPendingExceptionStack(vp);
  }
  
@@ -261,7 +263,7 @@ index 6241cd45d..06959976e 100644
    if (name == cx->names().length) {
      // Fast path for strings, arrays and arguments.
      if (::GetLengthProperty(v, vp)) {
-@@ -4674,9 +4789,30 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
+@@ -4674,9 +4793,30 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
      return false;
    }
 
