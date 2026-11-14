@@ -263,7 +263,9 @@ test("import rejects a missing receipt instead of running a hidden sysroot build
 test("a failed prebuild keeps the selected consumer blocking", () => {
   const condition = steps("shared-sysroot");
   expect(job("shared-sysroot")).toContain("!cancelled() && needs.selection.result == 'success'");
-  expect(condition[1]?.name).toBe("Require the shared prebuild producer");
+  const guardIndex = condition.findIndex(step => step.name === "Require the shared prebuild producer");
+  expect(guardIndex).toBeGreaterThanOrEqual(0);
+  expect(guardIndex).toBeLessThan(condition.findIndex(step => step.uses === "actions/download-artifact@v4"));
   const guard = command("shared-sysroot", "Require the shared prebuild producer");
   for (const result of ["failure", "cancelled", "skipped", ""]) {
     expect(spawnSync("bash", ["-euo", "pipefail", "-c", guard], { env: { ...process.env, SHARED_PREBUILD_RESULT: result } }).status).toBe(1);
