@@ -14,7 +14,7 @@ test("native quality has a bounded checkpoint before the unchanged final native 
   expect(record(jobs["native-quality"])["timeout-minutes"]).toBe(45);
   expect(record(jobs.rust)["timeout-minutes"]).toBe(60);
   expect(record(jobs["jsc-prebuild"])["timeout-minutes"]).toBe(45);
-  expect(record(jobs.rust).needs).toEqual(["quality", "jsc-prebuild", "native-quality"]);
+  expect(record(jobs.rust).needs).toEqual(["selection", "jsc-prebuild", "native-quality"]);
 });
 
 import { createHash } from "node:crypto";
@@ -96,19 +96,19 @@ function runs(job: Record<string, unknown>, needs: Record<string, Need>, cancell
 }
 
 test("full selection/result matrix never skips a needed failed, cancelled or skipped producer", () => {
-  for (const quality of ["success", "failure", "cancelled", "skipped"]) checkSelection(quality);
+  for (const selection of ["success", "failure", "cancelled", "skipped"]) checkSelection(selection);
 });
-function checkSelection(quality: string): void {
-  for (const selected of ["true", "false"]) for (const jsc of ["true", "false"]) checkResults({ result: quality, outputs: { rust: selected, jsc } });
+function checkSelection(selection: string): void {
+  for (const selected of ["true", "false"]) for (const jsc of ["true", "false"]) checkResults({ result: selection, outputs: { rust: selected, jsc } });
 }
-function checkResults(quality: Need): void {
-  for (const prebuild of ["success", "failure", "cancelled", "skipped"]) for (const checkpoint of ["success", "failure", "cancelled", "skipped"]) checkCancellation(quality, prebuild, checkpoint);
+function checkResults(selection: Need): void {
+  for (const prebuild of ["success", "failure", "cancelled", "skipped"]) for (const checkpoint of ["success", "failure", "cancelled", "skipped"]) checkCancellation(selection, prebuild, checkpoint);
 }
-function checkCancellation(quality: Need, prebuild: string, checkpoint: string): void {
+function checkCancellation(selection: Need, prebuild: string, checkpoint: string): void {
   for (const cancelled of [false, true]) {
-    const selected = quality.result === "success" && quality.outputs?.rust === "true" && !cancelled;
-    expect(runs(producer, { quality, "jsc-prebuild": { result: prebuild } }, cancelled)).toBe(selected);
-    expect(runs(consumer, { quality, "jsc-prebuild": { result: prebuild }, "native-quality": { result: checkpoint } }, cancelled)).toBe(selected);
+    const selected = selection.result === "success" && selection.outputs?.rust === "true" && !cancelled;
+    expect(runs(producer, { selection, "jsc-prebuild": { result: prebuild } }, cancelled)).toBe(selected);
+    expect(runs(consumer, { selection, "jsc-prebuild": { result: prebuild }, "native-quality": { result: checkpoint } }, cancelled)).toBe(selected);
   }
 }
 

@@ -29,7 +29,7 @@ const heavy = caches.filter(step => /^(?:native-|jsc-(?:prebuild|cargo)-|bash-we
 const saves = heavy.filter(step => step.uses === "./.github/actions/save-ci-cache");
 const healthy: Record<string, string> = {
   "github.event_name": "push", "github.ref": "refs/heads/main",
-  "needs.quality.outputs.jsc": "true",
+  "needs.selection.outputs.jsc": "true",
   "steps.sources-cache.outputs.cache-hit": "false", "steps.shell-cache.outputs.cache-hit": "false",
   "steps.jsc-prebuild-cache.outputs.cache-hit": "false", "steps.jsc-cargo-cache.outputs.cache-hit": "false",
   "steps.jsc-cargo-cache.outputs.cache-matched-key": "",
@@ -76,10 +76,10 @@ test("PRs retain all heavy restore paths and native/JSC checks remain blocking",
     expect(String(step.if ?? "")).not.toContain("github.event_name");
     expect(String(step.if ?? "")).not.toContain("github.ref");
   }
-  expect(source).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') &&");
+  expect(source).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') &&");
   expect(source).toContain("name: Blocking native quality checks");
   expect(source).toContain("name: Blocking native fixture checks");
-  expect(source).toContain("name: Blocking JSC embedding and allocation checks\n        if: needs.quality.outputs.jsc == 'true'");
+  expect(source).toContain("name: Blocking JSC embedding and allocation checks\n        if: needs.selection.outputs.jsc == 'true'");
   expect(source).not.toContain("continue-on-error:");
 });
 
