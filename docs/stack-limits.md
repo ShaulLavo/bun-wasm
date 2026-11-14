@@ -829,7 +829,8 @@ nesting before the browser's own stack overflows, in counter units:
 
 Chromium is the smallest host measured: Firefox and WebKit hold about twice as much. The
 tightest shape, `?:` chains, leaves 27 percent headroom at 1300. In all three browsers, every
-shape one level past its accepted depth ends in a caught `RangeError`, and the next evaluation
+shape one level past its accepted depth ends in a caught `RangeError`, after which the nesting
+sweep ends its worker. Only the Wasmtime run and the smoke test check that a later evaluation
 succeeds. Under Wasmtime, host stack per level ranges from 400 bytes (blocks) to 1.7 KiB
 (template literals). In the ordinary guest, `eval` now has 1,289 units left and
 `new Function` 1,276 to 1,283, against 326 to 339 before.
