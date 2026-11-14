@@ -33,6 +33,10 @@ tests are `tests/fixtures/buffer-resizable-construction` and
 programs at Bun `9510e74152073d850a18758ca41114d8f214ffa6`,
 `test/js/node/buffer.test.js` lines 4415 and 4691, in the factory directly.
 Resizable and growable-shared checks run only where those operations exist.
+The shared-growth control also probes construction: ordinary QuickJS exposes
+`grow` but rejects growable stores without allocator hooks. That capability gap
+is separate from Buffer construction and remains Engine-owned; every RAB
+assertion still runs. Both feature fixtures select QuickJS, JSC and Browser.
 
 
 `buffer_fill_args.ts` is an original adapter, not copied upstream code. It selects
