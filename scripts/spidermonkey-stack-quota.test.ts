@@ -35,6 +35,7 @@ test("installed SpiderMonkey quotas and overflow recovery on both tiers and memb
       expect(stdout).toContain("ok uncatchable interrupt inside finally; catch=0 finally=0");
       expect(stdout).toContain("ok counted reentrant recursion");
       expect(stdout).toContain("ok named getter frame storage and recovery");
+      expect(stdout).toContain("ok call and apply frame storage and recovery");
       expect(stdout).toContain("ok tier evidence");
     }
   } finally {

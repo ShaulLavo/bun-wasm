@@ -10,7 +10,7 @@ export const ordinaryFixtures: readonly string[] = [
   "require-esm-caught-failure", "rejection-inspect-still-unhandled",
   "require-esm-after-lowered-import", "require-esm-after-native-import",
   "require-esm-failure-cache", "require-esm-limit-recovery",
-  "spidermonkey-getter-loop",
+  "spidermonkey-getter-loop", "spidermonkey-call-loop",
 ];
 
 // test.sh owns each 60s TERM / 5s KILL deadline and every output/exit assertion.

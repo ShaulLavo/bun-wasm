@@ -45,12 +45,11 @@ test("ordinary live gate has one runtime owner, no local selection and serial gu
   expect(selectChecks("quality", checks)).not.toContain(live);
   expect(selectChecks("local-runtime", checks)).not.toContain(live);
   expect(readFileSync(resolve("scripts/spidermonkey-ordinary-fixtures.ts"), "utf8")).toContain("scripts/spidermonkey-engine-semantics.sh");
-  expect(ordinaryFixtures).toHaveLength(20);
-  expect(ordinaryFixtureTimeout).toBe(20 * 65_000 + 30_000);
+  expect(ordinaryFixtures).toHaveLength(21);
+  expect(ordinaryFixtureTimeout).toBe(21 * 65_000 + 30_000);
 });
 
-test("the getter-loop fixture runs on both SpiderMonkey tiers through the ordinary gate", () => {
-  const fixture = "spidermonkey-getter-loop";
+test.each(["spidermonkey-getter-loop", "spidermonkey-call-loop"])("the %s fixture runs on both SpiderMonkey tiers through the ordinary gate", fixture => {
   const checks = discoverChecks();
   // Its native manifest selects only QuickJS; SpiderMonkey reaches it through the ordinary list.
   expect(checks.filter(check => check.path === `tests/fixtures/${fixture}`)).toHaveLength(1);

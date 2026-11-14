@@ -152,19 +152,33 @@ pub fn main() {
             "missing argument",
             "function f(a, b) { d++; return f(1) + 1; } f(1);",
         ),
+        (
+            "call",
+            "function f() { d++; return f.call(this) + 1; } f();",
+        ),
+        (
+            "apply",
+            "function f() { d++; return f.apply(this, arguments) + 1; } f(1);",
+        ),
     ] {
         let depth = number(&format!(
             "var d = 0; try {{ {code} }} catch (e) {{ if (!(e instanceof RangeError)) throw e; }} d"
         ));
-        let counted = pbl || (label != "missing argument" && label != "getter");
+        // Getters, call and apply run as interpreter frames on the interpreter tier.
+        let framed = matches!(label, "getter" | "call" | "apply");
+        let counted = pbl || (label != "missing argument" && !framed);
         assert!(depth > 100.0, "{label} recursion depth {depth}");
         assert!(!counted || depth < 350.0, "{label} recursion depth {depth}");
-        assert!(pbl || label != "getter" || depth > 4096.0);
+        assert!(
+            pbl || !framed || depth > 4096.0,
+            "{label} recursion depth {depth}"
+        );
 
         assert_eq!(number("6 * 7"), 42.0);
     }
     println!("ok counted reentrant recursion");
     println!("ok named getter frame storage and recovery");
+    println!("ok call and apply frame storage and recovery");
     let polls = unsafe { sys::bsm_poll_count(tier) };
     let entries = unsafe { sys::bsm_pbl_entries() };
     assert!(polls >= 30000);
