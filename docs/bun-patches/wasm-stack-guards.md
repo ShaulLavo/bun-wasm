@@ -78,6 +78,11 @@ statement parsers reserve 2048 bytes. Fast JSON's static-buffer path also checks
 the VM's soft limit. Its upstream stack estimate assumes native frames and cannot
 by itself protect Wasm's separate host stack. Non-WASI builds add no reservation.
 
+[JSC iterative JSON fast stringifier](jsc-json-fast-iterative.md) moves plain fast-path container
+traversal onto rooted heap frames on WASI. The reservation and soft check stay at `append` entry,
+but container depth no longer adds native frames. Allocation refusal and the internal nesting cap
+restart the unchanged general serializer.
+
 The browser adapter gives V8 800 KiB for JSC getter reentry only after these native
 paths have their own accounting. QuickJS's V8 default and the Firefox, WebKit and
 unknown-host policies remain unchanged. The `stack-getter-headroom` fixture keeps

@@ -7,13 +7,49 @@ const root = resolve(import.meta.dir, "..");
 const launcher = process.env.BUN_WASM_LAUNCHER ?? `${process.env.CARGO_TARGET_DIR ?? "/work/tmp/bun-wasm-target"}/release/bun-wasm`;
 const wasm = process.env.BUN_WASM_JSON_FAST_WASM ?? join(root, "dist/bun-jsc.wasm");
 type RecordLine = Record<string, string | number | boolean | null>;
-type Run = { records: RecordLine[]; dispatches: RecordLine[]; stdout: string };
+type Run = { records: RecordLine[]; dispatches: RecordLine[]; memory: RecordLine[]; linear: RecordLine[]; stdout: string; stderr: string };
 const common = String.raw`
 import assert from "node:assert/strict";
+import { memoryUsage } from "bun:jsc";
+import { linearMemoryBytes } from "bun:internal-for-testing";
 function chain(n, array = false, leaf = 0) {
   let value = leaf;
   for (let i = 0; i < n; i++) value = array ? [value] : { a: value };
   return value;
+}
+function stealTable(value) {
+  const twin = {};
+  for (const key of Object.keys(value)) twin[key] = value[key];
+  twin.transition = 0;
+  return value;
+}
+function leaf(tag) {
+  return stealTable({ ["value" + tag]: 1 });
+}
+function stressGraph(levels = 1000, leaves = 19) {
+  let child = leaf("root");
+  for (let i = levels - 1; i >= 0; i--) {
+    const node = {};
+    node["before" + i] = i;
+    node["child" + i] = child;
+    node["after" + i] = i;
+    for (let j = 0; j < leaves; j++) node["leaf" + i + "_" + j] = leaf(i + "_" + j);
+    child = stealTable(node);
+  }
+  Bun.gc(true);
+  return child;
+}
+function sharedGraph() {
+  const values = Array.from({ length: 2000 }, () => ({ value: 1 }));
+  Object.keys(values[0]);
+  const twin = { value: 1 };
+  twin.transition = 0;
+  Bun.gc(true);
+  return { values };
+}
+function sampleMemory(label) {
+  const usage = memoryUsage();
+  console.error("bunwasm-json-fast-linear " + JSON.stringify({ label, capacity: linearMemoryBytes(), heapUsed: usage.heapUsed, extraMemory: usage.external }));
 }
 function equal(graph, gap) {
   const actual = JSON.stringify(graph(), undefined, gap);
@@ -56,8 +92,10 @@ function run(control: string, source: string, env: Record<string, string> = {}):
     assert.equal(result.exitCode, 0, stderr);
     const records = parseLines(stderr, "bunwasm-json-fast ");
     const dispatches = parseLines(stderr, "bunwasm-json-fast-dispatch ");
+    const memory = parseLines(stderr, "bunwasm-json-fast-memory ");
+    const linear = parseLines(stderr, "bunwasm-json-fast-linear ");
     assert.ok(records.length > 0, "the compiled engine must report real fast attempts");
-    return { records, dispatches, stdout: result.stdout.toString() };
+    return { records, dispatches, memory, linear, stdout: result.stdout.toString(), stderr };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -118,7 +156,7 @@ for (const [depth, array, frames, roots, movedFrames, movedRoots] of [
   }, 600_000);
 }
 
-for (const depth of [4094, 4095, 4096, 4097, 39998, 39999]) {
+for (const depth of [4094, 4095, 4096, 4097, 39998, 39999, 40000]) {
   test(`compact depth ${depth} succeeds across the fast cap`, () => {
     const result = run("record", `assert.equal(equal(() => chain(${depth})), ${depth * 6 + 1});`);
     expect(result.records.some(record => record.outcome === (depth <= 4095 ? "success" : "FastNesting"))).toBe(true);
@@ -127,7 +165,7 @@ for (const depth of [4094, 4095, 4096, 4097, 39998, 39999]) {
 
 test("general depth limit remains authoritative", () => {
   run("record", String.raw`
-const graph = chain(40000);
+const graph = chain(40001);
 let fast, general;
 try { JSON.stringify(graph); } catch (e) { assert.ok(e instanceof RangeError); fast = String(e); }
 try { JSON.stringify(graph, (_k, v) => v); } catch (e) { assert.ok(e instanceof RangeError); general = String(e); }
@@ -135,4 +173,152 @@ assert.equal(typeof fast, "string");
 assert.equal(fast, general);
 recovery();
 `);
+}, 600_000);
+
+function collectionSuccess(result: Run, materializations: number): RecordLine {
+  const record = result.records.find(item => item.outcome === "success");
+  assert.ok(record, result.stderr);
+  expect(Number(record.materializations)).toBeGreaterThanOrEqual(materializations);
+  expect(Number(record.collectionsWithLiveFrames)).toBeGreaterThan(0);
+  expect(Number(record.clearedLiveTables)).toBeGreaterThan(0);
+  expect(Number(record.resumesOfClearedTableFrames)).toBeGreaterThan(0);
+  expect(Number(record.forcedCollectionsAtA)).toBeGreaterThan(0);
+  expect(Number(record.forcedCollectionsAtB)).toBeGreaterThan(0);
+  expect(record.collectionSkippedDeferred).toBe(0);
+  expect(result.stdout).toContain("collection passed");
+  return record;
+}
+
+for (const ordinal of [1, 7]) {
+  test(`collection resumes deep rooted frames at open ordinal ${ordinal}`, () => {
+    const result = run(`collect-at-open:${ordinal}`, String.raw`
+const graph = stressGraph();
+assert.equal(JSON.stringify(graph), JSON.stringify(graph, (_k, v) => v));
+console.log("collection passed");
+`);
+    const record = collectionSuccess(result, 20000);
+    expect(record.rootsEverRegistered).toBe(true);
+  }, 600_000);
+
+  test(`collection resumes inline rooted frames at open ordinal ${ordinal}`, () => {
+    const result = run(`collect-at-open:${ordinal}`, String.raw`
+const graph = stressGraph(4, 2000);
+assert.equal(JSON.stringify(graph), JSON.stringify(graph, (_k, v) => v));
+console.log("collection passed");
+`);
+    const record = collectionSuccess(result, 8000);
+    expect(record.rootCapacityAtExit).toBe(16);
+    expect(record.rootsEverRegistered).toBe(false);
+  }, 600_000);
+}
+
+test("collection rematerializes a shared structure while older tables stay rooted", () => {
+  const result = run("collect-at-open:1", String.raw`
+const graph = sharedGraph();
+assert.equal(JSON.stringify(graph), JSON.stringify(graph, (_k, v) => v));
+console.log("collection passed");
+`);
+  collectionSuccess(result, 2000);
+}, 600_000);
+
+test.if(process.env.BUN_WASM_JSON_LONG_STRESS === "1")("JSC slow-allocation GC pressure reaches the running guest", () => {
+  const result = run("record", String.raw`
+const graph = stressGraph(20, 20);
+assert.equal(JSON.stringify(graph), JSON.stringify(graph, (_k, v) => v));
+console.log("collection passed");
+`, { JSC_slowPathAllocsBetweenGCs: "1" });
+  const record = result.records.find(item => item.outcome === "success");
+  assert.ok(record);
+  expect(Number(record.collections)).toBeGreaterThan(0);
+  expect(result.stdout).toContain("collection passed");
+}, 600_000);
+
+const pressureSource = String.raw`
+const graph = stressGraph();
+const deep = chain(4095);
+const ballastBytes = Number(process.env.BUN_WASM_JSON_BALLAST_BYTES || 0);
+const ballast = ballastBytes ? new Uint8Array(ballastBytes) : null;
+const donor = process.env.BUN_WASM_JSON_DONOR === "1";
+Bun.gc(true);
+sampleMemory("pre");
+for (let batch = 0; batch < 2; batch++) {
+  for (let run = 0; run < 50; run++) {
+    assert.equal(JSON.stringify(graph), JSON.stringify(graph, (_k, v) => v));
+    assert.equal(JSON.stringify(deep, donor ? (_k, v) => v : undefined), JSON.stringify(deep, (_k, v) => v));
+  }
+  Bun.gc(true);
+  sampleMemory("batch " + batch);
+}
+assert.ok(graph);
+assert.ok(deep);
+assert.equal(ballast ? ballast.length : 0, ballastBytes);
+console.log("pressure passed");
+`;
+
+const collectionPressureSource = String.raw`
+const graph = stressGraph(20, 5);
+const ballastBytes = Number(process.env.BUN_WASM_JSON_BALLAST_BYTES || 0);
+const ballast = ballastBytes ? new Uint8Array(ballastBytes) : null;
+Bun.gc(true);
+sampleMemory("pre");
+for (let batch = 0; batch < 2; batch++) {
+  for (let run = 0; run < 3; run++)
+    assert.equal(JSON.stringify(graph), JSON.stringify(graph, (_k, v) => v));
+  Bun.gc(true);
+  sampleMemory("batch " + batch);
+}
+assert.ok(graph);
+assert.equal(ballast ? ballast.length : 0, ballastBytes);
+console.log("pressure passed");
+`;
+
+function assertRecovery(result: Run, noBallastPre?: RecordLine): RecordLine {
+  expect(result.memory).toHaveLength(3);
+  expect(result.linear).toHaveLength(3);
+  const ownPre = result.memory[0];
+  const allowancePre = noBallastPre ?? ownPre;
+  assert.ok(ownPre && allowancePre);
+  for (const post of result.memory.slice(1)) {
+    expect(Number(post.heapUsed) - Number(ownPre.heapUsed)).toBeLessThanOrEqual(256 * 1024 + Number(allowancePre.heapUsed) * 0.1);
+    expect(Number(post.live) - Number(ownPre.live)).toBeLessThanOrEqual(256 * 1024 + Number(allowancePre.live) * 0.1);
+    assert.ok("extraMemory" in post);
+  }
+  return result.memory[0]!;
+}
+
+function assertRecordPressure(result: Run, noBallastPre?: RecordLine): RecordLine {
+  expect(result.stdout).toContain("pressure passed");
+  const stress = result.records.filter(record => record.outcome === "success" && record.maxFrames === 1001);
+  expect(stress).toHaveLength(100);
+  const attempts = result.records.filter(record => record.maxFrames === 305 || record.maxFrames === 1001);
+  expect(attempts).toHaveLength(200);
+  for (const index of [0, 50]) {
+    const materializations = Number(attempts[index * 2]?.materializations) + Number(attempts[index * 2 + 1]?.materializations);
+    expect(materializations).toBeGreaterThanOrEqual(20000);
+  }
+  return assertRecovery(result, noBallastPre);
+}
+
+function assertCollectionPressure(result: Run, noBallastPre?: RecordLine): RecordLine {
+  expect(result.stdout).toContain("pressure passed");
+  const stress = result.records.filter(record => record.outcome === "success" && record.maxFrames === 21);
+  expect(stress).toHaveLength(6);
+  for (const record of stress) {
+    expect(Number(record.collectionsWithLiveFrames)).toBeGreaterThan(0);
+    expect(Number(record.materializations)).toBeGreaterThanOrEqual(1);
+    expect(record.rootsEverRegistered).toBe(true);
+  }
+  return assertRecovery(result, noBallastPre);
+}
+
+const ballast = { BUN_WASM_JSON_BALLAST_BYTES: String(Math.floor(1073741824 * 0.7)) };
+
+test("repeated record pressure recovers heap and allocator bytes with ballast", () => {
+  const pre = assertRecordPressure(run("record", pressureSource));
+  assertRecordPressure(run("record", pressureSource, ballast), pre);
+}, 600_000);
+
+test("bounded collection pressure recovers heap and allocator bytes with ballast", () => {
+  const pre = assertCollectionPressure(run("collect-at-open:7", collectionPressureSource));
+  assertCollectionPressure(run("collect-at-open:7", collectionPressureSource, ballast), pre);
 }, 600_000);

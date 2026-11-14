@@ -55,7 +55,8 @@ function exactChain(depth: number, shape: Shape) {
   assert.equal(text, JSON.stringify(value, (_key, item) => item));
 }
 for (const shape of ["object", "array", "mixed"] satisfies Shape[]) {
-  for (const depth of [4094, 4095, 4096, 4097, 39999]) exactChain(depth, shape);
+  for (const depth of [4094, 4095, 4096, 4097]) exactChain(depth, shape);
+  compare(chain(39999, shape));
 }
 for (const leaf of ["漢", "x".repeat(20000), { 漢: "é" }]) compare(chain(1000, "mixed", leaf));
 

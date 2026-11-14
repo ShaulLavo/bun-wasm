@@ -25,6 +25,14 @@ After J11 and P2, identify the cold native-reentry cost and guard coverage indep
 
 Validate a fix against the pre-feature donor and current candidate, including cold/warm and actual platform acceptance, with original assertions intact. Preserve all historical failed controls.
 
+## Unit 3: iterative plain JSON fast path
+
+The WASI fast stringifier owns rooted, fallible container frames instead of recursing through native object and array calls. Frames grow geometrically and publish no more than 4095 containers. The nesting cap and either vector allocation refusal restart the existing general stringifier from the root. That fallback remains authoritative for cycles and the unchanged 40000-holder limit.
+
+Every published container and acquired property table is a live root until its frame pops or the attempt ends. Collection is never deferred. Resumable property enumeration stores the next physical cursor by frame index, never a frame pointer across vector growth. The original output order, stack reservations, soft guard, and 200000-deep caught-error fixture stay unchanged.
+
+The runtime-owned controls exercise real growth refusal, collection before and after frame publication, cleared structure caches, resumed parent frames, and recovery after roots unregister. Split and shared finalized products, all-engine differential fixtures, and the original Linux browser controls qualify the change. Safari remains coordinated through the existing Mac lane.
+
 ## Unit B disposition
 
 Managing's decision permits comparative legacy disposition plus real acceptance without fixing this broader item first. PR 685 additionally requires one normal desktop Safari SolidStart/JSC acceptance on a matched delivery showing benefit without regression. If that run establishes no benefit, close PR 685 with a one-line reason. No further B diagnostics are scheduled now. This does not itself approve or merge B.
