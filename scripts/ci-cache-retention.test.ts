@@ -35,7 +35,7 @@ function allows(step: Record<string, unknown>, event: string, ref: string, hit =
       if (name.endsWith(".cache-matched-key")) return JSON.stringify("");
       if (name.endsWith(".changed")) return JSON.stringify(changed);
       if (name.endsWith(".tls-sha256")) return JSON.stringify("a".repeat(64));
-      if (name.startsWith("needs.quality.outputs.") || name.endsWith("-ready")) return JSON.stringify("true");
+      if (name.startsWith("needs.selection.outputs.") || name.endsWith("-ready")) return JSON.stringify("true");
       throw new Error(`Missing condition input ${name}`);
     });
   const result: unknown = new Function(`return (${expression})`)();

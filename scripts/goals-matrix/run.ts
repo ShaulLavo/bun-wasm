@@ -33,7 +33,7 @@ export interface Options {
   signal?: AbortSignal;
   nativeAdmission?: NativeAdmission;
   reactStartupUrl?: string;
-  root: string; output: string; timeoutMs?: number; installTimeouts: Record<string, number>; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
+  root: string; output: string; timeoutMs?: number; buildTimeoutMs?: number; installTimeouts: Record<string, number>; browsers: readonly Browser[]; engines: readonly Engine[]; frameworks: readonly string[];
   resume: boolean; retryFailures: boolean; sourceFile?: string; safariEndpoint?: string; iphoneEndpoint?: string; deviceUDID?: string; assetSource: string;
   iphoneControlUrl?: string; iphoneAgentCommand?: string;
 }
@@ -47,13 +47,15 @@ export function options(args: readonly string[]): Options {
   for (const arg of args) {
     const match = /^--([a-z-]+)(?:=(.*))?$/.exec(arg);
     if (!match?.[1]) throw new Error(`Expected --name=value, received ${arg}`);
-    const allowed = ["next-build-observation", "safari-ownership", "safari-causal-capture", "profile", "root", "output", "timeout-ms", "install-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url", "iphone-control-url", "iphone-agent-command", "mac-lane", "mac-thread", "mac-expected-seconds", "mac-wait-seconds", "mac-timeout-seconds"];
+    const allowed = ["next-build-observation", "safari-ownership", "safari-causal-capture", "profile", "root", "output", "timeout-ms", "install-timeout-ms", "build-timeout-ms", "browsers", "engines", "frameworks", "resume", "retry-failures", "safari-endpoint", "iphone-endpoint", "device-udid", "asset-source", "source-file", "react-startup-url", "iphone-control-url", "iphone-agent-command", "mac-lane", "mac-thread", "mac-expected-seconds", "mac-wait-seconds", "mac-timeout-seconds"];
     if (!allowed.includes(match[1]) || values.has(match[1])) throw new Error(`Unknown or repeated option ${arg}`);
     values.set(match[1], match[2] ?? "true");
   }
   if (values.has("safari-ownership") && values.get("safari-ownership") !== "true") throw new Error("--safari-ownership accepts only true");
   const suppliedTimeout = values.get("timeout-ms");
   const timeoutMs = suppliedTimeout === undefined ? undefined : parseTimeout(suppliedTimeout);
+  const suppliedBuildTimeout = values.get("build-timeout-ms");
+  const buildTimeoutMs = suppliedBuildTimeout === undefined ? undefined : parseTimeout(suppliedBuildTimeout, "build-timeout-ms");
   const installTimeouts = parseInstallTimeouts(values.get("install-timeout-ms"));
   const profile = playgroundProfile(values.get("profile") ?? null);
   const selectedEngines = selected(values.get("engines") ?? engines.join(","), engines);
@@ -75,7 +77,7 @@ export function options(args: readonly string[]): Options {
     safariCausalCapture: values.has("safari-causal-capture"),
     nativeAdmission: nativeAdmissionOptions(values),
     reactStartupUrl: reactStartupURL(values.get("react-startup-url")),
-    root: resolve(values.get("root") ?? "web/dist"), output: resolve(values.get("output") ?? "/work/reports/goals"), timeoutMs, installTimeouts,
+    root: resolve(values.get("root") ?? "web/dist"), output: resolve(values.get("output") ?? "/work/reports/goals"), timeoutMs, installTimeouts, buildTimeoutMs,
     browsers: selectedBrowsers, engines: selectedEngines,
     frameworks: selectedFrameworks,
     resume: values.has("resume"), retryFailures: values.has("retry-failures"), safariEndpoint: values.get("safari-endpoint"), iphoneEndpoint: values.get("iphone-endpoint"),
@@ -122,7 +124,7 @@ export async function initialReport(config: Options): Promise<Report> {
   if (hostSource === null && files.some(file => /\.wasm(?:\.gz)?$/.test(file.file))) throw new Error("Preparation error: staged host has no built source identity; run goals-matrix/prepare.ts");
   if (files.some(file => /\.wasm(?:\.gz)?$/.test(file.file))) await verifyPreparedSiteInventory(config.root);
   const builds = await readFile(join(config.root, "engine-builds.json"), "utf8").then(text => JSON.parse(text)).catch(error => ({ error: String(error) }));
-  const report: Report = { schema: 2, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), deadlines: campaignDeadlines(config.timeoutMs, config.installTimeouts), source: { commit, dirty, assets: { profile: config.profile ?? "split", source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
+  const report: Report = { schema: 2, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), deadlines: campaignDeadlines(config.timeoutMs, config.installTimeouts, config.buildTimeoutMs), source: { commit, dirty, assets: { profile: config.profile ?? "split", source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
   if (staged && JSON.stringify(staged.assets) !== JSON.stringify(report.source.assets)) throw new Error("Staged assets differ from controller provenance");
   if (!config.resume) return report;
   const previous: unknown = JSON.parse(await readFile(join(config.output, "TABLE.json"), "utf8"));
