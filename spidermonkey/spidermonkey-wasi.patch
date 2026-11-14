@@ -587,7 +587,7 @@ index f1ce887af..00c9ecad1 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..5ff096965 100644
+index 9524c5d6a..5d313cbb1 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,29 @@
@@ -632,7 +632,7 @@ index 9524c5d6a..5ff096965 100644
 +// Portable baseline inline caches calling a scripted getter, setter or callee.
 +inline constexpr size_t PBLCallReserve = 384;
 +// Proxy traps on PBL, whose scripted handlers enter the interpreter again.
-+inline constexpr size_t ProxyTrapPBLReserve = 1408;
++inline constexpr size_t ProxyTrapPBLReserve = 1792;
 +// Native-only recursion: JSON.stringify's serializer and Array.prototype.join
 +// reached again through an element's toString.
 +inline constexpr size_t JSONSerializeReserve = 672;
@@ -641,15 +641,15 @@ index 9524c5d6a..5ff096965 100644
 +// size Next's generated validators allow (docs/stack-limits.md).
 +inline constexpr size_t StatementReserve = 336;
 +inline constexpr size_t StatementListItemReserve = 352;
-+inline constexpr size_t FunctionBodyReserve = 1520;
-+inline constexpr size_t FunctionExpressionReserve = 2560;
-+inline constexpr size_t ArgumentListReserve = 2496;
-+inline constexpr size_t ArrayLiteralReserve = 2208;
-+inline constexpr size_t ObjectLiteralReserve = 2480;
-+inline constexpr size_t ElementAccessReserve = 2480;
-+inline constexpr size_t TemplateLiteralReserve = 2896;
-+inline constexpr size_t ConditionalReserve = 944;
-+inline constexpr size_t ParenthesizedReserve = 2720;
++inline constexpr size_t FunctionBodyReserve = 1696;
++inline constexpr size_t FunctionExpressionReserve = 2880;
++inline constexpr size_t ArgumentListReserve = 2800;
++inline constexpr size_t ArrayLiteralReserve = 2496;
++inline constexpr size_t ObjectLiteralReserve = 2784;
++inline constexpr size_t ElementAccessReserve = 2784;
++inline constexpr size_t TemplateLiteralReserve = 3248;
++inline constexpr size_t ConditionalReserve = 1088;
++inline constexpr size_t ParenthesizedReserve = 3072;
 +inline constexpr size_t UnaryReserve = 464;
 +}  // namespace bunwasm
 +
