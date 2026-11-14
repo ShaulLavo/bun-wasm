@@ -1,4 +1,4 @@
-import { programProfile, type PairedEngine } from "../../src/engine-kind";
+import { pairedEngineKinds, programProfile, type PairedEngine } from "../../src/engine-kind";
 import { expect, test } from "bun:test";
 import { loadWasm } from "../src/engine-loader";
 import { programMetadata } from "../../src/assets";
@@ -6,6 +6,24 @@ import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
 import { linkedFixtureValue } from "../../tests/package/linked-fixture";
 
 const digest = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+
+for (const kind of pairedEngineKinds) test(`${kind} downloads its side while the core response is pending`, async () => {
+  const profile = programProfile(kind);
+  const core = Promise.withResolvers<void>();
+  const side = Promise.withResolvers<void>();
+  await withPair("download", undefined, async () => {
+    const pending = loadWasm(profile.core, () => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Side download waited for the core response")), 1000);
+    });
+    try { await Promise.race([side.promise, deadline]); }
+    finally { clearTimeout(timer); core.resolve(); await pending; }
+  }, kind, async name => {
+    if (name === profile.core) await core.promise;
+    else side.resolve();
+  });
+});
 
 for (const kind of ["quickjs", "jsc"] as const) {
   const profile = programProfile(kind);
@@ -60,7 +78,7 @@ test("downloaded and cached pairs preserve executable plans without retaining in
   });
 });
 
-async function withPair(source: "download" | "cache", changed: string | undefined, check: (state: ReturnType<typeof quickjsPair> & { downloads(): number }) => Promise<void>, kind: PairedEngine = "quickjs") {
+async function withPair(source: "download" | "cache", changed: string | undefined, check: (state: ReturnType<typeof quickjsPair> & { downloads(): number }) => Promise<void>, kind: PairedEngine = "quickjs", beforeResponse?: (name: string) => Promise<void>) {
   const { core, side } = quickjsPair(kind);
   const profile = programProfile(kind);
   const files = new Map<string, Uint8Array<ArrayBuffer>>([[profile.core, core], [profile.side, side]]);
@@ -82,6 +100,7 @@ async function withPair(source: "download" | "cache", changed: string | undefine
     async fetch(url: string) {
       downloads++;
       const name = new URL(url, "https://example.test/").pathname.slice(1).replace(/\.gz$/, "");
+      await beforeResponse?.(name);
       return new Response(Bun.gzipSync(bytesFor(name)));
     },
   };
