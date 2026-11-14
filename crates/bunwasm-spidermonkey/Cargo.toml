@@ -43,7 +43,6 @@ standalone = []
 controls = []
 loop-controls = ["controls"]
 unicode-controls = []
-loop-controls = ["controls"]
 unicode-generator = []
 
 # Enables write16's SmallVec sink implementation used by the copied normalizer.
