@@ -123,6 +123,51 @@ The coordinator owns follow-through and accepts independent review before merge.
 The implementation worker opens a draft early, runs local matcher and discovery
 checks, then marks it ready so normal GitHub-hosted CI validates the real path.
 
+### React reopening evidence gap
+
+The first entry-absent hosted execution at head
+`135564d953a5802e98523a71b2deb5a749d2fa7a` passed. The second, run 43608394922,
+job 132533226013 on tested merge `9b43a0c6e30afa0eb5b1ddcb61e715fda9084602`,
+failed during later React reopening after eviction. Initial React readiness
+had passed. The later readiness candidate never completed, while Vite printed
+ready and optimizer bundling and the preview stayed empty and loading. The
+retained protocol has no bounds exception, CLOSED error or dev exit. Hono and
+both filesystems remained ready and cleanup completed.
+
+The cause remains unknown. A full exact-source local scenario and focused
+reopening passed. Neither is hosted proof or evidence for a product repair.
+The historical journal lacks request delivery and iframe document state, so it
+cannot distinguish an unfinished dependency from delivery followed by a render
+or preview acceptance failure. The bounded diagnosis is retained under
+`/work/reports/goals/storage-ci-20261114/react-restoration-stall/REPORT.md`.
+
+The ordinary optional observer now records request starts, response statuses,
+completion and failure with per-page weak request identities. Frame identity,
+URL, method, resource type and navigation context locate preview dependencies.
+Events whose start was not observed carry `startObserved: false`; an absent
+terminal event remains absent. No bodies, asynchronous response reads, worker
+hooks, polling or new scenario timeouts are added. The failure snapshot reads
+each iframe Document once and adds its URL, readyState and accepted-Document
+identity. A null Document is never accepted. Historical report fixtures can
+omit these diagnostic-only fields.
+
+The real snapshot and emitted observer events have routed Chromium and WebKit
+controls for delayed module release and rendering, loading and complete
+documents, accepted and unaccepted documents, cross-origin null documents,
+concurrent same-URL requests, failed requests, unknown starts and lost terminal
+events. Suppressed lifecycle listeners are intentional diagnostic controls,
+not naturally occurring browser losses. Evidence write errors stay blocking
+without replacing a primary product error. These tests qualify observation,
+not the cause of the React stall. Existing quarantine rejection and cleanup
+failure controls remain required.
+
+Readiness predicates, scenario order, checkpoint values, Document oracle,
+success assertions and bounds are unchanged. Diagnostic-only consumers retain
+the current React quarantine. Its separate removal remains with Storage PR 783
+and requires two qualifying hosted WebKit passes; these diagnostics do not
+satisfy that gate. Local controls and cleanup are retained under
+`/work/reports/goals/storage-ci-20261114/react-hosted-diagnostics/`.
+
 ## Throughput checkpoint
 
 The initial mitigation covers Firefox and vanilla. One bounded follow-up adds
