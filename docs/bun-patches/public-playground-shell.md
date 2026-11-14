@@ -3,7 +3,7 @@
 | Area | Classification | Source | Local change | Reason |
 | --- | --- | --- | --- | --- |
 | `web/src/playground/playground.ts` | Original Bun consumer adapter | Public `bash-web/session` and `bash-web/prompt` entries at the exact bash-web revision pinned in the package manifests and shell builder | Pass the borrowed Waffle runtime, asset URLs, zsh editor option, terminal callbacks, geometry, and the prompt provider to `BrowserSession.create` | Share the maintained session and prompt implementations instead of copying their input queue, bridge pump, redraw or newline handling |
-| bash-web `shell/engine/src/{runtime.rs,runtime/wasi.rs,process.rs,interpreter.rs}` | Host feature, unchanged upstream implementation | `53e61e7a7310cd2335ca57b5a19f5f4d5644ff26`, including startup diagnostics from `de97536116ed2e55174dda4b4ff99ad7d4c8810a` | Update both consumer locks and the guest producer pin; no shell source changes | Print Waffle's original startup cause through normal terminal output |
+| bash-web `shell/engine/src/{runtime.rs,runtime/wasi.rs,process.rs,interpreter.rs}` and `src/runtime/{worker.ts,worker-launcher.ts,diagnostics.ts}` | Host feature, unchanged upstream implementation | `0b392d67b0dd31c6661dec6853904b7ea8bea417`, including startup diagnostics from `de97536116ed2e55174dda4b4ff99ad7d4c8810a` | Update both consumer locks and the guest producer pin; no shell source changes | Retire eligible waiting command shells before admitting their successor through Waffle exec |
 | `crates/bunwasm-host/src/slots.rs::add_shell_imports` | Original native shell ABI adapter | bash-web `src/runtime/guest-imports.ts` and `shell/engine/src/runtime_main.rs` at `d2b16d6fab8628e21e91b562ff96830b745b13cd` | Bind inherited native stdio, fixed 80x24 geometry, the two-argument phase/status notification, and the no-provider prompt imports (`prompt_names`, `prompt`, `prompt_update` return `-1`; `output_position` returns `0`) | The current shell must instantiate for native package scripts; prompt hooks are unavailable here and phase notifications do not own native process cancellation |
 | `crates/bunwasm-host/src/process/mod.rs`, `slots.rs::add_import` | Original native process ABI adapter | Waffle `docs/host-abi.md` and `packages/waffle/browser/worker.ts` at `ea051e5e9061bcd2bfed6faf363be0f21d211acc` (`waffle-v0.0.100`, `programs-v0.0.8`) | Capture sorted launch descriptors and expose `runtime_proc.inherited_fd` with the specified `-ENOENT` terminator | The released env utility forwards real inherited descriptors to npm-bin shebang commands |
 | Staged `env.wasm` | Host feature, unchanged upstream artifact | Waffle `packages/coreutils/dist/env.wasm`, `programs-v0.0.20`, source `3050f69d810fe7c851e487135517698b5dfd93e5` | Copy the consumer's installed base-family asset to the native launcher guest path; no implementation changes | bash-web delegates external programs to the released Waffle families |
@@ -32,7 +32,7 @@ edited draft with Ctrl+E, Ctrl+U, and Ctrl+K, including multiline zsh drafts.
 The runtime and program tuple is recorded in `scripts/waffle-release-inputs.json`;
 the shell builder uses the same exact bash-web revision as both applications.
 
-The shell pin `53e61e7a7310cd2335ca57b5a19f5f4d5644ff26` includes bash-web's
+The shell pin `0b392d67b0dd31c6661dec6853904b7ea8bea417` includes bash-web's
 startup-diagnostic fix from `de97536116ed2e55174dda4b4ff99ad7d4c8810a`.
 Its unchanged `shell/engine/src/runtime.rs`, `runtime/wasi.rs`, `process.rs`
 and `interpreter.rs` copy up to 4,096 UTF-8 bytes from the existing
@@ -40,6 +40,17 @@ and `interpreter.rs` copy up to 4,096 UTF-8 bytes from the existing
 the original nested startup cause after the errno message. Diagnostic publication
 is awaited without changing errno, exit status, command acceptance or cleanup.
 These are maintained upstream implementations, consumed without local patches.
+
+This revision adds explicit `exec` and parser-owned replacement of eligible final
+external commands in noninteractive `-c` mode. Waffle 0.0.129 owns the same PID,
+parent, job, children and descriptors across image generations. The shell forwards
+the cached original root preopen, including its remap around user descriptor 3.
+The old image stops before successor admission, without publishing process exit.
+Unsupported implicit replacement falls back to spawn on ENOTSUP or ENOSYS.
+Explicit unsupported exec returns 126. Interactive roots, script files, pipelines
+and other ineligible commands retain ordinary execution. Bun's package-script
+text and shebang handling are unchanged. Worker retirement alone proves neither
+physical memory reclamation nor Safari framework acceptance.
 
 The new shell revision delegates `env` to the published Waffle coreutils family.
 `scripts/build-bash-web-shell.sh` builds only the shell and stages the matching
