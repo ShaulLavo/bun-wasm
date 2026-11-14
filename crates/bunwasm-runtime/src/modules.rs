@@ -763,6 +763,30 @@ pub fn eval_entry(state: &State, code: &str) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_polyfill_registration_and_dispatch() {
+        crate::engine_host::tests::registration_and_dispatch();
+    }
+
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_polyfill_source_and_errors() {
+        crate::engine_host::tests::source_and_errors();
+    }
+
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_polyfill_string_wire_and_result_ownership() {
+        crate::engine_host::tests::string_wire_and_result_ownership();
+    }
+
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_polyfill_reentry() {
+        crate::engine_host::tests::reentry();
+    }
+
     use super::*;
 
     /// A record's invalid source is a SyntaxError with the source line and location; any other

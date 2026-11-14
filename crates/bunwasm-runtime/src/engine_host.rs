@@ -29,6 +29,9 @@ use crate::natives::Table;
 use crate::resolve;
 use crate::{Entry, State};
 
+#[cfg(test)]
+pub(crate) mod tests;
+
 const T_UNDEFINED: u8 = 0;
 const T_NULL: u8 = 1;
 const T_FALSE: u8 = 2;
@@ -40,6 +43,12 @@ const T_ARRAY: u8 = 7;
 const T_OBJECT: u8 = 8;
 const T_BIGINT: u8 = 9;
 const T_BIGUINT: u8 = 10;
+
+fn encode_string(source: &str, out: &mut Vec<u8>) {
+    out.push(T_STR);
+    out.extend((source.len() as u32).to_le_bytes());
+    out.extend(source.as_bytes());
+}
 
 pub fn encode(v: &Val, out: &mut Vec<u8>) {
     let len = |out: &mut Vec<u8>, n: usize| out.extend((n as u32).to_le_bytes());
@@ -60,11 +69,7 @@ pub fn encode(v: &Val, out: &mut Vec<u8>) {
             out.push(T_BIGUINT);
             out.extend(n.to_le_bytes());
         }
-        Val::Str(s) => {
-            out.push(T_STR);
-            len(out, s.len());
-            out.extend(s.as_bytes());
-        }
+        Val::Str(s) => encode_string(s, out),
         Val::Bytes(b) => {
             out.push(T_BYTES);
             len(out, b.len());
@@ -150,6 +155,7 @@ pub fn decode(bytes: &[u8]) -> Val {
 
 struct Host {
     functions: Vec<(&'static str, DataFn)>,
+    polyfill_source: usize,
     constants: Vec<(&'static str, Val)>,
     entry: Val,
 }
@@ -162,7 +168,7 @@ thread_local! {
 /// Set the program up for the host to run; `_start` then returns.
 pub(crate) fn init(entry: Entry, state: Rc<State>, main_path: String) -> i32 {
     let mut table = crate::natives::table(&state);
-    install_host_natives(&mut table, &state);
+    let polyfill_source = install_host_natives(&mut table, &state);
     let entry = match &entry {
         Entry::File(_) => Record::new().set("kind", "file").set("main", main_path),
         Entry::Eval(code) => {
@@ -179,6 +185,7 @@ pub(crate) fn init(entry: Entry, state: Rc<State>, main_path: String) -> i32 {
     };
     let host = Host {
         functions: table.functions,
+        polyfill_source,
         constants: table.constants,
         entry: entry.into(),
     };
@@ -196,6 +203,19 @@ fn set_result(v: &Val) {
         r.clear();
         encode(v, &mut r);
     });
+}
+
+fn set_polyfill_result(args: Args<'_>) -> Result<(), NativeError> {
+    let source = modules::polyfill_source(args.str(0)?);
+    RESULT.with(|r| {
+        let mut r = r.borrow_mut();
+        r.clear();
+        match source {
+            Some(source) => encode_string(source, &mut r),
+            None => encode(&Val::Undefined, &mut r),
+        }
+    });
+    Ok(())
 }
 
 fn error_val(err: &NativeError) -> Val {
@@ -267,18 +287,26 @@ pub unsafe extern "C" fn bunwasm_call(index: u32, ptr: *mut u8, len: u32) -> i32
         other => vec![other],
     };
     drop(input);
-    let f = host().functions.get(index as usize).map(|(_, f)| f.clone());
+    let (is_polyfill_source, f) = {
+        let h = host();
+        (
+            index as usize == h.polyfill_source,
+            h.functions.get(index as usize).map(|(_, f)| f.clone()),
+        )
+    };
     let Some(f) = f else {
         set_result(&error_val(&NativeError::error(format!(
             "bun-wasm: no native #{index}"
         ))));
         return 1;
     };
-    match f(Args(&args)) {
-        Ok(v) => {
-            set_result(&v);
-            0
-        }
+    let result = if is_polyfill_source {
+        set_polyfill_result(Args(&args))
+    } else {
+        f(Args(&args)).map(|v| set_result(&v))
+    };
+    match result {
+        Ok(()) => 0,
         Err(err) => {
             set_result(&error_val(&err));
             1
@@ -288,7 +316,7 @@ pub unsafe extern "C" fn bunwasm_call(index: u32, ptr: *mut u8, len: u32) -> i32
 
 /// Natives only the host engine needs: module sources ready for the host's
 /// native ES module loader, CommonJS wrappers, polyfill sources.
-fn install_host_natives(t: &mut Table, state: &Rc<State>) {
+fn install_host_natives(t: &mut Table, state: &Rc<State>) -> usize {
     t.constants.push((
         "prepareVersion",
         Val::from(state.transpiler.hooks_version()),
@@ -323,6 +351,7 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
         let out = st.esm_as_cjs(path)?;
         Ok(host_dynamic_imports(&out.code, path, &out.imports).into())
     });
+    let polyfill_source = t.functions.len();
     t.add("polyfillSource", |a| {
         Ok(modules::polyfill_source(a.str(0)?).map(Val::from).into())
     });
@@ -331,6 +360,7 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
         st.flush();
         Ok(Val::Undefined)
     });
+    polyfill_source
 }
 
 /// `import(...)` in code evaluated as a script (CommonJS) goes through the
