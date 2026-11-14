@@ -92,13 +92,39 @@ function stageResolverLock(original: string, locations: ReadonlyMap<string, stri
   return JSON.stringify({ ...lock, packages });
 }
 
-function verifyUnrelatedPackages(original: string, updated: string, locations: ReadonlyMap<string, string>): void {
-  const before = object(object(Bun.JSONC.parse(original)).packages);
+function intendedGitRevision(before: string, previous: unknown, selected: unknown, inputs: ReadonlyMap<string, ResolverInput>): string | undefined {
+  if (typeof previous !== "string" || typeof selected !== "string" || previous === selected) return;
+  const oldPin = gitPattern.exec(previous);
+  const newPin = gitPattern.exec(selected);
+  const locked = gitPattern.exec(before);
+  if (!oldPin || !newPin || !locked) return;
+  if (locked[1] !== oldPin[1] || locked[2] !== oldPin[2] || !oldPin[3]!.startsWith(locked[3]!)) return;
+  const input = inputs.get(selected);
+  return input?.kind === "git" ? input.resolution : undefined;
+}
+
+function requestedGitRevision(name: string, before: string, after: unknown, root: Record<string, unknown>, manifest: Record<string, unknown>, inputs: ReadonlyMap<string, ResolverInput>): boolean {
+  const previous = gitPattern.exec(before);
+  if (!previous || !Array.isArray(after) || typeof after[0] !== "string") return false;
+  const spec = after[0].slice(after[0].indexOf("@", 1) + 1);
+  for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "overrides"]) {
+    const oldPins = object(root[field] ?? {});
+    const newPins = object(manifest[field] ?? {});
+    if (intendedGitRevision(before, oldPins[name], newPins[name], inputs) === spec) return true;
+  }
+  return false;
+}
+
+function verifyUnrelatedPackages(original: string, updated: string, locations: ReadonlyMap<string, string>, inputs: ReadonlyMap<string, ResolverInput>, manifest: Record<string, unknown>): void {
+  const lock = object(Bun.JSONC.parse(original));
+  const root = object(object(lock.workspaces)[""]);
+  const before = object(lock.packages);
   const after = object(object(Bun.JSONC.parse(updated)).packages);
   for (const [name, entry] of Object.entries(before)) {
     if (!Array.isArray(entry) || typeof entry[0] !== "string") throw new Error("Invalid locked package");
     const spec = entry[0].slice(entry[0].indexOf("@", 1) + 1);
-    if (locations.has(spec)) continue;
+    if (locations.has(spec) && !gitPattern.test(spec)) continue;
+    if (requestedGitRevision(name, spec, after[name], root, manifest, inputs)) continue;
     if (!isDeepStrictEqual(entry, after[name])) throw new Error(`Lock update changed an unrelated package: ${name}`);
   }
 }
@@ -150,7 +176,7 @@ export async function updateReleaseLock(directory: string, download = releaseDow
     await writeFile(join(directory, "bun.lock"), stageResolverLock(lock.toString(), locations, integrities));
     await runBunInstall(directory, ["--lockfile-only", "--ignore-scripts"].concat(offline ? ["--offline"] : []), controller.signal);
     const updated = canonicalLock(await readFile(join(directory, "bun.lock"), "utf8"), locations, inputs);
-    verifyUnrelatedPackages(lock.toString(), updated, locations);
+    verifyUnrelatedPackages(lock.toString(), updated, locations, inputs, metadata);
     result = updated;
   } finally {
     await writeFile(join(directory, "package.json"), manifest);

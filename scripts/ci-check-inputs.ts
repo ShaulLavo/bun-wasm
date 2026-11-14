@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
-import { parseCheck, type NativeFixtureEngine, type NativeProfile } from "./test-checks";
+import { parseCheck, type NativeEngine } from "./test-checks";
+
+type NativeInputSelection = { profile?: "split"; engine?: NativeEngine } | { profile: "shared-group"; engine?: never };
 
 export function checkInputPaths(check: ReturnType<typeof parseCheck>): string[] {
   if (check.owner === "native-probe") return [check.path].concat(check.inputs);
@@ -20,7 +22,8 @@ function treeEntry(entry: string) {
   return { mode, kind, object, path: entry.slice(separator + 1) };
 }
 
-export function nativeCheckInputsAt(ref: string, profile?: NativeProfile, engine?: NativeFixtureEngine): string[] {
+export function nativeCheckInputsAt(ref: string, selection: NativeInputSelection = {}): string[] {
+  const { profile, engine } = selection;
   if (/^0{40}$/.test(ref)) return [];
   const tree = execFileSync("git", ["ls-tree", "-r", "-t", "-z", "--full-tree", ref, "--", "checks"], { encoding: "utf8", timeout: 5_000 });
   const [directory, ...manifests] = tree.split("\0").filter(Boolean).map(treeEntry);
@@ -42,8 +45,8 @@ export function nativeCheckInputsAt(ref: string, profile?: NativeProfile, engine
     if (object !== manifest.object || kind !== "blob" || !Number.isSafeInteger(length) || length < 0 || blobs[start + length] !== 10) throw new Error(`Invalid check blob at ${ref}: ${manifest.path}`);
     const check = parseCheck(JSON.parse(blobs.toString("utf8", start, start + length)), basename(manifest.path));
     offset = start + length + 1;
-    if (engine !== undefined && (check.owner !== "native" || !(check.engines ?? ["quickjs"]).includes(engine))) return [];
     if (profile !== undefined && ((check.owner !== "native" && check.owner !== "browser-guest") || (check.profile ?? "split") !== profile)) return [];
+    if (engine !== undefined && (check.owner !== "native" || check.profile === "shared-group" || !(check.engines ?? ["quickjs"]).includes(engine))) return [];
     const inputs = checkInputPaths(check);
     return inputs.length ? inputs.concat([manifest.path]) : [];
   });

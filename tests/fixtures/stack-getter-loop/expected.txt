@@ -1,0 +1,14 @@
+own getter loop completed
+receiver-preserving getter loop completed
+super getter loop completed
+getter exception and finally preserved
+unbounded getter caught
+own getter loop completed
+continued
+own getter loop completed
+receiver-preserving getter loop completed
+super getter loop completed
+getter exception and finally preserved
+unbounded getter caught
+own getter loop completed
+continued

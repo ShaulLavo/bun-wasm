@@ -16,7 +16,18 @@ export function expandedCiWorkflow(): string {
     /^      - uses: \.\/\.github\/actions\/jsc-(setup|prebuild)\n(?: {8,}.+\n)*/gm,
     (_step, action: string) => actionSteps(action === "setup" ? setup : prebuild),
   );
-  return expand(read(".github/workflows/ci.yml"))
+  const sharedSetup = read(".github/actions/shared-jsc-setup/action.yml");
+  const sharedBuild = read(".github/actions/shared-jsc-prebuild/action.yml");
+  const sharedKey = sharedSetup.match(/^        JSC_KEY: (.+)$/m)?.[1];
+  if (!sharedKey) throw new Error("Missing effective shared JSC cache identity");
+  const shared = read(".github/workflows/ci.yml").replace(
+    /^      - uses: \.\/\.github\/actions\/shared-jsc-(setup|prebuild)\n(?: {8,}.+\n)*/gm,
+    (_step, action: string) => actionSteps(action === "setup" ? sharedSetup : sharedBuild)
+      .replaceAll("${{ inputs.key }}", sharedKey)
+      .replaceAll("${{ inputs.expected-key }}", "${{ needs.shared-jsc-identity.outputs.key }}")
+      .replaceAll("inputs.shared-native", "needs.quality.outputs.shared-native"),
+  );
+  return expand(shared)
     .replaceAll("${{ inputs.key }}", key)
     .replaceAll("${{ inputs.prefix }}", prefix)
     .replaceAll("${{ inputs.expected-key }}", "${{ needs.jsc-identity.outputs.key }}")

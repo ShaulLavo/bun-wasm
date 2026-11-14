@@ -18,14 +18,22 @@ site once from its receipt-verified guest and uploads it with its identities
 in `BUN_WASM_BROWSER_SITE`; each check verifies the site's closed inventory, guest and
 receipt against the checkout before and after the browsers run, and never bundles it again.
 A local run without that variable builds a site in scratch from `dist/bun-browser.wasm`.
-Native paths name a directory under
-`tests/fixtures/`. Ordinary native manifests may declare `"engines":
-["quickjs", "jsc", "spidermonkey"]`. Omission retains QuickJS only, and explicit
-lists must retain QuickJS. The existing native gate runs each declared fixture
-once on each selected engine, using the already built ordinary pairs. It compares
-stdout, stderr and the expected exit through `test.sh`, without another build.
-`BUN_WASM_CHECK_ENGINES` selects the produced engines and defaults to `quickjs`
-locally. CI includes SpiderMonkey and includes JSC when its producer is selected.
+Split native manifests default to QuickJS and may declare an `engines` array
+containing a nonempty, unique subset of `quickjs`, `jsc`, `browser` and `spidermonkey`.
+The native runner runs the runtime preflight once, then executes each
+declared engine's fixtures without rebuilding guests or increasing fixture-group
+concurrency. CI consumes only the producers selected by its explicit
+`INSTALL_ENGINES` subset; missing artifacts for selected engines fail. Without
+that subset, local runs consume every declared engine. JSC selections require
+its normal producer, including when the
+manifest or fixture is removed. Shared-group manifests continue to infer their
+engine from their matching producer and cannot declare `engines`.
+
+Native paths name a directory under `tests/fixtures/`. The existing native gate
+compares stdout, stderr and the expected exit through `test.sh`. SpiderMonkey
+requires an absolute `SPIDERMONKEY_WASM` and runs the interpreter tier. CI adds
+its already built SpiderMonkey producer to `INSTALL_ENGINES` only for the native
+fixture command; the separate installer matrix retains its three engines.
 Changed targeted fixtures and manifests select JSC from the verified base, head
 and merge ancestor, including removals. Missing selected inputs fail the gate.
 Native manifests may select `"profile": "shared-group"`; omission
