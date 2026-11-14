@@ -3917,7 +3917,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +        recordFailure("!canGetIndexQuickly"_s);
 +        return false;
 +    }
-+    append<hasGap, testing>(value);
++    [[clang::always_inline]] append<hasGap, testing>(value);
 +    if (haveFailure()) [[unlikely]]
 +        return false;
 +    frameAt(index).cursor = i + 1;
@@ -3981,7 +3981,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +    }
 +
 +    unsigned count = m_frames.size();
-+    append<hasGap, testing>(value);
++    [[clang::always_inline]] append<hasGap, testing>(value);
 +    return !haveFailure() && m_frames.size() == count;
 +}
 +
