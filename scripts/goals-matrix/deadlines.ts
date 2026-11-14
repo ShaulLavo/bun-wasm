@@ -2,11 +2,15 @@ import { isDeepStrictEqual } from "node:util";
 import { frameworks, inventory, boxId, type Box } from "./catalog";
 import { object, text } from "./evidence";
 import reviewed from "./cell-deadlines.json";
-import type { CalibrationMetadata, CellLimits } from "./calibration-model";
+import type { Calibration, CalibrationMetadata, CellLimits } from "./calibration-model";
 
 export const cleanupTimeoutMs = 20_000;
+/** Operational watchdog for driver creation, never a product phase limit. */
+export const harnessSetupWatchdogMs = 120_000;
 interface FrameworkDeadlinePolicy {
   timeoutMs: number;
+  startupTimeoutMs?: number;
+  startupTimeouts?: Record<string, number>;
   installTimeouts: Record<string, number>;
   buildTimeouts: Record<string, number>;
   cleanupTimeoutMs: typeof cleanupTimeoutMs;
@@ -36,18 +40,28 @@ export function parseInstallTimeouts(value: string | undefined): Record<string, 
   }
   return Object.fromEntries(entries);
 }
-export function deadlinePolicy(timeoutMs = 90_000, overrides: Readonly<Record<string, number>> = {}): FrameworkDeadlinePolicy {
-  return { timeoutMs, installTimeouts: Object.fromEntries(frameworks.map(framework => [framework.id, overrides[framework.id] ?? timeoutMs])),
+export function deadlinePolicy(timeoutMs = 90_000, overrides: Readonly<Record<string, number>> = {}, startupTimeoutMs = timeoutMs): FrameworkDeadlinePolicy {
+  return { timeoutMs, startupTimeoutMs, installTimeouts: Object.fromEntries(frameworks.map(framework => [framework.id, overrides[framework.id] ?? timeoutMs])),
     buildTimeouts: Object.fromEntries(frameworks.map(framework => [framework.id, framework.id === "next" ? Math.max(timeoutMs, 110_000) : timeoutMs])), cleanupTimeoutMs };
 }
-export function campaignDeadlines(timeoutMs?: number, installs: Readonly<Record<string, number>> = {}): FrameworkDeadlinePolicy & CellDeadlinePolicy {
-  const defaults = deadlinePolicy(timeoutMs, installs);
+export function campaignDeadlines(timeoutMs?: number, installs: Readonly<Record<string, number>> = {}, startupTimeoutMs?: number): FrameworkDeadlinePolicy & CellDeadlinePolicy {
+  const defaults = deadlinePolicy(timeoutMs, installs, startupTimeoutMs);
   const cellTimeouts = Object.fromEntries(reviewed.cells.map(cell => [`${cell.framework}/${cell.browser}/${cell.engine}`, {
     timeoutMs: timeoutMs ?? cell.limits.timeoutMs,
     installTimeoutMs: installs[cell.framework] ?? (timeoutMs === undefined ? cell.limits.installTimeoutMs : timeoutMs),
     buildTimeoutMs: timeoutMs === undefined ? cell.limits.buildTimeoutMs : defaults.buildTimeouts[cell.framework]!,
   }]));
-  return { ...defaults, calibration: structuredClone(reviewed.metadata), cellTimeouts, overrides: { timeoutMs: timeoutMs ?? null, installTimeouts: { ...installs } } };
+  const startupCalibration: Pick<Calibration, "metadata" | "startupTimeouts"> = reviewed;
+  const startupTimeouts = Object.fromEntries(Object.entries(cellTimeouts).map(([id, limits]) => [id, startupTimeoutMs ?? (timeoutMs === undefined ? startupCalibration.startupTimeouts?.[id] : timeoutMs) ?? limits.timeoutMs]));
+  return { ...defaults, startupTimeouts, calibration: structuredClone(reviewed.metadata), cellTimeouts, overrides: { timeoutMs: timeoutMs ?? null, installTimeouts: { ...installs } } };
+}
+export function startupDeadline(policy: RecordedDeadlinePolicy, box: Pick<Box, "framework" | "browser"> & { engine: string }): number {
+  if (policy.startupTimeouts) {
+    const timeout = policy.startupTimeouts[`${box.framework}/${box.browser}/${box.engine}`];
+    if (timeout === undefined) throw new Error("Missing cell startup deadline policy");
+    return timeout;
+  }
+  return policy.startupTimeoutMs ?? cellDeadlines(policy, box).timeoutMs;
 }
 export function cellDeadlines(policy: RecordedDeadlinePolicy, box: Pick<Box, "framework" | "browser"> & { engine: string }): CellLimits {
   if (policy.cellTimeouts) {
@@ -95,6 +109,13 @@ export function validateDeadlines(value: unknown): DeadlinePolicy {
     normalized[framework.id] = parseTimeout(String(timeout));
   }
   const policy = deadlinePolicy(data.timeoutMs, normalized);
+  if (data.startupTimeoutMs === undefined) delete policy.startupTimeoutMs;
+  else policy.startupTimeoutMs = positiveTimeout(data.startupTimeoutMs);
+  if (data.startupTimeouts !== undefined) {
+    const startups = object(data.startupTimeouts);
+    if (Object.keys(startups).length !== inventory().length) throw new Error("Startup deadlines must cover the full inventory");
+    policy.startupTimeouts = Object.fromEntries(inventory().map(box => [boxId(box), positiveTimeout(startups[boxId(box)])]));
+  }
   const builds = object(data.buildTimeouts);
   if (Object.keys(builds).length !== frameworks.length || frameworks.some(framework => builds[framework.id] !== policy.buildTimeouts[framework.id])) throw new Error("Invalid framework build deadline policy");
   return validateCellPolicy(data, policy);

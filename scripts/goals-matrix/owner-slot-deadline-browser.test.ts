@@ -73,7 +73,7 @@ async function lifecycle(framework: Framework, fixture: Transport, held: HeldPre
     async cleanup(timeoutMs) { cleanup = true; return transport.cleanup!(timeoutMs); },
   };
   const result = await execute({ framework, box: { framework: framework.id, browser: "iphone-safari", engine: "browser" },
-    url: "http://fixture/?engine=browser", timeoutMs: 7000, installTimeoutMs: scenario === "undelivered" ? 400 : 7000, signal: abort.signal,
+    url: "http://fixture/?engine=browser", timeoutMs: 7000, startupTimeoutMs: 7000, installTimeoutMs: scenario === "undelivered" ? 400 : 7000, signal: abort.signal,
     createTransport: async () => facade, saveLog: async text => { logs.push(text); },
   });
   const returnedAt = performance.now();
@@ -211,7 +211,7 @@ async function cancelledArm(engine: BrowserType): Promise<void> {
       };
       const facade: Transport = { ...fixture, nativeClick: held.transport.nativeClick, cleanup: timeoutMs => held.transport.cleanup!(timeoutMs) };
       const result = await execute({ framework, box: { framework: framework.id, browser: "iphone-safari", engine: "browser" },
-        url: "http://fixture/?engine=browser", timeoutMs: 3000, signal: abort.signal,
+        url: "http://fixture/?engine=browser", timeoutMs: 3000, startupTimeoutMs: 3000, signal: abort.signal,
         createTransport: async () => facade, saveLog: async () => {},
       });
       await answer.promise;

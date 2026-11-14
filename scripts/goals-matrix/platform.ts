@@ -3,7 +3,7 @@ import type { Cell } from "./model";
 export interface PlatformBlocker { reason: string; discovery: { failedBox: string; error: string } }
 export function nativePlatformBlocker(cell: Cell): PlatformBlocker | undefined {
   if (cell.browser !== "safari" && cell.browser !== "iphone-safari") return undefined;
-  if (cell.status !== "fail" || cell.phase !== "startup") return undefined;
+  if (cell.status !== "fail" || (cell.phase !== "harness-setup" && cell.phase !== "startup")) return undefined;
   const prerequisite = /session not created|Could not create a session|Expected (?:native Safari|desktop Safari|iPhone simulator Safari)/.test(cell.error);
   if (!prerequisite) return undefined;
   return { reason: `Native browser prerequisite failed: ${cell.error}`, discovery: { failedBox: `${cell.framework}/${cell.browser}/${cell.engine}`, error: cell.error } };

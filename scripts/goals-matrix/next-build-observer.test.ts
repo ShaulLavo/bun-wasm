@@ -250,7 +250,7 @@ test.each([false, true])("full execution retains original deadlines, cleanup and
       return evaluate(expression, admission, options);
     };
     transport.cleanup = async () => { expect(fs.disposed()).toBe(true); cleanup = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
-    const result = await execute({ framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, buildTimeoutMs: 110_000,
+    const result = await execute({ framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, startupTimeoutMs: 1000, buildTimeoutMs: 110_000,
       nextBuildObservation: value => events.push(value), async createTransport() { return transport; }, async saveLog() {},
     });
     expect(result.status).toBe("pass");
@@ -276,7 +276,7 @@ test.each([false, true])("stalled optional close leaves time for complete teardo
     const close = transport.close.bind(transport);
     transport.close = async (...args) => { if (!owned) await complete(); await close(...args); };
     if (owned) transport.cleanup = async () => { await complete(); return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
-    const config: Parameters<typeof execute>[0] = { framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, buildTimeoutMs: 110_000,
+    const config: Parameters<typeof execute>[0] = { framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, startupTimeoutMs: 1000, buildTimeoutMs: 110_000,
       nextBuildObservation: value => events.push(value), async createTransport() { return transport; }, async saveLog() {},
     };
     try {
@@ -329,7 +329,7 @@ test("full execution cancels a pending baseline and disposes before owned cleanu
     };
     transport.cleanup = async () => { expect(fs.disposed()).toBe(true); expect(fs.outstanding()).toBe(0); return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
     try {
-      const result = await execute({ framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, buildTimeoutMs: 110_000, signal: controller.signal,
+      const result = await execute({ framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, startupTimeoutMs: 1000, buildTimeoutMs: 110_000, signal: controller.signal,
         nextBuildObservation: value => events.push(value), async createTransport() { return transport; }, async saveLog() {},
       });
       expect(result).toMatchObject({ status: "fail", phase: "build", error: expect.stringContaining("outer cancelled") });
@@ -364,7 +364,7 @@ test.each(["failure", "final"])("opt-in Next observer preserves current launch-f
     let cleaned = false;
     const logs: string[] = [];
     transport.cleanup = async () => { expect(fs.disposed()).toBe(true); expect(fs.outstanding()).toBe(0); cleaned = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
-    const result = await execute({ framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, buildTimeoutMs: 110_000,
+    const result = await execute({ framework: next!, box: { framework: "next", engine: "quickjs", browser: "chrome" }, url: "http://fixture/?engine=quickjs", timeoutMs: 1000, startupTimeoutMs: 1000, buildTimeoutMs: 110_000,
       nextBuildObservation: value => events.push(value), async createTransport() { return transport; }, async saveLog(text) { expect(cleaned).toBe(false); logs.push(text); },
     });
     expect(result).toMatchObject({ status: "fail", phase: "build", error: expect.stringContaining("original native refusal") });

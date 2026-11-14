@@ -127,7 +127,7 @@ async function runFailureFixture(framework: Framework, fixture: Transport, held:
     },
   };
   const result = await execute({ framework, box: { framework: framework.id, browser: "iphone-safari", engine: "browser" },
-    url: "http://fixture/?engine=browser", timeoutMs: scenario === "held-timeout" ? 1000 : 5000, signal: abort.signal,
+    url: "http://fixture/?engine=browser", timeoutMs: scenario === "held-timeout" ? 1000 : 5000, startupTimeoutMs: 5000, signal: abort.signal,
     createTransport: async () => facade, saveLog: async text => { logs.push(text); },
   });
   expect(result).toMatchObject({ status: "fail", phase: "render" });

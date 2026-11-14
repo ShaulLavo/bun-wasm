@@ -4,12 +4,12 @@ import { resolve, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { inventory, boxId, type Box } from "./catalog";
 import { validateArchive, recordedTime, type ArchivedReport } from "./archive";
-import { finish, type Attempt, type PhaseResult, type Phase } from "./model";
+import { finish, type Attempt, type PhaseResult, type FailureStage } from "./model";
 
 type Input = { path: string; contents: Uint8Array };
 type Observation = { input: number; cell: number };
 type AttemptRef = Observation & { attempt: number };
-type Outcome = { status: "unattempted" } | { status: "pass" } | { status: "fail"; phase: Phase; error: string };
+type Outcome = { status: "unattempted" } | { status: "pass" } | { status: "fail"; phase: FailureStage; error: string };
 interface ViewCell extends Box {
   observations: Observation[];
   attempts: AttemptRef[];

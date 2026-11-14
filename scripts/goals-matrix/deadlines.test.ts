@@ -61,7 +61,7 @@ async function sampleExecution(installTimeoutMs?: number, stallRender = false) {
   return withPlayground(framework, 150, transport => {
     if (stallRender) transport.openPreview = () => new Promise(() => {});
     return execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" },
-      url: "http://fixture/?engine=browser", timeoutMs: 100, installTimeoutMs,
+      url: "http://fixture/?engine=browser", timeoutMs: 100, startupTimeoutMs: 100, installTimeoutMs,
       async createTransport() { return transport; }, async saveLog() {},
     });
   });
@@ -165,13 +165,15 @@ test("continuation accepts the same policy, retains failed history, and rejects 
   });
 });
 
-type CleanupDelays = { session?: number; preview?: number; transcript?: number };
+type CleanupDelays = { session?: number; preview?: number; transcript?: number; setup?: number; navigation?: number };
 async function withDriver(transport: Transport, action: (endpoint: string, timeouts: unknown[]) => Promise<void>, delays: CleanupDelays = {}): Promise<void> {
   const timeouts: unknown[] = [];
   let previewToken: string | undefined;
   async function route(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
     const body = request.method === "POST" ? object(await request.json()) : {};
+    if (path === "/session") await Bun.sleep(delays.setup ?? 0);
+    if (path.endsWith("/url")) await Bun.sleep(delays.navigation ?? 0);
     if (request.method === "DELETE" && path === "/session/deadline-unit") await Bun.sleep(delays.session ?? 0);
     const expression = Array.isArray(body.args) ? body.args[0] : undefined;
     if (timeouts.length > 1 && path.endsWith("/execute/async") && typeof expression === "string" && expression.includes("function transcript")) await Bun.sleep(delays.transcript ?? 0);
@@ -225,6 +227,21 @@ async function stageUnitHost(root: string, framework: string): Promise<void> {
   await writeFile(join(root, `${framework}.json`), "{}");
   await writePreparedSiteInventory(root);
 }
+test.each([200, 600])("the native runner keeps slow setup outside startup and times %i ms playground navigation independently", async navigation => {
+  const framework = frameworks.find(item => item.id === "hono")!;
+  await withPlayground(framework, 0, transport => withDriver(transport, (endpoint, timeouts) => withReportRoot(async (root, output) => {
+    await stageUnitHost(root, framework.id);
+    const config = options(["--asset-source=startup-unit-not-acceptance", `--root=${root}`, `--output=${output}`, "--timeout-ms=100", "--startup-timeout-ms=500", "--browsers=safari", "--engines=browser", "--frameworks=hono", `--safari-endpoint=${endpoint}`]);
+    const report = await run(config);
+    const cell = report.cells.find(cell => cell.framework === "hono" && cell.browser === "safari" && cell.engine === "browser")!;
+    expect(cell).toMatchObject(navigation === 200 ? { status: "pass" } : { status: "fail", phase: "startup" });
+    expect(cell.attempts[0]?.harnessSetup?.durationMs).toBeGreaterThanOrEqual(650);
+    expect(cell.attempts[0]?.phases[0]?.timeoutMs).toBe(500);
+    expect(timeouts).toEqual([{ script: 500, pageLoad: 500, implicit: 0 }, { script: 100, pageLoad: 100, implicit: 0 }]);
+    expect(report.resources?.every(resource => resource.stopped)).toBe(true);
+    for (const resource of report.resources ?? []) expect(() => process.kill(resource.pid, 0)).toThrow();
+  }), { setup: 700, navigation }));
+});
 test.each(["nuxt", "astro"])("the real runner and WebDriver transport apply the override only to %s's install in a local unit fixture", async id => {
   const framework = frameworks.find(item => item.id === id);
   if (!framework) throw new Error("Missing framework fixture");
@@ -278,7 +295,7 @@ test("a cleanup-mode failure still closes the owned transport", async () => {
     transport.beginCleanup = () => { throw new Error("cleanup request reset failed"); };
     transport.close = async () => { closed = true; await close(); };
     const cell = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" },
-      url: "http://fixture/?engine=browser", timeoutMs: 1000, async createTransport() { return transport; }, async saveLog() {} });
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, startupTimeoutMs: 1000, async createTransport() { return transport; }, async saveLog() {} });
     expect(cell).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("cleanup request reset failed") });
     expect(closed).toBe(true);
   });
@@ -292,7 +309,7 @@ test("a stalled cleanup-mode switch stays inside the existing owned observation 
     transport.beginCleanup = () => new Promise(() => {});
     transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
     const cell = await execute({ framework, box: { framework: framework.id, browser: "iphone-safari", engine: "browser" },
-      url: "http://fixture/?engine=browser", timeoutMs: 1000, async createTransport() { return transport; }, async saveLog() {} });
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, startupTimeoutMs: 1000, async createTransport() { return transport; }, async saveLog() {} });
     expect(cell).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("4000 ms") });
     expect(cell.attempts[0]?.phases.at(-1)?.timeoutMs).toBe(20_000);
     expect(closed).toBe(true);

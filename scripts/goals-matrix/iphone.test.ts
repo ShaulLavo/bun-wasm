@@ -178,7 +178,7 @@ async function cleanupDeadlineControl(scenario: "elapsed" | "expired" | "cancell
       return { browserClosed: true, foregroundStopped: true, previewClosed: true };
     };
     return execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
-      url: "http://fixture/?engine=browser", timeoutMs: 1000, createTransport: async () => transport,
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, startupTimeoutMs: 1000, createTransport: async () => transport,
       saveLog: async () => {
         now += 300;
         if (scenario === "expired" && cleanupScope) now = cleanupScope.deadline;
@@ -246,7 +246,7 @@ async function nativeLifecycle(scenario: NativeScenario) {
     let closed = false;
     transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
     const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
-      url: "http://fixture/?engine=browser", timeoutMs: 1000, createTransport: async () => transport, saveLog: lifecycleLog(logs, scenario),
+      url: "http://fixture/?engine=browser", timeoutMs: 1000, startupTimeoutMs: 1000, createTransport: async () => transport, saveLog: lifecycleLog(logs, scenario),
     });
     return { result, closed, logs };
   });
@@ -287,7 +287,7 @@ async function pendingCleanupControl(agent: string, log: string, closed: string)
     const logs: string[] = [];
     try {
       const result = await execute({ box: { framework: framework.id, browser: "iphone-safari", engine: "browser" }, framework,
-        url: "http://fixture/?engine=browser", timeoutMs: 1000, installTimeoutMs: 80,
+        url: "http://fixture/?engine=browser", timeoutMs: 1000, startupTimeoutMs: 1000, installTimeoutMs: 80,
         createTransport: async () => transport, saveLog: async text => { logs.push(text); },
       });
       expect(result).toMatchObject({ status: "fail", phase: "install" });

@@ -39,7 +39,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const owned of
         const close = transport.close;
         transport.close = async () => { closed = true; await close(); };
         if (owned) transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
-        const result = await execute({ framework, box: { framework: "angular", browser: "chrome", engine }, url: `http://fixture/?engine=${engine}`, timeoutMs: 1000,
+        const result = await execute({ framework, box: { framework: "angular", browser: "chrome", engine }, url: `http://fixture/?engine=${engine}`, timeoutMs: 1000, startupTimeoutMs: 1000,
           async createTransport() { return transport; }, async saveLog(text) { expect(closed).toBe(false); logs.push(text); },
         });
         expect(result).toMatchObject({ status: "fail", phase: "install" });
@@ -87,7 +87,7 @@ async function stalledTrapCapture(owned: boolean, failureTimeObserved: boolean):
     transport.close = async () => { closed = true; await close(); };
     if (owned) transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
     try {
-      const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 1000,
+      const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 1000, startupTimeoutMs: 1000,
         async createTransport() { return transport; }, async saveLog(text) { saved = text; },
       });
       expect(result).toMatchObject({ status: "fail", phase: "install" });

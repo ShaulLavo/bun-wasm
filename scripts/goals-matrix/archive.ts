@@ -28,6 +28,11 @@ function validateHistory(cell: Cell<RecordedBox>): void {
     const start = recordedTime(attempt.startedAt), end = recordedTime(attempt.finishedAt);
     if (end < start || !attempt.phases.length) throw new Error("Invalid archived attempt time or empty phases");
     let previous = -1, failed = false;
+    if (attempt.harnessSetup) {
+      const setupAt = recordedTime(attempt.harnessSetup.startedAt);
+      if (setupAt < start || setupAt > end || (attempt.phases[0] && setupAt > recordedTime(attempt.phases[0].startedAt))) throw new Error("Invalid archived harness setup time");
+      failed = attempt.harnessSetup.status === "fail";
+    }
     for (const phase of attempt.phases) {
       const index = phases.indexOf(phase.phase), at = recordedTime(phase.startedAt);
       if (index <= previous || at < start || at > end || (failed && phase.phase !== "cleanup")) throw new Error("Invalid archived phase order or time");
@@ -36,14 +41,28 @@ function validateHistory(cell: Cell<RecordedBox>): void {
     finish(cell, attempt);
   }
 }
-function archivedDeadlines(value: unknown, frameworks: readonly string[]): RecordedDeadlinePolicy {
+function archivedDeadlines(value: unknown, frameworks: readonly string[], boxes: readonly RecordedBox[]): RecordedDeadlinePolicy {
   const data = object(value);
   if (data.cellTimeouts !== undefined || data.calibration !== undefined || data.overrides !== undefined) return validateDeadlines(value);
   if (typeof data.timeoutMs !== "number" || data.cleanupTimeoutMs !== cleanupTimeoutMs) throw new Error("Invalid archived deadline policy");
   parseTimeout(String(data.timeoutMs));
   const installTimeouts = timeoutMap(data.installTimeouts, frameworks);
-  if (data.buildTimeouts === undefined) return { timeoutMs: data.timeoutMs, installTimeouts, cleanupTimeoutMs };
-  return { timeoutMs: data.timeoutMs, installTimeouts, buildTimeouts: timeoutMap(data.buildTimeouts, frameworks), cleanupTimeoutMs };
+  const policy: RecordedDeadlinePolicy = { timeoutMs: data.timeoutMs, installTimeouts, cleanupTimeoutMs };
+  if (data.buildTimeouts !== undefined) policy.buildTimeouts = timeoutMap(data.buildTimeouts, frameworks);
+  if (data.startupTimeoutMs !== undefined) policy.startupTimeoutMs = recordedTimeout(data.startupTimeoutMs);
+  if (data.startupTimeouts !== undefined) {
+    const startups = object(data.startupTimeouts);
+    if (Object.keys(startups).length !== boxes.length) throw new Error("Archived startup policy must match its cell inventory");
+    policy.startupTimeouts = Object.fromEntries(boxes.map(box => {
+      const id = `${box.framework}/${box.browser}/${box.engine}`;
+      return [id, recordedTimeout(startups[id])];
+    }));
+  }
+  return policy;
+}
+function recordedTimeout(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) throw new Error("Invalid archived startup timeout");
+  return value;
 }
 function timeoutMap(value: unknown, frameworks: readonly string[]): Record<string, number> {
   const data = object(value);
@@ -70,7 +89,7 @@ export function validateArchive(value: unknown): asserts value is ArchivedReport
   const source = object(report.source); text(source.commit);
   if (typeof source.dirty !== "boolean" || source.assets === undefined) throw new Error("Invalid source identity");
   const cells = array(report.cells), boxes = cells.map(archivedBox);
-  const deadlines = archivedDeadlines(report.deadlines, validateInventory(boxes));
+  const deadlines = archivedDeadlines(report.deadlines, validateInventory(boxes), boxes);
   cells.forEach((cell, index) => {
     validateCellEvidence(cell, boxes[index]!, deadlines);
     validateHistory(cell);

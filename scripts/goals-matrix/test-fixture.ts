@@ -1,5 +1,6 @@
 import { createContext, runInContext } from "node:vm";
-import type { Framework } from "./catalog";
+import type { Framework, Engine } from "./catalog";
+import { ENGINES } from "../../web/src/engine-loader";
 import type { Transport } from "./transport";
 import { admit, awaitWithin, type Admission } from "./scope";
 import { phases, type Attempt, type Phase } from "./model";
@@ -21,7 +22,7 @@ export function completeAttempt(): Attempt {
   return { startedAt: "now", finishedAt: "now", browser: { browserName: "chrome" }, phases: phases.map(phase => ({ phase, status: "pass", evidence: evidence(phase), startedAt: "now", durationMs: 1, timeoutMs: phase === "cleanup" ? 20_000 : 180_000 })) };
 }
 
-export async function withPlayground<T>(framework: Framework, installDelayMs: number, action: (transport: Transport) => Promise<T>, buildDelayMs = 0, filesystem?: Pick<Runtime["filesystem"], "fork">): Promise<T> {
+export async function withPlayground<T>(framework: Framework, installDelayMs: number, action: (transport: Transport) => Promise<T>, buildDelayMs = 0, filesystem?: Pick<Runtime["filesystem"], "fork">, engine: Engine = "browser"): Promise<T> {
   const pending: Promise<void>[] = [];
   let listening = false, count = 0, message = framework.text;
   const shell = { running: false, lastExit: 0,
@@ -45,8 +46,8 @@ export async function withPlayground<T>(framework: Framework, installDelayMs: nu
     __bunRetainedMemorySnapshots: () => [],
     __goalsFixtureNativeClick() { count++; clickListener?.({ isTrusted: true, currentTarget: counter }); clickListener = undefined; },
     document: { querySelector(selector: string) {
-      if (selector === "#status") return { textContent: "Browser (native) ready" };
-      if (selector === "#engine") return { value: "browser" };
+      if (selector === "#status") return { textContent: `${ENGINES[engine].name} ready` };
+      if (selector === "#engine") return { value: engine };
       if (selector === framework.button || selector === framework.clicked) return counter;
       return { textContent: message };
     } },

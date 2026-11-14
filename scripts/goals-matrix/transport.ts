@@ -1,9 +1,10 @@
 import { chromium, firefox, type Page, type BrowserContext, type Logger } from "playwright";
 import type { Browser as BrowserKind } from "./catalog";
-import { admit, awaitWithin, type Admission } from "./scope";
+import { admit, awaitWithin, Scope, type Admission } from "./scope";
 import type { EvaluationOptions, Transport } from "./scoped-transport";
 import { armNativeClick, observeNativeClick } from "./native-click";
 import { until } from "./playground";
+import { harnessSetupWatchdogMs } from "./deadlines";
 export type { Transport, ScopedTransport } from "./scoped-transport";
 export { scoped } from "./scoped-transport";
 export async function evaluatePage<T>(page: Page, expression: string, timeoutMs: number, admission: Admission, options?: EvaluationOptions): Promise<T> {
@@ -56,29 +57,31 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
     if (await version.exited !== 0 || !name.startsWith("Google Chrome ")) throw new Error(`Expected genuine Google Chrome, received ${name}`);
   }
   const browserType = kind === "chrome" ? chromium : firefox;
-  const launch = kind === "chrome" ? { ...(executablePath ? { executablePath } : { channel: "chrome" }), headless: true, timeout: timeoutMs, logger } : { headless: true, timeout: timeoutMs, logger };
+  const launch = kind === "chrome" ? { ...(executablePath ? { executablePath } : { channel: "chrome" }), headless: true, timeout: harnessSetupWatchdogMs, logger } : { headless: true, timeout: harnessSetupWatchdogMs, logger };
   record("browserType.launchServer started");
   const server = scopedProcess ? await browserType.launchServer(launch) : null;
   record("browserType.launchServer finished; browserType.connect/launch started");
-  const browser = server ? await browserType.connect(server.wsEndpoint()).catch(async error => { await server.close(); throw error; }) : await browserType.launch(launch);
+  const browser = server ? await browserType.connect(server.wsEndpoint(), { timeout: harnessSetupWatchdogMs }).catch(async error => { await server.close(); throw error; }) : await browserType.launch(launch);
   record("browserType.connect/launch finished");
   const close = async () => { try { await browser.close(); } finally { await server?.close(); } };
+  const setup = Scope.open(harnessSetupWatchdogMs);
   try {
     record("browser.newContext started");
-    const context = await browser.newContext({ serviceWorkers: "allow", logger });
+    const context = await setup.run(() => browser.newContext({ serviceWorkers: "allow", logger }));
     record("browser.newContext finished");
-    const host = await context.newPage();
+    const host = await setup.run(() => context.newPage());
     return {
       ...createPageTransport(context, host, { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? executablePath ?? "chrome channel" : firefox.executablePath() }, timeoutMs, cleanupTimeoutMs, close),
       processRoot: server?.process().pid,
     };
   } catch (error) { await close(); throw error; }
+  finally { setup.close(); }
 }
 
 export function createPageTransport(context: Pick<BrowserContext, "newPage">, host: Page, capabilities: Record<string, unknown>, timeoutMs: number, cleanupTimeoutMs: number, close: () => Promise<void>): Transport {
   let preview: typeof host | undefined;
   let page = host;
-  let evaluationTimeoutMs = timeoutMs;
+  let evaluationTimeoutMs = Infinity;
   page.setDefaultTimeout(timeoutMs);
   return {
     capabilities,
@@ -89,9 +92,9 @@ export function createPageTransport(context: Pick<BrowserContext, "newPage">, ho
     beginCleanup(admission) { admit(admission); evaluationTimeoutMs = cleanupTimeoutMs; },
     async navigate(url, admission) {
       admit(admission);
-      return awaitWithin((async () => { await host.goto(url, { timeout: timeoutMs }); admit(admission); page = host; })(), admission);
+      return awaitWithin((async () => { await host.goto(url, { timeout: admit(admission) }); admit(admission); page = host; })(), admission);
     },
-    async evaluate(expression, admission, options) { admit(admission); return awaitWithin(evaluatePage(page, expression, evaluationTimeoutMs, admission, options), admission); },
+    async evaluate(expression, admission, options) { return awaitWithin(evaluatePage(page, expression, Math.min(evaluationTimeoutMs, admit(admission)), admission, options), admission); },
     async openPreview(url, admission) {
       admit(admission);
       return awaitWithin(openPreview(url, admission), admission);

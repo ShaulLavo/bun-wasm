@@ -59,7 +59,7 @@ describe("honest goals matrix", () => {
   });
   test("startup failure still closes the owned browser, and close failure stays red", async () => {
     let closed = false;
-    const cell = await execute({ box, framework: { id: "vite-react", label: "test", template: "vite-react", source: "src/App.tsx", selector: "h1", text: "test", button: "button", clicked: "output" }, url: "http://localhost/", timeoutMs: 100,
+    const cell = await execute({ box, framework: { id: "vite-react", label: "test", template: "vite-react", source: "src/App.tsx", selector: "h1", text: "test", button: "button", clicked: "output" }, url: "http://localhost/", timeoutMs: 100, startupTimeoutMs: 100,
       async createTransport() { return {
         capabilities: { browserName: "chrome" },
         async navigate() { throw new Error("navigation failed"); },

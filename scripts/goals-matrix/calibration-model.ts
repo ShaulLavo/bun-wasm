@@ -15,4 +15,4 @@ export type CalibrationCell = Box & { limits: CellLimits } & (
     startedAt: string; finishedAt: string; sha256: string;
   } }
 );
-export interface Calibration { metadata: CalibrationMetadata; cells: CalibrationCell[] }
+export interface Calibration { metadata: CalibrationMetadata; cells: CalibrationCell[]; startupTimeouts?: Record<string, number> }

@@ -573,13 +573,15 @@ test("reports malformed protocol and evaluation responses instead of returning f
   }
 });
 
-test("startup HTTP timeout still deletes the session whose ID was already received", async () => {
+test("slow setup HTTP does not inherit the product budget and retains its owned session", async () => {
   const driver = fixture({ intercept: async call => {
     if (!call.path.endsWith("/timeouts")) return;
     await Bun.sleep(200);
     return reply(null);
   } });
-  await expect(driver.connect({ timeoutMs: 50 })).rejects.toThrow();
+  const transport = await driver.connect({ timeoutMs: 50 });
+  expect(driver.deleted).toBe(false);
+  await transport.close();
   expect(driver.deleted).toBe(true);
 });
 
@@ -1008,7 +1010,7 @@ test("late initial session creation retains observed identifiers and records onl
     if (call.path !== "/session") return;
     entered.resolve(); await release.promise;
   } });
-  const running = executeCell({ box: { framework: "vite-react", browser: "safari", engine: "browser" }, framework, url: "http://fixture.test/never-navigate", timeoutMs: 1000,
+  const running = executeCell({ box: { framework: "vite-react", browser: "safari", engine: "browser" }, framework, url: "http://fixture.test/never-navigate", timeoutMs: 1000, startupTimeoutMs: 1000,
     signal: controller.signal, createTransport: () => driver.connect(capture), saveLog: async () => {} });
   try {
     await entered.promise;
@@ -1017,7 +1019,9 @@ test("late initial session creation retains observed identifiers and records onl
     expect(capture.events.every(event => event.sessionId === null)).toBe(true);
     release.resolve();
     const result = await running;
-    expect(result.attempts[0]?.phases[0]).toMatchObject({ status: "fail", error: "Error: startup cancelled" });
+    expect(result).toMatchObject({ status: "fail", phase: "harness-setup", error: "Error: startup cancelled" });
+    expect(result.attempts[0]?.harnessSetup).toMatchObject({ status: "fail", error: "Error: startup cancelled" });
+    expect(result.attempts[0]?.phases.map(phase => phase.phase)).toEqual(["cleanup"]);
     expect(driver.deleted).toBe(true);
     expect(driver.calls.some(call => call.path.endsWith("/url"))).toBe(false);
     expect(capture.events.at(-1)).toMatchObject({ sessionId: "owned", hostHandle: "host", operation: { kind: "session-delete" }, outcome: { state: "acknowledged", observation: { kind: "acknowledgement" } } });

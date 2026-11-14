@@ -35,7 +35,7 @@ async function control(engine: BrowserType, ownedCleanup: boolean, imported: boo
     const framework = frameworks.find(value => value.id === "next");
     if (!framework) throw Error("Missing Next matrix definition");
     const log = join(scratch, "matrix.log");
-    const result = await execute({ framework, box: { framework: "next", browser: "chrome", engine: "browser" }, url: `${server.url}?engine=browser&memory=${imported ? "imported" : "defined"}`, timeoutMs: 5000,
+    const result = await execute({ framework, box: { framework: "next", browser: "chrome", engine: "browser" }, url: `${server.url}?engine=browser&memory=${imported ? "imported" : "defined"}`, timeoutMs: 5000, startupTimeoutMs: 5000,
       async createTransport() { return transport; }, async saveLog(text) {
         expect(page.isClosed()).toBe(false);
         expect(await page.evaluate(() => Reflect.get(globalThis, "__browserTrapControl"))).toEqual({ type: "control-done", sameError: true, runtimeError: true, exits: 0,

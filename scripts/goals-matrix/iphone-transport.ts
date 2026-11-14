@@ -10,7 +10,7 @@ import { object } from "./evidence";
 import { closeIphoneTab } from "./iphone-cleanup";
 import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates, saveIphoneEvidence } from "./iphone-click";
 
-type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; cleanupTimeoutMs?: number; saveNative?(text: string): Promise<void> };
+type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; startupTimeoutMs?: number; cleanupTimeoutMs?: number; saveNative?(text: string): Promise<void> };
 export function validateIphoneControl(control: string, agent: string): void {
   const url = new URL(control);
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !/^\/__goals_iphone\/[a-f0-9]{64}$/.test(url.pathname) || url.search || url.hash || url.username || url.password) throw new Error("Expected forwarded loopback iPhone control URL");
@@ -65,7 +65,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   let deviceFailed = false;
   let title = "";
   let closing: Promise<void> | undefined;
-  let observationTimeoutMs = config.timeoutMs;
+  const startupTimeoutMs = config.startupTimeoutMs ?? config.timeoutMs;
+  let observationTimeoutMs = Math.max(config.timeoutMs, startupTimeoutMs);
   const lifetime = new AbortController();
   const active = new Set<Promise<string>>();
   const capabilities: Record<string, unknown> = { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": config.deviceUDID, transport: "visible-safari-xctest", safariDriverSession: false };
@@ -159,11 +160,11 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   };
   async function navigate(url: string, admission: Admission): Promise<void> {
       admit(admission);
-      const target = await request("host/configure", { url });
+      const target = await request("host/configure", { url }, admit(admission));
       if (typeof target !== "string") throw new Error("Missing iPhone navigation target");
       admit(admission);
-      await device(["open", "com.apple.mobilesafari", target], config.timeoutMs); opened = true;
-      const state = await until(async () => { admit(admission); return object(await request("host/state") ?? {}); }, attached, config.timeoutMs);
+      await device(["open", "com.apple.mobilesafari", target], admit(admission)); opened = true;
+      const state = await until(async () => object(await request("host/state", undefined, admit(admission)) ?? {}), attached, admit(admission));
       if (typeof state.userAgent !== "string" || !/iPhone.*Safari/.test(state.userAgent)) throw new Error("Observer did not identify iPhone Safari");
       admit(admission);
       capabilities.userAgent = state.userAgent;

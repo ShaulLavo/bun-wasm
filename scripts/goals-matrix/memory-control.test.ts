@@ -196,7 +196,7 @@ test.each([[false, false], [true, false], [false, true], [true, true]])("synthet
           shell: { running: false }, previews: { serves: () => false } } });
     }, async close() { closed = true; } };
   if (owned) transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
-  const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "spidermonkey" }, url: "http://synthetic/", timeoutMs: 1000,
+  const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "spidermonkey" }, url: "http://synthetic/", timeoutMs: 1000, startupTimeoutMs: 1000,
     async createTransport() { return transport; }, async saveLog(text) { expect(closed).toBe(false); saves.push(text); } });
   expect(result).toMatchObject({ status: "fail", phase: "startup" });
   if (result.status !== "fail") throw Error("expected synthetic startup failure");

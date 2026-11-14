@@ -104,7 +104,7 @@ test.each([false, true])("a stalled diagnostic keeps the original error and log 
     const close = transport.close;
     transport.close = async () => { closed = true; await close(); };
     if (owned) transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
-    const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 1000,
+    const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 1000, startupTimeoutMs: 1000,
       async createTransport() { return transport; }, async saveLog(text) { saved = text; saves++; },
     });
     expect(result).toMatchObject({ status: "fail", phase: "install" });

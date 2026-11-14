@@ -5,6 +5,7 @@ import { armNativeClick, observeNativeClick } from "./native-click";
 import { presentIphonePreview } from "./iphone-browser";
 import { SafariOwnershipWitness, ownershipRequest, type SafariOwnershipSink, type SafariOwnershipOperation } from "./safari-ownership";
 import { jsonKind, mediaKind, networkKind, newTrace, openFact, webDriverError, type ProtocolLane, type ProtocolObserver, type ProtocolTrace, type SafariProtocolSink } from "./safari-protocol";
+import { harnessSetupWatchdogMs } from "./deadlines";
 export type SafariTransportOptions = {
   ownershipSink?: SafariOwnershipSink;
   protocolSink?: SafariProtocolSink;
@@ -12,6 +13,7 @@ export type SafariTransportOptions = {
   browser: "safari" | "iphone-safari";
   deviceUDID?: string;
   timeoutMs: number;
+  startupTimeoutMs?: number;
   cleanupTimeoutMs?: number;
 };
 
@@ -307,6 +309,8 @@ async function finishSession(witness: SafariOwnershipWitness | undefined, cleanu
 
 export async function createSafariTransport(options: SafariTransportOptions): Promise<SafariTransport> {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 2_147_483_647) throw new Error("Safari timeoutMs must be a positive timer-sized integer");
+  const startupTimeoutMs = options.startupTimeoutMs ?? options.timeoutMs;
+  if (!Number.isSafeInteger(startupTimeoutMs) || startupTimeoutMs < 1 || startupTimeoutMs > 2_147_483_647) throw new Error("Safari startupTimeoutMs must be a positive timer-sized integer");
   const cleanupTimeoutMs = options.cleanupTimeoutMs ?? Math.min(options.timeoutMs, 10_000);
   if (!Number.isSafeInteger(cleanupTimeoutMs) || cleanupTimeoutMs < 1 || cleanupTimeoutMs > 2_147_483_647) throw new Error("Safari cleanupTimeoutMs must be a positive timer-sized integer");
   const endpoint = new URL(options.endpoint);
@@ -316,7 +320,8 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
   const address = endpoint.href.replace(/\/$/, "");
   const counter = { value: 0 };
   const observe = (lane: ProtocolLane): ProtocolObserver | undefined => options.protocolSink ? { sink: options.protocolSink, lane, counter } : undefined;
-  const request = createRequest(address, options.timeoutMs, lifetime.signal, observe("command"));
+  const request = createRequest(address, Math.max(options.timeoutMs, startupTimeoutMs), lifetime.signal, observe("command"));
+  const setupRequest = createRequest(address, harnessSetupWatchdogMs, lifetime.signal, observe("command"));
   const cleanup = { command: createRequest(address, cleanupTimeoutMs, lifetime.signal, observe("cleanup-command")), session: createRequest(address, cleanupTimeoutMs, undefined, observe("session")), timeoutMs: cleanupTimeoutMs };
   const witness = options.ownershipSink ? new SafariOwnershipWitness(options.ownershipSink) : undefined;
   let sessionPath: string | undefined;
@@ -329,7 +334,7 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
     return result;
   };
   try {
-    opened = await request("/session", { capabilities: { alwaysMatch: requested } }, undefined, sessionReply, { witness, operation: { kind: "session-create" } });
+    opened = await setupRequest("/session", { capabilities: { alwaysMatch: requested } }, undefined, sessionReply, { witness, operation: { kind: "session-create" } });
   } catch (error) {
     const path = sessionPath;
     return cleanupAfterFailure(error, () => path ? finishSession(witness, cleanup, path) : witness ? witness.finish(async () => {}) : Promise.resolve());
@@ -338,8 +343,9 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
   const path = sessionPath;
   try {
     const capabilities = freezeCapabilities(opened.capabilities);
-    await request(`${path}/timeouts`, { script: options.timeoutMs, pageLoad: options.timeoutMs, implicit: 0 }, undefined, accept);
-    const host = await request(`${path}/window`, undefined, undefined, handle, { witness, operation: { kind: "host-handle" } });
+    const navigationTimeoutMs = Math.max(options.timeoutMs, startupTimeoutMs);
+    await setupRequest(`${path}/timeouts`, { script: navigationTimeoutMs, pageLoad: navigationTimeoutMs, implicit: 0 }, undefined, accept);
+    const host = await setupRequest(`${path}/window`, undefined, undefined, handle, { witness, operation: { kind: "host-handle" } });
     return transport(request, path, host, capabilities, lifetime, cleanup, options.browser, witness);
   } catch (error) { return cleanupAfterFailure(error, () => finishSession(witness, cleanup, path)); }
 }

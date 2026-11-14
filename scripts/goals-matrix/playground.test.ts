@@ -42,17 +42,21 @@ test("a failed asynchronous start preserves its actual failure", async () => {
   const transport = page(async shell => { await Bun.sleep(25); shell.lastExit = 9; });
   await expect(withScoped(transport, page => start(page, "fails later", 1000))).rejects.toThrow("without listening");
 });
-test("startup timeout closes a transport whose factory resolves after the deadline", async () => {
+test("setup cancellation closes a late factory without starting product navigation", async () => {
   let closed = 0;
   let navigated = false;
   const transport = page(async () => {});
   transport.close = async () => { closed++; };
   transport.navigate = async () => { navigated = true; };
   const framework = frameworks[0]!;
-  const result = await execute({ box: { framework: framework.id, browser: "chrome", engine: "browser" }, framework, url: "http://unit.test/", timeoutMs: 10,
-    async createTransport() { await Bun.sleep(50); return transport; }, async saveLog() {},
+  const controller = new AbortController();
+  const result = await execute({ box: { framework: framework.id, browser: "chrome", engine: "browser" }, framework, url: "http://unit.test/", timeoutMs: 10, startupTimeoutMs: 10,
+    signal: controller.signal,
+    async createTransport() { controller.abort(new Error("setup cancelled")); await Bun.sleep(50); return transport; }, async saveLog() {},
   });
-  expect(result.status).toBe("fail"); expect(closed).toBe(1); expect(navigated).toBe(false);
+  expect(result).toMatchObject({ status: "fail", phase: "harness-setup", error: "Error: setup cancelled" });
+  expect(result.attempts[0]?.phases.map(phase => phase.phase)).toEqual(["cleanup"]);
+  expect(closed).toBe(1); expect(navigated).toBe(false);
 });
 
 test("a free-port server start waits for its preview worker to activate before returning its URL", async () => {
@@ -109,7 +113,7 @@ test("pending preview activation leaves the serialized Safari transport free for
     const transport = await createSafariTransport({ endpoint: driver.server.url.href, browser: "safari", timeoutMs: 30_000 });
     try {
       const result = await execute({ framework, box: { framework: framework.id, browser: "safari", engine: "browser" },
-        url: "http://fixture/?engine=browser", timeoutMs: 30_000, signal: controller.signal,
+        url: "http://fixture/?engine=browser", timeoutMs: 30_000, startupTimeoutMs: 30_000, signal: controller.signal,
         async createTransport() { return transport; }, async saveLog() {},
       });
       expect(result).toMatchObject({ status: "fail", phase: "dev" });
@@ -178,7 +182,7 @@ async function replacementNavigation(failure: Error | undefined, replace = true)
       entered.resolve(); await resume.promise;
       if (failure) throw failure;
     };
-    const running = execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 1000,
+    const running = execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 1000, startupTimeoutMs: 1000,
       async createTransport() { return transport; }, async saveLog() {},
     });
     try {

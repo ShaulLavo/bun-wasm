@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { inventory, boxId, type Box } from "./catalog";
 import { object, text } from "./evidence";
 import { recordedTime } from "./archive";
-import { finish, phases, type Attempt, type PhaseResult } from "./model";
+import { finish, phases, readHarnessSetup, type Attempt, type PhaseResult } from "./model";
 import type { Calibration, CalibrationCell, CellLimits } from "./calibration-model";
 import { cellDeadlines, deadlinePolicy } from "./deadlines";
 
@@ -28,7 +28,8 @@ function readPhase(value: unknown): PhaseResult {
 }
 function readAttempt(value: unknown): Attempt {
   const data = object(value);
-  const attempt = { startedAt: text(data.startedAt), finishedAt: text(data.finishedAt), browser: object(data.browser), phases: array(data.phases).map(readPhase) };
+  const attempt: Attempt = { startedAt: text(data.startedAt), finishedAt: text(data.finishedAt), browser: object(data.browser), phases: array(data.phases).map(readPhase) };
+  if (data.harnessSetup !== undefined) attempt.harnessSetup = readHarnessSetup(data.harnessSetup);
   if (recordedTime(attempt.finishedAt) < recordedTime(attempt.startedAt)) throw new Error("Invalid attempt interval");
   return attempt;
 }
@@ -65,7 +66,7 @@ function measured(attempt: Attempt): CellLimits {
     if (value === undefined) throw new Error("Missing measured phase");
     return value;
   };
-  const shared = phases.filter(phase => phase !== "install" && phase !== "build" && phase !== "cleanup");
+  const shared = phases.filter(phase => phase !== "install" && phase !== "build" && phase !== "cleanup" && (phase !== "startup" || attempt.harnessSetup === undefined));
   return { timeoutMs: Math.max(...shared.map(get)), installTimeoutMs: get("install"), buildTimeoutMs: get("build") };
 }
 function calibratedCell(raw: unknown, box: Box, location: string, path: string, createdAt: string): CalibrationCell {

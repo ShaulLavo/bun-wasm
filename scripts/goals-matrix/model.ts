@@ -1,5 +1,5 @@
 import { boxId, inventory, browsers, engines, frameworks, type Box } from "./catalog";
-import { cellDeadlines, validateDeadlines, type DeadlinePolicy, type RecordedDeadlinePolicy } from "./deadlines";
+import { cellDeadlines, startupDeadline, validateDeadlines, type DeadlinePolicy, type RecordedDeadlinePolicy } from "./deadlines";
 import { object, text, observed } from "./evidence";
 export const phases = ["startup", "install", "dev", "render", "click", "hot-reload", "build", "preview", "cleanup"] as const;
 export type Phase = typeof phases[number];
@@ -7,13 +7,15 @@ export type PhaseResult = { phase: Phase; startedAt: string; durationMs: number;
   | { status: "pass"; evidence: unknown }
   | { status: "fail"; error: string }
 );
-export type Attempt = { startedAt: string; finishedAt: string; phases: PhaseResult[]; browser: Record<string, unknown> };
+export type HarnessSetup = { startedAt: string; durationMs: number } & ({ status: "pass" } | { status: "fail"; error: string });
+export type FailureStage = Phase | "harness-setup";
+export type Attempt = { startedAt: string; finishedAt: string; phases: PhaseResult[]; browser: Record<string, unknown>; harnessSetup?: HarnessSetup };
 export type RecordedBox = Omit<Box, "engine"> & { engine: string };
 export type Cell<B extends RecordedBox = Box> = B & { attempts: Attempt[] } & (
   | { status: "pending"; reason: string }
   | { status: "not runnable yet"; reason: string; discovery: unknown }
   | { status: "pass" }
-  | { status: "fail"; phase: Phase; error: string }
+  | { status: "fail"; phase: FailureStage; error: string }
 );
 export interface Report {
   schema: 2;
@@ -31,6 +33,10 @@ export function finish(box: RecordedBox, attempt: Attempt, earlier?: readonly At
 export function finish(box: RecordedBox, attempt: Attempt, earlier: readonly Attempt[] = []): Cell<RecordedBox> {
   const identity = { framework: box.framework, browser: box.browser, engine: box.engine };
   const attempts = earlier.concat([attempt]);
+  if (attempt.harnessSetup?.status === "fail") {
+    if (attempt.phases.some(phase => phase.phase !== "cleanup")) throw new Error("Failed harness setup cannot have product phase evidence");
+    return { ...identity, attempts, status: "fail", phase: "harness-setup", error: attempt.harnessSetup.error };
+  }
   const failed = attempt.phases.find(result => result.status === "fail");
   if (failed?.status === "fail") return { ...identity, attempts, status: "fail", phase: failed.phase, error: failed.error };
   assertBrowser(box, attempt.browser);
@@ -48,12 +54,12 @@ function array(value: unknown): unknown[] {
   if (!Array.isArray(value)) throw new Error("Expected an array");
   return value;
 }
-function phaseResult(value: unknown, box: RecordedBox, deadlines: RecordedDeadlinePolicy): PhaseResult {
+function phaseResult(value: unknown, box: RecordedBox, deadlines: RecordedDeadlinePolicy, productStartup: boolean): PhaseResult {
   const data = object(value);
   const phase = phases.find(phase => phase === data.phase);
   if (!phase || typeof data.durationMs !== "number" || !Number.isFinite(data.durationMs) || data.durationMs < 0) throw new Error("Invalid phase or duration");
   const limits = cellDeadlines(deadlines, box);
-  const timeoutMs = phase === "cleanup" ? deadlines.cleanupTimeoutMs : phase === "install" ? limits.installTimeoutMs : phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs;
+  const timeoutMs = phase === "cleanup" ? deadlines.cleanupTimeoutMs : phase === "startup" && productStartup ? startupDeadline(deadlines, box) : phase === "install" ? limits.installTimeoutMs : phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs;
   if (data.timeoutMs !== timeoutMs) throw new Error("Phase timeout differs from report deadline policy");
   const base = { phase, timeoutMs: data.timeoutMs, startedAt: text(data.startedAt), durationMs: data.durationMs };
   if (data.status === "fail") return { ...base, status: "fail", error: text(data.error) };
@@ -63,7 +69,17 @@ function phaseResult(value: unknown, box: RecordedBox, deadlines: RecordedDeadli
 }
 function attempt(value: unknown, box: RecordedBox, deadlines: RecordedDeadlinePolicy): Attempt {
   const data = object(value);
-  return { startedAt: text(data.startedAt), finishedAt: text(data.finishedAt), browser: object(data.browser), phases: array(data.phases).map(value => phaseResult(value, box, deadlines)) };
+  const result: Attempt = { startedAt: text(data.startedAt), finishedAt: text(data.finishedAt), browser: object(data.browser), phases: array(data.phases).map(value => phaseResult(value, box, deadlines, data.harnessSetup !== undefined)) };
+  if (data.harnessSetup !== undefined) result.harnessSetup = readHarnessSetup(data.harnessSetup);
+  return result;
+}
+export function readHarnessSetup(value: unknown): HarnessSetup {
+  const data = object(value);
+  if ("timeoutMs" in data || typeof data.durationMs !== "number" || !Number.isFinite(data.durationMs) || data.durationMs < 0) throw new Error("Invalid harness setup duration or phase limit");
+  const base = { startedAt: text(data.startedAt), durationMs: data.durationMs };
+  if (data.status === "pass") return { ...base, status: "pass" };
+  if (data.status === "fail") return { ...base, status: "fail", error: text(data.error) };
+  throw new Error("Unknown harness setup status");
 }
 function validateCell(value: unknown, deadlines: DeadlinePolicy): Box {
   const data = object(value);

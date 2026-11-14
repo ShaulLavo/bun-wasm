@@ -153,7 +153,7 @@ async function capturedRun(native: FakeNative, directory: string, prepare: (capt
   return withPlayground(nuxt, 0, transport => withSafariCausalCapture({ logs: directory, identity, native, windowMs: 40, pollMs: 5 }, capture => {
     prepare(capture);
     // The fixture page reports Chrome capabilities; the capture itself does not depend on the box label.
-    return execute({ framework: nuxt, box: { framework: "nuxt", browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 2000,
+    return execute({ framework: nuxt, box: { framework: "nuxt", browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 2000, startupTimeoutMs: 2000,
       observeStartup: capture.arm, async createTransport() { return busyPage(transport, native); }, async saveLog() {} });
   }));
 }
@@ -232,7 +232,7 @@ test("an unacknowledged session blocks arming before any page challenge", async 
 test("an armed capture whose native query fails leaves the ordinary outcome unchanged", async () => {
   const directory = await logs();
   const ordinary = await withPlayground(nuxt, 0, transport => execute({ framework: nuxt, box: { framework: "nuxt", browser: "chrome", engine: "browser" },
-    url: "http://fixture/?engine=browser", timeoutMs: 2000, async createTransport() { return transport; }, async saveLog() {} }));
+    url: "http://fixture/?engine=browser", timeoutMs: 2000, startupTimeoutMs: 2000, async createTransport() { return transport; }, async saveLog() {} }));
   const native = fakeNative({}, async () => { throw new Error("log show failed"); });
   const captured = await capturedRun(native, directory);
   expect(captured.status).toBe(ordinary.status);

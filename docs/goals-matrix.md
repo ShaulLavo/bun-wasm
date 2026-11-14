@@ -222,7 +222,13 @@ behavior or other frameworks, and no Nuxt override is enabled implicitly.
 For a read-only summary of independent historical runs, use the
 [framework evidence view](goals-report-view.md). It never creates a resumable campaign.
 
-Reports use schema 2. `TABLE.json` records effective phase, install and build
+`--startup-timeout-ms` changes only product startup. New attempts record browser
+and driver creation in `harnessSetup`, with a duration and status but no phase
+limit. Startup begins with navigation to the actual playground URL and includes
+host readiness, cache and service-worker initialization, and after-ready observers.
+Retained attempts without `harnessSetup` include browser creation in startup.
+
+Reports use schema 2. `TABLE.json` records effective startup, phase, install and build
 deadlines for every cell, calibration provenance, explicit CLI overrides and the fixed cleanup deadline in
 `deadlines`. Each phase records its own `timeoutMs`, checked against that policy
 when the report is read. `TABLE.md` shows the command and effective deadlines.

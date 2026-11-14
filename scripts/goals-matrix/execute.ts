@@ -1,8 +1,8 @@
 import { engineMemoryLog, memoryBudgetFallback, launchFailureLog } from "./browser-memory";
-import { cleanupTimeoutMs } from "./deadlines";
+import { cleanupTimeoutMs, harnessSetupWatchdogMs } from "./deadlines";
 import { angularDiagnostic, namedAngularDiagnostic } from "./angular-diagnostic";
 import type { Framework, Box } from "./catalog";
-import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from "./model";
+import { finish, type Attempt, type Cell, type Phase, type PhaseResult, type HarnessSetup } from "./model";
 import { scoped, type ScopedTransport, type Transport } from "./transport";
 import { admit, awaitWithin, Scope, type Admission } from "./scope";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
@@ -17,6 +17,7 @@ export interface Execution {
   url: string;
   port?: number;
   timeoutMs: number;
+  startupTimeoutMs: number;
   installTimeoutMs?: number;
   buildTimeoutMs?: number;
   createTransport(): Promise<Transport>;
@@ -42,33 +43,50 @@ async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, ope
     throw error;
   } finally { scope.close(new Error(`${name} phase ended`)); }
 }
+async function recordHarnessSetup(create: () => Promise<Transport>, signal?: AbortSignal): Promise<HarnessSetup> {
+  const startedAt = new Date().toISOString(), started = performance.now();
+  const scope = Scope.open(harnessSetupWatchdogMs, signal);
+  try {
+    await scope.run(create);
+    return { status: "pass", startedAt, durationMs: Math.round(performance.now() - started) };
+  } catch (error) {
+    const reason = error === scope.expiryReason ? new Error(`Harness setup watchdog expired after ${harnessSetupWatchdogMs} ms`) : error;
+    return { status: "fail", startedAt, durationMs: Math.round(performance.now() - started), error: String(reason) };
+  } finally { scope.close(); }
+}
 export async function execute(options: Execution, earlier: readonly Attempt[] = []): Promise<Cell> {
   if (options.nextBuildObservation && (options.framework.id !== "next" || options.box.engine !== "quickjs")) throw new Error("Next build observation requires the Next QuickJS cell");
   const results: PhaseResult[] = [];
   const startedAt = new Date().toISOString();
   let transport: Transport | undefined;
   let creation: Promise<Transport> | undefined;
+  let lateCleanup: Promise<void> | undefined;
   let closing = false;
   let capabilities: Record<string, unknown> = {};
   let failureLog: FailureLog | undefined;
   function retainTransport(owned: Transport): Transport | Promise<Transport> {
-    if (closing) return closeLateTransport(owned);
+    if (closing) {
+      lateCleanup = bounded(() => owned.close(true, 10_000), 10_000);
+      return lateCleanup.then(() => owned);
+    }
     transport = owned;
     return owned;
   }
+  const harnessSetup = await recordHarnessSetup(() => { creation = options.createTransport().then(retainTransport); return creation; }, options.signal);
   try {
-    await phase(results, "startup", options.timeoutMs, async admission => {
-      creation = options.createTransport().then(retainTransport);
-      transport = await creation;
-      capabilities = transport.capabilities;
-      const page = scoped(transport, admission);
+    if (harnessSetup.status === "fail") throw new Error(harnessSetup.error);
+    if (!transport) throw new Error("Transport not created");
+    const owned = transport;
+    capabilities = owned.capabilities;
+    const { startupTimeoutMs } = options;
+    await phase(results, "startup", startupTimeoutMs, async admission => {
+      const page = scoped(owned, admission);
       await page.navigate(options.url);
-      const evidence = await ready(page, options.box.engine, options.timeoutMs, options.profile);
+      const evidence = await ready(page, options.box.engine, startupTimeoutMs, options.profile);
       await options.observeStartup?.(page, admission);
       return evidence;
     }, options.signal);
-    if (!transport) throw new Error("Transport not created");
-    await lifecycle(transport, options, results);
+    await lifecycle(owned, options, results);
   } catch {
     if (transport) failureLog = await captureFailure(transport, options, results);
   }
@@ -77,14 +95,11 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
     await phase(results, "cleanup", cleanupTimeoutMs, async admission => {
       const pending = creation;
       if (!transport && pending) await bounded(() => pending.catch(() => undefined), 10_000);
+      if (lateCleanup) await lateCleanup;
       return cleanup(transport, options, results, failureLog, admission);
     }).catch(() => {});
   }
-  return finish(options.box, { startedAt, finishedAt: new Date().toISOString(), phases: results, browser: capabilities }, earlier);
-}
-async function closeLateTransport(owned: Transport): Promise<never> {
-  await owned.close();
-  throw new Error("Transport created after startup deadline and closed");
+  return finish(options.box, { startedAt, finishedAt: new Date().toISOString(), harnessSetup, phases: results, browser: capabilities }, earlier);
 }
 async function lifecycle(transport: Transport, options: Execution, results: PhaseResult[]): Promise<void> {
   const { framework, timeoutMs, port = 5173 } = options;

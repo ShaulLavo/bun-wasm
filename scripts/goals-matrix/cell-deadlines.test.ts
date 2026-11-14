@@ -117,7 +117,7 @@ test("fixed policy records decision date, margin, frozen identity and immutable 
   expect(reviewed.metadata).toMatchObject({ decisionDate: "2026-11-11", margin: 0.125, source: { path: "/work/reports/goals/TABLE.json", sha256: "96ebe1aba8032b12dc9e3077a9bad97f5e9c4967fd970d7cbc3b4e1bbf822ad2", run: "60ab3cfb-4da8-4782-aff1-e839ff1831a1" } });
   const markdown = deadlineMarkdown(campaignDeadlines());
   expect(markdown).toContain("2026-11-11"); expect(markdown).toContain("12.5%");
-  expect(markdown).toContain("| Next.js | chrome | browser | 4926 | 19782 | 25072 |");
+  expect(markdown).toContain("| Next.js | chrome | browser | 4926 | 4926 | 19782 | 25072 |");
   expect(markdown).toContain(reviewed.metadata.source.sha256);
   const table = input(), box = inventory()[0]!;
   setCell(table, box, [attempt(box, date)]);

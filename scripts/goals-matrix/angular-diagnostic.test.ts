@@ -58,7 +58,7 @@ async function runFixture(config: Fixture = {}) {
     const close = transport.close.bind(transport);
     transport.close = async () => { events.push("close"); await close(); };
     const started = performance.now();
-    const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 500,
+    const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 500, startupTimeoutMs: 500,
       async createTransport() { return transport; }, async saveLog(text) { events.push("save"); logs.push(text); },
     });
     const durationMs = performance.now() - started;

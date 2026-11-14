@@ -34,7 +34,7 @@ async function buildExecution(buildTimeoutMs?: number, stallPreview = false) {
   if (!framework) throw new Error("Missing Next fixture");
   return withPlayground(framework, 0, transport => {
     if (stallPreview) transport.openPreview = () => new Promise(() => {});
-    return execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 100, buildTimeoutMs,
+    return execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" }, url: "http://fixture/?engine=browser", timeoutMs: 100, startupTimeoutMs: 100, buildTimeoutMs,
       async createTransport() { return transport; }, async saveLog() {},
     });
   }, 150);

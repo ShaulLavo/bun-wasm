@@ -2,7 +2,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { browsers, browserLabels, engines, frameworks, boxId } from "./catalog";
 import { validateReport, type Cell, type Report } from "./model";
-import { cellDeadlines, type DeadlinePolicy } from "./deadlines";
+import { cellDeadlines, startupDeadline, type DeadlinePolicy } from "./deadlines";
 function clean(value: string): string { return value.replace(/[\r\n|]/g, " ").replace(/\s+/g, " ").trim(); }
 function concise(error: string): string {
   const terminal = error.indexOf("; terminal: ");
@@ -21,17 +21,18 @@ function mark(cell: Cell): string {
 }
 export function deadlineMarkdown(policy: DeadlinePolicy): string {
   const lines = ["## Deadlines", "", `Campaign phases: ${policy.timeoutMs} ms by default. Cleanup: ${policy.cleanupTimeoutMs} ms, with existing shorter inner bounds.`, "", "| Framework | Default install in ms | Default build in ms |", "| --- | ---: | ---: |"];
+  if (policy.startupTimeoutMs !== undefined) lines.splice(2, 0, `Product startup: ${policy.startupTimeoutMs} ms by default, independently of other phases. Browser/driver creation is recorded in harnessSetup without a phase limit.`, "");
   for (const framework of frameworks) lines.push(`| ${framework.label} | ${policy.installTimeouts[framework.id]} | ${policy.buildTimeouts[framework.id]} |`);
   if (!policy.calibration) return lines.concat([""]).join("\n");
   const metadata = policy.calibration;
   lines.push("", `${metadata.decision}. Decision date: ${metadata.decisionDate}. Margin: ${metadata.margin * 100}%. ${metadata.selection}.`, "",
     `Frozen input: ${metadata.source.path}. SHA-256: ${metadata.source.sha256}. Run: ${metadata.source.run}. Recorded: ${metadata.source.createdAt}.`, "",
-    "Fixed reviewed limits; campaign execution never recalibrates. No complete pass retains defaults. In-guest engines never widen. Next/SpiderMonkey is exempt. Explicit CLI overrides take precedence and are recorded below. Cleanup and inner bounds are unchanged.", "", "```json", JSON.stringify(policy.overrides, null, 2), "```", "",
-    "| Framework | Browser | Engine | Phase in ms | Install in ms | Build in ms |", "| --- | --- | --- | ---: | ---: | ---: |");
+    "The calibration above owns shared-phase, install and build limits. Startup limits are recorded separately. Campaign execution never recalibrates. No complete pass retains defaults. In-guest engines never widen. Next/SpiderMonkey is exempt. Explicit CLI overrides take precedence and are recorded below. Cleanup and inner bounds are unchanged.", "", "```json", JSON.stringify(policy.overrides, null, 2), "```", "",
+    "| Framework | Browser | Engine | Startup in ms | Phase in ms | Install in ms | Build in ms |", "| --- | --- | --- | ---: | ---: | ---: | ---: |");
   for (const framework of frameworks) {
     lines.push(...browsers.flatMap(browser => engines.map(engine => {
       const limits = cellDeadlines(policy, { framework: framework.id, browser, engine });
-      return `| ${framework.label} | ${browser} | ${engine} | ${limits.timeoutMs} | ${limits.installTimeoutMs} | ${limits.buildTimeoutMs} |`;
+      return `| ${framework.label} | ${browser} | ${engine} | ${startupDeadline(policy, { framework: framework.id, browser, engine })} | ${limits.timeoutMs} | ${limits.installTimeoutMs} | ${limits.buildTimeoutMs} |`;
     })));
   }
   return lines.concat([""]).join("\n");
@@ -56,7 +57,7 @@ export function markdown(report: Report): string {
     const error = cell.status === "fail" ? `${cell.phase}: ${cell.error}` : cell.reason;
     lines.push(`- ${boxId(cell)}. ${concise(error)}`);
   }
-  lines.push("", "## Provenance", "", "Artifact details, browser capabilities, phase evidence, previous attempts, and discovery are in TABLE.json.", "", "```json", JSON.stringify(provenance(report.source.assets), null, 2), "```", "");
+  lines.push("", "## Provenance", "", "Artifact details, browser capabilities, phase evidence, previous attempts, and discovery are in TABLE.json. Attempts with harnessSetup measure startup from playground navigation through host ready, including cache and service-worker initialization and after-ready observers. Retained attempts without harnessSetup include driver creation in startup.", "", "```json", JSON.stringify(provenance(report.source.assets), null, 2), "```", "");
   return lines.join("\n");
 }
 export async function saveReport(directory: string, report: Report): Promise<void> {
