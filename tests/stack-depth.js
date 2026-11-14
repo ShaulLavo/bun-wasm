@@ -11,6 +11,7 @@ function deepObject() { let o = {}; for (let i = 0; i < n; i++) o = { child: o }
 function deepArray() { let a = []; for (let i = 0; i < n; i++) a = [a]; return a; }
 const actions = {
   plain() { let d = 0; const f = () => (++d === n ? 0 : 1 + f()); f(); },
+  call() { let d = 0; const f = () => (++d === n ? 0 : 1 + f.call(null)); f(); },
   getter() { let d = 0; const o = { get v() { return ++d === n ? 0 : 1 + o.v; } }; void o.v; },
   // The same getter read through a key the compiler cannot see, so JSC calls it from C++
   // (docs/stack-limits.md): `getter` no longer measures that reentry there.

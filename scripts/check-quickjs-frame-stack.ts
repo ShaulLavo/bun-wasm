@@ -9,7 +9,9 @@ import { stripTypeScriptTypes } from "node:module";
 import { join } from "node:path";
 import { nativeCheck } from "./quickjs-native-check.ts";
 
-const { root, engine, scratch, cleanup } = nativeCheck("bun-wasm-quickjs-frames-", process.argv[2]);
+const sanitize = process.argv.includes("--sanitize");
+const engineArgument = process.argv.slice(2).find(arg => arg !== "--sanitize");
+const { root, engine, scratch, cleanup } = nativeCheck("bun-wasm-quickjs-frames-", engineArgument);
 
 function run(command: string, args: string[]): { status: number | null; output: string; stderr: string } {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });
@@ -35,13 +37,32 @@ function check(label: string, ok: boolean): boolean {
   return ok;
 }
 
+function checkNativeArgumentReaders(): void {
+  const bytecodeReaders = new Set(["get_var_ref", "JS_CallBytecode", "async_func_init", "async_func_mark", "async_func_free", "async_func_resume"]);
+  const nativeWriters = new Set(["js_call_c_function", "js_cont_push"]);
+  for (const name of readdirSync(engine).filter(file => /\.[ch]$/.test(file))) {
+    const source = readFileSync(join(engine, name), "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
+    for (const match of source.matchAll(/(?:->|\.)arg_buf\b/g)) {
+      const start = source.lastIndexOf("\n{", match.index);
+      const owner = /\b(\w+)\([^{};]*\)\s*$/.exec(source.slice(0, start))?.[1];
+      const line = source.slice(source.lastIndexOf("\n", match.index) + 1, source.indexOf("\n", match.index));
+      if (owner && bytecodeReaders.has(owner)) continue;
+      if (owner && nativeWriters.has(owner) && /^\s*sf->arg_buf\s*=\s*\(JSValue \*\)(?:arg_buf|argv);$/.test(line)) continue;
+      throw new Error(`Unreviewed native argument reader in ${name}, function ${owner ?? "unknown"}: ${line.trim()}`);
+    }
+  }
+}
+
 try {
+  checkNativeArgumentReaders();
   const binary = join(scratch, "quickjs-frame-stack");
   const library = producedLibrary();
+  if (sanitize && library) throw new Error("Sanitizer checks must compile engine sources");
+  const sanitizerFlags = sanitize ? ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"] : [];
   const engineInputs = library ? [library] : ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"].map(name => join(engine, name));
   console.log(JSON.stringify({ engine, linked: library ? "produced archive" : "engine sources" }));
   const compiled = run(process.env.CC ?? "cc", ["-D_GNU_SOURCE", "-std=gnu11", "-O1", "-g", "-I", engine,
-    join(root, "scripts/fixtures/quickjs-frame-stack.c")].concat(engineInputs, ["-lm", "-lpthread", "-o", binary]));
+    join(root, "scripts/fixtures/quickjs-frame-stack.c")].concat(sanitizerFlags, engineInputs, ["-lm", "-lpthread", "-o", binary]));
   if (compiled.status !== 0) throw new Error(`Native QuickJS compilation exited ${compiled.status}`);
 
   const semantics = join(scratch, "frames.js");
