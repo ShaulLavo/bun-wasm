@@ -16,6 +16,9 @@
 #include "js/CallAndConstruct.h"
 #include "js/CompilationAndEvaluation.h"
 #include "js/Context.h"
+#if defined(BUNSM_LOOP_CONTROLS)
+#include "js/Debug.h"
+#endif
 #include "js/Conversions.h"
 #include "js/Equality.h"
 #include "js/Exception.h"

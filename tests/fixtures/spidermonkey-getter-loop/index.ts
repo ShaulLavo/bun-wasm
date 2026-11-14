@@ -53,23 +53,24 @@ check(Reflect.get(Number.prototype, "getterReceiver", 7) === 7, "primitive refer
 check((7 as number & { getterReceiver: number }).getterReceiver === 7, "primitive receiver");
 delete (Number.prototype as Number & { getterReceiver?: number }).getterReceiver;
 const parameters = new Function("a", "b", "return [a, b, arguments.length, this.marker]");
-const object = { marker: token };
+const object: { marker: object; value?: unknown[]; bad?: unknown } = { marker: token };
 Object.defineProperty(object, "value", { get: parameters });
-const args = Reflect.get(object, "value");
+const args = object.value;
+check(args, "getter arguments result");
 check(args[0] === undefined && args[1] === undefined && args[2] === 0 && args[3] === token, "padded getter parameters");
 console.log("receivers and arguments preserved");
 
 let reads = 0;
 const redefining = { get value() { reads++; Object.defineProperty(this, "value", { value: 42 }); return 17; } };
 check(redefining.value === 17 && redefining.value === 42 && reads === 1, "getter redefinition");
-const generator = { marker: token };
+const generator = { marker: token, value: undefined as unknown };
 Object.defineProperty(generator, "value", { get: function* () { yield this.marker; } });
-check(Reflect.get(generator, "value").next().value === token, "generator getter");
-const asyncObject = { marker: token };
+check((generator.value as Generator).next().value === token, "generator getter");
+const asyncObject = { marker: token, value: undefined as unknown };
 Object.defineProperty(asyncObject, "value", { get: async function () { return this.marker; } });
-check(await Reflect.get(asyncObject, "value") === token, "async getter");
+check(await asyncObject.value === token, "async getter");
 Object.defineProperty(object, "bad", { get: class {} });
-try { Reflect.get(object, "bad"); caught = undefined; } catch (error) { caught = error; }
+try { object.bad; caught = undefined; } catch (error) { caught = error; }
 check(caught instanceof TypeError, "class getter rejected");
 console.log("special getters preserved");
 
