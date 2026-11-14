@@ -121,7 +121,7 @@ const WRITER: &str = r#"class EncodedLines {
 
 const GENERATE_MAP: &str = r#"	generateMap(options) {
 		const generateDecodedMap = this.generateDecodedMap;
-		if (generateDecodedMap !== defaultGenerateDecodedMap) return new SourceMap(generateDecodedMap.call(this, options));
+		if (generateDecodedMap !== defaultGenerateDecodedMap) return new SourceMap(Reflect.apply(generateDecodedMap, this, [options]));
 		const properties = generateEncodedMap(this, options);
 		const encoded = properties.mappings;
 		properties.mappings = [];

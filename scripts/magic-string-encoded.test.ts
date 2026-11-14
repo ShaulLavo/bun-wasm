@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
-import type MagicString from "./fixtures/magic-string/magic-string.d.mts";
+import type { default as MagicString, Bundle as MagicStringBundle, BundleOptions, SourceMapSegment } from "./fixtures/magic-string/magic-string.d.mts";
 
 let scratch = "";
 afterAll(() => { if (scratch) rmSync(scratch, { recursive: true, force: true }); });
@@ -31,7 +31,7 @@ test("retained fixtures and supplied loader output have the measured identities"
   expect(sha256(original)).toBe("d637092a6c7dd947e1b27aef30e97d1a5f59dc39b69ef8f4f0e37e766e4df159");
   const measured = fixture("candidate.mjs");
   expect(sha256(measured)).toBe("0ff3919bd96940bb50b71f040f394432564c67da541c0b9f7d7998cf7eab7af0");
-  expect(candidate).toBe(measured.replace("if (this.generateDecodedMap !== defaultGenerateDecodedMap) return new SourceMap(this.generateDecodedMap(options));", "const generateDecodedMap = this.generateDecodedMap;\n\t\tif (generateDecodedMap !== defaultGenerateDecodedMap) return new SourceMap(generateDecodedMap.call(this, options));"));
+  expect(candidate).toBe(measured.replace("if (this.generateDecodedMap !== defaultGenerateDecodedMap) return new SourceMap(this.generateDecodedMap(options));", "const generateDecodedMap = this.generateDecodedMap;\n\t\tif (generateDecodedMap !== defaultGenerateDecodedMap) return new SourceMap(Reflect.apply(generateDecodedMap, this, [options]));"));
   expect(candidate).toBe(fixture("corrected.mjs"));
   expect(Object.getOwnPropertyNames(right.default.prototype)).toEqual(Object.getOwnPropertyNames(left.default.prototype));
 });
@@ -46,7 +46,8 @@ function compare(before: MagicString, after: MagicString) {
     const decoded = after.generateDecodedMap(options);
     expect(decoded).toEqual(before.generateDecodedMap(options));
     expect(codec.decode(actual.mappings)).toEqual(decoded.mappings);
-    decoded.mappings[0]?.push([987]);
+    const changedSegment: SourceMapSegment = [987];
+    decoded.mappings[0]?.push(changedSegment);
     decoded.names.push("changed");
     expect(after.generateMap(options).toString()).toBe(expected.toString());
   }
@@ -78,7 +79,8 @@ function editedPair(seed: number): [MagicString, MagicString] {
 }
 
 test("Bundle, SourceMap and custom decoded-map overrides retain their public behavior", () => {
-  const before = new left.Bundle({ separator: "\n" }), after = new right.Bundle({ separator: "\n" });
+  const options: BundleOptions = { separator: "\n" };
+  const before: MagicStringBundle = new left.Bundle(options), after: MagicStringBundle = new right.Bundle(options);
   before.addSource({ filename: "one.js", content: new left.default("const a = 1;\n") });
   after.addSource({ filename: "one.js", content: new right.default("const a = 1;\n") });
   expect(after.generateMap({ hires: true }).toString()).toBe(before.generateMap({ hires: true }).toString());
@@ -129,3 +131,27 @@ function accessorMap(value: MagicString, options: Parameters<MagicString["genera
   expect(calls[0]?.options).toBe(options);
   return map;
 }
+
+test("callable decoded-map overrides ignore their own call property", () => {
+  const options = { hires: true, file: "callable.js" };
+  const decoded = new left.default("abc").generateDecodedMap(options);
+  const expected = new left.SourceMap(decoded).toString();
+  for (const value of [new left.default("abc"), new right.default("abc")]) {
+    const calls: unknown[] = [];
+    const override = function (this: unknown, received: unknown) { calls.push(this, received); return decoded; };
+    Object.defineProperty(override, "call", { get() { throw new Error("override call property was read"); } });
+    Object.defineProperty(value, "generateDecodedMap", { value: override });
+    expect(value.generateMap(options).toString()).toBe(expected);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toBe(value);
+    expect(calls[1]).toBe(options);
+  }
+});
+
+test("non-callable decoded-map overrides remain errors", () => {
+  const decoded = new left.default("abc").generateDecodedMap();
+  for (const value of [new left.default("abc"), new right.default("abc")]) {
+    Object.defineProperty(value, "generateDecodedMap", { value: { call: () => decoded } });
+    expect(() => value.generateMap()).toThrow(TypeError);
+  }
+});

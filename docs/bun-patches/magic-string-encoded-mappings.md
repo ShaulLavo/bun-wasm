@@ -36,11 +36,12 @@ The fixtures retain compressed exact original and measured candidate ESM,
 the unmodified published MagicString ESM declaration, and the unmodified
 published codec ESM. `identities.json` binds these fixture bytes. Candidate ESM
 SHA-256 is `0ff3919bd96940bb50b71f040f394432564c67da541c0b9f7d7998cf7eab7af0`.
-The production correction reads a custom decoded-map accessor once, matching
-upstream. Its exact ESM SHA-256 is
-`31b9f7f42a733b1646a344933f167f3825dc58517f83682acbbd65f7e1d83395`.
-The API control binds the corrected fixture to that single change in the
-measured candidate and checks its getter count, receiver and options.
+The production correction reads a custom decoded-map accessor once and invokes
+it intrinsically, matching upstream without reading the function's `call`
+property. Its exact ESM SHA-256 is
+`a93456a27ace927affdcafe6bf558ada830c03040742c696eaa7c8f161378fcc`.
+The API control binds the corrected fixture to those fallback changes in the
+measured candidate and checks getter count, callable behavior, receiver and options.
 Native State tests verify ordinary loading, hot preparation, unsupported input,
 and source cache invalidation. The ordinary loading test passes its actual
 emitted source to the API controls. Those controls compare encoded map bytes,

@@ -25,10 +25,10 @@
   },
   {
     "path": "corrected.mjs.gz",
-    "bytes": 10061,
-    "sha256": "80e42657d1fc8ee7af50df0e399107d78d8a1a7103704f4bc22a281463c0e65e",
-    "sourceBytes": 44091,
-    "sourceSha256": "31b9f7f42a733b1646a344933f167f3825dc58517f83682acbbd65f7e1d83395"
+    "bytes": 10075,
+    "sha256": "6742797abd3f5e821ee4d9dd49f71027a694d7de8584fe61ad51b1a7adba40df",
+    "sourceBytes": 44103,
+    "sourceSha256": "a93456a27ace927affdcafe6bf558ada830c03040742c696eaa7c8f161378fcc"
   },
   {
     "path": "magic-string.d.mts",
