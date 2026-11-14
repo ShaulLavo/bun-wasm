@@ -20,6 +20,7 @@ import { createNodeAsyncContext } from "./async-context.ts";
 import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
 import { loadNodeProgram, linkNodeProgram, parseEngineAllocationFault, startNodeProgram, type EngineAllocationFault } from "./node-linked.ts";
 import { createNodeWorker } from "./node-worker.ts";
+import { loadNodeShell } from "./node-shell.ts";
 import { pairedEngineKinds, isPairedEngine, type PairedEngine } from "../../src/engine-kind.ts";
 import type { SharedLinkPlan, LinkedGroup } from "waffle/link";
 
@@ -28,6 +29,8 @@ const STACK_MB = 32, GUEST_STACK_KIB = "6144";
 const nodeProcess = process;
 interface Settings {
   wasmPath: string;
+  shellPath?: string;
+  envPath?: string;
   engines: Partial<Record<PairedEngine, string>>;
   stackMb: number;
   withNet: boolean;
@@ -45,6 +48,7 @@ interface Settings {
 }
 interface GuestData {
   module: WebAssembly.Module;
+  adapter: string;
   linkPlan?: SharedLinkPlan;
   settings: Settings;
   transport: WorkerProcessTransport;
@@ -66,6 +70,8 @@ function settings(): Settings {
     const arg = argv[i];
     if (arg === "--") { i++; break; }
     if (arg === "--wasm") result.wasmPath = argv[++i]!;
+    else if (arg === "--shell") result.shellPath = resolve(argv[++i]!);
+    else if (arg === "--env-utility") result.envPath = resolve(argv[++i]!);
     else if (arg === "--engine") {
       const value = argv[++i] ?? "", equal = value.indexOf("="), engine = value.slice(0, equal);
       if (!isPairedEngine(engine) || equal < 0 || !value.slice(equal + 1)) throw new Error("--engine requires quickjs=PATH, jsc=PATH or spidermonkey=PATH");
@@ -109,10 +115,11 @@ async function main() {
     engines[engine] = program.module;
     if (program.linkPlan) programs.set(program.module, program.linkPlan);
   }
-  const broker = new NodeProcessBroker({ module: baseModule, engines, preopens: config.preopens,
+  const shell = await loadNodeShell(config.shellPath, config.envPath);
+  const broker = new NodeProcessBroker({ module: baseModule, engines, shell, preopens: config.preopens,
     launch(context, transport) {
       validateNodeCwd(config.preopens, context.request.cwd);
-      return launch({ module: context.module, settings: config, transport, request: context.request });
+      return launch({ module: context.module, adapter: context.adapter, settings: config, transport, request: context.request });
     },
     onError(error) { writeSync(2, `node-host: ${error instanceof Error ? error.stack : error}\n`); },
   });
@@ -121,7 +128,7 @@ async function main() {
     config.env.PATH ??= "/bin:/usr/bin";
     broker.pipeStdin();
     const signals = createNodeSignalController(workerProcessState(broker.root).signals);
-    const guest = launch({ module, settings: config, transport: broker.root });
+    const guest = launch({ module, adapter: "bun", settings: config, transport: broker.root });
     broker.attach(guest, broker.root);
     guest.on("exit", code => {
       const selected = signals.finish(code);
@@ -179,7 +186,7 @@ async function run(data: GuestData) {
     let instance: WebAssembly.Instance;
     if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
     const host = processHost.install(imports, () => instance, cliFetch?.call);
-    const module = request ? await nodeModule({ args, baseModule: data.module, wasmPath: config.wasmPath }) : data.module;
+    const module = request && data.adapter === "bun" ? await nodeModule({ args, baseModule: data.module, wasmPath: config.wasmPath }) : data.module;
     if (data.linkPlan && module === data.module) linked = await linkNodeProgram(data.linkPlan, imports, config.engineAllocationFault);
     instance = linked?.entry ?? await WebAssembly.instantiate(module, imports);
     cliFetch?.install();
