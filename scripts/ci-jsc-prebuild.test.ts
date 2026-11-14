@@ -70,10 +70,10 @@ function guard(result: string): number | null {
 }
 
 test("the prebuild job runs for every native selection, independent of the JSC engine gates", () => {
-  expect(producer.needs).toEqual(["quality", "jsc-identity"]);
-  expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
-  expect(JSON.stringify(producer)).not.toContain("needs.quality.outputs.jsc");
-  expect(native.needs).toEqual(["quality", "jsc-prebuild", "native-quality"]);
+  expect(producer.needs).toEqual(["selection", "jsc-identity"]);
+  expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') }}");
+  expect(JSON.stringify(producer)).not.toContain("needs.selection.outputs.jsc");
+  expect(native.needs).toEqual(["selection", "jsc-prebuild", "native-quality"]);
   // A native-only change still builds the tools fixture, which links the prebuild.
   for (const [path, jsc] of [["crates/bunwasm-runtime/src/engine_quickjs.rs", false], ["jsc/configure.sh", true], ["scripts/build-jsc.sh", true]] satisfies [string, boolean][]) {
     expect(needsRust([path])).toBe(true);
@@ -82,19 +82,19 @@ test("the prebuild job runs for every native selection, independent of the JSC e
   expect(needsRust(["docs/code-quality.md"])).toBe(false);
 });
 
-type GraphCase = { quality: string; rust: string; jsc: string; outcome: string; cancelled: boolean };
+type GraphCase = { selection: string; rust: string; jsc: string; outcome: string; cancelled: boolean };
 
-const graphCases: GraphCase[] = ["success", "failure"].flatMap(quality => ["true", "false"].flatMap(rust => ["true", "false"].flatMap(jsc =>
-  ["success", "failure", "cancelled"].flatMap(outcome => [false, true].map(cancelled => ({ quality, rust, jsc, outcome, cancelled }))))));
+const graphCases: GraphCase[] = ["success", "failure"].flatMap(selection => ["true", "false"].flatMap(rust => ["true", "false"].flatMap(jsc =>
+  ["success", "failure", "cancelled"].flatMap(outcome => [false, true].map(cancelled => ({ selection, rust, jsc, outcome, cancelled }))))));
 
-function checkGraph({ quality, rust, jsc, outcome, cancelled }: GraphCase) {
-  const qualityNeed = { result: quality, outputs: { rust, jsc, shared: "false" } };
-  const prebuildRuns = jobRuns(producer, { quality: qualityNeed, "jsc-identity": { result: quality === "success" && rust === "true" ? "success" : "skipped" } }, cancelled);
+function checkGraph({ selection, rust, jsc, outcome, cancelled }: GraphCase) {
+  const selectionNeed = { result: selection, outputs: { rust, jsc, shared: "false" } };
+  const prebuildRuns = jobRuns(producer, { selection: selectionNeed, "jsc-identity": { result: selection === "success" && rust === "true" ? "success" : "skipped" } }, cancelled);
   const prebuild = { result: prebuildRuns ? outcome : "skipped" };
-  const nativeRuns = jobRuns(native, { quality: qualityNeed, "jsc-prebuild": prebuild, "native-quality": { result: prebuild.result } }, cancelled);
-  const selected = quality === "success" && rust === "true" && !cancelled;
+  const nativeRuns = jobRuns(native, { selection: selectionNeed, "jsc-prebuild": prebuild, "native-quality": { result: prebuild.result } }, cancelled);
+  const selected = selection === "success" && rust === "true" && !cancelled;
   expect(prebuildRuns).toBe(selected);
-  // Skipping is reserved for the change filter, a failed quality job or a cancelled run.
+  // Skipping is reserved for the change filter, a failed selection job or a cancelled run.
   expect(nativeRuns).toBe(selected);
   if (!nativeRuns) return;
   expect(guard(prebuild.result)).toBe(outcome === "success" ? 0 : 1);
