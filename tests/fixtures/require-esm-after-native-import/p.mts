@@ -1,3 +1,3 @@
-import "./d.mjs";
+import "./d.mts";
 globalThis.order.push("p");
 export const value = "p";

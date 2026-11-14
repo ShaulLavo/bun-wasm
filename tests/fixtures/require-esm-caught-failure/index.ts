@@ -1,4 +1,4 @@
-for (const specifier of ["./throws.mjs", "./user-range.mjs"]) {
+for (const specifier of ["./throws.mts", "./user-range.mts"]) {
   try {
     require(specifier);
   } catch (error) {
@@ -6,4 +6,4 @@ for (const specifier of ["./throws.mjs", "./user-range.mjs"]) {
   }
 }
 
-console.log(`ok: ${require("./ok.mjs").value}`);
+console.log(`ok: ${require("./ok.mts").value}`);
