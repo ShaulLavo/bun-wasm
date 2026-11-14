@@ -305,8 +305,11 @@ bookkeeping and the stack guards are unchanged.
 
 Ordinary targets of `Function.prototype.call` now stay in the interpreter loop
 through a [native builtin continuation](bun-patches/quickjs-loop-dispatch.md).
-The native logical frame and builtin identity remain visible. `apply` and other
-target classes keep their native calls. The historical measurements below
+Ordinary callbacks of Array `reduce` and `reduceRight` use the same mechanism.
+The native logical frame and builtin identity remain visible. `apply`, other
+callback builtins and other target classes keep their native calls. Array
+element getters and length coercions also keep native calls. Deep Ajv and Angular
+acceptance needs the separate getter unit. The historical measurements below
 describe the dispatcher extraction before this continuation change.
 
 At the unchanged 32 KiB budget, the `stack-native-call` fixture now completes
