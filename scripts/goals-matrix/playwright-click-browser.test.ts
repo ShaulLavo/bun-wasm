@@ -6,6 +6,7 @@ import { withScoped } from "./scope-fixture";
 import { createPlaywrightTransport, scoped, type ScopedTransport, type Transport } from "./transport";
 import { Scope } from "./scope";
 import { armNativeClick, observeNativeClick } from "./native-click";
+import { clickStageEvidence } from "./click-stage-evidence";
 
 const framework = frameworks.find(row => row.id === "vite-react");
 if (!framework) throw new Error("Missing Vite React fixture");
@@ -74,32 +75,33 @@ async function clickPartiallyVisibleCounter(page: ScopedTransport, framework: Fr
 
 for (const kind of ["chrome", "firefox"] as const) {
   test(`checkClick delivers trusted input to the selected ${kind} page`, async () => {
-    const transport = await createPlaywrightTransport(kind, 5000, 5000, true);
+    const { logger, run } = clickStageEvidence(kind);
+    const transport = await run("launch", () => createPlaywrightTransport(kind, 5000, 5000, true, logger));
     try {
       await withScoped(transport, async page => {
-        await page.navigate(counter);
-        await page.openPreview(counter);
-        const result = await checkClick(page, framework, 3000);
+        await run("navigate", () => page.navigate(counter));
+        await run("openPreview", () => page.openPreview(counter));
+        const result = await run("preview.checkClick", () => checkClick(page, framework, 3000));
         const trusted = await page.evaluate("document.body.dataset.trusted");
         console.info(JSON.stringify({ browser: transport.capabilities, trusted, result }));
         expect(trusted).toBe("true");
         expect(result).toMatchObject({ before: "count is 0", after: "count is 1", trusted: true });
         await page.useHost();
         expect(await page.evaluate("document.querySelector('button').textContent")).toBe("count is 0");
-        expect(await checkClick(page, framework, 3000)).toMatchObject({ before: "count is 0", after: "count is 1", trusted: true });
+        expect(await run("host.checkClick", () => checkClick(page, framework, 3000))).toMatchObject({ before: "count is 0", after: "count is 1", trusted: true });
         await page.usePreview();
         expect(await page.evaluate("document.body.dataset.trusted")).toBe("true");
         await page.closePreview();
         expect(await page.evaluate("document.body.dataset.trusted")).toBe("true");
-        await rejectInvalidClicks(page, framework);
-        await clickFirstCounter(page, framework);
-        await clickPartiallyVisibleCounter(page, framework);
+        await run("rejectInvalidClicks", () => rejectInvalidClicks(page, framework));
+        await run("clickFirstCounter", () => clickFirstCounter(page, framework));
+        await run("clickPartiallyVisibleCounter", () => clickPartiallyVisibleCounter(page, framework));
       });
-      await rejectBlockedClick(transport, framework, "abort");
-      await rejectBlockedClick(transport, framework, "deadline");
+      await run("rejectBlockedClick.abort", () => rejectBlockedClick(transport, framework, "abort"));
+      await run("rejectBlockedClick.deadline", () => rejectBlockedClick(transport, framework, "deadline"));
       console.info(JSON.stringify({ browser: transport.capabilities, trusted: true, pages: ["preview", "host"] }));
     } finally {
-      await transport.close();
+      await run("close", () => transport.close());
       const root = transport.processRoot;
       expect(root).toBeNumber();
       if (root !== undefined) expect(() => process.kill(root, 0)).toThrow();

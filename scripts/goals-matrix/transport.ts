@@ -1,4 +1,4 @@
-import { chromium, firefox, type Page, type BrowserContext } from "playwright";
+import { chromium, firefox, type Page, type BrowserContext, type Logger } from "playwright";
 import type { Browser as BrowserKind } from "./catalog";
 import { admit, awaitWithin, type Admission } from "./scope";
 import type { EvaluationOptions, Transport } from "./scoped-transport";
@@ -47,7 +47,8 @@ async function clickPage(page: Page, button: string, clicked: string, admission:
   const after = await until(() => evaluatePage<ReturnType<typeof observeNativeClick>>(page, observation, admit(admission), admission), value => value.trusted && value.after === expected, admit(admission));
   return { before: before.before, after: after.after, trusted: true, inputMethod: "Playwright mouse click" };
 }
-export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number, cleanupTimeoutMs = timeoutMs, scopedProcess = false): Promise<Transport> {
+export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chrome" | "firefox">, timeoutMs: number, cleanupTimeoutMs = timeoutMs, scopedProcess = false, logger?: Logger): Promise<Transport> {
+  const record = (message: string) => { if (logger?.isEnabled("api", "info")) logger.log("api", "info", message, [], {}); };
   const executablePath = process.env.GOALS_CHROME_EXECUTABLE;
   if (kind === "chrome" && executablePath) {
     const version = Bun.spawn([executablePath, "--version"], { stdout: "pipe", timeout: 5000 });
@@ -55,12 +56,17 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
     if (await version.exited !== 0 || !name.startsWith("Google Chrome ")) throw new Error(`Expected genuine Google Chrome, received ${name}`);
   }
   const browserType = kind === "chrome" ? chromium : firefox;
-  const launch = kind === "chrome" ? { ...(executablePath ? { executablePath } : { channel: "chrome" }), headless: true, timeout: timeoutMs } : { headless: true, timeout: timeoutMs };
+  const launch = kind === "chrome" ? { ...(executablePath ? { executablePath } : { channel: "chrome" }), headless: true, timeout: timeoutMs, logger } : { headless: true, timeout: timeoutMs, logger };
+  record("browserType.launchServer started");
   const server = scopedProcess ? await browserType.launchServer(launch) : null;
+  record("browserType.launchServer finished; browserType.connect/launch started");
   const browser = server ? await browserType.connect(server.wsEndpoint()).catch(async error => { await server.close(); throw error; }) : await browserType.launch(launch);
+  record("browserType.connect/launch finished");
   const close = async () => { try { await browser.close(); } finally { await server?.close(); } };
   try {
-    const context = await browser.newContext({ serviceWorkers: "allow" });
+    record("browser.newContext started");
+    const context = await browser.newContext({ serviceWorkers: "allow", logger });
+    record("browser.newContext finished");
     const host = await context.newPage();
     return {
       ...createPageTransport(context, host, { browserName: kind === "chrome" ? "chrome" : "firefox", browserVersion: browser.version(), transport: "playwright", executable: kind === "chrome" ? executablePath ?? "chrome channel" : firefox.executablePath() }, timeoutMs, cleanupTimeoutMs, close),

@@ -1,6 +1,6 @@
 # Cold native reentry on x86 WebKit
 
-Status: Approved, scheduled after J11 and P2. Owner: Engines. This legacy JSC stack-safety item is separate from Unit B and is not dropped.
+Status: Approved for independent structural units. Owner: Engines. This legacy JSC stack-safety item is separate from Unit B and is not dropped.
 
 ## Problem and evidence
 
@@ -19,9 +19,29 @@ Evidence and exact immutable inputs:
 
 The original control is `web/tests/browser-stack.mjs --measure webkit` with ENGINES=jsc, STACK_KIB=240, JSC_PARSER_RESERVE=2048 and `ulimit -s 512`, serving each report's verified whole site. Keep original navigation, probe and assertion limits. The same failure is not inferred for native Safari, physical iPhone, every mode, or P's distinct cold tuple.
 
-## Next scheduled unit
+## Structural units
 
-After J11 and P2, identify the cold native-reentry cost and guard coverage independently of incidental optimizing-tier warm-up. Start from the captured code paths and narrow native-frame or code-install evidence. Give a bounded design and cost before a broader implementation. Do not add artificial warm-up or change caps, guard budgets or deadlines to hide the failure.
+Unit 1 routes ordinary JavaScript computed-key getters through the existing C-loop getter
+protocol. Unit 2 iterates empty-handler Proxy get forwarding. Unit 3 returns to its tech lead
+for a bounded allocation and rooting contract before implementation. The reviewed design and
+parent disposition are retained in `/work/reports/goals/stack-exhaustion-20261113/jsc-design/`.
+
+Unit 1 preserves coercion order, primitive receivers, roots, exception position, value profiling,
+destination aliases, all three actual operand widths and native fallback paths. Offlineasm's
+full expansion assigns private return labels. Check declarations, definitions, references and
+semantic return continuations from each real generated split and shared-group product. Never
+assign explicit site numbers to preserve earlier private labels.
+
+Keep the 4,896-byte held CLoop frame floor and 328-value-slot gate on finalized sides. Validate
+native semantics and embedding, then original Linux WebKit cold and warm computed-getter
+controls at 512 KiB host stack, 240 KiB guest budget and 2,048 parser reserve, at 45 and 200000.
+Run Chrome too. The expected roughly 39930 frame-stack depth is a measurement, not a cap.
+Desktop Safari and iPhone consume the normal merged delivery through the final Safari lane.
+Do not add artificial warm-up or change caps, guard budgets or deadlines to hide the failure.
+
+Each independently reviewed green unit merges when ready. Other units and J11 own separate
+hunks in the same WebKit patch. Resolve later conflicts through rebase and repeat affected
+checks. No reserved merge order or merge hold applies.
 
 Validate a fix against the pre-feature donor and current candidate, including cold/warm and actual platform acceptance, with original assertions intact. Preserve all historical failed controls.
 

@@ -34,6 +34,22 @@ test("posted Worker ownership preserves its admitted lifetime and rejects old or
   }
 });
 
+test("posted Worker ownership requires its actual positive image generation", () => {
+  const transport = createWorkerProcessTransport({ pid: 23, job: 20 });
+  const { generation: _generation, ...missing } = transport;
+  const invalid = [missing].concat([0, -1, 1.5, NaN, Number.MAX_SAFE_INTEGER + 1].map(generation => ({ ...transport, generation })));
+  for (const posted of invalid) {
+    const worker = {};
+    const jobs = new WorkerJobs(new Set([worker]), () => false);
+    jobs.observe(worker, { runtimeProcess: posted });
+    expect(() => jobs.baseline(23)).toThrow();
+  }
+  const worker = {};
+  const jobs = new WorkerJobs(new Set([worker]), () => false);
+  jobs.observe(worker, { runtimeProcess: { ...transport, generation: 7 } });
+  expect(jobs.baseline(23).root.generation).toBe(7);
+});
+
 for (const mode of ["held", "throw", "reject", "reject-falsy"]) test(`real Node CPU root and child retain native-return observation: ${mode}`, () => {
   const result = spawnSync("node", ["--no-warnings", new URL("../web/tests/fixtures/node-observation-probe.ts", import.meta.url).pathname, mode], { encoding: "utf8", timeout: 5000 });
   expect({ status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr }).toMatchObject({ status: 0 });
