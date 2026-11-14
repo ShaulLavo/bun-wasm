@@ -68,9 +68,9 @@ test("WASI JSON frames reserve capacity and root tables before publication", () 
   expect(open.indexOf("reserveContainerSlot<testing>()")).toBeLessThan(open.indexOf("buffer()[m_length++]"));
   expect(open.indexOf("m_roots.append(&object)")).toBeGreaterThan(open.indexOf("buffer()[m_length++]"));
   expect(json.indexOf("m_roots.append(table)")).toBeGreaterThan(json.indexOf("acquirePropertyTableForJSONFastPath"));
-  expect(json.indexOf("m_frames.append")).toBeGreaterThan(json.indexOf("m_roots.append(table)"));
-  expect(json).toContain("m_frames[index].cursor = next;");
-  expect(json).toContain("m_frames[index].cursor = i + 1;");
+  expect(json.indexOf("m_frames.unsafeAppendWithoutCapacityCheck")).toBeGreaterThan(json.indexOf("m_roots.append(table)"));
+  expect(json).toContain("frameAt(index).cursor = next;");
+  expect(json).toContain("frameAt(index).cursor = i + 1;");
   expect(json).not.toContain("DeferGCForAWhile");
   expect(json).toContain("FailureReason::FastNesting");
   expect(json).toContain("FailureReason::FastFrameAllocation");
