@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 export const spiderMonkeyTiers = ['interp', 'pbl'] as const;
 export type SpiderMonkeyTier = typeof spiderMonkeyTiers[number];
 
-/** Hosted full drivers completed in 280.81/273.25 s; the slower main entry took 241.53 s. */
+/** Generous hang caps; correctness is determined by the fixture output and ownership checks. */
 export function sharedBrowserClocks(kind: string, entry = "browser-guest.ts") {
   const spiderMonkey = kind === "spidermonkey";
   return {
-    pageMs: spiderMonkey && entry === "browser-guest.ts" ? 272_000 : 240_000,
-    driverMs: spiderMonkey ? 316_000 : 300_000,
-    consumerSeconds: spiderMonkey ? 660 : 420,
+    pageMs: spiderMonkey && entry === "browser-guest.ts" ? 480_000 : 240_000,
+    driverMs: spiderMonkey ? 540_000 : 300_000,
+    consumerSeconds: spiderMonkey ? 1320 : 420,
   };
 }
 

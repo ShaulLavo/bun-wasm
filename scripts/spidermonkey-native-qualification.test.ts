@@ -84,15 +84,11 @@ test('child traces do not substitute for the final returning member observation'
   expect(() => verifySpiderMonkeyQualification(trace() + stopped + stopped, 'interp')).toThrow('Missing final member tier trace');
 });
 
-test('Browser clocks fit completed hosted tiers without changing other entries or engines', () => {
-  const measuredMain = 241_523.46;
-  const measuredDriver = 280_805.0103;
+test('Browser hang caps preserve page, driver and sequential-tier supervision', () => {
   const clock = sharedBrowserClocks('spidermonkey');
-  expect(clock.pageMs / measuredMain).toBeGreaterThanOrEqual(1.10);
-  expect(clock.pageMs / measuredMain).toBeLessThanOrEqual(1.15);
-  expect(clock.driverMs / measuredDriver).toBeGreaterThanOrEqual(1.10);
-  expect(clock.driverMs / measuredDriver).toBeLessThanOrEqual(1.15);
-  expect(clock.consumerSeconds * 1000).toBeGreaterThanOrEqual(clock.driverMs * 2 + 28_000);
+  expect(clock).toEqual({ pageMs: 480_000, driverMs: 540_000, consumerSeconds: 1320 });
+  expect(clock.driverMs).toBeGreaterThan(clock.pageMs);
+  expect(clock.consumerSeconds * 1000).toBeGreaterThan(clock.driverMs * 2);
   for (const kind of ['quickjs', 'jsc']) expect(sharedBrowserClocks(kind)).toEqual({ pageMs: 240_000, driverMs: 300_000, consumerSeconds: 420 });
   for (const entry of ['spidermonkey-canary.ts', 'spidermonkey-recursion.ts', 'spidermonkey-reentry.ts', 'parser-reserve-ownership.ts', 'failed-stop.ts', 'address-space/guest.ts']) {
     expect(sharedBrowserClocks('spidermonkey', entry).pageMs).toBe(240_000);

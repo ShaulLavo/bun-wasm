@@ -6,9 +6,9 @@ admission contract. The group itself (members, regions, futex, budgets) belongs 
 [Waffle's memory groups](https://github.com/ShaulLavo/waffle/blob/main/docs/memory-groups.md).
 
 The native lifetime command runs all 200 workers and then checks a fresh group in the same
-launcher. Its command bound is 158 seconds, about 12.8% above the slowest complete hosted
-measurement of 140.09 seconds. Other native commands keep their 120-second bound. Worker
-counts, assertions, output checks and SpiderMonkey tier/accounting checks are unchanged.
+launcher. It has a ten-minute hang cap; other native commands keep a two-minute hang cap.
+The tests assert delivery, output and ownership outcomes, not elapsed-time targets. Worker
+counts and SpiderMonkey tier/accounting checks are unchanged. Durations belong in benchmarks.
 
 Shared proof handoffs preserve component receipts and their original source labels. The producer
 also records freshly captured `current-inputs.json` snapshots for the composition. The handoff

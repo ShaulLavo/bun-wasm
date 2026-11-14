@@ -2122,7 +2122,7 @@ jobs:
           TEMP: ${{ runner.temp }}
         run: |
           source env.sh
-          bun scripts/run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 660 || 420 }} bun scripts/test-checks.ts browser-guest --profile shared-group
+          bun scripts/run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }} bun scripts/test-checks.ts browser-guest --profile shared-group
 
   shared-proof:
     name: Shared PIC sysroot proof

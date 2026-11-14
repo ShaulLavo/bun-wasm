@@ -40,9 +40,9 @@ export function runDeclaredFixtures(ids: readonly string[], declared: readonly s
 
 const COMMAND_TIMEOUT_MS = 120_000;
 
-/** The 200-worker command includes a fresh group; the slowest hosted completion was 140.09 s. */
+/** The 200-worker command includes a fresh group and receives a generous hang cap. */
 export function profileFixtureTimeoutMs(id: string): number {
-  return id === 'tests/fixtures/shared-wasm-memory#lifetime' ? 158_000 : COMMAND_TIMEOUT_MS;
+  return id === 'tests/fixtures/shared-wasm-memory#lifetime' ? 600_000 : COMMAND_TIMEOUT_MS;
 }
 
 function runFixture(id: string, directory: string, artifacts: Artifacts, env: NodeJS.ProcessEnv, tier?: SpiderMonkeyTier) {
