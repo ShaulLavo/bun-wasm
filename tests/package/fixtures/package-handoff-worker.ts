@@ -55,6 +55,35 @@ function prepare(context: WorkerExecutionContext, imports: WebAssembly.Imports, 
   return { memory, file, rootFd };
 }
 
+function reexec(context: WorkerExecutionContext, imports: WebAssembly.Imports, mode: string, prepared: ReturnType<typeof prepare>): void {
+  if (!mode.startsWith("reexec") || context.request.runtimeProcess?.generation !== 1) return;
+  const { memory, file, rootFd } = prepared;
+  const table = context.wasi.descriptors;
+  const target = mode === "reexec-gap" ? 7 : rootFd;
+  const entry = table.get(file);
+  if (!entry) throw new Error("Missing reexec file");
+  if (target !== rootFd) {
+    table.inherit(target, entry);
+    if (call(imports, "wasi_snapshot_preview1", "fd_renumber", rootFd, target) !== 0) throw new Error("root move failed");
+  }
+  const fds = table.inheritable().concat([target]).map(fd => ({ parent: fd, child: fd }));
+  const request = source.encode(JSON.stringify({ executable: "/caller", argv: ["caller"], env: context.request.env, cwd: "/", fds }));
+  new Uint8Array(memory.buffer).set(request, 1024);
+  call(imports, "runtime_proc", "exec", 1024, request.length);
+  throw new Error("ordinary exec returned");
+}
+
+function mutateCensus(context: WorkerExecutionContext, imports: WebAssembly.Imports, mode: string, file: number, rootFd: number): void {
+  if (mode !== "late-census") return;
+  const table = context.wasi.descriptors;
+  const entry = table.get(file);
+  if (!entry) throw new Error("Missing late census file");
+  table.inherit(1_000_005, entry);
+  call(imports, "wasi_snapshot_preview1", "fd_close", file);
+  table.inherit(11, entry);
+  if (call(imports, "wasi_snapshot_preview1", "fd_renumber", rootFd, 11) !== 0) throw new Error("late root move failed");
+}
+
 self.onmessage = ({ data }: MessageEvent<Request>) => {
   const executor = createBunExecutor(data);
   let imports: WebAssembly.Imports;
@@ -62,7 +91,9 @@ self.onmessage = ({ data }: MessageEvent<Request>) => {
     imports(value, context) { executor.imports?.(value, context); imports = value; return value; },
     run(context) {
       if (["root", "group", "thread", "filesystem", "cancelled"].includes(data.mode)) return unsupported(context, data.mode);
-      const { memory, file, rootFd } = prepare(context, imports, data.mode);
+      const prepared = prepare(context, imports, data.mode);
+      reexec(context, imports, data.mode, prepared);
+      const { memory, file, rootFd } = prepared;
       const value = plan({ main: { name: "build", original: "original $UNCHANGED", command: "prepared 'already quoted'" }, env: { PATH: "/bin", ACTUAL: "after resolve", EMPTY: "", npm_execpath: "/actual/bun" } });
       const bytes = source.encode(JSON.stringify(value));
       new Uint8Array(memory.buffer).set(bytes, 1024);
@@ -70,7 +101,9 @@ self.onmessage = ({ data }: MessageEvent<Request>) => {
       const required = handoff(1024, bytes.length, 0, 0);
       self.postMessage({ type: "handoff-observation", file, rootFd, required });
       if (required < 0) return required === -58 ? 42 : 43;
-      // The only caller work between the size query and handoff is scratch provisioning.
+      // This control can deliberately change bindings after the size query.
+      mutateCensus(context, imports, data.mode, file, rootFd);
+      self.postMessage({ type: "original-root-before-commit", generation: context.request.runtimeProcess?.generation, fd: rootFd, preopen: context.wasi.descriptors.get(rootFd)?.preopen });
       const result = handoff(1024, bytes.length, 8192, 32768);
       self.postMessage({ type: "handoff-returned", result });
       return 44;

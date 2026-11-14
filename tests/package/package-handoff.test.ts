@@ -12,7 +12,7 @@ import type { Request } from "./fixtures/package-handoff-worker.js";
 const module = guest(0, [
   { namespace: "bun_package_scripts", name: "handoff" },
 ].concat(["path_open", "fd_close", "fd_renumber", "fd_fdstat_set_rights", "fd_read"].map(name => ({ namespace: "wasi_snapshot_preview1", name })),
-  ["dup", "signal"].map(name => ({ namespace: "runtime_proc", name }))));
+  ["dup", "signal", "exec"].map(name => ({ namespace: "runtime_proc", name }))));
 const empty = guest(0);
 const workerUrl = new URL("./fixtures/package-handoff-worker.ts", import.meta.url).href;
 const notificationWorkerUrl = new URL("../../src/notification-worker-entry.ts", import.meta.url).href;
@@ -103,6 +103,25 @@ test("admission captures private dependencies across uninstall and reinstall", a
   expect(f.successors).toHaveLength(2);
 }, true), 30_000);
 
+for (const mode of ["reexec-gap", "reexec-compact", "late-census"]) {
+  test(`handoff preserves restored root and takes a fresh census: ${mode}`, async () => using(mode, async f => {
+    const status = await (await f.start()).exit;
+    expect(f.successors).toHaveLength(1);
+    const next = f.successors[0]!;
+    expect(next.context.generation).toBe(mode.startsWith("reexec") ? 3 : 2);
+    expect(next.root?.fd).toBe(mode === "reexec-gap" ? 7 : mode === "late-census" ? 11 : 3);
+    expect(next.root?.rights).toBeGreaterThan(0n);
+    expect(status).toMatchObject({ kind: "exited", code: 0 });
+    expect(f.children).toHaveLength(1);
+    expect(next.context.request.fds.some(fd => fd.child === 1_000_003)).toBe(true);
+    if (mode === "reexec-gap") expect(f.observations).toContainEqual({ type: "original-root-before-commit", generation: 2, fd: 7, preopen: "/" });
+    if (mode === "late-census") {
+      expect(next.context.request.fds.some(fd => fd.child === 1_000_005)).toBe(true);
+      expect(next.context.request.fds.some(fd => fd.child === 4)).toBe(false);
+    }
+  }), 30_000);
+}
+
 test("caught signals return precommit without a successor or shell", async () => using("caught", async f => {
   expect((await (await f.start()).exit).code).toBe(42);
   expect(f.successors).toHaveLength(0);
@@ -156,14 +175,7 @@ async function setup({ runtime, tables, remove, mode, held, gate, installations 
   const startupFailure = new Error("owned startup failure");
   const owner = { ...runtime,
     registerAdapter(name: string, launch: GuestLauncher) {
-      return runtime.registerAdapter(name, (context, service) => {
-        name === PACKAGE_ADAPTER && successors.push(successor(context));
-        const selected = name === PACKAGE_ADAPTER ? { ...context,
-          startFailed(error: unknown) { reports.push(error); context.startFailed(error); },
-          fail(error: unknown) { reports.push(error); context.fail(error); },
-        } : context;
-        return launch(selected, mode === "startup-failure" && name === PACKAGE_ADAPTER ? { ...service, async ready() { throw startupFailure; } } : service);
-      });
+      return runtime.registerAdapter(name, observingLauncher(name, launch, { successors, reports, startupFailure, mode }));
     },
     registerProgram(name: string, definition: ProgramDefinition) {
       if (name !== PACKAGE_CONTINUATION || !held || !("module" in definition) || !definition.module) return runtime.registerProgram(name, definition);
@@ -206,5 +218,18 @@ async function setup({ runtime, tables, remove, mode, held, gate, installations 
     uninstall() { installed?.dispose(); },
     async reinstall() { installed = await installBunAdapters(owner, { module: empty, workerUrl, notificationWorkerUrl }); installations.push(installed); },
     async start() { return shell.spawn("/caller", ["caller"], { PATH: "/before" }, [0, 1, 2].map(fd => ({ parent: fd, child: fd })).concat(mode === "reserved-root" ? [{ parent: 0, child: 3 }] : [])); },
+  };
+}
+
+function observingLauncher(name: string, launch: GuestLauncher, observation: Pick<Fixture, "successors" | "reports" | "startupFailure"> & { mode: string }): GuestLauncher {
+  return (context, service) => {
+    if (name === PACKAGE_ADAPTER) observation.successors.push(successor(context));
+    const selected = name === PACKAGE_ADAPTER ? { ...context,
+      startFailed(error: unknown) { observation.reports.push(error); context.startFailed(error); },
+      fail(error: unknown) { observation.reports.push(error); context.fail(error); },
+    } : context;
+    const selectedService = observation.mode === "startup-failure" && name === PACKAGE_ADAPTER
+      ? { ...service, async ready() { throw observation.startupFailure; } } : service;
+    return launch(selected, selectedService);
   };
 }

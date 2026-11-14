@@ -7,15 +7,23 @@ import { parsePackagePlan, type PackagePlan } from "./package-continuation-plan.
 export const PACKAGE_CONTINUATION = "/.bun-wasm/package-continuation";
 export const PACKAGE_ADAPTER = "bun:package-continuation";
 
+function originalRoot(table: DescriptorTable, inherited: ReadonlySet<number>): { fd: number; binding: Descriptor } | undefined {
+  const binding = table.rootPreopen();
+  if (!binding) return;
+  for (const fd of inherited) {
+    if (table.get(fd) === binding) return { fd, binding };
+  }
+  for (let fd = 3; table.get(fd) || inherited.has(fd); fd++) {
+    if (table.get(fd) === binding) return { fd, binding };
+  }
+}
+
 /** Captured after inherited bindings. An alias never becomes the original preopen. */
 class PackageDescriptors {
   private root: { fd: number; binding: Descriptor } | undefined;
 
   constructor(private readonly table: DescriptorTable, reserved: ReadonlySet<number>) {
-    for (let fd = 3; table.get(fd) || reserved.has(fd); fd++) {
-      const binding = table.get(fd);
-      if (binding?.resource.kind === "directory" && binding.preopen === "/") this.root = { fd, binding };
-    }
+    this.root = originalRoot(table, reserved);
     const close = table.close.bind(table);
     table.close = fd => {
       const result = close(fd);

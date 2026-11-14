@@ -12,7 +12,9 @@ uses its existing loop. No engine, browser, framework or memory benefit is estab
 | `tests/package/fixtures/program-shell.ts` | Adapted implementation | Waffle `tests/fixtures/program-shell.ts` at the same revision, using published entrypoints consistently with the installed consumer. Notice draining is extracted without changing supervision or consuming waits. |
 | Package handoff Worker and tests | Original adapter | Tiny caller memory, actual installed runtime/WASI imports, filesystem Worker, ordinary exec, installer and supervisor. No maintained engine or guest producer is run. |
 
-The executor captures the original root Descriptor after inherited bindings. Successful
+The executor captures the original root Descriptor after inherited bindings, checking
+the finite inherited fd set before the default occupied prefix. A root restored by an
+earlier exec remains discoverable beyond a gap without scanning sparse fd space. Successful
 table close and renumber operations track its identity, including calls through every
 WASI import namespace. A fresh census includes live inheritable descriptors plus that
 still-live root at its current rights. A root alias cannot restore a closed preopen.
