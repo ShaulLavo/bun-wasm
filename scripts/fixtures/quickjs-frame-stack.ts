@@ -83,7 +83,7 @@ report("inherited getter survives interrupt-time deletion", () => {
   return target.value === target;
 });
 report("super getter survives interrupt-time deletion and collection", () => {
-  const prototype = { get value(): string { return `selected ${(this as { tag: string }).tag}`; } };
+  const prototype = { get value(): string { return `selected ${Reflect.get(this, "tag")}`; } };
   const home = {
     __proto__: prototype,
     tag: "receiver",
@@ -110,7 +110,7 @@ report("super key coercion precedes getter selection", () => {
   return log.join();
 });
 report("class constructor getter uses its own realm", () => {
-  const Foreign = otherRealm("(class Foreign {})") as Function;
+  const Foreign = otherRealm("(class Foreign {})") as () => unknown;
   const foreignType = otherRealm("TypeError.prototype");
   const target = {};
   Object.defineProperty(target, "value", { get: Foreign });
@@ -120,7 +120,7 @@ report("class constructor getter uses its own realm", () => {
 });
 report("getter formal padding and escaping parameters", () => {
   const target = {};
-  const getter = new Function("a", "b", "c", "d", "e", "f", "g", 'a = "kept"; arguments[0] = "unmapped"; return () => [a, b, c, d, e, f, g, arguments.length, new.target].join();');
+  const getter = new Function("a", "b", "c", "d", "e", "f", "g", 'a = "kept"; arguments[0] = "unmapped"; return () => [a, b, c, d, e, f, g, arguments.length, new.target].join();') as () => () => string;
   Object.defineProperty(target, "value", { get: getter });
   const later = (target as { value: () => string }).value;
   collectGarbage();
