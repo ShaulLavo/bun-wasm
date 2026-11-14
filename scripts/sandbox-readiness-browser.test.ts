@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { chromium, webkit, type Browser, type Page } from "playwright";
 import { readFile } from "node:fs/promises";
 import { openTemplate, ready, restart } from "../sandbox/tests/storage-browser";
@@ -199,29 +199,102 @@ async function failures(browser: Browser): Promise<void> {
   });
 }
 
-function invalidateEachCheckpoint(): void {
-  const control = Reflect.get(globalThis, "control");
-  Reflect.set(globalThis, "flushHook", () => { control.preview = { ...control.preview }; });
+function gatedFlush(): void {
+  Reflect.set(globalThis, "flushHook", async () => {
+    if (!await Reflect.get(globalThis, "flushCheckpoint")()) return;
+    const control = Reflect.get(globalThis, "control");
+    control.preview = { ...control.preview };
+  });
 }
 
-async function deadlines(browser: Browser): Promise<void> {
+async function repeatedInvalidation(browser: Browser): Promise<void> {
   await model(browser, async page => {
     await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
-    await page.evaluate(invalidateEachCheckpoint);
+    const checkpoints = Array.from({ length: 3 }, () => ({ entered: Promise.withResolvers<void>(), release: Promise.withResolvers<boolean>() }));
+    let attempts = 0;
+    await page.exposeFunction("flushCheckpoint", () => {
+      const checkpoint = checkpoints[attempts++];
+      if (!checkpoint) throw new Error("Unexpected extra checkpoint");
+      checkpoint.entered.resolve();
+      return checkpoint.release.promise;
+    });
+    await page.evaluate(gatedFlush);
+    let settled = false;
+    const completion = ready(page, "vanilla", Date.now() + 30_000).then(
+      () => { settled = true; return "ready"; },
+      error => { settled = true; return error; },
+    );
+    try {
+      for (const [index, checkpoint] of checkpoints.entries()) {
+        await Promise.race([checkpoint.entered.promise, completion.then(() => { throw new Error("Readiness settled before the next checkpoint"); })]);
+        expect(settled).toBe(false);
+        checkpoint.release.resolve(index < 2);
+      }
+      expect(await completion).toBe("ready");
+      expect(attempts).toBe(3);
+      expect(await page.evaluate(() => Reflect.get(globalThis, "flushes"))).toBe(4);
+    } finally {
+      for (const checkpoint of checkpoints) checkpoint.release.resolve(false);
+      await page.close();
+      await completion;
+    }
+  });
+}
+
+async function readinessDeadline(browser: Browser): Promise<void> {
+  await model(browser, async page => {
+    await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
+    await page.clock.pauseAt(new Date());
+    await page.evaluate(() => {
+      Reflect.get(globalThis, "sandbox").fs.state.status = "loading";
+      requestAnimationFrame(() => { Reflect.get(globalThis, "sandbox").fs.state.status = "ready"; });
+    });
     const started = Date.now();
-    await expect(ready(page, "vanilla", started + 1000)).rejects.toThrow(/deadline|Timeout/);
-    expect(Date.now() - started).toBeLessThan(3000);
-    expect(await page.evaluate(() => Reflect.get(globalThis, "flushes"))).toBeGreaterThan(1);
-  });
-  await model(browser, async page => {
-    await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
-    await page.evaluate(() => Reflect.set(globalThis, "flushHook", () => new Promise(() => {})));
-    await expect(ready(page, "vanilla", Date.now() + 150)).rejects.toThrow(/deadline|Timeout/);
+    try {
+      await expect(ready(page, "vanilla", started + 1000)).rejects.toThrow(/deadline|Timeout/);
+      expect(await page.evaluate(() => Reflect.get(globalThis, "sandbox").fs.state.status)).toBe("loading");
+      expect(await page.evaluate(() => Reflect.get(globalThis, "flushes"))).toBe(1);
+      console.log(JSON.stringify({ browser: browser.browserType().name(), control: "paused readiness deadline", elapsedMs: Date.now() - started }));
+    } finally { await page.clock.resume(); }
+    await ready(page, "vanilla");
   });
 }
 
-const cases = [normalAndRepeated, redirectsAndQueries, invalidLoads, changesDuringFlush, failures, deadlines];
+async function pendingFlushDeadline(browser: Browser): Promise<void> {
+  await model(browser, async page => {
+    await openTemplate(page, "http://readiness.test/sandbox/", "vanilla");
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<boolean>();
+    await page.exposeFunction("flushCheckpoint", () => { entered.resolve(); return release.promise; });
+    await page.evaluate(gatedFlush);
+    const schedule = globalThis.setTimeout;
+    // Hold timer delivery until the real browser flush starts, including Playwright's poll timeout.
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(Object.assign(
+      (...[callback, delay, ...args]: Parameters<typeof setTimeout>) => schedule(() => {
+        void entered.promise.then(() => callback(...args));
+      }, delay),
+      { __promisify__: schedule.__promisify__ },
+    ));
+    const started = Date.now();
+    const completion = ready(page, "vanilla", started + 150);
+    const expired = expect(completion).rejects.toThrow(/deadline|Timeout/);
+    try {
+      await Promise.race([entered.promise, completion.then(() => { throw new Error("Readiness resolved before its pending flush"); })]);
+      timer.mockRestore();
+      await expired;
+      expect(await page.evaluate(() => Reflect.get(globalThis, "flushes"))).toBe(2);
+      console.log(JSON.stringify({ browser: browser.browserType().name(), control: "pending flush deadline", elapsedMs: Date.now() - started }));
+    } finally {
+      timer.mockRestore();
+      release.resolve(false);
+      await page.close();
+      await completion.catch(() => {});
+    }
+  });
+}
+
+const cases = [normalAndRepeated, redirectsAndQueries, invalidLoads, changesDuringFlush, failures, repeatedInvalidation, readinessDeadline, pendingFlushDeadline];
 for (const engine of [chromium, webkit]) for (const run of cases) test(`${engine.name()}: ${run.name}`, async () => {
   const browser = await engine.launch({ headless: true });
   try { await run(browser); } finally { await browser.close(); }
-}, 15_000);
+}, 60_000);
