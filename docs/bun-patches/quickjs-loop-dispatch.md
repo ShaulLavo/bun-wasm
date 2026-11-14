@@ -1,4 +1,4 @@
-# QuickJS builtin loop continuations
+# QuickJS getter dispatch and builtin loop continuations
 
 Class **Port**. Upstream is QuickJS-ng 0.16.2 in rquickjs-sys 0.13.0,
 imported at `902364cf9`. The adapted implementation is
@@ -36,6 +36,21 @@ alignment and containment assertions. With reduce state the continuation is
 208 bytes on wasm32 and 352 bytes on x86_64, allocated as 208 and 360 bytes.
 Budgets, backing limits and native entry reservations are unchanged.
 
+Ordinary JavaScript getters selected by `OP_get_field`, `OP_get_field2` and
+`OP_get_super_value` also enter the running interpreter. Their result replaces
+one, zero or three caller operand slots respectively. Lookup keeps the original
+receiver, including inherited and `super` reads. `super` coerces its key once
+before searching ordinary prototypes. Exotics, computed ordinary keys, data,
+VARREF and AUTOINIT properties, native getters, async functions and generators
+retain the existing property lookup and native call paths. Coroutine callers
+retain native dispatch.
+
+The selected getter is duplicated before interrupt polling or frame allocation.
+The callee record owns that reference until its normal or exceptional teardown.
+Interrupt and allocation refusal release it before unwinding the caller, whose
+operands remain intact. No property pointer is used after a poll. Zero actual
+arguments use a NULL vector and declared formal slots receive undefined.
+
 `Array.prototype.reduce` and `reduceRight` use that same return path for ordinary
 bytecode callbacks. Initialization and stepping stay out of line. Their step
 mirrors upstream `js_array_reduce`. It converts
@@ -60,5 +75,12 @@ was captured from the engine before each dispatch change. The wasm32 contract
 also runs deep reduce calls and recovery at 32 KiB. The native fixtures run on
 all three engines, and the existing browser stack gate runs the continuation
 fixture in its browser matrix. `tests/stack-depth.js` adds an original reduce
-depth probe. Getter dispatch and apply remain separate units. Deep real Ajv and
-Angular acceptance requires the separate getter unit as well as reduce.
+depth probe. Apply remains a separate unit.
+
+Getter-specific original adapters extend those same bare-engine fixtures and
+add `tests/fixtures/stack-getter-loop`, discovered by
+`checks/native-stack-getter-loop.json`. They cover selected-getter collection
+during an interrupt, accessor mutation, receiver and key semantics, formal
+padding, escaping references, refused allocations, unbounded recursion and
+recovery at the unchanged 32 and 36 KiB native budgets. Getter dispatch and
+reduce continuations now both use the interpreter loop.
