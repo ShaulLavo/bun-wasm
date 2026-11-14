@@ -45,8 +45,8 @@ test("ordinary live gate has one runtime owner, no local selection and serial gu
   expect(selectChecks("quality", checks)).not.toContain(live);
   expect(selectChecks("local-runtime", checks)).not.toContain(live);
   expect(readFileSync(resolve("scripts/spidermonkey-ordinary-fixtures.ts"), "utf8")).toContain("scripts/spidermonkey-engine-semantics.sh");
-  expect(ordinaryFixtures).toHaveLength(16);
-  expect(ordinaryFixtureTimeout).toBeGreaterThanOrEqual(16 * 65_000);
+  expect(ordinaryFixtures).toHaveLength(17);
+  expect(ordinaryFixtureTimeout).toBeGreaterThanOrEqual(17 * 65_000);
 });
 
 test("ordinary invocation passes explicit inputs once and forces the interpreter", () => {

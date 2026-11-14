@@ -789,6 +789,55 @@ Angular stops in Ajv's getter recursion. The budget stays 192 KiB. The existing
 `BUN_WASM_JSC_PARSER_RESERVE=832` override remains available for experiments on the measured host;
 other hosts are not qualified by these results.
 
+## SpiderMonkey parser nesting
+
+SpiderMonkey's WASI build cannot see the host's call stack, so it counts recursion: every
+`AutoCheckRecursionLimit` holds one unit of a per-context counter. Runtime reentry and the
+parser and bytecode emitter shared one 350-unit limit. A nested `if` block costs three units,
+so a generated validator compiled only about 110 properties deep
+(`tests/fixtures/stack-statement-nesting` needs 200, and 300 levels of labelled loops, which
+cost four units each).
+
+The parser and emitter spend much less host stack per unit than runtime reentry. Under
+`BUNWASM_EMBED`, a compile attached to a context now checks the counter against its own bound
+of 1300 units ([patch record](bun-patches/spidermonkey-g2.md)). Two refinements keep every
+shape inside the measured stacks:
+
+- Nested functions cost about three times more host stack per unit than other levels, so each
+  holds two extra units. Arrow chains count three units per level, function declarations four.
+- A runtime unit costs up to four frontend units of host stack on PBL. Each unit held when the
+  compile began beyond the first 32 lowers the bound by three, never below the runtime's 350.
+  Without this, about 100 levels of `toString` reentry followed by a deep compile overflowed
+  Chromium's stack on PBL.
+
+The runtime limit and the 8 MiB byte quota are unchanged. Measured November 14, 2026 with the
+standalone smoke under Wasmtime and in fresh dedicated workers (cold code, compiled from bytes)
+of headless Chromium 156, Firefox 157 and WebKit 27.2 on Linux. "Capacity" is the deepest
+nesting before the browser's own stack overflows, in counter units:
+
+| Shape | Units per level | Chromium capacity | Accepted now (levels) |
+| --- | ---: | ---: | ---: |
+| `{` blocks | 2 | 2,384 | 646 |
+| validator property (`if (ok) {`) | 3 | 2,142 | 427 |
+| `l: while (true) {` | 4 | 2,372 | 322 |
+| labels, `a ? b :` chains | 1 | 1,781, 1,658 | 1,292, 1,287 |
+| nested calls `f(` | 4 | 1,816 | 322 |
+| arrays, objects, parentheses, templates | 5 | 1,900 to 2,220 | 257 to 258 |
+| arrow chains | 3 | 1,890 | 429 |
+| function declarations | 4 | 2,088 | 323 |
+| immediately called functions, class methods | about 14 | 1,960, 2,282 | 92 |
+
+Chromium is the smallest host measured: Firefox and WebKit hold about twice as much. The
+tightest shape, `?:` chains, leaves 27 percent headroom at 1300. In all three browsers, every
+shape one level past its accepted depth ends in a caught `RangeError`, and the next evaluation
+succeeds. Under Wasmtime, host stack per level ranges from 400 bytes (blocks) to 1.7 KiB
+(template literals). In the ordinary guest, `eval` now has 1,289 units left and
+`new Function` 1,276 to 1,283, against 326 to 339 before.
+
+Not covered: iPhone Safari and Android Chrome were not measured. PBL getter recursion
+overflows the host stack in all three browsers at any setting, because PBL does not hold a
+counter unit per inline frame. That predates this bound.
+
 ## Historical nested require measurements
 
 This common-loader snapshot predates the native-call dispatcher split, parser
