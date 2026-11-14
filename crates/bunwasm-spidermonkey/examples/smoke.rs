@@ -47,6 +47,11 @@ pub fn main() {
         });
     }
     println!("ok init tier={}", if pbl { "pbl" } else { "interp" });
+    if let Ok(source) = std::env::var("BUNSM_NEST_PROBE") {
+        println!("probe {}", number(&source));
+        unsafe { sys::bsm_shutdown() };
+        return;
+    }
     if std::env::args().any(|s| s == "--oom") {
         unsafe { sys::bsm_force_oom() };
         panic!("OOM returned");
@@ -109,6 +114,38 @@ pub fn main() {
         );
         println!("ok uncatchable interrupt {label}; catch=0 finally=0");
     }
+    // Getters, setters, bound functions and calls with missing arguments re-enter the portable
+    // baseline interpreter in C. Each level holds a recursion unit, so the 350-unit WASI limit
+    // ends them with a catchable RangeError before a browser's native stack runs out. On the
+    // interpreter tier, missing-argument calls stay in the loop and only the bytecode stack
+    // bounds them.
+    for (label, code) in [
+        (
+            "getter",
+            "var o = { get x() { d++; return this.x; } }; o.x;",
+        ),
+        (
+            "setter",
+            "var o = { set x(v) { d++; this.x = v; } }; o.x = 1;",
+        ),
+        (
+            "bound",
+            "var b; function f() { d++; return b(); } b = f.bind(null); b();",
+        ),
+        (
+            "missing argument",
+            "function f(a, b) { d++; return f(1) + 1; } f(1);",
+        ),
+    ] {
+        let depth = number(&format!(
+            "var d = 0; try {{ {code} }} catch (e) {{ if (!(e instanceof RangeError)) throw e; }} d"
+        ));
+        let counted = pbl || label != "missing argument";
+        assert!(depth > 100.0, "{label} recursion depth {depth}");
+        assert!(!counted || depth < 350.0, "{label} recursion depth {depth}");
+        assert_eq!(number("6 * 7"), 42.0);
+    }
+    println!("ok counted reentrant recursion");
     let polls = unsafe { sys::bsm_poll_count(tier) };
     let entries = unsafe { sys::bsm_pbl_entries() };
     assert!(polls >= 30000);

@@ -269,3 +269,6 @@ pub extern "C" fn quickjs_run(session: u32) -> i32 {
 
 #[cfg(test)]
 mod native_contract_tests;
+
+#[cfg(test)]
+mod json_tests;
