@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/fs-stat-materialization-order.test.ts",
+  "localRuntime": true
+}
