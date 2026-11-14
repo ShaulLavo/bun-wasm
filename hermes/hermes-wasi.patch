@@ -666,7 +666,7 @@ index da64243b8e601e690fbb7abdf646536e6cc7c8d7..20b1836394121fcf90f5decd084f7fcc
        self._A.push(deferred);
        return;
      }
-+    if (trackHandle) {
++    if (self._y === 2 && self._x === 0 && trackHandle) {
 +      trackHandle(self);
 +    }
      handleResolved(self, deferred);
