@@ -25,6 +25,11 @@ the current lookup instead of retaining every parsed document. After platform
 selection, it releases the cached responses before archive installation.
 Selected and skipped packages keep their own metadata for lockfile writing and
 downloads. Registry cache validation still runs before parsing and resolution.
+The original registry selector retains each parsed Bun `Version` while filtering
+and comparing candidates. It uses the same Bun range and ordering operations,
+release preference, and last-entry tie behavior without reparsing matching keys
+in the comparator. It retains no additional packument documents.
+
 Archive extraction remembers up to 1,024 successfully prepared parent directories
 per package. The installer owns its staging tree, and tarball links remain
 unsupported, so another entry cannot replace a remembered parent. Repeated files
