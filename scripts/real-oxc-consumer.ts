@@ -1,19 +1,20 @@
-// Test driver only. Uses the guest installer, the native launcher and the existing Browser host.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { programKind, programProfile, sharedGroupPair, verifyProgramSide } from "../src/engine-kind";
+import { oxcConsumers } from "../tests/real-oxc-consumer/api";
 
 const root = resolve(import.meta.dir, "..");
 export const oxcFixture = join(root, "tests/real-oxc-consumer");
 export const oxcOutputs = {
-  "index.ts": "ExportNamedDeclaration 0\n",
-  "direct.ts": "official Wasm binding loaded function\nshared memory created\n",
+  "index.ts": oxcConsumers.map(({ name }) => `${name} package evaluated\n${name} package API passed\n`).join(""),
+  "direct.ts": oxcConsumers.map(({ name }) => `${name} official Wasm binding evaluated\n${name} official Wasm API passed\n`).join("") + "shared memory created\n",
+  "async.ts": "parser package async API passed\ntransform package async API passed\n",
 };
 export const oxcTreeVariable = "SHARED_WASM_OXC_TREE";
-const frozenFiles = ["package.json", "bun.lock", "index.ts", "direct.ts"];
+export const oxcFixtureFiles = ["package.json", "bun.lock", "api.ts", "index.ts", "direct.ts", "async.ts"];
 
 export function requireOxcEnvironment(env: NodeJS.ProcessEnv): void {
   for (const key of ["NAPI_RS_FORCE_WASI", "SHARED_WASM_CONTROL", "SHARED_WASM_ENTRY", oxcTreeVariable]) {
@@ -22,24 +23,28 @@ export function requireOxcEnvironment(env: NodeJS.ProcessEnv): void {
 }
 
 export function requireOxcTree(tree: string): void {
-  for (const file of frozenFiles) assert.deepEqual(readFileSync(join(tree, file)), readFileSync(join(oxcFixture, file)), `Oxc fixture changed: ${file}`);
-  for (const name of ["oxc-parser", "@oxc-parser/binding-wasm32-wasi"]) {
+  for (const file of oxcFixtureFiles) assert.deepEqual(readFileSync(join(tree, file)), readFileSync(join(oxcFixture, file)), `Oxc fixture changed: ${file}`);
+  for (const name of oxcConsumers.flatMap(consumer => [consumer.package, consumer.binding])) {
     const manifest: unknown = JSON.parse(readFileSync(join(tree, "node_modules", name, "package.json"), "utf8"));
     assert.ok(manifest && typeof manifest === "object" && "name" in manifest && manifest.name === name && "version" in manifest && manifest.version === "0.94.0", `Expected published ${name}@0.94.0`);
   }
-  assert.ok(statSync(join(tree, "node_modules/@oxc-parser/binding-wasm32-wasi/parser.wasm32-wasi.wasm")).isFile());
-  assert.ok(statSync(join(tree, "node_modules/@oxc-parser/binding-wasm32-wasi/parser.wasi.cjs")).isFile());
+  for (const consumer of oxcConsumers) {
+    const binding = join(tree, "node_modules", consumer.binding, consumer.name);
+    assert.ok(statSync(`${binding}.wasm32-wasi.wasm`).isFile());
+    assert.ok(statSync(`${binding}.wasi.cjs`).isFile());
+  }
 }
 
-export function requireOxcInputs(program: string, launcher: string, browser: string): void {
+export function requireOxcInputs(program: string, launcher: string, browser: string) {
   const core = new WebAssembly.Module(readFileSync(program));
   const kind = programKind(core);
-  assert.equal(kind, "quickjs", "The real Oxc check requires the selected QuickJS group core");
-  const side = readFileSync(join(dirname(program), programProfile("quickjs").side));
+  if (kind === "single") throw new Error("The real Oxc check requires a JSC, QuickJS or SpiderMonkey group core");
+  const side = readFileSync(join(dirname(program), programProfile(kind).side));
   assert.equal(sharedGroupPair(core, side), true, "The selected core and side must be a shared-group pair");
-  verifyProgramSide("quickjs", new WebAssembly.Module(side));
+  verifyProgramSide(kind, new WebAssembly.Module(side));
   assert.ok(statSync(launcher).isFile(), "Missing matching native launcher");
   assert.equal(programKind(new WebAssembly.Module(readFileSync(browser))), "single", "Expected the Browser-engine control guest");
+  return kind;
 }
 
 type Row = { name: string; status: number | null; signal: NodeJS.Signals | null; timedOut: boolean; elapsedMs: number; stdout: string; stderr: string };
@@ -73,7 +78,9 @@ export async function command(rows: Row[], name: string, executable: string, arg
 
 async function runOxcConsumer(program: string, launcher: string, browser: string, output: string): Promise<void> {
   requireOxcEnvironment(process.env);
-  requireOxcInputs(program, launcher, browser);
+  const kind = requireOxcInputs(program, launcher, browser);
+  const tier = process.env.BUN_WASM_SPIDERMONKEY_TIER;
+  if (kind === "spidermonkey") assert.ok(tier === "interp" || tier === "pbl", "Select an explicit SpiderMonkey tier: interp or pbl");
   const rows: Row[] = [];
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -84,21 +91,33 @@ async function runOxcConsumer(program: string, launcher: string, browser: string
     scratch = mkdtempSync(join(tmpdir(), "bun-wasm-real-oxc-"));
     console.log(JSON.stringify({ resources: { scratch, downloads: "frozen guest dependencies only", program, launcher, browser } }));
     cpSync(oxcFixture, scratch, { recursive: true });
-    const args = ["--wasm", program, "--dir", `${scratch}::/`, "--env", "PWD=/", "--env", "HOME=/", "--"];
-    await command(rows, "quickjs-group-install", launcher, args.concat(["install", "--frozen-lockfile"]), process.env, controller.signal);
+    const args = ["--wasm", program, "--dir", `${scratch}::/`, "--env", "PWD=/", "--env", "HOME=/"].concat(kind === "spidermonkey" ? ["--env", `BUN_WASM_SPIDERMONKEY_TIER=${tier}`] : [], ["--"]);
+    await command(rows, `${kind}-group-install`, launcher, args.concat(["install", "--frozen-lockfile"]), process.env, controller.signal);
     requireOxcTree(scratch);
-    for (const [entry, expected] of Object.entries(oxcOutputs)) {
-      assert.equal((await command(rows, `quickjs-group-${entry}`, launcher, args.concat(["run", `/${entry}`]), process.env, controller.signal)).stdout, expected);
-      const controlArgs: string[] = ["--disable-warning=ExperimentalWarning", "web/scripts/node-host.mjs", "--wasm", browser, "--dir", `${scratch}::/`, "--env", "PWD=/", "--", "run", `/${entry}`];
-      assert.equal((await command(rows, `browser-engine-${entry}`, "node", controlArgs, process.env, controller.signal)).stdout, expected);
-    }
-    // The same installed bytes enter the production Browser-host executor, not a new executor.
+    const failures: unknown[] = [];
+    await runEntries({ rows, failures, kind, launcher, args, browser, scratch, signal: controller.signal });
     const env = { ...process.env, BUN_WASM_PROFILE_PROGRAM: program, [oxcTreeVariable]: scratch };
-    await command(rows, "browser-host-quickjs-group", process.execPath, ["web/tests/shared-wasm-memory-browser.ts", "chromium"], env, controller.signal, 300_000);
+    await observe(failures, () => command(rows, `browser-host-${kind}-group`, process.execPath, ["web/tests/shared-wasm-memory-browser.ts", "chromium"], env, controller.signal, 300_000));
     requireOxcTree(scratch);
+    if (failures.length) throw new AggregateError(failures, "Real Oxc consumer checks failed");
   } finally {
     saveAndClean(output, rows, scratch, signals, stop);
   }
+}
+
+async function runEntries({ rows, failures, kind, launcher, args, browser, scratch, signal }: {
+  rows: Row[]; failures: unknown[]; kind: string; launcher: string; args: string[]; browser: string; scratch: string; signal: AbortSignal;
+}): Promise<void> {
+  for (const [entry, expected] of Object.entries(oxcOutputs)) {
+    await observe(failures, async () => assert.equal((await command(rows, `${kind}-group-${entry}`, launcher, args.concat(["run", `/${entry}`]), process.env, signal)).stdout, expected));
+    const controlArgs = ["--disable-warning=ExperimentalWarning", "web/scripts/node-host.mjs", "--wasm", browser, "--dir", `${scratch}::/`, "--env", "PWD=/", "--", "run", `/${entry}`];
+    await observe(failures, async () => assert.equal((await command(rows, `browser-engine-${entry}`, "node", controlArgs, process.env, signal)).stdout, expected));
+  }
+}
+
+export async function observe(failures: unknown[], check: () => Promise<unknown>): Promise<void> {
+  try { await check(); }
+  catch (error) { failures.push(error); }
 }
 
 function saveAndClean(output: string, rows: Row[], scratch: string | undefined, signals: readonly NodeJS.Signals[], stop: () => void): void {
