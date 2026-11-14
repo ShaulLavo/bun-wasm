@@ -2114,6 +2114,10 @@ jobs:
           test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"
           chmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
       - name: Consume the discovered shared native checks sequentially
+        env:
+          TMPDIR: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           source env.sh
           export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
@@ -2165,6 +2169,10 @@ jobs:
           bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
           (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
       - name: Consume the discovered shared Browser checks sequentially
+        env:
+          TMPDIR: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: |
           source env.sh
           bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group

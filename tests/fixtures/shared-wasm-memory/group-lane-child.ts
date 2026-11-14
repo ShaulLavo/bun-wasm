@@ -1,8 +1,14 @@
-import { writeFileSync } from 'node:fs';
+import { renameSync, writeFileSync } from 'node:fs';
 import { parentPort, receiveMessageOnPort, workerData, type MessagePort } from 'node:worker_threads';
 
 type Data = { mode: string; port: MessagePort; gate: SharedArrayBuffer; check: string; count: number; size: number; seed: number; side: number; directory: string };
 const data: Data = workerData;
+
+function publishMarker(path: string, value: string) {
+  const temporary = `${path}.tmp`;
+  writeFileSync(temporary, value);
+  renameSync(temporary, path);
+}
 
 function check(condition: boolean, label: string) {
   if (!condition) throw new Error(label);
@@ -121,11 +127,11 @@ function pingPong() {
       received++;
     }
     data.port.postMessage({ task: text(data.size, step) });
-    if (step === 10) writeFileSync(`${data.directory}/started`, 'started');
+    if (step === 10) publishMarker(`${data.directory}/started`, 'started');
     Atomics.store(turn, 0, step + 1);
     Atomics.notify(turn, 0);
   }
-  writeFileSync(`${data.directory}/done-${data.side}`, String(received));
+  publishMarker(`${data.directory}/done-${data.side}`, String(received));
 }
 
 switch (data.mode) {

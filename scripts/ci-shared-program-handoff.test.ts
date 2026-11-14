@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { programProfile } from "../src/engine-kind.ts";
 import { discoverChecks } from "./test-checks.ts";
 
@@ -158,6 +160,24 @@ test("native and Browser consumers use ready artifacts on separate runners and d
   expect(shared.name).toBe("Shared PIC program producer");
   expect(sharedSteps.some(step => String(step.run).includes("test-checks.ts"))).toBe(false);
   expect(namedStep("Produce the shared JSC profile once").env).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });
+});
+
+test("consumer scratch remains on the runner after sourcing workstation defaults", () => {
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-consumer-env-"));
+  const probe = 'source env.sh\n"$BUN_BIN" -e \'const {tmpdir}=require("node:os");const {mkdtempSync,rmSync}=require("node:fs");const {join}=require("node:path");if(tmpdir()!==process.env.RUNNER_TEMP)throw Error("Wrong consumer scratch");const path=mkdtempSync(join(tmpdir(),"probe-"));rmSync(path,{recursive:true});\'';
+  const execute = (env: NodeJS.ProcessEnv) => spawnSync("bash", ["-euo", "pipefail", "-c", probe], { cwd: resolve(import.meta.dir, ".."), env, encoding: "utf8" });
+  try {
+    const legacy: NodeJS.ProcessEnv = { ...process.env, RUNNER_TEMP: root, BUN_BIN: process.execPath };
+    for (const name of ["TMPDIR", "TMP", "TEMP"]) delete legacy[name];
+    expect(execute(legacy).status).not.toBe(0);
+    for (const id of ["shared-native", "shared-browser"]) {
+      const consumer = steps(record(jobs[id])).find(step => String(step.name).startsWith("Consume the discovered shared "))!;
+      expect(consumer.env).toEqual({ TMPDIR: "${{ runner.temp }}", TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}" });
+      const env = { ...legacy, ...Object.fromEntries(Object.keys(record(consumer.env)).map(name => [name, root])) };
+      const result = execute(env);
+      expect(result.status, result.stderr).toBe(0);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("the matching native launcher stays in its original source-verified artifact", () => {
