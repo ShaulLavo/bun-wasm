@@ -19,18 +19,25 @@ in `BUN_WASM_BROWSER_SITE`; each check verifies the site's closed inventory, gue
 receipt against the checkout before and after the browsers run, and never bundles it again.
 A local run without that variable builds a site in scratch from `dist/bun-browser.wasm`.
 Split native manifests default to QuickJS and may declare an `engines` array
-containing a nonempty, unique subset of `quickjs`, `jsc` and `browser`.
+containing a nonempty, unique subset of `quickjs`, `jsc`, `browser` and `spidermonkey`.
 The native runner runs the runtime preflight once, then executes each
 declared engine's fixtures without rebuilding guests or increasing fixture-group
 concurrency. CI consumes only the producers selected by its explicit
-`INSTALL_ENGINES` subset; missing artifacts for selected engines fail. Without
+`BUN_WASM_CHECK_ENGINES` subset; missing artifacts for selected engines fail. Without
 that subset, local runs consume every declared engine. JSC selections require
 its normal producer, including when the
 manifest or fixture is removed. Shared-group manifests continue to infer their
 engine from their matching producer and cannot declare `engines`.
 
-Native paths name a directory under
-`tests/fixtures/`. Native manifests may select `"profile": "shared-group"`; omission
+Native paths name a directory under `tests/fixtures/`. The existing native gate
+compares stdout, stderr and the expected exit through `test.sh`. SpiderMonkey
+requires an absolute `SPIDERMONKEY_WASM` and runs the interpreter tier. CI includes
+that producer in `BUN_WASM_CHECK_ENGINES`. The separate installer matrix and the
+installer checks inside runtime preflight use `INSTALL_ENGINES`, retaining their
+three supported engines.
+Changed targeted fixtures and manifests select JSC from the verified base, head
+and merge ancestor, including removals. Missing selected inputs fail the gate.
+Native manifests may select `"profile": "shared-group"`; omission
 keeps the ordinary split producer and selection. The shared PIC job consumes the
 Rust job's launcher and one matching group core/QuickJS pair through
 `bun scripts/test-checks.ts native --profile shared-group`. A `browser-guest` manifest may
@@ -87,7 +94,7 @@ A selected missing artifact fails the check. No file-existence filter changes se
 
 Package tests and Web's own test directory keep their existing narrow globs.
 Do not also register those files. Browser matrix jobs, deadlines, environment,
-engine selection, cache inputs, conditional gates and shared artifact producers
+producer selection, cache inputs, conditional gates and shared artifact producers
 stay in their existing scripts and workflow steps. The CMake probe remains after
 its prerequisite step. No discovered native fixture can request a rebuild.
 

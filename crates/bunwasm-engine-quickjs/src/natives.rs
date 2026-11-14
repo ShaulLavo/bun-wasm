@@ -3,18 +3,7 @@ use std::rc::Rc;
 use crate::client::CoreClient;
 use crate::data::{Val, WORD_ARGS, drop_tree};
 use crate::driver::Core;
-use crate::engine::{Engine, ValueFn};
-
-/// Adapt a data native: convert the arguments to [`Val`] and back.
-fn data_fn<E: Engine>(client: CoreClient, native_id: u32) -> ValueFn<E> {
-    Rc::new(move |e: &E, args: &[E::Value]| {
-        let values = args.iter().map(|value| e.to_val(value)).collect();
-        client
-            .native(native_id, values)
-            .map(|value| e.value_from(value))
-            .map_err(|error| e.error_value(&error))
-    })
-}
+use crate::engine::{Engine, ValueFn, data_fn};
 
 /// A number or boolean as a word. Word natives take nothing else, so any other value is zero.
 fn word(value: Val) -> u32 {
@@ -49,7 +38,12 @@ pub(crate) fn bootstrap<E: Engine>(e: &E, core: &Rc<Core<E>>) -> Result<E::Value
         .functions
         .into_iter()
         .enumerate()
-        .map(|(index, name)| (name, data_fn::<E>(core.client, id(index))));
+        .map(|(index, name)| {
+            let client = core.client;
+            let native_id = id(index);
+            let function = data_fn::<E>(move |values| client.native(native_id, values));
+            (name, function)
+        });
     let words = table
         .words
         .into_iter()

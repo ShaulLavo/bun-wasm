@@ -902,6 +902,7 @@ impl Engine for Jsc {
             .set("heapUsed", memory_counter(snapshot.heap_used))
             .set("external", memory_counter(snapshot.extra_memory))
             .set("arrayBuffers", memory_counter(snapshot.array_buffer_bytes))
+            .set("wasmCapacity", crate::engine::wasm_capacity())
             .into()
     }
 }

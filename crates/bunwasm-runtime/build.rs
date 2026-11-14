@@ -119,6 +119,7 @@ fn build_zlib_ng() {
 
 fn main() {
     program_profile::configure();
+    println!("cargo:rustc-check-cfg=cfg(bun_wasm_transfer_fault)");
     build_brotli();
     build_zlib_ng();
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();

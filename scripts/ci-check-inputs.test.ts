@@ -73,6 +73,21 @@ test.each(compiledChecks)("declared $owner check $path retains its blocking Rust
 });
 
 for (const event of ["pull_request", "push"]) {
+  test(`${event} retains JSC selection for declared native engines and removed targets`, () => {
+    const repo = repository();
+    const base = repo.commit();
+    const manifest = "checks/native-matrix.json";
+    const input = "tests/fixtures/new-matrix/index.ts";
+    repo.write(manifest, JSON.stringify({ owner: "native", path: "tests/fixtures/new-matrix", engines: ["quickjs", "jsc", "spidermonkey"] }));
+    repo.write(input, "before\n");
+    const registered = repo.commit();
+    expect(repo.select(base, registered, event).output).toBe("rust=true\njsc=true\nshared=false");
+    repo.write(input, "changed\n");
+    const changed = repo.commit();
+    expect(repo.select(registered, changed, event).output).toBe("rust=true\njsc=true\nshared=false");
+    repo.write(manifest, JSON.stringify({ owner: "native", path: "tests/fixtures/new-matrix" }));
+    expect(repo.select(changed, repo.commit(), event).output).toBe("rust=true\njsc=true\nshared=false");
+  });
   for (const owner of ["native", "runtime", "browser-guest"] as const) {
     const input = owner === "native" ? "tests/fixtures/new-owned-case/index.ts" : "scripts/new-owned-case.test.ts";
     const checkPath = owner === "native" ? "tests/fixtures/new-owned-case" : input;

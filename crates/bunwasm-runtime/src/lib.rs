@@ -21,6 +21,9 @@ mod crypto;
 pub(crate) mod data;
 mod directory;
 mod encoding;
+#[cfg(all(test, feature = "engine-split"))]
+#[allow(dead_code, unused_imports)]
+mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;
 mod glob;
@@ -37,6 +40,10 @@ mod node_path;
 #[cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 pub(crate) mod ops;
 mod parse_env;
+#[cfg(all(test, feature = "engine-split"))]
+#[allow(dead_code)]
+#[path = "../../bunwasm-engine-quickjs/src/vm.rs"]
+mod quickjs_embedding;
 mod resolve;
 mod semver;
 mod sourcemap;
