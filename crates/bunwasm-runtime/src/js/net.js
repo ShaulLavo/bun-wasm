@@ -15,7 +15,7 @@
 
   // --- I/O core -------------------------------------------------------------
 
-  // Waiters: { step(): boolean (true = done), ref: boolean, fail(err) }.
+  // Waiters: { step(): boolean (true = done), ref: boolean, fail(err), permanent?: boolean }.
   const waiters = new Set();
 
   function addWaiter(waiter) {
@@ -71,7 +71,10 @@
       try {
         result = waiter.step();
       } catch (err) {
-        waiters.delete(waiter);
+        // A permanent waiter stays registered whatever its step throws. Taking it out for its
+        // `fail` to put back would need a new set entry after the failure, and an engine that
+        // cannot allocate one would lose the waiter for good.
+        if (!waiter.permanent) waiters.delete(waiter);
         if (waiter.fail) waiter.fail(err);
         else throw err;
         progressed = true;

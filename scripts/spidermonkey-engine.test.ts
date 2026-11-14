@@ -13,6 +13,23 @@ const hash = (value: string | Uint8Array) => createHash("sha256").update(value).
 const put = (path: string, value: string | Uint8Array) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, value); };
 const json = (path: string, value: unknown) => put(path, JSON.stringify(value, null, 2) + "\n");
 
+test.each([
+  { name: "SPIDERMONKEY_TRANSFER_FAULT", value: "1" },
+  { name: "SPIDERMONKEY_TRANSFER_FAULT", value: "" },
+  { name: "SPIDERMONKEY_TRANSFER_FAULT", value: "true" },
+  { name: "BUN_WASM_TRANSFER_FAULT", value: "0" },
+  { name: "BUN_WASM_TRANSFER_FAULT", value: "1" },
+  { name: "BUN_WASM_TRANSFER_FAULT", value: "" },
+])("ordinary SM capture rejects validation $name=$value before native reads", ({ name, value }) => {
+  const previous = process.env[name];
+  process.env[name] = value;
+  try { expect(() => captureInputs("/unused", "/unused")).toThrow("SPIDERMONKEY_TRANSFER_FAULT=0 and no BUN_WASM_TRANSFER_FAULT"); }
+  finally {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+});
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-sm-side-core-"));
   const source = join(root, "source");
