@@ -3,10 +3,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, checkBatches, namedCheckBatches, selectCheckBatch, checkArguments, parseCheck } from "./test-checks";
+import { automaticChecks, checkCommand, discoverChecks, selectChecks, runCheck, checkBatches, namedCheckBatches, selectCheckBatch, checkArguments, parseCheck, nativeEngineGroups } from "./test-checks";
 import { migrationBase } from "./migrations/split-bun-patches";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
-import { needsRust } from "./ci-changes";
+import { needsJsc, needsRust } from "./ci-changes";
 
 const root = resolve(import.meta.dir, "..");
 const scratch: string[] = [];
@@ -40,6 +40,45 @@ test("CI's native command runs the busy-loop stdout handshake fixture", () => {
   const command = checkCommand("native");
   expect(command.slice(0, 3)).toEqual(["bash", join(root, "scripts/test.sh"), "--no-build"]);
   expect(command).toContain("stdout-busy-loop");
+});
+
+test("WASI memory views declare blocking commands for all three supported engines", () => {
+  const path = "tests/fixtures/wasi-memory-views";
+  const check = discoverChecks().find(check => check.path === path);
+  expect(check && "engines" in check ? check.engines : undefined).toEqual(["quickjs", "jsc", "browser"]);
+  expect(needsJsc([`${path}/index.ts`])).toBe(true);
+});
+
+test("native commands select the declared engine explicitly", () => {
+  const path = "tests/fixtures/wasi-memory-views";
+  for (const engine of ["quickjs", "jsc", "browser"]) {
+    expect(Reflect.apply(checkCommand, undefined, ["native", [path], "split", engine])).toEqual([
+      "bash", join(root, "scripts/test.sh"), "--no-build", "--engine", engine, "wasi-memory-views",
+    ]);
+  }
+});
+
+test.each([[], ["jsc", "jsc"], ["unknown"], [17], "browser", null].map(engines => ({ engines })))("native engines reject invalid selection $engines", ({ engines }) => {
+  expect(() => parseCheck({ owner: "native", path: "tests/fixtures/example", engines }, "native-example.json")).toThrow();
+});
+
+test("native execution discovers each WASI engine command once without changing other fixture ownership", () => {
+  const path = "tests/fixtures/wasi-memory-views";
+  const groups = nativeEngineGroups([path], 2);
+  expect(groups.map(group => group.engine)).toEqual(["quickjs", "jsc", "browser"]);
+  for (const group of groups) expect(group.commands).toEqual([
+    ["bash", join(root, "scripts/test.sh"), "--no-build", "--engine", group.engine, "wasi-memory-views"],
+  ]);
+  const legacy = parseCheck({ owner: "native", path: "tests/fixtures/legacy-case" }, "native-legacy-case.json");
+  const multi = parseCheck({ owner: "native", path, engines: ["quickjs", "jsc", "browser"] }, "native-wasi-memory-views.json");
+  const mixed = nativeEngineGroups([path, legacy.path], 2, [multi, legacy]);
+  expect(mixed[0]?.commands).toHaveLength(2);
+  for (const group of mixed) expect(group.commands.flat().filter(argument => argument === "legacy-case")).toHaveLength(group.engine === "quickjs" ? 1 : 0);
+});
+
+test("engine selection belongs only to split native fixtures", () => {
+  expect(() => parseCheck({ owner: "web", path: "scripts/example.test.ts", engines: ["browser"] }, "web-example.json")).toThrow();
+  expect(() => parseCheck({ owner: "native", path: "tests/fixtures/example", profile: "shared-group", engines: ["jsc"] }, "native-example.json")).toThrow();
 });
 
 test("import-specifier collection runs through the shared QuickJS and JSC native gates", () => {

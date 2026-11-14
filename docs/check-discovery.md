@@ -18,6 +18,14 @@ site once from its receipt-verified guest and uploads it with its identities
 in `BUN_WASM_BROWSER_SITE`; each check verifies the site's closed inventory, guest and
 receipt against the checkout before and after the browsers run, and never bundles it again.
 A local run without that variable builds a site in scratch from `dist/bun-browser.wasm`.
+Split native manifests default to QuickJS and may declare an `engines` array
+containing a nonempty, unique subset of `quickjs`, `jsc` and `browser`.
+The native runner runs the shared runtime preflight once, then executes each
+declared engine's fixtures without rebuilding guests or increasing fixture-group
+concurrency. JSC selections require its normal producer, including when the
+manifest or fixture is removed. Shared-group manifests continue to infer their
+engine from their matching producer and cannot declare `engines`.
+
 Native paths name a directory under
 `tests/fixtures/`. Native manifests may select `"profile": "shared-group"`; omission
 keeps the ordinary split producer and selection. The shared PIC job consumes the

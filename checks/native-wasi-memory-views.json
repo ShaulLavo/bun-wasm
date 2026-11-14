@@ -1,4 +1,5 @@
 {
   "owner": "native",
-  "path": "tests/fixtures/wasi-memory-views"
+  "path": "tests/fixtures/wasi-memory-views",
+  "engines": ["quickjs", "jsc", "browser"]
 }
