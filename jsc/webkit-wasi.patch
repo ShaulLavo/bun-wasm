@@ -3403,23 +3403,23 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +    static_assert(sizeof(Frame) == 24);
 +    static constexpr unsigned maximumFastNesting = 4096;
 +    static constexpr unsigned maximumFastRoots = 8192;
-+    template<bool testing> bool reserveContainerSlot();
++    template<bool testing> ALWAYS_INLINE bool reserveContainerSlot();
 +    bool growFrames();
-+    bool checkObject(JSObject&);
++    ALWAYS_INLINE bool checkObject(JSObject&);
 +    bool checkObjectPrototype(JSObject&);
-+    bool checkArray(JSArray&);
-+    template<HasGap hasGap, bool testing> void openContainer(JSCell&);
-+    template<HasGap hasGap, bool testing> void openObject(JSObject&, Structure&);
-+    template<HasGap hasGap, bool testing> void openArray(JSArray&);
++    ALWAYS_INLINE bool checkArray(JSArray&);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openContainer(JSCell&);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openObject(JSObject&, Structure&);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openArray(JSArray&);
 +    template<HasGap hasGap, bool testing> ALWAYS_INLINE bool appendProperty(unsigned, const PropertyTableEntry&);
 +    template<HasGap hasGap> ALWAYS_INLINE bool appendPropertyName(std::span<const Latin1Character>);
 +    ALWAYS_INLINE bool appendPropertyString(JSValue);
 +    ALWAYS_INLINE bool appendLatin1PropertyString(JSValue);
-+    template<HasGap hasGap, bool testing> bool advanceObject(unsigned);
-+    template<HasGap hasGap, bool testing> bool advanceArray(unsigned);
-+    template<HasGap hasGap> void closeContainer(typename Frame::Kind);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE bool advanceObject(unsigned);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE bool advanceArray(unsigned);
++    template<HasGap hasGap> ALWAYS_INLINE void closeContainer(typename Frame::Kind);
 +    template<HasGap hasGap, bool testing> void drainContainers();
-+    void popFrame();
++    ALWAYS_INLINE void popFrame();
 +    void startTestRecord();
 +    void finishTestRecord();
 +    void didCollect();
@@ -3575,7 +3575,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +
 +template<typename CharType, BufferMode bufferMode>
 +template<bool testing>
-+bool FastStringifier<CharType, bufferMode>::reserveContainerSlot()
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::reserveContainerSlot()
 +{
 +    if constexpr (testing)
 +        m_test.frameRelocatedInFailingReserve = false;
@@ -3620,7 +3620,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +}
 +
 +template<typename CharType, BufferMode bufferMode>
-+bool FastStringifier<CharType, bufferMode>::checkObject(JSObject& object)
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::checkObject(JSObject& object)
 +{
 +    if (object.isCallable()) [[unlikely]] {
 +        recordFailure("callable object"_s);
@@ -3658,7 +3658,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +}
 +
 +template<typename CharType, BufferMode bufferMode>
-+bool FastStringifier<CharType, bufferMode>::checkArray(JSArray& array)
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::checkArray(JSArray& array)
 +{
 +    if (!m_checkedArrayPrototype) {
 +        if (mayHaveToJSON(*m_globalObject.arrayPrototype())) [[unlikely]] {
@@ -3689,7 +3689,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +
 +template<typename CharType, BufferMode bufferMode>
 +template<HasGap hasGap, bool testing>
-+void FastStringifier<CharType, bufferMode>::openContainer(JSCell& cell)
++ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::openContainer(JSCell& cell)
 +{
 +    bool array = cell.type() == ArrayType;
 +    auto& object = *asObject(&cell);
@@ -3722,7 +3722,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +
 +template<typename CharType, BufferMode bufferMode>
 +template<HasGap hasGap, bool testing>
-+void FastStringifier<CharType, bufferMode>::openObject(JSObject& object, Structure& structure)
++ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::openObject(JSObject& object, Structure& structure)
 +{
 +    bool materialized;
 +    PropertyTable* table = structure.acquirePropertyTableForJSONFastPath(m_vm, materialized);
@@ -3781,7 +3781,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +
 +template<typename CharType, BufferMode bufferMode>
 +template<HasGap hasGap, bool testing>
-+void FastStringifier<CharType, bufferMode>::openArray(JSArray& array)
++ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::openArray(JSArray& array)
 +{
 +    if constexpr (hasGap == HasGap::Yes)
 +        ++m_depth;
@@ -3815,7 +3815,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +
 +template<typename CharType, BufferMode bufferMode>
 +template<HasGap hasGap>
-+void FastStringifier<CharType, bufferMode>::closeContainer(typename Frame::Kind kind)
++ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::closeContainer(typename Frame::Kind kind)
 +{
 +    if constexpr (hasGap == HasGap::Yes)
 +        --m_depth;
@@ -3831,7 +3831,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +}
 +
 +template<typename CharType, BufferMode bufferMode>
-+void FastStringifier<CharType, bufferMode>::popFrame()
++ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::popFrame()
 +{
 +    unsigned rootCount = m_frames.last().rootCount;
 +    m_frames.removeLast();
@@ -3859,7 +3859,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +
 +template<typename CharType, BufferMode bufferMode>
 +template<HasGap hasGap, bool testing>
-+bool FastStringifier<CharType, bufferMode>::advanceObject(unsigned index)
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::advanceObject(unsigned index)
 +{
 +    if constexpr (testing)
 +        resumedFrameForTest(index);
@@ -3879,7 +3879,7 @@ diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCor
 +
 +template<typename CharType, BufferMode bufferMode>
 +template<HasGap hasGap, bool testing>
-+bool FastStringifier<CharType, bufferMode>::advanceArray(unsigned index)
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::advanceArray(unsigned index)
 +{
 +    unsigned i = m_frames[index].cursor;
 +    if (i == m_frames[index].length)
