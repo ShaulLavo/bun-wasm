@@ -1,4 +1,4 @@
-import { withScoped } from "./scope-fixture";
+import { withScoped, withAdmission } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { chromium, webkit, type BrowserType, type Page } from "playwright";
 import { armIphoneClick } from "./iphone-browser";
@@ -7,7 +7,8 @@ import { execute } from "./execute";
 import { frameworks, type Framework } from "./catalog";
 import { withPlayground } from "./test-fixture";
 import type { Admission } from "./scope";
-import type { Transport } from "./transport";
+import { scoped, type Transport } from "./transport";
+import { render } from "./playground";
 
 // Shaped like the executor's terminal read: an owner-page promise that settles on a later task.
 const diagnostic = 'new Promise(resolve => setTimeout(() => resolve(document.querySelector("#editor").id), 0))';
@@ -16,7 +17,7 @@ const armedType = (page: Page): Promise<string> => page.frameLocator("iframe").l
 const frameActive = (page: Page) => page.waitForFunction(() => document.activeElement?.id === "__goalsIphonePreview", undefined, { timeout: 2000 });
 
 async function diagnosticsWhileHeld(engine: BrowserType, hold: Hold): Promise<void> {
-  await withHeldPreview(engine, hold, 5000, async ({ page, bus, transport, preview, requested, presented, deviceCommands, release }) => {
+  await withHeldPreview(engine, hold, 5000, async ({ page, bus, transport, preview, requested, presented, deviceCommands, release, evidence, observed }) => {
     let outcome = "pending";
     const opening = withScoped(transport, page => page.openPreview(preview)).then(() => { outcome = "presented"; }, (error: unknown) => { outcome = String(error); });
     await requested;
@@ -27,12 +28,17 @@ async function diagnosticsWhileHeld(engine: BrowserType, hold: Hold): Promise<vo
       expect(await withScoped(transport, page => page.evaluate<string>(diagnostic))).toBe("editor");
     }
     expect(outcome).toBe("pending");
+    const stage = hold === "document" ? "document" : "load";
+    await observed(stage);
+    expect(evidence().at(-1)).toMatchObject({ event: "iphone-preview", stage, observation: hold === "document" ? { attached: false } : { loaded: false } });
+    expect(evidence().some(row => row.stage === "open-preview-complete")).toBe(false);
     expect(await page.evaluate(() => document.activeElement?.id)).toBe("editor");
     if (hold === "document") expect(bus.state("preview")).toEqual({ url: preview, nonce: expect.any(String), visible: false });
     else expect(await armedType(page)).toBe("undefined");
     release();
     await opening;
     expect(outcome).toBe("presented");
+    expect(evidence().at(-1)).toMatchObject({ stage: "open-preview-complete", outcome: "returned" });
     await frameActive(page);
     expect(await withScoped(transport, page => page.evaluate(arm))).toMatchObject({ ready: true, before: "Count 0" });
     expect(await withScoped(transport, page => page.evaluate("document.hasFocus()"))).toBe(false);
@@ -61,16 +67,20 @@ async function expiredLoadRefusesInput(engine: BrowserType): Promise<void> {
 }
 
 async function closingCancelsHeldLoad(engine: BrowserType): Promise<void> {
-  await withHeldPreview(engine, "resource", 5000, async ({ page, transport, preview, requested, deviceCommands, release, controllerRequests }) => {
+  await withHeldPreview(engine, "resource", 5000, async ({ page, transport, preview, requested, deviceCommands, release, controllerRequests, evidence, observed }) => {
     const opening = withScoped(transport, page => page.openPreview(preview)).then(() => "presented", (error: unknown) => String(error));
     await requested;
+    await observed("load");
     await transport.close();
     expect(await opening).toContain("iPhone transport closing");
+    expect(evidence().at(-1)).toMatchObject({ stage: "load", outcome: "cancelled", observation: { loaded: false } });
     const settled = controllerRequests();
+    const saved = evidence().length;
     release();
     await frameActive(page);
     await Bun.sleep(250);
     expect(controllerRequests()).toBe(settled);
+    expect(evidence()).toHaveLength(saved);
     await expect(withScoped(transport, page => page.nativeClick!("button", "button", 500))).rejects.toThrow();
     expect(controllerRequests()).toBe(settled);
     expect(await armedType(page)).toBe("undefined");
@@ -87,6 +97,41 @@ for (const engine of [chromium, webkit]) {
   for (const scenario of ["held-timeout", "focus-cancel"] as const) {
     test(`executor ${scenario} preserves current owner diagnostics in ${engine.name()}`, () => executionFailure(engine, scenario), 15000);
   }
+  for (const command of ["presentIphonePreview", "iphonePreviewLoad", "rendered"] as const) {
+    test(`undelivered ${command} retains its exact stage in ${engine.name()}`, () => undeliveredCommand(engine, command), 30000);
+  }
+}
+
+async function undeliveredCommand(engine: BrowserType, command: "presentIphonePreview" | "iphonePreviewLoad" | "rendered"): Promise<void> {
+  await withHeldPreview(engine, "document", 30000, async ({ bus, transport, preview, release, evidence, deviceCommands }) => {
+    let blocked: "host" | "preview" | undefined;
+    const poll = bus.poll.bind(bus);
+    bus.poll = (role, value, origin) => role === blocked ? null : poll(role, value, origin);
+    const original = bus.execute.bind(bus);
+    const stop = new AbortController();
+    bus.execute = (role, source, timeoutMs, observation, deliverByMs) => {
+      const pending = original(role, source, timeoutMs, observation, deliverByMs);
+      if (!source.startsWith(`(function ${command}(`)) return pending;
+      blocked = role;
+      // Cancel the outer phase only after the real bus has registered the undelivered command.
+      stop.abort(new Error("Fixture cancelled undelivered command"));
+      return pending;
+    };
+    release();
+    const framework = frameworks.find(row => row.id === "next");
+    if (!framework) throw new Error("Missing Next fixture");
+    const action = withAdmission(async admission => {
+      const page = scoped(transport, { ...admission, signal: stop.signal });
+      await page.openPreview(preview);
+      if (command === "rendered") await render(page, framework, framework.text, 30000);
+    });
+    await expect(action).rejects.toThrow("Fixture cancelled undelivered command");
+    const stage = command === "presentIphonePreview" ? "presentation" : "load";
+    if (command !== "rendered") expect(evidence().at(-1)).toMatchObject({ stage });
+    else expect(evidence().at(-1)).toMatchObject({ event: "iphone-rendered", first: { dispatched: true, delivered: "unknown", settled: false } });
+    await transport.close();
+    expect(deviceCommands()).toEqual([]);
+  });
 }
 
 async function executionFailure(engine: BrowserType, scenario: "held-timeout" | "focus-cancel"): Promise<void> {
@@ -133,4 +178,7 @@ async function runFailureFixture(framework: Framework, fixture: Transport, held:
   expect(result).toMatchObject({ status: "fail", phase: "render" });
   expect(logs.join("\n")).toContain("Error: current dev diagnostic");
   expect(deviceCommands()).toEqual([]);
+  expect(held.evidence().filter(row => row.event === "iphone-preview").at(-1)).toMatchObject({
+    stage: scenario === "held-timeout" ? "document" : "focus", outcome: "cancelled",
+  });
 }
