@@ -1,0 +1,1 @@
+JSC currently completes the lowered import before the require; Unit 1 only owns the require result's rejection. Scheduler parity remains a follow-up.

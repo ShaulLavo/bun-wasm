@@ -9,6 +9,7 @@
 #   args                        optional extra program arguments, one per line
 #   cmd                         optional: bun arguments replacing `run /index.*`, one per line
 #   stdin                       optional file piped to stdin
+#   jsc-current-behavior         optional reason for a non-parity JSC assertion; requires expected-jsc.txt
 #   expected_stderr.txt         optional expected stderr (e.g. `bun test` reports)
 #   host                        optional marker: start the local networking test server;
 #                               all native-engine fixtures use crates/bunwasm-host.
@@ -405,7 +406,14 @@ for name in "${names[@]}"; do
   normalize <"$scratch/out" >"$scratch/out.n"
   normalize <"$scratch/err" >"$scratch/err.n"
   ok=1
-  diff -u "$src/expected.txt" "$scratch/out.n" >"$scratch/diff" || ok=0
+  expected="$src/expected.txt"
+  current_reason=""
+  if [[ "$engine" == jsc && -f "$src/jsc-current-behavior" ]]; then
+    [[ -f "$src/expected-jsc.txt" ]] || { echo "missing $src/expected-jsc.txt"; exit 1; }
+    expected="$src/expected-jsc.txt"
+    IFS= read -r current_reason < "$src/jsc-current-behavior"
+  fi
+  diff -u "$expected" "$scratch/out.n" >"$scratch/diff" || ok=0
   if [[ -f "$src/expected_stderr.txt" ]]; then
     diff -u "$src/expected_stderr.txt" "$scratch/err.n" >>"$scratch/diff" || ok=0
   elif [[ $engine == spidermonkey ]]; then
@@ -413,7 +421,11 @@ for name in "${names[@]}"; do
   fi
   if [[ $ok == 1 && "$code" == "$expected_exit" ]]; then
     pass=$((pass + 1))
-    printf 'PASS %s\n' "$name"
+    if [[ -n "$current_reason" ]]; then
+      printf 'PASS %s (jsc current behavior, not Bun parity: %s)\n' "$name" "$current_reason"
+    else
+      printf 'PASS %s\n' "$name"
+    fi
     continue
   fi
   fail=$((fail + 1))
