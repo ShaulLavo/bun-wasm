@@ -4,7 +4,7 @@ The lifecycle adapters live beside the strict interpreter replay tools in
 `scripts/performance/`. They measure the exact Next and Vite React starters.
 Replay result equality remains specific to interpreter tracing.
 
-This campaign requires the current product pin, Waffle 0.0.130. Retain the
+This campaign requires the current product pin, Waffle 0.0.131. Retain the
 prepared host's actual package version and byte inventory.
 
 Next ends at successful process completion with expected build outputs.
