@@ -78,6 +78,38 @@ for (const browser of ["firefox", "webkit"]) {
     expect(storageQuarantine(browser, failure(browser, { pages: target(report, { runtime: { ...page.runtime, filesystem: { status: "failed", error: "CLOSED" } } }) }))).toBeUndefined();
   });
 
+  test(`${browser}: unknown output inside either historical terminal remains blocking`, async () => {
+    const report = failure(browser).report;
+    const [active, page] = report.pages;
+    if (!active || !page || typeof active === "string" || typeof page === "string") throw new Error("Invalid fixture");
+    const command = browser === "firefox" ? 'error: script "dev" exited with code 254' : "$ bun install (Browser (native))";
+    const position = page.terminal.lastIndexOf(command);
+    const extra = "Error: Cannot find module '/home/user/app/node_modules/vite/dist/node/cli.js'\n";
+    const transcripts = [
+      target(report, { terminal: page.terminal.slice(0, position) + extra + page.terminal.slice(position) }),
+      target(report, { terminal: `unexpected guest output\n${page.terminal}` }),
+      [{ ...active, terminal: `${active.terminal}\n${extra}` }, page],
+    ];
+    const env = await evidence();
+    for (const pages of transcripts) {
+      const original = failure(browser, { pages });
+      expect(storageQuarantine(browser, original)).toBeUndefined();
+      await expect(handleStorageFailure(browser, original, env)).rejects.toBe(original);
+      const saved = JSON.parse(await readFile(join(env.BUN_WASM_BROWSER_REPORT_DIR!, `sandbox-storage-${browser}-preservation.json`), "utf8"));
+      expect(saved).toEqual({ browser, quarantine: null, ...original.report });
+    }
+  });
+
+  test(`${browser}: only timing and local stack address differences are normalized`, () => {
+    const report = failure(browser).report;
+    const pages = report.pages.map(page => typeof page === "string" ? page : {
+      ...page,
+      terminal: page.terminal.replace(/\[\d+ms\]/g, "[99999ms]").replace(/ready in \d+ ms/g, "ready in 99999 ms")
+        .replace(/127\.0\.0\.1:\d+/g, "127.0.0.1:45678").replace(/worker-[a-z0-9]+\.js:\d+:\d+/g, "worker-newhash.js:999:888"),
+    });
+    expect(storageQuarantine(browser, failure(browser, { pages }))).toBe(browser === "firefox" ? "firefox-first-vue-closed" : "webkit-vanilla-config-restart");
+  });
+
   test(`${browser}: matching failure retains the complete protocol and labels the quarantine`, async () => {
     const env = await evidence();
     const original = failure(browser);

@@ -26,6 +26,11 @@ job summary for a quarantined failure. No broad continue-on-error, new retry,
 timeout increase, engine change, Waffle pin change, or receipt bypass is allowed.
 The quarantine admits a known failed scenario; it does not claim product success.
 
+Both page terminals must match their complete historical transcripts. Normalize
+only whitespace, install and ready timings, loopback ports, and worker chunk
+hashes and stack coordinates. Any added terminal output, including an error
+before the expected failure footer or in the active Hono terminal, stays blocking.
+
 ## Evidence
 
 Firefox has one known hosted failure. Jobs 132260477153 and 132268805440 have
@@ -44,16 +49,21 @@ Mitigation checks and cleanup evidence belong under
 ## Permanent repair and removal
 
 1. Firefox research owns the first failing filesystem transport operation.
-   Capture the original MessagePort messageerror or workspace-bridge exception,
-   sender and receiver lifecycle, and fork preopen operation. Waffle .128's
-   bridge catch discards the initiating exception and labels it messageerror.
-   CLOSED and the deserialization text establish neither that mechanism nor
-   the root cause. Reproduce on GitHub-hosted Ubuntu with the
+   Capture the original MessagePort messageerror, sender and receiver lifecycle,
+   and fork preopen operation. The ordinary sandbox uses FilesystemService,
+   whose synchronous receive failures report reason=protocol, rather than the
+   WorkspaceBridge path. Native .128 controls for inherited and newly published
+   segments passed 72/72 with no messageerror. SAB announcements remain an
+   unproved candidate. Reproduce on GitHub-hosted Ubuntu with the
    receipt-verified site and unchanged scenario before choosing a runtime fix.
 2. WebKit research owns vanilla restart after config save. Capture the old and
    new process lifecycle, config evaluation, filesystem flush, preview request,
    and first exception before the readiness deadline. Hono's liveness excludes
    a whole-context shutdown but does not explain the stalled vanilla process.
+   A fresh hosted run of the original failed source and producer passed the
+   unchanged scenario after observer qualification. The original edit creates
+   vite.config.ts; simultaneous config self-restart is unproved. Keep this as
+   bounded non-reproduction rather than a demonstrated fence-overlap defect.
 3. Land the smallest demonstrated fix in its owning repository with a regression
    check. A dependency repair follows the normal release and consumer-pin path;
    this mitigation changes no dependency pins.
