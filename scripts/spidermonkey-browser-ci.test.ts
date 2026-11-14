@@ -23,7 +23,7 @@ test("the selected native producer feeds the discovered Browser group consumer o
   const step = browserStep();
   expect(workflow.split("\n  shared-browser:\n")[1]!).toContain("needs.quality.outputs.shared-native == 'true'");
   expect(workflow).toContain("shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm");
-  expect(step).toContain("bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group");
+  expect(step).toContain("bun scripts/run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 660 || 420 }} bun scripts/test-checks.ts browser-guest --profile shared-group");
   expect(step).not.toMatch(/continue-on-error|build-native|build-bun|build-engine|native --profile|BUN_WASM_SPIDERMONKEY_TIER/);
   expect(workflow.match(/name: Consume the discovered shared Browser checks sequentially/g)).toHaveLength(1);
   expect(workflow.indexOf("name: Produce the shared JSC profile once")).toBeLessThan(workflow.indexOf("name: Consume the discovered shared Browser checks sequentially"));

@@ -2,7 +2,7 @@
 // Browser host. No mock: Chromium instantiates the group core and side through Waffle's worker.
 // source env.sh && BUN_WASM_PROFILE_PROGRAM=<group>/bun.wasm bun web/tests/shared-wasm-memory-browser.ts chromium
 import { strict as assert } from "node:assert";
-import { verifySpiderMonkeyStackWitness } from "../../scripts/spidermonkey-native-qualification";
+import { sharedBrowserClocks, verifySpiderMonkeyStackWitness } from "../../scripts/spidermonkey-native-qualification";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Browser, BrowserType, Page } from "playwright";
@@ -38,7 +38,9 @@ const cleanup = () => cleaning ??= (async () => {
   }
 })();
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
-const deadline = setTimeout(() => { console.error("shared Wasm memory browser deadline"); void cleanup().finally(() => process.exit(1)); }, 300_000);
+const driverStarted = performance.now();
+const expired = () => { console.error("shared Wasm memory browser deadline"); void cleanup().finally(() => process.exit(1)); };
+let deadline = setTimeout(expired, sharedBrowserClocks("quickjs").driverMs);
 
 async function prepareSite(program: string): Promise<string> {
   const coreBytes = await Bun.file(program).bytes();
@@ -72,6 +74,10 @@ async function prepareSite(program: string): Promise<string> {
   if (kind === "spidermonkey" && tier !== "interp" && tier !== "pbl") throw new Error("Select an explicit SpiderMonkey tier: interp or pbl");
   await Bun.write(join(out, "program/env.json"), JSON.stringify(kind === "spidermonkey" ? { BUN_WASM_SPIDERMONKEY_TIER: tier, BUN_WASM_SPIDERMONKEY_TRACE: "1" } : {}));
   selectedSpiderMonkey = kind === "spidermonkey";
+  if (selectedSpiderMonkey) {
+    clearTimeout(deadline);
+    deadline = setTimeout(expired, Math.max(0, sharedBrowserClocks(kind).driverMs - (performance.now() - driverStarted)));
+  }
 
   return out;
 }
@@ -102,12 +108,12 @@ function assertRetired(value: Result): void {
   assert.equal(value.budget, 0, "the page budget is released with the last group");
 }
 
-async function result(page: Page): Promise<Result> {
+async function result(page: Page, entry: string): Promise<Result> {
   // A blocked guest cannot explain itself, so the page reports what it has seen so far.
   const report = () => void page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryProgress")?.()).then(progress => console.log(JSON.stringify({ progress })), () => {});
   const progress = setInterval(report, 20_000);
   try {
-    await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: oxcTree === undefined ? 240_000 : 90_000 });
+    await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: oxcTree === undefined ? sharedBrowserClocks(selectedSpiderMonkey ? "spidermonkey" : "quickjs", entry).pageMs : 90_000 });
     return await page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryResult"));
   } finally { clearInterval(progress); }
 }
@@ -119,7 +125,7 @@ async function runEntry(name: string, port: number, entry: string): Promise<Entr
   const pageErrors: string[] = [];
   page.on("pageerror", error => pageErrors.push(error.message));
   await page.goto(`http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}${oxcTree === undefined ? "" : "&oxc=1"}`);
-  const value = await result(page);
+  const value = await result(page, entry);
   const host = await pageHost(page, name);
   console.log(JSON.stringify({ browser: name, version: browser!.version(), entry, host, ...value, pageErrors }));
   await page.close();

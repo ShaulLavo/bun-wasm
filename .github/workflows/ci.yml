@@ -2168,28 +2168,6 @@ jobs:
         run: |
           bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
           (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
-      - name: Observe complete SpiderMonkey Browser runs without qualification
-        if: ${{ matrix.engine == 'spidermonkey' }}
-        env:
-          TMPDIR: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-          TEMP: ${{ runner.temp }}
-        run: |
-          source env.sh
-          # Temporary completion observation, never a passing qualification result.
-          diagnostic=web/tests/shared-sm-clock-observation.ts
-          trap 'rm -f "$diagnostic"' EXIT
-          bun -e 'import { readFileSync, writeFileSync } from "node:fs"; const path="web/tests/shared-wasm-memory-browser.ts"; let source=readFileSync(path,"utf8"); for (const [from,to] of [["}, 300_000);","}, 600_000);"],["oxcTree === undefined ? 240_000 : 90_000","oxcTree === undefined ? 540_000 : 90_000"]]) { if(source.split(from).length!==2) throw Error("Unexpected observation clock: "+from); source=source.replace(from,to); } writeFileSync("web/tests/shared-sm-clock-observation.ts",source);'
-          for tier in interp pbl; do
-            echo "SM_BROWSER_COMPLETION_OBSERVATION tier=$tier started=$(date -u +%FT%TZ)"
-            if BUN_WASM_SPIDERMONKEY_TIER="$tier" BUN_WASM_SPIDERMONKEY_TRACE=1 BUN_WASM_TRACE=1 bun scripts/run-with-timeout.mts 630 bun "$diagnostic" chromium; then
-              echo "SM_BROWSER_COMPLETION_OBSERVATION tier=$tier completed=$(date -u +%FT%TZ) status=0"
-            else
-              echo "SM_BROWSER_COMPLETION_OBSERVATION tier=$tier failed=$(date -u +%FT%TZ)"
-            fi
-          done
-          echo "Diagnostic completion observation only; production qualification remains failed."
-          exit 1
       - name: Consume the discovered shared Browser checks sequentially
         env:
           TMPDIR: ${{ runner.temp }}
@@ -2197,7 +2175,7 @@ jobs:
           TEMP: ${{ runner.temp }}
         run: |
           source env.sh
-          bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group
+          bun scripts/run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 660 || 420 }} bun scripts/test-checks.ts browser-guest --profile shared-group
 
   shared-proof:
     name: Shared PIC sysroot proof

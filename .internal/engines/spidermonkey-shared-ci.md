@@ -1,5 +1,25 @@
 # SpiderMonkey shared CI
 
+## Completed hosted Browser clocks, November 14
+
+The bounded completion observation in run 43556231263 used normal shared inputs
+and unchanged fixture assertions, 200 churn workers and 120,000-byte messages.
+Interp main completed in 241,523.46 ms and PBL in 234,464.78 ms; both had exact
+stdout, 32 retired owners, zero active groups and zero budget. Complete driver
+spans were 280,805.01 ms and 273,249.10 ms. The diagnostic job deliberately
+failed afterward and is not a normal qualification pass.
+
+The normal SM-only main-page bound is 272 seconds and driver bound 316 seconds,
+about 12.5 percent above the slower completed measurements. Driver setup remains
+charged from the original monotonic start. Other pages retain 240 seconds, Oxc
+retains 90 seconds, and QuickJS/JSC retain their 300-second drivers. The wrapper
+keeps 330 seconds per tier. The SM sequential consumer gets 660 seconds, covering
+two 316-second drivers plus 28 seconds for the measured profile/registration
+controls and teardown. Other engine consumers retain 420 seconds. Both tiers,
+all entries, failed-stop debt, output/accounting checks and cleanup remain
+blocking. The temporary observation step is removed before normal CI.
+
+
 Status: Approved. November 11, 2026. Native integration in J11 PR 599 and Browser integration in PR 600.
 
 The existing `shared-sysroot` job owns the experimental SpiderMonkey library,
