@@ -1,0 +1,185 @@
+[
+  {
+    "source": {
+      "pr": 657,
+      "run": 43545860161,
+      "job": 132317528894
+    },
+    "report": {
+      "error": "Error: Storage readiness deadline: vite-react",
+      "errors": [
+        "[bun-wasm development HTML] disconnected",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()"
+      ],
+      "pages": [
+        {
+          "url": "http://127.0.0.1:43561/sandbox/?template=hono&engine=browser",
+          "status": "dev server ready in 1.0 s · Browser (native) · 20.1 MB",
+          "terminal": "$ bun install (Browser (native))\nbun install v1.4.4 (2210913e2)\n\nSaved lockfile\n+ hono@4.10.2\n\n1 package installed [2929ms]\n$ bun run dev (Browser (native))\n$ bun --hot run server.ts\n\n$ bun install (Browser (native))\nbun install v1.4.4 (2210913e2)\n\nDone! Checked 2 packages (no changes) [21ms]\n$ bun run dev (Browser (native))\n$ bun --hot run server.ts\n",
+          "frames": [
+            {
+              "src": "http://127.0.0.1:43561/sandbox/__preview/5174/",
+              "body": "Hello from hono\nIncrement1"
+            }
+          ],
+          "runtime": {
+            "filesystem": {
+              "status": "ready"
+            },
+            "started": true,
+            "editorPath": "server.ts",
+            "pending": false
+          }
+        },
+        {
+          "url": "http://127.0.0.1:43561/sandbox/?template=vite-react&engine=browser",
+          "status": "loading preview…",
+          "terminal": "$ bun install (Browser (native))\nbun install v1.4.4 (2210913e2)\n\n+ @emnapi/core@2.0.0-beta.2\n+ @emnapi/runtime@2.0.0-beta.2\n+ @emnapi/wasi-threads@2.2.0\n+ @napi-rs/wasm-runtime@1.2.6\n+ @oxc-project/types@0.156.0\n+ @rolldown/binding-wasm32-wasi@1.2.16\n+ @rolldown/pluginutils@1.0.1\n+ @tybys/wasm-util@0.10.4\n+ @vitejs/plugin-react@6.1.2\n+ fdir@6.5.0\n+ lightningcss-wasm@1.33.0\n+ nanoid@3.3.20\n+ napi-wasm@1.1.3\n+ picocolors@1.1.1\n+ picomatch@4.0.7\n+ postcss@8.5.32\n+ react@19.3.1\n+ react-dom@19.3.1\n+ rolldown@1.2.16\n+ scheduler@0.28.0\n+ source-map-js@1.2.2\n+ tinyglobby@0.2.17\n+ tslib@2.8.1\n+ vite@8.3.5\n\n24 packages installed [12104ms]\n$ bun run dev (Browser (native))\n$ vite --host 127.0.0.1 --port 5173 --strictPort\n\n  VITE v8.3.5  ready in 5120 ms\n\n  ➜  Local:   http://127.0.0.1:5173/\n3:38:19 AM [vite] (client) [optimizer] bundling dependencies...\nworker (tid = 55) sent an error! Out of bounds access\nRangeError: Out of bounds access\n      at <anonymous> (bun-wasm:host:130:17)\n      at <anonymous> (bun-wasm:host:15:27)\n      at guard (bun-wasm:host:11:9471)\n      at pump (bun-wasm:host:11:8296)\n      at <anonymous> (bun-wasm:host:9:90764)\n\nBun v1.4.4 (WASI wasm32)\nerror: script \"dev\" exited with code 1\n[dev exited with code 1]\n",
+          "frames": [
+            {
+              "src": "http://127.0.0.1:43561/sandbox/__preview/5173/",
+              "body": ""
+            }
+          ],
+          "runtime": {
+            "filesystem": {
+              "status": "ready"
+            },
+            "started": true,
+            "editorPath": "src/App.tsx",
+            "pending": false
+          }
+        }
+      ]
+    }
+  },
+  {
+    "source": {
+      "pr": 738,
+      "run": 43546088852,
+      "job": 132317988768
+    },
+    "report": {
+      "checkpoint": "preservation",
+      "error": "Error: Storage readiness deadline: vite-react",
+      "errors": [
+        "[bun-wasm development HTML] disconnected",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()"
+      ],
+      "pages": [
+        {
+          "url": "http://127.0.0.1:36567/sandbox/?template=hono&engine=browser",
+          "status": "dev server ready in 0.7 s · Browser (native) · 20.0 MB",
+          "terminal": "$ bun install (Browser (native))\nbun install v1.4.4 (2210913e2)\n\nSaved lockfile\n+ hono@4.10.2\n\n1 package installed [1772ms]\n$ bun run dev (Browser (native))\n$ bun --hot run server.ts\n\n$ bun install (Browser (native))\nbun install v1.4.4 (2210913e2)\n\nDone! Checked 2 packages (no changes) [14ms]\n$ bun run dev (Browser (native))\n$ bun --hot run server.ts\n",
+          "frames": [
+            {
+              "src": "http://127.0.0.1:36567/sandbox/__preview/5174/",
+              "body": "Hello from hono\nIncrement1"
+            }
+          ],
+          "runtime": {
+            "filesystem": {
+              "status": "ready"
+            },
+            "started": true,
+            "editorPath": "server.ts",
+            "pending": false
+          }
+        },
+        {
+          "url": "http://127.0.0.1:36567/sandbox/?template=vite-react&engine=browser",
+          "status": "loading preview…",
+          "terminal": "$ bun install (Browser (native))\nbun install v1.4.4 (2210913e2)\n\n+ @emnapi/core@2.0.0-beta.2\n+ @emnapi/runtime@2.0.0-beta.2\n+ @emnapi/wasi-threads@2.2.0\n+ @napi-rs/wasm-runtime@1.2.6\n+ @oxc-project/types@0.156.0\n+ @rolldown/binding-wasm32-wasi@1.2.16\n+ @rolldown/pluginutils@1.0.1\n+ @tybys/wasm-util@0.10.4\n+ @vitejs/plugin-react@6.1.2\n+ fdir@6.5.0\n+ lightningcss-wasm@1.33.0\n+ nanoid@3.3.20\n+ napi-wasm@1.1.3\n+ picocolors@1.1.1\n+ picomatch@4.0.7\n+ postcss@8.5.32\n+ react@19.3.1\n+ react-dom@19.3.1\n+ rolldown@1.2.16\n+ scheduler@0.28.0\n+ source-map-js@1.2.2\n+ tinyglobby@0.2.17\n+ tslib@2.8.1\n+ vite@8.3.5\n\n24 packages installed [7066ms]\n$ bun run dev (Browser (native))\n$ vite --host 127.0.0.1 --port 5173 --strictPort\n\n  VITE v8.3.5  ready in 2998 ms\n\n  ➜  Local:   http://127.0.0.1:5173/\n3:39:56 AM [vite] (client) [optimizer] bundling dependencies...\nworker (tid = 65) sent an error! Out of bounds access\nRangeError: Out of bounds access\n      at <anonymous> (bun-wasm:host:130:17)\n      at <anonymous> (bun-wasm:host:15:27)\n      at guard (bun-wasm:host:11:9471)\n      at pump (bun-wasm:host:11:8296)\n      at <anonymous> (bun-wasm:host:9:90764)\n\nBun v1.4.4 (WASI wasm32)\nerror: script \"dev\" exited with code 1\n[dev exited with code 1]\n",
+          "frames": [
+            {
+              "src": "http://127.0.0.1:36567/sandbox/__preview/5173/",
+              "body": ""
+            }
+          ],
+          "runtime": {
+            "filesystem": {
+              "status": "ready"
+            },
+            "started": true,
+            "editorPath": "src/App.tsx",
+            "pending": false
+          }
+        }
+      ]
+    }
+  },
+  {
+    "source": {
+      "pr": 730,
+      "run": 43546081559,
+      "job": 132319996195
+    },
+    "report": {
+      "checkpoint": "preservation",
+      "error": "Error: Storage readiness deadline: vite-react",
+      "errors": [
+        "[bun-wasm development HTML] disconnected",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()",
+        "Failed to load resource: the server responded with a status of 502 ()"
+      ],
+      "pages": [
+        {
+          "url": "http://127.0.0.1:42089/sandbox/?template=hono&engine=browser",
+          "status": "dev server ready in 1.0 s · Browser (native) · 20.0 MB",
+          "terminal": "$ bun install (Browser (native))\nbun install v1.4.4 (2210913e2)\n\nSaved lockfile\n+ hono@4.10.2\n\n1 package installed [2643ms]\n$ bun run dev (Browser (native))\n$ bun --hot run server.ts\n\n$ bun install (Browser (native))\nbun install v1.4.4 (2210913e2)\n\nDone! Checked 2 packages (no changes) [27ms]\n$ bun run dev (Browser (native))\n$ bun --hot run server.ts\n",
+          "frames": [
+            {
+              "src": "http://127.0.0.1:42089/sandbox/__preview/5174/",
+              "body": "Hello from hono\nIncrement1"
+            }
+          ],
+          "runtime": {
+            "filesystem": {
+              "status": "ready"
+            },
+            "started": true,
+            "editorPath": "server.ts",
+            "pending": false
+          }
+        },
+        {
+          "url": "http://127.0.0.1:42089/sandbox/?template=vite-react&engine=browser",
+          "status": "dev server ready in 25.7 s · Browser (native) · 20.0 MB",
+          "terminal": "$ bun install (Browser (native))\nbun install v1.4.4 (2210913e2)\n\n+ @emnapi/core@2.0.0-beta.2\n+ @emnapi/runtime@2.0.0-beta.2\n+ @emnapi/wasi-threads@2.2.0\n+ @napi-rs/wasm-runtime@1.2.6\n+ @oxc-project/types@0.156.0\n+ @rolldown/binding-wasm32-wasi@1.2.16\n+ @rolldown/pluginutils@1.0.1\n+ @tybys/wasm-util@0.10.4\n+ @vitejs/plugin-react@6.1.2\n+ fdir@6.5.0\n+ lightningcss-wasm@1.33.0\n+ nanoid@3.3.20\n+ napi-wasm@1.1.3\n+ picocolors@1.1.1\n+ picomatch@4.0.7\n+ postcss@8.5.32\n+ react@19.3.1\n+ react-dom@19.3.1\n+ rolldown@1.2.16\n+ scheduler@0.28.0\n+ source-map-js@1.2.2\n+ tinyglobby@0.2.17\n+ tslib@2.8.1\n+ vite@8.3.5\n\n24 packages installed [11923ms]\n$ bun run dev (Browser (native))\n$ vite --host 127.0.0.1 --port 5173 --strictPort\n\n  VITE v8.3.5  ready in 5185 ms\n\n  ➜  Local:   http://127.0.0.1:5173/\n3:48:56 AM [vite] (client) [optimizer] bundling dependencies...\nworker (tid = 57) sent an error! Out of bounds access\nRangeError: Out of bounds access\n      at <anonymous> (bun-wasm:host:130:17)\n      at <anonymous> (bun-wasm:host:15:27)\n      at guard (bun-wasm:host:11:9471)\n      at pump (bun-wasm:host:11:8296)\n      at <anonymous> (bun-wasm:host:9:90764)\n\nBun v1.4.4 (WASI wasm32)\nerror: script \"dev\" exited with code 1\n[dev exited with code 1]\n",
+          "frames": [
+            {
+              "src": "http://127.0.0.1:42089/sandbox/__preview/5173/",
+              "body": ""
+            }
+          ],
+          "runtime": {
+            "filesystem": {
+              "status": "ready"
+            },
+            "started": true,
+            "editorPath": "src/App.tsx",
+            "pending": false
+          }
+        }
+      ]
+    }
+  }
+]
