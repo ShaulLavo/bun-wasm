@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
-import { namedCheckBatches, selectCheckBatch, selectChecks } from "./test-checks";
+import { discoverChecks, namedCheckBatches, parseCheck, selectCheckBatch, selectChecks } from "./test-checks";
 import { webBrowserShards } from "./ci-web-browser-shards";
 
 function object(value: unknown): Record<string, unknown> {
@@ -87,16 +87,17 @@ test("Web jobs reuse the existing release namespace and browser setup is isolate
   }
 });
 
-test("parallel browser shards discover every owned check exactly once and require measured deadlines", () => {
+test("parallel browser shards preserve every owned check under a generous job hang cap", () => {
   const selected = namedCheckBatches("web-browser");
   const matrix = webBrowserShards(selected);
-  expect(matrix).toHaveLength(3);
+  expect(matrix.map(shard => shard.batch)).toEqual(selected.map(batch => batch.name));
   const paths = matrix.flatMap(shard => selectCheckBatch("web-browser", shard.batch));
   expect(paths.toSorted()).toEqual(selectChecks("web-browser"));
   expect(new Set(paths).size).toBe(paths.length);
-  for (const shard of matrix) expect(shard.timeoutSeconds).toBeLessThanOrEqual(300);
-  expect(() => webBrowserShards(selected.concat([{ name: "default", paths: ["scripts/new-browser.test.ts"] }]))).toThrow("measured deadlines");
-  expect(() => webBrowserShards(selected.map(batch => ({ ...batch, name: "unmeasured" })))).toThrow("Unmeasured");
+  for (const shard of matrix) {
+    expect(shard.timeoutSeconds).toBe(300);
+    expect(shard.timeoutSeconds).toBeLessThan(Number(shards["timeout-minutes"]) * 60);
+  }
   expect(object(shards.strategy)).toEqual({ "fail-fast": false, matrix: "${{ fromJSON(needs.selection.outputs.web-browser-shards) }}" });
   const discovery = steps(object(jobs.selection)).find(step => step.id === "web-browser-shards");
   assert(discovery && typeof discovery.run === "string");
@@ -107,4 +108,19 @@ test("parallel browser shards discover every owned check exactly once and requir
   const command = steps(shards).find(step => step.name === "Run the discovered Web browser shard");
   expect(command?.run).toBe('bun ../scripts/run-with-timeout.mts "$WEB_BROWSER_TIMEOUT_SECONDS" bun ../scripts/test-checks.ts web-browser --batch "$WEB_BROWSER_BATCH"');
   expect(command?.env).toEqual({ EDITOR_SCRATCH_ROOT: "${{ runner.temp }}", WEB_BROWSER_BATCH: "${{ matrix.batch }}", WEB_BROWSER_TIMEOUT_SECONDS: "${{ matrix.timeoutSeconds }}" });
+});
+
+test("new browser batches and the default batch need no timing calibration", () => {
+  const checks = discoverChecks().concat([
+    parseCheck({ owner: "web-browser", path: "scripts/new-browser.test.ts", batch: "40-new" }, "web-browser-new.json"),
+    parseCheck({ owner: "web-browser", path: "scripts/default-browser.test.ts" }, "web-browser-default.json"),
+  ]);
+  const selected = namedCheckBatches("web-browser", checks);
+  const matrix = webBrowserShards(selected);
+  expect(matrix.map(shard => shard.batch)).toEqual(selected.map(batch => batch.name));
+  expect(matrix).toContainEqual({ batch: "40-new", timeoutSeconds: 300 });
+  expect(matrix).toContainEqual({ batch: "default", timeoutSeconds: 300 });
+  const paths = matrix.flatMap(shard => selectCheckBatch("web-browser", shard.batch, checks));
+  expect(paths.toSorted()).toEqual(selectChecks("web-browser", checks).toSorted());
+  expect(new Set(paths).size).toBe(paths.length);
 });

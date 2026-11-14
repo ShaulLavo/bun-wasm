@@ -1,6 +1,20 @@
 # Web browser shard measurements
 
-Status: Approved. Measured on November 13, 2026.
+Status: Historical measurements from November 13, 2026. The measured-limit policy
+below was retired on November 14 under the owner's outcome-first test rule.
+
+## Current hang policy
+
+Every discovered batch receives the same five-minute command hang cap, including
+new batches and the default batch. The ten-minute job still includes setup and
+cleanup. `scripts/ci-web-browser-shards.ts` contains no measured-limit mapping.
+Bun's normal reporter records durations, and the existing command supervisor
+preserves nonzero outcomes, process-tree diagnostics, interruption and descendant
+cleanup. Individual test and hook caps are separate and remain unchanged here.
+The observations below are historical reports, not correctness thresholds or
+instructions to recalibrate a batch after a slow run.
+
+## Historical rollout
 
 PR 657's [hosted Web host job](https://github.com/ShaulLavo/bun-wasm/actions/runs/43461758984/job/132016209809)
 hit the unchanged 300-second command deadline with 31 of 33 file groups complete.
@@ -9,9 +23,9 @@ The retained log is
 `/work/reports/wave-20261112/engines-active/j11-atomicity/current-ci/ae410-web-host.log`.
 Its selected paths match all 33 current manifests.
 
-The manifests now allocate ten interface files, eighteen preview files and five
-lifecycle files. `ci-web-browser-shards.ts` discovers those batches and supplies
-the matrix deadlines. The matrix has `fail-fast: false` and no concurrency cap.
+At measurement time, the manifests allocated ten interface files, eighteen preview
+files and five lifecycle files. `ci-web-browser-shards.ts` discovered those batches
+and supplied the former matrix deadlines. The matrix had `fail-fast: false` and no concurrency cap.
 The existing Web host guard requires successful unit and matrix results before
 running the original smoke commands once. The eleven required branch contexts
 and all test assertions and individual deadlines stay unchanged.
@@ -37,7 +51,7 @@ All commands exited zero. Sandbox readiness completed all twelve checks. Its
 previously unprinted WebKit failures and deadlines checks took 6.08943 and
 1.50770 seconds locally. The storage-index check took 5.15111 seconds and passed.
 
-## Deadline calculation and limits
+## Historical deadline calculation and limits
 
 All three shards completed successfully in [PR CI run 43468007947](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947)
 on source `9ce67b0a0bb64593f604d22fd8d879c150af79bf`. Each shard used a separate
@@ -91,7 +105,7 @@ test deadlines, allocation or the aggregate guard.
 Source `env.sh`, then run each name from
 `bun scripts/test-checks.ts web-browser --batches` through
 `bun scripts/run-with-timeout.mts 300 bun scripts/test-checks.ts web-browser --batch NAME`.
-Use `bun scripts/ci-web-browser-shards.ts` for the final CI matrix and deadlines.
+Use `bun scripts/ci-web-browser-shards.ts` for the current CI matrix and hang caps.
 Run browser commands through the heavy runner on the PC. Use a fresh short
 `/work/tmp/bws-*` directory for `TMPDIR`, with an EXIT trap that removes it after
 the owned command and browser processes stop.
