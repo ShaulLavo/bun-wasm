@@ -216,8 +216,8 @@ export function selectChanges(base: string, head: string, pullRequest = false, i
   const refs = Array.from(new Set([base, head, ancestor]));
   const native = nativeChanges(paths, base, head, refs.flatMap(ref => inputsAt(ref)));
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
-  const profileInputs = refs.flatMap(ref => inputsAt(ref, "shared-group"));
-  const jscInputs = refs.flatMap(ref => inputsAt(ref, "split", "jsc"));
+  const profileInputs = refs.flatMap(ref => inputsAt(ref, { profile: "shared-group" }));
+  const jscInputs = refs.flatMap(ref => inputsAt(ref, { profile: "split", engine: "jsc" }));
   return classifyChanges(paths, native, profileInputs, jscInputs);
 }
 

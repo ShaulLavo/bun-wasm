@@ -37,11 +37,19 @@ function isNativeEngine(value: unknown): value is NativeEngine {
   return value === "quickjs" || value === "jsc" || value === "browser";
 }
 
+function engineSubset(engines: unknown, source: string): readonly NativeEngine[] {
+  if (!Array.isArray(engines) || engines.length === 0 || !engines.every(isNativeEngine) || new Set(engines).size !== engines.length) throw new Error(`Invalid native engines: ${source}`);
+  return engines;
+}
+
 function nativeSelection(value: object, profile: NativeProfile, file: string): NativeSelection {
   if (!("engines" in value)) return profile === "shared-group" ? { profile } : {};
-  const engines = value.engines;
-  if (profile !== "split" || !Array.isArray(engines) || engines.length === 0 || !engines.every(isNativeEngine) || new Set(engines).size !== engines.length) throw new Error(`Invalid split native engines: ${file}`);
-  return { engines };
+  if (profile !== "split") throw new Error(`Only split native checks select engines: ${file}`);
+  return { engines: engineSubset(value.engines, file) };
+}
+
+export function nativeProducerEngines(env = process.env): readonly NativeEngine[] {
+  return env.INSTALL_ENGINES === undefined ? nativeEngines : engineSubset(env.INSTALL_ENGINES.split(","), "INSTALL_ENGINES");
 }
 
 export function parseCheck(value: unknown, file: string): Check {
@@ -156,10 +164,12 @@ export function nativeGroups(paths: readonly string[], count: number): string[][
   return groups;
 }
 
-export function nativeEngineGroups(paths: readonly string[], count: number, checks: readonly Check[] = discoverChecks()) {
+export function nativeEngineGroups(paths: readonly string[], options: { count: number; checks?: readonly Check[]; producers?: readonly NativeEngine[] }) {
+  const { count, checks = discoverChecks(), producers = nativeEngines } = options;
   const selected = new Set(paths);
   const native = checks.filter(check => check.owner === "native");
   return nativeEngines.flatMap(engine => {
+    if (!producers.includes(engine)) return [];
     const selectedPaths = native.filter(check => check.profile !== "shared-group" && selected.has(check.path) && (check.engines ?? ["quickjs"]).includes(engine)).map(check => check.path);
     if (selectedPaths.length === 0) return [];
     return [{ engine, commands: nativeGroups(selectedPaths, count).map(group => checkCommand("native", group, "split", engine)) }];
@@ -186,12 +196,13 @@ async function runNative(paths: readonly string[], profile: NativeProfile): Prom
   if (profile === "shared-group") return runCheck(checkCommand("native", paths.slice(), profile));
   const count = Number(process.env.BUN_WASM_CHECK_JOBS ?? availableParallelism());
   if (!Number.isInteger(count) || count < 1) throw new Error(`Invalid BUN_WASM_CHECK_JOBS: ${String(count)}`);
+  const producers = nativeProducerEngines();
   const env = { ...process.env, BUN_WASM_CI_CHECKS: "1" };
   // Each test.sh would otherwise run the whole runtime suite again, in parallel.
   const runtime = runCheck(["bash", join(root, "scripts/check-runtime.sh")], env);
   if (runtime !== 0) return runtime;
   const grouped = { ...env, BUN_WASM_RUNTIME_CHECKED: "1" };
-  for (const group of nativeEngineGroups(paths, count)) {
+  for (const group of nativeEngineGroups(paths, { count, producers })) {
     console.log(`Native fixture engine: ${group.engine}`);
     const results = await Promise.all(group.commands.map(command => runBuffered(command, grouped)));
     for (const result of results) process.stdout.write(result.output);

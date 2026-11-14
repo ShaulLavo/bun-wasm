@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
-import { parseCheck, type NativeEngine, type NativeProfile } from "./test-checks";
+import { parseCheck, type NativeEngine } from "./test-checks";
+
+type NativeInputSelection = { profile?: "split"; engine?: NativeEngine } | { profile: "shared-group"; engine?: never };
 
 export function checkInputPaths(check: ReturnType<typeof parseCheck>): string[] {
   if (check.owner === "native-probe") return [check.path].concat(check.inputs);
@@ -20,7 +22,8 @@ function treeEntry(entry: string) {
   return { mode, kind, object, path: entry.slice(separator + 1) };
 }
 
-export function nativeCheckInputsAt(ref: string, profile?: NativeProfile, engine?: NativeEngine): string[] {
+export function nativeCheckInputsAt(ref: string, selection: NativeInputSelection = {}): string[] {
+  const { profile, engine } = selection;
   if (/^0{40}$/.test(ref)) return [];
   const tree = execFileSync("git", ["ls-tree", "-r", "-t", "-z", "--full-tree", ref, "--", "checks"], { encoding: "utf8", timeout: 5_000 });
   const [directory, ...manifests] = tree.split("\0").filter(Boolean).map(treeEntry);
