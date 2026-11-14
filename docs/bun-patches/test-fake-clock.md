@@ -18,7 +18,10 @@ close those running handles without including them in the pending timer count.
 
 A stable Date constructor wrapper preserves references saved before activation, explicit
 constructor arguments, subclasses and Date instances. Its current time also supplies native
-Intl formatters when callers omit the date. `setSystemTime` rebases wall time without changing
+Intl formatters when callers omit the date. Existing native Intl data values are patched during
+clock setup. The fallback stays lazy and is patched once per formatter prototype before its
+first observable access, preserving formatter methods saved before clock activation.
+`setSystemTime` rebases wall time without changing
 timer deadlines. Performance and process high-resolution time use the fake monotonic clock.
 `runOnlyPendingTimers` uses Bun's latest pending deadline as its horizon. Timer callbacks
 drain the runtime-owned `process.nextTick` queue synchronously. Browser native Promise jobs

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,8 +10,17 @@ const revision = "1234567890123456789012345678901234567890";
 const git = `git+https://github.com/owner/project.git#${revision}`;
 const gitUrl = `https://codeload.github.com/owner/project/legacy.tar.gz/${revision}`;
 const archiveId = "owner-project-1234567";
+const otherGit = `git+https://github.com/owner/other.git#${revision}`;
+const otherGitUrl = `https://codeload.github.com/owner/other/legacy.tar.gz/${revision}`;
 const releaseUrl = "https://github.com/owner/project/releases/download/v1/released.tgz";
 const integrity = (bytes: Uint8Array) => `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+
+function packageEntries(text: string): Record<string, unknown> {
+  const lock: unknown = Bun.JSONC.parse(text);
+  assert.ok(lock && typeof lock === "object" && "packages" in lock);
+  assert.ok(lock.packages && typeof lock.packages === "object");
+  return Object.fromEntries(Object.entries(lock.packages));
+}
 
 async function archive(root: string, name: string, prefix = "package") {
   const source = join(root, name);
@@ -26,6 +36,7 @@ async function fixture(root: string) {
   const rangedIntegrity = integrity(ranged);
   const inputs = new Map([
     [gitUrl, await archive(root, "git-parent", archiveId)],
+    [otherGitUrl, await archive(root, "other-git", "owner-other-1234567")],
     [releaseUrl, await archive(root, "released")],
   ]);
   const requests: string[] = [];
@@ -51,10 +62,11 @@ async function fixture(root: string) {
   const source = join(root, "consumer");
   try {
     await mkdir(source);
-    const dependencies = { "git-parent": git, released: releaseUrl, ranged: "^1.0.0" };
+    const dependencies = { "git-parent": git, "other-git": otherGit, released: releaseUrl, ranged: "^1.0.0" };
     const manifest = JSON.stringify({ name: "consumer", dependencies });
     const packages = {
       "git-parent": ["git-parent@github:owner/project#1234567", {}, archiveId, integrity(inputs.get(gitUrl)!)],
+      "other-git": ["other-git@github:owner/other#1234567", {}, "owner-other-1234567", integrity(inputs.get(otherGitUrl)!)],
       released: [`released@${releaseUrl}`, {}, integrity(inputs.get(releaseUrl)!)],
       ranged: ["ranged@1.0.0", `${server.url}ranged-1.0.0.tgz`, {}, rangedIntegrity],
     };
@@ -108,6 +120,54 @@ test("a rejected lock cannot publish fresh unrelated resolutions and restores bo
     await expect(updateReleaseLock(f.source, f.download)).rejects.toThrow("unrelated package: ranged");
     expect(await readFile(join(f.source, "bun.lock"), "utf8")).toBe(lock);
     expect(await readFile(join(f.source, "package.json"), "utf8")).toBe(f.manifest);
+  } finally {
+    server?.stop(true);
+    if (previous === undefined) delete process.env.BUN_INSTALL_CACHE_DIR;
+    else process.env.BUN_INSTALL_CACHE_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a requested Git revision replaces its old lock entry without refreshing unrelated ranges", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-update-git-revision-"));
+  const previous = process.env.BUN_INSTALL_CACHE_DIR;
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    const f = await fixture(root);
+    server = f.server;
+    process.env.BUN_INSTALL_CACHE_DIR = join(root, "cache");
+    const next = "abcdef0123456789012345678901234567890123";
+    const nextArchive = "owner-project-abcdef0";
+    const bytes = await archive(root, "git-parent", nextArchive);
+    const manifest = f.manifest.replace(revision, next);
+    await writeFile(join(f.source, "package.json"), manifest);
+    await updateReleaseLock(f.source, url => url === gitUrl.replace(revision, next) ? Promise.resolve(new Response(bytes)) : f.download(url));
+    const text = await readFile(join(f.source, "bun.lock"), "utf8");
+    const updated = packageEntries(text);
+    const original = packageEntries(f.lock);
+    expect(updated["git-parent"]).toEqual(["git-parent@github:owner/project#abcdef0", {}, nextArchive, integrity(bytes)]);
+    expect(updated.ranged).toEqual(original.ranged);
+    expect(updated["other-git"]).toEqual(original["other-git"]);
+    expect(updated.released).toEqual(original.released);
+    expect(text).toContain(git.replace(revision, next));
+    expect(f.requests).toEqual([]);
+    expect(await readFile(join(f.source, "package.json"), "utf8")).toBe(manifest);
+    const published = await readFile(join(f.source, "bun.lock"), "utf8");
+    const download = (url: string) => url === gitUrl.replace(revision, next) ? Promise.resolve(new Response(bytes)) : f.download(url);
+    await updateReleaseLock(f.source, download);
+    expect(await readFile(join(f.source, "bun.lock"), "utf8")).toBe(published);
+    const invalid = f.lock.replace(f.rangedIntegrity, "invalid-integrity");
+    await writeFile(join(f.source, "bun.lock"), invalid);
+    await expect(updateReleaseLock(f.source, download)).rejects.toThrow("unrelated package: ranged");
+    expect(await readFile(join(f.source, "bun.lock"), "utf8")).toBe(invalid);
+    expect(await readFile(join(f.source, "package.json"), "utf8")).toBe(manifest);
+    const other = original["other-git"];
+    assert.ok(Array.isArray(other) && typeof other[3] === "string");
+    const changedOther = f.lock.replace(other[3], `sha512-${"A".repeat(86)}==`);
+    await writeFile(join(f.source, "bun.lock"), changedOther);
+    await expect(updateReleaseLock(f.source, download)).rejects.toThrow("unrelated package: other-git");
+    expect(await readFile(join(f.source, "bun.lock"), "utf8")).toBe(changedOther);
+    expect(await readFile(join(f.source, "package.json"), "utf8")).toBe(manifest);
   } finally {
     server?.stop(true);
     if (previous === undefined) delete process.env.BUN_INSTALL_CACHE_DIR;

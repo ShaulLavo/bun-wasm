@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -7,7 +8,7 @@ import { join } from "node:path";
 import { needsSharedSysroot } from "./ci-changes";
 import { discoverChecks } from "./test-checks";
 
-const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const workflow = expandedCiWorkflow();
 const producer = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-spidermonkey-prebuild:\n")[0]!;
 const smProducer = workflow.split("\n  shared-spidermonkey-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
 const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0]!;
@@ -131,6 +132,8 @@ function sharedCacheSaves(source: string): { name: string; condition: string }[]
 
 function sharedSaveAllowed(condition: string, state: SharedSaveContext): boolean {
   const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+    .replaceAll("inputs.sysroot", JSON.stringify("build"))
+    .replaceAll("steps.shared-jsc-producer.outputs.jsc-ready", JSON.stringify("true"))
     .replace(/needs\.quality\.outputs\.shared-native/g, JSON.stringify("true"))
     .replace(/success\(\)/g, String(state.success))
     .replace(/cancelled\(\)/g, String(state.cancelled))
