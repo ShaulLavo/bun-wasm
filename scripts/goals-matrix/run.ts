@@ -113,7 +113,7 @@ async function nativeTransport(box: Cell, config: Options, timeoutMs: number, re
   if (!endpoint) throw new Error("Missing native WebDriver endpoint");
   const receipt = config.safariOwnership ? ownershipReceipt(config.output, captureIdentity(box, report)) : undefined;
   const ownershipSink = capture ? capture.ownership(receipt) : receipt;
-  const transport = await createSafariTransport({ ownershipSink, protocolSink: fact => { capture?.protocol(fact); exit?.protocol(fact); }, browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs,
+  const transport = await createSafariTransport({ ownershipSink, protocolSink: capture || exit ? fact => { capture?.protocol(fact); exit?.protocol(fact); } : undefined, browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs,
     cleanupTimeoutMs: Math.min(config.timeoutMs ?? 90_000, 10_000) });
   return exit ? exit.transport(transport) : transport;
 }
