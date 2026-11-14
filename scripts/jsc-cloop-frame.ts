@@ -4,7 +4,7 @@
 //   bun scripts/jsc-cloop-frame.ts check <jsc-engine.wasm>...
 //
 // JSC's native recursion guard counts shadow-stack bytes. Every reentry path (Proxy traps,
-// `toString`, computed getters) starts a new `CLoop::execute`, and the bytes that function holds
+// `toString`, numeric-index getters) starts a new `CLoop::execute`, and the bytes that function holds
 // are what stops those paths before a small host stack runs out. A build that holds fewer bytes
 // would admit more levels than the host has room for, with no source change of ours.
 //

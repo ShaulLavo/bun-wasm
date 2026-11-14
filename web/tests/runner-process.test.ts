@@ -751,7 +751,7 @@ test("run.done waits for deferred root activation and descriptor release", async
   class DescriptorSupervisor extends proc.ProcessSupervisor {
     override createRoot(options: RootProcessOptions): number {
       const pid = super.createRoot(options);
-      this.get(pid)!.descriptors.open({
+      this.get(pid)!.image.descriptors.open({
         kind: "terminal", read: () => 0, write: () => 0,
         readiness: () => ({ readable: false, writable: true, hangup: false }),
       }, 0n, 0n, () => { released = true; });
@@ -801,7 +801,7 @@ for (const partial of [false, true]) test(`run.done safely handles rejected defe
   class PartialSupervisor extends proc.ProcessSupervisor {
     override createRoot(options: RootProcessOptions): never {
       const pid = super.createRoot(options);
-      this.get(pid)!.descriptors.open({
+      this.get(pid)!.image.descriptors.open({
         kind: "terminal", read: () => 0, write: () => 0,
         readiness: () => ({ readable: false, writable: true, hangup: false }),
       }, 0n, 0n, () => { released = true; });
