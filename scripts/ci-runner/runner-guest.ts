@@ -11,8 +11,8 @@ async function input(): Promise<unknown> {
   return JSON.parse(text);
 }
 
-function environment(): NodeJS.ProcessEnv {
-  return { HOME: "/home/runner", PATH: "/opt/node/bin:/usr/local/bin:/usr/bin:/bin", ImageVersion: "ubuntu-24.04-node26.13.1-v1", RUNNER_TEMP: "/work/t", TMPDIR: "/work/t" };
+export function runnerEnvironment(): NodeJS.ProcessEnv {
+  return { HOME: "/home/runner", PATH: "/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", ImageVersion: "ubuntu-24.04-node26.13.1-v1", RUNNER_TEMP: "/work/t", TMPDIR: "/work/t" };
 }
 
 async function configure(): Promise<void> {
@@ -20,7 +20,7 @@ async function configure(): Promise<void> {
   if (typeof value !== "object" || value === null || !("token" in value) || !("name" in value) || typeof value.token !== "string" || typeof value.name !== "string" || !/^pc-bun-wasm-[a-f0-9-]{36}$/.test(value.name)) throw new Error("Invalid runner configuration");
   const copy = spawnSync("/usr/bin/cp", ["-r", "--preserve=mode,timestamps", "/opt/actions-runner/.", "/work/runner"], { stdio: "ignore" });
   if (copy.status !== 0) throw new Error("Cannot stage private runner");
-  const result = spawnSync("/work/runner/bin/Runner.Listener", ["configure", "--unattended", "--url", "https://github.com/ShaulLavo/bun-wasm", "--name", value.name, "--labels", "self-hosted,linux,x64,pc,bun-wasm", "--work", "/work/w", "--ephemeral", "--disableupdate"], { cwd: "/work/runner", env: { ...environment(), ACTIONS_RUNNER_INPUT_TOKEN: value.token }, stdio: "ignore", timeout: 120_000 });
+  const result = spawnSync("/work/runner/bin/Runner.Listener", ["configure", "--unattended", "--url", "https://github.com/ShaulLavo/bun-wasm", "--name", value.name, "--labels", "self-hosted,linux,x64,pc,bun-wasm", "--work", "/work/w", "--ephemeral", "--disableupdate"], { cwd: "/work/runner", env: { ...runnerEnvironment(), ACTIONS_RUNNER_INPUT_TOKEN: value.token }, stdio: "ignore", timeout: 120_000 });
   if (result.status !== 0) throw new Error("Ephemeral registration failed");
 }
 
@@ -30,10 +30,10 @@ export function validateRunnerSettings(text: string): void {
 }
 
 async function listen(): Promise<void> {
-  const version = spawnSync("/work/runner/bin/Runner.Listener", ["--version"], { cwd: "/work/runner", env: environment(), encoding: "utf8" });
+  const version = spawnSync("/work/runner/bin/Runner.Listener", ["--version"], { cwd: "/work/runner", env: runnerEnvironment(), encoding: "utf8" });
   if (version.status !== 0 || version.stdout.trim() !== "2.338.2") throw new Error("Unexpected runner version");
   validateRunnerSettings(readFileSync("/work/runner/.runner", "utf8"));
-  const child = spawn("/work/runner/bin/Runner.Listener", ["run", "--startuptype", "service"], { cwd: "/work/runner", env: { ...environment(), ACTIONS_RUNNER_HOOK_JOB_STARTED: "/opt/bun-wasm-ci/guard-hook.sh" }, stdio: "inherit" });
+  const child = spawn("/work/runner/bin/Runner.Listener", ["run", "--startuptype", "service"], { cwd: "/work/runner", env: { ...runnerEnvironment(), ACTIONS_RUNNER_HOOK_JOB_STARTED: "/opt/bun-wasm-ci/guard-hook.sh" }, stdio: "inherit" });
   const status = await new Promise<number | null>((resolveExit, reject) => { child.once("error", () => reject(new Error("Cannot start runner"))); child.once("exit", resolveExit); });
   if (status !== 0) throw new Error("Ephemeral Listener failed");
 }

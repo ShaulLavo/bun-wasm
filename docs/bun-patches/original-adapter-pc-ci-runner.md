@@ -48,6 +48,10 @@ The guest uses stock WorkFolder `/work/w`, workspace
 and TMPDIR can use `/work/t`. Logical paths remain stable between private jobs;
 input stamps are verified rather than rewritten.
 
+The private Listener environment includes standard system sbin directories so
+JSC identity, native quality and Rust jobs can find installed `ldconfig`.
+This preserves tool inventory and fingerprints across all job entry points.
+
 VM requests use the installed heavy runner's public settings-home option with
 the same production queue and policy. The CI snapshot reserves the known 8/10
 GiB VM budget without raising configured ceilings; insufficient ceilings fail.
