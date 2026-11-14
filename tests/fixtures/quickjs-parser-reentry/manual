@@ -1,0 +1,1 @@
+QuickJS uses an intentional 32 KiB child budget. Other engines use their normal fixture budget.
