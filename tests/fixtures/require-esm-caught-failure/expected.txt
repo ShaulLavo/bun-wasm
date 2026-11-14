@@ -1,0 +1,3 @@
+Error: ordinary failure
+RangeError: too much recursion
+ok: 42
