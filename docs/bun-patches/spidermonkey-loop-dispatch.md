@@ -6,9 +6,16 @@ This embed adaptation patches Mozilla revision
 
 | Upstream path | Classification | Change and reason |
 | --- | --- | --- |
-| `js/src/vm/Stack.h`, `Stack-inl.h`, `Activation.h` | Embed adaptation | Allocate a getter's callee, receiver and missing formal arguments with its interpreter frame. A frame flag selects cleanup from the caller's opcode. An explicit result mode permits replacement or preservation of the caller's value. |
+| `js/src/vm/Stack.h`, `Stack-inl.h`, `Stack.cpp`, `Activation.h` | Embed adaptation | Allocate a getter's callee, receiver and missing formal arguments with its interpreter frame. A frame flag selects cleanup from the caller's opcode. An explicit result mode permits replacement or preservation of the caller's value. The ordinary inline return tests the flag once and leaves owned frames to an out-of-line pop in `Stack.cpp`. |
 | `js/src/vm/NativeObject.cpp`, `NativeObject.h` | Embed adaptation | A sibling lookup defers eligible scripted getters at the existing call site. The prototype walk, resolve hooks, data reads and exotic-object dispatch still use the ordinary lookup. |
-| `js/src/vm/Interpreter.cpp`, `Interpreter.h` | Embed adaptation | `GetProp` and `GetPropSuper` publish the getter frame, then use the ordinary inline entry, return and unwind paths. The value lookup shares upstream's primitive, length and conversion handling. |
+| `js/src/vm/Interpreter.cpp`, `Interpreter.h` | Embed adaptation | `GetProp` and `GetPropSuper` publish the getter frame through an out-of-line helper, then use the ordinary inline entry, return and unwind paths. The value lookup shares upstream's primitive, length and conversion handling. |
+
+`js::Interpret`'s frame is paid by every native reentry that remains, so the
+change keeps it at main's size: 432 bytes of shadow stack. A first version that
+put the owned-frame branch into the inlined return path grew it to 464 bytes,
+and with it the residual proxy recursion on the 512 KiB WebKit model fell from 86
+to 77 levels. The owned pop, the frame push and delazification therefore stay out
+of line, and the deferred lookups are never inlined.
 
 The getter must be interpreted, in the current realm, and callable without
 construction. A realm observing native calls retains synchronous dispatch. A

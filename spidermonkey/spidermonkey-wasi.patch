@@ -54,7 +54,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git a/js/src/vm/Interpreter.cpp b/js/src/vm/Interpreter.cpp
-index 6241cd45d..d4f0dbd5a 100644
+index 6241cd45d..94b0824a2 100644
 --- a/js/src/vm/Interpreter.cpp
 +++ b/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -67,15 +67,35 @@ index 6241cd45d..d4f0dbd5a 100644
  
  using namespace js;
  
-@@ -1779,8 +1782,20 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
+@@ -1779,8 +1782,40 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
                            JS::ObjectValue(*disposableRecord));
  }
- 
+
 +#if defined(__wasi__) && defined(BUNWASM_EMBED) && defined(BUNWASM_INTERPRETER_CONTROLS)
 +extern "C" void bunsm_test_deferred_getter(JSContext* cx);
 +extern "C" bool bunsm_test_inline_prologue(JSContext* cx);
 +extern "C" size_t bunsm_test_interpreter_frames(JSContext* cx) {
 +  return cx->interpreterStack().bunwasmFrameCount();
++}
++#endif
++
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++// Delazifies a deferred getter and publishes its owned-arguments frame. The
++// getter stays in the interpreter's mutable function root and the receiver in
++// the case's rooted copy until the frame holds both. Out of line, so that
++// js::Interpret's own frame, which every remaining native reentry pays for,
++// does not grow.
++static MOZ_NEVER_INLINE bool PushDeferredGetterFrame(
++    JSContext* cx, InterpreterActivation& activation, HandleFunction getter,
++    HandleValue receiver) {
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++  bunsm_test_deferred_getter(cx);
++#  endif
++  RootedScript script(cx, JSFunction::getOrCreateScript(cx, getter));
++  if (!script) {
++    return false;
++  }
++  return activation.pushInlineGetterFrame(getter, script, receiver);
 +}
 +#endif
 +
@@ -88,7 +108,7 @@ index 6241cd45d..d4f0dbd5a 100644
  /*
   * Define macros for an interpreter loop. Opcode dispatch is done by
   * indirect goto (aka a threaded interpreter), which is technically
-@@ -1839,8 +1854,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1839,8 +1874,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
     * Prepare to call a user-supplied branch handler, and abort the script
     * if it returns false.
     */
@@ -103,7 +123,7 @@ index 6241cd45d..d4f0dbd5a 100644
      if (!CheckForInterrupt(cx)) goto error; \
    JS_END_MACRO
  
-@@ -1984,6 +2005,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1984,6 +2025,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
    INIT_COVERAGE();
    COUNT_COVERAGE_MAIN();
  
@@ -116,7 +136,7 @@ index 6241cd45d..d4f0dbd5a 100644
    // Enter the interpreter loop starting at the current pc.
    ADVANCE_AND_DISPATCH(0);
  
-@@ -2229,7 +2256,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2229,7 +2276,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
  
        jit_return:
  
@@ -129,7 +149,7 @@ index 6241cd45d..d4f0dbd5a 100644
          MOZ_ASSERT(cx->realm() == script->realm());
  
          /* Resume execution in the calling frame. */
-@@ -2238,8 +2270,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2238,8 +2290,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
              ADVANCE_AND_DISPATCH(JSOpLength_Resume);
            }
  
@@ -142,7 +162,7 @@ index 6241cd45d..d4f0dbd5a 100644
          }
  
          goto error;
-@@ -2944,9 +2980,30 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2944,9 +3000,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
        ReservedRooted<Value> lval(&rootValue0, REGS.sp[-1]);
        MutableHandleValue res = REGS.stackHandleAt(-1);
        ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
@@ -152,15 +172,7 @@ index 6241cd45d..d4f0dbd5a 100644
 +        goto error;
 +      }
 +      if (fun) {
-+#  ifdef BUNWASM_INTERPRETER_CONTROLS
-+        bunsm_test_deferred_getter(cx);
-+#  endif
-+        ReservedRooted<JSScript*> funScript(
-+            &rootScript0, JSFunction::getOrCreateScript(cx, fun));
-+        if (!funScript) {
-+          goto error;
-+        }
-+        if (!activation.pushInlineGetterFrame(fun, funScript, lval)) {
++        if (!PushDeferredGetterFrame(cx, activation, fun, lval)) {
 +          goto error;
 +        }
 +        goto enter_inline_frame;
@@ -173,25 +185,17 @@ index 6241cd45d..d4f0dbd5a 100644
        cx->debugOnlyCheck(res);
      }
      END_CASE(GetProp)
-@@ -2964,9 +3021,30 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2964,9 +3033,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
          goto error;
        }
- 
+
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +      ReservedRooted<JSFunction*> fun(&rootFunction0);
 +      if (!GetPropertyDeferred(cx, obj, receiver, name, rref, &fun)) {
 +        goto error;
 +      }
 +      if (fun) {
-+#  ifdef BUNWASM_INTERPRETER_CONTROLS
-+        bunsm_test_deferred_getter(cx);
-+#  endif
-+        ReservedRooted<JSScript*> funScript(
-+            &rootScript0, JSFunction::getOrCreateScript(cx, fun));
-+        if (!funScript) {
-+          goto error;
-+        }
-+        if (!activation.pushInlineGetterFrame(fun, funScript, receiver)) {
++        if (!PushDeferredGetterFrame(cx, activation, fun, receiver)) {
 +          goto error;
 +        }
 +        goto enter_inline_frame;
@@ -204,7 +208,7 @@ index 6241cd45d..d4f0dbd5a 100644
  
        cx->debugOnlyCheck(rref);
  
-@@ -3366,8 +3444,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -3366,8 +3448,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
                                      // call popInlineFrame.
        }
  
@@ -224,7 +228,7 @@ index 6241cd45d..d4f0dbd5a 100644
        if (!REGS.fp()->prologue(cx)) {
          goto prologue_error;
        }
-@@ -4619,8 +4708,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
+@@ -4619,8 +4712,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
    return cx->getPendingExceptionStack(vp);
  }
  
@@ -241,7 +245,7 @@ index 6241cd45d..d4f0dbd5a 100644
    if (name == cx->names().length) {
      // Fast path for strings, arrays and arguments.
      if (::GetLengthProperty(v, vp)) {
-@@ -4674,9 +4769,39 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
+@@ -4674,9 +4773,41 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
      return false;
    }
  
@@ -259,10 +263,12 @@ index 6241cd45d..d4f0dbd5a 100644
 +}
 +
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+bool js::GetPropertyDeferred(JSContext* cx, HandleObject obj,
-+                              HandleValue receiver, Handle<PropertyName*> name,
-+                              MutableHandleValue vp,
-+                              MutableHandleFunction getter) {
++// Both lookups stay out of line: inlined into js::Interpret, their rooted
++// locals would enlarge the frame every remaining native reentry pays for.
++MOZ_NEVER_INLINE bool js::GetPropertyDeferred(
++    JSContext* cx, HandleObject obj, HandleValue receiver,
++    Handle<PropertyName*> name, MutableHandleValue vp,
++    MutableHandleFunction getter) {
 +  if (obj->getOpsGetProperty()) {
 +    return GetProperty(cx, obj, receiver, name, vp);
 +  }
@@ -271,9 +277,9 @@ index 6241cd45d..d4f0dbd5a 100644
 +                                    vp, getter);
 +}
 +
-+bool js::GetPropertyDeferred(JSContext* cx, HandleValue v,
-+                              Handle<PropertyName*> name, MutableHandleValue vp,
-+                              MutableHandleFunction getter) {
++MOZ_NEVER_INLINE bool js::GetPropertyDeferred(
++    JSContext* cx, HandleValue v, Handle<PropertyName*> name,
++    MutableHandleValue vp, MutableHandleFunction getter) {
 +  return GetPropertyOperation<true>(cx, v, name, vp, &getter);
 +}
 +#endif
@@ -981,20 +987,10 @@ index 57951667c..f640070b4 100644
  
 
 diff --git a/js/src/vm/Stack.h b/js/src/vm/Stack.h
-index 7fd5148d5..0406c1c69 100644
+index 7fd5148d5..c79c5c4b6 100644
 --- a/js/src/vm/Stack.h
 +++ b/js/src/vm/Stack.h
-@@ -19,6 +19,9 @@
- #include "vm/ArgumentsObject.h"
- #include "vm/GeneratorResumeKind.h"
- #include "vm/JSFunction.h"
-+#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+#include "vm/BytecodeUtil.h"
-+#endif
- #include "vm/JSScript.h"
- #include "wasm/WasmDebugFrame.h"  // js::wasm::DebugFrame
- 
-@@ -351,6 +354,11 @@ class InterpreterFrame {
+@@ -351,6 +351,11 @@ class InterpreterFrame {
       * |js::SavedFrame| object cached for this frame.
       */
      HAS_CACHED_SAVED_FRAME = 0x200,
@@ -1006,7 +1002,7 @@ index 7fd5148d5..0406c1c69 100644
    };
  
    mutable uint32_t flags_; /* bits described by Flags */
-@@ -733,6 +741,18 @@ class InterpreterFrame {
+@@ -733,6 +738,18 @@ class InterpreterFrame {
    }
    bool isResumingGenerator() const { return !!(flags_ & RESUMING_GENERATOR); }
  
@@ -1025,29 +1021,29 @@ index 7fd5148d5..0406c1c69 100644
    /*
     * These two queries should not be used in general: the presence/absence of
     * the call/args object is determined by the static(ish) properties of the
-@@ -821,6 +841,14 @@ class InterpreterRegs {
- 
-   void popInlineFrame() {
-     pc = fp_->prevpc();
+@@ -830,6 +847,11 @@ class InterpreterRegs {
+     fp_ = fp_->prev();
+     MOZ_ASSERT(fp_);
+   }
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+    if (fp_->hasOwnedArguments()) {
-+      sp = fp_->prevsp() - (StackUses(JSOp(*pc), pc) - 1);
-+      fp_ = fp_->prev();
-+      MOZ_ASSERT(fp_);
-+      return;
-+    }
++  // Pops a frame that owns its arguments. The caller's operands are removed
++  // as its opcode's stack uses say, keeping the slot that takes the result.
++  void popOwnedInlineFrame();
 +#endif
-     unsigned spForNewTarget = fp_->isConstructing();
-     // This code is called when resuming from async and generator code.
-     // In the case of modules, we don't have arguments, so we can't use
-@@ -910,6 +938,13 @@ class InterpreterStack {
- 
+   void prepareToRun(InterpreterFrame& fp, JSScript* script) {
+     pc = script->code();
+     sp = fp.slots() + script->nfixed();
+@@ -910,6 +932,16 @@ class InterpreterStack {
+
    void popInlineFrame(InterpreterRegs& regs);
- 
+
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  bool pushInlineGetterFrame(JSContext* cx, InterpreterRegs& regs,
 +                             HandleFunction callee, HandleScript script,
 +                             HandleValue receiver);
++  // Out of line, so the interpreter's ordinary inline return path, and with
++  // it js::Interpret's frame, is unchanged.
++  void popOwnedInlineFrame(InterpreterRegs& regs);
 +  size_t bunwasmFrameCount() const { return frameCount_; }
 +#endif
 +
@@ -1056,10 +1052,10 @@ index 7fd5148d5..0406c1c69 100644
                                        HandleObject envChain);
 
 diff --git a/js/src/vm/Stack-inl.h b/js/src/vm/Stack-inl.h
-index 7a729d13d..320fb2995 100644
+index 7a729d13d..f1b357712 100644
 --- a/js/src/vm/Stack-inl.h
 +++ b/js/src/vm/Stack-inl.h
-@@ -356,10 +356,46 @@ MOZ_ALWAYS_INLINE bool InterpreterStack::pushInlineGeneratorResumeFrame(
+@@ -356,8 +356,44 @@ MOZ_ALWAYS_INLINE bool InterpreterStack::pushInlineGeneratorResumeFrame(
    return true;
  }
  
@@ -1095,17 +1091,15 @@ index 7a729d13d..320fb2995 100644
 +
  MOZ_ALWAYS_INLINE void InterpreterStack::popInlineFrame(InterpreterRegs& regs) {
    InterpreterFrame* fp = regs.fp();
-   regs.popInlineFrame();
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+  if (!fp->discardsReturnValue()) {
-+    regs.sp[-1] = fp->returnValue();
++  if (MOZ_UNLIKELY(fp->hasOwnedArguments())) {
++    popOwnedInlineFrame(regs);
++    return;
 +  }
-+#else
-   regs.sp[-1] = fp->returnValue();
 +#endif
+   regs.popInlineFrame();
+   regs.sp[-1] = fp->returnValue();
    releaseFrame(fp);
-   MOZ_ASSERT(regs.fp());
- }
 @@ -860,6 +896,14 @@ inline void InterpreterActivation::popInlineFrame(InterpreterFrame* frame) {
    cx_->interpreterStack().popInlineFrame(regs_);
  }
@@ -1138,4 +1132,46 @@ index b2c3f2a99..62cdb40e2 100644
 +
    inline bool pushInlineGeneratorResumeFrame(JS::Handle<JSFunction*> callee,
                                               JS::Handle<JSObject*> envChain);
- 
+
+
+diff --git a/js/src/vm/Stack.cpp b/js/src/vm/Stack.cpp
+index 2465a89b4..110b3281c 100644
+--- a/js/src/vm/Stack.cpp
++++ b/js/src/vm/Stack.cpp
+@@ -14,6 +14,9 @@
+ #include "jit/JitRuntime.h"
+ #include "js/friend/ErrorMessages.h"  // JSMSG_*
+ #include "js/Value.h"                 // JS::Value
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++#  include "vm/BytecodeUtil.h"  // js::StackUses
++#endif
+ #include "vm/FrameIter.h"             // js::FrameIter
+ #include "vm/JSContext.h"
+ #include "wasm/WasmProcess.h"
+@@ -406,6 +409,26 @@ void js::TraceActivations(JSContext* cx, JSTracer* trc) {
+ // we don't have to #include jsautooplen.h in vm/Stack.h.
+ void InterpreterRegs::setToEndOfScript() { sp = fp()->base(); }
+
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++void InterpreterRegs::popOwnedInlineFrame() {
++  MOZ_ASSERT(fp_->hasOwnedArguments());
++  pc = fp_->prevpc();
++  sp = fp_->prevsp() - (StackUses(JSOp(*pc), pc) - 1);
++  fp_ = fp_->prev();
++  MOZ_ASSERT(fp_);
++}
++
++void InterpreterStack::popOwnedInlineFrame(InterpreterRegs& regs) {
++  InterpreterFrame* fp = regs.fp();
++  regs.popOwnedInlineFrame();
++  if (!fp->discardsReturnValue()) {
++    regs.sp[-1] = fp->returnValue();
++  }
++  releaseFrame(fp);
++  MOZ_ASSERT(regs.fp());
++}
++#endif
++
+ /*****************************************************************************/
+
+ InterpreterFrame* InterpreterStack::pushInvokeFrame(
