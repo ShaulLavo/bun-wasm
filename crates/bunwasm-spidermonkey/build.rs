@@ -60,6 +60,9 @@ fn main() {
     if controls {
         shim.define("BUNSM_CONTROLS", "1");
     }
+    if env::var_os("CARGO_FEATURE_LOOP_CONTROLS").is_some() {
+        shim.define("BUNSM_LOOP_CONTROLS", "1");
+    }
     shim.cpp(true)
         .file(if env::var_os("CARGO_FEATURE_STANDALONE").is_some() {
             "cpp/shim.cpp"
@@ -81,6 +84,7 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/engine.h");
     println!("cargo:rerun-if-changed=tests/engine-semantics.cpp");
     println!("cargo:rerun-if-changed=tests/require-recovery.cpp");
+    println!("cargo:rerun-if-changed=tests/loop-dispatch.cpp");
     println!("cargo:rustc-link-search=native={}", native.display());
     println!("cargo:rustc-link-search=native={}", libcxx.display());
     println!("cargo:rustc-link-lib=static=spidermonkey_g2");

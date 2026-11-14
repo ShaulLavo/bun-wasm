@@ -41,6 +41,7 @@ required-features = ["unicode-generator"]
 [features]
 standalone = []
 controls = []
+loop-controls = ["controls"]
 unicode-controls = []
 unicode-generator = []
 

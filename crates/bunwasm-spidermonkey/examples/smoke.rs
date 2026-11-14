@@ -156,12 +156,15 @@ pub fn main() {
         let depth = number(&format!(
             "var d = 0; try {{ {code} }} catch (e) {{ if (!(e instanceof RangeError)) throw e; }} d"
         ));
-        let counted = pbl || label != "missing argument";
+        let counted = pbl || (label != "missing argument" && label != "getter");
         assert!(depth > 100.0, "{label} recursion depth {depth}");
         assert!(!counted || depth < 350.0, "{label} recursion depth {depth}");
+        assert!(pbl || label != "getter" || depth > 4096.0);
+
         assert_eq!(number("6 * 7"), 42.0);
     }
     println!("ok counted reentrant recursion");
+    println!("ok named getter frame storage and recovery");
     let polls = unsafe { sys::bsm_poll_count(tier) };
     let entries = unsafe { sys::bsm_pbl_entries() };
     assert!(polls >= 30000);

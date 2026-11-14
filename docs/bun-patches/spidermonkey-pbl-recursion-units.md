@@ -36,7 +36,7 @@ number of levels entered before the caught `RangeError`.
 
 | Path | PBL before | PBL after | Interpreter (unchanged) |
 | --- | --- | ---: | ---: |
-| Getter | browser stack overflow | 344 | 173 |
+| Getter | browser stack overflow | 344 | 173, now 50,999 ([loop dispatch](spidermonkey-loop-dispatch.md)) |
 | Setter | browser stack overflow | 344 | 173 |
 | Bound function | browser stack overflow | 342 | 115 |
 | Missing argument | browser stack overflow | 344 | 50,999 |
