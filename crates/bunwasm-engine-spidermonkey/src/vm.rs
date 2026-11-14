@@ -785,6 +785,7 @@ impl Engine for SpiderMonkey {
             .set("heapUsed", memory_counter(used))
             .set("external", memory_counter(external))
             .set("arrayBuffers", Val::Null)
+            .set("wasmCapacity", crate::engine::wasm_capacity())
             .into()
     }
 }
