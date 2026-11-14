@@ -1,0 +1,12 @@
+
+index.test.ts:
+(pass) nth return follows call order through throws and undefined
+(pass) nth return handles empty mocks and omitted expected values
+(pass) nth return validates the index with and without negation
+(pass) nth return uses deep equality and asymmetric matching
+(pass) nth return leaves incomplete recursive calls in their original positions
+
+ 5 pass
+ 0 fail
+ 96 expect() calls
+Ran 5 tests across 1 file. [TIME]

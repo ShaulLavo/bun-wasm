@@ -49,6 +49,37 @@
     return { body: `\n\nExpected: ${ctx.not ? "not " : ""}between ${start} (inclusive) and ${end} (exclusive)\nReceived: ${String(received)}\n` };
   }
 
+  function nthReturned(options: {
+    not?: boolean;
+    results: readonly unknown[];
+    nth: unknown;
+    expected: unknown;
+    equals(received: unknown, expected: unknown, strict: boolean): boolean;
+    inspect(value: unknown): string;
+    formatDiff(received: string, expected: string, strict: boolean): string;
+  }): Failure {
+    const { not, results, nth, expected, equals, inspect, formatDiff } = options;
+    if (typeof nth !== "number" || !Number.isInteger(nth) || Object.is(nth, -0) || nth < -(2 ** 51) || nth >= 2 ** 51) {
+      throw new TypeError("toHaveNthReturnedWith() first argument must be an integer");
+    }
+    if (nth <= 0) throw new TypeError("toHaveNthReturnedWith() n must be greater than 0");
+    const result = results[nth - 1];
+    const record = result !== null && typeof result === "object" ? result : undefined;
+    const type = record && "type" in record ? record.type : undefined;
+    const value = record && "value" in record ? record.value : undefined;
+    const pass = type === "return" && equals(value, expected, false);
+    if (pass !== !!not) return null;
+    if (not) return { body: `\n\nExpected mock function not to have returned on call ${nth}: ${inspect(expected)}\nBut it did.\n` };
+    if (nth > results.length) {
+      return { body: `\n\nThe mock function was called ${results.length} time${results.length === 1 ? "" : "s"}, but call ${nth} was requested.\n` };
+    }
+    if (type === "throw") return { body: `\n\nCall ${nth} threw an error: ${inspect(value)}\n` };
+    if (typeof value === "string" && typeof expected === "string") {
+      return { body: `\n\nCall ${nth}:\n${formatDiff(value, expected, false)}\n` };
+    }
+    return { body: `\n\nCall ${nth}:\nExpected: ${inspect(expected)}\nReceived: ${inspect(value)}` };
+  }
+
   function pending() {
     type Rejection = { kind: "none" } | { kind: "unhandled"; error: unknown };
     const records = new Map<Promise<unknown>, Rejection>();
@@ -96,5 +127,5 @@
     return { track, unhandled, complete };
   }
 
-  return { settle, throwOutcome, within, pending };
+  return { settle, throwOutcome, within, nthReturned, pending };
 })
