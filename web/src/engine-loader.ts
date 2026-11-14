@@ -223,8 +223,10 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
   if (build !== null) await verifyArtifact(name, bytes, build);
   else verifyWasm(name, bytes);
   progress(`verified ${name} (${mb(bytes.length)})…`);
-  if (build !== null && await cacheEngine(key, build, new Response(bytes, { headers: { "content-type": "application/wasm", "content-length": String(bytes.length) } }))) {
-    performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
+  if (build !== null) {
+    void cacheEngine(key, build, new Response(bytes, { headers: { "content-type": "application/wasm", "content-length": String(bytes.length) } })).then(stored => {
+      if (stored) performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
+    });
   }
   return { bytes, build };
 }
