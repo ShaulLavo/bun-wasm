@@ -624,14 +624,15 @@ whether the engine is V8. A worker cannot read touch points, and iPadOS Safari i
 sends a Macintosh user agent, so the page reports its platform, vendor, and `navigator.maxTouchPoints` in the run request's `stackHost` field.
 Both engine policies use that one field. QuickJS retains its positively observed desktop Safari rule above.
 
-| Host | JSC budget | Parser reserve |
-| --- | ---: | --- |
-| V8 (Chrome, Edge, Node) | 800 KiB | Default |
-| Desktop Firefox on Linux: `Firefox/`, `X11` and `Linux`, none of `Android`, `Mobile`, `Tablet`, `FxiOS` | 208 KiB | 960, measured below |
-| Desktop Firefox on macOS or Windows | 208 KiB | Default. Not measured |
-| macOS Safari | 192 KiB | Default. The measured Apple silicon override below is not selected automatically |
-| iPhone, iPad in either user-agent mode, any iOS browser | 192 KiB | Default. Only a native device run could qualify one |
-| Android Firefox, a Macintosh Safari identity with no touch-point fact, anything unknown | 192 KiB | Default |
+| Host | JSC budget | Parser reserve | SpiderMonkey quota |
+| --- | ---: | --- | ---: |
+| V8 (Chrome, Edge, Node) | 800 KiB | Default | Full |
+| Desktop Firefox on Linux: `Firefox/`, `X11` and `Linux`, none of `Android`, `Mobile`, `Tablet`, `FxiOS` | 208 KiB | 960, measured below | Full |
+| Desktop Firefox on macOS or Windows | 208 KiB | Default. Not measured | Full |
+| macOS Safari | 192 KiB | Default. The measured Apple silicon override below is not selected automatically | 188 KiB |
+| iPhone, iPad in either user-agent mode, any iOS browser | 192 KiB | Default. Only a native device run could qualify one | 188 KiB |
+| Android Firefox | 192 KiB | Default | Full |
+| A Macintosh Safari identity with no touch-point fact, anything else unknown | 192 KiB | Default | 188 KiB |
 
 A family without its own passing measurement keeps the default, and the catch-all never carries
 a reduced value. Playwright WebKit on Linux and a phone device descriptor on a desktop qualify
@@ -796,23 +797,47 @@ runs out on any reentry path, so unbounded getter, `.call` or Ajv-style recursio
 The engine's own byte check (`JS_SetNativeStackQuota`) counts shadow bytes, so
 `BUN_WASM_STACK_KIB` now sets it, and the recursive paths that hold few shadow bytes per host
 byte reserve more (`docs/bun-patches/spidermonkey-stack-budget.md` lists each site and size).
-With the reservations, every path holds about 0.2 shadow bytes per host byte on a cold worker.
+The browser host passes 188 KiB for SpiderMonkey on every WebKit host: desktop Safari, iPhone,
+iPad and the other iOS browsers (`web/src/engine-stack-budget.ts`). V8, desktop Firefox and
+Firefox on Android pass nothing and keep the full 8 MiB quota.
 
-Measured on Playwright WebKit 27.2 under `ulimit -s 512`, one fresh page per attempt, the guest
-catches unbounded input on every runtime and compile path at quotas up to 91 KiB (nested
-parentheses and function expressions, interp) to 256 KiB (paths the counter stops first).
-Statement nesting such as Ajv's generated validators is caught up to 109 KiB (interp) and
-115 KiB (PBL). In the native launcher, loading Next's webpack hook needs 117 KiB (interp) and
-129 KiB (PBL), and the guest's bootstrap 43 and 48 KiB.
+How it was measured: the guest in a fresh Playwright WebKit page per attempt, so its bootstrap
+runs and the shape meets cold code, on Darwin's 512 KiB worker stack: Playwright WebKit 26.6 on
+the M1 Mac and WebKit 27.2 on Linux under `ulimit -s 512`. Each shape recurses without bound
+through one path, and a second evaluation must then succeed. Runtime shapes are `.call`,
+`.apply`, getters, setters, Ajv's getter-and-`reduce` walk, bound functions, bound chains,
+proxies, `JSON.stringify` and nested-array `String`. Compile shapes are one construct nested
+20,000 deep in `eval`: blocks, `if` blocks, an Ajv-style validator, labels, labelled loops,
+arrays, calls, `?:` chains, arrows, functions, immediately called functions, classes, methods,
+parentheses, objects, unary operators, element access and templates.
 
-The two conflict, and no reservation size resolves it. Next's deepest compile path is the same
-statement nesting, 83 levels of an Ajv validator in `next/dist/compiled/webpack/bundle5.js`. Cold,
-those 83 levels need about 460 KiB of host stack. They fit in Safari only because the 2.5 MB
-bundle has warmed the parser's wasm into JavaScriptCore's optimized tier by then: compiled
-alone with no quota, the bundle needs 256 to 320 KiB of host stack. A byte budget cannot see that
-tier. A value at Next's need leaves cold statement nesting deeper than about 85 levels trapping.
-A value safe for cold nesting refuses Next. Until that choice is made, no host family passes a
-SpiderMonkey quota.
+| | Mac WebKit | Linux WebKit, 512 KiB |
+| --- | --- | --- |
+| At 188 KiB, caught and recovered | every shape except statement nesting, both tiers, two runs | the same |
+| Lowest quota still caught, other shapes | 193 KiB (parentheses, unary chains) | 209 KiB (PBL Ajv) |
+| Statement nesting caught up to | 118 to 144 KiB, or not at the 112 KiB floor tested | 112 to 144 KiB |
+
+The native launcher has no host limit, so it gives the quota each workload needs: the guest's
+bootstrap 97 KiB (interp) and 106 KiB (PBL), and loading Next's webpack hook (`require-hook` and
+`loadWebpackHook()`) 165 and 184 KiB. 188 KiB sits about 2 percent above Next's need and
+3 percent below the Mac's lowest capacity. The reservations cost no measurable CPU: a
+recursion-heavy script under the launcher, pinned to one core with 10 interleaved runs, took a
+median 1.42 s on main and 1.45 s here on interp, and 1.28 s and 1.26 s on PBL.
+
+### Known gap: cold statement nesting
+
+Nested `if`, loop, label and block statements compiled cold still overflow the worker stack
+first: past about 70 levels of Ajv-style validator or labelled loops on the Mac (about 90 on the
+Linux model), and past about 190 blocks or labels. This is the parser and emitter's host stack
+per statement. Main crashed on all of these shapes and on every runtime shape above much earlier.
+
+No byte budget can close it. Next's deepest compile path is the same statement nesting: 83
+levels of an Ajv validator in `next/dist/compiled/webpack/bundle5.js`. Cold, those levels need
+about 460 KiB of host stack. They fit in Safari only because the 2.5 MB bundle has warmed the
+parser's wasm into JavaScriptCore's optimized tier by then. Compiled alone with no quota, the
+bundle needs 256 to 320 KiB. A byte budget cannot see the tier, and statement reservations raise
+Next's need as fast as the shapes' capacity. So the value admits Next and leaves cold statement
+nesting to a separate design that makes each statement level cheaper.
 
 ## SpiderMonkey parser nesting
 
