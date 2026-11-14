@@ -44,6 +44,10 @@ function detached(Buffer: BufferFactory) {
   return buf;
 }
 
+function callableDetaching(buffer: ArrayBuffer) {
+  return Object.assign(() => 0, { valueOf() { structuredClone(buffer, { transfer: [buffer] }); return 0; } });
+}
+
 export function encodingChecks(Buffer: BufferFactory): Check[] {
   const checks: Check[] = [];
   const add = (name: string, run: () => void) => checks.push({ name, run });
@@ -132,6 +136,32 @@ export function encodingChecks(Buffer: BufferFactory): Check[] {
     equal(invoke(buf, "utf8Write", "é", 1.9, 2.9), 2);
     equal(invoke(buf, "utf16leWrite", "abc", 3, 3), 2);
     equal(bytes(buf), [0xcc, 0xc3, 0xa9, 97, 0, 0xcc]);
+  });
+  add("clamping writes check callable offset and length detachment", () => {
+    for (const method of ["ucs2Write", "utf16leWrite", "base64Write", "base64urlWrite", "hexWrite"]) {
+      const offsetStore = new ArrayBuffer(9), offsetView = Buffer.from(offsetStore);
+      typeError(() => invoke(offsetView, method, "abcd", callableDetaching(offsetStore)));
+      const lengthStore = new ArrayBuffer(9), lengthView = Buffer.from(lengthStore);
+      typeError(() => invoke(lengthView, method, "abcd", 0, callableDetaching(lengthStore)));
+    }
+  });
+  add("detached DataViews preserve empty-view and validation policies", () => {
+    for (const prefix of ["utf8", "hex"]) {
+      const store = new ArrayBuffer(4), view = new DataView(store);
+      structuredClone(store, { transfer: [store] });
+      equal(invoke(view, `${prefix}Slice`), "");
+      equal(invoke(view, `${prefix}Write`, "abcd"), 0);
+      equal(codeOf(() => invoke(view, `${prefix}Write`, "abcd", 1)), "ERR_BUFFER_OUT_OF_BOUNDS");
+      equal(codeOf(() => invoke(view, `${prefix}Write`, 123)), "ERR_INVALID_ARG_TYPE");
+      equal(codeOf(() => invoke(view, `${prefix}Write`, 123, -1)), prefix === "utf8" ? "ERR_BUFFER_OUT_OF_BOUNDS" : "ERR_INVALID_ARG_TYPE");
+    }
+  });
+  add("raw slice indexes saturate before comparing empty ranges", () => {
+    const buf = Buffer.alloc(4);
+    for (const prefix of ["utf8", "latin1", "ascii", "ucs2", "utf16le", "hex", "base64", "base64url"]) {
+      equal(invoke(buf, `${prefix}Slice`, 1e20, Infinity), "");
+      equal(invoke(buf, `${prefix}Slice`, Infinity, 1e20), "");
+    }
   });
   return checks;
 }

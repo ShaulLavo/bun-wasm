@@ -15,12 +15,15 @@ That source identifies Node v26.3.0 `src/node_internals.h`,
 Raw slices reject negative indexes and ends beyond the buffer, after the
 empty-range check. They accept ArrayBufferView receivers and decode bytes,
 including a DataView's byte offset. Public `toString` keeps its clamping policy.
+Indexes saturate at the signed 64-bit limit before empty ranges are compared.
+Intrinsic length accessors preserve zero length for an already detached
+DataView without invoking a receiver's overridden length property.
 
 UTF-8, latin1, and ASCII writers convert offsets and lengths before checking
 bounds and rejecting nonstrings. UCS2, UTF16LE, base64, base64url, and hex
 writers reject nonstrings first and clamp oversized lengths. These bindings
-also distinguish an already detached buffer from detachment during object
-argument conversion. They use the existing codecs without copying storage.
+also distinguish an already detached buffer from detachment during object or
+callable argument conversion. They use the existing codecs without copying storage.
 
 The legacy `buffer.js` Port delegates helper installation to this factory.
 Both `ucs2` and `utf16le` helper names use the UTF16LE codec. Existing public
