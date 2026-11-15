@@ -52,6 +52,20 @@ for (const event of ["pull_request", "push"]) {
 
 const compiledChecks = discoverChecks().filter(check => check.owner === "native" || check.owner === "runtime" || check.owner === "browser-guest");
 
+const legacyManifest = "checks/runtime-legacy-cli.json";
+const legacyCheck = discoverChecks().find(check => check.path === "scripts/legacy-cli-runtime.test.ts");
+if (legacyCheck?.owner !== "runtime") throw new Error("Missing legacy CLI runtime owner");
+for (const event of ["pull_request", "push"]) test.each(legacyCheck.inputs)(`${event} selects legacy CLI coverage for %s alone`, input => {
+  const repo = repository();
+  repo.write(legacyManifest, readFileSync(join(import.meta.dir, "..", legacyManifest), "utf8"));
+  repo.write(input, "original source\n");
+  const base = repo.commit();
+  repo.write(input, "changed source\n");
+  const selected = repo.select(base, repo.commit(), event);
+  expect(selected.output.startsWith("rust=true\n")).toBe(true);
+  expect(selected.inputs).toContain(input);
+});
+
 for (const event of ["pull_request", "push"]) {
   test(`${event} preserves JSC production for declared engine fixtures through edits and removal`, () => {
     const repo = repository();

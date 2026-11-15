@@ -187,6 +187,7 @@ beforeAll(() => {
   writeFileSync(join(fixture, "crates/lib.rs"), "owned native input\n");
   mkdirSync(join(fixture, "checks"));
   writeFileSync(join(fixture, "checks/native-json-fast-iterative.json"), readFileSync(new URL("../checks/native-json-fast-iterative.json", import.meta.url), "utf8"));
+  writeFileSync(join(fixture, "checks/runtime-legacy-cli.json"), readFileSync(new URL("../checks/runtime-legacy-cli.json", import.meta.url), "utf8"));
   git(["add", "."]);
   git(["commit", "-qm", "base"]);
   base = git(["rev-parse", "HEAD"]);

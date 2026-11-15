@@ -15,6 +15,11 @@ The helper now verifies the existing guest build receipt and companion before la
 rejects incomplete row accounting, and owns server and scratch cleanup.
 It performs no build, artifact substitution, or runtime repair.
 
+The runtime manifest declares its helper, CLI, supervisor, receipt and fixture inputs.
+The existing manifest parser and selector now accept these exact runtime paths and
+read them from verified base, head and merge-ancestor snapshots, including removals.
+This keeps helper-only changes under the same blocking preflight owner.
+
 `scripts/legacy-cli.test.ts` uses an owned TypeScript consumer control and tiny
 receipt fixtures to test orchestration. These controls do not establish live guest
 coverage. `scripts/legacy-cli-runtime.test.ts` executes all fourteen real rows.
