@@ -1,15 +1,15 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pinnedBashWeb, verifiedGuests } from "../bash-web-guests";
-import { preflight, preparationOptions, withStagedAssets } from "./preparation";
+import { preflight, preparationInput, preparationOptions, withStagedAssets } from "./preparation";
 import { engines } from "./catalog";
 import { engineFiles } from "./engines";
 import { parseMemoryProfile } from "../../web/src/program-profile";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
 import { writePreparedSiteInventory } from "./prepared-site";
-const { delivery, spidermonkey, shell: selectedShell, profile: requestedProfile } = preparationOptions(process.argv.slice(2));
+const { delivery, spidermonkey, shell: selectedShell, profile: requestedProfile, localSource } = preparationOptions(process.argv.slice(2));
 const profile = parseMemoryProfile(requestedProfile);
-const manifest: unknown = JSON.parse(await readFile(resolve(delivery, "../delivery-manifest.json"), "utf8"));
+const { assets: assetDirectory, manifest } = await preparationInput(delivery, localSource);
 if (!manifest || typeof manifest !== "object" || !("guestSource" in manifest) || !manifest.guestSource || typeof manifest.guestSource !== "object" || !("head" in manifest.guestSource) || typeof manifest.guestSource.head !== "string" || !/^[a-f0-9]{40}$/.test(manifest.guestSource.head)) throw new Error("Delivery manifest has no exact guest source commit");
 const guestHead = manifest.guestSource.head;
 const spiderMonkeySource: unknown = spidermonkey ? JSON.parse(await readFile(spidermonkey.source, "utf8")) : undefined;
@@ -17,7 +17,7 @@ const shell = resolve(selectedShell ?? process.env.BASH_WEB_GUESTS_DIR ?? "dist"
 const shellGuests = verifiedGuests(shell, pinnedBashWeb(resolve("web")));
 if (!shellGuests && (selectedShell || process.env.BASH_WEB_GUESTS_DIR)) throw new Error("Preparation requires current receipt-backed shell guests through --shell or BASH_WEB_GUESTS_DIR");
 const spiderMonkeyFiles: { file: string; bytes: number; sha256: string }[] = [];
-await withStagedAssets(join(delivery, "web"), async assets => {
+await withStagedAssets(assetDirectory, async assets => {
   if (spidermonkey) {
     for (const file of engineFiles("spidermonkey")) {
       const data = await Bun.file(join(assets, file)).bytes();
