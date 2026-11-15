@@ -1,4 +1,5 @@
-import type { GuestLauncher, Runtime, RuntimeSupervisor } from "waffle";
+import type { Runtime, RuntimeSupervisor } from "waffle";
+import type { HostLauncher, HostProcessService } from "waffle/runtime";
 import type { ProcessContext, ProcessExit } from "waffle/proc/types";
 import { ProcessError } from "waffle/proc/types";
 import { startFailureErrno } from "./package-start-diagnostic.js";
@@ -11,7 +12,7 @@ import { announcement, scriptDiagnostic, startupDiagnostic } from "./package-con
 import { PackageChildren } from "./package-continuation-children.js";
 import { parsePackagePlan, type PackagePhase, type PackagePlan } from "./package-continuation-plan.js";
 
-type Service = Parameters<GuestLauncher>[1];
+type Service = HostProcessService;
 type ChildResult = { readonly exit: ProcessExit; readonly diagnostic: string; readonly status: number };
 class Revoked extends Error {}
 
@@ -204,11 +205,11 @@ function publish(context: ProcessContext, result: ProcessExit): void {
 }
 
 /** Host-only prototype. No registration, guest trigger, continuation Worker or Wasm allocation. */
-export function packageContinuation(runtime: Pick<Runtime, "filesystem">): GuestLauncher {
+export function packageContinuation(runtime: Pick<Runtime, "filesystem">): HostLauncher {
   return (context, service) => launchContinuation(runtime, context, service);
 }
 
-function launchContinuation(runtime: Pick<Runtime, "filesystem">, context: Parameters<GuestLauncher>[0], service: Service) {
+function launchContinuation(runtime: Pick<Runtime, "filesystem">, context: Parameters<HostLauncher>[0], service: Service) {
     const owner = new LocalWork();
     const unregister = context.registerRevocation(owner.revoke);
     let io: ContinuationIO | undefined;

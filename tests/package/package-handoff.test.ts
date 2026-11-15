@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { createRuntime, type GuestLauncher, type ProgramDefinition, type RuntimeProcessContext } from "waffle";
+import { createRuntime, type ProgramDefinition, type RuntimeProcessContext } from "waffle";
+import type { HostLauncher } from "waffle/runtime";
 import { DescriptorTable, type Stream } from "waffle/core/descriptors";
 import { createProgramShell } from "./fixtures/program-shell.js";
 import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
@@ -150,7 +151,7 @@ test("committed startup failure never returns to the old caller", async () => us
   expect(f.observations.some(value => !!value && typeof value === "object" && "type" in value && value.type === "handoff-returned")).toBe(false);
 }), 30_000);
 
-for (const mode of ["root", "group", "thread", "filesystem", "cancelled"]) {
+for (const mode of ["root", "preview1", "filesystem", "cancelled"]) {
   test(`private binding checks ${mode} before invalid pointers`, async () => using(mode, async f => {
     const result = await (await f.start()).exit;
     expect(result.kind).toBe(mode === "cancelled" ? "signaled" : "exited");
@@ -180,8 +181,8 @@ async function setup({ runtime, tables, remove, mode, held, gate, installations,
   const reports: unknown[] = [];
   const startupFailure = new Error("owned startup failure");
   const owner = { ...runtime,
-    registerAdapter(name: string, launch: GuestLauncher) {
-      return runtime.registerAdapter(name, observingLauncher(name, launch, { successors, reports, startupFailure, mode }));
+    registerHostAdapter(name: string, launch: HostLauncher) {
+      return runtime.registerHostAdapter(name, observingLauncher(name, launch, { successors, reports, startupFailure, mode }));
     },
     registerProgram(name: string, definition: ProgramDefinition) {
       if (name !== PACKAGE_CONTINUATION || !held || !("module" in definition) || !definition.module) return runtime.registerProgram(name, definition);
@@ -231,7 +232,7 @@ async function setup({ runtime, tables, remove, mode, held, gate, installations,
   };
 }
 
-function observingLauncher(name: string, launch: GuestLauncher, observation: Pick<Fixture, "successors" | "reports" | "startupFailure"> & { mode: string }): GuestLauncher {
+function observingLauncher(name: string, launch: HostLauncher, observation: Pick<Fixture, "successors" | "reports" | "startupFailure"> & { mode: string }): HostLauncher {
   return (context, service) => {
     if (name === PACKAGE_ADAPTER) observation.successors.push(successor(context));
     const selected = name === PACKAGE_ADAPTER ? { ...context,

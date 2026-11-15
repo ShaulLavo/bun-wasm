@@ -1,4 +1,5 @@
-import type { ProcessService, RuntimeProcessContext } from "waffle";
+import type { RuntimeProcessContext } from "waffle";
+import type { HostProcessService } from "waffle/runtime";
 import { FilesystemClient } from "waffle/fs/client";
 import { createProcessFilesystemIdentity, reapFilesystem, revokeFilesystem, type FilesystemIdentity } from "waffle/fs/protocol";
 import { createFilesystemDescriptorCodec } from "waffle/proc/filesystem-codec";
@@ -36,7 +37,7 @@ export class PackageChildren {
   private readonly client: WorkerProcessClient;
   private readonly notices: WorkerProcessMessage[] = [];
 
-  constructor(filesystem: FilesystemClient, private readonly service: ProcessService, private readonly context: RuntimeProcessContext, transport: WorkerProcessTransport, identity: FilesystemIdentity) {
+  constructor(filesystem: FilesystemClient, private readonly service: HostProcessService, private readonly context: RuntimeProcessContext, transport: WorkerProcessTransport, identity: FilesystemIdentity) {
     this.filesystem = filesystem;
     const registry = attachPipePublicationRegistry(workerProcessPipeRegistry(transport));
     this.client = new WorkerProcessClient({ transport, descriptors: context.descriptors,

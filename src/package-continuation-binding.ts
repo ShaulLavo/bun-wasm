@@ -48,10 +48,11 @@ class PackageDescriptors {
 }
 
 /** Private executor binding. Positive results request scratch bytes; success never returns. */
-export function packageBinding(request: { readonly memoryGroup?: unknown; readonly adapter?: string }, hostCallFd: number) {
+export function packageBinding(request: { readonly adapter?: string }, hostCallFd: number) {
   let setup: WorkerSetupContext | undefined;
   let bound: WorkerBindingsContext | undefined;
   let execution: WorkerExecutionContext | undefined;
+  let memory: WebAssembly.Memory | undefined;
   let descriptors: PackageDescriptors | undefined;
   let execUnwind: { error: unknown } | undefined;
   const decode = new TextDecoder("utf-8", { fatal: true });
@@ -59,7 +60,7 @@ export function packageBinding(request: { readonly memoryGroup?: unknown; readon
 
   function unsupported(): boolean {
     const state = setup?.runtimeState;
-    if (!state || state.parentPid <= 0 || request.memoryGroup || request.adapter === "preview1") return true;
+    if (!state || state.parentPid <= 0 || request.adapter === "preview1") return true;
     if (setup?.request.filesystem.publication || setup?.request.filesystem.residentPublication) return true;
     return caughtSignals(state.signals.signalState);
   }
@@ -69,8 +70,7 @@ export function packageBinding(request: { readonly memoryGroup?: unknown; readon
     setup.checkActive();
     if (unsupported()) return -58;
     if (!execution?.process || !descriptors || bound?.wasi !== execution.wasi) throw new Error("Package binding was not installed");
-    const memory = execution.instance.exports.memory;
-    if (!(memory instanceof WebAssembly.Memory)) return -58;
+    if (!memory) return -58;
     const bytes = new Uint8Array(memory.buffer);
     const input = range(bytes, ptr, length);
     const output = range(bytes, out, capacity);
@@ -106,8 +106,21 @@ export function packageBinding(request: { readonly memoryGroup?: unknown; readon
       reserved.add(hostCallFd);
       descriptors = new PackageDescriptors(context.wasi.descriptors, reserved);
     },
-    instantiated(context: WorkerExecutionContext) {
+    instantiated(context: WorkerExecutionContext, linkedMemory?: WebAssembly.Memory) {
+      context.checkActive();
+      if (bound?.wasi !== context.wasi) throw new Error("Package binding WASI identity mismatch");
+      const exported = context.instance.exports.memory;
+      if (linkedMemory && exported !== undefined && exported !== linkedMemory) throw new Error("Package binding memory identity mismatch");
+      memory = linkedMemory ?? (exported instanceof WebAssembly.Memory ? exported : undefined);
       execution = context;
+    },
+    dispose() {
+      setup = undefined;
+      bound = undefined;
+      execution = undefined;
+      memory = undefined;
+      descriptors = undefined;
+      execUnwind = undefined;
     },
   };
 }

@@ -1,7 +1,6 @@
 import type { ProcessRuntime } from "./process-runtime.js";
 import { FilesystemClient } from "waffle/fs/client";
 import { createExecutable } from "./executable-marker.js";
-import { packageContinuation } from "./package-continuation.js";
 import { PACKAGE_ADAPTER, PACKAGE_CONTINUATION } from "./package-continuation-binding.js";
 
 interface PackageService {
@@ -18,7 +17,10 @@ export function packageService(runtime: ProcessRuntime) {
   let service = services.get(runtime);
   if (!service) {
     service = { users: 0, committed: false,
-      unregisterAdapter: runtime.registerAdapter(PACKAGE_ADAPTER, packageContinuation({ filesystem: runtime.filesystem })) };
+      unregisterAdapter: runtime.registerHostAdapter(PACKAGE_ADAPTER, async (context, process) => {
+        const { packageContinuation } = await import("./package-continuation.js");
+        return packageContinuation({ filesystem: runtime.filesystem })(context, process);
+      }) };
     services.set(runtime, service);
   }
   const owner = service;

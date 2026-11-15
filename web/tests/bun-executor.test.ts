@@ -393,7 +393,7 @@ for (const kind of ["exited", "signaled"] as const) test(`every process import c
         context.fs.release = () => {};
         executor.setup?.(context);
       },
-      imports(linked) { imports = linked.runtime_proc as typeof imports; },
+      imports(linked, context) { executor.imports?.(linked, context); imports = linked.runtime_proc as typeof imports; },
       run({ instance }) {
         const memory = instance.exports.memory as WebAssembly.Memory;
         // An invalid pointer alone is insufficient: an ABI might swallow its fault and
@@ -475,7 +475,7 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
           control.attach(request.runtimeProcess);
           await bootstrap(request, { ...executor,
             setup: context => setupLocalFilesystem(context, executor),
-            imports(linked) { call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
+            imports(linked, context) { executor.imports?.(linked, context); call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
             run({ instance, wasi }) {
               const fd = wasi.descriptors.open({ kind: "pipe", notification: state.wake,
                 read: () => -6, write: () => -6,
@@ -526,7 +526,7 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
       control.attach(request.runtimeProcess);
       await bootstrap(request, { ...executor,
         setup: context => setupLocalFilesystem(context, executor),
-        imports(linked) { call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
+        imports(linked, context) { executor.imports?.(linked, context); call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
         run({ instance, wasi }) {
           const fd = wasi.descriptors.open({ kind: "pipe", notification: state.wake,
             read: () => -6, write: () => -6,

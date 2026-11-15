@@ -96,7 +96,7 @@ self.onmessage = ({ data }: MessageEvent<Request>) => {
   void bootstrap(data, { ...executor,
     imports(value, context) { executor.imports?.(value, context); imports = value; return value; },
     run(context) {
-      if (["root", "group", "thread", "filesystem", "cancelled"].includes(data.mode)) return unsupported(context, data.mode);
+      if (["root", "preview1", "filesystem", "cancelled"].includes(data.mode)) return unsupported(context, data.mode);
       const prepared = prepare(context, imports, data.mode);
       reexec(context, imports, data.mode, prepared);
       const { memory, file, rootFd } = prepared;
@@ -125,7 +125,7 @@ function unsupported(context: WorkerExecutionContext, mode: string): number {
   const runtimeState = context.runtimeState;
   if (mode === "filesystem") Reflect.set(request.filesystem, "publication", {});
   const setup = { ...context, request, runtimeState: mode === "root" && runtimeState ? { ...runtimeState, parentPid: 0 } : runtimeState };
-  const binding = packageBinding({ memoryGroup: mode === "group" || mode === "thread" ? {} : undefined }, 0x7fff_b0b0);
+  const binding = packageBinding({ adapter: mode === "preview1" ? "preview1" : undefined }, 0x7fff_b0b0);
   const namespaces = binding.namespaces(setup);
   if (mode === "cancelled") {
     if (!context.outcome) throw new Error("No cancellation outcome");

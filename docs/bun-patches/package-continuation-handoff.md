@@ -7,14 +7,15 @@ remain separate from this source behavior.
 
 | Local source | Classification | Source and revision |
 | --- | --- | --- |
-| `src/package-continuation-binding.ts`, `package-continuation-installation.ts`, the installer and executor hooks | Original adapter | Waffle WorkerExecutor, DescriptorTable and ordinary exec contracts at `b6ce9c22e4032637814a3985fab934915be02bcc`, released as 0.0.130. No Waffle source is changed. |
+| `src/package-continuation-binding.ts`, `package-continuation-installation.ts`, the installer and executor hooks | Original adapter | Waffle WorkerExecutor, DescriptorTable and trusted host exec contracts at `8188acb35f2a2eead259e6cc1852d52964e5a8f7`, released as 0.0.132. No Waffle source is changed. |
 | `crates/bunwasm-runtime/src/host.rs` private handoff and `natives.rs` registration; `crates/bunwasm-host/src/slots.rs` unsupported import | Original adapter | Private Bun prepared-plan bridge over the same released exec contract. Native cancellation precedes NOTSUP and pointer access. |
 | `package_scripts.ts` `continuationPlan` and trigger; `package_scripts_types.d.ts` | Original adapter | Snapshots the actual guest environment and existing Bun-derived rewrite/quoting functions recorded in `package-scripts-through-the-shell.md`. Successful exec never returns. Any return other than precommit NOTSUP/NOSYS throws before entering the old loop. The feature-owned declaration describes this native result without changing shared declarations. |
 | `src/executable-marker.ts`, playground registration and subprocess-broker installation | Original adapter | Shared exclusive marker creation and per-consumer target leases over Waffle 0.0.131 at `5515535c372ea4b7c93bd90ceda3cf4756ef9373`. All production registrations install both the launcher and the private target before guest entry. No Waffle source is changed. |
 | `web/scripts/run.ts` private import | Original adapter | Waffle ProcessABI at the same 0.0.131 revision. The CLI has no continuation executor, so the import checks fatal cancellation through `signal(0, 4)` before returning NOTSUP without touching pointers or consuming handled signals. |
 | `src/package-start-diagnostic.ts` | Adapted implementation | Waffle `proc/start-errno.ts`, `proc/start-diagnostic.ts` and `proc/intrinsics/host.ts` at the same revision. Restricted to synchronous ProcessError reservations. Preserves bounded cause/stack rendering and UTF-8 truncation without importing unpublished source paths. Typed asynchronous startup diagnostics are already copied by Waffle. |
 | `tests/package/fixtures/program-shell.ts` | Adapted implementation | Waffle `tests/fixtures/program-shell.ts` at the same revision, using published entrypoints consistently with the installed consumer. Notice draining is extracted without changing supervision or consuming waits. The fixture records stdout and stderr separately and accepts the spawn cwd/job for installed-guest ownership controls. |
-| Package handoff Worker and tests | Original adapter | Tiny caller memory, actual installed runtime/WASI imports, filesystem Worker, ordinary exec, installer and supervisor. No maintained engine or guest producer is run. |
+| Package handoff Workers and tests | Original adapter | Tiny callers, actual installed runtime/WASI imports, filesystem Worker, ordinary/shared exec, installer and supervisor. No maintained engine or guest producer is run. |
+| `tests/package/fixtures/shared-handoff-program.ts` | Adapted implementation | Waffle `tests/fixtures/memory-group-pie.ts` at the 0.0.132 revision above. Builds executable PIE with no memory export, adding private handoff, owner-growth and WASI identity imports plus Bun executor entry declarations. It is a consumer control, not a maintained Bun guest. |
 | `web/src/engine-host.js`, its declaration and `bun-executor.ts` transfer wiring | Original adapter | Preserve the exact native exec throw through Browser entry promises to Waffle's existing Worker bootstrap. The existing JavaScript host remains directly importable by Node; recognition stays in the TypeScript binding and executor. |
 
 The executor captures the original root Descriptor after inherited bindings, checking
@@ -82,6 +83,33 @@ that one failed installation or disposal cannot remove another consumer's target
 The CLI control executes `run.ts` with a module importing and calling the handoff with
 invalid spans. These controls qualify source wiring, not maintained guest/browser
 acceptance. Fresh produced ordinary guests and the exact CLI, installer and page consumers
-remain required. Shared groups, roots, preview1, filesystem publications and HANDLE signals
-retain the 0.0.131 exclusions. Trusted host registration and imported shared memory belong
-to a separate release adoption.
+remain required. Roots, preview1, filesystem publications and HANDLE signals retain their
+exclusions. Waffle 0.0.132 admits an ordinary sole-member shared caller into the trusted
+host target. The consumer does no group census: Waffle owns typed-caller, reservation,
+surviving-member and retained-member refusal, and joins the real source retirement.
+
+The per-Runtime continuation uses `registerHostAdapter` and the restricted `HostLauncher`
+and `HostProcessService` types from `waffle/runtime`; it cannot acquire a Worker. The
+registered launcher imports its implementation only on target entry, keeping process
+clients, pipes and descriptor codecs out of the initial page/Worker graph. Registration
+and the private target lease remain synchronous. The existing startup graph checks
+continue to require lazy process ownership; no dependency is added to their exemptions.
+The UI filesystem fixture services real marker requests over owned filesystem ports,
+and closes those ports and services during page cleanup. Runner rollback controls inject
+the fault into the final borrowed filesystem, and the registration census counts the one
+Runtime-owned private target alongside the stable executable aliases.
+
+The executor passes its exact linker-owned memory into the private binding before the
+slots-off return. Exported memory must agree when present, and the WASI instance must
+match the one captured with descriptor bindings. Each handoff reads the current buffer,
+so owner growth cannot leave a stale view. Final cleanup clears the binding and captured
+linked memory even when linked-group cleanup fails. Guest ABI 2 and PID-only KILL stay
+unchanged.
+
+Released-Runtime controls use a genuine imported-memory PIE, slots off, real owner growth,
+WASI identity, conflicting bindings, invalid spans and cancellation precedence. They
+gate the source filesystem fence, exact native terminate return and accepted adapter
+cleanup separately; the host enters only after all return. A real second group member
+forces precommit NOTSUP while the source filesystem remains usable. These narrow tests
+complement Waffle's release-owned admission/debt suite. They do not qualify current
+maintained guests, Browser/QuickJS/JSC package dispatch, Safari or physical reclamation.

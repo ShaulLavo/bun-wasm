@@ -88,6 +88,11 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
       adapters.set(name, launch);
       return () => { if (adapters.get(name) === launch) adapters.delete(name); };
     },
+    registerHostAdapter(name, launch) {
+      if (adapters.has(name)) throw new Error(`Adapter already registered: ${name}`);
+      adapters.set(name, launch);
+      return () => { if (adapters.get(name) === launch) adapters.delete(name); };
+    },
     registerProgram(name, program) {
       if (registry.has(name)) throw new Error(`Program already registered: ${name}`);
       if (program.adapter !== undefined && !adapters.has(program.adapter)) throw new Error(`Unknown adapter: ${program.adapter}`);

@@ -26,6 +26,7 @@ const cleanups: Array<() => void> = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
 function fixture() {
   const adapters = new Map<string, GuestLauncher>();
+  const hostAdapters = new Set<string>();
   const programs = new Map<string, ProgramDefinition>();
   const files = new Map<string, Uint8Array>();
   const directories = new Set(["/"]);
@@ -39,6 +40,11 @@ function fixture() {
   const runtime = {
     network: () => networkOwner.network(),
     registerAdapter: (name: string, value: GuestLauncher) => register("adapter", adapters, name, value),
+    registerHostAdapter: (name: string, value: GuestLauncher) => {
+      const unregister = register("adapter", adapters, name, value);
+      hostAdapters.add(name);
+      return () => { unregister(); hostAdapters.delete(name); };
+    },
     registerProgram: (name: string, value: ProgramDefinition) => register("program", programs, name, value),
     filesystem: {
       directoryHandle: socketDirectoryFixture,
@@ -73,13 +79,14 @@ function fixture() {
       },
     },
   } as unknown as Runtime;
-  return { runtime, adapters, programs, files, directories, removed };
+  return { runtime, adapters, hostAdapters, programs, files, directories, removed };
 }
 
 test("install provisions /bin/bun and owns registrations without reserving a Runtime root", async () => {
   const f = fixture();
   const install = await installBunAdapters(f.runtime);
   expect(Array.from(f.adapters.keys())).toEqual([PACKAGE_ADAPTER, "bun:quickjs", "bun:jsc", "bun:browser"]);
+  expect(Array.from(f.hostAdapters)).toEqual([PACKAGE_ADAPTER]);
   expect(Array.from(f.programs.keys())).toEqual([PACKAGE_CONTINUATION, "/bin/bun", "/bin/node", "/bin/nodejs"]);
   expect(f.programs.get("/bin/bun")?.adapter).toBe("bun:browser");
   expect(f.directories.has("/bin")).toBe(true);
@@ -112,6 +119,7 @@ test("failed registration rolls back only this installation", async () => {
   f.programs.set("/bin/bun", existing);
   await expect(installBunAdapters(f.runtime)).rejects.toThrow("Already registered: /bin/bun");
   expect(f.adapters.size).toBe(0);
+  expect(f.hostAdapters.size).toBe(0);
   expect(f.programs.get("/bin/bun")).toBe(existing);
   expect(f.files.size).toBe(0);
   f.programs.delete("/bin/bun");

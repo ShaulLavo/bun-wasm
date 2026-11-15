@@ -153,7 +153,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     signalError(signal): never { throw new DefaultSignal(signal); },
     terminalSignal: error => error instanceof DefaultSignal ? error.signal : undefined,
     async instantiated(context) {
-      packages.instantiated(context);
+      packages.instantiated(context, groupMemory);
       const { instance, wasi, fs, checkActive, notifications } = context;
       // No guest code runs until this member holds every pre-attached buffer; a failed grant fails the start.
       if (sharedObjects) { await sharedObjects.ready; checkActive(); }
@@ -180,6 +180,8 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     beforeFinish() {
       try { linked.beforeFinish?.(); }
       finally {
+        packages.dispose();
+        groupMemory = undefined;
         try { terminal?.dispose(); }
         finally { finishHostServices(sharedObjects, lookupClient, req.lookupPort); }
       }
