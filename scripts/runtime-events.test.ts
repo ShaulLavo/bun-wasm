@@ -37,6 +37,39 @@ test("EventTarget limit initialization propagates failed writes", () => {
   expect(() => Events.getMaxListeners(Object.freeze(new EventTarget()))).toThrow(TypeError);
 });
 
+test("EventTarget limits reread transformed or existing storage", () => {
+  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  let stored: number | undefined;
+  const target = new EventTarget();
+  Object.defineProperty(target, Events.kMaxEventTargetListeners, {
+    get() { return stored; },
+    set(value: number) { stored = value + 1; Events.defaultMaxListeners = 2; },
+  });
+  expect(Events.getMaxListeners(target)).toBe(11);
+  let reads = 0;
+  const changing = new EventTarget();
+  Object.defineProperty(changing, Events.kMaxEventTargetListeners, {
+    get() { return ++reads === 1 ? 7 : 9; },
+  });
+  expect(Events.getMaxListeners(changing)).toBe(9);
+  expect(reads).toBe(2);
+});
+
+test("EventTarget limits propagate the readback getter exception", () => {
+  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  const sentinel = new Error("limit readback");
+  let reads = 0;
+  const target = new EventTarget();
+  Object.defineProperty(target, Events.kMaxEventTargetListeners, {
+    get() { if (++reads > 1) throw sentinel; },
+    set() {},
+  });
+  let thrown: unknown;
+  try { Events.getMaxListeners(target); } catch (error) { thrown = error; }
+  expect(thrown).toBe(sentinel);
+  expect(reads).toBe(2);
+});
+
 test("events permits only the exact audited constructor and private-invariant views", () => {
   const file = ts.createSourceFile("events.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const escapes: string[] = [];

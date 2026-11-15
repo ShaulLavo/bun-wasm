@@ -11,6 +11,8 @@ state before queued events drain. A fired once wrapper clears its emitter refere
 while retaining its public `.listener`, original receiver, and removal ordering.
 EventTarget limits use the exported limit symbol and reject unwritable storage.
 The first read stores the current default, preserving it across later default changes.
+The helper then reads the stored limit again, preserving accessor transformations
+and original readback exceptions, including when storage was already initialized.
 Borrowed native methods observe
 the `_events` getter before performing `once`, `eventNames`, or `getMaxListeners`.
 These changes keep local scheduling, listener storage and Promise construction;

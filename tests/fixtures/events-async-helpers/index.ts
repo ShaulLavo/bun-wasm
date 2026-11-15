@@ -117,6 +117,38 @@ function getterErrors() {
   console.log("borrowed native methods preserve the original events getter exception");
 }
 
+function listenerLimitReadback() {
+  const savedDefault = EventEmitter.defaultMaxListeners;
+  try {
+    EventEmitter.defaultMaxListeners = 10;
+    let stored: number | undefined;
+    const target = new EventTarget();
+    Object.defineProperty(target, EventEmitter.kMaxEventTargetListeners, {
+      get() { return stored; },
+      set(value: number) { stored = value + 1; EventEmitter.defaultMaxListeners = 2; },
+    });
+    assert.equal(getMaxListeners(target), 11);
+    let reads = 0;
+    const changing = new EventTarget();
+    Object.defineProperty(changing, EventEmitter.kMaxEventTargetListeners, {
+      get() { return ++reads === 1 ? 7 : 9; },
+    });
+    assert.equal(getMaxListeners(changing), 9);
+    assert.equal(reads, 2);
+    const sentinel = new Error("limit readback");
+    let throwReads = 0;
+    const throwing = new EventTarget();
+    Object.defineProperty(throwing, EventEmitter.kMaxEventTargetListeners, {
+      get() { if (++throwReads > 1) throw sentinel; },
+      set() {},
+    });
+    assert.throws(() => getMaxListeners(throwing), error => error === sentinel);
+    assert.equal(throwReads, 2);
+  } finally {
+    EventEmitter.defaultMaxListeners = savedDefault;
+  }
+}
+
 function listenerLimits() {
   const emitter = new EventEmitter();
   const target = new EventTarget();
@@ -144,6 +176,7 @@ function listenerLimits() {
   } finally {
     EventEmitter.defaultMaxListeners = savedDefault;
   }
+  listenerLimitReadback();
   console.log("listener limits support EventTarget and static helpers reject invalid targets");
 }
 
