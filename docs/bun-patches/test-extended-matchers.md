@@ -20,6 +20,8 @@ non-overlapping search and unsigned count conversion.
 Emptiness checks use Blob and file sizes, ArrayBuffer byte lengths, and iterable
 contents instead of object property counts. Iterables are consumed completely,
 without materializing their contents, and iterator exceptions propagate unchanged.
+Bun probes iterability before acquiring the iterator. The adapter preserves both
+iterator getter reads, reads `next` once, and uses the second iterator method.
 Existing array, string, Map, Set and ordinary object behavior remains in place.
 Async asymmetric extension results and recursive deep equality are outside this
 adapter. No mock, spy, engine or host interface code changes.

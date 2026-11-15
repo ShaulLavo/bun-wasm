@@ -90,6 +90,32 @@ check(visits === 3 && iterator.next().done, "emptiness consumes the full iterabl
 const sentinel = new Error("iterator failure");
 const broken = { *[Symbol.iterator]() { yield 1; throw sentinel; } };
 check(thrown(() => call(broken, "toBeEmpty", [], true)) === sentinel, "iterator error identity");
+let iteratorReads = 0;
+let nextReads = 0;
+let steps = 0;
+const observedIterator = {
+  get next() {
+    nextReads++;
+    return () => ({ done: steps++ > 0, value: 1 });
+  },
+};
+const observed = {
+  get [Symbol.iterator]() {
+    iteratorReads++;
+    return () => observedIterator;
+  },
+};
+call(observed, "toBeEmpty", [], true);
+check(iteratorReads === 2 && nextReads === 1 && steps === 2, "iterator getter and next counts");
+let methodReads = 0;
+const changing = {
+  get [Symbol.iterator]() {
+    methodReads++;
+    return methodReads === 1 ? function* () { yield 1; } : function* () {};
+  },
+};
+call(changing, "toBeEmpty");
+check(methodReads === 2, "uses the iterator acquired after the iterability probe");
 await Bun.write("expect-empty.txt", "");
 await Bun.write("expect-full.txt", "x");
 call(Bun.file("expect-empty.txt"), "toBeEmpty");

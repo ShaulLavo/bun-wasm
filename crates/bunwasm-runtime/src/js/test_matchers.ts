@@ -59,17 +59,19 @@
     return typeof value === "number" && Number.isInteger(value) && Math.abs(value % 2) === 1;
   }
 
+  function isIterable(value: object): value is Iterable<unknown> {
+    return typeof Reflect.get(value, Symbol.iterator) === "function";
+  }
+
   function empty(value: unknown): boolean {
     if (typeof value === "string" || value instanceof String || Array.isArray(value)) return value.length === 0;
     if (value instanceof Map || value instanceof Set || value instanceof Blob) return value.size === 0;
     if (value instanceof ArrayBuffer) return value.byteLength === 0;
     if (ArrayBuffer.isView(value) && !(value instanceof DataView)) return value.byteLength === 0;
     if (value === null || typeof value !== "object" && typeof value !== "function") return false;
-    const iterate: unknown = Reflect.get(value, Symbol.iterator);
-    if (typeof iterate !== "function") return Object.keys(value).length === 0;
-    const iterable: Iterable<unknown> = { [Symbol.iterator]: () => Reflect.apply(iterate, value, []) };
+    if (!isIterable(value)) return Object.keys(value).length === 0;
     let empty = true;
-    for (const _item of iterable) empty = false;
+    for (const _item of value) empty = false;
     return empty;
   }
 
