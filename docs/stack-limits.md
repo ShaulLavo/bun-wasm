@@ -927,8 +927,9 @@ In the real guest on the M1 Mac (Playwright WebKit 26.6, 512 KiB worker stacks),
 | Observed deepest compile (of the wrapper-only ceiling) | PBL none, interpreter 10 of 80 (earlier Angular gate run) | PBL 16 of 29, interpreter 49 of 80 |
 
 After the merge the bytecode emitter is the deepest pass for braced statements compiled in full,
-at about 172 levels of the Ajv shape on the Mac. Unit 2 of the parser design re-places the small
-stack guard's reservations on the surviving frames and adds one for the emitter.
+at about 172 levels of the Ajv shape on the Mac. The small stack guard's reservations now sit on
+the surviving frames, with one for the emitter
+(["SpiderMonkey on small stacks"](#spidermonkey-on-small-stacks) above).
 
 ## SpiderMonkey getters, call and apply in the interpreter loop
 

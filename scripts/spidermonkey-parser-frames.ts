@@ -404,7 +404,7 @@ const reservingFrames = {
   assignExpr: "AssignExprReserve", unaryExpr: "UnaryExprReserve", memberExpr: "MemberExprReserve",
 } as const;
 
-export function reservationSizes(patch: string): Record<string, number> {
+function reservationSizes(patch: string): Record<string, number> {
   return Object.fromEntries(Array.from(patch.matchAll(/^\+inline constexpr size_t (\w+Reserve) = (\d+);$/gm), match => [match[1]!, Number(match[2])]));
 }
 

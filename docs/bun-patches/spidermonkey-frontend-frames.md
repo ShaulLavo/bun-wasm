@@ -8,21 +8,24 @@ other builds keep the original code.
 | --- | --- | --- |
 | `js/src/frontend/Parser.h`, `GeneralParser` declarations | Port | `BUNWASM_PARSER_MERGED` (`MOZ_ALWAYS_INLINE`) on the in-class declarations of `statementListItem`, `blockStatement`, `consequentOrAlternative`, `optionalExpr`, `primaryExpr`, `exprInParens`, `orExpr` and `condExpr`, and a never-inline `unbracedFunctionConsequent`. |
 | `js/src/frontend/Parser.cpp`, the same members' definitions | Port | The same attribute on the definitions (`orExpr` and `condExpr` were already always-inline there). |
-| `js/src/frontend/Parser.cpp`, `consequentOrAlternative` | Port | A braced body goes to `blockStatement` directly. It holds and checks the recursion unit `statement` would hold, before consuming the `{`, then consumes it as `statement` does, and it holds `statement`'s 336-byte stack budget reservation. The Annex B branch (an unbraced function declaration under `if`) moves unchanged into `unbracedFunctionConsequent`, so its statement and scope objects stay out of `ifStatement`'s merged frame. |
+| `js/src/frontend/Parser.cpp`, `consequentOrAlternative` | Port | A braced body goes to `blockStatement` directly. It holds and checks the recursion unit `statement` would hold, before consuming the `{`, then consumes it as `statement` does. The Annex B branch (an unbraced function declaration under `if`) moves unchanged into `unbracedFunctionConsequent`, so its statement and scope objects stay out of `ifStatement`'s merged frame. |
 
 ## Stack budget reservations
 
-The [stack budget](spidermonkey-stack-budget.md) reserves shadow bytes in parser functions. Their
-sizes are unchanged here; re-sizing them for the merged frames is calibrated separately.
+The [stack budget](spidermonkey-stack-budget.md) reserves shadow bytes in the frames these merges
+leave on each cycle, one size per surviving frame. That record has the sizes and the measurements
+behind them.
 
-- `statementListItem`'s 352 bytes now sit in `statementList`'s frame, the function it is merged
-  into, so every statement level still holds them.
-- The braced `if` body no longer passes through `statement`, so the fast path holds `statement`'s
-  336 bytes. A fixed-size local lands in `ifStatement`'s merged frame for the whole call, so an
-  `if` with an unbraced body now holds 336 bytes in `ifStatement` as well as 336 in `statement`.
-- The never-inline reservation wrappers around parenthesised expressions, function expressions
-  and the branches of `?:` stay as they are. Each is one extra frame on its cycle; the structural
-  check accepts a cycle edge that passes through one.
+- `statementListItem`'s reservation sits in `statementList`'s frame (and `switchStatement`'s), the
+  functions it is merged into, so every statement level holds it.
+- `ifStatement` reserves for its own frame, so a braced `if` level holds `statementList`'s and
+  `ifStatement`'s, one per frame. An `if` with an unbraced body holds `ifStatement`'s and
+  `statement`'s, again one per frame.
+- `assignExpr`, `unaryExpr` and `memberExpr` each reserve for their own frame. The never-inline
+  reservation wrappers that guarded parenthesised expressions, function expressions and the
+  branches of `?:` are gone, so no wrapper frame sits on a parser cycle. The structural check
+  requires each surviving edge to be a direct call and each of these six frames to hold at least
+  its reservation, in all four instantiations.
 
 ## Why
 
@@ -44,9 +47,9 @@ bound and its entry-depth and function weights accept and refuse at the same dep
 
 - `scripts/spidermonkey-parser-frames.ts` reads the name section and call graph of a linked
   module. For each of the four instantiations (full and syntax parser, UTF-8 and two-byte) it
-  requires the merged members to be gone and the surviving cycle edges to exist.
-  `scripts/spidermonkey-parser.test.ts` runs it on the smoke and the ordinary engine side; main's
-  library fails it.
+  requires the merged members to be gone, the surviving cycle edges to be direct calls, and each
+  reserving frame's shadow frame to hold at least its size from the patch's table.
+  `scripts/spidermonkey-parser.test.ts` runs it on the smoke and the ordinary engine side.
 - The same test runs a differential corpus (`scripts/spidermonkey-parser-semantics.ts`) through
   the smoke on both tiers: 86 sources, each compiled directly as UTF-8 (script, and an inner
   function called once) and as two-byte strings through `eval`, a lazy inner function and
