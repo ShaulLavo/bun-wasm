@@ -14,6 +14,13 @@ removes a Unicode BOM only after decoding succeeds, so a fatal chunk does not
 consume the stream's first output code point. Each completed stream resets that
 serialization state. The native codec implementation and public ABI are unchanged.
 
+After a completed UTF-8 decode releases its initial handle, subsequent completed
+calls use the existing stateless `utf8Decode` operation. It performs real UTF-8
+validation or replacement decoding and honors fatal mode. Pending streams and
+other encodings continue through the incremental codec. The shared input,
+options, error and BOM handling applies to both paths. This avoids creating,
+registering and releasing a new native handle for every independent UTF-8 chunk.
+
 The Web factory consumes the decoder class exported by the production polyfill
 loader. Source controls execute that loader's actual bootstrap block and the Web
 installer, so a factory/export mismatch fails before decoding assertions run.

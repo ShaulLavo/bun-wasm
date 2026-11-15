@@ -18,6 +18,28 @@ extern "C" void bunsm_test_deferred_getter(JSContext* cx) {
   getterCollections++;
 }
 
+// Call and apply routes: counted, and the owned (apply list) route can collect
+// between its eligibility check and frame publication, and fail its prologue.
+unsigned collectBeforeApply = 0;
+bool failLoopCallPrologue = false;
+size_t loopCalls = 0;
+size_t ownedLoopCalls = 0;
+size_t applyCollections = 0;
+
+extern "C" void bunsm_test_loop_call(JSContext* cx, bool owned) {
+  loopCalls++;
+  if (failLoopCallPrologue) {
+    failLoopCallPrologue = false;
+    failNextPrologue = true;
+  }
+  if (!owned) return;
+  ownedLoopCalls++;
+  if (!collectBeforeApply || --collectBeforeApply) return;
+  JS::PrepareForFullGC(cx);
+  JS::NonIncrementalGC(cx, JS::GCOptions::Shrink, JS::GCReason::API);
+  applyCollections++;
+}
+
 extern "C" bool bunsm_test_inline_prologue(JSContext* cx) {
   if (!failNextPrologue) return true;
   failNextPrologue = false;
@@ -219,6 +241,146 @@ void async_getter_stacks() {
   puts("ok async getter parent stack");
 }
 
+void moving_apply_gc() {
+  for (const char* source : {
+      // A temporary receiver and list: only the operands keep them alive.
+      "function f(a, b){ return this.marker + a.value + b; } if (f.apply({marker: 40}, [{value: 1}, 1]) !== 42) throw 1;",
+      // An unmapped arguments object as the list.
+      "function f(a, b){ 'use strict'; return this.marker + a.value + b; } function g(){ 'use strict'; return f.apply(this, arguments); } if (g.call({marker: 40}, {value: 1}, 1) !== 42) throw 2;",
+      // A mapped arguments object as the list.
+      "function f(a, b){ return this.marker + a.value + b; } function g(a, b){ return f.apply(this, arguments); } if (g.call({marker: 40}, {value: 1}, 1) !== 42) throw 3;"}) {
+    collectBeforeApply = 1;
+    auto before = applyCollections;
+    loop_success(source);
+    check(!collectBeforeApply && applyCollections == before + 1, "shrinking GC before apply frame publication");
+  }
+  puts("ok moving GC before apply frame publication");
+}
+
+void debugger_calls(bool pbl) {
+  size_t before = loopCalls;
+  debugger_evaluate(R"JS(
+    function assert(v, label) { if (!v) throw new Error(label + (hookFailure ? ' after hook failure ' + hookFailure : '')); }
+    var dbg = watch(new Debugger(debuggee));
+    var g = dbg.makeGlobalObjectReference(debuggee);
+    g.executeInGlobal("function target(a, b) { return [this && this.marker, a, b, arguments.length].join(); }", {url:'call-target.js'});
+    var shapes = ["target.call({marker:1}, 2, 3)", "target.call()", "target.apply({marker:1}, [2, 3])", "target.apply({marker:1}, null, 9)", "(function(){ return target.apply({marker:1}, arguments); })(2, 3)"];
+    var entered = 0, left = 0, exceptions = 0;
+    dbg.onEnterFrame = frame => {
+      if (frame.callee?.name !== 'target') return;
+      entered++;
+      frame.onPop = completion => { left++; };
+    };
+    var expected = ["1,2,3,2", ",,,0", "1,2,3,2", "1,,,0", "1,2,3,2"];
+    shapes.forEach((shape, i) => {
+      var result = g.executeInGlobal(shape, {url:'call-site.js'});
+      assert(result.return === expected[i] && entered === i + 1 && left === i + 1, 'one enter and leave for ' + shape + ': ' + JSON.stringify(result));
+    });
+    dbg.onEnterFrame = frame => {
+      if (frame.callee?.name !== 'target') return;
+      frame.onPop = completion => { left++; };
+      return {return: 73};
+    };
+    left = 0;
+    shapes.forEach(shape => {
+      var result = g.executeInGlobal(shape, {url:'call-forced.js'});
+      assert(result.return === 73, 'forced return through ' + shape);
+    });
+    assert(left === shapes.length, 'forced frames left once each');
+    dbg.onEnterFrame = undefined;
+    dbg.onExceptionUnwind = (frame, value) => {
+      if (frame.callee?.name === 'thrower') exceptions++;
+    };
+    var result = g.executeInGlobal("var token={}; function thrower(){ throw token; } var seen = 0; try { thrower.call(null); } catch (e) { seen += e === token; } try { thrower.apply(null, [1]); } catch (e) { seen += e === token; } seen;", {url:'call-throw.js'});
+    assert(result.return === 2 && exceptions === 2, 'exception hook and identity ' + JSON.stringify(result) + ' ' + exceptions);
+    dbg.onExceptionUnwind = undefined;
+    var locations = [], stacks = [];
+    dbg.onEnterFrame = frame => {
+      if (frame.callee?.name !== 'located') return;
+      var caller = frame.older;
+      var location = caller.script.getOffsetMetadata(caller.offset);
+      locations.push(JSON.stringify([location.lineNumber, location.columnNumber]));
+    };
+    var source = 'function located(){return new Error().stack;}\nfunction viaCall(){return located.call(this, 1);}\nfunction viaApply(){return located.apply(this, [1]);}\n[viaCall(), viaApply()].join("|");';
+    var locate = () => stacks.push(g.executeInGlobal(source, {url:'call-location.js'}).return);
+    locate();
+    dbg.onNativeCall = () => {};
+    locate();
+    assert(locations.length === 4 && locations[0] === locations[2] && locations[1] === locations[3], 'caller line and column ' + locations.join(' '));
+    assert(debuggeeFrames(stacks[0]) === debuggeeFrames(stacks[1]) && stacks[0].includes('viaCall@call-location.js:2:') && stacks[0].includes('viaApply@call-location.js:3:'), 'saved call stack ' + JSON.stringify(stacks));
+    dbg.onNativeCall = undefined;
+    dbg.onEnterFrame = undefined;
+    debuggee.crossTarget = function crossTarget(a) { return this.marker + a; };
+    result = g.executeInGlobal("[crossTarget.call({marker:40}, 2), crossTarget.apply({marker:40}, [2])].join();", {url:'call-realm.js'});
+    assert(result.return === '42,42', 'cross-realm targets');
+    dbg.removeAllDebuggees();
+  )JS");
+  // Five shapes, five forced, two throws and two unobserved locations.
+  check(pbl || loopCalls >= before + 14, "Debugger call cases take the loop route");
+  puts("ok call and apply Debugger hooks, forced return, exception, caller PC, saved stack and realm");
+}
+
+void native_observer_call_exclusion() {
+  size_t before = loopCalls;
+  debugger_evaluate(R"JS(
+    var dbg = watch(new Debugger(debuggee));
+    var g = dbg.makeGlobalObjectReference(debuggee);
+    var natives = 0;
+    dbg.onNativeCall = () => { natives++; };
+    var result = g.executeInGlobal('function f(a){ return a; } f.call(null, 20) + f.apply(null, [22]);');
+    if (result.return !== 42 || natives < 2) throw new Error('observed call and apply ' + JSON.stringify(result) + ' ' + natives);
+    dbg.removeAllDebuggees();
+  )JS");
+  check(loopCalls == before, "native observer excludes call and apply routes");
+  loop_success("function f(a){ return a; } if (f.call(null, 20) + f.apply(null, [22]) !== 42) throw 1;");
+  check(loopCalls == before + 2, "call and apply take the loop after native observer removed");
+  puts("ok native-call observer keeps call and apply native");
+}
+
+void async_call_stacks() {
+  auto entry = loop_stack();
+  {
+    Value saved(script("new Error()", "async-parent.js"));
+    JS::RootedObject error(context, object(saved.handle));
+    JS::RootedObject stack(context, JS::ExceptionStackOrNull(error));
+    check(stack != nullptr, "async parent saved frame");
+    JS::AutoSetAsyncStackForNewCalls async(context, stack, "call-parent", JS::AutoSetAsyncStackForNewCalls::AsyncCallKind::EXPLICIT);
+    debugger_evaluate(R"JS(
+      var dbg = watch(new Debugger(debuggee)), g = dbg.makeGlobalObjectReference(debuggee);
+      var source = 'function stackOf(){return new Error().stack;} stackOf.call(null) + stackOf.apply(null, [1]);';
+      var run = () => g.executeInGlobal(source, {url:'async-call.js'}).return;
+      var loop = run();
+      dbg.onNativeCall = () => {};
+      var generic = run();
+      if (debuggeeFrames(loop) !== debuggeeFrames(generic) || !loop.includes('call-parent')) throw new Error('async parent stack ' + JSON.stringify([loop, generic]));
+      dbg.removeAllDebuggees();
+    )JS");
+  }
+  balanced(entry, "stack balanced after async parent");
+  puts("ok async call and apply parent stack");
+}
+
+void call_balance(bool pbl) {
+  loop_success("var units=stackUnits(); var left=32; function f(){ return left-- ? f.call(this) : stackUnits(); } if (!(f() >= units)) throw 1;");
+  loop_success("var token={}; var left=32; function f(){ try { if (left--) return f.apply(this, arguments); throw token; } finally {} } try { f(1); } catch (e) { if (e !== token) throw 1; }");
+  loop_failure("function f(){ throw 0; } f.call(null);");
+  loop_failure("var token={}; function f(){ throw token; } f.apply(null, [1]);");
+  loop_success("function f(){ return f.call(this); } try { f(); throw 1; } catch (e) { if (!(e instanceof RangeError)) throw e; }");
+  loop_success("function f(){ return f.apply(this, arguments); } try { f(1); throw 1; } catch (e) { if (!(e instanceof RangeError)) throw e; }");
+  if (pbl) return;
+  // On the interpreter tier the routes hold no recursion unit.
+  loop_success("var units=stackUnits(); var left=128; function f(){ return left-- ? f.call(this) : stackUnits(); } if (f() !== units) throw 1;");
+  loop_success("var units=stackUnits(); var left=128; function f(a){ return left-- ? f.apply(this, arguments) : stackUnits(); } if (f(1) !== units) throw 1;");
+  loop_success("var units=stackUnits(); var left=128; function f(a){ return left-- ? f.apply(this, [a]) : stackUnits(); } if (f(1) !== units) throw 1;");
+  moving_apply_gc();
+  for (const char* source : {"function f(){ return 42; } f.call(null, 1);", "function f(){ return 42; } f.apply(null, [1]);", "function f(){ return 42; } f.apply(null, null);"}) {
+    failLoopCallPrologue = true;
+    loop_failure(source);
+    check(!failLoopCallPrologue && !failNextPrologue, "call route prologue failure reached");
+  }
+  native_observer_call_exclusion();
+}
+
 void loop_controls() {
   setvbuf(stdout, nullptr, _IONBF, 0);
   bool pbl = getenv("BUN_WASM_SPIDERMONKEY_TIER") && !strcmp(getenv("BUN_WASM_SPIDERMONKEY_TIER"), "pbl");
@@ -241,13 +403,18 @@ void loop_controls() {
     check(!failGetterPrologue && !failNextPrologue, "prologue failure reached");
     native_observer_exclusion();
   }
+  call_balance(pbl);
+  check(pbl || (ownedLoopCalls && loopCalls > ownedLoopCalls), "call and apply routes taken on the interpreter tier");
   debugger_getters();
   async_getter_stacks();
+  debugger_calls(pbl);
+  async_call_stacks();
   puts("ok frame and recursion-unit balance on success, throw, exhaustion and prologue failure");
   interruptAt = 1;
   // The host interrupt is polled at loop back-edges and returns, so it lands in
-  // the loop under 48 live getter frames, which termination must unwind.
-  loop_failure("var left=48;var o={get value(){if(left--)return this.value;for(;;){}}};o.value;");
+  // the loop under 48 live getter, call and apply frames, which termination
+  // must unwind.
+  loop_failure("var left=48;function f(){if(left--){return left%3==0?f.call(this):left%3==1?f.apply(this,[1]):this.value;}for(;;){}}var o={get value(){return f.call(this);}};f.call(o);");
   check(bsm_terminated(), "getter interruption terminates");
   puts("ok frame and recursion-unit balance on interruption");
 }
