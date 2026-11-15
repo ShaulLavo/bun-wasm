@@ -53,8 +53,8 @@ test("native-only selections provision the tools JSC prerequisite without enabli
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
   }
-  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') }}");
-  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true') }}");
+  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true')) }}");
+  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true'))) }}");
   for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps)]) {
     expect(prerequisite).not.toHaveProperty("if");
   }

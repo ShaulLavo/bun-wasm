@@ -3,9 +3,9 @@ import { appendFileSync } from "node:fs";
 import { nativeCheckInputsAt } from "./ci-check-inputs";
 import { selectChanges, selectionOutput, type CheckSelection } from "./ci-changes";
 
-export const coverageMarker = "Resolve cumulative main coverage v1";
+export const coverageMarker = "Resolve cumulative main coverage v2";
 const workflowPath = ".github/workflows/ci.yml";
-const fullSelection: CheckSelection = { rust: true, jsc: true, shared: true, shared_native: true };
+const fullSelection: CheckSelection = { rust: true, jsc: true, shared: true, shared_native: true, browser_guest: true };
 const limits = { edges: 64, pages: 80, jobInspections: 24, milliseconds: 30_000 };
 
 type Coverage =
@@ -85,14 +85,14 @@ function selectionAcross(chain: readonly string[], distance: number, checkTime: 
     if (!inputs) { inputs = nativeCheckInputsAt(ref, selection); cache.set(key, inputs); }
     return inputs;
   };
-  const selection: CheckSelection = { rust: false, jsc: false, shared: false, shared_native: false };
+  const selection: CheckSelection = { rust: false, jsc: false, shared: false, shared_native: false, browser_guest: false };
   for (let index = distance; index > 0; index--) {
     const base = chain[index];
     const head = chain[index - 1];
     if (!base || !head) throw new Error("Incomplete first-parent edge");
     checkTime();
     const edge = selectChanges(base, head, false, inputsAt);
-    for (const key of ["rust", "jsc", "shared", "shared_native"] as const) selection[key] ||= edge[key];
+    for (const key of ["rust", "jsc", "shared", "shared_native", "browser_guest"] as const) selection[key] ||= edge[key];
   }
   checkTime();
   return selection;
@@ -183,8 +183,8 @@ async function runCli(): Promise<void> {
     },
   });
   const summary = result.kind === "verified"
-    ? `Cumulative main coverage v1: run ${result.run}, base ${result.base}, head ${result.head}, ${result.edges} first-parent edges.`
-    : `Cumulative main coverage v1: all families selected for head ${result.head}. ${result.reason}.`;
+    ? `Cumulative main coverage v2: run ${result.run}, base ${result.base}, head ${result.head}, ${result.edges} first-parent edges.`
+    : `Cumulative main coverage v2: all families selected for head ${result.head}. ${result.reason}.`;
   console.error(summary);
   const output = selectionOutput(result.selection);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n\n\`\`\`\n${output}\n\`\`\`\n`);

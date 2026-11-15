@@ -25,7 +25,7 @@ run_report() {
   test "$(grep -c '^api --method POST repos/ShaulLavo/fixture/statuses/tested-head ' "$STATUS_LOG")" = 11
 }
 baseline=$(cat <<'JSON'
-{"selection":{"result":"success","outputs":{"rust":"true","shared":"true"}},"quality":{"result":"success"},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-proof":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
+{"selection":{"result":"success","outputs":{"rust":"true","browser_guest":"true","shared":"true"}},"quality":{"result":"success"},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-proof":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
 JSON
 )
 export RESULTS="$baseline"
@@ -39,7 +39,7 @@ while IFS='|' read -r context job selection; do
     grep -Fq -- "-f context=$context -f state=failure " "$STATUS_LOG"
   done
   [[ -n "$selection" ]] || continue
-  RESULTS=$(jq --arg job "$job" --arg selection "$selection" '.[$job].result = "skipped" | .selection.outputs[$selection] = "false"' <<< "$baseline")
+  RESULTS=$(jq --arg job "$job" --arg selection "$selection" '.[$job].result = "skipped" | .selection.outputs[$selection] = "false" | if $selection == "rust" then .selection.outputs.browser_guest = "false" else . end' <<< "$baseline")
   run_report
   test "$(grep -c -- '-f state=success ' "$STATUS_LOG")" = 11
   RESULTS=$(jq '.selection.result = "failure"' <<< "$RESULTS")
@@ -58,6 +58,11 @@ Processes (chromium)|browser-process|
 Processes (firefox)|browser-process|
 Processes (webkit)|browser-process|
 CASES
+for job in jsc-prebuild native-quality rust; do
+  RESULTS=$(jq --arg job "$job" '.selection.outputs.rust = "false" | .[$job].result = "skipped"' <<< "$baseline")
+  run_report
+  test "$(grep -c -- '-f state=failure ' "$STATUS_LOG")" = 1
+done
 RESULTS=$(jq 'del(."ci-result")' <<< "$baseline")
 if bash -euo pipefail "$scratch/report.sh"; then
   echo 'Missing CI result was accepted' >&2; exit 1

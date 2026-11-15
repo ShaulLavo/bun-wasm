@@ -12,7 +12,7 @@ Add one `checks/<owner>-<feature>.json` file for a new script test or native fix
 
 Owners are `runtime`, `web`, `quality`, `package-extra`, `cmake`, `web-browser`,
 `browser-guest` and `native`. `browser-guest` checks serve the playground site built from
-the same commit's browser guest (`scripts/browser-guest-site.ts`). CI's rust job builds that
+the same commit's browser guest (`scripts/browser-guest-site.ts`). CI's selected Rust or PR-only Browser producer builds that
 site once from its receipt-verified guest and uploads it with its identities
 (`browser-guest-site`). Browser guest batch jobs in Chromium and WebKit download it and pass it
 in `BUN_WASM_BROWSER_SITE`; each check verifies the site's closed inventory, guest and
@@ -78,8 +78,10 @@ valid metadata; empty files and symlinks fail selection.
 Runtime manifests may also declare `inputs` as a nonempty list of exact repository
 paths for their helpers and fixtures. These inputs select the existing native
 preflight from the same three snapshots, including removed declarations.
-Browser guest harnesses and their manifests also select the existing Rust producer,
-which builds the receipt-verified guest and bundles the site once. A `browser-guest`
+Browser guest harnesses and their manifests select fresh production. Browser-only
+PR inputs use the separate producer; independent native inputs and non-PR runs
+retain the Rust route. Each route uses the existing guest entrypoints and bundles
+the site once. Both routes retain the required browser and Processes consumers. A `browser-guest`
 manifest may declare `inputs` as a nonempty list of exact repository paths for
 feature source or helpers that also need this gate. The selector reads these inputs
 from the same three snapshots, including removals. The check keeps its Browser guest

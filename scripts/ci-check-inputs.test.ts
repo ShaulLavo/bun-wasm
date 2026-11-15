@@ -25,13 +25,15 @@ function repository() {
     git(["commit", "-qm", "fixture"]);
     return git(["rev-parse", "HEAD"]);
   }
-  function select(base: string, head: string, event: string) {
-    const result = spawnSync("bun", [join(import.meta.dir, "ci-changes.ts"), base, head], {
+  function select(base: string, head: string, event: string, families = false) {
+    const script = join(import.meta.dir, "ci-changes.ts");
+    const args = families ? ["--eval", `import { selectChanges, selectionOutput } from ${JSON.stringify(script)}; console.log(selectionOutput(selectChanges(${JSON.stringify(base)}, ${JSON.stringify(head)}, ${event === "pull_request"})));`] : [script, base, head];
+    const result = spawnSync("bun", args, {
       cwd: directory, encoding: "utf8", env: { ...process.env, GITHUB_EVENT_NAME: event }, stdio: ["ignore", "pipe", "pipe"],
     });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(result.stderr);
-    return { output: result.stdout.trim().split("\n").slice(0, 3).join("\n"), profile: result.stdout.trim().split("\n")[3], inputs: result.stderr.trim() };
+    return { output: result.stdout.trim().split("\n").slice(0, 3).join("\n"), profile: result.stdout.trim().split("\n")[3], inputs: result.stderr.trim(), browser: result.stdout.trim().split("\n")[4] };
   }
   git(["init", "-q"]);
   write("base.txt", "fixture\n");
@@ -112,8 +114,8 @@ for (const event of ["pull_request", "push"]) {
       repo.write(input, "first\n");
       const registered = repo.commit();
       repo.write(input, "changed\n");
-      expect(repo.select(registered, repo.commit(), event).output).toBe("rust=true\njsc=false\nshared=false");
-      expect(repo.select(base, registered, event).output).toBe("rust=true\njsc=false\nshared=false");
+      expect(repo.select(registered, repo.commit(), event).output).toBe(`rust=${owner !== "browser-guest"}\njsc=false\nshared=false`);
+      expect(repo.select(base, registered, event).output).toBe(`rust=${owner !== "browser-guest"}\njsc=false\nshared=false`);
     });
     test(`${event} reads removed ${owner} check paths from the base snapshot`, () => {
       const repo = repository();
@@ -125,8 +127,8 @@ for (const event of ["pull_request", "push"]) {
       repo.write("checks/web-new-owned-case.json", JSON.stringify({ owner: "web", path: "scripts/replacement.test.ts", localRuntime: true }));
       repo.write("scripts/replacement.test.ts", "replacement\n");
       const selected = repo.select(base, repo.commit(), event);
-      expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
-      expect(selected.inputs).toContain(input);
+      expect(selected.output).toBe(`rust=${owner !== "browser-guest"}\njsc=false\nshared=false`);
+      if (owner !== "browser-guest") expect(selected.inputs).toContain(input);
     });
   }
   test(`${event} keeps source-only Web registration and edits outside the native job`, () => {
@@ -156,9 +158,10 @@ for (const event of ["pull_request", "push"]) {
     const base = repo.commit();
     repo.write(path, path === largeMessageManifest ? `${readFileSync(join(repo.directory, path), "utf8")}\n` : "changed\n");
     const selected = repo.select(base, repo.commit(), event);
-    expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
+    expect(selected.output).toBe(`rust=${false}\njsc=false\nshared=false`);
     expect(selected.profile).toBe("shared_native=false");
-    expect(selected.inputs).toBe(`Native inputs changed: ${path}`);
+    expect(selected.browser).toBe("browser_guest=true");
+    expect(selected.inputs).toBe("Native inputs changed: none");
   });
 
   test.each(["split", "shared-group"] as const)(`${event} retains removed %s Browser guest secondary inputs`, profile => {
@@ -171,14 +174,14 @@ for (const event of ["pull_request", "push"]) {
     repo.write(input, "changed\n");
     const changed = repo.commit();
     const selectedChange = repo.select(base, changed, event);
-    expect(selectedChange.output).toBe("rust=true\njsc=false\nshared=false");
+    expect(selectedChange.output).toBe(`rust=${profile === "shared-group"}\njsc=false\nshared=false`);
     expect(selectedChange.profile).toBe(`shared_native=${profile === "shared-group"}`);
     rmSync(join(repo.directory, manifest));
     rmSync(join(repo.directory, input));
     const selected = repo.select(changed, repo.commit(), event);
-    expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
+    expect(selected.output).toBe(`rust=${profile === "shared-group"}\njsc=false\nshared=false`);
     expect(selected.profile).toBe(`shared_native=${profile === "shared-group"}`);
-    expect(selected.inputs).toContain(input);
+    if (profile === "shared-group") expect(selected.inputs).toContain(input);
   });
 
   test(`${event} reads a fixture's second command from the snapshot that declares it, added or deleted`, () => {
@@ -374,4 +377,216 @@ for (const event of ["pull_request", "push"]) test(`${event} selects shared prof
   rmSync(join(repo.directory, manifest));
   rmSync(join(repo.directory, input));
   expect(repo.select(changed, repo.commit(), event).profile).toBe("shared_native=true");
+});
+
+function familyOutput(repo: ReturnType<typeof repository>, base: string, head: string, event = "pull_request"): string {
+  const selected = repo.select(base, head, event, true);
+  return [selected.output, selected.profile, selected.browser].join("\n");
+}
+
+const browserFamily = "rust=false\njsc=false\nshared=false\nshared_native=false\nbrowser_guest=true";
+const nativeFamily = "rust=true\njsc=false\nshared=false\nshared_native=false\nbrowser_guest=true";
+const noFamily = "rust=false\njsc=false\nshared=false\nshared_native=false\nbrowser_guest=false";
+
+function storageRepository() {
+  const repo = repository();
+  repo.write("checks/browser-guest-sandbox-storage.json", readFileSync(join(import.meta.dir, "../checks/browser-guest-sandbox-storage.json"), "utf8"));
+  return repo;
+}
+
+const pr819Paths = ["sandbox/template-next/next.config.ts", "scripts/next-build-scheduling.test.ts", "docs/bun-patches/next-build-scheduling.md"];
+
+test("exact PR 819 and Storage-only inputs select fresh Browser production through the live selector", () => {
+  for (const paths of [pr819Paths, [pr819Paths[0]!]]) {
+    const repo = storageRepository();
+    const base = repo.commit();
+    for (const path of paths) repo.write(path, "PR 819 change\n");
+    const head = repo.commit();
+    expect(familyOutput(repo, base, head)).toBe(browserFamily);
+    expect(repo.select(base, head, "pull_request").output).toBe("rust=false\njsc=false\nshared=false");
+    expect(repo.select(base, head, "pull_request").browser).toBe("browser_guest=true");
+    for (const event of ["push", "workflow_dispatch"]) expect(familyOutput(repo, base, head, event)).toBe(browserFamily);
+  }
+});
+
+test.each([
+  "crates/bunwasm-runtime/src/host.rs", "web/src/native-direct-stream.ts", "web/src/bun-launcher.ts",
+  "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "bun.lock", ".github/workflows/ci.yml",
+  "scripts/build-unclassified.sh", ".github/actions/shared-jsc-setup/action.yml",
+])("independent native cause %s overrides ordinary Browser ownership", path => {
+  const repo = storageRepository();
+  repo.write("checks/browser-guest-overlap.json", JSON.stringify({ owner: "browser-guest", path: "scripts/overlap.test.ts", inputs: [path] }));
+  const base = repo.commit();
+  repo.write(path, "native input\n");
+  const head = repo.commit();
+  const selected = repo.select(base, head, "pull_request", true);
+  expect(selected.output).toStartWith("rust=true\n");
+  expect(selected.browser).toBe("browser_guest=true");
+  expect(selected.output).toBe(repo.select(base, head, "pull_request").output);
+  expect(selected.profile).toBe(repo.select(base, head, "pull_request").profile);
+});
+
+test.each(["native", "runtime", "native-probe"] as const)("dual Browser and %s declarations retain independent native correctness", owner => {
+  const repo = repository();
+  const input = owner === "native" ? "tests/fixtures/dual/guest.ts" : "scripts/dual.test.ts";
+  repo.write("checks/browser-guest-dual.json", JSON.stringify({ owner: "browser-guest", path: "scripts/browser-dual.test.ts", inputs: [input] }));
+  repo.write(`checks/${owner}-dual.json`, JSON.stringify({ owner, path: owner === "native" ? "tests/fixtures/dual" : input, ...(owner === "native-probe" ? { inputs: ["scripts/secondary.ts"] } : {}) }));
+  const base = repo.commit();
+  repo.write(input, "dual-owned change\n");
+  expect(familyOutput(repo, base, repo.commit())).toBe(nativeFamily);
+});
+
+test.each(["quickjs", "browser", "spidermonkey", "jsc"])("native engine %s preserves its own JSC selection without global expansion", engine => {
+  const repo = repository();
+  repo.write("checks/native-engine-selection.json", JSON.stringify({ owner: "native", path: "tests/fixtures/engine-selection", engines: [engine] }));
+  const base = repo.commit();
+  repo.write("tests/fixtures/engine-selection/expected.txt", "expected output\n");
+  const selected = repo.select(base, repo.commit(), "pull_request", true);
+  expect(selected.output).toBe(`rust=true\njsc=${engine === "jsc"}\nshared=false`);
+  expect(selected.browser).toBe("browser_guest=true");
+});
+
+test("shared Browser ownership always keeps the full shared native route", () => {
+  const repo = repository();
+  repo.write("checks/browser-guest-group.json", JSON.stringify({ owner: "browser-guest", path: "scripts/group.test.ts", inputs: ["web/src/group.ts"], profile: "shared-group" }));
+  const base = repo.commit();
+  repo.write("web/src/group.ts", "group input\n");
+  expect(familyOutput(repo, base, repo.commit())).toBe("rust=true\njsc=false\nshared=false\nshared_native=true\nbrowser_guest=true");
+});
+
+test.each(["split", "shared-group"] as const)("%s Browser declarations retain introduction, edits, renames and removals", profile => {
+  const repo = repository();
+  const manifest = "checks/browser-guest-lifecycle.json";
+  const input = "web/src/lifecycle.ts";
+  const expected = profile === "split" ? browserFamily : "rust=true\njsc=false\nshared=false\nshared_native=true\nbrowser_guest=true";
+  const base = repo.commit();
+  repo.write(manifest, JSON.stringify({ owner: "browser-guest", path: "scripts/lifecycle.test.ts", inputs: [input], ...(profile === "shared-group" ? { profile } : {}) }));
+  repo.write(input, "before\n");
+  const introduced = repo.commit();
+  expect(familyOutput(repo, base, introduced)).toBe(expected);
+  repo.write(input, "edited\n");
+  const edited = repo.commit();
+  expect(familyOutput(repo, introduced, edited)).toBe(expected);
+  repo.git(["mv", input, "web/src/lifecycle-renamed.ts"]);
+  repo.write(manifest, JSON.stringify({ owner: "browser-guest", path: "scripts/lifecycle.test.ts", inputs: ["web/src/lifecycle-renamed.ts"], ...(profile === "shared-group" ? { profile } : {}) }));
+  const renamed = repo.commit();
+  expect(familyOutput(repo, edited, renamed)).toBe(expected);
+  const renamedManifest = "checks/browser-guest-lifecycle-renamed.json";
+  repo.git(["mv", manifest, renamedManifest]);
+  const manifestMoved = repo.commit();
+  expect(familyOutput(repo, renamed, manifestMoved)).toBe(expected);
+  repo.git(["rm", renamedManifest, "web/src/lifecycle-renamed.ts"]);
+  expect(familyOutput(repo, manifestMoved, repo.commit())).toBe(expected);
+});
+
+test.each(["browser-guest", "runtime", "native-probe"] as const)("ancestor-only %s ownership survives deletion on both PR branches", owner => {
+  const repo = repository();
+  const manifest = `checks/${owner}-ancestor-family.json`;
+  const input = "scripts/ancestor-family.ts";
+  repo.write(manifest, JSON.stringify({ owner, path: "scripts/ancestor-family.test.ts", ...(owner === "runtime" ? {} : { inputs: [input] }) }));
+  const owned = owner === "runtime" ? "scripts/ancestor-family.test.ts" : input;
+  repo.write(owned, "before\n");
+  const ancestor = repo.commit();
+  repo.git(["checkout", "-qb", "target"]);
+  repo.git(["rm", manifest]);
+  repo.write("target.txt", "target\n");
+  const base = repo.commit();
+  repo.git(["checkout", "--detach", ancestor]);
+  repo.git(["rm", manifest]);
+  repo.write(owned, "changed after deletion\n");
+  const head = repo.commit();
+  expect(repo.git(["merge-base", base, head])).toBe(ancestor);
+  expect(familyOutput(repo, base, head)).toBe(owner === "browser-guest" ? browserFamily : nativeFamily);
+});
+
+test.each(["base", "head", "ancestor"])("the additive API rejects malformed or unsafe %s snapshots even outside the selected family", side => {
+  const repo = repository();
+  repo.write("checks/quality-invalid.json", "");
+  const invalid = repo.commit();
+  repo.git(["rm", "checks/quality-invalid.json"]);
+  repo.write("target.txt", "target\n");
+  const base = repo.commit();
+  repo.git(["checkout", "--detach", invalid]);
+  repo.git(["rm", "checks/quality-invalid.json"]);
+  repo.write("head.txt", "head\n");
+  const head = repo.commit();
+  expect(() => familyOutput(repo, side === "base" ? invalid : base, side === "head" ? invalid : head)).toThrow();
+});
+
+test("missing comparison history fails closed and the initial-push fallback keeps native production", () => {
+  const repo = repository();
+  const head = repo.commit();
+  expect(familyOutput(repo, "0".repeat(40), head, "push")).toContain("rust=true\n");
+  expect(() => familyOutput(repo, "1".repeat(40), head)).toThrow();
+});
+
+test("unrelated UI, docs and source-only Web/quality checks select no producer family", () => {
+  const repo = storageRepository();
+  repo.write("checks/web-source-only-family.json", JSON.stringify({ owner: "web", path: "scripts/source-only-family.test.ts", localRuntime: true }));
+  repo.write("checks/quality-source-only-family.json", JSON.stringify({ owner: "quality", path: "scripts/source-only-quality.test.ts" }));
+  const base = repo.commit();
+  for (const path of ["web/src/unrelated-ui.ts", "docs/unrelated.md", "scripts/source-only-family.test.ts", "scripts/source-only-quality.test.ts"]) repo.write(path, "source-only change\n");
+  expect(familyOutput(repo, base, repo.commit())).toBe(noFamily);
+});
+
+test("version-only package edits preserve the live native exception while real package edits retain it", () => {
+  const repo = repository();
+  repo.write("package.json", JSON.stringify({ version: "0.0.1", scripts: { check: "original" } }));
+  const base = repo.commit();
+  repo.write("package.json", JSON.stringify({ version: "0.0.2", scripts: { check: "original" } }));
+  const version = repo.commit();
+  expect(repo.select(base, version, "pull_request", true).output).toBe(repo.select(base, version, "pull_request").output);
+  expect(repo.select(base, version, "pull_request", true).output).toStartWith("rust=false\n");
+  repo.write("package.json", JSON.stringify({ version: "0.0.2", scripts: { check: "changed" } }));
+  expect(repo.select(version, repo.commit(), "pull_request", true).output).toStartWith("rust=true\n");
+});
+
+test("family filtering never suppresses an unsafe manifest or check directory", () => {
+  const repo = repository();
+  repo.write("checks/quality-control.json", JSON.stringify({ owner: "quality", path: "scripts/control.test.ts" }));
+  const base = repo.commit();
+  symlinkSync("quality-control.json", join(repo.directory, "checks/browser-guest-unsafe.json"));
+  const unsafeManifest = repo.commit();
+  expect(() => familyOutput(repo, base, unsafeManifest)).toThrow("Unsafe check manifest");
+  repo.git(["rm", "-r", "checks"]);
+  symlinkSync("elsewhere", join(repo.directory, "checks"));
+  expect(() => familyOutput(repo, base, repo.commit())).toThrow("Unsafe check directory");
+});
+
+test.each(["native", "runtime", "native-probe"] as const)("introduced and removed %s declarations retain native routing until the next comparison", owner => {
+  const repo = repository();
+  const input = owner === "native" ? "tests/fixtures/family-transition/guest.ts" : "scripts/family-transition.test.ts";
+  const manifest = `checks/${owner}-family-transition.json`;
+  const base = repo.commit();
+  repo.write(manifest, JSON.stringify({ owner, path: owner === "native" ? "tests/fixtures/family-transition" : input, ...(owner === "native-probe" ? { inputs: ["scripts/family-transition-helper.ts"] } : {}) }));
+  repo.write("checks/browser-guest-family-transition.json", JSON.stringify({ owner: "browser-guest", path: "scripts/browser-family-transition.test.ts", inputs: [input] }));
+  repo.write(input, "introduced\n");
+  const introduced = repo.commit();
+  expect(familyOutput(repo, base, introduced)).toBe(nativeFamily);
+  repo.git(["rm", manifest]);
+  const removed = repo.commit();
+  expect(familyOutput(repo, introduced, removed)).toBe(nativeFamily);
+  repo.write(input, "ordinary Browser ownership only\n");
+  expect(familyOutput(repo, removed, repo.commit())).toBe(browserFamily);
+});
+
+test.each(["native-setup", "native-seed", "native-production"])("shared action %s selects every native, JSC and shared consumer through edit, rename and removal", action => {
+  const repo = repository();
+  repo.write("checks/native-shared-action-control.json", JSON.stringify({ owner: "native", path: "tests/fixtures/shared-action-control", profile: "shared-group" }));
+  const path = `.github/actions/${action}/action.yml`;
+  const base = repo.commit();
+  repo.write(path, "introduced\n");
+  const introduced = repo.commit();
+  const full = "rust=true\njsc=true\nshared=true\nshared_native=true\nbrowser_guest=true";
+  expect(familyOutput(repo, base, introduced)).toBe(full);
+  repo.write(path, "edited\n");
+  const edited = repo.commit();
+  expect(familyOutput(repo, introduced, edited)).toBe(full);
+  repo.git(["mv", path, `${path}.moved`]);
+  const renamed = repo.commit();
+  expect(familyOutput(repo, edited, renamed)).toBe(full);
+  repo.git(["mv", `${path}.moved`, path]);
+  const restored = repo.commit();
+  repo.git(["rm", path]);
+  expect(familyOutput(repo, restored, repo.commit())).toBe(full);
 });

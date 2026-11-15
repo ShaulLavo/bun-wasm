@@ -3,6 +3,10 @@ import { discoverChecks } from "./test-checks";
 import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-check-inputs";
 import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
+const nativePreparationFiles = new Set([
+  ".github/actions/native-setup/action.yml", ".github/actions/native-seed/action.yml", ".github/actions/native-production/action.yml",
+]);
+
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "scripts/fixtures/magic-string/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/wasm-validation/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "scripts/ci-program-delivery.ts",
@@ -45,7 +49,7 @@ const sharedSysrootFiles = new Set([
 ]);
 
 export function needsSharedSysroot(paths: readonly string[]): boolean {
-  return paths.some(path => sharedSysrootFiles.has(path));
+  return paths.some(path => (nativePreparationFiles.has(path) || sharedSysrootFiles.has(path)));
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
@@ -91,7 +95,7 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
 const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/", "spidermonkey/"];
 export function needsSharedNative(paths: readonly string[], inputs: readonly string[] = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
-  return paths.some(path => !excludedNativeInput(path) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
+  return paths.some(path => !excludedNativeInput(path) && (nativePreparationFiles.has(path) || sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
 }
 
 const nativeChecks = discoverChecks();
@@ -170,7 +174,7 @@ function excludedNativeInput(path: string): boolean {
 function nativeInput(path: string, checkInputs: readonly string[]): boolean {
   if (excludedNativeInput(path)) return false;
   return ordinarySpiderMonkeyInput(path) || path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || matchesCheckInput(path, checkInputs)
-    || path.startsWith("web/tests/bun-runtime-proc-") || nativeFiles.has(path) || nativeScripts.test(path)
+    || path.startsWith("web/tests/bun-runtime-proc-") || nativePreparationFiles.has(path) || nativeFiles.has(path) || nativeScripts.test(path)
     || nativeDirectories.some(root => path.startsWith(root));
 }
 
@@ -183,7 +187,7 @@ function ordinarySpiderMonkeyInput(path: string): boolean {
 }
 
 export function needsJsc(paths: readonly string[], inputs: readonly string[] = jscNativeCheckInputs): boolean {
-  return paths.some(path => path !== "jsc/README.md" && (sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs)));
+  return paths.some(path => path !== "jsc/README.md" && (sharedWebGuestInput(path) || nativePreparationFiles.has(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs)));
 }
 
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
@@ -217,9 +221,10 @@ export interface CheckSelection {
   jsc: boolean;
   shared: boolean;
   shared_native: boolean;
+  browser_guest: boolean;
 }
 
-function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[], jscInputs: readonly string[]): CheckSelection {
+function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[], jscInputs: readonly string[]) {
   return { rust: native.length > 0, jsc: needsJsc(paths, jscInputs), shared: needsSharedSysroot(paths), shared_native: needsSharedNative(native, profileInputs) };
 }
 
@@ -228,11 +233,16 @@ export function selectChanges(base: string, head: string, pullRequest = false, i
   const ancestor = pullRequest && !/^0+$/.test(base)
     ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8", timeout: 5_000 }).trim() : base;
   const refs = Array.from(new Set([base, head, ancestor]));
-  const native = nativeChanges(paths, base, head, refs.flatMap(ref => inputsAt(ref)));
-  console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
+  const correctnessInputs = refs.flatMap(ref => inputsAt(ref, { family: "native-correctness" }));
+  const browserInputs = refs.flatMap(ref => inputsAt(ref, { family: "ordinary-browser" }));
   const profileInputs = refs.flatMap(ref => inputsAt(ref, { profile: "shared-group" }));
   const jscInputs = refs.flatMap(ref => inputsAt(ref, { profile: "split", engine: "jsc" }));
-  return classifyChanges(paths, native, profileInputs, jscInputs);
+  const native = nativeChanges(paths, base, head, correctnessInputs);
+  console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
+  const selection = classifyChanges(paths, native, profileInputs, jscInputs);
+  const browser = paths.some(path => matchesCheckInput(path, browserInputs));
+  const full = selection.rust;
+  return { rust: full, jsc: selection.jsc, shared: selection.shared, shared_native: selection.shared_native, browser_guest: full || browser };
 }
 
 export function selectionOutput(selection: CheckSelection): string {

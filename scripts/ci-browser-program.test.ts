@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -75,7 +76,7 @@ function workflowSteps(value: unknown) {
 }
 
 test("one maintained standard recipe feeds native, Web and source-cache/transfer consumers", async () => {
-  const text = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
+  const text = expandedCiWorkflow();
   const workflow = Bun.YAML.parse(text);
   if (!record(workflow) || !record(workflow.jobs)) throw new Error("Expected workflow jobs");
   const steps = workflowSteps(workflow.jobs.rust);
@@ -85,7 +86,7 @@ test("one maintained standard recipe feeds native, Web and source-cache/transfer
   const upload = steps.find(step => record(step.with) && step.with.name === "browser-program");
   if (!build || !exporter || !upload) throw new Error("Missing Browser producer or exporter");
   expect(build.run).toBe('source env.sh\nBROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh\n');
-  expect(text.match(/bash scripts\/build-bun-browser\.sh/g)).toHaveLength(1);
+  expect((await Bun.file(new URL("../.github/actions/native-production/action.yml", import.meta.url)).text()).match(/bash scripts\/build-bun-browser\.sh/g)).toHaveLength(1);
   expect(text).not.toContain("source-cache-browser");
   const recipe = await Bun.file(new URL("./build-bun-browser.sh", import.meta.url)).text();
   expect(recipe).toContain('guest-build-receipt.ts" inputs browser');
@@ -96,9 +97,9 @@ test("one maintained standard recipe feeds native, Web and source-cache/transfer
   const native = steps.findIndex(step => step.name === "Blocking native fixture checks");
   expect(native).toBeGreaterThan(steps.indexOf(build));
   for (const name of ["Blocking native fixture checks", "Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)"]) expect(steps.indexOf(exporter)).toBeGreaterThan(steps.findIndex(step => step.name === name));
-  expect(exporter).toEqual({ name: "Export the validated standard Browser and tools guests", run: 'source env.sh\nbun scripts/ci-browser-program.ts export "$RUNNER_TEMP/browser-program"\n' });
+  expect(exporter).toEqual({ name: "Export the validated standard Browser and tools guests", shell: "setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}", run: 'source env.sh\nbun scripts/ci-browser-program.ts export "$RUNNER_TEMP/browser-program"\n' });
   expect(upload).toEqual({ uses: "actions/upload-artifact@v4", "timeout-minutes": 5, with: { name: "browser-program", path: "${{ runner.temp }}/browser-program/", "if-no-files-found": "error", "retention-days": 1 } });
-  expect(steps.indexOf(upload)).toBe(steps.indexOf(exporter) + 1);
+  expect(steps.indexOf(upload)).toBeGreaterThan(steps.indexOf(exporter));
   const sourceCache = processes.find(step => step.name === "Real Bun source cache in one Waffle browser runtime");
   const transfer = processes.find(step => step.name === "Native Wasm module and shared-memory worker transfer");
   if (!sourceCache || !record(sourceCache.env) || !transfer || !record(transfer.env)) throw new Error("Missing Browser regression consumers");

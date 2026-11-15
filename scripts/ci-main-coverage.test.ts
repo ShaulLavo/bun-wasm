@@ -5,10 +5,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { coverageMarker, mainCoverage } from "./ci-main-coverage";
 import { needsJsc, needsRust, needsSharedNative, needsSharedSysroot, selectChanges } from "./ci-changes";
+import { fullBrowserGuestSelection } from "./browser-guest-catalogue";
+import { browserGuestManifest } from "./browser-guest-selection";
+import { selectCiBrowserCoverage } from "./ci-browser-coverage";
 import { selectChecks } from "./test-checks";
 
-const all = { rust: true, jsc: true, shared: true, shared_native: true };
-const none = { rust: false, jsc: false, shared: false, shared_native: false };
+const all = { rust: true, jsc: true, shared: true, shared_native: true, browser_guest: true };
+const none = { rust: false, jsc: false, shared: false, shared_native: false, browser_guest: false };
 
 function git(args: readonly string[]): string {
   return execFileSync("git", ["-c", "user.name=CI coverage test", "-c", "user.email=ci@localhost"].concat(args), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -63,7 +66,7 @@ test.each(["quickjs", "browser", "jsc"])("cumulative selection forwards the decl
   const base = change("tests/fixtures/engine-selection/index.ts", "before");
   const head = change("tests/fixtures/engine-selection/index.ts", "after");
   const result = await mainCoverage(api(head, [run(base)], [selectionJob(base)]));
-  expect(result).toMatchObject({ kind: "verified", selection: { ...none, rust: true, jsc: engine === "jsc" } });
+  expect(result).toMatchObject({ kind: "verified", selection: { ...none, rust: true, browser_guest: true, jsc: engine === "jsc" } });
 }));
 
 test("pending native followed by several docs replacements retains every owed family", () => fixture(async base => {
@@ -77,9 +80,9 @@ test("pending native followed by several docs replacements retains every owed fa
 
 test.each([".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml"])("JSC coordination change %s selects PR validation and survives pending main replacement", path => fixture(async base => {
   const action = change(path, "changed JSC action");
-  expect(selectChanges(base, action, true)).toEqual({ ...none, rust: true, jsc: true });
+  expect(selectChanges(base, action, true)).toEqual({ ...none, rust: true, browser_guest: true, jsc: true });
   const head = change("docs/after-action.md", "docs");
-  expect(await mainCoverage(api(head, [run(base)], [selectionJob(base)]))).toMatchObject({ kind: "verified", selection: { ...none, rust: true, jsc: true } });
+  expect(await mainCoverage(api(head, [run(base)], [selectionJob(base)]))).toMatchObject({ kind: "verified", selection: { ...none, rust: true, browser_guest: true, jsc: true } });
 }));
 
 test("reverted native paths, package inputs and manifests retain historical families", () => fixture(async base => {
@@ -146,7 +149,7 @@ test("real main CLI bootstraps all flags and records its reason when API proof i
     encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main", GITHUB_SHA: head, GITHUB_RUN_ID: "999", GITHUB_REPOSITORY: "ShaulLavo/bun-wasm", GITHUB_TOKEN: "", GITHUB_STEP_SUMMARY: "coverage-summary.md" },
   });
-  expect(output.trim()).toBe("browser-base=" + "0".repeat(40) + "\nbrowser-full=true\nselection<<ci-main-selection\nrust=true\njsc=true\nshared=true\nshared_native=true\nci-main-selection");
+  expect(output.trim()).toBe(`browser-selection=${JSON.stringify(fullBrowserGuestSelection)}\n` + "browser-base=" + "0".repeat(40) + "\nbrowser-full=true\nselection<<ci-main-selection\nrust=true\njsc=true\nshared=true\nshared_native=true\nbrowser_guest=true\nci-main-selection");
   expect(readFileSync("coverage-summary.md", "utf8")).toContain(`all families selected for head ${head}. Missing GITHUB_TOKEN`);
 }));
 
@@ -291,6 +294,7 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
     "jsc-prebuild": { needs: ["selection", "jsc-identity"], minutes: 45 },
     "native-quality": { needs: ["selection", "jsc-prebuild"], minutes: 45 },
     rust: { needs: ["selection", "jsc-prebuild", "native-quality"], minutes: 60 },
+    "browser-production": { needs: ["selection", "jsc-prebuild"], minutes: 60 },
     package: { needs: "selection", minutes: 10 },
     "shared-jsc-identity": { needs: "selection", minutes: 15 },
     "shared-prebuild": { needs: ["selection", "shared-jsc-identity"], minutes: 45 },
@@ -303,13 +307,36 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
     "web-unit": { needs: "selection", minutes: 10 },
     "web-browser": { needs: "selection", minutes: 10 },
     "process-bundles": { needs: "selection", minutes: 10 },
-    "browser-guest": { needs: ["selection", "rust"], minutes: "${{ startsWith(matrix.batch, '2') && 60 || 10 }}" },
-    "browser-process": { needs: ["selection", "rust", "process-bundles", "browser-guest"], minutes: 10 },
-    "ci-result": { needs: ["selection", "quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process"], minutes: 5 },
-    "update-status": { needs: ["selection", "quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process", "ci-result"], minutes: 5 },
+    "browser-guest": { needs: ["selection", "rust", "browser-production"], minutes: "${{ startsWith(matrix.batch, '2') && 60 || 10 }}" },
+    "browser-process": { needs: ["selection", "rust", "browser-production", "process-bundles", "browser-guest"], minutes: 10 },
+    "ci-result": { needs: ["selection", "quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "browser-production", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process"], minutes: 5 },
+    "update-status": { needs: ["selection", "quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "browser-production", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process", "ci-result"], minutes: 5 },
   });
   const browser = object(jobs["browser-process"]);
   expect(object(browser.strategy).matrix).toEqual({ browser: ["chromium", "firefox", "webkit"] });
   expect(browser.if).toContain("needs.process-bundles.result == 'success'");
-  expect(browser.if).toContain("needs.rust.result == 'success' || needs.rust.result == 'skipped'");
+  expect(browser.if).toContain("needs.browser-production.result == 'success'");
 });
+
+
+test("cumulative browser selection retains a worker edit reverted before the docs replacement", () => fixture(async () => {
+  const base = change("web/tests/browser-worker-modules.ts", "before");
+  const edited = change("web/tests/browser-worker-modules.ts", "changed");
+  const selected = [{ owner: "worker-modules", engines: ["browser"] }];
+  expect(selectCiBrowserCoverage(base, edited, { pullRequest: false, full: false })).toEqual(selected);
+  change("web/tests/browser-worker-modules.ts", "before");
+  const head = change("docs/replacement.md", "docs");
+  expect(selectCiBrowserCoverage(base, head, { pullRequest: false, full: false })).toEqual([]);
+  const result = await mainCoverage(api(head, [run(base)], [selectionJob(base)]));
+  expect(result).toMatchObject({ kind: "verified", edges: 3, browserSelection: selected });
+}));
+
+test("cumulative browser selection retains declarations introduced and removed between green and head", () => fixture(async base => {
+  change("checks/browser-guest-worker-modules.json", JSON.stringify({ ...browserGuestManifest("worker-modules"), inputs: ["web/tests/intermediate-only.ts"] }));
+  change("web/tests/intermediate-only.ts", "changed intermediate input");
+  rmSync("checks/browser-guest-worker-modules.json");
+  const head = change("docs/replacement.md", "docs");
+  expect(selectCiBrowserCoverage(base, head, { pullRequest: false, full: false })).toEqual([]);
+  const result = await mainCoverage(api(head, [run(base)], [selectionJob(base)]));
+  expect(result).toMatchObject({ kind: "verified", edges: 3, browserSelection: [{ owner: "worker-modules", engines: ["browser"] }] });
+}));

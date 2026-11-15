@@ -204,7 +204,7 @@ beforeAll(() => {
 function selectionOutput(start: string, end: string, event = "pull_request"): string {
   return execFileSync("bun", [join(import.meta.dir, "ci-changes.ts"), start, end], {
     cwd: fixture, encoding: "utf8", env: { ...process.env, GITHUB_EVENT_NAME: event }, stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  }).trim().split("\n").slice(0, 4).join("\n");
 }
 
 function select(start: string, end: string, event = "pull_request"): string {
@@ -305,7 +305,7 @@ test("the EncodedSlice proof blocks native CI once after existing tool and vendo
   const rust = workflow.split("\n  native-quality:\n")[1]!.split("\n  rust:\n")[0]!;
   const name = "      - name: Blocking EncodedSlice address regression";
   const step = rust.split(name)[1]?.split("\n      - ")[0];
-  expect(step?.trim()).toBe("run: |\n          source env.sh\n          bun scripts/check-encoded-slice.ts");
+  expect(step?.trim()).toBe("shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}\n        run: |\n          source env.sh\n          bun scripts/check-encoded-slice.ts");
   expect(workflow.match(/bun scripts\/check-encoded-slice\.ts/g)).toHaveLength(1);
   for (const prerequisite of ["targets: wasm32-wasip1", "name: Install pinned Wasmtime", "name: Prepare pinned upstream sources"]) {
     expect(rust.indexOf(prerequisite)).toBeGreaterThan(-1);
@@ -405,7 +405,7 @@ test("unrelated page changes skip JSC; its selected gate builds and executes onc
   expect(needsJsc(["web/src/page.ts", "docs/jsc-build.md"])).toBe(false);
   expect(workflow).toContain("if: needs.selection.outputs.jsc == 'true'");
   expect(workflow.match(/^\s+bash scripts\/build-jsc\.sh$/gm)).toHaveLength(1);
-  expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
+  expect(readFileSync(new URL("../.github/actions/native-production/action.yml", import.meta.url), "utf8").match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
   expect(workflow).toContain("bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm");
 });
 

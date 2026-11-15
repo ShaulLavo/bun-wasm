@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -140,7 +141,7 @@ test("capacity, process and large IO retain blocking coverage on three ordinary 
 });
 
 test("CI declares its native fixture and installer engine domains separately", () => {
-  const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const workflow = expandedCiWorkflow();
   const gate = workflow.split("name: Blocking native fixture checks")[1]!.split("\n      - name:")[0]!;
   expect(gate).toContain("INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
   expect(gate).toContain("BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}");
@@ -361,15 +362,15 @@ test("selected tests cannot import hidden test barrels that give a fixture a sec
 });
 
 test("each discovery group retains one command owner and browser deadlines stay outside discovery", () => {
-  const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const workflow = expandedCiWorkflow();
   for (const owner of ["native", "package-extra", "cmake"]) expect(workflow.match(new RegExp(`bun scripts/test-checks\\.ts ${owner}\\n`, "g"))).toHaveLength(1);
   const web = readFileSync(join(root, "scripts/test-web-host.sh"), "utf8");
   expect(web.match(/bun \.\.\/scripts\/test-checks.ts web\n/g)).toHaveLength(1);
   expect(web).toContain("browser_test bun ../scripts/test-checks.ts web-browser");
   // The rust job bundles one verified site. Browser legs and the shared-profile consumer reuse it.
   expect(workflow.match(/bun \.\.\/scripts\/test-checks\.ts browser-guest --batch/g)).toHaveLength(1);
-  expect(workflow.match(/bun scripts\/browser-guest-site\.ts build "\$RUNNER_TEMP\/browser-guest-site"\n/g)).toHaveLength(1);
-  expect(workflow.match(/name: browser-guest-site\n/g)).toHaveLength(3);
+  expect(readFileSync(join(root, ".github/actions/native-production/action.yml"), "utf8").match(/bun scripts\/browser-guest-site\.ts build "\$RUNNER_TEMP\/browser-guest-site"\n/g)).toHaveLength(1);
+  expect(workflow.match(/name: browser-guest-site\n/g)).toHaveLength(4);
   expect(workflow).toContain("BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site");
   expect(workflow).not.toContain("web/build.ts");
   expect(workflow).toContain("bun scripts/ci-install.ts --cwd sandbox --frozen-lockfile --ignore-scripts");
@@ -451,21 +452,21 @@ test("Browser guest matrix discovers each profile batch and runs every check exa
 });
 
 test("required Processes gates reject failed or cancelled guest batches and allow only producer-disabled skips", () => {
-  const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const workflow = expandedCiWorkflow();
   const guest = workflow.split("\n  browser-guest:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
   expect(guest).toContain("batch: ${{ fromJSON(needs.selection.outputs.browser-guest-batches) }}");
   expect(guest).toContain("fail-fast: false");
   expect(guest).toContain("timeout-minutes: ${{ startsWith(matrix.batch, '2') && 60 || 10 }}");
   expect(guest).not.toContain("browser-guest-site.ts build");
   const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
-  expect(processes).toContain("needs: [selection, rust, process-bundles, browser-guest]");
+  expect(processes).toContain("needs: [selection, rust, browser-production, process-bundles, browser-guest]");
   expect(processes).toContain("always() && !cancelled()");
   const guard = processes.match(/run: \|\n([\s\S]*?)      - uses:/)?.[1];
   if (!guard) throw new Error("Missing required guest-result guard");
-  for (const rust of ["success", "skipped", "failure", "cancelled"]) {
+  for (const selected of ["true", "false", "", "invalid"]) {
     for (const guest of ["success", "skipped", "failure", "cancelled"]) {
-      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", guard], { env: { ...process.env, RUST_RESULT: rust, GUEST_RESULT: guest } });
-      expect(result.status === 0, `${rust}/${guest}`).toBe(rust === "success" && guest === "success" || rust === "skipped" && guest === "skipped");
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", guard], { env: { ...process.env, BROWSER_GUEST: selected, GUEST_RESULT: guest } });
+      expect(result.status === 0, `${selected}/${guest}`).toBe(selected === "true" && guest === "success" || selected === "false" && guest === "skipped");
     }
   }
 });
