@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 
+const noop = () => {};
+
 export function residualChecks(factory: typeof Buffer) {
   return [
     { name: "fill selects overloads by value and ignores end without a start", run() {
@@ -84,7 +86,7 @@ export function residualChecks(factory: typeof Buffer) {
         assert.equal(Object.getOwnPropertyDescriptor(factory.prototype, name)?.enumerable, true);
       }
       for (const name in factory.prototype) {
-        if (typeof Reflect.get(buffer, name) === "function") Reflect.set(buffer, name, () => {});
+        if (typeof Reflect.get(buffer, name) === "function") Reflect.set(buffer, name, noop);
       }
       assert.doesNotThrow(() => buffer.write("hello"));
       assert.doesNotThrow(() => buffer.writeUInt8(0));
