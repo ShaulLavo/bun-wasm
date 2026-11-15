@@ -89,7 +89,7 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "scripts/stage-program-profiles.ts", "web/tests/explicit-profile-browser.ts", "web/build.ts", "sandbox/build.ts",
   "web/src/fs-worker.ts", "web/src/notification-worker.ts", "src/assets.ts", "src/program-memory.ts",
   "src/bun-adapter.ts", "src/process-runtime.ts", "src/executable-paths.ts", "src/guest-asset.generated.ts", "src/shared-objects.ts",
-  "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "web/package.json", "web/bun.lock",
+  "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "scripts/bash-web-release-inputs.json", "web/package.json", "web/bun.lock",
   "web/tests/shared-wasm-memory-browser.ts", "web/tests/shared-wasm-memory-browser-main.ts", "web/tests/shared-wasm-agent/worker.ts", "web/tests/shared-wasm-agent/lock.ts", "web/tests/shared-wasm-agent/observer.ts",
   // The parent-and-Worker parser reserve ownership case that consumer runs in each group.
   "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",

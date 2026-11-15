@@ -115,7 +115,7 @@ export function parseCheck(value: unknown, file: string): Check {
     if (profile === "shared-group") return { owner, path, localRuntime, batch, profile, inputs };
     return { owner, path, localRuntime, batch, inputs };
   }
-  if (owner === "runtime") return { owner, path, localRuntime, batch, inputs: "inputs" in value ? inputFiles(value.inputs, file) : [] };
+  if (owner === "runtime") return { owner, path, localRuntime, batch, ...isolation, inputs: "inputs" in value ? inputFiles(value.inputs, file) : [] };
   if (owner !== "native-probe") {
     if ("inputs" in value) throw new Error(`Only runtime, native-probe and browser-guest checks declare input files: ${file}`);
     if (owner === "native") return { owner, path, localRuntime, batch, ...nativeSelection(value, profile, file), ...(entry === undefined ? {} : { entry }) };

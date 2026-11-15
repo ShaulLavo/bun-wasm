@@ -23,7 +23,7 @@ const commonInputs = [
   "sandbox/bun.lock",
   "sandbox/package.json",
   "scripts/base-program-build.ts",
-  "scripts/bash-web-guests.ts",
+  "scripts/bash-web-guests.ts", "scripts/bash-web-release-inputs.json",
   "scripts/browser-build.ts",
   "scripts/browser-guest-catalogue.ts",
   "scripts/browser-guest-coverage.ts",

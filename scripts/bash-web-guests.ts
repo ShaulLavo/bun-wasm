@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import release from "./bash-web-release-inputs.json" with { type: "json" };
 
 const RECEIPT = "bash-web-guests.json";
 /** Program name the browser serves (programs/<name>) → the file in dist. */
@@ -43,10 +44,12 @@ async function stageEnv(consumer: string, dist: string): Promise<void> {
   copyFileSync(source, join(dist, GUESTS["env.wasm"]));
 }
 
-/** The bash-web commit a consumer's package.json pins (`git+…bash-web.git#<commit>`). */
+/** Source identity of the pinned public archive or an explicit Git source consumer. */
 export function pinnedBashWeb(consumer: string): string {
   const manifest = JSON.parse(readFileSync(join(consumer, "package.json"), "utf8")) as { dependencies?: Record<string, string> };
-  const commit = /#([0-9a-f]{40})$/.exec(manifest.dependencies?.["bash-web"] ?? "")?.[1];
+  const pin = manifest.dependencies?.["bash-web"] ?? "";
+  if (pin === release.url) return release.sourceCommit;
+  const commit = /^git\+https:\/\/github\.com\/ShaulLavo\/bash-web\.git#([0-9a-f]{40})$/.exec(pin)?.[1];
   if (!commit) throw new Error(`${consumer}/package.json does not pin bash-web to a full commit`);
   return commit;
 }

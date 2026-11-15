@@ -143,9 +143,20 @@ test("capacity, process and large IO retain blocking coverage on three ordinary 
 test("CI declares its native fixture and installer engine domains separately", () => {
   const workflow = expandedCiWorkflow();
   const gate = workflow.split("name: Blocking native fixture checks")[1]!.split("\n      - name:")[0]!;
+  expect(gate).toContain('BUN_WASM_RUNTIME_JOBS: "2"');
   expect(gate).toContain("INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
   expect(gate).toContain("BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}");
   expect(gate).toContain("          bun scripts/test-checks.ts native\n");
+});
+
+test("runtime declarations retain process isolation and source selection inputs together", () => {
+  const raw = { owner: "runtime", path: "scripts/example.test.ts", isolation: "process", inputs: ["scripts/example.ts"] };
+  const parsed = parseCheck(raw, "runtime-example.json");
+  expect(parsed).toEqual({ owner: "runtime", path: raw.path, isolation: "process", inputs: raw.inputs, batch: "default", localRuntime: false });
+  expect(raw).toEqual({ owner: "runtime", path: "scripts/example.test.ts", isolation: "process", inputs: ["scripts/example.ts"] });
+  expect(parseCheck({ owner: "runtime", path: raw.path, isolation: "process" }, "runtime-example.json")).toEqual({
+    owner: "runtime", path: raw.path, isolation: "process", inputs: [], batch: "default", localRuntime: false,
+  });
 });
 
 test("native runner executes engine groups once and propagates the first failure", () => {
