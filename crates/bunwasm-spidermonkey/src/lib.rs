@@ -116,6 +116,7 @@ extern "C" {
     pub fn bsm_is_detachable_buffer(handle: Handle) -> bool;
     pub fn bsm_detach_buffer(handle: Handle);
     pub fn bsm_is_proxy(handle: Handle) -> bool;
+    pub fn bsm_is_module_namespace(handle: Handle) -> bool;
     pub fn bsm_proxy_target(handle: Handle) -> Handle;
     pub fn bsm_is_error(handle: Handle) -> bool;
     pub fn bsm_async_context() -> Handle;

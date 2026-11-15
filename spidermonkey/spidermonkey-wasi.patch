@@ -814,14 +814,21 @@ diff --git a/js/src/util/DiagnosticAssertions.h b/js/src/util/DiagnosticAssertio
  #endif
  
 diff --git i/js/public/Modules.h w/js/public/Modules.h
-index 6f3c3cd68..176dd32a8 100644
+index 6f3c3cd..f23e1a0 100644
 --- i/js/public/Modules.h
 +++ w/js/public/Modules.h
-@@ -34,6 +34,26 @@ union Utf8Unit;
+@@ -34,6 +34,33 @@ union Utf8Unit;
  
  namespace JS {
  
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
++// This embedding reserves global application slot zero for its traced prototype.
++constexpr uint32_t ModuleNamespacePrototypeSlot = 0;
++extern JS_PUBLIC_API bool InitModuleNamespacePrototype(JSContext* cx);
++
++// Inspect the native namespace class without unwrapping proxies or running script.
++extern JS_PUBLIC_API bool IsModuleNamespaceObject(const Value& value);
++
 +enum class ModuleEvaluationState : uint8_t {
 +  Unevaluated,
 +  Pending,
@@ -845,10 +852,106 @@ index 6f3c3cd68..176dd32a8 100644
  // sequential numbers starting at zero for the unknown type.
  enum class ModuleType : uint32_t {
 diff --git i/js/src/builtin/ModuleObject.cpp w/js/src/builtin/ModuleObject.cpp
-index 0e97fa421..11346e8e8 100644
+index 0e97fa4..66eb35e 100644
 --- i/js/src/builtin/ModuleObject.cpp
 +++ w/js/src/builtin/ModuleObject.cpp
-@@ -1012,6 +1012,9 @@ class js::CyclicModuleFields {
+@@ -390,6 +390,26 @@ bool IndirectBindingMap::lookup(jsid name, ModuleEnvironmentObject** envOut,
+ ///////////////////////////////////////////////////////////////////////////
+ // ModuleNamespaceObject
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++static JSObject* ModuleNamespacePrototype(JSContext* cx) {
++  const Value& proto = cx->global()->getReservedSlot(JS::ModuleNamespacePrototypeSlot);
++  return proto.isObject() ? &proto.toObject() : nullptr;
++}
++
++static bool HasNamespacePrototypeProperty(JSContext* cx, HandleId id, bool* found) {
++  RootedObject proto(cx, ModuleNamespacePrototype(cx));
++  *found = false;
++  return !proto || HasProperty(cx, proto, id, found);
++}
++
++static bool GetNamespacePrototypeProperty(JSContext* cx, HandleValue receiver,
++                                         HandleId id, MutableHandleValue result) {
++  RootedObject proto(cx, ModuleNamespacePrototype(cx));
++  result.setUndefined();
++  return !proto || GetProperty(cx, proto, receiver, id, result);
++}
++#endif
++
+ // Module namespace objects need 3 reserved slots (ExportsSlot, BindingsSlot,
+ // DeferredSlot), so they use a custom proxy class instead of the default
+ // ProxyClass which only has 2.
+@@ -529,14 +549,22 @@ static void ReportUninitializedModuleBinding(JSContext* cx, HandleId id) {
+ 
+ bool ModuleNamespaceObject::ProxyHandler::getPrototype(
+     JSContext* cx, HandleObject proxy, MutableHandleObject protop) const {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  protop.set(ModuleNamespacePrototype(cx));
++#else
+   protop.set(nullptr);
++#endif
+   return true;
+ }
+ 
+ bool ModuleNamespaceObject::ProxyHandler::setPrototype(
+     JSContext* cx, HandleObject proxy, HandleObject proto,
+     ObjectOpResult& result) const {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  if (proto == ModuleNamespacePrototype(cx)) {
++#else
+   if (!proto) {
++#endif
+     return result.succeed();
+   }
+   return result.failCantSetProto();
+@@ -719,6 +747,9 @@ bool ModuleNamespaceObject::ProxyHandler::has(JSContext* cx, HandleObject proxy,
+   Rooted<ModuleNamespaceObject*> ns(cx, &proxy->as<ModuleNamespaceObject>());
+   if (IsSymbolLikeNamespaceKey(cx, id, ns)) {
+     *bp = id.isWellKnownSymbol(JS::SymbolCode::toStringTag);
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    if (!*bp) return HasNamespacePrototypeProperty(cx, id, bp);
++#endif
+     return true;
+   }
+ 
+@@ -727,6 +758,9 @@ bool ModuleNamespaceObject::ProxyHandler::has(JSContext* cx, HandleObject proxy,
+   }
+ 
+   *bp = ns->bindings().has(id);
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  if (!*bp) return HasNamespacePrototypeProperty(cx, id, bp);
++#endif
+   return true;
+ }
+ 
+@@ -742,8 +776,12 @@ bool ModuleNamespaceObject::ProxyHandler::get(JSContext* cx, HandleObject proxy,
+       return true;
+     }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    return GetNamespacePrototypeProperty(cx, receiver, id, vp);
++#else
+     vp.setUndefined();
+     return true;
++#endif
+   }
+ 
+   if (!EnsureDeferredModuleEvaluated(cx, ns)) {
+@@ -753,8 +791,12 @@ bool ModuleNamespaceObject::ProxyHandler::get(JSContext* cx, HandleObject proxy,
+   ModuleEnvironmentObject* env;
+   mozilla::Maybe<PropertyInfo> prop;
+   if (!ns->bindings().lookup(id, &env, &prop)) {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    return GetNamespacePrototypeProperty(cx, receiver, id, vp);
++#else
+     vp.setUndefined();
+     return true;
++#endif
+   }
+ 
+   RootedValue value(cx, env->getSlot(prop->slot()));
+@@ -1012,6 +1054,9 @@ class js::CyclicModuleFields {
    ModuleStatus status = ModuleStatus::New;
  
    bool hasTopLevelAwait : 1;
@@ -858,7 +961,7 @@ index 0e97fa421..11346e8e8 100644
  
   private:
    // Flag bits that determine whether other fields are present.
-@@ -1064,6 +1067,9 @@ class js::CyclicModuleFields {
+@@ -1064,6 +1109,9 @@ class js::CyclicModuleFields {
  
  CyclicModuleFields::CyclicModuleFields()
      : hasTopLevelAwait(false),
@@ -868,7 +971,7 @@ index 0e97fa421..11346e8e8 100644
        hasDfsAncestorIndex(false),
        hasPendingAsyncDependencies(false) {}
  
-@@ -1448,6 +1454,18 @@ bool ModuleObject::hasTopLevelAwait() const {
+@@ -1448,6 +1496,18 @@ bool ModuleObject::hasTopLevelAwait() const {
    return cyclicModuleFields()->hasTopLevelAwait;
  }
  
@@ -903,24 +1006,42 @@ index 4cf98d2d5..d23d13cf8 100644
    void setPendingAsyncDependencies(uint32_t newValue);
    void setInitialTopLevelCapability(Handle<PromiseObject*> capability);
 diff --git i/js/src/vm/Modules.cpp w/js/src/vm/Modules.cpp
-index f1ce887af..00c9ecad1 100644
+index f1ce887..f1bffcd 100644
 --- i/js/src/vm/Modules.cpp
 +++ w/js/src/vm/Modules.cpp
-@@ -30,6 +30,9 @@
+@@ -30,6 +30,10 @@
  #include "js/Value.h"       // JS::Value
  #include "js/WasmModule.h"  // JS::WasmModule
  #include "vm/EnvironmentObject.h"  // js::ModuleEnvironmentObject
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +#  include "vm/ErrorObject.h"
++#  include "vm/PlainObject.h"
 +#endif
  #include "vm/JSAtomUtils.h"        // AtomizeString
  #include "vm/JSContext.h"          // CHECK_THREAD, JSContext
  #include "vm/JSObject.h"           // JSObject
-@@ -677,6 +680,44 @@ JS_PUBLIC_API bool JS::ModuleIsLinked(JSObject* moduleObj) {
+@@ -677,6 +681,61 @@ JS_PUBLIC_API bool JS::ModuleIsLinked(JSObject* moduleObj) {
           moduleObj->as<ModuleObject>().status() != ModuleStatus::Unlinked;
  }
  
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
++JS_PUBLIC_API bool JS::InitModuleNamespacePrototype(JSContext* cx) {
++  AssertHeapIsIdle();
++  CHECK_THREAD(cx);
++  MOZ_ASSERT(cx->global()->getReservedSlot(ModuleNamespacePrototypeSlot).isUndefined());
++  RootedObject proto(cx, NewPlainObjectWithProto(cx, nullptr));
++  if (!proto || !JS_DefineProperty(cx, proto, "__esModule", TrueHandleValue,
++                                  JSPROP_READONLY | JSPROP_PERMANENT)) {
++    return false;
++  }
++  cx->global()->setReservedSlot(ModuleNamespacePrototypeSlot, ObjectValue(*proto));
++  return true;
++}
++
++JS_PUBLIC_API bool JS::IsModuleNamespaceObject(const Value& value) {
++  return value.isObject() && value.toObject().is<ModuleNamespaceObject>();
++}
++
 +JS_PUBLIC_API JS::ModuleEvaluationInfo JS::GetModuleEvaluationInfo(
 +    JSObject* moduleObj) {
 +  AssertHeapIsIdle();
