@@ -4,10 +4,14 @@ Class **Original adapter**. `web/scripts/node-shell.ts`, `node-host.ts`,
 `node-spawn.ts` and `node-process.ts` connect the existing Node worker host to
 the pinned Bash and env guests. No upstream implementation is copied.
 
-The consumer pins bash-web at `e6d29598eb0111f16bc3068ad52a9167dac51da7`
-and Waffle at `b6ce9c22e4032637814a3985fab934915be02bcc`, released as
-0.0.130. The existing `scripts/bash-web-guests.ts` receipt verifier checks the
-Bash pin and both guest hashes before loading either program. The Node host
+The consumer pins bash-web 0.0.111 at
+`e362a4752b505606cc009be59ccfa7a90e4b8cf5` and Waffle 0.0.132 at
+`8188acb35f2a2eead259e6cc1852d52964e5a8f7`. The adapter originally used Waffle
+0.0.130 at `b6ce9c22e4032637814a3985fab934915be02bcc`; its inherited-descriptor
+contract remains unchanged. Self INT and TERM retain signaled outcomes 2 and 15;
+ordinary exits 130 and 143 remain exited outcomes. The existing
+`scripts/bash-web-guests.ts` receipt verifier checks the Bash pin and both guest
+hashes before loading either program. The Node host
 accepts the native launcher's `--shell` and `--env-utility` arguments as one
 complete receipt-backed pair. Partial, modified or stale inputs fail startup.
 
@@ -37,6 +41,9 @@ owner or prompt provider, and permission queries returning WASI NOTSUP because
 Node's native filesystem has no Waffle inode metadata. These imports share the
 process cancellation guard and never read memory for an unsupported query.
 The private package handoff remains cancellation-first NOTSUP.
+
+The native launcher's calling-process identity import is classified separately
+in [Native shell process identity](native-shell-process-identity.md).
 
 `scripts/test.sh` builds the existing pinned pair for Browser runs and passes it
 explicitly, including under `--no-build`. The package behavior fixture retains
