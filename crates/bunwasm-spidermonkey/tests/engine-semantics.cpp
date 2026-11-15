@@ -15,6 +15,7 @@ std::vector<bsm_handle> rejected;
 std::vector<bsm_handle> uncaught;
 std::vector<bool> rejectionEvents;
 std::vector<uint32_t> finalized;
+std::string lastReferrer;
 unsigned interruptCalls = 0;
 unsigned interruptAt = 0;
 
@@ -35,7 +36,7 @@ class Value {
 
 Value script(const char* source, const char* filename = "semantics", int32_t line = 1) {
   bsm_handle out = 0;
-  bool ok = bsm_eval_script(source, strlen(source), filename, line, &out);
+  bool ok = bsm_eval_script(source, strlen(source), filename, strlen(filename), line, &out);
   check(ok, source);
   return Value(out);
 }
@@ -735,7 +736,7 @@ void errors_and_lines() {
   Value zero(script("globalThis.zeroStack = new Error('zero').stack;", "zero.ts", 0));
   Value zeroLine(script("if (!zeroStack.includes('zero.ts:0:')) throw new Error(zeroStack);"));
   bsm_handle negative = 0;
-  check(!bsm_eval_script("42", 2, "negative", -1, &negative), "unrecognized negative source refused");
+  check(!bsm_eval_script("42", 2, "negative", 8, -1, &negative), "unrecognized negative source refused");
   Value negativeError(negative);
   check(bsm_is_error(negativeError.handle), "negative source returns an error");
   Value semantics(script("(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {\n\nreturn [__bunwasm_cjs__, eval('__bunwasm_cjs__'), this, exports, require, module, __filename, __dirname, arguments.length];\n})", "commonjs-bindings.cts", -1));
@@ -750,7 +751,7 @@ void errors_and_lines() {
   install("commonjsReceiver", receiver.handle);
   Value bound(script("if (commonjsFunction.name !== '__bunwasm_cjs__' || commonjsFunction.length !== 5 || commonjsBindings[0] !== commonjsFunction || commonjsBindings[1] !== commonjsFunction || commonjsBindings[2] !== commonjsReceiver || commonjsBindings.slice(3, 8).some(v => v !== 42) || commonjsBindings[8] !== 5) throw new Error('CommonJS bindings');"));
   bsm_handle failure = 0;
-  check(!bsm_eval_script("throw 17", 8, "thrown", 1, &failure), "primitive exception");
+  check(!bsm_eval_script("throw 17", 8, "thrown", 6, 1, &failure), "primitive exception");
   Value primitive(failure);
   check(bsm_number(primitive.handle) == 17, "exception value preserved");
   Value overflow(script("globalThis.overflowName = ''; try { (function recurse() { recurse(); })(); } catch (e) { overflowName = e.name; }"));
@@ -769,6 +770,7 @@ void natives() {
   bsm_gc();
   check(finalized.size() == 1 && finalized[0] == 100, "native finalizer exactly once");
 }
+#include "filename-controls.cpp"
 #include "eval-completion.cpp"
 #include "require-recovery.cpp"
 #if defined(BUNSM_LOOP_CONTROLS)
@@ -785,7 +787,8 @@ extern "C" bool bunsm_host_call(uint32_t id, bsm_handle, const bsm_handle* args,
   return true;
 }
 extern "C" void bunsm_host_drop(uint32_t id) { finalized.push_back(id); }
-extern "C" bool bunsm_host_resolve(const char* spec, size_t size, const char*, size_t, char** out, size_t* length, bsm_handle*) {
+extern "C" bool bunsm_host_resolve(const char* spec, size_t size, const char* referrer, size_t referrerLength, char** out, size_t* length, bsm_handle*) {
+  lastReferrer.assign(referrer, referrerLength);
   *out = static_cast<char*>(malloc(size));
   memcpy(*out, spec, size);
   *length = size;
@@ -799,7 +802,7 @@ extern "C" bool bunsm_host_load(const char* name, size_t size, char** out, size_
   memcpy(*out, found->second.data(), *length);
   return true;
 }
-extern "C" void bunsm_host_free(char* text) { free(text); }
+extern "C" void bunsm_host_free(char* text, size_t) { free(text); }
 extern "C" bool bunsm_host_init_meta(const char*, size_t, bsm_handle, bsm_handle*) { return true; }
 extern "C" bool bunsm_host_interrupt() { return interruptAt && ++interruptCalls >= interruptAt; }
 extern "C" void bunsm_host_rejection(bsm_handle promise, bsm_handle, bool handled) {
@@ -827,6 +830,11 @@ extern "C" int engine_semantics_main() {
       static_cast<uint8_t>(tier && !strcmp(tier, "pbl")), 1};
   finalized.reserve(16);
   bsm_init(&config);
+  if (mode && !strcmp(mode, "filename")) {
+    filename_controls();
+    bsm_shutdown();
+    return 0;
+  }
 #if defined(BUNSM_LOOP_CONTROLS)
   loop_controls();
   bsm_shutdown();
@@ -885,11 +893,12 @@ extern "C" int engine_semantics_main() {
     promise_reactions();
     buffers();
     errors_and_lines();
+    filename_controls();
     natives();
     interruptAt = 1;
     bsm_handle interrupted = 0;
     const char* loop = "globalThis.caught = false; globalThis.finallyRan = false; try { while (true) {} } catch { caught = true; } finally { finallyRan = true; }";
-    check(!bsm_eval_script(loop, strlen(loop), "interrupt", 1, &interrupted), "uncatchable interrupt");
+    check(!bsm_eval_script(loop, strlen(loop), "interrupt", 9, 1, &interrupted), "uncatchable interrupt");
     check(interrupted == 0 && bsm_terminated(), "interrupt has no catchable exception");
     Value global(bsm_global());
     bsm_handle caught = 0;

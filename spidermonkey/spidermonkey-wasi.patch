@@ -1,3 +1,378 @@
+diff --git a/js/public/SavedFrameAPI.h b/js/public/SavedFrameAPI.h
+index 688d1e185..1e3d64721 100644
+--- a/js/public/SavedFrameAPI.h
++++ b/js/public/SavedFrameAPI.h
+@@ -72,6 +72,31 @@ extern JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
+     uint32_t* sourceIdp,
+     SavedFrameSelfHosted selfHosted = SavedFrameSelfHosted::Include);
+ 
++/**
++ * Which capture-time branch produced a SavedFrame's source string.
++ * Cloned and reconstructed frames have no provenance and report DisplayURL,
++ * meaning the label is opaque and must stay raw.
++ */
++enum class SavedFrameSourceKind : uint8_t {
++  // The script source's displayURL, or an opaque cloned/reconstructed label.
++  DisplayURL,
++  // The script's compiler filename, including introduced eval, Function and
++  // WebAssembly names derived from it.
++  Filename
++};
++
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++/**
++ * Given a SavedFrame JSObject, get the kind of its source property. Selects the
++ * same frame as GetSavedFrameSource for identical principals and selfHosted
++ * arguments. Never allocates, GCs or runs script. Defaults to DisplayURL.
++ */
++extern JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceKind(
++    JSContext* cx, JSPrincipals* principals, Handle<JSObject*> savedFrame,
++    SavedFrameSourceKind* kindp,
++    SavedFrameSelfHosted selfHosted = SavedFrameSelfHosted::Include);
++#endif
++
+ /**
+  * Given a SavedFrame JSObject, get its line property (1-origin).
+  * Defaults to 0.
+diff --git a/js/src/vm/SavedFrame.h b/js/src/vm/SavedFrame.h
+index f5b41efc2..16d49b764 100644
+--- a/js/src/vm/SavedFrame.h
++++ b/js/src/vm/SavedFrame.h
+@@ -11,6 +11,7 @@
+ #include "js/ColumnNumber.h"  // JS::TaggedColumnNumberOneOrigin
+ #include "js/GCHashTable.h"
+ #include "js/Principals.h"
++#include "js/SavedFrameAPI.h"  // JS::SavedFrameSourceKind
+ #include "js/UbiNode.h"
+ #include "vm/NativeObject.h"
+ 
+@@ -56,6 +57,7 @@ class SavedFrame : public NativeObject {
+   SavedFrame* getParent() const;
+   JSPrincipals* getPrincipals();
+   bool getMutedErrors();
++  JS::SavedFrameSourceKind getSourceKind();
+   bool isSelfHosted(JSContext* cx);
+   bool isWasm();
+ 
+@@ -126,9 +128,11 @@ class SavedFrame : public NativeObject {
+   void initFunctionDisplayName(JSAtom* maybeName);
+   void initAsyncCause(JSAtom* maybeCause);
+   void initParent(SavedFrame* maybeParent);
+-  void initPrincipalsAlreadyHeldAndMutedErrors(JSPrincipals* principals,
+-                                               bool mutedErrors);
+-  void initPrincipalsAndMutedErrors(JSPrincipals* principals, bool mutedErrors);
++  void initPrincipalsAlreadyHeldAndMutedErrors(
++      JSPrincipals* principals, bool mutedErrors,
++      JS::SavedFrameSourceKind sourceKind);
++  void initPrincipalsAndMutedErrors(JSPrincipals* principals, bool mutedErrors,
++                                    JS::SavedFrameSourceKind sourceKind);
+ 
+   enum {
+     // The reserved slots in the SavedFrame class.
+diff --git a/js/src/vm/SavedStacks.cpp b/js/src/vm/SavedStacks.cpp
+index 7c26d9c97..144ff4da0 100644
+--- a/js/src/vm/SavedStacks.cpp
++++ b/js/src/vm/SavedStacks.cpp
+@@ -174,7 +174,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+   Lookup(JSAtom* source, uint32_t sourceId, uint32_t line,
+          JS::TaggedColumnNumberOneOrigin column, JSAtom* functionDisplayName,
+          JSAtom* asyncCause, SavedFrame* parent, JSPrincipals* principals,
+-         bool mutedErrors,
++         bool mutedErrors, JS::SavedFrameSourceKind sourceKind,
+          const Maybe<LiveSavedFrameCache::FramePtr>& framePtr = Nothing(),
+          jsbytecode* pc = nullptr, Activation* activation = nullptr)
+       : source(source),
+@@ -186,6 +186,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+         parent(parent),
+         principals(principals),
+         mutedErrors(mutedErrors),
++        sourceKind(sourceKind),
+         framePtr(framePtr),
+         pc(pc),
+         activation(activation) {
+@@ -206,6 +207,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+         parent(savedFrame.getParent()),
+         principals(savedFrame.getPrincipals()),
+         mutedErrors(savedFrame.getMutedErrors()),
++        sourceKind(savedFrame.getSourceKind()),
+         framePtr(Nothing()),
+         pc(nullptr),
+         activation(nullptr) {
+@@ -226,6 +228,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+   SavedFrame* parent;
+   JSPrincipals* principals;
+   bool mutedErrors;
++  JS::SavedFrameSourceKind sourceKind;
+ 
+   // These are used only by the LiveSavedFrameCache and not used for identity or
+   // hashing.
+@@ -261,6 +264,7 @@ class WrappedPtrOperations<SavedFrame::Lookup, Wrapper> {
+   SavedFrame* parent() { return value().parent; }
+   JSPrincipals* principals() { return value().principals; }
+   bool mutedErrors() { return value().mutedErrors; }
++  JS::SavedFrameSourceKind sourceKind() { return value().sourceKind; }
+   Maybe<LiveSavedFrameCache::FramePtr> framePtr() { return value().framePtr; }
+   jsbytecode* pc() { return value().pc; }
+   Activation* activation() { return value().activation; }
+@@ -314,7 +318,7 @@ HashNumber SavedFrame::HashPolicy::calculateHash(const Lookup& lookup,
+   // and add another overload of AddToHash with more arguments.
+   return AddToHash(lookup.line, lookup.column.rawValue(), lookup.source,
+                    lookup.functionDisplayName, lookup.asyncCause,
+-                   lookup.mutedErrors, parentHash,
++                   lookup.mutedErrors, uint8_t(lookup.sourceKind), parentHash,
+                    JSPrincipalsPtrHasher::hash(lookup.principals));
+ }
+ 
+@@ -357,6 +361,12 @@ bool SavedFrame::HashPolicy::match(SavedFrame* existing, const Lookup& lookup) {
+     return false;
+   }
+ 
++  // Frames whose equal labels come from different capture branches stay
++  // distinct, because their labels are interpreted differently.
++  if (existing->getSourceKind() != lookup.sourceKind) {
++    return false;
++  }
++
+   return true;
+ }
+ 
+@@ -479,12 +489,22 @@ SavedFrame* SavedFrame::getParent() const {
+   return v.isObject() ? &v.toObject().as<SavedFrame>() : nullptr;
+ }
+ 
++// JSSLOT_PRINCIPALS holds the principals pointer with two flags in its low
++// bits: bit 0 is mutedErrors, bit 1 marks a compiler-filename source.
++static constexpr uintptr_t MutedErrorsBit = 0b01;
++static constexpr uintptr_t FilenameSourceBit = 0b10;
++static constexpr uintptr_t PrincipalsFlagBits =
++    MutedErrorsBit | FilenameSourceBit;
++static_assert(alignof(JSPrincipals) > PrincipalsFlagBits,
++              "SavedFrame packs flags into JSPrincipals pointer bits");
++
+ JSPrincipals* SavedFrame::getPrincipals() {
+   const Value& v = getReservedSlot(JSSLOT_PRINCIPALS);
+   if (v.isUndefined()) {
+     return nullptr;
+   }
+-  return reinterpret_cast<JSPrincipals*>(uintptr_t(v.toPrivate()) & ~0b1);
++  return reinterpret_cast<JSPrincipals*>(uintptr_t(v.toPrivate()) &
++                                         ~PrincipalsFlagBits);
+ }
+ 
+ bool SavedFrame::getMutedErrors() {
+@@ -492,7 +512,17 @@ bool SavedFrame::getMutedErrors() {
+   if (v.isUndefined()) {
+     return true;
+   }
+-  return bool(uintptr_t(v.toPrivate()) & 0b1);
++  return bool(uintptr_t(v.toPrivate()) & MutedErrorsBit);
++}
++
++JS::SavedFrameSourceKind SavedFrame::getSourceKind() {
++  const Value& v = getReservedSlot(JSSLOT_PRINCIPALS);
++  if (v.isUndefined()) {
++    return JS::SavedFrameSourceKind::DisplayURL;
++  }
++  return (uintptr_t(v.toPrivate()) & FilenameSourceBit)
++             ? JS::SavedFrameSourceKind::Filename
++             : JS::SavedFrameSourceKind::DisplayURL;
+ }
+ 
+ void SavedFrame::initSource(JSAtom* source) {
+@@ -515,18 +545,24 @@ void SavedFrame::initColumn(JS::TaggedColumnNumberOneOrigin column) {
+   initReservedSlot(JSSLOT_COLUMN, PrivateUint32Value(column.rawValue()));
+ }
+ 
+-void SavedFrame::initPrincipalsAndMutedErrors(JSPrincipals* principals,
+-                                              bool mutedErrors) {
++void SavedFrame::initPrincipalsAndMutedErrors(
++    JSPrincipals* principals, bool mutedErrors,
++    JS::SavedFrameSourceKind sourceKind) {
+   if (principals) {
+     JS_HoldPrincipals(principals);
+   }
+-  initPrincipalsAlreadyHeldAndMutedErrors(principals, mutedErrors);
++  initPrincipalsAlreadyHeldAndMutedErrors(principals, mutedErrors, sourceKind);
+ }
+ 
+ void SavedFrame::initPrincipalsAlreadyHeldAndMutedErrors(
+-    JSPrincipals* principals, bool mutedErrors) {
++    JSPrincipals* principals, bool mutedErrors,
++    JS::SavedFrameSourceKind sourceKind) {
+   MOZ_ASSERT_IF(principals, principals->refcount > 0);
+-  uintptr_t ptr = uintptr_t(principals) | mutedErrors;
++  MOZ_ASSERT((uintptr_t(principals) & PrincipalsFlagBits) == 0);
++  uintptr_t ptr = uintptr_t(principals) | (mutedErrors ? MutedErrorsBit : 0) |
++                  (sourceKind == JS::SavedFrameSourceKind::Filename
++                       ? FilenameSourceBit
++                       : 0);
+   initReservedSlot(JSSLOT_PRINCIPALS,
+                    PrivateValue(reinterpret_cast<void*>(ptr)));
+ }
+@@ -568,7 +604,8 @@ void SavedFrame::initFromLookup(JSContext* cx, Handle<Lookup> lookup) {
+   initFunctionDisplayName(lookup.functionDisplayName());
+   initAsyncCause(lookup.asyncCause());
+   initParent(lookup.parent());
+-  initPrincipalsAndMutedErrors(lookup.principals(), lookup.mutedErrors());
++  initPrincipalsAndMutedErrors(lookup.principals(), lookup.mutedErrors(),
++                               lookup.sourceKind());
+ }
+ 
+ /* static */
+@@ -812,6 +849,27 @@ JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
+   return SavedFrameResult::Ok;
+ }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceKind(
++    JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
++    SavedFrameSourceKind* kindp,
++    SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */) {
++  js::AssertHeapIsIdle();
++  CHECK_THREAD(cx);
++  MOZ_RELEASE_ASSERT(cx->realm());
++
++  bool skippedAsync;
++  Rooted<js::SavedFrame*> frame(cx, UnwrapSavedFrame(cx, principals, savedFrame,
++                                                     selfHosted, skippedAsync));
++  if (!frame) {
++    *kindp = SavedFrameSourceKind::DisplayURL;
++    return SavedFrameResult::AccessDenied;
++  }
++  *kindp = frame->getSourceKind();
++  return SavedFrameResult::Ok;
++}
++#endif
++
+ JS_PUBLIC_API SavedFrameResult GetSavedFrameLine(
+     JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
+     uint32_t* linep,
+@@ -1564,8 +1622,9 @@ bool SavedStacks::insertFrames(JSContext* cx, MutableHandle<SavedFrame*> frame,
+                                   displayAtom,
+                                   nullptr,  // asyncCause
+                                   nullptr,  // parent (not known yet)
+-                                  principals, iter.mutedErrors(), framePtr,
+-                                  iter.pc(), &activation)) {
++                                  principals, iter.mutedErrors(),
++                                  location.sourceKind(), framePtr, iter.pc(),
++                                  &activation)) {
+         return false;
+       }
+     }
+@@ -1900,6 +1959,8 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
+     if (!locationp.source()) {
+       return false;
+     }
++    // |locationp| is reused across frames, so always overwrite the kind.
++    locationp.setSourceKind(JS::SavedFrameSourceKind::Filename);
+ 
+     JS::TaggedColumnNumberOneOrigin column;
+     locationp.setLine(iter.computeLine(&column));
+@@ -1914,11 +1975,14 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
+ 
+   if (!p) {
+     Rooted<JSAtom*> source(cx);
++    JS::SavedFrameSourceKind sourceKind;
+     if (const char16_t* displayURL = iter.displayURL()) {
+       source = AtomizeChars(cx, displayURL, js_strlen(displayURL));
++      sourceKind = JS::SavedFrameSourceKind::DisplayURL;
+     } else {
+       const char* filename = script->filename() ? script->filename() : "";
+       source = AtomizeUTF8Chars(cx, filename, strlen(filename));
++      sourceKind = JS::SavedFrameSourceKind::Filename;
+     }
+     if (!source) {
+       return false;
+@@ -1930,7 +1994,7 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
+ 
+     PCKey key(script, pc);
+     LocationValue value(source, sourceId, line,
+-                        JS::TaggedColumnNumberOneOrigin(column));
++                        JS::TaggedColumnNumberOneOrigin(column), sourceKind);
+     if (!pcLocationMap.add(p, key, value)) {
+       ReportOutOfMemory(cx);
+       return false;
+@@ -2114,7 +2178,9 @@ JS_PUBLIC_API bool ConstructSavedFrameStackSlow(
+                                 functionDisplayName,
+                                 /* asyncCause */ nullptr,
+                                 /* parent */ nullptr, principals,
+-                                /* mutedErrors */ true)) {
++                                /* mutedErrors */ true,
++                                // A reconstructed label has no provenance.
++                                JS::SavedFrameSourceKind::DisplayURL)) {
+       ReportOutOfMemory(cx);
+       return false;
+     }
+diff --git a/js/src/vm/SavedStacks.h b/js/src/vm/SavedStacks.h
+index b7dfe4dd9..74eabe7e5 100644
+--- a/js/src/vm/SavedStacks.h
++++ b/js/src/vm/SavedStacks.h
+@@ -242,10 +242,19 @@ class SavedStacks {
+ 
+  public:
+   struct LocationValue {
+-    LocationValue() : source(nullptr), sourceId(0), line(0) {}
++    LocationValue()
++        : source(nullptr),
++          sourceId(0),
++          line(0),
++          sourceKind(JS::SavedFrameSourceKind::DisplayURL) {}
+     LocationValue(JSAtom* source, uint32_t sourceId, size_t line,
+-                  JS::TaggedColumnNumberOneOrigin column)
+-        : source(source), sourceId(sourceId), line(line), column(column) {}
++                  JS::TaggedColumnNumberOneOrigin column,
++                  JS::SavedFrameSourceKind sourceKind)
++        : source(source),
++          sourceId(sourceId),
++          line(line),
++          column(column),
++          sourceKind(sourceKind) {}
+ 
+     void trace(JSTracer* trc) {
+       TraceEdge(trc, &source, "SavedStacks::LocationValue::source");
+@@ -266,6 +275,9 @@ class SavedStacks {
+ 
+     // Column number in UTF-16 code units.
+     JS::TaggedColumnNumberOneOrigin column;
++
++    // The branch that produced |source|, stored with it.
++    JS::SavedFrameSourceKind sourceKind;
+   };
+ 
+  private:
+@@ -305,6 +317,7 @@ struct WrappedPtrOperations<SavedStacks::LocationValue, Wrapper> {
+   uint32_t sourceId() const { return loc().sourceId; }
+   size_t line() const { return loc().line; }
+   JS::TaggedColumnNumberOneOrigin column() const { return loc().column; }
++  JS::SavedFrameSourceKind sourceKind() const { return loc().sourceKind; }
+ 
+  private:
+   const SavedStacks::LocationValue& loc() const {
+@@ -319,6 +332,7 @@ struct MutableWrappedPtrOperations<SavedStacks::LocationValue, Wrapper>
+   void setSourceId(uint32_t v) { loc().sourceId = v; }
+   void setLine(size_t v) { loc().line = v; }
+   void setColumn(JS::TaggedColumnNumberOneOrigin v) { loc().column = v; }
++  void setSourceKind(JS::SavedFrameSourceKind v) { loc().sourceKind = v; }
+ 
+  private:
+   SavedStacks::LocationValue& loc() {
+diff --git a/js/src/vm/StructuredClone.cpp b/js/src/vm/StructuredClone.cpp
+index 075aa3638..5af89759a 100644
+--- a/js/src/vm/StructuredClone.cpp
++++ b/js/src/vm/StructuredClone.cpp
+@@ -3802,8 +3802,10 @@ JSObject* JSStructuredCloneReader::readSavedFrameHeader(
+     }
+   }
+ 
+-  savedFrame->initPrincipalsAlreadyHeldAndMutedErrors(principals,
+-                                                      mutedErrors.toBoolean());
++  // The clone format carries no source provenance, so the label stays opaque.
++  savedFrame->initPrincipalsAlreadyHeldAndMutedErrors(
++      principals, mutedErrors.toBoolean(),
++      JS::SavedFrameSourceKind::DisplayURL);
+ 
+   savedFrame->initSource(&source.toString()->asAtom());
+ 
 diff --git i/js/src/jsapi.cpp w/js/src/jsapi.cpp
 --- i/js/src/jsapi.cpp
 +++ w/js/src/jsapi.cpp
@@ -1341,7 +1716,7 @@ index f1ce887..f1bffcd 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..b017e9eff 100644
+index 9524c5d6a..15f5307f3 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,29 @@
@@ -1374,7 +1749,7 @@ index 9524c5d6a..b017e9eff 100644
  #include "mozilla/Attributes.h"  // MOZ_ALWAYS_INLINE, MOZ_COLD
  #include "mozilla/Likely.h"      // MOZ_LIKELY
  #include "mozilla/Variant.h"     // mozilla::Variant, mozilla::AsVariant
-@@ -30,6 +53,63 @@ struct JS_PUBLIC_API JSContext;
+@@ -30,6 +53,71 @@ struct JS_PUBLIC_API JSContext;
  
  namespace js {
  
@@ -1399,20 +1774,28 @@ index 9524c5d6a..b017e9eff 100644
 +// reached again through an element's toString.
 +inline constexpr size_t JSONSerializeReserve = 896;
 +inline constexpr size_t ArrayJoinReserve = 1536;
-+// Parser levels, the same on both tiers. Statement nesting stays at the
-+// size Next's generated validators allow (docs/stack-limits.md).
-+inline constexpr size_t StatementReserve = 336;
-+inline constexpr size_t StatementListItemReserve = 352;
++// Compile levels, the same on both tiers. Each size sits in a frame that
++// stays on its recursion cycle after the parser frame merges, so every cycle
++// holds at least one. A statement level holds statementList's (through
++// statementListItem) and its own function's: ifStatement's, tryStatement's,
++// or statement's when it is a body or a label's target. An expression level
++// holds assignExpr's, unaryExpr's and memberExpr's; chains that pass only
++// one of them (assignments, conditionals, unary operators, `new`) hold that
++// one.
++inline constexpr size_t StatementListItemReserve = 640;
++inline constexpr size_t IfStatementReserve = 256;
++inline constexpr size_t TryStatementReserve = 288;
++inline constexpr size_t StatementReserve = 1104;
++inline constexpr size_t AssignExprReserve = 880;
++inline constexpr size_t UnaryExprReserve = 592;
++inline constexpr size_t MemberExprReserve = 848;
++// Levels that add a frame of their own to those three.
++inline constexpr size_t ArgumentListReserve = 464;
++inline constexpr size_t TemplateLiteralReserve = 512;
 +inline constexpr size_t FunctionBodyReserve = 1696;
-+inline constexpr size_t FunctionExpressionReserve = 2880;
-+inline constexpr size_t ArgumentListReserve = 2800;
-+inline constexpr size_t ArrayLiteralReserve = 2816;
-+inline constexpr size_t ObjectLiteralReserve = 2784;
-+inline constexpr size_t ElementAccessReserve = 2784;
-+inline constexpr size_t TemplateLiteralReserve = 3248;
-+inline constexpr size_t ConditionalReserve = 1088;
-+inline constexpr size_t ParenthesizedReserve = 3072;
-+inline constexpr size_t UnaryReserve = 464;
++// The bytecode emitter walks the finished tree with frames of its own and
++// spends more host stack per statement level than the parser.
++inline constexpr size_t EmitTreeReserve = 416;
 +}  // namespace bunwasm
 +
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
@@ -1439,7 +1822,7 @@ index 9524c5d6a..b017e9eff 100644
  
  #ifdef __wasi__
 diff --git i/js/src/frontend/Parser.cpp w/js/src/frontend/Parser.cpp
-index 34f4dee86..0784efd6e 100644
+index 34f4dee86..a7e01d0de 100644
 --- i/js/src/frontend/Parser.cpp
 +++ w/js/src/frontend/Parser.cpp
 @@ -2996,6 +2996,7 @@ template <class ParseHandler, typename Unit>
@@ -1493,7 +1876,7 @@ index 34f4dee86..0784efd6e 100644
  GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
      YieldHandling yieldHandling) {
    TokenKind next;
-@@ -6257,6 +6269,35 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
+@@ -6257,6 +6269,34 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
      return errorResult();
    }
  
@@ -1502,9 +1885,8 @@ index 34f4dee86..0784efd6e 100644
 +  // frame: the same recursion unit, checked before the token is consumed,
 +  // then blockStatement. This function is merged into ifStatement, so a
 +  // braced if level costs ifStatement and statementList frames only.
-+  // statement()'s shadow reservation moves with it, onto ifStatement's frame.
++  // ifStatement holds the shadow reservation for its own frame.
 +  if (next == TokenKind::LeftCurly) {
-+    BUNWASM_RESERVE_STACK(bunwasm::StatementReserve);
 +    AutoCheckRecursionLimit recursion(this->fc_);
 +    if (!recursion.check(this->fc_)) {
 +      return errorResult();
@@ -1529,7 +1911,23 @@ index 34f4dee86..0784efd6e 100644
    // Annex B.3.4 says that unbraced FunctionDeclarations under if/else in
    // non-strict code act as if they were braced: |if (x) function f() {}|
    // parses as |if (x) { function f() {} }|.
-@@ -9299,6 +9340,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
+@@ -6304,6 +6344,7 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
+ template <class ParseHandler, typename Unit>
+ typename ParseHandler::TernaryNodeResult
+ GeneralParser<ParseHandler, Unit>::ifStatement(YieldHandling yieldHandling) {
++  BUNWASM_RESERVE_STACK(bunwasm::IfStatementReserve);
+   Vector<Node, 4> condList(fc_), thenList(fc_);
+   Vector<uint32_t, 4> posList(fc_);
+   Node elseBranch;
+@@ -7292,6 +7333,7 @@ GeneralParser<ParseHandler, Unit>::throwStatement(YieldHandling yieldHandling) {
+ template <class ParseHandler, typename Unit>
+ typename ParseHandler::TernaryNodeResult
+ GeneralParser<ParseHandler, Unit>::tryStatement(YieldHandling yieldHandling) {
++  BUNWASM_RESERVE_STACK(bunwasm::TryStatementReserve);
+   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::Try));
+   uint32_t begin = pos().begin;
+ 
+@@ -9299,6 +9341,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
  template <class ParseHandler, typename Unit>
  typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
      YieldHandling yieldHandling) {
@@ -1537,7 +1935,7 @@ index 34f4dee86..0784efd6e 100644
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -9543,9 +9585,10 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
+@@ -9543,9 +9586,10 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
  }
  
  template <class ParseHandler, typename Unit>
@@ -1549,35 +1947,15 @@ index 34f4dee86..0784efd6e 100644
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -10114,15 +10157,17 @@ GeneralParser<ParseHandler, Unit>::condExpr(InHandling inHandling,
-     return condition;
-   }
- 
--  Node thenExpr =
--      MOZ_TRY(assignExpr(InAllowed, yieldHandling, TripledotProhibited));
-+  Node thenExpr = MOZ_TRY(BUNWASM_RESERVED_CALL(
-+      bunwasm::ConditionalReserve,
-+      assignExpr(InAllowed, yieldHandling, TripledotProhibited)));
- 
-   if (!mustMatchToken(TokenKind::Colon, JSMSG_COLON_IN_COND)) {
+@@ -10133,6 +10177,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::assignExpr(
+     TripledotHandling tripledotHandling,
+     PossibleError* possibleError /* = nullptr */,
+     InvokedPrediction invoked /* = PredictUninvoked */) {
++  BUNWASM_RESERVE_STACK(bunwasm::AssignExprReserve);
+   AutoCheckRecursionLimit recursion(this->fc_);
+   if (!recursion.check(this->fc_)) {
      return errorResult();
-   }
- 
--  Node elseExpr =
--      MOZ_TRY(assignExpr(inHandling, yieldHandling, TripledotProhibited));
-+  Node elseExpr = MOZ_TRY(BUNWASM_RESERVED_CALL(
-+      bunwasm::ConditionalReserve,
-+      assignExpr(inHandling, yieldHandling, TripledotProhibited)));
- 
-   return handler_.newConditional(condition, thenExpr, elseExpr);
- }
-@@ -10493,12 +10538,13 @@ typename ParseHandler::UnaryNodeResult
- GeneralParser<ParseHandler, Unit>::unaryOpExpr(YieldHandling yieldHandling,
-                                                ParseNodeKind kind,
-                                                uint32_t begin) {
-+  BUNWASM_RESERVE_STACK(bunwasm::UnaryReserve);
-   Node kid = MOZ_TRY(unaryExpr(yieldHandling, TripledotProhibited));
-   return handler_.newUnary(kind, begin, kid);
+@@ -10498,7 +10543,7 @@ GeneralParser<ParseHandler, Unit>::unaryOpExpr(YieldHandling yieldHandling,
  }
  
  template <class ParseHandler, typename Unit>
@@ -1586,6 +1964,14 @@ index 34f4dee86..0784efd6e 100644
  GeneralParser<ParseHandler, Unit>::optionalExpr(
      YieldHandling yieldHandling, TripledotHandling tripledotHandling,
      TokenKind tt, PossibleError* possibleError /* = nullptr */,
+@@ -10589,6 +10634,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::unaryExpr(
+     PossibleError* possibleError /* = nullptr */,
+     InvokedPrediction invoked /* = PredictUninvoked */,
+     PrivateNameHandling privateNameHandling /* = PrivateNameProhibited */) {
++  BUNWASM_RESERVE_STACK(bunwasm::UnaryExprReserve);
+   AutoCheckRecursionLimit recursion(this->fc_);
+   if (!recursion.check(this->fc_)) {
+     return errorResult();
 @@ -10762,6 +10808,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::argumentList(
      YieldHandling yieldHandling, bool* isSpread,
@@ -1594,31 +1980,15 @@ index 34f4dee86..0784efd6e 100644
    ListNodeType argsList = MOZ_TRY(handler_.newArguments(pos()));
  
    bool matched;
-@@ -11149,6 +11196,7 @@ GeneralParser<ParseHandler, Unit>::memberElemAccess(
-     Node lhs, YieldHandling yieldHandling,
-     OptionalKind optionalKind /* = OptionalKind::NonOptional */) {
-   MOZ_ASSERT(anyChars.currentToken().type == TokenKind::LeftBracket);
-+  BUNWASM_RESERVE_STACK(bunwasm::ElementAccessReserve);
-   Node propExpr = MOZ_TRY(expr(InAllowed, yieldHandling, TripledotProhibited));
+@@ -10844,6 +10891,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::memberExpr(
+     YieldHandling yieldHandling, TripledotHandling tripledotHandling,
+     TokenKind tt, bool allowCallSyntax, PossibleError* possibleError,
+     InvokedPrediction invoked) {
++  BUNWASM_RESERVE_STACK(bunwasm::MemberExprReserve);
+   MOZ_ASSERT(anyChars.isCurrentTokenType(tt));
  
-   if (!mustMatchToken(TokenKind::RightBracket, JSMSG_BRACKET_IN_INDEX)) {
-@@ -11724,6 +11772,7 @@ typename ParseHandler::ListNodeResult
- GeneralParser<ParseHandler, Unit>::arrayInitializer(
-     YieldHandling yieldHandling, PossibleError* possibleError) {
-   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftBracket));
-+  BUNWASM_RESERVE_STACK(bunwasm::ArrayLiteralReserve);
- 
-   uint32_t begin = pos().begin;
-   ListNodeType literal = MOZ_TRY(handler_.newArrayLiteral(begin));
-@@ -12145,6 +12194,7 @@ typename ParseHandler::ListNodeResult
- GeneralParser<ParseHandler, Unit>::objectLiteral(YieldHandling yieldHandling,
-                                                  PossibleError* possibleError) {
-   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftCurly));
-+  BUNWASM_RESERVE_STACK(bunwasm::ObjectLiteralReserve);
- 
-   uint32_t openedPos = pos().begin;
- 
-@@ -12576,7 +12626,7 @@ GeneralParser<ParseHandler, Unit>::importExpr(YieldHandling yieldHandling,
+   Node lhs;
+@@ -12576,7 +12624,7 @@ GeneralParser<ParseHandler, Unit>::importExpr(YieldHandling yieldHandling,
  }
  
  template <class ParseHandler, typename Unit>
@@ -1627,32 +1997,7 @@ index 34f4dee86..0784efd6e 100644
  GeneralParser<ParseHandler, Unit>::primaryExpr(
      YieldHandling yieldHandling, TripledotHandling tripledotHandling,
      TokenKind tt, PossibleError* possibleError, InvokedPrediction invoked) {
-@@ -12588,8 +12638,9 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
- 
-   switch (tt) {
-     case TokenKind::Function:
--      return functionExpr(pos().begin, invoked,
--                          FunctionAsyncKind::SyncFunction);
-+      return BUNWASM_RESERVED_CALL(
-+          bunwasm::FunctionExpressionReserve,
-+          functionExpr(pos().begin, invoked, FunctionAsyncKind::SyncFunction));
- 
-     case TokenKind::Class:
-       return classDefinition(yieldHandling, ClassExpression, NameRequired);
-@@ -12638,8 +12689,10 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
-       }
- 
-       // Pass |possibleError| to support destructuring in arrow parameters.
--      Node expr = MOZ_TRY(exprInParens(InAllowed, yieldHandling,
--                                       TripledotAllowed, possibleError));
-+      Node expr = MOZ_TRY(BUNWASM_RESERVED_CALL(
-+          bunwasm::ParenthesizedReserve,
-+          exprInParens(InAllowed, yieldHandling, TripledotAllowed,
-+                       possibleError)));
-       if (!mustMatchToken(TokenKind::RightParen, JSMSG_PAREN_IN_PAREN)) {
-         return errorResult();
-       }
-@@ -12770,7 +12823,7 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+@@ -12770,7 +12818,7 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
  }
  
  template <class ParseHandler, typename Unit>
@@ -2227,10 +2572,10 @@ index 2465a89b4..110b3281c 100644
  /*****************************************************************************/
 
  InterpreterFrame* InterpreterStack::pushInvokeFrame(
-diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitter.cpp
-index 18e469828..a6d3f5f4b 100644
---- a/js/src/frontend/BytecodeEmitter.cpp
-+++ b/js/src/frontend/BytecodeEmitter.cpp
+diff --git i/js/src/frontend/BytecodeEmitter.cpp w/js/src/frontend/BytecodeEmitter.cpp
+index 18e469828..bc1bde7ea 100644
+--- i/js/src/frontend/BytecodeEmitter.cpp
++++ w/js/src/frontend/BytecodeEmitter.cpp
 @@ -5219,6 +5219,13 @@ MOZ_NEVER_INLINE bool BytecodeEmitter::emitTry(TryNode* tryNode) {
  }
  
@@ -2245,6 +2590,14 @@ index 18e469828..a6d3f5f4b 100644
    IfEmitter ifThenElse(this);
  
    if (!ifThenElse.emitIf(Some(ifNode->kid1()->pn_pos.begin))) {
+@@ -12668,6 +12675,7 @@ bool BytecodeEmitter::emitExportDefault(BinaryNode* exportNode) {
+ bool BytecodeEmitter::emitTree(
+     ParseNode* pn, ValueUsage valueUsage /* = ValueUsage::WantValue */,
+     EmitLineNumberNote emitLineNote /* = EMIT_LINENOTE */) {
++  BUNWASM_RESERVE_STACK(bunwasm::EmitTreeReserve);
+   AutoCheckRecursionLimit recursion(fc);
+   if (!recursion.check(fc)) {
+     return false;
 diff --git a/js/src/frontend/FoldConstants.cpp b/js/src/frontend/FoldConstants.cpp
 index 8d1b3bf5d..766c8d956 100644
 --- a/js/src/frontend/FoldConstants.cpp

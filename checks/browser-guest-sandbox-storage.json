@@ -8,6 +8,7 @@
     "scripts/storage-browser-evidence.ts",
     "scripts/fixtures/storage-ci/firefox.json",
     "scripts/fixtures/storage-ci/webkit.json",
+    "scripts/fixtures/storage-ci/webkit-restoration.json",
     "scripts/fixtures/storage-ci/webkit-react.json",
     "sandbox/src/editor-pane.tsx",
     "sandbox/src/file-tree.tsx",
@@ -177,6 +178,11 @@
     "sandbox/template/src/main.tsx",
     "sandbox/template/vite.config.ts",
     "sandbox/template-react-router/app/preview-context.ts",
-    "web/src/program-profile.ts"
+    "web/src/program-profile.ts",
+    "scripts/storage-fs-build.ts",
+    "scripts/storage-fs-endpoint.ts",
+    "scripts/storage-fs-observation.ts",
+    "scripts/storage-fs-worker-prelude.ts",
+    "scripts/storage-fs-page-prelude.ts"
   ]
 }

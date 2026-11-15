@@ -171,7 +171,6 @@ export default {};
 export async function preservationScenario(browser: Browser, base: string, observer?: StorageObservation): Promise<void> {
   const acquired = observer ? await observer.acquire("context.create", () => browser.newContext(), context => context.close()) : undefined;
   const context = acquired ? acquired.value : await browser.newContext();
-  observer?.observeContext(context);
   const step = <T>(phase: string, operation: () => Promise<T>) => storageStep(observer, phase, operation);
   const errors: string[] = [];
   context.on("page", page => {
@@ -180,6 +179,7 @@ export async function preservationScenario(browser: Browser, base: string, obser
   });
   let checkpoint: StoragePreservationFailure["report"]["checkpoint"] = "setup";
   try {
+    if (observer) await observer.observeContext(context);
     const active = await step("hono.page.create", () => context.newPage());
     const page = await step("preservation.page.create", () => context.newPage());
     await openTemplate(active, base, "hono", observer);
@@ -212,7 +212,9 @@ export async function preservationScenario(browser: Browser, base: string, obser
     assert.equal(await step("hono.stored", () => stored(page, "hono")), true, "active workspace was evicted");
     assert.equal(await step("hono.server-state", () => active.locator("#server-dot").getAttribute("data-state")), "up", "active Hono server was stopped");
     assert.equal(await step("hono.counter", () => active.frameLocator("#preview").locator("#count").textContent()), "1");
+    checkpoint = "first-vanilla-restoration";
     await openTemplate(page, base, "vanilla", observer);
+    checkpoint = "preservation";
     await step("vanilla.retained-tree", () => retainedUserTree(page));
     const preview = page.frameLocator("#preview");
     await step("vanilla.increment", () => preview.locator("button.counter").click());
@@ -245,7 +247,7 @@ export async function preservationScenario(browser: Browser, base: string, obser
 
 export class StoragePreservationFailure extends Error {
   constructor(readonly report: {
-    checkpoint: "setup" | "vanilla-config-restart" | "first-vite-react-startup" | "first-vite-vue-startup" | "preservation";
+    checkpoint: "setup" | "vanilla-config-restart" | "first-vite-react-startup" | "first-vite-vue-startup" | "first-vanilla-restoration" | "preservation";
     error: string; errors: readonly string[]; pages: readonly (StoragePageDiagnostic | string)[];
   }, cause: unknown) {
     super(report.error, { cause });

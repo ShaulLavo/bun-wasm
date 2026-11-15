@@ -1,15 +1,15 @@
 # Browser-native storage CI repair
 
-Status: Approved. Owner: storage CI coordinator. Updated: 2026-11-14.
+Status: Approved. Owner: storage CI coordinator. Updated: 2026-11-15.
 
 ## Immediate mitigation
 
 Run every existing storage scenario with its existing deadlines and verified site.
-Only CI may quarantine the two remaining historical preservation failures below. Match an
+Only CI may quarantine the three remaining historical preservation failures below. Match an
 explicit scenario checkpoint and the complete diagnostic signature. Persist the
 original per-browser failure before accepting a match. A missing report, failed
 write, unknown signature, receipt mismatch, cleanup failure, storage assertion,
-or later restoration, HMR, or unsupported-symlink failure remains blocking.
+or any unmatched restoration, HMR, or unsupported-symlink failure remains blocking.
 
 - Firefox, first Vite Vue startup after vanilla config restart and Vite React.
   The dev shell exits 254 after fork reports FilesystemTransportError CLOSED,
@@ -19,6 +19,16 @@ or later restoration, HMR, or unsupported-symlink failure remains blocking.
   Readiness reaches its existing deadline, the second dev invocation has no new
   ready message, and the preview reports no server on 5173. Hono remains ready
   on 5174 with counter 1. Vanilla storage is ready with no pending editor text.
+- WebKit, first vanilla restoration after the first LRU eviction. The explicit
+  `first-vanilla-restoration` checkpoint starts just before that open and resets
+  immediately after readiness, before any retained-tree or HMR assertions.
+  Both complete original terminals must match. Vite installs 20 packages and
+  prints ready, but its preview is empty, interactive and unaccepted, with its
+  own document URL on 5173. Hono's accepted complete document on 5174 still
+  renders counter 1. Both filesystems are ready, runtimes started and editors
+  not pending. Console errors must be exactly the original disconnect followed
+  by three 502s. No unknown error or native stack is accepted. This admits only
+  that failed checkpoint and labels the remaining preservation checks skipped.
 
 The first Vite React optimizer entry is absent in this candidate removal. Its
 historical failures now retain complete diagnostics with `quarantine: null` and
@@ -79,6 +89,41 @@ Small receipt, mapping, protocol, and red/green evidence is retained under
 archive and extracted site were removed without a browser workload retry.
 
 ## Permanent repair and removal
+
+### First vanilla restoration repair and removal
+
+Storage owns this temporary entry and its removal. The retained original is
+PR 824 old head `9c4f19a6e1322cb48398380a1ec466f2b261a2d0`, run
+43692497763, job 132760205807, artifact 14154828272. Its first vanilla reopen
+after eviction fails at readiness phase 63, before restored HMR or symlink
+checks. The full protocol is retained unchanged in
+`scripts/fixtures/storage-ci/webkit-restoration.json`. The focused tests change
+only its old `preservation` checkpoint label to `first-vanilla-restoration`.
+Install 9573 ms and ready 4080 ms are observations, not speed assertions.
+
+The initiating cause remains unresolved. This protocol contains no named clock
+failure, CLOSED transport, thread panic, process kill or unknown terminal error.
+It does not prove thread exhaustion or attribute the failure to the rollback.
+Root retains ownership of the underlying runtime causes. The actual late-handle
+repair candidate is [Waffle PR 518](https://github.com/ShaulLavo/waffle/pull/518),
+released as .133. The original-refusal diagnostic is
+[Root PR 828](https://github.com/ShaulLavo/bun-wasm/pull/828). Neither is a
+demonstrated repair of this historical artifact. Current local reproduction
+work is recorded in
+`/work/reports/goals/storage-ci-20261114/local-restart-admission/REPORT.md` and
+`/work/reports/goals/storage-ci-20261114/local-firefox-closed/REPORT.md`.
+Passing controls or a failure in a different phase cannot establish attribution.
+The separate Playground registration fix in PR 834 is unrelated.
+
+Remove this entry only after a demonstrated correction and two unchanged
+GitHub-hosted WebKit preservation passes with this entry absent. Preserve the
+old protocol as a rejection fixture. Later restoration, HMR, symlink, storage,
+context/session cleanup and progress-write failures remain blocking. The .132
+rollback and .133 adoption have separate pin owners; this unit changes neither.
+Local mitigation checks and cleanup are retained under
+`/work/reports/goals/storage-ci-20261114/restoration-mitigation/`.
+
+### Existing entries
 
 1. Firefox research owns the first failing filesystem transport operation.
    Capture the original MessagePort messageerror, sender and receiver lifecycle,
@@ -201,7 +246,7 @@ an established transient cause that would make a retry a demonstrated repair.
 
 ## Mitigation verification
 
-`scripts/storage-ci-quarantine.test.ts` matches only the Firefox and vanilla
+`scripts/storage-ci-quarantine.test.ts` matches only the Firefox and two vanilla
 protocols at their source checkpoints. It rejects other checkpoints and browsers, unknown console
 errors, altered transport or restart output, a missing or changed Hono control,
 failed filesystem state, pending edits, ordinary assertions, and failed report

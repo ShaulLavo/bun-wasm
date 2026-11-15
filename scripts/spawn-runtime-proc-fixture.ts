@@ -203,11 +203,12 @@ interface TestTimers {
   setImmediate: typeof setImmediate;
 }
 
-export function load(fake: ReturnType<typeof service>, options: { execArgv?: string[]; timers?: TestTimers; spawnArguments?: (argv: string[], cwd: unknown) => string[]; contexts?: ContextSlot } = {}) {
+export function load(fake: ReturnType<typeof service>, options: { Error?: new(message?: string) => Error; execArgv?: string[]; timers?: TestTimers; spawnArguments?: (argv: string[], cwd: unknown) => string[]; contexts?: ContextSlot } = {}) {
   const waiters: any[] = [];
   const process = Object.assign(new EventEmitter(), { env: { HOME: "/home", PATH: "/bin:/usr/bin" }, execArgv: options.execArgv ?? [], execPath: "bun", exitCode: 0, cwd: () => "/work" });
   const factory = runInNewContext(source, {
     ReadableStream, Response, URL, TextEncoder, TextDecoder, Promise, process,
+    ...(options.Error ? { Error: options.Error } : {}),
   });
   const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {}, events: EventEmitter, process, package_scripts: { spawnArguments: options.spawnArguments ?? ((argv: string[]) => argv) }, resource_frame: resourceFrames(options.contexts) };
   const internal = {

@@ -139,6 +139,11 @@
       new Error((path === undefined ? `${syscall} ${code}` : `${syscall} ${path} ${code}`) + (detail ? `: ${detail}` : "")),
       { code, errno: nodeErrnos[code], syscall });
     if (path !== undefined) error.path = path;
+    // WebKit stacks contain only frames; stack-only consumers still need the refusal reason.
+    const header = `${error.name}: ${error.message}`;
+    const stack = error.stack;
+    if (!stack) error.stack = header;
+    else if (stack !== header && !stack.startsWith(`${header}\n`)) error.stack = `${header}\n${stack}`;
     return error;
   }
 

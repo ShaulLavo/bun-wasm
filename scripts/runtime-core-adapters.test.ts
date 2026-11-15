@@ -65,12 +65,16 @@ function withoutStackCapabilityDeltas(source: string) {
   expect(source.split("custom && parseCapturedStack")).toHaveLength(2);
   expect(source.split('native.engine === "quickjs" || parseCapturedStack')).toHaveLength(2);
   const prototypeWrapper = /  if \(native.engine === "spidermonkey"\) \{\n[\s\S]*?\n  \}\n\n/;
+  const capturedFrames = /  function capturedFrames\(target[^)]*\) \{\n[\s\S]*?\n  \}\n\n/;
   const jscWrapper = /  if \(native.engine === "jsc"\) \{\n[\s\S]*?\n  \}\n\n/;
   const hostWrapper = /  if \(native.engine === "host" && internal.hasNativeStackTrace\) \{\n[\s\S]*?\n  \}\n\n/;
   expect(source.match(prototypeWrapper)).not.toBeNull();
   expect(source.match(jscWrapper)).not.toBeNull();
   expect(source.match(hostWrapper)).not.toBeNull();
-  return source.replace(prototypeWrapper, "").replace(jscWrapper, "").replace(hostWrapper, "").replace(declaration, "")
+  expect(source.match(capturedFrames)).not.toBeNull();
+  expect(source.split("capturedFrames(target, raw)")).toHaveLength(2);
+  return source.replace(prototypeWrapper, "").replace(capturedFrames, "").replace(jscWrapper, "").replace(hostWrapper, "").replace(declaration, "")
+    .replace("capturedFrames(target, raw)", 'internal.require("inspect").parseStack(raw)')
     .replace(/function formatStack\(target\s*, raw\s*, materializing = false\)/, "function formatStack(target, raw)")
     .replace("      if (!custom && materializing) return raw;\n", "")
     .replace(awaitingCaller, 'this.#frame.name.startsWith("async ")')
@@ -125,7 +129,7 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
   return target;
 }
 
-// Hashes pin original syntax; stack capability selection, SpiderMonkey's awaiting-caller name, descriptors and builtin changes have explicit deltas.
+// Hashes pin original syntax; stack capability selection, SpiderMonkey's structured frames, awaiting-caller name, descriptors and builtin changes have explicit deltas.
 // The stack_trace hash also covers the call-site predicates React's stack collector calls.
 const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",

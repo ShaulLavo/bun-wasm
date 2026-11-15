@@ -10,6 +10,7 @@
         "scripts/sandbox-storage-measure.ts",
         "scripts/c1-controller.ts",
         "scripts/goals-matrix/run.ts",
+        "scripts/iphone-smoke.ts",
         "scripts/goals-matrix/fleet.ts",
         "scripts/goals-matrix/view.ts",
         "scripts/goals-matrix/prepare.ts",
@@ -89,7 +90,10 @@
         "scripts/stream-polyfill-node-hooks.ts",
         "scripts/http-suite-report.ts",
         "scripts/ci-report.ts",
-        "tests/shell-consumer/{main,worker,fs-worker,notification-worker,sw}.ts"
+        "tests/shell-consumer/{main,worker,fs-worker,notification-worker,sw}.ts",
+        "scripts/storage-fs-observation.ts",
+        "scripts/storage-fs-page-prelude.ts",
+        "scripts/storage-fs-worker-prelude.ts"
       ],
       "project": [
         "src/**/*.ts",

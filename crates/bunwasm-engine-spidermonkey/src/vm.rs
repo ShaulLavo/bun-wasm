@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ffi::{CString, c_char};
+use std::ffi::c_char;
 use std::io::Write;
 use std::rc::Rc;
 
@@ -393,9 +393,9 @@ unsafe fn string_reply(
             return false;
         }
     };
-    let text = CString::new(text).expect("host text has no NUL");
-    unsafe { out_len.write(text.as_bytes().len()) };
-    unsafe { out.write(text.into_raw()) };
+    let (bytes, length) = crate::reply_buffer::into_raw(text);
+    unsafe { out_len.write(length) };
+    unsafe { out.write(bytes) };
     true
 }
 
@@ -478,8 +478,8 @@ pub unsafe extern "C" fn bunsm_host_rejection(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn bunsm_host_free(bytes: *mut c_char) {
-    drop(unsafe { CString::from_raw(bytes) });
+pub unsafe extern "C" fn bunsm_host_free(bytes: *mut c_char, length: usize) {
+    unsafe { crate::reply_buffer::free_raw(bytes, length) };
 }
 
 fn same_value(a: &SmVal, b: &SmVal) -> bool {
@@ -629,13 +629,13 @@ impl Engine for SpiderMonkey {
         call(function, this, args)
     }
     fn eval_script(&self, source: &str, filename: &str, first_line: i32) -> Result<SmVal, SmVal> {
-        let filename = CString::new(filename).expect("script filename has no NUL");
         let mut out = 0;
         let ok = unsafe {
             sys::bsm_eval_script(
                 source.as_ptr().cast::<c_char>(),
                 source.len(),
-                filename.as_ptr(),
+                filename.as_ptr().cast::<c_char>(),
+                filename.len(),
                 first_line,
                 &mut out,
             )
