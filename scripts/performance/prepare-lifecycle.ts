@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { object, string } from "./input";
 import { ownedCommand, withSignals } from "../goals-matrix/lifetime";
 import { verifyPreparedSiteInventory, writePreparedSiteInventory } from "../goals-matrix/prepared-site";
+import waffleRelease from "../waffle-release-inputs.json";
 
 async function prepareLifecycle(canonical: string, scratch: string, spidermonkey: { directory: string; source: string }): Promise<void> {
   const shell = process.env.BASH_WEB_GUESTS_DIR;
@@ -19,7 +20,7 @@ async function prepareLifecycle(canonical: string, scratch: string, spidermonkey
     await cp("web/dist", join(scratch, "host"), { recursive: true });
     await verifyPreparedSiteInventory(join(scratch, "host"));
     const waffle = object(JSON.parse(await readFile("web/node_modules/waffle/package.json", "utf8")));
-    if (waffle.version !== "0.0.131") throw new Error("Lifecycle host requires Waffle 0.0.131");
+    if (waffle.version !== waffleRelease.version) throw new Error(`Lifecycle host requires Waffle ${waffleRelease.version}`);
     await writeFile(join(scratch, "host/lifecycle-host.json"), JSON.stringify({ waffle: waffle.version, canonicalManifest: manifest,
       guestSource: string(guestSource.head), hostSource: JSON.parse(await readFile("web/dist/goals-host-source.json", "utf8")) }));
     await writePreparedSiteInventory(join(scratch, "host"));
