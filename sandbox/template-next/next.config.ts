@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const config: NextConfig = {
-  experimental: { cpus: 1 },
+  experimental: { cpus: 1, webpackBuildWorker: false },
   outputFileTracingExcludes: {
     "next-server": [
       "**/next/dist/compiled/next-server/app-page-experimental.runtime.prod.js",

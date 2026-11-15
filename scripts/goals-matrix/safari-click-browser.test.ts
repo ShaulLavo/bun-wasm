@@ -4,12 +4,23 @@ import { armNativeClick, observeNativeClick } from "./native-click";
 
 const counter = '<button onclick="document.querySelector(\'output\').textContent=\'1\'">Increment</button><output>0</output>';
 
+async function acceptChangingClock(page: Page, arm: string, observe: string): Promise<void> {
+  await page.setContent(counter);
+  await page.evaluate("Object.defineProperty(performance, 'timeOrigin', { configurable: true, get: (() => { let value = 123; return () => ++value; })() })");
+  try {
+    expect(await page.evaluate(arm)).toEqual({ ready: true, before: "0" });
+    const first = await page.evaluate("performance.timeOrigin");
+    await page.getByRole("button", { name: "Increment" }).click();
+    expect(await page.evaluate("performance.timeOrigin")).not.toBe(first);
+    expect(await page.evaluate(observe)).toEqual({ trusted: true, after: "1" });
+  } finally { await page.evaluate("delete performance.timeOrigin"); }
+}
+
 async function rejectDocumentChanges(page: Page, arm: string, observe: string): Promise<void> {
   const cases = [
     { change: "delete globalThis.__goalsNativeClick", detail: "state-missing; statePresent=false" },
     { change: "globalThis.__goalsNativeClick.token = 'different-private-token'", detail: "token-mismatch; statePresent=true; tokenEqual=false" },
     { change: "location.hash = 'private-document-control'", detail: "url-mismatch; statePresent=true; tokenEqual=true; urlEqual=false" },
-    { change: "globalThis.__goalsNativeClick.timeOrigin += 1", detail: "time-origin-mismatch; statePresent=true; tokenEqual=true; urlEqual=true; timeOriginEqual=false" },
   ];
   for (const row of cases) {
     await page.setContent(counter);
@@ -19,6 +30,29 @@ async function rejectDocumentChanges(page: Page, arm: string, observe: string): 
     const message = await page.evaluate(`try { ${observe} } catch (error) { error.message }`);
     expect(message).toBe(`Native click document changed: ${row.detail}`);
   }
+}
+
+async function rejectChangedDocument(page: Page, arm: string, observe: string): Promise<void> {
+  await page.setContent(counter);
+  await page.evaluate(arm);
+  await page.getByRole("button", { name: "Increment" }).click();
+  const evidence = await page.evaluate<{ guards: Record<string, boolean | string>; message: string }>(`(() => {
+    const state = globalThis.__goalsNativeClick;
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const other = frame.contentWindow;
+    Object.defineProperty(other.performance, 'timeOrigin', { value: performance.timeOrigin });
+    other.document.body.append(other.document.adoptNode(state.target));
+    other.document.body.append(other.document.adoptNode(document.querySelector('output')));
+    other.__goalsNativeClick = state;
+    const guards = { tokenEqual: other.__goalsNativeClick.token === ${JSON.stringify("trusted-control")},
+      urlEqual: state.url === other.location.href, targetEqual: other.document.querySelector('button') === state.target,
+      connected: state.target.isConnected, trusted: state.event.trusted, after: other.document.querySelector('output').textContent,
+      timeOriginEqual: other.performance.timeOrigin === performance.timeOrigin };
+    return { guards, message: other.eval(${JSON.stringify(`try { ${observe} } catch (error) { error.message }`)}) };
+  })()`);
+  expect(evidence.guards).toEqual({ tokenEqual: true, urlEqual: true, targetEqual: true, connected: true, trusted: true, after: "1", timeOriginEqual: true });
+  expect(evidence.message).toBe("Native click document changed: document-identity-mismatch; statePresent=true; tokenEqual=true; urlEqual=true; documentEqual=false");
 }
 
 async function rejectTargetChanges(page: Page, arm: string, observe: string): Promise<void> {
@@ -51,6 +85,8 @@ async function control(engine: BrowserType): Promise<void> {
     await page.evaluate(arm);
     await page.evaluate(() => { document.querySelector("button")!.click(); });
     await expect(page.evaluate(observe)).rejects.toThrow("trusted event");
+    await acceptChangingClock(page, arm, observe);
+    await rejectChangedDocument(page, arm, observe);
     await rejectDocumentChanges(page, arm, observe);
     await rejectTargetChanges(page, arm, observe);
   } finally { await browser.close(); }

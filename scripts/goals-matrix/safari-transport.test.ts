@@ -731,7 +731,7 @@ test.each([
   { change: "delete globalThis.__goalsNativeClick", detail: "state-missing; statePresent=false" },
   { change: "globalThis.__goalsNativeClick.token = 'private-other-token'", detail: "token-mismatch; statePresent=true; tokenEqual=false" },
   { change: "location.href = 'http://private.test/changed'", detail: "url-mismatch; statePresent=true; tokenEqual=true; urlEqual=false" },
-  { change: "performance.timeOrigin += 1", detail: "time-origin-mismatch; statePresent=true; tokenEqual=true; urlEqual=true; timeOriginEqual=false" },
+  { change: "globalThis.document = { ...document }", detail: "document-identity-mismatch; statePresent=true; tokenEqual=true; urlEqual=true; documentEqual=false" },
 ])("native click propagates finite document evidence without retry: $detail", async row => {
   const { driver, install } = counterDriver({ intercept: call => {
     if (!call.path.endsWith("/click")) return;

@@ -796,11 +796,18 @@ other hosts are not qualified by these results.
 SpiderMonkey's logical counter (350 units) does not fire before a 512 KiB WebKit worker stack
 runs out on any reentry path, so unbounded getter, `.call` or Ajv-style recursion traps there.
 The engine's own byte check (`JS_SetNativeStackQuota`) counts shadow bytes, so
-`BUN_WASM_STACK_KIB` now sets it, and the recursive paths that hold few shadow bytes per host
-byte reserve more (`docs/bun-patches/spidermonkey-stack-budget.md` lists each site and size).
+`BUN_WASM_SPIDERMONKEY_STACK_KIB` sets it, and the recursive paths that hold few shadow bytes per
+host byte reserve more (`docs/bun-patches/spidermonkey-stack-budget.md` lists each site and size).
 The browser host passes 188 KiB for SpiderMonkey on every WebKit host: desktop Safari, iPhone,
 iPad and the other iOS browsers (`web/src/engine-stack-budget.ts`). V8, desktop Firefox and
 Firefox on Android pass nothing and keep the full 8 MiB quota.
+
+SpiderMonkey has its own variable because its quota and the QuickJS and JSC budget in
+`BUN_WASM_STACK_KIB` are different quantities: the guest's bootstrap alone needs about 100 KiB
+of SpiderMonkey quota, while fixtures run QuickJS children at 32 KiB. With one shared variable,
+`tests/fixtures/require-chain-stack` and `stack-native-call` could not start their SpiderMonkey
+children. The executor writes each engine's budget under its own key
+(`engineStackBudgetKey`).
 
 How it was measured: the guest in a fresh Playwright WebKit page per attempt, so its bootstrap
 runs and the shape meets cold code, on Darwin's 512 KiB worker stack: Playwright WebKit 26.6 on
@@ -893,6 +900,34 @@ succeeds. Under Wasmtime, host stack per level ranges from 400 bytes (blocks) to
 Not covered: iPhone Safari and Android Chrome were not measured. PBL getter recursion
 overflows the host stack in all three browsers at any setting, because PBL does not hold a
 counter unit per inline frame. That predates this bound.
+
+## SpiderMonkey parser frames
+
+The counter bounds how deep the parser may go, not how much host stack each level costs. Every
+C++ function in a parser recursion cycle is one wasm frame, and a cold WebKit frame costs 0.6 to
+0.9 KiB. Under `BUNWASM_EMBED` the parser's statement and expression cycles are merged into
+fewer functions ([patch record](bun-patches/spidermonkey-frontend-frames.md)): a braced `if`
+level costs two frames instead of six, a block one instead of three, a parenthesised expression
+four instead of six or eight. Counter units per level are unchanged, so the bound above accepts
+and refuses at the same depths.
+
+`scripts/spidermonkey-parser.test.ts` checks that the merged functions stay gone in all four
+parser instantiations, in the smoke and the engine side, and that a differential corpus gives
+main's values, errors, positions and compile-limit boundaries.
+
+In the real guest on the M1 Mac (Playwright WebKit 26.6, 512 KiB worker stacks), Ajv's
+`validate16` from Angular's schema validation, measured November 14, 2026:
+
+| Tier | Before | After |
+| --- | --- | --- |
+| PBL, compile at the top | trapped in 3 of 3 | compiled 6 of 6, with and without calling the validator |
+| PBL, beneath 10 `.call` levels | not measured | compiled 3 of 3, both ways |
+| Interpreter, beneath 40 `.call` levels | not measured | compiled 3 of 3, both ways |
+| Observed deepest compile (of the wrapper-only ceiling) | PBL none, interpreter 10 of 80 (earlier Angular gate run) | PBL 16 of 29, interpreter 49 of 80 |
+
+After the merge the bytecode emitter is the deepest pass for braced statements compiled in full,
+at about 172 levels of the Ajv shape on the Mac. Unit 2 of the parser design re-places the small
+stack guard's reservations on the surviving frames and adds one for the emitter.
 
 ## SpiderMonkey getters, call and apply in the interpreter loop
 
