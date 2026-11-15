@@ -363,6 +363,11 @@ unsafe extern "C" {
         specifier: *const c_char,
         exception: *mut JSValueRef,
     ) -> JSValueRef;
+    pub fn bunjsc_require(
+        ctx: JSContextRef,
+        name: *const c_char,
+        exception: *mut JSValueRef,
+    ) -> JSValueRef;
     pub fn bunjsc_evaluate_script(
         ctx: JSContextRef,
         source: *const c_char,

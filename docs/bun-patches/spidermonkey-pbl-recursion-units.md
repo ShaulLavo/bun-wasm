@@ -40,7 +40,7 @@ number of levels entered before the caught `RangeError`.
 | Setter | browser stack overflow | 344 | 173 |
 | Bound function | browser stack overflow | 342 | 115 |
 | Missing argument | browser stack overflow | 344 | 50,999 |
-| Plain call, `call`, proxy, `toString` | 5,030, 115, 115, 172 | same | 50,999, 116, 115, 115 |
+| Plain call, `call`, proxy, `toString` | 5,030, 115, 115, 172 | same | 50,999, 116 (now 50,998, [loop dispatch](spidermonkey-loop-dispatch.md)), 115, 115 |
 
 After the change all 48 cases (three browsers, both tiers, eight paths) end in a
 caught `RangeError` and the next evaluation succeeds. A PBL reentry costs about

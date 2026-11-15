@@ -719,8 +719,11 @@ impl Engine for Jsc {
     }
 
     fn require_module(&self, name: &str) -> Result<JsVal, JsVal> {
-        let promise = self.import_module(name)?;
+        let name = CString::new(name).unwrap_or_default();
         let mut exc = ptr::null();
+        // SAFETY: NUL-terminated module key and the process's live JSC context.
+        let raw = unsafe { bunjsc_require(ctx(), name.as_ptr(), &mut exc) };
+        let promise = checked(exc, raw)?;
         // SAFETY: the helper holds the VM lock and checks the promise brand.
         unsafe { bunjsc_promise_mark_handled(ctx(), promise.raw(), &mut exc) };
         if !exc.is_null() {

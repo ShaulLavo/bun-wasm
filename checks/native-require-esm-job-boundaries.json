@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/require-esm-job-boundaries",
+  "engines": ["jsc"]
+}

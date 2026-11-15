@@ -1,0 +1,8 @@
+call recursion completed
+apply recursion completed
+call throw and finally preserved
+receivers and constructor checks preserved
+call targets preserved
+apply lists preserved
+arguments lists preserved
+call exhaustion caught and recovered
