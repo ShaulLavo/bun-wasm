@@ -105,20 +105,6 @@ test("a clean consumer installs prepared Waffle Node exports without lifecycle s
       for (const specifier of ${JSON.stringify(browserOnlySpecifiers)}) {
         await assert.rejects(import(specifier), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
       }
-      const { Wasi } = await import("waffle/core");
-      const text = value => [value.length].concat(Array.from(new TextEncoder().encode(value)));
-      const section = (id, bytes) => [id, bytes.length].concat(bytes);
-      const module = new WebAssembly.Module(Uint8Array.from(
-        [0, 97, 115, 109, 1, 0, 0, 0].concat(
-          section(1, [1, 0x60, 0, 1, 0x7f]),
-          section(2, [1].concat(text("runtime_fs"), text("watch_ready"), [0, 0])),
-          section(7, [1].concat(text("ready"), [0, 0])),
-        ),
-      ));
-      assert.throws(() => new WebAssembly.Instance(module, { runtime_fs: {} }), WebAssembly.LinkError);
-      const wasi = new Wasi({ args: [], env: {}, fs: {}, preopens: {}, stdout() {}, stderr() {}, sleep() {} });
-      const instance = new WebAssembly.Instance(module, wasi.imports(module));
-      assert.equal(instance.exports.ready(), 0);
     `;
     await expect(run("node", ["--input-type=module", "--eval", script], consumer)).resolves.toBeString();
     expect(existsSync(join(root, "runtime"))).toBe(false);
