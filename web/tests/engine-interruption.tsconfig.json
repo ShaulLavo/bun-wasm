@@ -13,6 +13,8 @@
     "fixtures/worker-signals-intrinsics.ts",
     "engine-interruption-cases.ts",
     "engine-interruption-cases.test.ts",
+    "engine-interruption-stop.ts",
+    "engine-interruption-stop.test.ts",
     "engine-interruption-worker.ts",
     "engine-interruption-transport.ts",
     "engine-interruption-transport.test.ts",
