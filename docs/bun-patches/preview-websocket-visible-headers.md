@@ -12,6 +12,8 @@ The adapter captures that authority before converting to the plain transport
 scheme, which can otherwise discard an explicit secure port 80. Synchronous
 constructor scope binds each stream to its own authority and restores the prior
 scope even when protocol access constructs another socket or throws.
+Host and Origin are inserted with literal replacement callbacks, so URL text
+cannot be interpreted as replacement-string syntax.
 
 Previously both headers described the virtual localhost endpoint. Applications
 therefore received different headers from those a browser would send. Keeping

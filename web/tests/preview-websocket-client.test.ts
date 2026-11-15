@@ -165,6 +165,14 @@ const authorities = [
     host: "fxj6.sprockt.dev:80",
   },
   {
+    name: "literal replacement characters in the visible authority",
+    origin: "https://price$&.example:80/",
+    port: 4174,
+    input: "wss://price$&.example:80/socket",
+    requestLine: "GET /socket HTTP/1.1",
+    host: "price$&.example:80",
+  },
+  {
     name: "visible mounted preview with a different guest port",
     origin: "http://localhost:4179/__preview/3000/some/page?x=1",
     port: 3000,
