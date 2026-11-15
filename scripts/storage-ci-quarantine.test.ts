@@ -10,6 +10,8 @@ import webkitProtocol from "./fixtures/storage-ci/webkit.json";
 import webkitReactProtocols from "./fixtures/storage-ci/webkit-react.json";
 import webkitRestorationProtocol from "./fixtures/storage-ci/webkit-restoration.json";
 import { StorageLifetime } from "./storage-browser-evidence";
+import { discoverChecks } from "./test-checks";
+import { needsJsc, needsRust } from "./ci-changes";
 
 type Report = StoragePreservationFailure["report"];
 type PageDiagnostic = Exclude<Report["pages"][number], string>;
@@ -207,8 +209,18 @@ test("ordinary assertions and cleanup or receipt errors never enter quarantine",
 });
 
 function restorationFailure(patch: Partial<Report> = {}): StoragePreservationFailure {
-  return new StoragePreservationFailure({ ...structuredClone(webkitRestorationProtocol), checkpoint: "first-vanilla-restoration", ...patch }, new Error(webkitRestorationProtocol.error));
+  const { error, errors, pages } = structuredClone(webkitRestorationProtocol);
+  return new StoragePreservationFailure({ error, errors, pages, checkpoint: "first-vanilla-restoration", ...patch }, new Error(error));
 }
+
+test("restoration fixture remains owned by the blocking storage producer and quality check", () => {
+  const checks = discoverChecks();
+  const fixture = "scripts/fixtures/storage-ci/webkit-restoration.json";
+  expect(checks.find(check => check.path === "scripts/storage-ci-quarantine.test.ts")?.owner).toBe("quality");
+  expect(checks.find(check => check.path === "scripts/sandbox-storage-browser.test.ts")?.inputs).toContain(fixture);
+  expect(needsRust([fixture])).toBe(true);
+  expect(needsJsc([fixture])).toBe(false);
+});
 
 test("first vanilla restoration retains the original protocol before summary and warning, and labels skipped checks", async () => {
   const env = await evidence();

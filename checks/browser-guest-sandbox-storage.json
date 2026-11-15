@@ -8,6 +8,7 @@
     "scripts/storage-browser-evidence.ts",
     "scripts/fixtures/storage-ci/firefox.json",
     "scripts/fixtures/storage-ci/webkit.json",
+    "scripts/fixtures/storage-ci/webkit-restoration.json",
     "scripts/fixtures/storage-ci/webkit-react.json",
     "sandbox/src/editor-pane.tsx",
     "sandbox/src/file-tree.tsx",
