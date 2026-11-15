@@ -587,7 +587,7 @@ index f1ce887af..00c9ecad1 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..60db5b48b 100644
+index 9524c5d6a..7e6bc5868 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,29 @@
@@ -630,9 +630,9 @@ index 9524c5d6a..60db5b48b 100644
 +inline constexpr size_t RunScriptReserve = 2688;
 +inline constexpr size_t RunScriptPBLReserve = 2304;
 +// Portable baseline inline caches calling a scripted getter, setter or callee.
-+inline constexpr size_t PBLCallReserve = 384;
++inline constexpr size_t PBLCallReserve = 640;
 +// Function.prototype.call and apply on PBL, on top of the script entry.
-+inline constexpr size_t FunctionCallPBLReserve = 1920;
++inline constexpr size_t FunctionCallPBLReserve = 2688;
 +// Proxy traps on PBL, whose scripted handlers enter the interpreter again.
 +inline constexpr size_t ProxyTrapPBLReserve = 2816;
 +// Native-only recursion: JSON.stringify's serializer and Array.prototype.join
@@ -641,8 +641,8 @@ index 9524c5d6a..60db5b48b 100644
 +inline constexpr size_t ArrayJoinReserve = 1536;
 +// Parser levels, the same on both tiers. Statement nesting stays at the
 +// size Next's generated validators allow (docs/stack-limits.md).
-+inline constexpr size_t StatementReserve = 336;
-+inline constexpr size_t StatementListItemReserve = 352;
++inline constexpr size_t StatementReserve = 256;
++inline constexpr size_t StatementListItemReserve = 256;
 +inline constexpr size_t FunctionBodyReserve = 1696;
 +inline constexpr size_t FunctionExpressionReserve = 2880;
 +inline constexpr size_t ArgumentListReserve = 2800;
