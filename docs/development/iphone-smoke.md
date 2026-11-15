@@ -15,6 +15,9 @@ delivery receipts, or a goals-site inventory. The root must contain `index.html`
 `engine-builds.json`, and Browser and QuickJS engine files. The runner checks the
 embedded host fingerprints against the guest bytes to catch mixed builds.
 The [goals-matrix guide](../goals-matrix.md) describes engine staging and preparation.
+Run the smoke command from the selected revision's checkout so preflight reads
+the same runtime sources used for its local build. Queue commands such as claim
+and complete use the installed watcher's checkout.
 
 Record the build's 40-character commit in `--source-file`, for example
 `{"commit":"YOUR_FULL_COMMIT"}`. Optional `dirty` and `assets` fields retain
@@ -23,13 +26,14 @@ every case. It does not rebuild or deploy a site.
 
 1. Call T3 `device_list`. Select iPhone 17e with UDID
    `C4D2FFD4-A0D2-4608-B180-35854521B830` on the Mac device host.
-2. Call `device_open` with that device's host ID and UDID. Keep its exact absolute
-   bound `agent-device` command. The runner uses it for Safari, taps, and tab cleanup.
-3. Use the maintained [visible iPhone wrapper and Mac FIFO](../goals-matrix.md#run-visible-iphone-safari-with-xctest-input)
+2. Use the maintained [visible iPhone wrapper and Mac FIFO](../goals-matrix.md#run-visible-iphone-safari-with-xctest-input)
    to serve the same prepared bytes on the Mac and forward its observer port.
    Set `--mac-thread` below to the FIFO holder's thread ID. Keep that wrapper and
    admission alive for the entire smoke. A 6,000-second workload hang cap covers
    all three cases and their cleanup. Queue wait time is separate.
+3. Once the FIFO admits your wrapper and its server is ready, call `device_open`
+   with that device's host ID and UDID. Keep its exact absolute bound
+   `agent-device` command. The runner uses it for Safari, taps, and tab cleanup.
 
 The runner verifies the same supervised FIFO ticket before each case. It does
 not acquire another Mac ticket. The wrapper checks owner availability and refuses
