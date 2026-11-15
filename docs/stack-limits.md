@@ -869,8 +869,8 @@ stack holds cold. On the portable baseline tier, the tighter one:
 | --- | ---: | ---: | ---: |
 | Ajv-style validator, lazily parsed | 168, 216 | 125 | 74% |
 | Ajv-style validator, compiled in full | 144, 188 | 102 | 71% |
-| `if` blocks, compiled in full | 192, 232 | 128 | 67% |
 | Blocks, compiled in full | 280, 352 | 156 | 56% |
+| `try` blocks, lazily parsed | 264, 296 | 139 | 53% |
 | `try` blocks, compiled in full | 148, 192 | 104 | 70% |
 | `for` loops, compiled in full | 108, 144 | 76 | 70% |
 | Labels | 156, 204 | 120 | 77% |
@@ -885,6 +885,12 @@ stack holds cold. On the portable baseline tier, the tighter one:
 before the reservations moved (the wrapper frames removed since give parentheses, `?:` chains and
 function expressions a little more). "Accepts" is the deepest level that compiles in a fresh
 page at 188 KiB; it is the same on both hosts, because the quota counts shadow bytes.
+
+The share stays at 80 percent or less, not just under 100, because refusing takes host stack
+too: the engine raises its error at the deepest point, through code that is cold the first time.
+A trial at 216 KiB before `tryStatement` had a reservation showed it: lazily parsed `try`
+nesting was accepted to 248 of the 280 levels the Mac's interpreter tier holds, and the refusal
+at the next level crashed the worker.
 
 What this means for real code: Ajv's deepest Angular validator nests 57 `if` blocks and is
 compiled in full when it first validates, and the deepest validator in Next's `bundle5.js` nests
@@ -971,7 +977,12 @@ In the real guest on the M1 Mac (Playwright WebKit 26.6, 512 KiB worker stacks),
 After the merge the bytecode emitter is the deepest pass for braced statements compiled in full,
 at about 172 levels of the Ajv shape on the Mac. The small stack guard's reservations now sit on
 the surviving frames, with one for the emitter
-(["SpiderMonkey on small stacks"](#spidermonkey-on-small-stacks) above).
+(["SpiderMonkey on small stacks"](#spidermonkey-on-small-stacks) above). With them and the
+188 KiB budget, measured November 15, 2026 on the Mac and on Linux WebKit at 512 KiB,
+`validate16` compiles in 6 of 6 fresh pages at the top on both tiers, with and without calling
+the validator, and in 3 of 3 beneath 10 `.call` levels on PBL and 40 on the interpreter tier.
+The real Angular load then gets past Ajv on both tiers and hosts, and stops at an unrelated
+error (`The object cannot be cloned`).
 
 ## SpiderMonkey getters, call and apply in the interpreter loop
 
