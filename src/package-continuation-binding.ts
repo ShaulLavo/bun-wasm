@@ -53,6 +53,7 @@ export function packageBinding(request: { readonly memoryGroup?: unknown; readon
   let bound: WorkerBindingsContext | undefined;
   let execution: WorkerExecutionContext | undefined;
   let descriptors: PackageDescriptors | undefined;
+  let execUnwind: { error: unknown } | undefined;
   const decode = new TextDecoder("utf-8", { fatal: true });
   const encode = new TextEncoder();
 
@@ -85,12 +86,16 @@ export function packageBinding(request: { readonly memoryGroup?: unknown; readon
     if (payload.length > capacity) return payload.length;
     output.set(payload);
     setup.checkActive();
-    const result = execution.process.imports.exec!(out, payload.length);
+    let result: number;
+    try { result = execution.process.imports.exec!(out, payload.length); }
+    catch (error) { execUnwind = { error }; throw error; }
     if (result !== -58 && result !== -52) throw new Error(`Package continuation installation failed: WASI errno ${-result}`);
     return result;
   }
 
   return {
+    // Waffle owns the exec throw's meaning. Its public ABI returns ordinary errno failures.
+    isExecUnwind: (error: unknown) => execUnwind !== undefined && execUnwind.error === error,
     namespaces(context: WorkerSetupContext) {
       setup = context;
       return { bun_package_scripts: { handoff } };

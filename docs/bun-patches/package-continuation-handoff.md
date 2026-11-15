@@ -13,6 +13,7 @@ remain separate from this source behavior.
 | `src/package-start-diagnostic.ts` | Adapted implementation | Waffle `proc/start-errno.ts`, `proc/start-diagnostic.ts` and `proc/intrinsics/host.ts` at the same revision. Restricted to synchronous ProcessError reservations. Preserves bounded cause/stack rendering and UTF-8 truncation without importing unpublished source paths. Typed asynchronous startup diagnostics are already copied by Waffle. |
 | `tests/package/fixtures/program-shell.ts` | Adapted implementation | Waffle `tests/fixtures/program-shell.ts` at the same revision, using published entrypoints consistently with the installed consumer. Notice draining is extracted without changing supervision or consuming waits. The fixture records stdout and stderr separately and accepts the spawn cwd/job for installed-guest ownership controls. |
 | Package handoff Worker and tests | Original adapter | Tiny caller memory, actual installed runtime/WASI imports, filesystem Worker, ordinary exec, installer and supervisor. No maintained engine or guest producer is run. |
+| `web/src/engine-host.js`, its declaration and `bun-executor.ts` transfer wiring | Original adapter | Preserve the exact native exec throw through Browser entry promises to Waffle's existing Worker bootstrap. The existing JavaScript host remains directly importable by Node; recognition stays in the TypeScript binding and executor. |
 
 The executor captures the original root Descriptor after inherited bindings, checking
 the finite inherited fd set before the default occupied prefix. A root restored by an
@@ -27,6 +28,21 @@ This permits new guests to instantiate; native shell resolution remains a separa
 consumer requirement and is not supplied by this unsupported binding.
 Serialization and standard exec transfer run synchronously on the caller's stack.
 Each Bash child receives only explicit stdio, while the continuation retains the census.
+
+Waffle's public exec import returns ordinary errno failures and throws its terminal
+control. The binding remembers the exact thrown value without interpreting its private
+class or message. EngineHost stops its loop, performs its existing cleanup, and rejects
+that same value to Worker bootstrap. It never reports an ordinary exit for that transfer.
+The executor also recognizes Waffle's published exit, signal and observation controls,
+and Bun's existing default-signal control. Application errors still enter the guest's
+uncaught handler. Cleanup failure rejects with both errors rather than acknowledging a
+successful replacement with failed cleanup.
+
+The automatic Web test owner covers synchronous transfer, the actual asynchronous
+`package_scripts.run` rejection, ordinary and signaled exits, idle completion and setup
+cleanup. Executor tests exercise the actual Worker replacement path with the exact
+private native throw. The isolated direct-WASI QuickJS fixtures explicitly supply the
+unsupported handoff namespace, matching the maintained native consumer.
 
 Browser guests expose a resizable Wasm buffer. WebIDL's `TextDecoder` rejects a view
 of that buffer, so the binding copies the bounded prepared JSON into a fixed byte

@@ -8,6 +8,8 @@ export interface EngineHostOptions {
   instance: WebAssembly.Instance;
   /** Synchronous host diagnostic before a bunwasm_call trap propagates. Observer errors are ignored. */
   onWasmCallTrap?: (error: WebAssembly.RuntimeError, index: number) => void;
+  /** Exact native control identity owned by the executor. Reject it back to Worker bootstrap. */
+  isExecutionUnwind?: (error: unknown) => boolean;
   /** The URLs native ES modules get with a module store: blob: URLs in browsers, data: URLs in Node. */
   moduleUrls: "blob" | "data";
   /**
@@ -47,5 +49,5 @@ export interface EngineHostOptions {
   onExit(code: number): void;
 }
 
-/** Resolves with the exit code when the program ends (after `onExit`). */
+/** Resolves after ordinary exit; rejects with executor-owned native control after cleanup. */
 export function startEngineHost(options: EngineHostOptions): Promise<number>;

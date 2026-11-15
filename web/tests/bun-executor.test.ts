@@ -4,7 +4,8 @@ import { createFilesystemConnection, revokeFilesystem } from "waffle/fs";
 import { controlAdd, controlLoad } from "waffle/proc/control";
 import { WasiExit, type Wasi } from "waffle/core";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
-import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
+import { createWorkerProcessTransport, workerProcessState, WorkerProcessClient, type WorkerProcessTransport } from "waffle/proc/worker-client";
+import { DescriptorTable } from "waffle/core/descriptors";
 import { bootstrap, type RuntimeWorkerHost, type WorkerSetupContext } from "waffle/browser/worker";
 import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
@@ -145,6 +146,83 @@ test("a ready browser guest exits with the status its engine host reports", cont
   expect(startEngineHost).toHaveBeenCalledTimes(1);
   expect(exits(messages)).toEqual([{ type: "exit", code: 5, signal: undefined, sleep: "atomics" }]);
 }));
+
+test("the browser host transfers only executor-owned controls to the real bootstrap", controlled(async () => {
+  const control = new DefaultSignal(15);
+  const ordinary = new Error("process image replaced");
+  startEngineHost.mockImplementationOnce(async options => {
+    const owns = options.isExecutionUnwind;
+    expect(typeof owns).toBe("function");
+    if (typeof owns !== "function") throw new Error("No native control transfer");
+    expect(owns(ordinary)).toBe(false);
+    expect(owns({ signal: 15 })).toBe(false);
+    expect(owns(143)).toBe(false);
+    expect(owns(control)).toBe(true);
+    expect(owns(new WasiExit(2))).toBe(true);
+    throw control;
+  });
+  const { messages } = await run();
+  expect(exits(messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "atomics" }]);
+}));
+
+test("the private exec throw passes unchanged through browser policy to bootstrap replacement cleanup", controlled(async () => {
+  const { ProcessReplaced }: { ProcessReplaced: new (message: string) => Error } =
+    await import(new URL("../proc/exec.js", import.meta.resolve("waffle/browser/worker")).href);
+  const marker = new ProcessReplaced("process image replaced");
+  const connection = createFilesystemConnection();
+  const runtimeProcess = childTransport();
+  const messages: WorkerMessage[] = [];
+  const host: BunExecutorHost & RuntimeWorkerHost = {
+    crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
+    async fetch() { return new Response("ok"); },
+  };
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(1), args: ["bun"], env: {},
+    filesystem: connection.client, runtimeProcess, trace: false, net: null };
+  const executor = createBunExecutor(request, host);
+  let handoff: WebAssembly.ImportValue | undefined;
+  startEngineHost.mockImplementationOnce(async options => {
+    const instance = options.instance as WebAssembly.Instance;
+    const memory = instance.exports.memory;
+    const owns = options.isExecutionUnwind;
+    if (!(memory instanceof WebAssembly.Memory) || typeof handoff !== "function" || typeof owns !== "function") throw new Error("Missing private binding");
+    const plan = new TextEncoder().encode(JSON.stringify({ version: 1, cwd: "/", env: {}, silent: true, color: false,
+      pre: null, main: { name: "build", original: "echo ok", command: "echo ok" }, post: null, footer: "" }));
+    new Uint8Array(memory.buffer).set(plan, 1024);
+    expect(owns(marker)).toBe(false);
+    try { handoff(1024, plan.length, 4096, 4096); }
+    catch (error) { expect(error).toBe(marker); expect(owns(error)).toBe(true); throw error; }
+    throw new Error("Successful exec returned");
+  });
+  try {
+    control.attach(runtimeProcess);
+    await bootstrap(request, { ...executor,
+      namespaces(context) { const imports = executor.namespaces!(context); handoff = imports.bun_package_scripts?.handoff; return imports; },
+      setup(context) { setupLocalFilesystem(context, executor); },
+      async instantiated(context) {
+        if (!context.process) throw new Error("No process ABI");
+        context.process.imports.exec = () => { throw marker; };
+        await executor.instantiated?.(context);
+      },
+    }, host);
+    expect(messages).toContainEqual({ type: "replaced" });
+    expect(exits(messages)).toEqual([]);
+  } finally { connection.client.port.close(); connection.server.port.close(); }
+}));
+
+function childTransport(): WorkerProcessTransport {
+  const root = createWorkerProcessTransport({ pid: 1, job: 1 });
+  const descriptors = new DescriptorTable();
+  let child: WorkerProcessTransport | undefined;
+  const client = new WorkerProcessClient({ transport: root, descriptors,
+    codec: { export() { throw new Error("No inherited descriptors"); }, import() { throw new Error("No inherited descriptors"); }, discard() {} },
+    postMessage(message) { if (message.operation === "spawn") child = message.transport; },
+  });
+  try { client.spawn(1, { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/", fds: [], job: 0 }); }
+  finally { descriptors.dispose(); }
+  if (!child) throw new Error("No admitted child transport");
+  return child;
+}
 
 for (const [label, options] of [
   ["a non-browser engine", { engine: "quickjs" as const }],

@@ -10,6 +10,9 @@ import type { RuntimeWorkerRequest, RuntimeWorkerMessage, WorkerExecutor } from 
 import { NetHost } from "./net/host.js";
 import { engineStackBudgets, jscParserReserve, type StackHost } from "./engine-stack-budget.js";
 import { DefaultSignal } from "./default-signal.js";
+import { WasiExit } from "waffle/core";
+import { RuntimeWorkerSignal } from "waffle/browser/worker";
+import { isProcessExecutionTerminated, observedProcessExit } from "waffle/proc/observation";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
 import { createLookupClient, type LookupClient } from "./net/lookup.js";
@@ -196,6 +199,8 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       // with or without a service worker controlling this worker.
       return startEngineHost({
         instance, moduleUrls: "blob",
+        isExecutionUnwind: error => packages.isExecUnwind(error) || error instanceof DefaultSignal || error instanceof WasiExit ||
+          error instanceof RuntimeWorkerSignal || isProcessExecutionTerminated(error) || observedProcessExit(error) !== null,
         onWasmCallTrap: telemetry ? (_error, index) => publishBrowserCallTrap(instance, index, telemetry, message => host.postMessage(message)) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
         sharedObjects, net, terminal, processWake: runtimeState?.wake, onExit: code => finish({ code }),
