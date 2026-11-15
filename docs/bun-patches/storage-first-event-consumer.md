@@ -16,6 +16,9 @@ initial-announcement control. Rows describe sends, successful returns, receives,
 native errors, and native close calls, returns, and errors. Original close receivers,
 argument tuples, results, and exceptions are preserved too. The existing handler
 qualification and close boundaries publish complete histories without per-frame output.
+The first request send and receive also publish traffic evidence when a non-request
+frame arrived first. The installed control waits for the matching positive client
+and service observations, whose metadata can arrive after command completion.
 No Waffle package source, export or release pin changes.
 
 Build hooks read Waffle 0.0.131 at `5515535c372ea4b7c93bd90ceda3cf4756ef9373`:

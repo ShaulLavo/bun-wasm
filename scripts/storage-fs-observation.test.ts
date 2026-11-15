@@ -9,7 +9,7 @@ import { needsRust } from "./ci-changes";
 import { observeFilesystemEndpoint } from "./storage-fs-endpoint";
 import { createFilesystemConnection } from "../web/node_modules/waffle/fs/protocol";
 import { retainMetadata } from "./storage-fs-metadata";
-import { hasEntryRequestTraffic } from "./storage-fs-control";
+import { hasEntryRequestTraffic, waitForEntryRequestTraffic } from "./storage-fs-control";
 const own = { documentId: crypto.randomUUID(), runtimeId: crypto.randomUUID(), workerId: 1, pageURL: "http://localhost/" };
 
 test("observation rejects missing and cross-document/runtime/Worker identities", () => {
@@ -361,3 +361,65 @@ test("missing or malformed peer identities do not match each other", () => {
       { ...service, snapshot: { ...service.snapshot, [field]: "3" } }], "bun")).toBe(false);
   }
 });
+
+test("first requests publish traffic after non-request frames", async () => {
+  const pair = createFilesystemConnection();
+  const { client, service } = fixture();
+  const rows: object[] = [];
+  const context = { tree: "control", realm: "native-port", workerURL: "control" };
+  const clientObserver = observeFilesystemEndpoint(pair.client, { ...context, endpoint: "client" }, () =>
+    retainMetadata(rows, { ...client, snapshot: clientObserver.snapshot() }));
+  const serviceObserver = observeFilesystemEndpoint(pair.server, { ...context, endpoint: "service" }, () =>
+    retainMetadata(rows, { ...service, snapshot: serviceObserver.snapshot() }));
+  const completed = Promise.withResolvers<void>();
+  pair.server.port.onmessage = event => { if (event.data.id) pair.server.port.postMessage({ completed: event.data.id }); };
+  pair.server.port.onmessageerror = () => completed.reject(Error("service messageerror"));
+  pair.client.port.onmessage = () => completed.resolve();
+  pair.client.port.onmessageerror = () => completed.reject(Error("client messageerror"));
+  try {
+    clientObserver.qualifyHandlers();
+    serviceObserver.qualifyHandlers();
+    pair.client.port.postMessage({ sweep: true });
+    pair.client.port.postMessage({ id: 1, generation: pair.client.requests.generation });
+    await completed.promise;
+    expect(hasEntryRequestTraffic(rows, "bun")).toBe(true);
+  } finally {
+    clientObserver.dispose();
+    serviceObserver.dispose();
+    pair.client.port.close();
+    pair.server.port.close();
+  }
+}, 30_000);
+
+test("entry traffic waits for metadata delivered after command completion", async () => {
+  const pair = createFilesystemConnection();
+  const { client, service } = fixture();
+  const rows: object[] = [], delayed: object[] = [];
+  const context = { tree: "control", realm: "native-port", workerURL: "control" };
+  const clientObserver = observeFilesystemEndpoint(pair.client, { ...context, endpoint: "client" }, () =>
+    retainMetadata(rows, { ...client, snapshot: clientObserver.snapshot() }));
+  const serviceObserver = observeFilesystemEndpoint(pair.server, { ...context, endpoint: "service" }, () =>
+    retainMetadata(delayed, { ...service, snapshot: serviceObserver.snapshot() }));
+  const completed = Promise.withResolvers<void>();
+  const read = Promise.withResolvers<void>();
+  pair.server.port.onmessage = event => pair.server.port.postMessage({ completed: event.data.id });
+  pair.server.port.onmessageerror = () => completed.reject(Error("service messageerror"));
+  pair.client.port.onmessage = () => completed.resolve();
+  pair.client.port.onmessageerror = () => completed.reject(Error("client messageerror"));
+  try {
+    clientObserver.qualifyHandlers();
+    serviceObserver.qualifyHandlers();
+    pair.client.port.postMessage({ id: 1, generation: pair.client.requests.generation });
+    await completed.promise;
+    const waiting = waitForEntryRequestTraffic(async () => { read.resolve(); return rows.slice(); }, "bun");
+    await read.promise;
+    expect(hasEntryRequestTraffic(rows, "bun")).toBe(false);
+    for (const row of delayed) retainMetadata(rows, row);
+    expect(hasEntryRequestTraffic(await waiting, "bun")).toBe(true);
+  } finally {
+    clientObserver.dispose();
+    serviceObserver.dispose();
+    pair.client.port.close();
+    pair.server.port.close();
+  }
+}, 30_000);

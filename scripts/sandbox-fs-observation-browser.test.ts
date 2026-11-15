@@ -4,7 +4,7 @@ import { resolve, join } from "node:path";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 import { storageEvidence, type StorageLifetime } from "./storage-browser-evidence";
-import { hasEntryRequestTraffic } from "./storage-fs-control";
+import { waitForEntryRequestTraffic } from "./storage-fs-control";
 
 const lifetimes: StorageLifetime[] = [];
 afterEach(async () => {
@@ -58,9 +58,8 @@ test("Firefox: installed observation covers original root and successful Bun, sh
   expect(root.some(row => "workerId" in row && row.workerId === null && "process" in row && row.process === null)).toBe(true);
   for (const [entry, text] of [["bun", "bun -e 'console.log(17+19)'"], ["shell", "/bin/bash -c 'echo 47'"], ["preview1", "/bin/env"]]) {
     await command(page, text!);
-    const rows = await snapshot(page);
+    const rows = await waitForEntryRequestTraffic(() => snapshot(page), entry!);
     lifetime.event("filesystem-positive-control", { entry, rows });
-    expect(hasEntryRequestTraffic(rows, entry!)).toBe(true);
   }
   expect(errors).toEqual([]);
   expect(failures).toEqual([]);

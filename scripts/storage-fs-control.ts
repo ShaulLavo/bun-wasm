@@ -1,3 +1,5 @@
+import { expect as playwrightExpect } from "playwright/test";
+
 function endpoint(row: object) {
   if (!("snapshot" in row) || !row.snapshot || typeof row.snapshot !== "object") return;
   const snapshot = row.snapshot;
@@ -33,4 +35,13 @@ export function hasEntryRequestTraffic(rows: readonly object[], entry: string): 
       && peer.documentId === client.documentId && peer.runtimeId === client.runtimeId
       && peer.owner === client.owner && peer.generation === client.generation);
   });
+}
+
+export async function waitForEntryRequestTraffic(read: () => Promise<readonly object[]>, entry: string): Promise<readonly object[]> {
+  let rows: readonly object[] = [];
+  await playwrightExpect.poll(async () => {
+    rows = await read();
+    return hasEntryRequestTraffic(rows, entry);
+  }, { timeout: 120_000 }).toBe(true);
+  return rows;
 }
