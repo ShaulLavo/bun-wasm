@@ -45,3 +45,16 @@ The production setup and fingerprint commands remain unchanged.
 
 No product or native engine build is needed for these controls. Actual Ubuntu
 installation and the next producer configure remain integration checks.
+
+The ordinary producer also rejected Clang 18 in run 43664959139, job
+132688391183. The ordinary JSC setup composite, native-quality and Rust now
+select the same three versioned tools before hashing or importing artifacts.
+They retain the existing native prerequisites and `libclang-dev` contract.
+Ready versioned tools skip apt; missing or unusable tools trigger installation
+and revalidation. Selection checks the final links before continuing.
+The existing host-tools hash binds all three selected executables' bytes,
+resolved paths and supported versions. Existing keys and checkpoint verifiers
+remain unchanged, so old compiler objects cannot cross the migration.
+The maintained fourteen-step equality test remains, and the existing JSC
+prebuild tests execute setup, failure controls and hashing at every ordinary
+site with hermetic tool fixtures, rejecting fallbacks and valid ambient decoys.

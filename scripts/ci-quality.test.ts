@@ -811,11 +811,12 @@ test("split engine producers reuse one common core and retain both pair receipts
 });
 
 test("preinstalled native tools skip apt and fallback removes the known slow mirror", () => {
-  for (const section of [quality, rust]) {
-    expect(section).toContain("if command -v cmake");
-    expect(section.indexOf("then exit 0; fi")).toBeLessThan(section.indexOf("sudo apt-get update"));
+  for (const [section, guard] of [[quality, "if command -v cmake"], [rust, "if ! native_tools_ready; then"]] satisfies [string, string][]) {
+    expect(section).toContain(guard);
+    expect(section.indexOf(guard)).toBeLessThan(section.indexOf("sudo apt-get update"));
     expect(section).toContain("/etc/apt/apt-mirrors.txt");
   }
+  expect(quality.indexOf("then exit 0; fi")).toBeLessThan(quality.indexOf("sudo apt-get update"));
 });
 
 test("cold and restored JSC setup install Binaryen before sourcing common.sh", () => {

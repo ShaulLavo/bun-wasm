@@ -29,13 +29,31 @@ runs:
     - name: Install native build tools
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
-        if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
-           command -v ruby && command -v gperf && command -v bison &&
-           ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
-        if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
-        if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
-        sudo apt-get update
-        sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
+        native_tools_ready() {
+          local tool version
+          for tool in cmake ninja nasm pkg-config ruby gperf bison; do
+            "$tool" --version > /dev/null || return 1
+          done
+          for tool in clang clang++ llvm-readobj; do
+            version=$("/usr/bin/$tool-19" --version) || return 1
+            [[ "$version" =~ (clang|LLVM)[[:space:]]version[[:space:]]19\. ]] || return 1
+          done
+          ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null
+        }
+        if ! native_tools_ready; then
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build nasm clang-19 llvm-19 libclang-dev pkg-config ruby gperf bison
+        fi
+        native_tools_ready
+        for tool in clang clang++ llvm-readobj; do
+          target=$(readlink -f "/usr/bin/$tool-19")
+          if [[ "$(readlink -f "/usr/bin/$tool")" != "$target" ]]; then
+            sudo ln -sfn "/usr/bin/$tool-19" "/usr/bin/$tool"
+          fi
+          [[ "$(readlink -f "/usr/bin/$tool")" == "$target" ]]
+        done
     # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
     # land on different runner images. Every producer and consumer uses the same pinned bytes.
     - uses: ./.github/actions/restore-ci-cache
@@ -64,6 +82,13 @@ runs:
       run: |
         report="$RUNNER_TEMP/host-tools.txt"
         {
+          for tool in /usr/bin/clang /usr/bin/clang++ /usr/bin/llvm-readobj; do
+            version=$("$tool" --version)
+            [[ "$version" =~ (clang|LLVM)[[:space:]]version[[:space:]]19\. ]]
+            readlink -f "$tool"
+            sha256sum "$tool"
+            printf '%s\n' "$version"
+          done
           for tool in cc c++ clang cmake ninja make nasm pkg-config ruby perl python3 gperf bison; do
             command -v "$tool"
             "$tool" --version | sed -n '1,2p'

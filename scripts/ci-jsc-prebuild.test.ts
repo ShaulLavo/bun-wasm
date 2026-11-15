@@ -1,6 +1,6 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -135,6 +135,136 @@ test("both jobs run byte-identical setup, so the native job can re-verify in the
   expect(JSON.stringify(producer)).not.toContain("rust-toolchain");
   expect(JSON.stringify(producer)).not.toContain("sync-bun.sh");
 });
+
+const hostToolJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust"];
+const hostTools = ["clang", "clang++", "llvm-readobj"];
+const nativePrograms = ["cc", "c++", "cmake", "ninja", "make", "nasm", "pkg-config", "ruby", "perl", "python3", "gperf", "bison", "ldd"];
+type NativeTools = { root: string; execute: (script: string, env?: Record<string, string>) => SpawnSyncReturns<string> };
+
+function nativeToolsFixture(check: (fixture: NativeTools) => void): void {
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-native-tools-"));
+  try {
+    for (const path of ["bin", "host", "packages", "unavailable", "ambient", "apt"]) mkdirSync(join(root, path));
+    const binary = '#!/bin/sh\nprintf "fixture tool\\n"\n';
+    for (const tool of nativePrograms) writeFileSync(join(root, "bin", tool), binary, { mode: 0o755 });
+    for (const tool of nativePrograms.concat(hostTools, hostTools.map(tool => tool + "-19"), ["ldconfig", "sudo", "apt-get", "ln"])) {
+      writeFileSync(join(root, "unavailable", tool), "#!/bin/sh\nexit 127\n", { mode: 0o755 });
+      writeFileSync(join(root, "ambient", tool), binary, { mode: 0o755 });
+    }
+    for (const tool of hostTools) {
+      const supported = `#!/bin/sh\nprintf "Ubuntu ${tool === "llvm-readobj" ? "LLVM" : "clang"} version %s fixture\\n" "\${FIXTURE_VERSION:-19.1.1}"\n`;
+      writeFileSync(join(root, "host", tool), supported.replace("19.1.1", "18.1.3"), { mode: 0o755 });
+      writeFileSync(join(root, "host", tool + "-19"), supported, { mode: 0o755 });
+      writeFileSync(join(root, "packages", tool + "-19"), supported, { mode: 0o755 });
+      writeFileSync(join(root, "ambient", tool), supported, { mode: 0o755 });
+      writeFileSync(join(root, "ambient", tool + "-19"), supported, { mode: 0o755 });
+    }
+    writeFileSync(join(root, "bin/ldconfig"), '#!/bin/sh\n[ "${NO_LIBCLANG:-}" != 1 ] || exit 1\nprintf "libclang-18.so\\n"\n', { mode: 0o755 });
+    writeFileSync(join(root, "bin/sudo"), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+    writeFileSync(join(root, "bin/ln"), '#!/bin/sh\n[ "${LINK_FAIL:-}" != 1 ] || exit 42\n[ "${LINK_NOOP:-}" != 1 ] || exit 0\nexec /usr/bin/ln "$@"\n', { mode: 0o755 });
+    writeFileSync(join(root, "bin/apt-get"), ["#!/bin/sh", 'printf "%s\\n" "$*" >> "$FIXTURE_ROOT/apt-calls"',
+      '[ "${APT_FAIL:-}" != "$1" ] || exit 42',
+      'if [ "$1" = install ] && [ "${INSTALL_TOOLS:-}" = 1 ]; then /usr/bin/cp "$FIXTURE_ROOT"/packages/* "$FIXTURE_ROOT/host/"; fi', ""].join("\n"), { mode: 0o755 });
+    const execute = (script: string, env: Record<string, string> = {}) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+      script.replaceAll("/usr/bin/", root + "/host/").replaceAll("/etc/apt/", root + "/apt/")], {
+      encoding: "utf8", timeout: 30000,
+      env: { PATH: ["host", "bin", "unavailable", "ambient"].map(path => join(root, path)).concat([process.env.PATH ?? "/usr/bin:/bin"]).join(":"),
+        HOME: root, RUNNER_TEMP: root, FIXTURE_ROOT: root, GITHUB_OUTPUT: join(root, "outputs"), ...env },
+    });
+    check({ root, execute });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function nativeToolHash(fixture: NativeTools, job: Job, env?: Record<string, string>): string {
+  writeFileSync(join(fixture.root, "outputs"), "");
+  const result = fixture.execute(run(job, "Identify host build tools"), env);
+  expect(result.status, result.stderr).toBe(0);
+  const hash = readFileSync(join(fixture.root, "outputs"), "utf8").match(/^hash=([a-f0-9]{64})$/m)?.[1];
+  if (!hash) throw new Error("Missing host-tools hash");
+  return hash;
+}
+
+test.each(hostToolJobs)("%s selects supported tools before hashing and importing, with a warm fast path", id => nativeToolsFixture(fixture => {
+  const job = record(jobs[id]);
+  const names = steps(job).map(item => String(item.name ?? ""));
+  const install = names.indexOf("Install native build tools"), identify = names.indexOf("Identify host build tools");
+  expect(install).toBeGreaterThan(-1);
+  expect(identify).toBeGreaterThan(install);
+  for (const name of names.filter(name => /^(Import|Identify .*inputs|Identify effective)/.test(name))) expect(names.indexOf(name)).toBeGreaterThan(identify);
+  const result = fixture.execute(run(job, "Install native build tools"));
+  expect(result.status, result.stderr).toBe(0);
+  expect(existsSync(join(fixture.root, "apt-calls"))).toBe(false);
+  for (const tool of hostTools) expect(readlinkSync(join(fixture.root, "host", tool))).toBe(join(fixture.root, "host", tool + "-19"));
+  const hash = nativeToolHash(fixture, job);
+  expect(fixture.execute(run(job, "Install native build tools"), { APT_FAIL: "update", LINK_FAIL: "1" }).status).toBe(0);
+  expect(nativeToolHash(fixture, job)).toBe(hash);
+}));
+
+test.each(hostToolJobs)("%s installs explicit packages and rejects failed or incomplete setup", id => nativeToolsFixture(fixture => {
+  const install = run(record(jobs[id]), "Install native build tools");
+  for (const tool of hostTools) rmSync(join(fixture.root, "host", tool + "-19"));
+  for (const operation of ["update", "install"]) expect(fixture.execute(install, { APT_FAIL: operation }).status).toBe(42);
+  expect(fixture.execute(install).status).not.toBe(0);
+  const result = fixture.execute(install, { INSTALL_TOOLS: "1" });
+  expect(result.status, result.stderr).toBe(0);
+  expect(readFileSync(join(fixture.root, "apt-calls"), "utf8").split("\n")).toContain("install -y cmake ninja-build nasm clang-19 llvm-19 libclang-dev pkg-config ruby gperf bison");
+  expect(fixture.execute(install, { NO_LIBCLANG: "1" }).status).not.toBe(0);
+  rmSync(join(fixture.root, "bin/gperf"));
+  expect(fixture.execute(install).status).not.toBe(0);
+}));
+
+test.each(hostToolJobs)("%s rejects failed selection, old versions and missing or failing selected compilers", id => nativeToolsFixture(fixture => {
+  const job = record(jobs[id]), install = run(job, "Install native build tools");
+  for (const key of ["LINK_FAIL", "LINK_NOOP"]) expect(fixture.execute(install, { [key]: "1" }).status).not.toBe(0);
+  expect(fixture.execute(install).status).toBe(0);
+  for (const tool of hostTools) checkRejectedHostTool(fixture, job, tool);
+}));
+
+function checkRejectedHostTool(fixture: NativeTools, job: Job, tool: string): void {
+  const path = join(fixture.root, "host", tool + "-19"), original = readFileSync(path);
+  for (const replacement of [null, "#!/bin/sh\nexit 42\n", original.toString().replace("19.1.1", "18.1.3")]) {
+    rmSync(path, { force: true });
+    if (replacement !== null) writeFileSync(path, replacement, { mode: 0o755 });
+    expect(fixture.execute(run(job, "Install native build tools")).status).not.toBe(0);
+    writeFileSync(join(fixture.root, "outputs"), "");
+    expect(fixture.execute(run(job, "Identify host build tools")).status).not.toBe(0);
+    expect(readFileSync(join(fixture.root, "outputs"), "utf8")).not.toContain("hash=");
+  }
+  writeFileSync(path, original, { mode: 0o755 });
+}
+
+test("all native setup sites hash the actual selected bytes, versions and link targets identically", () => nativeToolsFixture(fixture => {
+  expect(fixture.execute(run(producer, "Install native build tools")).status).toBe(0);
+  const original = nativeToolHash(fixture, producer);
+  for (const id of hostToolJobs) expect(nativeToolHash(fixture, record(jobs[id]))).toBe(original);
+  for (const tool of hostTools) checkHostToolHash(fixture, tool, original);
+  for (const id of hostToolJobs) expect(nativeToolHash(fixture, record(jobs[id]), { FIXTURE_VERSION: "19.1.2" })).not.toBe(original);
+  expect(nativeToolHash(fixture, producer)).toBe(original);
+}));
+
+test("native tool fixtures reject missing prerequisites before usable ambient decoys", () => nativeToolsFixture(fixture => {
+  expect(fixture.execute('"$FIXTURE_ROOT/ambient/gperf" --version').status).toBe(0);
+  expect(fixture.execute('"$FIXTURE_ROOT/ambient/clang" --version').status).toBe(0);
+  rmSync(join(fixture.root, "bin/gperf"));
+  expect(fixture.execute("gperf --version").status).toBe(127);
+  expect(fixture.execute("clang --version").stdout).toContain("18.1.3");
+}));
+
+function checkHostToolHash(fixture: NativeTools, tool: string, original: string): void {
+  const path = join(fixture.root, "host", tool + "-19"), before = readFileSync(path);
+  writeFileSync(path, before.toString() + "# different fixture bytes\n");
+  for (const id of hostToolJobs) expect(nativeToolHash(fixture, record(jobs[id]))).not.toBe(original);
+  writeFileSync(path, before);
+  const copy = join(fixture.root, "host", tool + "-copy"), link = join(fixture.root, "host", tool);
+  copyFileSync(path, copy);
+  rmSync(link);
+  symlinkSync(copy, link);
+  for (const id of hostToolJobs) expect(nativeToolHash(fixture, record(jobs[id]))).not.toBe(original);
+  rmSync(link);
+  symlinkSync(path, link);
+}
 
 test("one job owns the sysroot and prebuild builds and caches; the native job only imports and verifies", () => {
   const ownedIds = ["sysroot-inputs", "sysroot-cache", "jsc-prebuild-cache", "jsc-producer", "jsc-artifact"];
