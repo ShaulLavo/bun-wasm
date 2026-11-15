@@ -305,10 +305,10 @@ index 6241cd45d..9c09be558 100644
                                       HandleObject parent, gc::AllocSite* site) {
    MOZ_ASSERT(site);
 diff --git i/js/src/vm/PortableBaselineInterpret.cpp w/js/src/vm/PortableBaselineInterpret.cpp
-index d38cebe3e..a7aef3fda 100644
+index d38cebe3e..7c462d79b 100644
 --- i/js/src/vm/PortableBaselineInterpret.cpp
 +++ w/js/src/vm/PortableBaselineInterpret.cpp
-@@ -105,8 +105,27 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
+@@ -105,8 +105,35 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
  #  define ENABLE_COMPUTED_GOTO_DISPATCH
  #endif
  
@@ -322,6 +322,14 @@ index d38cebe3e..a7aef3fda 100644
 +// frames entered from C++.
 +#  define BUNWASM_HOLD_RECURSION_UNIT(cx) \
 +    AutoCheckRecursionLimit bunwasmNestedFrame(cx)
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++// Test controls: refuse the call fast path, so a call reaches its inline
++// cache; observe a hand-over once its frames are in place; count scripted
++// getter calls made by a getter stub.
++extern "C" bool bunsm_test_pbl_call_fast_path();
++extern "C" void bunsm_test_pbl_hand_over(JSContext* cx);
++extern "C" void bunsm_test_pbl_cache_getter();
++#  endif
 +#else
 +#  define BUNWASM_HOLD_RECURSION_UNIT(cx) ((void)0)
 +#endif
@@ -337,7 +345,7 @@ index d38cebe3e..a7aef3fda 100644
  // On WASI, with a single thread, there is no possibility for an
  // interrupt to come asynchronously.
  #  define ENABLE_INTERRUPT_CHECKS
-@@ -533,6 +552,126 @@ static double DoubleMinMax(bool isMax, double first, double second) {
+@@ -533,6 +560,129 @@ static double DoubleMinMax(bool isMax, double first, double second) {
    }
  }
  
@@ -394,6 +402,9 @@ index d38cebe3e..a7aef3fda 100644
 +
 +  // The caller's JitScript must outlive the call, as for a nested PBL call.
 +  AutoKeepJitScripts keepJitScripts(cx);
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++  bunsm_test_pbl_hand_over(cx);
++#  endif
 +  CallArgs args = CallArgsFromVp(argc, vp);
 +  MOZ_ASSERT(args.isConstructing() == constructing);
 +  if (!(constructing ? ConstructFromStack(cx, args)
@@ -464,7 +475,7 @@ index d38cebe3e..a7aef3fda 100644
  // Interpreter for CacheIR.
  uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
                          ICCtx& ctx) {
-@@ -2293,6 +2432,17 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+@@ -2293,6 +2443,17 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
            FAIL_IC();
          }
  
@@ -482,7 +493,7 @@ index d38cebe3e..a7aef3fda 100644
          // Handle arg-underflow (but only for scripted targets).
          uint32_t undefArgs = (!isNative && (argc < callee->nargs()))
                                   ? (callee->nargs() - argc)
-@@ -2419,7 +2569,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+@@ -2419,7 +2580,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
              ImmutableScriptData* isd = script->immutableScriptData();
              PBIResult result;
              Value ret;
@@ -492,7 +503,7 @@ index d38cebe3e..a7aef3fda 100644
                  cx, ctx.state, ctx.stack, sp,
                  /* envChain = */ nullptr, &ret, pc, isd, nullptr, nullptr,
                  nullptr, PBIResult::Ok);
-@@ -2474,6 +2625,16 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+@@ -2474,6 +2636,16 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
            FAIL_IC();
          }
  
@@ -509,17 +520,23 @@ index d38cebe3e..a7aef3fda 100644
          {
            PUSH_IC_FRAME();
  
-@@ -2508,7 +2669,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+@@ -2508,7 +2680,14 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
            ImmutableScriptData* isd = script->immutableScriptData();
            PBIResult result;
            Value ret;
 -          result = PortableBaselineInterpret<false, kHybridICsInterp>(
++#if defined(__wasi__) && defined(BUNWASM_EMBED) && \
++    defined(BUNWASM_INTERPRETER_CONTROLS)
++          if (!isSetter) {
++            bunsm_test_pbl_cache_getter();
++          }
++#endif
 +          BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
 +          result = BUNWASM_RESERVED_PBL_CALL(
                cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
                isd, nullptr, nullptr, nullptr, PBIResult::Ok);
            if (result != PBIResult::Ok) {
-@@ -2563,6 +2725,17 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+@@ -2563,6 +2742,17 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
            FAIL_IC();
          }
  
@@ -537,7 +554,7 @@ index d38cebe3e..a7aef3fda 100644
          StackVal* origArgs = ctx.sp();
  
          {
-@@ -2602,7 +2775,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+@@ -2602,7 +2792,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
            ImmutableScriptData* isd = script->immutableScriptData();
            PBIResult result;
            Value ret;
@@ -547,7 +564,7 @@ index d38cebe3e..a7aef3fda 100644
                cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
                isd, nullptr, nullptr, nullptr, PBIResult::Ok);
            if (result != PBIResult::Ok) {
-@@ -6034,7 +6208,16 @@ PBIResult PortableBaselineInterpret(
+@@ -6034,7 +6225,16 @@ PBIResult PortableBaselineInterpret(
      }
    }
    COUNT_COVERAGE_MAIN();
@@ -564,7 +581,20 @@ index d38cebe3e..a7aef3fda 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
    if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
      PUSH_EXIT_FRAME();
-@@ -7795,10 +7978,19 @@ PBIResult PortableBaselineInterpret(
+@@ -7740,6 +7940,12 @@ PBIResult PortableBaselineInterpret(
+         uint32_t argc = GET_ARGC(pc);
+         do {
+           {
++#if defined(__wasi__) && defined(BUNWASM_EMBED) && \
++    defined(BUNWASM_INTERPRETER_CONTROLS)
++            if (!bunsm_test_pbl_call_fast_path()) {
++              break;
++            }
++#endif
+             // CallArgsFromSp would be called with
+             // - numValues = argc + 2 + constructing
+             // - stackSlots = argc + constructing
+@@ -7795,10 +8001,19 @@ PBIResult PortableBaselineInterpret(
                TRACE_PRINTF("missed fastpath: mismatched realm\n");
                break;
              }
@@ -584,7 +614,7 @@ index d38cebe3e..a7aef3fda 100644
  
              // Fast-path: function, interpreted, has JitScript, same realm, no
              // argument underflow.
-@@ -7811,7 +8003,8 @@ PBIResult PortableBaselineInterpret(
+@@ -7811,7 +8026,8 @@ PBIResult PortableBaselineInterpret(
                  "Call fastpath: argc = %d origArgs = %p callee = %" PRIx64 "\n",
                  argc, origArgs, callee.get().asRawBits());
  
@@ -594,7 +624,7 @@ index d38cebe3e..a7aef3fda 100644
                TRACE_PRINTF("missed fastpath: would cause stack overrun\n");
                break;
              }
-@@ -7855,7 +8048,14 @@ PBIResult PortableBaselineInterpret(
+@@ -7855,7 +8071,14 @@ PBIResult PortableBaselineInterpret(
              // 3. Push args in proper order (they are reversed in our
              // downward-growth stack compared to what the calling
              // convention expects).
@@ -610,7 +640,7 @@ index d38cebe3e..a7aef3fda 100644
                VIRTPUSH(origArgs[i]);
              }
  
-@@ -7909,6 +8109,9 @@ PBIResult PortableBaselineInterpret(
+@@ -7909,6 +8132,9 @@ PBIResult PortableBaselineInterpret(
                }
              }
              // 11. Check for interrupts.
@@ -620,7 +650,7 @@ index d38cebe3e..a7aef3fda 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
              if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
                PUSH_EXIT_FRAME();
-@@ -8231,6 +8434,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8231,6 +8457,9 @@ PBIResult PortableBaselineInterpret(
        CASE(LoopHead) {
          int32_t icIndex = GET_INT32(pc);
          icEntry = icEntries + icIndex;
@@ -630,7 +660,7 @@ index d38cebe3e..a7aef3fda 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
          if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
            PUSH_EXIT_FRAME();
-@@ -8499,6 +8705,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8499,6 +8728,9 @@ PBIResult PortableBaselineInterpret(
        }
  
        CASE(Finally) {

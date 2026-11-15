@@ -135,11 +135,12 @@ pub fn main() {
         );
         println!("ok uncatchable interrupt {label}; catch=0 finally=0");
     }
-    // Getters, setters, bound functions and calls with missing arguments re-enter the portable
-    // baseline interpreter in C. Each level holds a recursion unit, so the 350-unit WASI limit
-    // ends them with a catchable RangeError before a browser's native stack runs out. On the
-    // interpreter tier, missing-argument calls stay in the loop and only the bytecode stack
-    // bounds them.
+    // Setters and bound functions re-enter the engine in C on both tiers. Each level holds a
+    // recursion unit, so the 350-unit WASI limit ends them with a catchable RangeError before a
+    // browser's native stack runs out. Named getters and calls with missing arguments stay in an
+    // interpreter loop: the C++ interpreter's on that tier, and on PBL its own loop (padded
+    // arguments) or, once the stack is deep, the C++ interpreter's after the hand-over. Only the
+    // frame limit bounds them.
     for (label, code) in [
         (
             "getter",
@@ -161,10 +162,10 @@ pub fn main() {
         let depth = number(&format!(
             "var d = 0; try {{ {code} }} catch (e) {{ if (!(e instanceof RangeError)) throw e; }} d"
         ));
-        let counted = pbl || (label != "missing argument" && label != "getter");
+        let counted = label == "setter" || label == "bound";
         assert!(depth > 100.0, "{label} recursion depth {depth}");
         assert!(!counted || depth < 350.0, "{label} recursion depth {depth}");
-        assert!(pbl || label != "getter" || depth > 4096.0);
+        assert!(counted || depth > 4096.0, "{label} recursion depth {depth}");
 
         assert_eq!(number("6 * 7"), 42.0);
     }
@@ -230,13 +231,14 @@ fn budget_checks(pbl: bool) {
             "{label} must end in a caught RangeError, got {depth}"
         );
         assert_eq!(number("6 * 7"), 42.0);
-        // Without the quota the counter stops reentrant getters near 175 levels (interp) or 350
-        // (PBL). On the interpreter tier, `a.b` getters run as interpreter frames that use no
-        // host stack, so the frame limit ends them; a computed-key getter still reenters through
-        // RunScript, and its reservation must let the quota stop it
+        // Without the quota the counter stops reentrant getters near 175 levels (interp) or 234
+        // (PBL). `a.b` getters run as interpreter frames that use no host stack, so the frame
+        // limit ends them; on PBL they move to the C++ interpreter once the stack is deep
+        // (docs/bun-patches/spidermonkey-pbl-handover.md). A computed-key getter still reenters
+        // through RunScript, and its reservation must let the quota stop it
         // (docs/bun-patches/spidermonkey-loop-dispatch.md).
-        let in_loop = !pbl && label == "getter";
-        let reentrant = label == "computed getter" || (pbl && label == "getter");
+        let in_loop = label == "getter";
+        let reentrant = label == "computed getter";
         let bound = if pbl { 300.0 } else { 140.0 };
         assert!(
             !reentrant || (depth > 20.0 && depth < bound),
