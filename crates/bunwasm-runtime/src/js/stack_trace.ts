@@ -71,7 +71,7 @@
     return native.engine === "spidermonkey" ? inspect.errorFrames(target, raw) : inspect.parseStack(raw);
   }
 
-  function formatStack(target: object, raw: unknown) {
+  function formatStack(target: object, raw: unknown, materializing = false) {
     if (formatted.has(target)) return formatted.get(target);
     if (formatting) return store(target, defaultStack(target, raw));
     formatting = true;
@@ -79,6 +79,7 @@
     try {
       const prepare = Error.prepareStackTrace;
       const custom = typeof prepare === "function" && prepare !== defaultPrepare;
+      if (!custom && materializing) return raw;
       const sites = custom && parseCapturedStack
         ? capturedFrames(target, raw).map(frame => new CallSite(frame))
         : raw;
@@ -87,6 +88,16 @@
       formatting = false;
     }
     return store(target, value);
+  }
+
+  if (native.engine === "jsc") {
+    Object.defineProperty(globalThis, Symbol.for("bunwasm.internal.jsc.formatStack"), nullPrototypeDescriptor({
+      __proto__: null, value: (target: object, raw: unknown) => formatStack(target, raw, true),
+    }));
+  }
+
+  if (native.engine === "host" && internal.hasNativeStackTrace) {
+    internal.require("host_call_sites");
   }
 
   if (native.engine === "quickjs") {

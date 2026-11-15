@@ -14,6 +14,7 @@ declare namespace BunWasm {
   }
   interface PreparedColumns { version: number; columns: Int32Array; }
   interface Internal {
+    isProgramScriptHash?(hash: string): boolean;
     stringIsWellFormed(value: string): boolean;
     mainPath: string;
     prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;
@@ -385,6 +386,7 @@ declare namespace BunWasm {
     mappedCallSites: WeakSet<object>;
     formatCallSite(site: StackCallSite): string;
     require(name: "inspect"): ConsoleInspector;
+    require(name: "host_call_sites"): object;
   }
   interface ShellFs {
     readonly constants: object;
