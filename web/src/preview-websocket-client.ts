@@ -8,7 +8,8 @@ const previewPrefix = script?.getAttribute("data-bun-prefix") ?? "/__preview/";
 const encoder = new TextEncoder();
 const accepts = new Map<string, string>();
 const connections = new Set<Connection>();
-const streams = new Map<number, MessagePort>();
+const streams = new Map<number, { port: MessagePort; authority: string }>();
+let constructingAuthority: string | undefined;
 let nextStream = 1;
 
 function concatBytes(chunks: Uint8Array[]): Uint8Array {
@@ -37,16 +38,19 @@ class Connection {
   onClose: (() => void) | null = null;
   onError: ((error: Error) => void) | null = null;
   private port: MessagePort;
+  private readonly authority: string;
   private sending = Promise.resolve();
   private timer: ReturnType<typeof setTimeout>;
   private acceptInput: string | null = null;
   private upgrading = true;
 
   constructor(handle: number) {
-    const port = streams.get(handle);
-    if (!port) throw new Error("Missing preview stream");
+    const stream = streams.get(handle);
+    if (!stream) throw new Error("Missing preview stream");
     streams.delete(handle);
+    const { port, authority } = stream;
     this.port = port;
+    this.authority = authority;
     connections.add(this);
     this.timer = setTimeout(() => this.fail("Preview WebSocket connection timed out"), 10000);
     port.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
@@ -88,7 +92,8 @@ class Connection {
     this.acceptInput = input;
     const digest = await crypto.subtle.digest("SHA-1", encoder.encode(input));
     if (!this.closed) accepts.set(input, btoa(String.fromCharCode(...new Uint8Array(digest))));
-    return encoder.encode(request.replace(/\r\n\r\n$/, `\r\norigin: http://localhost:${previewPort}\r\n\r\n`));
+    return encoder.encode(request.replace(/^host:[^\r\n]*/im, () => `host: ${this.authority}`)
+      .replace(/\r\n\r\n$/, () => `\r\norigin: ${location.origin}\r\n\r\n`));
   }
 
   startReading(): void {}
@@ -107,9 +112,10 @@ class Connection {
 }
 
 function connect(): number {
+  if (constructingAuthority === undefined) throw new Error("Missing preview request authority");
   const channel = new MessageChannel();
   const handle = nextStream++;
-  streams.set(handle, channel.port1);
+  streams.set(handle, { port: channel.port1, authority: constructingAuthority });
   const controller = navigator.serviceWorker.controller;
   if (!controller) { channel.port2.close(); return handle; }
   controller.postMessage({ type: "preview-socket", port: previewPort }, [channel.port2]);
@@ -130,7 +136,7 @@ const runtime = websocketFactory({
 });
 const RuntimeWebSocket = runtime.clientClass(Connection);
 
-function tunnelUrl(input: string | URL): URL | null {
+function tunnelUrl(input: string | URL): { url: URL; authority: string } | null {
   const url = new URL(String(input), location.href);
   if (url.protocol === "http:") url.protocol = "ws:";
   if (url.protocol === "https:") url.protocol = "wss:";
@@ -140,9 +146,10 @@ function tunnelUrl(input: string | URL): URL | null {
   if (!["ws:", "wss:"].includes(url.protocol)) return null;
   const marker = `${previewPrefix}${previewPort}`;
   if (url.pathname.startsWith(marker + "/")) url.pathname = url.pathname.slice(marker.length);
+  const authority = url.host;
   url.protocol = "ws:";
-  url.host = `localhost:${previewPort}`;
-  return url;
+  // connect() selects the guest port; the handshake keeps the requested authority.
+  return { url, authority };
 }
 
 class PreviewWebSocket extends RuntimeWebSocket {
@@ -153,7 +160,10 @@ class PreviewWebSocket extends RuntimeWebSocket {
   constructor(input: string | URL, protocols: string | string[] = []) {
     const target = tunnelUrl(input);
     if (!target) return new nativeWebSocket(input, protocols);
-    super(target.href, protocols);
+    const previous = constructingAuthority;
+    constructingAuthority = target.authority;
+    try { super(target.url.href, protocols); }
+    finally { constructingAuthority = previous; }
     Object.defineProperty(this, "url", { value: new URL(String(input), location.href).href.replace(/^http/, "ws") });
   }
 

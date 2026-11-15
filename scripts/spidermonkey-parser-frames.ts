@@ -378,6 +378,8 @@ const survivingEdges = [
   ["statementList", "statementList"], ["statementList", "ifStatement"], ["ifStatement", "statementList"],
   ["ifStatement", "statement"], ["ifStatement", "unbracedFunctionConsequent"],
   ["assignExpr", "unaryExpr"], ["unaryExpr", "memberExpr"], ["memberExpr", "expr"], ["expr", "assignExpr"],
+  ["arrayBindingPattern", "bindingIdentifierOrPattern"], ["bindingIdentifierOrPattern", "arrayBindingPattern"],
+  ["objectBindingPattern", "bindingIdentifierOrPattern"], ["bindingIdentifierOrPattern", "objectBindingPattern"],
 ] as const;
 
 const reported = ["statementList", "ifStatement", "statement", "assignExpr", "unaryExpr", "memberExpr", "expr"];
@@ -402,6 +404,7 @@ export type InstantiationReport = { label: string; frames: Record<string, { slot
 const reservingFrames = {
   statementList: "StatementListItemReserve", ifStatement: "IfStatementReserve", tryStatement: "TryStatementReserve",
   statement: "StatementReserve", assignExpr: "AssignExprReserve", unaryExpr: "UnaryExprReserve", memberExpr: "MemberExprReserve",
+  arrayBindingPattern: "ArrayBindingPatternReserve", objectBindingPattern: "ObjectBindingPatternReserve",
 } as const;
 
 function reservationSizes(patch: string): Record<string, number> {

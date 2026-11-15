@@ -6,6 +6,9 @@ import { storageObservationSource } from "./storage-fs-build";
 import { browserBuildConfig } from "./browser-build";
 import { discoverChecks } from "./test-checks";
 import { needsRust } from "./ci-changes";
+import { observeFilesystemEndpoint } from "./storage-fs-endpoint";
+import { createFilesystemConnection } from "../web/node_modules/waffle/fs/protocol";
+import { retainMetadata } from "./storage-fs-metadata";
 const own = { documentId: crypto.randomUUID(), runtimeId: crypto.randomUUID(), workerId: 1, pageURL: "http://localhost/" };
 
 test("observation rejects missing and cross-document/runtime/Worker identities", () => {
@@ -30,7 +33,9 @@ test("retention bounds recent metadata and separates stale shared closure from a
   expect(JSON.stringify(emitted)).toContain('"initiatingCauseProved":false');
 });
 test("all actual consumer seams fail closed on source drift and leave executors untouched", () => {
-  for (const file of ["web/src/main.ts", "web/src/worker.ts", "web/src/preview1-worker.ts", "web/src/fs-worker.ts", "web/node_modules/bash-web/src/runtime/worker.ts", "web/node_modules/waffle/fs/client.ts", "web/node_modules/waffle/fs/service.ts", "web/node_modules/waffle/runtime.ts", "web/node_modules/waffle/browser/shared-fs.ts"]) {
+  const waffle = ["web", "sandbox"].flatMap(app => ["fs/client.ts", "fs/service.ts", "runtime.ts", "browser/shared-fs.ts"].map(file => `${app}/node_modules/waffle/${file}`));
+  const consumers = ["web/src/main.ts", "sandbox/src/main.ts", "web/src/worker.ts", "web/src/preview1-worker.ts", "web/src/fs-worker.ts", "web/node_modules/bash-web/src/runtime/worker.ts", "sandbox/node_modules/bash-web/src/runtime/worker.ts"].concat(waffle);
+  for (const file of consumers) {
     const path = resolve(import.meta.dir, "..", file), original = readFileSync(path, "utf8");
     const transformed = storageObservationSource(path, original);
     expect(transformed).toBeDefined();
@@ -47,7 +52,7 @@ test("default build has no observation plugin and helper-only edits select the s
   try { expect(browserBuildConfig([resolve(import.meta.dir, "../web/src/main.ts")], "/work/tmp/unused").plugins?.some(plugin => plugin.name === "storage-first-event")).toBe(false); }
   finally { if (previous === undefined) delete process.env.BUN_WASM_STORAGE_DIAGNOSTICS; else process.env.BUN_WASM_STORAGE_DIAGNOSTICS = previous; }
   const storage = discoverChecks().find(check => check.path === "scripts/sandbox-storage-browser.test.ts");
-  for (const path of ["scripts/storage-fs-build.ts", "scripts/storage-fs-endpoint.ts", "scripts/storage-fs-observation.ts"]) {
+  for (const path of ["scripts/storage-fs-build.ts", "scripts/storage-fs-endpoint.ts", "scripts/storage-fs-observation.ts", "scripts/storage-fs-metadata.ts"]) {
     expect(storage?.inputs).toContain(path);
     expect(needsRust([path])).toBe(true);
   }
@@ -155,4 +160,115 @@ test("repeated causal snapshots cannot spend another emission or cross document 
   expect(emitted.length).toBe(1);
   retain({ ...own, documentId: crypto.randomUUID(), snapshot }, state, row => emitted.push(row));
   expect(emitted.length).toBe(2);
+});
+
+const nativeContext = { tree: "control", realm: "native-port", endpoint: "service", workerURL: "control" } satisfies Parameters<typeof observeFilesystemEndpoint>[1];
+
+test("native ports retain more than 22 complete sends and receives at qualification and close", async () => {
+  const pair = createFilesystemConnection();
+  const emitted: ReturnType<ReturnType<typeof observeFilesystemEndpoint>["snapshot"]>[] = [];
+  const sender = observeFilesystemEndpoint(pair.server, nativeContext, () => emitted.push(sender.snapshot()));
+  const receiver = observeFilesystemEndpoint(pair.client, { ...nativeContext, endpoint: "client" });
+  const done = Promise.withResolvers<void>();
+  let received = 0;
+  pair.client.port.onmessage = () => { if (++received === 30) done.resolve(); };
+  pair.client.port.onmessageerror = () => { throw Error("unexpected native error"); };
+  try {
+    for (let index = 1; index <= 30; index++) pair.server.port.postMessage({ segment: index, buffer: new SharedArrayBuffer(16) });
+    pair.server.port.onmessage = () => {};
+    pair.server.port.onmessageerror = () => {};
+    sender.qualifyHandlers();
+    receiver.qualifyHandlers();
+    await done.promise;
+    expect(sender.snapshot().sends).toBe(30);
+    expect(receiver.snapshot().receives).toBe(30);
+    expect(sender.snapshot().history.filter(row => row.event === "send-call").map(row => row.frame && "index" in row.frame ? row.frame.index : null)).toEqual(Array.from({ length: 30 }, (_, index) => index + 1));
+    expect(sender.snapshot().history.filter(row => row.event === "send-return").every(row => row.result === "undefined")).toBe(true);
+    expect(emitted.at(-1)?.history.length).toBe(60);
+    const beforeClose = sender.snapshot();
+    expect(pair.server.port.close()).toBeUndefined();
+    expect(sender.snapshot().history.slice(-2).map(row => row.event)).toEqual(["close-call", "close-return"]);
+    expect(beforeClose.history.length).toBe(60);
+    expect(sender.snapshot().historyDropped).toBe(0);
+    expect(receiver.snapshot().historyDropped).toBe(0);
+    await Promise.resolve();
+    expect(emitted.at(-1)?.history.at(-1)?.event).toBe("close-return");
+  } finally { sender.dispose(); receiver.dispose(); pair.server.port.close(); pair.client.port.close(); }
+});
+
+test("injected error on a native port captures revocation before original handlers and stays immutable", () => {
+  const pair = createFilesystemConnection();
+  const observer = observeFilesystemEndpoint(pair.client, { ...nativeContext, endpoint: "client" });
+  const revocation = new Int32Array(pair.client.revocations[0]!);
+  const states = new Int32Array(pair.client.ownerStates);
+  Atomics.store(revocation, 0, 1);
+  Atomics.store(states, 0, 2);
+  pair.client.port.onmessage = () => {};
+  pair.client.port.onmessageerror = () => { Atomics.store(revocation, 0, 2); Atomics.store(states, 0, 3); };
+  try {
+    observer.qualifyHandlers();
+    const event = new MessageEvent("messageerror");
+    pair.client.port.dispatchEvent(event);
+    expect(observer.snapshot().first).toMatchObject({ kind: "messageerror", closedBefore: null, identityRevocation: 1, serviceRevocation: 2, trusted: event.isTrusted });
+    expect(observer.snapshot()).toMatchObject({ identityRevocation: 2, serviceRevocation: 3, closed: null });
+    expect(Object.isFrozen(observer.snapshot().first)).toBe(true);
+  } finally { observer.dispose(); pair.client.port.close(); pair.server.port.close(); }
+});
+
+test("unavailable authority words are never reported as zero and overflow keeps its exact drop count", () => {
+  const pair = createFilesystemConnection();
+  const observer = observeFilesystemEndpoint({ ...pair.server, revocations: [], ownerStates: new SharedArrayBuffer(0) }, nativeContext);
+  try {
+    for (let index = 1; index <= 80; index++) pair.server.port.postMessage({ segment: index, buffer: new SharedArrayBuffer(16) });
+    const snapshot = observer.snapshot();
+    expect(snapshot).toMatchObject({ identityRevocation: null, serviceRevocation: null, ownerState: null, sends: 80, historyLimit: 128, historyDropped: 32 });
+    expect(snapshot.history.length).toBe(128);
+    expect(snapshot.history.at(-1)?.sequence).toBe(128);
+    expect(JSON.stringify(snapshot).length).toBeLessThanOrEqual(32768);
+    expect(JSON.stringify(snapshot)).not.toMatch(/SharedArrayBuffer|Int32Array|MessagePort/);
+  } finally { observer.dispose(); pair.client.port.close(); pair.server.port.close(); }
+});
+
+test("close preserves the original receiver, tuple, result and thrown identity even if reporting fails", async () => {
+  const pair = createFilesystemConnection();
+  const port = pair.server.port;
+  const native = port.close;
+  const failure = Error("close failure");
+  const reportFailure = Error("close reporter failure");
+  const reported: unknown[] = [];
+  const result = {};
+  const tuple = ["ignored native close argument", { original: true }];
+  let fail = false;
+  port.close = function (...args) {
+    const actual: unknown = args;
+    expect(this).toBe(port);
+    expect(actual).toEqual(tuple);
+    if (fail) throw failure;
+    Reflect.apply(native, this, args);
+    return result;
+  };
+  const observer = observeFilesystemEndpoint(pair.server, nativeContext, () => { throw reportFailure; }, error => reported.push(error));
+  try {
+    const call: unknown = port.close;
+    if (typeof call !== "function") throw Error("missing original close hook");
+    const returned: unknown = Reflect.apply(call, port, tuple);
+    expect(returned).toBe(result);
+    fail = true;
+    try { Reflect.apply(call, port, tuple); throw Error("did not throw"); } catch (error) { expect(error).toBe(failure); }
+    expect(observer.snapshot().history.map(row => row.event)).toEqual(["close-call", "close-return", "close-call", "close-error"]);
+    expect(reported).toEqual([reportFailure, reportFailure]);
+  } finally { observer.dispose(); port.close = native; port.close(); pair.client.port.close(); }
+});
+
+test("bounded metadata retains complete matched service history rather than first-send snapshots", () => {
+  const rows: object[] = [];
+  for (let sends = 1; sends <= 30; sends++) retainMetadata(rows, { ...own, snapshot: { owner: 16, generation: 16, endpoint: "service", sends, history: Array.from({ length: sends }, (_, index) => ({ event: "send-return", sequence: index + 1 })) } });
+  retainMetadata(rows, { ...own, workerId: 24, snapshot: { owner: 16, generation: 16, endpoint: "client", first: { kind: "messageerror" } } });
+  expect(rows.length).toBe(2);
+  expect(rows[0]).toMatchObject({ snapshot: { sends: 30 } });
+  expect(rows[0] && "snapshot" in rows[0] ? rows[0].snapshot : null).toMatchObject({ history: expect.arrayContaining([{ event: "send-return", sequence: 30 }]) });
+  let dropped = 0;
+  for (let owner = 100; owner <= 140; owner++) if (retainMetadata(rows, { ...own, snapshot: { owner, generation: owner, endpoint: "service" } })) dropped++;
+  expect(rows.length).toBe(32);
+  expect(dropped).toBe(11);
 });
