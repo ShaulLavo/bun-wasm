@@ -1,13 +1,21 @@
-import { chmod, mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { chmod, cp, lstat, mkdtemp, mkdir, readdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deadlinePolicy } from "./deadlines";
 import { test, expect } from "bun:test";
 import { nativePlatformBlocker, blockedCell } from "./platform";
-import { combine, collectNativeReport, cleanupStaging } from "./fleet";
+import { combine, collectNativeReport, cleanupStaging, cleanupLocalStaging } from "./fleet";
 import { options } from "./run";
 import { initialCells, finish, phases, type Report, type Attempt } from "./model";
 function report(): Report { return { schema: 2, run: "unit", createdAt: "unit", command: "unit", deadlines: deadlinePolicy(180_000), source: { commit: "unit", dirty: false, assets: {} }, cells: initialCells() }; }
+async function localCleanupReceipts(output: string): Promise<unknown[]> {
+  const files = (await readdir(output)).filter(file => file.startsWith("fleet-local-cleanup") && file.endsWith(".json"));
+  return Promise.all(files.map(async file => {
+    const receipt: unknown = JSON.parse(await readFile(join(output, file), "utf8"));
+    return receipt;
+  }));
+}
 test("merging disjoint shards retains failures and all pending and unavailable boxes", () => {
   const first = report(), second = report();
   const failed: Attempt = { startedAt: "now", finishedAt: "now", browser: {}, phases: [{ phase: "dev", status: "fail", error: "real failure", startedAt: "now", durationMs: 1, timeoutMs: 180_000 }] };
@@ -96,20 +104,27 @@ test("zero attempted cells still require the native cleanup receipt", async () =
   });
 });
 
-const meshFixture = `import { cpSync, existsSync, rmSync } from "node:fs";
+const meshFixture = `import { cpSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 const args = process.argv.slice(2);
 const remote = process.env.SAFARI_SALVAGE_REMOTE;
 if (!remote) throw new Error("Missing fixture root");
+function remove(command: string, argv: string[]) {
+  if (existsSync(remote + "/cleanup-error")) throw new Error("injected removal failure");
+  const result = spawnSync(command, argv, { stdio: "inherit" });
+  process.exitCode = result.status ?? 1;
+}
 if (args[0] === "cp") cpSync(args[2].replace(/^mac:/, ""), args[3], { recursive: true });
 else if (args[0] === "ssh" && args[4] === "-lc") {
-  if (args[5].includes("queue-exit")) console.log(JSON.stringify({ holder: null, waiting: [] }));
+  if (args[5].includes("find ")) remove("sh", ["-lc", args[5]]);
+  else if (args[5].includes("queue-exit")) console.log(JSON.stringify({ holder: null, waiting: [] }));
   else console.log(JSON.stringify({ workloadStarted: true, capture: null, cleanup: { driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" } }));
-} else if (args[3] === "rm") rmSync(remote, { recursive: true });
+} else if (args[3] === "rm") remove("rm", args.slice(4));
 else if (args[3] === "test") process.exitCode = existsSync(remote) ? 1 : 0;
 else throw new Error("Unexpected fixture operation");
 `;
 
-async function salvageFixture(mode: "interrupted" | "copy-failed" | "incomplete"): Promise<void> {
+async function salvageFixture(mode: "interrupted" | "copy-failed" | "incomplete" | "cleanup-failed"): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-salvage-"));
   const remote = join(root, "remote"), output = join(root, "output"), bin = join(root, "bin");
   const originalPath = process.env.PATH, originalRemote = process.env.SAFARI_SALVAGE_REMOTE;
@@ -126,6 +141,19 @@ async function salvageFixture(mode: "interrupted" | "copy-failed" | "incomplete"
     await writeFile(join(remote, "report/TABLE.json"), JSON.stringify(native));
     await writeFile(join(remote, "report/logs/owned.jsonl"), "final acknowledgement\n");
     if (mode !== "incomplete") await writeFile(join(remote, "report/native-cleanup.json"), JSON.stringify({ driverExited: true }));
+    if (mode === "cleanup-failed") {
+      await collectNativeReport(join(remote, "report"), output);
+      const saved = await readFile(join(output, "TABLE.json"), "utf8");
+      await writeFile(join(remote, "cleanup-error"), "fail deletion only");
+      const normal = options(["--asset-source=fixture", `--output=${output}`]);
+      await expect(cleanupStaging(remote, true, normal, undefined)).rejects.toThrow("injected removal failure");
+      expect(await readFile(join(output, "TABLE.json"), "utf8")).toBe(saved);
+      expect(JSON.parse(saved).cells[0].attempts).toEqual(native.cells[0]!.attempts);
+      expect(await readFile(join(output, "logs/owned.jsonl"), "utf8")).toBe("final acknowledgement\n");
+      expect(JSON.parse(await readFile(join(output, "fleet-cleanup.json"), "utf8"))).toMatchObject({ remote, stagingRemoved: false });
+      expect(existsSync(remote)).toBe(true);
+      return;
+    }
     const config = options(["--asset-source=fixture", "--safari-ownership", `--output=${output}`]);
     const cleanup = cleanupStaging(remote, true, config, new Error(mode));
     if (mode === "incomplete") { await expect(cleanup).rejects.toThrow(); expect(await Bun.file(join(remote, "report/TABLE.json")).exists()).toBe(true); return; }
@@ -147,4 +175,85 @@ test("exceptional native collection preserves TABLE history, logs and cleanup be
   await salvageFixture("interrupted");
   await salvageFixture("copy-failed");
   await salvageFixture("incomplete");
+});
+
+test("normal collected native results survive a propagated remote cleanup error", async () => {
+  await salvageFixture("cleanup-failed");
+});
+
+test("local staging cleanup removes readonly copies without following links or changing original inputs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-readonly-staging-"));
+  const original = join(root, "original"), nested = join(original, "nested"), staged = join(root, "staged ' quoted");
+  try {
+    await mkdir(nested, { recursive: true });
+    await writeFile(join(nested, "asset"), "original bytes\n");
+    await chmod(join(nested, "asset"), 0o444);
+    await chmod(nested, 0o555); await chmod(original, 0o555);
+    await cp(original, staged, { recursive: true });
+    expect((await lstat(staged)).mode & 0o777).toBe(0o555);
+    await chmod(staged, 0o755);
+    await symlink(original, join(staged, "common"));
+    await chmod(staged, 0o555);
+    await cleanupLocalStaging(staged, root);
+    expect(existsSync(staged)).toBe(false);
+    expect(await readFile(join(nested, "asset"), "utf8")).toBe("original bytes\n");
+    expect((await lstat(original)).mode & 0o777).toBe(0o555);
+    expect((await lstat(nested)).mode & 0o777).toBe(0o555);
+    expect((await lstat(join(nested, "asset"))).mode & 0o777).toBe(0o444);
+    expect(await localCleanupReceipts(root)).toContainEqual(expect.objectContaining({ scratch: staged, stagingRemoved: true }));
+  } finally {
+    await Promise.all([original, nested, staged, join(staged, "nested")].filter(existsSync).map(directory => chmod(directory, 0o755)));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("validated combined results survive local deletion failure and both errors propagate", async () => {
+  await collectionFixture(async (collected, output, native) => {
+    const local = report();
+    local.cells[0] = { ...local.cells[0]!, status: "not runnable yet", reason: "local retained", discovery: { error: "local retained" } };
+    native.cells[1] = finish(native.cells[1]!, { startedAt: "now", finishedAt: "now", browser: {}, phases: [{ phase: "startup", status: "fail", error: "native failure", startedAt: "now", durationMs: 1, timeoutMs: 180_000 }] });
+    await mkdir(join(collected, "logs"));
+    await writeFile(join(collected, "TABLE.json"), JSON.stringify(native));
+    await writeFile(join(output, "TABLE.json"), JSON.stringify(local));
+    await collectNativeReport(collected, output);
+    const saved = await readFile(join(output, "TABLE.json"), "utf8");
+    const parent = join(collected, "readonly-parent"), staged = join(parent, "staging");
+    await mkdir(staged, { recursive: true }); await chmod(parent, 0o555);
+    try {
+      await expect(cleanupLocalStaging(staged, output, new Error("remote cleanup failed"))).rejects.toThrow("remote cleanup failed; local cleanup:");
+      expect(await readFile(join(output, "TABLE.json"), "utf8")).toBe(saved);
+      expect(JSON.parse(saved).cells[0].reason).toBe("local retained");
+      expect(JSON.parse(saved).cells[1].attempts).toEqual(native.cells[1]!.attempts);
+      expect(existsSync(join(output, "TABLE.md"))).toBe(true);
+      expect(await localCleanupReceipts(output)).toContainEqual(expect.objectContaining({ scratch: staged, stagingRemoved: false }));
+    } finally { await chmod(parent, 0o755); }
+  });
+});
+
+test("outer cleanup preserves both failed salvage directory receipts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-nested-cleanup-"));
+  const output = join(root, "output"), outer = join(root, "outer");
+  const parents = [join(root, "first-parent"), join(root, "second-parent")];
+  try {
+    await mkdir(output); await mkdir(outer);
+    for (const parent of parents) {
+      const scratch = join(parent, "salvage");
+      await mkdir(scratch, { recursive: true }); await chmod(parent, 0o555);
+      await expect(cleanupLocalStaging(scratch, output, new Error("interrupted collection"))).rejects.toThrow("local cleanup");
+      expect(existsSync(scratch)).toBe(true);
+    }
+    await cleanupLocalStaging(outer, output);
+    const receipts = await localCleanupReceipts(output);
+    expect(receipts).toHaveLength(3);
+    for (const parent of parents) {
+      expect(receipts).toContainEqual(expect.objectContaining({ scratch: join(parent, "salvage"), stagingRemoved: false, removalCondition: expect.any(String) }));
+      expect(existsSync(join(parent, "salvage"))).toBe(true);
+      expect((await lstat(parent)).mode & 0o777).toBe(0o555);
+    }
+    expect(receipts).toContainEqual(expect.objectContaining({ scratch: outer, stagingRemoved: true }));
+    expect(existsSync(outer)).toBe(false);
+  } finally {
+    await Promise.all(parents.filter(existsSync).map(parent => chmod(parent, 0o755)));
+    await rm(root, { recursive: true, force: true });
+  }
 });

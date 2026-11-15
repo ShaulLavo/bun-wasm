@@ -29,6 +29,24 @@ Only a report with zero attempted cells may omit the terminal logs directory.
 Attempted cells still require logs, and every collection requires its cleanup
 receipt. Collection never upgrades an unproved driver or lock receipt.
 
+Validated collection now saves the combined TABLE and its Markdown view before
+either staging cleanup can fail. The normal and interrupted paths use this same
+checkpoint, preserving local history, native attempts, logs and native cleanup
+evidence while still propagating a later deletion error.
+
+Fleet cleanup makes only directories inside its task-owned staging tree
+owner-writable before deletion. It leaves file modes alone and does not follow
+symbolic links into original or common inputs. Remote permission changes still
+require the existing queue and native consumer settlement proof. Local cleanup
+runs after the controller command has settled, including diagnostic and report
+salvage scratch. Each directory gets its own `fleet-local-cleanup-*.json`, keyed
+by its absolute path, recording local removal or its retained path and error.
+Outer cleanup cannot overwrite failed salvage cleanup receipts;
+`fleet-cleanup.json` retains the remote outcome.
+An original operation or remote cleanup error aggregates with local cleanup
+failure rather than being replaced. Tiny filesystem regressions exercise both
+deletion paths and report survival, without a native session or framework build.
+
 Lifetime and collection regressions retain their existing quality owners under
 `checks/quality-goals-matrix-native.json` and `quality-goals-matrix-fleet.json`.
 Actual native session creation and teardown are checked separately from injected
