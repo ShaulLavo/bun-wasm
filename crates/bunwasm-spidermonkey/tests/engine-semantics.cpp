@@ -720,6 +720,10 @@ void natives() {
 }
 #include "eval-completion.cpp"
 #include "require-recovery.cpp"
+#if defined(BUNSM_LOOP_CONTROLS)
+#include "loop-dispatch.cpp"
+#endif
+
 }  // namespace
 
 extern "C" bool bunsm_host_call(uint32_t id, bsm_handle, const bsm_handle* args, size_t argc, bsm_handle* out) {
@@ -772,6 +776,12 @@ extern "C" int engine_semantics_main() {
       static_cast<uint8_t>(tier && !strcmp(tier, "pbl")), 1};
   finalized.reserve(16);
   bsm_init(&config);
+#if defined(BUNSM_LOOP_CONTROLS)
+  loop_controls();
+  bsm_shutdown();
+  puts("SpiderMonkey loop controls passed");
+  return 0;
+#endif
   if (mode && !strcmp(mode, "fault-terminate")) {
     termination_fault();
     bsm_shutdown();

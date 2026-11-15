@@ -21,7 +21,10 @@ export function armNativeClick(input: { button: string; clicked: string; token: 
 
 export function observeNativeClick(input: { button: string; clicked: string; token: string }): { trusted: boolean; after: string } {
   const state = globalThis.__goalsNativeClick;
-  if (!state || state.token !== input.token || state.url !== location.href || state.timeOrigin !== performance.timeOrigin) throw new Error("Native click document changed");
+  if (!state) throw new Error("Native click document changed: state-missing; statePresent=false");
+  if (state.token !== input.token) throw new Error("Native click document changed: token-mismatch; statePresent=true; tokenEqual=false");
+  if (state.url !== location.href) throw new Error("Native click document changed: url-mismatch; statePresent=true; tokenEqual=true; urlEqual=false");
+  if (state.timeOrigin !== performance.timeOrigin) throw new Error("Native click document changed: time-origin-mismatch; statePresent=true; tokenEqual=true; urlEqual=true; timeOriginEqual=false");
   if (!state.target.isConnected || state.target !== document.querySelector(input.button)) throw new Error("Native click target changed");
   if (state.event && (!state.event.trusted || state.event.target !== state.target)) throw new Error("Native click did not deliver a trusted event to the armed target");
   return { trusted: state.event?.trusted === true, after: document.querySelector(input.clicked)?.textContent?.trim() ?? "" };
