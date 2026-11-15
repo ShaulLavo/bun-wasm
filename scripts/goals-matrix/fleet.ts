@@ -1,11 +1,10 @@
-import { cp, mkdtemp, mkdir, readFile, readdir, rm, rmdir, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, readdir, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { run, options, unavailableReport, type Options } from "./run";
 import { sameDeadlines } from "./deadlines";
 import { saveReport } from "./report";
 import { validateReport, type Report } from "./model";
-import { bounded } from "./execute";
 import { buildAngularDiagnosticSource } from "./angular-diagnostic";
 import { buildNextBuildReaderSource } from "./next-build-observer";
 import { CommandExitError, ownedCommand, withSignals } from "./lifetime";
@@ -93,9 +92,23 @@ export async function removeStaging(remote: string, started: boolean, config: Op
   await removeSettledStaging(remote, config);
 }
 async function removeSettledStaging(remote: string, config: Options): Promise<void> {
-  await ownedCommand(["mesh", "ssh", "mac", "--", "rm", "-rf", remote]);
+  await ownedCommand(["mesh", "ssh", "mac", "--", "sh", "-lc", stagingRemovalScript(remote)]);
   await ownedCommand(["mesh", "ssh", "mac", "--", "test", "!", "-e", remote]);
   await writeFile(join(config.output, "fleet-cleanup.json"), JSON.stringify({ remote, stagingRemoved: true, consumersStopped: true, at: new Date().toISOString() }, null, 2));
+}
+function stagingRemovalScript(directory: string): string {
+  const path = quote(directory);
+  return `set -eu; if [ -d ${path} ] && [ ! -L ${path} ]; then find ${path} -type d -exec chmod u+w {} +; fi; rm -rf -- ${path}; test ! -e ${path}`;
+}
+export async function cleanupLocalStaging(scratch: string, output: string, failure?: unknown): Promise<void> {
+  try {
+    await ownedCommand(["sh", "-lc", stagingRemovalScript(scratch)], undefined, 30_000);
+    await writeFile(join(output, "fleet-local-cleanup.json"), JSON.stringify({ scratch, stagingRemoved: true, at: new Date().toISOString() }, null, 2));
+  } catch (error) {
+    await writeFile(join(output, "fleet-local-cleanup.json"), JSON.stringify({ scratch, stagingRemoved: false, error: String(error), removalCondition: "Remove only this task-owned local staging directory after its controller has settled" }, null, 2));
+    if (failure !== undefined) throw new AggregateError([failure, error], `${String(failure)}; local cleanup: ${String(error)}`);
+    throw error;
+  }
 }
 export function nativeRunnerArgs(config: Options, remote: string): string[] {
   const installs = Object.entries(config.installTimeouts).map(([framework, timeout]) => `${framework}:${timeout}`).join(",");
@@ -136,24 +149,28 @@ export async function collectNativeReport(collected: string, output: string): Pr
     if (!(noAttempts && error instanceof Error && "code" in error && error.code === "ENOENT" && "path" in error && error.path === join(collected, "logs"))) throw error;
   }
   await cp(join(collected, "native-cleanup.json"), join(output, "native-cleanup.json"));
+  const local = await existingReport(output);
+  await saveReport(output, local ? combine(local, report) : report);
   return report;
 }
 async function collectFailedOwnership(remote: string, output: string): Promise<void> {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-ownership-"));
+  let failure: unknown;
   try {
     await ownedCommand(["mesh", "cp", "-r", `mac:${remote}/report/logs`, join(scratch, "logs")], undefined, 30_000);
     await cp(join(scratch, "logs"), join(output, "logs"), { recursive: true });
-  } finally { await rm(scratch, { recursive: true, force: true }); }
+  } catch (error) { failure = error; throw error; }
+  finally { await cleanupLocalStaging(scratch, output, failure); }
 }
 async function collectFailedReport(remote: string, output: string): Promise<void> {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-report-salvage-"));
+  let failure: unknown;
   try {
     const collected = join(scratch, "report");
     await ownedCommand(["mesh", "cp", "-r", `mac:${remote}/report`, collected], undefined, 30_000);
-    const native = await collectNativeReport(collected, output);
-    const local = await existingReport(output);
-    await saveReport(output, local ? combine(local, native) : native);
-  } finally { await rm(scratch, { recursive: true, force: true }); }
+    await collectNativeReport(collected, output);
+  } catch (error) { failure = error; throw error; }
+  finally { await cleanupLocalStaging(scratch, output, failure); }
 }
 async function existingReport(output: string): Promise<Report | undefined> {
   let text: string;
@@ -202,13 +219,15 @@ async function runFleet(config: Options, signal: AbortSignal): Promise<Report> {
     if (!nativeConfig.browsers.length) return local;
   }
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-goals-fleet-"));
+  let failure: unknown;
   try {
     const native = await mac(nativeConfig, local.source, scratch, signal);
     return combine(local, native);
   } catch (error) {
-    if (!(error instanceof NativeUnavailable)) throw error;
-    return unavailableReport(nativeConfig, error, local);
-  } finally { await bounded(() => rm(scratch, { recursive: true, force: true }), 30_000); }
+    if (error instanceof NativeUnavailable) return unavailableReport(nativeConfig, error, local);
+    failure = error;
+    throw error;
+  } finally { await cleanupLocalStaging(scratch, config.output, failure); }
 }
 export async function fleet(config: Options): Promise<Report> { return withSignals(signal => lockedFleet(config, signal), config.signal); }
 async function lockedFleet(config: Options, signal: AbortSignal): Promise<Report> {
