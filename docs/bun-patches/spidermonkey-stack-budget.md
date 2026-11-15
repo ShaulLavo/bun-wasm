@@ -68,6 +68,8 @@ possible to what Next's webpack hook and Angular's schema validators need.
 | `templateLiteral` | both | 512 | Nested template substitutions | `templates` |
 | `functionFormalParametersAndBody` | both | 1696 | Nested function bodies of every kind | `functions`, `classes`; also `iifes`, `methods`, `arrows` (main's size, kept) |
 | `emitTree` | both | 416 | The bytecode emitter's walk of a function compiled in full | `validator`, `tries` and `blocks` compiled in full |
+| `arrayBindingPattern` | both | 1664 | Nested array patterns in declarations, parameters and `catch`, and the emitter's walk of them, which has no check of its own | `letArrays` and `letRests` compiled in full |
+| `objectBindingPattern` | both | 1088 | Nested object patterns in the same places | `letObjects`, `catches` and `letRests` compiled in full |
 
 ### Compile sites follow the frames, not the constructs
 
@@ -94,9 +96,17 @@ holding the whole level's:
 - No reservation wrapper frame is left in the parser. The never-inline wrappers
   around parenthesised expressions, function expressions and both branches of
   `?:` each added a host frame to the cycle they guarded.
+- A binding pattern level (`let [[x]]`, `function f({ a: { b } })`,
+  `catch ({ a: { b } })`, `for (let [[x]] of y)`) is `arrayBindingPattern` or
+  `objectBindingPattern` plus `bindingIdentifierOrPattern`. Patterns in an
+  assignment or arrow parameters are parsed as expressions first and take the
+  expression level's. Until November 15, 2026 neither pattern function
+  reserved, so nesting 20,000 deep ran the WebKit host stack out on both tiers.
 
 Every recursion cycle passes a function that checks the quota, and the check
-sees every reservation held above it.
+sees every reservation held above it. Only the cycles the measurement probe
+nests are known to hold a reservation; a cycle it does not nest may hold none
+and then needs its own site, as binding patterns did.
 
 Parsing is not the deepest pass for everything. A function is parsed lazily
 (syntax only) when it is declared and compiled in full on its first call: full
@@ -107,7 +117,12 @@ and `try` blocks reach only about 60 percent of their lazily parsed depth when
 compiled. So the emitter reserves for itself. A validator-shaped function that
 the lazy parse accepts can therefore be refused on its first call, with the same
 catchable `RangeError`. For unary chains the constant folder is the deepest pass
-and `unaryExpr`'s size covers it.
+and `unaryExpr`'s size covers it. Binding patterns are the opposite case: the
+emitter's walk of a nested pattern (`emitDestructuringOps` and its callees)
+checks neither the counter nor the quota, so only the parse can refuse. An array
+pattern takes more host stack there than an object pattern, so
+`arrayBindingPattern` reserves more, and both sizes keep the depth the parse
+accepts at 188 KiB at or below 75 percent of the depth a cold full compile holds.
 
 Shapes are those of the measurement probe: unbounded `down(n)` recursion through
 each runtime path, and one construct nested 20,000 deep, compiled by `eval` as
