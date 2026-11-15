@@ -20,6 +20,9 @@ export class StorageLifetime {
   private sequence = 0;
   private operation = 0;
   private page = 0;
+  private readonly filesystemRings = new Map<number, { rows: unknown[]; dropped: number }>();
+  private filesystemRetained = false;
+  private filesystemPagesDropped = 0;
 
   constructor(private readonly write?: RecordEvent) {}
 
@@ -28,6 +31,28 @@ export class StorageLifetime {
   event(kind: string, detail: unknown = null): void {
     try { this.write?.({ sequence: ++this.sequence, time: new Date().toISOString(), kind, detail }); }
     catch (error) { this.failProgress(error); }
+    if (["error", "preservation-error", "primary-error", "secondary-error"].includes(kind)) this.retainFilesystemFailure();
+  }
+
+  private retainFilesystemFailure(): void {
+    if (this.filesystemRetained || !this.filesystemRings.size) return;
+    this.filesystemRetained = true;
+    this.event("filesystem-retained", { pagesDropped: this.filesystemPagesDropped,
+      streams: Array.from(this.filesystemRings, ([page, ring]) => ({ page, ...ring })), limits: { pages: 8, recentPerPage: 32 } });
+  }
+
+  private filesystemMetadata(page: number, text: string): void {
+    try {
+      if (text.length > 32768) throw Error("Filesystem observation metadata exceeded its bound");
+      const row: unknown = JSON.parse(text);
+      let ring = this.filesystemRings.get(page);
+      if (!ring) { ring = { rows: [], dropped: 0 }; this.filesystemRings.set(page, ring); }
+      ring.rows.push(row);
+      if (ring.rows.length > 32) { ring.rows.shift(); ring.dropped++; }
+      if (this.filesystemRings.size <= 8) return;
+      this.filesystemRings.delete(this.filesystemRings.keys().next().value!);
+      this.filesystemPagesDropped++;
+    } catch (error) { this.secondary("filesystem-observation.metadata", error); }
   }
 
   private failProgress(error: unknown): void {
@@ -120,6 +145,10 @@ export class StorageLifetime {
   }
 
   observeContext(context: BrowserContext): void {
+    if (this.write) {
+      const installation = context.addInitScript(() => { Reflect.set(globalThis, "__bunwasmStorageFirstEvent", true); });
+      this.acquisitions.push(installation.then(() => {}, error => this.secondary("filesystem-observation.install", error)));
+    }
     context.on("page", page => this.observePage(page));
     context.on("close", () => this.event("context-close"));
   }
@@ -149,7 +178,12 @@ export class StorageLifetime {
         navigation: request.isNavigationRequest(), ...requestFrame(request, frameDetail) };
     };
     this.event("page", { page: id });
-    page.on("console", message => this.event("console", { page: id, type: message.type(), text: message.text(), location: message.location() }));
+    page.on("console", message => {
+      const metadata = "[storage-fs-metadata] ";
+      if (message.text().startsWith(metadata)) { this.filesystemMetadata(id, message.text().slice(metadata.length)); return; }
+      this.event("console", { page: id, type: message.type(), text: message.text(), location: message.location() });
+      if (message.text().startsWith("[storage-fs-observation-error] ")) this.secondary("filesystem-observation", new Error(message.text()));
+    });
     page.on("pageerror", error => this.event("pageerror", { page: id, ...errorObject(error) }));
     page.on("request", request => this.event("request", requestDetail(request, true)));
     page.on("response", response => this.event("response", { ...requestDetail(response.request()), status: response.status() }));

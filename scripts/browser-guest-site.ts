@@ -60,8 +60,8 @@ export function buildSite(out: string): SiteIdentity {
   const guestPath = join(root, "dist/bun-browser.wasm");
   const guest = readFileSync(guestPath);
   const receipt = verifiedReceipt(guest, JSON.parse(readFileSync(`${guestPath}.build.json`, "utf8")), source);
-  execFileSync(process.execPath, [join(root, "web/build.ts")], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
-  execFileSync(process.execPath, [join(root, "sandbox/build.ts")], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
+  execFileSync(process.execPath, [join(root, "web/build.ts")], { cwd: root, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, BUN_WASM_STORAGE_DIAGNOSTICS: "1" } });
+  execFileSync(process.execPath, [join(root, "sandbox/build.ts")], { cwd: root, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, BUN_WASM_STORAGE_DIAGNOSTICS: "1" } });
   mkdirSync(out, { recursive: true });
   cpSync(join(root, "web/dist"), join(out, "site"), { recursive: true });
   cpSync(join(root, "sandbox/dist"), join(out, "site/sandbox"), { recursive: true });
