@@ -43,6 +43,9 @@ async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, ope
   } finally { scope.close(new Error(`${name} phase ended`)); }
 }
 export async function execute(options: Execution, earlier: readonly Attempt[] = []): Promise<Cell> {
+  return finish(options.box, await executeAttempt(options), earlier);
+}
+export async function executeAttempt(options: Execution, stopAfter?: "click"): Promise<Attempt> {
   if (options.nextBuildObservation && (options.framework.id !== "next" || options.box.engine !== "quickjs")) throw new Error("Next build observation requires the Next QuickJS cell");
   const results: PhaseResult[] = [];
   const startedAt = new Date().toISOString();
@@ -68,7 +71,7 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
       return evidence;
     }, options.signal);
     if (!transport) throw new Error("Transport not created");
-    await lifecycle(transport, options, results);
+    await lifecycle(transport, options, results, stopAfter);
   } catch {
     if (transport) failureLog = await captureFailure(transport, options, results);
   }
@@ -80,13 +83,13 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
       return cleanup(transport, options, results, failureLog, admission);
     }).catch(() => {});
   }
-  return finish(options.box, { startedAt, finishedAt: new Date().toISOString(), phases: results, browser: capabilities }, earlier);
+  return { startedAt, finishedAt: new Date().toISOString(), phases: results, browser: capabilities };
 }
 async function closeLateTransport(owned: Transport): Promise<never> {
   await owned.close();
   throw new Error("Transport created after startup deadline and closed");
 }
-async function lifecycle(transport: Transport, options: Execution, results: PhaseResult[]): Promise<void> {
+async function lifecycle(transport: Transport, options: Execution, results: PhaseResult[], stopAfter?: "click"): Promise<void> {
   const { framework, timeoutMs, port = 5173 } = options;
   const check = (name: Phase, operation: (page: ScopedTransport) => Promise<unknown>) => phase(results, name, timeoutMs, admission => operation(scoped(transport, admission)), options.signal);
   const installTimeoutMs = options.installTimeoutMs ?? timeoutMs;
@@ -95,6 +98,7 @@ async function lifecycle(transport: Transport, options: Execution, results: Phas
   await check("dev", async page => { previewUrl = await start(page, framework.rootPreview?.dev.replaceAll("{port}", String(port)) ?? "bun run dev", timeoutMs, port); return { url: previewUrl, port }; });
   await check("render", async page => { await openPreview(page, timeoutMs, port); return render(page, framework, framework.text, timeoutMs); });
   await check("click", page => checkClick(page, framework, timeoutMs));
+  if (stopAfter === "click") return;
   await check("hot-reload", page => edit(page, framework, timeoutMs));
   const buildTimeoutMs = options.buildTimeoutMs ?? timeoutMs;
   await phase(results, "build", buildTimeoutMs, async admission => {
