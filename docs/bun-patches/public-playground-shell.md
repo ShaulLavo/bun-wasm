@@ -29,6 +29,23 @@ The page registers its Bun launcher for the selected engine and tools before
 starting the session. Run calls `submit()` with an absolute editor path, so shell
 `cd` does not change which file runs. The public session replaces the entire
 edited draft with Ctrl+E, Ctrl+U, and Ctrl+K, including multiline zsh drafts.
+
+`web/src/playground/program-profile.ts` is an original Bun consumer adapter. It
+also registers the declared QuickJS, JSC and Browser executable directories,
+with matching launchers and lazily loaded modules. `/bin/bun` remains Browser;
+`/opt/bun/quickjs/bin/bun` and `/opt/bun/jsc/bin/bun` select their named engines.
+The selected engine reuses its prepared module. Other paired engines retain the
+selected memory profile, while Browser uses split. A missing engine artifact
+fails its own load rather than substituting the current engine. SpiderMonkey is
+registered only when explicitly selected. The private registration tests check
+module identity, adapter choice, lazy reuse and memory-profile selection. The
+unchanged original subprocess browser fixture exercises these executable paths.
+Public `installBunAdapters` still registers only the caller-supplied engine and
+module. No upstream implementation or provider contract changes here.
+Executable files use the existing exclusive marker helper and roll back only
+new markers on failure. The original marker adapter recognizes EEXIST by the
+filesystem error's numeric errno, including errors from a separately installed
+copy of the same Waffle package. It preserves unrelated files byte for byte.
 The runtime and program tuple is recorded in `scripts/waffle-release-inputs.json`;
 the shell builder uses the same exact bash-web revision as both applications.
 

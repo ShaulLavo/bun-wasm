@@ -220,9 +220,11 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     if (wasm instanceof Error) throw wasm;
     const module = wasm.module;
     const engine = this.engine;
-    const registration = await registerPlaygroundBun({ runtime, engine, module, profile: this.profile, launcher: async (context, service) => {
+    const registration = await registerPlaygroundBun({ runtime, engine, module, profile: this.profile,
+      loadModule: (provider, profile) => loadEngineProgram(provider, profile, () => {}).then(loaded => loaded.module),
+      launcher: provider => async (context, service) => {
       const { bunLauncher } = await import("../bun-launcher");
-      return bunLauncher(engine, {
+      return bunLauncher(provider, {
         runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
         // web/build.ts emits the notification helper at the page root in both modes.
         notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,

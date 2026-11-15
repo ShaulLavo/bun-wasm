@@ -199,3 +199,24 @@ test("a name without a script runs a source file first, then an installed packag
   expect(runtime(cwd, "tool").scripts.resolve(path.join(cwd, "tool"))).toBe(path.join(cwd, "tool.ts"));
   expect(bin.spawned).toEqual([]);
 }));
+
+test("package script preparation resolves an unlinked manifest bin without source-file precedence", () => project({ dev: 'fixture-tool "two words"' }, async cwd => {
+  const entry = path.join(cwd, "node_modules/@fixture/cli/cli.ts");
+  mkdirSync(path.dirname(entry), { recursive: true });
+  writeFileSync(path.join(path.dirname(entry), "package.json"), JSON.stringify({ name: "@fixture/cli", bin: { "fixture-tool": "cli.ts" } }));
+  writeFileSync(entry, 'console.log(JSON.stringify([process.argv.slice(2), process.cwd(), process.env.VALUE, process.env.npm_lifecycle_event]));');
+  writeFileSync(path.join(cwd, "fixture-tool.ts"), 'throw new Error("source collision");');
+  const f = runtime(cwd, "dev", ["tail", "$HOME", "a; echo injected"]);
+  f.guest.execPath = process.execPath;
+  f.guest.env.VALUE = "preserved";
+  const command = f.scripts.resolve(path.join(cwd, "dev"));
+  const plan = f.scripts.continuationPlan(command);
+  expect(plan.main.original).toBe('fixture-tool "two words"');
+  const child = Bun.spawnSync(["/bin/bash", "-c", plan.main.command], { cwd: plan.cwd, env: { ...plan.env, npm_lifecycle_event: "dev" } });
+  expect({ code: child.exitCode, error: child.stderr.toString() }).toEqual({ code: 0, error: "" });
+  expect(JSON.parse(child.stdout.toString())).toEqual([["two words", "tail", "$HOME", "a; echo injected"], cwd, "preserved", "dev"]);
+  await f.scripts.run(command);
+  expect(f.spawned[0]?.argv[2]).toBe(plan.main.command);
+  expect(f.spawned[0]?.script).toBe(plan.main.original);
+  expect(f.guest.env.PATH).toBe(plan.env.PATH);
+}));

@@ -1,8 +1,10 @@
 import type { GuestLauncher, Runtime } from "waffle";
-import { isSharedGroupCore, type Engine } from "../../../src/engine-kind";
+import { FilesystemClient } from "waffle/fs/client";
+import { isSharedGroupCore, pairedEngines, type Engine } from "../../../src/engine-kind";
 import { projectTemplate } from "./project-templates";
 import { ENGINE_BIN } from "../../../src/executable-paths";
 import { packageService, preparePackageContinuation } from "../../../src/package-continuation-installation";
+import { createExecutable, rollbackExecutables } from "../../../src/executable-marker";
 
 export type PlaygroundProfile = "split" | "shared-group";
 
@@ -25,26 +27,41 @@ function requireProfileEngine(engine: Engine, profile: PlaygroundProfile): void 
 }
 
 export async function registerPlaygroundBun(options: {
-  runtime: Runtime; engine: Engine; module: WebAssembly.Module; profile: PlaygroundProfile; launcher: GuestLauncher;
+  runtime: Runtime; engine: Engine; module: WebAssembly.Module; profile: PlaygroundProfile;
+  launcher(engine: Engine): GuestLauncher;
+  loadModule(engine: Engine, profile: PlaygroundProfile): Promise<WebAssembly.Module>;
 }): Promise<{ profile: PlaygroundProfile; bin: string; dispose(): void }> {
   const { runtime, engine, module } = options;
   requireProfileEngine(engine, options.profile);
   const profile = isSharedGroupCore(module) ? "shared-group" : "split";
   if (profile !== options.profile) throw new TypeError(`Requested ${options.profile} program profile, but the prepared ${engine} core is ${profile}`);
   const bin = ENGINE_BIN[engine];
-  const packages = packageService(runtime);
+  await runtime.filesystem.resolvePath("/");
+  const filesystem = new FilesystemClient(runtime.filesystem.fork());
+  let packages: ReturnType<typeof packageService> | undefined;
   const removals: Array<() => void> = [];
-  const dispose = () => { for (const remove of removals.splice(0).reverse()) remove(); packages.dispose(); };
-  try {
-    removals.push(runtime.registerAdapter(`bun:${engine}`, options.launcher));
-    await runtime.filesystem.mkdirp(bin);
+  const created: string[] = [];
+  const dispose = () => { for (const remove of removals.splice(0).reverse()) remove(); packages?.dispose(); };
+  async function register(provider: Engine): Promise<void> {
+    removals.push(runtime.registerAdapter(`bun:${provider}`, options.launcher(provider)));
+    const directory = ENGINE_BIN[provider];
+    const memoryProfile = provider === "browser" ? "split" : profile;
+    let loading: Promise<WebAssembly.Module> | undefined;
+    const load = provider === engine ? () => module : () => loading ??= options.loadModule(provider, memoryProfile);
+    await filesystem.asyncCall("mkdirp", [directory]);
     for (const name of ["bun", "node", "nodejs"]) {
-      const path = `${bin}/${name}`;
-      removals.push(runtime.registerProgram(path, { adapter: `bun:${engine}`, cooperative: true, module: () => module }));
-      await runtime.filesystem.writeFile(path, "bun-wasm registered executable\n");
+      const path = `${directory}/${name}`;
+      removals.push(runtime.registerProgram(path, { adapter: `bun:${provider}`, cooperative: true, module: load }));
+      if (await createExecutable(filesystem, path)) created.push(path);
     }
+  }
+  try {
+    packages = packageService(runtime);
+    const providers: readonly Engine[] = pairedEngines;
+    for (const provider of providers.concat(["browser"], engine === "spidermonkey" ? [engine] : [])) await register(provider);
     await preparePackageContinuation(runtime);
     packages.commit();
     return { profile, bin, dispose };
-  } catch (error) { dispose(); packages.rollback(); throw error; }
+  } catch (error) { dispose(); packages?.rollback(); await rollbackExecutables(filesystem, created); throw error; }
+  finally { filesystem.dispose(); }
 }
