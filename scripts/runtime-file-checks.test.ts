@@ -164,7 +164,7 @@ test.skipIf(process.platform !== "linux")("real runtime failure retains its orig
     const events = readdirSync(join(root, "events"));
     const started = events.filter(file => file.endsWith(".started")).map(file => file.replace(".started", ""));
     const done = events.filter(file => file.endsWith(".done")).map(file => file.replace(".done", ""));
-    expect(done).toEqual(started);
+    expect(done.sort()).toEqual(started.sort());
     expect(readdirSync(join(root, "tmp"))).toEqual([]);
   }
 }, 60000);

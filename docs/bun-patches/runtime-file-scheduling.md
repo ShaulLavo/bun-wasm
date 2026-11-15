@@ -21,3 +21,5 @@ unchanged. The runtime coordinator forwards cancellation to that supervisor and
 removes its temporary directory only after supervision ends. It bounds file
 concurrency and Rayon threads to two without altering program profile or native
 input paths. Defaults, fixture selection, assertions and exports are preserved.
+The failure/drain fixture compares completed and started filenames in canonical
+order because filesystem directory enumeration does not imply execution order.
