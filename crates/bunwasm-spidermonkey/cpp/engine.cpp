@@ -996,6 +996,7 @@ extern "C" void bsm_init(const bsm_config* config) {
   global = new JS::PersistentRootedObject(context, object);
   JSAutoRealm realm(context, object);
   require(JS::InitRealmStandardClasses(context), "standard classes failed");
+  require(JS::InitModuleNamespacePrototype(context), "module namespace prototype failed");
   JS::RootedObject promisePrototype(context, JS::GetPromisePrototype(context));
   require(promisePrototype != nullptr, "Promise prototype missing");
   JS::RootedId capturedThenId(context);
@@ -1623,6 +1624,9 @@ extern "C" void bsm_detach_buffer(bsm_handle handle) {
 extern "C" bool bsm_is_proxy(bsm_handle handle) {
   JSObject* obj = object(handle);
   return obj && js::IsScriptedProxy(obj);
+}
+extern "C" bool bsm_is_module_namespace(bsm_handle handle) {
+  return JS::IsModuleNamespaceObject(value(handle));
 }
 extern "C" bsm_handle bsm_proxy_target(bsm_handle handle) {
   JSObject* obj = object(handle);
