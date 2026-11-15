@@ -63,6 +63,7 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
       if (name === "fs_watch") return () => ({});
       if (name === "http_common") return {};
       if (name === "websocket") return { clientClass: () => class {} };
+      if (name === "io_pump") return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL("../crates/bunwasm-runtime/src/js/io_pump.ts", import.meta.url), "utf8")}`))(internal);
       if (name === "net") return net ??= load("net")(internal);
       throw new Error(`Unexpected module ${name}`);
     },

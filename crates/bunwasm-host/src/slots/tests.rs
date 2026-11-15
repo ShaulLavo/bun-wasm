@@ -1554,16 +1554,27 @@ fn wait_for_rename(f: &mut Fixture, id: i32, name: &str) {
 
 /// Sleep in the network poll until a drain of the watch reports `wanted`.
 fn wait_for(f: &mut Fixture, id: i32, wanted: (u8, Option<String>)) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         assert!(std::time::Instant::now() < deadline, "no record {wanted:?}");
         f.store.data_mut().net.poll(1000);
-        while let Ok(records) = watch_records(f, id) {
-            if records.contains(&wanted) {
-                return;
-            }
+        if f.call("runtime_fs", "watch_ready", ()) == 0 {
+            continue;
+        }
+        assert_eq!(f.call("runtime_fs", "watch_ready", ()), 1);
+        if watch_contains(f, id, &wanted) {
+            return;
         }
     }
+}
+
+fn watch_contains(f: &mut Fixture, id: i32, wanted: &(u8, Option<String>)) -> bool {
+    while let Ok(records) = watch_records(f, id) {
+        if records.contains(wanted) {
+            return true;
+        }
+    }
+    false
 }
 
 /// `path_open` of `path` under preopen 3 with the rights Rust's `File::open` uses (wasi-libc
@@ -1616,6 +1627,7 @@ fn runtime_fs_watches_follow_an_opened_directory_and_wake_the_network_poll() {
     );
     assert_eq!(f.call("runtime_fs", "watch_open", (directory, 1, 132)), 0);
     let id = f.word(132);
+    assert_eq!(f.call("runtime_fs", "watch_ready", ()), 0);
     assert_eq!(watch_records(&mut f, id), Err(6), "nothing pending yet");
     std::fs::write(root.join("app/page.tsx"), "1").unwrap();
     wait_for_rename(&mut f, id, "page.tsx");

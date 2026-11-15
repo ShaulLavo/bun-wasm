@@ -399,19 +399,20 @@ mod runtime_proc {
 }
 
 /// Waffle's `runtime_fs` guest filesystem watches (Waffle docs/host-abi.md, "Guest filesystem
-/// watches"). Each call returns a positive WASI errno, 0 on success. Watch ids are process-local
-/// and are not descriptors.
+/// watches"). Open/read/close return a positive WASI errno, 0 on success. Readiness returns
+/// a boolean i32. Watch ids are process-local and are not descriptors.
 #[cfg(target_arch = "wasm32")]
 mod runtime_fs {
     #[link(wasm_import_module = "runtime_fs")]
     unsafe extern "C" {
         pub fn watch_open(fd: i32, flags: i32, out_id: i32) -> i32;
         pub fn watch_read(id: i32, buf: i32, len: i32, out_len: i32) -> i32;
+        pub fn watch_ready() -> i32;
         pub fn watch_close(id: i32) -> i32;
     }
 }
 
-/// Host builds (unit tests) have no runtime_fs namespace: every call is ENOSYS.
+/// Host builds (unit tests) have no watches. Registration/read/close return ENOSYS.
 #[cfg(not(target_arch = "wasm32"))]
 mod runtime_fs {
     const NOSYS: i32 = 52;
@@ -423,6 +424,9 @@ mod runtime_fs {
     }
     pub unsafe fn watch_close(_: i32) -> i32 {
         NOSYS
+    }
+    pub unsafe fn watch_ready() -> i32 {
+        0
     }
 }
 
@@ -629,6 +633,11 @@ pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
         return Err(errno);
     }
     Ok(id)
+}
+
+/// Non-consuming readiness for all process-local watches, including terminal records.
+pub fn fs_watch_ready() -> bool {
+    proc_call!(runtime_fs::watch_ready()) != 0
 }
 
 /// One `watch_read`: whole records (empty at end of stream), or the positive errno

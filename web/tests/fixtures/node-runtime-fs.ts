@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { WASI } from "node:wasi";
 import { createWorkerProcessTransport } from "waffle/proc/worker-client";
 import { createNodeProcess, type NodeWasiImports } from "../../scripts/node-process.ts";
+import { compileSections, section, utf8Name } from "../../src/nested/binary.ts";
 
 // Original minimal guest linking the exact runtime_fs imports a Bun guest declares, re-exported
 // so the checks call them through a real instance:
@@ -48,11 +49,20 @@ try {
   let instance: WebAssembly.Instance | undefined;
   const { proc } = created.install(imports, () => instance!);
   instance = new WebAssembly.Instance(guest, imports);
-  assert.deepEqual(Object.keys(imports.runtime_fs!).toSorted(), ["path_permissions_get", "watch_close", "watch_open", "watch_read"]);
+  assert.deepEqual(Object.keys(imports.runtime_fs!).toSorted(), ["path_permissions_get", "watch_close", "watch_open", "watch_read", "watch_ready"]);
   const permissions = imports.runtime_fs!.path_permissions_get;
   if (typeof permissions !== "function") throw new Error("missing path_permissions_get import");
   assert.equal(permissions(-1, -1, -1, -1, -1), ENOTSUP);
   wasi.start(instance as Parameters<typeof wasi.start>[0]);
+  const readiness = compileSections(
+    section(1, [1, 0x60, 0, 1, 0x7f]),
+    section(2, [1].concat(utf8Name("runtime_fs"), utf8Name("watch_ready"), [0, 0])),
+    section(7, [1].concat(utf8Name("ready"), [0, 0])),
+  );
+  const ready = new WebAssembly.Instance(readiness, imports).exports.ready;
+  assert.equal(typeof ready, "function");
+  if (typeof ready !== "function") throw new Error("missing readiness export");
+  assert.equal(ready(), 0);
   const guestFs = instance.exports as unknown as WatchExports;
   const view = () => new DataView(guestFs.memory.buffer);
   const name = new TextEncoder().encode("file.txt");

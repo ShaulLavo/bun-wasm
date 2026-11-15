@@ -39,6 +39,7 @@ function fixture() {
   const closed: number[] = [];
   const ticks: (() => void)[] = [];
   const effects = { stats: 0, timers: 0, scans: 0 };
+  const traffic = { readiness: 0, reads: 0 };
   let nextId = 40;
   let openResult: number | undefined;
   let net: unknown;
@@ -52,7 +53,12 @@ function fixture() {
         queued.set(id, []);
         return id;
       },
+      fsWatchReady() {
+        traffic.readiness++;
+        return Array.from(queued.values()).some(records => records.length > 0);
+      },
       fsWatchRead(id: number) {
+        traffic.reads++;
         if (closed.includes(id)) return -8;
         return queued.get(id)?.shift() ?? -6;
       },
@@ -73,6 +79,7 @@ function fixture() {
       if (name === "http_common") return {};
       if (name === "websocket") return { clientClass: () => class {} };
       if (name === "resource_frame") return resourceFrames();
+      if (name === "io_pump") return runInNewContext(transpile("io_pump.ts"))(internal);
       if (name === "net") return net ??= runInNewContext(readFileSync(new URL("net.js", directory), "utf8"), { Uint8Array, ArrayBuffer, DataView, URL, TextEncoder })(internal);
       throw new Error(`Unexpected module ${name}`);
     },
@@ -88,7 +95,7 @@ function fixture() {
   const factory = runInNewContext(transpile("fs_watch.ts"), { AbortSignal });
   const module: WatchModule = factory(internal)(filesystem);
   return {
-    module, opened, closed, effects, internal,
+    module, opened, closed, effects, traffic, internal,
     commit(id: number, ...results: (Uint8Array | number)[]) { queued.get(id)!.push(...results); },
     failOpen(errno: number) { openResult = -errno; },
     pump: (): boolean => internal.pumpIo(),
@@ -96,6 +103,34 @@ function fixture() {
     runTicks() { while (ticks.length) ticks.shift()!(); },
   };
 }
+
+test("idle turns query readiness once and read none of the registered watches", () => {
+  const world = fixture();
+  const watchers = Array.from({ length: 2000 }, (_, index) => world.module.watch(`/app/${index}`));
+  try {
+    for (let turn = 0; turn < 10; turn++) expect(world.pump()).toBe(false);
+    expect(world.traffic).toEqual({ readiness: 10, reads: 0 });
+  } finally { for (const watcher of watchers) watcher.close(); }
+  world.pump();
+  expect(world.traffic.readiness).toBe(10);
+});
+
+test("a nested idle pump cannot change its outer turn's readiness", () => {
+  const world = fixture();
+  const events: string[] = [];
+  const first = world.module.watch("/first", () => {
+    expect(world.pump()).toBe(false);
+    world.commit(41, record("change", "second"));
+    events.push("first");
+  });
+  const second = world.module.watch("/second", () => events.push("second"));
+  try {
+    world.commit(40, record("change", "first"));
+    expect(world.pump()).toBe(true);
+    expect(events).toEqual(["first", "second"]);
+    expect(world.traffic.readiness).toBe(2);
+  } finally { first.close(); second.close(); }
+});
 
 test("a write committed before the pump reaches change listeners before a socket step runs its handler, with no timer", () => {
   const world = fixture();
