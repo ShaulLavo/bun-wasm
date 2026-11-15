@@ -2185,10 +2185,10 @@ index 2465a89b4..110b3281c 100644
  /*****************************************************************************/
 
  InterpreterFrame* InterpreterStack::pushInvokeFrame(
-diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitter.cpp
-index 18e469828..a6d3f5f4b 100644
---- a/js/src/frontend/BytecodeEmitter.cpp
-+++ b/js/src/frontend/BytecodeEmitter.cpp
+diff --git i/js/src/frontend/BytecodeEmitter.cpp w/js/src/frontend/BytecodeEmitter.cpp
+index 18e469828..bc1bde7ea 100644
+--- i/js/src/frontend/BytecodeEmitter.cpp
++++ w/js/src/frontend/BytecodeEmitter.cpp
 @@ -5219,6 +5219,13 @@ MOZ_NEVER_INLINE bool BytecodeEmitter::emitTry(TryNode* tryNode) {
  }
  
@@ -2203,6 +2203,14 @@ index 18e469828..a6d3f5f4b 100644
    IfEmitter ifThenElse(this);
  
    if (!ifThenElse.emitIf(Some(ifNode->kid1()->pn_pos.begin))) {
+@@ -12668,6 +12675,7 @@ bool BytecodeEmitter::emitExportDefault(BinaryNode* exportNode) {
+ bool BytecodeEmitter::emitTree(
+     ParseNode* pn, ValueUsage valueUsage /* = ValueUsage::WantValue */,
+     EmitLineNumberNote emitLineNote /* = EMIT_LINENOTE */) {
++  BUNWASM_RESERVE_STACK(bunwasm::EmitTreeReserve);
+   AutoCheckRecursionLimit recursion(fc);
+   if (!recursion.check(fc)) {
+     return false;
 diff --git a/js/src/frontend/FoldConstants.cpp b/js/src/frontend/FoldConstants.cpp
 index 8d1b3bf5d..766c8d956 100644
 --- a/js/src/frontend/FoldConstants.cpp
@@ -2290,15 +2298,3 @@ index 803b92892..643a1fa86 100644
 +}
 +#  endif
  #endif  // __wasi__
-diff --git i/js/src/frontend/BytecodeEmitter.cpp w/js/src/frontend/BytecodeEmitter.cpp
-index 18e469828..895bf0341 100644
---- i/js/src/frontend/BytecodeEmitter.cpp
-+++ w/js/src/frontend/BytecodeEmitter.cpp
-@@ -12668,6 +12668,7 @@ bool BytecodeEmitter::emitExportDefault(BinaryNode* exportNode) {
- bool BytecodeEmitter::emitTree(
-     ParseNode* pn, ValueUsage valueUsage /* = ValueUsage::WantValue */,
-     EmitLineNumberNote emitLineNote /* = EMIT_LINENOTE */) {
-+  BUNWASM_RESERVE_STACK(bunwasm::EmitTreeReserve);
-   AutoCheckRecursionLimit recursion(fc);
-   if (!recursion.check(fc)) {
-     return false;
