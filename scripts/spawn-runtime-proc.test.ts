@@ -3,6 +3,81 @@ import { service, load, loadExit, type ProcessExit } from "./spawn-runtime-proc-
 const ENOENT = -44;
 const EAGAIN = -6;
 
+function capturedErrors(stack: "webkit" | "native" | "empty" | "missing") {
+  const errors: Error[] = [];
+  const descriptors: PropertyDescriptorMap[] = [];
+  class CapturedError extends Error {
+    constructor(message?: string) {
+      super(message);
+      if (stack === "webkit") this.stack = "processError@\nstart@\nrun@\nWorker@";
+      if (stack === "native") this.stack = `${this.name}: ${this.message}\n    at processError (spawn.ts:138)`;
+      if (stack === "empty") this.stack = "";
+      if (stack === "missing") this.stack = undefined;
+      errors.push(this);
+      descriptors.push(Object.getOwnPropertyDescriptors(this));
+    }
+  }
+  return { Error: CapturedError, errors, descriptors };
+}
+
+for (const stack of ["webkit", "native", "empty", "missing"] as const) test(`process errors retain their reason in ${stack} stacks without replacing the error`, () => {
+  const captured = capturedErrors(stack);
+  const detail = "ProcessError: backing reservation refused\ncaused by RangeError: allocation failed";
+  const fake = service({ failSpawn: -48, spawnDetail: detail });
+  const { module } = load(fake, captured);
+  let thrown: unknown;
+  try { module.spawnWorker(["bun", "worker"], { stdio: "pipe" }, {}); } catch (error) { thrown = error; }
+  expect(captured.errors).toHaveLength(1);
+  const error = captured.errors[0]!;
+  const header = `Error: spawn bun ENOMEM: ${detail}`;
+  expect(thrown).toBe(error);
+  expect(error).toMatchObject({ name: "Error", message: `spawn bun ENOMEM: ${detail}`, code: "ENOMEM", errno: -12, syscall: "spawn", path: "bun" });
+  expect(error.stack?.startsWith(header)).toBe(true);
+  expect(error.stack?.split(header)).toHaveLength(2);
+  if (stack === "webkit") expect(error.stack).toBe(`${header}\nprocessError@\nstart@\nrun@\nWorker@`);
+  if (stack === "native") expect(error.stack).toBe(`${header}\n    at processError (spawn.ts:138)`);
+  if (stack === "empty" || stack === "missing") expect(error.stack).toBe(header);
+  const before = captured.descriptors[0]!;
+  const after = Object.getOwnPropertyDescriptors(error);
+  expect(after.message).toEqual(before.message);
+  expect(after.stack).toEqual({ ...before.stack, value: error.stack });
+  expect(after.code).toEqual({ value: "ENOMEM", writable: true, enumerable: true, configurable: true });
+  expect(fake.calls).toEqual(["spawn", "spawnError:0"]);
+  expect(fake.children.size).toBe(0);
+  expect(fake.open()).toBe(0);
+});
+
+test("WebKit stack-only consumers distinguish synchronous refusal errnos and host details", () => {
+  const stacks: string[] = [];
+  for (const [errno, code, detail] of [[-6, "EAGAIN", "process directory full"], [-48, "ENOMEM", "backing reservation refused"], [-29, "EIO", "descriptor codec rejected"]] as const) {
+    const captured = capturedErrors("webkit");
+    const fake = service({ failSpawn: errno, spawnDetail: detail });
+    const { module } = load(fake, captured);
+    expect(() => module.spawnWorker(["bun", "worker"], { stdio: "pipe" }, {})).toThrow(detail);
+    const error = captured.errors[0]!;
+    expect(error.stack).toContain(`Error: spawn bun ${code}: ${detail}`);
+    stacks.push(error.stack ?? "");
+    expect(fake.open()).toBe(0);
+  }
+  expect(new Set(stacks).size).toBe(3);
+});
+
+for (const boundary of ["access", "pipe", "job"] as const) test(`WebKit stack-only ${boundary} refusal retains its syscall and cleans descriptors`, () => {
+  const captured = capturedErrors("webkit");
+  const fake = service();
+  if (boundary === "access") fake.native.procAccess = () => -29;
+  if (boundary === "job") fake.native.procJobOf = () => -29;
+  const pipe = fake.native.procPipe;
+  let pipes = 0;
+  if (boundary === "pipe") fake.native.procPipe = () => ++pipes === 2 ? -29 : pipe();
+  const { module } = load(fake, captured);
+  expect(() => module.spawnWorker(["bun", "worker"], { stdio: "pipe" }, {})).toThrow("EIO");
+  const error = captured.errors[0]!;
+  expect(error.stack).toContain(boundary === "pipe" ? "Error: pipe EIO" : "Error: spawn bun EIO");
+  expect(fake.calls).toEqual([]);
+  expect(fake.open()).toBe(0);
+});
+
 function decode(subscriptions: Uint8Array) {
   const view = new DataView(subscriptions.buffer, subscriptions.byteOffset, subscriptions.byteLength);
   return Array.from({ length: subscriptions.length / 16 }, (_, i) => [view.getUint32(i * 16, true), view.getUint32(i * 16 + 4, true)]);
