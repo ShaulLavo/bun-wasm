@@ -8,7 +8,7 @@ import { execute, executeAttempt } from "../goals-matrix/execute";
 import type { Transport } from "../goals-matrix/transport";
 import type { Attempt, Phase, Report } from "../goals-matrix/model";
 import { deviceUDID, smokeOptions, phaseTimeoutMs, installTimeoutMs } from "./options";
-import { completedCase, smokeCases, smokePhases } from "./model";
+import { completedCase, smokeCases, smokePhases, unsafeToContinue } from "./model";
 import { queueTicket } from "./admission";
 import { runSmoke } from "./run";
 
@@ -87,6 +87,7 @@ test("smoke cannot pass synthetic input, missing phases, another simulator or in
   const unclean = attempt();
   unclean.phases = unclean.phases.map(value => value.phase === "cleanup" && value.status === "pass" ? { ...value, evidence: { browserClosed: false } } : value);
   expect(completedCase(box, source, unclean).status).toBe("fail");
+  expect(unsafeToContinue(completedCase(box, source, unclean))).toContain("unproved");
 });
 test("dev-only execution uses maintained phases while full-matrix default remains complete", async () => {
   const box = smokeCases[0]!, framework = frameworkFor(box);
@@ -144,6 +145,7 @@ test("missing prepared metadata records an exact prerequisite and never touches 
     expect(admitted).toBe(false);
     expect(result).toMatchObject({ status: "red", revision: source.commit, failedPhase: "prerequisite", failures: [{ phase: "prerequisite", error: "Error: Prepared smoke root is missing goals-host-source.json" }] });
     expect(result.cases.every(value => value.status === "blocked" && value.attempt === null)).toBe(true);
+    expect(result.cases.every(value => value.source?.commit === source.commit)).toBe(true);
   });
 });
 test("lost admission leaves all cases durable and performs no native work", async () => {
@@ -176,3 +178,23 @@ test("a second invocation refuses to replace an existing result directory", asyn
     expect(await Bun.file(join(config.matrix.output, "result.json")).text()).toBe("keep previous evidence");
   });
 });
+test("the real CLI lists cases and exits nonzero with a durable prerequisite failure", async () => {
+  await scratch(async root => {
+    const cli = new URL("../iphone-smoke.ts", import.meta.url).pathname;
+    const listed = await cliResult(cli, ["--list"]);
+    expect(listed.code).toBe(0);
+    expect(listed.stdout.trim().split("\n")).toEqual(smokeCases.map(boxId));
+    const failed = await cliResult(cli, argumentsFor(root));
+    expect(failed.code).toBe(1);
+    expect(JSON.parse(failed.stdout)).toMatchObject({ status: "red", failedPhase: "prerequisite" });
+    expect(await Bun.file(join(root, "report/result.json")).json()).toMatchObject({ status: "red", revision: source.commit });
+  });
+});
+async function cliResult(cli: string, args: string[]): Promise<{ code: number; stdout: string }> {
+  const child = Bun.spawn([process.execPath, cli].concat(args), { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  try {
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(stderr).toBe("");
+    return { code, stdout };
+  } finally { child.kill("SIGTERM"); await child.exited; }
+}

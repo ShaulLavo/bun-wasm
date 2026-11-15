@@ -57,6 +57,11 @@ function validateSmokeEvidence(box: Box, attempt: Attempt, failures: Failure[]):
 export function unsafeToContinue(result: SmokeCase): string | undefined {
   const failedCleanup = result.failures.find(failure => failure.phase === "cleanup");
   if (failedCleanup) return `Previous case cleanup failed: ${failedCleanup.error}`;
+  if (result.attempt && !result.cleanup) return "Previous case has no cleanup evidence";
+  if (result.cleanup?.status === "pass") {
+    try { observed("cleanup", result.cleanup.evidence, result.box.engine); }
+    catch (error) { return `Previous case cleanup is unproved: ${String(error)}`; }
+  }
   const device = result.failures.find(failure => failure.error.includes("T3 device command failed"));
   return device ? device.error : undefined;
 }

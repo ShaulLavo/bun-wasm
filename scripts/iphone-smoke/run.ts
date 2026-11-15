@@ -62,6 +62,7 @@ export async function runSmoke(config: SmokeOptions, overrides: Partial<SmokeIO>
   try {
     report.source = await readSource(config);
     report.revision = report.source.commit;
+    report.cases = smokeCases.map(box => pendingCase(box, report.source));
     report.source = await io.qualify(config);
     report.revision = report.source.commit;
     report.cases = smokeCases.map(box => pendingCase(box, report.source));
