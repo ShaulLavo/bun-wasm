@@ -38,5 +38,10 @@ symlink behavior, package-install failure, version rejection, tool-byte and
 version changes, missing tools and fingerprint-command failures. Its recipe
 controls also mutate the package selection and compiler-link target.
 
+Fixture-owned tools have rejecting fallback entries before ambient PATH tools.
+Valid ambient LLVM 19 and package-query decoys reproduce hosted-runner behavior,
+so deleting a selected fixture cannot accidentally use the machine's real tool.
+The production setup and fingerprint commands remain unchanged.
+
 No product or native engine build is needed for these controls. Actual Ubuntu
 installation and the next producer configure remain integration checks.

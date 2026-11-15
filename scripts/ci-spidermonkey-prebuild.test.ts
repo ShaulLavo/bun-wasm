@@ -225,10 +225,15 @@ function hostToolsFixture(run: (value: { root: string; programs: string[]; execu
   const root = mkdtempSync(join(tmpdir(), 'bun-wasm-sm-tools-'));
   try {
     const tools = join(root, 'tools'), cargo = join(root, 'cargo'), sysroot = join(root, 'sysroot');
-    for (const path of ['bin', 'tools/wasi-sdk/bin', 'cargo/bin', 'sysroot/lib/wasm32-wasip1', 'host']) mkdirSync(join(root, path), { recursive: true });
+    for (const path of ['bin', 'tools/wasi-sdk/bin', 'cargo/bin', 'sysroot/lib/wasm32-wasip1', 'host', 'unavailable', 'ambient']) mkdirSync(join(root, path), { recursive: true });
     const programs = ['rustc', 'cargo', 'python3', 'autoconf2.13', 'make', 'perl', 'dpkg-query'];
     const binary = '#!/bin/sh\nprintf "fixture tool\\n"\n';
     for (const program of programs) writeFileSync(join(root, 'bin', program), binary, { mode: 0o755 });
+    for (const program of programs.concat(['clang', 'clang++', 'llvm-readobj', 'sudo', 'apt-get'])) {
+      writeFileSync(join(root, 'unavailable', program), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
+    }
+    writeFileSync(join(root, 'ambient/llvm-readobj'), '#!/bin/sh\nprintf "Ubuntu LLVM version 19.1.1\\n"\n', { mode: 0o755 });
+    writeFileSync(join(root, 'ambient/dpkg-query'), binary, { mode: 0o755 });
     for (const path of ['tools/wasi-sdk/bin/clang', 'tools/wasi-sdk/bin/clang++', 'cargo/bin/cbindgen']) writeFileSync(join(root, path), binary, { mode: 0o755 });
     for (const tool of ['clang', 'clang++', 'llvm-readobj']) {
       writeFileSync(join(root, 'host', tool), '#!/bin/sh\nprintf "Ubuntu clang version 18.1.3\\n"\n', { mode: 0o755 });
@@ -240,7 +245,7 @@ function hostToolsFixture(run: (value: { root: string; programs: string[]; execu
     const output = join(root, 'output');
     const execute = (script: string, env: NodeJS.ProcessEnv = {}) => spawnSync('bash', ['-euo', 'pipefail', '-c', script.replaceAll('/usr/bin/', join(root, 'host') + '/')], {
       encoding: 'utf8', env: { ...process.env, WASM_TOOLS: tools, WASI_SDK_PATH: join(tools, 'wasi-sdk'),
-        CARGO_HOME: cargo, BUN_WASM_SYSROOT: sysroot, PATH: join(root, 'host') + ':' + join(root, 'bin') + ':' + process.env.PATH,
+        CARGO_HOME: cargo, BUN_WASM_SYSROOT: sysroot, PATH: join(root, 'host') + ':' + join(root, 'bin') + ':' + join(root, 'unavailable') + ':' + join(root, 'ambient') + ':' + process.env.PATH,
         RUNNER_TEMP: root, GITHUB_ENV: join(root, 'environment'), GITHUB_OUTPUT: output, APT_CALLS: join(root, 'apt-calls'), ...env },
     });
     const identity = (env?: NodeJS.ProcessEnv) => {
@@ -304,7 +309,7 @@ test('old, missing and failing selected tools cannot publish a native-input fing
       if (replacement) writeFileSync(path, replacement);
       else rmSync(path);
       const result = execute(identifyNativeInputs);
-      expect(result.status).not.toBe(0);
+      expect(result.status, `${tool}: ${replacement ? 'replacement' : 'missing'}`).not.toBe(0);
       expect(readFileSync(output, 'utf8')).not.toContain('hash=');
       writeFileSync(path, before, { mode: 0o755 });
     }
