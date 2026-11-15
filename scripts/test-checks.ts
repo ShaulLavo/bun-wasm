@@ -10,7 +10,7 @@ export type NativeProfile = "split" | "shared-group";
 const nativeEngines = ["quickjs", "jsc", "browser", "spidermonkey"] as const;
 export type NativeEngine = typeof nativeEngines[number];
 type NativeSelection = { profile: "shared-group"; engines?: never } | { profile?: never; engines?: readonly NativeEngine[] };
-type Check = { path: string; localRuntime: boolean; batch: string; entry?: string } & (
+type Check = { path: string; localRuntime: boolean; batch: string; entry?: string; isolation?: "process" } & (
   | { owner: "native-probe"; inputs: string[] }
   | ({ owner: "native"; inputs?: never } & NativeSelection)
   | { owner: "browser-guest"; profile?: "shared-group"; inputs: string[] }
@@ -84,11 +84,18 @@ export function nativeProducerEngines(env = process.env): readonly NativeEngine[
   return env.BUN_WASM_CHECK_ENGINES === undefined ? nativeEngines : engineSubset(env.BUN_WASM_CHECK_ENGINES.split(","), "BUN_WASM_CHECK_ENGINES");
 }
 
+function runtimeIsolation(value: object, owner: Owner, file: string): Pick<Check, "isolation"> {
+  if (!("isolation" in value)) return {};
+  if (owner !== "runtime" || value.isolation !== "process") throw new Error(`Invalid runtime isolation: ${file}`);
+  return { isolation: "process" };
+}
+
 export function parseCheck(value: unknown, file: string): Check {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid check: ${file}`);
   if (!("owner" in value) || !("path" in value)) throw new Error(`Missing check fields: ${file}`);
-  if (Object.keys(value).some(key => !["owner", "path", "localRuntime", "batch", "inputs", "profile", "entry", "engines"].includes(key))) throw new Error(`Unknown check fields: ${file}`);
+  if (Object.keys(value).some(key => !["owner", "path", "localRuntime", "batch", "inputs", "profile", "entry", "engines", "isolation"].includes(key))) throw new Error(`Unknown check fields: ${file}`);
   const owner = parseOwner(value.owner);
+  const isolation = runtimeIsolation(value, owner, file);
   if ("engines" in value && owner !== "native") throw new Error(`Only split native checks select engines: ${file}`);
   if ("profile" in value && !hasProfile(owner)) throw new Error(`Only native and browser-guest checks select a profile: ${file}`);
   const profile = "profile" in value ? nativeProfile(value.profile) : "split";
@@ -110,7 +117,7 @@ export function parseCheck(value: unknown, file: string): Check {
   if (owner !== "native-probe") {
     if ("inputs" in value) throw new Error(`Only native-probe and browser-guest checks declare input files: ${file}`);
     if (owner === "native") return { owner, path, localRuntime, batch, ...nativeSelection(value, profile, file), ...(entry === undefined ? {} : { entry }) };
-    return { owner, path, localRuntime, batch };
+    return { owner, path, localRuntime, batch, ...isolation };
   }
   const inputs = inputFiles("inputs" in value ? value.inputs : undefined, file);
   return { owner, path, localRuntime, batch, inputs };
@@ -278,6 +285,15 @@ async function runNative(paths: readonly string[], profile: NativeProfile): Prom
 }
 
 async function runOwner(owner: string, profile: NativeProfile, selectedBatch?: string): Promise<void> {
+  if (owner === "runtime" && process.env.BUN_WASM_RUNTIME_JOBS !== undefined) {
+    const { runtimeJobs, runRuntimeChecks } = await import("./runtime-file-checks.ts");
+    const jobs = runtimeJobs(process.env.BUN_WASM_RUNTIME_JOBS);
+    if (jobs === 2) {
+      const paths = selectedBatch === undefined ? selectChecks(owner) : selectCheckBatch(owner, selectedBatch);
+      process.exitCode = await runRuntimeChecks(paths);
+      return;
+    }
+  }
   const batches = selectedBatch === undefined ? checkBatches(owner, undefined, profile) : [selectCheckBatch(owner, selectedBatch, undefined, profile)];
   for (const batch of batches) {
     const status = owner === "native" ? await runNative(batch, profile) : runCheck(checkCommand(owner, batch), process.env);

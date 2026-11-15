@@ -15,6 +15,14 @@ test("command deadline preserves ordinary command exit and output", async () => 
   expect(await run("5", ["-e", 'console.log("ordinary-exit"); process.exit(7)'])).toEqual({ code: 7, stdout: "ordinary-exit\n", stderr: "" });
 });
 
+test("until-exit supervision retains command status without replacing file-owned hang caps", async () => {
+  expect(await run("--until-exit", ["-e", 'console.log("file-owned-caps"); process.exit(11)'])).toEqual({ code: 11, stdout: "file-owned-caps\n", stderr: "" });
+  const invalid = await run("0", ["-e", 'console.log("must not start")']);
+  expect(invalid.code).not.toBe(0);
+  expect(invalid.stdout).toBe("");
+  expect(invalid.stderr).toContain("Usage:");
+});
+
 test("command deadline diagnoses and removes its descendant process group", async () => {
   const scratch = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-deadline-"));
   try {

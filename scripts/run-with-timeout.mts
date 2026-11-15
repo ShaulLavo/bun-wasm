@@ -14,9 +14,9 @@ if (inputs[0] === "--state") {
   inputs.splice(0, 2);
 }
 const [seconds, command, ...args] = inputs;
-const timeout = Number(seconds) * 1000;
-if (!command || !Number.isFinite(timeout) || timeout <= 0) {
-  throw new Error("Usage: run-with-timeout.mts [--state <directory>] <seconds> <command> [args...]");
+const timeout = seconds === "--until-exit" ? undefined : Number(seconds) * 1000;
+if (!command || timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+  throw new Error("Usage: run-with-timeout.mts [--state <directory>] <seconds|--until-exit> <command> [args...]");
 }
 const owner = new ProcessOwner();
 let rootPid: number | undefined;
@@ -66,7 +66,7 @@ async function execute(command: string): Promise<number> {
     interrupted ??= 143;
     void stop();
   }, 50);
-  timer = setTimeout(() => {
+  if (timeout !== undefined) timer = setTimeout(() => {
     timedOut = true;
     diagnoseTimeout();
     void stop();
