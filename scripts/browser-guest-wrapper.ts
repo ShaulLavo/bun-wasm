@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseBrowserGuestSelection, type CoverageEngine, type CoverageLeg, type CoverageOwner } from "./browser-guest-catalogue";
 import { verifyBrowserGuestCoverage, type VerifiedBrowserGuestCoverage } from "./browser-guest-coverage";
@@ -48,7 +49,7 @@ export async function withBrowserGuestRegression(request: WrapperRequest, env: N
   mkdirSync(reports, { recursive: true });
   const directory = mkdtempSync(join(reports, `${request.owner}-${leg}-`));
   const regression = new BrowserGuestRegression({ owner: request.owner, leg, engines: selected.engines, directory,
-    controls: request.controls({ leg, engines: selected.engines }), artifact });
+    controls: request.controls({ leg, engines: selected.engines }) });
   const controller = new AbortController(), stop = () => controller.abort();
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   for (const signal of signals) process.on(signal, stop);
@@ -56,7 +57,7 @@ export async function withBrowserGuestRegression(request: WrapperRequest, env: N
   let scratch: string | undefined;
   try {
     // The finally path and signal handlers exist before private directories or children.
-    scratch = mkdtempSync("/work/tmp/bun-wasm-bg-");
+    scratch = mkdtempSync(join(env.TMPDIR ?? tmpdir(), "bun-wasm-bg-"));
     writeFileSync(join(directory, "ownership.json"), JSON.stringify({ scratch, status: "owned" }) + "\n");
     await request.execute({ leg, engines: selected.engines, artifact, regression, repository, directory, scratch,
       signal: controller.signal, env: { ...env, ROOT: artifact.site, TMPDIR: scratch, TMP: scratch, TEMP: scratch, BUN_WASM_TEST_TMP: scratch } });

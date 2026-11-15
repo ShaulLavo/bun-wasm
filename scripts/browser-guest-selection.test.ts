@@ -38,7 +38,7 @@ test("engine producer changes retain narrower QuickJS, JSC and Browser predicate
   expect(expectedBrowserGuestRows(jsc)).toHaveLength(9);
   const browser = select(["scripts/build-bun-browser.sh"]);
   expect(browser.every(item => item.engines.join() === "browser")).toBe(true);
-  const quickjs = select(["third_party/rquickjs/src/lib.rs"]);
+  const quickjs = select(["third_party/rquickjs-sys/src/lib.rs"]);
   expect(quickjs.every(item => item.engines.join() === "quickjs")).toBe(true);
   expect(expectedBrowserGuestRows(quickjs)).toHaveLength(11);
   expect(select(["crates/bunwasm-runtime/src/engine_quickjs.rs"])).toEqual(quickjs);
@@ -94,4 +94,20 @@ test("serialized owner/engine outputs fail closed for absent, unknown, duplicate
   for (const value of [undefined, {}, [{ owner: "unknown", engines: ["browser"] }], [{ owner: "terminal-stdin", engines: [] }],
     [{ owner: "terminal-stdin", engines: ["jsc"] }], [{ owner: "worker-modules", engines: ["browser", "browser"] }],
     [{ owner: "worker-modules", engines: ["browser"] }, { owner: "worker-modules", engines: ["browser"] }]]) expect(() => parseBrowserGuestSelection(value)).toThrow();
+});
+
+test("actual shared side modules and initializer inputs keep both QuickJS and JSC", () => {
+  for (const path of ["crates/bunwasm-engine-quickjs/src/transport.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs", "crates/bunwasm-engine-quickjs/src/allocator.rs", "scripts/src/engine-init.c", "scripts/src/engine-explicit-init.ts"]) {
+    const selected = select([path]);
+    expect(expectedBrowserGuestRows(selected)).toHaveLength(20);
+    expect(selected.every(item => !item.engines.includes("browser"))).toBe(true);
+    expect(selected.some(item => item.engines.includes("jsc"))).toBe(true);
+  }
+  expect(expectedBrowserGuestRows(select(["crates/bunwasm-engine-quickjs/src/vm.rs"]))).toHaveLength(11);
+});
+test("real runtime generators, pinned shell and wrapper select their applicable owners", () => {
+  for (const path of ["scripts/generate-node-path.ts", "scripts/generate-dev-html-client.ts", "web/src/dev-html-client.ts", "scripts/build-bash-web-shell.sh", "scripts/browser-guest-wrapper.ts"]) {
+    expect(select([path])).toEqual(fullBrowserGuestSelection);
+  }
+  expect(select(["web/src/preview-websocket-client.ts"])).toEqual(fullBrowserGuestSelection.filter(item => item.owner === "preview-websocket"));
 });

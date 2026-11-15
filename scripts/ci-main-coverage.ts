@@ -188,6 +188,7 @@ async function runCli(): Promise<void> {
   console.error(summary);
   const output = selectionOutput(result.selection);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n\n\`\`\`\n${output}\n\`\`\`\n`);
+  console.log(`browser-base=${result.kind === "verified" ? result.base : "0".repeat(40)}\nbrowser-full=${result.kind === "full"}`);
   console.log(`selection<<ci-main-selection\n${output}\nci-main-selection`);
 }
 

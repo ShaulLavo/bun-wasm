@@ -2,7 +2,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, lstatSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { verifyGuestBuildReceipt, verifyGuestCompanions } from "./guest-build-receipt";
 
 export const legacyCliFixtures = ["net-fetch", "net-serve", "net-node-http", "net-tcp", "net-bun-tcp", "net-http-upgrade", "net-ws-builtin"] as const;
 const slotModes = ["table", "imports"] as const;
@@ -15,14 +14,11 @@ function requiredFile(path: string): void {
 }
 
 export async function prepareLegacyCli(directory: string): Promise<void> {
-  for (const path of ["dist/bun.wasm", "dist/quickjs.wasm", "dist/bun.wasm.build.json", "web/scripts/run.ts", "tests/servers/http.ts", "scripts/run-with-timeout.mts"]) requiredFile(join(directory, path));
+  for (const path of ["dist/bun.wasm", "dist/quickjs.wasm", "web/scripts/run.ts", "tests/servers/http.ts", "scripts/run-with-timeout.mts"]) requiredFile(join(directory, path));
   for (const fixture of legacyCliFixtures) {
     for (const file of ["index.js", "expected.txt"]) requiredFile(join(directory, "tests/fixtures", fixture, file));
   }
-  const receipt: unknown = await Bun.file(join(directory, "dist/bun.wasm.build.json")).json();
-  verifyGuestBuildReceipt(await Bun.file(join(directory, "dist/bun.wasm")).bytes(), receipt);
-  if (receipt.sourceManifest.build !== "quickjs" || receipt.program.kind !== "quickjs" || receipt.profile !== undefined) throw new Error("Legacy CLI requires the ordinary split QuickJS producer");
-  await verifyGuestCompanions(receipt, join(directory, "dist"));
+
 }
 
 export function legacyCliCommand(directory: string, row: Row): string[] {

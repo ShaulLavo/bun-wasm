@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
+import { coverageBatches } from "./browser-guest-catalogue";
 import { parseCheck, type NativeEngine } from "./test-checks";
 
 type NativeInputSelection = { profile?: "split"; engine?: NativeEngine } | { profile: "shared-group"; engine?: never };
@@ -7,6 +8,8 @@ type NativeInputSelection = { profile?: "split"; engine?: NativeEngine } | { pro
 export function checkInputPaths(check: ReturnType<typeof parseCheck>): string[] {
   if (check.owner === "native-probe") return [check.path].concat(check.inputs);
   if (check.owner === "native") return [`${check.path}/`];
+  // These rows use the separate owner/engine selector, including historical inputs.
+  if (check.owner === "browser-guest" && Object.values(coverageBatches).some(batch => batch === check.batch)) return [check.path];
   if (check.owner === "browser-guest") return [check.path].concat(check.inputs);
   return check.owner === "runtime" ? [check.path].concat(check.inputs) : [];
 }

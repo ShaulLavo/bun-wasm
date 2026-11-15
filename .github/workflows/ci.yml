@@ -31,11 +31,12 @@ jobs:
     outputs:
       base: ${{ steps.refs.outputs.base }}
       head: ${{ steps.refs.outputs.head }}
-      rust: ${{ steps.changes.outputs.rust }}
-      jsc: ${{ steps.changes.outputs.jsc }}
+      rust: ${{ steps.changes.outputs.rust == 'true' || steps.browser-guest-batches.outputs.rust == 'true' }}
+      jsc: ${{ steps.changes.outputs.jsc == 'true' || steps.browser-guest-batches.outputs.jsc == 'true' }}
       shared: ${{ steps.changes.outputs.shared }}
       shared-native: ${{ steps.changes.outputs.shared_native }}
       browser-guest-batches: ${{ steps.browser-guest-batches.outputs.batches }}
+      browser-coverage-selection: ${{ steps.browser-guest-batches.outputs.selection }}
       web-browser-shards: ${{ steps.web-browser-shards.outputs.matrix }}
     steps:
       - name: Require a ready PR
@@ -77,9 +78,11 @@ jobs:
           fi
       - name: Discover Browser guest batches from feature manifests
         id: browser-guest-batches
-        run: |
-          batches=$(bun scripts/test-checks.ts browser-guest --batches)
-          echo "batches=$batches" >> "$GITHUB_OUTPUT"
+        env:
+          BASE: ${{ steps.main-coverage.outputs.browser-base || steps.refs.outputs.base }}
+          HEAD: ${{ steps.refs.outputs.head }}
+          BROWSER_COVERAGE_FULL: ${{ steps.main-coverage.outputs.browser-full }}
+        run: bun scripts/ci-browser-coverage.ts "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
       - name: Discover Web browser shards from feature manifests
         id: web-browser-shards
         run: |
@@ -1269,9 +1272,13 @@ jobs:
       # The playground site the browser-guest checks serve, bundled once from the verified guest
       # (and the bash-web shell) linked above; each Processes browser leg verifies and serves it.
       - name: Build the browser-guest site once
+        env:
+          BUN_WASM_BROWSER_COVERAGE_SELECTION: ${{ needs.selection.outputs.browser-coverage-selection }}
         run: |
           bun scripts/ci-install.ts --cwd sandbox --frozen-lockfile --ignore-scripts
+          source env.sh
           bun scripts/browser-guest-site.ts build "$RUNNER_TEMP/browser-guest-site"
+          bun scripts/browser-guest-coverage.ts "$RUNNER_TEMP/browser-guest-site" "$BUN_WASM_BROWSER_COVERAGE_SELECTION"
       - uses: actions/upload-artifact@v4
         timeout-minutes: 5
         with:
@@ -2352,7 +2359,7 @@ jobs:
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.rust.result == 'success' }}
     name: Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: ${{ startsWith(matrix.batch, '2') && 60 || 10 }}
     strategy:
       fail-fast: false
       matrix:
@@ -2385,6 +2392,8 @@ jobs:
           path: ${{ runner.temp }}/browser-guest-site
       - name: Browser-guest checks on the verified site
         env:
+          BUN_WASM_BROWSER_COVERAGE_SELECTION: ${{ needs.selection.outputs.browser-coverage-selection }}
+          BUN_WASM_BROWSER_COVERAGE_REPORTS: ${{ runner.temp }}/browser-guest-diagnostics
           BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site
           BUN_WASM_BROWSER_REPORT_DIR: ${{ runner.temp }}/browser-guest-diagnostics
           BUN_WASM_STORAGE_CI_QUARANTINE: known-20261114
@@ -2394,7 +2403,8 @@ jobs:
         run: |
           mkdir -p "$BUN_WASM_BROWSER_REPORT_DIR"
           bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd .. --frozen-lockfile --ignore-scripts
-          bun ../scripts/run-with-timeout.mts 900 bun ../scripts/test-checks.ts browser-guest --batch "${{ matrix.batch }}"
+          source ../env.sh
+          bun ../scripts/run-with-timeout.mts ${{ startsWith(matrix.batch, '2') && 3240 || 900 }} bun ../scripts/test-checks.ts browser-guest --batch "${{ matrix.batch }}"
       - name: Retain Browser guest diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

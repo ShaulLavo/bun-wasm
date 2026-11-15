@@ -3,6 +3,11 @@
   "path": "scripts/tools-integrity-browser.test.ts",
   "batch": "26-tools-integrity",
   "inputs": [
+    ".github/workflows/ci.yml",
+    "scripts/ci-browser-coverage.ts",
+    "scripts/ci-changes.ts",
+    "scripts/ci-check-inputs.ts",
+    "scripts/test-checks.ts",
     "bun.lock",
     "package.json",
     "sandbox/build.ts",
@@ -15,6 +20,7 @@
     "scripts/browser-guest-coverage.ts",
     "scripts/browser-guest-regression.ts",
     "scripts/browser-guest-selection.ts",
+    "scripts/browser-guest-wrapper.ts",
     "scripts/browser-guest-site.ts",
     "scripts/linux-subreaper.mts",
     "scripts/process-owner.mts",
@@ -130,7 +136,6 @@
     "web/tests/foreground.ts",
     "web/tests/playground-cleanup.ts",
     "web/tests/playground.mjs",
-    "scripts/browser-guest-wrapper.ts",
     "scripts/browser-existing-drivers.ts"
   ]
 }

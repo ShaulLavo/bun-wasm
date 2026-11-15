@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { mkdirSync, openSync, closeSync, readFileSync, writeFileSync, renameSync, statSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { expectedBrowserGuestRows, rowIdentity, type BrowserGuestRow, type CoverageLeg, type CoverageEngine, type CoverageOwner } from "./browser-guest-catalogue";
-import type { VerifiedBrowserGuestCoverage } from "./browser-guest-coverage";
 
 export function browserGuestLeg(value: string | undefined): CoverageLeg {
   if (value !== "chromium" && value !== "webkit") throw new Error("Select exactly one browser: chromium or webkit");
@@ -68,7 +67,7 @@ export class BrowserGuestRegression {
   private unsafe = false;
 
   constructor(private readonly request: { owner: CoverageOwner; leg: CoverageLeg; engines: readonly CoverageEngine[]; directory: string;
-    controls: readonly string[]; artifact: Pick<VerifiedBrowserGuestCoverage, "assertUnchanged"> }) {
+    controls: readonly string[] }) {
     this.expected = expectedBrowserGuestRows([{ owner: request.owner, engines: request.engines }], request.leg);
     if (!this.expected.length || new Set(request.controls).size !== request.controls.length) throw new Error("Invalid expected rows/controls");
     mkdirSync(request.directory, { recursive: true });
@@ -136,8 +135,6 @@ export class BrowserGuestRegression {
       this.rows.set(id, { id, status: "not-run", detail: "Selected row was never launched", command: [], elapsedMs: 0,
         cleanup: this.unsafe ? { kind: "unsafe", error: "Prior child drain was not proven" } : { kind: "drained" } });
     }
-    try { this.request.artifact.assertUnchanged(); }
-    catch (error) { this.failures.push(`Post-run artifact verification: ${message(error)}`); }
     const incomplete = Array.from(this.rows.values()).filter(row => row.status !== "passed").map(row => row.id);
     const controls = this.request.controls.filter(id => this.controls.get(id)?.status !== "passed");
     this.save();

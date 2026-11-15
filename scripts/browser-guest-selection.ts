@@ -4,6 +4,11 @@ import { coverageOwners, coverageBatches, coverageWrappers, fullBrowserGuestSele
 
 // Exact serving/startup imports, not all Web source. Template contents remain Storage-owned.
 const commonInputs = [
+  ".github/workflows/ci.yml",
+  "scripts/ci-browser-coverage.ts",
+  "scripts/ci-changes.ts",
+  "scripts/ci-check-inputs.ts",
+  "scripts/test-checks.ts",
   "bun.lock",
   "package.json",
   "sandbox/build.ts",
@@ -16,6 +21,7 @@ const commonInputs = [
   "scripts/browser-guest-coverage.ts",
   "scripts/browser-guest-regression.ts",
   "scripts/browser-guest-selection.ts",
+  "scripts/browser-guest-wrapper.ts",
   "scripts/browser-guest-site.ts",
   "scripts/linux-subreaper.mts",
   "scripts/process-owner.mts",
@@ -164,6 +170,7 @@ const ownerInputs = {
     "web/tests/playground.mjs"
   ],
   "preview-websocket": [
+    "web/src/preview-websocket-client.ts",
     "tests/fixtures/net-bun-response-async-cancel/expected.txt",
     "tests/fixtures/net-bun-response-async-cancel/index.ts",
     "tests/fixtures/net-bun-response-disconnect/expected.txt",
@@ -233,7 +240,8 @@ const ownerInputs = {
 } satisfies Record<CoverageOwner, readonly string[]>;
 
 export function browserGuestOwnerInputs(owner: CoverageOwner): string[] {
-  return commonInputs.concat(owner === "engine-interruption" ? [] : playgroundInputs, ownerInputs[owner]);
+  return commonInputs.concat(owner === "engine-interruption" ? [] : playgroundInputs, ownerInputs[owner],
+    ["installer-links", "subprocess", "preview-websocket", "tools-integrity"].includes(owner) ? ["scripts/browser-existing-drivers.ts"] : []);
 }
 export function browserGuestManifest(owner: CoverageOwner) {
   return { owner: "browser-guest", path: `scripts/${coverageWrappers[owner]}-browser.test.ts`, batch: coverageBatches[owner], inputs: browserGuestOwnerInputs(owner) } as const;
@@ -246,7 +254,7 @@ export interface CoverageManifestSnapshot {
 }
 
 const engineRoots: Record<CoverageEngine, readonly string[]> = {
-  quickjs: ["crates/bunwasm-engine-quickjs/", "third_party/rquickjs/"],
+  quickjs: ["crates/bunwasm-engine-quickjs/", "third_party/rquickjs-sys/"],
   jsc: ["crates/bunwasm-engine-jsc/", "crates/bunwasm-jsc/", "jsc/"],
   browser: ["crates/bunwasm-engine-host/", "crates/bunwasm-runtime/src/engine_host/"],
 };
@@ -257,7 +265,8 @@ const engineFiles: Record<CoverageEngine, readonly string[]> = {
 };
 const commonProducerFiles = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "scripts/build-bun-core.sh", "scripts/build-wasi-sysroot.ts",
   "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts",
-  "scripts/src/program-profile.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-direct-stream.ts"];
+  "scripts/src/program-profile.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-direct-stream.ts", "scripts/generate-node-path.ts", "scripts/generate-dev-html-client.ts",
+  "web/src/dev-html-client.ts", "scripts/build-bash-web-shell.sh"];
 const commonProducerRoots = ["crates/", "patches/", "vendor/", "third_party/", ".cargo/"];
 function touches(path: string, roots: readonly string[], files: readonly string[] = []): boolean {
   return files.includes(path) || roots.some(root => path.startsWith(root));
@@ -311,6 +320,9 @@ function selectPath(path: string, inputs: Map<CoverageOwner, string[]>): Browser
   if (path === "scripts/build-bun-tools.sh" || path === "scripts/optimize-tools.ts") return [{ owner: "tools-integrity", engines: ownerEngines("tools-integrity") }];
   return coverageOwners.filter(owner => inputs.get(owner)?.includes(path)).map(owner => ({ owner, engines: ownerEngines(owner) }));
 }
+const pairedSideFiles = ["allocator.rs", "client.rs", "driver.rs", "loader.rs", "natives.rs", "program.rs", "transport.rs", "value_natives.rs", "side_modules.rs", "transfer.rs", "nested_bridge.rs", "nested_token.rs", "transfer_fault.rs"]
+  .map(file => `crates/bunwasm-engine-quickjs/src/${file}`).concat(["scripts/src/engine-init.c", "scripts/src/engine-explicit-init.ts", "crates/bunwasm-engine-quickjs/group-errno.c", "crates/bunwasm-engine-quickjs/build/transfer_fault.rs", "scripts/src/transfer-fault.sh", "scripts/src/group-errno-wraps.sh"]);
 function coverageEnginesForPath(path: string): CoverageEngine[] {
+  if (pairedSideFiles.includes(path)) return ["quickjs", "jsc"];
   return (["browser", "quickjs", "jsc"] as const).filter(engine => touches(path, engineRoots[engine], engineFiles[engine]));
 }

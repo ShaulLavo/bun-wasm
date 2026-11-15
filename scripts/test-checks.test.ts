@@ -422,7 +422,7 @@ test("native-probe inputs are typed and the source utility retains its lightweig
 
 test("Browser guest matrix discovers each profile batch and runs every check exactly once", () => {
   const batches = namedCheckBatches("browser-guest");
-  expect(batches.map(batch => batch.name)).toEqual(["10-storage", "default"]);
+  expect(batches.map(batch => batch.name)).toEqual(["10-storage", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"]);
   const paths = batches.flatMap(batch => selectCheckBatch("browser-guest", batch.name));
   expect(paths.toSorted()).toEqual(selectChecks("browser-guest").toSorted());
   expect(new Set(paths).size).toBe(paths.length);
@@ -444,7 +444,7 @@ test("required Processes gates reject failed or cancelled guest batches and allo
   const guest = workflow.split("\n  browser-guest:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
   expect(guest).toContain("batch: ${{ fromJSON(needs.selection.outputs.browser-guest-batches) }}");
   expect(guest).toContain("fail-fast: false");
-  expect(guest).toContain("timeout-minutes: 10");
+  expect(guest).toContain("timeout-minutes: ${{ startsWith(matrix.batch, '2') && 60 || 10 }}");
   expect(guest).not.toContain("browser-guest-site.ts build");
   const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
   expect(processes).toContain("needs: [selection, rust, process-bundles, browser-guest]");

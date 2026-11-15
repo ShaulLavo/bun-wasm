@@ -15,7 +15,7 @@ async function fixture() {
   await site.prepare();
   const reports = mkdtempSync("/work/tmp/bun-wasm-boundary-"); cleanup.add(reports);
   return { site, reports, env: { PATH: process.env.PATH, BUN_WASM_BROWSER_COVERAGE_SELECTION: JSON.stringify(selection),
-    BUN_WASM_TEST_BROWSERS: "chromium", BUN_WASM_BROWSER_SITE: site.out, BUN_WASM_BROWSER_COVERAGE_REPORTS: reports } };
+    TMPDIR: reports, BUN_WASM_TEST_BROWSERS: "chromium", BUN_WASM_BROWSER_SITE: site.out, BUN_WASM_BROWSER_COVERAGE_REPORTS: reports } };
 }
 async function smallChild(context: BrowserGuestContext, code = "console.log('completed')") {
   await context.regression.runChild({ command: [process.execPath, "-e", code], cwd: context.repository, env: context.env,
@@ -26,7 +26,7 @@ async function smallChild(context: BrowserGuestContext, code = "console.log('com
 
 test("requires explicit scheduled owner and every boundary input, before launching", async () => {
   const { env } = await fixture();
-  for (const name of Object.keys(env).filter(name => name !== "PATH")) {
+  for (const name of Object.keys(env).filter(name => name !== "PATH" && name !== "TMPDIR")) {
     const missing: NodeJS.ProcessEnv = { ...env }; delete missing[name];
     await expect(withBrowserGuestRegression({ owner: "installer-links", controls: () => [], execute: smallChild }, missing)).rejects.toThrow();
   }
@@ -50,6 +50,7 @@ test("verifies only the scheduled owner's subset and sets verified child root wi
     expect(context.artifact.selection).toEqual(selection);
     expect(context.env.ROOT).toBe(site.site);
     expect(context.env.TMPDIR).toBe(scratch);
+    expect(scratch.startsWith(join(reports, "bun-wasm-bg-"))).toBe(true);
     expect(context.engines).toEqual(["browser"]);
     expect(existsSync(join(context.directory, "rows.json"))).toBe(true);
     await smallChild(context);

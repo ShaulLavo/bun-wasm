@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fixtureReceipt } from "../tests/package/guest-receipt-fixture";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 import { discoverChecks, selectChecks } from "./test-checks";
 import { assertLegacyCliResults, legacyCliCommand, legacyCliFixtures, legacyCliRows, prepareLegacyCli, runLegacyCli } from "./legacy-cli";
@@ -18,7 +17,6 @@ function fixture(): string {
   const { core, side } = quickjsPair();
   writeFileSync(join(directory, "dist/bun.wasm"), core);
   writeFileSync(join(directory, "dist/quickjs.wasm"), side);
-  writeFileSync(join(directory, "dist/bun.wasm.build.json"), JSON.stringify(fixtureReceipt(core, "quickjs", side)));
   for (const name of legacyCliFixtures) {
     const path = join(directory, "tests/fixtures", name);
     mkdirSync(path, { recursive: true });
@@ -91,21 +89,17 @@ async function waitForRow(directory: string, child: ReturnType<typeof Bun.spawn>
   } finally { clearTimeout(timeout); }
 }
 
-test("missing selected files and invalid guest/companion receipts fail before any row starts", async () => {
+test("missing selected files fail before any row starts; development needs no receipts", async () => {
   const directory = fixture();
   try {
-    for (const path of ["dist/bun.wasm", "dist/quickjs.wasm", "dist/bun.wasm.build.json", "web/scripts/run.ts", "tests/fixtures/net-fetch/index.js", "tests/fixtures/net-ws-builtin/expected.txt"]) {
+    for (const path of ["dist/bun.wasm", "dist/quickjs.wasm", "web/scripts/run.ts", "tests/fixtures/net-fetch/index.js", "tests/fixtures/net-ws-builtin/expected.txt"]) {
       const file = join(directory, path);
       const bytes = readFileSync(file);
       rmSync(file);
       await expect(runLegacyCli(directory)).rejects.toThrow("Missing required legacy CLI input");
       writeFileSync(file, bytes);
     }
-    writeFileSync(join(directory, "dist/quickjs.wasm"), quickjsPair("jsc").side);
-    await expect(prepareLegacyCli(directory)).rejects.toThrow();
-    writeFileSync(join(directory, "dist/quickjs.wasm"), quickjsPair().side);
-    writeFileSync(join(directory, "dist/bun.wasm.build.json"), "{}");
-    await expect(prepareLegacyCli(directory)).rejects.toThrow("Invalid guest build receipt");
+    await prepareLegacyCli(directory);
     expect(existsSync(join(directory, "rows.jsonl"))).toBe(false);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

@@ -112,7 +112,7 @@ test("four manifests retain foundation inputs and discover each wrapper exactly 
   for (const owner of owners) {
     const manifest = JSON.parse(readFileSync(join(import.meta.dir, "../checks", `browser-guest-${owner}.json`), "utf8"));
     const original = browserGuestManifest(owner);
-    expect(manifest).toEqual({ ...original, inputs: original.inputs.concat(["scripts/browser-guest-wrapper.ts", "scripts/browser-existing-drivers.ts"]) });
+    expect(manifest).toEqual({ ...original, inputs: original.inputs });
     expect(checks.filter(check => check.path === original.path)).toHaveLength(1);
   }
 });

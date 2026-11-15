@@ -3,6 +3,11 @@
   "path": "scripts/preview-websocket-headers-browser.test.ts",
   "batch": "22-preview-websocket-headers",
   "inputs": [
+    ".github/workflows/ci.yml",
+    "scripts/ci-browser-coverage.ts",
+    "scripts/ci-changes.ts",
+    "scripts/ci-check-inputs.ts",
+    "scripts/test-checks.ts",
     "bun.lock",
     "package.json",
     "sandbox/build.ts",
@@ -15,6 +20,7 @@
     "scripts/browser-guest-coverage.ts",
     "scripts/browser-guest-regression.ts",
     "scripts/browser-guest-selection.ts",
+    "scripts/browser-guest-wrapper.ts",
     "scripts/browser-guest-site.ts",
     "scripts/linux-subreaper.mts",
     "scripts/process-owner.mts",
@@ -125,6 +131,7 @@
     "web/src/terminal-mount.ts",
     "web/src/viewport.ts",
     "web/src/style.css",
+    "web/src/preview-websocket-client.ts",
     "tests/fixtures/net-bun-response-async-cancel/expected.txt",
     "tests/fixtures/net-bun-response-async-cancel/index.ts",
     "tests/fixtures/net-bun-response-disconnect/expected.txt",
@@ -150,7 +157,6 @@
     "web/tests/browser-net.mjs",
     "web/tests/fixture-output.ts",
     "web/tests/foreground.ts",
-    "scripts/browser-guest-wrapper.ts",
     "scripts/browser-existing-drivers.ts"
   ]
 }

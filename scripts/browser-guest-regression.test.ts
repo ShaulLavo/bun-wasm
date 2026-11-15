@@ -34,10 +34,10 @@ function child(run: BrowserGuestRegression, request: Parameters<BrowserGuestRegr
   pending.add(result); void result.catch(() => {});
   return result;
 }
-function regression(options: { controls?: string[]; verify?: () => void } = {}) {
+function regression(options: { controls?: string[] } = {}) {
   const directory = mkdtempSync("/work/tmp/bun-wasm-regression-"); cleanup.add(directory);
   const run = new BrowserGuestRegression({ owner: "worker-modules", leg: "chromium", engines: ["browser"], directory,
-    controls: options.controls ?? [], artifact: { assertUnchanged: options.verify ?? (() => {}) } });
+    controls: options.controls ?? [] });
   return { directory, run };
 }
 function evidence(run: BrowserGuestRegression): RowEvidence[] {
@@ -61,11 +61,9 @@ test("leg validation rejects ambient duplicate/extra browser dimensions", () => 
   for (const value of [undefined, "", "firefox", "chromium,webkit", "chromium,chromium"]) expect(() => browserGuestLeg(value)).toThrow();
 });
 test("planned rows are durable before launch and a zero-row finalization fails", () => {
-  let verified = 0;
-  const { directory, run } = regression({ verify: () => { verified++; } });
+  const { directory, run } = regression();
   expect(JSON.parse(readFileSync(join(directory, "rows.json"), "utf8")).rows.every((row: { status: string }) => row.status === "planned")).toBe(true);
   expect(() => run.finish()).toThrow("coverage failed");
-  expect(verified).toBe(1);
   expect(JSON.parse(readFileSync(join(directory, "rows.json"), "utf8")).rows.every((row: { status: string }) => row.status === "not-run")).toBe(true);
 });
 test("successful child drains detached descendants before return and passes exact row/control evidence", async () => {
@@ -79,15 +77,14 @@ test("successful child drains detached descendants before return and passes exac
   run.recordControl({ id: "controlled-iterations-1-20", status: "passed", detail: "all iterations" });
   run.finish();
 }, 30_000);
-test("failed child drains descendants and keeps post-run artifact failure separate", async () => {
-  const { directory, run } = regression({ verify: () => { throw new Error("changed bytes"); } });
+test("failed child drains descendants and retains every failed row", async () => {
+  const { directory, run } = regression();
   const result = await child(run, request("fail", directory, run));
   const pid = await descendant(directory);
   expect(linuxProcess(pid)?.state ?? "Z").toBe("Z");
   expect(result.exitCode).toBe(7); expect(result.cleanup).toEqual({ kind: "drained" });
   expect(() => run.finish()).toThrow("coverage failed");
   const rows = JSON.parse(readFileSync(join(directory, "rows.json"), "utf8"));
-  expect(rows.failures).toEqual(["Post-run artifact verification: changed bytes"]);
   expect(rows.rows.every((row: { status: string }) => row.status === "failed")).toBe(true);
 }, 30_000);
 test("functional failure permits a disjoint next child only after descendant drain", async () => {

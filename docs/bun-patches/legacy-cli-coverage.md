@@ -11,15 +11,16 @@ Each command still uses `web/scripts/run.ts`, the ordinary `dist/bun.wasm` and
 `quickjs.wasm` pair, its fixture's source, and the 60-second hang supervisor.
 The helper compares complete merged stdout/stderr as bytes and requires exit zero.
 One existing `tests/servers/http.ts` server provides the loopback port for all rows.
-The helper now verifies the existing guest build receipt and companion before launch,
-rejects incomplete row accounting, and owns server and scratch cleanup.
+The helper requires the actual guest and companion files before launch, rejects
+incomplete row accounting, and owns server and scratch cleanup. Development
+commands need no build receipt. Release receipt libraries remain unchanged.
 It performs no build, artifact substitution, or runtime repair.
 
-The runtime manifest declares its helper, CLI, supervisor, receipt and fixture inputs.
+The runtime manifest declares its helper, CLI, supervisor and fixture inputs.
 The existing manifest parser and selector now accept these exact runtime paths and
 read them from verified base, head and merge-ancestor snapshots, including removals.
 This keeps helper-only changes under the same blocking preflight owner.
 
 `scripts/legacy-cli.test.ts` uses an owned TypeScript consumer control and tiny
-receipt fixtures to test orchestration. These controls do not establish live guest
+Wasm fixtures to test orchestration. These controls do not establish live guest
 coverage. `scripts/legacy-cli-runtime.test.ts` executes all fourteen real rows.

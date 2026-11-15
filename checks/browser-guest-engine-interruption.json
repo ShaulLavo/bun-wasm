@@ -3,6 +3,11 @@
   "path": "scripts/engine-interruption-browser.test.ts",
   "batch": "23-engine-interruption",
   "inputs": [
+    ".github/workflows/ci.yml",
+    "scripts/ci-browser-coverage.ts",
+    "scripts/ci-changes.ts",
+    "scripts/ci-check-inputs.ts",
+    "scripts/test-checks.ts",
     "bun.lock",
     "package.json",
     "sandbox/build.ts",
@@ -15,6 +20,7 @@
     "scripts/browser-guest-coverage.ts",
     "scripts/browser-guest-regression.ts",
     "scripts/browser-guest-selection.ts",
+    "scripts/browser-guest-wrapper.ts",
     "scripts/browser-guest-site.ts",
     "scripts/linux-subreaper.mts",
     "scripts/process-owner.mts",
@@ -115,7 +121,6 @@
     "web/tests/engine-interruption-sleep.ts",
     "web/tests/engine-interruption-transport.ts",
     "web/tests/engine-interruption-worker.ts",
-    "web/tests/process-module-fixture.ts",
-    "scripts/browser-guest-wrapper.ts"
+    "web/tests/process-module-fixture.ts"
   ]
 }
