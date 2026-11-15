@@ -11,7 +11,11 @@ const body = (code: number[]) => unsigned(code.length + 2).concat([0], code, [0x
 const module = (parts: number[][]) => Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0].concat(...parts));
 
 /** A bounded fixture also exposes a real allocator record for limit-forwarding checks. */
-export function quickjsPair(kind: PairedEngine = "quickjs", maximumPages?: number): { core: Uint8Array<ArrayBuffer>; side: Uint8Array<ArrayBuffer> } {
+export function quickjsPair(kind: PairedEngine = "quickjs", maximumPages?: number, options: { requireInitialization?: boolean } = {}): { core: Uint8Array<ArrayBuffer>; side: Uint8Array<ArrayBuffer> } {
+  const start = options.requireInitialization
+    ? [0x23, 1, 0x41, 1, 0x47, 0x04, 0x40, 0x00, 0x0b,
+      0x41, 0, 0x28, 2, 0, 0x41, 42, 0x47, 0x04, 0x40, 0x00, 0x0b]
+    : [];
   const exports = [entry("memory", 2, 0), entry("__indirect_function_table", 1, 0), entry("__stack_pointer", 3, 0),
     entry("bun_core_idle", 0, 1), entry("bun_core_poll", 0, 1), entry("_start", 0, 1),
     entry("bun_core_alloc", 0, 2), entry("__wasm_call_ctors", 0, 3),
@@ -24,7 +28,7 @@ export function quickjsPair(kind: PairedEngine = "quickjs", maximumPages?: numbe
     section(5, maximumPages === undefined ? [1, 0, 1] : [1, 1, 1].concat(unsigned(maximumPages))),
     section(6, [2, 0x7f, 1, 0x41, 0x80, 0x08, 0x0b, 0x7f, 1, 0x41, 0, 0x0b]),
     section(7, [exports.length].concat(...exports)),
-    section(10, [maximumPages === undefined ? 6 : 7].concat(body([]), body([0x41, 0x80, 0x08]), body([0x23, 1, 0x41, 1, 0x6a, 0x24, 1]),
+    section(10, [maximumPages === undefined ? 6 : 7].concat(body(start), body([0x41, 0x80, 0x08]), body([0x23, 1, 0x41, 1, 0x6a, 0x24, 1]),
       body([0x20, 0]), body([]), body([0x41, 0, 0x28, 2, 0]), maximumPages === undefined ? [] : body([0x41, 0x80, 4]))),
   ].concat(maximumPages === undefined ? [] : [section(11, [1, 0, 0x41, 0x80, 4, 0x0b, 80].concat(
     Array.from({ length: 80 }, (_, index) => index === 0 ? 1 : index === 8 ? 80 : 0),
