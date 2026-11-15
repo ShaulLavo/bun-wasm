@@ -58,6 +58,14 @@ export const jscStackBudgets: Readonly<Record<StackHostFamily, string>> = {
  */
 export const spiderMonkeyWebKitStackKib = "188";
 
+/**
+ * The environment key that carries an engine's budget. SpiderMonkey's byte quota needs about
+ * 100 KiB just to start, so it has its own key: a QuickJS or JSC value (32 KiB) must not reach it.
+ */
+export function engineStackBudgetKey(engine: Engine): string {
+  return engine === "spidermonkey" ? "BUN_WASM_SPIDERMONKEY_STACK_KIB" : "BUN_WASM_STACK_KIB";
+}
+
 export function engineStackBudgets(stack: string, userAgent: string, host?: StackHost): Partial<Record<Engine, string>> | null {
   if (/\n\s+at /.test(stack)) return { jsc: "800" };
   const firefox = /\bFirefox\/\d+/.test(userAgent);

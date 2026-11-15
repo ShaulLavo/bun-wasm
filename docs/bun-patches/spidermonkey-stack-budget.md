@@ -9,8 +9,12 @@ Mozilla revision `a5df22d986d4b626f771b4f8885241941601c35c`.
 
 ## Changes and reasons
 
-Read `BUN_WASM_STACK_KIB` once when initializing the context. A positive decimal
-value selects the quota, clamped to 7 MiB and to the member's available stack.
+Read `BUN_WASM_SPIDERMONKEY_STACK_KIB` once when initializing the context. A
+positive decimal value selects the quota, clamped to 7 MiB and to the member's
+available stack. SpiderMonkey never reads `BUN_WASM_STACK_KIB`, the QuickJS and
+JSC budget: values sized for those engines (32 KiB, as fixtures pass to child
+processes) are far below the roughly 100 KiB SpiderMonkey needs to start, and
+the native launcher sets that variable to 4096 for every guest.
 Missing, zero and malformed values retain the available-stack default. Both
 embeds keep 64 KiB between their largest quota and the bottom of the member's
 shadow stack. The standalone smoke verifies the installed native stack limits.

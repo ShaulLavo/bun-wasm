@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { effectiveParserReserve, engineStackBudgets, jscParserReserve, pageFacts, qualifiedParserReserves, spiderMonkeyWebKitStackKib, stackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
+import { effectiveParserReserve, engineStackBudgetKey, engineStackBudgets, jscParserReserve, pageFacts, qualifiedParserReserves, spiderMonkeyWebKitStackKib, stackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
 
 const firefox = "Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0";
 const firefoxMac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0";
@@ -30,6 +30,11 @@ test("Safari and unmeasured hosts retain the conservative budgets and bound Spid
   expect(engineStackBudgets(geckoStack, safari)).toEqual(webkit);
   expect(engineStackBudgets(geckoStack, "Mozilla/5.0 AppleWebKit/605.1.15 FxiOS/144.0 Mobile Safari/605.1.15")).toEqual(webkit);
   expect(engineStackBudgets("", "")).toEqual(webkit);
+});
+
+test("SpiderMonkey's budget travels under its own key, never the QuickJS and JSC one", () => {
+  expect(engineStackBudgetKey("spidermonkey")).toBe("BUN_WASM_SPIDERMONKEY_STACK_KIB");
+  for (const engine of ["quickjs", "jsc", "browser"] as const) expect(engineStackBudgetKey(engine)).toBe("BUN_WASM_STACK_KIB");
 });
 
 test("V8 gives JSC getter reentry room while keeping QuickJS at its default", () => {

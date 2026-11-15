@@ -796,11 +796,18 @@ other hosts are not qualified by these results.
 SpiderMonkey's logical counter (350 units) does not fire before a 512 KiB WebKit worker stack
 runs out on any reentry path, so unbounded getter, `.call` or Ajv-style recursion traps there.
 The engine's own byte check (`JS_SetNativeStackQuota`) counts shadow bytes, so
-`BUN_WASM_STACK_KIB` now sets it, and the recursive paths that hold few shadow bytes per host
-byte reserve more (`docs/bun-patches/spidermonkey-stack-budget.md` lists each site and size).
+`BUN_WASM_SPIDERMONKEY_STACK_KIB` sets it, and the recursive paths that hold few shadow bytes per
+host byte reserve more (`docs/bun-patches/spidermonkey-stack-budget.md` lists each site and size).
 The browser host passes 188 KiB for SpiderMonkey on every WebKit host: desktop Safari, iPhone,
 iPad and the other iOS browsers (`web/src/engine-stack-budget.ts`). V8, desktop Firefox and
 Firefox on Android pass nothing and keep the full 8 MiB quota.
+
+SpiderMonkey has its own variable because its quota and the QuickJS and JSC budget in
+`BUN_WASM_STACK_KIB` are different quantities: the guest's bootstrap alone needs about 100 KiB
+of SpiderMonkey quota, while fixtures run QuickJS children at 32 KiB. With one shared variable,
+`tests/fixtures/require-chain-stack` and `stack-native-call` could not start their SpiderMonkey
+children. The executor writes each engine's budget under its own key
+(`engineStackBudgetKey`).
 
 How it was measured: the guest in a fresh Playwright WebKit page per attempt, so its bootstrap
 runs and the shape meets cold code, on Darwin's 512 KiB worker stack: Playwright WebKit 26.6 on
