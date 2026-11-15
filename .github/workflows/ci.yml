@@ -31,7 +31,8 @@ jobs:
     outputs:
       base: ${{ steps.refs.outputs.base }}
       head: ${{ steps.refs.outputs.head }}
-      rust: ${{ steps.changes.outputs.rust == 'true' || steps.browser-guest-batches.outputs.rust == 'true' }}
+      # The alternate provider composition moves this coverage need to browser_guest.
+      rust: ${{ steps.changes.outputs.rust == 'true' || steps.browser-guest-batches.outputs.needed == 'true' }}
       jsc: ${{ steps.changes.outputs.jsc == 'true' || steps.browser-guest-batches.outputs.jsc == 'true' }}
       shared: ${{ steps.changes.outputs.shared }}
       shared-native: ${{ steps.changes.outputs.shared_native }}

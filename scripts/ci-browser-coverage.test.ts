@@ -49,7 +49,7 @@ test("selected batches keep existing Storage/default cells and narrower engines"
   expect(browserCoverageOutputs([])).toContain('batches=["10-storage","default"]');
   const quickjs = browserCoverageOutputs([{ owner: "installer-links", engines: ["quickjs"] }]);
   expect(quickjs).toContain('batches=["10-storage","20-installer-links","default"]');
-  expect(quickjs).toContain("rust=true\njsc=false");
+  expect(quickjs).toContain("needed=true\njsc=false");
   expect(browserCoverageOutputs([{ owner: "installer-links", engines: ["jsc"] }])).toContain("jsc=true");
   expect(JSON.parse(browserCoverageOutputs(fullBrowserGuestSelection).split("\n")[0]!.slice(8))).toHaveLength(9);
 });
@@ -72,5 +72,5 @@ test("browser input declarations keep native predicates separate from selected r
     expect(needsJsc([path])).toBe(false);
   }
   const quickjs = browserCoverageOutputs([{ owner: "installer-links", engines: ["quickjs"] }]);
-  expect(quickjs).toContain("rust=true\njsc=false");
+  expect(quickjs).toContain("needed=true\njsc=false");
 });

@@ -31,7 +31,7 @@ export function browserCoverageOutputs(selection: BrowserGuestSelection): string
   const selected = new Set<string>(selection.map(item => coverageBatches[item.owner]));
   const batches = namedCheckBatches("browser-guest").filter(batch => !Object.values(coverageBatches).some(name => name === batch.name) || selected.has(batch.name));
   return [`batches=${JSON.stringify(batches.map(batch => batch.name))}`, `selection=${JSON.stringify(selection)}`,
-    `rust=${selection.length > 0}`, `jsc=${selection.some(item => item.engines.includes("jsc"))}`].join("\n");
+    `needed=${selection.length > 0}`, `jsc=${selection.some(item => item.engines.includes("jsc"))}`].join("\n");
 }
 if (import.meta.main) {
   const [base, head] = process.argv.slice(2);
