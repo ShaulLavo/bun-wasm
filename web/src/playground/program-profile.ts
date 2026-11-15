@@ -49,7 +49,7 @@ export async function registerPlaygroundBun(options: {
     let loading: Promise<WebAssembly.Module> | undefined;
     const load = provider === engine ? () => module : () => loading ??= options.loadModule(provider, memoryProfile);
     await filesystem.asyncCall("mkdirp", [directory]);
-    for (const name of ["bun", "node", "nodejs"]) {
+    for (const name of ["bun", "bunx", "node", "nodejs"]) {
       const path = `${directory}/${name}`;
       removals.push(runtime.registerProgram(path, { adapter: `bun:${provider}`, cooperative: true, module: load }));
       if (await createExecutable(filesystem, path)) created.push(path);

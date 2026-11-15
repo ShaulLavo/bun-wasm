@@ -46,6 +46,10 @@ Executable files use the existing exclusive marker helper and roll back only
 new markers on failure. The original marker adapter recognizes EEXIST by the
 filesystem error's numeric errno, including errors from a separately installed
 copy of the same Waffle package. It preserves unrelated files byte for byte.
+Each engine also registers `bunx`. The existing guest CLI dispatches that
+executable basename to `bun x`; the page supplies only the executable marker
+and matching provider. This covers the original installer's later `bunx
+--no-install` command without introducing a shell alias or command rewrite.
 The runtime and program tuple is recorded in `scripts/waffle-release-inputs.json`;
 the shell builder uses the same exact bash-web revision as both applications.
 

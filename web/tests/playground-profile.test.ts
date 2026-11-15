@@ -51,7 +51,7 @@ for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) test(`${engine
     const registered = await registerPlaygroundBun({ runtime, engine, module, profile: "split", ...providers });
     expect(registered.profile).toBe("split");
     const engines: readonly Engine[] = engine === "spidermonkey" ? ["quickjs", "jsc", "browser", engine] : ["quickjs", "jsc", "browser"];
-    expect(programs.mock.calls.map(([path]) => path)).toEqual([PACKAGE_CONTINUATION].concat(engines.flatMap(provider => ["bun", "node", "nodejs"].map(name => `${ENGINE_BIN[provider]}/${name}`))));
+    expect(programs.mock.calls.map(([path]) => path)).toEqual([PACKAGE_CONTINUATION].concat(engines.flatMap(provider => ["bun", "bunx", "node", "nodejs"].map(name => `${ENGINE_BIN[provider]}/${name}`))));
     expect(await runtime.filesystem.readFile(`${registered.bin}/bun`)).toEqual(new TextEncoder().encode("bun-wasm registered executable\n"));
     registered.dispose();
   } finally { adapter.mockRestore(); programs.mockRestore(); await runtime.dispose(); }
@@ -69,7 +69,7 @@ for (const profile of ["split", "shared-group"] satisfies PlaygroundProfile[]) t
     }
     const registration = await pending;
     expect(registration.profile).toBe("shared-group");
-    expect(programs).toHaveBeenCalledTimes(10);
+    expect(programs).toHaveBeenCalledTimes(13);
     registration.dispose();
   } finally { programs.mockRestore(); await runtime.dispose(); }
 });

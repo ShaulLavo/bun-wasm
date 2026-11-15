@@ -28,7 +28,7 @@ test("the supplied shared pair preserves explicit playground registration and pr
     const registered = await registerPlaygroundBun({ runtime, engine, module, profile: "shared-group", ...providers });
     expect(registered.profile).toBe("shared-group");
     const engines: readonly Engine[] = engine === "spidermonkey" ? ["quickjs", "jsc", "browser", engine] : ["quickjs", "jsc", "browser"];
-    expect(programs.mock.calls.map(([name]) => name)).toEqual([PACKAGE_CONTINUATION].concat(engines.flatMap(provider => ["bun", "node", "nodejs"].map(name => `${ENGINE_BIN[provider]}/${name}`))));
+    expect(programs.mock.calls.map(([name]) => name)).toEqual([PACKAGE_CONTINUATION].concat(engines.flatMap(provider => ["bun", "bunx", "node", "nodejs"].map(name => `${ENGINE_BIN[provider]}/${name}`))));
     const continuation = programs.mock.calls[0]?.[1];
     expect(continuation?.adapter).toBe(PACKAGE_ADAPTER);
     if (!(continuation?.module instanceof WebAssembly.Module)) throw new Error("Expected the private host continuation module");
