@@ -19,5 +19,7 @@ quality check still runs. No local compiler build or second tool install is adde
 controlled Cargo command. It covers an accepted executable, absent and stale tools,
 install failure, and a wrong installed version. Workflow assertions cover exact-key
 inputs, restore order, main-only publication, and the quality-owned check manifest.
+The existing cache audit counts the fourteen prior saves separately from this one
+tool save, preserving both inventories and all per-revision key assertions.
 Actual CI cache-hit and install-skip qualification is still required before claiming
 any time saving.
