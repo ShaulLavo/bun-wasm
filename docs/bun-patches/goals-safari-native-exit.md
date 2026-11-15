@@ -46,3 +46,35 @@ identify cleanup as the cause. Signal 9 names no killer. The memory bit reports
 the kernel classification, not an allocation, byte owner or threshold; its absence
 does not exclude WebKit policy or allocation failure. Nonchild signals, Safari
 exit delivery and a native positive memory bit remain unqualified.
+
+The optional native wrapper also registers a synchronous local snapshot reader
+with the existing exit owner. `native.ts` reads the existing `native-safari.ts`
+launch shape. These original host additions copy no upstream code or ABI. First-invalid,
+wrapper-signal cancellation, and before/after bounded teardown settlement record
+the already retained driver and application child PID, exit code and signal.
+Available cached driver root and application start identities are copied into
+each record. The driver spawn bound is rounded to seconds; cached process start
+times are distinct from the WebContent kernel birth. No process lookup, native observer, browser request or log query is
+added. Record sequence and UTC/monotonic observation clocks correlate snapshots
+with the existing protocol facts and birth-bound WebContent target. The capture
+remains under the enclosing run's existing source provenance.
+
+Null child exit code and signal mean no child exit was observed. They do not
+prove liveness, driver endpoint health or Safari session health. Child-handle
+state is distinct from the WebContent subscription. Reads are sequential, not
+an atomic process snapshot or a kernel exit clock. Cancellation covers only the
+native wrapper's existing signal; the reason retains its type and Error name,
+without message or arbitrary payload. It identifies no external actor and
+cannot exclude an interruption outside that signal. An after-teardown snapshot
+marks the bounded step's settlement, including timeout or an unjoined result;
+the adjacent cleanup-settled record determines whether teardown completed.
+Reader failure degrades evidence without changing the operation's thrown value
+or independent cleanup attempts. The listener and reader detach after wrapper
+teardown. Ordinary runs without the exit owner retain their existing path.
+
+Linux controls combine the maintained local WebDriver endpoint, real owned
+children, injected subscription syscalls and the real JSONL writer. They cover
+null replies, cancellation before invalidity and during teardown, an already
+observed child exit, partial setup, cleanup failure and hangs, delayed or failed
+writes, late observations and listener removal. They establish wrapper ordering
+and retained local state, with no new Safari or Darwin delivery qualification.
