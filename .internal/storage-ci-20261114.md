@@ -5,16 +5,12 @@ Status: Approved. Owner: storage CI coordinator. Updated: 2026-11-15.
 ## Immediate mitigation
 
 Run every existing storage scenario with its existing deadlines and verified site.
-Only CI may quarantine the three remaining historical preservation failures below. Match an
+Only CI may quarantine the two remaining historical preservation failures below. Match an
 explicit scenario checkpoint and the complete diagnostic signature. Persist the
 original per-browser failure before accepting a match. A missing report, failed
 write, unknown signature, receipt mismatch, cleanup failure, storage assertion,
 or any unmatched restoration, HMR, or unsupported-symlink failure remains blocking.
 
-- Firefox, first Vite Vue startup after vanilla config restart and Vite React.
-  The dev shell exits 254 after fork reports FilesystemTransportError CLOSED,
-  errno 29, and failure to deserialize a message. Hono remains ready on 5174
-  with counter 1. The Vue preview has no URL and its filesystem reports ready.
 - WebKit, first vanilla restart after saving the guest-writing config.
   Readiness reaches its existing deadline, the second dev invocation has no new
   ready message, and the preview reports no server on 5173. Hono remains ready
@@ -30,7 +26,8 @@ or any unmatched restoration, HMR, or unsupported-symlink failure remains blocki
   by three 502s. No unknown error or native stack is accepted. This admits only
   that failed checkpoint and labels the remaining preservation checks skipped.
 
-The first Vite React optimizer entry is absent in this candidate removal. Its
+The Firefox first Vue CLOSED and first Vite React optimizer entries are absent
+in this candidate removal. Their
 historical failures now retain complete diagnostics with `quarantine: null` and
 rethrow even with the CI switch enabled. They emit no acceptance warning or job
 summary. The recorded ready status and empty preview remain failed scenarios.
@@ -46,7 +43,7 @@ only whitespace, install and ready timings, loopback ports, and worker chunk
 hashes and stack coordinates. Any added terminal output, including an error
 before the expected failure footer or in the active Hono terminal, stays blocking.
 The former React matcher and its separate normalizer are deleted. Historical
-React protocols remain focused-test rejection inputs, not production exceptions.
+React and Firefox protocols remain focused-test rejection inputs, not production exceptions.
 
 ## Evidence
 
@@ -159,13 +156,13 @@ Local mitigation checks and cleanup are retained under
    once the unchanged preservation scenario passes twice on GitHub-hosted runners
    for that browser with the matching quarantine entry disabled. Keep deadlines,
    site receipt verification, and all preservation assertions unchanged.
-6. Delete the quarantine module and its CI switch once all three entries are removed.
+6. Delete the quarantine module and its CI switch once both remaining entries are removed.
 
 ### React removal gate
 
 Status: Approved candidate, awaiting hosted proof and independent review. This
 branch removes only production acceptance of `webkit-first-react-optimizer-bounds`.
-The exact Firefox first Vue CLOSED and WebKit vanilla restart rules remain.
+The WebKit vanilla rules remain. Firefox removal has its own gate below.
 No scenario, readiness assertion, budget, deadline, CI owner, receipt check,
 switch semantics, engine, build, runtime source, or dependency pin changes here.
 
@@ -185,6 +182,48 @@ unchanged. This unit does not weaken the HMR document assertion.
 The coordinator owns follow-through and accepts independent review before merge.
 The implementation worker opens a draft early, runs local matcher and discovery
 checks, then marks it ready so normal GitHub-hosted CI validates the real path.
+
+### Firefox removal gate
+
+Status: Approved draft source, awaiting the runtime pin and hosted proof. This
+branch removes only production acceptance of `firefox-first-vue-closed` and its
+private matcher inputs. The original Firefox protocol stays byte-for-byte as
+rejection evidence. With CI quarantine enabled, the handler must retain the
+complete diagnostic report with `quarantine: null`, throw the identical failure,
+and emit no acceptance warning or job summary. Both WebKit vanilla rules and
+React rejection remain unchanged. Accepted WebKit protocols still exercise
+independently blocking context, session and progress failures.
+
+The historical Firefox failure was the first Vite Vue startup after vanilla
+config restart and Vite React. Its shell exited 254 after fork reported
+FilesystemTransportError CLOSED, errno 29 and message deserialization failure.
+Hono stayed ready on 5174 with counter 1. Vue had no preview URL and its
+filesystem reported ready. These observations do not establish the cause.
+
+Waffle PR 526 merged at `8109d198969290fb910e36e0407a4ecc93cece6c` and corrects
+a private former-service-port lifetime. The reviewed local provider source is
+`1d1e62133c7d5f8401b442360b638197c37bcc19`. The historical Firefox Nuxt cause
+and asynchronous Disentangle remain unproved. The saved local Nuxt and five
+other app results each passed all nine phases once. Their independent review is
+`/work/reports/goals/storage-ci-20261114/firefox-lifetime-candidate-app-review/REPORT.md`.
+The original-entry control has 25 assertions and six actual client/service joins.
+These app results are local development evidence, not hosted storage proof or a
+claim that the correction caused the historical failure to disappear.
+
+Keep this PR draft. The current source pin is Waffle .133 and lacks PR 526.
+The normal PR 526-containing .136 release and its reviewed consumer pin are
+pending, owned by fresh Safari. The parent must integrate and fetch that actual
+pin through its normal owner before marking the PR ready or commissioning the
+unchanged hosted scenario. This is a missing runtime input, not a CI artifact
+wait. This unit changes no pin, scenario, readiness predicate, oracle, deadline,
+retry, workflow, guest, runtime, observer or selector policy.
+
+After pin integration, the parent owns independent review, normal green CI and
+TWO independently executed GitHub-hosted Firefox preservation passes on the
+exact final head with the Firefox entry absent. Each new head needs its own
+proof pair. Earlier passes with the entry present or without PR 526 do not
+qualify. Local validation and cleanup records belong under
+`/work/reports/goals/storage-ci-20261114/firefox-quarantine-removal/`.
 
 ### React reopening evidence gap
 
@@ -246,11 +285,11 @@ an established transient cause that would make a retry a demonstrated repair.
 
 ## Mitigation verification
 
-`scripts/storage-ci-quarantine.test.ts` matches only the Firefox and two vanilla
+`scripts/storage-ci-quarantine.test.ts` matches only the two WebKit vanilla
 protocols at their source checkpoints. It rejects other checkpoints and browsers, unknown console
 errors, altered transport or restart output, a missing or changed Hono control,
 failed filesystem state, pending edits, ordinary assertions, and failed report
-or summary writes. Every retained React protocol is rejected at all checkpoints;
+or summary writes. Every retained Firefox and React protocol is rejected at all checkpoints;
 the real handler retains and rethrows it without warning or summary acceptance,
 including with the CI switch enabled. `checks/quality-storage-ci-quarantine.json` keeps these tests
 blocking in Source quality. The existing browser manifest also selects the
