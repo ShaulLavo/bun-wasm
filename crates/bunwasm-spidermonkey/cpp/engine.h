@@ -59,6 +59,7 @@ uint8_t* bsm_shared_buffer_data(bsm_handle);
 bool bsm_is_detachable_buffer(bsm_handle);
 void bsm_detach_buffer(bsm_handle);
 bool bsm_is_proxy(bsm_handle);
+bool bsm_is_module_namespace(bsm_handle);
 bsm_handle bsm_proxy_target(bsm_handle);
 bool bsm_is_error(bsm_handle);
 bsm_handle bsm_async_context(void);
