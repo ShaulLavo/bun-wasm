@@ -5,6 +5,7 @@ import { createRuntime, type GuestLauncher } from "waffle";
 import { prepareProgram } from "../src/assets";
 import { BUN_MEMORY_GROUP_POLICY, isPairedEngine, programKind, programProfile } from "../src/engine-kind";
 import { registerPlaygroundBun } from "../web/src/playground/program-profile";
+import { PACKAGE_ADAPTER, PACKAGE_CONTINUATION } from "../src/package-continuation-binding";
 
 test("the supplied shared pair preserves explicit playground registration and profile refusal", async () => {
   const path = process.env.BUN_WASM_PROFILE_PROGRAM;
@@ -24,8 +25,16 @@ test("the supplied shared pair preserves explicit playground registration and pr
     expect(programs).not.toHaveBeenCalled();
     const registered = await registerPlaygroundBun({ runtime, engine, module, profile: "shared-group", launcher });
     expect(registered.profile).toBe("shared-group");
-    expect(programs).toHaveBeenCalledTimes(3);
-    for (const [, program] of programs.mock.calls) {
+    expect(programs.mock.calls.map(([name]) => name)).toEqual([
+      PACKAGE_CONTINUATION, `${registered.bin}/bun`, `${registered.bin}/node`, `${registered.bin}/nodejs`,
+    ]);
+    const continuation = programs.mock.calls[0]?.[1];
+    expect(continuation?.adapter).toBe(PACKAGE_ADAPTER);
+    if (!(continuation?.module instanceof WebAssembly.Module)) throw new Error("Expected the private host continuation module");
+    expect(WebAssembly.Module.imports(continuation.module)).toEqual([]);
+    expect(WebAssembly.Module.exports(continuation.module)).toEqual([]);
+    for (const [, program] of programs.mock.calls.slice(1)) {
+      expect(program.adapter).toBe(`bun:${engine}`);
       if (typeof program.module !== "function") throw new Error("Expected the prepared module callback");
       expect(await program.module()).toBe(module);
     }

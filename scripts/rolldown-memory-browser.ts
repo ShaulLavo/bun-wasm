@@ -90,7 +90,7 @@ try {
   const adaptedResult = Bun.spawnSync([adapter, original, adapted], { stdout: "pipe", stderr: "pipe" });
   assert.equal(adaptedResult.exitCode, 0, adaptedResult.stderr.toString());
   assert.equal(JSON.parse(adaptedResult.stdout.toString()).changed, true);
-  assert.equal(readFileSync(adapted, "utf8"), readFileSync(original, "utf8").replace("initial: 16384,", "initial: 1001 ,"));
+  assert.equal(readFileSync(adapted, "utf8"), readFileSync(original, "utf8").replace("initial: 16384,", "initial: 1001 ,").replace("maximum: 65536,", "maximum: 32768,"));
   const banner = "const probeMemories = [], probeDescriptors = []; const WebAssembly = Object.create(globalThis.WebAssembly); WebAssembly.Memory = class extends globalThis.WebAssembly.Memory { constructor(d) { super(d); probeDescriptors.push(d); probeMemories.push(this); } }; export { probeMemories, probeDescriptors };";
   for (const mode of ["stock", "small"]) {
     await build({ entryPoints: [mode === "stock" ? original : adapted], bundle: true, platform: "browser", format: "esm",

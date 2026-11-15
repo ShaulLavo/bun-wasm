@@ -29,15 +29,17 @@ export interface BunTerminal {
 }
 
 /** Absent metadata is an ordinary process; partial or malformed metadata fails its start. */
-export function attachBunTerminal(request: RuntimeWorkerRequest, checkActive: () => void): BunTerminal | undefined {
-  const data = request.runtimeProcess?.data as Partial<Record<keyof TerminalMetadata, unknown>> | undefined;
-  if (data?.terminalContext === undefined && data?.terminalInput === undefined) return undefined;
+export function attachBunTerminal(request: Pick<RuntimeWorkerRequest, "runtimeProcess">, checkActive: () => void): BunTerminal | undefined {
+  const data: unknown = request.runtimeProcess?.data;
+  if (!data || typeof data !== "object") return undefined;
+  const context = "terminalContext" in data ? data.terminalContext : undefined;
+  const input = "terminalInput" in data ? data.terminalInput : undefined;
+  if (context === undefined && input === undefined) return undefined;
   const process = request.runtimeProcess;
-  const input = data.terminalInput;
-  if (!process || data.terminalContext === undefined || !(input instanceof SharedArrayBuffer))
+  if (!process || context === undefined || !(input instanceof SharedArrayBuffer))
     throw new TypeError("Terminal metadata needs both terminalContext and a terminalInput SharedArrayBuffer");
   const policy = createTerminalInputPolicy({ input: attachTerminalInput(input) });
-  const attachment = attachTerminal({ context: data.terminalContext, process, checkActive, policy });
+  const attachment = attachTerminal({ context, process, checkActive, policy });
   // Each inherited descriptor owns its endpoint, which its description closes. Mode changes use
   // one more endpoint that only the attachment owns, so closing any descriptor cannot cut them off.
   let controls: ReturnType<typeof terminalControls>;

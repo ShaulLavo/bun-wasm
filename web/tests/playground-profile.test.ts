@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import type { GuestLauncher } from "waffle";
+import { PACKAGE_CONTINUATION } from "../../src/package-continuation-binding";
 import { prepareProgram } from "../../src/assets";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
@@ -23,7 +24,7 @@ test("playground defaults to Browser split and rejects unsupported profile selec
 for (const engine of ["quickjs", "jsc", "spidermonkey", "browser"] as const) test(`${engine} Angular selects its worker-capable profile before loading`, () => {
   expect(new Playground(`?template=angular&engine=${engine}`).profile).toBe(engine === "browser" ? "split" : "shared-group");
   expect(new Playground(`?template=angular&engine=${engine}&profile=split`).profile).toBe("split");
-  expect(new Playground(`?template=vite-react&engine=${engine}`).profile).toBe("split");
+  expect(new Playground(`?template=vite-react&engine=${engine}`).profile).toBe(engine === "browser" ? "split" : "shared-group");
   expect(new Playground(`?engine=${engine}`).profile).toBe("split");
   expect(new Playground("?template=angular").profileForEngine(engine)).toBe(engine === "browser" ? "split" : "shared-group");
   expect(new Playground("?template=angular&profile=split").profileForEngine(engine)).toBe("split");
@@ -44,7 +45,7 @@ for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) test(`${engine
     expect(programs).not.toHaveBeenCalled();
     const registered = await registerPlaygroundBun({ runtime, engine, module, profile: "split", launcher });
     expect(registered.profile).toBe("split");
-    expect(programs.mock.calls.map(([path]) => path)).toEqual(["bun", "node", "nodejs"].map(name => `${registered.bin}/${name}`));
+    expect(programs.mock.calls.map(([path]) => path)).toEqual([PACKAGE_CONTINUATION].concat(["bun", "node", "nodejs"].map(name => `${registered.bin}/${name}`)));
     expect(await runtime.filesystem.readFile(`${registered.bin}/bun`)).toEqual(new TextEncoder().encode("bun-wasm registered executable\n"));
     registered.dispose();
   } finally { adapter.mockRestore(); programs.mockRestore(); await runtime.dispose(); }
@@ -62,7 +63,7 @@ for (const profile of ["split", "shared-group"] satisfies PlaygroundProfile[]) t
     }
     const registration = await pending;
     expect(registration.profile).toBe("shared-group");
-    expect(programs).toHaveBeenCalledTimes(3);
+    expect(programs).toHaveBeenCalledTimes(4);
     registration.dispose();
   } finally { programs.mockRestore(); await runtime.dispose(); }
 });

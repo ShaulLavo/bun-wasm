@@ -53,6 +53,12 @@ pub(super) fn adapt<'a>(source: &'a str, path: &str) -> Cow<'a, str> {
     if file_digest(&wasm).ok().as_deref() != Some(WASM) {
         return Cow::Borrowed(source);
     }
-    // The real binary imports 1001 pages. Equal width preserves source positions.
-    Cow::Owned(source.replacen("initial: 16384,", "initial: 1001 ,", 1))
+    // The import needs 1001 pages; its 65536-page maximum is an upper bound.
+    // Use bun-wasm's supported 2 GiB capacity, including for native Browser memory.
+    // Equal-width replacements preserve every original source position.
+    Cow::Owned(
+        source
+            .replacen("initial: 16384,", "initial: 1001 ,", 1)
+            .replacen("maximum: 65536,", "maximum: 32768,", 1),
+    )
 }

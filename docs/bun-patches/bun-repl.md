@@ -12,3 +12,9 @@
 The browser terminal leaves echo to the program, so the original editor echoes and redraws its line and handles history, cursor keys, Ctrl+A/E/U/K/L, Ctrl+C (clear, then exit on a second press) and Ctrl+D. When standard input is not a terminal, lines are evaluated in order with no banner or prompts, and the REPL exits at end of input.
 
 Like Node's REPL, a terminal is switched to raw mode while the REPL runs and back to cooked mode when it closes (`process.stdin.setRawMode`). Under bash-web, Bun reads the keyboard through the shell's Waffle terminal session: the shell puts its session context and input buffer in the child's spawn metadata (`terminalContext`, `terminalInput`), `web/src/bun-terminal.ts` attaches them (an original adapter), stdin resolves through the session, and stdout and stderr keep Waffle's default output; `setRawMode` changes the session's input mode through Waffle's `terminalControls`. Without that metadata, terminal stdin reads end-of-file, as before. `scripts/node-repl.test.ts` drives the real module with native Bun's transpiler for piped order, continuation rules, Ctrl+C cancellation, `.exit`, raw mode and line editing; `web/tests/bun-terminal.test.ts` covers the attachment.
+
+The same terminal attachment helper also serves the host package continuation.
+Its input is narrowed to the actual runtime-process field it uses, with unknown
+metadata validated without a type assertion. The existing public Waffle terminal
+attachment validates the process/session relationship before producing inherited
+metadata. This changes no terminal policy, input mode or session authority.

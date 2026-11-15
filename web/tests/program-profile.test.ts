@@ -43,7 +43,7 @@ test("both production pages validate selection before creating one runtime with 
         await new Page("?engine=quickjs&mode=memory&profile=" + profile).start();
       }
       assert.throws(() => new Page("?profile=shared"), Page === Playground ? /Unknown Bun program profile/ : /Unknown Bun program memory profile/);
-      assert.throws(() => new Page("?engine=browser&profile=shared-group"), Page === Playground ? /does not support/ : /unavailable/);
+      assert.throws(() => new Page("?engine=browser&profile=shared-group"), /does not support/);
     }
     assert.equal(requests.length, 4);
     for (const request of requests) assert.deepEqual(request.memoryGroups, BUN_MEMORY_GROUP_POLICY);

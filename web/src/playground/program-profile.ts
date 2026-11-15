@@ -1,6 +1,8 @@
 import type { GuestLauncher, Runtime } from "waffle";
 import { isSharedGroupCore, type Engine } from "../../../src/engine-kind";
+import { projectTemplate } from "./project-templates";
 import { ENGINE_BIN } from "../../../src/executable-paths";
+import { packageService, preparePackageContinuation } from "../../../src/package-continuation-installation";
 
 export type PlaygroundProfile = "split" | "shared-group";
 
@@ -11,7 +13,7 @@ export function playgroundProfile(value: string | null): PlaygroundProfile {
 }
 
 export function templateProfile(engine: Engine, template: string | undefined, requested?: PlaygroundProfile): PlaygroundProfile {
-  const profile = requested ?? (template === "angular" && engine !== "browser" ? "shared-group" : "split");
+  const profile = requested ?? (projectTemplate(template ?? null)?.sharedWorkers && engine !== "browser" ? "shared-group" : "split");
   requireProfileEngine(engine, profile);
   return profile;
 }
@@ -30,16 +32,19 @@ export async function registerPlaygroundBun(options: {
   const profile = isSharedGroupCore(module) ? "shared-group" : "split";
   if (profile !== options.profile) throw new TypeError(`Requested ${options.profile} program profile, but the prepared ${engine} core is ${profile}`);
   const bin = ENGINE_BIN[engine];
-  const removeAdapter = runtime.registerAdapter(`bun:${engine}`, options.launcher);
+  const packages = packageService(runtime);
   const removals: Array<() => void> = [];
-  const dispose = () => { for (const remove of removals) remove(); removeAdapter(); };
+  const dispose = () => { for (const remove of removals.splice(0).reverse()) remove(); packages.dispose(); };
   try {
+    removals.push(runtime.registerAdapter(`bun:${engine}`, options.launcher));
     await runtime.filesystem.mkdirp(bin);
     for (const name of ["bun", "node", "nodejs"]) {
       const path = `${bin}/${name}`;
       removals.push(runtime.registerProgram(path, { adapter: `bun:${engine}`, cooperative: true, module: () => module }));
       await runtime.filesystem.writeFile(path, "bun-wasm registered executable\n");
     }
+    await preparePackageContinuation(runtime);
+    packages.commit();
     return { profile, bin, dispose };
-  } catch (error) { dispose(); throw error; }
+  } catch (error) { dispose(); packages.rollback(); throw error; }
 }

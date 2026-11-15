@@ -390,6 +390,7 @@ class ExitSignal {
  *   a module store: named URLs the host's module loader serves from what was
  *   put (a service worker, Node's module hooks). Needed for import cycles.
  * @param {(code: number) => void} o.onExit  called once when the program ends
+ * @param {(error: unknown) => boolean} [o.isExecutionUnwind] executor-owned native control to reject to its bootstrap
  * @param {typeof fetch} [o.fetch]  the host's fetch, for user code when o.net has no fetch (else fetch rejects)
  * @param {{natives: object, caps: Record<string, boolean>, onNews(cb: () => void): void}} [o.net]
  *   networking: the bun_wasm ABI (docs/host-abi.md) as the JS functions net.js
@@ -403,19 +404,24 @@ class ExitSignal {
  * @returns {Promise<number>} the exit code (if onExit returns)
  */
 export function startEngineHost(o) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    let host;
     try {
-      const host = new EngineHost(o, resolve);
+      host = new EngineHost(o, resolve, reject);
       host.disposeNativeStreams = installNativeStreamState();
       host.start();
-    } catch (error) { o.sharedObjects?.close(); throw error; }
+    } catch (error) {
+      if (host) host.exit(undefined, { error });
+      else { o.sharedObjects?.close(); reject(error); }
+    }
   });
 }
 
 class EngineHost {
-  constructor(o, resolve) {
+  constructor(o, resolve, reject) {
     this.o = o;
     this.resolveDone = resolve;
+    this.rejectDone = reject;
     this.wasm = wasmCaller(o.instance.exports, o.onWasmCallTrap);
     this.exited = false;
     this.pendingAsync = 0;
@@ -464,6 +470,7 @@ class EngineHost {
       const factory = this.evalPolyfill("bootstrap");
       internal = factory(native);
     } catch (err) {
+      if (this.transfer(err)) return;
       this.o.onExit && this.writeErr(`bun-wasm: bootstrap failed: ${err && err.stack ? err.stack : err}\n`);
       return this.exit(70);
     }
@@ -1039,6 +1046,7 @@ class EngineHost {
   watchRejections() {
     const onRejection = (reason, promise) => {
       if (this.exited || reason instanceof ExitSignal) return;
+      if (this.transfer(reason)) return;
       if (!this.guard(() => this.internal.handleRejection(reason, promise))) this.exit(1);
     };
     if (nativeProcess) {
@@ -1237,17 +1245,25 @@ class EngineHost {
 
   uncaught(err) {
     if (this.exited || err instanceof ExitSignal) return;
+    if (this.transfer(err)) return;
     let handled = false;
     try {
       handled = this.internal.handleUncaught(err);
     } catch (inner) {
       if (inner instanceof ExitSignal) return;
+      if (this.transfer(inner)) return;
       this.writeErr(`error: ${inner}\n`);
     }
     if (!handled) this.exit(1);
   }
 
-  exit(code) {
+  transfer(error) {
+    if (!this.o.isExecutionUnwind?.(error)) return false;
+    this.exit(undefined, { error });
+    return true;
+  }
+
+  exit(code, result = { code }) {
     if (this.exited) return;
     this.exited = true;
     let cleanupError;
@@ -1268,19 +1284,23 @@ class EngineHost {
       catch (error) { recordCleanupError(error); }
       try { this.disposeNativeStreams?.(); }
       catch (error) { recordCleanupError(error); }
-      try { this.native.tlsDispose(); }
+      try { this.native?.tlsDispose(); }
       catch (error) { recordCleanupError(error); }
-      try { this.native.closeAllDirs(); }
+      try { this.native?.closeAllDirs(); }
       catch (error) { recordCleanupError(error); }
       try { this.flush(); }
       catch (error) { recordCleanupError(error); }
       if (this.timer !== null) nativeClearTimeout(this.timer);
-      try { this.o.onExit?.(code); }
+      try { "code" in result && this.o.onExit?.(result.code); }
       catch (error) { recordCleanupError(error); }
-      try { this.resolveDone(code); }
+      try {
+        const failed = "error" in result;
+        const value = failed && cleanupError ? new AggregateError([result.error, cleanupError], "Engine cleanup failed during unwind") : failed ? result.error : result.code;
+        (failed ? this.rejectDone : this.resolveDone)(value);
+      }
       catch (error) { recordCleanupError(error); }
     }
-    if (cleanupError) throw cleanupError;
+    if (cleanupError && "code" in result) throw cleanupError;
   }
 }
 

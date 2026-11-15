@@ -1,6 +1,6 @@
 import { projectTemplates } from "../../web/src/playground/project-templates";
 
-export type Template = Record<keyof typeof projectTemplates[number], string>;
+export type Template = Record<Exclude<keyof typeof projectTemplates[number], "sharedWorkers">, string>;
 export const defaultTemplate = { ...projectTemplates[0], file: "template.json" };
 
 const sandboxTemplates: Template[] = [
