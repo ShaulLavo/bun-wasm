@@ -1,6 +1,6 @@
 import { withScoped } from "./scope-fixture";
 import { expect, test } from "bun:test";
-import { initialReport, options, playgroundURL } from "./run";
+import { initialReport, options, playgroundURL, preflightSelection } from "./run";
 import { nativeRunnerArgs } from "./fleet";
 import { frameworks, type Engine } from "./catalog";
 import { Playground } from "../../web/src/playground/playground";
@@ -77,5 +77,30 @@ test("normal mixed goals use product template defaults and preserve explicit dia
     const box = { framework: "angular", engine: "quickjs", browser: "chrome" } as const;
     expect(prerequisites(box, { root })?.reason).toContain("profiles/shared-group/bun.wasm.gz");
     expect(prerequisites(box, { root, profile: "split" })).toBeUndefined();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("preflight verifies only engine/profile pairs used by the selected templates", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-angular-preflight-"));
+  try {
+    const data = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+    const hash = new Bun.CryptoHasher("sha256").update(data).digest("hex");
+    const names = ["profiles/shared-group/bun.wasm", "profiles/shared-group/quickjs.wasm"];
+    const builds = Object.fromEntries(names.map(name => [name, hash]));
+    await Bun.write(join(root, "index.html"), `<script>globalThis.__bunwasmBuilds=${JSON.stringify(builds)};</script>`);
+    await Bun.write(join(root, "engine-builds.json"), JSON.stringify(builds));
+    for (const name of names) await Bun.write(join(root, name + ".gz"), Bun.gzipSync(data));
+    const angular = { root, engines: ["quickjs"], frameworks: ["angular"] } satisfies Parameters<typeof preflightSelection>[0];
+    await expect(preflightSelection(angular)).resolves.toBeUndefined();
+    // A stray incomplete split profile is unused by an Angular-only selection.
+    await Bun.write(join(root, "bun.wasm.gz"), Bun.gzipSync(data));
+    await expect(preflightSelection(angular)).resolves.toBeUndefined();
+    await expect(preflightSelection({ ...angular, frameworks: ["angular", "vite-react"] })).rejects.toThrow("Missing engine assets: quickjs.wasm");
+    await expect(preflightSelection({ ...angular, profile: "split" })).rejects.toThrow("Missing engine assets: quickjs.wasm");
+    await Bun.write(join(root, names[1]! + ".gz"), Bun.gzipSync(new Uint8Array([1])));
+    await expect(preflightSelection(angular)).rejects.toThrow("staged bytes disagree");
+    // Explicit split ignores even corrupt shared assets once its own pair is absent.
+    await rm(join(root, "bun.wasm.gz"));
+    await expect(preflightSelection({ ...angular, profile: "split" })).resolves.toBeUndefined();
   } finally { await rm(root, { recursive: true, force: true }); }
 });

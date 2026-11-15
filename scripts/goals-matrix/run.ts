@@ -198,11 +198,14 @@ function seedBlockers(report: Report, blockers: Map<Browser, PlatformBlocker>): 
     if (blocker) blockers.set(cell.browser, blocker);
   }
 }
-async function runLocked(config: Options, signal: AbortSignal, exit?: ExitOwner): Promise<Report> {
-  await preflight(config.root, config.engines, config.profile);
-  if (config.profile === undefined && config.frameworks.includes("angular")) {
-    await preflight(config.root, config.engines.filter(engine => engine !== "browser"), "shared-group");
+export async function preflightSelection(config: Pick<Options, "root" | "engines" | "frameworks" | "profile">): Promise<void> {
+  for (const engine of config.engines) {
+    const profiles = new Set(config.frameworks.map(id => templateProfile(engine, frameworks.find(framework => framework.id === id)?.template, config.profile)));
+    for (const profile of profiles) await preflight(config.root, [engine], profile, { allowMissing: true });
   }
+}
+async function runLocked(config: Options, signal: AbortSignal, exit?: ExitOwner): Promise<Report> {
+  await preflightSelection(config);
   const report = await initialReport(config);
   await mkdir(join(config.output, "logs"), { recursive: true });
   await saveReport(config.output, report);
