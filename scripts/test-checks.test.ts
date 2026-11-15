@@ -75,6 +75,17 @@ test("native commands select the declared engine explicitly", () => {
   }
 });
 
+test("CallSite predicates run through every ordinary engine's blocking fixture gate", () => {
+  const path = "tests/fixtures/stack-callsite-predicates";
+  const groups = nativeEngineGroups([path], { count: 1, env: { SPIDERMONKEY_WASM: "/fixture/bun-spidermonkey.wasm" } });
+  expect(groups.map(group => group.engine)).toEqual(["quickjs", "jsc", "browser", "spidermonkey"]);
+  for (const group of groups) {
+    expect(group.commands).toHaveLength(1);
+    expect(group.commands[0]).toContain("stack-callsite-predicates");
+  }
+  expect(needsJsc([`${path}/index.js`])).toBe(true);
+});
+
 test.each([[], ["jsc", "jsc"], ["unknown"], [17], "browser", null].map(engines => ({ engines })))("native engines reject invalid selection $engines", ({ engines }) => {
   expect(() => parseCheck({ owner: "native", path: "tests/fixtures/example", engines }, "native-example.json")).toThrow();
 });

@@ -4464,3 +4464,89 @@ diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/Java
  
  .osrReturnPoint:
      getterSetterOSRExitReturnPoint(op_get_by_val, size)
+diff --git i/Source/JavaScriptCore/runtime/ErrorInstance.cpp w/Source/JavaScriptCore/runtime/ErrorInstance.cpp
+index ea73c51347..ffb0a419b2 100644
+--- i/Source/JavaScriptCore/runtime/ErrorInstance.cpp
++++ w/Source/JavaScriptCore/runtime/ErrorInstance.cpp
+@@ -467,7 +467,32 @@ JSValue ErrorInstance::stackWithHeader(VM& vm, String&& frames)
+ }
+ #endif
+ 
++#if OS(WASI) && USE(BUN_JSC_ADDITIONS)
+ bool ErrorInstance::materializeErrorInfoIfNeeded(VM& vm)
++{
++    auto scope = DECLARE_THROW_SCOPE(vm);
++    bool wasMaterialized = m_errorInfoMaterialized;
++    bool result = materializeErrorInfo(vm);
++    RETURN_IF_EXCEPTION(scope, result);
++    auto& formatter = vm.onMaterializeErrorStack();
++    if (wasMaterialized || m_stackPropertyProvidedByCapturedStackTrace || !formatter)
++        return result;
++    // Property access, not computeErrorInfo's collection-time string caching.
++    m_errorInfoMaterialized = true;
++    JSValue raw = getDirect(vm, vm.propertyNames->stack);
++    JSValue value = formatter(vm, this, raw ? raw : jsUndefined());
++    RETURN_IF_EXCEPTION(scope, result);
++    if (raw || !value.isUndefined()) {
++        AllowLazyMaterializationOfImmutableProperties allowMaterialization(vm);
++        putDirect(vm, vm.propertyNames->stack, value, static_cast<unsigned>(PropertyAttribute::DontEnum));
++    }
++    return true;
++}
++
++bool ErrorInstance::materializeErrorInfo(VM& vm)
++#else
++bool ErrorInstance::materializeErrorInfoIfNeeded(VM& vm)
++#endif
+ {
+     bool materializedCapturedStackProperty = materializeCapturedStackPropertyIfSaved(vm);
+     if (m_errorInfoMaterialized)
+diff --git i/Source/JavaScriptCore/runtime/ErrorInstance.h w/Source/JavaScriptCore/runtime/ErrorInstance.h
+index 3c69d36c3d..55b5c5efc6 100644
+--- i/Source/JavaScriptCore/runtime/ErrorInstance.h
++++ w/Source/JavaScriptCore/runtime/ErrorInstance.h
+@@ -160,6 +160,9 @@ protected:
+     JS_EXPORT_PRIVATE static bool deleteProperty(JSCell*, JSGlobalObject*, PropertyName, DeletePropertySlot&);
+ 
+     void computeErrorInfo(VM&, bool allocationAllowed);
++#if OS(WASI) && USE(BUN_JSC_ADDITIONS)
++    bool materializeErrorInfo(VM&);
++#endif
+     bool materializeCapturedStackPropertyIfSaved(VM&);
+ 
+     SourceAppender m_sourceAppender { nullptr };
+diff --git i/Source/JavaScriptCore/runtime/VM.h w/Source/JavaScriptCore/runtime/VM.h
+index 3bd4ebd8a4..dbe091015c 100644
+--- i/Source/JavaScriptCore/runtime/VM.h
++++ w/Source/JavaScriptCore/runtime/VM.h
+@@ -183,6 +183,9 @@ constexpr bool validateDFGDoesGC = ENABLE_DFG_DOES_GC_VALIDATION;
+ using StackTraceAppenderFunction = WTF::Function<void(VM&, JSCell* owner, Vector<StackFrame>& stackTrace, size_t maxToAppend)>;
+ using ErrorInfoFunction = WTF::Function<String(VM&, Vector<StackFrame>& stackTrace, unsigned& line, unsigned& column, String& sourceURL)>;
+ using ErrorInfoFunctionJSValue = WTF::Function<JSValue(VM&, Vector<StackFrame>& stackTrace, unsigned& line, unsigned& column, String& sourceURL, JSC::JSObject*)>;
++#if OS(WASI)
++using MaterializeErrorStackFunction = WTF::Function<JSValue(VM&, JSObject*, JSValue)>;
++#endif
+ #endif
+ 
+ #if ENABLE(FTL_JIT)
+@@ -1213,6 +1216,10 @@ public:
+     void setOnAppendStackTrace(StackTraceAppenderFunction&& function) { m_onAppendStackTrace = WTF::move(function); }
+     void setOnComputeErrorInfo(ErrorInfoFunction&& function) { m_onComputeErrorInfo = WTF::move(function); }
+     void setOnComputeErrorInfoJSValue(ErrorInfoFunctionJSValue&& function) { m_onComputeErrorInfoJSValue = WTF::move(function); }
++#if OS(WASI)
++    const MaterializeErrorStackFunction& onMaterializeErrorStack() const { return m_onMaterializeErrorStack; }
++    void setOnMaterializeErrorStack(MaterializeErrorStackFunction&& function) { m_onMaterializeErrorStack = WTF::move(function); }
++#endif
+     void setComputeLineColumnWithSourcemap(WTF::Function<void(VM&, SourceProvider*, LineColumn&, String&)>&& function) { m_computeLineColumnWithSourcemap = WTF::move(function); }
+ #endif
+     
+@@ -1462,6 +1469,9 @@ private:
+ #if USE(BUN_JSC_ADDITIONS)
+     ErrorInfoFunction m_onComputeErrorInfo;
+     ErrorInfoFunctionJSValue m_onComputeErrorInfoJSValue;
++#if OS(WASI)
++    MaterializeErrorStackFunction m_onMaterializeErrorStack;
++#endif
+     StackTraceAppenderFunction m_onAppendStackTrace;
+     WTF::Function<void(VM&, SourceProvider*, LineColumn&, String&)> m_computeLineColumnWithSourcemap;
+ #endif

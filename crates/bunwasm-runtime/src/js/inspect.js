@@ -1421,7 +1421,10 @@
   // `forEach@[native code]`. Positions are in evaluated code; map them back.
   function parseJscFrameLine(line) {
     const m = /^(.*?)@(.*):(\d+):(\d+)$/.exec(line);
-    return m ? nativeFrame(m[1], m[2], Number(m[3]), Number(m[4])) : null;
+    if (m) return nativeFrame(m[1], m[2], Number(m[3]), Number(m[4]));
+    if (native.engine !== "jsc" && native.engine !== "host") return null;
+    const unlocated = /^(.*?)@$/.exec(line);
+    return unlocated ? nativeFrame(unlocated[1], "<eval>", 0, 0) : null;
   }
 
   function nativeFrame(name, source, line, col) {
