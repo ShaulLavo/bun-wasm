@@ -19,7 +19,7 @@
   function adapt(site: NativeCallSite) {
     return new Proxy(site, {
       get(target, key) {
-        if (key === "isToplevel") return () => programFrame(target) ?? target.isToplevel();
+        if (key === "isToplevel") return () => !target.getFunctionName();
         // V8 includes the suspended module program among its async frames.
         if (key === "isAsync") return () => target.isAsync() && programFrame(target) !== true;
         const value = Reflect.get(target, key, target);

@@ -30,11 +30,11 @@ tested Chromium and Node engines. The adapter wraps custom formatter functions
 and passes proxies for their CallSites. Other methods bind to the original
 frame, preserving V8 receiver checks and frame metadata. A program frame has no
 function name and enclosing position 1:1, using the bootstrap formatter's existing
-classification. Named calls and anonymous functions with other enclosing
-positions are not top-level. Only the program frame loses V8's async flag,
+classification. The existing name-based top-level predicate stays unchanged.
+Only the program frame loses V8's async flag,
 including a module suspended at top-level await. Anonymous awaiting functions
 retain their native async flag and null function name. A host without enclosing
-positions retains its native predicates.
+positions retains its native async flag.
 
 The default formatter and native capture function stay unchanged. Custom hook
 assignment uses an accessor and returns a stable wrapper for each hook.
