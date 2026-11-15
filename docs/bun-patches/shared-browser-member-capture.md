@@ -35,11 +35,16 @@ lock remain installed.
 
 Each group worker has one 64 KiB host-owned shared record. A sequence word makes
 concurrent reads either complete or explicitly `writing`; readers do not retry.
-The record contains two 2,048-character stderr tails, the last four active host
+The record contains two 2,048-byte stderr tails, the last four active host
 frames, four escaping-error records and the current lifecycle phase. Stacks are
 bounded to 900 characters at entry and 1,000 characters on failure. The page keeps
 at most 64 completed member records, retiring older native-terminated workers
 when admitting another capture. Live members are retained.
+
+Stderr retains bytes across iovecs, writes and host posts before decoding. This
+preserves split UTF-8 characters and accepted-byte counts. Snapshots omit an
+incomplete trailing character until more bytes arrive and skip a leading
+character fragment discarded by tail truncation. They do not consume a pipe.
 
 ## Failure reporting
 

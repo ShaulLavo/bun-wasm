@@ -4,6 +4,33 @@ import type { RunRequest } from "../../src/bun-executor";
 export const captureBytes = 65536;
 const tailBytes = 2048;
 type Fact = { boundary: string; stack: string };
+type StderrChunk = { readonly bytes: Uint8Array; readonly clipped: boolean };
+
+class StderrTail {
+  private readonly bytes = new Uint8Array(tailBytes);
+  private length = 0;
+  private clipped = false;
+
+  append(chunk: StderrChunk): void {
+    const incoming = Math.min(chunk.bytes.length, tailBytes);
+    const retained = chunk.clipped ? 0 : Math.min(this.length, tailBytes - incoming);
+    this.clipped ||= chunk.clipped || retained < this.length || incoming < chunk.bytes.length;
+    this.bytes.copyWithin(0, this.length - retained, this.length);
+    this.bytes.set(chunk.bytes.subarray(chunk.bytes.length - incoming), retained);
+    this.length = retained + incoming;
+  }
+  chunk(): StderrChunk { return { bytes: this.bytes.slice(0, this.length), clipped: this.clipped }; }
+  text(): string {
+    let start = 0;
+    if (this.clipped) {
+      while (start < Math.min(3, this.length) && continuation(this.bytes[start])) start++;
+    }
+    return new TextDecoder("utf-8", { ignoreBOM: true }).decode(this.bytes.subarray(start, this.length), { stream: true });
+  }
+}
+
+function continuation(byte: number | undefined): boolean { return byte !== undefined && (byte & 0xc0) === 0x80; }
+function stderrChunk(bytes: Uint8Array): StderrChunk { return { bytes: bytes.slice(-tailBytes), clipped: bytes.length > tailBytes }; }
 export interface MemberCapture {
   phase: string;
   active: Fact[];
@@ -26,6 +53,8 @@ export class CaptureWriter {
   private readonly header: Int32Array;
   private readonly bytes: Uint8Array;
   private readonly encoder = new TextEncoder();
+  private readonly acceptedTail = new StderrTail();
+  private readonly attemptedTail = new StderrTail();
   private readonly value: MemberCapture = { phase: "received", active: [], depth: 0, last: null, failures: [], stderr: "", attemptedStderr: "", writes: 0, observationErrors: 0 };
 
   constructor(buffer: SharedArrayBuffer) {
@@ -59,10 +88,12 @@ export class CaptureWriter {
     } finally { if (entered) this.leave(); }
   }
   private leave() { this.observe(() => { this.value.depth--; this.value.active.pop(); }); }
-  stderr(text: string, accepted: boolean) {
+  stderr(chunk: StderrChunk, accepted: boolean) {
     this.observe(() => {
-      if (accepted) { this.value.stderr = (this.value.stderr + text).slice(-tailBytes); this.value.writes++; }
-      else this.value.attemptedStderr = (this.value.attemptedStderr + text).slice(-tailBytes);
+      const tail = accepted ? this.acceptedTail : this.attemptedTail;
+      tail.append(chunk);
+      if (accepted) { this.value.stderr = tail.text(); this.value.writes++; }
+      else this.value.attemptedStderr = tail.text();
     });
   }
   error(error: unknown) { this.observe(() => { this.value.failures = this.value.failures.slice(-3).concat([{ boundary: this.value.phase, stack: errorStack(error) }]); }); }
@@ -80,24 +111,23 @@ export function readCapture(buffer: SharedArrayBuffer): { state: "empty" | "writ
   return { state: "read", value: { ...value, observationErrors: Atomics.load(header, 2) } };
 }
 
-function stderrText(memory: WebAssembly.Memory, iovs: number, count: number, accepted = Infinity): string {
+function stderrBytes(memory: WebAssembly.Memory, iovs: number, count: number, accepted = Infinity): StderrChunk {
   const view = new DataView(memory.buffer);
-  let text = "";
+  const tail = new StderrTail();
   for (let index = 0; index < count && accepted > 0; index++) {
     const pointer = view.getUint32(iovs + index * 8, true);
     const length = Math.min(view.getUint32(iovs + index * 8 + 4, true), accepted);
-    const bytes = new Uint8Array(memory.buffer, pointer + Math.max(0, length - tailBytes), Math.min(length, tailBytes)).slice();
-    text = (text + new TextDecoder().decode(bytes)).slice(-tailBytes);
+    tail.append({ bytes: new Uint8Array(memory.buffer, pointer, length), clipped: false });
     accepted -= length;
   }
-  return text;
+  return tail.chunk();
 }
 
 function observePostedStderr(data: Uint8Array, capture: CaptureWriter, accepted: boolean): void {
-  capture.observe(() => capture.stderr(new TextDecoder().decode(data.slice()), accepted));
+  capture.observe(() => capture.stderr(stderrChunk(data), accepted));
 }
 
-function capturedPost(post: WorkerSetupContext["post"], capture: CaptureWriter): WorkerSetupContext["post"] {
+export function capturedPost(post: WorkerSetupContext["post"], capture: CaptureWriter): WorkerSetupContext["post"] {
   return (type, data) => {
     if (type !== "stderr") return post(type, data);
     observePostedStderr(data, capture, false);
@@ -119,7 +149,7 @@ export function captureImports(imports: WebAssembly.Imports, capture: CaptureWri
 }
 
 function acceptedStderr(memory: WebAssembly.Memory, iovs: number, count: number, written: number, capture: CaptureWriter): void {
-  capture.observe(() => capture.stderr(stderrText(memory, iovs, count, new DataView(memory.buffer).getUint32(written, true)), true));
+  capture.observe(() => capture.stderr(stderrBytes(memory, iovs, count, new DataView(memory.buffer).getUint32(written, true)), true));
 }
 
 function writeStderr(write: CallableFunction, memory: WebAssembly.Memory, capture: CaptureWriter, iovs: number, count: number, written: number): unknown {
@@ -131,7 +161,7 @@ function writeStderr(write: CallableFunction, memory: WebAssembly.Memory, captur
 function capturedWrite(write: CallableFunction, memory: WebAssembly.Memory, capture: CaptureWriter) {
   return (fd: number, iovs: number, count: number, written: number) => {
     if (fd !== 2) return Reflect.apply(write, undefined, [fd, iovs, count, written]);
-    capture.observe(() => capture.stderr(stderrText(memory, iovs, count), false));
+    capture.observe(() => capture.stderr(stderrBytes(memory, iovs, count), false));
     return capture.run("wasi.fd_write", () => writeStderr(write, memory, capture, iovs, count, written));
   };
 }
