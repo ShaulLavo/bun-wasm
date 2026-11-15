@@ -11,7 +11,7 @@ export const ordinaryFixtures: readonly string[] = [
   "require-esm-after-lowered-import", "require-esm-after-native-import",
   "require-esm-failure-cache", "require-esm-limit-recovery",
   "stack-callsite-predicates", "stack-getter-loop", "ts-stack-trace",
-  "spidermonkey-getter-loop",
+  "spidermonkey-getter-loop", "spidermonkey-call-loop",
   // Children started with a QuickJS-sized BUN_WASM_STACK_KIB must still start on SpiderMonkey.
   "require-chain-stack", "stack-native-call",
 ];
