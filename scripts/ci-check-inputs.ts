@@ -27,7 +27,7 @@ function treeEntry(entry: string) {
   return { mode, kind, object, path: entry.slice(separator + 1) };
 }
 
-export function verifiedCheckManifestsAt(ref: string, cwd = process.cwd()): { file: string; value: ReturnType<typeof parseCheck> }[] {
+export function verifiedCheckManifestsAt(ref: string, cwd = process.cwd()): { file: string; value: unknown; check: ReturnType<typeof parseCheck> }[] {
   if (/^0{40}$/.test(ref)) return [];
   const tree = execFileSync("git", ["ls-tree", "-r", "-t", "-z", "--full-tree", ref, "--", "checks"], { cwd, encoding: "utf8", timeout: 5_000 });
   const [directory, ...manifests] = tree.split("\0").filter(Boolean).map(treeEntry);
@@ -47,15 +47,16 @@ export function verifiedCheckManifestsAt(ref: string, cwd = process.cwd()): { fi
     const length = Number(size);
     const start = end + 1;
     if (object !== manifest.object || kind !== "blob" || !Number.isSafeInteger(length) || length < 0 || blobs[start + length] !== 10) throw new Error(`Invalid check blob at ${ref}: ${manifest.path}`);
-    const check = parseCheck(JSON.parse(blobs.toString("utf8", start, start + length)), basename(manifest.path));
+    const value: unknown = JSON.parse(blobs.toString("utf8", start, start + length));
+    const check = parseCheck(value, basename(manifest.path));
     offset = start + length + 1;
-    return { file: manifest.path, value: check };
+    return { file: manifest.path, value, check };
   });
 }
 
 export function nativeCheckInputsAt(ref: string, selection: NativeInputSelection = {}, read = verifiedCheckManifestsAt): string[] {
   const { profile, engine, family } = selection;
-  return read(ref).flatMap(({ file, value: check }) => {
+  return read(ref).flatMap(({ file, check }) => {
     const ordinaryBrowser = check.owner === "browser-guest" && check.profile !== "shared-group";
     if (family === "native-correctness" && ordinaryBrowser) return [];
     if (family === "ordinary-browser" && !ordinaryBrowser) return [];

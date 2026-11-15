@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -7,8 +7,24 @@ import { needsRust, needsJsc } from "./ci-changes";
 import { browserCoverageOutputs, browserCoverageSnapshot } from "./ci-browser-coverage";
 import { selectBrowserGuestCoverage, browserGuestManifest } from "./browser-guest-selection";
 import { expectedBrowserGuestRows, fullBrowserGuestSelection, coverageOwners } from "./browser-guest-catalogue";
+import { parseCheck } from "./test-checks";
 
 const cleanup = new Set<string>();
+test("actual repository declarations remain raw and the real PR entrypoint accepts the full corpus", () => {
+  const cwd = new URL("..", import.meta.url).pathname;
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
+  const snapshot = browserCoverageSnapshot(head, "head", cwd);
+  for (const { file, value } of snapshot.manifests) {
+    const original: unknown = JSON.parse(execFileSync("git", ["show", `${head}:${file}`], { cwd, encoding: "utf8" }));
+    expect(value).toEqual(original);
+    expect(() => parseCheck(value, file.slice("checks/".length))).not.toThrow();
+  }
+  const result = spawnSync(process.execPath, [new URL("./ci-browser-coverage.ts", import.meta.url).pathname, head, head], {
+    cwd, encoding: "utf8", env: { ...process.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_REF: "refs/pull/1/merge", BROWSER_COVERAGE_SELECTION: "" },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain("needed=false");
+}, 60_000);
 afterEach(() => { for (const directory of cleanup) rmSync(directory, { recursive: true, force: true }); cleanup.clear(); });
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-coverage-git-")); cleanup.add(directory);
@@ -78,10 +94,9 @@ test("browser input declarations keep native predicates separate from selected r
   expect(quickjs).toContain("needed=true\njsc=false");
 });
 
-test.each(["native-setup", "native-seed", "native-production"])("production action %s selects all browser owners on edit and removal", action => {
+test.each(["native-setup", "native-seed", "native-production", "jsc-setup", "jsc-prebuild"].map(action => `.github/actions/${action}/action.yml`).concat(["scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts"]))("production input %s selects all browser owners on edit and removal", path => {
   const { directory, git, base } = fixture();
-  const path = `.github/actions/${action}/action.yml`;
-  mkdirSync(join(directory, `.github/actions/${action}`), { recursive: true });
+  mkdirSync(join(directory, path, ".."), { recursive: true });
   writeFileSync(join(directory, path), "introduced");
   git("add", "."); git("commit", "-m", "introduce action");
   const introduced = git("rev-parse", "HEAD");

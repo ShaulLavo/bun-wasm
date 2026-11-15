@@ -33,6 +33,14 @@ function selectionJob(head: string) {
   return { name: "CI selection", head_sha: head, status: "completed", conclusion: "success", steps: [{ name: coverageMarker, status: "completed", conclusion: "success" }] };
 }
 
+test("ordinary runtime declarations do not force full fallback in verified cumulative coverage", () => fixture(async () => {
+  change("checks/runtime-assert-calltracker.json", readFileSync(new URL("../checks/runtime-assert-calltracker.json", import.meta.url), "utf8"));
+  const base = change("checks/browser-guest-worker-modules.json", JSON.stringify(browserGuestManifest("worker-modules")));
+  const head = change("web/tests/browser-worker-modules.ts", "changed worker driver\n");
+  const result = await mainCoverage(api(head, [run(base)], [selectionJob(base)]));
+  expect(result).toMatchObject({ kind: "verified", browserSelection: [{ owner: "worker-modules", engines: ["browser"] }] });
+}));
+
 async function fixture(body: (base: string) => Promise<void>): Promise<void> {
   const original = process.cwd();
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-ci-main-"));

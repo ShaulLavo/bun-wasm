@@ -7,6 +7,8 @@ The immutable check-manifest reader accepts an optional family filter. It keeps
 ordinary split Browser declarations separate from native correctness and shared
 profiles, after validating every snapshot manifest. Existing callers retain the
 unfiltered input set.
+It retains the original declaration separately from its normalized parsed check,
+so coverage can consume source declarations without rejecting parser defaults.
 
 `selectChanges` reads verified base, head and merge-ancestor declarations.
 Ordinary Browser inputs select fresh production through `browser_guest`;
