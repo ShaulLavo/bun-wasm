@@ -11,6 +11,8 @@ export const ordinaryFixtures: readonly string[] = [
   "require-esm-after-lowered-import", "require-esm-after-native-import",
   "require-esm-failure-cache", "require-esm-limit-recovery",
   "stack-callsite-predicates", "stack-getter-loop", "ts-stack-trace",
+  // Children started with a QuickJS-sized BUN_WASM_STACK_KIB must still start on SpiderMonkey.
+  "require-chain-stack", "stack-native-call",
 ];
 
 // test.sh owns each 60s TERM / 5s KILL deadline and every output/exit assertion.
