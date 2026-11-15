@@ -1,0 +1,97 @@
+import { expect } from "bun:test";
+
+function check(value: unknown, message: string): asserts value {
+  if (!value) throw new Error(message);
+}
+
+function call(received: unknown, name: string, args: unknown[] = [], not = false): unknown {
+  const target = not ? expect(received).not : expect(received);
+  const matcher: unknown = Reflect.get(target, name);
+  check(typeof matcher === "function", `missing ${name}`);
+  return Reflect.apply(matcher, target, args);
+}
+
+function thrown(run: () => unknown): unknown {
+  try { run(); } catch (error) { return error; }
+  throw new Error("expected a throw");
+}
+
+function message(error: unknown): string {
+  check(error instanceof Error, "expected Error");
+  return error.message;
+}
+
+for (const name of ["pass", "fail"]) {
+  const not = name === "pass";
+  check(call(undefined, name, [], !not) === undefined, `${name} returns undefined`);
+  const verb = not ? "passes" : "fails";
+  check(message(thrown(() => call(undefined, name, [], not))).includes(`${verb} by .${name}() assertion`), `${name} default message`);
+  check(message(thrown(() => call(1, name, ["custom message"], not))).includes("custom message"), `${name} custom message`);
+  for (const value of [1, undefined, null, {}]) {
+    check(message(thrown(() => call(1, name, [value], !not))).includes(`Expected message to be a string for '${name}'.`), `${name} validates before negation`);
+  }
+}
+console.log("PASS pass and fail helpers");
+
+for (const size of [0, 3, 3_000_000_000, 2 ** 32 - 1]) {
+  check(call(new Array(size), "toBeArrayOfSize", [size]) === undefined, "array size");
+  call(new Array(size), "toBeArrayOfSize", [size + 1], true);
+}
+for (const value of [null, {}, "three", new Uint8Array(3)]) call(value, "toBeArrayOfSize", [3], true);
+for (const args of [[], [undefined], ["3"], [3n], [NaN], [Infinity], [1.5], [-0]]) {
+  check(message(thrown(() => call([], "toBeArrayOfSize", args, true))).includes("toBeArrayOfSize() requires"), "array size validation");
+}
+console.log("PASS array size and validation");
+
+for (const value of [0, -0, 2, -2, 2n, -2n, 1n << 100n, -(1n << 100n)]) {
+  call(value, "toBeEven");
+  call(value, "toBeOdd", [], true);
+}
+for (const value of [1, -1, 3n, -3n, (1n << 100n) + 1n, -(1n << 100n) - 1n]) {
+  call(value, "toBeOdd");
+  call(value, "toBeEven", [], true);
+}
+for (const value of [NaN, Infinity, -Infinity, 0.5, "2", {}, new Number(2)]) {
+  call(value, "toBeEven", [], true);
+  call(value, "toBeOdd", [], true);
+}
+console.log("PASS number and bigint parity");
+
+call(" h\te\nl\vl\fo\r ", "toEqualIgnoringWhitespace", ["hello"]);
+call("a\u00a0b", "toEqualIgnoringWhitespace", ["ab"], true);
+call("a\ufeffb", "toEqualIgnoringWhitespace", ["ab"], true);
+call(1, "toEqualIgnoringWhitespace", ["1"], true);
+call(new String(" h e l l o "), "toEqualIgnoringWhitespace", [new String("hello")]);
+for (const args of [[], [undefined], [1]]) {
+  check(message(thrown(() => call("hello", "toEqualIgnoringWhitespace", args, true))).includes("toEqualIgnoringWhitespace() requires"), "whitespace validation");
+}
+console.log("PASS ASCII whitespace comparison");
+
+call("abc abc", "toIncludeRepeated", ["abc", 2]);
+call("aaa", "toIncludeRepeated", ["aa", 1]);
+call("😘🥳😘", "toIncludeRepeated", ["😘", 2]);
+call("abc", "toIncludeRepeated", ["d", 0]);
+for (const count of [-0, undefined, null, NaN, Infinity, 1.5]) {
+  check(message(thrown(() => call("", "toIncludeRepeated", ["a", count], true))).includes("requires the second argument to be a number"), "count validation");
+}
+console.log("PASS repeated substring validation");
+
+const form = new FormData();
+form.set("a", "b");
+for (const value of [new Headers({ a: "b" }), new URLSearchParams("a=b"), form, new Blob(["x"]), new Uint8Array(1), new ArrayBuffer(1)]) {
+  check(call(value, "toBeEmpty", [], true) === undefined, "nonempty container");
+}
+for (const value of [new Headers(), new URLSearchParams(), new FormData(), new Blob(), new Uint8Array(), new ArrayBuffer(0)]) call(value, "toBeEmpty");
+let visits = 0;
+function* values() { visits++; yield 1; visits++; yield 2; visits++; }
+const iterator = values();
+call(iterator, "toBeEmpty", [], true);
+check(visits === 3 && iterator.next().done, "emptiness consumes the full iterable");
+const sentinel = new Error("iterator failure");
+const broken = { *[Symbol.iterator]() { yield 1; throw sentinel; } };
+check(thrown(() => call(broken, "toBeEmpty", [], true)) === sentinel, "iterator error identity");
+await Bun.write("expect-empty.txt", "");
+await Bun.write("expect-full.txt", "x");
+call(Bun.file("expect-empty.txt"), "toBeEmpty");
+call(Bun.file("expect-full.txt"), "toBeEmpty", [], true);
+console.log("PASS container emptiness and iterator errors");

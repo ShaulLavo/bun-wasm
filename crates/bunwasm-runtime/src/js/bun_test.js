@@ -711,6 +711,7 @@
    */
   const matcherSupport = internal.require("test_matchers");
   const extensions = internal.require("test_extensions");
+  const extendedMatchers = matcherSupport.extended(inspect);
 
   function defineMatcher(name, params, impl) {
     matcherParams[name] = params;
@@ -865,8 +866,8 @@
   defineValueMatcher("toBeFinite", (v) => typeof v === "number" && Number.isFinite(v));
   defineValueMatcher("toBePositive", (v) => typeof v === "number" && v > 0 && Number.isFinite(v));
   defineValueMatcher("toBeNegative", (v) => typeof v === "number" && v < 0 && Number.isFinite(v));
-  defineValueMatcher("toBeEven", (v) => Number.isInteger(v) && v % 2 === 0);
-  defineValueMatcher("toBeOdd", (v) => Number.isInteger(v) && Math.abs(v % 2) === 1);
+  defineValueMatcher("toBeEven", matcherSupport.even);
+  defineValueMatcher("toBeOdd", matcherSupport.odd);
   defineValueMatcher("toBeDate", (v) => v instanceof Date);
   defineValueMatcher("toBeValidDate", (v) => v instanceof Date && !Number.isNaN(v.getTime()));
   defineValueMatcher("toBeObject", (v) => typeof v === "object" && v !== null);
@@ -910,6 +911,11 @@
   });
 
   // ── containers ──
+
+  defineMatcher("pass", "", extendedMatchers.pass);
+  defineMatcher("fail", "", extendedMatchers.fail);
+  defineMatcher("toBeArrayOfSize", "", extendedMatchers.arrayOfSize);
+  defineMatcher("toEqualIgnoringWhitespace", "expected", extendedMatchers.ignoringWhitespace);
 
   function iterableItems(value) {
     if (value === null || value === undefined || typeof value[Symbol.iterator] !== "function") return null;
@@ -957,7 +963,7 @@
     if (args.length < 2) throw new TypeError("toIncludeRepeated() requires 2 arguments");
     const [substring, count] = args;
     if (typeof substring !== "string") throw new Error("toIncludeRepeated() requires the first argument to be a string");
-    if (!Number.isInteger(count)) throw new Error("toIncludeRepeated() requires the second argument to be a number");
+    if (!Number.isInteger(count) || Object.is(count, -0)) throw new Error("toIncludeRepeated() requires the second argument to be a number");
     if (typeof received !== "string") throw new Error("toIncludeRepeated() requires the expect(value) to be a string");
     if (substring.length === 0) throw new Error("toIncludeRepeated() requires the first argument to be a non-empty string");
     let actual = 0;
@@ -981,11 +987,7 @@
   });
 
   defineMatcher("toBeEmpty", "", (ctx, received) => {
-    let empty = false;
-    if (typeof received === "string" || Array.isArray(received)) empty = received.length === 0;
-    else if (received instanceof Map || received instanceof Set) empty = received.size === 0;
-    else if (isObjectLike(received)) empty = Object.keys(received).length === 0;
-    if (!failed(ctx, empty)) return null;
+    if (!failed(ctx, matcherSupport.empty(received))) return null;
     return { body: `\n\nReceived: ${inspect(received)}\n` };
   });
 

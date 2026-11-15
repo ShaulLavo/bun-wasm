@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/test-extended-matchers.test.ts",
+  "localRuntime": true
+}

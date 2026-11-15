@@ -49,6 +49,68 @@
     return { body: `\n\nExpected: ${ctx.not ? "not " : ""}between ${start} (inclusive) and ${end} (exclusive)\nReceived: ${String(received)}\n` };
   }
 
+  function even(value: unknown): boolean {
+    if (typeof value === "bigint") return value % 2n === 0n;
+    return typeof value === "number" && Number.isInteger(value) && value % 2 === 0;
+  }
+
+  function odd(value: unknown): boolean {
+    if (typeof value === "bigint") return value % 2n !== 0n;
+    return typeof value === "number" && Number.isInteger(value) && Math.abs(value % 2) === 1;
+  }
+
+  function empty(value: unknown): boolean {
+    if (typeof value === "string" || value instanceof String || Array.isArray(value)) return value.length === 0;
+    if (value instanceof Map || value instanceof Set || value instanceof Blob) return value.size === 0;
+    if (value instanceof ArrayBuffer) return value.byteLength === 0;
+    if (ArrayBuffer.isView(value) && !(value instanceof DataView)) return value.byteLength === 0;
+    if (value === null || typeof value !== "object" && typeof value !== "function") return false;
+    const iterate: unknown = Reflect.get(value, Symbol.iterator);
+    if (typeof iterate !== "function") return Object.keys(value).length === 0;
+    const iterable: Iterable<unknown> = { [Symbol.iterator]: () => Reflect.apply(iterate, value, []) };
+    let empty = true;
+    for (const _item of iterable) empty = false;
+    return empty;
+  }
+
+  function constant(ctx: Context, name: "pass" | "fail", pass: boolean, args: unknown[]): Failure {
+    if (args.length > 0 && typeof args[0] !== "string") throw new TypeError(`Expected message to be a string for '${name}'.`);
+    if (pass !== !!ctx.not) return null;
+    const message = args.length === 0 ? `${pass ? "passes" : "fails"} by .${name}() assertion` : args[0];
+    return { body: `\n\n${message}\n` };
+  }
+
+  function extended(inspect: (value: unknown) => string) {
+    function arrayOfSize(ctx: Context, received: unknown, ...args: unknown[]): Failure {
+      if (args.length === 0) throw new TypeError("toBeArrayOfSize() requires 1 argument");
+      const size = args[0];
+      if (typeof size !== "number" || !Number.isInteger(size) || Object.is(size, -0)) {
+        throw new Error("toBeArrayOfSize() requires the first argument to be a number");
+      }
+      if ((Array.isArray(received) && received.length === size) !== !!ctx.not) return null;
+      return { body: `\n\nReceived: ${inspect(received)}\n` };
+    }
+
+    function ignoringWhitespace(ctx: Context, received: unknown, ...args: unknown[]): Failure {
+      if (args.length === 0) throw new TypeError("toEqualIgnoringWhitespace() requires 1 argument");
+      const expected = args[0];
+      if (typeof expected !== "string" && !(expected instanceof String)) {
+        throw new Error("toEqualIgnoringWhitespace() requires argument to be a string");
+      }
+      const pass = (typeof received === "string" || received instanceof String)
+        && String(received).replace(/[ \t-\r]/g, "") === String(expected).replace(/[ \t-\r]/g, "");
+      if (pass !== !!ctx.not) return null;
+      return { body: `\n\nExpected: ${ctx.not ? "not " : ""}${inspect(expected)}\nReceived: ${inspect(received)}\n` };
+    }
+
+    return {
+      pass: (ctx: Context, _received: unknown, ...args: unknown[]) => constant(ctx, "pass", true, args),
+      fail: (ctx: Context, _received: unknown, ...args: unknown[]) => constant(ctx, "fail", false, args),
+      arrayOfSize,
+      ignoringWhitespace,
+    };
+  }
+
   function nthReturned(options: {
     not?: boolean;
     results: readonly unknown[];
@@ -128,5 +190,5 @@
     return { track, unhandled, complete };
   }
 
-  return { settle, throwOutcome, within, nthReturned, pending };
+  return { settle, throwOutcome, within, nthReturned, pending, even, odd, empty, extended };
 })
