@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+const child = `${import.meta.dir}/member-capture-child.ts`;
+const blocked = Bun.spawn([process.execPath, 'run', child, 'wait'], { stdout: 'pipe', stderr: 'pipe' });
+while (!await Bun.file(`${process.env.SHARED_WASM_PAGE_CONTROL}/capture-release`).exists()) await Bun.sleep(1);
+blocked.kill();
+assert.notEqual(await blocked.exited, 0);
+assert.equal(await new Response(blocked.stderr).text(), 'member capture buffered stderr\n');
+const ended = Bun.spawnSync([process.execPath, 'run', child, 'exit'], { stdout: 'pipe', stderr: 'pipe' });
+assert.equal(ended.exitCode, 7);
+assert.equal(ended.stderr.toString(), 'member capture host stderr control\nmember capture buffered stderr\n');
+console.log('shared-wasm member capture: pass');

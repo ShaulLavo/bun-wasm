@@ -717,6 +717,9 @@ impl Engine for SpiderMonkey {
     fn is_promise(&self, value: &SmVal) -> bool {
         self.promise_state(value).is_some()
     }
+    fn is_module_namespace(&self, value: &SmVal) -> Option<bool> {
+        Some(unsafe { sys::bsm_is_module_namespace(value.raw()) })
+    }
     fn is_proxy(&self, value: &SmVal) -> bool {
         unsafe { sys::bsm_is_proxy(value.raw()) }
     }
