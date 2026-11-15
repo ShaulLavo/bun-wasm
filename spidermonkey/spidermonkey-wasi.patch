@@ -1220,7 +1220,7 @@ index f1ce887af..00c9ecad1 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..b017e9eff 100644
+index 9524c5d6a..b3d744e5d 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,29 @@
@@ -1253,7 +1253,7 @@ index 9524c5d6a..b017e9eff 100644
  #include "mozilla/Attributes.h"  // MOZ_ALWAYS_INLINE, MOZ_COLD
  #include "mozilla/Likely.h"      // MOZ_LIKELY
  #include "mozilla/Variant.h"     // mozilla::Variant, mozilla::AsVariant
-@@ -30,6 +53,63 @@ struct JS_PUBLIC_API JSContext;
+@@ -30,6 +53,69 @@ struct JS_PUBLIC_API JSContext;
  
  namespace js {
  
@@ -1278,20 +1278,26 @@ index 9524c5d6a..b017e9eff 100644
 +// reached again through an element's toString.
 +inline constexpr size_t JSONSerializeReserve = 896;
 +inline constexpr size_t ArrayJoinReserve = 1536;
-+// Parser levels, the same on both tiers. Statement nesting stays at the
-+// size Next's generated validators allow (docs/stack-limits.md).
-+inline constexpr size_t StatementReserve = 336;
-+inline constexpr size_t StatementListItemReserve = 352;
++// Compile levels, the same on both tiers. Each size sits in a frame that
++// stays on its recursion cycle after the parser frame merges, so every cycle
++// holds at least one. A statement level holds statementList's (through
++// statementListItem), ifStatement's or statement's. An expression level
++// holds assignExpr's, unaryExpr's and memberExpr's; chains that pass only
++// one of them (assignments, conditionals, unary operators, `new`) hold that
++// one.
++inline constexpr size_t StatementListItemReserve = 640;
++inline constexpr size_t IfStatementReserve = 256;
++inline constexpr size_t StatementReserve = 1104;
++inline constexpr size_t AssignExprReserve = 880;
++inline constexpr size_t UnaryExprReserve = 592;
++inline constexpr size_t MemberExprReserve = 848;
++// Levels that add a frame of their own to those three.
++inline constexpr size_t ArgumentListReserve = 464;
++inline constexpr size_t TemplateLiteralReserve = 512;
 +inline constexpr size_t FunctionBodyReserve = 1696;
-+inline constexpr size_t FunctionExpressionReserve = 2880;
-+inline constexpr size_t ArgumentListReserve = 2800;
-+inline constexpr size_t ArrayLiteralReserve = 2816;
-+inline constexpr size_t ObjectLiteralReserve = 2784;
-+inline constexpr size_t ElementAccessReserve = 2784;
-+inline constexpr size_t TemplateLiteralReserve = 3248;
-+inline constexpr size_t ConditionalReserve = 1088;
-+inline constexpr size_t ParenthesizedReserve = 3072;
-+inline constexpr size_t UnaryReserve = 464;
++// The bytecode emitter walks the finished tree with frames of its own and
++// spends more host stack per statement level than the parser.
++inline constexpr size_t EmitTreeReserve = 416;
 +}  // namespace bunwasm
 +
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
@@ -1318,7 +1324,7 @@ index 9524c5d6a..b017e9eff 100644
  
  #ifdef __wasi__
 diff --git i/js/src/frontend/Parser.cpp w/js/src/frontend/Parser.cpp
-index 34f4dee86..0784efd6e 100644
+index 34f4dee86..816c5c1e9 100644
 --- i/js/src/frontend/Parser.cpp
 +++ w/js/src/frontend/Parser.cpp
 @@ -2996,6 +2996,7 @@ template <class ParseHandler, typename Unit>
@@ -1372,7 +1378,7 @@ index 34f4dee86..0784efd6e 100644
  GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
      YieldHandling yieldHandling) {
    TokenKind next;
-@@ -6257,6 +6269,35 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
+@@ -6257,6 +6269,34 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
      return errorResult();
    }
  
@@ -1381,9 +1387,8 @@ index 34f4dee86..0784efd6e 100644
 +  // frame: the same recursion unit, checked before the token is consumed,
 +  // then blockStatement. This function is merged into ifStatement, so a
 +  // braced if level costs ifStatement and statementList frames only.
-+  // statement()'s shadow reservation moves with it, onto ifStatement's frame.
++  // ifStatement holds the shadow reservation for its own frame.
 +  if (next == TokenKind::LeftCurly) {
-+    BUNWASM_RESERVE_STACK(bunwasm::StatementReserve);
 +    AutoCheckRecursionLimit recursion(this->fc_);
 +    if (!recursion.check(this->fc_)) {
 +      return errorResult();
@@ -1408,6 +1413,14 @@ index 34f4dee86..0784efd6e 100644
    // Annex B.3.4 says that unbraced FunctionDeclarations under if/else in
    // non-strict code act as if they were braced: |if (x) function f() {}|
    // parses as |if (x) { function f() {} }|.
+@@ -6304,6 +6344,7 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
+ template <class ParseHandler, typename Unit>
+ typename ParseHandler::TernaryNodeResult
+ GeneralParser<ParseHandler, Unit>::ifStatement(YieldHandling yieldHandling) {
++  BUNWASM_RESERVE_STACK(bunwasm::IfStatementReserve);
+   Vector<Node, 4> condList(fc_), thenList(fc_);
+   Vector<uint32_t, 4> posList(fc_);
+   Node elseBranch;
 @@ -9299,6 +9340,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
  template <class ParseHandler, typename Unit>
  typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
@@ -1428,35 +1441,15 @@ index 34f4dee86..0784efd6e 100644
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -10114,15 +10157,17 @@ GeneralParser<ParseHandler, Unit>::condExpr(InHandling inHandling,
-     return condition;
-   }
- 
--  Node thenExpr =
--      MOZ_TRY(assignExpr(InAllowed, yieldHandling, TripledotProhibited));
-+  Node thenExpr = MOZ_TRY(BUNWASM_RESERVED_CALL(
-+      bunwasm::ConditionalReserve,
-+      assignExpr(InAllowed, yieldHandling, TripledotProhibited)));
- 
-   if (!mustMatchToken(TokenKind::Colon, JSMSG_COLON_IN_COND)) {
+@@ -10133,6 +10176,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::assignExpr(
+     TripledotHandling tripledotHandling,
+     PossibleError* possibleError /* = nullptr */,
+     InvokedPrediction invoked /* = PredictUninvoked */) {
++  BUNWASM_RESERVE_STACK(bunwasm::AssignExprReserve);
+   AutoCheckRecursionLimit recursion(this->fc_);
+   if (!recursion.check(this->fc_)) {
      return errorResult();
-   }
- 
--  Node elseExpr =
--      MOZ_TRY(assignExpr(inHandling, yieldHandling, TripledotProhibited));
-+  Node elseExpr = MOZ_TRY(BUNWASM_RESERVED_CALL(
-+      bunwasm::ConditionalReserve,
-+      assignExpr(inHandling, yieldHandling, TripledotProhibited)));
- 
-   return handler_.newConditional(condition, thenExpr, elseExpr);
- }
-@@ -10493,12 +10538,13 @@ typename ParseHandler::UnaryNodeResult
- GeneralParser<ParseHandler, Unit>::unaryOpExpr(YieldHandling yieldHandling,
-                                                ParseNodeKind kind,
-                                                uint32_t begin) {
-+  BUNWASM_RESERVE_STACK(bunwasm::UnaryReserve);
-   Node kid = MOZ_TRY(unaryExpr(yieldHandling, TripledotProhibited));
-   return handler_.newUnary(kind, begin, kid);
+@@ -10498,7 +10542,7 @@ GeneralParser<ParseHandler, Unit>::unaryOpExpr(YieldHandling yieldHandling,
  }
  
  template <class ParseHandler, typename Unit>
@@ -1465,7 +1458,15 @@ index 34f4dee86..0784efd6e 100644
  GeneralParser<ParseHandler, Unit>::optionalExpr(
      YieldHandling yieldHandling, TripledotHandling tripledotHandling,
      TokenKind tt, PossibleError* possibleError /* = nullptr */,
-@@ -10762,6 +10808,7 @@ typename ParseHandler::ListNodeResult
+@@ -10589,6 +10633,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::unaryExpr(
+     PossibleError* possibleError /* = nullptr */,
+     InvokedPrediction invoked /* = PredictUninvoked */,
+     PrivateNameHandling privateNameHandling /* = PrivateNameProhibited */) {
++  BUNWASM_RESERVE_STACK(bunwasm::UnaryExprReserve);
+   AutoCheckRecursionLimit recursion(this->fc_);
+   if (!recursion.check(this->fc_)) {
+     return errorResult();
+@@ -10762,6 +10807,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::argumentList(
      YieldHandling yieldHandling, bool* isSpread,
      PossibleError* possibleError /* = nullptr */) {
@@ -1473,31 +1474,15 @@ index 34f4dee86..0784efd6e 100644
    ListNodeType argsList = MOZ_TRY(handler_.newArguments(pos()));
  
    bool matched;
-@@ -11149,6 +11196,7 @@ GeneralParser<ParseHandler, Unit>::memberElemAccess(
-     Node lhs, YieldHandling yieldHandling,
-     OptionalKind optionalKind /* = OptionalKind::NonOptional */) {
-   MOZ_ASSERT(anyChars.currentToken().type == TokenKind::LeftBracket);
-+  BUNWASM_RESERVE_STACK(bunwasm::ElementAccessReserve);
-   Node propExpr = MOZ_TRY(expr(InAllowed, yieldHandling, TripledotProhibited));
+@@ -10844,6 +10890,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::memberExpr(
+     YieldHandling yieldHandling, TripledotHandling tripledotHandling,
+     TokenKind tt, bool allowCallSyntax, PossibleError* possibleError,
+     InvokedPrediction invoked) {
++  BUNWASM_RESERVE_STACK(bunwasm::MemberExprReserve);
+   MOZ_ASSERT(anyChars.isCurrentTokenType(tt));
  
-   if (!mustMatchToken(TokenKind::RightBracket, JSMSG_BRACKET_IN_INDEX)) {
-@@ -11724,6 +11772,7 @@ typename ParseHandler::ListNodeResult
- GeneralParser<ParseHandler, Unit>::arrayInitializer(
-     YieldHandling yieldHandling, PossibleError* possibleError) {
-   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftBracket));
-+  BUNWASM_RESERVE_STACK(bunwasm::ArrayLiteralReserve);
- 
-   uint32_t begin = pos().begin;
-   ListNodeType literal = MOZ_TRY(handler_.newArrayLiteral(begin));
-@@ -12145,6 +12194,7 @@ typename ParseHandler::ListNodeResult
- GeneralParser<ParseHandler, Unit>::objectLiteral(YieldHandling yieldHandling,
-                                                  PossibleError* possibleError) {
-   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftCurly));
-+  BUNWASM_RESERVE_STACK(bunwasm::ObjectLiteralReserve);
- 
-   uint32_t openedPos = pos().begin;
- 
-@@ -12576,7 +12626,7 @@ GeneralParser<ParseHandler, Unit>::importExpr(YieldHandling yieldHandling,
+   Node lhs;
+@@ -12576,7 +12623,7 @@ GeneralParser<ParseHandler, Unit>::importExpr(YieldHandling yieldHandling,
  }
  
  template <class ParseHandler, typename Unit>
@@ -1506,32 +1491,7 @@ index 34f4dee86..0784efd6e 100644
  GeneralParser<ParseHandler, Unit>::primaryExpr(
      YieldHandling yieldHandling, TripledotHandling tripledotHandling,
      TokenKind tt, PossibleError* possibleError, InvokedPrediction invoked) {
-@@ -12588,8 +12638,9 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
- 
-   switch (tt) {
-     case TokenKind::Function:
--      return functionExpr(pos().begin, invoked,
--                          FunctionAsyncKind::SyncFunction);
-+      return BUNWASM_RESERVED_CALL(
-+          bunwasm::FunctionExpressionReserve,
-+          functionExpr(pos().begin, invoked, FunctionAsyncKind::SyncFunction));
- 
-     case TokenKind::Class:
-       return classDefinition(yieldHandling, ClassExpression, NameRequired);
-@@ -12638,8 +12689,10 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
-       }
- 
-       // Pass |possibleError| to support destructuring in arrow parameters.
--      Node expr = MOZ_TRY(exprInParens(InAllowed, yieldHandling,
--                                       TripledotAllowed, possibleError));
-+      Node expr = MOZ_TRY(BUNWASM_RESERVED_CALL(
-+          bunwasm::ParenthesizedReserve,
-+          exprInParens(InAllowed, yieldHandling, TripledotAllowed,
-+                       possibleError)));
-       if (!mustMatchToken(TokenKind::RightParen, JSMSG_PAREN_IN_PAREN)) {
-         return errorResult();
-       }
-@@ -12770,7 +12823,7 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+@@ -12770,7 +12817,7 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
  }
  
  template <class ParseHandler, typename Unit>
@@ -2148,3 +2108,15 @@ index 803b92892..643a1fa86 100644
 +}
 +#  endif
  #endif  // __wasi__
+diff --git i/js/src/frontend/BytecodeEmitter.cpp w/js/src/frontend/BytecodeEmitter.cpp
+index 18e469828..895bf0341 100644
+--- i/js/src/frontend/BytecodeEmitter.cpp
++++ w/js/src/frontend/BytecodeEmitter.cpp
+@@ -12668,6 +12668,7 @@ bool BytecodeEmitter::emitExportDefault(BinaryNode* exportNode) {
+ bool BytecodeEmitter::emitTree(
+     ParseNode* pn, ValueUsage valueUsage /* = ValueUsage::WantValue */,
+     EmitLineNumberNote emitLineNote /* = EMIT_LINENOTE */) {
++  BUNWASM_RESERVE_STACK(bunwasm::EmitTreeReserve);
+   AutoCheckRecursionLimit recursion(fc);
+   if (!recursion.check(fc)) {
+     return false;
