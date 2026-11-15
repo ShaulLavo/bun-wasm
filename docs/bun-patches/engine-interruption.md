@@ -48,8 +48,8 @@ native operation; QuickJS retains its existing native-operation interrupt polls.
 The original `web/tests/engine-interruption-stop.ts` proof adapter holds a requested
 native stop pending until the production bootstrap has returned and its genuine
 terminal exit message has crossed the worker's FIFO channel. Only then does it
-acknowledge the completed execution. Physical termination remains disabled until
-explicit teardown, so the original assertions still prove native termination did
+acknowledge genuine guest/bootstrap execution quiescence. The host Worker scaffold
+remains physically alive until explicit teardown, so the original assertions still prove native termination did
 not produce the unwind. Returning immediately from a suppressed terminate
 would expire Waffle's observation lease while the guest was still unwinding,
 preventing the terminal message that the proof requires. Failed-proof teardown

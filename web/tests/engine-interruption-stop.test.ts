@@ -16,7 +16,7 @@ function fixture() {
 }
 
 for (const first of ["exit", "return"] as const) {
-  test(`native return stays pending until both proof events, ${first} first`, async () => {
+  test(`execution acknowledgement stays pending until both proof events, ${first} first`, async () => {
     const { stop, observer, returned, nativeStops } = fixture();
     let acknowledged = false;
     const pending = stop.request();
@@ -58,7 +58,7 @@ test("a completed proof may receive a later stop request", async () => {
   } finally { stop.force(); }
 });
 
-test("failed-proof cleanup releases a held stop even with no completion events", async () => {
+test("failed-proof cleanup acknowledges actual forced stop without claiming proof events", async () => {
   const { stop, observer, returned, nativeStops } = fixture();
   try {
     const pending = stop.request();
@@ -69,4 +69,29 @@ test("failed-proof cleanup releases a held stop even with no completion events",
     expect(nativeStops()).toBe(1);
     expect(observer.read().kind).toBe("terminated");
   } finally { stop.force(); }
+});
+
+
+test("a failed native stop cannot acknowledge failed-proof cleanup", async () => {
+  const failure = new Error("native stop failed");
+  let fail = true;
+  let physicallyStopped = false;
+  let acknowledged = false;
+  const stop = new CooperativeWorkerStop(() => {
+    if (fail) throw failure;
+    physicallyStopped = true;
+  });
+  const pending = stop.request();
+  void pending.then(() => { acknowledged = true; });
+  try {
+    expect(() => stop.force()).toThrow(failure);
+    await Promise.resolve();
+    expect(physicallyStopped).toBe(false);
+    expect(acknowledged).toBe(false);
+    fail = false;
+    stop.force();
+    await pending;
+    expect(physicallyStopped).toBe(true);
+    expect(acknowledged).toBe(true);
+  } finally { fail = false; stop.force(); }
 });

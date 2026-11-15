@@ -103,7 +103,8 @@ function destroy(): Promise<void> {
   if (destruction) return destruction;
   destroyed = true;
   return destruction = (async () => {
-    // Release held native-stop acknowledgements before awaiting broker disposal.
+    // Capture failure evidence before native stop releases held execution acknowledgements.
+    for (const context of currentCase?.contexts ?? []) context.final ??= captureContext(context.read);
     for (const worker of Array.from(activeWorkers)) {
       try { worker.forceTerminate(); } catch (error) { destroyErrors.push(String(error)); }
     }
@@ -188,8 +189,8 @@ async function scope(module: WebAssembly.Module, engine: Engine, route: EngineIn
     async dispose(): Promise<void> {
       if (disposed) return;
       disposed = true;
-      // Preserve diagnostics before broker disposal can forget process metadata.
-      context.final = captureContext(context.read);
+      // Capture failure evidence before forced native stop and broker disposal.
+      context.final ??= captureContext(context.read);
       const children = Array.from(base.children.values());
       const errors: unknown[] = [];
       for (const child of children) {
@@ -557,7 +558,7 @@ async function testPreview1Clock(root: boolean): Promise<void> {
       }
       return { root, latencyMs, generation, suppressedNotifications: mutation?.count() ?? 0, causalRejection, evidence };
     } finally {
-      context.final = captureContext(context.read);
+      context.final ??= captureContext(context.read);
       instrumentPreview1Root = false;
       await cleanupCase([
         () => mutation?.restore(),

@@ -1,5 +1,5 @@
-/** Keep Waffle's observation lease until real return and the terminal FIFO barrier.
- * The native worker stays alive for proof assertions until explicit teardown. */
+/** Acknowledge genuine guest/bootstrap execution quiescence after real return and
+ * the terminal FIFO barrier. The host Worker scaffold stays physically alive until teardown. */
 export class CooperativeWorkerStop {
   private exited = false;
   private returned = false;
@@ -18,7 +18,8 @@ export class CooperativeWorkerStop {
   observeExit(): void { this.exited = true; this.complete(); }
   observeReturn(): void { this.returned = true; this.complete(); }
 
-  /** Emergency cleanup releases a pending stop without claiming either proof event. */
+  /** Call after capturing failure evidence. Actual forced native stop must finish
+   * before releasing the acknowledgement, so broker disposal cannot deadlock. */
   force(): void {
     if (this.stopped) return;
     this.nativeStop();
@@ -28,6 +29,7 @@ export class CooperativeWorkerStop {
 
   private complete(): void {
     if (!this.pending || !this.exited || !this.returned) return;
+    // Execution is quiescent; physical Worker termination remains disabled for the proof.
     this.pending.resolve();
   }
 }
