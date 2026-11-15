@@ -3,9 +3,9 @@ import { join } from "node:path";
 import type { Page, Request, Response } from "playwright";
 import { ready } from "./playground.mjs";
 
-async function observe<T>(read: () => Promise<T>) {
+async function observe<T>(read: () => Promise<T>, hangCap = 5_000) {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("diagnostic observation exceeded its 5 second hang cap")), 5_000); });
+  const expired = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`diagnostic observation exceeded its ${hangCap} ms hang cap`)), hangCap); });
   try { return { outcome: "ok", value: await Promise.race([read(), expired]) } as const; }
   catch (error) { return { outcome: "error", error: String(error) } as const; }
   finally { clearTimeout(timer); }
@@ -75,7 +75,8 @@ export async function openQuickjsStackPage(page: Page, url: string): Promise<voi
   // Runtime publication below decides readiness; unrelated resources need not finish loading.
   try { await page.goto(target, { waitUntil: "domcontentloaded", timeout: 30_000 }); }
   catch (error) {
-    await reportFailure(page, target, error, requests.snapshot()).catch(failure => { console.error("QuickJS navigation diagnostic failed:", failure); });
+    const diagnostic = await observe(() => reportFailure(page, target, error, requests.snapshot()), 15_000);
+    if (diagnostic.outcome === "error") console.error("QuickJS navigation diagnostic failed:", diagnostic.error);
     throw error;
   } finally { requests.stop(); }
   await ready(page, 90_000);

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -110,3 +111,15 @@ for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: a navigation failure records browser requests`, () => navigationFailure(engine, "connection"), 30_000);
   test(`${engine.name()}: a diagnostic write failure preserves the navigation error`, () => navigationFailure(engine, "sink"), 30_000);
 }
+
+test("a diagnostic sink that never settles preserves the navigation error and removes listeners", () => {
+  const directory = mkdtempSync(join(tmpdir(), "qjs-report-"));
+  try {
+    const output = execFileSync(process.execPath, [new URL("./fixtures/quickjs-stack-stalled-report.ts", import.meta.url).pathname], {
+      encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL",
+      env: { ...process.env, TMPDIR: directory, BUN_WASM_BROWSER_REPORT_DIR: join(directory, "reports") },
+    });
+    expect(output).toContain("STALLED_REPORT_WRITE");
+    expect(output).toContain("STALLED_REPORT_RESULT original error preserved; listeners removed");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+}, 90_000);
