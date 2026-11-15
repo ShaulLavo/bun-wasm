@@ -93,6 +93,7 @@ function sourceLoop(internal: { native: object; require(name: string): unknown; 
   const unused = () => { throw new Error("No networking in this fixture"); };
   modules.set("http_common", { validateHeaderName: unused, validateHeaderValue: unused, validateMethod: unused, validatePath: unused, validateStatus: unused, outgoingHeaders: unused });
   modules.set("websocket", { clientClass: () => class {} });
+  modules.set("io_pump", factory("io_pump")(internal));
   modules.set("net", factory("net", undefined, "js")(Object.assign(internal, { web: { Request, Response, Headers } })));
   const pumpIo = internal.pumpIo;
   if (!pumpIo) throw new Error("net.js installed no pumpIo");

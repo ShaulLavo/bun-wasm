@@ -161,6 +161,7 @@ function httpFixture(protocol: "http" | "tcp" = "http") {
   const ports = load("net_port.ts")();
   const addressModules = { net_address: load("net_address.ts")({ require: () => ports }) };
   const modules = {
+    io_pump: load("io_pump.ts")({ native }),
     events: EventEmitter, buffer: { Buffer }, net_port: ports, net_address: addressModules.net_address, net_listener: factory({ native, runInContext: frames.runInContext }),
     net_hostname: load("net_hostname.ts")({ require: (name: keyof typeof addressModules) => addressModules[name] }),
     http_common: load("http_common.ts")(), http_agent: load("http_agent.ts")(), websocket: { clientClass: () => undefined },

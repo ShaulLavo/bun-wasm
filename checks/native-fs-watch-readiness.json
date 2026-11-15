@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fs-watch-readiness",
+  "engines": ["quickjs", "jsc", "browser"]
+}
