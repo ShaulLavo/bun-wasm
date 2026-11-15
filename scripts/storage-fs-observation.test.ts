@@ -112,6 +112,42 @@ test("observation callback failure cannot replace the original native result or 
   } finally { observer.dispose(); pair.client.port.postMessage = original; pair.client.port.close(); pair.server.port.close(); }
 });
 
+test.each([false, true])("frame inspection failure preserves the native send when reporting throws=%s", async reportThrows => {
+  const { createFilesystemConnection } = await import("../web/node_modules/waffle/fs/protocol");
+  const { observeFilesystemEndpoint } = await import("./storage-fs-endpoint");
+  const pair = createFilesystemConnection();
+  const port = pair.client.port;
+  const original = port.postMessage;
+  const metadataError = new Error("frame metadata inspection failed");
+  const reporterError = new Error("metadata reporter failed");
+  const reported: unknown[] = [];
+  const frame = new Proxy({}, { has() { throw metadataError; } });
+  let nativeError: unknown;
+  let nativeCalls = 0;
+  port.postMessage = function (...args) {
+    nativeCalls++;
+    expect(this).toBe(port);
+    expect(args[0]).toBe(frame);
+    try { return Reflect.apply(original, this, args); }
+    catch (error) { nativeError = error; throw error; }
+  };
+  const observer = observeFilesystemEndpoint(pair.client, { tree: "control", realm: "native-port", endpoint: "client", workerURL: "control" }, () => {}, error => {
+    reported.push(error);
+    if (reportThrows) throw reporterError;
+  });
+  try {
+    let observedError: unknown;
+    try { port.postMessage(frame); } catch (error) { observedError = error; }
+    expect(nativeCalls).toBe(1);
+    expect(nativeError).toMatchObject({ name: "DataCloneError" });
+    expect(observedError).toBe(nativeError);
+    expect(observedError).not.toBe(metadataError);
+    expect(observedError).not.toBe(reporterError);
+    expect(reported).toEqual([metadataError]);
+    expect(observer.snapshot().first?.kind).toBe("send-error");
+  } finally { observer.dispose(); port.postMessage = original; port.close(); pair.server.port.close(); }
+});
+
 test("repeated causal snapshots cannot spend another emission or cross document streams", () => {
   const state = { recent: [], causalEvents: 0, propagationEvents: 0, causalKeys: new Set<string>() }, emitted: object[] = [];
   const snapshot = { owner: 1, generation: 1, endpoint: "client", first: { kind: "messageerror", closedBefore: null, sequence: 1 } };

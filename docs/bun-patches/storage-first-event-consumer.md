@@ -8,6 +8,8 @@ Its upstream path is `packages/waffle/tests/fixtures/filesystem-endpoint-observe
 The source is retained in the Storage lane's `firefox-stop-fork-boundary` evidence.
 Private imports select the consuming app's installed Waffle. The adaptation adds
 bounded observation notifications and preserves the original post result.
+Frame-inspection failures are reported separately so the original send still runs
+and preserves its native result or exception, even if the diagnostic reporter throws.
 No Waffle package source, export or release pin changes.
 
 Build hooks read Waffle 0.0.131 at `5515535c372ea4b7c93bd90ceda3cf4756ef9373`:

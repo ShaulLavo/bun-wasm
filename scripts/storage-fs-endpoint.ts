@@ -30,9 +30,12 @@ export function observeFilesystemEndpoint(
   changed: (afterHandler?: boolean) => void = () => {},
   failed: (error: unknown) => void = () => {},
 ) {
+  function reportFailure(error: unknown): void {
+    try { failed(error); } catch {}
+  }
   function notify(afterHandler = false): void {
     try { changed(afterHandler); }
-    catch (error) { try { failed(error); } catch {} }
+    catch (error) { reportFailure(error); }
   }
   const port = connection.port;
   if (port.onmessage || port.onmessageerror) throw Error("endpoint observer installed too late");
@@ -55,6 +58,10 @@ export function observeFilesystemEndpoint(
     lastReceive: Frame | null;
   };
   let first: FirstEvent | null = null;
+  function inspectFrame(value: unknown): Frame {
+    try { return describeFrame(value, inherited); }
+    catch (error) { reportFailure(error); return { kind: "other" }; }
+  }
   const closed = () => requestTransportError(connection.requests)?.reason ?? null;
   function record(kind: FirstEvent["kind"], trusted: boolean | null): void {
     if (first) return;
@@ -64,7 +71,7 @@ export function observeFilesystemEndpoint(
   function message(event: MessageEvent<unknown>): void {
     sequence++;
     receives++;
-    lastReceive = describeFrame(event.data, inherited);
+    lastReceive = inspectFrame(event.data);
     if (lastReceive.kind === "request") requestReceives++;
     if (receives === 1) notify();
     if (lastReceive.kind === "transportClosed") record("transportClosed", event.isTrusted);
@@ -79,7 +86,7 @@ export function observeFilesystemEndpoint(
   ) {
     if (this !== port) return Reflect.apply(originalSend, this, args);
     sequence++;
-    lastSend = describeFrame(args[0], inherited);
+    lastSend = inspectFrame(args[0]);
     try {
       const result = Reflect.apply(originalSend, this, args);
       sends++;
