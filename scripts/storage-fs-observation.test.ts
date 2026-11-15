@@ -31,7 +31,7 @@ test("retention bounds recent metadata and separates stale shared closure from a
 });
 test("all actual consumer seams fail closed on source drift and leave executors untouched", () => {
   for (const file of ["web/src/main.ts", "web/src/worker.ts", "web/src/preview1-worker.ts", "web/src/fs-worker.ts", "web/node_modules/bash-web/src/runtime/worker.ts", "web/node_modules/waffle/fs/client.ts", "web/node_modules/waffle/fs/service.ts", "web/node_modules/waffle/runtime.ts", "web/node_modules/waffle/browser/shared-fs.ts"]) {
-    const path = resolve(file), original = readFileSync(path, "utf8");
+    const path = resolve(import.meta.dir, "..", file), original = readFileSync(path, "utf8");
     const transformed = storageObservationSource(path, original);
     expect(transformed).toBeDefined();
     if (file.endsWith("/client.ts") || file.endsWith("/service.ts") || file.endsWith("/worker.ts") || file.endsWith("/preview1-worker.ts")) {
@@ -44,7 +44,7 @@ test("all actual consumer seams fail closed on source drift and leave executors 
 test("default build has no observation plugin and helper-only edits select the same blocking storage gate", () => {
   const previous = process.env.BUN_WASM_STORAGE_DIAGNOSTICS;
   delete process.env.BUN_WASM_STORAGE_DIAGNOSTICS;
-  try { expect(browserBuildConfig([resolve("web/src/main.ts")], "/work/tmp/unused").plugins?.some(plugin => plugin.name === "storage-first-event")).toBe(false); }
+  try { expect(browserBuildConfig([resolve(import.meta.dir, "../web/src/main.ts")], "/work/tmp/unused").plugins?.some(plugin => plugin.name === "storage-first-event")).toBe(false); }
   finally { if (previous === undefined) delete process.env.BUN_WASM_STORAGE_DIAGNOSTICS; else process.env.BUN_WASM_STORAGE_DIAGNOSTICS = previous; }
   const storage = discoverChecks().find(check => check.path === "scripts/sandbox-storage-browser.test.ts");
   for (const path of ["scripts/storage-fs-build.ts", "scripts/storage-fs-endpoint.ts", "scripts/storage-fs-observation.ts"]) {
