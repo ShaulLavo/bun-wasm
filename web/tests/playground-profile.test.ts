@@ -5,6 +5,9 @@ import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
 import { Playground } from "../src/playground/playground";
 import { registerPlaygroundBun, type PlaygroundProfile } from "../src/playground/program-profile";
+import { PACKAGE_CONTINUATION } from "../../src/package-continuation-binding";
+import { createProgramShell } from "../../tests/package/fixtures/program-shell";
+import type { DescriptorTable } from "waffle/core/descriptors";
 
 const { createRuntime }: typeof import("waffle") = await import(Bun.resolveSync("waffle", process.cwd()));
 
@@ -30,7 +33,7 @@ for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) test(`${engine
     expect(programs).not.toHaveBeenCalled();
     const registered = await registerPlaygroundBun({ runtime, engine, module, profile: "split", launcher });
     expect(registered.profile).toBe("split");
-    expect(programs.mock.calls.map(([path]) => path)).toEqual(["bun", "node", "nodejs"].map(name => `${registered.bin}/${name}`));
+    expect(programs.mock.calls.map(([path]) => path)).toEqual([PACKAGE_CONTINUATION].concat(["bun", "node", "nodejs"].map(name => `${registered.bin}/${name}`)));
     expect(await runtime.filesystem.readFile(`${registered.bin}/bun`)).toEqual(new TextEncoder().encode("bun-wasm registered executable\n"));
     registered.dispose();
   } finally { adapter.mockRestore(); programs.mockRestore(); await runtime.dispose(); }
@@ -48,7 +51,7 @@ for (const profile of ["split", "shared-group"] satisfies PlaygroundProfile[]) t
     }
     const registration = await pending;
     expect(registration.profile).toBe("shared-group");
-    expect(programs).toHaveBeenCalledTimes(3);
+    expect(programs).toHaveBeenCalledTimes(4);
     registration.dispose();
   } finally { programs.mockRestore(); await runtime.dispose(); }
 });
@@ -61,4 +64,19 @@ test("Browser's ordinary prepared module registers with the split default", asyn
     expect(registered.profile).toBe("split");
     registered.dispose();
   } finally { await runtime.dispose(); }
+});
+
+test("ordinary Playground resolves the package-script continuation before launching scripts", async () => {
+  const runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL("../src/fs-worker.ts", import.meta.url) }, memoryGroups: BUN_MEMORY_GROUP_POLICY });
+  const tables: DescriptorTable[] = [];
+  try {
+    const module = await prepareProgram({ kind: "single", core: empty });
+    const registration = await registerPlaygroundBun({ runtime, engine: "browser", module, profile: "split", launcher });
+    const shell = await createProgramShell(runtime, tables);
+    expect(await shell.access(PACKAGE_CONTINUATION)).toBe(0);
+    registration.dispose();
+  } finally {
+    await runtime.dispose();
+    for (const table of tables) table.dispose();
+  }
 });

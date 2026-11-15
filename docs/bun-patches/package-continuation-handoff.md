@@ -61,6 +61,13 @@ belongs to the Runtime, and survives installation disposal until Runtime disposa
 retains no filesystem client, handle, Worker or Wasm memory. Uninstall removes its program;
 reinstall reuses the launcher. Failed first installation removes it during rollback.
 
+The Playground's engine-profile installer registers this same private launcher, program
+and executable marker before publishing its Bun aliases. It previously installed only
+the aliases, so the current executor's first package script failed ordinary exec with
+ENOENT. Registration remains independent of the selected engine's memory profile.
+The original Playground regression checks the private executable through the actual
+runtime access query, without launching a framework or replacing the launcher.
+
 Owned startup failures select `context.startFailed` before entry; execution failures use
 `context.fail`. The immediate handle, synchronous revocation, caught work fence and
 distinct cleanup failures retain the reviewed ownership contract. Arbitrary foreign
