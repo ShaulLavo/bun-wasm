@@ -1,4 +1,4 @@
-import { ciRunner } from "./fixtures/ci-expressions";
+import { ciExpression, ciRunner } from "./fixtures/ci-expressions";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -26,7 +26,32 @@ test("a package exact-exec fixture-only edit retains its blocking Web unit owner
   expect(pullRequest).not.toHaveProperty("paths");
   expect(pullRequest).not.toHaveProperty("paths-ignore");
   expect(unit.needs).toBe("selection");
-  expect(unit.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}");
+  assert(typeof unit.if === "string");
+  const cases = [
+    ["pull_request", "ShaulLavo/bun-wasm", false, true],
+    ["pull_request", "fork/bun-wasm", false, true],
+    ["pull_request", "ShaulLavo/bun-wasm", true, false],
+    ["pull_request", "fork/bun-wasm", true, false],
+    ["push", "", false, true],
+    ["workflow_dispatch", "", false, true],
+  ] as const;
+  for (const enabled of ["", "true"]) {
+    for (const [event, repository, draft, expected] of cases) {
+      expect(ciExpression(unit.if, {
+        "vars.BUN_WASM_PC_RUNNER": enabled,
+        "github.event_name": event,
+        "github.ref": event === "pull_request" ? "refs/pull/1/merge" : "refs/heads/main",
+        "github.repository": "ShaulLavo/bun-wasm",
+        "github.event.pull_request.head.repo.full_name": repository,
+        "github.event.pull_request.draft": draft,
+        "needs.selection.result": "success",
+        "needs.selection.outputs.rust": "false",
+        "needs.selection.outputs.jsc": "false",
+        "needs.selection.outputs.shared": "false",
+        "needs.selection.outputs.shared-native": "false",
+      }), `${event}: ${repository}: draft=${draft}: PC=${enabled}`).toBe(expected);
+    }
+  }
   expect(unit).not.toHaveProperty("continue-on-error");
   expect(steps(unit).filter(step => step.run === "bash ../scripts/test-web-host.sh --unit")).toHaveLength(1);
   expect(readFileSync(new URL("./test-web-host.sh", import.meta.url), "utf8")).toContain("bun run test");
