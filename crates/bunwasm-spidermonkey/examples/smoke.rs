@@ -362,7 +362,7 @@ fn compile_budget_checks() {
         (
             "try blocks",
             "'try {'.repeat(n) + '1;' + '} finally {}'.repeat(n)",
-            157.0,
+            159.0,
         ),
         (
             "switches",
