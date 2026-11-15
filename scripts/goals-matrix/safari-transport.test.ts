@@ -727,6 +727,27 @@ test("an untrusted fixture event cannot pass despite the expected counter value"
   } finally { await transport.close(); }
 });
 
+test.each([
+  { change: "delete globalThis.__goalsNativeClick", detail: "state-missing; statePresent=false" },
+  { change: "globalThis.__goalsNativeClick.token = 'private-other-token'", detail: "token-mismatch; statePresent=true; tokenEqual=false" },
+  { change: "location.href = 'http://private.test/changed'", detail: "url-mismatch; statePresent=true; tokenEqual=true; urlEqual=false" },
+  { change: "performance.timeOrigin += 1", detail: "time-origin-mismatch; statePresent=true; tokenEqual=true; urlEqual=true; timeOriginEqual=false" },
+])("native click propagates finite document evidence without retry: $detail", async row => {
+  const { driver, install } = counterDriver({ intercept: call => {
+    if (!call.path.endsWith("/click")) return;
+    runInContext(row.change, driver.context());
+    return reply(null);
+  } });
+  const transport = await driver.connect();
+  try {
+    install();
+    await expect(withScoped(transport, page => page.nativeClick!("button", "output", 1000))).rejects.toThrow(`Safari evaluation failed: Error: Native click document changed: ${row.detail}`);
+    expect(driver.calls.filter(call => call.path.endsWith("/click"))).toHaveLength(1);
+    expect(driver.calls.filter(call => call.path.endsWith("/execute/async"))).toHaveLength(2);
+  } finally { await transport.close(); }
+  expect(driver.deleted).toBe(true);
+});
+
 test("a nonzero counter refuses native input and simulator transport retains its existing path", async () => {
   const { driver, install } = counterDriver({ before: "1" });
   const transport = await driver.connect();
