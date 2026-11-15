@@ -29,12 +29,12 @@ The browser host passes 188 KiB on WebKit (`web/src/engine-stack-budget.ts`);
 The WASI embed patch changes `js/public/friend/StackLimits.h`,
 `js/src/vm/Interpreter.cpp`, `js/src/vm/PortableBaselineInterpret.cpp`,
 `js/src/frontend/Parser.cpp`, `js/src/builtin/JSON.cpp`,
-`js/src/builtin/Array.cpp` and `js/src/proxy/Proxy.cpp` at the same revision.
+and `js/src/builtin/Array.cpp` at the same revision.
 This is a port change. Uninitialized, address-escaped stack memory reserves
 shadow bytes until the reserving frame returns: a fixed array in the recursive
 function itself (`BUNWASM_RESERVE_STACK`), a never-inlined wrapper around one
 recursive call (`BUNWASM_RESERVED_CALL`), or an `alloca` whose size depends on
-the selected tier (`BUNWASM_RESERVE_STACK_DYNAMIC`). No bytes are filled and no
+the stack's depth (`BUNWASM_RESERVE_STACK_DYNAMIC`). No bytes are filled and no
 error-path bookkeeping is needed. Every macro is empty without
 `__wasi__ && BUNWASM_EMBED`. The sizes live in one place, `js::bunwasm` in
 `StackLimits.h`.
@@ -48,10 +48,10 @@ Next's webpack hook needs.
 
 | Site | Tier | Reserved bytes | Covered recursion | Sized by (binding shapes) |
 | --- | --- | ---: | --- | --- |
-| `RunScript` | interp | 1840 | Native calls into scripts: call/apply, getters, setters, bound and proxy targets | `getter`, `ajv` |
-| `RunScript` | PBL | 2304 | The same, entering PBL through its trampoline | `call`, `apply` |
-| `CallWithWasmStackReservation` around three recursive calls in `ICInterpretOps` | PBL | 384 | Scripted calls, getters and setters reached through inline caches | `ajv`, `getter` |
-| `Proxy::getInternal`, `setInternal`, `has`, `call`, `construct` | PBL | 1792 | Scripted proxy traps | `proxy` |
+| `RunScript`, shallow stack | interp | 1840 | Native calls into scripts: the program's own entry chain and the start of any recursion | `getter`, `ajv` |
+| `RunScript`, shallow stack | PBL | 2304 | The same, entering PBL through its trampoline | PBL parentheses and unary chains compiled under the program's own entries (main's size, kept); Next's webpack hook needs 184 KiB with it |
+| `RunScript`, deep stack (`bunwasm::StackIsDeep`) | both | 4096 | Runaway native recursion that remains after the interpreter loops: setters, computed getters, bound and proxy targets, array-like `apply`, coercion | Mac: PBL `stringify`, `proxy`, `toString` (caught up to 218 to 229 KiB), interp `computed` (224 KiB) |
+| `CallWithWasmStackReservation` around three recursive calls in `ICInterpretOps` | PBL | 384 | Scripted calls, getters and setters reached through inline caches before the stack is deep | `ajv`, `getter` |
 | `SerializeJSONProperty` | both | 896 | Nested arrays and objects in `JSON.stringify` | `stringify` |
 | `array_join` | both | 1536 | Nested arrays converted to strings | `join` |
 | `statement`, and the braced `if` body path that bypasses it (in `ifStatement`'s frame since the [parser frame merges](spidermonkey-frontend-frames.md)) | both | 336 | Labels and sub-statements (`if`, loop and `with` bodies) | `labels`, with `ifs`, `validator`, `labelWhile` |
@@ -78,9 +78,16 @@ own: the `ajv` shape costs what its getter costs. Runtime reservations stay at
 the shared entries (script entry and PBL's cache-interpreter calls), never inside
 `js::CallGetter`, `fun_call` or the bound-call path, so moving one path into the
 interpreter loop removes it from an entry's coverage. That entry is then
-re-sized from its remaining binding shapes. Proxy traps have their own PBL-only
-site, because a PBL-sized script entry would raise Next's need as much as the
-proxy shape's capacity.
+re-sized from its remaining binding shapes.
+
+The script-entry size also follows the stack
+([PBL hand-over](spidermonkey-pbl-handover.md)). A program's own entries are
+shallow and pay the tier's size, so Next's need and the compile shapes stay
+where main had them. Recursion that keeps the native route goes deep, where each
+entry pays 4096 bytes on either tier and the quota fires early enough. This
+replaced the PBL-only proxy-trap site of 1792 bytes: on PBL, getters, `call` and
+`apply` continue in the C++ interpreter's loop once the stack is deep, and the
+native routes that remain, proxy traps included, pay the deep entry size.
 
 Remove a site's reservation when its calls stay inside the interpreter loop.
 
