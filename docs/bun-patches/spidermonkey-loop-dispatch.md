@@ -37,6 +37,15 @@ native route still enters through `RunScript` and holds it. The smoke's budget
 run checks both: on the interpreter tier `a.b` getter recursion passes 4,096
 levels, and a computed-key getter (`o[k]`) is still stopped by the quota.
 
+The same holds for `call` and `apply`. A target run in the loop never reaches
+`RunScript`; every `call` or `apply` that keeps the native route (`fun_call` or
+`fun_apply`, then `js::Call`, then `RunScript`) still takes the reservation. At
+the 188 KiB WebKit budget, `apply` with an array-like and `f.call.call(f, ...)`
+stop at the same depths with and without this route (interpreter 75 and 70
+levels, PBL 52 and 44), below the 87 to 172 levels the counter alone allows; the
+budget smoke asserts both shapes stop below 85 levels on both tiers, and that
+in-loop `call` and `apply` pass 4,096 on the interpreter tier.
+
 The selected getter stays in the interpreter's mutable function root through
 delazification. The receiver comes from the case's existing `lval` or `receiver`
 root, never from the operand the generic lookup clears. Frame allocation cannot
