@@ -580,6 +580,14 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
         linker.define(&mut *store, "runtime_proc", name, function)?;
     }
     linker.func_wrap(
+        "runtime_proc",
+        "getpid",
+        |caller: Caller<'_, Host>| -> Result<i32> {
+            caller.data().cancel.check()?;
+            Ok(caller.data().processes.pid)
+        },
+    )?;
+    linker.func_wrap(
         "bun_package_scripts",
         "handoff",
         |caller: Caller<'_, Host>,

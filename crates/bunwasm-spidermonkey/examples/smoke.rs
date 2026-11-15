@@ -83,7 +83,7 @@ pub fn main() {
         unsafe { sys::bsm_shutdown() };
         return;
     }
-    if std::env::var("BUN_WASM_STACK_KIB").is_ok() {
+    if std::env::var("BUN_WASM_SPIDERMONKEY_STACK_KIB").is_ok() {
         budget_checks(pbl);
         unsafe { sys::bsm_shutdown() };
         return;
@@ -166,11 +166,12 @@ pub fn main() {
         );
         println!("ok uncatchable interrupt {label}; catch=0 finally=0");
     }
-    // Getters, setters, bound functions and calls with missing arguments re-enter the portable
-    // baseline interpreter in C. Each level holds a recursion unit, so the 350-unit WASI limit
-    // ends them with a catchable RangeError before a browser's native stack runs out. On the
-    // interpreter tier, missing-argument calls stay in the loop and only the bytecode stack
-    // bounds them.
+    // Setters and bound functions re-enter the engine in C on both tiers. Each level holds a
+    // recursion unit, so the 350-unit WASI limit ends them with a catchable RangeError before a
+    // browser's native stack runs out. Named getters and calls with missing arguments stay in an
+    // interpreter loop: the C++ interpreter's on that tier, and on PBL its own loop (padded
+    // arguments) or, once the stack is deep, the C++ interpreter's after the hand-over. Only the
+    // frame limit bounds them.
     for (label, code) in [
         (
             "getter",
@@ -200,15 +201,11 @@ pub fn main() {
         let depth = number(&format!(
             "var d = 0; try {{ {code} }} catch (e) {{ if (!(e instanceof RangeError)) throw e; }} d"
         ));
-        // Getters, call and apply run as interpreter frames on the interpreter tier.
-        let framed = matches!(label, "getter" | "call" | "apply");
-        let counted = pbl || (label != "missing argument" && !framed);
+        // Getters, call and apply run as C++ interpreter frames, on PBL once the stack is deep.
+        let counted = label == "setter" || label == "bound";
         assert!(depth > 100.0, "{label} recursion depth {depth}");
         assert!(!counted || depth < 350.0, "{label} recursion depth {depth}");
-        assert!(
-            pbl || !framed || depth > 4096.0,
-            "{label} recursion depth {depth}"
-        );
+        assert!(counted || depth > 4096.0, "{label} recursion depth {depth}");
 
         assert_eq!(number("6 * 7"), 42.0);
     }
@@ -223,7 +220,7 @@ pub fn main() {
     unsafe { sys::bsm_shutdown() };
 }
 
-/// With a host stack budget in `BUN_WASM_STACK_KIB` (WebKit hosts pass 188 KiB), every reserved
+/// With a budget in `BUN_WASM_SPIDERMONKEY_STACK_KIB` (WebKit hosts pass 188 KiB), every reserved
 /// recursion path ends in a catchable RangeError and evaluation continues. The byte quota, not the
 /// WASI counter, must stop reentrant getters and statement nesting, which shows the reservations
 /// are in effect (docs/bun-patches/spidermonkey-stack-budget.md).
@@ -289,17 +286,18 @@ fn budget_checks(pbl: bool) {
         );
         println!("budget {label} depth {depth}");
         assert_eq!(number("6 * 7"), 42.0);
-        // Without the quota the counter stops reentrant getters near 175 levels (interp) or 350
-        // (PBL). On the interpreter tier, `a.b` getters run as interpreter frames that use no
-        // host stack, so the frame limit ends them; a computed-key getter still reenters through
-        // RunScript, and its reservation must let the quota stop it
+        // Without the quota the counter stops reentrant getters near 175 levels (interp) or 234
+        // (PBL). `a.b` getters run as interpreter frames that use no host stack, so the frame
+        // limit ends them; on PBL they move to the C++ interpreter once the stack is deep
+        // (docs/bun-patches/spidermonkey-pbl-handover.md). A computed-key getter still reenters
+        // through RunScript, and its reservation must let the quota stop it
         // (docs/bun-patches/spidermonkey-loop-dispatch.md).
         // `call` and `apply` to a scripted target with a packed list also run in the loop there.
         // `apply` with an array-like and `call` of `call` keep the native route: without the quota
         // the counter stops them at 87 to 172 levels, so stopping below 85 shows the RunScript
         // reservation still governs them on both tiers.
-        let in_loop = !pbl && matches!(label, "getter" | "call" | "apply");
-        let reentrant = label == "computed getter" || (pbl && label == "getter");
+        let in_loop = matches!(label, "getter" | "call" | "apply");
+        let reentrant = label == "computed getter";
         let native_call = matches!(label, "apply array-like" | "call of call");
         let bound = if pbl { 300.0 } else { 140.0 };
         assert!(
