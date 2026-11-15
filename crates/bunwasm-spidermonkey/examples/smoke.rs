@@ -417,6 +417,28 @@ fn compile_budget_checks() {
             "'(class { m() { return '.repeat(n) + '1' + '} });'.repeat(n)",
             19.0,
         ),
+        // Binding patterns recurse outside the expression cycle. Without their reservations
+        // the frontend's bound stops them at about 1,290 levels (arrays) or 645 (objects).
+        (
+            "array binding patterns",
+            "'let ' + '['.repeat(n) + 'x' + ']'.repeat(n) + ' = [];'",
+            106.0,
+        ),
+        (
+            "object binding patterns",
+            "'let ' + '{a:'.repeat(n) + 'x' + '}'.repeat(n) + ' = {};'",
+            155.0,
+        ),
+        (
+            "parameter patterns",
+            "'(function (' + '['.repeat(n) + 'x' + ']'.repeat(n) + ') {});'",
+            101.0,
+        ),
+        (
+            "catch parameters",
+            "'try {} catch (' + '{a:'.repeat(n) + 'x' + '}'.repeat(n) + ') {}'",
+            155.0,
+        ),
     ] {
         let depth = number(&format!(
             "var make = (n) => 'if (false) {{' + ({make}) + '}}'; deepest((n) => !refused(() => (0, eval)(make(n))))"
