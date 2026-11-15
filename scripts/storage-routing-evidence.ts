@@ -1,5 +1,5 @@
 export type RoutingRow = Record<string, string | number | boolean | null>;
-export const routingTargets = ["/@vite/client", "/src/main.ts"];
+const routingTargets = ["/@vite/client", "/src/main.ts"];
 const limit = 4096;
 export class StorageRoutingEvidence {
   readonly rows: RoutingRow[] = [];
@@ -11,7 +11,8 @@ export class StorageRoutingEvidence {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Invalid routing metadata");
     if (Object.values(value).some(item => item !== null && !["string", "number", "boolean"].includes(typeof item))) throw Error("Routing metadata contains non-scalar data");
     const row = value as RoutingRow;
-    if (typeof row.kind !== "string") throw Error("Routing metadata has no event kind");
+    if (typeof row.kind !== "string" || typeof row.generation !== "string" || !Number.isSafeInteger(row.sequence) || Number(row.sequence) < 1) throw Error("Routing metadata has no valid event identity");
+    if (Object.values(row).some(value => typeof value === "string" && value.length > 2048 || typeof value === "number" && !Number.isFinite(value))) throw Error("Routing metadata exceeded scalar bounds");
     if (this.rows.some(existing => existing.generation === row.generation && existing.sequence === row.sequence)) return;
     if (this.rows.length === limit) { this.rows.shift(); this.dropped++; }
     this.rows.push({ ...row, observed: ++this.native });
@@ -22,7 +23,7 @@ export class StorageRoutingEvidence {
     this.requests.push({ ...value, observed: ++this.native });
   }
   beginRestart(): void { this.boundary = this.native; }
-  snapshot(): object { return { rows: this.rows.slice(), requests: this.requests.slice(), dropped: this.dropped, limit, boundary: this.boundary }; }
+  snapshot() { return { coverage: this.coverage(), rows: this.rows.slice(), requests: this.requests.slice(), dropped: this.dropped, limit, boundary: this.boundary }; }
   summaries(): object[] {
     return routingTargets.map(target => this.summarize(target));
   }
@@ -30,10 +31,14 @@ export class StorageRoutingEvidence {
     const rows = this.rows.filter(row => Number(row.observed) > this.boundary && targetPath(row.target) === target);
     const requests = this.requests.filter(row => Number(row.observed) > this.boundary && path(row.url) === target && row.kind === "request");
     const forwards = rows.filter(row => row.kind === "forward");
-    const base = { target, browserRequests: requests, joins: "unique target and port within observed restart window; no clock or cross-realm object-ID join" };
+    const base = { target, browserRequests: requests, candidates: this.candidateDetails(rows), joins: "unique target and port within observed restart window; no clock or cross-realm object-ID join" };
     if (!requests.length) return { ...base, firstIncomplete: "No observed browser request" };
     if (this.dropped || rows.some(row => Number(row.dropped) > 0)) return { ...base, firstIncomplete: "Unknown: routing retention or transport overflow", dropped: this.dropped };
-    if (!forwards.length) return { ...base, firstIncomplete: "Browser request observed; no SW forward observed", swFetch: this.rows.some(row => row.kind === "sw-fetch" && requests.some(request => request.url === row.url)) };
+    if (this.coverage().some(stream => stream.missing > 0)) return { ...base, firstIncomplete: "Unknown: routing stream coverage is missing", coverage: this.coverage() };
+    if (!forwards.length) {
+      const fetch = this.rows.some(row => row.kind === "sw-fetch" && requests.some(request => request.url === row.url));
+      return { ...base, firstIncomplete: fetch ? "SW fetch observed; forward not observed" : "Unknown: browser request observed; no SW event observed" };
+    }
     if (requests.length !== 1 || forwards.length !== 1) return { ...base, firstIncomplete: "Unknown: ambiguous same-target browser/SW join" };
     const forward = forwards[0]!;
     if (requests[0]!.url !== forward.url) return { ...base, firstIncomplete: "Unknown: browser and SW request URLs differ" };
@@ -41,6 +46,8 @@ export class StorageRoutingEvidence {
     const candidates = worker.filter(row => row.kind === "claim-open");
     const replies = worker.filter(row => row.kind === "claim-reply");
     const explicit = worker.find(row => row.kind === "claim-post-failure" || row.kind === "claim-timeout" || row.kind === "claim-reply" && row.reply === "error");
+    const refusal = replies.find(row => row.reply === "error");
+    if (refusal) return { ...base, firstIncomplete: "SW received explicit server error", error: refusal.error };
     if (replies.some(row => row.reply === "head")) return { ...base, firstIncomplete: replies.some(row => row.reply === "end") ? "Routing body completed; inspect native completion" : "Response head received; body completion not observed", explicit };
     if (replies.some(row => row.reply === "accepted")) return { ...base, firstIncomplete: "Accepted by SW; no response headers observed", explicit };
     if (worker.some(row => row.kind === "unavailable")) return { ...base, firstIncomplete: candidates.length ? "All observed candidates refused, expired or failed to post" : "Discovery completed without an eligible candidate", explicit };
@@ -60,8 +67,48 @@ export class StorageRoutingEvidence {
     const helper = page.filter(row => row.kind === "helper-request-return" && row.request === dispatched.request && row.helper === projection?.helper);
     if (helper.length !== 1) return { ...base, firstIncomplete: "Registered-server dispatch observed; real helper.request return missing or ambiguous", explicit };
     if (helper[0]!.accepted === false) return { ...base, firstIncomplete: "Real helper.request explicitly refused", explicit };
+    const sendError = page.find(row => row.kind === "page-send-error");
+    if (sendError) return { ...base, firstIncomplete: "Page reply send threw", error: sendError.error, explicit };
     const sent = page.find(row => row.kind === "page-send-return" && row.reply === "accepted");
     return { ...base, firstIncomplete: sent ? "Page acceptance send returned; SW receipt not observed" : "Real helper accepted; page acceptance send return not observed", explicit };
+  }
+  private candidateDetails(rows: RoutingRow[]) {
+    const claims = rows.filter(row => row.kind === "claim-open");
+    return { omitted: Math.max(0, claims.length - 16), items: claims.slice(0, 16).map(claim => {
+      const worker = rows.filter(row => row.generation === claim.generation && row.ask === claim.ask && row.channel === claim.channel);
+      const page = rows.filter(row => row.realm === "page" && row.realmURL === claim.clientURL && row.port === claim.port);
+      const receipts = page.filter(row => row.kind === "page-receive");
+      return { workerGeneration: claim.generation, claim: claim.channel, clientId: claim.clientId, clientURL: claim.clientURL,
+        sendCalled: worker.some(row => row.kind === "claim-post"), sendReturned: worker.some(row => row.kind === "claim-post-return"),
+        expired: worker.some(row => row.kind === "claim-timeout"), postFailed: worker.some(row => row.kind === "claim-post-failure"),
+        replies: worker.filter(row => row.kind === "claim-reply" && row.reply !== "data").map(row => ({ reply: row.reply, status: row.status, error: row.error })),
+        bodyChunks: worker.filter(row => row.kind === "claim-reply" && row.reply === "data").length,
+        page: receipts.length === 1 ? this.pageDetails(page, receipts[0]!) : { join: receipts.length ? "ambiguous same-target page receipts" : "page receipt not observed" } };
+    }) };
+  }
+  private pageDetails(rows: RoutingRow[], receipt: RoutingRow) {
+    const selected = rows.find(row => row.generation === receipt.generation && row.router === receipt.router && row.kind === "request-dispatch");
+    const projection = this.rows.find(row => row.generation === receipt.generation && row.kind === "helper-projection" && row.capability === selected?.current);
+    const helper = rows.filter(row => row.generation === receipt.generation && row.helper === projection?.helper && row.request === selected?.request);
+    return { join: "unique observed target, candidate URL and port", generation: receipt.generation, router: receipt.router, replyPort: receipt.replyPort,
+      selectedServer: selected?.current, realHelper: projection?.helper,
+      helperReturns: helper.filter(row => row.kind === "helper-request-return").map(row => row.accepted),
+      helperErrors: helper.filter(row => row.kind === "helper-request-error").map(row => row.error),
+      sendsCalled: rows.filter(row => row.kind === "page-send").map(row => row.reply),
+      sendsReturned: rows.filter(row => row.kind === "page-send-return").map(row => row.reply) };
+  }
+  private coverage() {
+    const streams = new Map<string, number[]>();
+    for (const row of this.rows) {
+      const generation = String(row.generation);
+      const sequence = Number(row.sequence);
+      const stream = streams.get(generation) ?? [];
+      stream.push(sequence); streams.set(generation, stream);
+    }
+    return Array.from(streams, ([generation, stream]) => {
+      const maximum = Math.max(...stream);
+      return { generation, received: stream.length, maximum, missing: maximum - stream.length, tail: "Unobserved realm termination can hide a tail" };
+    });
   }
   qualify(targets = routingTargets): void {
     for (const target of targets) this.qualifyTarget(target);
@@ -72,6 +119,7 @@ export class StorageRoutingEvidence {
     const complete = forward.some(row => this.complete(row));
     if (!complete) throw Error(`Routing coverage missing actual page/runtime/helper and SW head/end for ${target}`);
     if (this.dropped || this.rows.some(row => Number(row.dropped) > 0)) throw Error("Routing coverage overflowed");
+    if (this.coverage().some(stream => stream.missing > 0)) throw Error("Routing stream coverage is missing");
   }
   private complete(forward: RoutingRow): boolean {
     const worker = this.rows.filter(row => row.generation === forward.generation && row.ask === forward.ask);

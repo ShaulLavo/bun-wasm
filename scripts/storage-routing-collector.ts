@@ -37,9 +37,14 @@ async function deliver(): Promise<void> {
     try {
       const windows = await clients.matchAll({ type: "window", includeUncontrolled: true });
       if (!windows.length) { dropped += rows.length; continue; }
-      for (const client of windows) client.postMessage({ diagnostic: transport, rows, dropped });
+      const delivered = windows.map(client => send(client, rows));
+      if (!delivered.some(Boolean)) dropped += rows.length;
     } catch { dropped += rows.length; }
   }
+}
+function send(client: WindowClient, rows: object[]): boolean {
+  try { client.postMessage({ diagnostic: transport, rows, dropped }); return true; }
+  catch { return false; }
 }
 function receive(event: MessageEvent): void {
   if (event.data?.diagnostic !== transport) return;

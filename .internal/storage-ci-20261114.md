@@ -52,11 +52,10 @@ source and failure reports remain under
 
 ## Routing report requirement
 
-The same combined PR adds the qualified routing observer to ordinary CI. It must
-retain request routing, document acceptance and independent observation failures
-without changing the product oracle or turning a failure into success. The
-routing integration owner will finish this section with its implementation and
-checks. This component does not edit that worker's observation or build helpers.
+The combined PR enables the qualified routing observer in ordinary CI through
+the existing storage diagnostic build and context. The implementation and
+checks are recorded below. Request routing, accepted Document checks and
+independent evidence failures keep the same blocking behavior.
 
 ## Local verification
 

@@ -3,7 +3,7 @@ import type { Browser, BrowserContext, Frame, Page, Request } from "playwright";
 import { StorageRoutingEvidence } from "./storage-routing-evidence";
 import { retainMetadata } from "./storage-fs-metadata";
 
-export type StorageObservation = Pick<StorageLifetime, "step" | "event" | "acquire" | "own" | "observeContext" | "secondary" | "qualifyRouting">;
+export type StorageObservation = Pick<StorageLifetime, "step" | "event" | "acquire" | "own" | "observeContext" | "secondary" | "qualifyRouting" | "routingReport">;
 type RecordEvent = (event: { sequence: number; time: string; kind: string; detail: unknown }) => void;
 
 function errorDetail(error: unknown): unknown {
@@ -128,7 +128,10 @@ export class StorageLifetime {
 
   cleanup(): Promise<void> {
     this.closing = true;
-    return this.cleanupTask ??= Promise.all(this.releases.map(release => release()).concat(this.acquisitions)).then(() => { this.retainFilesystemFailure(true); if (this.filesystemFailed) this.event("routing-final", { summary: this.routing.summaries(), trace: this.routing.snapshot() }); });
+    return this.cleanupTask ??= Promise.all(this.releases.map(release => release()).concat(this.acquisitions)).then(() => {
+      this.retainFilesystemFailure(true);
+      if (this.filesystemFailed) this.event("routing-final", { summary: this.routing.summaries(), trace: this.routing.snapshot() });
+    });
   }
 
   assertClean(): void {
@@ -151,6 +154,8 @@ export class StorageLifetime {
   observeBrowser(browser: Browser): void {
     browser.on("disconnected", () => this.event("browser-disconnected"));
   }
+
+  routingReport(): object[] { return this.routing.summaries(); }
 
   async qualifyRouting(targets?: string[]): Promise<void> {
     const deadline = Date.now() + 30_000;

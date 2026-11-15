@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { instrumentRouter, instrumentWorker } from "./storage-routing-build-source";
+import { instrumentHelper, instrumentRouter, instrumentWorker } from "./storage-routing-build-source";
 
 const scratch = await mkdtemp("/work/tmp/bun-wasm-routing-");
 afterAll(() => rm(scratch, { recursive: true, force: true }));
@@ -176,4 +176,34 @@ test("replacement and stale unregister retain exact current server identity", ()
   expect(stale?.server).not.toBe(stale?.current);
   router.unregister(9, current);
   expect(router.serves(9)).toBe(false);
+});
+
+test("real helper adapter preserves receiver, arguments, result and error identity with a throwing sink", async () => {
+  const helper = `${import.meta.dir}/../sandbox/node_modules/waffle/browser/net/helper.ts`;
+  const result = await Bun.build({ entrypoints: [helper], target: "bun", outdir: scratch,
+    plugins: [{ name: "real-helper-control", setup(build) {
+      build.onLoad({ filter: /waffle\/browser\/net\/helper\.ts$/ }, async ({ path }) => ({ contents: instrumentHelper(await Bun.file(path).text()), loader: "ts" }));
+    } }],
+  });
+  expect(result.success).toBe(true);
+  const { NetHelper }: typeof import("../sandbox/node_modules/waffle/browser/net/helper") = await import(`${scratch}/helper.js`);
+  const request = { method: "POST", target: "/input", headers: [], body: new Uint8Array([17, 23]) };
+  const sink = { head() {}, data() {}, end() {}, error() {} };
+  let connection: object | null = {};
+  const thrown = { toString() { throw Error("toString failed"); } };
+  let fail = false;
+  const receiver = { requestConnection(...args: unknown[]) {
+    expect(this).toBe(receiver); expect(args).toEqual([5173, request, sink]);
+    if (fail) throw thrown;
+    return connection;
+  } };
+  Reflect.set(globalThis, "__routingTrace", () => { throw Error("observer failed"); });
+  expect(Reflect.apply(NetHelper.prototype.request, receiver, [5173, request, sink])).toBe(true);
+  connection = null;
+  expect(Reflect.apply(NetHelper.prototype.request, receiver, [5173, request, sink])).toBe(false);
+  fail = true;
+  let caught: unknown;
+  try { Reflect.apply(NetHelper.prototype.request, receiver, [5173, request, sink]); }
+  catch (error) { caught = error; }
+  expect(caught).toBe(thrown);
 });

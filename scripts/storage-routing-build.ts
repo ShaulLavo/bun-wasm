@@ -18,7 +18,7 @@ export function routingObservationSource(path: string, source: string): string |
   }
 }
 export function verifyRoutingInstallation(runtime: string): void {
-    const metadata: unknown = JSON.parse(readFileSync(join(runtime, "package.json"), "utf8"));
-    if (!metadata || typeof metadata !== "object" || !("version" in metadata) || metadata.version !== "0.0.136") throw Error("Storage routing requires the complete installed Waffle .136");
-    for (const name of Object.keys(transforms)) verifySource(name, readFileSync(join(runtime, name), "utf8"));
+  const metadata: unknown = JSON.parse(readFileSync(join(runtime, "package.json"), "utf8"));
+  if (!metadata || typeof metadata !== "object" || !("version" in metadata) || metadata.version !== "0.0.136") throw Error("Storage routing requires the complete installed Waffle .136");
+  for (const name of Object.keys(transforms)) verifySource(name, readFileSync(join(runtime, name), "utf8"));
 }

@@ -35,6 +35,11 @@ registered-server selection, runtime/router binding, helper projection and the
 real helper's successful request return. Missing coverage fails the existing
 storage gate. Installation or HTTP success alone does not qualify it.
 
+The per-browser preservation report includes the concise routing summary. The
+progress report retains the bounded raw trace at failure and again after cleanup,
+so delayed metadata survives even when the case times out or the page closes.
+The final progress record can be more complete than the initial JSON report.
+
 Failure summaries use native request URLs and unique target/port candidates
 within the observed restart window. IDs remain realm-local. Repeated targets,
 missing SW coverage, dropped rows and unknown transport tails cannot establish
