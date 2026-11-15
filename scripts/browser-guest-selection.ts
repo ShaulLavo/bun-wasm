@@ -221,6 +221,7 @@ const ownerInputs = {
     "web/tests/engine-interruption-safari.ts",
     "web/tests/engine-interruption-scope.ts",
     "web/tests/engine-interruption-sleep.ts",
+    "web/tests/engine-interruption-stop.ts",
     "web/tests/engine-interruption-transport.ts",
     "web/tests/engine-interruption-worker.ts",
     "web/tests/process-module-fixture.ts"

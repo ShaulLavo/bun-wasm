@@ -46,6 +46,11 @@ test("engine producer changes retain narrower QuickJS, JSC and Browser predicate
   expect(select(["crates/bunwasm-runtime/src/engine_host.rs"])).toEqual(browser);
   expect(select(["scripts/build-bun-tools.sh"])).toEqual(fullBrowserGuestSelection.filter(item => item.owner === "tools-integrity"));
 });
+test("the cooperative stop proof helper selects both interruption engines", () => {
+  const path = "web/tests/engine-interruption-stop.ts";
+  expect(browserGuestManifest("engine-interruption").inputs).toContain(path);
+  expect(select([path])).toEqual(fullBrowserGuestSelection.filter(item => item.owner === "engine-interruption"));
+});
 test("shared runtime selects full rows; serving/startup inputs select their actual page owners", () => {
   expect(select(["crates/bunwasm-runtime/src/host.rs"])).toEqual(fullBrowserGuestSelection);
   for (const input of ["scripts/accept-encoding.ts", "web/src/playground/app.tsx", "web/src/playground/terminal-pane.tsx", "web/src/terminal-mount.ts", "web/src/startup.ts"]) {

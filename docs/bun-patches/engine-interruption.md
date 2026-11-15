@@ -45,6 +45,19 @@ These adapters and the browser proof/benchmark harness are original implementati
 not copied source. JSC polling covers JS safe points, not a single uninterrupted
 native operation; QuickJS retains its existing native-operation interrupt polls.
 
+The original `web/tests/engine-interruption-stop.ts` proof adapter holds a requested
+native stop pending until the production bootstrap has returned and its genuine
+terminal exit message has crossed the worker's FIFO channel. Only then does it
+acknowledge genuine guest/bootstrap execution quiescence. The host Worker scaffold
+remains physically alive until explicit teardown, so the original assertions still prove native termination did
+not produce the unwind. Returning immediately from a suppressed terminate
+would expire Waffle's observation lease while the guest was still unwinding,
+preventing the terminal message that the proof requires. Failed-proof teardown
+forces native stop before awaiting broker disposal, without setting either proof
+event or altering the guest evidence. Signal delivery, synchronous sleep, guest
+assertions and the terminal FIFO barrier are unchanged. This adapter is original
+test infrastructure, with no upstream source or revision.
+
 
 ## Classification
 

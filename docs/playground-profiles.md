@@ -1,19 +1,23 @@
 # Playground program profiles
 
-The playground defaults to the `split` program profile, including the Browser engine.
-The opt-in `?engine=quickjs&profile=shared-group` and
-`?engine=jsc&profile=shared-group` selections require matching shared-group core
-and companion artifacts. The Browser and experimental SpiderMonkey playground
-engines do not accept `shared-group`.
+Angular on QuickJS, JSC and SpiderMonkey defaults to `shared-group`, which
+provides the shared backing and worker publication needed by its compiler.
+Browser and every other template keep the `split` default.
 
-Profile selection checks the actual prepared core before registering Bun or its
-Node aliases. Replacing ordinary artifacts with a shared pair without selecting
-the profile fails startup. Selecting shared-group with an ordinary pair also
-fails startup. The existing matched-pair verification and Bun memory policy
-still apply.
+An explicit `?profile=split` or `?profile=shared-group` overrides the template
+default before any guest loads. Browser rejects shared-group. The host verifies
+the actual prepared core before registering Bun and its Node aliases. A mismatch
+or missing profile pair fails startup without substituting another profile.
 
-Framework qualification passes `--profile=split` or `--profile=shared-group` to
-`scripts/goals-matrix/fleet.ts`. Shared qualification selects only QuickJS and
-JSC. Startup evidence records the running profile and refuses a mismatch. Profile
-selection does not establish parser, worker, or framework compatibility. Those
-still require the unchanged lifecycle checks.
+Partial `web/build.ts` builds may omit engines or shared programs. A full
+`site/build.ts` build requires `SHARED_QUICKJS_PROGRAM` and
+`SHARED_JSC_PROGRAM`, plus `SHARED_SPIDERMONKEY_PROGRAM` when SpiderMonkey is
+included. Each points to a complete program directory produced by
+`scripts/build-native-profile.ts shared-group OUTPUT ENGINE`. Staging verifies
+the core, companion and original build records. Shared assets live under
+`profiles/shared-group/`; the page loads only the selected engine/profile.
+
+Goals runs without `--profile` use the same template defaults. Their source
+metadata records `template-default`, and each startup records the actual engine
+and profile. An explicit `--profile=split` remains a split diagnostic, including
+for Angular. Qualification still requires the ordinary lifecycle checks.

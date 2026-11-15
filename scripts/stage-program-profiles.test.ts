@@ -7,7 +7,7 @@ import { appendCustomSection, BUN_MEMORY_GROUP_POLICY, importedMemory, programPr
 import { initializationPair } from "../tests/package/engine-initialization-fixture";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 import type { ProgramBuildReceipt } from "./guest-core-receipt";
-import { sharedProgramReceipts, stageSharedPrograms } from "./stage-program-profiles";
+import { requireSharedProgramInputs, sharedProgramReceipts, stageSharedPrograms } from "./stage-program-profiles";
 import { verifySharedProgramMemory } from "./shared-program-memory";
 
 const hash = (bytes: Uint8Array | string) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
@@ -278,4 +278,13 @@ test.each([
     expect(builds).toEqual({});
     expect(await readdir(join(source, "out")).catch(() => [])).toEqual([]);
   });
+});
+
+test("full site requires shared inputs for each published Wasm engine", () => {
+  const inputs = { SHARED_QUICKJS_PROGRAM: "/quickjs", SHARED_JSC_PROGRAM: "/jsc" };
+  expect(() => requireSharedProgramInputs(["quickjs", "jsc"], inputs)).not.toThrow();
+  expect(() => requireSharedProgramInputs(["quickjs", "jsc"], {})).toThrow("SHARED_QUICKJS_PROGRAM");
+  expect(() => requireSharedProgramInputs(["quickjs", "jsc"], { SHARED_QUICKJS_PROGRAM: "/quickjs" })).toThrow("SHARED_JSC_PROGRAM");
+  expect(() => requireSharedProgramInputs(["quickjs", "jsc", "spidermonkey"], inputs)).toThrow("SHARED_SPIDERMONKEY_PROGRAM");
+  expect(() => requireSharedProgramInputs(["quickjs", "jsc", "spidermonkey"], { ...inputs, SHARED_SPIDERMONKEY_PROGRAM: "/sm" })).not.toThrow();
 });

@@ -20,7 +20,7 @@ import { nativePlatformBlocker, blockedCell, type PlatformBlocker } from "./plat
 import { createIphoneTransport, validateIphoneControl } from "./iphone-transport";
 import { appendFile } from "node:fs/promises";
 import { appendFileSync } from "node:fs";
-import { playgroundProfile, requireProfileEngine, type PlaygroundProfile } from "../../web/src/playground/program-profile";
+import { playgroundProfile, templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { ownershipReceipt } from "./safari-ownership";
 import { verifyPreparedSiteInventory } from "./prepared-site";
 import type { ExitOwner } from "./safari-exit-observer";
@@ -59,13 +59,13 @@ export function options(args: readonly string[]): Options {
   const suppliedBuildTimeout = values.get("build-timeout-ms");
   const buildTimeoutMs = suppliedBuildTimeout === undefined ? undefined : parseTimeout(suppliedBuildTimeout, "build-timeout-ms");
   const installTimeouts = parseInstallTimeouts(values.get("install-timeout-ms"));
-  const profile = playgroundProfile(values.get("profile") ?? null);
+  const profile = values.has("profile") ? playgroundProfile(values.get("profile")!) : undefined;
   const selectedEngines = selected(values.get("engines") ?? engines.join(","), engines);
   const selectedFrameworks = selected(values.get("frameworks") ?? frameworks.map(item => item.id).join(","), frameworks.map(item => item.id));
   const selectedBrowsers = selected(values.get("browsers") ?? browsers.join(","), browsers);
   if (values.has("next-build-observation") && (values.get("next-build-observation") !== "true" || selectedFrameworks.length !== 1 || selectedFrameworks[0] !== "next" || selectedEngines.length !== 1 || selectedEngines[0] !== "quickjs" || selectedBrowsers.length !== 1)) throw new Error("--next-build-observation requires one Next QuickJS cell and one browser");
   requireCausalCapture(values, selectedBrowsers, selectedEngines, selectedFrameworks);
-  for (const engine of selectedEngines) requireProfileEngine(engine, profile);
+  for (const engine of selectedEngines) templateProfile(engine, undefined, profile);
   const assetSource = values.get("asset-source");
   if (!assetSource) throw new Error("Set --asset-source to the actual WASM source commit or delivery manifest path");
   const iphoneControlUrl = values.get("iphone-control-url"), iphoneAgentCommand = values.get("iphone-agent-command");
@@ -127,7 +127,7 @@ export async function initialReport(config: Options): Promise<Report> {
   if (hostSource === null && files.some(file => /\.wasm(?:\.gz)?$/.test(file.file))) throw new Error("Preparation error: staged host has no built source identity; run goals-matrix/prepare.ts");
   if (files.some(file => /\.wasm(?:\.gz)?$/.test(file.file))) await verifyPreparedSiteInventory(config.root);
   const builds = await readFile(join(config.root, "engine-builds.json"), "utf8").then(text => JSON.parse(text)).catch(error => ({ error: String(error) }));
-  const report: Report = { schema: 2, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), deadlines: campaignDeadlines(config.timeoutMs, config.installTimeouts, config.buildTimeoutMs), source: { commit, dirty, assets: { profile: config.profile ?? "split", source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
+  const report: Report = { schema: 2, run: crypto.randomUUID(), createdAt: new Date().toISOString(), command: ["source env.sh && bun scripts/goals-matrix/run.ts"].concat(process.argv.slice(2).map(arg => `'${arg.replaceAll("'", "'\\''")}'`)).join(" "), deadlines: campaignDeadlines(config.timeoutMs, config.installTimeouts, config.buildTimeoutMs), source: { commit, dirty, assets: { profile: config.profile ?? "template-default", source: config.assetSource, engineBuilds: builds, hostSource, files } }, cells: initialCells() };
   if (staged && JSON.stringify(staged.assets) !== JSON.stringify(report.source.assets)) throw new Error("Staged assets differ from controller provenance");
   if (!config.resume) return report;
   const previous: unknown = JSON.parse(await readFile(join(config.output, "TABLE.json"), "utf8"));
@@ -142,11 +142,11 @@ function selectedCell(cell: Cell, config: Options): boolean {
   if (cell.status === "fail" && !config.retryFailures) return false;
   return true;
 }
-export function playgroundURL(base: string, framework: Framework, engine: Engine, profile: PlaygroundProfile = "split"): string {
-  requireProfileEngine(engine, profile);
+export function playgroundURL(base: string, framework: Framework, engine: Engine, profile?: PlaygroundProfile): string {
+  templateProfile(engine, framework.template, profile);
   const url = new URL(base);
   url.searchParams.set("template", framework.template); url.searchParams.set("engine", engine);
-  url.searchParams.set("profile", profile);
+  if (profile !== undefined) url.searchParams.set("profile", profile);
   url.searchParams.set("prompt", "off"); url.searchParams.set("mode", "memory");
   if (framework.rootPreview) url.searchParams.set("root-previews", "");
   return url.href;
@@ -158,7 +158,7 @@ async function runCell(cell: Cell, config: Options, base: string, signal: AbortS
   if (!framework) throw new Error(`Unknown framework ${cell.framework}`);
   const port = framework.rootPreview ? await availablePort() : 5173;
   const limits = cellDeadlines(report.deadlines, cell);
-  const execution = (capture?: SafariCausalCapture): Execution => ({ box: cell, framework, port, profile: config.profile ?? "split", url: playgroundURL(base, framework, cell.engine, config.profile), ...limits, signal,
+  const execution = (capture?: SafariCausalCapture): Execution => ({ box: cell, framework, port, profile: templateProfile(cell.engine, framework.template, config.profile), url: playgroundURL(base, framework, cell.engine, config.profile), ...limits, signal,
     nextBuildObservation: config.nextBuildObservation ? value => appendFileSync(join(config.output, "logs", boxId(cell).replaceAll("/", "-") + ".next-build.jsonl"), JSON.stringify(value) + "\n") : undefined,
     createTransport: () => cell.browser === "chrome" || cell.browser === "firefox" ? createPlaywrightTransport(cell.browser, limits.timeoutMs, Math.min(config.timeoutMs ?? 90_000, 10_000)) : nativeTransport(cell, config, limits.timeoutMs, report, capture, exit),
     observeStartup: capture?.arm,
@@ -198,8 +198,14 @@ function seedBlockers(report: Report, blockers: Map<Browser, PlatformBlocker>): 
     if (blocker) blockers.set(cell.browser, blocker);
   }
 }
+export async function preflightSelection(config: Pick<Options, "root" | "engines" | "frameworks" | "profile">): Promise<void> {
+  for (const engine of config.engines) {
+    const profiles = new Set(config.frameworks.map(id => templateProfile(engine, frameworks.find(framework => framework.id === id)?.template, config.profile)));
+    for (const profile of profiles) await preflight(config.root, [engine], profile, { allowMissing: true });
+  }
+}
 async function runLocked(config: Options, signal: AbortSignal, exit?: ExitOwner): Promise<Report> {
-  await preflight(config.root, config.engines, config.profile);
+  await preflightSelection(config);
   const report = await initialReport(config);
   await mkdir(join(config.output, "logs"), { recursive: true });
   await saveReport(config.output, report);

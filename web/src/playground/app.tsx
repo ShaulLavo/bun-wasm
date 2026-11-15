@@ -4,7 +4,6 @@ import type { Playground } from "./playground";
 import { TerminalPane } from "./terminal-pane";
 import { projectTemplates } from "./project-templates";
 import { engineUnavailable, type Engine } from "../engine-loader";
-import { requireProfileEngine, type PlaygroundProfile } from "./program-profile";
 
 type Props = { playground: Playground };
 
@@ -12,11 +11,11 @@ const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS (9
 const RUN_TITLE = "Save and run (Ctrl/Cmd-Enter)";
 const RELOAD_TITLES = { startup: "Retry playground startup", ownership: "Open the latest saved workspace", shell: RUN_TITLE };
 
-function engineOption(engine: Engine, label: string, profile: PlaygroundProfile) {
-  try { requireProfileEngine(engine, profile); }
-  catch (error) { return { label: `${label} (unsupported profile)`, unavailable: String(error) }; }
-  const unavailable = engineUnavailable(engine, profile);
-  return { label: unavailable ? "SpiderMonkey (not in this build)" : label, unavailable };
+function engineOption(engine: Engine, label: string, playground: Playground) {
+  try {
+    const unavailable = engineUnavailable(engine, playground.profileForEngine(engine));
+    return { label: unavailable ? `${label} (not in this build)` : label, unavailable };
+  } catch (error) { return { label: `${label} (unsupported profile)`, unavailable: String(error) }; }
 }
 
 export function App(handle: Handle<Props>) {
@@ -54,7 +53,7 @@ function Header(handle: Handle<Props>) {
           mix={on("change", (event) => playground.chooseEngine(event.currentTarget.value))}
         >
           {ENGINE_OPTIONS.map(([value, label]) => {
-            const option = engineOption(value, label, playground.profile);
+            const option = engineOption(value, label, playground);
             return <option value={value} selected={value === playground.engine}
               disabled={option.unavailable !== null} title={option.unavailable ?? undefined}
             >{option.label}</option>;

@@ -19,7 +19,12 @@ async function fixture(builds: Record<string, string> = {}) {
 const pair = { "bun-spidermonkey.wasm": "a".repeat(64), "spidermonkey-engine.wasm": "b".repeat(64) };
 
 test("the shared profile picker disables engines outside the profile contract", async () => {
-  const page = await fixture(pair);
+  const page = await fixture({
+    "profiles/shared-group/bun.wasm": "a".repeat(64),
+    "profiles/shared-group/quickjs.wasm": "b".repeat(64),
+    "profiles/shared-group/bun-jsc.wasm": "c".repeat(64),
+    "profiles/shared-group/jsc-engine.wasm": "d".repeat(64),
+  });
   const playground = new page.Playground("?engine=quickjs&profile=shared-group");
   const markup = await page.renderPlayground(playground);
   for (const engine of ["browser", "spidermonkey"]) {
@@ -62,7 +67,7 @@ for (const builds of incompleteBuilds) {
     const markup = await page.renderPlayground(new page.Playground(""));
     const option = markup.match(/<option[^>]*value="spidermonkey"[^>]*>/)?.[0];
     expect(option).toContain("disabled");
-    expect(markup).toContain("SpiderMonkey (not in this build)");
+    expect(markup).toContain("SpiderMonkey (experimental) (not in this build)");
   });
 }
 

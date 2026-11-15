@@ -17,6 +17,7 @@ import { assertFatalSleepSync, assertHandledSleepSync, sleepSyncSignalGuest } fr
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignal, type EngineSignalDelivery } from "./engine-interruption-scope";
 import { FunctionalCases, selectInterruptionEngines, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
+import { CooperativeWorkerStop } from "./engine-interruption-stop";
 
 interface CaseResources {
   workers: Set<ObservedWorker>;
@@ -47,6 +48,7 @@ let observeCheckpoints = true;
 let idleWaitTimeoutMs = 0;
 let instrumentPreview1Root = false;
 class ObservedWorker extends NativeWorker {
+  private readonly stop = new CooperativeWorkerStop(() => { super.terminate(); activeWorkers.delete(this); });
   readonly probe = new Int32Array(new SharedArrayBuffer(probeLength * 4));
   deferStop = false;
   guestEngine?: Engine;
@@ -61,7 +63,8 @@ class ObservedWorker extends NativeWorker {
     activeWorkers.add(this);
     this.addEventListener("error", event => this.diagnostics.push({ error: event.message }));
     this.addEventListener("message", event => {
-      if (event.data?.type === "exit") this.exitObserved = true;
+      if (event.data?.type === "exit") { this.exitObserved = true; this.stop.observeExit(); }
+      if (event.data?.type === "engine-interruption-run-returned") this.stop.observeReturn();
       if (["phase", "error", "exit"].includes(event.data?.type)) this.diagnostics.push(event.data);
     });
   }
@@ -80,11 +83,12 @@ class ObservedWorker extends NativeWorker {
     if (Array.isArray(options)) super.postMessage(message, options);
     else super.postMessage(message, options);
   }
-  override terminate(): void {
+  override terminate(): void | Promise<void> {
     controlAdd(this.probe, probeCell.terminateRequests, 1);
-    if (!this.deferStop) this.forceTerminate();
+    if (this.deferStop) return this.stop.request();
+    this.forceTerminate();
   }
-  forceTerminate(): void { super.terminate(); activeWorkers.delete(this); }
+  forceTerminate(): void { this.stop.force(); }
 }
 // Install teardown before creating the filesystem or any guest worker. In particular,
 // default-action tests deliberately suppress the supervisor's physical backstop.
@@ -99,13 +103,15 @@ function destroy(): Promise<void> {
   if (destruction) return destruction;
   destroyed = true;
   return destruction = (async () => {
+    // Capture failure evidence before native stop releases held execution acknowledgements.
+    for (const context of currentCase?.contexts ?? []) context.final ??= captureContext(context.read);
+    for (const worker of Array.from(activeWorkers)) {
+      try { worker.forceTerminate(); } catch (error) { destroyErrors.push(String(error)); }
+    }
     for (const owned of Array.from(scopes)) {
       try { await owned.dispose(); } catch (error) { destroyErrors.push(String(error)); }
     }
     try { await runtime?.dispose(); } catch (error) { destroyErrors.push(String(error)); }
-    for (const worker of Array.from(activeWorkers)) {
-      try { worker.forceTerminate(); } catch (error) { destroyErrors.push(String(error)); }
-    }
     globalThis.Worker = NativeWorker;
   })();
 }
@@ -183,14 +189,16 @@ async function scope(module: WebAssembly.Module, engine: Engine, route: EngineIn
     async dispose(): Promise<void> {
       if (disposed) return;
       disposed = true;
-      // Preserve diagnostics before broker disposal can forget process metadata.
-      context.final = captureContext(context.read);
+      // Capture failure evidence before forced native stop and broker disposal.
+      context.final ??= captureContext(context.read);
       const children = Array.from(base.children.values());
       const errors: unknown[] = [];
+      for (const child of children) {
+        try { guestWorkers.get(child.pid)?.forceTerminate(); } catch (error) { errors.push(error); }
+      }
       try { await base.dispose(); } catch (error) { errors.push(error); }
       try { await disposeRuntime(owner); } catch (error) { errors.push(error); }
       for (const child of children) {
-        try { guestWorkers.get(child.pid)?.forceTerminate(); } catch (error) { errors.push(error); }
         guestWorkers.delete(child.pid);
       }
       scopes.delete(owned);
@@ -550,14 +558,15 @@ async function testPreview1Clock(root: boolean): Promise<void> {
       }
       return { root, latencyMs, generation, suppressedNotifications: mutation?.count() ?? 0, causalRejection, evidence };
     } finally {
-      context.final = captureContext(context.read);
+      context.final ??= captureContext(context.read);
       instrumentPreview1Root = false;
       await cleanupCase([
         () => mutation?.restore(),
         () => { if (run && !rootSettled) run.kill(9); },
+        () => { if (root) (worker ?? guestWorkers.get(1))?.forceTerminate(); },
         () => owned?.dispose(),
         () => disposeRuntime(rootRuntime),
-        () => { if (root) { (worker ?? guestWorkers.get(1))?.forceTerminate(); guestWorkers.delete(1); } },
+        () => { if (root) guestWorkers.delete(1); },
       ]);
     }
   }

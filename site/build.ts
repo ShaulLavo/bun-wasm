@@ -4,6 +4,7 @@
 import { appendFileSync, cpSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveSiteSpiderMonkey, verifySiteGuests } from "../scripts/site-guest-preflight";
+import { requireSharedProgramInputs } from "../scripts/stage-program-profiles";
 import { templates } from "../sandbox/src/template-catalog";
 
 const root = resolve(import.meta.dir, "..");
@@ -22,6 +23,7 @@ async function build(app: string): Promise<void> {
 
 const spiderMonkey = resolveSiteSpiderMonkey(root);
 await verifySiteGuests(root, process.env, spiderMonkey);
+requireSharedProgramInputs(spiderMonkey ? ["quickjs", "jsc", "spidermonkey"] : ["quickjs", "jsc"]);
 if (spiderMonkey) process.env.SPIDERMONKEY_WASM = spiderMonkey;
 
 // The deployed site always ships bash-web's shell and env guests, built at the apps' pin.

@@ -35,3 +35,7 @@ the expected engine declaration, and paired companions must expose that engine's
 initializer/RUN interface. Valid but mislabeled Wasm fails before browser launch.
 Owned source-test fixtures use the configured temporary directory on both local
 and GitHub-hosted machines.
+
+The interruption owner's exact input list includes the cooperative worker-stop
+proof adapter. Changes to its execution acknowledgement select both QuickJS and
+JSC interruption checks while preserving the original proof lifecycle.
