@@ -10,7 +10,7 @@ import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
-import { qualifiedParserReserves, spiderMonkeyWebKitStackKib, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
+import { engineStackBudgetKey, qualifiedParserReserves, spiderMonkeyWebKitStackKib, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
 import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/executor-guest";
 import { createSharedObjectBroker } from "../src/shared-objects/broker";
 import type { SharedObjectService } from "../src/shared-objects/service";
@@ -901,6 +901,7 @@ test("each armed JSC instance gets a fresh allocation-boundary generation; other
 
 const geckoStack = "smallStackKib@http://localhost/worker.js:1:1\ncreateBunExecutor@http://localhost/worker.js:2:1";
 const v8Stack = "Error\n    at smallStackKib (http://localhost/worker.js:1:1)";
+const spiderMonkeyKey = engineStackBudgetKey("spidermonkey");
 const stackHosts = [
   { name: "Firefox", agent: "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: undefined, jsc: "208", spidermonkey: undefined },
   { name: "Chrome", agent: "Mozilla/5.0 Chrome/147.0.0.0 Safari/537.36", stack: v8Stack, quickjs: undefined, jsc: "800", spidermonkey: undefined },
@@ -946,13 +947,17 @@ for (const host of stackHosts) {
     expect(stackEnvironment(host, "quickjs")?.BUN_WASM_STACK_KIB).toBe(host.quickjs);
     expect(stackEnvironment(host, "jsc")?.BUN_WASM_STACK_KIB).toBe(host.jsc);
     expect(stackEnvironment(host, "browser")).toEqual({});
-    // WebKit hosts bound SpiderMonkey's byte quota; V8 and Gecko keep its full quota.
-    expect(stackEnvironment(host, "spidermonkey")).toEqual(host.spidermonkey ? { BUN_WASM_STACK_KIB: host.spidermonkey } : {});
+    // WebKit hosts bound SpiderMonkey's byte quota under its own key; V8 and Gecko keep its full quota.
+    const ownBudget = host.spidermonkey ? { [spiderMonkeyKey]: host.spidermonkey } : {};
+    expect(stackEnvironment(host, "spidermonkey")).toEqual(ownBudget);
     expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
     expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "" })).toEqual({ BUN_WASM_STACK_KIB: "" });
     expect(stackEnvironment(host, "jsc", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
-    expect(stackEnvironment(host, "spidermonkey", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
-    expect(stackEnvironment(host, "spidermonkey", { BUN_WASM_STACK_KIB: "" })).toEqual({ BUN_WASM_STACK_KIB: "" });
+    expect(stackEnvironment(host, "spidermonkey", { [spiderMonkeyKey]: "256" })).toEqual({ [spiderMonkeyKey]: "256" });
+    expect(stackEnvironment(host, "spidermonkey", { [spiderMonkeyKey]: "" })).toEqual({ [spiderMonkeyKey]: "" });
+    // A QuickJS or JSC budget in the environment (a fixture's 32 KiB child) never replaces SpiderMonkey's.
+    expect(stackEnvironment(host, "spidermonkey", { BUN_WASM_STACK_KIB: "32" })).toEqual({ BUN_WASM_STACK_KIB: "32", ...ownBudget });
+    expect(stackEnvironment(host, "quickjs", { [spiderMonkeyKey]: "256" })?.BUN_WASM_STACK_KIB).toBe(host.quickjs);
   })));
 }
 
@@ -981,7 +986,7 @@ test("no engine but JSC ever receives the parser reserve", controlled(() => with
   expect(stackEnvironment(linuxFirefox, "quickjs")).toEqual({});
   expect(stackEnvironment(linuxFirefox, "browser")).toEqual({});
   expect(stackEnvironment(linuxFirefox, "spidermonkey")).toEqual({});
-  expect(stackEnvironment(macSafari, "spidermonkey", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: spiderMonkeyWebKitStackKib });
+  expect(stackEnvironment(macSafari, "spidermonkey", {}, { maxTouchPoints: 0 })).toEqual({ [spiderMonkeyKey]: spiderMonkeyWebKitStackKib });
   expect(stackEnvironment(macSafari, "quickjs", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "32" });
   expect(stackEnvironment(linuxFirefox, "quickjs", { [reserveKey]: "512" })).toEqual({ [reserveKey]: "512" });
 })));
