@@ -12,7 +12,7 @@ import { completedCase, smokeCases, smokePhases, unsafeToContinue } from "./mode
 import { queueTicket } from "./admission";
 import { runSmoke } from "./run";
 
-const source: Report["source"] = { commit: "a".repeat(40), dirty: false, assets: { source: "qualified-test-packet", files: [] } };
+const source: Report["source"] = { commit: "a".repeat(40), dirty: false, assets: { source: "local-test-build" } };
 const capabilities = { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": deviceUDID, transport: "visible-safari-xctest" };
 function argumentsFor(root: string): string[] {
   return [`--root=${root}/site`, `--output=${root}/report`, `--source-file=${root}/source.json`, `--device-udid=${deviceUDID}`,
@@ -125,7 +125,7 @@ async function withFixtures(config: ReturnType<typeof smokeOptions>, entered: st
   const transports: Transport[] = [];
   const run = async (index: number): Promise<Awaited<ReturnType<typeof runSmoke>>> => {
     const box = smokeCases[index];
-    if (!box) return runSmoke(config, { qualify: async () => source, admission: async () => "ticket", verify: async () => {}, transport: async (_config, selected) => {
+    if (!box) return runSmoke(config, { qualify: async () => {}, admission: async () => "ticket", verify: async () => {}, transport: async (_config, selected) => {
       entered.push(boxId(selected));
       const fixture = transports[smokeCases.findIndex(box => boxId(box) === boxId(selected))];
       if (!fixture) throw new Error("Missing transport");
@@ -135,7 +135,7 @@ async function withFixtures(config: ReturnType<typeof smokeOptions>, entered: st
   };
   return run(0);
 }
-test("missing prepared metadata records an exact prerequisite and never touches a device", async () => {
+test("missing engine manifest records an exact prerequisite and never touches a device", async () => {
   await scratch(async root => {
     const config = smokeOptions(argumentsFor(root));
     await mkdir(config.matrix.root);
@@ -143,14 +143,14 @@ test("missing prepared metadata records an exact prerequisite and never touches 
     let admitted = false;
     const result = await runSmoke(config, { admission: async () => { admitted = true; return "ticket"; } });
     expect(admitted).toBe(false);
-    expect(result).toMatchObject({ status: "red", revision: source.commit, failedPhase: "prerequisite", failures: [{ phase: "prerequisite", error: "Error: Prepared smoke root is missing goals-host-source.json" }] });
+    expect(result).toMatchObject({ status: "red", revision: source.commit, failedPhase: "prerequisite", failures: [{ phase: "prerequisite", error: "Error: Prepared smoke root is missing engine-builds.json" }] });
     expect(result.cases.every(value => value.status === "blocked" && value.attempt === null)).toBe(true);
     expect(result.cases.every(value => value.source?.commit === source.commit)).toBe(true);
   });
 });
 test("lost admission leaves all cases durable and performs no native work", async () => {
   await scratch(async root => {
-    const result = await runSmoke(smokeOptions(argumentsFor(root)), { qualify: async () => source, admission: async () => { throw new Error("FIFO owner changed"); } });
+    const result = await runSmoke(smokeOptions(argumentsFor(root)), { qualify: async () => {}, admission: async () => { throw new Error("FIFO owner changed"); } });
     expect(result.status).toBe("red");
     expect(result.cases.every(value => value.status === "blocked" && value.phases.length === 0)).toBe(true);
     expect(await Bun.file(result.reportPath).json()).toEqual(result);
@@ -161,7 +161,7 @@ test("interruption saves blocked remaining cases without dispatching native work
     const controller = new AbortController();
     controller.abort(new Error("cancelled"));
     let entered = false;
-    const result = await runSmoke(smokeOptions(argumentsFor(root)), { qualify: async () => source, admission: async () => "ticket", verify: async () => {}, transport: async () => { entered = true; throw new Error("must not dispatch"); } }, controller.signal);
+    const result = await runSmoke(smokeOptions(argumentsFor(root)), { qualify: async () => {}, admission: async () => "ticket", verify: async () => {}, transport: async () => { entered = true; throw new Error("must not dispatch"); } }, controller.signal);
     expect(result.status).toBe("red");
     expect(entered).toBe(false);
     expect(result.cases.every(value => value.status === "blocked")).toBe(true);
@@ -198,3 +198,21 @@ async function cliResult(cli: string, args: string[]): Promise<{ code: number; s
     return { code, stdout };
   } finally { child.kill("SIGTERM"); await child.exited; }
 }
+test("a local build and recorded commit need no CI origin or goals inventory metadata", async () => {
+  await scratch(async root => {
+    const config = smokeOptions(argumentsFor(root));
+    await mkdir(config.matrix.root);
+    await Bun.write(config.sourceFile, JSON.stringify({ commit: source.commit }));
+    const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+    const fingerprint = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+    const builds = Object.fromEntries(["bun-browser.wasm", "bun.wasm", "quickjs.wasm"].map(name => [name, fingerprint]));
+    for (const name of Object.keys(builds)) await Bun.write(join(config.matrix.root, name), bytes);
+    await Bun.write(join(config.matrix.root, "index.html"), `globalThis.__bunwasmBuilds = ${JSON.stringify(builds)};`);
+    await Bun.write(join(config.matrix.root, "engine-builds.json"), JSON.stringify(builds));
+    let admitted = false;
+    const result = await runSmoke(config, { admission: async () => { admitted = true; throw new Error("stop before native work"); } });
+    expect(admitted).toBe(true);
+    expect(result.source).toEqual({ commit: source.commit, dirty: null, assets: { source: config.matrix.root } });
+    expect(result.failures[0]?.error).toBe("Error: stop before native work");
+  });
+});

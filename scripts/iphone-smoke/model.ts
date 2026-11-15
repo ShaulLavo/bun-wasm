@@ -1,5 +1,5 @@
 import { boxId, type Box } from "../goals-matrix/catalog";
-import type { Attempt, PhaseResult, Report } from "../goals-matrix/model";
+import type { Attempt, PhaseResult } from "../goals-matrix/model";
 import { object, observed } from "../goals-matrix/evidence";
 import { deviceUDID } from "./options";
 
@@ -10,10 +10,11 @@ export const smokeCases: readonly Box[] = [
 ];
 export const smokePhases = ["startup", "install", "dev", "render", "click", "cleanup"] as const;
 type Failure = { phase: string; error: string };
+type SmokeSource = { commit: string; dirty: boolean | null; assets: unknown };
 export interface SmokeCase {
   id: string;
   box: Box;
-  source: Report["source"] | null;
+  source: SmokeSource | null;
   status: "pending" | "pass" | "fail" | "blocked";
   phases: PhaseResult[];
   cleanup: PhaseResult | null;
@@ -24,7 +25,7 @@ export interface SmokeReport {
   schema: 1;
   kind: "manual-iphone-smoke";
   revision: string | null;
-  source: Report["source"] | null;
+  source: SmokeSource | null;
   status: "green" | "red";
   failedPhase: string | null;
   reportPath: string;

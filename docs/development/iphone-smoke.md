@@ -9,17 +9,17 @@ Its result is separate from the [full goals matrix](../goals-matrix.md).
 
 ## Prepare the inputs
 
-Use a qualified prepared playground containing both Browser and QuickJS assets.
-Follow the [goals-matrix preparation instructions](../goals-matrix.md).
-Keep `goals-host-source.json`, `goals-asset-sources.json`,
-`goals-site-inventory.json`, and `engine-builds.json` with the unchanged assets.
-An ordinary site artifact without that metadata cannot qualify for this check.
-Do not invent metadata for an artifact whose source is unknown.
+Build the playground locally on the PC through the heavy runner from the commit
+you want to check. A local prepared root is valid. You do not need CI artifacts,
+delivery receipts, or a goals-site inventory. The root must contain `index.html`,
+`engine-builds.json`, and Browser and QuickJS engine files. The runner checks the
+embedded host fingerprints against the guest bytes to catch mixed builds.
+The [goals-matrix guide](../goals-matrix.md) describes engine staging and preparation.
 
-Supply `--source-file` with the existing goals-matrix source object containing
-`commit`, `dirty`, and `assets`. The runner verifies its assets against the
-prepared root. This identifies both the source revision and artifact sources.
-It records those identities in every case. It does not rebuild or deploy a site.
+Record the build's 40-character commit in `--source-file`, for example
+`{"commit":"YOUR_FULL_COMMIT"}`. Optional `dirty` and `assets` fields retain
+additional build details. The runner records the commit and artifact source in
+every case. It does not rebuild or deploy a site.
 
 1. Call T3 `device_list`. Select iPhone 17e with UDID
    `C4D2FFD4-A0D2-4608-B180-35854521B830` on the Mac device host.
@@ -53,9 +53,9 @@ bun /work/heavy-runner/current/run.js --host local --class browser iphone-smoke 
 	--mac-thread=FIFO_HOLDER_THREAD
 ```
 
-`--asset-source` defaults to `<root>/goals-asset-sources.json`. Supply the original
-source label explicitly if the source metadata uses another path. The remaining
-options above are required. Other devices, engines, and case selections are rejected.
+`--asset-source` defaults to the prepared root path. Use it to label another build
+source when the source file omits `assets`. The remaining options above are
+required. Other devices, engines, and case selections are rejected.
 
 Startup, dev, render, and click each have a five-minute hang cap. Install has a
 ten-minute hang cap. The maintained cleanup phase has a twenty-second hang cap.
@@ -64,7 +64,7 @@ Every phase records its actual duration. A slow successful outcome passes.
 ## Read the result and finish cleanup
 
 Read `<output>/result.json`. `status` is `green` only when all three cases pass,
-their cleanup succeeds, and the prepared inventory still matches. `failedPhase`
+their cleanup succeeds, and the host and guest fingerprints still match. `failedPhase`
 names the first failure. Each case retains its phases, actual durations, failures,
 source identity, browser identity, and cleanup evidence. Logs and native command
 evidence are under `<output>/logs`. The command exits nonzero for any failure,
@@ -80,6 +80,6 @@ The runner closes only its owned Safari tabs and guest processes. After it exits
 stop the wrapper and owned forward, collect the wrapper's cleanup receipt, verify
 that its server and listeners stopped, and check that its FIFO ticket is gone.
 Remove task staging only after its consumers stop. Close your T3 device session
-without shutting down the retained simulator. Keep the results and qualified
-artifact inputs. The smoke's green result covers case cleanup. The deployment
+without shutting down the retained simulator. Keep the results. Remove disposable
+builds after use. The smoke's green result covers case cleanup. The deployment
 operator also owns wrapper, forward, session, and staging cleanup.

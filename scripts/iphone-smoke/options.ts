@@ -1,4 +1,4 @@
-import { resolve, join } from "node:path";
+import { resolve } from "node:path";
 import { options, type Options } from "../goals-matrix/run";
 import { validateIphoneControl } from "../goals-matrix/iphone-transport";
 
@@ -32,7 +32,7 @@ export function smokeOptions(args: readonly string[]): SmokeOptions {
   if (/[\r\n\0]/.test(thread) || Buffer.byteLength(thread) > 1024) throw new Error("--mac-thread must be a single-line T3 thread ID");
   const root = resolve(required("root")), output = resolve(required("output")), sourceFile = resolve(required("source-file"));
   const matrix = options([`--root=${root}`, `--output=${output}`, `--source-file=${sourceFile}`,
-    `--asset-source=${values.get("asset-source") ?? join(root, "goals-asset-sources.json")}`,
+    `--asset-source=${values.get("asset-source") ?? root}`,
     "--browsers=iphone-safari", "--engines=browser,quickjs", "--frameworks=vite-react,hono",
     `--timeout-ms=${phaseTimeoutMs}`, `--install-timeout-ms=vite-react:${installTimeoutMs},hono:${installTimeoutMs}`,
     `--device-udid=${deviceUDID}`, `--iphone-control-url=${control}`, `--iphone-agent-command=${agent}`]);
