@@ -466,6 +466,40 @@ pub fn proc_spawn(request: &[u8]) -> i32 {
     proc_call!(runtime_proc::spawn(ptr(request), request.len() as i32))
 }
 
+#[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "bun_package_scripts")]
+unsafe extern "C" {
+    fn handoff(ptr: i32, length: i32, out: i32, capacity: i32) -> i32;
+}
+
+/// Private prepared-plan binding. The caller snapshots its actual JS environment and commands.
+/// Only NOTSUP/NOSYS permit the old loop; a committed exec unwinds and never returns here.
+pub fn package_scripts_handoff(plan: &str) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // SAFETY: both buffers remain live throughout each synchronous host call. No guest
+        // callback, descriptor operation or event-loop turn occurs during the size retry.
+        let required = unsafe { handoff(ptr(plan.as_bytes()), plan.len() as i32, 0, 0) };
+        if required <= 0 {
+            return required;
+        }
+        let mut scratch = vec![0u8; required as usize];
+        unsafe {
+            handoff(
+                ptr(plan.as_bytes()),
+                plan.len() as i32,
+                ptr_mut(&mut scratch),
+                required,
+            )
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = plan;
+        -58
+    }
+}
+
 /// Copy the bounded diagnostic before another spawn or a consuming child wait.
 pub fn proc_spawn_error(pid: i32) -> Result<Vec<u8>, i32> {
     let mut bytes = vec![0u8; 4096];

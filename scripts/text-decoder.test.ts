@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { runtimeTextDecoder, singleByteCases } from "./text-decoder-controls";
 import { decoderInputKinds, decoderInputView } from "../tests/fixtures/text-decoder/cases";
+import { nativeTextDecoderCodec } from "./fixtures/native-text-decoder";
 
 const { Decoder, handles } = runtimeTextDecoder();
 
@@ -141,6 +142,41 @@ test("non-streaming calls and native errors release their handles", () => {
   expect(handles.size).toBe(before);
   for (let index = 0; index < 10; index++) expect(decoder.decode(Uint8Array.of(65))).toBe("A");
   expect(handles.size).toBe(before);
+});
+
+test("completed UTF-8 decodes reuse the stateless native operation", () => {
+  const { streams, handles } = nativeTextDecoderCodec();
+  const calls = { decoder: 0, push: 0, release: 0 };
+  const { Decoder } = runtimeTextDecoder({
+    decoder(...args) { calls.decoder++; return streams.decoder(...args); },
+    push(...args) { calls.push++; return streams.push(...args); },
+    release(...args) { calls.release++; return streams.release(...args); },
+  });
+  const decoder = new Decoder("utf-8", { fatal: true });
+  expect(decoder.decode(Uint8Array.of(65))).toBe("A");
+  for (let index = 0; index < 32; index++) expect(decoder.decode(Uint8Array.of(0xef, 0xbb, 0xbf, 66))).toBe("B");
+  expect(() => decoder.decode(Uint8Array.of(0xff))).toThrow(expect.objectContaining({ code: "ERR_ENCODING_INVALID_ENCODED_DATA" }));
+  expect(decoder.decode(Uint8Array.of(67))).toBe("C");
+  expect(calls).toEqual({ decoder: 1, push: 1, release: 1 });
+  expect(handles.size).toBe(0);
+  expect(decoder.decode(Uint8Array.of(0xf0, 0x9f), { stream: true })).toBe("");
+  expect(decoder.decode(Uint8Array.of(0x92, 0xa9))).toBe("💩");
+  expect(decoder.decode(Uint8Array.of(68))).toBe("D");
+  expect(calls).toEqual({ decoder: 2, push: 3, release: 2 });
+  expect(handles.size).toBe(0);
+});
+
+test("stateless UTF-8 decodes retain malformed input, BOM and view semantics", () => {
+  const decoder = new Decoder("utf-8", { ignoreBOM: true });
+  decoder.decode();
+  const oracle = new TextDecoder("utf-8", { ignoreBOM: true });
+  for (const bytes of [Uint8Array.of(0xef, 0xbb, 0xbf, 65), Uint8Array.of(0xf0, 0x9f), Uint8Array.of(0xed, 0xa0, 0x80), Uint8Array.of(0xe0, 0x80, 0x80), Uint8Array.of(0xff, 0xc1, 65)]) {
+    expect(decoder.decode(bytes)).toBe(oracle.decode(bytes));
+  }
+  const bytes = Uint8Array.of(88, 65, 66, 89);
+  expect(decoder.decode(bytes.subarray(1, 3))).toBe("AB");
+  expect(decoder.decode(new DataView(bytes.buffer, 1, 2))).toBe("AB");
+  expect(decoder.decode(bytes, { get stream() { bytes.buffer.transfer(); return false; } })).toBe("");
 });
 
 test("ArrayBuffer intrinsic slots remain valid after its prototype changes", () => {

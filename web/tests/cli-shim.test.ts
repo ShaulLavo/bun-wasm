@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cliShimFixture } from "./cli-shim-fixture";
+import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
+import { programProfile } from "../../src/engine-kind";
 
 for (const mode of ["exit", "signal"] as const) {
   test(`CLI shim links runtime_proc and preserves ${mode}`, async () => {
@@ -17,4 +19,22 @@ for (const mode of ["exit", "signal"] as const) {
       expect({ code, stdout, stderr }).toEqual({ code: mode === "signal" ? 130 : 0, stdout: mode === "signal" ? "" : "cli-shim-ok\n", stderr: "" });
     } finally { await rm(scratch, { recursive: true, force: true }); }
   }, 20_000);
+}
+
+for (const engine of ["quickjs", "jsc"] as const) {
+  test(`CLI shim initializes the ${engine} core and companion before command entry`, async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-cli-shim-pair-"));
+    try {
+      const profile = programProfile(engine);
+      const { core, side } = quickjsPair(engine, undefined, { requireInitialization: true });
+      const path = join(scratch, profile.core);
+      await writeFile(path, core);
+      await writeFile(join(scratch, profile.side), side);
+      const child = Bun.spawn(["node", "../scripts/run-with-timeout.mts", "30", "bun", "scripts/run.ts", path], {
+        cwd: join(import.meta.dir, ".."), env: { ...process.env, NET: "0" }, stdout: "pipe", stderr: "pipe",
+      });
+      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: "", stderr: "" });
+    } finally { await rm(scratch, { recursive: true, force: true }); }
+  }, 60_000);
 }

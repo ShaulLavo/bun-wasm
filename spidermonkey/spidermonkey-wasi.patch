@@ -54,7 +54,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git i/js/src/vm/Interpreter.cpp w/js/src/vm/Interpreter.cpp
-index 6241cd45d..ea7534680 100644
+index 6241cd45d..44424e3ef 100644
 --- i/js/src/vm/Interpreter.cpp
 +++ w/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -77,8 +77,205 @@ index 6241cd45d..ea7534680 100644
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
-@@ -1781,6 +1787,10 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
+@@ -1779,8 +1785,207 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
+                           JS::ObjectValue(*disposableRecord));
+ }
  
++#if defined(__wasi__) && defined(BUNWASM_EMBED) && defined(BUNWASM_INTERPRETER_CONTROLS)
++extern "C" void bunsm_test_deferred_getter(JSContext* cx);
++extern "C" bool bunsm_test_inline_prologue(JSContext* cx);
++// Called when a call opcode takes the loop route for call or apply; |owned| is
++// true for an apply list copied into an owned frame, before delazification.
++extern "C" void bunsm_test_loop_call(JSContext* cx, bool owned);
++extern "C" size_t bunsm_test_interpreter_frames(JSContext* cx) {
++  return cx->interpreterStack().bunwasmFrameCount();
++}
++#endif
++
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++// ObjectOperations-inl.h's inline GetProperty(obj, receiver, name), except that
++// a native object's eligible scripted getter is returned instead of called.
++// Exotic objects keep the ordinary synchronous route. Inline like the original,
++// so the lookup adds no native frame.
++static MOZ_ALWAYS_INLINE bool GetPropertyDeferredFrom(
++    JSContext* cx, HandleObject obj, HandleValue receiver,
++    Handle<PropertyName*> name, MutableHandleValue vp,
++    MutableHandleFunction getter) {
++  RootedId id(cx, NameToId(name));
++  if (GetPropertyOp op = obj->getOpsGetProperty()) {
++    return op(cx, obj, receiver, id, vp);
++  }
++  return NativeGetPropertyDeferred(cx, obj.as<NativeObject>(), receiver, id,
++                                   vp, getter);
++}
++
++// Delazifies a deferred getter and publishes its owned-arguments frame. The
++// getter stays in the interpreter's mutable function root and the receiver in
++// the case's rooted copy until the frame holds both. Out of line, so that
++// js::Interpret's own frame, which every remaining native reentry pays for,
++// does not grow.
++static MOZ_NEVER_INLINE bool PushDeferredGetterFrame(
++    JSContext* cx, InterpreterActivation& activation, HandleFunction getter,
++    HandleValue receiver) {
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++  bunsm_test_deferred_getter(cx);
++#  endif
++  RootedScript script(cx, JSFunction::getOrCreateScript(cx, getter));
++  if (!script) {
++    return false;
++  }
++  return activation.pushOwnedInlineFrame(getter, script, receiver, 0,
++                                         [](Value*) {});
++}
++
++// How a call opcode whose callee is Function.prototype.call or apply goes on.
++enum class LoopCall {
++  Native,  // Nothing changed: the builtin runs natively.
++  Inline,  // The operands now call the target: take the inline call path.
++  Owned,   // An owned-arguments frame for the target is published.
++  Error,
++};
++
++static bool IsLoopApplyList(JSObject* list, uint32_t* length) {
++  if (list->is<ArrayObject>()) {
++    if (!IsPackedArray(list)) {
++      return false;
++    }
++    *length = list->as<ArrayObject>().length();
++    return *length <= ARGS_LENGTH_MAX;
++  }
++  if (!list->is<ArgumentsObject>()) {
++    return false;
++  }
++  // Upstream's optimised apply route (CacheIR's FunApplyArgsObj) uses the same
++  // guards: with none of these set, the length and elements are exactly the
++  // call's original arguments and reading them runs no script.
++  ArgumentsObject& arguments = list->as<ArgumentsObject>();
++  if (arguments.hasOverriddenLength() || arguments.hasOverriddenElement() ||
++      arguments.anyArgIsForwarded()) {
++    return false;
++  }
++  *length = arguments.initialLength();
++  return true;
++}
++
++// Copies an eligible apply list (IsLoopApplyList) into a frame's arguments.
++// Neither kind of read can run script or GC.
++static void CopyLoopApplyList(JSObject* list, uint32_t length, Value* argv) {
++  if (list->is<ArgumentsObject>()) {
++    MOZ_ALWAYS_TRUE(
++        list->as<ArgumentsObject>().maybeGetElements(0, length, argv));
++    return;
++  }
++  ArrayObject& array = list->as<ArrayObject>();
++  for (uint32_t i = 0; i < length; i++) {
++    argv[i] = array.getDenseElement(i);
++  }
++}
++
++// [call, target, this, a1...] becomes [target, this, a1...]: one argument
++// fewer, so the caller's cleanup still lands on the builtin's slot. With no
++// arguments, |this| is undefined.
++static void RewriteLoopCall(InterpreterRegs& regs, CallArgs& args,
++                            JSFunction* target) {
++  Value* operands = args.base();
++  unsigned argc = args.length();
++  bool ignoresReturnValue = args.ignoresReturnValue();
++  operands[0].setObject(*target);
++  if (argc == 0) {
++    operands[1].setUndefined();
++    args = CallArgsFromSp(0, regs.sp, NO_CONSTRUCT, ignoresReturnValue);
++    return;
++  }
++  for (unsigned i = 1; i <= argc; i++) {
++    operands[i] = operands[i + 1];
++  }
++  regs.sp--;
++  args = CallArgsFromSp(argc - 1, regs.sp, NO_CONSTRUCT, ignoresReturnValue);
++}
++
++// apply with no list, null or undefined: zero arguments, |this| from the first
++// argument, and every later operand dropped. The caller's cleanup still lands
++// on the builtin's slot.
++static void RewriteLoopApplyWithoutList(InterpreterRegs& regs, CallArgs& args,
++                                        JSFunction* target) {
++  Value* operands = args.base();
++  bool ignoresReturnValue = args.ignoresReturnValue();
++  operands[1] = args.get(0);
++  operands[0].setObject(*target);
++  regs.sp = operands + 2;
++  args = CallArgsFromSp(0, regs.sp, NO_CONSTRUCT, ignoresReturnValue);
++}
++
++// Runs Function.prototype.call and apply to a scripted target as a frame of
++// this loop. |args| belongs to a call opcode, never a construction. Every
++// condition that keeps the native route is checked before anything changes;
++// after the operands are rewritten a failure is an error, never a fallback.
++// Out of line, like PushDeferredGetterFrame.
++static MOZ_NEVER_INLINE LoopCall PrepareLoopCall(
++    JSContext* cx, InterpreterActivation& activation, CallArgs& args) {
++  JSFunction* builtin = &args.callee().as<JSFunction>();
++  bool apply = builtin->native() == fun_apply;
++  MOZ_ASSERT(apply || builtin->native() == fun_call);
++  if (builtin->realm() != cx->realm() ||
++      cx->realm()->debuggerObservesNativeCall() || !args.thisv().isObject() ||
++      !args.thisv().toObject().is<JSFunction>()) {
++    return LoopCall::Native;
++  }
++  JSFunction* target = &args.thisv().toObject().as<JSFunction>();
++  if (!target->isInterpreted() || target->isClassConstructor()) {
++    return LoopCall::Native;
++  }
++
++  InterpreterRegs& regs = activation.regs();
++  if (!apply) {
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++    bunsm_test_loop_call(cx, false);
++#  endif
++    RewriteLoopCall(regs, args, target);
++    return LoopCall::Inline;
++  }
++
++  if (args.length() < 2 || args[1].isNullOrUndefined()) {
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++    bunsm_test_loop_call(cx, false);
++#  endif
++    RewriteLoopApplyWithoutList(regs, args, target);
++    return LoopCall::Inline;
++  }
++
++  // Lists that need script or a lookup to read (array-likes, holes, proxies,
++  // over-limit lengths, non-objects with their TypeError) stay native, so
++  // upstream's order of checks and errors is untouched. An owned frame skips
++  // the inline call path's realm entry, so the target must share this realm.
++  uint32_t length;
++  if (!args[1].isObject() || target->realm() != cx->realm() ||
++      !IsLoopApplyList(&args[1].toObject(), &length)) {
++    return LoopCall::Native;
++  }
++  RootedFunction fun(cx, target);
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++  bunsm_test_loop_call(cx, true);
++#  endif
++  RootedScript script(cx, JSFunction::getOrCreateScript(cx, fun));
++  if (!script) {
++    return LoopCall::Error;
++  }
++  // Delazification may GC: the list and |this| are reread from the traced
++  // operands. No script ran, so the list is still eligible.
++  RootedValue thisv(cx, args[0]);
++  JSObject* list = &args[1].toObject();
++  MOZ_ASSERT(IsLoopApplyList(list, &length));
++  auto fill = [list, length](Value* argv) {
++    CopyLoopApplyList(list, length, argv);
++  };
++  if (!activation.pushOwnedInlineFrame(fun, script, thisv, length, fill)) {
++    return LoopCall::Error;
++  }
++  return LoopCall::Owned;
++}
++#endif
++
  bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
                                                             RunState& state) {
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
@@ -88,7 +285,7 @@ index 6241cd45d..ea7534680 100644
  /*
   * Define macros for an interpreter loop. Opcode dispatch is done by
   * indirect goto (aka a threaded interpreter), which is technically
-@@ -1839,8 +1849,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1839,8 +2044,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
     * Prepare to call a user-supplied branch handler, and abort the script
     * if it returns false.
     */
@@ -103,7 +300,7 @@ index 6241cd45d..ea7534680 100644
      if (!CheckForInterrupt(cx)) goto error; \
    JS_END_MACRO
  
-@@ -1984,6 +2000,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1984,6 +2195,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
    INIT_COVERAGE();
    COUNT_COVERAGE_MAIN();
  
@@ -116,6 +313,184 @@ index 6241cd45d..ea7534680 100644
    // Enter the interpreter loop starting at the current pc.
    ADVANCE_AND_DISPATCH(0);
  
+@@ -2229,7 +2446,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+ 
+       jit_return:
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++        MOZ_ASSERT(IsInvokePC(REGS.pc) || JSOp(*REGS.pc) == JSOp::GetProp ||
++                   JSOp(*REGS.pc) == JSOp::GetPropSuper);
++#else
+         MOZ_ASSERT(IsInvokePC(REGS.pc));
++#endif
+         MOZ_ASSERT(cx->realm() == script->realm());
+ 
+         /* Resume execution in the calling frame. */
+@@ -2238,6 +2460,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+             ADVANCE_AND_DISPATCH(JSOpLength_Resume);
+           }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++          static_assert(JSOpLength_GetProp == JSOpLength_GetPropSuper,
++                        "getter frames return to opcodes of one length");
++          if (MOZ_UNLIKELY(JSOp(*REGS.pc) == JSOp::GetProp ||
++                           JSOp(*REGS.pc) == JSOp::GetPropSuper)) {
++            ADVANCE_AND_DISPATCH(JSOpLength_GetProp);
++          }
++#endif
+           MOZ_ASSERT(GetBytecodeLength(REGS.pc) == JSOpLength_Call);
+           ADVANCE_AND_DISPATCH(JSOpLength_Call);
+         }
+@@ -2944,9 +3174,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+       ReservedRooted<Value> lval(&rootValue0, REGS.sp[-1]);
+       MutableHandleValue res = REGS.stackHandleAt(-1);
+       ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++      ReservedRooted<JSFunction*> fun(&rootFunction0);
++      if (!GetPropertyDeferred(cx, lval, name, res, &fun)) {
++        goto error;
++      }
++      if (fun && !PushDeferredGetterFrame(cx, activation, fun, lval)) {
++        goto error;
++      }
++      if (fun) {
++        goto enter_inline_frame;
++      }
++#else
+       if (!GetProperty(cx, lval, name, res)) {
+         goto error;
+       }
++#endif
+       cx->debugOnlyCheck(res);
+     }
+     END_CASE(GetProp)
+@@ -2964,9 +3207,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+         goto error;
+       }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++      ReservedRooted<JSFunction*> fun(&rootFunction0);
++      if (!GetPropertyDeferredFrom(cx, obj, receiver, name, rref, &fun)) {
++        goto error;
++      }
++      if (fun && !PushDeferredGetterFrame(cx, activation, fun, receiver)) {
++        goto error;
++      }
++      if (fun) {
++        goto enter_inline_frame;
++      }
++#else
+       if (!GetProperty(cx, obj, receiver, name, rref)) {
+         goto error;
+       }
++#endif
+ 
+       cx->debugOnlyCheck(rref);
+ 
+@@ -3271,6 +3527,25 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+           (construct && !maybeFun->isConstructor()) ||
+           (!construct && maybeFun->isClassConstructor()) ||
+           cx->realm()->debuggerObservesNativeCall()) {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++        // Function.prototype.call and apply to a scripted target continue in
++        // this loop. Calls only: a construction keeps rejecting the builtin.
++        if (!construct && isFunction && maybeFun->isNativeFun() &&
++            (maybeFun->native() == fun_call ||
++             maybeFun->native() == fun_apply)) {
++          LoopCall route = PrepareLoopCall(cx, activation, args);
++          if (route == LoopCall::Error) {
++            goto error;
++          }
++          if (route == LoopCall::Owned) {
++            goto enter_inline_frame;
++          }
++          if (route == LoopCall::Inline) {
++            maybeFun = &args.callee().as<JSFunction>();
++            goto inline_call;
++          }
++        }
++#endif
+         if (construct) {
+           CallReason reason = op == JSOp::NewContent ? CallReason::CallContent
+                                                      : CallReason::Call;
+@@ -3298,6 +3573,9 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+         ADVANCE_AND_DISPATCH(JSOpLength_Call);
+       }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    inline_call:
++#endif
+       {
+         MOZ_ASSERT(maybeFun);
+         ReservedRooted<JSFunction*> fun(&rootFunction0, maybeFun);
+@@ -3366,8 +3644,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+                                     // call popInlineFrame.
+       }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++      goto enter_inline_frame;
++    }
++
++    enter_inline_frame: {
++#endif
+       SET_SCRIPT(REGS.fp()->script());
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED) && defined(BUNWASM_INTERPRETER_CONTROLS)
++      if (!bunsm_test_inline_prologue(cx)) {
++        goto prologue_error;
++      }
++#endif
+       if (!REGS.fp()->prologue(cx)) {
+         goto prologue_error;
+       }
+@@ -4619,8 +4908,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
+   return cx->getPendingExceptionStack(vp);
+ }
+ 
+-bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
+-                     MutableHandleValue vp) {
++template <bool deferGetter>
++static bool GetPropertyOperation(JSContext* cx, HandleValue v,
++                                  Handle<PropertyName*> name,
++                                  MutableHandleValue vp
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    , MutableHandleFunction* deferredGetter = nullptr
++#endif
++) {
+   if (name == cx->names().length) {
+     // Fast path for strings, arrays and arguments.
+     if (::GetLengthProperty(v, vp)) {
+@@ -4674,9 +4969,30 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
+     return false;
+   }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  if constexpr (deferGetter) {
++    return GetPropertyDeferredFrom(cx, obj, receiver, name, vp,
++                                   *deferredGetter);
++  }
++#endif
+   return GetProperty(cx, obj, receiver, name, vp);
+ }
+ 
++bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
++                     MutableHandleValue vp) {
++  return GetPropertyOperation<false>(cx, v, name, vp);
++}
++
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++// Out of line like js::GetProperty above: inlined into js::Interpret, its
++// rooted locals would enlarge the frame every remaining native reentry pays for.
++MOZ_NEVER_INLINE bool js::GetPropertyDeferred(
++    JSContext* cx, HandleValue v, Handle<PropertyName*> name,
++    MutableHandleValue vp, MutableHandleFunction getter) {
++  return GetPropertyOperation<true>(cx, v, name, vp, &getter);
++}
++#endif
++
+ JSObject* js::LambdaBaselineFallback(JSContext* cx, HandleFunction fun,
+                                      HandleObject parent, gc::AllocSite* site) {
+   MOZ_ASSERT(site);
 diff --git i/js/src/vm/PortableBaselineInterpret.cpp w/js/src/vm/PortableBaselineInterpret.cpp
 index d38cebe3e..39afaa2d9 100644
 --- i/js/src/vm/PortableBaselineInterpret.cpp
@@ -927,7 +1302,7 @@ index 4ecf3ef44..fccb197d6 100644
  #include "proxy/ScriptedProxyHandler.h"
 @@ -398,6 +406,7 @@ bool Proxy::isExtensible(JSContext* cx, HandleObject proxy, bool* extensible) {
  }
- 
+
  bool Proxy::has(JSContext* cx, HandleObject proxy, HandleId id, bool* bp) {
 +  BUNWASM_RESERVE_PROXY_TRAP();
    AutoCheckRecursionLimit recursion(cx);
@@ -936,7 +1311,7 @@ index 4ecf3ef44..fccb197d6 100644
 @@ -498,6 +507,7 @@ MOZ_ALWAYS_INLINE bool Proxy::getInternal(JSContext* cx, HandleObject proxy,
                                            MutableHandleValue vp) {
    MOZ_ASSERT_IF(receiver.isObject(), !IsWindow(&receiver.toObject()));
- 
+
 +  BUNWASM_RESERVE_PROXY_TRAP();
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
@@ -944,14 +1319,14 @@ index 4ecf3ef44..fccb197d6 100644
 @@ -572,6 +582,7 @@ MOZ_ALWAYS_INLINE bool Proxy::setInternal(JSContext* cx, HandleObject proxy,
                                            ObjectOpResult& result) {
    MOZ_ASSERT_IF(receiver.isObject(), !IsWindow(&receiver.toObject()));
- 
+
 +  BUNWASM_RESERVE_PROXY_TRAP();
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
 @@ -701,6 +712,7 @@ bool Proxy::enumerate(JSContext* cx, HandleObject proxy,
  }
- 
+
  bool Proxy::call(JSContext* cx, HandleObject proxy, const CallArgs& args) {
 +  BUNWASM_RESERVE_PROXY_TRAP();
    AutoCheckRecursionLimit recursion(cx);
@@ -959,9 +1334,362 @@ index 4ecf3ef44..fccb197d6 100644
      return false;
 @@ -721,6 +733,7 @@ bool Proxy::call(JSContext* cx, HandleObject proxy, const CallArgs& args) {
  }
- 
+
  bool Proxy::construct(JSContext* cx, HandleObject proxy, const CallArgs& args) {
 +  BUNWASM_RESERVE_PROXY_TRAP();
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
+
+diff --git a/js/src/vm/Interpreter.h b/js/src/vm/Interpreter.h
+index 87e79b096..03b82f863 100644
+--- a/js/src/vm/Interpreter.h
++++ b/js/src/vm/Interpreter.h
+@@ -477,6 +477,14 @@ bool ThrowWithStackOperation(JSContext* cx, HandleValue v, HandleValue stack);
+
+ bool GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp);
+
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++// GetProperty, except that an eligible scripted getter on a native object is
++// stored in |getter| instead of being called; |vp| is then undefined.
++bool GetPropertyDeferred(JSContext* cx, HandleValue value,
++                         Handle<PropertyName*> name, MutableHandleValue vp,
++                         MutableHandleFunction getter);
++#endif
++
+ bool GetProperty(JSContext* cx, HandleValue value, Handle<PropertyName*> name,
+                  MutableHandleValue vp);
+ 
+
+diff --git a/js/src/vm/NativeObject.cpp b/js/src/vm/NativeObject.cpp
+index 6986f5fa2..c93b5cff0 100644
+--- a/js/src/vm/NativeObject.cpp
++++ b/js/src/vm/NativeObject.cpp
+@@ -2170,13 +2170,35 @@ static bool GetCustomDataProperty(JSContext* cx, HandleObject obj, HandleId id,
+   return true;
+ }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++static bool CanDeferGetter(JSContext* cx, HandleValue getter) {
++  if (!getter.isObject() || !getter.toObject().is<JSFunction>()) {
++    return false;
++  }
++  JSFunction* fun = &getter.toObject().as<JSFunction>();
++  return fun->isInterpreted() && !fun->isClassConstructor() &&
++         fun->realm() == cx->realm() &&
++         !cx->realm()->debuggerObservesNativeCall();
++}
++#endif
++
+ static inline bool CallGetter(JSContext* cx, Handle<NativeObject*> obj,
+                               HandleValue receiver, HandleId id,
+-                              PropertyInfo prop, MutableHandleValue vp) {
++                              PropertyInfo prop, MutableHandleValue vp
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    , MutableHandleFunction* deferredGetter = nullptr
++#endif
++) {
+   MOZ_ASSERT(!prop.isDataProperty());
+ 
+   if (prop.isAccessorProperty()) {
+     RootedValue getter(cx, obj->getGetterValue(prop));
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    if (deferredGetter && CanDeferGetter(cx, getter)) {
++      deferredGetter->set(&getter.toObject().as<JSFunction>());
++      return true;
++    }
++#endif
+     return js::CallGetter(cx, receiver, getter, vp);
+   }
+ 
+@@ -2190,7 +2212,11 @@ static MOZ_ALWAYS_INLINE bool GetExistingProperty(
+     JSContext* cx, typename MaybeRooted<Value, allowGC>::HandleType receiver,
+     typename MaybeRooted<NativeObject*, allowGC>::HandleType obj,
+     typename MaybeRooted<jsid, allowGC>::HandleType id, PropertyInfo prop,
+-    typename MaybeRooted<Value, allowGC>::MutableHandleType vp) {
++    typename MaybeRooted<Value, allowGC>::MutableHandleType vp
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    , MutableHandleFunction* deferredGetter = nullptr
++#endif
++) {
+   if (prop.isDataProperty()) {
+     vp.set(obj->getSlot(prop.slot()));
+     return true;
+@@ -2205,7 +2231,11 @@ static MOZ_ALWAYS_INLINE bool GetExistingProperty(
+   if constexpr (!allowGC) {
+     return false;
+   } else {
+-    return CallGetter(cx, obj, receiver, id, prop, vp);
++    return CallGetter(cx, obj, receiver, id, prop, vp
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++                      , deferredGetter
++#endif
++    );
+   }
+ }
+ 
+@@ -2323,7 +2353,11 @@ static MOZ_ALWAYS_INLINE bool NativeGetPropertyInline(
+     JSContext* cx, typename MaybeRooted<NativeObject*, allowGC>::HandleType obj,
+     typename MaybeRooted<Value, allowGC>::HandleType receiver,
+     typename MaybeRooted<jsid, allowGC>::HandleType id, IsNameLookup nameLookup,
+-    typename MaybeRooted<Value, allowGC>::MutableHandleType vp) {
++    typename MaybeRooted<Value, allowGC>::MutableHandleType vp
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    , MutableHandleFunction* deferredGetter = nullptr
++#endif
++) {
+   typename MaybeRooted<NativeObject*, allowGC>::RootType pobj(cx, obj);
+   PropertyResult prop;
+ 
+@@ -2349,7 +2383,11 @@ static MOZ_ALWAYS_INLINE bool NativeGetPropertyInline(
+       }
+ 
+       return GetExistingProperty<allowGC>(cx, receiver, pobj, id,
+-                                          prop.propertyInfo(), vp);
++                                          prop.propertyInfo(), vp
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++                                        , deferredGetter
++#endif
++      );
+     }
+ 
+     // Step 2.a.
+@@ -2382,6 +2420,17 @@ bool js::NativeGetProperty(JSContext* cx, Handle<NativeObject*> obj,
+                                         vp);
+ }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++bool js::NativeGetPropertyDeferred(JSContext* cx, Handle<NativeObject*> obj,
++                                   HandleValue receiver, HandleId id,
++                                   MutableHandleValue vp,
++                                   MutableHandleFunction getter) {
++  MOZ_ASSERT(!getter);
++  return NativeGetPropertyInline<CanGC>(cx, obj, receiver, id, NotNameLookup,
++                                       vp, &getter);
++}
++#endif
++
+ bool js::NativeGetPropertyNoGC(JSContext* cx, NativeObject* obj,
+                                const Value& receiver, jsid id, Value* vp) {
+   AutoAssertNoPendingException noexc(cx);
+
+diff --git a/js/src/vm/NativeObject.h b/js/src/vm/NativeObject.h
+index 57951667c..f640070b4 100644
+--- a/js/src/vm/NativeObject.h
++++ b/js/src/vm/NativeObject.h
+@@ -2105,6 +2105,13 @@ extern bool NativeGetProperty(JSContext* cx, Handle<NativeObject*> obj,
+                               HandleValue receiver, HandleId id,
+                               MutableHandleValue vp);
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++extern bool NativeGetPropertyDeferred(JSContext* cx, Handle<NativeObject*> obj,
++                                      HandleValue receiver, HandleId id,
++                                      MutableHandleValue vp,
++                                      MutableHandleFunction getter);
++#endif
++
+ extern bool NativeGetPropertyNoGC(JSContext* cx, NativeObject* obj,
+                                   const Value& receiver, jsid id, Value* vp);
+ 
+
+diff --git a/js/src/vm/Stack.h b/js/src/vm/Stack.h
+index 7fd5148d5..caef2c251 100644
+--- a/js/src/vm/Stack.h
++++ b/js/src/vm/Stack.h
+@@ -351,6 +351,11 @@ class InterpreterFrame {
+      * |js::SavedFrame| object cached for this frame.
+      */
+     HAS_CACHED_SAVED_FRAME = 0x200,
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    // The frame owns its arguments and returns to an arbitrary caller opcode.
++    OWNED_ARGUMENTS = 0x400,
++    DISCARD_RETURN_VALUE = 0x800,
++#endif
+   };
+ 
+   mutable uint32_t flags_; /* bits described by Flags */
+@@ -733,6 +738,18 @@ class InterpreterFrame {
+   }
+   bool isResumingGenerator() const { return !!(flags_ & RESUMING_GENERATOR); }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  enum class InlineReturnMode { ReplaceValue, KeepValue };
++  void setOwnedArguments(InlineReturnMode mode) {
++    flags_ |= OWNED_ARGUMENTS;
++    if (mode == InlineReturnMode::KeepValue) {
++      flags_ |= DISCARD_RETURN_VALUE;
++    }
++  }
++  bool hasOwnedArguments() const { return flags_ & OWNED_ARGUMENTS; }
++  bool discardsReturnValue() const { return flags_ & DISCARD_RETURN_VALUE; }
++#endif
++
+   /*
+    * These two queries should not be used in general: the presence/absence of
+    * the call/args object is determined by the static(ish) properties of the
+@@ -830,6 +847,11 @@ class InterpreterRegs {
+     fp_ = fp_->prev();
+     MOZ_ASSERT(fp_);
+   }
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  // Pops a frame that owns its arguments. The caller's operands are removed
++  // as its opcode's stack uses say, keeping the slot that takes the result.
++  void popOwnedInlineFrame();
++#endif
+   void prepareToRun(InterpreterFrame& fp, JSScript* script) {
+     pc = script->code();
+     sp = fp.slots() + script->nfixed();
+@@ -910,6 +932,19 @@ class InterpreterStack {
+ 
+   void popInlineFrame(InterpreterRegs& regs);
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  // Pushes a frame that owns its callee, |this|, |argc| arguments written by
++  // |fill| (which must not GC) and any missing formals.
++  template <typename Fill>
++  bool pushOwnedInlineFrame(JSContext* cx, InterpreterRegs& regs,
++                            HandleFunction callee, HandleScript script,
++                            HandleValue thisv, unsigned argc, Fill fill);
++  // Out of line, so the interpreter's ordinary inline return path, and with
++  // it js::Interpret's frame, is unchanged.
++  void popOwnedInlineFrame(InterpreterRegs& regs);
++  size_t bunwasmFrameCount() const { return frameCount_; }
++#endif
++
+   bool pushInlineGeneratorResumeFrame(JSContext* cx, InterpreterRegs& regs,
+                                       HandleFunction callee,
+                                       HandleObject envChain);
+
+diff --git a/js/src/vm/Stack-inl.h b/js/src/vm/Stack-inl.h
+index 7a729d13d..02048c6f2 100644
+--- a/js/src/vm/Stack-inl.h
++++ b/js/src/vm/Stack-inl.h
+@@ -356,8 +356,47 @@ MOZ_ALWAYS_INLINE bool InterpreterStack::pushInlineGeneratorResumeFrame(
+   return true;
+ }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++template <typename Fill>
++MOZ_ALWAYS_INLINE bool InterpreterStack::pushOwnedInlineFrame(
++    JSContext* cx, InterpreterRegs& regs, HandleFunction callee,
++    HandleScript script, HandleValue thisv, unsigned argc, Fill fill) {
++  MOZ_ASSERT(regs.fp());
++  MOZ_ASSERT(callee->baseScript() == script);
++  LifoAlloc::Mark mark = allocator_.mark();
++  unsigned nformal = callee->nargs();
++  unsigned nargs = argc > nformal ? argc : nformal;
++  size_t nvals = 2 + size_t(nargs) + script->nslots();
++  uint8_t* buffer =
++      allocateFrame(cx, sizeof(InterpreterFrame) + nvals * sizeof(Value));
++  if (!buffer) {
++    return false;
++  }
++
++  // Allocation cannot GC. Publish only after every owned slot is initialized.
++  Value* argv = reinterpret_cast<Value*>(buffer) + 2;
++  argv[-2] = ObjectValue(*callee);
++  argv[-1] = thisv;
++  fill(argv);
++  SetValueRangeToUndefined(argv + argc, nargs - argc);
++  InterpreterFrame* fp = reinterpret_cast<InterpreterFrame*>(argv + nargs);
++  fp->mark_ = mark;
++  fp->initCallFrame(regs.fp(), regs.pc, regs.sp, *callee, script, argv, argc,
++                    NO_CONSTRUCT);
++  fp->setOwnedArguments(InterpreterFrame::InlineReturnMode::ReplaceValue);
++  regs.prepareToRun(*fp, script);
++  return true;
++}
++#endif
++
+ MOZ_ALWAYS_INLINE void InterpreterStack::popInlineFrame(InterpreterRegs& regs) {
+   InterpreterFrame* fp = regs.fp();
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  if (MOZ_UNLIKELY(fp->hasOwnedArguments())) {
++    popOwnedInlineFrame(regs);
++    return;
++  }
++#endif
+   regs.popInlineFrame();
+   regs.sp[-1] = fp->returnValue();
+   releaseFrame(fp);
+@@ -860,6 +899,17 @@ inline void InterpreterActivation::popInlineFrame(InterpreterFrame* frame) {
+   cx_->interpreterStack().popInlineFrame(regs_);
+ }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++template <typename Fill>
++inline bool InterpreterActivation::pushOwnedInlineFrame(
++    HandleFunction callee, HandleScript script, HandleValue thisv,
++    unsigned argc, Fill fill) {
++  return cx_->interpreterStack().pushOwnedInlineFrame(cx_, regs_, callee,
++                                                      script, thisv, argc,
++                                                      fill);
++}
++#endif
++
+ inline bool InterpreterActivation::pushInlineGeneratorResumeFrame(
+     HandleFunction callee, HandleObject envChain) {
+   InterpreterStack& stack = cx_->interpreterStack();
+
+diff --git a/js/src/vm/Activation.h b/js/src/vm/Activation.h
+index b2c3f2a99..96f70884b 100644
+--- a/js/src/vm/Activation.h
++++ b/js/src/vm/Activation.h
+@@ -503,6 +503,14 @@ class InterpreterActivation : public Activation {
+                               MaybeConstruct constructing);
+   inline void popInlineFrame(InterpreterFrame* frame);
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  template <typename Fill>
++  inline bool pushOwnedInlineFrame(JS::Handle<JSFunction*> callee,
++                                   JS::Handle<JSScript*> script,
++                                   JS::Handle<JS::Value> thisv, unsigned argc,
++                                   Fill fill);
++#endif
++
+   inline bool pushInlineGeneratorResumeFrame(JS::Handle<JSFunction*> callee,
+                                              JS::Handle<JSObject*> envChain);
+ 
+
+
+diff --git a/js/src/vm/Stack.cpp b/js/src/vm/Stack.cpp
+index 2465a89b4..110b3281c 100644
+--- a/js/src/vm/Stack.cpp
++++ b/js/src/vm/Stack.cpp
+@@ -14,6 +14,9 @@
+ #include "jit/JitRuntime.h"
+ #include "js/friend/ErrorMessages.h"  // JSMSG_*
+ #include "js/Value.h"                 // JS::Value
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++#  include "vm/BytecodeUtil.h"  // js::StackUses
++#endif
+ #include "vm/FrameIter.h"             // js::FrameIter
+ #include "vm/JSContext.h"
+ #include "wasm/WasmProcess.h"
+@@ -406,6 +409,26 @@ void js::TraceActivations(JSContext* cx, JSTracer* trc) {
+ // we don't have to #include jsautooplen.h in vm/Stack.h.
+ void InterpreterRegs::setToEndOfScript() { sp = fp()->base(); }
+
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++void InterpreterRegs::popOwnedInlineFrame() {
++  MOZ_ASSERT(fp_->hasOwnedArguments());
++  pc = fp_->prevpc();
++  sp = fp_->prevsp() - (StackUses(JSOp(*pc), pc) - 1);
++  fp_ = fp_->prev();
++  MOZ_ASSERT(fp_);
++}
++
++void InterpreterStack::popOwnedInlineFrame(InterpreterRegs& regs) {
++  InterpreterFrame* fp = regs.fp();
++  regs.popOwnedInlineFrame();
++  if (!fp->discardsReturnValue()) {
++    regs.sp[-1] = fp->returnValue();
++  }
++  releaseFrame(fp);
++  MOZ_ASSERT(regs.fp());
++}
++#endif
++
+ /*****************************************************************************/
+
+ InterpreterFrame* InterpreterStack::pushInvokeFrame(

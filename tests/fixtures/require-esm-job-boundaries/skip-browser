@@ -1,0 +1,1 @@
+Browser require converts ES modules into separate CommonJS instances, as documented in docs/engine-browser.md.
