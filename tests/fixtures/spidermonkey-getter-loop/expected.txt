@@ -1,0 +1,9 @@
+own getter completed
+prototype getter completed
+static getter completed
+super getter completed
+getter throw and finally preserved
+receivers and arguments preserved
+special getters preserved
+proxy prototype preserved
+getter exhaustion caught and recovered
