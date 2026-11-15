@@ -17,8 +17,15 @@ async function fixture(engine: BrowserType, write?: (event: Event) => void): Pro
   const events: Event[] = [];
   const lifetime = new StorageLifetime(event => { events.push(event); write?.(event); });
   lifetimes.push(lifetime);
-  const { value: browser } = await lifetime.acquire("browser.launch", () => engine.launch({ headless: true }), browser => browser.close());
-  const context = await browser.newContext();
+  let closeContext: (() => Promise<void>) | undefined;
+  const { value: browser } = await lifetime.acquire("browser.launch", () => engine.launch({ headless: true }), async browser => {
+    try { await closeContext?.(); }
+    finally { await browser.close(); }
+  });
+  lifetime.observeBrowser(browser);
+  const opening = browser.newContext();
+  closeContext = lifetime.own("context.close", async () => { await (await opening).close(); });
+  const context = await opening;
   lifetime.observeContext(context);
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
