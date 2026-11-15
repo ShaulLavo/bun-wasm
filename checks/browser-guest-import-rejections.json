@@ -1,5 +1,10 @@
 {
   "owner": "browser-guest",
   "path": "scripts/browser-import-rejections.test.ts",
-  "inputs": ["web/src/engine-host.js"]
+  "inputs": [
+    "web/src/engine-host.js",
+    "crates/bunwasm-runtime/src/js/bootstrap.js",
+    "crates/bunwasm-runtime/src/js/inspect.js",
+    "crates/bunwasm-runtime/src/js/bun.js"
+  ]
 }
