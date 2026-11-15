@@ -1,5 +1,5 @@
-/** A cooperative proof must not acknowledge native stop while its guest still runs.
- * Keep Waffle's observation lease until real return and the terminal FIFO barrier. */
+/** Keep Waffle's observation lease until real return and the terminal FIFO barrier.
+ * The native worker stays alive for proof assertions until explicit teardown. */
 export class CooperativeWorkerStop {
   private exited = false;
   private returned = false;
@@ -28,6 +28,6 @@ export class CooperativeWorkerStop {
 
   private complete(): void {
     if (!this.pending || !this.exited || !this.returned) return;
-    this.force();
+    this.pending.resolve();
   }
 }

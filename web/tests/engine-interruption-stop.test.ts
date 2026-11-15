@@ -11,16 +11,16 @@ function fixture() {
   const returned = captureNativeReturn(transport);
   claimOutcome(state.signals.outcome, { kind: "signaled", code: 10 });
   let nativeStops = 0;
-  const stop = new CooperativeWorkerStop(() => { nativeStops++; returned(); });
-  return { stop, observer, nativeStops: () => nativeStops };
+  const stop = new CooperativeWorkerStop(() => { nativeStops++; });
+  return { stop, observer, returned, nativeStops: () => nativeStops };
 }
 
 for (const first of ["exit", "return"] as const) {
   test(`native return stays pending until both proof events, ${first} first`, async () => {
-    const { stop, observer, nativeStops } = fixture();
+    const { stop, observer, returned, nativeStops } = fixture();
     let acknowledged = false;
     const pending = stop.request();
-    void pending.then(() => { acknowledged = true; });
+    const nativeReturn = pending.then(() => { returned(); acknowledged = true; });
     const selected: ReturnType<typeof observer.read> = { kind: "selected", result: { kind: "signaled", code: 10, status: 138 } };
     try {
       expect(stop.request()).toBe(pending);
@@ -33,34 +33,38 @@ for (const first of ["exit", "return"] as const) {
       expect(nativeStops()).toBe(0);
       expect(observer.read()).toEqual(selected);
       if (first === "exit") stop.observeReturn(); else stop.observeExit();
-      await pending;
+      await nativeReturn;
       expect(acknowledged).toBe(true);
-      expect(nativeStops()).toBe(1);
+      expect(nativeStops()).toBe(0);
       expect(observer.read()).toEqual({ kind: "terminated" });
-      stop.observeExit(); stop.observeReturn(); stop.force();
+      stop.observeExit(); stop.observeReturn();
+      expect(nativeStops()).toBe(0);
+      stop.force();
       expect(nativeStops()).toBe(1);
     } finally { stop.force(); }
   });
 }
 
 test("a completed proof may receive a later stop request", async () => {
-  const { stop, observer, nativeStops } = fixture();
+  const { stop, observer, returned, nativeStops } = fixture();
   try {
     stop.observeExit(); stop.observeReturn();
     expect(nativeStops()).toBe(0);
     expect(observer.read().kind).toBe("selected");
     await stop.request();
-    expect(nativeStops()).toBe(1);
+    returned();
+    expect(nativeStops()).toBe(0);
     expect(observer.read().kind).toBe("terminated");
   } finally { stop.force(); }
 });
 
 test("failed-proof cleanup releases a held stop even with no completion events", async () => {
-  const { stop, observer, nativeStops } = fixture();
+  const { stop, observer, returned, nativeStops } = fixture();
   try {
     const pending = stop.request();
     stop.force();
     await pending;
+    returned();
     await stop.request();
     expect(nativeStops()).toBe(1);
     expect(observer.read().kind).toBe("terminated");
