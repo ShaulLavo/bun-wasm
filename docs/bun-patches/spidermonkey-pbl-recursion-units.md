@@ -45,7 +45,10 @@ number of levels entered before the caught `RangeError`.
 | Plain call, `call`, proxy, `toString` | 5,030, 115, 115, 172 | same | 50,999, 116 (now 50,998, [loop dispatch](spidermonkey-loop-dispatch.md)), 115, 115 |
 
 After the change all 48 cases (three browsers, both tiers, eight paths) end in a
-caught `RangeError` and the next evaluation succeeds. A PBL reentry costs about
+caught `RangeError` and the next evaluation succeeds. The "PBL after" column
+predates the [PBL hand-over](spidermonkey-pbl-handover.md): getter and
+missing-argument recursion now pass 50,000 levels on PBL, and setters and bound
+functions stop near 234 and 196 levels. A PBL reentry costs about
 1,360 bytes of host stack under Wasmtime, so 344 levels need about 470 KB; the
 fixed build also catches every path at Wasmtime's default 512 KiB stack, where
 main traps. Chromium, the tightest browser, keeps about twice the headroom.

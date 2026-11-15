@@ -821,14 +821,22 @@ parentheses, objects, unary operators, element access and templates.
 
 | | Mac WebKit | Linux WebKit, 512 KiB |
 | --- | --- | --- |
-| At 188 KiB, caught and recovered | every shape except statement nesting, both tiers, two runs | the same |
-| Lowest quota still caught, other shapes | 193 KiB (parentheses, unary chains) | 209 KiB (PBL Ajv) |
+| At 188 KiB, caught and recovered | every shape except statement nesting, both tiers | the same |
+| Lowest quota still caught, runtime shapes | 218 KiB (PBL `JSON.stringify`), 224 KiB interp (computed getter) | 237 KiB (PBL computed getter), 278 KiB interp |
+| Lowest quota still caught, other compile shapes | 183 to 189 KiB (PBL parentheses and unary chains), 204 KiB interp | 233 KiB (PBL parentheses) |
 | Statement nesting caught up to | 118 to 144 KiB, or not at the 112 KiB floor tested | 112 to 144 KiB |
 
+Measured November 15, 2026, cold, after the [PBL hand-over](#spidermonkey-pbl-on-deep-stacks).
+Main's guest has started colder since its `Intl` setup became lazy, and on the Mac main's own
+engine is then caught only up to 157 to 171 KiB for PBL `toString`, proxy and array-like
+`apply`, and below 150 KiB for interp computed getters: those trapped at 188 KiB. PBL
+parentheses and unary chains sit within a few KiB of 188 KiB on main too (189 KiB); they belong
+to the parser work below.
+
 The native launcher has no host limit, so it gives the quota each workload needs: the guest's
-bootstrap 97 KiB (interp) and 106 KiB (PBL), and loading Next's webpack hook (`require-hook` and
-`loadWebpackHook()`) 165 and 184 KiB. 188 KiB sits about 2 percent above Next's need and
-3 percent below the Mac's lowest capacity. The reservations run on every WASI host, with or
+bootstrap 96 KiB (interp) and 105 KiB (PBL), and loading Next's webpack hook (`require-hook` and
+`loadWebpackHook()`) 160 and 184 KiB. 188 KiB sits about 2 percent above Next's need. The
+reservations run on every WASI host, with or
 without a budget, so the emitted code differs from main everywhere; no CPU regression was
 measured. A recursion-heavy script under the launcher, pinned to one core with 10 interleaved
 runs, took a median 1.42 s on main and 1.45 s here on interp, and 1.28 s and 1.26 s on PBL.
@@ -952,12 +960,54 @@ Firefox 157 and WebKit 27.2 (WebKit under `ulimit -s 512`), interpreter tier:
 | `f.apply(null, [n - 1])` recursion | trap at 550, 1,059 and 95 | caught at 50,998 in all three |
 | `apply` with `arguments` (two frames per level) | trap at 550, 1,059 and 93 | caught at 25,499 in all three |
 
-Computed-key getters (`a[k]`), setters, `Reflect.get`, getters on proxies or in another realm,
-and every PBL getter keep the native route, its counter and the `RunScript` quota reservation
-("SpiderMonkey on small stacks" above). So do `call` and `apply` on PBL, to bound, proxy or
-native targets, `apply` with array-likes, holey arrays or a modified `arguments` object,
-spread calls and `Reflect.apply`. Those shapes, proxy traps and `valueOf` coercion still
-recurse natively.
+Computed-key getters (`a[k]`), setters, `Reflect.get` and getters on proxies or in another
+realm keep the native route, its counter and the `RunScript` quota reservation ("SpiderMonkey
+on small stacks" above). So do `call` and `apply` to bound, proxy or native targets, `apply`
+with array-likes, holey arrays or a modified `arguments` object, spread calls and
+`Reflect.apply`. Those shapes, proxy traps and `valueOf` coercion still recurse natively. PBL
+reaches these loops once its stack is deep (next section).
+
+## SpiderMonkey PBL on deep stacks
+
+The portable baseline interpreter (PBL) calls getters, setters, bound functions and calls with
+missing arguments by entering itself again in C, so each level held a counter unit and host
+stack, and its getter recursion stopped at 344 levels. Two changes
+([patch record](bun-patches/spidermonkey-pbl-handover.md)):
+
+- Calls with fewer arguments than parameters pad them with `undefined` and stay in PBL's own
+  loop.
+- Once a quarter of the byte quota is in use, or 128 counter units are held, new frames run in
+  the C++ interpreter. PBL's inline caches call through the engine's ordinary call or construct
+  path, and calls from C++ stop entering PBL. From there, getters, `call` and `apply` stay in the
+  C++ interpreter's loop above.
+
+PBL recursion depth before a caught `RangeError`, standalone smoke under Wasmtime with the full
+quota and with the 188 KiB WebKit budget:
+
+| Shape | Before | After, full quota | After, 188 KiB |
+| --- | ---: | ---: | ---: |
+| Getter | 344 | 51,124 | 51,044 |
+| Missing argument | 344 | 55,087 | 55,087 |
+| `f.call`, `f.apply` | 115 | 51,042 | 51,010 |
+| Ajv's getter walk | 340 | 17,120 | 17,035 |
+| Setter, computed getter | 344 | 234 | 73, 75 |
+| Bound function | 342 | 196 | 73 |
+| Proxy `get` trap, `toString` | 115, 172 | 115, 136 | 42, 41 |
+
+Plain PBL recursion is still bounded by PBL's own frame stack, near 4,400 levels in the smoke
+and 3,600 in the guest. Setters, computed getters, bound functions, proxies and coercions
+recurse natively in the C++ interpreter after the crossing, as on that tier, so the counter and
+the quota still stop them.
+
+In the guest, every runtime shape of the WebKit sweep above ends in a caught `RangeError` on PBL
+at 188 KiB, on the Mac and on Linux under `ulimit -s 512`. Default Chromium 156 and Firefox 157
+catch all 18 runtime shapes on both tiers, as before.
+
+Code that runs while the stack is deep runs at interpreter speed. A PBL workload of plain,
+padded, getter, setter, bound, `call` and constructor calls, pinned to one core with 10
+interleaved launcher runs, took a median 0.882 s of CPU against main's 0.917 s at the top of the
+stack (padded calls no longer leave PBL's loop), and 0.995 s against 0.919 s when run under
+200 getter levels, where it now runs in the C++ interpreter.
 
 ## Historical nested require measurements
 
