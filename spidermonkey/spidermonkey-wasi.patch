@@ -1341,7 +1341,7 @@ index f1ce887..f1bffcd 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..d8fdc122f 100644
+index 9524c5d6a..51e15d182 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,29 @@
@@ -1424,8 +1424,8 @@ index 9524c5d6a..d8fdc122f 100644
 +// outside the expression cycle. The emitter's walk of a nested array pattern
 +// has no check of its own and takes the most host stack per level, so the
 +// array size bounds how deep a full compile goes.
-+inline constexpr size_t ArrayBindingPatternReserve = 1280;
-+inline constexpr size_t ObjectBindingPatternReserve = 640;
++inline constexpr size_t ArrayBindingPatternReserve = 1664;
++inline constexpr size_t ObjectBindingPatternReserve = 1088;
 +// The bytecode emitter walks the finished tree with frames of its own and
 +// spends more host stack per statement level than the parser.
 +inline constexpr size_t EmitTreeReserve = 416;
