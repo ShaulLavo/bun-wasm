@@ -4,6 +4,7 @@ import { resolve, join } from "node:path";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 import { storageEvidence, type StorageLifetime } from "./storage-browser-evidence";
+import { waitForEntryRequestTraffic } from "./storage-fs-control";
 
 const lifetimes: StorageLifetime[] = [];
 afterEach(async () => {
@@ -20,16 +21,6 @@ async function command(page: Page, text: string): Promise<void> {
   }, text);
   await page.waitForFunction(() => Reflect.get(globalThis, "observationControlDone"), undefined, { timeout: 120_000 });
   expect(await page.evaluate(() => Reflect.get(Reflect.get(globalThis, "playground"), "shell").lastExit)).toBe(0);
-}
-function endpoint(row: object) {
-  if (!("snapshot" in row) || !row.snapshot || typeof row.snapshot !== "object") return;
-  const snapshot = row.snapshot;
-  if (!("owner" in snapshot) || !("generation" in snapshot) || !("endpoint" in snapshot) || !("handlersQualified" in snapshot)) return;
-  if (!("documentId" in row) || !("runtimeId" in row) || !("workerId" in row)) return;
-  return { documentId: row.documentId, runtimeId: row.runtimeId, workerId: row.workerId, owner: snapshot.owner, generation: snapshot.generation, endpoint: snapshot.endpoint, qualified: snapshot.handlersQualified };
-}
-function entries(rows: object[], entry: string): object[] {
-  return rows.filter(row => "process" in row && row.process && typeof row.process === "object" && "entry" in row.process && row.process.entry === entry);
 }
 test("Firefox: installed observation covers original root and successful Bun, shell and selected terminal Preview1 entries", async () => {
   const requested = process.env.BUN_WASM_TEST_BROWSERS;
@@ -67,17 +58,8 @@ test("Firefox: installed observation covers original root and successful Bun, sh
   expect(root.some(row => "workerId" in row && row.workerId === null && "process" in row && row.process === null)).toBe(true);
   for (const [entry, text] of [["bun", "bun -e 'console.log(17+19)'"], ["shell", "/bin/bash -c 'echo 47'"], ["preview1", "/bin/env"]]) {
     await command(page, text!);
-    const rows = await snapshot(page);
+    const rows = await waitForEntryRequestTraffic(() => snapshot(page), entry!);
     lifetime.event("filesystem-positive-control", { entry, rows });
-    const observed = entries(rows, entry!);
-    expect(observed.length).toBeGreaterThan(0);
-    expect(JSON.stringify(observed)).toContain('"requestSends":1');
-    if (entry === "preview1") expect(JSON.stringify(observed)).toContain('"executorBranch":"terminal"');
-    const client = observed.map(endpoint).find(value => value?.qualified);
-    expect(client).toBeDefined();
-    if (!client) throw Error("No qualified original client");
-    expect(rows.map(endpoint).some(peer => peer?.qualified && peer.endpoint === "service" && peer.documentId === client?.documentId && peer.runtimeId === client.runtimeId && peer.owner === client.owner && peer.generation === client.generation)).toBe(true);
-    expect(rows.some(row => "snapshot" in row && row.snapshot && typeof row.snapshot === "object" && "endpoint" in row.snapshot && row.snapshot.endpoint === "service")).toBe(true);
   }
   expect(errors).toEqual([]);
   expect(failures).toEqual([]);

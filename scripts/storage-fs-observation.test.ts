@@ -9,6 +9,7 @@ import { needsRust } from "./ci-changes";
 import { observeFilesystemEndpoint } from "./storage-fs-endpoint";
 import { createFilesystemConnection } from "../web/node_modules/waffle/fs/protocol";
 import { retainMetadata } from "./storage-fs-metadata";
+import { hasEntryRequestTraffic, waitForEntryRequestTraffic } from "./storage-fs-control";
 const own = { documentId: crypto.randomUUID(), runtimeId: crypto.randomUUID(), workerId: 1, pageURL: "http://localhost/" };
 
 test("observation rejects missing and cross-document/runtime/Worker identities", () => {
@@ -272,3 +273,153 @@ test("bounded metadata retains complete matched service history rather than firs
   expect(rows.length).toBe(32);
   expect(dropped).toBe(11);
 });
+
+function withoutField(value: object, field: string): object {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== field));
+}
+
+function fixture(entry = "bun", count = 8) {
+  const identity = { documentId: "original-document", runtimeId: "original-runtime" };
+  const snapshot = { owner: 3, generation: 3, handlersQualified: true };
+  const client = { ...identity, workerId: 4, process: { entry, executorBranch: "terminal" },
+    snapshot: { ...snapshot, endpoint: "client", requestSends: count, requestReceives: 0 } };
+  const service = { ...identity, workerId: 1, process: null,
+    snapshot: { ...snapshot, endpoint: "service", requestSends: 0, requestReceives: count } };
+  return { client, service, rows: [client, service] };
+}
+
+for (const entry of ["bun", "shell", "preview1"]) {
+  for (const count of [1, 2, 8, 10]) {
+    test(`${entry} accepts successful request count ${count} on the matching qualified pair`, () => {
+      expect(hasEntryRequestTraffic(fixture(entry, count).rows, entry)).toBe(true);
+    });
+  }
+}
+
+for (const value of [0, -1, undefined, null, "1", NaN, Infinity, 1.5, true]) {
+  test(`rejects invalid client or service request count ${String(value)}`, () => {
+    const { client, service, rows } = fixture();
+    Object.assign(client.snapshot, { requestSends: value });
+    expect(hasEntryRequestTraffic(rows, "bun")).toBe(false);
+    client.snapshot.requestSends = 8;
+    Object.assign(service.snapshot, { requestReceives: value });
+    expect(hasEntryRequestTraffic(rows, "bun")).toBe(false);
+  });
+}
+
+test("missing request fields cannot qualify through generic sends or receives", () => {
+  const { client, service } = fixture();
+  const { requestSends: _sends, ...noSends } = client.snapshot;
+  const { requestReceives: _receives, ...noReceives } = service.snapshot;
+  expect(hasEntryRequestTraffic([{ ...client, snapshot: { ...noSends, sends: 10 } }, service], "bun")).toBe(false);
+  expect(hasEntryRequestTraffic([client, { ...service, snapshot: { ...noReceives, receives: 10 } }], "bun")).toBe(false);
+});
+
+for (const field of ["documentId", "runtimeId", "owner", "generation"]) {
+  test(`rejects a service with mismatched ${field} even beside a matching idle peer`, () => {
+    const { client, service } = fixture();
+    const wrong = { ...service, snapshot: { ...service.snapshot } };
+    if (field === "documentId" || field === "runtimeId") wrong[field] = "other";
+    else Object.assign(wrong.snapshot, { [field]: 99 });
+    const idle = { ...service, snapshot: { ...service.snapshot, requestReceives: 0 } };
+    expect(hasEntryRequestTraffic([client, idle, wrong], "bun")).toBe(false);
+  });
+}
+
+test("traffic on another entry or unqualified client cannot qualify the selected client", () => {
+  const { client, service } = fixture();
+  const idle = { ...client, snapshot: { ...client.snapshot, requestSends: 0 } };
+  const otherEntry = { ...client, process: { ...client.process, entry: "shell" } };
+  const unqualified = { ...client, snapshot: { ...client.snapshot, handlersQualified: false } };
+  expect(hasEntryRequestTraffic([idle, otherEntry, unqualified, service], "bun")).toBe(false);
+});
+
+test("traffic must belong to the same selected terminal Preview1 client", () => {
+  const { client, service } = fixture("preview1");
+  const terminal = { ...client, snapshot: { ...client.snapshot, requestSends: 0 } };
+  const plain = { ...client, process: { ...client.process, executorBranch: "plain" } };
+  expect(hasEntryRequestTraffic([terminal, plain, service], "preview1")).toBe(false);
+  expect(hasEntryRequestTraffic([client, service], "preview1")).toBe(true);
+});
+
+test("client and service endpoints must each have their original handlers qualified", () => {
+  const { client, service } = fixture();
+  expect(hasEntryRequestTraffic([{ ...client, snapshot: { ...client.snapshot, handlersQualified: false } }, service], "bun")).toBe(false);
+  expect(hasEntryRequestTraffic([client, { ...service, snapshot: { ...service.snapshot, handlersQualified: false } }], "bun")).toBe(false);
+  expect(hasEntryRequestTraffic([{ ...client, snapshot: { ...client.snapshot, endpoint: "service" } }, service], "bun")).toBe(false);
+  expect(hasEntryRequestTraffic([client, { ...service, snapshot: { ...service.snapshot, endpoint: "client" } }], "bun")).toBe(false);
+});
+
+test("missing or malformed peer identities do not match each other", () => {
+  const { client, service } = fixture();
+  for (const field of ["documentId", "runtimeId", "workerId"]) {
+    expect(hasEntryRequestTraffic([withoutField(client, field), withoutField(service, field)], "bun")).toBe(false);
+  }
+  for (const field of ["owner", "generation"]) {
+    expect(hasEntryRequestTraffic([{ ...client, snapshot: withoutField(client.snapshot, field) }, { ...service, snapshot: withoutField(service.snapshot, field) }], "bun")).toBe(false);
+    expect(hasEntryRequestTraffic([{ ...client, snapshot: { ...client.snapshot, [field]: "3" } },
+      { ...service, snapshot: { ...service.snapshot, [field]: "3" } }], "bun")).toBe(false);
+  }
+});
+
+test("first requests publish traffic after non-request frames", async () => {
+  const pair = createFilesystemConnection();
+  const { client, service } = fixture();
+  const rows: object[] = [];
+  const context = { tree: "control", realm: "native-port", workerURL: "control" };
+  const clientObserver = observeFilesystemEndpoint(pair.client, { ...context, endpoint: "client" }, () =>
+    retainMetadata(rows, { ...client, snapshot: clientObserver.snapshot() }));
+  const serviceObserver = observeFilesystemEndpoint(pair.server, { ...context, endpoint: "service" }, () =>
+    retainMetadata(rows, { ...service, snapshot: serviceObserver.snapshot() }));
+  const completed = Promise.withResolvers<void>();
+  pair.server.port.onmessage = event => { if (event.data.id) pair.server.port.postMessage({ completed: event.data.id }); };
+  pair.server.port.onmessageerror = () => completed.reject(Error("service messageerror"));
+  pair.client.port.onmessage = () => completed.resolve();
+  pair.client.port.onmessageerror = () => completed.reject(Error("client messageerror"));
+  try {
+    clientObserver.qualifyHandlers();
+    serviceObserver.qualifyHandlers();
+    pair.client.port.postMessage({ sweep: true });
+    pair.client.port.postMessage({ id: 1, generation: pair.client.requests.generation });
+    await completed.promise;
+    expect(hasEntryRequestTraffic(rows, "bun")).toBe(true);
+  } finally {
+    clientObserver.dispose();
+    serviceObserver.dispose();
+    pair.client.port.close();
+    pair.server.port.close();
+  }
+}, 30_000);
+
+test("entry traffic waits for metadata delivered after command completion", async () => {
+  const pair = createFilesystemConnection();
+  const { client, service } = fixture();
+  const rows: object[] = [], delayed: object[] = [];
+  const context = { tree: "control", realm: "native-port", workerURL: "control" };
+  const clientObserver = observeFilesystemEndpoint(pair.client, { ...context, endpoint: "client" }, () =>
+    retainMetadata(rows, { ...client, snapshot: clientObserver.snapshot() }));
+  const serviceObserver = observeFilesystemEndpoint(pair.server, { ...context, endpoint: "service" }, () =>
+    retainMetadata(delayed, { ...service, snapshot: serviceObserver.snapshot() }));
+  const completed = Promise.withResolvers<void>();
+  const read = Promise.withResolvers<void>();
+  pair.server.port.onmessage = event => pair.server.port.postMessage({ completed: event.data.id });
+  pair.server.port.onmessageerror = () => completed.reject(Error("service messageerror"));
+  pair.client.port.onmessage = () => completed.resolve();
+  pair.client.port.onmessageerror = () => completed.reject(Error("client messageerror"));
+  try {
+    clientObserver.qualifyHandlers();
+    serviceObserver.qualifyHandlers();
+    pair.client.port.postMessage({ id: 1, generation: pair.client.requests.generation });
+    await completed.promise;
+    const waiting = waitForEntryRequestTraffic(async () => { read.resolve(); return rows.slice(); }, "bun");
+    await read.promise;
+    expect(hasEntryRequestTraffic(rows, "bun")).toBe(false);
+    for (const row of delayed) retainMetadata(rows, row);
+    expect(hasEntryRequestTraffic(await waiting, "bun")).toBe(true);
+  } finally {
+    clientObserver.dispose();
+    serviceObserver.dispose();
+    pair.client.port.close();
+    pair.server.port.close();
+  }
+}, 30_000);
