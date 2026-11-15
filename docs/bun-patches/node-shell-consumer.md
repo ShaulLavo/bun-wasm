@@ -41,6 +41,12 @@ Node's native filesystem has no Waffle inode metadata. These imports share the
 process cancellation guard and never read memory for an unsupported query.
 The private package handoff remains cancellation-first NOTSUP.
 
+The native launcher's `runtime_proc.getpid` returns the calling process's existing
+directory identity, including root identity 0 and allocated child identities,
+under the same cancellation guard. It does not expose the operating-system
+launcher's PID. This supplies the existing import used by Bash 0.0.111's PID
+expansion and self-signal path without changing the process ABI.
+
 `scripts/test.sh` builds the existing pinned pair for Browser runs and passes it
 explicitly, including under `--no-build`. The package behavior fixture retains
 its assertions and its single native owner selecting all three maintained

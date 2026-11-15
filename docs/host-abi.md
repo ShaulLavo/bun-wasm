@@ -334,6 +334,7 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 
 | import | signature |
 |---|---|
+| `runtime_proc.getpid` | `() -> pid`, the calling process's runtime directory identity |
 | `runtime_proc.access_start` | `(path_ptr, path_len, cwd_ptr, cwd_len, mode) -> request` |
 | `runtime_proc.access_take` | `(request) -> 0` or negative WASI errno (`-6` while pending) |
 | `runtime_proc.access_cancel` | `(request) -> 0` |
