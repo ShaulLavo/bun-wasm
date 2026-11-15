@@ -2,7 +2,8 @@ function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
 
-const depth = process.env.BUN_WASM_SPIDERMONKEY_TIER === "pbl" ? 48 : 4096;
+const pbl = process.env.BUN_WASM_SPIDERMONKEY_TIER === "pbl";
+const depth = 4096;
 let remaining = depth;
 const own = { get value(): number { return remaining-- ? 1 + own.value : 0; } };
 check(own.value === depth, "own getter depth");
@@ -73,6 +74,52 @@ Object.defineProperty(object, "bad", { get: class {} });
 try { object.bad; caught = undefined; } catch (error) { caught = error; }
 check(caught instanceof TypeError, "class getter rejected");
 console.log("special getters preserved");
+
+// On PBL a deep native stack hands new frames to the C++ interpreter: past about 128 levels of
+// cache calls, or under a deep getter chain. Constructors, setters and bound functions reached
+// there keep their results, receivers and argument order.
+function underGetters<T>(levels: number, work: () => T): T {
+  let left = levels;
+  const chain = { get value(): T { return left-- ? chain.value : work(); } };
+  return chain.value;
+}
+function Primitive(this: { n: number }, n: number): number {
+  this.n = n;
+  if (n) {
+    const inner = new (Primitive as unknown as new (n: number) => { n: number })(n - 1);
+    check(inner instanceof Primitive && inner.n === n - 1, "primitive-returning constructor");
+  }
+  return 5;
+}
+class Base2 { b: number; constructor(n: number) { this.b = n; } }
+class Derived2 extends Base2 {
+  constructor(n: number) {
+    super(n);
+    if (n) check(new Derived2(n - 1).b === n - 1, "derived constructor");
+  }
+}
+underGetters(200, () => {
+  check(new (Primitive as unknown as new (n: number) => { n: number })(300).n === 300, "deep primitive-returning constructor");
+  check(new Derived2(300).b === 300, "deep derived constructor");
+});
+let assigned = 0;
+const setter = { left: 150, set value(v: number) { if (this.left--) check((this.value = v + 1) === v + 1, "assignment result"); else assigned = v; } };
+check((setter.value = 1) === 1 && assigned === 151, "deep setter keeps the assigned value");
+const tag = { marker: token };
+let bound: (n: number) => number;
+function boundTarget(this: typeof tag, a: number, b: number, n: number): number {
+  check(this === tag && a === 1 && b === 2, "bound this and argument order");
+  return n ? 1 + bound(n - 1) : 0;
+}
+bound = boundTarget.bind(tag, 1, 2);
+const boundDepth = pbl ? 150 : 100;
+check(bound(boundDepth) === boundDepth, "deep bound call");
+function padded(n: number, pad?: unknown): number {
+  check(pad === undefined, "padded argument");
+  return n ? 1 + padded(n - 1) : 0;
+}
+check(padded(depth) === depth, "missing-argument recursion");
+console.log("deep constructors, setters, bound calls and padded arguments preserved");
 
 let traps = 0;
 const target = { get value() { return this.marker; }, marker: null };
