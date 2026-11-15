@@ -142,8 +142,9 @@ function stageBunGit(state: Context, scratch: string): string {
   mkdirSync(join(metadata, "refs"));
   // The consumer checks the patched HEAD and reapplies patches to the pinned base tree.
   // Keep those two complete trees, without upstream history or unrelated refs.
-  shell('git -C "$1" rev-list --objects --no-object-names --no-walk "$3" "$4" | git -C "$1" pack-objects "$2"', bun, join(metadata, "objects/pack/pack"), head, base);
   writeFileSync(join(metadata, "HEAD"), `${head}\n`);
+  // Output-prefix packing renames a source-ODB temporary file across mounts.
+  shell('git -C "$1" rev-list --objects --no-object-names --no-walk "$3" "$4" | git -C "$1" pack-objects --stdout | git --git-dir="$2" index-pack --stdin', bun, metadata, head, base);
   writeFileSync(join(metadata, "shallow"), Array.from(new Set([head, base])).join("\n") + "\n");
   execFileSync("git", ["-C", bun, "read-tree", head], { env: { ...process.env, GIT_INDEX_FILE: join(metadata, "index") } });
   return directory;

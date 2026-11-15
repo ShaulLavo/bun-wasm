@@ -141,10 +141,23 @@ function repository(directory: string): void {
   writeFileSync(join(directory, "node_modules/private/.npmrc"), "fixture-auth-do-not-package");
   writeFileSync(join(directory, "fixtures/node_modules/public/.npmrc"), "fixture-auth-do-not-package");
 }
-function fixture(run: (root: string, env: Record<string, string>, invoke: (job: string, name: string, changes?: Record<string, string>) => SpawnSyncReturns<string>) => void): void {
+function fixture(run: (root: string, env: Record<string, string>, invoke: (job: string, name: string, changes?: Record<string, string>) => SpawnSyncReturns<string>) => void, temp?: string): void {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-native-handoff-"));
-  try { runFixture(root, run); }
+  try {
+    if (temp) symlinkSync(temp, join(root, "temp"));
+    runFixture(root, run);
+  }
   finally { rmSync(root, { recursive: true, force: true }); }
+}
+function crossFilesystemFixture(run: Parameters<typeof fixture>[0]): void {
+  const temp = mkdtempSync("/dev/shm/bun-wasm-native-handoff-");
+  try {
+    const sourceDevice = statSync(tmpdir()).dev, destinationDevice = statSync(temp).dev;
+    expect(destinationDevice).not.toBe(sourceDevice);
+    console.log(JSON.stringify({ source: tmpdir(), destination: temp, sourceDevice, destinationDevice }));
+    fixture(run, temp);
+  }
+  finally { rmSync(temp, { recursive: true, force: true }); }
 }
 // What a cold native-quality producer leaves in target: no cache restore, so no guest outputs.
 const coldProducerFiles = [".ci-input-times.json", "debug/build/quality-host", "release/deps/native", "wasm32-wasip1/debug/deps/quality-output", "tls-probe/handoff.json", "tls-probe/output/tls-probe.wasm"];
@@ -289,31 +302,69 @@ test("a warm producer preserves cached core, QuickJS and tools outputs with thei
 });
 
 test("the source checkpoint keeps the patched and pinned trees without upstream history", () => {
-  fixture((root, env, invoke) => {
+  fixture(sourceCheckpoint);
+});
+
+test.skipIf(process.platform !== "linux")("the real source checkpoint crosses filesystems where output-prefix packing fails", () => {
+  crossFilesystemFixture((root, env, invoke) => {
     const bun = join(root, "repo/vendor/bun");
-    const ancestor = git(bun, "rev-parse", "HEAD");
-    git(bun, "commit", "--allow-empty", "-qm", "pinned base");
-    const base = git(bun, "rev-parse", "HEAD");
-    const verifier = join(root, "repo/scripts/sync-bun.sh");
-    writeFileSync(verifier, readFileSync(verifier, "utf8").replace(`BUN_COMMIT=${ancestor}`, `BUN_COMMIT=${base}`));
-    writeFileSync(join(bun, "source"), "patched source\n");
-    git(bun, "commit", "-qam", "patched head");
-    const head = git(bun, "rev-parse", "HEAD");
-    const patches = join(root, "repo/patches/bun");
-    mkdirSync(patches, { recursive: true });
-    writeFileSync(join(patches, "0001-fixture.patch"), git(bun, "format-patch", "--stdout", `${base}..${head}`) + "\n");
-    const unused = execFileSync("git", ["-C", bun, "hash-object", "-w", "--stdin"], { input: "unneeded cached history", encoding: "utf8" }).trim();
-    const changes = prepareImport(root, env, invoke);
-    const imported = invoke("rust", unpackName, changes);
-    expect(imported.status, imported.stderr).toBe(0);
-    expect(git(bun, "rev-parse", "HEAD")).toBe(head);
-    expect(git(bun, "show", `${base}:source`)).toBe("public source");
-    expect(git(bun, "show", "HEAD:source")).toBe("patched source");
-    for (const object of [ancestor, unused]) expect(spawnSync("git", ["-C", bun, "cat-file", "-e", object]).status).not.toBe(0);
-    expect(git(bun, "status", "--porcelain")).toBe("");
-    expect(existsSync(join(root, "temp/source-verified"))).toBe(true);
+    const objects = git(bun, "rev-list", "--objects", "--no-object-names", "--no-walk", "HEAD");
+    const failed = spawnSync("git", ["-C", bun, "pack-objects", join(root, "temp/old-pack")], { input: objects + "\n", encoding: "utf8", env: { ...process.env, LC_ALL: "C" } });
+    expect(failed.status).not.toBe(0);
+    expect(failed.stderr).toContain("Invalid cross-device link");
+    sourceCheckpoint(root, env, invoke);
+    expect(readdirSync(env.RUNNER_TEMP!).filter(path => path.startsWith("native-quality-pack-"))).toEqual([]);
   });
 });
+
+test.skipIf(process.platform !== "linux")("cross-filesystem packaging rejects missing source objects and cleans its staging directory", () => {
+  crossFilesystemFixture((root, env, invoke) => {
+    const bun = join(root, "repo/vendor/bun");
+    const blob = git(bun, "rev-parse", "HEAD:source");
+    rmSync(join(bun, ".git/objects", blob.slice(0, 2), blob.slice(2)));
+    const failed = invoke("native-quality", packName);
+    expect(failed.status).not.toBe(0);
+    expect(failed.stderr).toContain(blob);
+    expect(existsSync(env.GITHUB_OUTPUT!)).toBe(false);
+    expect(existsSync(join(root, "temp/native-quality-artifact/manifest.json"))).toBe(false);
+    expect(readdirSync(env.RUNNER_TEMP!).filter(path => path.startsWith("native-quality-pack-"))).toEqual([]);
+  });
+});
+
+function sourceCheckpoint(root: string, env: Record<string, string>, invoke: Parameters<Parameters<typeof fixture>[0]>[2]): void {
+  const bun = join(root, "repo/vendor/bun");
+  const ancestor = git(bun, "rev-parse", "HEAD");
+  git(bun, "commit", "--allow-empty", "-qm", "pinned base");
+  const base = git(bun, "rev-parse", "HEAD");
+  const verifier = join(root, "repo/scripts/sync-bun.sh");
+  writeFileSync(verifier, readFileSync(verifier, "utf8").replace(`BUN_COMMIT=${ancestor}`, `BUN_COMMIT=${base}`));
+  writeFileSync(join(bun, "source"), "patched source\n");
+  git(bun, "commit", "-qam", "patched head");
+  const head = git(bun, "rev-parse", "HEAD");
+  const patches = join(root, "repo/patches/bun");
+  mkdirSync(patches, { recursive: true });
+  writeFileSync(join(patches, "0001-fixture.patch"), git(bun, "format-patch", "--stdout", `${base}..${head}`) + "\n");
+  const unused = execFileSync("git", ["-C", bun, "hash-object", "-w", "--stdin"], { input: "unneeded cached history", encoding: "utf8" }).trim();
+  const objects = git(bun, "rev-list", "--objects", "--no-object-names", "--no-walk", head, base).split("\n").sort();
+  const index = git(bun, "ls-files", "--stage");
+  const changes = prepareImport(root, env, invoke);
+  const imported = invoke("rust", unpackName, changes);
+  expect(imported.status, imported.stderr).toBe(0);
+  expect(git(bun, "rev-parse", "HEAD")).toBe(head);
+  expect(git(bun, "show", `${base}:source`)).toBe("public source");
+  expect(git(bun, "show", "HEAD:source")).toBe("patched source");
+  expect(git(bun, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)").split("\n").sort()).toEqual(objects);
+  expect(git(bun, "ls-files", "--stage")).toBe(index);
+  expect(readFileSync(join(bun, ".git/shallow"), "utf8").trim().split("\n").sort()).toEqual([head, base].sort());
+  const packs = readdirSync(join(bun, ".git/objects/pack"));
+  const pack = packs.find(path => /^pack-[a-f0-9]{40}\.pack$/.test(path));
+  if (!pack) throw new Error("Missing canonical source pack");
+  expect(packs).toContain(pack.replace(/\.pack$/, ".idx"));
+  git(bun, "verify-pack", join(bun, ".git/objects/pack", pack.replace(/\.pack$/, ".idx")));
+  for (const object of [ancestor, unused]) expect(spawnSync("git", ["-C", bun, "cat-file", "-e", object]).status).not.toBe(0);
+  expect(git(bun, "status", "--porcelain")).toBe("");
+  expect(existsSync(join(root, "temp/source-verified"))).toBe(true);
+}
 
 for (const missing of nativeTargetRoots.filter(root => root.presence === "required")) test(`real package rejects a producer without required target root ${missing.path}`, () => {
   fixture((root, env, invoke) => {
