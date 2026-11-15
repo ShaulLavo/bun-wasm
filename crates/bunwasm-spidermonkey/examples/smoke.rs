@@ -17,6 +17,32 @@ fn eval(source: &str) -> (u32, u32) {
     let handle = unsafe { sys::bsm_eval(source.as_ptr().cast(), source.len(), &mut status) };
     (handle, status)
 }
+extern "C" {
+    fn bsm_set_global(name: *const c_char, len: usize, value: u32) -> bool;
+    fn bsm_print(value: u32) -> bool;
+}
+// Differential parser corpus from scripts/spidermonkey-parser-semantics.ts: evaluate the harness,
+// compile every later chunk directly as UTF-8 and hand its result to the harness, then print the
+// harness's report.
+fn parser_corpus(corpus: &str) {
+    let mut chunks = corpus.split("\n//@@utf8\n");
+    let (harness, status) = eval(chunks.next().unwrap_or_default());
+    assert_eq!(status, 0, "parser corpus harness");
+    unsafe { sys::bsm_release(harness) };
+    for source in chunks {
+        let (value, status) = eval(source);
+        assert!(status < 2, "parser corpus case ended without a result");
+        assert!(unsafe { bsm_set_global(b"__value".as_ptr().cast(), 7, value) });
+        unsafe { sys::bsm_release(value) };
+        let (step, step_status) = eval(&format!("__utf8Step({status})"));
+        assert_eq!(step_status, 0, "parser corpus step");
+        unsafe { sys::bsm_release(step) };
+    }
+    let (report, status) = eval("__finish()");
+    assert_eq!(status, 0, "parser corpus report");
+    assert!(unsafe { bsm_print(report) });
+    unsafe { sys::bsm_release(report) };
+}
 fn number(source: &str) -> f64 {
     let (h, status) = eval(source);
     assert_eq!(status, 0, "{source}");
@@ -49,6 +75,11 @@ pub fn main() {
     println!("ok init tier={}", if pbl { "pbl" } else { "interp" });
     if let Ok(source) = std::env::var("BUNSM_NEST_PROBE") {
         println!("probe {}", number(&source));
+        unsafe { sys::bsm_shutdown() };
+        return;
+    }
+    if let Ok(corpus) = std::env::var("BUNSM_PARSER_CORPUS") {
+        parser_corpus(&corpus);
         unsafe { sys::bsm_shutdown() };
         return;
     }
