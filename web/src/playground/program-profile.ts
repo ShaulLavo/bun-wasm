@@ -16,7 +16,7 @@ export function templateProfile(engine: Engine, template: string | undefined, re
   return profile;
 }
 
-export function requireProfileEngine(engine: Engine, profile: PlaygroundProfile): void {
+function requireProfileEngine(engine: Engine, profile: PlaygroundProfile): void {
   if (profile === "shared-group" && engine === "browser") {
     throw new TypeError(`The ${engine} engine does not support the shared-group playground profile`);
   }
