@@ -83,7 +83,7 @@ pub fn main() {
         unsafe { sys::bsm_shutdown() };
         return;
     }
-    if std::env::var("BUN_WASM_STACK_KIB").is_ok() {
+    if std::env::var("BUN_WASM_SPIDERMONKEY_STACK_KIB").is_ok() {
         budget_checks(pbl);
         unsafe { sys::bsm_shutdown() };
         return;
@@ -223,7 +223,7 @@ pub fn main() {
     unsafe { sys::bsm_shutdown() };
 }
 
-/// With a host stack budget in `BUN_WASM_STACK_KIB` (WebKit hosts pass 188 KiB), every reserved
+/// With a budget in `BUN_WASM_SPIDERMONKEY_STACK_KIB` (WebKit hosts pass 188 KiB), every reserved
 /// recursion path ends in a catchable RangeError and evaluation continues. The byte quota, not the
 /// WASI counter, must stop reentrant getters and statement nesting, which shows the reservations
 /// are in effect (docs/bun-patches/spidermonkey-stack-budget.md).
