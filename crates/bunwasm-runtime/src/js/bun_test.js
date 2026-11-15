@@ -685,7 +685,7 @@
     while (owner && !Object.prototype.hasOwnProperty.call(owner, key)) owner = Object.getPrototypeOf(owner);
     const descriptor = owner && Object.getOwnPropertyDescriptor(owner, key);
     if (descriptor && !Object.prototype.hasOwnProperty.call(descriptor, "value")) throw new TypeError("spyOn does not support accessor properties");
-    const original = object[method];
+    const original = object[key];
     if (isMock(original)) return original;
     const callable = typeof original === "function";
     if (typeof object === "function" && key === "prototype" && !callable) {
