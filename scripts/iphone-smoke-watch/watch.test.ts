@@ -251,3 +251,29 @@ test("CLI fake GitHub/T3 dispatch, claim, red complete and cleanup-confirmed ret
   expect(first(await load(path)).state).toEqual({ kind: "pending", attempt: 2 });
   expect(await readFile(join(path, sha(1), "attempt-1", "result.json"), "utf8")).toContain("manual-iphone-smoke");
 }, 60_000);
+
+test("claim and complete survive a busy watcher lock while duplicate claims stay rejected", async () => {
+  const path = await directory(), state = fresh(), fake = harness([run(1)]);
+  await tick(state, fake.adapters);
+  await save(path, state);
+  const identity = [`--revision=${sha(1)}`, "--attempt=1"];
+  expect((await contendedCli(path, ["claim"].concat(identity))).code).toBe(0);
+  expect(first(await load(path)).state).toMatchObject({ kind: "running", claimedAt: expect.any(String) });
+  expect((await cli(path, ["claim"].concat(identity))).code).toBe(1);
+  const result = join(path, "manual-result.json");
+  await writeFile(result, JSON.stringify(green(first(await load(path)))));
+  expect((await contendedCli(path, ["complete"].concat(identity, [`--result-file=${result}`]))).code).toBe(0);
+  expect(first(await load(path)).state).toMatchObject({ kind: "complete", outcome: { status: "green" } });
+}, 60_000);
+
+async function contendedCli(path: string, args: string[]) {
+  const holder = Bun.spawn(["flock", join(path, ".lock"), process.execPath, "--eval", 'process.stdout.write("held\\n"); await new Response(Bun.stdin).text();'], { stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  const reader = holder.stdout.getReader();
+  try {
+    expect((await reader.read()).done).toBe(false);
+    const release = Bun.sleep(500).then(() => holder.stdin.end());
+    const result = await cli(path, args);
+    await release;
+    return result;
+  } finally { reader.releaseLock(); holder.stdin.end(); holder.kill(); await holder.exited; }
+}

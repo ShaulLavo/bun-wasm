@@ -119,7 +119,8 @@ async function main(args: readonly string[]): Promise<void> {
   if (!isAbsolute(directory)) throw new Error("--report-dir must be absolute");
   await mkdir(directory, { recursive: true });
   if (config.underLock) { await run(config, directory); return; }
-  const child = spawnSync("flock", ["--nonblock", "--conflict-exit-code", "75", join(directory, ".lock"), process.execPath, fileURLToPath(import.meta.url)].concat(args, ["--under-lock"]), { stdio: "inherit" });
+  const locking = config.command === "tick" ? ["--nonblock"] : ["--wait", "900"];
+  const child = spawnSync("flock", locking.concat(["--conflict-exit-code", "75", join(directory, ".lock"), process.execPath, fileURLToPath(import.meta.url)], args, ["--under-lock"]), { stdio: "inherit" });
   if (child.error) throw child.error;
   process.exitCode = child.status ?? 1;
 }

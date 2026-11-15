@@ -130,11 +130,15 @@ bun scripts/iphone-smoke-watch.ts status
 
 Do not modify the existing `bun-wasm-ci-controller.service`. It owns unrelated VM
 work. Use a separate user oneshot service and a two-minute timer. Install from a
-reviewed checkout retained at a stable `/work` path. The examples below use
+reviewed checkout that includes `scripts/iphone-smoke.ts`, retained at a stable `/work` path. The examples below use
 `/work/automation/bun-wasm-iphone-smoke`; substitute the actual reviewed path and
 the chosen activation timestamp before installation. Confirm `gh api` and
 `t3 thread send --help` work in the service user's environment. Reuse their normal
 login state; no credentials belong in a unit file or this repository.
+
+A busy timer tick may skip its poll. Claim, completion, retry and status commands
+wait for the active state update, with a fifteen-minute hang cap. A stale or
+duplicate claim still fails before device work.
 
 `~/.config/systemd/user/bun-wasm-iphone-smoke.service`:
 
