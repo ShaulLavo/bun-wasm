@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { dispatchRuntime, runtimeJobs, runtimePlan } from "./runtime-file-checks.ts";
+import { dispatchRuntime, runRuntimeChecks, runtimeJobs, runtimePlan } from "./runtime-file-checks.ts";
 import { discoverChecks, parseCheck, selectChecks } from "./test-checks.ts";
 import { linuxProcess } from "./process-owner.mts";
 import { runSubreaperProbe } from "./test-subreaper-command.ts";
@@ -85,6 +85,12 @@ test("failure stops pending dispatch, preserves status and waits for the active 
   expect(await dispatchRuntime({ serial: ["failure"], isolated: ["pending"] }, async paths => { serialCalls.push(paths.slice()); return 9; })).toBe(9);
   expect(serialCalls).toEqual([["failure"]]);
 });
+
+test.skipIf(process.platform !== "linux")("the actual serial lifecycle controls reap adopted descendants beneath runtime supervision", async () => {
+  const paths = ["scripts/runtime-js-controls.test.ts"];
+  expect(runtimePlan(paths)).toEqual({ serial: paths, isolated: [] });
+  expect(await runRuntimeChecks(paths)).toBe(0);
+}, 30000);
 
 function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-runtime-dispatch-"));
