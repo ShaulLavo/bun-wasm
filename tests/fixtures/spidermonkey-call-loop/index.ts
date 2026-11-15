@@ -6,7 +6,9 @@ function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
 
-const depth = process.env.BUN_WASM_SPIDERMONKEY_TIER === "pbl" ? 48 : 5000;
+// PBL keeps call and apply native until unit 3b; at the 188 KiB WebKit budget that route stops
+// near 45 levels, so its depth stays well below.
+const depth = process.env.BUN_WASM_SPIDERMONKEY_TIER === "pbl" ? 32 : 5000;
 const token = { token: true };
 let remaining = 0;
 let caught: unknown;
