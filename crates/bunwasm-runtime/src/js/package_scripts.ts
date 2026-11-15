@@ -191,9 +191,10 @@
     return internal.require("bun_shell").escape(arg);
   }
 
+  const shellCommands = new Set(". alias bg bind break builtin caller case cd command compgen complete compopt continue coproc declare dirs disown do done echo elif else enable esac eval exec exit export false fc fg fi for function getopts hash help history if in jobs kill let local logout mapfile popd printf pushd pwd read readarray readonly return select set shift shopt source suspend test then time times trap true type typeset ulimit umask unalias unset until wait while".split(" "));
   function expandScriptBinary(script: string): string {
     const command = /^([ \t]*)([A-Za-z0-9_@.+-]+)(?=[ \t]|$)/.exec(script);
-    if (!command) return script;
+    if (!command || shellCommands.has(command[2])) return script;
     const file = binary(process.cwd(), command[2]);
     if (!file || file.endsWith(`/node_modules/.bin/${command[2]}`)) return script;
     return command[1] + quote(process.execPath) + " " + quote(dereference(file)) + script.slice(command[0].length);

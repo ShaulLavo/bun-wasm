@@ -220,3 +220,24 @@ test("package script preparation resolves an unlinked manifest bin without sourc
   expect(f.spawned[0]?.script).toBe(plan.main.original);
   expect(f.guest.env.PATH).toBe(plan.env.PATH);
 }));
+
+for (const [name, original] of [
+  ["echo", "echo safe"],
+  ["if", "if true; then echo safe; fi"],
+  ["command", "command printf safe"],
+  ["for", "for word in safe; do printf %s \"$word\"; done"],
+]) test(`package manifest bin ${name} preserves shell command precedence`, () => project({ dev: original }, async cwd => {
+  const directory = path.join(cwd, "node_modules/collision");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: "collision", bin: { [name]: "cli.ts" } }));
+  writeFileSync(path.join(directory, "cli.ts"), 'throw new Error("manifest bin replaced shell handling");');
+  const f = runtime(cwd, "dev");
+  f.guest.execPath = process.execPath;
+  const command = f.scripts.resolve(path.join(cwd, "dev"));
+  const plan = f.scripts.continuationPlan(command);
+  expect(plan.main.command).toBe(original);
+  const child = Bun.spawnSync(["/bin/bash", "-c", plan.main.command], { cwd, env: plan.env });
+  expect({ code: child.exitCode, stdout: child.stdout.toString().trim(), stderr: child.stderr.toString() }).toEqual({ code: 0, stdout: "safe", stderr: "" });
+  await f.scripts.run(command);
+  expect(f.spawned[0]?.argv[2]).toBe(original);
+}));

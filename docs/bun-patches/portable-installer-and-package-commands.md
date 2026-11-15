@@ -58,7 +58,9 @@ leading command when its `.bin` entry is absent. It invokes the admitted current
 Bun executable with the resolved entry, preserving the remaining Bash source
 and the existing argument escaping. Both the continuation plan and native script
 loop use this preparation. Existing `.bin` entries keep their shell/shebang
-dispatch, and explicit file paths keep their existing interpretation. The
+dispatch, and explicit file paths keep their existing interpretation. Shell
+builtins and reserved words retain shell precedence even when an installed
+manifest declares a bin with the same name and no link. The
 original lifecycle text, cwd and environment are retained. No failed-spawn
 fallback or additional PATH is introduced. This original adapter repair is
 covered by the real-Bash regression in `scripts/package-scripts.test.ts` and the
