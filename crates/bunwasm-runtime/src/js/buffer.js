@@ -624,7 +624,7 @@
         value: methods[key],
         writable: true,
         configurable: true,
-        enumerable: false,
+        enumerable: true,
       });
     }
   }

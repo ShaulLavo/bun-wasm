@@ -78,6 +78,18 @@ export function residualChecks(factory: typeof Buffer) {
       const buffer = factory.from([0xff]);
       assert.equal(Reflect.apply(buffer.toLocaleString, buffer, ["hex"]), "ff");
     } },
+    { name: "public Buffer methods remain enumerable for instance mocks", run() {
+      const buffer = factory.alloc(0);
+      for (const name of ["write", "writeUInt8", "writeBigInt64LE", "toString", "toLocaleString", "slice"]) {
+        assert.equal(Object.getOwnPropertyDescriptor(factory.prototype, name)?.enumerable, true);
+      }
+      for (const name in factory.prototype) {
+        if (typeof Reflect.get(buffer, name) === "function") Reflect.set(buffer, name, () => {});
+      }
+      assert.doesNotThrow(() => buffer.write("hello"));
+      assert.doesNotThrow(() => buffer.writeUInt8(0));
+      assert.doesNotThrow(() => buffer.writeBigInt64LE(0n));
+    } },
   ];
 }
 

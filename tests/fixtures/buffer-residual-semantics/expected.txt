@@ -5,3 +5,4 @@ numeric offsets distinguish infinity from fractional and NaN offsets
 UTF-16 searches reject odd-byte matches and floor reverse offsets
 UTF-16 buffer and string needles wrap odd-length haystacks differently
 toLocaleString shares the toString function
+public Buffer methods remain enumerable for instance mocks

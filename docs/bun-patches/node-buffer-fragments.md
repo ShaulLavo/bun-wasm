@@ -75,6 +75,8 @@ against the original byte length; string needles wrap against the even search
 length. An empty needle returns a clamped byte offset. The common numeric
 offset check distinguishes NaN and fractions from infinities, which receive
 the bounds error. `toLocaleString` references the exact `toString` function.
+Public prototype methods are enumerable, as in native Bun and Node, allowing
+instance mocks to discover and replace them through `for...in`.
 The maintained small-buffer checks are
 `tests/fixtures/buffer-residual-semantics` and
 `scripts/buffer-residual-semantics.test.ts`. They require no private hooks or
