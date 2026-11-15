@@ -12,7 +12,12 @@ Its result is separate from the [full goals matrix](../goals-matrix.md).
 Build the playground locally on the PC through the heavy runner from the commit
 you want to check. A local prepared root is valid. You do not need CI artifacts,
 delivery receipts, or a goals-site inventory. The root must contain `index.html`,
-`engine-builds.json`, and Browser and QuickJS engine files. The runner checks the
+`engine-builds.json`, and the engine files selected by the frontend's common
+`templateProfile` helper for each case. Browser cases use ordinary assets; Vite
+React on QuickJS uses the shared-group core, engine and transport. The root must
+contain both sets, with their fingerprints in the built host and manifest. An
+ordinary QuickJS build does not substitute for missing shared-group assets.
+The runner checks the
 embedded host fingerprints against the guest bytes to catch mixed builds.
 The [goals-matrix guide](../goals-matrix.md) describes engine staging and preparation.
 Run the smoke command from the selected revision's checkout so preflight reads
@@ -79,6 +84,11 @@ cases. A failed device command, failed cleanup, changed FIFO ticket, or
 interruption blocks further native input. Prerequisite failures produce a red
 result before any device command. The runner atomically saves the result after
 each case and at completion.
+
+The resolved profile is reused for asset preflight, execution and the playground
+URL. Startup must report that same running profile, and final verification checks
+the same selected assets after cleanup. Profile policy stays in the shared
+frontend helper; the smoke command has no separate template/profile map.
 
 The runner closes only its owned Safari tabs and guest processes. After it exits,
 stop the wrapper and owned forward, collect the wrapper's cleanup receipt, verify

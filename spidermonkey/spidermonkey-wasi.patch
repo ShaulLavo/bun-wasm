@@ -1716,7 +1716,7 @@ index f1ce887..f1bffcd 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..15f5307f3 100644
+index 9524c5d6a..51e15d182 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,29 @@
@@ -1749,7 +1749,7 @@ index 9524c5d6a..15f5307f3 100644
  #include "mozilla/Attributes.h"  // MOZ_ALWAYS_INLINE, MOZ_COLD
  #include "mozilla/Likely.h"      // MOZ_LIKELY
  #include "mozilla/Variant.h"     // mozilla::Variant, mozilla::AsVariant
-@@ -30,6 +53,71 @@ struct JS_PUBLIC_API JSContext;
+@@ -30,6 +53,79 @@ struct JS_PUBLIC_API JSContext;
  
  namespace js {
  
@@ -1775,8 +1775,9 @@ index 9524c5d6a..15f5307f3 100644
 +inline constexpr size_t JSONSerializeReserve = 896;
 +inline constexpr size_t ArrayJoinReserve = 1536;
 +// Compile levels, the same on both tiers. Each size sits in a frame that
-+// stays on its recursion cycle after the parser frame merges, so every cycle
-+// holds at least one. A statement level holds statementList's (through
++// stays on its recursion cycle after the parser frame merges. Every cycle
++// the measurement probe nests holds one; a cycle it does not nest may hold
++// none. A statement level holds statementList's (through
 +// statementListItem) and its own function's: ifStatement's, tryStatement's,
 +// or statement's when it is a body or a label's target. An expression level
 +// holds assignExpr's, unaryExpr's and memberExpr's; chains that pass only
@@ -1793,6 +1794,13 @@ index 9524c5d6a..15f5307f3 100644
 +inline constexpr size_t ArgumentListReserve = 464;
 +inline constexpr size_t TemplateLiteralReserve = 512;
 +inline constexpr size_t FunctionBodyReserve = 1696;
++// Binding patterns (declarations, parameters, catch) recurse through
++// arrayBindingPattern or objectBindingPattern and bindingIdentifierOrPattern,
++// outside the expression cycle. The emitter's walk of a nested array pattern
++// has no check of its own and takes the most host stack per level, so the
++// array size bounds how deep a full compile goes.
++inline constexpr size_t ArrayBindingPatternReserve = 1664;
++inline constexpr size_t ObjectBindingPatternReserve = 1088;
 +// The bytecode emitter walks the finished tree with frames of its own and
 +// spends more host stack per statement level than the parser.
 +inline constexpr size_t EmitTreeReserve = 416;
@@ -1822,7 +1830,7 @@ index 9524c5d6a..15f5307f3 100644
  
  #ifdef __wasi__
 diff --git i/js/src/frontend/Parser.cpp w/js/src/frontend/Parser.cpp
-index 34f4dee86..a7e01d0de 100644
+index 34f4dee86..505fa1e68 100644
 --- i/js/src/frontend/Parser.cpp
 +++ w/js/src/frontend/Parser.cpp
 @@ -2996,6 +2996,7 @@ template <class ParseHandler, typename Unit>
@@ -1858,7 +1866,23 @@ index 34f4dee86..a7e01d0de 100644
    // Given a properly initialized parse context, try to parse an actual
    // function without concern for conversion to strict mode, use of lazy
    // parsing and such.
-@@ -4473,7 +4485,7 @@ GeneralParser<ParseHandler, Unit>::destructuringDeclarationWithoutYieldOrAwait(
+@@ -4210,6 +4222,7 @@ template <class ParseHandler, typename Unit>
+ typename ParseHandler::ListNodeResult
+ GeneralParser<ParseHandler, Unit>::objectBindingPattern(
+     DeclarationKind kind, YieldHandling yieldHandling) {
++  BUNWASM_RESERVE_STACK(bunwasm::ObjectBindingPatternReserve);
+   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftCurly));
+ 
+   AutoCheckRecursionLimit recursion(this->fc_);
+@@ -4346,6 +4359,7 @@ template <class ParseHandler, typename Unit>
+ typename ParseHandler::ListNodeResult
+ GeneralParser<ParseHandler, Unit>::arrayBindingPattern(
+     DeclarationKind kind, YieldHandling yieldHandling) {
++  BUNWASM_RESERVE_STACK(bunwasm::ArrayBindingPatternReserve);
+   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftBracket));
+ 
+   AutoCheckRecursionLimit recursion(this->fc_);
+@@ -4473,7 +4487,7 @@ GeneralParser<ParseHandler, Unit>::destructuringDeclarationWithoutYieldOrAwait(
  }
  
  template <class ParseHandler, typename Unit>
@@ -1867,7 +1891,7 @@ index 34f4dee86..a7e01d0de 100644
  GeneralParser<ParseHandler, Unit>::blockStatement(YieldHandling yieldHandling,
                                                    unsigned errorNumber) {
    MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftCurly));
-@@ -6249,7 +6261,7 @@ GeneralParser<ParseHandler, Unit>::expressionStatement(
+@@ -6249,7 +6263,7 @@ GeneralParser<ParseHandler, Unit>::expressionStatement(
  }
  
  template <class ParseHandler, typename Unit>
@@ -1876,7 +1900,7 @@ index 34f4dee86..a7e01d0de 100644
  GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
      YieldHandling yieldHandling) {
    TokenKind next;
-@@ -6257,6 +6269,34 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
+@@ -6257,6 +6271,34 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
      return errorResult();
    }
  
@@ -1911,7 +1935,7 @@ index 34f4dee86..a7e01d0de 100644
    // Annex B.3.4 says that unbraced FunctionDeclarations under if/else in
    // non-strict code act as if they were braced: |if (x) function f() {}|
    // parses as |if (x) { function f() {} }|.
-@@ -6304,6 +6344,7 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
+@@ -6304,6 +6346,7 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
  template <class ParseHandler, typename Unit>
  typename ParseHandler::TernaryNodeResult
  GeneralParser<ParseHandler, Unit>::ifStatement(YieldHandling yieldHandling) {
@@ -1919,7 +1943,7 @@ index 34f4dee86..a7e01d0de 100644
    Vector<Node, 4> condList(fc_), thenList(fc_);
    Vector<uint32_t, 4> posList(fc_);
    Node elseBranch;
-@@ -7292,6 +7333,7 @@ GeneralParser<ParseHandler, Unit>::throwStatement(YieldHandling yieldHandling) {
+@@ -7292,6 +7335,7 @@ GeneralParser<ParseHandler, Unit>::throwStatement(YieldHandling yieldHandling) {
  template <class ParseHandler, typename Unit>
  typename ParseHandler::TernaryNodeResult
  GeneralParser<ParseHandler, Unit>::tryStatement(YieldHandling yieldHandling) {
@@ -1927,7 +1951,7 @@ index 34f4dee86..a7e01d0de 100644
    MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::Try));
    uint32_t begin = pos().begin;
  
-@@ -9299,6 +9341,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
+@@ -9299,6 +9343,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
  template <class ParseHandler, typename Unit>
  typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
      YieldHandling yieldHandling) {
@@ -1935,7 +1959,7 @@ index 34f4dee86..a7e01d0de 100644
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -9543,9 +9586,10 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
+@@ -9543,9 +9588,10 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
  }
  
  template <class ParseHandler, typename Unit>
@@ -1947,7 +1971,7 @@ index 34f4dee86..a7e01d0de 100644
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -10133,6 +10177,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::assignExpr(
+@@ -10133,6 +10179,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::assignExpr(
      TripledotHandling tripledotHandling,
      PossibleError* possibleError /* = nullptr */,
      InvokedPrediction invoked /* = PredictUninvoked */) {
@@ -1955,7 +1979,7 @@ index 34f4dee86..a7e01d0de 100644
    AutoCheckRecursionLimit recursion(this->fc_);
    if (!recursion.check(this->fc_)) {
      return errorResult();
-@@ -10498,7 +10543,7 @@ GeneralParser<ParseHandler, Unit>::unaryOpExpr(YieldHandling yieldHandling,
+@@ -10498,7 +10545,7 @@ GeneralParser<ParseHandler, Unit>::unaryOpExpr(YieldHandling yieldHandling,
  }
  
  template <class ParseHandler, typename Unit>
@@ -1964,7 +1988,7 @@ index 34f4dee86..a7e01d0de 100644
  GeneralParser<ParseHandler, Unit>::optionalExpr(
      YieldHandling yieldHandling, TripledotHandling tripledotHandling,
      TokenKind tt, PossibleError* possibleError /* = nullptr */,
-@@ -10589,6 +10634,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::unaryExpr(
+@@ -10589,6 +10636,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::unaryExpr(
      PossibleError* possibleError /* = nullptr */,
      InvokedPrediction invoked /* = PredictUninvoked */,
      PrivateNameHandling privateNameHandling /* = PrivateNameProhibited */) {
@@ -1972,7 +1996,7 @@ index 34f4dee86..a7e01d0de 100644
    AutoCheckRecursionLimit recursion(this->fc_);
    if (!recursion.check(this->fc_)) {
      return errorResult();
-@@ -10762,6 +10808,7 @@ typename ParseHandler::ListNodeResult
+@@ -10762,6 +10810,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::argumentList(
      YieldHandling yieldHandling, bool* isSpread,
      PossibleError* possibleError /* = nullptr */) {
@@ -1980,7 +2004,7 @@ index 34f4dee86..a7e01d0de 100644
    ListNodeType argsList = MOZ_TRY(handler_.newArguments(pos()));
  
    bool matched;
-@@ -10844,6 +10891,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::memberExpr(
+@@ -10844,6 +10893,7 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::memberExpr(
      YieldHandling yieldHandling, TripledotHandling tripledotHandling,
      TokenKind tt, bool allowCallSyntax, PossibleError* possibleError,
      InvokedPrediction invoked) {
@@ -1988,7 +2012,7 @@ index 34f4dee86..a7e01d0de 100644
    MOZ_ASSERT(anyChars.isCurrentTokenType(tt));
  
    Node lhs;
-@@ -12576,7 +12624,7 @@ GeneralParser<ParseHandler, Unit>::importExpr(YieldHandling yieldHandling,
+@@ -12576,7 +12626,7 @@ GeneralParser<ParseHandler, Unit>::importExpr(YieldHandling yieldHandling,
  }
  
  template <class ParseHandler, typename Unit>
@@ -1997,7 +2021,7 @@ index 34f4dee86..a7e01d0de 100644
  GeneralParser<ParseHandler, Unit>::primaryExpr(
      YieldHandling yieldHandling, TripledotHandling tripledotHandling,
      TokenKind tt, PossibleError* possibleError, InvokedPrediction invoked) {
-@@ -12770,7 +12818,7 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+@@ -12770,7 +12820,7 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
  }
  
  template <class ParseHandler, typename Unit>

@@ -819,7 +819,8 @@ proxies, `JSON.stringify` and nested-array `String`. Compile shapes are one cons
 `?:` chains, arrows, functions, immediately called functions, classes, methods, parentheses,
 objects, unary operators, element access and templates, and the chains and bodies that pass
 through a single parser function: assignments, `typeof`, `new`, comma expressions, unbraced
-`if` and loop bodies, `while`, `for`, `do`, `with`, `try` and `switch`. Each is compiled two
+`if` and loop bodies, `while`, `for`, `do`, `with`, `try` and `switch`, plus ten
+[binding pattern](#binding-patterns) shapes since November 15. Each is compiled two
 ways: by `eval` as dead code, which the parser and constant folder see, and as the body of a
 function that is declared (a lazy syntax parse) and then called once (the full compile, emitter
 included).
@@ -860,9 +861,10 @@ Before the [parser frame merges](#spidermonkey-parser-frames) a nested statement
 frames, and no byte budget could both load Next and catch cold statement nesting: main at
 188 KiB still crashed on labels, labelled loops, `try` blocks and assignment chains on both
 hosts, and on PBL unary and `typeof` chains on the Mac. With two frames per `if` level a budget
-can do both. The compile reservations now sit in the frames that survive on each cycle
-([sites and sizes](bun-patches/spidermonkey-stack-budget.md)), with one in the bytecode emitter,
-and each is sized so that the depth 188 KiB accepts is at most 80 percent of the depth the host
+can do both. The compile reservations now sit in the frames that survive on each cycle the
+probe nests ([sites and sizes](bun-patches/spidermonkey-stack-budget.md)), with one in the
+bytecode emitter. A cycle the probe does not nest can still have none: binding patterns had none
+until [their own sites](#binding-patterns) were added. Each is sized so that the depth 188 KiB accepts is at most 80 percent of the depth the host
 stack holds cold. On the portable baseline tier, the tighter one:
 
 | Shape | Host stack holds, cold (Mac, Linux) | 188 KiB accepts | Share of the smaller |
@@ -899,6 +901,33 @@ validator levels, or 125 when it is never called, is refused on WebKit hosts wit
 `RangeError`, even where warm engine code would have fitted it: the budget cannot see how warm
 the engine's wasm is, so it assumes cold. A function the lazy parse accepted can also be refused
 on its first call, when the emitter walks it.
+
+### Binding patterns
+
+Nested destructuring in a declaration, a parameter list, a `catch` clause or a `for (let ... of)`
+head recurses through the two pattern functions, outside every reserved expression frame. With
+no reservation there, `let [[[...x]]] = []` nested 20,000 deep ran the host stack out at
+188 KiB on both tiers and both WebKit hosts, before the quota or the 1300-unit bound could
+refuse it. Patterns in an assignment or arrow parameters are parsed as expressions first and
+were already caught. Both pattern functions now reserve, the array one more, because the
+emitter's walk of a nested array pattern is the deepest pass and has no check of its own. On the
+portable baseline tier, compiled in full:
+
+| Shape | Host stack holds, cold (Mac, Linux) | 188 KiB accepts | Share of the smaller |
+| --- | ---: | ---: | ---: |
+| `let [[x]]` | 124, 168 | 90 | 73% |
+| `let {a: {a: x}}` | 184, 252 | 128 | 70% |
+| `let [...{a: [...{a: x}]}]` (one level is both kinds) | 82, 108 | 53 | 65% |
+| `catch ({a: {a: x}})` | 184, 256 | 132 | 72% |
+| `function ([[x]]) {}` | 288, 312 | 86 | 30% |
+
+On the interpreter tier `let [[x]]` holds 140 and 192 and 188 KiB accepts 100 (71 percent).
+On both hosts and tiers, at 188 KiB and at 216 KiB, every binding shape's deepest accepted input
+compiles cold and the next level is refused, and the validator, label and `?:` depths above are
+unchanged.
+A lazy parse holds at least 1.7 times what 188 KiB accepts for every pattern shape. Default Chromium and
+Firefox keep the full quota; there the 1300-unit bound refuses about 1,280 levels of array
+patterns and 640 of object patterns, and a full compile at that depth fits Chromium's stack.
 
 ## SpiderMonkey parser nesting
 
@@ -945,6 +974,13 @@ sweep ends its worker. Only the Wasmtime run and the smoke test check that a lat
 succeeds. Under Wasmtime, host stack per level ranges from 400 bytes (blocks) to 1.7 KiB
 (template literals). In the ordinary guest, `eval` now has 1,289 units left and
 `new Function` 1,276 to 1,283, against 326 to 339 before.
+
+A shared-memory group member runs the group build, whose host frames are larger, and on V8 it
+has only this bound too. While the parser still had reservation wrapper frames, a 4096-deep `?:`
+chain in a group guest overflowed Chromium's stack before the bound refused it. Since they were
+removed, every shape of the WebKit probe, binding patterns included, ends in a caught
+`RangeError` in a group guest in Chromium 156 on both tiers with no budget (November 15, 2026),
+and the shared-group ownership fixture runs under the host's own setting again.
 
 Not covered: iPhone Safari and Android Chrome were not measured. PBL getter recursion
 overflows the host stack in all three browsers at any setting, because PBL does not hold a

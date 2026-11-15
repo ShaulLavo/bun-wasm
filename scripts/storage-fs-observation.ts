@@ -2,6 +2,7 @@ import { observeFilesystemEndpoint, type EndpointSnapshot } from "./storage-fs-e
 import type { FilesystemConnection } from "../web/node_modules/waffle/fs/protocol";
 import { workerProcessState } from "../web/node_modules/waffle/proc/worker-client";
 import type { RuntimeWorkerRequest } from "../web/node_modules/waffle/browser/worker";
+import { retainMetadata } from "./storage-fs-metadata";
 
 const handshake = "bunwasm-storage-first-event-v1";
 const metadataPrefix = "[storage-fs-metadata] ";
@@ -112,6 +113,7 @@ export function installPage(): void {
   const nativeTerminate = NativeWorker.prototype.terminate;
   Reflect.set(globalThis, "__bunwasmStorageFirstEventSnapshot", () => retention.recent.slice());
   let workerId = 0;
+  let transferSequence = 0;
   globalThis.Worker = class extends NativeWorker {
     private observationPort: MessagePort | undefined;
     private readonly observationId = ++workerId;
@@ -131,7 +133,18 @@ export function installPage(): void {
       const message = args[0];
       if (!this.observationPort) observing(() => this.attach(message));
       if (message && typeof message === "object" && "runtimeProcess" in message && "filesystem" in message) observing(() => { this.posted = postedIdentity(message); });
-      return Reflect.apply(nativePost, this, args);
+      let transfer: ReturnType<typeof serviceTransfer> = undefined;
+      observing(() => { transfer = serviceTransfer(message, args[1]); });
+      const call = transfer ? ++transferSequence : null;
+      const publish = (outcome: "return" | "error") => observing(() => {
+        if (!transfer || !this.own) return;
+        writer?.({ ...this.own, workerURL: this.observationURL, serviceTransfer: { ...transfer, call, [outcome]: ++transferSequence, nativePortUUID: null } });
+      });
+      try {
+        const result = Reflect.apply(nativePost, this, args);
+        publish("return");
+        return result;
+      } catch (error) { publish("error"); throw error; }
     }
     private attach(message: unknown): void {
       const runtimeId = treeOf(message);
@@ -172,10 +185,9 @@ export function receive(value: unknown, own: Association, write: (row: object) =
   if (!validAssociation(row) || row.documentId !== own.documentId || row.runtimeId !== own.runtimeId || row.workerId !== own.workerId || row.pageURL !== own.pageURL) throw Error("Storage observation row identity mismatch");
   write(row);
 }
-export type Retention = { recent: object[]; causalEvents: number; propagationEvents: number; causalKeys: Set<string> };
+export type Retention = { recent: object[]; recentDropped?: number; causalEvents: number; propagationEvents: number; causalKeys: Set<string> };
 export function retain(row: object, state: Retention, emit: (value: object) => void): void {
-  state.recent.push(row);
-  if (state.recent.length > 32) state.recent.shift();
+  if (retainMetadata(state.recent, row)) state.recentDropped = (state.recentDropped ?? 0) + 1;
   if (!("snapshot" in row) || !row.snapshot || typeof row.snapshot !== "object") return;
   if (!("first" in row.snapshot) || !row.snapshot.first || typeof row.snapshot.first !== "object") return;
   const first = row.snapshot.first;
@@ -190,5 +202,15 @@ export function retain(row: object, state: Retention, emit: (value: object) => v
     emit({ kind: "causal-overflow", truncated: true, causalEventsAtLeast: 17, droppedAtLeast: 1, limits: { recent: 32, causalEmissions: 16 } });
     return;
   }
-  emit({ firstObservation: row, recent: state.recent.slice(), limits: { recent: 32, causalEmissions: 16 }, truncated: false, initiatingCauseProved: false });
+  emit({ firstObservation: row, recent: state.recent.slice(), recentDropped: state.recentDropped ?? 0, limits: { recent: 32, causalEmissions: 16 }, truncated: !!state.recentDropped, initiatingCauseProved: false });
+}
+
+function serviceTransfer(message: unknown, options: Transferable[] | StructuredSerializeOptions | undefined) {
+  if (!message || typeof message !== "object" || !("connect" in message)) return;
+  const connection = message.connect;
+  if (!connection || typeof connection !== "object" || !("owner" in connection) || typeof connection.owner !== "number") return;
+  if (!("requests" in connection) || !connection.requests || typeof connection.requests !== "object" || !("generation" in connection.requests) || typeof connection.requests.generation !== "number") return;
+  if (!("port" in connection) || !(connection.port instanceof MessagePort)) return;
+  const transfers = Array.isArray(options) ? options : options?.transfer;
+  return { endpoint: "service", owner: connection.owner, generation: connection.requests.generation, portInTransferList: transfers?.includes(connection.port) ?? false };
 }

@@ -41,6 +41,7 @@ export function observeFilesystemEndpoint(
   if (port.onmessage || port.onmessageerror) throw Error("endpoint observer installed too late");
   const inherited = connection.segments.map((buffer) => !!buffer);
   const originalSend = port.postMessage;
+  const originalClose = port.close;
   let handlersQualified = false;
   let sends = 0;
   let receives = 0;
@@ -49,6 +50,19 @@ export function observeFilesystemEndpoint(
   let sequence = 0;
   let lastSend: Frame | null = null;
   let lastReceive: Frame | null = null;
+  const history: { sequence: number; event: string; frame: Frame | null; trusted: boolean | null; result: string | null }[] = [];
+  let historyDropped = 0;
+  function trace(event: string, frame: Frame | null = null, trusted: boolean | null = null, result: string | null = null): void {
+    sequence++;
+    if (history.length === 128) { historyDropped++; return; }
+    history.push(Object.freeze({ sequence, event, frame, trusted, result }));
+  }
+  function word(buffer: SharedArrayBuffer | undefined, index = 0): number | null {
+    if (!buffer) return null;
+    try { return Atomics.load(new Int32Array(buffer), index); }
+    catch (error) { reportFailure(error); return null; }
+  }
+  const authority = () => ({ identityRevocation: word(connection.revocations[0]), serviceRevocation: word(connection.ownerStates), ownerState: word(connection.ownerStates, connection.owner) });
   type FirstEvent = {
     kind: "messageerror" | "transportClosed" | "shared-closed" | "send-error";
     sequence: number;
@@ -56,28 +70,31 @@ export function observeFilesystemEndpoint(
     closedBefore: CloseReason | null;
     lastSend: Frame | null;
     lastReceive: Frame | null;
+    identityRevocation: number | null;
+    serviceRevocation: number | null;
+    ownerState: number | null;
   };
   let first: FirstEvent | null = null;
   function inspectFrame(value: unknown): Frame {
-    try { return describeFrame(value, inherited); }
+    try { return Object.freeze(describeFrame(value, inherited)); }
     catch (error) { reportFailure(error); return { kind: "other" }; }
   }
   const closed = () => requestTransportError(connection.requests)?.reason ?? null;
   function record(kind: FirstEvent["kind"], trusted: boolean | null): void {
     if (first) return;
-    first = { kind, sequence, trusted, closedBefore: closed(), lastSend, lastReceive };
+    first = Object.freeze({ kind, sequence, trusted, closedBefore: closed(), lastSend, lastReceive, ...authority() });
     notify(true);
   }
   function message(event: MessageEvent<unknown>): void {
-    sequence++;
     receives++;
     lastReceive = inspectFrame(event.data);
+    trace("message", lastReceive, event.isTrusted);
     if (lastReceive.kind === "request") requestReceives++;
     if (receives === 1) notify();
     if (lastReceive.kind === "transportClosed") record("transportClosed", event.isTrusted);
   }
   function messageerror(event: MessageEvent<unknown>): void {
-    sequence++;
+    trace("messageerror", null, event.isTrusted);
     record("messageerror", event.isTrusted);
   }
   const send: MessagePort["postMessage"] = function (
@@ -85,27 +102,46 @@ export function observeFilesystemEndpoint(
     ...args: [message: unknown, options?: Transferable[] | StructuredSerializeOptions]
   ) {
     if (this !== port) return Reflect.apply(originalSend, this, args);
-    sequence++;
     lastSend = inspectFrame(args[0]);
+    const frame = lastSend;
+    trace("send-call", frame);
     try {
       const result = Reflect.apply(originalSend, this, args);
+      trace("send-return", null, null, typeof result);
       sends++;
-      if (lastSend.kind === "request") requestSends++;
+      if (frame.kind === "request") requestSends++;
       if (sends === 1) notify();
       return result;
     } catch (error) {
+      trace("send-error");
       record("send-error", null);
+      throw error;
+    }
+  };
+  const close: MessagePort["close"] = function (this: MessagePort, ...args: []) {
+    if (this !== port) return Reflect.apply(originalClose, this, args);
+    trace("close-call");
+    try {
+      const result = Reflect.apply(originalClose, this, args);
+      trace("close-return", null, null, typeof result);
+      notify(true);
+      return result;
+    } catch (error) {
+      trace("close-error");
+      notify(true);
       throw error;
     }
   };
   port.addEventListener("message", message);
   port.addEventListener("messageerror", messageerror);
   port.postMessage = send;
+  port.close = close;
   return {
     qualifyHandlers() {
       if (typeof port.onmessage !== "function" || typeof port.onmessageerror !== "function")
         throw Error("original endpoint handlers were not installed");
       handlersQualified = true;
+      notify();
     },
     snapshot() {
       if (closed() && !first) record("shared-closed", null);
@@ -124,6 +160,10 @@ export function observeFilesystemEndpoint(
         lastReceive,
         first,
         closed: closed(),
+        ...authority(),
+        history: history.slice(),
+        historyDropped,
+        historyLimit: 128,
       };
     },
     dispose() {
@@ -131,6 +171,8 @@ export function observeFilesystemEndpoint(
       port.removeEventListener("messageerror", messageerror);
       if (port.postMessage !== send) throw Error("endpoint observer send hook was replaced");
       port.postMessage = originalSend;
+      if (port.close !== close) throw Error("endpoint observer close hook was replaced");
+      port.close = originalClose;
     },
   };
 }
