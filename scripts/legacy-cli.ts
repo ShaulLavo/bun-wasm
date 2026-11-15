@@ -99,12 +99,13 @@ export async function runLegacyCli(directory: string): Promise<LegacyCliResult[]
   const stop = () => { interrupted = true; active?.kill("SIGTERM"); server.kill("SIGTERM"); };
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   for (const signal of signals) process.on(signal, stop);
+  const track = (child: ChildProcess) => { active = child; };
   try {
     const env = { ...process.env, TEST_SERVER: await serverAddress(server) };
     const results: LegacyCliResult[] = [];
     for (const row of legacyCliRows) {
       if (interrupted || server.exitCode !== null || server.signalCode !== null) throw new Error("Legacy CLI interrupted or loopback server exited");
-      results.push(await runRow(directory, row, join(scratch, `${row.id.replace("/", "-")}.out`), env, child => { active = child; }));
+      results.push(await runRow(directory, row, join(scratch, `${row.id.replace("/", "-")}.out`), env, track));
     }
     assertLegacyCliResults(results);
     return results;
