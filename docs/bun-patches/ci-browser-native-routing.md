@@ -3,6 +3,10 @@
 `scripts/ci-check-inputs.ts` and `scripts/ci-changes.ts` are original bun-wasm host
 tooling, with no adapted upstream implementation or upstream revision.
 
+Package producer guards expand the real shared actions before inspecting and
+executing their existing workflow fragments. The selector's path inventory is
+classified separately from actual playground transcript readers.
+
 The immutable check-manifest reader accepts an optional family filter. It keeps
 ordinary split Browser declarations separate from native correctness and shared
 profiles, after validating every snapshot manifest. Existing callers retain the
