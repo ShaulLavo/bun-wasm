@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import "../iphone-smoke-watch";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { instructions } from "./dispatch";
 import { discover } from "./github";
 import { outcome, state as parseState, type Job, type Run, type State } from "./model";
@@ -193,7 +194,7 @@ const scratch: string[] = [];
 afterEach(async () => { await Promise.all(scratch.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 async function directory(): Promise<string> {
-  const path = await mkdtemp("/work/tmp/bun-wasm-iphone-watch-");
+  const path = await mkdtemp(join(tmpdir(), "bun-wasm-iphone-watch-"));
   scratch.push(path);
   return path;
 }
