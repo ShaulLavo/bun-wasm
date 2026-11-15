@@ -1,11 +1,12 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { StorageLifetime, storageEvidence, storageStep } from "./storage-browser-evidence";
 import { StoragePreservationFailure } from "../sandbox/tests/storage-browser";
-import { handleStorageFailure } from "./storage-ci-quarantine";
+import { reportStorageFailure } from "./storage-failure-report";
 import protocol from "./fixtures/storage-ci/webkit.json";
+import restorationProtocol from "./fixtures/storage-ci/webkit-restoration.json";
 import { discoverChecks } from "./test-checks";
 import { needsJsc, needsRust } from "./ci-changes";
 
@@ -127,9 +128,14 @@ test("report failure cannot replace a product error and cannot pass its hook", a
   expect(() => lifetime.assertClean()).toThrow(AggregateError);
 });
 
-for (const phase of ["context.close", "session.cleanup", "progress-report"]) test(`known quarantine plus ${phase} remains failing`, async () => {
+const historicalReports: StoragePreservationFailure["report"][] = [
+  { ...protocol, checkpoint: "vanilla-config-restart" },
+  { ...restorationProtocol, checkpoint: "first-vanilla-restoration" },
+];
+
+for (const phase of ["context.close", "session.cleanup", "progress-report"]) test.each(historicalReports)(`$checkpoint plus ${phase} retains both failures and rejects`, async report => {
   const path = directory();
-  const original = new StoragePreservationFailure({ ...structuredClone(protocol), checkpoint: "vanilla-config-restart" }, new Error(protocol.error));
+  const original = new StoragePreservationFailure(structuredClone(report), new Error(report.error));
   const secondary = new Error(`${phase} failure`);
   const raw: unknown[] = [];
   const lifetime = new StorageLifetime(event => {
@@ -137,22 +143,18 @@ for (const phase of ["context.close", "session.cleanup", "progress-report"]) tes
     if (phase === "progress-report" && event.kind === "error") throw secondary;
   });
   if (phase !== "progress-report") lifetime.own(phase, async () => { throw secondary; });
-  let accepted = false;
-  const warning = spyOn(console, "error").mockImplementation(() => {});
-  try { await expect(lifetime.run(body)).rejects.toBeInstanceOf(AggregateError); }
-  finally { warning.mockRestore(); }
-  expect(accepted).toBe(true);
+  await expect(lifetime.run(body)).rejects.toBe(original);
   expect(lifetime.failures).toEqual([secondary]);
   expect(() => lifetime.assertClean()).toThrow(AggregateError);
   expect(JSON.stringify(raw)).toContain(original.message);
-  expect(readFileSync(join(path, "summary.md"), "utf8")).toContain("Storage quarantine");
+  if (phase !== "progress-report") expect(JSON.stringify(raw)).toContain(secondary.message);
+  expect(JSON.parse(readFileSync(join(path, "sandbox-storage-webkit-preservation.json"), "utf8"))).toEqual({ browser: "webkit", ...original.report });
 
   async function body(): Promise<void> {
     try { await lifetime.step("preservation", () => { throw original; }); }
     catch (error) {
       expect(error).toBe(original);
-      await handleStorageFailure("webkit", error, { CI: "true", BUN_WASM_STORAGE_CI_QUARANTINE: "known-20261114", BUN_WASM_BROWSER_REPORT_DIR: path, GITHUB_STEP_SUMMARY: join(path, "summary.md") });
-      accepted = true;
+      await reportStorageFailure("webkit", error, { CI: "true", BUN_WASM_BROWSER_REPORT_DIR: path });
     }
   }
 });
