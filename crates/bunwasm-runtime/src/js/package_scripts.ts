@@ -191,6 +191,19 @@
     return internal.require("bun_shell").escape(arg);
   }
 
+  const shellCommands = new Set(". alias bg bind break builtin caller case cd command compgen complete compopt continue coproc declare dirs disown do done echo elif else enable esac eval exec exit export false fc fg fi for function getopts hash help history if in jobs kill let local logout mapfile popd printf pushd pwd read readarray readonly return select set shift shopt source suspend test then time times trap true type typeset ulimit umask unalias unset until wait while".split(" "));
+  function expandScriptBinary(script: string): string {
+    const command = /^([ \t]*)([A-Za-z0-9_@.+-]+)(?=[ \t]|$)/.exec(script);
+    if (!command || shellCommands.has(command[2])) return script;
+    const file = binary(process.cwd(), command[2]);
+    if (!file || file.endsWith(`/node_modules/.bin/${command[2]}`)) return script;
+    return command[1] + quote(process.execPath) + " " + quote(dereference(file)) + script.slice(command[0].length);
+  }
+
+  function prepareScript(original: string, args: readonly string[]): string {
+    return [expandScriptBinary(replacePackageManagerRun(original))].concat(args.map(quote)).join(" ");
+  }
+
   function announce(script: string) {
     const colors = Boolean((process as unknown as { stderr: { isTTY?: boolean } }).stderr.isTTY);
     process.stderr.write(colors ? `\x1b[0m\x1b[2m\x1b[35m$\x1b[0m \x1b[2m\x1b[1m${script}\x1b[0m\n` : `$ ${script}\n`);
@@ -200,7 +213,7 @@
   async function runScript(name: string, original: string, args: readonly string[], silent: boolean): Promise<boolean> {
     process.env.npm_lifecycle_event = name;
     process.env.npm_lifecycle_script = original;
-    const script = [replacePackageManagerRun(original)].concat(args.map(quote)).join(" ");
+    const script = prepareScript(original, args);
     if (!silent) announce(script);
     const cwd = process.cwd();
     const shell = internal.require("bun_shell").findShell(process.env, cwd);
@@ -241,7 +254,7 @@
     function phase(name: string, args: readonly string[]) {
       const original = table[name];
       if (typeof original !== "string") return null;
-      return Object.freeze({ name, original, command: [replacePackageManagerRun(original)].concat(args.map(quote)).join(" ") });
+      return Object.freeze({ name, original, command: prepareScript(original, args) });
     }
     const main = phase(command.name, command.args);
     if (!main) return null;
