@@ -1,3 +1,378 @@
+diff --git a/js/public/SavedFrameAPI.h b/js/public/SavedFrameAPI.h
+index 688d1e185..1e3d64721 100644
+--- a/js/public/SavedFrameAPI.h
++++ b/js/public/SavedFrameAPI.h
+@@ -72,6 +72,31 @@ extern JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
+     uint32_t* sourceIdp,
+     SavedFrameSelfHosted selfHosted = SavedFrameSelfHosted::Include);
+ 
++/**
++ * Which capture-time branch produced a SavedFrame's source string.
++ * Cloned and reconstructed frames have no provenance and report DisplayURL,
++ * meaning the label is opaque and must stay raw.
++ */
++enum class SavedFrameSourceKind : uint8_t {
++  // The script source's displayURL, or an opaque cloned/reconstructed label.
++  DisplayURL,
++  // The script's compiler filename, including introduced eval, Function and
++  // WebAssembly names derived from it.
++  Filename
++};
++
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++/**
++ * Given a SavedFrame JSObject, get the kind of its source property. Selects the
++ * same frame as GetSavedFrameSource for identical principals and selfHosted
++ * arguments. Never allocates, GCs or runs script. Defaults to DisplayURL.
++ */
++extern JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceKind(
++    JSContext* cx, JSPrincipals* principals, Handle<JSObject*> savedFrame,
++    SavedFrameSourceKind* kindp,
++    SavedFrameSelfHosted selfHosted = SavedFrameSelfHosted::Include);
++#endif
++
+ /**
+  * Given a SavedFrame JSObject, get its line property (1-origin).
+  * Defaults to 0.
+diff --git a/js/src/vm/SavedFrame.h b/js/src/vm/SavedFrame.h
+index f5b41efc2..16d49b764 100644
+--- a/js/src/vm/SavedFrame.h
++++ b/js/src/vm/SavedFrame.h
+@@ -11,6 +11,7 @@
+ #include "js/ColumnNumber.h"  // JS::TaggedColumnNumberOneOrigin
+ #include "js/GCHashTable.h"
+ #include "js/Principals.h"
++#include "js/SavedFrameAPI.h"  // JS::SavedFrameSourceKind
+ #include "js/UbiNode.h"
+ #include "vm/NativeObject.h"
+ 
+@@ -56,6 +57,7 @@ class SavedFrame : public NativeObject {
+   SavedFrame* getParent() const;
+   JSPrincipals* getPrincipals();
+   bool getMutedErrors();
++  JS::SavedFrameSourceKind getSourceKind();
+   bool isSelfHosted(JSContext* cx);
+   bool isWasm();
+ 
+@@ -126,9 +128,11 @@ class SavedFrame : public NativeObject {
+   void initFunctionDisplayName(JSAtom* maybeName);
+   void initAsyncCause(JSAtom* maybeCause);
+   void initParent(SavedFrame* maybeParent);
+-  void initPrincipalsAlreadyHeldAndMutedErrors(JSPrincipals* principals,
+-                                               bool mutedErrors);
+-  void initPrincipalsAndMutedErrors(JSPrincipals* principals, bool mutedErrors);
++  void initPrincipalsAlreadyHeldAndMutedErrors(
++      JSPrincipals* principals, bool mutedErrors,
++      JS::SavedFrameSourceKind sourceKind);
++  void initPrincipalsAndMutedErrors(JSPrincipals* principals, bool mutedErrors,
++                                    JS::SavedFrameSourceKind sourceKind);
+ 
+   enum {
+     // The reserved slots in the SavedFrame class.
+diff --git a/js/src/vm/SavedStacks.cpp b/js/src/vm/SavedStacks.cpp
+index 7c26d9c97..144ff4da0 100644
+--- a/js/src/vm/SavedStacks.cpp
++++ b/js/src/vm/SavedStacks.cpp
+@@ -174,7 +174,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+   Lookup(JSAtom* source, uint32_t sourceId, uint32_t line,
+          JS::TaggedColumnNumberOneOrigin column, JSAtom* functionDisplayName,
+          JSAtom* asyncCause, SavedFrame* parent, JSPrincipals* principals,
+-         bool mutedErrors,
++         bool mutedErrors, JS::SavedFrameSourceKind sourceKind,
+          const Maybe<LiveSavedFrameCache::FramePtr>& framePtr = Nothing(),
+          jsbytecode* pc = nullptr, Activation* activation = nullptr)
+       : source(source),
+@@ -186,6 +186,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+         parent(parent),
+         principals(principals),
+         mutedErrors(mutedErrors),
++        sourceKind(sourceKind),
+         framePtr(framePtr),
+         pc(pc),
+         activation(activation) {
+@@ -206,6 +207,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+         parent(savedFrame.getParent()),
+         principals(savedFrame.getPrincipals()),
+         mutedErrors(savedFrame.getMutedErrors()),
++        sourceKind(savedFrame.getSourceKind()),
+         framePtr(Nothing()),
+         pc(nullptr),
+         activation(nullptr) {
+@@ -226,6 +228,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+   SavedFrame* parent;
+   JSPrincipals* principals;
+   bool mutedErrors;
++  JS::SavedFrameSourceKind sourceKind;
+ 
+   // These are used only by the LiveSavedFrameCache and not used for identity or
+   // hashing.
+@@ -261,6 +264,7 @@ class WrappedPtrOperations<SavedFrame::Lookup, Wrapper> {
+   SavedFrame* parent() { return value().parent; }
+   JSPrincipals* principals() { return value().principals; }
+   bool mutedErrors() { return value().mutedErrors; }
++  JS::SavedFrameSourceKind sourceKind() { return value().sourceKind; }
+   Maybe<LiveSavedFrameCache::FramePtr> framePtr() { return value().framePtr; }
+   jsbytecode* pc() { return value().pc; }
+   Activation* activation() { return value().activation; }
+@@ -314,7 +318,7 @@ HashNumber SavedFrame::HashPolicy::calculateHash(const Lookup& lookup,
+   // and add another overload of AddToHash with more arguments.
+   return AddToHash(lookup.line, lookup.column.rawValue(), lookup.source,
+                    lookup.functionDisplayName, lookup.asyncCause,
+-                   lookup.mutedErrors, parentHash,
++                   lookup.mutedErrors, uint8_t(lookup.sourceKind), parentHash,
+                    JSPrincipalsPtrHasher::hash(lookup.principals));
+ }
+ 
+@@ -357,6 +361,12 @@ bool SavedFrame::HashPolicy::match(SavedFrame* existing, const Lookup& lookup) {
+     return false;
+   }
+ 
++  // Frames whose equal labels come from different capture branches stay
++  // distinct, because their labels are interpreted differently.
++  if (existing->getSourceKind() != lookup.sourceKind) {
++    return false;
++  }
++
+   return true;
+ }
+ 
+@@ -479,12 +489,22 @@ SavedFrame* SavedFrame::getParent() const {
+   return v.isObject() ? &v.toObject().as<SavedFrame>() : nullptr;
+ }
+ 
++// JSSLOT_PRINCIPALS holds the principals pointer with two flags in its low
++// bits: bit 0 is mutedErrors, bit 1 marks a compiler-filename source.
++static constexpr uintptr_t MutedErrorsBit = 0b01;
++static constexpr uintptr_t FilenameSourceBit = 0b10;
++static constexpr uintptr_t PrincipalsFlagBits =
++    MutedErrorsBit | FilenameSourceBit;
++static_assert(alignof(JSPrincipals) > PrincipalsFlagBits,
++              "SavedFrame packs flags into JSPrincipals pointer bits");
++
+ JSPrincipals* SavedFrame::getPrincipals() {
+   const Value& v = getReservedSlot(JSSLOT_PRINCIPALS);
+   if (v.isUndefined()) {
+     return nullptr;
+   }
+-  return reinterpret_cast<JSPrincipals*>(uintptr_t(v.toPrivate()) & ~0b1);
++  return reinterpret_cast<JSPrincipals*>(uintptr_t(v.toPrivate()) &
++                                         ~PrincipalsFlagBits);
+ }
+ 
+ bool SavedFrame::getMutedErrors() {
+@@ -492,7 +512,17 @@ bool SavedFrame::getMutedErrors() {
+   if (v.isUndefined()) {
+     return true;
+   }
+-  return bool(uintptr_t(v.toPrivate()) & 0b1);
++  return bool(uintptr_t(v.toPrivate()) & MutedErrorsBit);
++}
++
++JS::SavedFrameSourceKind SavedFrame::getSourceKind() {
++  const Value& v = getReservedSlot(JSSLOT_PRINCIPALS);
++  if (v.isUndefined()) {
++    return JS::SavedFrameSourceKind::DisplayURL;
++  }
++  return (uintptr_t(v.toPrivate()) & FilenameSourceBit)
++             ? JS::SavedFrameSourceKind::Filename
++             : JS::SavedFrameSourceKind::DisplayURL;
+ }
+ 
+ void SavedFrame::initSource(JSAtom* source) {
+@@ -515,18 +545,24 @@ void SavedFrame::initColumn(JS::TaggedColumnNumberOneOrigin column) {
+   initReservedSlot(JSSLOT_COLUMN, PrivateUint32Value(column.rawValue()));
+ }
+ 
+-void SavedFrame::initPrincipalsAndMutedErrors(JSPrincipals* principals,
+-                                              bool mutedErrors) {
++void SavedFrame::initPrincipalsAndMutedErrors(
++    JSPrincipals* principals, bool mutedErrors,
++    JS::SavedFrameSourceKind sourceKind) {
+   if (principals) {
+     JS_HoldPrincipals(principals);
+   }
+-  initPrincipalsAlreadyHeldAndMutedErrors(principals, mutedErrors);
++  initPrincipalsAlreadyHeldAndMutedErrors(principals, mutedErrors, sourceKind);
+ }
+ 
+ void SavedFrame::initPrincipalsAlreadyHeldAndMutedErrors(
+-    JSPrincipals* principals, bool mutedErrors) {
++    JSPrincipals* principals, bool mutedErrors,
++    JS::SavedFrameSourceKind sourceKind) {
+   MOZ_ASSERT_IF(principals, principals->refcount > 0);
+-  uintptr_t ptr = uintptr_t(principals) | mutedErrors;
++  MOZ_ASSERT((uintptr_t(principals) & PrincipalsFlagBits) == 0);
++  uintptr_t ptr = uintptr_t(principals) | (mutedErrors ? MutedErrorsBit : 0) |
++                  (sourceKind == JS::SavedFrameSourceKind::Filename
++                       ? FilenameSourceBit
++                       : 0);
+   initReservedSlot(JSSLOT_PRINCIPALS,
+                    PrivateValue(reinterpret_cast<void*>(ptr)));
+ }
+@@ -568,7 +604,8 @@ void SavedFrame::initFromLookup(JSContext* cx, Handle<Lookup> lookup) {
+   initFunctionDisplayName(lookup.functionDisplayName());
+   initAsyncCause(lookup.asyncCause());
+   initParent(lookup.parent());
+-  initPrincipalsAndMutedErrors(lookup.principals(), lookup.mutedErrors());
++  initPrincipalsAndMutedErrors(lookup.principals(), lookup.mutedErrors(),
++                               lookup.sourceKind());
+ }
+ 
+ /* static */
+@@ -812,6 +849,27 @@ JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
+   return SavedFrameResult::Ok;
+ }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceKind(
++    JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
++    SavedFrameSourceKind* kindp,
++    SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */) {
++  js::AssertHeapIsIdle();
++  CHECK_THREAD(cx);
++  MOZ_RELEASE_ASSERT(cx->realm());
++
++  bool skippedAsync;
++  Rooted<js::SavedFrame*> frame(cx, UnwrapSavedFrame(cx, principals, savedFrame,
++                                                     selfHosted, skippedAsync));
++  if (!frame) {
++    *kindp = SavedFrameSourceKind::DisplayURL;
++    return SavedFrameResult::AccessDenied;
++  }
++  *kindp = frame->getSourceKind();
++  return SavedFrameResult::Ok;
++}
++#endif
++
+ JS_PUBLIC_API SavedFrameResult GetSavedFrameLine(
+     JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
+     uint32_t* linep,
+@@ -1564,8 +1622,9 @@ bool SavedStacks::insertFrames(JSContext* cx, MutableHandle<SavedFrame*> frame,
+                                   displayAtom,
+                                   nullptr,  // asyncCause
+                                   nullptr,  // parent (not known yet)
+-                                  principals, iter.mutedErrors(), framePtr,
+-                                  iter.pc(), &activation)) {
++                                  principals, iter.mutedErrors(),
++                                  location.sourceKind(), framePtr, iter.pc(),
++                                  &activation)) {
+         return false;
+       }
+     }
+@@ -1900,6 +1959,8 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
+     if (!locationp.source()) {
+       return false;
+     }
++    // |locationp| is reused across frames, so always overwrite the kind.
++    locationp.setSourceKind(JS::SavedFrameSourceKind::Filename);
+ 
+     JS::TaggedColumnNumberOneOrigin column;
+     locationp.setLine(iter.computeLine(&column));
+@@ -1914,11 +1975,14 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
+ 
+   if (!p) {
+     Rooted<JSAtom*> source(cx);
++    JS::SavedFrameSourceKind sourceKind;
+     if (const char16_t* displayURL = iter.displayURL()) {
+       source = AtomizeChars(cx, displayURL, js_strlen(displayURL));
++      sourceKind = JS::SavedFrameSourceKind::DisplayURL;
+     } else {
+       const char* filename = script->filename() ? script->filename() : "";
+       source = AtomizeUTF8Chars(cx, filename, strlen(filename));
++      sourceKind = JS::SavedFrameSourceKind::Filename;
+     }
+     if (!source) {
+       return false;
+@@ -1930,7 +1994,7 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
+ 
+     PCKey key(script, pc);
+     LocationValue value(source, sourceId, line,
+-                        JS::TaggedColumnNumberOneOrigin(column));
++                        JS::TaggedColumnNumberOneOrigin(column), sourceKind);
+     if (!pcLocationMap.add(p, key, value)) {
+       ReportOutOfMemory(cx);
+       return false;
+@@ -2114,7 +2178,9 @@ JS_PUBLIC_API bool ConstructSavedFrameStackSlow(
+                                 functionDisplayName,
+                                 /* asyncCause */ nullptr,
+                                 /* parent */ nullptr, principals,
+-                                /* mutedErrors */ true)) {
++                                /* mutedErrors */ true,
++                                // A reconstructed label has no provenance.
++                                JS::SavedFrameSourceKind::DisplayURL)) {
+       ReportOutOfMemory(cx);
+       return false;
+     }
+diff --git a/js/src/vm/SavedStacks.h b/js/src/vm/SavedStacks.h
+index b7dfe4dd9..74eabe7e5 100644
+--- a/js/src/vm/SavedStacks.h
++++ b/js/src/vm/SavedStacks.h
+@@ -242,10 +242,19 @@ class SavedStacks {
+ 
+  public:
+   struct LocationValue {
+-    LocationValue() : source(nullptr), sourceId(0), line(0) {}
++    LocationValue()
++        : source(nullptr),
++          sourceId(0),
++          line(0),
++          sourceKind(JS::SavedFrameSourceKind::DisplayURL) {}
+     LocationValue(JSAtom* source, uint32_t sourceId, size_t line,
+-                  JS::TaggedColumnNumberOneOrigin column)
+-        : source(source), sourceId(sourceId), line(line), column(column) {}
++                  JS::TaggedColumnNumberOneOrigin column,
++                  JS::SavedFrameSourceKind sourceKind)
++        : source(source),
++          sourceId(sourceId),
++          line(line),
++          column(column),
++          sourceKind(sourceKind) {}
+ 
+     void trace(JSTracer* trc) {
+       TraceEdge(trc, &source, "SavedStacks::LocationValue::source");
+@@ -266,6 +275,9 @@ class SavedStacks {
+ 
+     // Column number in UTF-16 code units.
+     JS::TaggedColumnNumberOneOrigin column;
++
++    // The branch that produced |source|, stored with it.
++    JS::SavedFrameSourceKind sourceKind;
+   };
+ 
+  private:
+@@ -305,6 +317,7 @@ struct WrappedPtrOperations<SavedStacks::LocationValue, Wrapper> {
+   uint32_t sourceId() const { return loc().sourceId; }
+   size_t line() const { return loc().line; }
+   JS::TaggedColumnNumberOneOrigin column() const { return loc().column; }
++  JS::SavedFrameSourceKind sourceKind() const { return loc().sourceKind; }
+ 
+  private:
+   const SavedStacks::LocationValue& loc() const {
+@@ -319,6 +332,7 @@ struct MutableWrappedPtrOperations<SavedStacks::LocationValue, Wrapper>
+   void setSourceId(uint32_t v) { loc().sourceId = v; }
+   void setLine(size_t v) { loc().line = v; }
+   void setColumn(JS::TaggedColumnNumberOneOrigin v) { loc().column = v; }
++  void setSourceKind(JS::SavedFrameSourceKind v) { loc().sourceKind = v; }
+ 
+  private:
+   SavedStacks::LocationValue& loc() {
+diff --git a/js/src/vm/StructuredClone.cpp b/js/src/vm/StructuredClone.cpp
+index 075aa3638..5af89759a 100644
+--- a/js/src/vm/StructuredClone.cpp
++++ b/js/src/vm/StructuredClone.cpp
+@@ -3802,8 +3802,10 @@ JSObject* JSStructuredCloneReader::readSavedFrameHeader(
+     }
+   }
+ 
+-  savedFrame->initPrincipalsAlreadyHeldAndMutedErrors(principals,
+-                                                      mutedErrors.toBoolean());
++  // The clone format carries no source provenance, so the label stays opaque.
++  savedFrame->initPrincipalsAlreadyHeldAndMutedErrors(
++      principals, mutedErrors.toBoolean(),
++      JS::SavedFrameSourceKind::DisplayURL);
+ 
+   savedFrame->initSource(&source.toString()->asAtom());
+ 
 diff --git i/js/src/jsapi.cpp w/js/src/jsapi.cpp
 --- i/js/src/jsapi.cpp
 +++ w/js/src/jsapi.cpp
@@ -54,7 +429,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git i/js/src/vm/Interpreter.cpp w/js/src/vm/Interpreter.cpp
-index 6241cd45d..44424e3ef 100644
+index 6241cd45d..6cd08791c 100644
 --- i/js/src/vm/Interpreter.cpp
 +++ w/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -67,17 +442,19 @@ index 6241cd45d..44424e3ef 100644
  
  using namespace js;
  
-@@ -436,6 +439,9 @@ static void AssertExceptionResult(JSContext* cx) {
+@@ -436,6 +439,11 @@ static void AssertExceptionResult(JSContext* cx) {
  #  pragma optimize("g", off)
  #endif
  bool js::RunScript(JSContext* cx, RunState& state) {
-+  BUNWASM_RESERVE_STACK_DYNAMIC(jit::JitOptions.portableBaselineInterpreter
-+                                    ? bunwasm::RunScriptPBLReserve
-+                                    : bunwasm::RunScriptReserve);
++  BUNWASM_RESERVE_STACK_DYNAMIC(
++      bunwasm::StackIsDeep(cx) ? bunwasm::RunScriptDeepReserve
++      : jit::JitOptions.portableBaselineInterpreter
++          ? bunwasm::RunScriptPBLReserve
++          : bunwasm::RunScriptReserve);
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
-@@ -1779,8 +1785,207 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
+@@ -1779,8 +1787,207 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
                            JS::ObjectValue(*disposableRecord));
  }
  
@@ -285,7 +662,7 @@ index 6241cd45d..44424e3ef 100644
  /*
   * Define macros for an interpreter loop. Opcode dispatch is done by
   * indirect goto (aka a threaded interpreter), which is technically
-@@ -1839,8 +2044,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1839,8 +2046,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
     * Prepare to call a user-supplied branch handler, and abort the script
     * if it returns false.
     */
@@ -300,7 +677,7 @@ index 6241cd45d..44424e3ef 100644
      if (!CheckForInterrupt(cx)) goto error; \
    JS_END_MACRO
  
-@@ -1984,6 +2195,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1984,6 +2197,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
    INIT_COVERAGE();
    COUNT_COVERAGE_MAIN();
  
@@ -313,7 +690,7 @@ index 6241cd45d..44424e3ef 100644
    // Enter the interpreter loop starting at the current pc.
    ADVANCE_AND_DISPATCH(0);
  
-@@ -2229,7 +2446,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2229,7 +2448,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
  
        jit_return:
  
@@ -326,7 +703,7 @@ index 6241cd45d..44424e3ef 100644
          MOZ_ASSERT(cx->realm() == script->realm());
  
          /* Resume execution in the calling frame. */
-@@ -2238,6 +2460,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2238,6 +2462,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
              ADVANCE_AND_DISPATCH(JSOpLength_Resume);
            }
  
@@ -341,7 +718,7 @@ index 6241cd45d..44424e3ef 100644
            MOZ_ASSERT(GetBytecodeLength(REGS.pc) == JSOpLength_Call);
            ADVANCE_AND_DISPATCH(JSOpLength_Call);
          }
-@@ -2944,9 +3174,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2944,9 +3176,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
        ReservedRooted<Value> lval(&rootValue0, REGS.sp[-1]);
        MutableHandleValue res = REGS.stackHandleAt(-1);
        ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
@@ -364,7 +741,7 @@ index 6241cd45d..44424e3ef 100644
        cx->debugOnlyCheck(res);
      }
      END_CASE(GetProp)
-@@ -2964,9 +3207,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2964,9 +3209,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
          goto error;
        }
  
@@ -387,7 +764,7 @@ index 6241cd45d..44424e3ef 100644
  
        cx->debugOnlyCheck(rref);
  
-@@ -3271,6 +3527,25 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -3271,6 +3529,25 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
            (construct && !maybeFun->isConstructor()) ||
            (!construct && maybeFun->isClassConstructor()) ||
            cx->realm()->debuggerObservesNativeCall()) {
@@ -413,7 +790,7 @@ index 6241cd45d..44424e3ef 100644
          if (construct) {
            CallReason reason = op == JSOp::NewContent ? CallReason::CallContent
                                                       : CallReason::Call;
-@@ -3298,6 +3573,9 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -3298,6 +3575,9 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
          ADVANCE_AND_DISPATCH(JSOpLength_Call);
        }
  
@@ -423,7 +800,7 @@ index 6241cd45d..44424e3ef 100644
        {
          MOZ_ASSERT(maybeFun);
          ReservedRooted<JSFunction*> fun(&rootFunction0, maybeFun);
-@@ -3366,8 +3644,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -3366,8 +3646,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
                                      // call popInlineFrame.
        }
  
@@ -443,7 +820,7 @@ index 6241cd45d..44424e3ef 100644
        if (!REGS.fp()->prologue(cx)) {
          goto prologue_error;
        }
-@@ -4619,8 +4908,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
+@@ -4619,8 +4910,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
    return cx->getPendingExceptionStack(vp);
  }
  
@@ -460,7 +837,7 @@ index 6241cd45d..44424e3ef 100644
    if (name == cx->names().length) {
      // Fast path for strings, arrays and arguments.
      if (::GetLengthProperty(v, vp)) {
-@@ -4674,9 +4969,30 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
+@@ -4674,9 +4971,30 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
      return false;
    }
  
@@ -492,10 +869,10 @@ index 6241cd45d..44424e3ef 100644
                                       HandleObject parent, gc::AllocSite* site) {
    MOZ_ASSERT(site);
 diff --git i/js/src/vm/PortableBaselineInterpret.cpp w/js/src/vm/PortableBaselineInterpret.cpp
-index d38cebe3e..39afaa2d9 100644
+index d38cebe3e..7c462d79b 100644
 --- i/js/src/vm/PortableBaselineInterpret.cpp
 +++ w/js/src/vm/PortableBaselineInterpret.cpp
-@@ -105,8 +105,27 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
+@@ -105,8 +105,35 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
  #  define ENABLE_COMPUTED_GOTO_DISPATCH
  #endif
  
@@ -509,6 +886,14 @@ index d38cebe3e..39afaa2d9 100644
 +// frames entered from C++.
 +#  define BUNWASM_HOLD_RECURSION_UNIT(cx) \
 +    AutoCheckRecursionLimit bunwasmNestedFrame(cx)
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++// Test controls: refuse the call fast path, so a call reaches its inline
++// cache; observe a hand-over once its frames are in place; count scripted
++// getter calls made by a getter stub.
++extern "C" bool bunsm_test_pbl_call_fast_path();
++extern "C" void bunsm_test_pbl_hand_over(JSContext* cx);
++extern "C" void bunsm_test_pbl_cache_getter();
++#  endif
 +#else
 +#  define BUNWASM_HOLD_RECURSION_UNIT(cx) ((void)0)
 +#endif
@@ -524,7 +909,155 @@ index d38cebe3e..39afaa2d9 100644
  // On WASI, with a single thread, there is no possibility for an
  // interrupt to come asynchronously.
  #  define ENABLE_INTERRUPT_CHECKS
-@@ -2419,7 +2438,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+@@ -533,6 +560,129 @@ static double DoubleMinMax(bool isMax, double first, double second) {
+   }
+ }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++// Deep-stack hand-over (bunwasm::StackIsDeep). An inline cache that would call
++// PortableBaselineInterpret again in C++ makes the same call through the
++// engine's generic call or construct path, and the callee runs in the C++
++// interpreter.
++//
++// The frames are those of this file's native-function call: a BaselineStub
++// frame that holds the stub pointer, so the stub is traced, beneath a native
++// exit frame whose vp array roots the callee, |this|, the arguments and
++// new.target. Every value reaches vp before the first allocation. The cache
++// operation returns the result without reading its stub again, so it must be
++// the stub's last operation. A failed call leaves through the operation's
++// error exit with the exception state the callee left.
++//
++// |pushArguments| pushes new.target (when constructing), then the arguments
++// from the last to the first.
++template <typename PushArguments>
++static MOZ_ALWAYS_INLINE uint64_t BunwasmHandOver(
++    ICCtx& ctx, ICCacheIRStub* cstub, JSFunction* callee, Value thisv,
++    uint32_t argc, bool constructing, PushArguments&& pushArguments) {
++  PUSH_IC_FRAME();
++  if (!ctx.stack.check(sp, sizeof(StackVal) * (argc + 2 + constructing + 6))) {
++    ReportOverRecursed(ctx.frameMgr.cxForLocalUseOnly());
++    ctx.error = PBIResult::Error;
++    return IC_ERROR_SENTINEL();
++  }
++
++  // A BaselineStub frame keeps the stub pointer where an exit frame keeps
++  // its type.
++  POPNNATIVE(1);
++  PUSHNATIVE(StackValNative(cstub));
++
++  pushArguments(sp);
++  // The construct path creates |this| itself.
++  PUSH(StackVal(constructing ? MagicValue(JS_IS_CONSTRUCTING) : thisv));
++  PUSH(StackVal(ObjectValue(*callee)));
++  Value* vp = reinterpret_cast<Value*>(sp);
++
++  PUSHNATIVE(StackValNative(callee));
++  PUSHNATIVE(StackValNative(argc));
++  PUSHNATIVE(StackValNative(MakeFrameDescriptor(FrameType::BaselineStub)));
++  PUSHNATIVE(StackValNative(nullptr));  // fake return address.
++  PUSHNATIVE(StackValNative(ctx.stack.fp));
++  ctx.stack.fp = sp;
++  PUSHNATIVE(StackValNative(uint32_t(constructing
++                                         ? ExitFrameType::ConstructNative
++                                         : ExitFrameType::CallNative)));
++  cx.getCx()->activation()->asJit()->setJSExitFP(
++      reinterpret_cast<uint8_t*>(ctx.stack.fp));
++  cx.getCx()->portableBaselineStack().top = reinterpret_cast<void*>(sp);
++
++  // The caller's JitScript must outlive the call, as for a nested PBL call.
++  AutoKeepJitScripts keepJitScripts(cx);
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++  bunsm_test_pbl_hand_over(cx);
++#  endif
++  CallArgs args = CallArgsFromVp(argc, vp);
++  MOZ_ASSERT(args.isConstructing() == constructing);
++  if (!(constructing ? ConstructFromStack(cx, args)
++                     : CallFromStack(cx, args))) {
++    ctx.error = PBIResult::Error;
++    return IC_ERROR_SENTINEL();
++  }
++  return args.rval().asRawBits();
++}
++
++// The Call opcode's operands, from the lowest address: new.target (when
++// constructing), the arguments from the last to the first, |this|, callee.
++static MOZ_NEVER_INLINE uint64_t BunwasmHandOverCall(ICCtx& ctx,
++                                                     ICCacheIRStub* cstub,
++                                                     JSFunction* callee,
++                                                     uint32_t argc,
++                                                     bool constructing) {
++  StackVal* operands = ctx.sp();
++  return BunwasmHandOver(ctx, cstub, callee,
++                         operands[argc + constructing].asValue(), argc,
++                         constructing, [&](StackVal*& sp) {
++                           for (uint32_t i = 0; i < argc + constructing; i++) {
++                             PUSH(operands[i]);
++                           }
++                         });
++}
++
++// A getter receives no argument. A setter receives the assigned value, and
++// what it returns is discarded.
++static MOZ_NEVER_INLINE uint64_t BunwasmHandOverAccessor(ICCtx& ctx,
++                                                         ICCacheIRStub* cstub,
++                                                         JSFunction* callee,
++                                                         Value receiver,
++                                                         Value assigned,
++                                                         bool isSetter) {
++  uint64_t result = BunwasmHandOver(ctx, cstub, callee, receiver, isSetter,
++                                    /* constructing = */ false,
++                                    [&](StackVal*& sp) {
++                                      if (isSetter) {
++                                        PUSH(StackVal(assigned));
++                                      }
++                                    });
++  if (isSetter && result != IC_ERROR_SENTINEL()) {
++    return UndefinedValue().asRawBits();
++  }
++  return result;
++}
++
++// The target receives the bound |this|, then the bound arguments, then the
++// call's own, as BoundFunctionObject::call passes them.
++static MOZ_NEVER_INLINE uint64_t BunwasmHandOverBound(
++    ICCtx& ctx, ICCacheIRStub* cstub, BoundFunctionObject* bound, uint32_t argc,
++    uint32_t numBoundArgs) {
++  StackVal* operands = ctx.sp();
++  return BunwasmHandOver(
++      ctx, cstub, &bound->getTarget()->as<JSFunction>(), bound->getBoundThis(),
++      numBoundArgs + argc, /* constructing = */ false, [&](StackVal*& sp) {
++        for (uint32_t i = 0; i < argc; i++) {
++          PUSH(operands[i]);
++        }
++        for (uint32_t i = 0; i < numBoundArgs; i++) {
++          PUSH(StackVal(bound->getBoundArg(numBoundArgs - 1 - i)));
++        }
++      });
++}
++#endif
++
+ // Interpreter for CacheIR.
+ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+                         ICCtx& ctx) {
+@@ -2293,6 +2443,17 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+           FAIL_IC();
+         }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++        if (!isNative &&
++            bunwasm::StackIsDeep(ctx.frameMgr.cxForLocalUseOnly())) {
++          if (cacheIRReader.more()) {
++            FAIL_IC();
++          }
++          return BunwasmHandOverCall(ctx, cstub, callee, argc,
++                                     flags.isConstructing());
++        }
++#endif
++
+         // Handle arg-underflow (but only for scripted targets).
+         uint32_t undefArgs = (!isNative && (argc < callee->nargs()))
+                                  ? (callee->nargs() - argc)
+@@ -2419,7 +2580,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
              ImmutableScriptData* isd = script->immutableScriptData();
              PBIResult result;
              Value ret;
@@ -534,7 +1067,58 @@ index d38cebe3e..39afaa2d9 100644
                  cx, ctx.state, ctx.stack, sp,
                  /* envChain = */ nullptr, &ret, pc, isd, nullptr, nullptr,
                  nullptr, PBIResult::Ok);
-@@ -2508,7 +2528,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+@@ -2474,6 +2636,16 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+           FAIL_IC();
+         }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++        if (bunwasm::StackIsDeep(ctx.frameMgr.cxForLocalUseOnly())) {
++          if (cacheIRReader.more()) {
++            FAIL_IC();
++          }
++          return BunwasmHandOverAccessor(ctx, cstub, callee, receiver, rhs,
++                                         isSetter);
++        }
++#endif
++
+         {
+           PUSH_IC_FRAME();
+ 
+@@ -2508,7 +2680,14 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+           ImmutableScriptData* isd = script->immutableScriptData();
+           PBIResult result;
+           Value ret;
+-          result = PortableBaselineInterpret<false, kHybridICsInterp>(
++#if defined(__wasi__) && defined(BUNWASM_EMBED) && \
++    defined(BUNWASM_INTERPRETER_CONTROLS)
++          if (!isSetter) {
++            bunsm_test_pbl_cache_getter();
++          }
++#endif
++          BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
++          result = BUNWASM_RESERVED_PBL_CALL(
+               cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
+               isd, nullptr, nullptr, nullptr, PBIResult::Ok);
+           if (result != PBIResult::Ok) {
+@@ -2563,6 +2742,17 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
+           FAIL_IC();
+         }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++        if (bunwasm::StackIsDeep(ctx.frameMgr.cxForLocalUseOnly())) {
++          // BoundFunctionObject::call reports a longer list as an error.
++          if (cacheIRReader.more() || totalArgs > ARGS_LENGTH_MAX) {
++            FAIL_IC();
++          }
++          return BunwasmHandOverBound(ctx, cstub, boundFunc, argc,
++                                      numBoundArgs);
++        }
++#endif
++
+         StackVal* origArgs = ctx.sp();
+ 
+         {
+@@ -2602,7 +2792,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
            ImmutableScriptData* isd = script->immutableScriptData();
            PBIResult result;
            Value ret;
@@ -544,17 +1128,7 @@ index d38cebe3e..39afaa2d9 100644
                cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
                isd, nullptr, nullptr, nullptr, PBIResult::Ok);
            if (result != PBIResult::Ok) {
-@@ -2602,7 +2623,8 @@ uint64_t ICInterpretOps(uint64_t arg0, uint64_t arg1, ICStub* stub,
-           ImmutableScriptData* isd = script->immutableScriptData();
-           PBIResult result;
-           Value ret;
--          result = PortableBaselineInterpret<false, kHybridICsInterp>(
-+          BUNWASM_HOLD_RECURSION_UNIT(ctx.frameMgr.cxForLocalUseOnly());
-+          result = BUNWASM_RESERVED_PBL_CALL(
-               cx, ctx.state, ctx.stack, sp, /* envChain = */ nullptr, &ret, pc,
-               isd, nullptr, nullptr, nullptr, PBIResult::Ok);
-           if (result != PBIResult::Ok) {
-@@ -6034,7 +6056,16 @@ PBIResult PortableBaselineInterpret(
+@@ -6034,7 +6225,16 @@ PBIResult PortableBaselineInterpret(
      }
    }
    COUNT_COVERAGE_MAIN();
@@ -571,7 +1145,66 @@ index d38cebe3e..39afaa2d9 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
    if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
      PUSH_EXIT_FRAME();
-@@ -7909,6 +7940,9 @@ PBIResult PortableBaselineInterpret(
+@@ -7740,6 +7940,12 @@ PBIResult PortableBaselineInterpret(
+         uint32_t argc = GET_ARGC(pc);
+         do {
+           {
++#if defined(__wasi__) && defined(BUNWASM_EMBED) && \
++    defined(BUNWASM_INTERPRETER_CONTROLS)
++            if (!bunsm_test_pbl_call_fast_path()) {
++              break;
++            }
++#endif
+             // CallArgsFromSp would be called with
+             // - numValues = argc + 2 + constructing
+             // - stackSlots = argc + constructing
+@@ -7795,10 +8001,19 @@ PBIResult PortableBaselineInterpret(
+               TRACE_PRINTF("missed fastpath: mismatched realm\n");
+               break;
+             }
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++            // Missing arguments are padded below, in the layout the inline
++            // cache and the trampoline build, so the call stays in this loop
++            // instead of entering PortableBaselineInterpret again in C++.
++            uint32_t undefArgs =
++                argc < func->nargs() ? func->nargs() - argc : 0;
++#else
+             if (argc < func->nargs()) {
+               TRACE_PRINTF("missed fastpath: not enough arguments\n");
+               break;
+             }
++            const uint32_t undefArgs = 0;
++#endif
+ 
+             // Fast-path: function, interpreted, has JitScript, same realm, no
+             // argument underflow.
+@@ -7811,7 +8026,8 @@ PBIResult PortableBaselineInterpret(
+                 "Call fastpath: argc = %d origArgs = %p callee = %" PRIx64 "\n",
+                 argc, origArgs, callee.get().asRawBits());
+ 
+-            if (!ctx.stack.check(sp, sizeof(StackVal) * (totalArgs + 3))) {
++            if (!ctx.stack.check(
++                    sp, sizeof(StackVal) * (totalArgs + undefArgs + 3))) {
+               TRACE_PRINTF("missed fastpath: would cause stack overrun\n");
+               break;
+             }
+@@ -7855,7 +8071,14 @@ PBIResult PortableBaselineInterpret(
+             // 3. Push args in proper order (they are reversed in our
+             // downward-growth stack compared to what the calling
+             // convention expects).
+-            for (uint32_t i = 0; i < totalArgs; i++) {
++            // new.target stays above the padding for missing arguments.
++            if (constructing) {
++              VIRTPUSH(origArgs[0]);
++            }
++            for (uint32_t i = 0; i < undefArgs; i++) {
++              VIRTPUSH(StackVal(UndefinedValue()));
++            }
++            for (uint32_t i = constructing; i < totalArgs; i++) {
+               VIRTPUSH(origArgs[i]);
+             }
+ 
+@@ -7909,6 +8132,9 @@ PBIResult PortableBaselineInterpret(
                }
              }
              // 11. Check for interrupts.
@@ -581,7 +1214,7 @@ index d38cebe3e..39afaa2d9 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
              if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
                PUSH_EXIT_FRAME();
-@@ -8231,6 +8265,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8231,6 +8457,9 @@ PBIResult PortableBaselineInterpret(
        CASE(LoopHead) {
          int32_t icIndex = GET_INT32(pc);
          icEntry = icEntries + icIndex;
@@ -591,7 +1224,7 @@ index d38cebe3e..39afaa2d9 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
          if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
            PUSH_EXIT_FRAME();
-@@ -8499,6 +8536,9 @@ PBIResult PortableBaselineInterpret(
+@@ -8499,6 +8728,9 @@ PBIResult PortableBaselineInterpret(
        }
  
        CASE(Finally) {
@@ -1083,7 +1716,7 @@ index f1ce887..f1bffcd 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..7b1543e5f 100644
+index 9524c5d6a..b017e9eff 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,29 @@
@@ -1116,19 +1749,27 @@ index 9524c5d6a..7b1543e5f 100644
  #include "mozilla/Attributes.h"  // MOZ_ALWAYS_INLINE, MOZ_COLD
  #include "mozilla/Likely.h"      // MOZ_LIKELY
  #include "mozilla/Variant.h"     // mozilla::Variant, mozilla::AsVariant
-@@ -30,6 +53,46 @@ struct JS_PUBLIC_API JSContext;
+@@ -30,6 +53,63 @@ struct JS_PUBLIC_API JSContext;
  
  namespace js {
  
 +namespace bunwasm {
++// The native stack is deep once this share of the byte quota is in use, or
++// this many recursion units are held (the backstop where the quota is the
++// whole shadow stack). StackIsDeep below reports it.
++inline constexpr size_t DeepStackQuotaNumerator = 1;
++inline constexpr size_t DeepStackQuotaDenominator = 4;
++inline constexpr size_t DeepStackUnits = 128;
 +// Native reentry into scripts (call/apply, getters, setters, bound and proxy
-+// targets). PBL enters through its trampoline and a much larger frame.
++// targets). A program's own entry chain stays shallow and pays the tier's
++// size; PBL enters through its trampoline and a much larger frame. Runaway
++// recursion goes deep, where the large size makes the quota fire before the
++// host stack runs out on either tier.
 +inline constexpr size_t RunScriptReserve = 1840;
 +inline constexpr size_t RunScriptPBLReserve = 2304;
++inline constexpr size_t RunScriptDeepReserve = 4096;
 +// Portable baseline inline caches calling a scripted getter, setter or callee.
 +inline constexpr size_t PBLCallReserve = 384;
-+// Proxy traps on PBL, whose scripted handlers enter the interpreter again.
-+inline constexpr size_t ProxyTrapPBLReserve = 1792;
 +// Native-only recursion: JSON.stringify's serializer and Array.prototype.join
 +// reached again through an element's toString.
 +inline constexpr size_t JSONSerializeReserve = 896;
@@ -1158,6 +1799,15 @@ index 9524c5d6a..7b1543e5f 100644
 +  asm volatile("" : : "r"(reservation) : "memory");
 +  return result;
 +}
++
++namespace bunwasm {
++// Whether the native stack is deep (DeepStack* above). On a deep stack
++// RunScript reserves RunScriptDeepReserve, and the portable baseline
++// interpreter stops recursing in C++: new frames run in the C++ interpreter,
++// which keeps calls and named getters in one loop. The answer follows the
++// current stack, so it changes between calls.
++extern JS_PUBLIC_API bool StackIsDeep(JSContext* cx);
++}  // namespace bunwasm
 +#endif
 +
  class FrontendContext;
@@ -1511,9 +2161,10 @@ index a60aef921..47c01b676 100644
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
-diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendContext.cpp
---- a/js/src/frontend/FrontendContext.cpp
-+++ b/js/src/frontend/FrontendContext.cpp
+diff --git i/js/src/frontend/FrontendContext.cpp w/js/src/frontend/FrontendContext.cpp
+index 80dcf1142..8bdb258ce 100644
+--- i/js/src/frontend/FrontendContext.cpp
++++ w/js/src/frontend/FrontendContext.cpp
 @@ -203,6 +203,9 @@ void FrontendContext::setCurrentJSContext(JSContext* cx) {
    nameCollectionPool_ = &cx->frontendCollectionPool();
    scriptDataTableHolder_ = &cx->runtime()->scriptDataTableHolder();
@@ -1521,13 +2172,13 @@ diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendConte
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  wasiEntryDepth_ = JS::RootingContext::get(cx)->wasiRecursionDepth;
 +#endif
-
+ 
  #ifdef DEBUG
    setNativeStackLimitThread();
 @@ -297,9 +300,38 @@ void FrontendContext::decWasiRecursionDepth() {
    }
  }
-
+ 
 +#  if defined(BUNWASM_EMBED)
 +// The parser and bytecode emitter spend far less host stack per depth unit
 +// than runtime reentry, so they get their own bound on the shared counter,
@@ -1563,13 +2214,14 @@ diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendConte
    }
    return true;
  }
-diff --git a/js/src/frontend/FrontendContext.h b/js/src/frontend/FrontendContext.h
---- a/js/src/frontend/FrontendContext.h
-+++ b/js/src/frontend/FrontendContext.h
+diff --git i/js/src/frontend/FrontendContext.h w/js/src/frontend/FrontendContext.h
+index a5d32bb53..528cc2add 100644
+--- i/js/src/frontend/FrontendContext.h
++++ w/js/src/frontend/FrontendContext.h
 @@ -119,6 +119,11 @@ class FrontendContext {
    // Set by setCurrentJSContext.
    JSContext* maybeCx_ = nullptr;
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  // The JSContext's WASI recursion depth when this compile attached to it.
 +  uint32_t wasiEntryDepth_ = 0;
@@ -1598,66 +2250,6 @@ index d544b13e3..fcd15e4ad 100644
    AutoJSMethodProfilerEntry pseudoFrame(cx, "Array.prototype", "join");
    CallArgs args = CallArgsFromVp(argc, vp);
  
-diff --git i/js/src/proxy/Proxy.cpp w/js/src/proxy/Proxy.cpp
-index 4ecf3ef44..fccb197d6 100644
---- i/js/src/proxy/Proxy.cpp
-+++ w/js/src/proxy/Proxy.cpp
-@@ -12,6 +12,14 @@
- #include "js/friend/WindowProxy.h"  // js::IsWindow, js::IsWindowProxy, js::ToWindowProxyIfWindow
- #include "js/PropertySpec.h"
- #include "js/Value.h"  // JS::ObjectValue
-+#include "jit/JitOptions.h"  // js::jit::JitOptions
-+
-+// A scripted trap reached from PBL enters the interpreter again through its
-+// trampoline; reserve shadow bytes for those host frames on that tier.
-+#define BUNWASM_RESERVE_PROXY_TRAP()                                    \
-+  BUNWASM_RESERVE_STACK_DYNAMIC(jit::JitOptions.portableBaselineInterpreter \
-+                                    ? bunwasm::ProxyTrapPBLReserve       \
-+                                    : 0)
- #include "js/Wrapper.h"
- #include "proxy/DeadObjectProxy.h"
- #include "proxy/ScriptedProxyHandler.h"
-@@ -398,6 +406,7 @@ bool Proxy::isExtensible(JSContext* cx, HandleObject proxy, bool* extensible) {
- }
-
- bool Proxy::has(JSContext* cx, HandleObject proxy, HandleId id, bool* bp) {
-+  BUNWASM_RESERVE_PROXY_TRAP();
-   AutoCheckRecursionLimit recursion(cx);
-   if (!recursion.check(cx)) {
-     return false;
-@@ -498,6 +507,7 @@ MOZ_ALWAYS_INLINE bool Proxy::getInternal(JSContext* cx, HandleObject proxy,
-                                           MutableHandleValue vp) {
-   MOZ_ASSERT_IF(receiver.isObject(), !IsWindow(&receiver.toObject()));
-
-+  BUNWASM_RESERVE_PROXY_TRAP();
-   AutoCheckRecursionLimit recursion(cx);
-   if (!recursion.check(cx)) {
-     return false;
-@@ -572,6 +582,7 @@ MOZ_ALWAYS_INLINE bool Proxy::setInternal(JSContext* cx, HandleObject proxy,
-                                           ObjectOpResult& result) {
-   MOZ_ASSERT_IF(receiver.isObject(), !IsWindow(&receiver.toObject()));
-
-+  BUNWASM_RESERVE_PROXY_TRAP();
-   AutoCheckRecursionLimit recursion(cx);
-   if (!recursion.check(cx)) {
-     return false;
-@@ -701,6 +712,7 @@ bool Proxy::enumerate(JSContext* cx, HandleObject proxy,
- }
-
- bool Proxy::call(JSContext* cx, HandleObject proxy, const CallArgs& args) {
-+  BUNWASM_RESERVE_PROXY_TRAP();
-   AutoCheckRecursionLimit recursion(cx);
-   if (!recursion.check(cx)) {
-     return false;
-@@ -721,6 +733,7 @@ bool Proxy::call(JSContext* cx, HandleObject proxy, const CallArgs& args) {
- }
-
- bool Proxy::construct(JSContext* cx, HandleObject proxy, const CallArgs& args) {
-+  BUNWASM_RESERVE_PROXY_TRAP();
-   AutoCheckRecursionLimit recursion(cx);
-   if (!recursion.check(cx)) {
-     return false;
-
 diff --git a/js/src/vm/Interpreter.h b/js/src/vm/Interpreter.h
 index 87e79b096..03b82f863 100644
 --- a/js/src/vm/Interpreter.h
@@ -2071,378 +2663,47 @@ index 8d1b3bf5d..766c8d956 100644
    return true;
  }
  
-diff --git a/js/public/SavedFrameAPI.h b/js/public/SavedFrameAPI.h
-index 688d1e185..1e3d64721 100644
---- a/js/public/SavedFrameAPI.h
-+++ b/js/public/SavedFrameAPI.h
-@@ -72,6 +72,31 @@ extern JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
-     uint32_t* sourceIdp,
-     SavedFrameSelfHosted selfHosted = SavedFrameSelfHosted::Include);
- 
-+/**
-+ * Which capture-time branch produced a SavedFrame's source string.
-+ * Cloned and reconstructed frames have no provenance and report DisplayURL,
-+ * meaning the label is opaque and must stay raw.
-+ */
-+enum class SavedFrameSourceKind : uint8_t {
-+  // The script source's displayURL, or an opaque cloned/reconstructed label.
-+  DisplayURL,
-+  // The script's compiler filename, including introduced eval, Function and
-+  // WebAssembly names derived from it.
-+  Filename
-+};
-+
-+#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+/**
-+ * Given a SavedFrame JSObject, get the kind of its source property. Selects the
-+ * same frame as GetSavedFrameSource for identical principals and selfHosted
-+ * arguments. Never allocates, GCs or runs script. Defaults to DisplayURL.
-+ */
-+extern JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceKind(
-+    JSContext* cx, JSPrincipals* principals, Handle<JSObject*> savedFrame,
-+    SavedFrameSourceKind* kindp,
-+    SavedFrameSelfHosted selfHosted = SavedFrameSelfHosted::Include);
-+#endif
-+
- /**
-  * Given a SavedFrame JSObject, get its line property (1-origin).
-  * Defaults to 0.
-diff --git a/js/src/vm/SavedFrame.h b/js/src/vm/SavedFrame.h
-index f5b41efc2..16d49b764 100644
---- a/js/src/vm/SavedFrame.h
-+++ b/js/src/vm/SavedFrame.h
-@@ -11,6 +11,7 @@
- #include "js/ColumnNumber.h"  // JS::TaggedColumnNumberOneOrigin
- #include "js/GCHashTable.h"
- #include "js/Principals.h"
-+#include "js/SavedFrameAPI.h"  // JS::SavedFrameSourceKind
- #include "js/UbiNode.h"
- #include "vm/NativeObject.h"
- 
-@@ -56,6 +57,7 @@ class SavedFrame : public NativeObject {
-   SavedFrame* getParent() const;
-   JSPrincipals* getPrincipals();
-   bool getMutedErrors();
-+  JS::SavedFrameSourceKind getSourceKind();
-   bool isSelfHosted(JSContext* cx);
-   bool isWasm();
- 
-@@ -126,9 +128,11 @@ class SavedFrame : public NativeObject {
-   void initFunctionDisplayName(JSAtom* maybeName);
-   void initAsyncCause(JSAtom* maybeCause);
-   void initParent(SavedFrame* maybeParent);
--  void initPrincipalsAlreadyHeldAndMutedErrors(JSPrincipals* principals,
--                                               bool mutedErrors);
--  void initPrincipalsAndMutedErrors(JSPrincipals* principals, bool mutedErrors);
-+  void initPrincipalsAlreadyHeldAndMutedErrors(
-+      JSPrincipals* principals, bool mutedErrors,
-+      JS::SavedFrameSourceKind sourceKind);
-+  void initPrincipalsAndMutedErrors(JSPrincipals* principals, bool mutedErrors,
-+                                    JS::SavedFrameSourceKind sourceKind);
- 
-   enum {
-     // The reserved slots in the SavedFrame class.
-diff --git a/js/src/vm/SavedStacks.cpp b/js/src/vm/SavedStacks.cpp
-index 7c26d9c97..144ff4da0 100644
---- a/js/src/vm/SavedStacks.cpp
-+++ b/js/src/vm/SavedStacks.cpp
-@@ -174,7 +174,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
-   Lookup(JSAtom* source, uint32_t sourceId, uint32_t line,
-          JS::TaggedColumnNumberOneOrigin column, JSAtom* functionDisplayName,
-          JSAtom* asyncCause, SavedFrame* parent, JSPrincipals* principals,
--         bool mutedErrors,
-+         bool mutedErrors, JS::SavedFrameSourceKind sourceKind,
-          const Maybe<LiveSavedFrameCache::FramePtr>& framePtr = Nothing(),
-          jsbytecode* pc = nullptr, Activation* activation = nullptr)
-       : source(source),
-@@ -186,6 +186,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
-         parent(parent),
-         principals(principals),
-         mutedErrors(mutedErrors),
-+        sourceKind(sourceKind),
-         framePtr(framePtr),
-         pc(pc),
-         activation(activation) {
-@@ -206,6 +207,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
-         parent(savedFrame.getParent()),
-         principals(savedFrame.getPrincipals()),
-         mutedErrors(savedFrame.getMutedErrors()),
-+        sourceKind(savedFrame.getSourceKind()),
-         framePtr(Nothing()),
-         pc(nullptr),
-         activation(nullptr) {
-@@ -226,6 +228,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
-   SavedFrame* parent;
-   JSPrincipals* principals;
-   bool mutedErrors;
-+  JS::SavedFrameSourceKind sourceKind;
- 
-   // These are used only by the LiveSavedFrameCache and not used for identity or
-   // hashing.
-@@ -261,6 +264,7 @@ class WrappedPtrOperations<SavedFrame::Lookup, Wrapper> {
-   SavedFrame* parent() { return value().parent; }
-   JSPrincipals* principals() { return value().principals; }
-   bool mutedErrors() { return value().mutedErrors; }
-+  JS::SavedFrameSourceKind sourceKind() { return value().sourceKind; }
-   Maybe<LiveSavedFrameCache::FramePtr> framePtr() { return value().framePtr; }
-   jsbytecode* pc() { return value().pc; }
-   Activation* activation() { return value().activation; }
-@@ -314,7 +318,7 @@ HashNumber SavedFrame::HashPolicy::calculateHash(const Lookup& lookup,
-   // and add another overload of AddToHash with more arguments.
-   return AddToHash(lookup.line, lookup.column.rawValue(), lookup.source,
-                    lookup.functionDisplayName, lookup.asyncCause,
--                   lookup.mutedErrors, parentHash,
-+                   lookup.mutedErrors, uint8_t(lookup.sourceKind), parentHash,
-                    JSPrincipalsPtrHasher::hash(lookup.principals));
- }
- 
-@@ -357,6 +361,12 @@ bool SavedFrame::HashPolicy::match(SavedFrame* existing, const Lookup& lookup) {
-     return false;
+diff --git i/js/src/jit/Jit.cpp w/js/src/jit/Jit.cpp
+index 94ac11bfa..eb1d5c5ba 100644
+--- i/js/src/jit/Jit.cpp
++++ w/js/src/jit/Jit.cpp
+@@ -208,6 +208,15 @@ EnterJitStatus js::jit::MaybeEnterJit(JSContext* cx, RunState& state) {
+     return EnterJitStatus::NotEntered;
    }
  
-+  // Frames whose equal labels come from different capture branches stay
-+  // distinct, because their labels are interpreted differently.
-+  if (existing->getSourceKind() != lookup.sourceKind) {
-+    return false;
++#if defined(__wasi__) && defined(BUNWASM_EMBED) && \
++    defined(ENABLE_PORTABLE_BASELINE_INTERP)
++  // On a deep native stack the frame runs in the C++ interpreter, which keeps
++  // the calls and getters it makes in one loop.
++  if (IsPortableBaselineInterpreterEnabled() && bunwasm::StackIsDeep(cx)) {
++    return EnterJitStatus::NotEntered;
 +  }
++#endif
 +
+   if (state.isGeneratorResume()) {
+     if (IsPortableBaselineInterpreterEnabled()) {
+       // The Portable Baseline Interpreter does not support resuming a suspended
+diff --git i/js/src/vm/JSContext.cpp w/js/src/vm/JSContext.cpp
+index 803b92892..643a1fa86 100644
+--- i/js/src/vm/JSContext.cpp
++++ w/js/src/vm/JSContext.cpp
+@@ -1813,4 +1813,19 @@ JS_PUBLIC_API bool js::CheckWasiRecursionLimit(JSContext* cx) {
+   }
    return true;
  }
- 
-@@ -479,12 +489,22 @@ SavedFrame* SavedFrame::getParent() const {
-   return v.isObject() ? &v.toObject().as<SavedFrame>() : nullptr;
- }
- 
-+// JSSLOT_PRINCIPALS holds the principals pointer with two flags in its low
-+// bits: bit 0 is mutedErrors, bit 1 marks a compiler-filename source.
-+static constexpr uintptr_t MutedErrorsBit = 0b01;
-+static constexpr uintptr_t FilenameSourceBit = 0b10;
-+static constexpr uintptr_t PrincipalsFlagBits =
-+    MutedErrorsBit | FilenameSourceBit;
-+static_assert(alignof(JSPrincipals) > PrincipalsFlagBits,
-+              "SavedFrame packs flags into JSPrincipals pointer bits");
 +
- JSPrincipals* SavedFrame::getPrincipals() {
-   const Value& v = getReservedSlot(JSSLOT_PRINCIPALS);
-   if (v.isUndefined()) {
-     return nullptr;
-   }
--  return reinterpret_cast<JSPrincipals*>(uintptr_t(v.toPrivate()) & ~0b1);
-+  return reinterpret_cast<JSPrincipals*>(uintptr_t(v.toPrivate()) &
-+                                         ~PrincipalsFlagBits);
- }
- 
- bool SavedFrame::getMutedErrors() {
-@@ -492,7 +512,17 @@ bool SavedFrame::getMutedErrors() {
-   if (v.isUndefined()) {
-     return true;
-   }
--  return bool(uintptr_t(v.toPrivate()) & 0b1);
-+  return bool(uintptr_t(v.toPrivate()) & MutedErrorsBit);
-+}
-+
-+JS::SavedFrameSourceKind SavedFrame::getSourceKind() {
-+  const Value& v = getReservedSlot(JSSLOT_PRINCIPALS);
-+  if (v.isUndefined()) {
-+    return JS::SavedFrameSourceKind::DisplayURL;
++#  ifdef BUNWASM_EMBED
++JS_PUBLIC_API bool js::bunwasm::StackIsDeep(JSContext* cx) {
++  JS::RootingContext* rcx = JS::RootingContext::get(cx);
++  if (rcx->wasiRecursionDepth >= DeepStackUnits) {
++    return true;
 +  }
-+  return (uintptr_t(v.toPrivate()) & FilenameSourceBit)
-+             ? JS::SavedFrameSourceKind::Filename
-+             : JS::SavedFrameSourceKind::DisplayURL;
- }
- 
- void SavedFrame::initSource(JSAtom* source) {
-@@ -515,18 +545,24 @@ void SavedFrame::initColumn(JS::TaggedColumnNumberOneOrigin column) {
-   initReservedSlot(JSSLOT_COLUMN, PrivateUint32Value(column.rawValue()));
- }
- 
--void SavedFrame::initPrincipalsAndMutedErrors(JSPrincipals* principals,
--                                              bool mutedErrors) {
-+void SavedFrame::initPrincipalsAndMutedErrors(
-+    JSPrincipals* principals, bool mutedErrors,
-+    JS::SavedFrameSourceKind sourceKind) {
-   if (principals) {
-     JS_HoldPrincipals(principals);
-   }
--  initPrincipalsAlreadyHeldAndMutedErrors(principals, mutedErrors);
-+  initPrincipalsAlreadyHeldAndMutedErrors(principals, mutedErrors, sourceKind);
- }
- 
- void SavedFrame::initPrincipalsAlreadyHeldAndMutedErrors(
--    JSPrincipals* principals, bool mutedErrors) {
-+    JSPrincipals* principals, bool mutedErrors,
-+    JS::SavedFrameSourceKind sourceKind) {
-   MOZ_ASSERT_IF(principals, principals->refcount > 0);
--  uintptr_t ptr = uintptr_t(principals) | mutedErrors;
-+  MOZ_ASSERT((uintptr_t(principals) & PrincipalsFlagBits) == 0);
-+  uintptr_t ptr = uintptr_t(principals) | (mutedErrors ? MutedErrorsBit : 0) |
-+                  (sourceKind == JS::SavedFrameSourceKind::Filename
-+                       ? FilenameSourceBit
-+                       : 0);
-   initReservedSlot(JSSLOT_PRINCIPALS,
-                    PrivateValue(reinterpret_cast<void*>(ptr)));
- }
-@@ -568,7 +604,8 @@ void SavedFrame::initFromLookup(JSContext* cx, Handle<Lookup> lookup) {
-   initFunctionDisplayName(lookup.functionDisplayName());
-   initAsyncCause(lookup.asyncCause());
-   initParent(lookup.parent());
--  initPrincipalsAndMutedErrors(lookup.principals(), lookup.mutedErrors());
-+  initPrincipalsAndMutedErrors(lookup.principals(), lookup.mutedErrors(),
-+                               lookup.sourceKind());
- }
- 
- /* static */
-@@ -812,6 +849,27 @@ JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
-   return SavedFrameResult::Ok;
- }
- 
-+#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceKind(
-+    JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
-+    SavedFrameSourceKind* kindp,
-+    SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */) {
-+  js::AssertHeapIsIdle();
-+  CHECK_THREAD(cx);
-+  MOZ_RELEASE_ASSERT(cx->realm());
-+
-+  bool skippedAsync;
-+  Rooted<js::SavedFrame*> frame(cx, UnwrapSavedFrame(cx, principals, savedFrame,
-+                                                     selfHosted, skippedAsync));
-+  if (!frame) {
-+    *kindp = SavedFrameSourceKind::DisplayURL;
-+    return SavedFrameResult::AccessDenied;
-+  }
-+  *kindp = frame->getSourceKind();
-+  return SavedFrameResult::Ok;
++  // JS_SetNativeStackQuota measures the shadow stack down from its base, so
++  // the share of the quota in use is exact.
++  uintptr_t base = cx->nativeStackBase();
++  uintptr_t quota = base - rcx->nativeStackLimit[JS::StackForUntrustedScript];
++  uintptr_t used = base - uintptr_t(__builtin_frame_address(0));
++  return used * DeepStackQuotaDenominator >= quota * DeepStackQuotaNumerator;
 +}
-+#endif
-+
- JS_PUBLIC_API SavedFrameResult GetSavedFrameLine(
-     JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
-     uint32_t* linep,
-@@ -1564,8 +1622,9 @@ bool SavedStacks::insertFrames(JSContext* cx, MutableHandle<SavedFrame*> frame,
-                                   displayAtom,
-                                   nullptr,  // asyncCause
-                                   nullptr,  // parent (not known yet)
--                                  principals, iter.mutedErrors(), framePtr,
--                                  iter.pc(), &activation)) {
-+                                  principals, iter.mutedErrors(),
-+                                  location.sourceKind(), framePtr, iter.pc(),
-+                                  &activation)) {
-         return false;
-       }
-     }
-@@ -1900,6 +1959,8 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
-     if (!locationp.source()) {
-       return false;
-     }
-+    // |locationp| is reused across frames, so always overwrite the kind.
-+    locationp.setSourceKind(JS::SavedFrameSourceKind::Filename);
- 
-     JS::TaggedColumnNumberOneOrigin column;
-     locationp.setLine(iter.computeLine(&column));
-@@ -1914,11 +1975,14 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
- 
-   if (!p) {
-     Rooted<JSAtom*> source(cx);
-+    JS::SavedFrameSourceKind sourceKind;
-     if (const char16_t* displayURL = iter.displayURL()) {
-       source = AtomizeChars(cx, displayURL, js_strlen(displayURL));
-+      sourceKind = JS::SavedFrameSourceKind::DisplayURL;
-     } else {
-       const char* filename = script->filename() ? script->filename() : "";
-       source = AtomizeUTF8Chars(cx, filename, strlen(filename));
-+      sourceKind = JS::SavedFrameSourceKind::Filename;
-     }
-     if (!source) {
-       return false;
-@@ -1930,7 +1994,7 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
- 
-     PCKey key(script, pc);
-     LocationValue value(source, sourceId, line,
--                        JS::TaggedColumnNumberOneOrigin(column));
-+                        JS::TaggedColumnNumberOneOrigin(column), sourceKind);
-     if (!pcLocationMap.add(p, key, value)) {
-       ReportOutOfMemory(cx);
-       return false;
-@@ -2114,7 +2178,9 @@ JS_PUBLIC_API bool ConstructSavedFrameStackSlow(
-                                 functionDisplayName,
-                                 /* asyncCause */ nullptr,
-                                 /* parent */ nullptr, principals,
--                                /* mutedErrors */ true)) {
-+                                /* mutedErrors */ true,
-+                                // A reconstructed label has no provenance.
-+                                JS::SavedFrameSourceKind::DisplayURL)) {
-       ReportOutOfMemory(cx);
-       return false;
-     }
-diff --git a/js/src/vm/SavedStacks.h b/js/src/vm/SavedStacks.h
-index b7dfe4dd9..74eabe7e5 100644
---- a/js/src/vm/SavedStacks.h
-+++ b/js/src/vm/SavedStacks.h
-@@ -242,10 +242,19 @@ class SavedStacks {
- 
-  public:
-   struct LocationValue {
--    LocationValue() : source(nullptr), sourceId(0), line(0) {}
-+    LocationValue()
-+        : source(nullptr),
-+          sourceId(0),
-+          line(0),
-+          sourceKind(JS::SavedFrameSourceKind::DisplayURL) {}
-     LocationValue(JSAtom* source, uint32_t sourceId, size_t line,
--                  JS::TaggedColumnNumberOneOrigin column)
--        : source(source), sourceId(sourceId), line(line), column(column) {}
-+                  JS::TaggedColumnNumberOneOrigin column,
-+                  JS::SavedFrameSourceKind sourceKind)
-+        : source(source),
-+          sourceId(sourceId),
-+          line(line),
-+          column(column),
-+          sourceKind(sourceKind) {}
- 
-     void trace(JSTracer* trc) {
-       TraceEdge(trc, &source, "SavedStacks::LocationValue::source");
-@@ -266,6 +275,9 @@ class SavedStacks {
- 
-     // Column number in UTF-16 code units.
-     JS::TaggedColumnNumberOneOrigin column;
-+
-+    // The branch that produced |source|, stored with it.
-+    JS::SavedFrameSourceKind sourceKind;
-   };
- 
-  private:
-@@ -305,6 +317,7 @@ struct WrappedPtrOperations<SavedStacks::LocationValue, Wrapper> {
-   uint32_t sourceId() const { return loc().sourceId; }
-   size_t line() const { return loc().line; }
-   JS::TaggedColumnNumberOneOrigin column() const { return loc().column; }
-+  JS::SavedFrameSourceKind sourceKind() const { return loc().sourceKind; }
- 
-  private:
-   const SavedStacks::LocationValue& loc() const {
-@@ -319,6 +332,7 @@ struct MutableWrappedPtrOperations<SavedStacks::LocationValue, Wrapper>
-   void setSourceId(uint32_t v) { loc().sourceId = v; }
-   void setLine(size_t v) { loc().line = v; }
-   void setColumn(JS::TaggedColumnNumberOneOrigin v) { loc().column = v; }
-+  void setSourceKind(JS::SavedFrameSourceKind v) { loc().sourceKind = v; }
- 
-  private:
-   SavedStacks::LocationValue& loc() {
-diff --git a/js/src/vm/StructuredClone.cpp b/js/src/vm/StructuredClone.cpp
-index 075aa3638..5af89759a 100644
---- a/js/src/vm/StructuredClone.cpp
-+++ b/js/src/vm/StructuredClone.cpp
-@@ -3802,8 +3802,10 @@ JSObject* JSStructuredCloneReader::readSavedFrameHeader(
-     }
-   }
- 
--  savedFrame->initPrincipalsAlreadyHeldAndMutedErrors(principals,
--                                                      mutedErrors.toBoolean());
-+  // The clone format carries no source provenance, so the label stays opaque.
-+  savedFrame->initPrincipalsAlreadyHeldAndMutedErrors(
-+      principals, mutedErrors.toBoolean(),
-+      JS::SavedFrameSourceKind::DisplayURL);
- 
-   savedFrame->initSource(&source.toString()->asAtom());
- 
++#  endif
+ #endif  // __wasi__

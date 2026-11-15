@@ -67,9 +67,29 @@ bool stack_stats(JSContext* cx, unsigned argc, JS::Value* vp) {
   return true;
 }
 
+// Prints a failed evaluation's thrown value and stack before the check aborts.
+void report_failure(bsm_handle thrown) {
+  if (!thrown) {
+    fputs("evaluation failed with no exception\n", stderr);
+    return;
+  }
+  install("lastFailure", thrown);
+  bsm_handle text = 0;
+  const char* describe = "String(lastFailure) + '\\n' + (lastFailure && lastFailure.stack)";
+  if (!bsm_eval_script(describe, strlen(describe), "report.js", 1, &text)) return;
+  size_t length = 0;
+  const char* data = bsm_string_data(text, &length);
+  if (data) fprintf(stderr, "thrown: %.*s\n", static_cast<int>(length), data);
+  bsm_release(text);
+}
+
 void loop_success(const char* source) {
   auto entry = loop_stack();
-  { Value result(script(source, "getter-control.js")); }
+  bsm_handle out = 0;
+  bool ok = bsm_eval_script(source, strlen(source), "getter-control.js", 1, &out);
+  if (!ok) report_failure(out);
+  check(ok, source);
+  bsm_release(out);
   balanced(entry, "stack balanced after successful evaluation");
 }
 
@@ -241,6 +261,192 @@ void async_getter_stacks() {
   puts("ok async getter parent stack");
 }
 
+// PBL hand-over controls (docs/bun-patches/spidermonkey-pbl-handover.md). On a
+// deep stack PBL's cache calls continue through js::Call or the construct route
+// in the C++ interpreter. Refusing PBL's call fast path sends plain calls and
+// constructions through the call cache, so they reach that route too.
+bool refuseCallFastPath = false;
+unsigned collectInHandOver = 0;  // counts down hand-overs; the one reaching zero collects
+size_t handOvers = 0;
+size_t handOverCollections = 0;
+size_t cacheGetters = 0;
+
+extern "C" bool bunsm_test_pbl_call_fast_path() { return !refuseCallFastPath; }
+extern "C" void bunsm_test_pbl_cache_getter() { cacheGetters++; }
+extern "C" void bunsm_test_pbl_hand_over(JSContext* cx) {
+  handOvers++;
+  if (!collectInHandOver || --collectInHandOver) return;
+  JS::PrepareForFullGC(cx);
+  JS::NonIncrementalGC(cx, JS::GCOptions::Shrink, JS::GCReason::API);
+  handOverCollections++;
+}
+
+bool hand_over_count(JSContext*, unsigned argc, JS::Value* vp) {
+  JS::CallArgsFromVp(argc, vp).rval().setNumber(double(handOvers));
+  return true;
+}
+bool cache_getter_count(JSContext*, unsigned argc, JS::Value* vp) {
+  JS::CallArgsFromVp(argc, vp).rval().setNumber(double(cacheGetters));
+  return true;
+}
+// A native returning false with no pending exception is SpiderMonkey's
+// uncatchable error: no catch or finally block runs.
+bool fail_uncatchable(JSContext*, unsigned, JS::Value*) { return false; }
+
+struct HandOverShape {
+  const char* kind;
+  bool viaCallCache;    // refuse the call fast path
+  const char* prelude;  // the recursion; BOTTOM is the deepest level's statement
+  const char* call;     // starts it; DEPTH is the level count
+  const char* depth;    // enough levels to cross the deep-stack threshold
+  const char* success;  // BOTTOM for a call that yields 42
+};
+
+const HandOverShape handOverShapes[] = {
+    {"call", true,
+     "function f(n, pad) { if (pad !== undefined) throw new Error('padding'); if (!n) { BOTTOM } return f(n - 1); }",
+     "f(DEPTH)", "300", "return 42;"},
+    {"construct", true,
+     "function P(n) { this.n = n; if (!n) { BOTTOM } var inner = new P(n - 1); if (!(inner instanceof P) || inner.n !== n - 1) throw new Error('construct ' + n); return 5; }",
+     "(new P(DEPTH).n === DEPTH ? 42 : 0)", "300", "return 5;"},
+    {"derived", true,
+     "var B = class B { constructor(n) { this.b = n; } }; var D = class D extends B { constructor(n) { super(n); if (!n) { BOTTOM } var x = new D(n - 1); if (!(x instanceof D) || x.b !== n - 1) throw new Error('derived ' + n); } };",
+     "(new D(DEPTH).b === DEPTH ? 42 : 0)", "300", "return;"},
+    {"getter", false,
+     "var proto = { get value() { if (this.left-- <= 0) { BOTTOM } return this.value; } };",
+     "Object.assign(Object.create(proto), { left: DEPTH, marker: 42 }).value", "300", "return this.marker;"},
+    {"setter", false,
+     "var last = undefined; var proto = { set value(v) { if (this.left-- <= 0) { BOTTOM } if ((this.value = v + 1) !== v + 1) throw new Error('setter'); return 'ignored'; } };",
+     "((Object.assign(Object.create(proto), { left: DEPTH, marker: 42 }).value = 1) === 1 && last === 42 ? 42 : 0)", "180",
+     "last = v === 181 ? this.marker : -1; return 'ignored';"},
+    {"bound", false,
+     "var tag = { marker: 42 }, bound; function g(a, b, n) { if (this !== tag || a !== 1 || b !== 2) throw new Error('bound ' + n); if (!n) { BOTTOM } return bound(n - 1); } bound = g.bind(tag, 1, 2);",
+     "bound(DEPTH)", "160", "return this.marker;"},
+};
+
+std::string replaced(std::string text, const char* hole, const std::string& with) {
+  for (size_t at = text.find(hole); at != std::string::npos; at = text.find(hole, at + with.size())) {
+    text.replace(at, strlen(hole), with);
+  }
+  return text;
+}
+
+// The shape's recursion with |bottom| at its deepest level, then |body|, in
+// which CALL starts the recursion.
+std::string hand_over_source(const HandOverShape& shape, const char* bottom, const char* depth, const char* body) {
+  std::string call = replaced(shape.call, "DEPTH", depth);
+  return "var token = {};\n" + replaced(shape.prelude, "BOTTOM", bottom) + "\n" + replaced(body, "CALL", call);
+}
+
+void expect_hand_over(const HandOverShape& shape, size_t before, const char* what) {
+  std::string label = std::string(shape.kind) + " " + what + " crossed a hand-over";
+  check(handOvers > before, label.c_str());
+}
+
+void hand_over_run(const HandOverShape& shape, const std::string& source, bool succeeds, const char* what) {
+  size_t before = handOvers;
+  refuseCallFastPath = shape.viaCallCache;
+  if (succeeds) loop_success(source.c_str());
+  else loop_failure(source.c_str());
+  refuseCallFastPath = false;
+  expect_hand_over(shape, before, what);
+}
+
+void hand_over_shape(const HandOverShape& shape) {
+  const char* result = "if (CALL !== 42) throw new Error('result');";
+  hand_over_run(shape, hand_over_source(shape, shape.success, shape.depth, result), true, "success");
+  collectInHandOver = 1;
+  size_t collections = handOverCollections;
+  hand_over_run(shape, hand_over_source(shape, shape.success, shape.depth, result), true, "moving GC");
+  check(!collectInHandOver && handOverCollections == collections + 1, "shrinking GC inside the hand-over");
+  hand_over_run(shape, hand_over_source(shape, "throw 0;", shape.depth, "CALL;"), false, "falsy throw");
+  hand_over_run(shape, hand_over_source(shape, "throw token;", shape.depth,
+                    "var caught; try { CALL; } catch (e) { caught = e; } if (caught !== token) throw new Error('token');"),
+                true, "token throw");
+  hand_over_run(shape, hand_over_source(shape, "failUncatchable();", shape.depth,
+                    "var caught = 0, finalized = 0; try { CALL; } catch (e) { caught = 1; } finally { finalized = 1; }"),
+                false, "uncatchable error");
+  loop_success("if (caught || finalized) throw new Error('uncatchable error was caught');");
+  hand_over_run(shape, hand_over_source(shape, shape.success, "1e9",
+                    "try { CALL; throw new Error('no exhaustion'); } catch (e) { if (!(e instanceof RangeError)) throw e; }"),
+                true, "caught exhaustion");
+}
+
+// A Debugger forces a return from the first frame the hand-over enters. The
+// debugger's own compartment reads the count through the debuggee wrapper, a
+// native call that enters no debuggee frame.
+void hand_over_forced_return(const HandOverShape& shape, const char* expected) {
+  std::string body = std::string(R"JS(
+    var dbg = watch(new Debugger(debuggee)), g = dbg.makeGlobalObjectReference(debuggee);
+    var before = debuggee.pblHandOvers(), forced = 0;
+    dbg.onEnterFrame = frame => {
+      if (forced || debuggee.pblHandOvers() === before) return;
+      forced++;
+      return { return: 73 };
+    };
+    var completion = g.executeInGlobal(SOURCE, { url: 'hand-over-forced.js' });
+    dbg.onEnterFrame = undefined;
+    if (!completion || completion.return !== EXPECTED || forced !== 1) throw new Error('forced return ' + JSON.stringify([completion, forced]));
+    dbg.removeAllDebuggees();
+  )JS");
+  std::string source = hand_over_source(shape, shape.success, shape.depth, "CALL;");
+  std::string quoted;
+  for (char c : source) {
+    if (c == '\\' || c == '\'') quoted += '\\';
+    quoted += c == '\n' ? ' ' : c;
+  }
+  body = replaced(replaced(body, "SOURCE", "'" + quoted + "'"), "EXPECTED", expected);
+  size_t before = handOvers;
+  refuseCallFastPath = shape.viaCallCache;
+  debugger_evaluate(body.c_str());
+  refuseCallFastPath = false;
+  expect_hand_over(shape, before, "forced return");
+}
+
+// A getter site specialised before a deep excursion still calls through its
+// stub afterwards: a hand-over never reports a cache miss.
+void hand_over_keeps_stub() {
+  size_t before = handOvers;
+  loop_success(R"JS(
+    var proto = { get value() { return this.left-- > 0 ? this.value : 42; } };
+    function read(o) { return o.value; }
+    var make = left => Object.assign(Object.create(proto), { left });
+    for (var i = 0; i < 20; i++) read(make(2));
+    if (read(make(400)) !== 42) throw new Error('excursion');
+    var calls = pblCacheGetters();
+    for (var i = 0; i < 10; i++) read(make(2));
+    if (pblCacheGetters() - calls !== 30) throw new Error('getter stub calls ' + (pblCacheGetters() - calls));
+  )JS");
+  check(handOvers > before, "getter excursion crossed a hand-over");
+  puts("ok specialised getter site keeps its stub after a hand-over");
+}
+
+void pbl_hand_over_controls() {
+  {
+    JSAutoRealm realm(context, global->get());
+    JS::RootedObject target(context, global->get());
+    check(JS_DefineFunction(context, target, "pblHandOvers", hand_over_count, 0, 0), "hand-over count");
+    check(JS_DefineFunction(context, target, "pblCacheGetters", cache_getter_count, 0, 0), "cache getter count");
+    check(JS_DefineFunction(context, target, "failUncatchable", fail_uncatchable, 0, 0), "uncatchable error");
+  }
+  for (const HandOverShape& shape : handOverShapes) hand_over_shape(shape);
+  puts("ok hand-over success, moving GC, falsy and token throws, uncatchable error and exhaustion");
+  for (const HandOverShape& shape : handOverShapes) {
+    const char* kind = shape.kind;
+    if (!strcmp(kind, "construct") || !strcmp(kind, "derived")) continue;
+    hand_over_forced_return(shape, strcmp(kind, "setter") ? "73" : "0");
+  }
+  puts("ok Debugger forced return through each hand-over");
+  hand_over_keeps_stub();
+  uint32_t polls = 0;
+  uint64_t entries = 0, later = 0;
+  bsm_tier_counts(&polls, &entries);
+  loop_success("function shallow(n) { return n; } var sum = 0; for (var i = 0; i < 100; i++) sum += shallow(i);");
+  bsm_tier_counts(&polls, &later);
+  check(later > entries, "shallow code enters PBL after hand-overs");
+  puts("ok shallow code still enters PBL");
+}
+
 void moving_apply_gc() {
   for (const char* source : {
       // A temporary receiver and list: only the operands keep them alive.
@@ -409,12 +615,17 @@ void loop_controls() {
   async_getter_stacks();
   debugger_calls(pbl);
   async_call_stacks();
+  if (pbl) pbl_hand_over_controls();
   puts("ok frame and recursion-unit balance on success, throw, exhaustion and prologue failure");
+  size_t before = handOvers;
   interruptAt = 1;
   // The host interrupt is polled at loop back-edges and returns, so it lands in
   // the loop under 48 live getter, call and apply frames, which termination
-  // must unwind.
-  loop_failure("var left=48;function f(){if(left--){return left%3==0?f.call(this):left%3==1?f.apply(this,[1]):this.value;}for(;;){}}var o={get value(){return f.call(this);}};f.call(o);");
+  // must unwind. On PBL it lands under 300 getter frames, whose getter cache
+  // hands the chain to the C++ interpreter once the stack is deep.
+  loop_failure(pbl ? "var left=300;var o={get value(){if(left--)return this.value;for(;;){}}};o.value;"
+                   : "var left=48;function f(){if(left--){return left%3==0?f.call(this):left%3==1?f.apply(this,[1]):this.value;}for(;;){}}var o={get value(){return f.call(this);}};f.call(o);");
   check(bsm_terminated(), "getter interruption terminates");
+  check(!pbl || handOvers > before, "PBL interruption crossed a hand-over");
   puts("ok frame and recursion-unit balance on interruption");
 }
