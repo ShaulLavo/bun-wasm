@@ -3,6 +3,9 @@ const { createRuntimeNetwork }: typeof import("../../node_modules/waffle/browser
   new URL("./browser/net/runtime.ts", import.meta.resolve("waffle/package.json")).href
 );
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
+import { MemoryBackend } from "waffle/fs/backend";
+import { FilesystemService } from "waffle/fs/service";
+import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol";
 import { MemFS } from "waffle/fs/memory";
 import { connectFilesystemIdentity, createFilesystemIdentity, type FilesystemIdentity } from "waffle/fs";
 import { ExecutableRegistry } from "waffle/proc/registry";
@@ -32,7 +35,19 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   let ownedReservations: ReturnType<typeof fixtureReservations> | undefined;
   const identities = new ProcessIdentityAllocator();
   const files = new MemFS();
+  const markerServices: FilesystemService[] = [];
+  const markerPorts: MessagePort[] = [];
   filesystem = Object.assign(Object.create(filesystem), {
+    fork() {
+      const backend = new MemoryBackend();
+      backend.execute = (operation, args, bytes) => markerOperation(files, operation, args, bytes);
+      const service = new FilesystemService(backend);
+      markerServices.push(service);
+      const connection = createFilesystemConnection();
+      markerPorts.push(connection.client.port, connection.server.port);
+      service.connect(connection.server);
+      return connection.client;
+    },
     async lookup(path: string) { const node = files.lookup(path); return node && { path, kind: node.kind }; },
     async writeFile(path: string, bytes: Uint8Array) { files.writeFile(path, bytes); },
     async mkdirp(path: string) { files.mkdirp(path); },
@@ -136,6 +151,8 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
           else await broker?.dispose();
         } catch (error) { errors.push(error); }
         try { await ownedReservations?.dispose(); } catch (error) { errors.push(error); }
+        for (const service of markerServices) service.dispose();
+        for (const port of markerPorts) port.close();
         const failuresAndErrors = errors.concat(failures);
         if (failuresAndErrors.length === 1) throw failuresAndErrors[0];
         if (failuresAndErrors.length) throw new AggregateError(failuresAndErrors, "Process fixture disposal failed");
@@ -150,4 +167,18 @@ export function fixtureFilesystemConnection(identity: FilesystemIdentity, port: 
   client.port.close();
   server.port.close();
   return { ...client, port };
+}
+
+function markerOperation(files: MemFS, operation: string, args: unknown[], bytes: Uint8Array): unknown {
+  const path = args[0];
+  if (typeof path !== "string") throw new Error("Missing marker path");
+  switch (operation) {
+    case "mkdirp": return files.mkdirp(path);
+    case "lookup": return files.lookup(path);
+    case "readFile": return files.readFile(path);
+    case "writeFile":
+      if (args[2] === true && files.lookup(path)) throw new FilesystemError(20);
+      return files.writeFile(path, bytes);
+    default: throw new Error(`Unexpected marker operation: ${operation}`);
+  }
 }

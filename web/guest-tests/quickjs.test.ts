@@ -11,12 +11,13 @@ import { instantiateLinkPlan, prepareLinkPlan } from "waffle/link";
 import { engineLinkPlan } from "../../src/quickjs-program.ts";
 
 const wasm = new URL("../../dist/bun.wasm", import.meta.url);
+const packageScripts = { handoff: () => -58 };
 async function memoryGrowth(fallback: boolean) {
   const { plan } = await engineLinkPlan({ kind: "quickjs", core: readFileSync(wasm), side: readFileSync(new URL("quickjs.wasm", wasm)) }, prepareLinkPlan);
   const module = plan.entryModule;
   // The guest imports runtime_proc directly; this test never calls it.
   const runtimeProc = Object.fromEntries(WebAssembly.Module.imports(module).filter(entry => entry.module === "runtime_proc").map(entry => [entry.name, () => 0]));
-  const wasi = new Wasi({ hostCallFd: HOST_CALL_FD, args: ["bun", "--version"], env: {}, fs: new MemFS(), preopens: {}, stdout() {}, stderr() {}, sleep() {}, namespaces: { runtime_proc: runtimeProc } });
+  const wasi = new Wasi({ hostCallFd: HOST_CALL_FD, args: ["bun", "--version"], env: {}, fs: new MemFS(), preopens: {}, stdout() {}, stderr() {}, sleep() {}, namespaces: { runtime_proc: runtimeProc, bun_package_scripts: packageScripts } });
   const imports = wasi.imports(module);
   const group = instantiateLinkPlan(plan, { wasi, coreImports: imports, checkActive() {} });
   try {
@@ -52,7 +53,7 @@ test("installHostSlots fills bun.wasm's slot table", () => {
   const module = new WebAssembly.Module(readFileSync(bunWasm));
   // The guest imports runtime_proc directly; this test only inspects the slot table, so stub it.
   const runtimeProc = Object.fromEntries(WebAssembly.Module.imports(module).filter(entry => entry.module === "runtime_proc").map(entry => [entry.name, () => 0]));
-  const wasi = new Wasi({ args: ["bun"], env: {}, fs: new MemFS(), preopens: { "/": "/" }, stdout() {}, stderr() {}, sleep() {}, namespaces: { runtime_proc: runtimeProc } });
+  const wasi = new Wasi({ args: ["bun"], env: {}, fs: new MemFS(), preopens: { "/": "/" }, stdout() {}, stderr() {}, sleep() {}, namespaces: { runtime_proc: runtimeProc, bun_package_scripts: packageScripts } });
   const instance = new WebAssembly.Instance(module, wasi.imports(module));
   const pathCalls: number[][] = [];
   const installed = installHostSlots(instance, {

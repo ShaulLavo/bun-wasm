@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import type { GuestLauncher } from "waffle";
+import { PACKAGE_CONTINUATION } from "../../src/package-continuation-binding";
 import { prepareProgram } from "../../src/assets";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
@@ -30,7 +31,7 @@ for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) test(`${engine
     expect(programs).not.toHaveBeenCalled();
     const registered = await registerPlaygroundBun({ runtime, engine, module, profile: "split", launcher });
     expect(registered.profile).toBe("split");
-    expect(programs.mock.calls.map(([path]) => path)).toEqual(["bun", "node", "nodejs"].map(name => `${registered.bin}/${name}`));
+    expect(programs.mock.calls.map(([path]) => path)).toEqual([PACKAGE_CONTINUATION].concat(["bun", "node", "nodejs"].map(name => `${registered.bin}/${name}`)));
     expect(await runtime.filesystem.readFile(`${registered.bin}/bun`)).toEqual(new TextEncoder().encode("bun-wasm registered executable\n"));
     registered.dispose();
   } finally { adapter.mockRestore(); programs.mockRestore(); await runtime.dispose(); }
@@ -48,7 +49,7 @@ for (const profile of ["split", "shared-group"] satisfies PlaygroundProfile[]) t
     }
     const registration = await pending;
     expect(registration.profile).toBe("shared-group");
-    expect(programs).toHaveBeenCalledTimes(3);
+    expect(programs).toHaveBeenCalledTimes(4);
     registration.dispose();
   } finally { programs.mockRestore(); await runtime.dispose(); }
 });
