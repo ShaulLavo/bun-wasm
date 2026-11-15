@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { approveAssignedJob, eligibleQueuedJob, type GitHubApi, type Session } from "./policy.ts";
+import { approvalFailure, approveAssignedJob, eligibleQueuedJob, type GitHubApi, type Session } from "./policy.ts";
 
 function fixture() {
   const session: Session = { runnerId: 303 };
@@ -97,7 +97,15 @@ for (const changed of ["wrong-runner", "fork-run", "fork-pr-head", "fork-pr-base
   if (changed === "queued") f.job.status = "queued";
   if (changed === "completed") f.job.status = "completed";
   if (changed === "job-conclusion") Object.assign(f.job, { conclusion: "cancelled" });
-  await expect(approveAssignedJob(f.api, f.session, f.hint)).rejects.toThrow();
+  const failure = await approveAssignedJob(f.api, f.session, f.hint).then(() => null, approvalFailure);
+  const reasons: Record<string, ReturnType<typeof approvalFailure>["reason"]> = {
+    "wrong-runner": "assignment-not-unique-active", "fork-run": "untrusted-run-repository", "fork-pr-head": "untrusted-or-stale-pr",
+    "fork-pr-base": "untrusted-or-stale-pr", repository: "untrusted-run-repository", attempt: "stale-job-run", cancel: "stale-job-run",
+    conclusion: "stale-job-run", "stale-head": "untrusted-or-stale-pr", event: "ineligible-event", "non-main-push": "ineligible-event",
+    pool: "wrong-pool", queued: "assignment-not-unique-active", completed: "assignment-not-unique-active", "job-conclusion": "unbound-assignment",
+  };
+  const reason = reasons[changed];
+  expect(failure).toEqual({ reason, stage: reason === "assignment-not-unique-active" ? "initial-inventory" : "initial-facts" });
 });
 
 test.each(["fork", "manual", "non-main", "stale", "cancelled"])("preallocation still rejects %s", async changed => {
@@ -116,7 +124,7 @@ test("current main push must still match server main ref", async () => {
   f.run.head_branch = "main";
   await approveAssignedJob(f.api, f.session, f.hint);
   f.ref.object.sha = "b".repeat(40);
-  await expect(approveAssignedJob(f.api, f.session, f.hint)).rejects.toThrow();
+  expect(await approveAssignedJob(f.api, f.session, f.hint).then(() => null, approvalFailure)).toEqual({ reason: "stale-main", stage: "initial-facts" });
 });
 
 test.each([
@@ -125,7 +133,8 @@ test.each([
 ])("incomplete or malformed inventories reject: %j", async inventory => {
   const f = fixture();
   const api: GitHubApi = async path => path.includes("/attempts/") ? inventory : f.api(path);
-  await expect(approveAssignedJob(api, f.session, f.hint)).rejects.toThrow();
+  const failure = await approveAssignedJob(api, f.session, f.hint).then(() => null, approvalFailure);
+  expect(failure).toEqual({ reason: inventory === null ? "invalid-object" : "incomplete-inventory", stage: "initial-inventory" });
 });
 
 test.each(["duplicate", "ambiguous", "truncated", "over-limit", "run", "attempt", "runner", "status"])("inventory rejects %s", async changed => {
@@ -140,7 +149,17 @@ test.each(["duplicate", "ambiguous", "truncated", "over-limit", "run", "attempt"
   if (changed === "status") Object.assign(f.candidate, { status: undefined });
   const inventory = { total_count: jobs.length + (changed === "truncated" ? 1 : 0), jobs };
   const api: GitHubApi = async path => path.includes("/attempts/") ? inventory : f.api(path);
-  await expect(approveAssignedJob(api, f.session, f.hint)).rejects.toThrow();
+  const reasons: Record<string, ReturnType<typeof approvalFailure>["reason"]> = { duplicate: "invalid-inventory", ambiguous: "assignment-not-unique-active", truncated: "incomplete-inventory", "over-limit": "incomplete-inventory", run: "invalid-inventory", attempt: "invalid-inventory", runner: "invalid-inventory-runner", status: "invalid-inventory" };
+  expect(await approveAssignedJob(api, f.session, f.hint).then(() => null, approvalFailure)).toEqual({ reason: reasons[changed], stage: "initial-inventory" });
+});
+
+test.each(["identity", "head"])("malformed %s retains only its fixed denial code", async changed => {
+  const f = fixture();
+  if (changed === "identity") f.candidate.id = 0;
+  if (changed === "head") f.job.head_sha = f.run.head_sha = "private-invalid-head";
+  const reason = changed === "identity" ? "invalid-identity" : "invalid-run-head";
+  const stage = changed === "identity" ? "initial-inventory" : "initial-facts";
+  expect(await approveAssignedJob(f.api, f.session, f.hint).then(() => null, approvalFailure)).toEqual({ reason, stage });
 });
 
 test.each(["runner", "cancel", "attempt", "head", "trust", "inventory", "replacement"])("fresh release recheck rejects changed %s", async changed => {
@@ -161,7 +180,10 @@ test.each(["runner", "cancel", "attempt", "head", "trust", "inventory", "replace
     if (exactJobs === 2 && changed === "trust") f.pr.head.repo = { full_name: "fork/bun-wasm" };
     return f.api(path);
   };
-  await expect(approveAssignedJob(api, f.session, f.hint)).rejects.toThrow();
+  const failure = await approveAssignedJob(api, f.session, f.hint).then(() => null, approvalFailure);
+  const reasons: Record<string, ReturnType<typeof approvalFailure>["reason"]> = { runner: "unbound-assignment", cancel: "stale-job-run", attempt: "stale-job-run", head: "changed-head", trust: "untrusted-or-stale-pr", inventory: "assignment-not-unique-active", replacement: "changed-assignment" };
+  const stage = changed === "inventory" ? "fresh-inventory" : changed === "replacement" ? "fresh-assignment" : changed === "head" ? "fresh-head" : "fresh-facts";
+  expect(failure).toEqual({ reason: reasons[changed], stage });
 });
 
 test("fresh release recheck rejects main ref movement", async () => {

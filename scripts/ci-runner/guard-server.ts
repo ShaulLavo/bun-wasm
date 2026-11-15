@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { approveAssignedJob, type Assignment, type AssignmentHint, type GitHubApi, type Session } from "./policy.ts";
+import { approvalFailure, approveAssignedJob, type Assignment, type AssignmentHint, type GitHubApi, type Session } from "./policy.ts";
 
 function assignmentHint(value: unknown): AssignmentHint {
   if (typeof value !== "object" || value === null || !("runId" in value) || !("attempt" in value)) throw new Error("Missing assignment hints");
@@ -15,20 +15,21 @@ export async function createGuard(options: { session: Session; api: GitHubApi; s
   let stopped = false;
   let approved = false;
   let verifying = false;
-  const evidence: { authenticated: boolean; apiChecked: boolean; approved: boolean; decision: string; runnerId: number; assignment: Assignment | null } = {
-    authenticated: false, apiChecked: false, approved: false, decision: "pending", runnerId: options.session.runnerId, assignment: null,
+  const evidence: { authenticated: boolean; apiChecked: boolean; approved: boolean; decision: string; runnerId: number; assignment: Assignment | null; failure: ReturnType<typeof approvalFailure> | null } = {
+    authenticated: false, apiChecked: false, approved: false, decision: "pending", runnerId: options.session.runnerId, assignment: null, failure: null,
   };
-  async function deny(reason = "policy"): Promise<void> {
+  async function deny(reason = "policy", failure: ReturnType<typeof approvalFailure> | null = null): Promise<void> {
     if (stopped) return;
     stopped = true;
     evidence.decision = reason;
+    evidence.failure = failure;
     clearTimeout(timer);
     await options.stopVm();
     server.closeAllConnections();
     server.close();
   }
   const server = createServer((request, response) => {
-    handle(request, response).catch(() => deny()).catch(() => { server.closeAllConnections(); server.close(); });
+    handle(request, response).catch(error => deny("policy", approvalFailure(error))).catch(() => { server.closeAllConnections(); server.close(); });
   });
   const timer = setTimeout(() => { deny("timeout").catch(() => { server.closeAllConnections(); server.close(); }); }, options.timeoutMs ?? 120_000);
 

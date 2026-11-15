@@ -32,6 +32,13 @@ inventory before release. A different eligible job or trusted run can therefore
 use the VM. Incomplete, ambiguous, stale or untrusted API facts stop it. Result
 receipts retain the approved public job, run, attempt, head and runner identity.
 
+Rejected guard receipts also retain a fixed policy or API failure code and the
+initial or fresh verification stage, including the failed API operation. These
+come from private typed errors, never API bodies, error messages, paths or hook
+input. Unknown errors retain only `unknown`. Transport and timeout decisions
+keep their existing precedence and cannot be overwritten by a late API failure.
+This evidence does not change assignment checks, API reads, release or cleanup.
+
 Before the hook, stock runner preparation downloads and extracts action archives
 inside the private VM. Container setup and workflow execution follow the hook.
 A rejected or uncertain assignment stops the VM instead of returning control to

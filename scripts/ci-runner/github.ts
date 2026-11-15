@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { repository } from "./policy.ts";
+import { apiFailure, repository } from "./policy.ts";
 
 export async function github(path: string, method = "GET"): Promise<unknown> {
   const child = spawn("/work/ci-runner/bun-wasm/bin/gh", ["api", "--method", method, path], {
@@ -9,13 +9,13 @@ export async function github(path: string, method = "GET"): Promise<unknown> {
   let bytes = 0;
   child.stdout.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > 4 * 1024 * 1024) child.kill("SIGKILL"); else chunks.push(chunk); });
   child.stderr.resume();
-  const status = await new Promise<number | null>((resolveExit, reject) => { child.once("error", () => reject(new Error("GitHub API unavailable"))); child.once("exit", resolveExit); });
-  if (status !== 0) throw new Error("GitHub API request failed");
+  const status = await new Promise<number | null>((resolveExit, reject) => { child.once("error", () => reject(apiFailure("api-unavailable"))); child.once("exit", resolveExit); });
+  if (status !== 0) throw apiFailure("api-request-failed");
   if (method === "DELETE") return null;
   try {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    throw new Error("Invalid GitHub API response");
+    throw apiFailure("api-invalid-response");
   }
 }
 

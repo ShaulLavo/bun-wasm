@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createGuard } from "./guard-server.ts";
-import type { GitHubApi } from "./policy.ts";
+import { apiFailure, type GitHubApi } from "./policy.ts";
 
 function authority() {
   const headSha = "b".repeat(40);
@@ -51,7 +51,7 @@ test("authenticated hook releases only the API-bound assignment and retains publ
     expect(await response?.json()).toEqual({ approved: true });
     expect(stopCount()).toBe(0);
     expect(guard.evidence).toEqual({ authenticated: true, apiChecked: true, approved: true, decision: "approved", runnerId: 303,
-      assignment: { jobId: 707, runId: 505, attempt: 2, headSha: f.headSha, runnerId: 303 } });
+      assignment: { jobId: 707, runId: 505, attempt: 2, headSha: f.headSha, runnerId: 303 }, failure: null });
     expect(f.calls).toHaveLength(8);
   });
 });
@@ -79,8 +79,18 @@ test.each([null, {}, { runId: "505", attempt: "0" }, { runId: "../505", attempt:
     });
   });
 
-test.each(["wrong-runner", "fork", "manual", "stale", "cancelled", "attempt", "ambiguous", "incomplete", "arbitrary-hint", "offline"])
-  ("authenticated %s lookup stops without an approval response", async mode => {
+test.each([
+  ["wrong-runner", "assignment-not-unique-active", "initial-inventory"],
+  ["fork", "untrusted-or-stale-pr", "initial-facts"],
+  ["manual", "ineligible-event", "initial-facts"],
+  ["stale", "untrusted-or-stale-pr", "initial-facts"],
+  ["cancelled", "stale-job-run", "initial-facts"],
+  ["attempt", "stale-job-run", "initial-facts"],
+  ["ambiguous", "assignment-not-unique-active", "initial-inventory"],
+  ["incomplete", "incomplete-inventory", "initial-inventory"],
+  ["arbitrary-hint", "unknown", "initial-inventory-api"],
+  ["offline", "unknown", "initial-inventory-api"],
+])("authenticated %s lookup stops without an approval response", async (mode, reason, stage) => {
     const f = authority();
     if (mode === "wrong-runner") f.job.runner_id = 999;
     if (mode === "fork") f.pr.head.repo = { full_name: "fork/bun-wasm" };
@@ -97,10 +107,53 @@ test.each(["wrong-runner", "fork", "manual", "stale", "cancelled", "attempt", "a
       await stopped;
       expect(stopCount()).toBe(1);
       expect(guard.evidence).toMatchObject({ authenticated: true, apiChecked: true, approved: false, assignment: null, decision: "policy" });
+      expect(JSON.parse(JSON.stringify(guard.evidence)).failure).toEqual({ reason, stage });
     });
   });
 
-test("timeout during authoritative lookup stops and a late result cannot release", async () => {
+test.each(["api-unavailable", "api-request-failed", "api-invalid-response"] as const)("receipts retain only the known %s category at each API stage", async reason => {
+  const stages = ["initial-inventory-api", "initial-job-api", "initial-run-api", "initial-pr-api", "fresh-inventory-api", "fresh-job-api", "fresh-run-api", "fresh-pr-api"];
+  for (const [index, stage] of stages.entries()) await checkApiFailure(index + 1, stage, apiFailure(reason), reason);
+  await checkApiFailure(4, "initial-main-ref-api", apiFailure(reason), reason, true);
+  await checkApiFailure(8, "fresh-main-ref-api", apiFailure(reason), reason, true);
+});
+
+async function checkApiFailure(failingCall: number, stage: string, error: unknown, reason: string, main = false) {
+  const f = authority();
+  if (main) Object.assign(f.run, { event: "push", head_branch: "main" });
+  let calls = 0;
+  const api: GitHubApi = async path => {
+    if (++calls === failingCall) throw error;
+    if (main && path.endsWith("/git/ref/heads/main")) return { object: { sha: f.headSha } };
+    return f.api(path);
+  };
+  await withGuard(api, async ({ guard, post, stopped, stopCount }) => {
+    expect(await post(hint)).toBeNull();
+    await stopped;
+    expect(stopCount()).toBe(1);
+    expect(calls).toBe(failingCall);
+    expect(JSON.parse(JSON.stringify(guard.evidence))).toEqual({ authenticated: true, apiChecked: true, approved: false,
+      decision: "policy", runnerId: 303, assignment: null, failure: { reason, stage } });
+  });
+}
+
+test.each([
+  new Error("private token and command https://private.invalid/api?token=secret"),
+  Object.assign(new Error("GitHub API request failed"), { reason: "api-request-failed", stage: "private-stage", body: "private-body" }),
+  { get message() { throw new Error("must not inspect private errors"); }, reason: "private-reason", stage: "private-stage" },
+  "private raw error",
+  null,
+])("unknown API errors are redacted without examining private fields: %#", async error => {
+  await checkApiFailure(1, "initial-inventory-api", error, "unknown");
+  await checkApiFailure(8, "fresh-pr-api", error, "unknown");
+});
+
+test("public error properties cannot replace the private allowlisted API evidence", async () => {
+  const error = Object.assign(apiFailure("api-request-failed"), { reason: "private-reason", stage: "private-stage", message: "private-message", body: "private-body" });
+  await checkApiFailure(4, "initial-pr-api", error, "api-request-failed");
+});
+
+test.each(["resolve", "reject"])("timeout during authoritative lookup stops and late %s cannot release or replace its receipt", async completion => {
   const f = authority();
   const pending = Promise.withResolvers<void>();
   const entered = Promise.withResolvers<void>();
@@ -109,10 +162,11 @@ test("timeout during authoritative lookup stops and a late result cannot release
     const response = post(hint);
     await entered.promise;
     await stopped;
-    pending.resolve();
+    if (completion === "resolve") pending.resolve();
+    if (completion === "reject") pending.reject(new Error("private late API error"));
     expect(await response).toBeNull();
     expect(stopCount()).toBe(1);
-    expect(guard.evidence).toMatchObject({ apiChecked: true, approved: false, assignment: null, decision: "timeout" });
+    expect(guard.evidence).toMatchObject({ apiChecked: true, approved: false, assignment: null, decision: "timeout", failure: null });
   }, 100);
 });
 
