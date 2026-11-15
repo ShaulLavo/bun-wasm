@@ -1,0 +1,4 @@
+native text unchanged after collection
+collected stack formats once on access
+empty stack formats once on access
+empty native stack remains absent without a hook
