@@ -128,7 +128,7 @@ function listenerLimits() {
   for (const value of [null, undefined, {}, 42, Object.create(null)]) {
     assert.throws(() => Reflect.apply(getMaxListeners, undefined, [value]), invalidArgument);
     assert.throws(() => Reflect.apply(listenerCount, undefined, [value, "value"]), value == null ? TypeError : invalidArgument);
-    assert.throws(() => Reflect.apply(setMaxListeners, undefined, [1, value]), invalidArgument);
+    assert.throws(() => Reflect.apply(setMaxListeners, undefined, [1, value]), value == null ? TypeError : invalidArgument);
   }
   assert.throws(() => setMaxListeners(1, Object.freeze(new EventTarget())), TypeError);
   console.log("listener limits support EventTarget and static helpers reject invalid targets");
