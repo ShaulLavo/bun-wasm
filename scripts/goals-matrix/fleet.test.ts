@@ -1,4 +1,4 @@
-import { chmod, cp, lstat, mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
+import { chmod, cp, lstat, mkdtemp, mkdir, readdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,13 @@ import { combine, collectNativeReport, cleanupStaging, cleanupLocalStaging } fro
 import { options } from "./run";
 import { initialCells, finish, phases, type Report, type Attempt } from "./model";
 function report(): Report { return { schema: 2, run: "unit", createdAt: "unit", command: "unit", deadlines: deadlinePolicy(180_000), source: { commit: "unit", dirty: false, assets: {} }, cells: initialCells() }; }
+async function localCleanupReceipts(output: string): Promise<unknown[]> {
+  const files = (await readdir(output)).filter(file => file.startsWith("fleet-local-cleanup") && file.endsWith(".json"));
+  return Promise.all(files.map(async file => {
+    const receipt: unknown = JSON.parse(await readFile(join(output, file), "utf8"));
+    return receipt;
+  }));
+}
 test("merging disjoint shards retains failures and all pending and unavailable boxes", () => {
   const first = report(), second = report();
   const failed: Attempt = { startedAt: "now", finishedAt: "now", browser: {}, phases: [{ phase: "dev", status: "fail", error: "real failure", startedAt: "now", durationMs: 1, timeoutMs: 180_000 }] };
@@ -193,7 +200,7 @@ test("local staging cleanup removes readonly copies without following links or c
     expect((await lstat(original)).mode & 0o777).toBe(0o555);
     expect((await lstat(nested)).mode & 0o777).toBe(0o555);
     expect((await lstat(join(nested, "asset"))).mode & 0o777).toBe(0o444);
-    expect(JSON.parse(await readFile(join(root, "fleet-local-cleanup.json"), "utf8"))).toMatchObject({ scratch: staged, stagingRemoved: true });
+    expect(await localCleanupReceipts(root)).toContainEqual(expect.objectContaining({ scratch: staged, stagingRemoved: true }));
   } finally {
     await Promise.all([original, nested, staged, join(staged, "nested")].filter(existsSync).map(directory => chmod(directory, 0o755)));
     await rm(root, { recursive: true, force: true });
@@ -218,7 +225,35 @@ test("validated combined results survive local deletion failure and both errors 
       expect(JSON.parse(saved).cells[0].reason).toBe("local retained");
       expect(JSON.parse(saved).cells[1].attempts).toEqual(native.cells[1]!.attempts);
       expect(existsSync(join(output, "TABLE.md"))).toBe(true);
-      expect(JSON.parse(await readFile(join(output, "fleet-local-cleanup.json"), "utf8"))).toMatchObject({ scratch: staged, stagingRemoved: false });
+      expect(await localCleanupReceipts(output)).toContainEqual(expect.objectContaining({ scratch: staged, stagingRemoved: false }));
     } finally { await chmod(parent, 0o755); }
   });
+});
+
+test("outer cleanup preserves both failed salvage directory receipts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-nested-cleanup-"));
+  const output = join(root, "output"), outer = join(root, "outer");
+  const parents = [join(root, "first-parent"), join(root, "second-parent")];
+  try {
+    await mkdir(output); await mkdir(outer);
+    for (const parent of parents) {
+      const scratch = join(parent, "salvage");
+      await mkdir(scratch, { recursive: true }); await chmod(parent, 0o555);
+      await expect(cleanupLocalStaging(scratch, output, new Error("interrupted collection"))).rejects.toThrow("local cleanup");
+      expect(existsSync(scratch)).toBe(true);
+    }
+    await cleanupLocalStaging(outer, output);
+    const receipts = await localCleanupReceipts(output);
+    expect(receipts).toHaveLength(3);
+    for (const parent of parents) {
+      expect(receipts).toContainEqual(expect.objectContaining({ scratch: join(parent, "salvage"), stagingRemoved: false, removalCondition: expect.any(String) }));
+      expect(existsSync(join(parent, "salvage"))).toBe(true);
+      expect((await lstat(parent)).mode & 0o777).toBe(0o555);
+    }
+    expect(receipts).toContainEqual(expect.objectContaining({ scratch: outer, stagingRemoved: true }));
+    expect(existsSync(outer)).toBe(false);
+  } finally {
+    await Promise.all(parents.filter(existsSync).map(parent => chmod(parent, 0o755)));
+    await rm(root, { recursive: true, force: true });
+  }
 });

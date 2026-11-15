@@ -1,5 +1,6 @@
 import { cp, mkdtemp, mkdir, readFile, readdir, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { run, options, unavailableReport, type Options } from "./run";
 import { sameDeadlines } from "./deadlines";
@@ -101,11 +102,12 @@ function stagingRemovalScript(directory: string): string {
   return `set -eu; if [ -d ${path} ] && [ ! -L ${path} ]; then find ${path} -type d -exec chmod u+w {} +; fi; rm -rf -- ${path}; test ! -e ${path}`;
 }
 export async function cleanupLocalStaging(scratch: string, output: string, failure?: unknown): Promise<void> {
+  const receipt = join(output, `fleet-local-cleanup-${createHash("sha256").update(resolve(scratch)).digest("hex")}.json`);
   try {
     await ownedCommand(["sh", "-lc", stagingRemovalScript(scratch)], undefined, 30_000);
-    await writeFile(join(output, "fleet-local-cleanup.json"), JSON.stringify({ scratch, stagingRemoved: true, at: new Date().toISOString() }, null, 2));
+    await writeFile(receipt, JSON.stringify({ scratch, stagingRemoved: true, at: new Date().toISOString() }, null, 2));
   } catch (error) {
-    await writeFile(join(output, "fleet-local-cleanup.json"), JSON.stringify({ scratch, stagingRemoved: false, error: String(error), removalCondition: "Remove only this task-owned local staging directory after its controller has settled" }, null, 2));
+    await writeFile(receipt, JSON.stringify({ scratch, stagingRemoved: false, error: String(error), removalCondition: "Remove only this task-owned local staging directory after its controller has settled" }, null, 2));
     if (failure !== undefined) throw new AggregateError([failure, error], `${String(failure)}; local cleanup: ${String(error)}`);
     throw error;
   }

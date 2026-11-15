@@ -39,8 +39,10 @@ owner-writable before deletion. It leaves file modes alone and does not follow
 symbolic links into original or common inputs. Remote permission changes still
 require the existing queue and native consumer settlement proof. Local cleanup
 runs after the controller command has settled, including diagnostic and report
-salvage scratch. A separate `fleet-local-cleanup.json` records local removal or
-its retained path and error; `fleet-cleanup.json` retains the remote outcome.
+salvage scratch. Each directory gets its own `fleet-local-cleanup-*.json`, keyed
+by its absolute path, recording local removal or its retained path and error.
+Outer cleanup cannot overwrite failed salvage cleanup receipts;
+`fleet-cleanup.json` retains the remote outcome.
 An original operation or remote cleanup error aggregates with local cleanup
 failure rather than being replaced. Tiny filesystem regressions exercise both
 deletion paths and report survival, without a native session or framework build.
