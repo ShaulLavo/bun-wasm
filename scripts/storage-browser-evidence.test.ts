@@ -6,6 +6,8 @@ import { StorageLifetime, storageEvidence, storageStep } from "./storage-browser
 import { StoragePreservationFailure } from "../sandbox/tests/storage-browser";
 import { handleStorageFailure } from "./storage-ci-quarantine";
 import protocol from "./fixtures/storage-ci/webkit.json";
+import { discoverChecks } from "./test-checks";
+import { needsJsc, needsRust } from "./ci-changes";
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -15,6 +17,17 @@ function directory(): string {
   directories.push(path);
   return path;
 }
+
+test("evidence-only changes retain the quality and Browser guest owners", () => {
+  const checks = discoverChecks();
+  expect(checks.find(check => check.path === "scripts/storage-browser-evidence.test.ts")?.owner).toBe("quality");
+  const storage = checks.find(check => check.path === "scripts/sandbox-storage-browser.test.ts");
+  expect(storage?.owner).toBe("browser-guest");
+  expect(storage?.inputs).toContain("scripts/storage-browser-evidence.ts");
+  expect(needsRust(["scripts/storage-browser-evidence.ts"])).toBe(true);
+  expect(needsJsc(["scripts/storage-browser-evidence.ts"])).toBe(false);
+  expect(checks.find(check => check.path === "scripts/storage-diagnostics-browser.test.ts")?.owner).toBe("web-browser");
+});
 
 test("unselected observation performs no progress work and preserves the ordinary promise", async () => {
   const lifetime = storageEvidence(undefined);

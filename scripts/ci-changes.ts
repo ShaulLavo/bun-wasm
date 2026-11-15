@@ -3,11 +3,7 @@ import { discoverChecks } from "./test-checks";
 import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-check-inputs";
 import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
-function pcRunnerInput(path: string): boolean {
-  return path.startsWith("scripts/ci-runner/") || /^\.github\/actions\/(?:restore|save)-ci-cache\/action\.yml$/.test(path);
-}
-
-const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/wasm-validation/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
+const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "scripts/fixtures/magic-string/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/wasm-validation/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "scripts/ci-program-delivery.ts",
   "scripts/ci-browser-program.ts", "scripts/build-bun-browser.sh",
@@ -243,6 +239,10 @@ export function selectChanges(base: string, head: string, pullRequest = false, i
 
 export function selectionOutput(selection: CheckSelection): string {
   return Object.entries(selection).map(([key, value]) => `${key}=${value}`).join("\n");
+}
+
+function pcRunnerInput(path: string): boolean {
+  return path.startsWith("scripts/ci-runner/") || /^\.github\/actions\/(?:restore|save)-ci-cache\/action\.yml$/.test(path);
 }
 
 if (import.meta.main) {
