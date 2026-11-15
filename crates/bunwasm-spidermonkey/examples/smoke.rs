@@ -337,34 +337,86 @@ fn compile_budget_checks() {
     );
     for (label, make, expected) in [
         ("blocks", "'{'.repeat(n) + '1;' + '}'.repeat(n)", 241.0),
-        ("if blocks", "'if (ok) {'.repeat(n) + '1;' + '}'.repeat(n)", 147.0),
+        (
+            "if blocks",
+            "'if (ok) {'.repeat(n) + '1;' + '}'.repeat(n)",
+            147.0,
+        ),
         ("unbraced ifs", "'if (ok) '.repeat(n) + '1;'", 103.0),
-        ("labels", "Array.from({ length: n }, (_, i) => 'l' + i + ': ').join('') + '1;'", 139.0),
+        (
+            "labels",
+            "Array.from({ length: n }, (_, i) => 'l' + i + ': ').join('') + '1;'",
+            139.0,
+        ),
         (
             "labelled loops",
             "Array.from({ length: n }, (_, i) => 'l' + i + ': while (true) {').join('') + '1;' + '}'.repeat(n)",
             54.0,
         ),
-        ("for loops", "'for (;;) {'.repeat(n) + '1;' + '}'.repeat(n)", 86.0),
+        (
+            "for loops",
+            "'for (;;) {'.repeat(n) + '1;' + '}'.repeat(n)",
+            86.0,
+        ),
         ("unbraced loops", "'while (ok) '.repeat(n) + '1;'", 141.0),
-        ("try blocks", "'try {'.repeat(n) + '1;' + '} finally {}'.repeat(n)", 213.0),
-        ("switches", "'switch (ok) { default: '.repeat(n) + '1;' + '}'.repeat(n)", 226.0),
-        ("parentheses", "'('.repeat(n) + '1' + ')'.repeat(n) + ';'", 62.0),
+        (
+            "try blocks",
+            "'try {'.repeat(n) + '1;' + '} finally {}'.repeat(n)",
+            213.0,
+        ),
+        (
+            "switches",
+            "'switch (ok) { default: '.repeat(n) + '1;' + '}'.repeat(n)",
+            226.0,
+        ),
+        (
+            "parentheses",
+            "'('.repeat(n) + '1' + ')'.repeat(n) + ';'",
+            62.0,
+        ),
         ("arrays", "'['.repeat(n) + ']'.repeat(n) + ';'", 63.0),
-        ("objects", "'x = ' + '{ a: '.repeat(n) + '1' + ' }'.repeat(n) + ';'", 61.0),
+        (
+            "objects",
+            "'x = ' + '{ a: '.repeat(n) + '1' + ' }'.repeat(n) + ';'",
+            61.0,
+        ),
         ("calls", "'f('.repeat(n) + '1' + ')'.repeat(n) + ';'", 54.0),
-        ("element access", "'a['.repeat(n) + '0' + ']'.repeat(n) + ';'", 62.0),
-        ("templates", "'`${'.repeat(n) + '1' + '}`'.repeat(n) + ';'", 52.0),
+        (
+            "element access",
+            "'a['.repeat(n) + '0' + ']'.repeat(n) + ';'",
+            62.0,
+        ),
+        (
+            "templates",
+            "'`${'.repeat(n) + '1' + '}`'.repeat(n) + ';'",
+            52.0,
+        ),
         ("conditionals", "'a ? b : '.repeat(n) + 'c;'", 150.0),
         ("assignments", "'x = '.repeat(n) + '1;'", 150.0),
         ("unary operators", "'!'.repeat(n) + 'x;'", 288.0),
         ("typeof", "'typeof '.repeat(n) + 'x;'", 288.0),
         ("new", "'new ('.repeat(n) + 'c' + ')'.repeat(n) + ';'", 46.0),
         ("arrows", "'() => '.repeat(n) + '1;'", 54.0),
-        ("functions", "'function g() {'.repeat(n) + '}'.repeat(n)", 61.0),
-        ("function expressions", "'(function () {'.repeat(n) + '1' + '})();'.repeat(n)", 20.0),
-        ("methods", "'x = { m() { return '.repeat(n) + '1' + '} };'.repeat(n)", 25.0),
-        ("class methods", "'(class { m() { return '.repeat(n) + '1' + '} });'.repeat(n)", 19.0),
+        (
+            "functions",
+            "'function g() {'.repeat(n) + '}'.repeat(n)",
+            61.0,
+        ),
+        (
+            "function expressions",
+            "'(function () {'.repeat(n) + '1' + '})();'.repeat(n)",
+            20.0,
+        ),
+        (
+            "methods",
+            "'x = { m() { return '.repeat(n) + '1' + '} };'.repeat(n)",
+            25.0,
+        ),
+        (
+            "class methods",
+            "'(class { m() { return '.repeat(n) + '1' + '} });'.repeat(n)",
+            19.0,
+        ),
     ] {
         let depth = number(&format!(
             "var make = (n) => 'if (false) {{' + ({make}) + '}}'; deepest((n) => !refused(() => (0, eval)(make(n))))"

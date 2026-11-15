@@ -815,49 +815,84 @@ the M1 Mac and WebKit 27.2 on Linux under `ulimit -s 512`. Each shape recurses w
 through one path, and a second evaluation must then succeed. Runtime shapes are `.call`,
 `.apply`, getters, setters, Ajv's getter-and-`reduce` walk, bound functions, bound chains,
 proxies, `JSON.stringify` and nested-array `String`. Compile shapes are one construct nested
-20,000 deep in `eval`: blocks, `if` blocks, an Ajv-style validator, labels, labelled loops,
-arrays, calls, `?:` chains, arrows, functions, immediately called functions, classes, methods,
-parentheses, objects, unary operators, element access and templates.
+20,000 deep: blocks, `if` blocks, an Ajv-style validator, labels, labelled loops, arrays, calls,
+`?:` chains, arrows, functions, immediately called functions, classes, methods, parentheses,
+objects, unary operators, element access and templates, and the chains and bodies that pass
+through a single parser function: assignments, `typeof`, `new`, comma expressions, unbraced
+`if` and loop bodies, `while`, `for`, `do`, `with`, `try` and `switch`. Each is compiled two
+ways: by `eval` as dead code, which the parser and constant folder see, and as the body of a
+function that is declared (a lazy syntax parse) and then called once (the full compile, emitter
+included).
 
 | | Mac WebKit | Linux WebKit, 512 KiB |
 | --- | --- | --- |
-| At 188 KiB, caught and recovered | every shape except statement nesting, both tiers | the same |
+| At 188 KiB, caught and recovered | every shape, both tiers | the same |
 | Lowest quota still caught, runtime shapes | 218 KiB (PBL `JSON.stringify`), 224 KiB interp (computed getter) | 237 KiB (PBL computed getter), 278 KiB interp |
-| Lowest quota still caught, other compile shapes | 183 to 189 KiB (PBL parentheses and unary chains), 204 KiB interp | 233 KiB (PBL parentheses) |
-| Statement nesting caught up to | 118 to 144 KiB, or not at the 112 KiB floor tested | 112 to 144 KiB |
+| Compile shapes at 188 KiB: the deepest input the quota accepts compiles cold, and what stops the next level is the quota | all 30 shapes, both tiers | the same |
+| The same at 216 KiB, 15 percent above the budget | all 30 shapes, both tiers | the same |
 
 Measured November 15, 2026, cold, after the [PBL hand-over](#spidermonkey-pbl-on-deep-stacks).
 Main's guest has started colder since its `Intl` setup became lazy, and on the Mac main's own
 engine is then caught only up to 157 to 171 KiB for PBL `toString`, proxy and array-like
-`apply`, and below 150 KiB for interp computed getters: those trapped at 188 KiB. PBL
-parentheses and unary chains sit within a few KiB of 188 KiB on main too (189 KiB); they belong
-to the parser work below.
+`apply`, and below 150 KiB for interp computed getters: those trapped at 188 KiB. The runtime
+sizes are the hand-over's and are unchanged since.
 
-The native launcher has no host limit, so it gives the quota each workload needs: the guest's
-bootstrap 96 KiB (interp) and 105 KiB (PBL), and loading Next's webpack hook (`require-hook` and
-`loadWebpackHook()`) 160 and 184 KiB. 188 KiB sits about 2 percent above Next's need. The
+The native launcher has no host limit, so it gives the quota each workload needs with the
+starters this site ships: the guest's bootstrap 86 KiB (interp) and 95 KiB (PBL), loading Next's
+webpack hook (`require-hook` and `loadWebpackHook()`) 151 and 175 KiB, and compiling the Angular
+CLI's workspace schema with Ajv, then validating a workspace with it, 102 and 135 KiB. 188 KiB
+sits 7 percent above Next's need. In the browser guest at the host's own budget, both tiers load
+Next's hook and compile and run Angular's validators on both hosts. The
 reservations run on every WASI host, with or
 without a budget, so the emitted code differs from main everywhere; no CPU regression was
 measured. A recursion-heavy script under the launcher, pinned to one core with 10 interleaved
 runs, took a median 1.42 s on main and 1.45 s here on interp, and 1.28 s and 1.26 s on PBL.
+Compiling Next's 2.5 MB `bundle5.js` with `new Function`, pinned and interleaved over six rounds,
+took a median 177 ms before and after the compile reservations moved, on both tiers.
 `scripts/spidermonkey-stack-quota.test.ts` also runs the smoke under the WebKit value on both
 tiers: every reserved path must end in a caught `RangeError` that the quota, not the counter,
-raises.
+raises, each compile shape must stop within 15 percent of its recorded depth, and the emitter's
+reservation must refuse a validator's first call before the parser would.
 
-### Known gap: cold statement nesting
+### Compile nesting
 
-Nested `if`, loop, label and block statements compiled cold still overflow the worker stack
-first: past about 70 levels of Ajv-style validator or labelled loops on the Mac (about 90 on the
-Linux model), and past about 190 blocks or labels. This is the parser and emitter's host stack
-per statement. Main crashed on all of these shapes and on every runtime shape above much earlier.
+Before the [parser frame merges](#spidermonkey-parser-frames) a nested statement cost six host
+frames, and no byte budget could both load Next and catch cold statement nesting: main at
+188 KiB still crashed on labels, labelled loops, `try` blocks and assignment chains on both
+hosts, and on PBL unary and `typeof` chains on the Mac. With two frames per `if` level a budget
+can do both. The compile reservations now sit in the frames that survive on each cycle
+([sites and sizes](bun-patches/spidermonkey-stack-budget.md)), with one in the bytecode emitter,
+and each is sized so that the depth 188 KiB accepts is at most 80 percent of the depth the host
+stack holds cold. On the portable baseline tier, the tighter one:
 
-No byte budget can close it. Next's deepest compile path is the same statement nesting: 83
-levels of an Ajv validator in `next/dist/compiled/webpack/bundle5.js`. Cold, those levels need
-about 460 KiB of host stack. They fit in Safari only because the 2.5 MB bundle has warmed the
-parser's wasm into JavaScriptCore's optimized tier by then. Compiled alone with no quota, the
-bundle needs 256 to 320 KiB. A byte budget cannot see the tier, and statement reservations raise
-Next's need as fast as the shapes' capacity. So the value admits Next and leaves cold statement
-nesting to a separate design that makes each statement level cheaper.
+| Shape | Host stack holds, cold (Mac, Linux) | 188 KiB accepts | Share of the smaller |
+| --- | ---: | ---: | ---: |
+| Ajv-style validator, lazily parsed | 168, 216 | 125 | 74% |
+| Ajv-style validator, compiled in full | 144, 188 | 102 | 71% |
+| `if` blocks, compiled in full | 192, 232 | 128 | 67% |
+| Blocks, compiled in full | 280, 352 | 156 | 56% |
+| `try` blocks, compiled in full | 148, 192 | 104 | 70% |
+| `for` loops, compiled in full | 108, 144 | 76 | 70% |
+| Labels | 156, 204 | 120 | 77% |
+| Parentheses | 72, 86 | 54 | 75% |
+| Call arguments | 63, 82 | 47 | 75% |
+| `?:` chains | 180, 212 | 132 | 73% |
+| Unary and `typeof` chains | 320, 424 | 236 | 74% |
+| Nested functions | 70, 78 | 53 | 76% |
+| Immediately called functions | 26, 30 | 18 | 69% |
+
+"Holds" is the deepest level that compiles in a fresh page with no quota, measured on the build
+before the reservations moved (the wrapper frames removed since give parentheses, `?:` chains and
+function expressions a little more). "Accepts" is the deepest level that compiles in a fresh
+page at 188 KiB; it is the same on both hosts, because the quota counts shadow bytes.
+
+What this means for real code: Ajv's deepest Angular validator nests 57 `if` blocks and is
+compiled in full when it first validates, and the deepest validator in Next's `bundle5.js` nests
+83. Both load. A generated function nested deeper than about 100
+validator levels, or 125 when it is never called, is refused on WebKit hosts with a catchable
+`RangeError`, even where warm engine code would have fitted it: the budget cannot see how warm
+the engine's wasm is, so it assumes cold. A function the lazy parse accepted can also be refused
+on its first call, when the emitter walks it.
 
 ## SpiderMonkey parser nesting
 
