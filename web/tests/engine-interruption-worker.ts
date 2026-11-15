@@ -14,6 +14,7 @@ export function observesInstance(module: WebAssembly.Module, request: Pick<RunRe
 
 installAtomicsObservers();
 const context = self as unknown as DedicatedWorkerGlobalScope;
+const postToPage = context.postMessage.bind(context);
 context.onmessage = async (event: MessageEvent<RuntimeWorkerRequest & Partial<RunRequest> & { engineInterruption: EngineInterruptionOptions }>) => {
   // Importing even the probe/transport loads Waffle's intrinsic-capture module.
   const { observeEngineImports, observePreview1Dequeue, observeEventLoopWait, observedEngineStart, probeCell } = await import("./engine-interruption-probe");
@@ -55,5 +56,6 @@ context.onmessage = async (event: MessageEvent<RuntimeWorkerRequest & Partial<Ru
     await run.call(context, event);
     // Unlike a logical process exit, this cannot happen while _start is still spinning.
     Atomics.store(probe, probeCell.runReturned, 1);
+    postToPage({ type: "engine-interruption-run-returned" });
   } finally { restoreWait(); WebAssembly.Instance = NativeInstance; }
 };
