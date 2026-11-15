@@ -178,6 +178,44 @@ fn runtime_proc_inherited_fds_are_a_stable_launch_snapshot() {
 }
 
 #[test]
+fn package_handoff_native_rejects_before_pointers_and_preserves_cancellation() {
+    use wasm_encoder::{
+        EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
+    };
+    let mut types = TypeSection::new();
+    types.ty().function([ValType::I32; 4], [ValType::I32]);
+    let mut imports = ImportSection::new();
+    imports.import("bun_package_scripts", "handoff", EntityType::Function(0));
+    let mut exports = ExportSection::new();
+    exports.export("handoff", ExportKind::Func, 0);
+    let mut binary = wasm_encoder::Module::new();
+    binary.section(&types).section(&imports).section(&exports);
+    for mut f in Fixture::both() {
+        let module = Module::new(f.store.engine(), binary.as_slice()).unwrap();
+        // This module has no memory. Even invalid pointers must return NOTSUP untouched.
+        let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+        let handoff = instance
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut f.store, "handoff")
+            .unwrap();
+        assert_eq!(
+            handoff.call(&mut f.store, (-1, -1, -1, -1)).unwrap(),
+            process::NOTSUP
+        );
+        let [reader, writer] = f.pipe();
+        f.write(1024, b"live");
+        assert_eq!(f.call("runtime_proc", "write", (writer, 1024, 4)), 4);
+        assert_eq!(f.call("runtime_proc", "read", (reader, 2048, 4)), 4);
+        assert_eq!(f.bytes(2048, 4), b"live");
+        f.store.data().cancel.kill(15);
+        assert!(handoff.call(&mut f.store, (-1, -1, -1, -1)).is_err());
+        assert_eq!(
+            f.store.data().cancel.select(FinalOutcome::Exit(126)),
+            FinalOutcome::Signal(15)
+        );
+    }
+}
+
+#[test]
 fn runtime_proc_exec_links_and_rejects_replacement_without_committing() {
     use wasm_encoder::{
         EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,

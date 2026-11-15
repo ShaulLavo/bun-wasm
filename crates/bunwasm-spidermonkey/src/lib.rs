@@ -13,6 +13,7 @@ mod properties;
 #[path = "glue/ucd.rs"]
 mod ucd;
 use core::ffi::c_char;
+mod panic_report;
 pub type Handle = u32;
 
 #[repr(C)]
@@ -132,9 +133,7 @@ extern "C" {
 }
 #[no_mangle]
 pub extern "C" fn install_rust_hooks() {
-    std::panic::set_hook(Box::new(|_| unsafe {
-        bunsm_host_fatal(c"SpiderMonkey Rust panic".as_ptr(), 22)
-    }));
+    std::panic::set_hook(Box::new(|info| panic_report::fatal(info)));
 }
 /// # Safety
 /// `reason` points to a live, NUL-terminated message for this call.
