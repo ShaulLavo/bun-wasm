@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { wasmMemoryLimits } from "../src/engine-kind";
 
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-rolldown-memory-"));
 const directory = join(scratch, "node_modules/@rolldown/binding-wasm32-wasi");
@@ -49,15 +50,23 @@ beforeAll(async () => {
   command(["tar", "-xzf", archive, "--strip-components=1", "-C", directory]);
 }, 120_000);
 
-test.each(loaders)("%s reduces only initial capacity and preserves source positions", filename => {
+test.each(loaders)("%s uses the binary minimum and supported capacity while preserving source positions", filename => {
   const loader = join(directory, filename);
   const source = readFileSync(loader, "utf8");
   const adapted = adapt(loader);
-  expect(adapted).toBe(source.replace("initial: 16384,", "initial: 1001 ,"));
+  expect(adapted).toBe(source.replace("initial: 16384,", "initial: 1001 ,").replace("maximum: 65536,", "maximum: 32768,"));
   expect(adapted.length).toBe(source.length);
-  expect(adapted).toContain("maximum: 65536,\n  shared: true,");
+  expect(adapted).toContain("maximum: 32768,\n  shared: true,");
   expect(readFileSync(loader, "utf8")).toBe(source);
   expect(JSON.parse(command([binary, loader, output])).dependsOnBinary).toBe(true);
+});
+
+test("the supplied shared capacity satisfies the real binary import bounds", () => {
+  const bytes = readFileSync(wasm);
+  expect(wasmMemoryLimits(bytes)).toEqual([{ initial: 1001, maximum: 65536, shared: true, origin: "imported" }]);
+  const memory = new WebAssembly.Memory({ initial: 1001, maximum: 32768, shared: true });
+  expect(memory.buffer.byteLength).toBe(1001 * 65536);
+  expect(memory.buffer).toBeInstanceOf(SharedArrayBuffer);
 });
 
 test("Rolldown rejects one page below the real binary minimum before imports run", () => {
@@ -87,7 +96,7 @@ test("Rolldown real sync, async, bundling, caller errors and disposal survive th
   expect(small.phases).toContain("bundle:return");
   expect(small.phases).toContain("dispose:return");
   expect(stock.descriptors).toEqual([{ initial: 16384, maximum: 65536, shared: true }]);
-  expect(small.descriptors).toEqual([{ initial: 1001, maximum: 65536, shared: true }]);
+  expect(small.descriptors).toEqual([{ initial: 1001, maximum: 32768, shared: true }]);
   expect(small.grownBytes[0]).toBeLessThan(stock.grownBytes[0]);
   measurements.push({ stock, small });
 }, 90_000);
