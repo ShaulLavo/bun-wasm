@@ -38,7 +38,7 @@ const REQUEST = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
 const MODULES = [
   "net_port.ts", "net_address.ts", "net_hostname.ts", "net_path.ts", "net_listener.ts", "http_common.ts", "http_agent.ts",
   "http_server_response.ts", "node_net_server.ts", "node_net_socket_state.ts", "node_net_socket_options.ts",
-  "node_net_onread.ts", "node_net.js", "tls_transport.ts", "net.js",
+  "node_net_onread.ts", "node_net.js", "tls_transport.ts", "io_pump.ts", "net.js",
 ];
 
 // One scenario text for every mode: `listen(port)` starts the server, `settled` resolves once

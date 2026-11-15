@@ -5,7 +5,7 @@ import type { PlaygroundProfile } from "../../web/src/playground/program-profile
 import { admit, awaitWithin, type Admission } from "./scope";
 interface Playground {
   profile: PlaygroundProfile;
-  shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void };
+  shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void; runtimeSnapshot?(): unknown };
   previews: { readonly ready: Promise<"ready" | "unsupported" | "failed">; serves(port: number): boolean; url(port: number): string };
   editor: { open(path: string): Promise<void>; save(): Promise<void>; view: { state: { doc: { toString(): string; length: number } }; dispatch(change: { changes: { from: number; to: number; insert: string } }): void } };
   term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { isWrapped: boolean; translateToString(trim: boolean): string } | undefined } } };
@@ -18,18 +18,24 @@ function expression<A, R>(operation: (input: A) => R, input: A): string { return
 export class ObservationTimeout extends Error {}
 export async function until<T>(operation: () => Promise<T>, accept: (value: T) => boolean, timeoutMs: number): Promise<T> {
   const end = Date.now() + timeoutMs;
+  let last: { value: T } | undefined;
   const admission: Admission = {
     signal: new AbortController().signal,
     deadline: end,
-    expiryReason: new ObservationTimeout(`Timed out after ${timeoutMs} ms waiting for an observation`),
+    get expiryReason() { return new ObservationTimeout(`Timed out after ${timeoutMs} ms; last observation: ${last ? observationText(last.value) : "unavailable"}`); },
   };
   while (true) {
     admit(admission);
     const value = await awaitWithin(operation(), admission);
+    last = { value };
     if (accept(value)) return value;
-    if (Date.now() >= end) throw new ObservationTimeout(`Timed out after ${timeoutMs} ms; last observation: ${JSON.stringify(value)}`);
+    if (Date.now() >= end) throw admission.expiryReason;
     await Bun.sleep(Math.min(100, end - Date.now()));
   }
+}
+function observationText(value: unknown): string {
+  try { return JSON.stringify(value) ?? "undefined"; }
+  catch { return "unserializable"; }
 }
 function readyState(): { ready: boolean; status: string; engine: string | null; agent: string; observedEngine: string | null; profile: PlaygroundProfile | null } {
   const control = document.querySelector("#engine");
@@ -173,7 +179,15 @@ function stop(): void {
 export async function stopServer(transport: ScopedTransport, timeoutMs: number, port = 5173): Promise<void> {
   await transport.useHost();
   await transport.evaluate(expression(stop, undefined));
-  await until(() => transport.evaluate<ReturnType<typeof listener>>(expression(listener, port)), value => !value.running && !value.listening, timeoutMs);
+  await until(() => transport.evaluate<ReturnType<typeof stopState>>(expression(stopState, port)), value => !value.running && !value.listening, timeoutMs);
+}
+function stopState(port: number) {
+  if (typeof playground === "undefined") return { listening: false, running: false, observedAt: Date.now(), runtime: null };
+  const listening = playground.previews.serves(port), running = playground.shell.running;
+  let runtime: unknown = null;
+  try { if (listening || running) runtime = playground.shell.runtimeSnapshot?.() ?? null; }
+  catch (error) { runtime = { unavailable: String(error) }; }
+  return { listening, running, observedAt: Date.now(), runtime };
 }
 function rendered(input: { selector: string; text: string }): { text: string; matched: boolean } {
   const text = document.querySelector(input.selector)?.textContent ?? "";

@@ -31,6 +31,7 @@ declare namespace BunWasm {
     };
   }
   interface Native {
+    fsWatchReady(): boolean;
     readonly prepareVersion: number;
     readonly contextHooks: boolean;
     readonly preparedColumns: Map<string, PreparedColumns>;

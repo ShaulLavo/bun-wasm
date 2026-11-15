@@ -93,6 +93,7 @@ export function fixture() {
     concatBytes: (parts: Uint8Array[]) => Buffer.concat(parts),
     pumpIo: () => false, ioPending: () => 0,
   };
+  modules.io_pump = load("io_pump")(internal);
   modules.tls_transport = load("tls_transport")(internal);
   modules.net_path = load("net_path")(internal);
   modules.net_listener = load("net_listener")(internal);

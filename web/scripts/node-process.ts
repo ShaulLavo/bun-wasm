@@ -227,6 +227,7 @@ function watchImports(memory: () => WebAssembly.Memory, descriptors: DescriptorT
       return entry.resource.kind === "file" || entry.resource.kind === "directory" ? ENOTSUP : EINVAL;
     }),
     watch_read: guard((_id, buf, len, out) => fits([buf!, len! >>> 0], [out!, 4]) ? EBADF : EFAULT),
+    watch_ready: guard(() => 0),
     watch_close: guard(() => EBADF),
   };
 }
