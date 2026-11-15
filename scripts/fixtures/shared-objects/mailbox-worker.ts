@@ -4,7 +4,7 @@ import { bindSharedObjectHost } from "../../../web/src/shared-objects/host";
 import { exportSharedObjects } from "../../../web/src/shared-objects/service";
 import { sourcePorts, type SourcePort } from "./source-runtime";
 
-const request: { owner: string; role: "sender" | "receiver" } = workerData;
+const request: { owner: string; role: "sender" | "receiver"; deferReceived?: boolean } = workerData;
 if (!parentPort) throw new Error("Missing native parent port");
 const host = parentPort;
 const service = exportSharedObjects(request.owner, { postMessage(message, transfer) {
@@ -17,6 +17,7 @@ const runtime = sourcePorts({ sharedObjects });
 const owned = new Set<SourcePort>();
 let source: SourcePort | undefined, reply: SourcePort | undefined;
 let callbacks = 0;
+let receivedPending = false;
 function port(value: unknown) {
   assert(value instanceof runtime.MessagePort); owned.add(value); return value;
 }
@@ -39,6 +40,11 @@ host.on("message", (message: { kind: string; graph?: unknown }) => {
     source = port(runtime.codec.decode(message.graph));
     host.postMessage({ kind: "ready" }); return;
   }
+  if (message.kind === "acknowledge-received") {
+    assert(receivedPending);
+    receivedPending = false;
+    host.postMessage({ kind: "received" }); return;
+  }
   if (message.kind === "send") {
     assert(source);
     const channel = new runtime.MessageChannel();
@@ -57,6 +63,7 @@ host.on("message", (message: { kind: string; graph?: unknown }) => {
     host.postMessage({ kind: "replied", callbacksWhileBlocked: callbacks - callbacksBefore, timerFired }); return;
   }
   if (message.kind !== "stop") throw new Error("Invalid mailbox fixture command");
+  assert.equal(receivedPending, false);
   clearInterval(interval);
   for (const value of owned) value.close();
   setImmediate(() => { service.close(); host.postMessage({ kind: "cleanup", state: service.inspectRoutes() }); host.close(); });
@@ -68,6 +75,7 @@ function receive(value: unknown) {
   assert.equal(value.shared, value.alias);
   assert("port" in value);
   port(value.port).postMessage("λ reply 😀");
+  if (request.deferReceived) { receivedPending = true; return; }
   host.postMessage({ kind: "received" });
 }
 const interval = setInterval(() => {

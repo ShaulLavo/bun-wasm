@@ -312,16 +312,17 @@ test("a reserved frame is invisible until commit and abort returns its capacity"
   expect(mailbox.drain(bytes => { expect(bytes[0]).toBe(3); })).toBe(1);
 });
 
-test("native workers execute source factories and host wrappers through the real broker", async () => {
+test.each([false, true])("native workers execute source factories and host wrappers through the real broker (defer received: %s)", async deferReceived => {
   const broker = createSharedObjectBroker();
   const workers: Worker[] = [], ports: NativeMessagePort[] = [], states: unknown[] = [];
-  const done = Promise.withResolvers<void>();
+  const sentAck = Promise.withResolvers<void>(), receivedAck = Promise.withResolvers<void>(), repliedAck = Promise.withResolvers<void>();
+  const failed = Promise.withResolvers<never>();
   const timeout = Promise.withResolvers<never>();
   const deadline = setTimeout(() => timeout.reject(new Error("Native mailbox fixture exceeded 5 seconds")), 5000);
   let received = 0, sent = 0;
   try {
     const receiverLease = broker.register(), senderLease = broker.register();
-    const receiver = new Worker(new URL("./fixtures/shared-objects/mailbox-worker.ts", import.meta.url), { workerData: { owner: receiverLease.id, role: "receiver" } });
+    const receiver = new Worker(new URL("./fixtures/shared-objects/mailbox-worker.ts", import.meta.url), { workerData: { owner: receiverLease.id, role: "receiver", deferReceived } });
     const sender = new Worker(new URL("./fixtures/shared-objects/mailbox-worker.ts", import.meta.url), { workerData: { owner: senderLease.id, role: "sender" } });
     workers.push(receiver, sender);
     function message(lease: typeof senderLease, value: Record<string, unknown>) {
@@ -331,21 +332,24 @@ test("native workers execute source factories and host wrappers through the real
       }
       if (value.kind === "initial") { receiver.postMessage({ kind: "restore", graph: value.graph }); return; }
       if (value.kind === "ready") { sender.postMessage({ kind: "send" }); return; }
-      if (value.kind === "sent") { sent++; return; }
-      if (value.kind === "received") { received++; return; }
+      if (value.kind === "sent") { sent++; sentAck.resolve(); return; }
+      if (value.kind === "received") { received++; receivedAck.resolve(); return; }
       if (value.kind === "cleanup") { states.push(value.state); return; }
       if (value.kind === "replied") {
         expect(value.callbacksWhileBlocked).toBe(0); expect(value.timerFired).toBe(false);
-        done.resolve(); return;
+        if (deferReceived) expect(received).toBe(0);
+        repliedAck.resolve();
+        if (deferReceived) receiver.postMessage({ kind: "acknowledge-received" });
+        return;
       }
       throw new Error("Unknown native mailbox response");
     }
     for (const [worker, lease] of [[receiver, receiverLease], [sender, senderLease]] as const) {
-      worker.on("message", value => { try { message(lease, value); } catch (error) { done.reject(error); } });
-      worker.on("error", done.reject);
+      worker.on("message", value => { try { message(lease, value); } catch (error) { failed.reject(error); } });
+      worker.on("error", failed.reject);
       worker.once("exit", () => lease.close());
     }
-    await Promise.race([done.promise, timeout.promise]);
+    await Promise.race([Promise.all([sentAck.promise, receivedAck.promise, repliedAck.promise]), failed.promise, timeout.promise]);
     expect({ received, sent }).toEqual({ received: 1, sent: 1 });
     const exits = workers.map(worker => once(worker, "exit"));
     for (const worker of workers) worker.postMessage({ kind: "stop" });
