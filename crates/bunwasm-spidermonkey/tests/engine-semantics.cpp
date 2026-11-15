@@ -769,6 +769,7 @@ void natives() {
   bsm_gc();
   check(finalized.size() == 1 && finalized[0] == 100, "native finalizer exactly once");
 }
+#include "eval-completion.cpp"
 #include "require-recovery.cpp"
 #if defined(BUNSM_LOOP_CONTROLS)
 #include "loop-dispatch.cpp"
@@ -869,6 +870,7 @@ extern "C" int engine_semantics_main() {
   {
     Value read(bsm_function("readFrame", 9, 1));
     install("readFrame", read.handle);
+    completion_cases();
     module_cases();
     for (auto promise : rejected) bsm_release(promise);
     rejected.clear();
