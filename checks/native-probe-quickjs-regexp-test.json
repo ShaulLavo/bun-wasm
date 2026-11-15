@@ -1,0 +1,12 @@
+{
+  "owner": "native-probe",
+  "path": "scripts/quickjs-regexp-test.test.ts",
+  "inputs": [
+    "third_party/rquickjs-sys/quickjs/quickjs.c",
+    "scripts/quickjs-native-check.ts",
+    "scripts/fixtures/quickjs-regexp-test.c",
+    "scripts/fixtures/quickjs-regexp-test.ts",
+    "scripts/fixtures/quickjs-regexp-test.baseline.json",
+    "scripts/fixtures/quickjs-regexp-test.node.json"
+  ]
+}
