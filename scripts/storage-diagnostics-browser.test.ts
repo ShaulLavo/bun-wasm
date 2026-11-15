@@ -1,19 +1,37 @@
 import { afterEach, expect, test } from "bun:test";
 import assert from "node:assert/strict";
-import { chromium, webkit, type BrowserType, type Page } from "playwright";
+import { chromium, webkit, type Browser, type BrowserContext, type BrowserType, type Page } from "playwright";
 import { diagnostic } from "../sandbox/tests/storage-browser";
 import { StorageLifetime } from "./storage-browser-evidence";
 
 type Event = Parameters<NonNullable<ConstructorParameters<typeof StorageLifetime>[0]>>[0];
 const lifetimes: StorageLifetime[] = [];
+const expectedFailures = new Map<StorageLifetime, readonly Error[]>();
 afterEach(async () => {
   for (const lifetime of lifetimes.splice(0)) {
     await lifetime.cleanup();
-    lifetime.assertClean();
+    const expected = expectedFailures.get(lifetime) ?? [];
+    expectedFailures.delete(lifetime);
+    assertFailures(lifetime.failures, expected);
+    if (expected.length === 0) lifetime.assertClean();
+    else assert.throws(() => lifetime.assertClean(), error => error instanceof AggregateError && hasFailures(error.errors, expected));
   }
 });
 
-async function fixture(engine: BrowserType, write?: (event: Event) => void): Promise<{ page: Page; events: Event[]; lifetime: StorageLifetime }> {
+function hasFailures(actual: readonly unknown[], expected: readonly Error[]): boolean {
+  return actual.length === expected.length && actual.every((error, index) => error === expected[index]);
+}
+
+function assertFailures(actual: readonly unknown[], expected: readonly Error[]): void {
+  assert(hasFailures(actual, expected), `Unexpected evidence or cleanup failures: ${actual.map(String).join(", ")}`);
+}
+
+type ContextOptions = {
+  open?: (browser: Browser) => Promise<BrowserContext>;
+  close?: (context: BrowserContext) => Promise<void>;
+};
+
+async function fixture(engine: BrowserType, write?: (event: Event) => void, contextOptions: ContextOptions = {}) {
   const events: Event[] = [];
   const lifetime = new StorageLifetime(event => { events.push(event); write?.(event); });
   lifetimes.push(lifetime);
@@ -23,15 +41,21 @@ async function fixture(engine: BrowserType, write?: (event: Event) => void): Pro
     finally { await browser.close(); }
   });
   lifetime.observeBrowser(browser);
-  const opening = browser.newContext();
-  closeContext = lifetime.own("context.close", async () => { await (await opening).close(); });
+  const opening = contextOptions.open ? contextOptions.open(browser) : browser.newContext();
+  let contextClosing = false;
+  closeContext = lifetime.own("context.close", async () => {
+    contextClosing = true;
+    const context = await opening;
+    await (contextOptions.close ? contextOptions.close(context) : context.close());
+  });
   const context = await opening;
+  if (contextClosing) throw new Error("Storage diagnostic context closed during setup");
   lifetime.observeContext(context);
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
   await page.route("http://storage.test/**", route => route.fulfill({ contentType: "text/html", body: "<!doctype html><h1>Host</h1>" }));
   await page.goto("http://storage.test/");
-  return { page, events, lifetime };
+  return { browser, page, events, lifetime };
 }
 
 function requestEvents(events: readonly Event[], path: string): Event[] {
@@ -178,18 +202,136 @@ for (const engine of [chromium, webkit]) {
     expect(snapshot?.readyState).toBeUndefined();
   }, 60_000);
 
-  for (const primary of [false, true]) test(`${engine.name()}: response evidence write failure blocks with primary=${primary}`, async () => {
-    const failure = new Error("response evidence write failed");
-    const original = new Error("original storage assertion");
-    const { lifetime } = await fixture(engine, event => { if (event.kind === "response") throw failure; });
-    const run = lifetime.run(async () => { if (primary) throw original; });
-    if (primary) await expect(run).rejects.toBe(original);
-    else await expect(run).rejects.toBeInstanceOf(AggregateError);
-    expect(lifetime.failures).toEqual([failure]);
-    expect(() => lifetime.assertClean()).toThrow(AggregateError);
-    lifetime.failures.splice(0);
-    lifetime.assertClean();
-  }, 60_000);
+  for (const primary of [false, true]) {
+    for (const closeFailure of [false, true]) test(`${engine.name()}: response evidence write failure blocks with primary=${primary}, closeFailure=${closeFailure}`,
+      () => responseFailure(engine, primary, closeFailure), 60_000);
+  }
+
+  test(`${engine.name()}: context teardown settles late iframe load before browser close`, () => orderedTeardown(engine), 60_000);
+  test(`${engine.name()}: cleanup awaits late context acquisition before browser close`, () => lateContext(engine), 60_000);
+  test(`${engine.name()}: context setup rejection still closes browser`, () => rejectedSetup(engine), 60_000);
+}
+
+async function responseFailure(engine: BrowserType, primary: boolean, closeFailure: boolean): Promise<void> {
+  const started = performance.now();
+  const failure = new Error("response evidence write failed");
+  const original = new Error("original storage assertion");
+  const report = new Error("fixture report failed");
+  const close = new Error("fixture context close failed");
+  const response = Promise.withResolvers<void>();
+  const { browser, page, lifetime, events } = await fixture(engine, event => {
+    if (event.kind !== "response" || requestEvents([event], "evidence").length === 0) return;
+    response.resolve();
+    throw failure;
+  }, closeFailure ? { close: async () => { throw close; } } : {});
+  const expected = closeFailure ? [failure, report, close] : [failure];
+  expectedFailures.set(lifetime, expected);
+  await page.evaluate(() => { document.body.innerHTML = '<iframe src="/evidence"></iframe>'; });
+  await response.promise;
+  if (closeFailure) lifetime.secondary("fixture.report", report);
+  const run = lifetime.run(async () => { if (primary) throw original; });
+  await assert.rejects(run, error => primary ? error === original : error instanceof AggregateError && hasFailures(error.errors, expected));
+  assertFailures(lifetime.failures, expected);
+  assert.equal(browser.isConnected(), false);
+  assert.equal(page.isClosed(), true);
+  assert.equal(requestEvents(events, "evidence").filter(event => event.kind === "response").length, 1);
+  console.log(JSON.stringify({ browser: engine.name(), control: "response failure", primary, closeFailure, durationMs: performance.now() - started,
+    failures: lifetime.failures.map(String), events: events.filter(event => /^(cleanup|secondary|context-close|browser-disconnected)/.test(event.kind)) }));
+}
+
+async function orderedTeardown(engine: BrowserType): Promise<void> {
+  const started = performance.now();
+  const closing = Promise.withResolvers<void>();
+  const allowClose = Promise.withResolvers<void>();
+  const order: string[] = [];
+  let cleanup = async () => {};
+  try {
+    const { browser, page, events, lifetime } = await fixture(engine, undefined, { close: async context => {
+      order.push("context close started");
+      closing.resolve();
+      await allowClose.promise;
+      await context.close();
+      order.push("context close settled");
+    } });
+    cleanup = () => lifetime.cleanup();
+    browser.on("disconnected", () => order.push("browser disconnected"));
+    const frame = await lateLoad(page, lifetime);
+    const loaded = frame.waitForLoadState("load");
+    void lifetime.cleanup();
+    await closing.promise;
+    await loaded;
+    assert.equal(browser.isConnected(), true);
+    assert.equal(await frame.locator("h1").textContent(), "Late module");
+    allowClose.resolve();
+    await cleanup();
+    assert.deepEqual(order, ["context close started", "context close settled", "browser disconnected"]);
+    assert.equal(page.isClosed(), true);
+    assert.equal(browser.contexts().length, 0);
+    console.log(JSON.stringify({ browser: engine.name(), control: "ordered teardown", durationMs: performance.now() - started, order,
+      events: events.filter(event => /^(cleanup|context-close|browser-disconnected)/.test(event.kind)) }));
+  } finally { allowClose.resolve(); await cleanup(); }
+}
+
+async function lateLoad(page: Page, lifetime: StorageLifetime) {
+  const held = Promise.withResolvers<void>();
+  const requested = Promise.withResolvers<void>();
+  lifetime.own("module.release", () => held.resolve());
+  await page.route("**/late.ts", async route => {
+    requested.resolve();
+    await held.promise;
+    await route.fulfill({ contentType: "text/javascript", body: 'document.body.innerHTML = "<h1>Late module</h1>";' });
+  });
+  await page.route("**/late", route => route.fulfill({ contentType: "text/html", body: '<!doctype html><body><script type="module" src="/late.ts"></script>' }));
+  await page.evaluate(() => { document.body.innerHTML = '<iframe src="/late"></iframe>'; });
+  await requested.promise;
+  const frame = page.frames().find(frame => frame.url() === "http://storage.test/late");
+  assert(frame);
+  return frame;
+}
+
+async function lateContext(engine: BrowserType): Promise<void> {
+  const started = performance.now();
+  const acquired = Promise.withResolvers<Browser>();
+  const deliver = Promise.withResolvers<void>();
+  const closing = Promise.withResolvers<void>();
+  const setup = fixture(engine, event => {
+    if (event.kind === "cleanup-begin" && typeof event.detail === "object" && event.detail !== null
+      && "phase" in event.detail && event.detail.phase === "context.close") closing.resolve();
+  }, { open: async browser => {
+    const context = await browser.newContext();
+    acquired.resolve(browser);
+    await deliver.promise;
+    return context;
+  } }).then(() => assert.fail("Setup must reject after context cleanup"), error => error);
+  const browser = await acquired.promise;
+  const lifetime = lifetimes.at(-1);
+  assert(lifetime);
+  const cleanup = lifetime.cleanup();
+  try {
+    await closing.promise;
+    assert.equal(browser.isConnected(), true);
+  } finally { deliver.resolve(); await cleanup; }
+  assert.match(String(await setup), /closed/);
+  assert.equal(browser.isConnected(), false);
+  assert.equal(browser.contexts().length, 0);
+  console.log(JSON.stringify({ browser: engine.name(), control: "late context", durationMs: performance.now() - started }));
+}
+
+async function rejectedSetup(engine: BrowserType): Promise<void> {
+  const started = performance.now();
+  const acquired = Promise.withResolvers<Browser>();
+  await assert.rejects(fixture(engine, undefined, { open: async browser => {
+    acquired.resolve(browser);
+    const context = await browser.newContext();
+    await context.close();
+    return context;
+  } }), /closed/);
+  const browser = await acquired.promise;
+  const lifetime = lifetimes.at(-1);
+  assert(lifetime);
+  await lifetime.cleanup();
+  assert.equal(browser.isConnected(), false);
+  console.log(JSON.stringify({ browser: engine.name(), control: "setup rejection", durationMs: performance.now() - started }));
 }
 
 async function unknownStart(page: Page, events: Event[]): Promise<void> {
