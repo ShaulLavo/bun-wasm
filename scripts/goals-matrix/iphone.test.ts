@@ -111,6 +111,22 @@ test("native cleanup rejects a successful input receipt when the owned tab is st
   expect(steps.map(batch => batch.map((step: { command: string }) => step.command))).toEqual([["press", "snapshot"], ["press", "snapshot"]]);
 });
 
+test("native tab cleanup settles transitions before using and verifying snapshot refs", async () => {
+  let moving = false, closed = false;
+  await closeIphoneTab(async args => {
+    if (args[0] !== "batch") return "Tapped";
+    const steps: unknown = JSON.parse(args[2]!);
+    if (!Array.isArray(steps)) throw new Error("Expected cleanup batch");
+    const input = object(object(steps[0]).input), target = object(input.target);
+    if (target.kind === "ref" && moving && input.settle !== true) throw new Error("target_still_moving; nothing dispatched");
+    closed ||= target.kind === "ref";
+    moving = input.settle !== true;
+    return tabBatch(tabOverview(closed && !moving ? ["Unrelated"] : ["Unrelated", "Goals owned"]));
+  }, "Goals owned", Date.now() + 10_000);
+  expect(closed).toBe(true);
+  expect(moving).toBe(false);
+});
+
 test("an outstanding install observation cannot block confirmed native tab cleanup", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-goals-pending-cleanup-"));
   const agent = join(root, "agent-device");
