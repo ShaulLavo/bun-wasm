@@ -54,6 +54,7 @@
         "scripts/fixtures/quickjs-async-context.ts",
         "scripts/fixtures/quickjs-frame-stack.ts",
         "scripts/fixtures/quickjs-parser-stack.ts",
+        "scripts/fixtures/quickjs-regexp-test.ts",
         "scripts/fixtures/runtime-js-child.ts",
         "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",

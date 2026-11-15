@@ -50,8 +50,8 @@ Next's webpack hook needs.
 | `CallWithWasmStackReservation` around three recursive calls in `ICInterpretOps` | PBL | 384 | Scripted calls, getters and setters reached through inline caches before the stack is deep | `ajv`, `getter` |
 | `SerializeJSONProperty` | both | 896 | Nested arrays and objects in `JSON.stringify` | `stringify` |
 | `array_join` | both | 1536 | Nested arrays converted to strings | `join` |
-| `statement` | both | 336 | Labels and sub-statements (`if`, loop and `with` bodies) | `labels`, with `ifs`, `validator`, `labelWhile` |
-| `statementListItem` | both | 352 | Statements inside blocks and function bodies | `blocks`, with `ifs`, `validator`, `labelWhile` |
+| `statement`, and the braced `if` body path that bypasses it (in `ifStatement`'s frame since the [parser frame merges](spidermonkey-frontend-frames.md)) | both | 336 | Labels and sub-statements (`if`, loop and `with` bodies) | `labels`, with `ifs`, `validator`, `labelWhile` |
+| `statementListItem` (in `statementList`'s frame since the parser frame merges) | both | 352 | Statements inside blocks and function bodies | `blocks`, with `ifs`, `validator`, `labelWhile` |
 | `functionFormalParametersAndBody` | both | 1696 | Nested function bodies | `functions`, `methods`, `classes`, `arrows` |
 | `functionExpr` in `primaryExpr` | both | 2880 | Nested function expressions | `iifes` |
 | `argumentList` | both | 2800 | Nested call arguments | `calls` |

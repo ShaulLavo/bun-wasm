@@ -67,4 +67,20 @@ assert.equal(new TextDecoder().decode(swappedBuffer), "AB");
 const swappedView = new DataView(Uint8Array.of(88, 65, 66, 89).buffer, 1, 2);
 Object.setPrototypeOf(swappedView, Uint8Array.prototype);
 assert.equal(new TextDecoder().decode(swappedView), "AB");
+
+function completedUtf8() {
+  const decoder = new TextDecoder();
+  decoder.decode();
+  for (const bytes of [Uint8Array.of(0xef, 0xbb, 0xbf, 65), Uint8Array.of(0xf0, 0x9f), Uint8Array.of(0xed, 0xa0, 0x80), Uint8Array.of(0xe0, 0x80, 0x80)]) {
+    assert.equal(decoder.decode(bytes), new TextDecoder().decode(bytes));
+  }
+  const bytes = Uint8Array.of(88, 65, 66, 89);
+  assert.equal(decoder.decode(bytes.subarray(1, 3)), "AB");
+  assert.equal(decoder.decode(new DataView(bytes.buffer, 1, 2)), "AB");
+  assert.equal(decoder.decode(bytes, { get stream() { bytes.buffer.transfer(); return false; } }), "");
+  assert.equal(decoder.decode(Uint8Array.of(0xf0, 0x9f), { stream: true }), "");
+  assert.equal(decoder.decode(Uint8Array.of(0x92, 0xa9)), "💩");
+  assert.equal(decoder.decode(Uint8Array.of(0xef, 0xbb, 0xbf, 66)), "B");
+}
+completedUtf8();
 console.log("TextDecoder native codec, streaming, fatal and dictionary controls passed");

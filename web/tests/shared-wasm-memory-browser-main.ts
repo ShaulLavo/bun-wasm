@@ -6,6 +6,7 @@ import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { startRun } from "../src/runner";
 import { fixtureFileUrl, installFixtureTree, parseFixtureTree } from "./fixture-tree";
 import { AgentLockObserver, heldLockNames } from "./shared-wasm-agent/observer";
+import { captureLaunch, captureMessage, captureStop, memberCaptures } from "./shared-wasm-agent/capture-page";
 
 const FIXTURE = "/home/user/fixture";
 const CONTROL = "/home/user/control";
@@ -47,14 +48,25 @@ function installAgentWorkers(): void {
       super(url, { ...options, name: id });
       agents.set(this, { id });
       this.addEventListener("message", event => {
+        captureMessage(this, event.data);
         if (event.data?.type !== "spidermonkey-stack-proof") return;
         hostStacks.push(event.data);
         event.stopImmediatePropagation();
       });
     }
+    override postMessage(data: unknown, options: Transferable[] | StructuredSerializeOptions = []): void {
+      const captured = captureLaunch(this, agents.get(this)!.id, data);
+      if (Array.isArray(options)) super.postMessage(captured, options);
+      else super.postMessage(captured, options);
+    }
     override terminate(): void {
-      if (agents.get(this)?.tag?.startsWith(FAIL_STOP)) throw new Error("injected native terminate failure");
+      captureStop(this, "native-terminate-entered");
+      if (agents.get(this)?.tag?.startsWith(FAIL_STOP)) {
+        captureStop(this, "injected-native-terminate-failure");
+        throw new Error("injected native terminate failure");
+      }
       super.terminate();
+      captureStop(this, "native-terminate-returned");
     }
   };
 }
@@ -232,6 +244,10 @@ async function run() {
   await installFixtureTree(runtime.filesystem, fixture, entries, path => bytes(fixtureFileUrl(path)));
   for (const directory of ["group", "gone", "armed", "unarmable", "closed", "stalled", "retained", "snapshot-request", "snapshot"]) await runtime.filesystem.mkdirp(`${CONTROL}/${directory}`);
   await runtime.filesystem.flush();
+  if (entry === "member-capture-control.ts") Reflect.set(globalThis, "sharedWasmCaptureRelease", async () => {
+    await runtime.filesystem.writeFile(`${CONTROL}/capture-release`, new Uint8Array());
+    await runtime.filesystem.flush();
+  });
   const kind: unknown = await (await fetch("./program/kind.json")).json();
   if (kind !== "quickjs" && kind !== "jsc" && kind !== "spidermonkey") throw new Error("Invalid program kind");
   const module = await prepareProgram({ kind, core: await bytes("./program/bun.wasm"), side: await bytes("./program/side.wasm") });
@@ -251,7 +267,7 @@ async function run() {
   // Owner-side counters while members live: proof real regions were reserved and charged.
   const processes = await runtime.processes();
   const members = watchMembers(runtime, processes, broker);
-  Reflect.set(globalThis, "sharedWasmMemoryProgress", () => ({ stdout: stdout.slice(-400), stderr: stderr.slice(-800), groups: processes.memoryGroups() }));
+  Reflect.set(globalThis, "sharedWasmMemoryProgress", () => ({ stdout: stdout.slice(-400), stderr: stderr.slice(-800), groups: processes.memoryGroups(), members: memberCaptures() }));
   const peak = { groups: 0, regions: 0, holds: 0, committedBytes: 0 };
   const sampling = setInterval(() => {
     members.sample();
@@ -273,7 +289,7 @@ async function run() {
   }
   members.sample();
   await members.settled();
-  return { ...result, hostStacks, wallMs, stdout, stderr, peak, groups: processes.memoryGroups(), ended: members.ended(), budget: members.budget(), agentCloseDelays: members.closeDelays() };
+  return { ...result, hostStacks, wallMs, stdout, stderr, peak, groups: processes.memoryGroups(), ended: members.ended(), budget: members.budget(), agentCloseDelays: members.closeDelays(), members: memberCaptures() };
 }
 
 void run().then(
