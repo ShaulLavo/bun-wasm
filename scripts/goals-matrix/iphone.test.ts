@@ -121,6 +121,7 @@ test("native tab cleanup settles transitions before using and verifying snapshot
     if (target.kind === "ref" && moving && input.settle !== true) throw new Error("target_still_moving; nothing dispatched");
     closed ||= target.kind === "ref";
     moving = input.settle !== true;
+    if (moving) throw new Error("cleanup snapshot acquired before transition settled");
     return tabBatch(tabOverview(closed && !moving ? ["Unrelated"] : ["Unrelated", "Goals owned"]));
   }, "Goals owned", Date.now() + 10_000);
   expect(closed).toBe(true);
