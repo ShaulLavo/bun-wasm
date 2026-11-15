@@ -7,11 +7,12 @@ import { withSignals, ownedCommand } from "./lifetime";
 import { requireNativeQueue } from "./mac-queue";
 import { prepareDesktopSafari, stopDesktopSafari, type DesktopSafari } from "./native-safari";
 import type { ExitOwner } from "./safari-exit-observer";
+import { clock } from "./safari-protocol";
 async function checkAvailability(signal: AbortSignal): Promise<void> {
   await ownedCommand(["python3", join(homedir(), ".agents/skills/machine-fleet/scripts/availability.py"), "check", "--owner-only"], signal, 15_000);
 }
 type NativeResources = { safari: DesktopSafari; safariStopped: boolean; stopped: boolean; port: number; driver?: ReturnType<typeof Bun.spawn>; owned?: ReturnType<typeof ownSafariDriver> };
-type NativeOptions = { desktopSafari: boolean; cleanupFile?: string; exitOwner?: Pick<ExitOwner, "attempt"> };
+type NativeOptions = { desktopSafari: boolean; cleanupFile?: string; exitOwner?: Pick<ExitOwner, "attempt" | "observeNative" | "snapshotNative"> };
 export interface NativeHost {
   platform: string;
   uid(): number | undefined;
@@ -60,13 +61,46 @@ async function runNative<T>(operation: (endpoint: string, signal: AbortSignal) =
     await until(() => io.ready(endpoint, signal), Boolean, 10_000);
     return await operation(endpoint, signal);
   };
-  if (config.exitOwner) return config.exitOwner.attempt(operationAndSetup, [
+  const owner = config.exitOwner;
+  if (owner) return captureNative(state, signal, owner, () => owner.attempt(operationAndSetup, [
     { phase: "driver-teardown", run: () => stopNativeDriver(state, io) },
     { phase: "app-teardown", run: async () => { await io.stopApp(state.safari); state.safariStopped = true; } },
     { phase: "final-drain", run: () => nativeReceipt(state, config.cleanupFile) },
-  ]);
+  ]));
   try { return await operationAndSetup(); }
   finally { await cleanupNative(state, io, config.cleanupFile); }
+}
+async function captureNative<T>(state: NativeResources, signal: AbortSignal, owner: NonNullable<NativeOptions["exitOwner"]>, operation: () => Promise<T>): Promise<T> {
+  const detach = owner.observeNative(() => ({
+    observedAt: clock(), observerPid: process.pid,
+    driver: state.driver ? { child: safariChildState(state.driver), spawnedAfter: state.owned?.spawnedAfter ?? null,
+      root: state.owned?.root ? { ...state.owned.root } : null } : null,
+    safari: desktopSafariState(state.safari),
+    cancellation: { source: "native-wrapper-signal", aborted: signal.aborted,
+      reason: signal.aborted ? cancellationReason(signal.reason) : null },
+    limitations: ["Null exitCode and signalCode mean no child exit observed, not proof of liveness.",
+      "Handle reads are sequential observations, not atomic process state or kernel exit times.",
+      "Cancellation covers only the wrapper signal; no initiating actor is identified.",
+      "After-teardown marks bounded settlement; an unjoined cleanup may still be running."],
+  }));
+  const cancelled = () => owner.snapshotNative("cancellation");
+  signal.addEventListener("abort", cancelled, { once: true });
+  if (signal.aborted) cancelled();
+  try { return await operation(); }
+  finally { signal.removeEventListener("abort", cancelled); detach(); }
+}
+function cancellationReason(reason: unknown) {
+  return reason instanceof Error ? { kind: "error", name: reason.name } : { kind: typeof reason };
+}
+function safariChildState(child: Pick<ReturnType<typeof Bun.spawn>, "pid" | "exitCode" | "signalCode">) {
+  return { source: "retained-child-handle", pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode };
+}
+function desktopSafariState(state: DesktopSafari) {
+  const launch = state.launch;
+  if (launch.kind === "none") return { kind: launch.kind };
+  const child = safariChildState(launch.process);
+  if (launch.kind === "spawned") return { kind: launch.kind, child };
+  return { kind: launch.kind, child, application: { ...launch.application } };
 }
 async function driverReady(endpoint: string, signal: AbortSignal): Promise<boolean> {
   signal.throwIfAborted();
