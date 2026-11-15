@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { coverageFixture } from "./browser-guest-coverage-fixture";
 import { ownerEngines, rowIdentity, type BrowserGuestSelection, type CoverageEngine, type CoverageLeg } from "./browser-guest-catalogue";
 import { executeExistingBrowserDriver, existingDriverCommand, existingDriverEvidence } from "./browser-existing-drivers";
@@ -35,7 +36,7 @@ function success(owner: Owner, leg: CoverageLeg, engine: CoverageEngine, program
 async function fixture(owner: Owner, leg: CoverageLeg, engines = ownerEngines(owner)) {
   const selection: BrowserGuestSelection = [{ owner, engines }], site = await coverageFixture(cleanup, selection);
   const artifact = await site.prepare();
-  const directory = mkdtempSync("/work/tmp/bun-wasm-adapter-"); cleanup.add(directory);
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-adapter-")); cleanup.add(directory);
   const repository = join(directory, "drivers"), reports = join(directory, "reports");
   mkdirSync(join(repository, "web/tests"), { recursive: true });
   const outputs = Object.fromEntries(engines.map(engine => [engine, success(owner, leg, engine, artifact.programs)]));

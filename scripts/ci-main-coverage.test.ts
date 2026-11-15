@@ -340,3 +340,20 @@ test("cumulative browser selection retains declarations introduced and removed b
   const result = await mainCoverage(api(head, [run(base)], [selectionJob(base)]));
   expect(result).toMatchObject({ kind: "verified", edges: 3, browserSelection: [{ owner: "worker-modules", engines: ["browser"] }] });
 }));
+
+test("cumulative browser engine unions preserve QuickJS and JSC edges without adding Browser rows", () => fixture(async base => {
+  change("third_party/rquickjs-sys/edge.rs", "QuickJS input");
+  change("jsc/edge.cpp", "JSC input");
+  rmSync("third_party/rquickjs-sys/edge.rs");
+  rmSync("jsc/edge.cpp");
+  const head = change("docs/replacement.md", "docs");
+  const result = await mainCoverage(api(head, [run(base)], [selectionJob(base)]));
+  expect(result.kind).toBe("verified");
+  expect(result.browserSelection).toEqual([
+    { owner: "installer-links", engines: ["quickjs", "jsc"] },
+    { owner: "subprocess", engines: ["quickjs", "jsc"] },
+    { owner: "preview-websocket", engines: ["quickjs"] },
+    { owner: "engine-interruption", engines: ["quickjs", "jsc"] },
+    { owner: "tools-integrity", engines: ["quickjs", "jsc"] },
+  ]);
+}));

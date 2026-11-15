@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { assertEngineInterruptionResult } from "../web/tests/engine-interruption-result";
 import { selectInterruptionEngines, interruptionInputs, interruptionProofs } from "../web/tests/engine-interruption-cases";
 import { assertWorkerModuleReport, runWorkerModuleVariants, workerModuleReport } from "../web/tests/browser-worker-modules";
@@ -56,7 +57,7 @@ test("interruption artifact inputs require each selected pair and unchanged Brow
   expect(interruptionInputs(selectInterruptionEngines())).toHaveLength(5);
 });
 test("missing explicitly selected side fails before browser launch or bundle build", () => {
-  const directory = mkdtempSync("/work/tmp/bun-wasm-focused-missing-");
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-focused-missing-"));
   try {
     const output = join(directory, "report.json");
     for (const name of ["bun-browser.wasm", "bun-jsc.wasm"]) writeFileSync(join(directory, name), "preflight-only, never executed");
@@ -150,7 +151,7 @@ test("focused manifests preserve the browser-guest blocking owner, exact inputs 
 });
 
 test("actual focused wrappers reject missing owner, invalid leg and missing selected artifacts before any browser execution", () => {
-  const directory = mkdtempSync("/work/tmp/bun-wasm-focused-boundary-");
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-focused-boundary-"));
   try {
     for (const owner of ["engine-interruption", "worker-modules", "terminal-stdin"] as const) {
       checkWrapperBoundary(owner, directory);

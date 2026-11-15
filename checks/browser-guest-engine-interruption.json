@@ -4,6 +4,10 @@
   "batch": "23-engine-interruption",
   "inputs": [
     ".github/workflows/ci.yml",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml",
+    "scripts/ci-main-coverage.ts",
     "scripts/ci-browser-coverage.ts",
     "scripts/ci-changes.ts",
     "scripts/ci-check-inputs.ts",
@@ -123,10 +127,6 @@
     "web/tests/engine-interruption-sleep.ts",
     "web/tests/engine-interruption-transport.ts",
     "web/tests/engine-interruption-worker.ts",
-    "web/tests/process-module-fixture.ts",
-    ".github/actions/native-setup/action.yml",
-    ".github/actions/native-seed/action.yml",
-    ".github/actions/native-production/action.yml",
-    "scripts/ci-main-coverage.ts"
+    "web/tests/process-module-fixture.ts"
   ]
 }

@@ -4,6 +4,10 @@
   "batch": "21-subprocess-aliases",
   "inputs": [
     ".github/workflows/ci.yml",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml",
+    "scripts/ci-main-coverage.ts",
     "scripts/ci-browser-coverage.ts",
     "scripts/ci-changes.ts",
     "scripts/ci-check-inputs.ts",
@@ -156,10 +160,6 @@
     "web/tests/foreground.ts",
     "web/tests/playground-cleanup.ts",
     "web/tests/playground.mjs",
-    "scripts/browser-existing-drivers.ts",
-    ".github/actions/native-setup/action.yml",
-    ".github/actions/native-seed/action.yml",
-    ".github/actions/native-production/action.yml",
-    "scripts/ci-main-coverage.ts"
+    "scripts/browser-existing-drivers.ts"
   ]
 }
