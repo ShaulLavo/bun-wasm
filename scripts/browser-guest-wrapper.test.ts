@@ -95,15 +95,15 @@ test("cancellation reaches the real supervisor and finally removes scratch after
 }, 30_000);
 
 test("unsafe cleanup retains its scratch and ownership evidence, with no next engine", async () => {
-  const { env, reports } = await fixture();
-  let scratch = "";
+  const { env } = await fixture();
+  let scratch = "", directory = "";
   await expect(withBrowserGuestRegression({ owner: "installer-links", controls: () => [], execute: async context => {
+    directory = context.directory;
     scratch = context.scratch; cleanup.add(scratch);
     await smallChild(context, `require('node:fs').writeFileSync(${JSON.stringify(join(context.scratch, "owned.pid"))},String(process.pid)); process.kill(process.ppid,'SIGKILL'); process.exit(0)`);
     expect(context.regression.safeToReuse).toBe(false);
   } }, env)).rejects.toThrow();
-  const name = readdirSync(reports)[0]; if (!name) throw new Error("Missing unsafe ledger");
-  expect(JSON.parse(readFileSync(join(reports, name, "ownership.json"), "utf8")).status).toBe("unsafe-retained");
+  expect(JSON.parse(readFileSync(join(directory, "ownership.json"), "utf8")).status).toBe("unsafe-retained");
   expect(existsSync(scratch)).toBe(true);
   const pid = Number(readFileSync(join(scratch, "owned.pid"), "utf8"));
   const cap = Date.now() + 10_000;

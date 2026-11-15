@@ -6,6 +6,9 @@ tooling, with no adapted upstream implementation or upstream revision.
 Package producer guards expand the real shared actions before inspecting and
 executing their existing workflow fragments. The selector's path inventory is
 classified separately from actual playground transcript readers.
+Composite run steps explicitly retain the workflow's restricted shell. Their
+metadata test requires a shell, and unsafe-cleanup fixtures read the report path
+provided by the wrapper rather than relying on directory enumeration order.
 
 The immutable check-manifest reader accepts an optional family filter. It keeps
 ordinary split Browser declarations separate from native correctness and shared

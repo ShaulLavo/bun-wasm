@@ -244,6 +244,10 @@ test("composite steps use supported metadata and transfers retain their five-min
 function requireSupportedStep(step: Record<string, unknown>): void {
   const allowed = new Set(["name", "id", "if", "run", "uses", "env", "with", "shell", "working-directory", "continue-on-error"]);
   expect(Object.keys(step).every(key => allowed.has(key))).toBe(true);
+  if (typeof step.run === "string") {
+    expect(step.shell).toBeString();
+    expect(step.shell).not.toBe("");
+  }
 }
 
 test("coverage outputs add only browser production and the actually selected JSC rows", () => {
