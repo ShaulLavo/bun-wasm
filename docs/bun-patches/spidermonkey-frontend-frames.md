@@ -20,12 +20,13 @@ behind them.
   functions it is merged into, so every statement level holds it.
 - `ifStatement` reserves for its own frame, so a braced `if` level holds `statementList`'s and
   `ifStatement`'s, one per frame. An `if` with an unbraced body holds `ifStatement`'s and
-  `statement`'s, again one per frame.
+  `statement`'s, again one per frame. `tryStatement` does the same for a `try` level, whose
+  blocks go straight to `statementList`.
 - `assignExpr`, `unaryExpr` and `memberExpr` each reserve for their own frame. The never-inline
   reservation wrappers that guarded parenthesised expressions, function expressions and the
   branches of `?:` are gone, so no wrapper frame sits on a parser cycle. The structural check
-  requires each surviving edge to be a direct call and each of these six frames to hold at least
-  its reservation, in all four instantiations.
+  requires each surviving edge to be a direct call and each of these seven frames to hold at
+  least its reservation, in all four instantiations.
 
 ## Why
 

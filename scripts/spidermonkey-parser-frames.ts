@@ -400,8 +400,8 @@ export type InstantiationReport = { label: string; frames: Record<string, { slot
 // patch's table: an inlining change that moved a reservation out of its frame is as silent as a
 // lost merge. statementListItem's reservation sits in statementList, the frame it is merged into.
 const reservingFrames = {
-  statementList: "StatementListItemReserve", ifStatement: "IfStatementReserve", statement: "StatementReserve",
-  assignExpr: "AssignExprReserve", unaryExpr: "UnaryExprReserve", memberExpr: "MemberExprReserve",
+  statementList: "StatementListItemReserve", ifStatement: "IfStatementReserve", tryStatement: "TryStatementReserve",
+  statement: "StatementReserve", assignExpr: "AssignExprReserve", unaryExpr: "UnaryExprReserve", memberExpr: "MemberExprReserve",
 } as const;
 
 function reservationSizes(patch: string): Record<string, number> {

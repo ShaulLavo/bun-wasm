@@ -57,8 +57,9 @@ possible to what Next's webpack hook and Angular's schema validators need.
 | `CallWithWasmStackReservation` around three recursive calls in `ICInterpretOps` | PBL | 384 | Scripted calls, getters and setters reached through inline caches before the stack is deep | `ajv`, `getter` |
 | `SerializeJSONProperty` | both | 896 | Nested arrays and objects in `JSON.stringify` | `stringify` |
 | `array_join` | both | 1536 | Nested arrays converted to strings | `join` |
-| `statementListItem` (in `statementList`'s frame, and `switchStatement`'s, since the [parser frame merges](spidermonkey-frontend-frames.md)) | both | 640 | Every statement in a block, function body or `switch` case | `tries` and `validator` parsed lazily; also `blocks`, `ifs` |
+| `statementListItem` (in `statementList`'s frame, and `switchStatement`'s, since the [parser frame merges](spidermonkey-frontend-frames.md)) | both | 640 | Every statement in a block, function body or `switch` case | `validator` parsed lazily; also `blocks`, `ifs`, `switches` |
 | `ifStatement` | both | 256 | `if` statements, braced or not | `validator` parsed lazily, with the 640 above |
+| `tryStatement` | both | 288 | `try` statements, whose blocks go straight to `statementList` | `tries` parsed lazily, with the 640 above: at 216 KiB without it, refusing lazily parsed `try` nesting ran out of host stack on the Mac's interpreter tier |
 | `statement` | both | 1104 | Statements that are a label's target or a body: loop, `with` and unbraced `if` bodies | `labels`; also `fors` compiled in full, `labelWhile`, `unbracedWhiles` |
 | `assignExpr` | both | 880 | Every expression level. Alone: conditional, assignment, arrow and `yield` chains | `ternary` |
 | `unaryExpr` | both | 592 | Every expression level. Alone: unary operator, `typeof`, `delete`, `await` and `++` chains | `unary`, `typeofs` (the constant folder is their deepest pass) |
@@ -77,7 +78,10 @@ holding the whole level's:
 
 - A statement level is `statementList` plus the statement's own function
   (`ifStatement`, `whileStatement`, `tryStatement` and so on), and `statement`
-  when the statement is a body or follows a label.
+  when the statement is a body or follows a label. `ifStatement` and
+  `tryStatement` reserve for themselves because their braced blocks go straight
+  to `statementList`; loops, `with` and labels parse their body through
+  `statement`, and `switch` holds `statementListItem`'s in its own frame.
 - An expression level is `assignExpr`, `unaryExpr` and `memberExpr`, plus
   `expr`, `argumentList` or `templateLiteral` for the bracket kinds that add one.
   Arrays, objects, element access, parentheses and function expressions need
