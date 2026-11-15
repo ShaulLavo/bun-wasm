@@ -13,6 +13,8 @@ import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol"
 import { installBunAdapters as installReal, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
 import type { BunAdapterOptions } from "../../src/index.js";
 import { runtimeSharedObjectRoute } from "../../web/src/shared-objects/runtime.js";
+import { packageService } from "../../src/package-continuation-installation.js";
+import { PACKAGE_ADAPTER, PACKAGE_CONTINUATION } from "../../src/package-continuation-binding.js";
 const workerUrl = "https://example.test/worker.js";
 const notificationWorkerUrl = "https://example.test/notification-worker.js";
 type FixtureOptions = Omit<BunAdapterOptions, "workerUrl" | "notificationWorkerUrl"> & { workerUrl?: string | URL; notificationWorkerUrl?: string | URL };
@@ -24,6 +26,7 @@ const cleanups: Array<() => void> = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
 function fixture() {
   const adapters = new Map<string, GuestLauncher>();
+  const hostAdapters = new Set<string>();
   const programs = new Map<string, ProgramDefinition>();
   const files = new Map<string, Uint8Array>();
   const directories = new Set(["/"]);
@@ -37,6 +40,11 @@ function fixture() {
   const runtime = {
     network: () => networkOwner.network(),
     registerAdapter: (name: string, value: GuestLauncher) => register("adapter", adapters, name, value),
+    registerHostAdapter: (name: string, value: GuestLauncher) => {
+      const unregister = register("adapter", adapters, name, value);
+      hostAdapters.add(name);
+      return () => { unregister(); hostAdapters.delete(name); };
+    },
     registerProgram: (name: string, value: ProgramDefinition) => register("program", programs, name, value),
     filesystem: {
       directoryHandle: socketDirectoryFixture,
@@ -71,21 +79,22 @@ function fixture() {
       },
     },
   } as unknown as Runtime;
-  return { runtime, adapters, programs, files, directories, removed };
+  return { runtime, adapters, hostAdapters, programs, files, directories, removed };
 }
 
 test("install provisions /bin/bun and owns registrations without reserving a Runtime root", async () => {
   const f = fixture();
   const install = await installBunAdapters(f.runtime);
-  expect(Array.from(f.adapters.keys())).toEqual(["bun:quickjs", "bun:jsc", "bun:browser"]);
-  expect(Array.from(f.programs.keys())).toEqual(["/bin/bun", "/bin/node", "/bin/nodejs"]);
+  expect(Array.from(f.adapters.keys())).toEqual([PACKAGE_ADAPTER, "bun:quickjs", "bun:jsc", "bun:browser"]);
+  expect(Array.from(f.hostAdapters)).toEqual([PACKAGE_ADAPTER]);
+  expect(Array.from(f.programs.keys())).toEqual([PACKAGE_CONTINUATION, "/bin/bun", "/bin/node", "/bin/nodejs"]);
   expect(f.programs.get("/bin/bun")?.adapter).toBe("bun:browser");
   expect(f.directories.has("/bin")).toBe(true);
   expect(f.files.has("/bin/bun")).toBe(true);
   expect(f.files.has("/bin/nodejs")).toBe(true);
   expect(f.programs.get("/bin/nodejs")?.adapter).toBe("bun:browser");
   install.dispose();
-  expect(f.adapters.size).toBe(0);
+  expect(Array.from(f.adapters.keys())).toEqual([PACKAGE_ADAPTER]);
   expect(f.programs.size).toBe(0);
   expect(f.files.has("/bin/bun")).toBe(true);
 });
@@ -97,10 +106,10 @@ test("concurrent and duplicate installs reject; disposal unregisters once and pe
   const first = await pending;
   await expect(installBunAdapters(f.runtime)).rejects.toThrow("already installed");
   first.dispose(); first.dispose();
-  expect(f.removed.length).toBe(6);
+  expect(f.removed.length).toBe(7);
   const second = await installBunAdapters(f.runtime);
   first.dispose();
-  expect(f.adapters.size).toBe(3);
+  expect(f.adapters.size).toBe(4);
   second.dispose();
 });
 
@@ -110,10 +119,27 @@ test("failed registration rolls back only this installation", async () => {
   f.programs.set("/bin/bun", existing);
   await expect(installBunAdapters(f.runtime)).rejects.toThrow("Already registered: /bin/bun");
   expect(f.adapters.size).toBe(0);
+  expect(f.hostAdapters.size).toBe(0);
   expect(f.programs.get("/bin/bun")).toBe(existing);
   expect(f.files.size).toBe(0);
   f.programs.delete("/bin/bun");
   (await installBunAdapters(f.runtime)).dispose();
+});
+
+test("a private marker failure rolls back the service and earlier created files", async () => {
+  const f = fixture();
+  const write = f.runtime.filesystem.writeFile;
+  f.runtime.filesystem.writeFile = async (path, bytes, mode) => {
+    if (path === PACKAGE_CONTINUATION) throw new FilesystemError(29);
+    return write(path, bytes, mode);
+  };
+  await expect(installBunAdapters(f.runtime)).rejects.toMatchObject({ errno: 29 });
+  expect(f.adapters.size).toBe(0);
+  expect(f.programs.size).toBe(0);
+  expect(f.files.size).toBe(0);
+  f.runtime.filesystem.writeFile = write;
+  (await installBunAdapters(f.runtime)).dispose();
+  expect(Array.from(f.adapters.keys())).toEqual([PACKAGE_ADAPTER]);
 });
 
 test("installation requires the notification helper worker", async () => {
@@ -141,6 +167,7 @@ test("every engine forwards to the production process worker", async () => {
   try {
     const context = { outcome: outcomeWord(), registerRevocation: () => () => {}, module, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { PATH: "/bin" }, cwd: "/" } };
     for (const [name, launch] of f.adapters) {
+      if (name === PACKAGE_ADAPTER) continue;
       await launch(context as never, service as never);
       expect(launches.at(-1)).toMatchObject({ workerUrl, notificationWorkerUrl, request: { engine: name.slice(4), module, args: ["bun", "-e", "0"], env: { BUNWASM_EXEC_PATH: "/bin/bun", PATH: "/bin" } } });
       expect(directory).toHaveBeenLastCalledWith("/");
@@ -151,7 +178,7 @@ test("every engine forwards to the production process worker", async () => {
     }
     const load = f.programs.get("/bin/bun")!.module as () => Promise<WebAssembly.Module>;
     expect(await load()).toBe(module);
-    expect(directory).toHaveBeenCalledTimes(f.adapters.size);
+    expect(directory).toHaveBeenCalledTimes(f.adapters.size - 1);
   } finally {
     for (const launched of launches) launched.cleanup?.();
     directory.mockRestore();
@@ -279,7 +306,7 @@ test("resolving an exclusive marker race never consumes a shared drain error", a
     expect(f.files.get("/bin/bun")).toBe(winner);
     await expect(f.runtime.filesystem.drain()).rejects.toBe(failure);
   } finally { install.dispose(); }
-  expect(f.adapters.size).toBe(0);
+  expect(Array.from(f.adapters.keys())).toEqual([PACKAGE_ADAPTER]);
   expect(f.programs.size).toBe(0);
 });
 
@@ -335,7 +362,7 @@ test("SpiderMonkey installation requires explicit matching guest bytes and regis
   const selected = await prepareProgram({ kind: "spidermonkey", ...quickjsPair("spidermonkey") });
   const installed = await installBunAdapters(f.runtime, { engine: "spidermonkey", module: selected });
   try {
-    expect(Array.from(f.adapters.keys())).toEqual(["bun:quickjs", "bun:jsc", "bun:browser", "bun:spidermonkey"]);
+    expect(Array.from(f.adapters.keys())).toEqual([PACKAGE_ADAPTER, "bun:quickjs", "bun:jsc", "bun:browser", "bun:spidermonkey"]);
     expect(f.files.has("/bin/bun")).toBe(false);
     const program = f.programs.get("/opt/bun/spidermonkey/bin/bun");
     if (typeof program?.module !== "function") throw new Error("Expected lazy SpiderMonkey registration");
@@ -347,4 +374,46 @@ test("SpiderMonkey installation requires explicit matching guest bytes and regis
     if (typeof program?.module !== "function") throw new Error("Expected lazy SpiderMonkey registration");
     await expect(program.module()).rejects.toThrow("Selected spidermonkey core declares single");
   } finally { wrong.dispose(); }
+});
+
+test("continuation target leases survive another consumer's disposal and failed installation", async () => {
+  const f = fixture();
+  const page = packageService(f.runtime);
+  page.commit();
+  const target = f.programs.get(PACKAGE_CONTINUATION);
+  const installed = await installBunAdapters(f.runtime);
+  installed.dispose();
+  expect(f.programs.get(PACKAGE_CONTINUATION)).toBe(target);
+  f.programs.set("/bin/bun", { adapter: "another", module, cooperative: true });
+  await expect(installBunAdapters(f.runtime)).rejects.toThrow("Already registered");
+  expect(f.programs.get(PACKAGE_CONTINUATION)).toBe(target);
+  page.dispose(); page.dispose();
+  expect(f.programs.has(PACKAGE_CONTINUATION)).toBe(false);
+  expect(f.adapters.has(PACKAGE_ADAPTER)).toBe(true);
+});
+
+test("an uncommitted consumer's rollback cannot remove another pending target lease", () => {
+  const f = fixture();
+  const first = packageService(f.runtime);
+  const second = packageService(f.runtime);
+  first.rollback();
+  expect(f.programs.has(PACKAGE_CONTINUATION)).toBe(true);
+  expect(f.adapters.has(PACKAGE_ADAPTER)).toBe(true);
+  second.rollback();
+  expect(f.programs.size).toBe(0);
+  expect(f.adapters.size).toBe(0);
+});
+
+test("repeated rollback cannot forget a newer registration owner", () => {
+  const f = fixture();
+  const failed = packageService(f.runtime);
+  failed.rollback();
+  const next = packageService(f.runtime);
+  failed.rollback();
+  const another = packageService(f.runtime);
+  next.rollback();
+  expect(f.programs.has(PACKAGE_CONTINUATION)).toBe(true);
+  another.rollback();
+  expect(f.programs.size).toBe(0);
+  expect(f.adapters.size).toBe(0);
 });

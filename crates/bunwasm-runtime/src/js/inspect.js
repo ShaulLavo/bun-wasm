@@ -1551,7 +1551,7 @@
   // VirtualMachine::print_errorlike_object, writing into the formatter.
   function printErrorLike(f, value) {
     const errors = isAggregateError(value) ? safeGet(value, "errors") : undefined;
-    if (!Array.isArray(errors)) {
+    if (!Array.isArray(errors) || !errors.some(isErrorInstance)) {
       printErrorInstance(f, value);
       return;
     }

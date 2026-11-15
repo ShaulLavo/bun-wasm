@@ -26,13 +26,23 @@ const factory: unknown = runInNewContext(`${host.slice(start, end)}\nwasmCaller`
   NativeTextEncoder: TextEncoder, NativeTextDecoder: TextDecoder, memoryViews, reportWasmCallTrap,
   WebAssembly, Uint8Array, ArrayBuffer, DataView, Error, TypeError, RangeError, SyntaxError,
 });
-function nativeCall(instance: WebAssembly.Instance, observer: NonNullable<EngineHostOptions["onWasmCallTrap"]>): () => unknown {
+function nativeCall(instance: WebAssembly.Instance, observer: NonNullable<EngineHostOptions["onWasmCallTrap"]>, index = 0): () => unknown {
   if (typeof factory !== "function") throw Error("Missing native-call factory");
   const caller: unknown = factory(instance.exports, observer);
   if (!caller || typeof caller !== "object" || !("call" in caller) || typeof caller.call !== "function") throw Error("Missing native-call wrapper");
   const call = caller.call;
-  return () => Reflect.apply(call, caller, [0, []]);
+  return () => Reflect.apply(call, caller, [index, []]);
 }
+
+test("the trap fixture provides successful native cleanup without another trap or memory growth", async () => {
+  const instance = await WebAssembly.instantiate(await WebAssembly.compile(browserTrapSource()));
+  const observed: unknown[] = [];
+  for (const index of [1, 2, 3]) expect(nativeCall(instance, error => observed.push(error), index)()).toBeUndefined();
+  expect(observed).toEqual([]);
+  const memory = instance.exports.memory;
+  if (!(memory instanceof WebAssembly.Memory)) throw new Error("Missing fixture memory");
+  expect(memory.buffer.byteLength).toBe(65536);
+});
 
 test("real native-call trap preserves identity even when its observer throws", async () => {
   const module = await prepareProgram({ kind: "single", core: browserTrapSource() });

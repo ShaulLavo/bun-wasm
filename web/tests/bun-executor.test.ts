@@ -146,6 +146,71 @@ test("a ready browser guest exits with the status its engine host reports", cont
   expect(exits(messages)).toEqual([{ type: "exit", code: 5, signal: undefined, sleep: "atomics" }]);
 }));
 
+test("the browser host transfers only executor-owned controls to the real bootstrap", controlled(async () => {
+  const control = new DefaultSignal(15);
+  const ordinary = new Error("process image replaced");
+  startEngineHost.mockImplementationOnce(async options => {
+    const owns = options.isExecutionUnwind;
+    expect(typeof owns).toBe("function");
+    if (typeof owns !== "function") throw new Error("No native control transfer");
+    expect(owns(ordinary)).toBe(false);
+    expect(owns({ signal: 15 })).toBe(false);
+    expect(owns(143)).toBe(false);
+    expect(owns(control)).toBe(true);
+    expect(owns(new WasiExit(2))).toBe(true);
+    throw control;
+  });
+  const { messages } = await run();
+  expect(exits(messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "atomics" }]);
+}));
+
+test("the private exec throw passes unchanged through browser policy to bootstrap replacement cleanup", controlled(async () => {
+  const { ProcessReplaced, bootstrap, createFilesystemConnection, childTransport, controlLoad } =
+    await import("../../tests/package/fixtures/engine-host-exec.ts");
+  const marker = new ProcessReplaced("process image replaced");
+  const connection = createFilesystemConnection();
+  const runtimeProcess = childTransport();
+  const messages: WorkerMessage[] = [];
+  const host: BunExecutorHost & RuntimeWorkerHost = {
+    crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
+    async fetch() { return new Response("ok"); },
+  };
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(1), args: ["bun"], env: {},
+    filesystem: connection.client, runtimeProcess, trace: false, net: null };
+  const executor = createBunExecutor(request, host);
+  let handoff: WebAssembly.ImportValue | undefined;
+  startEngineHost.mockImplementationOnce(async options => {
+    const instance = options.instance as WebAssembly.Instance;
+    const memory = instance.exports.memory;
+    const owns = options.isExecutionUnwind;
+    if (!(memory instanceof WebAssembly.Memory) || typeof handoff !== "function" || typeof owns !== "function") throw new Error("Missing private binding");
+    const plan = new TextEncoder().encode(JSON.stringify({ version: 1, cwd: "/", env: {}, silent: true, color: false,
+      pre: null, main: { name: "build", original: "echo ok", command: "echo ok" }, post: null, footer: "" }));
+    new Uint8Array(memory.buffer).set(plan, 1024);
+    expect(owns(marker)).toBe(false);
+    try { handoff(1024, plan.length, 4096, 4096); }
+    catch (error) { expect(error).toBe(marker); expect(owns(error)).toBe(true); throw error; }
+    throw new Error("Successful exec returned");
+  });
+  try {
+    control.attach(runtimeProcess);
+    await bootstrap(request, { ...executor,
+      namespaces(context) { const imports = executor.namespaces!(context); handoff = imports.bun_package_scripts?.handoff; return imports; },
+      setup(context) { setupLocalFilesystem(context, executor); },
+      async instantiated(context) {
+        if (!context.process) throw new Error("No process ABI");
+        if (!context.runtimeState) throw new Error("No process state");
+        expect(controlLoad(context.runtimeState.signals.signalState, 1)).toBe(0);
+        context.process.imports.exec = () => { throw marker; };
+        await executor.instantiated?.(context);
+      },
+    }, host);
+    expect(messages).toContainEqual({ type: "replaced" });
+    expect(exits(messages)).toEqual([]);
+  } finally { connection.client.port.close(); connection.server.port.close(); }
+}));
+
 for (const [label, options] of [
   ["a non-browser engine", { engine: "quickjs" as const }],
   ["a preview1 run", { adapter: "preview1" as const }],
@@ -328,7 +393,7 @@ for (const kind of ["exited", "signaled"] as const) test(`every process import c
         context.fs.release = () => {};
         executor.setup?.(context);
       },
-      imports(linked) { imports = linked.runtime_proc as typeof imports; },
+      imports(linked, context) { executor.imports?.(linked, context); imports = linked.runtime_proc as typeof imports; },
       run({ instance }) {
         const memory = instance.exports.memory as WebAssembly.Memory;
         // An invalid pointer alone is insufficient: an ABI might swallow its fault and
@@ -410,7 +475,7 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
           control.attach(request.runtimeProcess);
           await bootstrap(request, { ...executor,
             setup: context => setupLocalFilesystem(context, executor),
-            imports(linked) { call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
+            imports(linked, context) { executor.imports?.(linked, context); call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
             run({ instance, wasi }) {
               const fd = wasi.descriptors.open({ kind: "pipe", notification: state.wake,
                 read: () => -6, write: () => -6,
@@ -461,7 +526,7 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
       control.attach(request.runtimeProcess);
       await bootstrap(request, { ...executor,
         setup: context => setupLocalFilesystem(context, executor),
-        imports(linked) { call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
+        imports(linked, context) { executor.imports?.(linked, context); call = (linked[route] as Record<string, (...args: number[]) => unknown>)[importName]!; },
         run({ instance, wasi }) {
           const fd = wasi.descriptors.open({ kind: "pipe", notification: state.wake,
             read: () => -6, write: () => -6,

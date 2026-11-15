@@ -1,21 +1,16 @@
 import type { ProcessRuntime } from "./process-runtime.js";
 import { FilesystemClient } from "waffle/fs/client";
-import { FilesystemError } from "waffle/fs/protocol";
+import { BunWasmExecutableConflictError, createExecutable, matchesMarker, rollbackExecutables } from "./executable-marker.js";
+export { BunWasmExecutableConflictError } from "./executable-marker.js";
 import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
 
 import type { BunNetworkOptions } from "../web/src/net/helper.js";
 import { bunLauncher } from "../web/src/bun-launcher.js";
 import { isPairedEngine, pairedEngines, programKind, type Engine } from "./engine-kind.js";
 import { ENGINE_BIN } from "./executable-paths.js";
+import { packageService } from "./package-continuation-installation.js";
+import { PACKAGE_CONTINUATION } from "./package-continuation-binding.js";
 export type { Engine } from "./engine-kind.js";
-
-export class BunWasmExecutableConflictError extends Error {
-  readonly code = "BUN_WASM_EXECUTABLE_CONFLICT";
-  constructor(readonly path: string) {
-    super(`Cannot install Bun: a different filesystem entry already exists at ${path}`);
-    this.name = "BunWasmExecutableConflictError";
-  }
-}
 
 export interface BunAdapterOptions extends LoadBunWasmOptions {
   readonly network?: BunNetworkOptions;
@@ -36,35 +31,6 @@ export interface BunAdapterInstallation {
 
 const installations = new WeakMap<ProcessRuntime, BunAdapterInstallation>();
 const installing = new WeakSet<ProcessRuntime>();
-const executableMarker = new TextEncoder().encode("bun-wasm registered executable\n");
-const matchesMarker = (bytes: Uint8Array | undefined): boolean => bytes !== undefined
-  && bytes.length === executableMarker.length && bytes.every((byte, index) => byte === executableMarker[index]);
-
-async function createExecutable(filesystem: FilesystemClient, name: string): Promise<boolean> {
-  try {
-    await filesystem.asyncCall("writeFile", [name, false, true], executableMarker);
-    return true;
-  } catch (error) {
-    if (!(error instanceof FilesystemError) || error.errno !== 20) throw error;
-    const entry = await filesystem.asyncCall("lookup", [name]);
-    if (entry?.kind !== "file" || !matchesMarker(await filesystem.asyncCall("readFile", [name]))) {
-      throw new BunWasmExecutableConflictError(name);
-    }
-    return false;
-  }
-}
-
-async function rollbackExecutables(filesystem: FilesystemClient, created: string[]): Promise<void> {
-  for (const name of created.reverse()) {
-    try {
-      if (!matchesMarker(await filesystem.asyncCall("readFile", [name]))) continue;
-      await filesystem.asyncCall("remove", [name]);
-    } catch {
-      // A failed operation owns its own result; continue without touching page errors.
-    }
-  }
-}
-
 function moduleLoader(options: BunAdapterOptions, engine: Engine): () => Promise<WebAssembly.Module> {
   let loading: Promise<WebAssembly.Module> | undefined;
   return () => loading ??= selectedModule(options, engine).catch(error => { loading = undefined; throw error; });
@@ -96,8 +62,10 @@ export async function installBunAdapters(runtime: ProcessRuntime, options: BunAd
     }
   }
   const unregisters: Array<() => void> = [];
+  const markers = names.concat([PACKAGE_CONTINUATION]);
   const created: string[] = [];
   let filesystem: FilesystemClient | undefined;
+  let packages: ReturnType<typeof packageService> | undefined;
   installing.add(runtime);
   try {
     // The page-side ordering primitive waits for previously queued writes without
@@ -105,6 +73,7 @@ export async function installBunAdapters(runtime: ProcessRuntime, options: BunAd
     // every installer operation observes only its own completion, including EEXIST.
     await runtime.filesystem.resolvePath("/");
     filesystem = new FilesystemClient(runtime.filesystem.fork());
+    packages = packageService(runtime);
     const defaults: readonly Engine[] = pairedEngines;
     const adapters = defaults.concat(["browser"], engine === "spidermonkey" ? [engine] : []);
     for (const name of adapters) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), runtime, network: options.network })));
@@ -113,18 +82,19 @@ export async function installBunAdapters(runtime: ProcessRuntime, options: BunAd
       adapter: `bun:${engine}`, cooperative: true, module: loadModule,
     }));
     // Check every path before creating any files, so a conflict cannot leave a partial install.
-    for (const name of names) {
+    for (const name of markers) {
       const entry = await filesystem.asyncCall("lookup", [name]);
       if (entry && (entry.kind !== "file" || !matchesMarker(await filesystem.asyncCall("readFile", [name])))) {
         throw new BunWasmExecutableConflictError(name);
       }
     }
-    for (const name of names) {
+    for (const name of markers) {
       await filesystem.asyncCall("mkdirp", [name.slice(0, name.lastIndexOf("/")) || "/"]);
       if (await createExecutable(filesystem, name)) created.push(name);
     }
   } catch (error) {
     for (const unregister of unregisters.reverse()) unregister();
+    packages?.rollback();
     if (filesystem) await rollbackExecutables(filesystem, created);
     throw error;
   } finally {
@@ -137,9 +107,11 @@ export async function installBunAdapters(runtime: ProcessRuntime, options: BunAd
       if (!active) return;
       active = false;
       for (const unregister of unregisters.splice(0).reverse()) unregister();
+      packages?.dispose();
       if (installations.get(runtime) === installation) installations.delete(runtime);
     },
   };
+  packages?.commit();
   installations.set(runtime, installation);
   return installation;
 }

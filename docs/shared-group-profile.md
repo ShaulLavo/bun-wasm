@@ -49,7 +49,7 @@ under `--shared-memory`.
 ## Explicit page selection and assets
 
 The playground and sandbox accept `?engine=quickjs&profile=shared-group` and
-`?engine=jsc&profile=shared-group` and `?engine=spidermonkey&profile=shared-group`. Omitted `profile` means `split`. Engine kind and memory
+`?engine=jsc&profile=shared-group` and `?engine=spidermonkey&profile=shared-group`. Omitted `profile` uses the [template policy](playground-profiles.md): Vite 8 React, Vite 8 vanilla and Angular use `shared-group` on in-guest engines; Browser and ordinary templates use `split`. Engine kind and memory
 profile are separate selections. Invalid profiles, unavailable engine/profile combinations,
 missing assets and mixed pairs fail before the program executes. An execution failure never
 changes the selected profile. The Browser engine has no shared program profile.

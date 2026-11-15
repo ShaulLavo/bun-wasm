@@ -14,6 +14,7 @@ import type { FilesystemIdentity } from "waffle/fs";
 import { bunLauncher, preview1Launcher, siblingWorkerUrl, type Preview1LauncherOptions } from "./bun-launcher.js";
 import type { BunNetworkOptions } from "./net/helper.js";
 import type { Engine } from "./bun-executor.js";
+import { packageService, preparePackageContinuation } from "../../src/package-continuation-installation.js";
 
 type CompiledExecutable = WebAssembly.Module | (() => Promise<WebAssembly.Module>);
 export type ExecutableRegistration =
@@ -156,9 +157,22 @@ const installedAdapters = new WeakSet<ProcessRuntime>();
 /** Immutable engine-qualified registrations; concurrent runs never replace a global engine alias. */
 export function installBunAdapters(runtime: ProcessRuntime, workerUrl: string, loadTools?: () => Promise<WebAssembly.Module>, network?: BunNetworkOptions, preview1?: Preview1LauncherOptions): void {
   if (installedAdapters.has(runtime)) return;
-  installedAdapters.add(runtime);
-  runtime.registerAdapter("preview1", preview1Launcher({ workerUrl, runtime, network, preview1 }));
-  const notificationWorkerUrl = siblingWorkerUrl(workerUrl, "notification-worker.js");
-  const engines: readonly Engine[] = pairedEngineKinds;
-  for (const engine of engines.concat(["browser"])) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network }));
+  const packages = packageService(runtime);
+  const removals: Array<() => void> = [];
+  const rollback = () => {
+    for (const remove of removals.reverse()) remove();
+    packages.rollback();
+    installedAdapters.delete(runtime);
+    programFiles.delete(runtime);
+  };
+  try {
+    removals.push(runtime.registerAdapter("preview1", preview1Launcher({ workerUrl, runtime, network, preview1 })));
+    const notificationWorkerUrl = siblingWorkerUrl(workerUrl, "notification-worker.js");
+    const engines: readonly Engine[] = pairedEngineKinds;
+    for (const engine of engines.concat(["browser"])) removals.push(runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network })));
+    const prepared = (programFiles.get(runtime) ?? Promise.resolve()).then(() => preparePackageContinuation(runtime));
+    programFiles.set(runtime, prepared.then(() => { packages.commit(); }, error => { rollback(); throw error; }));
+    void programFiles.get(runtime)!.catch(() => {});
+    installedAdapters.add(runtime);
+  } catch (error) { rollback(); throw error; }
 }

@@ -11,6 +11,7 @@ import { startRun } from "../src/runner";
 import { ENGINES, type Engine } from "../src/engine-loader";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { ENGINE_BIN } from "../../src/executable-paths.js";
+import { PACKAGE_CONTINUATION } from "../../src/package-continuation-binding.ts";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { RunRequest, WorkerMessage } from "../src/bun-executor";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
@@ -222,7 +223,7 @@ for (const failure of ["fork", "retainConsumer", "registerAdapter"] as const) te
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
   const mutable = (failure === "fork" ? runtime.filesystem : runtime) as unknown as Record<string, unknown>;
   const original = mutable[failure];
-  if (failure !== "fork") mutable[failure] = () => { throw new Error(`${failure} failed`); };
+  mutable[failure] = () => { throw new Error(`${failure} failed`); };
   try {
     const module = fixtureModule(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     expect(() => startRun({ runtime, engine: "browser", module, args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} })).toThrow(`${failure} failed`);
@@ -492,7 +493,7 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
       worker.exit();
       expect(await run.done).toEqual({ code: 0 });
     }
-    expect(registered).toEqual(["/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/quickjs/bin/nodejs", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node", "/opt/bun/jsc/bin/nodejs", "/bin/bun", "/bin/node", "/bin/nodejs"]);
+    expect(registered).toEqual([PACKAGE_CONTINUATION, "/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/quickjs/bin/nodejs", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node", "/opt/bun/jsc/bin/nodejs", "/bin/bun", "/bin/node", "/bin/nodejs"]);
     for (const path of registered) expect(await runtime.filesystem.lookup(path)).toMatchObject({ kind: "file" });
     // Page-launched modules never become executable files or retain a per-launch registry key.
     expect(await runtime.filesystem.lookup("/bin/preview1-root-1")).toBeUndefined();

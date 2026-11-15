@@ -33,3 +33,11 @@ Full site builds require complete shared-program inputs for published Wasm
 engines; the existing staging verifier checks their real bytes and records.
 No payload, backing, worker codec, allocator, memory budget, stack policy or
 provider pin changes are part of this routing correction.
+
+The common template catalog now declares the shared-worker requirement for
+Vite 8 React, Vite 8 vanilla and Angular. The existing `templateProfile` resolver
+reads that declaration, including in the sandbox's main demo. Vite 7 and other
+ordinary templates retain split. Explicit split remains available for refusal
+diagnostics; failed loading or execution never selects another profile. The
+blocking shared browser check includes the catalog and both page policies as
+inputs, so a policy-only edit still exercises matched-pair admission.

@@ -89,6 +89,6 @@ phases.push("bundle:return");
 const grownBytes = memories.map(memory => memory.buffer.byteLength);
 await binding[Symbol.for("napi.rs.wasi.dispose")]();
 phases.push("dispose:return");
-assert.deepEqual(descriptors, [{ initial: mode === "stock" ? 16384 : 1001, maximum: 65536, shared: true }]);
+assert.deepEqual(descriptors, [{ initial: mode === "stock" ? 16384 : 1001, maximum: mode === "stock" ? 65536 : 32768, shared: true }]);
 console.log(JSON.stringify({ mode, phases, descriptors, startedBytes, grownBytes,
   output: { transformed, minified, errors, bundle: chunk.code }, badArgument }));

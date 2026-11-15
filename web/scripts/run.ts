@@ -34,7 +34,7 @@ const program = await loadNodeProgram(wasmPath);
 const processImports: Record<string, (...args: number[]) => number> = {};
 const wasi = new Wasi({
   hostCallFd: HOST_CALL_FD,
-  namespaces: { runtime_proc: processImports },
+  namespaces: { runtime_proc: processImports, bun_package_scripts: { handoff: () => { abi.imports.signal!(0, 4); return -58; } } },
   args: ["bun", ...args],
   // TEST_* variables pass through (TEST_SERVER for the network fixtures).
   env: { HOME, PWD: HOME, USER: "user", TERM: "xterm-256color", TMPDIR: "/tmp", ...testEnv() },

@@ -3,7 +3,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { createRuntime, openIdleWorkspace, storedWorkspaces, type Runtime } from "waffle";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
-import { parseMemoryProfile, requireProfileEngine, type ProgramMemoryProfile } from "../../web/src/program-profile";
+import { parseMemoryProfile, type ProgramMemoryProfile } from "../../web/src/program-profile";
+import { templateProfile } from "../../web/src/playground/program-profile";
 import { installBunSharedObjects } from "../../src/shared-objects";
 import { BrowserPrograms } from "../../web/src/browser-programs";
 import { ENGINES, type Engine, WasmMissing, isEngine, loadEngineProgram, mb, registerModuleScope } from "../../web/src/engine-loader";
@@ -119,8 +120,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const requested = this.params.get("engine");
     if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
     this.engine = requested ?? DEFAULT_ENGINE;
-    this.profile = parseMemoryProfile(this.params.get("profile"));
-    requireProfileEngine(this.engine, this.profile);
+    const profile = this.params.get("profile");
+    this.profile = templateProfile(this.engine, this.project.id, profile === null ? undefined : parseMemoryProfile(profile));
   }
 
   get term(): Terminal | undefined {

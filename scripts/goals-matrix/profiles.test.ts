@@ -66,7 +66,7 @@ test("normal mixed goals use product template defaults and preserve explicit dia
     const url = new URL(playgroundURL("http://test/", angular, engine));
     expect(url.searchParams.has("profile")).toBe(false);
     expect(new Playground(url.search).profile).toBe(engine === "browser" ? "split" : "shared-group");
-    expect(new Playground(new URL(playgroundURL("http://test/", framework, engine)).search).profile).toBe("split");
+    expect(new Playground(new URL(playgroundURL("http://test/", framework, engine)).search).profile).toBe(engine === "browser" ? "split" : "shared-group");
     expect(new Playground(new URL(playgroundURL("http://test/", angular, engine, "split")).search).profile).toBe("split");
   }
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-angular-assets-"));
@@ -95,7 +95,7 @@ test("preflight verifies only engine/profile pairs used by the selected template
     // A stray incomplete split profile is unused by an Angular-only selection.
     await Bun.write(join(root, "bun.wasm.gz"), Bun.gzipSync(data));
     await expect(preflightSelection(angular)).resolves.toBeUndefined();
-    await expect(preflightSelection({ ...angular, frameworks: ["angular", "vite-react"] })).rejects.toThrow("Missing engine assets: quickjs.wasm");
+    await expect(preflightSelection({ ...angular, frameworks: ["angular", "hono"] })).rejects.toThrow("Missing engine assets: quickjs.wasm");
     await expect(preflightSelection({ ...angular, profile: "split" })).rejects.toThrow("Missing engine assets: quickjs.wasm");
     await Bun.write(join(root, names[1]! + ".gz"), Bun.gzipSync(new Uint8Array([1])));
     await expect(preflightSelection(angular)).rejects.toThrow("staged bytes disagree");
