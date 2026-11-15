@@ -54,7 +54,7 @@ void loop_success(const char* source) {
 void loop_failure(const char* source) {
   auto entry = loop_stack();
   bsm_handle out = 0;
-  check(!bsm_eval_script(source, strlen(source), "getter-control.js", 1, &out), "expected failure");
+  check(!bsm_eval_script(source, strlen(source), "getter-control.js", 17, 1, &out), "expected failure");
   bsm_release(out);
   balanced(entry, "stack balanced after failed evaluation");
 }

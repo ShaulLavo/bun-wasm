@@ -22,3 +22,20 @@ SpiderMonkey stack strings and error filenames retain the readable encoded label
 The internal script-evaluation ABI carries the filename length, like module
 evaluation already does. Host reply buffers have explicit lengths on release,
 so an embedded NUL does not truncate their contents or their allocation size.
+
+## Controls
+
+`scripts/spidermonkey-filenames.test.ts` compiles and runs the standalone C++
+filename codec and Rust reply-buffer tests. Its feature-owned quality manifest
+keeps those cheap checks blocking. Controls include ordinary, backslash, Unicode,
+literal percent escapes, NUL-prefixed, middle-NUL and multiple-NUL names.
+
+The existing SpiderMonkey `engine-semantics` driver also runs
+`tests/filename-controls.cpp`. Script and CommonJS compilation retain dynamic
+import referrers, SavedFrame filenames and original line numbers. Module controls
+retain static and dynamic import referrers and require/import namespace identity
+for distinct full IDs. The `filename` control mode selects this subset locally.
+
+`tests/fixtures/virtual-filenames` exercises the runtime's `node:vm` entry point
+and formatted call-site filenames. Its native manifest selects the ordinary
+SpiderMonkey producer. These are source controls, not a Nuxt compatibility claim.

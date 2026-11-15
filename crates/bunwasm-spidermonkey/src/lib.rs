@@ -85,6 +85,7 @@ extern "C" {
         source: *const c_char,
         len: usize,
         filename: *const c_char,
+        filename_len: usize,
         line: i32,
         out: *mut Handle,
     ) -> bool;
