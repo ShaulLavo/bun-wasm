@@ -49,6 +49,7 @@
 #include "WASIJSONFastTest.h"
 #include <wtf/DataLog.h>
 #include <wtf/URL.h>
+#include <wtf/text/SymbolRegistry.h>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -90,6 +91,21 @@ static std::string utf8(const String& s)
 {
     auto bytes = s.utf8();
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.length());
+}
+
+static JSValue formatErrorStack(VM& vm, JSObject* error, JSValue raw)
+{
+    JSGlobalObject* globalObject = error->globalObject();
+    auto scope = DECLARE_THROW_SCOPE(vm);
+    auto symbol = vm.symbolRegistry().symbolForKey("bunwasm.internal.jsc.formatStack"_s);
+    JSValue formatter = globalObject->getDirect(vm, Identifier::fromUid(symbol.get()));
+    if (!formatter || formatter.isUndefined())
+        return raw;
+    MarkedArgumentBuffer arguments;
+    arguments.append(error);
+    arguments.append(raw);
+    RELEASE_ASSERT(!arguments.hasOverflowed());
+    RELEASE_AND_RETURN(scope, call(globalObject, formatter, jsUndefined(), arguments, "Stack formatter must be callable"_s));
 }
 
 // The URL a module or script's SourceOrigin gets: file URLs for paths (so
@@ -323,6 +339,7 @@ JSGlobalContextRef bunjsc_create_context()
     });
     Ref<VM> vm = VM::createContextGroup();
     JSLockHolder locker(vm.ptr());
+    vm->setOnMaterializeErrorStack(formatErrorStack);
 #if defined(BUN_WASM_SHARED_GROUP)
     // The group futex parks a member safely, so its JS may block in Atomics.wait.
     vm->m_typedArrayController = adoptRef(new SimpleTypedArrayController(true));

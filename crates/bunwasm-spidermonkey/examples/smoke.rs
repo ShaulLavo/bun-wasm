@@ -222,8 +222,8 @@ pub fn main() {
 
 /// With a budget in `BUN_WASM_SPIDERMONKEY_STACK_KIB` (WebKit hosts pass 188 KiB), every reserved
 /// recursion path ends in a catchable RangeError and evaluation continues. The byte quota, not the
-/// WASI counter, must stop reentrant getters and statement nesting, which shows the reservations
-/// are in effect (docs/bun-patches/spidermonkey-stack-budget.md).
+/// WASI counter, must stop reentrant getters and every compile cycle, which shows the
+/// reservations are in effect (docs/bun-patches/spidermonkey-stack-budget.md).
 fn budget_checks(pbl: bool) {
     for (label, code) in [
         ("call", "function f() { d++; return f.call(null); } f();"),
@@ -320,5 +320,139 @@ fn budget_checks(pbl: bool) {
     );
     assert_eq!(refused, 10.0, "statement nesting under the budget");
     assert_eq!(number("6 * 7"), 42.0);
+    compile_budget_checks();
     println!("ok budget recursion caught and recovered on every reserved path");
+}
+
+/// Under the WebKit budget the byte quota, not the frontend's depth bound, stops every compile
+/// recursion cycle. Each row is one construct nested `n` deep and the depth the 188 KiB budget
+/// accepts with the sizes of docs/bun-patches/spidermonkey-stack-budget.md. A reservation that
+/// left its frame, or a cycle with none, accepts far more; a changed size moves its rows, and
+/// then the table there and the browser measurements behind it are due again.
+fn compile_budget_checks() {
+    number(
+        "var deepest = (ok) => { var low = 0, high = 1; while (ok(high)) { low = high; high *= 2; if (high > 100000) throw new Error('unbounded'); }
+          while (low + 1 < high) { var middle = (low + high) >> 1; if (ok(middle)) low = middle; else high = middle; } return low; };
+        var refused = (run) => { try { run(); return false; } catch (e) { if (!(e instanceof RangeError)) throw e; return true; } }; 0",
+    );
+    for (label, make, expected) in [
+        ("blocks", "'{'.repeat(n) + '1;' + '}'.repeat(n)", 241.0),
+        (
+            "if blocks",
+            "'if (ok) {'.repeat(n) + '1;' + '}'.repeat(n)",
+            147.0,
+        ),
+        ("unbraced ifs", "'if (ok) '.repeat(n) + '1;'", 103.0),
+        (
+            "labels",
+            "Array.from({ length: n }, (_, i) => 'l' + i + ': ').join('') + '1;'",
+            139.0,
+        ),
+        (
+            "labelled loops",
+            "Array.from({ length: n }, (_, i) => 'l' + i + ': while (true) {').join('') + '1;' + '}'.repeat(n)",
+            54.0,
+        ),
+        (
+            "for loops",
+            "'for (;;) {'.repeat(n) + '1;' + '}'.repeat(n)",
+            86.0,
+        ),
+        ("unbraced loops", "'while (ok) '.repeat(n) + '1;'", 141.0),
+        (
+            "try blocks",
+            "'try {'.repeat(n) + '1;' + '} finally {}'.repeat(n)",
+            159.0,
+        ),
+        (
+            "switches",
+            "'switch (ok) { default: '.repeat(n) + '1;' + '}'.repeat(n)",
+            226.0,
+        ),
+        (
+            "parentheses",
+            "'('.repeat(n) + '1' + ')'.repeat(n) + ';'",
+            62.0,
+        ),
+        ("arrays", "'['.repeat(n) + ']'.repeat(n) + ';'", 63.0),
+        (
+            "objects",
+            "'x = ' + '{ a: '.repeat(n) + '1' + ' }'.repeat(n) + ';'",
+            61.0,
+        ),
+        ("calls", "'f('.repeat(n) + '1' + ')'.repeat(n) + ';'", 54.0),
+        (
+            "element access",
+            "'a['.repeat(n) + '0' + ']'.repeat(n) + ';'",
+            62.0,
+        ),
+        (
+            "templates",
+            "'`${'.repeat(n) + '1' + '}`'.repeat(n) + ';'",
+            52.0,
+        ),
+        ("conditionals", "'a ? b : '.repeat(n) + 'c;'", 150.0),
+        ("assignments", "'x = '.repeat(n) + '1;'", 150.0),
+        ("unary operators", "'!'.repeat(n) + 'x;'", 288.0),
+        ("typeof", "'typeof '.repeat(n) + 'x;'", 288.0),
+        ("new", "'new ('.repeat(n) + 'c' + ')'.repeat(n) + ';'", 46.0),
+        ("arrows", "'() => '.repeat(n) + '1;'", 54.0),
+        (
+            "functions",
+            "'function g() {'.repeat(n) + '}'.repeat(n)",
+            61.0,
+        ),
+        (
+            "function expressions",
+            "'(function () {'.repeat(n) + '1' + '})();'.repeat(n)",
+            20.0,
+        ),
+        (
+            "methods",
+            "'x = { m() { return '.repeat(n) + '1' + '} };'.repeat(n)",
+            25.0,
+        ),
+        (
+            "class methods",
+            "'(class { m() { return '.repeat(n) + '1' + '} });'.repeat(n)",
+            19.0,
+        ),
+    ] {
+        let depth = number(&format!(
+            "var make = (n) => 'if (false) {{' + ({make}) + '}}'; deepest((n) => !refused(() => (0, eval)(make(n))))"
+        ));
+        println!("budget compile {label} depth {depth}");
+        // PBL starts a little deeper in the stack, so it accepts about 3 percent less.
+        assert!(
+            (depth - expected).abs() <= expected * 0.15 + 1.0,
+            "{label} compiles {depth} levels under the budget, expected about {expected}"
+        );
+        assert_eq!(number("6 * 7"), 42.0);
+    }
+    // The bytecode emitter has a reservation of its own. A validator-shaped function is only
+    // parsed lazily when it is declared and compiled in full on its first call. As dead code the
+    // emitter never walks its body, so the parser decides and the first call goes as deep as the
+    // declaration. As live code the emitter's reservation refuses the first call earlier, and
+    // still leaves room for Ajv's deepest Angular validator (57 levels).
+    number(
+        "var body = (n) => 'let ok = true;' + 'if (ok) { if (value.p !== undefined) { const seen = ok; ok = seen; } else ok = true;'.repeat(n) + '}'.repeat(n);
+        var live = (n) => (0, eval)('function probeLive(value) {' + body(n) + '}; probeLive');
+        var dead = (n) => (0, eval)('function probeDead(value) { if (false) {' + body(n) + '} }; probeDead'); 0",
+    );
+    let lazy = number("deepest((n) => !refused(() => live(n)))");
+    let dead_full = number("deepest((n) => !refused(() => dead(n)({})))");
+    let live_full = number("deepest((n) => !refused(() => live(n)({})))");
+    println!("budget compile validator lazy {lazy} dead {dead_full} live {live_full}");
+    assert!(
+        live_full >= 80.0 && live_full + 10.0 <= dead_full && dead_full <= lazy,
+        "emitter reservation: lazy {lazy}, dead code {dead_full}, live code {live_full}"
+    );
+    assert_eq!(
+        number(&format!(
+            "var late = live({}); refused(() => late({{}})) && (0, eval)('6 * 7') === 42 ? 1 : 0",
+            live_full + 1.0
+        )),
+        1.0,
+        "a call the emitter refuses is a caught RangeError"
+    );
 }

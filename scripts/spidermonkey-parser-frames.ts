@@ -395,24 +395,20 @@ function memberName(symbol: string, instantiation: Instantiation): string | unde
 
 export type InstantiationReport = { label: string; frames: Record<string, { slots: number; shadow: number; bytes: number }> };
 
-// The stack budget wraps some recursive calls in a never-inline `CallWithWasmStackReservation`
-// (docs/bun-patches/spidermonkey-stack-budget.md). A cycle edge may pass through one such frame
-// and the lambda it calls.
-const reservationWrapper = /CallWithWasmStackReservation/;
+// The stack budget reserves shadow bytes in the frames that survive on each cycle
+// (docs/bun-patches/spidermonkey-stack-budget.md). Each must hold at least its size from the
+// patch's table: an inlining change that moved a reservation out of its frame is as silent as a
+// lost merge. statementListItem's reservation sits in statementList, the frame it is merged into.
+const reservingFrames = {
+  statementList: "StatementListItemReserve", ifStatement: "IfStatementReserve", tryStatement: "TryStatementReserve",
+  statement: "StatementReserve", assignExpr: "AssignExprReserve", unaryExpr: "UnaryExprReserve", memberExpr: "MemberExprReserve",
+} as const;
 
-function calls(functions: ReadonlyMap<number, FunctionFacts>, from: FunctionFacts, target: number, hops = 2): boolean {
-  if (from.calls.has(target)) return true;
-  if (hops === 0) return false;
-  for (const index of from.calls) {
-    const callee = functions.get(index);
-    // Step into a wrapper, or from a wrapper into the lambda it calls.
-    const through = callee && (reservationWrapper.test(callee.name) || reservationWrapper.test(from.name));
-    if (through && calls(functions, callee, target, hops - 1)) return true;
-  }
-  return false;
+function reservationSizes(patch: string): Record<string, number> {
+  return Object.fromEntries(Array.from(patch.matchAll(/^\+inline constexpr size_t (\w+Reserve) = (\d+);$/gm), match => [match[1]!, Number(match[2])]));
 }
 
-function checkInstantiation(functions: ReadonlyMap<number, FunctionFacts>, instantiation: Instantiation): InstantiationReport {
+function checkInstantiation(functions: ReadonlyMap<number, FunctionFacts>, instantiation: Instantiation, sizes: Record<string, number>): InstantiationReport {
   const members = new Map<string, FunctionFacts>();
   for (const facts of functions.values()) {
     const member = memberName(facts.name, instantiation);
@@ -425,7 +421,15 @@ function checkInstantiation(functions: ReadonlyMap<number, FunctionFacts>, insta
     const from = members.get(caller);
     const to = members.get(callee);
     assert(from && to, `${instantiation.label}: missing ${from ? callee : caller}`);
-    assert(calls(functions, from, to.index), `${instantiation.label}: ${caller} does not call ${callee}`);
+    // A direct call: no reservation wrapper frame sits on a parser cycle any more.
+    assert(from.calls.has(to.index), `${instantiation.label}: ${caller} does not call ${callee}`);
+  }
+  for (const [frame, constant] of Object.entries(reservingFrames)) {
+    const size = sizes[constant];
+    const facts = members.get(frame);
+    assert(size !== undefined, `the patch does not define ${constant}`);
+    assert(facts, `${instantiation.label}: missing ${frame}`);
+    assert(facts.shadow >= size, `${instantiation.label}: ${frame} holds ${facts.shadow} shadow bytes, less than ${constant} (${size})`);
   }
   const frames = Object.fromEntries(reported.map(name => {
     const facts = members.get(name);
@@ -435,9 +439,11 @@ function checkInstantiation(functions: ReadonlyMap<number, FunctionFacts>, insta
   return { label: instantiation.label, frames };
 }
 
-export function checkParserFrames(bytes: Uint8Array): InstantiationReport[] {
+const patchPath = resolve(fileURLToPath(import.meta.url), "../../spidermonkey/spidermonkey-wasi.patch");
+
+export function checkParserFrames(bytes: Uint8Array, sizes = reservationSizes(readFileSync(patchPath, "utf8"))): InstantiationReport[] {
   const functions = moduleFunctions(bytes, name => name.includes("GeneralParser"));
-  return parserInstantiations.map(instantiation => checkInstantiation(functions, instantiation));
+  return parserInstantiations.map(instantiation => checkInstantiation(functions, instantiation, sizes));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

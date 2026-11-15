@@ -52,8 +52,9 @@ export const jscStackBudgets: Readonly<Record<StackHostFamily, string>> = {
 
 /**
  * SpiderMonkey's byte quota in KiB on WebKit, whose workers get Apple's 512 KiB stack on macOS and
- * iOS. It is the smallest value that still loads Next's webpack hook, so cold statement nesting
- * deeper than about 85 levels still overflows the host first (docs/stack-limits.md).
+ * iOS. The engine's stack reservations are sized against this value: every measured recursion and
+ * nesting shape ends in a RangeError before the host stack runs out, and Next's webpack hook and
+ * Angular's schema validators load beneath it (docs/stack-limits.md).
  */
 export const spiderMonkeyWebKitStackKib = "188";
 
