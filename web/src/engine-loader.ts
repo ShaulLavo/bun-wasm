@@ -26,10 +26,11 @@ export function engineBuildHint(engine: Engine): string {
 
 /** Optional engines need the complete staged pair; loading still verifies its bytes and profile. */
 export function engineUnavailable(engine: Engine, memoryProfile: ProgramMemoryProfile = "split"): string | null {
-  if (engine !== "spidermonkey") return null;
+  if (engine !== "spidermonkey" && memoryProfile === "split") return null;
+  if (engine === "browser") return null;
   const { core, side } = programProfile(engine);
   if (assetBuild(profileAsset(core, memoryProfile)) !== null && assetBuild(profileAsset(side, memoryProfile)) !== null) return null;
-  if (memoryProfile === "shared-group") return "SpiderMonkey shared-group is not in this build. Stage its matching pair with SHARED_SPIDERMONKEY_PROGRAM=/absolute/program-spidermonkey before building this host.";
+  if (memoryProfile === "shared-group") return `${ENGINES[engine].name} shared-group is not in this build. Stage its matching pair with SHARED_${engine.toUpperCase()}_PROGRAM=/absolute/program before building this host.`;
   return `SpiderMonkey is not in this build. ${engineBuildHint(engine)}`;
 }
 

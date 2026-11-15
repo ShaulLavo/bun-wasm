@@ -3,6 +3,8 @@ import { expect, test } from "bun:test";
 import { initialReport, options, playgroundURL } from "./run";
 import { nativeRunnerArgs } from "./fleet";
 import { frameworks, type Engine } from "./catalog";
+import { Playground } from "../../web/src/playground/playground";
+import { prerequisites } from "./discovery";
 import { ready } from "./playground";
 import { withPlayground } from "./test-fixture";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
@@ -15,13 +17,13 @@ const args = ["--asset-source=profile-test", "--engines=quickjs,jsc", "--browser
 const sharedEngines: readonly Engine[] = ["quickjs", "jsc", "spidermonkey"];
 
 test("goals profile selection reaches both playground URLs and the remote FIFO runner", () => {
-  expect(options(args).profile).toBe("split");
+  expect(options(args).profile).toBeUndefined();
   const config = options(args.concat("--profile=shared-group"));
   expect(config.profile).toBe("shared-group");
   expect(options(nativeRunnerArgs(config, "/Users/test/goals")).profile).toBe("shared-group");
   const url = new URL(playgroundURL("http://test/", framework, "jsc", config.profile));
   expect(url.searchParams.get("profile")).toBe("shared-group");
-  expect(new URL(playgroundURL("http://test/", framework, "browser")).searchParams.get("profile")).toBe("split");
+  expect(new URL(playgroundURL("http://test/", framework, "browser")).searchParams.get("profile")).toBeNull();
   expect(() => options(args.concat("--profile=unknown"))).toThrow("Unknown Bun program profile");
   for (const engine of sharedEngines) {
     const selectedArgs = args.map(arg => arg.startsWith("--engines=") ? `--engines=${engine}` : arg);
@@ -50,7 +52,30 @@ test("staged reports cannot silently change their selected program profile", asy
     const config = options(args.concat(`--root=${root}`));
     const first = await initialReport(config);
     await Bun.write(sourceFile, JSON.stringify({ ...first.source, dirty: false }));
-    expect((await initialReport({ ...config, sourceFile })).source.assets).toHaveProperty("profile", "split");
+    expect((await initialReport({ ...config, sourceFile })).source.assets).toHaveProperty("profile", "template-default");
     await expect(initialReport({ ...config, sourceFile, profile: "shared-group" })).rejects.toThrow("Staged assets differ");
   } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
+test("normal mixed goals use product template defaults and preserve explicit diagnostics", async () => {
+  const angular = frameworks.find(item => item.id === "angular");
+  if (!angular) throw new Error("Missing Angular template");
+  const defaults = options(args);
+  expect(options(nativeRunnerArgs(defaults, "/Users/test/goals")).profile).toBeUndefined();
+  for (const engine of sharedEngines.concat(["browser"])) {
+    const url = new URL(playgroundURL("http://test/", angular, engine));
+    expect(url.searchParams.has("profile")).toBe(false);
+    expect(new Playground(url.search).profile).toBe(engine === "browser" ? "split" : "shared-group");
+    expect(new Playground(new URL(playgroundURL("http://test/", framework, engine)).search).profile).toBe("split");
+    expect(new Playground(new URL(playgroundURL("http://test/", angular, engine, "split")).search).profile).toBe("split");
+  }
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-angular-assets-"));
+  try {
+    await Bun.write(join(root, "angular.json"), "{}");
+    await Bun.write(join(root, "bun.wasm.gz"), "split core");
+    await Bun.write(join(root, "quickjs.wasm.gz"), "split side");
+    const box = { framework: "angular", engine: "quickjs", browser: "chrome" } as const;
+    expect(prerequisites(box, { root })?.reason).toContain("profiles/shared-group/bun.wasm.gz");
+    expect(prerequisites(box, { root, profile: "split" })).toBeUndefined();
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
