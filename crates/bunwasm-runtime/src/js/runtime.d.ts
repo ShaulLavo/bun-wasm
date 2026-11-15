@@ -339,6 +339,7 @@ declare namespace BunWasm {
   interface ConsoleInspector {
     nodeInspect: InspectFunction;
     parseStack(raw: unknown): StackFrame[];
+    errorFrames(error: unknown, raw: unknown): StackFrame[];
   }
   interface StackCallSite {
     getFileName(): string;

@@ -23,6 +23,12 @@ unchanged, and an ordinary filename without percent is returned as the same
 string. Raw SpiderMonkey stack strings and error filenames retain the readable
 encoded label.
 
+The inspector exposes its existing structured-frame conversion as `errorFrames`.
+It accepts an already captured raw stack, so a custom stack formatter can reuse
+decoded native filenames without recursively reading the stack accessor. Native
+metadata remains authoritative even for an empty trace; unavailable metadata
+falls back to parsing the supplied text.
+
 Every compiler filename the adapter passes to SpiderMonkey must be a
 `DiagnosticFilename` or a plain literal without escapes, percent or NUL, because
 eval, Function and Wasm names extend the caller's compiler filename with

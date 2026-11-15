@@ -1441,6 +1441,10 @@
   function parseErrorStack(error) {
     const formattedStack = safeGet(error, "stack");
     const stack = internal.hotErrorStacks?.get(error) ?? formattedStack;
+    return errorFrames(error, stack);
+  }
+
+  function errorFrames(error, stack) {
     if (native.engine !== "spidermonkey" || typeof savedErrorFrames !== "function") return parseStack(stack);
     let frames;
     try { frames = savedErrorFrames(error, stack, true); }
@@ -3965,6 +3969,7 @@ function createNodeInspect(internal) {
     nodeFormat,
     nodeFormatWithOptions,
     parseStack,
+    errorFrames,
     inspectCustom: INSPECT_CUSTOM,
   };
 })
