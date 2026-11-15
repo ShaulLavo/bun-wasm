@@ -1043,7 +1043,7 @@ index 9524c5d6a..7b1543e5f 100644
  
  #ifdef __wasi__
 diff --git i/js/src/frontend/Parser.cpp w/js/src/frontend/Parser.cpp
-index 34f4dee86..71160225a 100644
+index 34f4dee86..0784efd6e 100644
 --- i/js/src/frontend/Parser.cpp
 +++ w/js/src/frontend/Parser.cpp
 @@ -2996,6 +2996,7 @@ template <class ParseHandler, typename Unit>
@@ -1079,7 +1079,61 @@ index 34f4dee86..71160225a 100644
    // Given a properly initialized parse context, try to parse an actual
    // function without concern for conversion to strict mode, use of lazy
    // parsing and such.
-@@ -9299,6 +9311,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
+@@ -4473,7 +4485,7 @@ GeneralParser<ParseHandler, Unit>::destructuringDeclarationWithoutYieldOrAwait(
+ }
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::LexicalScopeNodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::LexicalScopeNodeResult
+ GeneralParser<ParseHandler, Unit>::blockStatement(YieldHandling yieldHandling,
+                                                   unsigned errorNumber) {
+   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftCurly));
+@@ -6249,7 +6261,7 @@ GeneralParser<ParseHandler, Unit>::expressionStatement(
+ }
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::NodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::NodeResult
+ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
+     YieldHandling yieldHandling) {
+   TokenKind next;
+@@ -6257,6 +6269,35 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
+     return errorResult();
+   }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  // A braced body takes statement()'s path for `{` without statement()'s
++  // frame: the same recursion unit, checked before the token is consumed,
++  // then blockStatement. This function is merged into ifStatement, so a
++  // braced if level costs ifStatement and statementList frames only.
++  // statement()'s shadow reservation moves with it, onto ifStatement's frame.
++  if (next == TokenKind::LeftCurly) {
++    BUNWASM_RESERVE_STACK(bunwasm::StatementReserve);
++    AutoCheckRecursionLimit recursion(this->fc_);
++    if (!recursion.check(this->fc_)) {
++      return errorResult();
++    }
++    tokenStream.consumeKnownToken(next, TokenStream::SlashIsRegExp);
++    return blockStatement(yieldHandling);
++  }
++  if (next == TokenKind::Function) {
++    return unbracedFunctionConsequent(yieldHandling);
++  }
++  return statement(yieldHandling);
++}
++
++// The rare Annex B branch below stays out of ifStatement's merged frame.
++template <class ParseHandler, typename Unit>
++MOZ_NEVER_INLINE typename ParseHandler::NodeResult
++GeneralParser<ParseHandler, Unit>::unbracedFunctionConsequent(
++    YieldHandling yieldHandling) {
++  TokenKind next = TokenKind::Function;
++#endif
++
+   // Annex B.3.4 says that unbraced FunctionDeclarations under if/else in
+   // non-strict code act as if they were braced: |if (x) function f() {}|
+   // parses as |if (x) { function f() {} }|.
+@@ -9299,6 +9340,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
  template <class ParseHandler, typename Unit>
  typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
      YieldHandling yieldHandling) {
@@ -1087,15 +1141,19 @@ index 34f4dee86..71160225a 100644
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -9546,6 +9559,7 @@ template <class ParseHandler, typename Unit>
- typename ParseHandler::NodeResult
+@@ -9543,9 +9585,10 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
+ }
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::NodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::NodeResult
  GeneralParser<ParseHandler, Unit>::statementListItem(
      YieldHandling yieldHandling, bool canHaveDirectives /* = false */) {
 +  BUNWASM_RESERVE_STACK(bunwasm::StatementListItemReserve);
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -10114,15 +10128,17 @@ GeneralParser<ParseHandler, Unit>::condExpr(InHandling inHandling,
+@@ -10114,15 +10157,17 @@ GeneralParser<ParseHandler, Unit>::condExpr(InHandling inHandling,
      return condition;
    }
  
@@ -1117,7 +1175,7 @@ index 34f4dee86..71160225a 100644
  
    return handler_.newConditional(condition, thenExpr, elseExpr);
  }
-@@ -10493,6 +10509,7 @@ typename ParseHandler::UnaryNodeResult
+@@ -10493,12 +10538,13 @@ typename ParseHandler::UnaryNodeResult
  GeneralParser<ParseHandler, Unit>::unaryOpExpr(YieldHandling yieldHandling,
                                                 ParseNodeKind kind,
                                                 uint32_t begin) {
@@ -1125,7 +1183,14 @@ index 34f4dee86..71160225a 100644
    Node kid = MOZ_TRY(unaryExpr(yieldHandling, TripledotProhibited));
    return handler_.newUnary(kind, begin, kid);
  }
-@@ -10762,6 +10779,7 @@ typename ParseHandler::ListNodeResult
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::NodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::NodeResult
+ GeneralParser<ParseHandler, Unit>::optionalExpr(
+     YieldHandling yieldHandling, TripledotHandling tripledotHandling,
+     TokenKind tt, PossibleError* possibleError /* = nullptr */,
+@@ -10762,6 +10808,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::argumentList(
      YieldHandling yieldHandling, bool* isSpread,
      PossibleError* possibleError /* = nullptr */) {
@@ -1133,7 +1198,7 @@ index 34f4dee86..71160225a 100644
    ListNodeType argsList = MOZ_TRY(handler_.newArguments(pos()));
  
    bool matched;
-@@ -11149,6 +11167,7 @@ GeneralParser<ParseHandler, Unit>::memberElemAccess(
+@@ -11149,6 +11196,7 @@ GeneralParser<ParseHandler, Unit>::memberElemAccess(
      Node lhs, YieldHandling yieldHandling,
      OptionalKind optionalKind /* = OptionalKind::NonOptional */) {
    MOZ_ASSERT(anyChars.currentToken().type == TokenKind::LeftBracket);
@@ -1141,7 +1206,7 @@ index 34f4dee86..71160225a 100644
    Node propExpr = MOZ_TRY(expr(InAllowed, yieldHandling, TripledotProhibited));
  
    if (!mustMatchToken(TokenKind::RightBracket, JSMSG_BRACKET_IN_INDEX)) {
-@@ -11724,6 +11743,7 @@ typename ParseHandler::ListNodeResult
+@@ -11724,6 +11772,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::arrayInitializer(
      YieldHandling yieldHandling, PossibleError* possibleError) {
    MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftBracket));
@@ -1149,7 +1214,7 @@ index 34f4dee86..71160225a 100644
  
    uint32_t begin = pos().begin;
    ListNodeType literal = MOZ_TRY(handler_.newArrayLiteral(begin));
-@@ -12145,6 +12165,7 @@ typename ParseHandler::ListNodeResult
+@@ -12145,6 +12194,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::objectLiteral(YieldHandling yieldHandling,
                                                   PossibleError* possibleError) {
    MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftCurly));
@@ -1157,7 +1222,16 @@ index 34f4dee86..71160225a 100644
  
    uint32_t openedPos = pos().begin;
  
-@@ -12588,8 +12609,9 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+@@ -12576,7 +12626,7 @@ GeneralParser<ParseHandler, Unit>::importExpr(YieldHandling yieldHandling,
+ }
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::NodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::NodeResult
+ GeneralParser<ParseHandler, Unit>::primaryExpr(
+     YieldHandling yieldHandling, TripledotHandling tripledotHandling,
+     TokenKind tt, PossibleError* possibleError, InvokedPrediction invoked) {
+@@ -12588,8 +12638,9 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
  
    switch (tt) {
      case TokenKind::Function:
@@ -1169,7 +1243,7 @@ index 34f4dee86..71160225a 100644
  
      case TokenKind::Class:
        return classDefinition(yieldHandling, ClassExpression, NameRequired);
-@@ -12638,8 +12660,10 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+@@ -12638,8 +12689,10 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
        }
  
        // Pass |possibleError| to support destructuring in arrow parameters.
@@ -1182,6 +1256,128 @@ index 34f4dee86..71160225a 100644
        if (!mustMatchToken(TokenKind::RightParen, JSMSG_PAREN_IN_PAREN)) {
          return errorResult();
        }
+@@ -12770,7 +12823,7 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+ }
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::NodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::NodeResult
+ GeneralParser<ParseHandler, Unit>::exprInParens(
+     InHandling inHandling, YieldHandling yieldHandling,
+     TripledotHandling tripledotHandling,
+diff --git i/js/src/frontend/Parser.h w/js/src/frontend/Parser.h
+index 55174d6cc..1a0fdc652 100644
+--- i/js/src/frontend/Parser.h
++++ w/js/src/frontend/Parser.h
+@@ -178,6 +178,17 @@
+ #include "js/friend/ErrorMessages.h"  // JSErrNum, JSMSG_*
+ #include "vm/GeneratorAndAsyncKind.h"  // js::GeneratorKind, js::FunctionAsyncKind
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++// A wasm host stack pays for every C++ frame in a recursion cycle. These
++// GeneralParser members are merged into their callers so a nested statement
++// or expression costs fewer frames. The attribute goes on the in-class
++// declaration and the definition; on the definition alone it does not take
++// effect for the full parser.
++#  define BUNWASM_PARSER_MERGED MOZ_ALWAYS_INLINE
++#else
++#  define BUNWASM_PARSER_MERGED
++#endif
++
+ namespace js {
+ 
+ class FrontendContext;
+@@ -989,8 +1000,8 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
+ 
+  public:
+   /* Public entry points for parsing. */
+-  NodeResult statementListItem(YieldHandling yieldHandling,
+-                               bool canHaveDirectives = false);
++  BUNWASM_PARSER_MERGED NodeResult statementListItem(
++      YieldHandling yieldHandling, bool canHaveDirectives = false);
+ 
+   // Parse an inner function given an enclosing ParseContext and a
+   // FunctionBox for the inner function.
+@@ -1027,7 +1038,7 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
+   NodeResult statement(YieldHandling yieldHandling);
+   bool maybeParseDirective(ListNodeType list, Node pn, bool* cont);
+ 
+-  LexicalScopeNodeResult blockStatement(
++  BUNWASM_PARSER_MERGED LexicalScopeNodeResult blockStatement(
+       YieldHandling yieldHandling,
+       unsigned errorNumber = JSMSG_CURLY_IN_COMPOUND);
+   BinaryNodeResult doWhileStatement(YieldHandling yieldHandling);
+@@ -1058,7 +1069,12 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
+   NodeResult labeledItem(YieldHandling yieldHandling);
+ 
+   TernaryNodeResult ifStatement(YieldHandling yieldHandling);
+-  NodeResult consequentOrAlternative(YieldHandling yieldHandling);
++  BUNWASM_PARSER_MERGED NodeResult
++  consequentOrAlternative(YieldHandling yieldHandling);
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  MOZ_NEVER_INLINE NodeResult
++  unbracedFunctionConsequent(YieldHandling yieldHandling);
++#endif
+ 
+   DeclarationListNodeResult lexicalDeclaration(YieldHandling yieldHandling,
+                                                DeclarationKind kind);
+@@ -1166,34 +1182,39 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
+                         InvokedPrediction invoked = PredictUninvoked);
+   NodeResult assignExprWithoutYieldOrAwait(YieldHandling yieldHandling);
+   UnaryNodeResult yieldExpression(InHandling inHandling);
+-  NodeResult condExpr(InHandling inHandling, YieldHandling yieldHandling,
+-                      TripledotHandling tripledotHandling,
+-                      PossibleError* possibleError, InvokedPrediction invoked);
+-  NodeResult orExpr(InHandling inHandling, YieldHandling yieldHandling,
+-                    TripledotHandling tripledotHandling,
+-                    PossibleError* possibleError, InvokedPrediction invoked);
++  BUNWASM_PARSER_MERGED NodeResult condExpr(
++      InHandling inHandling, YieldHandling yieldHandling,
++      TripledotHandling tripledotHandling, PossibleError* possibleError,
++      InvokedPrediction invoked);
++  BUNWASM_PARSER_MERGED NodeResult orExpr(InHandling inHandling,
++                                          YieldHandling yieldHandling,
++                                          TripledotHandling tripledotHandling,
++                                          PossibleError* possibleError,
++                                          InvokedPrediction invoked);
+   NodeResult unaryExpr(YieldHandling yieldHandling,
+                        TripledotHandling tripledotHandling,
+                        PossibleError* possibleError = nullptr,
+                        InvokedPrediction invoked = PredictUninvoked,
+                        PrivateNameHandling privateNameHandling =
+                            PrivateNameHandling::PrivateNameProhibited);
+-  NodeResult optionalExpr(YieldHandling yieldHandling,
+-                          TripledotHandling tripledotHandling, TokenKind tt,
+-                          PossibleError* possibleError = nullptr,
+-                          InvokedPrediction invoked = PredictUninvoked);
++  BUNWASM_PARSER_MERGED NodeResult
++  optionalExpr(YieldHandling yieldHandling,
++               TripledotHandling tripledotHandling, TokenKind tt,
++               PossibleError* possibleError = nullptr,
++               InvokedPrediction invoked = PredictUninvoked);
+   NodeResult memberExpr(YieldHandling yieldHandling,
+                         TripledotHandling tripledotHandling, TokenKind tt,
+                         bool allowCallSyntax, PossibleError* possibleError,
+                         InvokedPrediction invoked);
+   NodeResult decoratorExpr(YieldHandling yieldHandling, TokenKind tt);
+-  NodeResult primaryExpr(YieldHandling yieldHandling,
+-                         TripledotHandling tripledotHandling, TokenKind tt,
+-                         PossibleError* possibleError,
+-                         InvokedPrediction invoked);
+-  NodeResult exprInParens(InHandling inHandling, YieldHandling yieldHandling,
+-                          TripledotHandling tripledotHandling,
+-                          PossibleError* possibleError = nullptr);
++  BUNWASM_PARSER_MERGED NodeResult
++  primaryExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling,
++              TokenKind tt, PossibleError* possibleError,
++              InvokedPrediction invoked);
++  BUNWASM_PARSER_MERGED NodeResult
++  exprInParens(InHandling inHandling, YieldHandling yieldHandling,
++               TripledotHandling tripledotHandling,
++               PossibleError* possibleError = nullptr);
+ 
+   bool tryNewTarget(NewTargetNodeType* newTarget);
+ 
 diff --git i/js/src/builtin/JSON.cpp w/js/src/builtin/JSON.cpp
 index a60aef921..47c01b676 100644
 --- i/js/src/builtin/JSON.cpp
