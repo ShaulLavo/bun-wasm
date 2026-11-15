@@ -7,13 +7,13 @@ import { prepareDesktopSafari, stopDesktopSafari, parseSafariApplications, type 
 test("native startup prepares Safari after console admission and before starting the driver", async () => {
   const source = await readFile(new URL("./native.ts", import.meta.url), "utf8");
   const consoleCheck = source.indexOf('throw new Error("Desktop Safari requires an unlocked Mac console")');
-  const prelaunch = source.indexOf("await prepareDesktopSafari(");
-  const driver = source.indexOf('"/usr/bin/safaridriver"');
+  const prelaunch = source.indexOf("await io.prepare(");
+  const driver = source.indexOf('state.driver = io.spawn(');
   expect(consoleCheck).toBeGreaterThan(-1);
   expect(prelaunch).toBeGreaterThan(consoleCheck);
   expect(driver).toBeGreaterThan(prelaunch);
   const cleanup = source.slice(source.indexOf("async function cleanupNative"));
-  expect(cleanup.indexOf("await stopNativeDriver(")).toBeLessThan(cleanup.indexOf("await stopDesktopSafari("));
+  expect(cleanup.indexOf("await stopNativeDriver(")).toBeLessThan(cleanup.indexOf("await io.stopApp("));
   expect(cleanup).toContain('admissionOwner: "installed-mac-queue"');
   expect(cleanup).not.toContain("lockRemoved");
   expect(source).toContain("if (config.desktopSafari)");

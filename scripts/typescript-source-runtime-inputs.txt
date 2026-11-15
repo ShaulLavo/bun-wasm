@@ -361,7 +361,6 @@ tests/fixtures/parser-lookahead-exception/lib/divided.cjs
 tests/fixtures/parser-lookahead-exception/lib/later.mjs
 tests/fixtures/pipe-closed-output/index.js
 tests/fixtures/pipe-closed-output/large.js
-tests/fixtures/process/index.js
 tests/fixtures/require-string-heavy-chunk/index.js
 tests/fixtures/self-spawn-lifecycle/index.js
 tests/fixtures/self-spawn-network/index.js

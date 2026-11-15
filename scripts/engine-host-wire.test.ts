@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { runtimeTextDecoder } from "./text-decoder-controls";
 
 function sourceSection(source: string, start: string, end: string): string {
   const from = source.indexOf(start);
@@ -39,25 +40,34 @@ const wire = evaluate(`${capturedCodecs}\n${wireSource}\n${errorSource}\n({
 const roundTrip = method(wire, "roundTrip");
 const nativeError = method(wire, "nativeError");
 
-// Rust/wasm is not executed here. The model returns UTF-8 text with its BOM intact.
-function rustUtf8DecodeModel(bytes: Uint8Array, fatal: boolean): unknown {
-  return roundTrip(new TextDecoder("utf-8", { ignoreBOM: true, fatal }).decode(bytes));
-}
-
-// Only complete, nonsurrogate UTF-16LE code units are modeled.
-function rustUtf16leDecodeModel(bytes: Uint8Array): unknown {
-  assert.equal(bytes.length % 2, 0);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const units = Array.from({ length: bytes.length / 2 }, (_, index) => view.getUint16(index * 2, true));
-  assert.ok(units.every(unit => unit < 0xd800 || unit > 0xdfff));
-  return roundTrip(String.fromCharCode(...units));
-}
-
 const web = readFileSync(new URL("../crates/bunwasm-runtime/src/js/web.js", import.meta.url), "utf8");
+// Rust/wasm is not executed. Host codec output crosses the production wire.
+const decoderHandles = new Map<number, TextDecoder>();
+let nextDecoder = 0;
+const { Decoder: WireDecoder } = runtimeTextDecoder({
+  decoder(label, fatal, ignoreBOM) {
+    const decoder = new TextDecoder(label, { fatal, ignoreBOM });
+    const id = ++nextDecoder;
+    decoderHandles.set(id, decoder);
+    return { id, encoding: decoder.encoding };
+  },
+  push(id, bytes, last) {
+    const decoder = decoderHandles.get(id);
+    assert.ok(decoder, "Missing decoder handle");
+    const text = roundTrip(decoder.decode(bytes, { stream: !last }));
+    assert.ok(typeof text === "string");
+    return text;
+  },
+  release(id) { decoderHandles.delete(id); },
+});
+function requireDecoder(name: string) {
+  assert.equal(name, "text_decoder");
+  return WireDecoder;
+}
 const publicSource = sourceSection(web, "  function toUint8(data)", "  // --- base64");
 const publicCodecs = evaluate(`${publicSource}\n({
   decode(input, options, label = "utf-8") { return new TextDecoder(label, options).decode(input); },
-})`, { ...globals, internal: {}, native: { utf8Decode: rustUtf8DecodeModel, utf16leDecode: rustUtf16leDecodeModel } });
+})`, { ...globals, internal: { require: requireDecoder }, native: {} });
 const publicDecode = method(publicCodecs, "decode");
 
 for (const count of [1, 2]) {
@@ -171,8 +181,8 @@ const consumerCodecs = evaluate(`${publicSource}\n${blobSource}\n${bodySource}\n
   },
 })`, {
   ...globals, JSON, URL, URLSearchParams, AbortController, ReadableStream,
-  internal: { mimeType: () => "", toUint8: (bytes: Uint8Array) => bytes },
-  native: { utf8Encode: (text: string) => new TextEncoder().encode(text), utf8Decode: rustUtf8DecodeModel, utf16leDecode: rustUtf16leDecodeModel },
+  internal: { mimeType: () => "", toUint8: (bytes: Uint8Array) => bytes, require: requireDecoder },
+  native: { utf8Encode: (text: string) => new TextEncoder().encode(text) },
 });
 
 function consumerInput(name: string, bytes: Uint8Array): Uint8Array | ReadableStream<Uint8Array> {

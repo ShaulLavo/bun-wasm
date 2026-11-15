@@ -1,0 +1,4 @@
+private property-list hooks: 0
+public sparse getters and setter preserved
+replacer conversion, order, deduplication and thrown identity passed
+shared values, cycles, toJSON, reentry and recovery passed

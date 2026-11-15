@@ -26,6 +26,13 @@ proxy or exotic prototype also retains synchronous dispatch, including its
 invariant checks. Computed getters, setters, `Reflect.get` and PBL cache calls
 are unchanged.
 
+The small-stack guard's reservations ([stack budget](spidermonkey-stack-budget.md))
+are unchanged. A getter frame in the loop never reaches `js::RunScript`, so it
+neither needs nor takes the `RunScript` reservation; every getter that keeps the
+native route still enters through `RunScript` and holds it. The smoke's budget
+run checks both: on the interpreter tier `a.b` getter recursion passes 4,096
+levels, and a computed-key getter (`o[k]`) is still stopped by the quota.
+
 The selected getter stays in the interpreter's mutable function root through
 delazification. The receiver comes from the case's existing `lval` or `receiver`
 root, never from the operand the generic lookup clears. Frame allocation cannot

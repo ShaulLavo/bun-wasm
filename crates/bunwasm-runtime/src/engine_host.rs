@@ -165,9 +165,31 @@ thread_local! {
     static RESULT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
+/// A number or boolean argument as a word; a word native takes nothing else.
+fn word(value: &Val) -> u32 {
+    match value {
+        Val::Num(number) => *number as u32,
+        Val::Bool(flag) => u32::from(*flag),
+        _ => 0,
+    }
+}
+
+/// Calls a word native with plain-data arguments, as the host engine's one bridge carries them.
+fn call_word(function: crate::data::WordFn, args: Args<'_>) -> Val {
+    let mut words = [0; crate::data::WORD_ARGS];
+    for (slot, value) in words.iter_mut().zip(args.0) {
+        *slot = word(value);
+    }
+    Val::Num(function(&words) as f64)
+}
+
 /// Set the program up for the host to run; `_start` then returns.
 pub(crate) fn init(entry: Entry, state: Rc<State>, main_path: String) -> i32 {
     let mut table = crate::natives::table(&state);
+    // The host engine has one bridge, so a word native is an ordinary native here.
+    for (name, function) in std::mem::take(&mut table.words) {
+        table.add(name, move |args| Ok(call_word(function, args)));
+    }
     let polyfill_source = install_host_natives(&mut table, &state);
     let entry = match &entry {
         Entry::File(_) => Record::new().set("kind", "file").set("main", main_path),

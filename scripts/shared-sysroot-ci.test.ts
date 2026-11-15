@@ -11,11 +11,11 @@ import { discoverChecks } from "./test-checks";
 const workflow = expandedCiWorkflow();
 const producer = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-spidermonkey-prebuild:\n")[0]!;
 const smProducer = workflow.split("\n  shared-spidermonkey-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
-const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  web:\n")[0]!;
+const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  shared-native:\n")[0]!;
 
 test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
-  expect(shared).toContain("needs: [quality, rust, shared-prebuild, shared-spidermonkey-prebuild]");
-  expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.quality.result == 'success' && (needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true') }}");
+  expect(shared).toContain("needs: [selection, rust, shared-prebuild, shared-spidermonkey-prebuild]");
+  expect(shared).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
   expect(shared).toContain("node-version: ${{ env.CI_NODE_VERSION }}");
   expect(shared).toContain('echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"');
   expect(shared).toContain("bun scripts/build-wasi-sysroot.ts --shared-pic --inputs");
@@ -134,7 +134,7 @@ function sharedSaveAllowed(condition: string, state: SharedSaveContext): boolean
   const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("inputs.sysroot", JSON.stringify("build"))
     .replaceAll("steps.shared-jsc-producer.outputs.jsc-ready", JSON.stringify("true"))
-    .replace(/needs\.quality\.outputs\.shared-native/g, JSON.stringify("true"))
+    .replace(/needs\.selection\.outputs\.shared-native/g, JSON.stringify("true"))
     .replace(/success\(\)/g, String(state.success))
     .replace(/cancelled\(\)/g, String(state.cancelled))
     .replace(/github\.event_name/g, JSON.stringify(state.event))
@@ -181,20 +181,21 @@ test("shared native checks consume one matching launcher and one produced group 
   const rust = workflow.split("\n  rust:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
   expect(rust).toContain('cp "$CARGO_TARGET_DIR/release/bun-wasm" "$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   expect(rust).toContain("name: native-profile-launcher");
-  expect(shared).toContain("name: native-profile-launcher");
-  expect(shared).toContain('test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"');
+  const native = workflow.split("\n  shared-native:\n")[1]!.split("\n  shared-browser:\n")[0]!;
+  expect(native).toContain("name: native-profile-launcher");
+  expect(native).toContain('test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"');
   expect(shared).toContain('test "$PROFILE_LAUNCHER_RESULT" = success');
   expect(shared).toContain('"$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1');
   expect(shared.indexOf('"$GUEST_CARGO" fetch --locked')).toBeLessThan(shared.indexOf("      - name: Produce the shared native profile once"));
   expect(shared.match(/bun scripts\/build-native-profile.ts shared-group "\$CARGO_TARGET_DIR\/shared-native"$/gm)).toHaveLength(1);
   expect(shared.match(/bun scripts\/build-native-profile.ts shared-group "\$CARGO_TARGET_DIR\/shared-native" jsc$/gm)).toHaveLength(1);
-  expect(shared).toContain("bun scripts/test-checks.ts native --profile shared-group");
-  expect(shared).toContain('export BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"');
-  expect(shared).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
+  expect(native).toContain("bun scripts/test-checks.ts native --profile shared-group");
+  expect(native).toContain("shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm");
+  expect(native).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   expect(shared).not.toContain("shared-wasm-memory");
 });
 
-test("shared production is fully cached before any of the five blocking consumers", () => {
+test("shared production is fully cached before exporting the ready handoff", () => {
   const job: unknown = Bun.YAML.parse(shared);
   assert(job && typeof job === "object" && "steps" in job && Array.isArray(job.steps));
   const steps = job.steps.map((step: unknown) => {
@@ -202,9 +203,9 @@ test("shared production is fully cached before any of the five blocking consumer
     return step;
   });
   const producers = steps.flatMap((step, index) => "id" in step && /^shared-(?:quickjs|jsc|spidermonkey)-producer$/.test(String(step.id)) ? [index] : []);
-  const consumers = steps.flatMap((step, index) => "name" in step && String(step.name).startsWith("Consume the shared ") ? [index] : []);
+  const consumers = steps.flatMap((step, index) => "name" in step && step.name === "Prepare the same-source shared proof handoff" ? [index] : []);
   expect(producers).toHaveLength(3);
-  expect(consumers).toHaveLength(5);
+  expect(consumers).toHaveLength(1);
   const saves = steps.flatMap((step, index) => {
     if ("name" in step && step.name === "Save the completed shared native profile") return [index];
     if ("uses" in step && ["./.github/actions/save-rust-build-cache", "./.github/actions/save-release-downloads"].includes(String(step.uses))) return [index];
@@ -215,7 +216,7 @@ test("shared production is fully cached before any of the five blocking consumer
   expect(Math.max(...saves)).toBeLessThan(Math.min(...consumers));
   expect(job).toHaveProperty("timeout-minutes", 30);
   for (const index of consumers) {
-    expect(steps[index]).toHaveProperty("if", "needs.quality.outputs.shared-native == 'true'");
+    expect(steps[index]).toHaveProperty("if", "needs.selection.outputs.shared-native == 'true'");
     expect(steps[index]).not.toHaveProperty("continue-on-error");
   }
 });

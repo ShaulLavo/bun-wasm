@@ -161,6 +161,27 @@ function watchMembers(runtime: ReturnType<typeof createRuntime>, processes: Awai
     releasedAt.set(tag, performance.now());
     publish(`${CONTROL}/gone/${tag}`, ownerHolds(owners.get(groupOf.get(pid) ?? "")));
   };
+  // A fixture asks for its group owner's counters by writing `snapshot-request/<tag>.<id>`. The
+  // owner is sampled only after the page has read that request, and the answer is published under
+  // the same fresh name, so a fixture can never read a sample taken before it asked.
+  const answered = new Set<string>();
+  let answering = false;
+  const answerSnapshot = (request: string) => {
+    const tag = request.slice(0, request.lastIndexOf("."));
+    const pid = Array.from(tags).find(([, value]) => value === tag)?.[0];
+    const owner = pid === undefined ? undefined : owners.get(groupOf.get(pid) ?? "");
+    if (!owner || answered.has(request)) return;
+    answered.add(request);
+    const { pins, regions, holds, published, members } = owner.snapshot();
+    publish(`${CONTROL}/snapshot/${request}`, JSON.stringify({ pins, regions, holds, published, members }));
+  };
+  const answerSnapshots = async () => {
+    answering = true;
+    try {
+      const requests = await runtime.filesystem.listFiles(`${CONTROL}/snapshot-request`);
+      for (const path of requests) answerSnapshot(path.slice(path.lastIndexOf("/") + 1));
+    } finally { answering = false; }
+  };
   const lockObserver = new AgentLockObserver({
     armed: tag => publish(`${CONTROL}/armed/${tag}`, "armed"),
     closed: tag => {
@@ -180,6 +201,7 @@ function watchMembers(runtime: ReturnType<typeof createRuntime>, processes: Awai
       for (const group of processes.memoryGroups()) observeGroup(group, live);
       for (const [pid, tag] of tags) if (!live.has(pid) && !gone.has(pid)) release(pid, tag);
       if (!querying && navigator.locks) void queryLocks();
+      if (!answering) void answerSnapshots();
     },
     settled: () => writes,
     ended: () => Array.from(owners.values(), owner => owner.snapshot()),
@@ -208,7 +230,7 @@ async function run() {
     memoryGroups: BUN_MEMORY_GROUP_POLICY,
   });
   await installFixtureTree(runtime.filesystem, fixture, entries, path => bytes(fixtureFileUrl(path)));
-  for (const directory of ["group", "gone", "armed", "unarmable", "closed", "stalled", "retained"]) await runtime.filesystem.mkdirp(`${CONTROL}/${directory}`);
+  for (const directory of ["group", "gone", "armed", "unarmable", "closed", "stalled", "retained", "snapshot-request", "snapshot"]) await runtime.filesystem.mkdirp(`${CONTROL}/${directory}`);
   await runtime.filesystem.flush();
   const kind: unknown = await (await fetch("./program/kind.json")).json();
   if (kind !== "quickjs" && kind !== "jsc" && kind !== "spidermonkey") throw new Error("Invalid program kind");

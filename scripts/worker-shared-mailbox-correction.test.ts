@@ -232,7 +232,7 @@ test("review 4 multiple port commits use private ref state without calling publi
   second.port2.unref = () => { throw new Error("later public callback"); };
   await tick();
   expect(() => source.postMessage({ buffer, port: first.port2, other: second.port2 }, [buffer, first.port2, second.port2])).not.toThrow();
-  expect(buffer.byteLength).toBe(0); expect(sender.runtime.internal.messagePortRefs).toBe(0);
+  expect(buffer.byteLength).toBe(0); expect(sender.runtime.internal.messagePortRefs.size).toBe(0);
   await tick();
   const message = receiver.runtime.receiveMessageOnPort(target)?.message;
   const received = receivedTransfer(message, receiver.runtime);
@@ -276,7 +276,7 @@ test("multiple transfers keep all ownership and refs on full outbox and native r
   await tick();
   const locked = new WebAssembly.Memory({ initial: 0 }).buffer;
   expect(() => source.postMessage({ buffer, locked, port: first.port2, other: second.port2 }, [buffer, locked, first.port2, second.port2])).toThrow();
-  expect(buffer.byteLength).toBe(8); expect(sender.runtime.internal.messagePortRefs).toBe(2);
+  expect(buffer.byteLength).toBe(8); expect(sender.runtime.internal.messagePortRefs.size).toBe(2);
   first.port2.postMessage("first remains owned"); second.port2.postMessage("second remains owned");
   expect(sender.runtime.receiveMessageOnPort(first.port1)).toEqual({ message: "first remains owned" });
   expect(sender.runtime.receiveMessageOnPort(second.port1)).toEqual({ message: "second remains owned" });
