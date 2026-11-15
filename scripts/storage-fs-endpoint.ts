@@ -90,7 +90,7 @@ export function observeFilesystemEndpoint(
     lastReceive = inspectFrame(event.data);
     trace("message", lastReceive, event.isTrusted);
     if (lastReceive.kind === "request") requestReceives++;
-    if (receives === 1) notify();
+    if (receives === 1 || (lastReceive.kind === "request" && requestReceives === 1)) notify();
     if (lastReceive.kind === "transportClosed") record("transportClosed", event.isTrusted);
   }
   function messageerror(event: MessageEvent<unknown>): void {
@@ -110,7 +110,7 @@ export function observeFilesystemEndpoint(
       trace("send-return", null, null, typeof result);
       sends++;
       if (frame.kind === "request") requestSends++;
-      if (sends === 1) notify();
+      if (sends === 1 || (frame.kind === "request" && requestSends === 1)) notify();
       return result;
     } catch (error) {
       trace("send-error");
