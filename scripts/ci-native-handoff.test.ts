@@ -150,7 +150,7 @@ function fixture(run: (root: string, env: Record<string, string>, invoke: (job: 
   finally { rmSync(root, { recursive: true, force: true }); }
 }
 function crossFilesystemFixture(run: Parameters<typeof fixture>[0]): void {
-  const temp = mkdtempSync("/dev/shm/bun-wasm-native-handoff-");
+  const temp = mkdtempSync(join(process.env.BUN_WASM_CROSS_FILESYSTEM_TMPDIR ?? "/dev/shm", "bun-wasm-native-handoff-"));
   try {
     const sourceDevice = statSync(tmpdir()).dev, destinationDevice = statSync(temp).dev;
     expect(destinationDevice).not.toBe(sourceDevice);

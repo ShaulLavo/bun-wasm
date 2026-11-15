@@ -19,7 +19,8 @@ failure cannot publish a successful handoff manifest.
 
 The selected objects, shallow commits, patched-head index, archive checksums,
 manifest identity and consumer verification stay unchanged. The Linux regression
-uses a tiny `/dev/shm` destination, records both device identities and removes its fixture
+uses `BUN_WASM_CROSS_FILESYSTEM_TMPDIR`, defaulting to `/dev/shm`, for its tiny
+destination. It requires different device identities and removes its fixture
 on success and failure. It checks both complete trees and excludes unrelated
 history. This is registered through the existing quality handoff manifest.
 
