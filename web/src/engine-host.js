@@ -438,7 +438,6 @@ class EngineHost {
     this.storing = [];
     this.writing = new Set();
     this.paths = new Map();
-    this.stackPrograms = createStackPrograms(bytes => this.native.hash("sha256", bytes));
     this.contentModules = o.modules && o.moduleUrls === "blob" ? new ContentModules({
       named: o.modules, source: key => this.moduleSource(key), contentUrl: (source, key) => this.url(source, key),
       paths: this.paths, storing: this.storing,
@@ -476,7 +475,9 @@ class EngineHost {
       return this.exit(70);
     }
     this.internal = internal;
-    internal.isProgramScriptHash = hash => this.stackPrograms.has(hash);
+    this.stackPrograms = internal.hasNativeStackTrace
+      ? createStackPrograms(bytes => native.hash("sha256", bytes)) : undefined;
+    internal.isProgramScriptHash = hash => this.stackPrograms?.has(hash) === true;
     installHostCrypto(nativeSubtleCrypto,NativeCryptoKey,internal.crypto,native);
     // Module URLs show as their paths; frames of this host itself (and the
     // worker bundle it lives in) are internal, like the polyfills.
@@ -745,7 +746,7 @@ class EngineHost {
       const code = this.linkEsm(key, info);
       // hostModuleSource prefixes import.meta setup before user code, excluding
       // user functions from position 1:1 in this exact compiled source.
-      if (this.internal.hasNativeStackTrace) this.stackPrograms.register(code);
+      this.stackPrograms?.register(code);
       return code;
     }
     // CommonJS, JSON, text and builtins: evaluated now (sharing require's
