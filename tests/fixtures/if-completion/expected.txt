@@ -1,0 +1,34 @@
+constant false: undefined
+dynamic false: undefined
+constant empty then: undefined
+dynamic empty then: undefined
+constant empty else: undefined
+dynamic empty else: undefined
+constant declaration: undefined
+dynamic declaration: undefined
+constant break: undefined
+dynamic break: undefined
+constant break else: undefined
+dynamic break else: undefined
+constant continue: undefined
+dynamic continue: undefined
+constant labelled break: undefined
+dynamic labelled break: undefined
+constant else if: undefined
+dynamic else if: undefined
+constant nested false: undefined
+dynamic nested false: undefined
+bare block: 13
+bare break: 16
+bare continue: 19
+constant value then: 14
+dynamic value then: 14
+constant value else: 15
+dynamic value else: 15
+value before break: 10
+value before continue: 21
+hoisted declaration: undefined
+else if value: 24
+else if hoist: undefined
+shadowed undefined: undefined
+function returns: preserved
