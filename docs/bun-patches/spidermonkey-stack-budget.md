@@ -44,8 +44,9 @@ Next's webpack hook needs.
 
 | Site | Tier | Reserved bytes | Covered recursion | Sized by (binding shapes) |
 | --- | --- | ---: | --- | --- |
-| `RunScript`, shallow stack | both | 1840 | Native calls into scripts: the program's own entry chain and the start of any recursion | Next's webpack hook on PBL (181 KiB needed), with `getter` and `ajv` before the PBL hand-over |
-| `RunScript`, deep stack (`bunwasm::StackIsDeep`) | both | 4096 | Runaway native recursion that remains after the interpreter loops: setters, computed getters, bound and proxy targets, array-like `apply`, coercion | `proxy`, `toString`, `computed`, `setter` on the Mac |
+| `RunScript`, shallow stack | interp | 1840 | Native calls into scripts: the program's own entry chain and the start of any recursion | `getter`, `ajv` |
+| `RunScript`, shallow stack | PBL | 2304 | The same, entering PBL through its trampoline | PBL parentheses and unary chains compiled under the program's own entries (main's size, kept); Next's webpack hook needs 184 KiB with it |
+| `RunScript`, deep stack (`bunwasm::StackIsDeep`) | both | 4096 | Runaway native recursion that remains after the interpreter loops: setters, computed getters, bound and proxy targets, array-like `apply`, coercion | Mac: PBL `stringify`, `proxy`, `toString` (caught up to 218 to 229 KiB), interp `computed` (224 KiB) |
 | `CallWithWasmStackReservation` around three recursive calls in `ICInterpretOps` | PBL | 384 | Scripted calls, getters and setters reached through inline caches before the stack is deep | `ajv`, `getter` |
 | `SerializeJSONProperty` | both | 896 | Nested arrays and objects in `JSON.stringify` | `stringify` |
 | `array_join` | both | 1536 | Nested arrays converted to strings | `join` |
@@ -75,14 +76,14 @@ the shared entries (script entry and PBL's cache-interpreter calls), never insid
 interpreter loop removes it from an entry's coverage. That entry is then
 re-sized from its remaining binding shapes.
 
-The script-entry size follows the stack rather than the tier
+The script-entry size also follows the stack
 ([PBL hand-over](spidermonkey-pbl-handover.md)). A program's own entries are
-shallow and pay 1840 bytes, so Next's need stays where it was. Recursion that
-keeps the native route goes deep, where each entry pays 4096 bytes and the quota
-fires early enough. This replaced a PBL-wide 2304-byte entry and a PBL-only
-proxy-trap site of 1792 bytes: on PBL, getters, `call` and `apply` now continue
-in the C++ interpreter's loop once the stack is deep, so the shapes that sized
-those entries no longer reach them.
+shallow and pay the tier's size, so Next's need and the compile shapes stay
+where main had them. Recursion that keeps the native route goes deep, where each
+entry pays 4096 bytes on either tier and the quota fires early enough. This
+replaced the PBL-only proxy-trap site of 1792 bytes: on PBL, getters, `call` and
+`apply` continue in the C++ interpreter's loop once the stack is deep, and the
+native routes that remain, proxy traps included, pay the deep entry size.
 
 Remove a site's reservation when its calls stay inside the interpreter loop.
 

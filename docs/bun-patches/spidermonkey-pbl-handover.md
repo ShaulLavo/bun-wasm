@@ -56,7 +56,28 @@ interpreter speed.
 
 ## Effect
 
-MEASUREMENTS
+Measured November 15, 2026; tables and method are in
+[stack limits](../stack-limits.md#spidermonkey-pbl-on-deep-stacks).
+
+- PBL getter, missing-argument, `call` and `apply` recursion and Ajv's getter
+  walk pass 17,000 to 55,000 levels before a caught `RangeError`, where main
+  stopped at 115 to 344. Setters, bound functions, computed getters and proxies
+  still stop at the counter or the quota.
+- In the guest at the 188 KiB WebKit budget, cold, every runtime shape of the
+  small-stack sweep is caught on both tiers on the M1 Mac and on Linux under
+  `ulimit -s 512`. The shapes that keep the native route are caught up to at
+  least 218 KiB on the Mac and 237 KiB on Linux. On the Mac, main's engine
+  trapped at 188 KiB on PBL `toString`, proxy and array-like `apply` and on
+  interp computed getters. Default Chromium and Firefox catch every runtime shape
+  on both tiers.
+- Next's webpack hook and the guest's bootstrap load in the launcher at 184 and
+  105 KiB on PBL, as on main.
+- `js::Interpret`, `js::RunScript`, `ICInterpretOps` and both PBL loops keep
+  main's shadow frames (432, 48, 80 and 432 bytes). The PBL loops have three more
+  wasm locals each.
+- PBL CPU time: 4 percent less at the top of the stack, because padded calls stay
+  in PBL's loop, and 8 percent more for the same work under a deep stack, which
+  now runs in the C++ interpreter.
 
 ## Original adapters and controls
 
