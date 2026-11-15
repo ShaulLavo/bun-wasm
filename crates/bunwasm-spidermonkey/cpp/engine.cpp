@@ -2,6 +2,7 @@
 #include "stack-budget.h"
 #include "filename.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <new>
@@ -259,11 +260,31 @@ const JSClass nativeClass = {"BunNative", JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLAS
 const JSClass frameClass = {"BunAsyncFrame", JSCLASS_HAS_RESERVED_SLOTS(1), nullptr, nullptr, nullptr, nullptr};
 const JSClass globalClass = {"Bun", JSCLASS_GLOBAL_FLAGS, &JS::DefaultGlobalClassOps, nullptr, nullptr, nullptr};
 
-JSString* original_frame_source(JSContext* cx, JS::HandleString source) {
+bool has_percent(JSLinearString* linear) {
+  JS::AutoCheckCannotGC nogc;
+  const size_t length = JS::GetLinearStringLength(linear);
+  if (JS::LinearStringHasLatin1Chars(linear)) {
+    const JS::Latin1Char* chars = JS::GetLatin1LinearStringChars(nogc, linear);
+    return memchr(chars, '%', length) != nullptr;
+  }
+  const char16_t* chars = JS::GetTwoByteLinearStringChars(nogc, linear);
+  return std::find(chars, chars + length, u'%') != chars + length;
+}
+
+// Only compiler filenames carry DiagnosticFilename escapes. A sourceURL label is
+// raw text and an ordinary filename is returned as the same string.
+JSString* frame_filename(JSContext* cx, JS::HandleObject frame, JS::HandleString source,
+                         JS::SavedFrameSelfHosted selfHosted) {
+  JS::SavedFrameSourceKind kind = JS::SavedFrameSourceKind::DisplayURL;
+  if (JS::GetSavedFrameSourceKind(cx, nullptr, frame, &kind, selfHosted) != JS::SavedFrameResult::Ok) return nullptr;
+  if (kind != JS::SavedFrameSourceKind::Filename) return source;
+  // SavedFrame sources are atoms, so this never allocates.
+  JSLinearString* linear = JS_EnsureLinearString(cx, source);
+  if (!linear) return nullptr;
+  if (!has_percent(linear)) return source;
   JS::RootedValue value(cx, JS::StringValue(source));
   std::string label;
   if (!to_utf8(value, &label)) return nullptr;
-  if (label.find('%') == std::string::npos) return source;
   const std::string name = bunsm::original_filename(label);
   return utf8(name.data(), name.size());
 }
@@ -276,7 +297,7 @@ JSObject* saved_frame_object(JSContext* cx, JS::HandleObject frame, JS::SavedFra
       JS::GetSavedFrameFunctionDisplayName(cx, nullptr, frame, &name, selfHosted) != JS::SavedFrameResult::Ok ||
       JS::GetSavedFrameLine(cx, nullptr, frame, &line, selfHosted) != JS::SavedFrameResult::Ok ||
       JS::GetSavedFrameColumn(cx, nullptr, frame, &column, selfHosted) != JS::SavedFrameResult::Ok) return nullptr;
-  source = original_frame_source(cx, source);
+  source = frame_filename(cx, frame, source, selfHosted);
   if (!source) return nullptr;
   JS::RootedObject result(cx, JS_NewPlainObject(cx));
   if (!result) return nullptr;
