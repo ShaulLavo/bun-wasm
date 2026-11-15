@@ -47,6 +47,9 @@ The direct executor test obtains its bootstrap, signal cells and replacement
 constructor through the package fixture's Waffle installation. Separate root and
 Web development installs remain separate; no tagged control object crosses those
 module identities. Real consumers keep their existing single-peer bundle contract.
+The Web unit job runs for every ready pull request, including a package-fixture-only
+edit. `scripts/ci-web-phases.test.ts` checks that routing, the automatic test owner
+and the absence of a native producer requirement for this fixture.
 
 Browser guests expose a resizable Wasm buffer. WebIDL's `TextDecoder` rejects a view
 of that buffer, so the binding copies the bounded prepared JSON into a fixed byte
