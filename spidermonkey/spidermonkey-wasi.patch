@@ -587,7 +587,7 @@ index f1ce887af..00c9ecad1 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..ba1257b57 100644
+index 9524c5d6a..60db5b48b 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,29 @@
@@ -620,7 +620,7 @@ index 9524c5d6a..ba1257b57 100644
  #include "mozilla/Attributes.h"  // MOZ_ALWAYS_INLINE, MOZ_COLD
  #include "mozilla/Likely.h"      // MOZ_LIKELY
  #include "mozilla/Variant.h"     // mozilla::Variant, mozilla::AsVariant
-@@ -30,6 +53,46 @@ struct JS_PUBLIC_API JSContext;
+@@ -30,6 +53,48 @@ struct JS_PUBLIC_API JSContext;
  
  namespace js {
  
@@ -628,11 +628,13 @@ index 9524c5d6a..ba1257b57 100644
 +// Native reentry into scripts (call/apply, getters, setters, bound and proxy
 +// targets). PBL enters through its trampoline and a much larger frame.
 +inline constexpr size_t RunScriptReserve = 2688;
-+inline constexpr size_t RunScriptPBLReserve = 4224;
++inline constexpr size_t RunScriptPBLReserve = 2304;
 +// Portable baseline inline caches calling a scripted getter, setter or callee.
 +inline constexpr size_t PBLCallReserve = 384;
++// Function.prototype.call and apply on PBL, on top of the script entry.
++inline constexpr size_t FunctionCallPBLReserve = 1920;
 +// Proxy traps on PBL, whose scripted handlers enter the interpreter again.
-+inline constexpr size_t ProxyTrapPBLReserve = 1792;
++inline constexpr size_t ProxyTrapPBLReserve = 2816;
 +// Native-only recursion: JSON.stringify's serializer and Array.prototype.join
 +// reached again through an element's toString.
 +inline constexpr size_t JSONSerializeReserve = 896;
@@ -965,3 +967,40 @@ index 4ecf3ef44..fccb197d6 100644
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
+diff --git i/js/src/vm/JSFunction.cpp w/js/src/vm/JSFunction.cpp
+index d59add35d..585c7db12 100644
+--- i/js/src/vm/JSFunction.cpp
++++ w/js/src/vm/JSFunction.cpp
+@@ -20,6 +20,7 @@
+ #include "frontend/Stencil.h"  // js::DumpFunctionFlagsItems
+ #include "jit/InlinableNatives.h"
+ #include "jit/Ion.h"
++#include "jit/JitOptions.h"  // js::jit::JitOptions
+ #include "js/CallNonGenericMethod.h"
+ #include "js/CompilationAndEvaluation.h"
+ #include "js/CompileOptions.h"
+@@ -1050,7 +1051,16 @@ static bool fun_toSource(JSContext* cx, unsigned argc, Value* vp) {
+   return true;
+ }
+ 
++// `.call` and `.apply` reached from PBL enter the interpreter again through
++// RunScript and PBL's trampoline; those host frames cost more than the script
++// entry's reservation covers, so these natives reserve the rest on that tier.
++#define BUNWASM_RESERVE_PBL_FUNCTION_CALL()                                   \
++  BUNWASM_RESERVE_STACK_DYNAMIC(jit::JitOptions.portableBaselineInterpreter \
++                                    ? bunwasm::FunctionCallPBLReserve        \
++                                    : 0)
++
+ bool js::fun_call(JSContext* cx, unsigned argc, Value* vp) {
++  BUNWASM_RESERVE_PBL_FUNCTION_CALL();
+   CallArgs args = CallArgsFromVp(argc, vp);
+ 
+   HandleValue func = args.thisv();
+@@ -1089,6 +1099,7 @@ bool js::fun_call(JSContext* cx, unsigned argc, Value* vp) {
+ 
+ // ES5 15.3.4.3
+ bool js::fun_apply(JSContext* cx, unsigned argc, Value* vp) {
++  BUNWASM_RESERVE_PBL_FUNCTION_CALL();
+   CallArgs args = CallArgsFromVp(argc, vp);
+ 
+   // Step 1.
