@@ -92,6 +92,26 @@ owns the runtime type project. The native fixture runner sets `BUN_WASM_CI_CHECK
 so `test.sh` runs only Rust-owned probes, without repeating those Web checks.
 Local fixture commands still run their original complete runtime preflight.
 
+The Linux native CI step explicitly sets `BUN_WASM_RUNTIME_JOBS=2`. The runtime owner
+first runs unclassified files in its original single Bun process, then runs files
+marked `"isolation": "process"` in at most two Bun processes. That opt-in belongs
+only to runtime manifests whose controls write private scratch outputs and read
+produced engine inputs. New files default to serial execution. Ordinary SM
+fixtures and loop controls remain serial because they use a shared build target
+or producer compile commands. JSC JSON, Wasm tables and module evaluation controls
+use separate file processes, retaining their internal order, mocks, assertions,
+profile settings and hang caps. No test or compilation is added to the plan.
+
+Without this variable, or with `1`, the runtime command is unchanged. Other values
+fail before starting checks. The bounded mode sets `RAYON_NUM_THREADS=2` and owns
+a temporary root for `TMPDIR` and `WASM_TABLE_TMP`. It uses the existing command
+supervisor with `--until-exit`, preserving each file's existing deadlines rather
+than adding an aggregate deadline. Failure stops pending files and waits for
+active files. Cancellation requests the supervisor's existing stop state and
+drains descendants before removing owned scratch. Other platforms retain the
+default command and reject the bounded option.
+The existing blocking native verdict and later exports stay in place.
+
 The native CI step sets `INSTALL_ENGINES` from its ordinary JSC producer selection.
 The tarball installer matrix runs QuickJS and Browser, adding JSC only when that
 producer is selected. Installer source, fixture, and helper changes select JSC.

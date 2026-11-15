@@ -1,5 +1,6 @@
 {
   "owner": "runtime",
+  "isolation": "process",
   "path": "scripts/wasm-tables.test.ts",
   "localRuntime": true
 }

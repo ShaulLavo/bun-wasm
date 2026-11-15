@@ -1,13 +1,11 @@
 import { appendFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { StoragePreservationFailure, storageReportPath } from "../sandbox/tests/storage-browser";
-import firefoxProtocol from "./fixtures/storage-ci/firefox.json";
 import webkitProtocol from "./fixtures/storage-ci/webkit.json";
 import webkitRestorationProtocol from "./fixtures/storage-ci/webkit-restoration.json";
 
 type Diagnostic = StoragePreservationFailure["report"]["pages"][number];
 type PageDiagnostic = Exclude<Diagnostic, string>;
-const protocols = { firefox: firefoxProtocol, webkit: webkitProtocol };
 
 function normalizedTerminal(terminal: string): string {
   return terminal.replace(/\s+/g, "").replace(/\[\d+ms\]/g, "[ms]").replace(/readyin\d+ms/g, "readyinms")
@@ -30,15 +28,6 @@ function isActiveHono(page: Diagnostic | undefined): page is PageDiagnostic {
   const origin = new URL(page.url).origin;
   return !!page.status?.startsWith("dev server ready") && page.status.includes(" · Browser (native) · ") && page.runtime?.editorPath === "server.ts"
     && page.frames.length === 1 && page.frames[0]?.src === `${origin}/sandbox/__preview/5174/` && page.frames[0].body === "Hello from hono\nIncrement1";
-}
-
-function knownConsoleError(browser: string, error: string): boolean {
-  if (error === "[bun-wasm development HTML] disconnected") return true;
-  if (browser === "webkit") return error === "Failed to load resource: the server responded with a status of 502 ()";
-  return error === "[vite] JSHandle@object"
-    || error === "[vite] Failed to reload /src/main.ts. This could be due to syntax errors or importing non-existent modules. (see errors above)"
-    || error === "runtime: process controller failed Error"
-    || /^\[JavaScript Error: "Failed to load ‘’. A ServiceWorker intercepted the request and encountered an unexpected error\." \{file: "http:\/\/127\.0\.0\.1:\d+\/sandbox\/sw\.js" line: 8\}\]$/.test(error);
 }
 
 function firstVanillaRestoration(failure: StoragePreservationFailure): string | undefined {
@@ -68,24 +57,18 @@ function restorationPage(page: PageDiagnostic, original: typeof webkitRestoratio
 }
 
 export function storageQuarantine(browser: string, failure: StoragePreservationFailure): string | undefined {
-  if (failure.report.checkpoint === "first-vanilla-restoration") return browser === "webkit" ? firstVanillaRestoration(failure) : undefined;
-  if (browser !== "firefox" && browser !== "webkit") return;
+  if (browser !== "webkit") return;
+  if (failure.report.checkpoint === "first-vanilla-restoration") return firstVanillaRestoration(failure);
   const { checkpoint, error, errors, pages } = failure.report;
-  if (pages.length !== 2 || !errors.every(error => knownConsoleError(browser, error))) return;
+  if (pages.length !== 2 || !errors.every(error => error === "[bun-wasm development HTML] disconnected"
+    || error === "Failed to load resource: the server responded with a status of 502 ()")) return;
   const [active, page] = pages;
-  const template = browser === "firefox" ? "vite-vue" : "vanilla";
-  if (!isActiveHono(active) || !isNativePage(page, template)) return;
+  if (!isActiveHono(active) || !isNativePage(page, "vanilla")) return;
   if (new URL(active.url).origin !== new URL(page.url).origin) return;
   const origin = new URL(active.url).origin;
   if (page.frames.length !== 1) return;
-  const original = protocols[browser].pages;
+  const original = webkitProtocol.pages;
   if (!matchesTerminal(active.terminal, original[0]?.terminal) || !matchesTerminal(page.terminal, original[1]?.terminal)) return;
-  if (browser === "firefox") {
-    if (checkpoint !== "first-vite-vue-startup" || !error.startsWith("Error: waitForFunction: Dev server stopped before it was ready (exit 254).")) return;
-    if (page.status !== "Dev server stopped before it was ready (exit 254). Check the terminal output, then press Restart.") return;
-    if (page.frames[0]?.src !== "" || page.frames[0].body !== "" || page.runtime?.editorPath !== "src/App.vue") return;
-    return "firefox-first-vue-closed";
-  }
   if (checkpoint !== "vanilla-config-restart" || error !== "Error: Storage readiness deadline: vanilla") return;
   if (page.status !== "loading preview…" || page.runtime?.editorPath !== "vite.config.ts") return;
   if (page.frames[0]?.src !== `${origin}/sandbox/__preview/5173/` || page.frames[0].body !== "No bun.wasm server is listening on port 5173.\nStart one in the playground (Bun.serve), then reload this page.\n") return;
