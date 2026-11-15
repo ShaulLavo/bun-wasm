@@ -13,7 +13,7 @@ unit 2 of the interpreter-loop work that
 | `js/src/vm/PortableBaselineInterpret.cpp`, `ICInterpretOps` | Embed adaptation | On a deep stack the scripted-function, getter and setter, and bound-function cache operations call through `js::Call`, or the construct route for a construction, instead of entering PBL again in C. |
 | `js/src/vm/PortableBaselineInterpret.cpp`, call fast path | Embed adaptation | A call with fewer arguments than parameters pads them with `undefined` and stays in PBL's loop instead of missing the fast path. |
 | `js/src/vm/Interpreter.cpp`, `RunScript` | Port change | The script-entry reservation is graded by depth on both tiers instead of by tier ([stack budget](spidermonkey-stack-budget.md)). |
-| `js/src/proxy/Proxy.cpp` | Port change | The PBL proxy-trap reservation is removed; the deep script-entry size covers proxy recursion. |
+| `js/src/proxy/Proxy.cpp` | Port change | The PBL proxy-trap reservation is removed, so the patch no longer changes this file; the deep script-entry size covers proxy recursion. |
 
 ## The hand-over
 

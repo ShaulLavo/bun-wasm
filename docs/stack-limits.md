@@ -917,12 +917,46 @@ Firefox 157 and WebKit 27.2 (WebKit under `ulimit -s 512`), interpreter tier:
 | `f.apply(null, [n - 1])` recursion | trap at 550, 1,059 and 95 | caught at 50,998 in all three |
 | `apply` with `arguments` (two frames per level) | trap at 550, 1,059 and 93 | caught at 25,499 in all three |
 
-Computed-key getters (`a[k]`), setters, `Reflect.get`, getters on proxies or in another realm,
-and every PBL getter keep the native route, its counter and the `RunScript` quota reservation
-("SpiderMonkey on small stacks" above). So do `call` and `apply` on PBL, to bound, proxy or
-native targets, `apply` with array-likes, holey arrays or a modified `arguments` object,
-spread calls and `Reflect.apply`. Those shapes, proxy traps and `valueOf` coercion still
-recurse natively.
+Computed-key getters (`a[k]`), setters, `Reflect.get` and getters on proxies or in another
+realm keep the native route, its counter and the `RunScript` quota reservation ("SpiderMonkey
+on small stacks" above). So do `call` and `apply` to bound, proxy or native targets, `apply`
+with array-likes, holey arrays or a modified `arguments` object, spread calls and
+`Reflect.apply`. Those shapes, proxy traps and `valueOf` coercion still recurse natively. PBL
+reaches these loops once its stack is deep (next section).
+
+## SpiderMonkey PBL on deep stacks
+
+The portable baseline interpreter (PBL) calls getters, setters, bound functions and calls with
+missing arguments by entering itself again in C, so each level held a counter unit and host
+stack, and its getter recursion stopped at 344 levels. Two changes
+([patch record](bun-patches/spidermonkey-pbl-handover.md)):
+
+- Calls with fewer arguments than parameters pad them with `undefined` and stay in PBL's own
+  loop.
+- Once a quarter of the byte quota is in use, or 128 counter units are held, new frames run in
+  the C++ interpreter. PBL's inline caches call through the engine's ordinary call or construct
+  path, and calls from C++ stop entering PBL. From there, getters, `call` and `apply` stay in the
+  C++ interpreter's loop above.
+
+PBL recursion depth before a caught `RangeError`, standalone smoke under Wasmtime with the full
+quota and with the 188 KiB WebKit budget:
+
+| Shape | Before | After, full quota | After, 188 KiB |
+| --- | ---: | ---: | ---: |
+| Getter | 344 | 51,124 | 51,045 |
+| Missing argument | 344 | 55,087 | 55,087 |
+| `f.call`, `f.apply` | 115 | 51,042 | 51,012 |
+| Ajv's getter walk | 340 | 17,120 | 17,038 |
+| Setter, computed getter | 344 | 234 | 74, 76 |
+| Bound function | 342 | 196 | 74 |
+| Proxy `get` trap, `toString` | 115, 172 | 115, 136 | 44, 43 |
+
+Plain PBL recursion is still bounded by PBL's own frame stack, near 4,400 levels in the smoke
+and 3,600 in the guest. Setters, computed getters, bound functions, proxies and coercions
+recurse natively in the C++ interpreter after the crossing, as on that tier, so the counter and
+the quota still stop them.
+
+Code that runs while the stack is deep runs at interpreter speed. CPU_TIME_SUMMARY
 
 ## Historical nested require measurements
 

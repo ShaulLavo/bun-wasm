@@ -54,7 +54,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git i/js/src/vm/Interpreter.cpp w/js/src/vm/Interpreter.cpp
-index 6241cd45d..44424e3ef 100644
+index 6241cd45d..6cd08791c 100644
 --- i/js/src/vm/Interpreter.cpp
 +++ w/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -67,17 +67,19 @@ index 6241cd45d..44424e3ef 100644
  
  using namespace js;
  
-@@ -436,6 +439,9 @@ static void AssertExceptionResult(JSContext* cx) {
+@@ -436,6 +439,11 @@ static void AssertExceptionResult(JSContext* cx) {
  #  pragma optimize("g", off)
  #endif
  bool js::RunScript(JSContext* cx, RunState& state) {
-+  BUNWASM_RESERVE_STACK_DYNAMIC(bunwasm::StackIsDeep(cx)
-+                                    ? bunwasm::RunScriptDeepReserve
-+                                    : bunwasm::RunScriptReserve);
++  BUNWASM_RESERVE_STACK_DYNAMIC(
++      bunwasm::StackIsDeep(cx) ? bunwasm::RunScriptDeepReserve
++      : jit::JitOptions.portableBaselineInterpreter
++          ? bunwasm::RunScriptPBLReserve
++          : bunwasm::RunScriptReserve);
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
-@@ -1779,8 +1785,207 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
+@@ -1779,8 +1787,207 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
                            JS::ObjectValue(*disposableRecord));
  }
  
@@ -285,7 +287,7 @@ index 6241cd45d..44424e3ef 100644
  /*
   * Define macros for an interpreter loop. Opcode dispatch is done by
   * indirect goto (aka a threaded interpreter), which is technically
-@@ -1839,8 +2044,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1839,8 +2046,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
     * Prepare to call a user-supplied branch handler, and abort the script
     * if it returns false.
     */
@@ -300,7 +302,7 @@ index 6241cd45d..44424e3ef 100644
      if (!CheckForInterrupt(cx)) goto error; \
    JS_END_MACRO
  
-@@ -1984,6 +2195,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1984,6 +2197,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
    INIT_COVERAGE();
    COUNT_COVERAGE_MAIN();
  
@@ -313,7 +315,7 @@ index 6241cd45d..44424e3ef 100644
    // Enter the interpreter loop starting at the current pc.
    ADVANCE_AND_DISPATCH(0);
  
-@@ -2229,7 +2446,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2229,7 +2448,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
  
        jit_return:
  
@@ -326,7 +328,7 @@ index 6241cd45d..44424e3ef 100644
          MOZ_ASSERT(cx->realm() == script->realm());
  
          /* Resume execution in the calling frame. */
-@@ -2238,6 +2460,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2238,6 +2462,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
              ADVANCE_AND_DISPATCH(JSOpLength_Resume);
            }
  
@@ -341,7 +343,7 @@ index 6241cd45d..44424e3ef 100644
            MOZ_ASSERT(GetBytecodeLength(REGS.pc) == JSOpLength_Call);
            ADVANCE_AND_DISPATCH(JSOpLength_Call);
          }
-@@ -2944,9 +3174,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2944,9 +3176,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
        ReservedRooted<Value> lval(&rootValue0, REGS.sp[-1]);
        MutableHandleValue res = REGS.stackHandleAt(-1);
        ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
@@ -364,7 +366,7 @@ index 6241cd45d..44424e3ef 100644
        cx->debugOnlyCheck(res);
      }
      END_CASE(GetProp)
-@@ -2964,9 +3207,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2964,9 +3209,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
          goto error;
        }
  
@@ -387,7 +389,7 @@ index 6241cd45d..44424e3ef 100644
  
        cx->debugOnlyCheck(rref);
  
-@@ -3271,6 +3527,25 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -3271,6 +3529,25 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
            (construct && !maybeFun->isConstructor()) ||
            (!construct && maybeFun->isClassConstructor()) ||
            cx->realm()->debuggerObservesNativeCall()) {
@@ -413,7 +415,7 @@ index 6241cd45d..44424e3ef 100644
          if (construct) {
            CallReason reason = op == JSOp::NewContent ? CallReason::CallContent
                                                       : CallReason::Call;
-@@ -3298,6 +3573,9 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -3298,6 +3575,9 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
          ADVANCE_AND_DISPATCH(JSOpLength_Call);
        }
  
@@ -423,7 +425,7 @@ index 6241cd45d..44424e3ef 100644
        {
          MOZ_ASSERT(maybeFun);
          ReservedRooted<JSFunction*> fun(&rootFunction0, maybeFun);
-@@ -3366,8 +3644,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -3366,8 +3646,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
                                      // call popInlineFrame.
        }
  
@@ -443,7 +445,7 @@ index 6241cd45d..44424e3ef 100644
        if (!REGS.fp()->prologue(cx)) {
          goto prologue_error;
        }
-@@ -4619,8 +4908,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
+@@ -4619,8 +4910,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
    return cx->getPendingExceptionStack(vp);
  }
  
@@ -460,7 +462,7 @@ index 6241cd45d..44424e3ef 100644
    if (name == cx->names().length) {
      // Fast path for strings, arrays and arguments.
      if (::GetLengthProperty(v, vp)) {
-@@ -4674,9 +4969,30 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
+@@ -4674,9 +4971,30 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
      return false;
    }
  
@@ -1218,7 +1220,7 @@ index f1ce887af..00c9ecad1 100644
  // Internal implementation
  
 diff --git i/js/public/friend/StackLimits.h w/js/public/friend/StackLimits.h
-index 9524c5d6a..70add0502 100644
+index 9524c5d6a..b017e9eff 100644
 --- i/js/public/friend/StackLimits.h
 +++ w/js/public/friend/StackLimits.h
 @@ -5,6 +5,29 @@
@@ -1251,7 +1253,7 @@ index 9524c5d6a..70add0502 100644
  #include "mozilla/Attributes.h"  // MOZ_ALWAYS_INLINE, MOZ_COLD
  #include "mozilla/Likely.h"      // MOZ_LIKELY
  #include "mozilla/Variant.h"     // mozilla::Variant, mozilla::AsVariant
-@@ -30,6 +53,61 @@ struct JS_PUBLIC_API JSContext;
+@@ -30,6 +53,63 @@ struct JS_PUBLIC_API JSContext;
  
  namespace js {
  
@@ -1263,10 +1265,12 @@ index 9524c5d6a..70add0502 100644
 +inline constexpr size_t DeepStackQuotaDenominator = 4;
 +inline constexpr size_t DeepStackUnits = 128;
 +// Native reentry into scripts (call/apply, getters, setters, bound and proxy
-+// targets), on both tiers. A program's own entry chain stays shallow and pays
-+// the small size. Runaway recursion goes deep, where the large size makes the
-+// quota fire before the host stack runs out.
++// targets). A program's own entry chain stays shallow and pays the tier's
++// size; PBL enters through its trampoline and a much larger frame. Runaway
++// recursion goes deep, where the large size makes the quota fire before the
++// host stack runs out on either tier.
 +inline constexpr size_t RunScriptReserve = 1840;
++inline constexpr size_t RunScriptPBLReserve = 2304;
 +inline constexpr size_t RunScriptDeepReserve = 4096;
 +// Portable baseline inline caches calling a scripted getter, setter or callee.
 +inline constexpr size_t PBLCallReserve = 384;
