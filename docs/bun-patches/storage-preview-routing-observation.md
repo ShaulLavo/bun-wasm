@@ -13,6 +13,10 @@ The transforms reuse the qualified preview-claim observer and its schedule
 controls from the Storage investigation. The actual-consumer extension also
 reuses the earlier Sandbox runtime/router and helper/projection hooks. Consumer
 hooks adapt this repository's `web/src/preview.ts` and `sandbox/src/sandbox.ts`.
+The consumer source starts at bun-wasm revision
+`ff8697a55094e8e5485d78619037d070f12a90d1`. The earlier qualified observer
+implementation is retained in bun-wasm commit
+`9c987b08fa2c4d1b540967f7037b67ed5ec5a23a`.
 They add scalar observations around original calls, without changing request
 payloads, ports, candidate ordering, receivers, return values, thrown errors,
 or the original 3000 ms claim deadline. Page send-before-call and send-return

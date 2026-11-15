@@ -66,6 +66,14 @@ full storage workload or capture new browser diagnostics for this retirement.
 Component results and cleanup belong in
 `/work/reports/goals/storage-ci-20261116/webkit-quarantine-retirement/REPORT.md`.
 
+The latest concrete restart failure is main `d6f19fa9`, run `43736704897`,
+job `132905517968`. The replacement document returned 200 and stayed empty and
+interactive. `/@vite/client` and `/src/main.ts` had no response, completion or
+failure before teardown, while Hono stayed healthy. The unchanged 180-second
+readiness hang cap correctly rejected it. The retained report is
+`/work/reports/goals/storage-ci-20261114/webkit-d6-restart-forward/REPORT.md`.
+Current source cause remains unproved.
+
 ## Ordinary routing observation, approved
 
 The integration retires both remaining WebKit exceptions and enables the

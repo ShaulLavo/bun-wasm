@@ -1,8 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { instrumentHelper, instrumentRouter, instrumentWorker } from "./storage-routing-build-source";
 
-const scratch = await mkdtemp("/work/tmp/bun-wasm-routing-");
+const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-routing-"));
 afterAll(() => rm(scratch, { recursive: true, force: true }));
 process.once("SIGTERM", () => { void rm(scratch, { recursive: true, force: true }).finally(() => process.exit(143)); });
 process.once("SIGINT", () => { void rm(scratch, { recursive: true, force: true }).finally(() => process.exit(130)); });
