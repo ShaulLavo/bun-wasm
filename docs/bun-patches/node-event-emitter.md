@@ -9,7 +9,8 @@ function and validates options before registering listeners. `on` preserves
 the high watermark, and resumes below the low watermark. Closing clears the paused
 state before queued events drain. A fired once wrapper clears its emitter reference
 while retaining its public `.listener`, original receiver, and removal ordering.
-EventTarget limits use the exported limit symbol. Borrowed native methods observe
+EventTarget limits use the exported limit symbol and reject unwritable storage.
+Borrowed native methods observe
 the `_events` getter before performing `once`, `eventNames`, or `getMaxListeners`.
 These changes keep local scheduling, listener storage and Promise construction;
 they do not copy Bun's private native helpers. The additional declarations in

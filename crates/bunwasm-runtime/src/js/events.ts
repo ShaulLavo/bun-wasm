@@ -473,6 +473,11 @@
     throw invalidArgType("emitter", "an instance of EventEmitter or EventTarget", emitterOrTarget);
   };
 
+  function setEventTargetLimit(target: EventTarget, n: number) {
+    if (Reflect.set(target, EventEmitter.kMaxEventTargetListeners, n)) return;
+    throw new TypeError("Cannot set maximum listeners on a non-writable EventTarget");
+  }
+
   EventEmitter.setMaxListeners = function setMaxListeners(n = defaultMaxListeners) {
     checkMaxListeners(n, "n");
     const targets: Source[] = Array.prototype.slice.call(arguments, 1);
@@ -482,7 +487,7 @@
     }
     for (const target of targets) {
       if (target != null && typeof target.setMaxListeners === "function") target.setMaxListeners(n);
-      else if (target instanceof EventTarget) Reflect.set(target, EventEmitter.kMaxEventTargetListeners, n);
+      else if (target instanceof EventTarget) setEventTargetLimit(target, n);
       else throw invalidArgType("eventTargets", "an instance of EventEmitter or EventTarget", target);
     }
   };
