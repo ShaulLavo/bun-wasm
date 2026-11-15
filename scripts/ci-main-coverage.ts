@@ -1,16 +1,19 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { nativeCheckInputsAt } from "./ci-check-inputs";
+import { selectBrowserGuestCoverage, type CoverageManifestSnapshot } from "./browser-guest-selection";
+import { fullBrowserGuestSelection, unionBrowserGuestSelections, type BrowserGuestSelection } from "./browser-guest-catalogue";
+import { changedPaths } from "./ci-changes";
+import { nativeCheckInputsAt, verifiedCheckManifestsAt } from "./ci-check-inputs";
 import { selectChanges, selectionOutput, type CheckSelection } from "./ci-changes";
 
-export const coverageMarker = "Resolve cumulative main coverage v2";
+export const coverageMarker = "Resolve cumulative main coverage v3";
 const workflowPath = ".github/workflows/ci.yml";
 const fullSelection: CheckSelection = { rust: true, jsc: true, shared: true, shared_native: true, browser_guest: true };
 const limits = { edges: 64, pages: 80, jobInspections: 24, milliseconds: 30_000 };
 
 type Coverage =
-  | { kind: "verified"; base: string; head: string; run: number; edges: number; selection: CheckSelection }
-  | { kind: "full"; head: string; reason: string; selection: CheckSelection };
+  | { kind: "verified"; base: string; head: string; run: number; edges: number; selection: CheckSelection; browserSelection: BrowserGuestSelection }
+  | { kind: "full"; head: string; reason: string; selection: CheckSelection; browserSelection: BrowserGuestSelection };
 
 interface CoverageInput {
   head: string;
@@ -76,13 +79,22 @@ function pageItems(value: unknown, key: string): { items: unknown[]; total: numb
   return { items, total: page.total_count };
 }
 
-function selectionAcross(chain: readonly string[], distance: number, checkTime: () => void): CheckSelection {
+function selectionAcross(chain: readonly string[], distance: number, checkTime: () => void): { selection: CheckSelection; browserSelection: BrowserGuestSelection } {
+  const manifests = new Map<string, ReturnType<typeof verifiedCheckManifestsAt>>();
+  const read = (ref: string) => {
+    checkTime();
+    let value = manifests.get(ref);
+    if (!value) { value = verifiedCheckManifestsAt(ref); manifests.set(ref, value); }
+    return value;
+  };
+  const snapshot = (ref: string, role: CoverageManifestSnapshot["role"]) => ({ ref, role, manifests: read(ref) });
+  let browserSelection: BrowserGuestSelection = [];
   const cache = new Map<string, string[]>();
   const inputsAt: typeof nativeCheckInputsAt = (ref, selection = {}) => {
     checkTime();
     const key = `${ref}:${JSON.stringify(selection)}`;
     let inputs = cache.get(key);
-    if (!inputs) { inputs = nativeCheckInputsAt(ref, selection); cache.set(key, inputs); }
+    if (!inputs) { inputs = nativeCheckInputsAt(ref, selection, read); cache.set(key, inputs); }
     return inputs;
   };
   const selection: CheckSelection = { rust: false, jsc: false, shared: false, shared_native: false, browser_guest: false };
@@ -92,10 +104,14 @@ function selectionAcross(chain: readonly string[], distance: number, checkTime: 
     if (!base || !head) throw new Error("Incomplete first-parent edge");
     checkTime();
     const edge = selectChanges(base, head, false, inputsAt);
+    browserSelection = unionBrowserGuestSelections(browserSelection, selectBrowserGuestCoverage({
+      changedPaths: changedPaths(base, head, false), full: false,
+      snapshots: [snapshot(base, "base"), snapshot(head, "head"), snapshot(base, "merge-ancestor")],
+    }));
     for (const key of ["rust", "jsc", "shared", "shared_native", "browser_guest"] as const) selection[key] ||= edge[key];
   }
   checkTime();
-  return selection;
+  return { selection, browserSelection };
 }
 
 export async function mainCoverage(input: CoverageInput): Promise<Coverage> {
@@ -132,11 +148,11 @@ export async function mainCoverage(input: CoverageInput): Promise<Coverage> {
       if (!ancestor) throw new Error("Missing ancestor");
       const baseline = await baselineAt(ancestor, current, request, hasMarker);
       if (!baseline) continue;
-      return { kind: "verified", base: ancestor, head, run: baseline.id, edges: distance, selection: selectionAcross(chain, distance, checkTime) };
+      return { kind: "verified", base: ancestor, head, run: baseline.id, edges: distance, ...selectionAcross(chain, distance, checkTime) };
     }
     throw new Error(chain.length > bounds.edges ? "Coverage first-parent edge bound reached" : "No successful marked main baseline");
   } catch (error) {
-    return { kind: "full", head: input.head, reason: error instanceof Error ? error.message : "Coverage lookup failed", selection: { ...fullSelection } };
+    return { kind: "full", head: input.head, reason: error instanceof Error ? error.message : "Coverage lookup failed", selection: { ...fullSelection }, browserSelection: fullBrowserGuestSelection };
   }
 }
 
@@ -183,11 +199,12 @@ async function runCli(): Promise<void> {
     },
   });
   const summary = result.kind === "verified"
-    ? `Cumulative main coverage v2: run ${result.run}, base ${result.base}, head ${result.head}, ${result.edges} first-parent edges.`
-    : `Cumulative main coverage v2: all families selected for head ${result.head}. ${result.reason}.`;
+    ? `Cumulative main coverage v3: run ${result.run}, base ${result.base}, head ${result.head}, ${result.edges} first-parent edges.`
+    : `Cumulative main coverage v3: all families selected for head ${result.head}. ${result.reason}.`;
   console.error(summary);
   const output = selectionOutput(result.selection);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n\n\`\`\`\n${output}\n\`\`\`\n`);
+  console.log(`browser-selection=${JSON.stringify(result.browserSelection)}`);
   console.log(`browser-base=${result.kind === "verified" ? result.base : "0".repeat(40)}\nbrowser-full=${result.kind === "full"}`);
   console.log(`selection<<ci-main-selection\n${output}\nci-main-selection`);
 }

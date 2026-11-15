@@ -123,6 +123,10 @@
     "web/tests/engine-interruption-sleep.ts",
     "web/tests/engine-interruption-transport.ts",
     "web/tests/engine-interruption-worker.ts",
-    "web/tests/process-module-fixture.ts"
+    "web/tests/process-module-fixture.ts",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml",
+    "scripts/ci-main-coverage.ts"
   ]
 }

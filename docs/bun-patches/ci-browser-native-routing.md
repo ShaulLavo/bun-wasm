@@ -42,3 +42,23 @@ verification is unchanged.
 | `scripts/ci-check-inputs.ts`, `scripts/ci-changes.ts`, `scripts/ci-check-inputs.test.ts`, `scripts/ci-production-separation.test.ts`, `.github/actions/native-*/action.yml` | Host feature | Original CI family routing and immutable-snapshot controls. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+## Coverage composition
+
+The coverage adapter adds selected browser production and selected JSC rows to the
+workflow outputs without changing independent native correctness. Both providers
+receive the owner/engine selection. The shared site's production step builds the
+optional interruption bundle once, before either provider uploads the site.
+
+Cumulative main selection v3 uses the existing first-parent accumulator and one
+verified manifest reader for both native and browser selection. It caches each
+commit's parsed declarations, unions actual owner/engine selections on every edge,
+and carries that result to the batch adapter. Edited-and-reverted inputs and
+intermediate removed declarations remain selected. A failed lookup still selects
+all families and owners. The new marker prevents an earlier native-only successful
+run from establishing browser coverage. Ready PRs keep their ordinary comparison.
+
+The three shared native action paths explicitly select their native, JSC, shared
+and ordinary browser consumers, including all serialized browser declarations.
+The checker cache retains its original host/native identities through the shared
+setup outputs, with its original binary path and main-only writer.

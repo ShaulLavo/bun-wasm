@@ -40,11 +40,11 @@ test("Git snapshots reject symlink manifests and directories", () => {
   rmSync(join(directory, "checks/browser-guest-worker-modules.json"));
   symlinkSync("../outside", join(directory, "checks/browser-guest-worker-modules.json"));
   git("add", "."); git("commit", "-m", "unsafe manifest");
-  expect(() => browserCoverageSnapshot(git("rev-parse", "HEAD"), "head", directory)).toThrow("Unsafe coverage manifest");
+  expect(() => browserCoverageSnapshot(git("rev-parse", "HEAD"), "head", directory)).toThrow("Unsafe check manifest");
   rmSync(join(directory, "checks"), { recursive: true });
   symlinkSync("outside", join(directory, "checks"));
   git("add", "."); git("commit", "-m", "unsafe directory");
-  expect(() => browserCoverageSnapshot(git("rev-parse", "HEAD"), "head", directory)).toThrow("Unsafe coverage check directory");
+  expect(() => browserCoverageSnapshot(git("rev-parse", "HEAD"), "head", directory)).toThrow("Unsafe check directory");
 });
 test("selected batches keep existing Storage/default cells and narrower engines", () => {
   expect(browserCoverageOutputs([])).toContain('batches=["10-storage","default"]');
@@ -56,10 +56,12 @@ test("selected batches keep existing Storage/default cells and narrower engines"
 });
 test("CI passes selected cells to same-run site consumers and builds interruption once", () => {
   const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const producer = workflow.split("name: Build the browser-guest site once")[1]!.split("- uses:")[0]!;
+  const producer = readFileSync(new URL("../.github/actions/native-production/action.yml", import.meta.url), "utf8").split("name: Build the browser-guest site once")[1]!.split("- name:")[0]!;
   expect(producer.match(/browser-guest-site.ts build/g)).toHaveLength(1);
   expect(producer.match(/browser-guest-coverage.ts/g)).toHaveLength(1);
-  expect(producer).toContain("needs.selection.outputs.browser-coverage-selection");
+  expect(producer).toContain('bun scripts/browser-guest-coverage.ts "$RUNNER_TEMP/browser-guest-site" "$BUN_WASM_BROWSER_COVERAGE_SELECTION"');
+  expect(workflow.match(/BUN_WASM_BROWSER_COVERAGE_SELECTION: \$\{\{ needs.selection.outputs.browser-coverage-selection \}\}/g)).toHaveLength(3);
+  expect(workflow).not.toContain("browser-guest-coverage.ts");
   const consumer = workflow.split("\n  browser-guest:\n")[1]!.split("\n  browser-process:\n")[0]!;
   expect(consumer).toContain("BUN_WASM_BROWSER_COVERAGE_SELECTION");
   expect(consumer).toContain("BUN_WASM_BROWSER_COVERAGE_REPORTS");
@@ -74,4 +76,25 @@ test("browser input declarations keep native predicates separate from selected r
   }
   const quickjs = browserCoverageOutputs([{ owner: "installer-links", engines: ["quickjs"] }]);
   expect(quickjs).toContain("needed=true\njsc=false");
+});
+
+test.each(["native-setup", "native-seed", "native-production"])("production action %s selects all browser owners on edit and removal", action => {
+  const { directory, git, base } = fixture();
+  const path = `.github/actions/${action}/action.yml`;
+  mkdirSync(join(directory, `.github/actions/${action}`), { recursive: true });
+  writeFileSync(join(directory, path), "introduced");
+  git("add", "."); git("commit", "-m", "introduce action");
+  const introduced = git("rev-parse", "HEAD");
+  const select = (before: string, after: string) => selectBrowserGuestCoverage({
+    changedPaths: git("diff", "--name-only", "--no-renames", before, after).split("\n"), full: false,
+    snapshots: [browserCoverageSnapshot(before, "base", directory), browserCoverageSnapshot(after, "head", directory), browserCoverageSnapshot(before, "merge-ancestor", directory)],
+  });
+  expect(select(base, introduced)).toEqual(fullBrowserGuestSelection);
+  writeFileSync(join(directory, path), "edited");
+  git("add", "."); git("commit", "-m", "edit action");
+  const edited = git("rev-parse", "HEAD");
+  expect(select(introduced, edited)).toEqual(fullBrowserGuestSelection);
+  rmSync(join(directory, path));
+  git("add", "."); git("commit", "-m", "remove action");
+  expect(select(edited, git("rev-parse", "HEAD"))).toEqual(fullBrowserGuestSelection);
 });

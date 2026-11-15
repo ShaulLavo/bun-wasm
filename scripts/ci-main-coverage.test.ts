@@ -322,7 +322,7 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
 test("cumulative browser selection retains a worker edit reverted before the docs replacement", () => fixture(async () => {
   const base = change("web/tests/browser-worker-modules.ts", "before");
   const edited = change("web/tests/browser-worker-modules.ts", "changed");
-  const selected = [{ owner: "worker-modules", engines: ["browser"] }];
+  const selected = [{ owner: "worker-modules", engines: ["browser"] }] as const;
   expect(selectCiBrowserCoverage(base, edited, { pullRequest: false, full: false })).toEqual(selected);
   change("web/tests/browser-worker-modules.ts", "before");
   const head = change("docs/replacement.md", "docs");

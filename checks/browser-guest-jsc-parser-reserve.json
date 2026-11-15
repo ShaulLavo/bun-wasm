@@ -1,4 +1,9 @@
 {
   "owner": "browser-guest",
-  "path": "scripts/jsc-parser-reserve-browser.test.ts"
+  "path": "scripts/jsc-parser-reserve-browser.test.ts",
+  "inputs": [
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml"
+  ]
 }

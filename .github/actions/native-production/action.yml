@@ -285,6 +285,7 @@ runs:
       run: |
         bun scripts/ci-install.ts --cwd sandbox --frozen-lockfile --ignore-scripts
         bun scripts/browser-guest-site.ts build "$RUNNER_TEMP/browser-guest-site"
+        bun scripts/browser-guest-coverage.ts "$RUNNER_TEMP/browser-guest-site" "$BUN_WASM_BROWSER_COVERAGE_SELECTION"
     - name: Blocking Web guest case (JSC)
       if: inputs.jsc == 'true'
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}

@@ -5,6 +5,10 @@ import { coverageOwners, coverageBatches, coverageWrappers, fullBrowserGuestSele
 // Exact serving/startup imports, not all Web source. Template contents remain Storage-owned.
 const commonInputs = [
   ".github/workflows/ci.yml",
+  ".github/actions/native-setup/action.yml",
+  ".github/actions/native-seed/action.yml",
+  ".github/actions/native-production/action.yml",
+  "scripts/ci-main-coverage.ts",
   "scripts/ci-browser-coverage.ts",
   "scripts/ci-changes.ts",
   "scripts/ci-check-inputs.ts",

@@ -159,6 +159,10 @@
     "web/tests/browser-net.mjs",
     "web/tests/fixture-output.ts",
     "web/tests/foreground.ts",
-    "scripts/browser-existing-drivers.ts"
+    "scripts/browser-existing-drivers.ts",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml",
+    "scripts/ci-main-coverage.ts"
   ]
 }

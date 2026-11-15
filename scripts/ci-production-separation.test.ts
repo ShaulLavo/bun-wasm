@@ -245,3 +245,27 @@ function requireSupportedStep(step: Record<string, unknown>): void {
   const allowed = new Set(["name", "id", "if", "run", "uses", "env", "with", "shell", "working-directory", "continue-on-error"]);
   expect(Object.keys(step).every(key => allowed.has(key))).toBe(true);
 }
+
+test("coverage outputs add only browser production and the actually selected JSC rows", () => {
+  const outputs = object(job("selection").outputs);
+  const values = ["true", "false"];
+  for (const rust of values) for (const browser of values) checkCoverageOutputs(outputs, rust, browser);
+});
+
+function checkCoverageOutputs(outputs: Record<string, unknown>, rust: string, browser: string): void {
+  for (const needed of ["true", "false"]) for (const jsc of ["true", "false"]) {
+    const values: Record<string, string> = {
+      "steps.changes.outputs.rust": rust, "steps.changes.outputs.browser_guest": browser,
+      "steps.changes.outputs.jsc": "false", "steps.browser-guest-batches.outputs.needed": needed,
+      "steps.browser-guest-batches.outputs.jsc": jsc,
+    };
+    expect(evaluateOutput(outputs, values, "rust")).toBe(rust);
+    expect(evaluateOutput(outputs, values, "browser_guest")).toBe(browser === "true" || needed === "true");
+    expect(evaluateOutput(outputs, values, "jsc")).toBe(jsc === "true");
+  }
+}
+
+function evaluateOutput(outputs: Record<string, unknown>, values: Record<string, string>, key: string): unknown {
+  const expression = String(outputs[key]).replace(/^\$\{\{\s*|\s*\}\}$/g, "").replace(/steps\.[\w.-]+/g, key => JSON.stringify(values[key]));
+  return new Function(`return (${expression})`)();
+}
