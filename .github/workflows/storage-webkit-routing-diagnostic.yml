@@ -2,9 +2,6 @@ name: Storage WebKit original routing diagnostic
 
 on:
   workflow_dispatch:
-  push:
-    branches: [t3/storage-routing-diagnostic]
-    paths: [.github/workflows/storage-webkit-routing-diagnostic.yml]
 
 permissions:
   contents: read
