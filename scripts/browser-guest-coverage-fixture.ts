@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname, basename, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { wasm } from "../tests/package/guest-receipt-fixture";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
@@ -13,7 +14,7 @@ export function fixtureFile(directory: string, path: string, bytes: string | Uin
   writeFileSync(join(directory, path), bytes);
 }
 export async function coverageFixture(cleanup: Set<string>, selection: BrowserGuestSelection) {
-  const directory = mkdtempSync("/work/tmp/bun-wasm-coverage-");
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-coverage-"));
   cleanup.add(directory); // Registered before creating fixture files or preparing anything.
   const out = join(directory, "artifact"), site = join(out, "site");
   const maps: Record<string, string> = {};

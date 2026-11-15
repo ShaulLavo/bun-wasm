@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { coverageFixture } from "./browser-guest-coverage-fixture";
 import { rowIdentity, type BrowserGuestSelection } from "./browser-guest-catalogue";
@@ -13,7 +14,7 @@ const selection: BrowserGuestSelection = [{ owner: "installer-links", engines: [
 async function fixture() {
   const site = await coverageFixture(cleanup, selection);
   await site.prepare();
-  const reports = mkdtempSync("/work/tmp/bun-wasm-boundary-"); cleanup.add(reports);
+  const reports = mkdtempSync(join(tmpdir(), "bun-wasm-boundary-")); cleanup.add(reports);
   return { site, reports, env: { PATH: process.env.PATH, BUN_WASM_BROWSER_COVERAGE_SELECTION: JSON.stringify(selection),
     TMPDIR: reports, BUN_WASM_TEST_BROWSERS: "chromium", BUN_WASM_BROWSER_SITE: site.out, BUN_WASM_BROWSER_COVERAGE_REPORTS: reports } };
 }

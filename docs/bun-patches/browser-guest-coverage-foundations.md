@@ -29,3 +29,9 @@ The execution adapter runs each child through `run-with-timeout.mts`. Its durabl
 ledger distinguishes planned, passed, failed and not-run rows, and records the
 supervisor's descendant-drain receipt independently of functional evidence.
 No Bun, Node or WebKit source is adapted by this change.
+
+Shared Waffle libc inputs select every affected owner. Selected cores must have
+the expected engine declaration, and paired companions must expose that engine's
+initializer/RUN interface. Valid but mislabeled Wasm fails before browser launch.
+Owned source-test fixtures use the configured temporary directory on both local
+and GitHub-hosted machines.

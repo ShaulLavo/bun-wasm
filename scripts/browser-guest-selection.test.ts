@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { browserGuestRows, coverageOwners, expectedBrowserGuestRows, fullBrowserGuestSelection, withoutJscBrowserGuestSelection, unionBrowserGuestSelections, rowIdentity, parseBrowserGuestSelection } from "./browser-guest-catalogue";
 import { browserGuestManifest, browserGuestOwnerInputs, selectBrowserGuestCoverage, type CoverageManifestSnapshot } from "./browser-guest-selection";
@@ -60,7 +61,7 @@ test("unrelated native fixtures, CLI rows, Storage templates, declarations and U
 });
 
 test("genuine base/head/ancestor blobs preserve removed manifest/helper inputs", () => {
-  const directory = mkdtempSync("/work/tmp/bun-wasm-selection-"); cleanup.add(directory);
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-selection-")); cleanup.add(directory);
   const git = (...args: string[]) => execFileSync("git", args, { cwd: directory, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
   git("init", "-b", "fixture"); git("config", "user.name", "Coverage fixture"); git("config", "user.email", "fixture@example.invalid");
   mkdirSync(join(directory, "checks"));
@@ -110,4 +111,25 @@ test("real runtime generators, pinned shell and wrapper select their applicable 
     expect(select([path])).toEqual(fullBrowserGuestSelection);
   }
   expect(select(["web/src/preview-websocket-client.ts"])).toEqual(fullBrowserGuestSelection.filter(item => item.owner === "preview-websocket"));
+});
+
+test.each(["scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json"])("shared sysroot input %s selects every owner on edits and removals", path => {
+  expect(select([path])).toEqual(fullBrowserGuestSelection);
+  for (const owner of coverageOwners) expect(browserGuestManifest(owner).inputs).toContain(path);
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-sysroot-selection-")); cleanup.add(directory);
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: directory, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+  git("init", "-b", "fixture"); git("config", "user.name", "Coverage fixture"); git("config", "user.email", "fixture@example.invalid");
+  mkdirSync(join(directory, "scripts")); mkdirSync(join(directory, "checks"));
+  writeFileSync(join(directory, path), "original\n");
+  for (const owner of coverageOwners) writeFileSync(join(directory, `checks/browser-guest-${owner}.json`), JSON.stringify(browserGuestManifest(owner)));
+  git("add", "."); git("commit", "-m", "before"); const base = git("rev-parse", "HEAD");
+  writeFileSync(join(directory, path), "changed\n"); git("add", "."); git("commit", "-m", "edit"); const changed = git("rev-parse", "HEAD");
+  rmSync(join(directory, path)); git("add", "."); git("commit", "-m", "remove"); const removed = git("rev-parse", "HEAD");
+  const read = (ref: string, role: CoverageManifestSnapshot["role"]): CoverageManifestSnapshot => ({ role, ref,
+    manifests: git("ls-tree", "-r", "--name-only", ref, "--", "checks").split("\n").filter(Boolean).map(file => ({ file, value: JSON.parse(git("show", `${ref}:${file}`)) })) });
+  const comparisons: [string, string][] = [[base, changed], [changed, removed]];
+  for (const [before, after] of comparisons) {
+    const state = [read(before, "base"), read(after, "head"), read(before, "merge-ancestor")];
+    expect(selectBrowserGuestCoverage({ changedPaths: [path], snapshots: state, full: false })).toEqual(fullBrowserGuestSelection);
+  }
 });

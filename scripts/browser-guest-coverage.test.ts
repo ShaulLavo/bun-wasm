@@ -1,15 +1,40 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { coverageFixture, fixtureFile } from "./browser-guest-coverage-fixture";
 import { prepareBrowserGuestInterruptionBundle, stageBrowserGuestInterruption, verifyBrowserGuestCoverage } from "./browser-guest-coverage";
 import { fullBrowserGuestSelection, withoutJscBrowserGuestSelection, type BrowserGuestSelection } from "./browser-guest-catalogue";
 import { hash } from "./guest-source-manifest";
+import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 
 const cleanup = new Set<string>();
 afterEach(() => { for (const directory of cleanup) rmSync(directory, { recursive: true, force: true }); cleanup.clear(); });
 const browserOnly: BrowserGuestSelection = [{ owner: "worker-modules", engines: ["browser"] }];
 const qjsOnly: BrowserGuestSelection = [{ owner: "installer-links", engines: ["quickjs"] }];
+
+function replaceProgram(site: string, name: string, bytes: Uint8Array<ArrayBuffer>): void {
+  const maps = JSON.parse(readFileSync(join(site, "engine-builds.json"), "utf8"));
+  maps[name] = hash(bytes);
+  fixtureFile(site, name + ".gz", Bun.gzipSync(bytes));
+  fixtureFile(site, "engine-builds.json", JSON.stringify(maps));
+  fixtureFile(site, "index.html", `globalThis.__bunwasmBuilds=${JSON.stringify(maps)};`);
+  if (name !== "bun-browser.wasm") return;
+  fixtureFile(site, "sandbox/bun-browser.wasm.gz", Bun.gzipSync(bytes));
+  fixtureFile(site, "sandbox/engine-builds.json", JSON.stringify({ [name]: hash(bytes) }));
+}
+
+test.each([
+  { name: "bun.wasm", selection: qjsOnly, bytes: quickjsPair("jsc").core, error: "Wrong coverage core kind" },
+  { name: "quickjs.wasm", selection: qjsOnly, bytes: quickjsPair("jsc").side, error: "companion" },
+  { name: "bun-browser.wasm", selection: browserOnly, bytes: quickjsPair().core, error: "Wrong coverage core kind" },
+  { name: "bun-tools.wasm", selection: [{ owner: "tools-integrity", engines: ["browser"] }] satisfies BrowserGuestSelection,
+    bytes: quickjsPair().core, error: "Wrong coverage core kind" },
+])("selected $name rejects a valid but mislabeled engine program", async ({ name, selection, bytes, error }) => {
+  const fixture = await coverageFixture(cleanup, selection);
+  replaceProgram(fixture.site, name, bytes);
+  await expect(fixture.prepare()).rejects.toThrow(error);
+});
 
 test("selected programs work directly without development receipts or a source inventory", async () => {
   const fixture = await coverageFixture(cleanup, fullBrowserGuestSelection);
@@ -17,6 +42,19 @@ test("selected programs work directly without development receipts or a source i
   expect(verified.site).toBe(fixture.site);
   expect(verified.programs.size).toBe(6);
   for (const name of ["coverage.json", "coverage-receipts", "site.json"]) expect(existsSync(join(fixture.out, name))).toBe(false);
+});
+test("owned coverage fixtures honor the configured temporary root", async () => {
+  const temporary = mkdtempSync(join(tmpdir(), "bun-wasm-portable-fixture-")); cleanup.add(temporary);
+  const previous = process.env.TMPDIR;
+  process.env.TMPDIR = temporary;
+  try {
+    const fixture = await coverageFixture(cleanup, browserOnly);
+    expect(fixture.out.startsWith(temporary + "/")).toBe(true);
+    await fixture.prepare();
+  } finally {
+    if (previous === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previous;
+  }
 });
 test("unselected corrupt gzip is not decoded or compiled and consumers never build", async () => {
   const fixture = await coverageFixture(cleanup, browserOnly);

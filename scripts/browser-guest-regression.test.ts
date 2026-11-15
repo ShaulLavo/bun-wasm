@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { BrowserGuestRegression, browserGuestLeg, type RowEvidence } from "./browser-guest-regression";
 import { rowIdentity } from "./browser-guest-catalogue";
@@ -35,7 +36,7 @@ function child(run: BrowserGuestRegression, request: Parameters<BrowserGuestRegr
   return result;
 }
 function regression(options: { controls?: string[] } = {}) {
-  const directory = mkdtempSync("/work/tmp/bun-wasm-regression-"); cleanup.add(directory);
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-regression-")); cleanup.add(directory);
   const run = new BrowserGuestRegression({ owner: "worker-modules", leg: "chromium", engines: ["browser"], directory,
     controls: options.controls ?? [] });
   return { directory, run };

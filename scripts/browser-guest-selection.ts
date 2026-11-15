@@ -23,6 +23,8 @@ const commonInputs = [
   "scripts/browser-guest-selection.ts",
   "scripts/browser-guest-wrapper.ts",
   "scripts/browser-guest-site.ts",
+  "scripts/waffle-release-inputs.ts",
+  "scripts/waffle-release-inputs.json",
   "scripts/linux-subreaper.mts",
   "scripts/process-owner.mts",
   "scripts/run-with-timeout.mts",
@@ -264,6 +266,7 @@ const engineFiles: Record<CoverageEngine, readonly string[]> = {
   browser: ["scripts/build-bun-browser.sh", "crates/bunwasm-runtime/src/engine_host.rs"],
 };
 const commonProducerFiles = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "scripts/build-bun-core.sh", "scripts/build-wasi-sysroot.ts",
+  "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json",
   "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts",
   "scripts/src/program-profile.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-direct-stream.ts", "scripts/generate-node-path.ts", "scripts/generate-dev-html-client.ts",
   "web/src/dev-html-client.ts", "scripts/build-bash-web-shell.sh"];

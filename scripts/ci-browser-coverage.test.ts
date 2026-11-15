@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { needsRust, needsJsc } from "./ci-changes";
 import { browserCoverageOutputs, browserCoverageSnapshot } from "./ci-browser-coverage";
 import { selectBrowserGuestCoverage, browserGuestManifest } from "./browser-guest-selection";
@@ -10,7 +11,7 @@ import { expectedBrowserGuestRows, fullBrowserGuestSelection, coverageOwners } f
 const cleanup = new Set<string>();
 afterEach(() => { for (const directory of cleanup) rmSync(directory, { recursive: true, force: true }); cleanup.clear(); });
 function fixture() {
-  const directory = mkdtempSync("/work/tmp/bun-wasm-coverage-git-"); cleanup.add(directory);
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-coverage-git-")); cleanup.add(directory);
   const git = (...args: string[]) => execFileSync("git", args, { cwd: directory, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
   git("init", "-b", "fixture"); git("config", "user.name", "Coverage fixture"); git("config", "user.email", "fixture@example.invalid");
   mkdirSync(join(directory, "checks"));

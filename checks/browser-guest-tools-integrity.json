@@ -22,6 +22,8 @@
     "scripts/browser-guest-selection.ts",
     "scripts/browser-guest-wrapper.ts",
     "scripts/browser-guest-site.ts",
+    "scripts/waffle-release-inputs.ts",
+    "scripts/waffle-release-inputs.json",
     "scripts/linux-subreaper.mts",
     "scripts/process-owner.mts",
     "scripts/run-with-timeout.mts",

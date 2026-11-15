@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { gunzipSync, brotliDecompressSync } from "node:zlib";
 import { buildBrowserEntries } from "./browser-build";
 import { hash, guestBuilds } from "./guest-source-manifest";
-import { importedMemory } from "../src/engine-kind";
+import { importedMemory, programKind, programKindForBuild, verifyProgramSide } from "../src/engine-kind";
 import { validateSelection, type BrowserGuestSelection } from "./browser-guest-catalogue";
 
 const repository = resolve(import.meta.dir, "..");
@@ -75,13 +75,23 @@ function verifyRepresentations(site: string, path: string, expected: string, suf
     if (hash(decoded) !== expected) throw new Error(`Served representation differs: ${path}${suffix}`);
   }
 }
+function verifySelectedProgram(name: string, bytes: Uint8Array<ArrayBuffer>): void {
+  let module: WebAssembly.Module;
+  try { module = new WebAssembly.Module(bytes); }
+  catch { throw new Error(`Invalid split coverage program: ${name}`); }
+  if (importedMemory(bytes)?.shared) throw new Error(`Invalid split coverage program: ${name}`);
+  const side = name === "quickjs.wasm" ? "quickjs" : name === "jsc-engine.wasm" ? "jsc" : undefined;
+  if (side) { verifyProgramSide(side, module); return; }
+  const build = coreBuilds.find(build => guestBuilds[build].artifact === name);
+  if (build === undefined || programKind(module) !== programKindForBuild(build)) throw new Error(`Wrong coverage core kind: ${name}`);
+}
 function decodePrograms(site: string, selection: BrowserGuestSelection): Map<string, Uint8Array> {
   const maps = engineMaps(site);
   return new Map(requiredPrograms(selection).map(name => {
     requiredFile(join(site, name + ".gz"));
     const bytes = gunzipSync(readFileSync(join(site, name + ".gz"))), identity = hash(bytes);
     if (identity !== maps.manifest[name] || identity !== maps.embedded[name]) throw new Error(`Served program identity mismatch: ${name}`);
-    if (!WebAssembly.validate(bytes) || importedMemory(bytes)?.shared) throw new Error(`Invalid split coverage program: ${name}`);
+    verifySelectedProgram(name, bytes);
     verifyRepresentations(site, name, identity);
     return [name, bytes];
   }));
