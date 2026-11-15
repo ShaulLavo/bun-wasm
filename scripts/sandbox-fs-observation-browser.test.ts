@@ -54,7 +54,7 @@ test("Firefox: installed observation covers original root and successful Bun, sh
   context = await browser.newContext();
   // This control is always selected, including local runs without a progress artifact.
   await context.addInitScript(() => Reflect.set(globalThis, "__bunwasmStorageFirstEvent", true));
-  lifetime.observeContext(context);
+  await lifetime.observeContext(context);
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(String(error)));

@@ -25,6 +25,8 @@ These transformations affect only the consumer bundle, preserving installed file
 The ordinary Browser guest site builder includes them. Deployed product builds omit them by default.
 Observation is activated only in a storage test's BrowserContext. Other contexts
 retain the original handlers, constructors, executor, preopen and serving path.
+Context activation is awaited during protected setup. Installation failure stays
+on that primary setup path rather than becoming a late teardown error.
 
 The build adapter installs the helper before original client/service port handlers.
 It also checks shared closure at the client's existing transport-error check.

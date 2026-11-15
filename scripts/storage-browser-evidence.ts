@@ -144,13 +144,11 @@ export class StorageLifetime {
     browser.on("disconnected", () => this.event("browser-disconnected"));
   }
 
-  observeContext(context: BrowserContext): void {
-    if (this.write) {
-      const installation = context.addInitScript(() => { Reflect.set(globalThis, "__bunwasmStorageFirstEvent", true); });
-      this.acquisitions.push(installation.then(() => {}, error => this.secondary("filesystem-observation.install", error)));
-    }
+  async observeContext(context: BrowserContext): Promise<void> {
     context.on("page", page => this.observePage(page));
     context.on("close", () => this.event("context-close"));
+    if (this.write) await this.step("filesystem-observation.install", () =>
+      context.addInitScript(() => { Reflect.set(globalThis, "__bunwasmStorageFirstEvent", true); }));
   }
 
   private observePage(page: Page): void {
