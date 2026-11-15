@@ -36,7 +36,7 @@ test("mock and spy contracts through the runtime factory", async () => {
     require: (name: keyof typeof available) => available[name],
   }).exports;
   const source = readFileSync(new URL("index.ts", fixture), "utf8").replace(/^import[^\n]+\n/gm, "");
-  const run = expression(`async (assert, { expect, mock, spyOn }, console) => {${source}\n}`);
+  const run = expression(`async (assert, { expect, jest, mock, spyOn }, console) => {${source}\n}`);
   const lines: string[] = [];
   await run(assert, runtime, { log: (line: string) => lines.push(line) });
   expect(lines.join("\n") + "\n").toBe(readFileSync(new URL("expected.txt", fixture), "utf8"));

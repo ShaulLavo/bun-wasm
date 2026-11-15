@@ -698,8 +698,13 @@
       else Object.defineProperty(object, key, { value: original, writable: true, enumerable: true, configurable: true });
     };
     const spy = createMock(original, restore);
-    if (callable) object[key] = spy;
-    else Object.defineProperty(object, key, { get: spy, set: spy, enumerable: true, configurable: true });
+    try {
+      if (callable) object[key] = spy;
+      else Object.defineProperty(object, key, { get: spy, set: spy, enumerable: true, configurable: true });
+    } catch (error) {
+      allMocks.delete(spy);
+      throw error;
+    }
     return spy;
   }
 

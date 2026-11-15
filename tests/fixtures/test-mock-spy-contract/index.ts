@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { expect, mock, spyOn } from "bun:test";
+import { expect, jest, mock, spyOn } from "bun:test";
 
 const fn = mock(function original(value: unknown) { return value; });
 const other = mock(() => "other");
@@ -78,6 +78,26 @@ assert.deepEqual(Object.getOwnPropertyDescriptor(sparse, 3221225473), {
   value: undefined, writable: true, enumerable: true, configurable: true,
 });
 console.log("indexed property spies restore descriptors");
+
+const rejectedInstallation = new Error("rejected spy installation");
+const rejectedTargets = [
+  { target: Object.preventExtensions({}), key: "missing", expected: TypeError },
+  { target: Object.defineProperty({}, "fixed", { value: 7 }), key: "fixed", expected: TypeError },
+  { target: new Proxy({}, { defineProperty() { throw rejectedInstallation; } }), key: "missing", expected: rejectedInstallation },
+];
+for (const { target, key, expected } of rejectedTargets) {
+  for (const restore of [() => mock.restore(), () => jest.restoreAllMocks()]) {
+    assert.throws(() => Reflect.apply(spyOn, undefined, [target, key]), error => expected === TypeError ? error instanceof TypeError : error === expected);
+    const later = { method() { return 9; } };
+    const original = later.method;
+    spyOn(later, "method");
+    restore();
+    assert.equal(later.method, original);
+    restore();
+    assert.equal(later.method(), 9);
+  }
+}
+console.log("failed spy installations preserve global restoration");
 
 const called = mock((value: unknown) => value);
 called("return");

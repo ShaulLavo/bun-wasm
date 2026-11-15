@@ -21,6 +21,8 @@ descriptors, removes shadows of inherited methods, and restores missing value
 properties as writable, enumerable and configurable data properties. Existing
 accessors and non-callable function `prototype` properties are rejected before
 installation.
+Failed property installations remove their mock from global restoration before
+rethrowing the original error, so a rejected spy cannot block later valid spies.
 
 Call and return matchers validate counts and unexpected arguments before
 applying negation. Return counting visits every result, including array holes,
