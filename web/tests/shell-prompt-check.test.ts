@@ -128,8 +128,8 @@ const nonTranscriptCallers = [
   "scripts/app-matrix/next-acceptance-observer-control.ts",
   // The stack navigation helper reads runtime publication, not a terminal transcript.
   "web/tests/quickjs-stack-navigation.ts",
-  // Storage checks use only the server/browser lifecycle, never a terminal transcript.
-  "scripts/sandbox-storage-browser.test.ts",
+  // Storage checks use lifecycle and public shell state, never a terminal transcript.
+  "scripts/sandbox-storage-browser.test.ts", "scripts/sandbox-fs-observation-browser.test.ts",
 ];
 const inheritedTranscriptCallers = ["web/tests/browser-quickjs-stack.ts", "web/tests/browser-workers.ts", "web/tests/browser-web-workers.ts", "web/tests/browser-shell-stop.ts", "web/tests/playground-stdin.ts", "scripts/bench-engines.test.ts", "scripts/engine-chromium-bench.ts"];
 

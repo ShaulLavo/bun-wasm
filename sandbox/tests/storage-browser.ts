@@ -171,7 +171,6 @@ export default {};
 export async function preservationScenario(browser: Browser, base: string, observer?: StorageObservation): Promise<void> {
   const acquired = observer ? await observer.acquire("context.create", () => browser.newContext(), context => context.close()) : undefined;
   const context = acquired ? acquired.value : await browser.newContext();
-  observer?.observeContext(context);
   const step = <T>(phase: string, operation: () => Promise<T>) => storageStep(observer, phase, operation);
   const errors: string[] = [];
   context.on("page", page => {
@@ -180,6 +179,7 @@ export async function preservationScenario(browser: Browser, base: string, obser
   });
   let checkpoint: StoragePreservationFailure["report"]["checkpoint"] = "setup";
   try {
+    if (observer) await observer.observeContext(context);
     const active = await step("hono.page.create", () => context.newPage());
     const page = await step("preservation.page.create", () => context.newPage());
     await openTemplate(active, base, "hono", observer);

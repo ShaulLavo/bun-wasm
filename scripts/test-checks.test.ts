@@ -75,6 +75,17 @@ test("native commands select the declared engine explicitly", () => {
   }
 });
 
+test("CallSite predicates run through every ordinary engine's blocking fixture gate", () => {
+  const path = "tests/fixtures/stack-callsite-predicates";
+  const groups = nativeEngineGroups([path], { count: 1, env: { SPIDERMONKEY_WASM: "/fixture/bun-spidermonkey.wasm" } });
+  expect(groups.map(group => group.engine)).toEqual(["quickjs", "jsc", "browser", "spidermonkey"]);
+  for (const group of groups) {
+    expect(group.commands).toHaveLength(1);
+    expect(group.commands[0]).toContain("stack-callsite-predicates");
+  }
+  expect(needsJsc([`${path}/index.js`])).toBe(true);
+});
+
 test.each([[], ["jsc", "jsc"], ["unknown"], [17], "browser", null].map(engines => ({ engines })))("native engines reject invalid selection $engines", ({ engines }) => {
   expect(() => parseCheck({ owner: "native", path: "tests/fixtures/example", engines }, "native-example.json")).toThrow();
 });
@@ -426,7 +437,7 @@ test("Browser guest matrix discovers each profile batch and runs every check exa
   const paths = batches.flatMap(batch => selectCheckBatch("browser-guest", batch.name));
   expect(paths.toSorted()).toEqual(selectChecks("browser-guest").toSorted());
   expect(new Set(paths).size).toBe(paths.length);
-  expect(selectCheckBatch("browser-guest", "10-storage")).toEqual(["scripts/sandbox-storage-browser.test.ts"]);
+  expect(selectCheckBatch("browser-guest", "10-storage")).toEqual(["scripts/sandbox-fs-observation-browser.test.ts", "scripts/sandbox-storage-browser.test.ts"]);
   expect(() => selectCheckBatch("browser-guest", "missing")).toThrow("Unknown check batch");
   const shared = namedCheckBatches("browser-guest", undefined, "shared-group");
   expect(shared.flatMap(batch => batch.paths)).toEqual(selectChecks("browser-guest", undefined, "shared-group"));

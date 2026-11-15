@@ -41,6 +41,14 @@ replacing the temporary process-unavailable boundary without copying upstream im
 Package-script/bunx argument normalization remains ahead of executable lookup.
 
 The Bun guest's child-process adapter is original code over that ABI.
+Its `processError` keeps the original Error object, errno fields and host startup detail,
+and prefixes frame-only or empty stacks with the original name and message. An existing
+matching native header is retained unchanged. This lets stack-only consumers distinguish
+synchronous admission refusals without changing process admission or later startup settlement.
+Source-factory controls cover WebKit-shaped stacks, error identity, property descriptors, distinct
+errnos and descriptor cleanup; the `process-error-stack` fixture is selected on QuickJS,
+JSC and Browser. This is an original diagnostic adapter, not copied upstream code or a
+thread-lifecycle repair.
 `crates/bunwasm-runtime/src/host.rs` declares the `runtime_proc` imports and `natives.rs` exposes
 them as `procSpawn`, `procPipe`, `procRead`, `procWrite`, `procWait`, `procWaitJob`, `procKill`,
 `procKillJob` and `procPoll`. `js/spawn.ts` (converted from the earlier `spawn.js` adapter) keeps

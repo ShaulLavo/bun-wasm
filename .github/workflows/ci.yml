@@ -577,12 +577,25 @@ jobs:
           eval "$guest_environment"
           sysroot=$("$RUSTC" --print sysroot)
           "$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
+      - name: Restore pinned Rust dependency checker
+        id: machete-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cargo-machete
+          key: cargo-machete-v1-0.9.2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**') }}
       - name: Install pinned Rust dependency checker
         run: |
           source env.sh
           if ! cargo machete --version 2>/dev/null | command grep -qx '0.9.2'; then
             cargo install cargo-machete --version 0.9.2 --locked --jobs 2
           fi
+          cargo machete --version | command grep -qx '0.9.2'
+      - name: Save completed Rust dependency checker setup
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.machete-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cargo-machete
+          key: ${{ steps.machete-cache.outputs.cache-primary-key }}
       - name: Preserve unchanged build-script input timestamps
         run: bun scripts/quality-input-times.ts
       - name: Identify JSC prebuild inputs
