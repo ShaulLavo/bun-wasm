@@ -137,8 +137,8 @@ test("the real CommonJS wrapper keeps its exact body and other negative shapes r
   expect(run.exitCode).toBe(0);
   const evaluate = definition(shim, 'extern "C" bool bsm_eval_script(');
   expect(evaluate).toContain("if (line < 0) return compile_commonjs");
-  expect(evaluate).toContain("options.setFileAndLine(filename, static_cast<uint32_t>(line))");
-  expect(definition(shim, "bool compile_commonjs(")).toContain("options.setFileAndLine(filename, 0)");
+  expect(evaluate).toContain("options.setFileAndLine(label.c_str(), static_cast<uint32_t>(line))");
+  expect(definition(shim, "bool compile_commonjs(")).toContain("options.setFileAndLine(label.c_str(), 0)");
 });
 
 test("deferred native destruction permits destructor reentry into the registry", () => {

@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/virtual-filenames",
+  "engines": ["spidermonkey"]
+}
