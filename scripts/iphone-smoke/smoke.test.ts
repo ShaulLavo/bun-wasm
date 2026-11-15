@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withPlayground, completeAttempt } from "../goals-matrix/test-fixture";
@@ -73,6 +73,40 @@ test("Mac queue admission requires the same supervised holder throughout", () =>
   expect(() => queueTicket({ holder }, "other")).toThrow("does not hold");
   expect(() => queueTicket({ holder }, "coordinator", "ticket-2")).toThrow("changed");
   expect(() => queueTicket({ holder: { ...holder, mode: "split" } }, "coordinator")).toThrow();
+});
+async function admissionBoundary(root: string, availabilityExit: number): Promise<{ code: number; output: string; error: string }> {
+  const mesh = join(root, "bin/mesh"), bun = join(root, ".bun/bin/bun");
+  const checker = join(root, ".agents/skills/machine-fleet/scripts/availability.py");
+  await Bun.write(mesh, '#!/bin/sh\nexec /bin/sh -c "$6"\n');
+  await Bun.write(bun, '#!/bin/sh\n: > "$HOME/queue-queried"\nprintf \'%s\\n\' "$QUEUE_JSON"\n');
+  await Bun.write(checker, 'import json, os, sys\nprint(json.dumps({"ownerBusy": False}))\nsys.exit(int(os.environ["AVAILABILITY_EXIT"]))\n');
+  await chmod(mesh, 0o755); await chmod(bun, 0o755);
+  const admission = new URL("./admission.ts", import.meta.url).href;
+  const child = Bun.spawn([process.execPath, "--eval", `const {verifyMacAdmission} = await import(${JSON.stringify(admission)}); process.stdout.write(await verifyMacAdmission("coordinator"));`], {
+    env: { ...process.env, HOME: root, PATH: join(root, "bin") + ":" + process.env.PATH,
+      AVAILABILITY_EXIT: String(availabilityExit), QUEUE_JSON: JSON.stringify({ holder: { id: "ticket-1", thread: "coordinator", mode: "run", phase: "held", group_id: 123 } }) },
+    stdout: "pipe", stderr: "pipe",
+  });
+  try {
+    const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { code, output, error };
+  } finally { if (child.exitCode === null) child.kill(); await child.exited; }
+}
+test("Mac admission parses queue status after the availability checker prints its JSON", async () => {
+  await scratch(async root => {
+    const result = await admissionBoundary(root, 0);
+    expect(result.code, result.error).toBe(0);
+    expect(result.output).toBe("ticket-1");
+    expect(await Bun.file(join(root, "queue-queried")).exists()).toBe(true);
+  });
+});
+test("Mac admission preserves availability failure and never queries the queue", async () => {
+  await scratch(async root => {
+    const result = await admissionBoundary(root, 75);
+    expect(result.code).not.toBe(0);
+    expect(result.error).toContain("exited 75");
+    expect(await Bun.file(join(root, "queue-queried")).exists()).toBe(false);
+  });
 });
 test("smoke cannot pass synthetic input, missing phases, another simulator or incomplete cleanup", () => {
   const box = smokeCases[0]!;

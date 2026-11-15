@@ -9,7 +9,7 @@ export function queueTicket(value: unknown, thread: string, expected?: string): 
   return ticket;
 }
 export async function verifyMacAdmission(thread: string, expected?: string, signal?: AbortSignal): Promise<string> {
-  const script = 'python3 "$HOME/.agents/skills/machine-fleet/scripts/availability.py" check --owner-only && "$HOME/.bun/bin/bun" "$HOME/.agents/skills/machine-fleet/scripts/mac-queue.ts" status';
+  const script = 'python3 "$HOME/.agents/skills/machine-fleet/scripts/availability.py" check --owner-only > /dev/null && "$HOME/.bun/bin/bun" "$HOME/.agents/skills/machine-fleet/scripts/mac-queue.ts" status';
   const output = await ownedCommand(["mesh", "ssh", "mac", "--", "zsh", "-lc", script], signal, 30_000);
   return queueTicket(JSON.parse(output), thread, expected);
 }
