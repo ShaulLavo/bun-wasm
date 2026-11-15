@@ -54,7 +54,7 @@ index ab0f9a1b9..c7501b8c4 100644
 
  // Since we rearrange the layout for wasi via --stack-first flag for the linker
 diff --git i/js/src/vm/Interpreter.cpp w/js/src/vm/Interpreter.cpp
-index 6241cd45d..9c09be558 100644
+index 6241cd45d..44424e3ef 100644
 --- i/js/src/vm/Interpreter.cpp
 +++ w/js/src/vm/Interpreter.cpp
 @@ -75,6 +75,9 @@
@@ -77,13 +77,16 @@ index 6241cd45d..9c09be558 100644
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
-@@ -1779,8 +1785,56 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
+@@ -1779,8 +1785,207 @@ bool js::AddDisposableResourceToCapability(JSContext* cx,
                            JS::ObjectValue(*disposableRecord));
  }
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED) && defined(BUNWASM_INTERPRETER_CONTROLS)
 +extern "C" void bunsm_test_deferred_getter(JSContext* cx);
 +extern "C" bool bunsm_test_inline_prologue(JSContext* cx);
++// Called when a call opcode takes the loop route for call or apply; |owned| is
++// true for an apply list copied into an owned frame, before delazification.
++extern "C" void bunsm_test_loop_call(JSContext* cx, bool owned);
 +extern "C" size_t bunsm_test_interpreter_frames(JSContext* cx) {
 +  return cx->interpreterStack().bunwasmFrameCount();
 +}
@@ -121,7 +124,155 @@ index 6241cd45d..9c09be558 100644
 +  if (!script) {
 +    return false;
 +  }
-+  return activation.pushInlineGetterFrame(getter, script, receiver);
++  return activation.pushOwnedInlineFrame(getter, script, receiver, 0,
++                                         [](Value*) {});
++}
++
++// How a call opcode whose callee is Function.prototype.call or apply goes on.
++enum class LoopCall {
++  Native,  // Nothing changed: the builtin runs natively.
++  Inline,  // The operands now call the target: take the inline call path.
++  Owned,   // An owned-arguments frame for the target is published.
++  Error,
++};
++
++static bool IsLoopApplyList(JSObject* list, uint32_t* length) {
++  if (list->is<ArrayObject>()) {
++    if (!IsPackedArray(list)) {
++      return false;
++    }
++    *length = list->as<ArrayObject>().length();
++    return *length <= ARGS_LENGTH_MAX;
++  }
++  if (!list->is<ArgumentsObject>()) {
++    return false;
++  }
++  // Upstream's optimised apply route (CacheIR's FunApplyArgsObj) uses the same
++  // guards: with none of these set, the length and elements are exactly the
++  // call's original arguments and reading them runs no script.
++  ArgumentsObject& arguments = list->as<ArgumentsObject>();
++  if (arguments.hasOverriddenLength() || arguments.hasOverriddenElement() ||
++      arguments.anyArgIsForwarded()) {
++    return false;
++  }
++  *length = arguments.initialLength();
++  return true;
++}
++
++// Copies an eligible apply list (IsLoopApplyList) into a frame's arguments.
++// Neither kind of read can run script or GC.
++static void CopyLoopApplyList(JSObject* list, uint32_t length, Value* argv) {
++  if (list->is<ArgumentsObject>()) {
++    MOZ_ALWAYS_TRUE(
++        list->as<ArgumentsObject>().maybeGetElements(0, length, argv));
++    return;
++  }
++  ArrayObject& array = list->as<ArrayObject>();
++  for (uint32_t i = 0; i < length; i++) {
++    argv[i] = array.getDenseElement(i);
++  }
++}
++
++// [call, target, this, a1...] becomes [target, this, a1...]: one argument
++// fewer, so the caller's cleanup still lands on the builtin's slot. With no
++// arguments, |this| is undefined.
++static void RewriteLoopCall(InterpreterRegs& regs, CallArgs& args,
++                            JSFunction* target) {
++  Value* operands = args.base();
++  unsigned argc = args.length();
++  bool ignoresReturnValue = args.ignoresReturnValue();
++  operands[0].setObject(*target);
++  if (argc == 0) {
++    operands[1].setUndefined();
++    args = CallArgsFromSp(0, regs.sp, NO_CONSTRUCT, ignoresReturnValue);
++    return;
++  }
++  for (unsigned i = 1; i <= argc; i++) {
++    operands[i] = operands[i + 1];
++  }
++  regs.sp--;
++  args = CallArgsFromSp(argc - 1, regs.sp, NO_CONSTRUCT, ignoresReturnValue);
++}
++
++// apply with no list, null or undefined: zero arguments, |this| from the first
++// argument, and every later operand dropped. The caller's cleanup still lands
++// on the builtin's slot.
++static void RewriteLoopApplyWithoutList(InterpreterRegs& regs, CallArgs& args,
++                                        JSFunction* target) {
++  Value* operands = args.base();
++  bool ignoresReturnValue = args.ignoresReturnValue();
++  operands[1] = args.get(0);
++  operands[0].setObject(*target);
++  regs.sp = operands + 2;
++  args = CallArgsFromSp(0, regs.sp, NO_CONSTRUCT, ignoresReturnValue);
++}
++
++// Runs Function.prototype.call and apply to a scripted target as a frame of
++// this loop. |args| belongs to a call opcode, never a construction. Every
++// condition that keeps the native route is checked before anything changes;
++// after the operands are rewritten a failure is an error, never a fallback.
++// Out of line, like PushDeferredGetterFrame.
++static MOZ_NEVER_INLINE LoopCall PrepareLoopCall(
++    JSContext* cx, InterpreterActivation& activation, CallArgs& args) {
++  JSFunction* builtin = &args.callee().as<JSFunction>();
++  bool apply = builtin->native() == fun_apply;
++  MOZ_ASSERT(apply || builtin->native() == fun_call);
++  if (builtin->realm() != cx->realm() ||
++      cx->realm()->debuggerObservesNativeCall() || !args.thisv().isObject() ||
++      !args.thisv().toObject().is<JSFunction>()) {
++    return LoopCall::Native;
++  }
++  JSFunction* target = &args.thisv().toObject().as<JSFunction>();
++  if (!target->isInterpreted() || target->isClassConstructor()) {
++    return LoopCall::Native;
++  }
++
++  InterpreterRegs& regs = activation.regs();
++  if (!apply) {
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++    bunsm_test_loop_call(cx, false);
++#  endif
++    RewriteLoopCall(regs, args, target);
++    return LoopCall::Inline;
++  }
++
++  if (args.length() < 2 || args[1].isNullOrUndefined()) {
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++    bunsm_test_loop_call(cx, false);
++#  endif
++    RewriteLoopApplyWithoutList(regs, args, target);
++    return LoopCall::Inline;
++  }
++
++  // Lists that need script or a lookup to read (array-likes, holes, proxies,
++  // over-limit lengths, non-objects with their TypeError) stay native, so
++  // upstream's order of checks and errors is untouched. An owned frame skips
++  // the inline call path's realm entry, so the target must share this realm.
++  uint32_t length;
++  if (!args[1].isObject() || target->realm() != cx->realm() ||
++      !IsLoopApplyList(&args[1].toObject(), &length)) {
++    return LoopCall::Native;
++  }
++  RootedFunction fun(cx, target);
++#  ifdef BUNWASM_INTERPRETER_CONTROLS
++  bunsm_test_loop_call(cx, true);
++#  endif
++  RootedScript script(cx, JSFunction::getOrCreateScript(cx, fun));
++  if (!script) {
++    return LoopCall::Error;
++  }
++  // Delazification may GC: the list and |this| are reread from the traced
++  // operands. No script ran, so the list is still eligible.
++  RootedValue thisv(cx, args[0]);
++  JSObject* list = &args[1].toObject();
++  MOZ_ASSERT(IsLoopApplyList(list, &length));
++  auto fill = [list, length](Value* argv) {
++    CopyLoopApplyList(list, length, argv);
++  };
++  if (!activation.pushOwnedInlineFrame(fun, script, thisv, length, fill)) {
++    return LoopCall::Error;
++  }
++  return LoopCall::Owned;
 +}
 +#endif
 +
@@ -134,7 +285,7 @@ index 6241cd45d..9c09be558 100644
  /*
   * Define macros for an interpreter loop. Opcode dispatch is done by
   * indirect goto (aka a threaded interpreter), which is technically
-@@ -1839,8 +1893,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1839,8 +2044,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
     * Prepare to call a user-supplied branch handler, and abort the script
     * if it returns false.
     */
@@ -149,7 +300,7 @@ index 6241cd45d..9c09be558 100644
      if (!CheckForInterrupt(cx)) goto error; \
    JS_END_MACRO
  
-@@ -1984,6 +2044,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -1984,6 +2195,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
    INIT_COVERAGE();
    COUNT_COVERAGE_MAIN();
  
@@ -162,7 +313,7 @@ index 6241cd45d..9c09be558 100644
    // Enter the interpreter loop starting at the current pc.
    ADVANCE_AND_DISPATCH(0);
  
-@@ -2229,7 +2295,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2229,7 +2446,12 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
  
        jit_return:
  
@@ -175,10 +326,10 @@ index 6241cd45d..9c09be558 100644
          MOZ_ASSERT(cx->realm() == script->realm());
  
          /* Resume execution in the calling frame. */
-@@ -2238,6 +2309,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2238,6 +2460,14 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
              ADVANCE_AND_DISPATCH(JSOpLength_Resume);
            }
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +          static_assert(JSOpLength_GetProp == JSOpLength_GetPropSuper,
 +                        "getter frames return to opcodes of one length");
@@ -190,7 +341,7 @@ index 6241cd45d..9c09be558 100644
            MOZ_ASSERT(GetBytecodeLength(REGS.pc) == JSOpLength_Call);
            ADVANCE_AND_DISPATCH(JSOpLength_Call);
          }
-@@ -2944,9 +3023,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2944,9 +3174,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
        ReservedRooted<Value> lval(&rootValue0, REGS.sp[-1]);
        MutableHandleValue res = REGS.stackHandleAt(-1);
        ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
@@ -213,10 +364,10 @@ index 6241cd45d..9c09be558 100644
        cx->debugOnlyCheck(res);
      }
      END_CASE(GetProp)
-@@ -2964,9 +3056,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -2964,9 +3207,22 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
          goto error;
        }
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +      ReservedRooted<JSFunction*> fun(&rootFunction0);
 +      if (!GetPropertyDeferredFrom(cx, obj, receiver, name, rref, &fun)) {
@@ -236,7 +387,43 @@ index 6241cd45d..9c09be558 100644
  
        cx->debugOnlyCheck(rref);
  
-@@ -3366,8 +3471,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+@@ -3271,6 +3527,25 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+           (construct && !maybeFun->isConstructor()) ||
+           (!construct && maybeFun->isClassConstructor()) ||
+           cx->realm()->debuggerObservesNativeCall()) {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++        // Function.prototype.call and apply to a scripted target continue in
++        // this loop. Calls only: a construction keeps rejecting the builtin.
++        if (!construct && isFunction && maybeFun->isNativeFun() &&
++            (maybeFun->native() == fun_call ||
++             maybeFun->native() == fun_apply)) {
++          LoopCall route = PrepareLoopCall(cx, activation, args);
++          if (route == LoopCall::Error) {
++            goto error;
++          }
++          if (route == LoopCall::Owned) {
++            goto enter_inline_frame;
++          }
++          if (route == LoopCall::Inline) {
++            maybeFun = &args.callee().as<JSFunction>();
++            goto inline_call;
++          }
++        }
++#endif
+         if (construct) {
+           CallReason reason = op == JSOp::NewContent ? CallReason::CallContent
+                                                      : CallReason::Call;
+@@ -3298,6 +3573,9 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
+         ADVANCE_AND_DISPATCH(JSOpLength_Call);
+       }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    inline_call:
++#endif
+       {
+         MOZ_ASSERT(maybeFun);
+         ReservedRooted<JSFunction*> fun(&rootFunction0, maybeFun);
+@@ -3366,8 +3644,19 @@ bool MOZ_NEVER_INLINE JS_HAZ_JSNATIVE_CALLER js::Interpret(JSContext* cx,
                                      // call popInlineFrame.
        }
  
@@ -256,7 +443,7 @@ index 6241cd45d..9c09be558 100644
        if (!REGS.fp()->prologue(cx)) {
          goto prologue_error;
        }
-@@ -4619,8 +4735,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
+@@ -4619,8 +4908,14 @@ bool js::GetPendingExceptionStack(JSContext* cx, MutableHandleValue vp) {
    return cx->getPendingExceptionStack(vp);
  }
  
@@ -273,10 +460,10 @@ index 6241cd45d..9c09be558 100644
    if (name == cx->names().length) {
      // Fast path for strings, arrays and arguments.
      if (::GetLengthProperty(v, vp)) {
-@@ -4674,9 +4796,30 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
+@@ -4674,9 +4969,30 @@ bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
      return false;
    }
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  if constexpr (deferGetter) {
 +    return GetPropertyDeferredFrom(cx, obj, receiver, name, vp,
@@ -285,7 +472,7 @@ index 6241cd45d..9c09be558 100644
 +#endif
    return GetProperty(cx, obj, receiver, name, vp);
  }
-
+ 
 +bool js::GetProperty(JSContext* cx, HandleValue v, Handle<PropertyName*> name,
 +                     MutableHandleValue vp) {
 +  return GetPropertyOperation<false>(cx, v, name, vp);
@@ -627,14 +814,21 @@ diff --git a/js/src/util/DiagnosticAssertions.h b/js/src/util/DiagnosticAssertio
  #endif
  
 diff --git i/js/public/Modules.h w/js/public/Modules.h
-index 6f3c3cd68..176dd32a8 100644
+index 6f3c3cd..f23e1a0 100644
 --- i/js/public/Modules.h
 +++ w/js/public/Modules.h
-@@ -34,6 +34,26 @@ union Utf8Unit;
+@@ -34,6 +34,33 @@ union Utf8Unit;
  
  namespace JS {
  
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
++// This embedding reserves global application slot zero for its traced prototype.
++constexpr uint32_t ModuleNamespacePrototypeSlot = 0;
++extern JS_PUBLIC_API bool InitModuleNamespacePrototype(JSContext* cx);
++
++// Inspect the native namespace class without unwrapping proxies or running script.
++extern JS_PUBLIC_API bool IsModuleNamespaceObject(const Value& value);
++
 +enum class ModuleEvaluationState : uint8_t {
 +  Unevaluated,
 +  Pending,
@@ -658,10 +852,106 @@ index 6f3c3cd68..176dd32a8 100644
  // sequential numbers starting at zero for the unknown type.
  enum class ModuleType : uint32_t {
 diff --git i/js/src/builtin/ModuleObject.cpp w/js/src/builtin/ModuleObject.cpp
-index 0e97fa421..11346e8e8 100644
+index 0e97fa4..66eb35e 100644
 --- i/js/src/builtin/ModuleObject.cpp
 +++ w/js/src/builtin/ModuleObject.cpp
-@@ -1012,6 +1012,9 @@ class js::CyclicModuleFields {
+@@ -390,6 +390,26 @@ bool IndirectBindingMap::lookup(jsid name, ModuleEnvironmentObject** envOut,
+ ///////////////////////////////////////////////////////////////////////////
+ // ModuleNamespaceObject
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++static JSObject* ModuleNamespacePrototype(JSContext* cx) {
++  const Value& proto = cx->global()->getReservedSlot(JS::ModuleNamespacePrototypeSlot);
++  return proto.isObject() ? &proto.toObject() : nullptr;
++}
++
++static bool HasNamespacePrototypeProperty(JSContext* cx, HandleId id, bool* found) {
++  RootedObject proto(cx, ModuleNamespacePrototype(cx));
++  *found = false;
++  return !proto || HasProperty(cx, proto, id, found);
++}
++
++static bool GetNamespacePrototypeProperty(JSContext* cx, HandleValue receiver,
++                                         HandleId id, MutableHandleValue result) {
++  RootedObject proto(cx, ModuleNamespacePrototype(cx));
++  result.setUndefined();
++  return !proto || GetProperty(cx, proto, receiver, id, result);
++}
++#endif
++
+ // Module namespace objects need 3 reserved slots (ExportsSlot, BindingsSlot,
+ // DeferredSlot), so they use a custom proxy class instead of the default
+ // ProxyClass which only has 2.
+@@ -529,14 +549,22 @@ static void ReportUninitializedModuleBinding(JSContext* cx, HandleId id) {
+ 
+ bool ModuleNamespaceObject::ProxyHandler::getPrototype(
+     JSContext* cx, HandleObject proxy, MutableHandleObject protop) const {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  protop.set(ModuleNamespacePrototype(cx));
++#else
+   protop.set(nullptr);
++#endif
+   return true;
+ }
+ 
+ bool ModuleNamespaceObject::ProxyHandler::setPrototype(
+     JSContext* cx, HandleObject proxy, HandleObject proto,
+     ObjectOpResult& result) const {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  if (proto == ModuleNamespacePrototype(cx)) {
++#else
+   if (!proto) {
++#endif
+     return result.succeed();
+   }
+   return result.failCantSetProto();
+@@ -719,6 +747,9 @@ bool ModuleNamespaceObject::ProxyHandler::has(JSContext* cx, HandleObject proxy,
+   Rooted<ModuleNamespaceObject*> ns(cx, &proxy->as<ModuleNamespaceObject>());
+   if (IsSymbolLikeNamespaceKey(cx, id, ns)) {
+     *bp = id.isWellKnownSymbol(JS::SymbolCode::toStringTag);
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    if (!*bp) return HasNamespacePrototypeProperty(cx, id, bp);
++#endif
+     return true;
+   }
+ 
+@@ -727,6 +758,9 @@ bool ModuleNamespaceObject::ProxyHandler::has(JSContext* cx, HandleObject proxy,
+   }
+ 
+   *bp = ns->bindings().has(id);
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  if (!*bp) return HasNamespacePrototypeProperty(cx, id, bp);
++#endif
+   return true;
+ }
+ 
+@@ -742,8 +776,12 @@ bool ModuleNamespaceObject::ProxyHandler::get(JSContext* cx, HandleObject proxy,
+       return true;
+     }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    return GetNamespacePrototypeProperty(cx, receiver, id, vp);
++#else
+     vp.setUndefined();
+     return true;
++#endif
+   }
+ 
+   if (!EnsureDeferredModuleEvaluated(cx, ns)) {
+@@ -753,8 +791,12 @@ bool ModuleNamespaceObject::ProxyHandler::get(JSContext* cx, HandleObject proxy,
+   ModuleEnvironmentObject* env;
+   mozilla::Maybe<PropertyInfo> prop;
+   if (!ns->bindings().lookup(id, &env, &prop)) {
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    return GetNamespacePrototypeProperty(cx, receiver, id, vp);
++#else
+     vp.setUndefined();
+     return true;
++#endif
+   }
+ 
+   RootedValue value(cx, env->getSlot(prop->slot()));
+@@ -1012,6 +1054,9 @@ class js::CyclicModuleFields {
    ModuleStatus status = ModuleStatus::New;
  
    bool hasTopLevelAwait : 1;
@@ -671,7 +961,7 @@ index 0e97fa421..11346e8e8 100644
  
   private:
    // Flag bits that determine whether other fields are present.
-@@ -1064,6 +1067,9 @@ class js::CyclicModuleFields {
+@@ -1064,6 +1109,9 @@ class js::CyclicModuleFields {
  
  CyclicModuleFields::CyclicModuleFields()
      : hasTopLevelAwait(false),
@@ -681,7 +971,7 @@ index 0e97fa421..11346e8e8 100644
        hasDfsAncestorIndex(false),
        hasPendingAsyncDependencies(false) {}
  
-@@ -1448,6 +1454,18 @@ bool ModuleObject::hasTopLevelAwait() const {
+@@ -1448,6 +1496,18 @@ bool ModuleObject::hasTopLevelAwait() const {
    return cyclicModuleFields()->hasTopLevelAwait;
  }
  
@@ -716,24 +1006,42 @@ index 4cf98d2d5..d23d13cf8 100644
    void setPendingAsyncDependencies(uint32_t newValue);
    void setInitialTopLevelCapability(Handle<PromiseObject*> capability);
 diff --git i/js/src/vm/Modules.cpp w/js/src/vm/Modules.cpp
-index f1ce887af..00c9ecad1 100644
+index f1ce887..f1bffcd 100644
 --- i/js/src/vm/Modules.cpp
 +++ w/js/src/vm/Modules.cpp
-@@ -30,6 +30,9 @@
+@@ -30,6 +30,10 @@
  #include "js/Value.h"       // JS::Value
  #include "js/WasmModule.h"  // JS::WasmModule
  #include "vm/EnvironmentObject.h"  // js::ModuleEnvironmentObject
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +#  include "vm/ErrorObject.h"
++#  include "vm/PlainObject.h"
 +#endif
  #include "vm/JSAtomUtils.h"        // AtomizeString
  #include "vm/JSContext.h"          // CHECK_THREAD, JSContext
  #include "vm/JSObject.h"           // JSObject
-@@ -677,6 +680,44 @@ JS_PUBLIC_API bool JS::ModuleIsLinked(JSObject* moduleObj) {
+@@ -677,6 +681,61 @@ JS_PUBLIC_API bool JS::ModuleIsLinked(JSObject* moduleObj) {
           moduleObj->as<ModuleObject>().status() != ModuleStatus::Unlinked;
  }
  
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
++JS_PUBLIC_API bool JS::InitModuleNamespacePrototype(JSContext* cx) {
++  AssertHeapIsIdle();
++  CHECK_THREAD(cx);
++  MOZ_ASSERT(cx->global()->getReservedSlot(ModuleNamespacePrototypeSlot).isUndefined());
++  RootedObject proto(cx, NewPlainObjectWithProto(cx, nullptr));
++  if (!proto || !JS_DefineProperty(cx, proto, "__esModule", TrueHandleValue,
++                                  JSPROP_READONLY | JSPROP_PERMANENT)) {
++    return false;
++  }
++  cx->global()->setReservedSlot(ModuleNamespacePrototypeSlot, ObjectValue(*proto));
++  return true;
++}
++
++JS_PUBLIC_API bool JS::IsModuleNamespaceObject(const Value& value) {
++  return value.isObject() && value.toObject().is<ModuleNamespaceObject>();
++}
++
 +JS_PUBLIC_API JS::ModuleEvaluationInfo JS::GetModuleEvaluationInfo(
 +    JSObject* moduleObj) {
 +  AssertHeapIsIdle();
@@ -856,7 +1164,7 @@ index 9524c5d6a..7b1543e5f 100644
  
  #ifdef __wasi__
 diff --git i/js/src/frontend/Parser.cpp w/js/src/frontend/Parser.cpp
-index 34f4dee86..71160225a 100644
+index 34f4dee86..0784efd6e 100644
 --- i/js/src/frontend/Parser.cpp
 +++ w/js/src/frontend/Parser.cpp
 @@ -2996,6 +2996,7 @@ template <class ParseHandler, typename Unit>
@@ -892,7 +1200,61 @@ index 34f4dee86..71160225a 100644
    // Given a properly initialized parse context, try to parse an actual
    // function without concern for conversion to strict mode, use of lazy
    // parsing and such.
-@@ -9299,6 +9311,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
+@@ -4473,7 +4485,7 @@ GeneralParser<ParseHandler, Unit>::destructuringDeclarationWithoutYieldOrAwait(
+ }
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::LexicalScopeNodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::LexicalScopeNodeResult
+ GeneralParser<ParseHandler, Unit>::blockStatement(YieldHandling yieldHandling,
+                                                   unsigned errorNumber) {
+   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftCurly));
+@@ -6249,7 +6261,7 @@ GeneralParser<ParseHandler, Unit>::expressionStatement(
+ }
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::NodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::NodeResult
+ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
+     YieldHandling yieldHandling) {
+   TokenKind next;
+@@ -6257,6 +6269,35 @@ GeneralParser<ParseHandler, Unit>::consequentOrAlternative(
+     return errorResult();
+   }
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  // A braced body takes statement()'s path for `{` without statement()'s
++  // frame: the same recursion unit, checked before the token is consumed,
++  // then blockStatement. This function is merged into ifStatement, so a
++  // braced if level costs ifStatement and statementList frames only.
++  // statement()'s shadow reservation moves with it, onto ifStatement's frame.
++  if (next == TokenKind::LeftCurly) {
++    BUNWASM_RESERVE_STACK(bunwasm::StatementReserve);
++    AutoCheckRecursionLimit recursion(this->fc_);
++    if (!recursion.check(this->fc_)) {
++      return errorResult();
++    }
++    tokenStream.consumeKnownToken(next, TokenStream::SlashIsRegExp);
++    return blockStatement(yieldHandling);
++  }
++  if (next == TokenKind::Function) {
++    return unbracedFunctionConsequent(yieldHandling);
++  }
++  return statement(yieldHandling);
++}
++
++// The rare Annex B branch below stays out of ifStatement's merged frame.
++template <class ParseHandler, typename Unit>
++MOZ_NEVER_INLINE typename ParseHandler::NodeResult
++GeneralParser<ParseHandler, Unit>::unbracedFunctionConsequent(
++    YieldHandling yieldHandling) {
++  TokenKind next = TokenKind::Function;
++#endif
++
+   // Annex B.3.4 says that unbraced FunctionDeclarations under if/else in
+   // non-strict code act as if they were braced: |if (x) function f() {}|
+   // parses as |if (x) { function f() {} }|.
+@@ -9299,6 +9340,7 @@ GeneralParser<ParseHandler, Unit>::variableStatement(
  template <class ParseHandler, typename Unit>
  typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
      YieldHandling yieldHandling) {
@@ -900,15 +1262,19 @@ index 34f4dee86..71160225a 100644
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -9546,6 +9559,7 @@ template <class ParseHandler, typename Unit>
- typename ParseHandler::NodeResult
+@@ -9543,9 +9585,10 @@ typename ParseHandler::NodeResult GeneralParser<ParseHandler, Unit>::statement(
+ }
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::NodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::NodeResult
  GeneralParser<ParseHandler, Unit>::statementListItem(
      YieldHandling yieldHandling, bool canHaveDirectives /* = false */) {
 +  BUNWASM_RESERVE_STACK(bunwasm::StatementListItemReserve);
    MOZ_ASSERT(checkOptionsCalled_);
  
    AutoCheckRecursionLimit recursion(this->fc_);
-@@ -10114,15 +10128,17 @@ GeneralParser<ParseHandler, Unit>::condExpr(InHandling inHandling,
+@@ -10114,15 +10157,17 @@ GeneralParser<ParseHandler, Unit>::condExpr(InHandling inHandling,
      return condition;
    }
  
@@ -930,7 +1296,7 @@ index 34f4dee86..71160225a 100644
  
    return handler_.newConditional(condition, thenExpr, elseExpr);
  }
-@@ -10493,6 +10509,7 @@ typename ParseHandler::UnaryNodeResult
+@@ -10493,12 +10538,13 @@ typename ParseHandler::UnaryNodeResult
  GeneralParser<ParseHandler, Unit>::unaryOpExpr(YieldHandling yieldHandling,
                                                 ParseNodeKind kind,
                                                 uint32_t begin) {
@@ -938,7 +1304,14 @@ index 34f4dee86..71160225a 100644
    Node kid = MOZ_TRY(unaryExpr(yieldHandling, TripledotProhibited));
    return handler_.newUnary(kind, begin, kid);
  }
-@@ -10762,6 +10779,7 @@ typename ParseHandler::ListNodeResult
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::NodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::NodeResult
+ GeneralParser<ParseHandler, Unit>::optionalExpr(
+     YieldHandling yieldHandling, TripledotHandling tripledotHandling,
+     TokenKind tt, PossibleError* possibleError /* = nullptr */,
+@@ -10762,6 +10808,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::argumentList(
      YieldHandling yieldHandling, bool* isSpread,
      PossibleError* possibleError /* = nullptr */) {
@@ -946,7 +1319,7 @@ index 34f4dee86..71160225a 100644
    ListNodeType argsList = MOZ_TRY(handler_.newArguments(pos()));
  
    bool matched;
-@@ -11149,6 +11167,7 @@ GeneralParser<ParseHandler, Unit>::memberElemAccess(
+@@ -11149,6 +11196,7 @@ GeneralParser<ParseHandler, Unit>::memberElemAccess(
      Node lhs, YieldHandling yieldHandling,
      OptionalKind optionalKind /* = OptionalKind::NonOptional */) {
    MOZ_ASSERT(anyChars.currentToken().type == TokenKind::LeftBracket);
@@ -954,7 +1327,7 @@ index 34f4dee86..71160225a 100644
    Node propExpr = MOZ_TRY(expr(InAllowed, yieldHandling, TripledotProhibited));
  
    if (!mustMatchToken(TokenKind::RightBracket, JSMSG_BRACKET_IN_INDEX)) {
-@@ -11724,6 +11743,7 @@ typename ParseHandler::ListNodeResult
+@@ -11724,6 +11772,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::arrayInitializer(
      YieldHandling yieldHandling, PossibleError* possibleError) {
    MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftBracket));
@@ -962,7 +1335,7 @@ index 34f4dee86..71160225a 100644
  
    uint32_t begin = pos().begin;
    ListNodeType literal = MOZ_TRY(handler_.newArrayLiteral(begin));
-@@ -12145,6 +12165,7 @@ typename ParseHandler::ListNodeResult
+@@ -12145,6 +12194,7 @@ typename ParseHandler::ListNodeResult
  GeneralParser<ParseHandler, Unit>::objectLiteral(YieldHandling yieldHandling,
                                                   PossibleError* possibleError) {
    MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::LeftCurly));
@@ -970,7 +1343,16 @@ index 34f4dee86..71160225a 100644
  
    uint32_t openedPos = pos().begin;
  
-@@ -12588,8 +12609,9 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+@@ -12576,7 +12626,7 @@ GeneralParser<ParseHandler, Unit>::importExpr(YieldHandling yieldHandling,
+ }
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::NodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::NodeResult
+ GeneralParser<ParseHandler, Unit>::primaryExpr(
+     YieldHandling yieldHandling, TripledotHandling tripledotHandling,
+     TokenKind tt, PossibleError* possibleError, InvokedPrediction invoked) {
+@@ -12588,8 +12638,9 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
  
    switch (tt) {
      case TokenKind::Function:
@@ -982,7 +1364,7 @@ index 34f4dee86..71160225a 100644
  
      case TokenKind::Class:
        return classDefinition(yieldHandling, ClassExpression, NameRequired);
-@@ -12638,8 +12660,10 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+@@ -12638,8 +12689,10 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
        }
  
        // Pass |possibleError| to support destructuring in arrow parameters.
@@ -995,6 +1377,128 @@ index 34f4dee86..71160225a 100644
        if (!mustMatchToken(TokenKind::RightParen, JSMSG_PAREN_IN_PAREN)) {
          return errorResult();
        }
+@@ -12770,7 +12823,7 @@ GeneralParser<ParseHandler, Unit>::primaryExpr(
+ }
+ 
+ template <class ParseHandler, typename Unit>
+-typename ParseHandler::NodeResult
++BUNWASM_PARSER_MERGED typename ParseHandler::NodeResult
+ GeneralParser<ParseHandler, Unit>::exprInParens(
+     InHandling inHandling, YieldHandling yieldHandling,
+     TripledotHandling tripledotHandling,
+diff --git i/js/src/frontend/Parser.h w/js/src/frontend/Parser.h
+index 55174d6cc..1a0fdc652 100644
+--- i/js/src/frontend/Parser.h
++++ w/js/src/frontend/Parser.h
+@@ -178,6 +178,17 @@
+ #include "js/friend/ErrorMessages.h"  // JSErrNum, JSMSG_*
+ #include "vm/GeneratorAndAsyncKind.h"  // js::GeneratorKind, js::FunctionAsyncKind
+ 
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++// A wasm host stack pays for every C++ frame in a recursion cycle. These
++// GeneralParser members are merged into their callers so a nested statement
++// or expression costs fewer frames. The attribute goes on the in-class
++// declaration and the definition; on the definition alone it does not take
++// effect for the full parser.
++#  define BUNWASM_PARSER_MERGED MOZ_ALWAYS_INLINE
++#else
++#  define BUNWASM_PARSER_MERGED
++#endif
++
+ namespace js {
+ 
+ class FrontendContext;
+@@ -989,8 +1000,8 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
+ 
+  public:
+   /* Public entry points for parsing. */
+-  NodeResult statementListItem(YieldHandling yieldHandling,
+-                               bool canHaveDirectives = false);
++  BUNWASM_PARSER_MERGED NodeResult statementListItem(
++      YieldHandling yieldHandling, bool canHaveDirectives = false);
+ 
+   // Parse an inner function given an enclosing ParseContext and a
+   // FunctionBox for the inner function.
+@@ -1027,7 +1038,7 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
+   NodeResult statement(YieldHandling yieldHandling);
+   bool maybeParseDirective(ListNodeType list, Node pn, bool* cont);
+ 
+-  LexicalScopeNodeResult blockStatement(
++  BUNWASM_PARSER_MERGED LexicalScopeNodeResult blockStatement(
+       YieldHandling yieldHandling,
+       unsigned errorNumber = JSMSG_CURLY_IN_COMPOUND);
+   BinaryNodeResult doWhileStatement(YieldHandling yieldHandling);
+@@ -1058,7 +1069,12 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
+   NodeResult labeledItem(YieldHandling yieldHandling);
+ 
+   TernaryNodeResult ifStatement(YieldHandling yieldHandling);
+-  NodeResult consequentOrAlternative(YieldHandling yieldHandling);
++  BUNWASM_PARSER_MERGED NodeResult
++  consequentOrAlternative(YieldHandling yieldHandling);
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  MOZ_NEVER_INLINE NodeResult
++  unbracedFunctionConsequent(YieldHandling yieldHandling);
++#endif
+ 
+   DeclarationListNodeResult lexicalDeclaration(YieldHandling yieldHandling,
+                                                DeclarationKind kind);
+@@ -1166,34 +1182,39 @@ class MOZ_STACK_CLASS GeneralParser : public PerHandlerParser<ParseHandler> {
+                         InvokedPrediction invoked = PredictUninvoked);
+   NodeResult assignExprWithoutYieldOrAwait(YieldHandling yieldHandling);
+   UnaryNodeResult yieldExpression(InHandling inHandling);
+-  NodeResult condExpr(InHandling inHandling, YieldHandling yieldHandling,
+-                      TripledotHandling tripledotHandling,
+-                      PossibleError* possibleError, InvokedPrediction invoked);
+-  NodeResult orExpr(InHandling inHandling, YieldHandling yieldHandling,
+-                    TripledotHandling tripledotHandling,
+-                    PossibleError* possibleError, InvokedPrediction invoked);
++  BUNWASM_PARSER_MERGED NodeResult condExpr(
++      InHandling inHandling, YieldHandling yieldHandling,
++      TripledotHandling tripledotHandling, PossibleError* possibleError,
++      InvokedPrediction invoked);
++  BUNWASM_PARSER_MERGED NodeResult orExpr(InHandling inHandling,
++                                          YieldHandling yieldHandling,
++                                          TripledotHandling tripledotHandling,
++                                          PossibleError* possibleError,
++                                          InvokedPrediction invoked);
+   NodeResult unaryExpr(YieldHandling yieldHandling,
+                        TripledotHandling tripledotHandling,
+                        PossibleError* possibleError = nullptr,
+                        InvokedPrediction invoked = PredictUninvoked,
+                        PrivateNameHandling privateNameHandling =
+                            PrivateNameHandling::PrivateNameProhibited);
+-  NodeResult optionalExpr(YieldHandling yieldHandling,
+-                          TripledotHandling tripledotHandling, TokenKind tt,
+-                          PossibleError* possibleError = nullptr,
+-                          InvokedPrediction invoked = PredictUninvoked);
++  BUNWASM_PARSER_MERGED NodeResult
++  optionalExpr(YieldHandling yieldHandling,
++               TripledotHandling tripledotHandling, TokenKind tt,
++               PossibleError* possibleError = nullptr,
++               InvokedPrediction invoked = PredictUninvoked);
+   NodeResult memberExpr(YieldHandling yieldHandling,
+                         TripledotHandling tripledotHandling, TokenKind tt,
+                         bool allowCallSyntax, PossibleError* possibleError,
+                         InvokedPrediction invoked);
+   NodeResult decoratorExpr(YieldHandling yieldHandling, TokenKind tt);
+-  NodeResult primaryExpr(YieldHandling yieldHandling,
+-                         TripledotHandling tripledotHandling, TokenKind tt,
+-                         PossibleError* possibleError,
+-                         InvokedPrediction invoked);
+-  NodeResult exprInParens(InHandling inHandling, YieldHandling yieldHandling,
+-                          TripledotHandling tripledotHandling,
+-                          PossibleError* possibleError = nullptr);
++  BUNWASM_PARSER_MERGED NodeResult
++  primaryExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling,
++              TokenKind tt, PossibleError* possibleError,
++              InvokedPrediction invoked);
++  BUNWASM_PARSER_MERGED NodeResult
++  exprInParens(InHandling inHandling, YieldHandling yieldHandling,
++               TripledotHandling tripledotHandling,
++               PossibleError* possibleError = nullptr);
+ 
+   bool tryNewTarget(NewTargetNodeType* newTarget);
+ 
 diff --git i/js/src/builtin/JSON.cpp w/js/src/builtin/JSON.cpp
 index a60aef921..47c01b676 100644
 --- i/js/src/builtin/JSON.cpp
@@ -1007,9 +1511,10 @@ index a60aef921..47c01b676 100644
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
-diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendContext.cpp
---- a/js/src/frontend/FrontendContext.cpp
-+++ b/js/src/frontend/FrontendContext.cpp
+diff --git i/js/src/frontend/FrontendContext.cpp w/js/src/frontend/FrontendContext.cpp
+index 80dcf1142..8bdb258ce 100644
+--- i/js/src/frontend/FrontendContext.cpp
++++ w/js/src/frontend/FrontendContext.cpp
 @@ -203,6 +203,9 @@ void FrontendContext::setCurrentJSContext(JSContext* cx) {
    nameCollectionPool_ = &cx->frontendCollectionPool();
    scriptDataTableHolder_ = &cx->runtime()->scriptDataTableHolder();
@@ -1017,13 +1522,13 @@ diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendConte
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  wasiEntryDepth_ = JS::RootingContext::get(cx)->wasiRecursionDepth;
 +#endif
-
+ 
  #ifdef DEBUG
    setNativeStackLimitThread();
 @@ -297,9 +300,38 @@ void FrontendContext::decWasiRecursionDepth() {
    }
  }
-
+ 
 +#  if defined(BUNWASM_EMBED)
 +// The parser and bytecode emitter spend far less host stack per depth unit
 +// than runtime reentry, so they get their own bound on the shared counter,
@@ -1059,13 +1564,14 @@ diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendConte
    }
    return true;
  }
-diff --git a/js/src/frontend/FrontendContext.h b/js/src/frontend/FrontendContext.h
---- a/js/src/frontend/FrontendContext.h
-+++ b/js/src/frontend/FrontendContext.h
+diff --git i/js/src/frontend/FrontendContext.h w/js/src/frontend/FrontendContext.h
+index a5d32bb53..528cc2add 100644
+--- i/js/src/frontend/FrontendContext.h
++++ w/js/src/frontend/FrontendContext.h
 @@ -119,6 +119,11 @@ class FrontendContext {
    // Set by setCurrentJSContext.
    JSContext* maybeCx_ = nullptr;
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  // The JSContext's WASI recursion depth when this compile attached to it.
 +  uint32_t wasiEntryDepth_ = 0;
@@ -1306,7 +1812,7 @@ index 57951667c..f640070b4 100644
  
 
 diff --git a/js/src/vm/Stack.h b/js/src/vm/Stack.h
-index 7fd5148d5..c79c5c4b6 100644
+index 7fd5148d5..caef2c251 100644
 --- a/js/src/vm/Stack.h
 +++ b/js/src/vm/Stack.h
 @@ -351,6 +351,11 @@ class InterpreterFrame {
@@ -1352,14 +1858,17 @@ index 7fd5148d5..c79c5c4b6 100644
    void prepareToRun(InterpreterFrame& fp, JSScript* script) {
      pc = script->code();
      sp = fp.slots() + script->nfixed();
-@@ -910,6 +932,16 @@ class InterpreterStack {
-
+@@ -910,6 +932,19 @@ class InterpreterStack {
+ 
    void popInlineFrame(InterpreterRegs& regs);
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+  bool pushInlineGetterFrame(JSContext* cx, InterpreterRegs& regs,
-+                             HandleFunction callee, HandleScript script,
-+                             HandleValue receiver);
++  // Pushes a frame that owns its callee, |this|, |argc| arguments written by
++  // |fill| (which must not GC) and any missing formals.
++  template <typename Fill>
++  bool pushOwnedInlineFrame(JSContext* cx, InterpreterRegs& regs,
++                            HandleFunction callee, HandleScript script,
++                            HandleValue thisv, unsigned argc, Fill fill);
 +  // Out of line, so the interpreter's ordinary inline return path, and with
 +  // it js::Interpret's frame, is unchanged.
 +  void popOwnedInlineFrame(InterpreterRegs& regs);
@@ -1371,22 +1880,24 @@ index 7fd5148d5..c79c5c4b6 100644
                                        HandleObject envChain);
 
 diff --git a/js/src/vm/Stack-inl.h b/js/src/vm/Stack-inl.h
-index 7a729d13d..f1b357712 100644
+index 7a729d13d..02048c6f2 100644
 --- a/js/src/vm/Stack-inl.h
 +++ b/js/src/vm/Stack-inl.h
-@@ -356,8 +356,44 @@ MOZ_ALWAYS_INLINE bool InterpreterStack::pushInlineGeneratorResumeFrame(
+@@ -356,8 +356,47 @@ MOZ_ALWAYS_INLINE bool InterpreterStack::pushInlineGeneratorResumeFrame(
    return true;
  }
  
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+MOZ_ALWAYS_INLINE bool InterpreterStack::pushInlineGetterFrame(
++template <typename Fill>
++MOZ_ALWAYS_INLINE bool InterpreterStack::pushOwnedInlineFrame(
 +    JSContext* cx, InterpreterRegs& regs, HandleFunction callee,
-+    HandleScript script, HandleValue receiver) {
++    HandleScript script, HandleValue thisv, unsigned argc, Fill fill) {
 +  MOZ_ASSERT(regs.fp());
 +  MOZ_ASSERT(callee->baseScript() == script);
 +  LifoAlloc::Mark mark = allocator_.mark();
 +  unsigned nformal = callee->nargs();
-+  unsigned nvals = 2 + nformal + script->nslots();
++  unsigned nargs = argc > nformal ? argc : nformal;
++  size_t nvals = 2 + size_t(nargs) + script->nslots();
 +  uint8_t* buffer =
 +      allocateFrame(cx, sizeof(InterpreterFrame) + nvals * sizeof(Value));
 +  if (!buffer) {
@@ -1396,11 +1907,12 @@ index 7a729d13d..f1b357712 100644
 +  // Allocation cannot GC. Publish only after every owned slot is initialized.
 +  Value* argv = reinterpret_cast<Value*>(buffer) + 2;
 +  argv[-2] = ObjectValue(*callee);
-+  argv[-1] = receiver;
-+  SetValueRangeToUndefined(argv, nformal);
-+  InterpreterFrame* fp = reinterpret_cast<InterpreterFrame*>(argv + nformal);
++  argv[-1] = thisv;
++  fill(argv);
++  SetValueRangeToUndefined(argv + argc, nargs - argc);
++  InterpreterFrame* fp = reinterpret_cast<InterpreterFrame*>(argv + nargs);
 +  fp->mark_ = mark;
-+  fp->initCallFrame(regs.fp(), regs.pc, regs.sp, *callee, script, argv, 0,
++  fp->initCallFrame(regs.fp(), regs.pc, regs.sp, *callee, script, argv, argc,
 +                    NO_CONSTRUCT);
 +  fp->setOwnedArguments(InterpreterFrame::InlineReturnMode::ReplaceValue);
 +  regs.prepareToRun(*fp, script);
@@ -1419,15 +1931,18 @@ index 7a729d13d..f1b357712 100644
    regs.popInlineFrame();
    regs.sp[-1] = fp->returnValue();
    releaseFrame(fp);
-@@ -860,6 +896,14 @@ inline void InterpreterActivation::popInlineFrame(InterpreterFrame* frame) {
+@@ -860,6 +899,17 @@ inline void InterpreterActivation::popInlineFrame(InterpreterFrame* frame) {
    cx_->interpreterStack().popInlineFrame(regs_);
  }
  
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+inline bool InterpreterActivation::pushInlineGetterFrame(
-+    HandleFunction callee, HandleScript script, HandleValue receiver) {
-+  return cx_->interpreterStack().pushInlineGetterFrame(cx_, regs_, callee,
-+                                                       script, receiver);
++template <typename Fill>
++inline bool InterpreterActivation::pushOwnedInlineFrame(
++    HandleFunction callee, HandleScript script, HandleValue thisv,
++    unsigned argc, Fill fill) {
++  return cx_->interpreterStack().pushOwnedInlineFrame(cx_, regs_, callee,
++                                                      script, thisv, argc,
++                                                      fill);
 +}
 +#endif
 +
@@ -1436,21 +1951,24 @@ index 7a729d13d..f1b357712 100644
    InterpreterStack& stack = cx_->interpreterStack();
 
 diff --git a/js/src/vm/Activation.h b/js/src/vm/Activation.h
-index b2c3f2a99..62cdb40e2 100644
+index b2c3f2a99..96f70884b 100644
 --- a/js/src/vm/Activation.h
 +++ b/js/src/vm/Activation.h
-@@ -503,6 +503,12 @@ class InterpreterActivation : public Activation {
+@@ -503,6 +503,14 @@ class InterpreterActivation : public Activation {
                                MaybeConstruct constructing);
    inline void popInlineFrame(InterpreterFrame* frame);
  
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+  inline bool pushInlineGetterFrame(JS::Handle<JSFunction*> callee,
-+                                    JS::Handle<JSScript*> script,
-+                                    JS::Handle<JS::Value> receiver);
++  template <typename Fill>
++  inline bool pushOwnedInlineFrame(JS::Handle<JSFunction*> callee,
++                                   JS::Handle<JSScript*> script,
++                                   JS::Handle<JS::Value> thisv, unsigned argc,
++                                   Fill fill);
 +#endif
 +
    inline bool pushInlineGeneratorResumeFrame(JS::Handle<JSFunction*> callee,
                                               JS::Handle<JSObject*> envChain);
+ 
 
 
 diff --git a/js/src/vm/Stack.cpp b/js/src/vm/Stack.cpp
@@ -1494,3 +2012,64 @@ index 2465a89b4..110b3281c 100644
  /*****************************************************************************/
 
  InterpreterFrame* InterpreterStack::pushInvokeFrame(
+diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitter.cpp
+index 18e469828..a6d3f5f4b 100644
+--- a/js/src/frontend/BytecodeEmitter.cpp
++++ b/js/src/frontend/BytecodeEmitter.cpp
+@@ -5219,6 +5219,13 @@ MOZ_NEVER_INLINE bool BytecodeEmitter::emitTry(TryNode* tryNode) {
+ }
+ 
+ bool BytecodeEmitter::emitIf(TernaryNode* ifNode) {
++  // IfStatement applies UpdateEmpty with undefined, unlike a plain block.
++  if (sc->isTopLevelContext() && !sc->noScriptRval()) {
++    if (!emit1(JSOp::Undefined) || !emit1(JSOp::SetRval)) {
++      return false;
++    }
++  }
++
+   IfEmitter ifThenElse(this);
+ 
+   if (!ifThenElse.emitIf(Some(ifNode->kid1()->pn_pos.begin))) {
+diff --git a/js/src/frontend/FoldConstants.cpp b/js/src/frontend/FoldConstants.cpp
+index 8d1b3bf5d..766c8d956 100644
+--- a/js/src/frontend/FoldConstants.cpp
++++ b/js/src/frontend/FoldConstants.cpp
+@@ -879,6 +879,8 @@ static bool FoldConditional(FoldInfo info, ParseNode** nodePtr) {
+ }
+ 
+ static bool FoldIf(FoldInfo info, ParseNode** nodePtr) {
++  ParseNode** originalNodePtr = nodePtr;
++  ParseNode* originalNode = *nodePtr;
+   ParseNode** nextNode = nodePtr;
+ 
+   do {
+@@ -974,6 +976,29 @@ static bool FoldIf(FoldInfo info, ParseNode** nodePtr) {
+     }
+   } while (nextNode);
+ 
++  if (*originalNodePtr == originalNode) {
++    return true;
++  }
++
++  // Preserve the if completion after the entire selected else-if chain folds.
++  RawUndefinedLiteral* undefined;
++  MOZ_TRY_VAR_OR_RETURN(
++      undefined, info.handler->newRawUndefinedLiteral(originalNode->pn_pos),
++      false);
++  UnaryNode* undefinedStatement;
++  MOZ_TRY_VAR_OR_RETURN(
++      undefinedStatement,
++      info.handler->newExprStatement(undefined, originalNode->pn_pos.end), false);
++  ListNode* completion;
++  MOZ_TRY_VAR_OR_RETURN(
++      completion, info.handler->newStatementList(originalNode->pn_pos), false);
++  completion->append(undefinedStatement);
++
++  ParseNode* replacement = *originalNodePtr;
++  ReplaceNode(originalNodePtr, completion);
++  replacement->pn_next = nullptr;
++  completion->append(replacement);
++
+   return true;
+ }
+ 

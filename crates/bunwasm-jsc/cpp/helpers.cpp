@@ -37,6 +37,7 @@
 #include "JSPromise.h"
 #include "JSSourceCode.h"
 #include "MicrotaskQueue.h"
+#include "ModuleRegistryEntry.h"
 #include "ProxyObject.h"
 #include "TopExceptionScope.h"
 #include "SourceProvider.h"
@@ -393,6 +394,51 @@ JSValueRef bunjsc_import(JSContextRef ctx, const char* specifier, JSValueRef* ex
         return nullptr;
     }
     return toRef(globalObject, promise);
+}
+
+JSValueRef bunjsc_require(JSContextRef ctx, const char* name, JSValueRef* exception)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    VM& vm = globalObject->vm();
+    JSLockHolder lock(vm);
+    auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
+    auto key = Identifier::fromString(vm, String::fromUTF8(name));
+    auto* loader = globalObject->moduleLoader();
+    // WebKit diverts only loader continuations to its synchronous queue. User
+    // reactions and earlier imports keep their place in the normal job queue.
+    JSPromise* loading = loader->loadModuleSync(globalObject, key, nullptr, nullptr);
+    if (Exception* e = scope.exception()) {
+        *exception = toRef(globalObject, e->value());
+        scope.clearException();
+        return nullptr;
+    }
+    if (loading->status() == JSPromise::Status::Rejected)
+        return toRef(globalObject, loading);
+    loading->markAsHandled();
+    JSPromise* result;
+    if (loading->status() == JSPromise::Status::Pending) {
+        // Keep pending evaluations on the existing owned import path.
+        result = requestImport(globalObject, loader, String::fromUTF8(name), String(), nullptr, false);
+    } else {
+        auto* entry = loader->registryEntry(key);
+        RELEASE_ASSERT(entry && entry->record());
+        auto* moduleNamespace = entry->record()->getModuleNamespace(globalObject);
+        if (Exception* e = scope.exception()) {
+            *exception = toRef(globalObject, e->value());
+            scope.clearException();
+            return nullptr;
+        }
+        result = JSPromise::create(vm, globalObject->promiseStructure());
+        result->markAsHandled();
+        // Retain require's existing namespace-thenable adoption semantics.
+        result->resolve(globalObject, vm, moduleNamespace);
+    }
+    if (Exception* e = scope.exception()) {
+        *exception = toRef(globalObject, e->value());
+        scope.clearException();
+        return nullptr;
+    }
+    return toRef(globalObject, result);
 }
 
 // Evaluate a classic script named `filename` whose first line is

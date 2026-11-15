@@ -106,24 +106,49 @@ function assertRetired(value: Result): void {
   assert.equal(value.budget, 0, "the page budget is released with the last group");
 }
 
-async function result(page: Page, entry: string): Promise<Result> {
+async function result(page: Page, entry: string, initialCheckpoint?: unknown): Promise<Result> {
   // A blocked guest cannot explain itself, so the page reports what it has seen so far.
-  const report = () => void page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryProgress")?.()).then(progress => console.log(JSON.stringify({ progress })), () => {});
+  let checkpoint: unknown = initialCheckpoint;
+  const report = () => void page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryProgress")?.()).then(progress => {
+    checkpoint = progress;
+    console.log(JSON.stringify({ progress }));
+  }, error => console.error(JSON.stringify({ captureReadFailure: String(error), checkpoint })));
   const progress = setInterval(report, 20_000);
   try {
     await page.waitForFunction(() => Reflect.get(globalThis, "sharedWasmMemoryResult"), undefined, { timeout: oxcTree === undefined ? sharedBrowserClocks(selectedSpiderMonkey ? "spidermonkey" : "quickjs", entry).pageMs : 90_000 });
     return await page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryResult"));
+  } catch (error) {
+    console.error(JSON.stringify({ sharedWasmFailure: { entry, stack: error instanceof Error ? error.stack : String(error) }, checkpoint }));
+    try { console.error(JSON.stringify({ failureCapture: await page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryProgress")?.()) })); }
+    catch (captureError) { console.error(JSON.stringify({ captureReadFailure: String(captureError), checkpoint })); }
+    throw error;
   } finally { clearInterval(progress); }
 }
 
 interface EntryRun { readonly value: Result; readonly pageErrors: readonly string[]; readonly host: PageHost; }
+
+async function blockedControl(page: Page, entry: string): Promise<unknown> {
+  if (entry !== "member-capture-control.ts") return;
+  await page.waitForFunction(() => {
+    const members = Reflect.get(globalThis, "sharedWasmMemoryProgress")?.().members ?? [];
+    return members.some((member: { argv: string[]; capture: { state: string; value?: { stderr: string; active: { boundary: string }[] } } }) =>
+      member.argv.includes("wait") && member.capture.state === "read" && member.capture.value?.stderr.includes("member capture buffered stderr")
+      && member.capture.value.active.at(-1)?.boundary === "runtime_nested.Call");
+  }, undefined, { timeout: sharedBrowserClocks("quickjs", entry).pageMs });
+  const checkpoint: unknown = await page.evaluate(() => Reflect.get(globalThis, "sharedWasmMemoryProgress")?.());
+  console.log(JSON.stringify({ blockedMemberCapture: checkpoint }));
+  if (process.env.SHARED_WASM_CONTROL === "member-capture-failure") await page.close();
+  else await page.evaluate(() => Reflect.get(globalThis, "sharedWasmCaptureRelease")());
+  return checkpoint;
+}
 
 async function runEntry(name: string, port: number, entry: string): Promise<EntryRun> {
   const page = await browser!.newPage();
   const pageErrors: string[] = [];
   page.on("pageerror", error => pageErrors.push(error.message));
   await page.goto(`http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}${oxcTree === undefined ? "" : "&oxc=1"}`);
-  const value = await result(page, entry);
+  const checkpoint = await blockedControl(page, entry);
+  const value = await result(page, entry, checkpoint);
   const host = await pageHost(page, name);
   console.log(JSON.stringify({ browser: name, version: browser!.version(), entry, host, ...value, pageErrors }));
   await page.close();

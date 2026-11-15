@@ -24,9 +24,11 @@ that recursion never reaches the limit. The bytecode stack bounds it at about
 (Firefox about 1,430, WebKit about 1,840). The browser's stack overflows first
 and the worker dies instead of the program catching a `RangeError`.
 
-Plain calls with enough arguments, constructors and array callbacks stay inside
-the interpreter loop or reenter through C++, so they were already bounded and are
-unchanged. Mozilla's own `wasi-pbl` build has the same gap.
+Plain calls with enough arguments and array callbacks stay inside the interpreter
+loop or reenter through C++, so they were already bounded and are unchanged.
+Constructors called with fewer arguments than parameters take the same
+cache-interpreter call as missing-argument calls, so they now stop at about 342
+levels on PBL too. Mozilla's own `wasi-pbl` build has the same gap.
 
 ## Effect
 
@@ -40,7 +42,7 @@ number of levels entered before the caught `RangeError`.
 | Setter | browser stack overflow | 344 | 173 |
 | Bound function | browser stack overflow | 342 | 115 |
 | Missing argument | browser stack overflow | 344 | 50,999 |
-| Plain call, `call`, proxy, `toString` | 5,030, 115, 115, 172 | same | 50,999, 116, 115, 115 |
+| Plain call, `call`, proxy, `toString` | 5,030, 115, 115, 172 | same | 50,999, 116 (now 50,998, [loop dispatch](spidermonkey-loop-dispatch.md)), 115, 115 |
 
 After the change all 48 cases (three browsers, both tiers, eight paths) end in a
 caught `RangeError` and the next evaluation succeeds. A PBL reentry costs about
@@ -49,10 +51,10 @@ fixed build also catches every path at Wasmtime's default 512 KiB stack, where
 main traps. Chromium, the tightest browser, keeps about twice the headroom.
 
 On the native launcher (16 MiB host stack) PBL recursion through these paths now
-stops at about 344 levels instead of about 5,000. That matches the interpreter
-tier's limit for getters and other reentrant paths. Recursion with a missing
-argument is the one case where the tiers differ, because the interpreter keeps
-those calls in its loop.
+stops at about 344 levels instead of about 5,000. The tiers still differ: an
+interpreter getter or setter level holds two units, so it stops at 173 levels,
+while a PBL level holds one and stops at 344. Recursion with a missing argument
+differs most, because the interpreter keeps those calls in its loop.
 
 Each counted call adds two out-of-line counter updates. A pinned, interleaved
 guest workload of missing-argument, getter, setter and bound calls on PBL measured

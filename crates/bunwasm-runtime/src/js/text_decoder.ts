@@ -117,9 +117,10 @@
       const source = validateInput(input);
       const stream = Boolean(dictionary(options).stream);
       const bytes = source === undefined ? empty : inputBytes(source);
-      const id = this.#id ?? this.#create(this.#encoding).id;
+      const id = this.#id ?? (this.#encoding === "utf-8" && !stream ? null : this.#create(this.#encoding).id);
       try {
-        return this.#serialize(native.push(id, bytes, !stream));
+        const text = id === null ? internal.native.utf8Decode(bytes, this.#fatal) : native.push(id, bytes, !stream);
+        return this.#serialize(text);
       } catch (error) {
         this.#release();
         if (error instanceof TypeError) Object.assign(error, { code: "ERR_ENCODING_INVALID_ENCODED_DATA" });

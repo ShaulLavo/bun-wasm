@@ -204,7 +204,58 @@ void internal_promise_poisoning(int mode, int poison) {
   check(rejected.empty() && uncaught.empty(), "owned poisoning has no rejection report");
 }
 
+void module_namespace_cases() {
+  sources["namespace-live"] = "export let count = 0; export function increment() { ++count; }";
+  sources["namespace-reexport"] = "export * as child from 'namespace-live';";
+  sources["namespace-marker"] = "export let __esModule; export function mark() { __esModule = false; }";
+  sources["namespace-empty"] = "";
+  Value required(require("namespace-live"));
+  jobs();
+  Value ns(bsm_promise_result(required.handle));
+  check(bsm_is_module_namespace(ns.handle), "native namespace brand");
+  install("canonicalNamespace", ns.handle);
+  Value marker(script("if (canonicalNamespace.__esModule !== true || !('__esModule' in canonicalNamespace)) throw new Error('inherited marker'); if (Object.hasOwn(canonicalNamespace, '__esModule')) throw new Error('marker became export'); const markerDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(canonicalNamespace), '__esModule'); if (markerDescriptor.value !== true || markerDescriptor.writable || markerDescriptor.enumerable || markerDescriptor.configurable) throw new Error('marker descriptor'); if (Object.getPrototypeOf(Object.getPrototypeOf(canonicalNamespace)) !== null) throw new Error('marker prototype root');"));
+  Value bindings(script("const exportDescriptor = Object.getOwnPropertyDescriptor(canonicalNamespace, 'count'); if (exportDescriptor.value !== 0 || !exportDescriptor.writable || !exportDescriptor.enumerable || exportDescriptor.configurable) throw new Error('export descriptor'); canonicalNamespace.increment(); if (canonicalNamespace.count !== 1 || Object.getOwnPropertyDescriptor(canonicalNamespace, 'count').value !== 1) throw new Error('live binding'); if (Reflect.set(canonicalNamespace, 'count', 9) || Reflect.defineProperty(canonicalNamespace, 'count', {value: 9}) || Reflect.deleteProperty(canonicalNamespace, 'count') || Object.isExtensible(canonicalNamespace)) throw new Error('namespace mutation');"));
+  Value imported(import("namespace-live"));
+  jobs();
+  Value importedNs(bsm_promise_result(imported.handle));
+  check(bsm_same_value(ns.handle, importedNs.handle), "native namespace import identity");
+  bsm_gc();
+  Value prototype(script("const namespacePrototype = Object.getPrototypeOf(canonicalNamespace); const inheritedKey = Symbol('namespace prototype'); for (const key of ['namespacePrototypeValue', inheritedKey]) { Object.defineProperty(namespacePrototype, key, {configurable: true, get() { return this.count; }}); if (canonicalNamespace[key] !== 1 || !(key in canonicalNamespace) || Object.hasOwn(canonicalNamespace, key)) throw new Error('inherited namespace property'); delete namespacePrototype[key]; if (canonicalNamespace[key] !== undefined || key in canonicalNamespace) throw new Error('deleted namespace prototype property'); } if (canonicalNamespace.__esModule !== true || Reflect.set(namespacePrototype, '__esModule', false) || Reflect.deleteProperty(namespacePrototype, '__esModule')) throw new Error('marker prototype mutation');"));
+  Value repeated(require("namespace-live"));
+  jobs();
+  Value repeatedNs(bsm_promise_result(repeated.handle));
+  check(bsm_same_value(ns.handle, repeatedNs.handle), "native namespace require identity");
+  Value reexport(require("namespace-reexport"));
+  jobs();
+  Value reexportNs(bsm_promise_result(reexport.handle));
+  install("namespaceReexport", reexportNs.handle);
+  Value child(script("if (namespaceReexport.child !== canonicalNamespace) throw new Error('namespace reexport identity');"));
+  Value explicitMarker(require("namespace-marker"));
+  jobs();
+  Value explicitNs(bsm_promise_result(explicitMarker.handle));
+  install("explicitNamespace", explicitNs.handle);
+  Value explicitCheck(script("if (explicitNamespace.__esModule !== undefined || !Object.hasOwn(explicitNamespace, '__esModule')) throw new Error('explicit undefined marker'); explicitNamespace.mark(); if (explicitNamespace.__esModule !== false) throw new Error('explicit live marker');"));
+  Value empty(import("namespace-empty"));
+  jobs();
+  Value emptyNs(bsm_promise_result(empty.handle));
+  check(bsm_is_module_namespace(emptyNs.handle), "empty native namespace brand");
+  install("emptyNamespace", emptyNs.handle);
+  Value emptyCheck(script("if (emptyNamespace.__esModule !== true || Object.keys(emptyNamespace).length || Object.getPrototypeOf(emptyNamespace) !== Object.getPrototypeOf(canonicalNamespace)) throw new Error('empty namespace marker');"));
+  const char* negatives[] = {
+      "null", "undefined", "({})", "Object.getPrototypeOf(canonicalNamespace)",
+      "new Proxy(canonicalNamespace, {})",
+      "new Proxy({}, {getPrototypeOf() { throw new Error('must not run'); }})",
+      "Object.preventExtensions(Object.defineProperties(Object.create(Object.getPrototypeOf(canonicalNamespace)), {[Symbol.toStringTag]: {value: 'Module'}, __esModule: {value: true}}))",
+      "(() => { const proxy = Proxy.revocable(canonicalNamespace, {}); proxy.revoke(); return proxy.proxy; })()"};
+  for (const char* source : negatives) {
+    Value negative(script(source));
+    check(!bsm_is_module_namespace(negative.handle), "namespace brand rejects fabricated values and proxies");
+  }
+}
+
 void module_cases() {
+  module_namespace_cases();
   module_promise_poisoning(true, false);
   module_promise_poisoning(true, true);
   module_promise_poisoning(false, false);
@@ -718,6 +769,7 @@ void natives() {
   bsm_gc();
   check(finalized.size() == 1 && finalized[0] == 100, "native finalizer exactly once");
 }
+#include "eval-completion.cpp"
 #include "require-recovery.cpp"
 #if defined(BUNSM_LOOP_CONTROLS)
 #include "loop-dispatch.cpp"
@@ -781,6 +833,12 @@ extern "C" int engine_semantics_main() {
   puts("SpiderMonkey loop controls passed");
   return 0;
 #endif
+  if (mode && !strcmp(mode, "namespace")) {
+    module_namespace_cases();
+    bsm_shutdown();
+    puts("SpiderMonkey canonical namespace controls passed");
+    return 0;
+  }
   if (mode && !strcmp(mode, "fault-terminate")) {
     termination_fault();
     bsm_shutdown();
@@ -812,6 +870,7 @@ extern "C" int engine_semantics_main() {
   {
     Value read(bsm_function("readFrame", 9, 1));
     install("readFrame", read.handle);
+    completion_cases();
     module_cases();
     for (auto promise : rejected) bsm_release(promise);
     rejected.clear();

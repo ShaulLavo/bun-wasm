@@ -1,0 +1,36 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
+
+export type StandaloneSmoke = { smoke: string; env: NodeJS.ProcessEnv; remove: () => void };
+
+// Builds the standalone SpiderMonkey smoke against the ordinary native library in a new scratch
+// directory. The caller removes it with `remove` when its checks finish.
+export function buildStandaloneSmoke(): StandaloneSmoke {
+  const build = process.env.SPIDERMONKEY_BUILD_DIR;
+  const sysroot = process.env.BUN_WASM_SYSROOT;
+  assert(build && isAbsolute(build), "Set SPIDERMONKEY_BUILD_DIR to the ordinary native build");
+  assert(sysroot && isAbsolute(sysroot), "Source env.sh before the SpiderMonkey smoke checks");
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-sm-smoke-"));
+  const remove = () => rmSync(scratch, { recursive: true, force: true });
+  try {
+    symlinkSync(join(build, "libspidermonkey_bunwasm.a"), join(scratch, "libspidermonkey_g2.a"));
+    const env = {
+      ...process.env,
+      SPIDERMONKEY_G2_DIR: scratch,
+      CARGO_TARGET_DIR: join(scratch, "target"),
+      BUN_WASM_PROGRAM_PROFILE: "split",
+      CXXFLAGS_wasm32_wasip1: `--sysroot=${sysroot} -fPIC -fno-exceptions`,
+      CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS: `-C relocation-model=pic -C panic=abort -C link-self-contained=no -L native=${sysroot}/lib/wasm32-wasip1`,
+    };
+    execFileSync("timeout", ["--kill-after=5s", "180s", "cargo", "build", "--locked", "--release", "-j", "2",
+      "--target", "wasm32-wasip1", "-p", "bunwasm-spidermonkey", "--features", "standalone", "--example", "smoke"],
+    { cwd: resolve(import.meta.dir, ".."), env, stdio: "pipe" });
+    return { smoke: join(env.CARGO_TARGET_DIR, "wasm32-wasip1/release/examples/smoke.wasm"), env, remove };
+  } catch (error) {
+    remove();
+    throw error;
+  }
+}

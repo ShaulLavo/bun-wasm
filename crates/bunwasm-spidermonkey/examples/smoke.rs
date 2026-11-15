@@ -17,6 +17,32 @@ fn eval(source: &str) -> (u32, u32) {
     let handle = unsafe { sys::bsm_eval(source.as_ptr().cast(), source.len(), &mut status) };
     (handle, status)
 }
+extern "C" {
+    fn bsm_set_global(name: *const c_char, len: usize, value: u32) -> bool;
+    fn bsm_print(value: u32) -> bool;
+}
+// Differential parser corpus from scripts/spidermonkey-parser-semantics.ts: evaluate the harness,
+// compile every later chunk directly as UTF-8 and hand its result to the harness, then print the
+// harness's report.
+fn parser_corpus(corpus: &str) {
+    let mut chunks = corpus.split("\n//@@utf8\n");
+    let (harness, status) = eval(chunks.next().unwrap_or_default());
+    assert_eq!(status, 0, "parser corpus harness");
+    unsafe { sys::bsm_release(harness) };
+    for source in chunks {
+        let (value, status) = eval(source);
+        assert!(status < 2, "parser corpus case ended without a result");
+        assert!(unsafe { bsm_set_global(b"__value".as_ptr().cast(), 7, value) });
+        unsafe { sys::bsm_release(value) };
+        let (step, step_status) = eval(&format!("__utf8Step({status})"));
+        assert_eq!(step_status, 0, "parser corpus step");
+        unsafe { sys::bsm_release(step) };
+    }
+    let (report, status) = eval("__finish()");
+    assert_eq!(status, 0, "parser corpus report");
+    assert!(unsafe { bsm_print(report) });
+    unsafe { sys::bsm_release(report) };
+}
 fn number(source: &str) -> f64 {
     let (h, status) = eval(source);
     assert_eq!(status, 0, "{source}");
@@ -52,7 +78,12 @@ pub fn main() {
         unsafe { sys::bsm_shutdown() };
         return;
     }
-    if std::env::var("BUN_WASM_STACK_KIB").is_ok() {
+    if let Ok(corpus) = std::env::var("BUNSM_PARSER_CORPUS") {
+        parser_corpus(&corpus);
+        unsafe { sys::bsm_shutdown() };
+        return;
+    }
+    if std::env::var("BUN_WASM_SPIDERMONKEY_STACK_KIB").is_ok() {
         budget_checks(pbl);
         unsafe { sys::bsm_shutdown() };
         return;
@@ -157,19 +188,33 @@ pub fn main() {
             "missing argument",
             "function f(a, b) { d++; return f(1) + 1; } f(1);",
         ),
+        (
+            "call",
+            "function f() { d++; return f.call(this) + 1; } f();",
+        ),
+        (
+            "apply",
+            "function f() { d++; return f.apply(this, arguments) + 1; } f(1);",
+        ),
     ] {
         let depth = number(&format!(
             "var d = 0; try {{ {code} }} catch (e) {{ if (!(e instanceof RangeError)) throw e; }} d"
         ));
-        let counted = pbl || (label != "missing argument" && label != "getter");
+        // Getters, call and apply run as interpreter frames on the interpreter tier.
+        let framed = matches!(label, "getter" | "call" | "apply");
+        let counted = pbl || (label != "missing argument" && !framed);
         assert!(depth > 100.0, "{label} recursion depth {depth}");
         assert!(!counted || depth < 350.0, "{label} recursion depth {depth}");
-        assert!(pbl || label != "getter" || depth > 4096.0);
+        assert!(
+            pbl || !framed || depth > 4096.0,
+            "{label} recursion depth {depth}"
+        );
 
         assert_eq!(number("6 * 7"), 42.0);
     }
     println!("ok counted reentrant recursion");
     println!("ok named getter frame storage and recovery");
+    println!("ok call and apply frame storage and recovery");
     let polls = unsafe { sys::bsm_poll_count(tier) };
     let entries = unsafe { sys::bsm_pbl_entries() };
     assert!(polls >= 30000);
@@ -178,13 +223,26 @@ pub fn main() {
     unsafe { sys::bsm_shutdown() };
 }
 
-/// With a host stack budget in `BUN_WASM_STACK_KIB` (WebKit hosts pass 188 KiB), every reserved
+/// With a budget in `BUN_WASM_SPIDERMONKEY_STACK_KIB` (WebKit hosts pass 188 KiB), every reserved
 /// recursion path ends in a catchable RangeError and evaluation continues. The byte quota, not the
 /// WASI counter, must stop reentrant getters and statement nesting, which shows the reservations
 /// are in effect (docs/bun-patches/spidermonkey-stack-budget.md).
 fn budget_checks(pbl: bool) {
     for (label, code) in [
         ("call", "function f() { d++; return f.call(null); } f();"),
+        (
+            "apply",
+            "function f() { d++; return f.apply(null, [1]); } f();",
+        ),
+        // `call` and `apply` that keep the native route reenter through RunScript.
+        (
+            "apply array-like",
+            "function f() { d++; return f.apply(null, { length: 0 }); } f();",
+        ),
+        (
+            "call of call",
+            "function f() { d++; return f.call.call(f, null); } f();",
+        ),
         (
             "getter",
             "var o = { get x() { d++; return this.x; } }; o.x;",
@@ -229,22 +287,32 @@ fn budget_checks(pbl: bool) {
             depth > 0.0,
             "{label} must end in a caught RangeError, got {depth}"
         );
+        println!("budget {label} depth {depth}");
         assert_eq!(number("6 * 7"), 42.0);
         // Without the quota the counter stops reentrant getters near 175 levels (interp) or 350
         // (PBL). On the interpreter tier, `a.b` getters run as interpreter frames that use no
         // host stack, so the frame limit ends them; a computed-key getter still reenters through
         // RunScript, and its reservation must let the quota stop it
         // (docs/bun-patches/spidermonkey-loop-dispatch.md).
-        let in_loop = !pbl && label == "getter";
+        // `call` and `apply` to a scripted target with a packed list also run in the loop there.
+        // `apply` with an array-like and `call` of `call` keep the native route: without the quota
+        // the counter stops them at 87 to 172 levels, so stopping below 85 shows the RunScript
+        // reservation still governs them on both tiers.
+        let in_loop = !pbl && matches!(label, "getter" | "call" | "apply");
         let reentrant = label == "computed getter" || (pbl && label == "getter");
+        let native_call = matches!(label, "apply array-like" | "call of call");
         let bound = if pbl { 300.0 } else { 140.0 };
         assert!(
             !reentrant || (depth > 20.0 && depth < bound),
             "{label} depth {depth} under the budget"
         );
         assert!(
+            !native_call || (depth > 20.0 && depth < 85.0),
+            "{label} depth {depth} under the budget"
+        );
+        assert!(
             !in_loop || depth > 4096.0,
-            "named getter depth {depth} in the interpreter loop"
+            "{label} depth {depth} in the interpreter loop"
         );
     }
     // The frontend's own bound admits 400 nested `if` blocks; the budget refuses 300.

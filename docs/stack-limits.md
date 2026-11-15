@@ -796,11 +796,18 @@ other hosts are not qualified by these results.
 SpiderMonkey's logical counter (350 units) does not fire before a 512 KiB WebKit worker stack
 runs out on any reentry path, so unbounded getter, `.call` or Ajv-style recursion traps there.
 The engine's own byte check (`JS_SetNativeStackQuota`) counts shadow bytes, so
-`BUN_WASM_STACK_KIB` now sets it, and the recursive paths that hold few shadow bytes per host
-byte reserve more (`docs/bun-patches/spidermonkey-stack-budget.md` lists each site and size).
+`BUN_WASM_SPIDERMONKEY_STACK_KIB` sets it, and the recursive paths that hold few shadow bytes per
+host byte reserve more (`docs/bun-patches/spidermonkey-stack-budget.md` lists each site and size).
 The browser host passes 188 KiB for SpiderMonkey on every WebKit host: desktop Safari, iPhone,
 iPad and the other iOS browsers (`web/src/engine-stack-budget.ts`). V8, desktop Firefox and
 Firefox on Android pass nothing and keep the full 8 MiB quota.
+
+SpiderMonkey has its own variable because its quota and the QuickJS and JSC budget in
+`BUN_WASM_STACK_KIB` are different quantities: the guest's bootstrap alone needs about 100 KiB
+of SpiderMonkey quota, while fixtures run QuickJS children at 32 KiB. With one shared variable,
+`tests/fixtures/require-chain-stack` and `stack-native-call` could not start their SpiderMonkey
+children. The executor writes each engine's budget under its own key
+(`engineStackBudgetKey`).
 
 How it was measured: the guest in a fresh Playwright WebKit page per attempt, so its bootstrap
 runs and the shape meets cold code, on Darwin's 512 KiB worker stack: Playwright WebKit 26.6 on
@@ -894,14 +901,45 @@ Not covered: iPhone Safari and Android Chrome were not measured. PBL getter recu
 overflows the host stack in all three browsers at any setting, because PBL does not hold a
 counter unit per inline frame. That predates this bound.
 
-## SpiderMonkey getters in the interpreter loop
+## SpiderMonkey parser frames
+
+The counter bounds how deep the parser may go, not how much host stack each level costs. Every
+C++ function in a parser recursion cycle is one wasm frame, and a cold WebKit frame costs 0.6 to
+0.9 KiB. Under `BUNWASM_EMBED` the parser's statement and expression cycles are merged into
+fewer functions ([patch record](bun-patches/spidermonkey-frontend-frames.md)): a braced `if`
+level costs two frames instead of six, a block one instead of three, a parenthesised expression
+four instead of six or eight. Counter units per level are unchanged, so the bound above accepts
+and refuses at the same depths.
+
+`scripts/spidermonkey-parser.test.ts` checks that the merged functions stay gone in all four
+parser instantiations, in the smoke and the engine side, and that a differential corpus gives
+main's values, errors, positions and compile-limit boundaries.
+
+In the real guest on the M1 Mac (Playwright WebKit 26.6, 512 KiB worker stacks), Ajv's
+`validate16` from Angular's schema validation, measured November 14, 2026:
+
+| Tier | Before | After |
+| --- | --- | --- |
+| PBL, compile at the top | trapped in 3 of 3 | compiled 6 of 6, with and without calling the validator |
+| PBL, beneath 10 `.call` levels | not measured | compiled 3 of 3, both ways |
+| Interpreter, beneath 40 `.call` levels | not measured | compiled 3 of 3, both ways |
+| Observed deepest compile (of the wrapper-only ceiling) | PBL none, interpreter 10 of 80 (earlier Angular gate run) | PBL 16 of 29, interpreter 49 of 80 |
+
+After the merge the bytecode emitter is the deepest pass for braced statements compiled in full,
+at about 172 levels of the Ajv shape on the Mac. Unit 2 of the parser design re-places the small
+stack guard's reservations on the surviving frames and adds one for the emitter.
+
+## SpiderMonkey getters, call and apply in the interpreter loop
 
 On SpiderMonkey's C++ interpreter tier, a scripted getter read by `a.b` or `super.b` used to
 call back into native code for every level, holding two counter units and native stack
 until it returned. It now runs as an ordinary interpreter frame that returns to the property read
-([patch record](bun-patches/spidermonkey-loop-dispatch.md)). Such frames hold no counter unit
-and use no host stack, so getter recursion ends at the interpreter's 50,000-frame limit with
-the same catchable `RangeError`.
+([patch record](bun-patches/spidermonkey-loop-dispatch.md)). `f.call(...)` and `f.apply(...)`
+with a scripted target held three units per level; they now run the target as an
+interpreter frame too, for `call` with any arguments and for `apply` with no list, `null`,
+`undefined`, a packed array or an unmodified `arguments` object. Such frames hold no counter
+unit and use no host stack, so this recursion ends at the interpreter's 50,000-frame limit
+with the same catchable `RangeError`.
 
 Measured with the standalone smoke probe in fresh workers of headless Chromium 156,
 Firefox 157 and WebKit 27.2 (WebKit under `ulimit -s 512`), interpreter tier:
@@ -910,11 +948,16 @@ Firefox 157 and WebKit 27.2 (WebKit under `ulimit -s 512`), interpreter tier:
 | --- | --- | --- |
 | Getter recursion | trap at 78 levels (WebKit 512 KiB) | caught at 50,997 in all three |
 | Ajv's getter walk (`names` through `super.names`) | trap at 70 (WebKit 512 KiB) | caught at 16,999 in all three |
+| `f.call(null, n - 1)` recursion | trap at 550, 1,042 and 95 | caught at 50,998 in all three |
+| `f.apply(null, [n - 1])` recursion | trap at 550, 1,059 and 95 | caught at 50,998 in all three |
+| `apply` with `arguments` (two frames per level) | trap at 550, 1,059 and 93 | caught at 25,499 in all three |
 
 Computed-key getters (`a[k]`), setters, `Reflect.get`, getters on proxies or in another realm,
 and every PBL getter keep the native route, its counter and the `RunScript` quota reservation
-("SpiderMonkey on small stacks" above). Those shapes, `call`, `apply`,
-proxy traps and `valueOf` coercion still recurse natively.
+("SpiderMonkey on small stacks" above). So do `call` and `apply` on PBL, to bound, proxy or
+native targets, `apply` with array-likes, holey arrays or a modified `arguments` object,
+spread calls and `Reflect.apply`. Those shapes, proxy traps and `valueOf` coercion still
+recurse natively.
 
 ## Historical nested require measurements
 

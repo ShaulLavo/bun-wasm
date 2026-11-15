@@ -1,0 +1,1300 @@
+braced then and else | ascii | utf8 script value "then,else"
+braced then and else | ascii | utf8 lazy value undefined
+braced then and else | latin1 | utf8 script value "then,else"
+braced then and else | latin1 | utf8 lazy value undefined
+braced then and else | twobyte | utf8 script value "then,else"
+braced then and else | twobyte | utf8 lazy value undefined
+dangling else | ascii | utf8 script value "dangling"
+dangling else | ascii | utf8 lazy value undefined
+dangling else | latin1 | utf8 script value "dangling"
+dangling else | latin1 | utf8 lazy value undefined
+dangling else | twobyte | utf8 script value "dangling"
+dangling else | twobyte | utf8 lazy value undefined
+else if chain | ascii | utf8 script value "c"
+else if chain | ascii | utf8 lazy value undefined
+else if chain | latin1 | utf8 script value "c"
+else if chain | latin1 | utf8 lazy value undefined
+else if chain | twobyte | utf8 script value "c"
+else if chain | twobyte | utf8 lazy value undefined
+unbraced bodies | ascii | utf8 script value 12
+unbraced bodies | ascii | utf8 lazy value undefined
+unbraced bodies | latin1 | utf8 script value 12
+unbraced bodies | latin1 | utf8 lazy value undefined
+unbraced bodies | twobyte | utf8 script value 12
+unbraced bodies | twobyte | utf8 lazy value undefined
+empty and nested blocks | ascii | utf8 script value 5
+empty and nested blocks | ascii | utf8 lazy value undefined
+empty and nested blocks | latin1 | utf8 script value 5
+empty and nested blocks | latin1 | utf8 lazy value undefined
+empty and nested blocks | twobyte | utf8 script value 5
+empty and nested blocks | twobyte | utf8 lazy value undefined
+completion value of if | ascii | utf8 script value 1
+completion value of if | ascii | utf8 lazy value undefined
+completion value of if | latin1 | utf8 script value 1
+completion value of if | latin1 | utf8 lazy value undefined
+completion value of if | twobyte | utf8 script value 1
+completion value of if | twobyte | utf8 lazy value undefined
+completion value of block | ascii | utf8 script value 3
+completion value of block | ascii | utf8 lazy value undefined
+completion value of block | latin1 | utf8 script value 3
+completion value of block | latin1 | utf8 lazy value undefined
+completion value of block | twobyte | utf8 script value 3
+completion value of block | twobyte | utf8 lazy value undefined
+comment and regexp after block | ascii | utf8 script value true
+comment and regexp after block | ascii | utf8 lazy value undefined
+comment and regexp after block | latin1 | utf8 script value true
+comment and regexp after block | latin1 | utf8 lazy value undefined
+comment and regexp after block | twobyte | utf8 script value true
+comment and regexp after block | twobyte | utf8 lazy value undefined
+regexp after if block on next line | ascii | utf8 script value "b"
+regexp after if block on next line | ascii | utf8 lazy value undefined
+regexp after if block on next line | latin1 | utf8 script value "b"
+regexp after if block on next line | latin1 | utf8 lazy value undefined
+regexp after if block on next line | twobyte | utf8 script value "b"
+regexp after if block on next line | twobyte | utf8 lazy value undefined
+line comment then regexp | ascii | utf8 script value "a+"
+line comment then regexp | ascii | utf8 lazy value undefined
+line comment then regexp | latin1 | utf8 script value "a+"
+line comment then regexp | latin1 | utf8 lazy value undefined
+line comment then regexp | twobyte | utf8 script value "a+"
+line comment then regexp | twobyte | utf8 lazy value undefined
+division after parenthesis | ascii | utf8 script value 2
+division after parenthesis | ascii | utf8 lazy value undefined
+division after parenthesis | latin1 | utf8 script value 2
+division after parenthesis | latin1 | utf8 lazy value undefined
+division after parenthesis | twobyte | utf8 script value 2
+division after parenthesis | twobyte | utf8 lazy value undefined
+asi before array literal | ascii | utf8 script value 2
+asi before array literal | ascii | utf8 lazy value undefined
+asi before array literal | latin1 | utf8 script value 2
+asi before array literal | latin1 | utf8 lazy value undefined
+asi before array literal | twobyte | utf8 script value 2
+asi before array literal | twobyte | utf8 lazy value undefined
+asi increment | ascii | utf8 script throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js:4:5 stack @spidermonkey-g2.js:4:5
+asi increment | ascii | utf8 lazy throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js:5:5 stack @spidermonkey-g2.js:5:5
+asi increment | latin1 | utf8 script throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js:4:5 stack @spidermonkey-g2.js:4:5
+asi increment | latin1 | utf8 lazy throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js:5:5 stack @spidermonkey-g2.js:5:5
+asi increment | twobyte | utf8 script throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js:4:5 stack @spidermonkey-g2.js:4:5
+asi increment | twobyte | utf8 lazy throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js:5:5 stack @spidermonkey-g2.js:5:5
+return followed by newline | ascii | utf8 script throw SyntaxError: return not in function at spidermonkey-g2.js:1:1 stack 
+return followed by newline | ascii | utf8 lazy value undefined
+return followed by newline | latin1 | utf8 script throw SyntaxError: return not in function at spidermonkey-g2.js:1:6 stack 
+return followed by newline | latin1 | utf8 lazy value undefined
+return followed by newline | twobyte | utf8 script throw SyntaxError: return not in function at spidermonkey-g2.js:1:6 stack 
+return followed by newline | twobyte | utf8 lazy value undefined
+return in nested blocks | ascii | utf8 script throw SyntaxError: return not in function at spidermonkey-g2.js:1:24 stack 
+return in nested blocks | ascii | utf8 lazy value "inner"
+return in nested blocks | latin1 | utf8 script throw SyntaxError: return not in function at spidermonkey-g2.js:1:29 stack 
+return in nested blocks | latin1 | utf8 lazy value "inner"
+return in nested blocks | twobyte | utf8 script throw SyntaxError: return not in function at spidermonkey-g2.js:1:29 stack 
+return in nested blocks | twobyte | utf8 lazy value "inner"
+labelled block and break | ascii | utf8 script value "1,2"
+labelled block and break | ascii | utf8 lazy value undefined
+labelled block and break | latin1 | utf8 script value "1,2"
+labelled block and break | latin1 | utf8 lazy value undefined
+labelled block and break | twobyte | utf8 script value "1,2"
+labelled block and break | twobyte | utf8 lazy value undefined
+labelled loops | ascii | utf8 script value "0,2"
+labelled loops | ascii | utf8 lazy value undefined
+labelled loops | latin1 | utf8 script value "0,2"
+labelled loops | latin1 | utf8 lazy value undefined
+labelled loops | twobyte | utf8 script value "0,2"
+labelled loops | twobyte | utf8 lazy value undefined
+label on if block | ascii | utf8 script value "start"
+label on if block | ascii | utf8 lazy value undefined
+label on if block | latin1 | utf8 script value "start"
+label on if block | latin1 | utf8 lazy value undefined
+label on if block | twobyte | utf8 script value "start"
+label on if block | twobyte | utf8 lazy value undefined
+break outside loop | ascii | utf8 script throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:1:15 stack 
+break outside loop | ascii | utf8 lazy throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:2:15 stack 
+break outside loop | latin1 | utf8 script throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:1:20 stack 
+break outside loop | latin1 | utf8 lazy throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:2:20 stack 
+break outside loop | twobyte | utf8 script throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:1:20 stack 
+break outside loop | twobyte | utf8 lazy throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:2:20 stack 
+undefined label | ascii | utf8 script throw SyntaxError: label not found at spidermonkey-g2.js:1:11 stack 
+undefined label | ascii | utf8 lazy throw SyntaxError: label not found at spidermonkey-g2.js:2:11 stack 
+undefined label | latin1 | utf8 script throw SyntaxError: label not found at spidermonkey-g2.js:1:16 stack 
+undefined label | latin1 | utf8 lazy throw SyntaxError: label not found at spidermonkey-g2.js:2:16 stack 
+undefined label | twobyte | utf8 script throw SyntaxError: label not found at spidermonkey-g2.js:1:16 stack 
+undefined label | twobyte | utf8 lazy throw SyntaxError: label not found at spidermonkey-g2.js:2:16 stack 
+duplicate label | ascii | utf8 script throw SyntaxError: duplicate label at spidermonkey-g2.js:1:6 stack 
+duplicate label | ascii | utf8 lazy throw SyntaxError: duplicate label at spidermonkey-g2.js:2:6 stack 
+duplicate label | latin1 | utf8 script throw SyntaxError: duplicate label at spidermonkey-g2.js:1:11 stack 
+duplicate label | latin1 | utf8 lazy throw SyntaxError: duplicate label at spidermonkey-g2.js:2:11 stack 
+duplicate label | twobyte | utf8 script throw SyntaxError: duplicate label at spidermonkey-g2.js:1:11 stack 
+duplicate label | twobyte | utf8 lazy throw SyntaxError: duplicate label at spidermonkey-g2.js:2:11 stack 
+legal block shadowing | ascii | utf8 script value "number"
+legal block shadowing | ascii | utf8 lazy value undefined
+legal block shadowing | latin1 | utf8 script value "number"
+legal block shadowing | latin1 | utf8 lazy value undefined
+legal block shadowing | twobyte | utf8 script value "number"
+legal block shadowing | twobyte | utf8 lazy value undefined
+duplicate let in nested block | ascii | utf8 script throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:4:9 stack 
+duplicate let in nested block | ascii | utf8 lazy throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:5:9 stack 
+duplicate let in nested block | latin1 | utf8 script throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:4:9 stack 
+duplicate let in nested block | latin1 | utf8 lazy throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:5:9 stack 
+duplicate let in nested block | twobyte | utf8 script throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:4:9 stack 
+duplicate let in nested block | twobyte | utf8 lazy throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:5:9 stack 
+const without initializer | ascii | utf8 script throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:1:21 stack 
+const without initializer | ascii | utf8 lazy throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:2:21 stack 
+const without initializer | latin1 | utf8 script throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:1:26 stack 
+const without initializer | latin1 | utf8 lazy throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:2:26 stack 
+const without initializer | twobyte | utf8 script throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:1:26 stack 
+const without initializer | twobyte | utf8 lazy throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:2:26 stack 
+let then var conflict | ascii | utf8 script throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:1:21 stack 
+let then var conflict | ascii | utf8 lazy throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:2:21 stack 
+let then var conflict | latin1 | utf8 script throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:1:26 stack 
+let then var conflict | latin1 | utf8 lazy throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:2:26 stack 
+let then var conflict | twobyte | utf8 script throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:1:26 stack 
+let then var conflict | twobyte | utf8 lazy throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:2:26 stack 
+function and let conflict in block | ascii | utf8 script throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:1:24 stack 
+function and let conflict in block | ascii | utf8 lazy throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:2:24 stack 
+function and let conflict in block | latin1 | utf8 script throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:1:29 stack 
+function and let conflict in block | latin1 | utf8 lazy throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:2:29 stack 
+function and let conflict in block | twobyte | utf8 script throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:1:29 stack 
+function and let conflict in block | twobyte | utf8 lazy throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:2:29 stack 
+duplicate block functions in sloppy code | ascii | utf8 script value 2
+duplicate block functions in sloppy code | ascii | utf8 lazy value undefined
+duplicate block functions in sloppy code | latin1 | utf8 script value 2
+duplicate block functions in sloppy code | latin1 | utf8 lazy value undefined
+duplicate block functions in sloppy code | twobyte | utf8 script value 2
+duplicate block functions in sloppy code | twobyte | utf8 lazy value undefined
+block use strict is not a directive | ascii | utf8 script value 8
+block use strict is not a directive | ascii | utf8 lazy value undefined
+block use strict is not a directive | latin1 | utf8 script value 8
+block use strict is not a directive | latin1 | utf8 lazy value undefined
+block use strict is not a directive | twobyte | utf8 script value 8
+block use strict is not a directive | twobyte | utf8 lazy value undefined
+if block use strict is not a directive | ascii | utf8 script value 9
+if block use strict is not a directive | ascii | utf8 lazy value undefined
+if block use strict is not a directive | latin1 | utf8 script value 9
+if block use strict is not a directive | latin1 | utf8 lazy value undefined
+if block use strict is not a directive | twobyte | utf8 script value 9
+if block use strict is not a directive | twobyte | utf8 lazy value undefined
+parenthesized use strict is not a directive | ascii | utf8 script value 7
+parenthesized use strict is not a directive | ascii | utf8 lazy value undefined
+parenthesized use strict is not a directive | latin1 | utf8 script value 7
+parenthesized use strict is not a directive | latin1 | utf8 lazy value undefined
+parenthesized use strict is not a directive | twobyte | utf8 script value 7
+parenthesized use strict is not a directive | twobyte | utf8 lazy value undefined
+script directive | ascii | utf8 script throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:2:1 stack 
+script directive | ascii | utf8 lazy throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:3:1 stack 
+script directive | latin1 | utf8 script throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:2:1 stack 
+script directive | latin1 | utf8 lazy throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:3:1 stack 
+script directive | twobyte | utf8 script throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:2:1 stack 
+script directive | twobyte | utf8 lazy throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:3:1 stack 
+directive after another string | ascii | utf8 script throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:3:26 stack 
+directive after another string | ascii | utf8 lazy throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:4:26 stack 
+directive after another string | latin1 | utf8 script throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:3:26 stack 
+directive after another string | latin1 | utf8 lazy throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:4:26 stack 
+directive after another string | twobyte | utf8 script throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:3:26 stack 
+directive after another string | twobyte | utf8 lazy throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:4:26 stack 
+function directive | ascii | utf8 script value true
+function directive | ascii | utf8 lazy value undefined
+function directive | latin1 | utf8 script value true
+function directive | latin1 | utf8 lazy value undefined
+function directive | twobyte | utf8 script value true
+function directive | twobyte | utf8 lazy value undefined
+function directive rejects duplicate parameters | ascii | utf8 script throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:1:15 stack 
+function directive rejects duplicate parameters | ascii | utf8 lazy throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:2:15 stack 
+function directive rejects duplicate parameters | latin1 | utf8 script throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:1:20 stack 
+function directive rejects duplicate parameters | latin1 | utf8 lazy throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:2:20 stack 
+function directive rejects duplicate parameters | twobyte | utf8 script throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:1:20 stack 
+function directive rejects duplicate parameters | twobyte | utf8 lazy throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:2:20 stack 
+sloppy duplicate parameters | ascii | utf8 script value 2
+sloppy duplicate parameters | ascii | utf8 lazy value undefined
+sloppy duplicate parameters | latin1 | utf8 script value 2
+sloppy duplicate parameters | latin1 | utf8 lazy value undefined
+sloppy duplicate parameters | twobyte | utf8 script value 2
+sloppy duplicate parameters | twobyte | utf8 lazy value undefined
+function directive rejects octal | ascii | utf8 script throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:1:39 stack 
+function directive rejects octal | ascii | utf8 lazy throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:2:39 stack 
+function directive rejects octal | latin1 | utf8 script throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:1:44 stack 
+function directive rejects octal | latin1 | utf8 lazy throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:2:44 stack 
+function directive rejects octal | twobyte | utf8 script throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:1:44 stack 
+function directive rejects octal | twobyte | utf8 lazy throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:2:44 stack 
+escaped directive | ascii | utf8 script value true
+escaped directive | ascii | utf8 lazy value undefined
+escaped directive | latin1 | utf8 script value true
+escaped directive | latin1 | utf8 lazy value undefined
+escaped directive | twobyte | utf8 script value true
+escaped directive | twobyte | utf8 lazy value undefined
+annex b if function | ascii | utf8 script value "function annex"
+annex b if function | ascii | utf8 lazy value undefined
+annex b if function | latin1 | utf8 script value "function annex"
+annex b if function | latin1 | utf8 lazy value undefined
+annex b if function | twobyte | utf8 script value "function annex"
+annex b if function | twobyte | utf8 lazy value undefined
+annex b else function | ascii | utf8 script value 2
+annex b else function | ascii | utf8 lazy value undefined
+annex b else function | latin1 | utf8 script value 2
+annex b else function | latin1 | utf8 lazy value undefined
+annex b else function | twobyte | utf8 script value 2
+annex b else function | twobyte | utf8 lazy value undefined
+annex b with else | ascii | utf8 script value "undefined b"
+annex b with else | ascii | utf8 lazy value undefined
+annex b with else | latin1 | utf8 script value "undefined b"
+annex b with else | latin1 | utf8 lazy value undefined
+annex b with else | twobyte | utf8 script value "undefined b"
+annex b with else | twobyte | utf8 lazy value undefined
+strict if function | ascii | utf8 script throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:40 stack 
+strict if function | ascii | utf8 lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:40 stack 
+strict if function | latin1 | utf8 script throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:45 stack 
+strict if function | latin1 | utf8 lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:45 stack 
+strict if function | twobyte | utf8 script throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:45 stack 
+strict if function | twobyte | utf8 lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:45 stack 
+if generator declaration | ascii | utf8 script throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:1:11 stack 
+if generator declaration | ascii | utf8 lazy throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:2:11 stack 
+if generator declaration | latin1 | utf8 script throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if generator declaration | latin1 | utf8 lazy throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if generator declaration | twobyte | utf8 script throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if generator declaration | twobyte | utf8 lazy throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if async function declaration | ascii | utf8 script throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:1:11 stack 
+if async function declaration | ascii | utf8 lazy throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:2:11 stack 
+if async function declaration | latin1 | utf8 script throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if async function declaration | latin1 | utf8 lazy throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if async function declaration | twobyte | utf8 script throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if async function declaration | twobyte | utf8 lazy throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if class declaration | ascii | utf8 script throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:1:11 stack 
+if class declaration | ascii | utf8 lazy throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:2:11 stack 
+if class declaration | latin1 | utf8 script throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if class declaration | latin1 | utf8 lazy throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if class declaration | twobyte | utf8 script throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if class declaration | twobyte | utf8 lazy throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if lexical declaration | ascii | utf8 script throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:1:11 stack 
+if lexical declaration | ascii | utf8 lazy throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:2:11 stack 
+if lexical declaration | latin1 | utf8 script throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if lexical declaration | latin1 | utf8 lazy throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if lexical declaration | twobyte | utf8 script throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if lexical declaration | twobyte | utf8 lazy throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+while function declaration | ascii | utf8 script throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:15 stack 
+while function declaration | ascii | utf8 lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:15 stack 
+while function declaration | latin1 | utf8 script throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:20 stack 
+while function declaration | latin1 | utf8 lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:20 stack 
+while function declaration | twobyte | utf8 script throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:20 stack 
+while function declaration | twobyte | utf8 lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:20 stack 
+labelled function in sloppy code | ascii | utf8 script value "lab"
+labelled function in sloppy code | ascii | utf8 lazy value undefined
+labelled function in sloppy code | latin1 | utf8 script value "lab"
+labelled function in sloppy code | latin1 | utf8 lazy value undefined
+labelled function in sloppy code | twobyte | utf8 script value "lab"
+labelled function in sloppy code | twobyte | utf8 lazy value undefined
+labelled function in strict code | ascii | utf8 script throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:1:35 stack 
+labelled function in strict code | ascii | utf8 lazy throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:2:35 stack 
+labelled function in strict code | latin1 | utf8 script throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:1:40 stack 
+labelled function in strict code | latin1 | utf8 lazy throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:2:40 stack 
+labelled function in strict code | twobyte | utf8 script throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:1:40 stack 
+labelled function in strict code | twobyte | utf8 lazy throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:2:40 stack 
+block function in strict code | ascii | utf8 script value "undefined"
+block function in strict code | ascii | utf8 lazy value undefined
+block function in strict code | latin1 | utf8 script value "undefined"
+block function in strict code | latin1 | utf8 lazy value undefined
+block function in strict code | twobyte | utf8 script value "undefined"
+block function in strict code | twobyte | utf8 lazy value undefined
+parenthesized assignment target | ascii | utf8 script value 5
+parenthesized assignment target | ascii | utf8 lazy value undefined
+parenthesized assignment target | latin1 | utf8 script value 5
+parenthesized assignment target | latin1 | utf8 lazy value undefined
+parenthesized assignment target | twobyte | utf8 script value 5
+parenthesized assignment target | twobyte | utf8 lazy value undefined
+parenthesized object pattern | ascii | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized object pattern | ascii | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized object pattern | latin1 | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized object pattern | latin1 | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized object pattern | twobyte | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized object pattern | twobyte | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized array pattern | ascii | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized array pattern | ascii | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized array pattern | latin1 | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized array pattern | latin1 | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized array pattern | twobyte | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized array pattern | twobyte | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+object literal with initializer | ascii | utf8 script throw SyntaxError: missing : after property id at spidermonkey-g2.js:1:6 stack 
+object literal with initializer | ascii | utf8 lazy throw SyntaxError: missing : after property id at spidermonkey-g2.js:2:6 stack 
+object literal with initializer | latin1 | utf8 script throw SyntaxError: missing : after property id at spidermonkey-g2.js:1:11 stack 
+object literal with initializer | latin1 | utf8 lazy throw SyntaxError: missing : after property id at spidermonkey-g2.js:2:11 stack 
+object literal with initializer | twobyte | utf8 script throw SyntaxError: missing : after property id at spidermonkey-g2.js:1:11 stack 
+object literal with initializer | twobyte | utf8 lazy throw SyntaxError: missing : after property id at spidermonkey-g2.js:2:11 stack 
+nested parenthesized pattern | ascii | utf8 script throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:2:2 stack 
+nested parenthesized pattern | ascii | utf8 lazy throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:3:2 stack 
+nested parenthesized pattern | latin1 | utf8 script throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:2:2 stack 
+nested parenthesized pattern | latin1 | utf8 lazy throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:3:2 stack 
+nested parenthesized pattern | twobyte | utf8 script throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:2:2 stack 
+nested parenthesized pattern | twobyte | utf8 lazy throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:3:2 stack 
+parenthesized element target | ascii | utf8 script value 5
+parenthesized element target | ascii | utf8 lazy value undefined
+parenthesized element target | latin1 | utf8 script value 5
+parenthesized element target | latin1 | utf8 lazy value undefined
+parenthesized element target | twobyte | utf8 script value 5
+parenthesized element target | twobyte | utf8 lazy value undefined
+destructuring assignment | ascii | utf8 script value 3
+destructuring assignment | ascii | utf8 lazy value undefined
+destructuring assignment | latin1 | utf8 script value 3
+destructuring assignment | latin1 | utf8 lazy value undefined
+destructuring assignment | twobyte | utf8 script value 3
+destructuring assignment | twobyte | utf8 lazy value undefined
+comma assignment target | ascii | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+comma assignment target | ascii | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+comma assignment target | latin1 | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+comma assignment target | latin1 | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+comma assignment target | twobyte | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+comma assignment target | twobyte | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+literal assignment target | ascii | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:1:1 stack 
+literal assignment target | ascii | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+literal assignment target | latin1 | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:1:6 stack 
+literal assignment target | latin1 | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:6 stack 
+literal assignment target | twobyte | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:1:6 stack 
+literal assignment target | twobyte | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:6 stack 
+parenthesized arrow parameters | ascii | utf8 script value 8
+parenthesized arrow parameters | ascii | utf8 lazy value undefined
+parenthesized arrow parameters | latin1 | utf8 script value 8
+parenthesized arrow parameters | latin1 | utf8 lazy value undefined
+parenthesized arrow parameters | twobyte | utf8 script value 8
+parenthesized arrow parameters | twobyte | utf8 lazy value undefined
+invalid arrow parameters | ascii | utf8 script throw SyntaxError: missing formal parameter at spidermonkey-g2.js:1:13 stack 
+invalid arrow parameters | ascii | utf8 lazy throw SyntaxError: missing formal parameter at spidermonkey-g2.js:2:13 stack 
+invalid arrow parameters | latin1 | utf8 script throw SyntaxError: missing formal parameter at spidermonkey-g2.js:1:18 stack 
+invalid arrow parameters | latin1 | utf8 lazy throw SyntaxError: missing formal parameter at spidermonkey-g2.js:2:18 stack 
+invalid arrow parameters | twobyte | utf8 script throw SyntaxError: missing formal parameter at spidermonkey-g2.js:1:18 stack 
+invalid arrow parameters | twobyte | utf8 lazy throw SyntaxError: missing formal parameter at spidermonkey-g2.js:2:18 stack 
+rest in parenthesized expression | ascii | utf8 script throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:1:10 stack 
+rest in parenthesized expression | ascii | utf8 lazy throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:2:10 stack 
+rest in parenthesized expression | latin1 | utf8 script throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:1:15 stack 
+rest in parenthesized expression | latin1 | utf8 lazy throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:2:15 stack 
+rest in parenthesized expression | twobyte | utf8 script throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:1:15 stack 
+rest in parenthesized expression | twobyte | utf8 lazy throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:2:15 stack 
+optional chain assignment | ascii | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+optional chain assignment | ascii | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+optional chain assignment | latin1 | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+optional chain assignment | latin1 | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+optional chain assignment | twobyte | utf8 script throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+optional chain assignment | twobyte | utf8 lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+new with optional chain | ascii | utf8 script throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:1:1 stack 
+new with optional chain | ascii | utf8 lazy throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:2:1 stack 
+new with optional chain | latin1 | utf8 script throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:1:6 stack 
+new with optional chain | latin1 | utf8 lazy throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:2:6 stack 
+new with optional chain | twobyte | utf8 script throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:1:6 stack 
+new with optional chain | twobyte | utf8 lazy throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:2:6 stack 
+prefix increment of parenthesis | ascii | utf8 script value 2
+prefix increment of parenthesis | ascii | utf8 lazy value undefined
+prefix increment of parenthesis | latin1 | utf8 script value 2
+prefix increment of parenthesis | latin1 | utf8 lazy value undefined
+prefix increment of parenthesis | twobyte | utf8 script value 2
+prefix increment of parenthesis | twobyte | utf8 lazy value undefined
+prefix increment of object | ascii | utf8 script throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:1:3 stack 
+prefix increment of object | ascii | utf8 lazy throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:2:3 stack 
+prefix increment of object | latin1 | utf8 script throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:1:8 stack 
+prefix increment of object | latin1 | utf8 lazy throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:2:8 stack 
+prefix increment of object | twobyte | utf8 script throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:1:8 stack 
+prefix increment of object | twobyte | utf8 lazy throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:2:8 stack 
+nested parentheses and brackets | ascii | utf8 script value 3
+nested parentheses and brackets | ascii | utf8 lazy value undefined
+nested parentheses and brackets | latin1 | utf8 script value 3
+nested parentheses and brackets | latin1 | utf8 lazy value undefined
+nested parentheses and brackets | twobyte | utf8 script value 3
+nested parentheses and brackets | twobyte | utf8 lazy value undefined
+template and call nesting | ascii | utf8 script value "11,2"
+template and call nesting | ascii | utf8 lazy value undefined
+template and call nesting | latin1 | utf8 script value "11,2"
+template and call nesting | latin1 | utf8 lazy value undefined
+template and call nesting | twobyte | utf8 script value "11,2"
+template and call nesting | twobyte | utf8 lazy value undefined
+ternary and logical chain | ascii | utf8 script value 5
+ternary and logical chain | ascii | utf8 lazy value undefined
+ternary and logical chain | latin1 | utf8 script value 5
+ternary and logical chain | latin1 | utf8 lazy value undefined
+ternary and logical chain | twobyte | utf8 script value 5
+ternary and logical chain | twobyte | utf8 lazy value undefined
+unexpected token in deep expression | ascii | utf8 script throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:1:35 stack 
+unexpected token in deep expression | ascii | utf8 lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:2:35 stack 
+unexpected token in deep expression | latin1 | utf8 script throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:1:40 stack 
+unexpected token in deep expression | latin1 | utf8 lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:2:40 stack 
+unexpected token in deep expression | twobyte | utf8 script throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:1:40 stack 
+unexpected token in deep expression | twobyte | utf8 lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:2:40 stack 
+missing closing brace | ascii | utf8 script throw SyntaxError: missing } in compound statement at spidermonkey-g2.js:5:1 stack 
+missing closing brace | ascii | utf8 lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:7:2 stack 
+missing closing brace | latin1 | utf8 script throw SyntaxError: missing } in compound statement at spidermonkey-g2.js:5:1 stack 
+missing closing brace | latin1 | utf8 lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:7:2 stack 
+missing closing brace | twobyte | utf8 script throw SyntaxError: missing } in compound statement at spidermonkey-g2.js:5:1 stack 
+missing closing brace | twobyte | utf8 lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:7:2 stack 
+missing closing parenthesis | ascii | utf8 script throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:1:16 stack 
+missing closing parenthesis | ascii | utf8 lazy throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:2:16 stack 
+missing closing parenthesis | latin1 | utf8 script throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:1:21 stack 
+missing closing parenthesis | latin1 | utf8 lazy throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:2:21 stack 
+missing closing parenthesis | twobyte | utf8 script throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:1:21 stack 
+missing closing parenthesis | twobyte | utf8 lazy throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:2:21 stack 
+early error after identifiers | ascii | utf8 script throw SyntaxError: expected expression, got end of script at spidermonkey-g2.js:2:10 stack 
+early error after identifiers | ascii | utf8 lazy throw SyntaxError: expected expression, got '}' at spidermonkey-g2.js:4:1 stack 
+early error after identifiers | latin1 | utf8 script throw SyntaxError: expected expression, got end of script at spidermonkey-g2.js:2:10 stack 
+early error after identifiers | latin1 | utf8 lazy throw SyntaxError: expected expression, got '}' at spidermonkey-g2.js:4:1 stack 
+early error after identifiers | twobyte | utf8 script throw SyntaxError: expected expression, got end of script at spidermonkey-g2.js:2:10 stack 
+early error after identifiers | twobyte | utf8 lazy throw SyntaxError: expected expression, got '}' at spidermonkey-g2.js:4:1 stack 
+non-Latin-1 identifiers | ascii | utf8 script value 6
+non-Latin-1 identifiers | ascii | utf8 lazy value undefined
+non-Latin-1 identifiers | latin1 | utf8 script value 6
+non-Latin-1 identifiers | latin1 | utf8 lazy value undefined
+non-Latin-1 identifiers | twobyte | utf8 script value 6
+non-Latin-1 identifiers | twobyte | utf8 lazy value undefined
+string with non-Latin-1 text | ascii | utf8 script value "☃13"
+string with non-Latin-1 text | ascii | utf8 lazy value undefined
+string with non-Latin-1 text | latin1 | utf8 script value "☃13"
+string with non-Latin-1 text | latin1 | utf8 lazy value undefined
+string with non-Latin-1 text | twobyte | utf8 script value "☃13"
+string with non-Latin-1 text | twobyte | utf8 lazy value undefined
+throw from nested blocks | ascii | utf8 script throw Error: innermost at spidermonkey-g2.js:5:15 stack deepThrow@spidermonkey-g2.js:5:15 | @spidermonkey-g2.js:10:1
+throw from nested blocks | ascii | utf8 lazy throw Error: innermost at spidermonkey-g2.js:6:15 stack deepThrow@spidermonkey-g2.js:6:15 | @spidermonkey-g2.js:11:1
+throw from nested blocks | latin1 | utf8 script throw Error: innermost at spidermonkey-g2.js:5:15 stack deepThrow@spidermonkey-g2.js:5:15 | @spidermonkey-g2.js:10:1
+throw from nested blocks | latin1 | utf8 lazy throw Error: innermost at spidermonkey-g2.js:6:15 stack deepThrow@spidermonkey-g2.js:6:15 | @spidermonkey-g2.js:11:1
+throw from nested blocks | twobyte | utf8 script throw Error: innermost at spidermonkey-g2.js:5:15 stack deepThrow@spidermonkey-g2.js:5:15 | @spidermonkey-g2.js:10:1
+throw from nested blocks | twobyte | utf8 lazy throw Error: innermost at spidermonkey-g2.js:6:15 stack deepThrow@spidermonkey-g2.js:6:15 | @spidermonkey-g2.js:11:1
+runtime error position | ascii | utf8 script throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js:3:5 stack @spidermonkey-g2.js:3:5
+runtime error position | ascii | utf8 lazy throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js:4:5 stack @spidermonkey-g2.js:4:5
+runtime error position | latin1 | utf8 script throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js:3:5 stack @spidermonkey-g2.js:3:5
+runtime error position | latin1 | utf8 lazy throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js:4:5 stack @spidermonkey-g2.js:4:5
+runtime error position | twobyte | utf8 script throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js:3:5 stack @spidermonkey-g2.js:3:5
+runtime error position | twobyte | utf8 lazy throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js:4:5 stack @spidermonkey-g2.js:4:5
+lazy inner functions | ascii | utf8 script value "1,2"
+lazy inner functions | ascii | utf8 lazy value undefined
+lazy inner functions | latin1 | utf8 script value "1,2"
+lazy inner functions | latin1 | utf8 lazy value undefined
+lazy inner functions | twobyte | utf8 script value "1,2"
+lazy inner functions | twobyte | utf8 lazy value undefined
+inner function syntax error | ascii | utf8 script throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:3:16 stack 
+inner function syntax error | ascii | utf8 lazy throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:4:16 stack 
+inner function syntax error | latin1 | utf8 script throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:3:16 stack 
+inner function syntax error | latin1 | utf8 lazy throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:4:16 stack 
+inner function syntax error | twobyte | utf8 script throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:3:16 stack 
+inner function syntax error | twobyte | utf8 lazy throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:4:16 stack 
+switch and try nesting | ascii | utf8 script value "2,f"
+switch and try nesting | ascii | utf8 lazy value undefined
+switch and try nesting | latin1 | utf8 script value "2,f"
+switch and try nesting | latin1 | utf8 lazy value undefined
+switch and try nesting | twobyte | utf8 script value "2,f"
+switch and try nesting | twobyte | utf8 lazy value undefined
+with statement block | ascii | utf8 script value "with"
+with statement block | ascii | utf8 lazy value undefined
+with statement block | latin1 | utf8 script value "with"
+with statement block | latin1 | utf8 lazy value undefined
+with statement block | twobyte | utf8 script value "with"
+with statement block | twobyte | utf8 lazy value undefined
+do while asi | ascii | utf8 script value 3
+do while asi | ascii | utf8 lazy value undefined
+do while asi | latin1 | utf8 script value 3
+do while asi | latin1 | utf8 lazy value undefined
+do while asi | twobyte | utf8 script value 3
+do while asi | twobyte | utf8 lazy value undefined
+for loops with blocks | ascii | utf8 script value 4
+for loops with blocks | ascii | utf8 lazy value undefined
+for loops with blocks | latin1 | utf8 script value 4
+for loops with blocks | latin1 | utf8 lazy value undefined
+for loops with blocks | twobyte | utf8 script value 4
+for loops with blocks | twobyte | utf8 lazy value undefined
+object literal methods | ascii | utf8 script value "mg1"
+object literal methods | ascii | utf8 lazy value undefined
+object literal methods | latin1 | utf8 script value "mg1"
+object literal methods | latin1 | utf8 lazy value undefined
+object literal methods | twobyte | utf8 script value "mg1"
+object literal methods | twobyte | utf8 lazy value undefined
+class bodies | ascii | utf8 script value "s1"
+class bodies | ascii | utf8 lazy value undefined
+class bodies | latin1 | utf8 script value "s1"
+class bodies | latin1 | utf8 lazy value undefined
+class bodies | twobyte | utf8 script value "s1"
+class bodies | twobyte | utf8 lazy value undefined
+async and generator bodies | ascii | utf8 script value "1,2function"
+async and generator bodies | ascii | utf8 lazy value undefined
+async and generator bodies | latin1 | utf8 script value "1,2function"
+async and generator bodies | latin1 | utf8 lazy value undefined
+async and generator bodies | twobyte | utf8 script value "1,2function"
+async and generator bodies | twobyte | utf8 lazy value undefined
+html comment in script | ascii | utf8 script value 1
+html comment in script | ascii | utf8 lazy value undefined
+html comment in script | latin1 | utf8 script value 1
+html comment in script | latin1 | utf8 lazy value undefined
+html comment in script | twobyte | utf8 script value 1
+html comment in script | twobyte | utf8 lazy value undefined
+braced then and else | ascii | eval value "then,else"
+braced then and else | ascii | eval lazy value undefined
+braced then and else | ascii | Function value undefined
+braced then and else | latin1 | eval value "then,else"
+braced then and else | latin1 | eval lazy value undefined
+braced then and else | latin1 | Function value undefined
+braced then and else | twobyte | eval value "then,else"
+braced then and else | twobyte | eval lazy value undefined
+braced then and else | twobyte | Function value undefined
+dangling else | ascii | eval value "dangling"
+dangling else | ascii | eval lazy value undefined
+dangling else | ascii | Function value undefined
+dangling else | latin1 | eval value "dangling"
+dangling else | latin1 | eval lazy value undefined
+dangling else | latin1 | Function value undefined
+dangling else | twobyte | eval value "dangling"
+dangling else | twobyte | eval lazy value undefined
+dangling else | twobyte | Function value undefined
+else if chain | ascii | eval value "c"
+else if chain | ascii | eval lazy value undefined
+else if chain | ascii | Function value undefined
+else if chain | latin1 | eval value "c"
+else if chain | latin1 | eval lazy value undefined
+else if chain | latin1 | Function value undefined
+else if chain | twobyte | eval value "c"
+else if chain | twobyte | eval lazy value undefined
+else if chain | twobyte | Function value undefined
+unbraced bodies | ascii | eval value 12
+unbraced bodies | ascii | eval lazy value undefined
+unbraced bodies | ascii | Function value undefined
+unbraced bodies | latin1 | eval value 12
+unbraced bodies | latin1 | eval lazy value undefined
+unbraced bodies | latin1 | Function value undefined
+unbraced bodies | twobyte | eval value 12
+unbraced bodies | twobyte | eval lazy value undefined
+unbraced bodies | twobyte | Function value undefined
+empty and nested blocks | ascii | eval value 5
+empty and nested blocks | ascii | eval lazy value undefined
+empty and nested blocks | ascii | Function value undefined
+empty and nested blocks | latin1 | eval value 5
+empty and nested blocks | latin1 | eval lazy value undefined
+empty and nested blocks | latin1 | Function value undefined
+empty and nested blocks | twobyte | eval value 5
+empty and nested blocks | twobyte | eval lazy value undefined
+empty and nested blocks | twobyte | Function value undefined
+completion value of if | ascii | eval value 1
+completion value of if | ascii | eval lazy value undefined
+completion value of if | ascii | Function value undefined
+completion value of if | latin1 | eval value 1
+completion value of if | latin1 | eval lazy value undefined
+completion value of if | latin1 | Function value undefined
+completion value of if | twobyte | eval value 1
+completion value of if | twobyte | eval lazy value undefined
+completion value of if | twobyte | Function value undefined
+completion value of block | ascii | eval value 3
+completion value of block | ascii | eval lazy value undefined
+completion value of block | ascii | Function value undefined
+completion value of block | latin1 | eval value 3
+completion value of block | latin1 | eval lazy value undefined
+completion value of block | latin1 | Function value undefined
+completion value of block | twobyte | eval value 3
+completion value of block | twobyte | eval lazy value undefined
+completion value of block | twobyte | Function value undefined
+comment and regexp after block | ascii | eval value true
+comment and regexp after block | ascii | eval lazy value undefined
+comment and regexp after block | ascii | Function value undefined
+comment and regexp after block | latin1 | eval value true
+comment and regexp after block | latin1 | eval lazy value undefined
+comment and regexp after block | latin1 | Function value undefined
+comment and regexp after block | twobyte | eval value true
+comment and regexp after block | twobyte | eval lazy value undefined
+comment and regexp after block | twobyte | Function value undefined
+regexp after if block on next line | ascii | eval value "b"
+regexp after if block on next line | ascii | eval lazy value undefined
+regexp after if block on next line | ascii | Function value undefined
+regexp after if block on next line | latin1 | eval value "b"
+regexp after if block on next line | latin1 | eval lazy value undefined
+regexp after if block on next line | latin1 | Function value undefined
+regexp after if block on next line | twobyte | eval value "b"
+regexp after if block on next line | twobyte | eval lazy value undefined
+regexp after if block on next line | twobyte | Function value undefined
+line comment then regexp | ascii | eval value "a+"
+line comment then regexp | ascii | eval lazy value undefined
+line comment then regexp | ascii | Function value undefined
+line comment then regexp | latin1 | eval value "a+"
+line comment then regexp | latin1 | eval lazy value undefined
+line comment then regexp | latin1 | Function value undefined
+line comment then regexp | twobyte | eval value "a+"
+line comment then regexp | twobyte | eval lazy value undefined
+line comment then regexp | twobyte | Function value undefined
+division after parenthesis | ascii | eval value 2
+division after parenthesis | ascii | eval lazy value undefined
+division after parenthesis | ascii | Function value undefined
+division after parenthesis | latin1 | eval value 2
+division after parenthesis | latin1 | eval lazy value undefined
+division after parenthesis | latin1 | Function value undefined
+division after parenthesis | twobyte | eval value 2
+division after parenthesis | twobyte | eval lazy value undefined
+division after parenthesis | twobyte | Function value undefined
+asi before array literal | ascii | eval value 2
+asi before array literal | ascii | eval lazy value undefined
+asi before array literal | ascii | Function value undefined
+asi before array literal | latin1 | eval value 2
+asi before array literal | latin1 | eval lazy value undefined
+asi before array literal | latin1 | Function value undefined
+asi before array literal | twobyte | eval value 2
+asi before array literal | twobyte | eval lazy value undefined
+asi before array literal | twobyte | Function value undefined
+asi increment | ascii | eval throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js line 41 > eval:4:5 stack @spidermonkey-g2.js line 41 > eval:4:5
+asi increment | ascii | eval lazy throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js line 42 > eval:5:5 stack @spidermonkey-g2.js line 42 > eval:5:5
+asi increment | ascii | Function throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js line 43 > Function:6:5 stack anonymous@spidermonkey-g2.js line 43 > Function:6:5
+asi increment | latin1 | eval throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js line 41 > eval:4:5 stack @spidermonkey-g2.js line 41 > eval:4:5
+asi increment | latin1 | eval lazy throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js line 42 > eval:5:5 stack @spidermonkey-g2.js line 42 > eval:5:5
+asi increment | latin1 | Function throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js line 43 > Function:6:5 stack anonymous@spidermonkey-g2.js line 43 > Function:6:5
+asi increment | twobyte | eval throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js line 41 > eval:4:5 stack @spidermonkey-g2.js line 41 > eval:4:5
+asi increment | twobyte | eval lazy throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js line 42 > eval:5:5 stack @spidermonkey-g2.js line 42 > eval:5:5
+asi increment | twobyte | Function throw TypeError: can't access property "join", y[y] is undefined at spidermonkey-g2.js line 43 > Function:6:5 stack anonymous@spidermonkey-g2.js line 43 > Function:6:5
+return followed by newline | ascii | eval throw SyntaxError: return not in function at spidermonkey-g2.js:1:1 stack 
+return followed by newline | ascii | eval lazy value undefined
+return followed by newline | ascii | Function value undefined
+return followed by newline | latin1 | eval throw SyntaxError: return not in function at spidermonkey-g2.js:1:6 stack 
+return followed by newline | latin1 | eval lazy value undefined
+return followed by newline | latin1 | Function value undefined
+return followed by newline | twobyte | eval throw SyntaxError: return not in function at spidermonkey-g2.js:1:6 stack 
+return followed by newline | twobyte | eval lazy value undefined
+return followed by newline | twobyte | Function value undefined
+return in nested blocks | ascii | eval throw SyntaxError: return not in function at spidermonkey-g2.js:1:24 stack 
+return in nested blocks | ascii | eval lazy value "inner"
+return in nested blocks | ascii | Function value "inner"
+return in nested blocks | latin1 | eval throw SyntaxError: return not in function at spidermonkey-g2.js:1:29 stack 
+return in nested blocks | latin1 | eval lazy value "inner"
+return in nested blocks | latin1 | Function value "inner"
+return in nested blocks | twobyte | eval throw SyntaxError: return not in function at spidermonkey-g2.js:1:29 stack 
+return in nested blocks | twobyte | eval lazy value "inner"
+return in nested blocks | twobyte | Function value "inner"
+labelled block and break | ascii | eval value "1,2"
+labelled block and break | ascii | eval lazy value undefined
+labelled block and break | ascii | Function value undefined
+labelled block and break | latin1 | eval value "1,2"
+labelled block and break | latin1 | eval lazy value undefined
+labelled block and break | latin1 | Function value undefined
+labelled block and break | twobyte | eval value "1,2"
+labelled block and break | twobyte | eval lazy value undefined
+labelled block and break | twobyte | Function value undefined
+labelled loops | ascii | eval value "0,2"
+labelled loops | ascii | eval lazy value undefined
+labelled loops | ascii | Function value undefined
+labelled loops | latin1 | eval value "0,2"
+labelled loops | latin1 | eval lazy value undefined
+labelled loops | latin1 | Function value undefined
+labelled loops | twobyte | eval value "0,2"
+labelled loops | twobyte | eval lazy value undefined
+labelled loops | twobyte | Function value undefined
+label on if block | ascii | eval value "start"
+label on if block | ascii | eval lazy value undefined
+label on if block | ascii | Function value undefined
+label on if block | latin1 | eval value "start"
+label on if block | latin1 | eval lazy value undefined
+label on if block | latin1 | Function value undefined
+label on if block | twobyte | eval value "start"
+label on if block | twobyte | eval lazy value undefined
+label on if block | twobyte | Function value undefined
+break outside loop | ascii | eval throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:1:15 stack 
+break outside loop | ascii | eval lazy throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:2:15 stack 
+break outside loop | ascii | Function throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:3:15 stack 
+break outside loop | latin1 | eval throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:1:20 stack 
+break outside loop | latin1 | eval lazy throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:2:20 stack 
+break outside loop | latin1 | Function throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:3:20 stack 
+break outside loop | twobyte | eval throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:1:20 stack 
+break outside loop | twobyte | eval lazy throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:2:20 stack 
+break outside loop | twobyte | Function throw SyntaxError: unlabeled break must be inside loop or switch at spidermonkey-g2.js:3:20 stack 
+undefined label | ascii | eval throw SyntaxError: label not found at spidermonkey-g2.js:1:11 stack 
+undefined label | ascii | eval lazy throw SyntaxError: label not found at spidermonkey-g2.js:2:11 stack 
+undefined label | ascii | Function throw SyntaxError: label not found at spidermonkey-g2.js:3:11 stack 
+undefined label | latin1 | eval throw SyntaxError: label not found at spidermonkey-g2.js:1:16 stack 
+undefined label | latin1 | eval lazy throw SyntaxError: label not found at spidermonkey-g2.js:2:16 stack 
+undefined label | latin1 | Function throw SyntaxError: label not found at spidermonkey-g2.js:3:16 stack 
+undefined label | twobyte | eval throw SyntaxError: label not found at spidermonkey-g2.js:1:16 stack 
+undefined label | twobyte | eval lazy throw SyntaxError: label not found at spidermonkey-g2.js:2:16 stack 
+undefined label | twobyte | Function throw SyntaxError: label not found at spidermonkey-g2.js:3:16 stack 
+duplicate label | ascii | eval throw SyntaxError: duplicate label at spidermonkey-g2.js:1:6 stack 
+duplicate label | ascii | eval lazy throw SyntaxError: duplicate label at spidermonkey-g2.js:2:6 stack 
+duplicate label | ascii | Function throw SyntaxError: duplicate label at spidermonkey-g2.js:3:6 stack 
+duplicate label | latin1 | eval throw SyntaxError: duplicate label at spidermonkey-g2.js:1:11 stack 
+duplicate label | latin1 | eval lazy throw SyntaxError: duplicate label at spidermonkey-g2.js:2:11 stack 
+duplicate label | latin1 | Function throw SyntaxError: duplicate label at spidermonkey-g2.js:3:11 stack 
+duplicate label | twobyte | eval throw SyntaxError: duplicate label at spidermonkey-g2.js:1:11 stack 
+duplicate label | twobyte | eval lazy throw SyntaxError: duplicate label at spidermonkey-g2.js:2:11 stack 
+duplicate label | twobyte | Function throw SyntaxError: duplicate label at spidermonkey-g2.js:3:11 stack 
+legal block shadowing | ascii | eval value "number"
+legal block shadowing | ascii | eval lazy value undefined
+legal block shadowing | ascii | Function value undefined
+legal block shadowing | latin1 | eval value "number"
+legal block shadowing | latin1 | eval lazy value undefined
+legal block shadowing | latin1 | Function value undefined
+legal block shadowing | twobyte | eval value "number"
+legal block shadowing | twobyte | eval lazy value undefined
+legal block shadowing | twobyte | Function value undefined
+duplicate let in nested block | ascii | eval throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:4:9 stack 
+duplicate let in nested block | ascii | eval lazy throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:5:9 stack 
+duplicate let in nested block | ascii | Function throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:6:9 stack 
+duplicate let in nested block | latin1 | eval throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:4:9 stack 
+duplicate let in nested block | latin1 | eval lazy throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:5:9 stack 
+duplicate let in nested block | latin1 | Function throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:6:9 stack 
+duplicate let in nested block | twobyte | eval throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:4:9 stack 
+duplicate let in nested block | twobyte | eval lazy throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:5:9 stack 
+duplicate let in nested block | twobyte | Function throw SyntaxError: redeclaration of let dup at spidermonkey-g2.js:6:9 stack 
+const without initializer | ascii | eval throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:1:21 stack 
+const without initializer | ascii | eval lazy throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:2:21 stack 
+const without initializer | ascii | Function throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:3:21 stack 
+const without initializer | latin1 | eval throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:1:26 stack 
+const without initializer | latin1 | eval lazy throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:2:26 stack 
+const without initializer | latin1 | Function throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:3:26 stack 
+const without initializer | twobyte | eval throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:1:26 stack 
+const without initializer | twobyte | eval lazy throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:2:26 stack 
+const without initializer | twobyte | Function throw SyntaxError: missing = in const declaration at spidermonkey-g2.js:3:26 stack 
+let then var conflict | ascii | eval throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:1:21 stack 
+let then var conflict | ascii | eval lazy throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:2:21 stack 
+let then var conflict | ascii | Function throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:3:21 stack 
+let then var conflict | latin1 | eval throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:1:26 stack 
+let then var conflict | latin1 | eval lazy throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:2:26 stack 
+let then var conflict | latin1 | Function throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:3:26 stack 
+let then var conflict | twobyte | eval throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:1:26 stack 
+let then var conflict | twobyte | eval lazy throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:2:26 stack 
+let then var conflict | twobyte | Function throw SyntaxError: redeclaration of let lv at spidermonkey-g2.js:3:26 stack 
+function and let conflict in block | ascii | eval throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:1:24 stack 
+function and let conflict in block | ascii | eval lazy throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:2:24 stack 
+function and let conflict in block | ascii | Function throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:3:24 stack 
+function and let conflict in block | latin1 | eval throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:1:29 stack 
+function and let conflict in block | latin1 | eval lazy throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:2:29 stack 
+function and let conflict in block | latin1 | Function throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:3:29 stack 
+function and let conflict in block | twobyte | eval throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:1:29 stack 
+function and let conflict in block | twobyte | eval lazy throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:2:29 stack 
+function and let conflict in block | twobyte | Function throw SyntaxError: redeclaration of function fx at spidermonkey-g2.js:3:29 stack 
+duplicate block functions in sloppy code | ascii | eval value 2
+duplicate block functions in sloppy code | ascii | eval lazy value undefined
+duplicate block functions in sloppy code | ascii | Function value undefined
+duplicate block functions in sloppy code | latin1 | eval value 2
+duplicate block functions in sloppy code | latin1 | eval lazy value undefined
+duplicate block functions in sloppy code | latin1 | Function value undefined
+duplicate block functions in sloppy code | twobyte | eval value 2
+duplicate block functions in sloppy code | twobyte | eval lazy value undefined
+duplicate block functions in sloppy code | twobyte | Function value undefined
+block use strict is not a directive | ascii | eval value 8
+block use strict is not a directive | ascii | eval lazy value undefined
+block use strict is not a directive | ascii | Function value undefined
+block use strict is not a directive | latin1 | eval value 8
+block use strict is not a directive | latin1 | eval lazy value undefined
+block use strict is not a directive | latin1 | Function value undefined
+block use strict is not a directive | twobyte | eval value 8
+block use strict is not a directive | twobyte | eval lazy value undefined
+block use strict is not a directive | twobyte | Function value undefined
+if block use strict is not a directive | ascii | eval value 9
+if block use strict is not a directive | ascii | eval lazy value undefined
+if block use strict is not a directive | ascii | Function value undefined
+if block use strict is not a directive | latin1 | eval value 9
+if block use strict is not a directive | latin1 | eval lazy value undefined
+if block use strict is not a directive | latin1 | Function value undefined
+if block use strict is not a directive | twobyte | eval value 9
+if block use strict is not a directive | twobyte | eval lazy value undefined
+if block use strict is not a directive | twobyte | Function value undefined
+parenthesized use strict is not a directive | ascii | eval value 7
+parenthesized use strict is not a directive | ascii | eval lazy value undefined
+parenthesized use strict is not a directive | ascii | Function value undefined
+parenthesized use strict is not a directive | latin1 | eval value 7
+parenthesized use strict is not a directive | latin1 | eval lazy value undefined
+parenthesized use strict is not a directive | latin1 | Function value undefined
+parenthesized use strict is not a directive | twobyte | eval value 7
+parenthesized use strict is not a directive | twobyte | eval lazy value undefined
+parenthesized use strict is not a directive | twobyte | Function value undefined
+script directive | ascii | eval throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:2:1 stack 
+script directive | ascii | eval lazy throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:3:1 stack 
+script directive | ascii | Function throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:4:1 stack 
+script directive | latin1 | eval throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:2:1 stack 
+script directive | latin1 | eval lazy throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:3:1 stack 
+script directive | latin1 | Function throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:4:1 stack 
+script directive | twobyte | eval throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:2:1 stack 
+script directive | twobyte | eval lazy throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:3:1 stack 
+script directive | twobyte | Function throw SyntaxError: strict mode code may not contain 'with' statements at spidermonkey-g2.js:4:1 stack 
+directive after another string | ascii | eval throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:3:26 stack 
+directive after another string | ascii | eval lazy throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:4:26 stack 
+directive after another string | ascii | Function throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:5:26 stack 
+directive after another string | latin1 | eval throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:3:26 stack 
+directive after another string | latin1 | eval lazy throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:4:26 stack 
+directive after another string | latin1 | Function throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:5:26 stack 
+directive after another string | twobyte | eval throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:3:26 stack 
+directive after another string | twobyte | eval lazy throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:4:26 stack 
+directive after another string | twobyte | Function throw SyntaxError: applying the 'delete' operator to an unqualified name is deprecated at spidermonkey-g2.js:5:26 stack 
+function directive | ascii | eval value true
+function directive | ascii | eval lazy value undefined
+function directive | ascii | Function value undefined
+function directive | latin1 | eval value true
+function directive | latin1 | eval lazy value undefined
+function directive | latin1 | Function value undefined
+function directive | twobyte | eval value true
+function directive | twobyte | eval lazy value undefined
+function directive | twobyte | Function value undefined
+function directive rejects duplicate parameters | ascii | eval throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:1:15 stack 
+function directive rejects duplicate parameters | ascii | eval lazy throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:2:15 stack 
+function directive rejects duplicate parameters | ascii | Function throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:3:15 stack 
+function directive rejects duplicate parameters | latin1 | eval throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:1:20 stack 
+function directive rejects duplicate parameters | latin1 | eval lazy throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:2:20 stack 
+function directive rejects duplicate parameters | latin1 | Function throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:3:20 stack 
+function directive rejects duplicate parameters | twobyte | eval throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:1:20 stack 
+function directive rejects duplicate parameters | twobyte | eval lazy throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:2:20 stack 
+function directive rejects duplicate parameters | twobyte | Function throw SyntaxError: duplicate formal argument a at spidermonkey-g2.js:3:20 stack 
+sloppy duplicate parameters | ascii | eval value 2
+sloppy duplicate parameters | ascii | eval lazy value undefined
+sloppy duplicate parameters | ascii | Function value undefined
+sloppy duplicate parameters | latin1 | eval value 2
+sloppy duplicate parameters | latin1 | eval lazy value undefined
+sloppy duplicate parameters | latin1 | Function value undefined
+sloppy duplicate parameters | twobyte | eval value 2
+sloppy duplicate parameters | twobyte | eval lazy value undefined
+sloppy duplicate parameters | twobyte | Function value undefined
+function directive rejects octal | ascii | eval throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:1:39 stack 
+function directive rejects octal | ascii | eval lazy throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:2:39 stack 
+function directive rejects octal | ascii | Function throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:3:39 stack 
+function directive rejects octal | latin1 | eval throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:1:44 stack 
+function directive rejects octal | latin1 | eval lazy throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:2:44 stack 
+function directive rejects octal | latin1 | Function throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:3:44 stack 
+function directive rejects octal | twobyte | eval throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:1:44 stack 
+function directive rejects octal | twobyte | eval lazy throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:2:44 stack 
+function directive rejects octal | twobyte | Function throw SyntaxError: "0"-prefixed octal literals are deprecated; use the "0o" prefix instead at spidermonkey-g2.js:3:44 stack 
+escaped directive | ascii | eval value true
+escaped directive | ascii | eval lazy value undefined
+escaped directive | ascii | Function value undefined
+escaped directive | latin1 | eval value true
+escaped directive | latin1 | eval lazy value undefined
+escaped directive | latin1 | Function value undefined
+escaped directive | twobyte | eval value true
+escaped directive | twobyte | eval lazy value undefined
+escaped directive | twobyte | Function value undefined
+annex b if function | ascii | eval value "function annex"
+annex b if function | ascii | eval lazy value undefined
+annex b if function | ascii | Function value undefined
+annex b if function | latin1 | eval value "function annex"
+annex b if function | latin1 | eval lazy value undefined
+annex b if function | latin1 | Function value undefined
+annex b if function | twobyte | eval value "function annex"
+annex b if function | twobyte | eval lazy value undefined
+annex b if function | twobyte | Function value undefined
+annex b else function | ascii | eval value 2
+annex b else function | ascii | eval lazy value undefined
+annex b else function | ascii | Function value undefined
+annex b else function | latin1 | eval value 2
+annex b else function | latin1 | eval lazy value undefined
+annex b else function | latin1 | Function value undefined
+annex b else function | twobyte | eval value 2
+annex b else function | twobyte | eval lazy value undefined
+annex b else function | twobyte | Function value undefined
+annex b with else | ascii | eval value "undefined b"
+annex b with else | ascii | eval lazy value undefined
+annex b with else | ascii | Function value undefined
+annex b with else | latin1 | eval value "undefined b"
+annex b with else | latin1 | eval lazy value undefined
+annex b with else | latin1 | Function value undefined
+annex b with else | twobyte | eval value "undefined b"
+annex b with else | twobyte | eval lazy value undefined
+annex b with else | twobyte | Function value undefined
+strict if function | ascii | eval throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:40 stack 
+strict if function | ascii | eval lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:40 stack 
+strict if function | ascii | Function throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:3:40 stack 
+strict if function | latin1 | eval throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:45 stack 
+strict if function | latin1 | eval lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:45 stack 
+strict if function | latin1 | Function throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:3:45 stack 
+strict if function | twobyte | eval throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:45 stack 
+strict if function | twobyte | eval lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:45 stack 
+strict if function | twobyte | Function throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:3:45 stack 
+if generator declaration | ascii | eval throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:1:11 stack 
+if generator declaration | ascii | eval lazy throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:2:11 stack 
+if generator declaration | ascii | Function throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:3:11 stack 
+if generator declaration | latin1 | eval throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if generator declaration | latin1 | eval lazy throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if generator declaration | latin1 | Function throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:3:16 stack 
+if generator declaration | twobyte | eval throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if generator declaration | twobyte | eval lazy throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if generator declaration | twobyte | Function throw SyntaxError: generator declarations can't appear in single-statement context at spidermonkey-g2.js:3:16 stack 
+if async function declaration | ascii | eval throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:1:11 stack 
+if async function declaration | ascii | eval lazy throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:2:11 stack 
+if async function declaration | ascii | Function throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:3:11 stack 
+if async function declaration | latin1 | eval throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if async function declaration | latin1 | eval lazy throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if async function declaration | latin1 | Function throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:3:16 stack 
+if async function declaration | twobyte | eval throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if async function declaration | twobyte | eval lazy throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if async function declaration | twobyte | Function throw SyntaxError: async function declarations can't appear in single-statement context at spidermonkey-g2.js:3:16 stack 
+if class declaration | ascii | eval throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:1:11 stack 
+if class declaration | ascii | eval lazy throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:2:11 stack 
+if class declaration | ascii | Function throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:3:11 stack 
+if class declaration | latin1 | eval throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if class declaration | latin1 | eval lazy throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if class declaration | latin1 | Function throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:3:16 stack 
+if class declaration | twobyte | eval throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if class declaration | twobyte | eval lazy throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if class declaration | twobyte | Function throw SyntaxError: classes can't appear in single-statement context at spidermonkey-g2.js:3:16 stack 
+if lexical declaration | ascii | eval throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:1:11 stack 
+if lexical declaration | ascii | eval lazy throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:2:11 stack 
+if lexical declaration | ascii | Function throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:3:11 stack 
+if lexical declaration | latin1 | eval throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if lexical declaration | latin1 | eval lazy throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if lexical declaration | latin1 | Function throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:3:16 stack 
+if lexical declaration | twobyte | eval throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:1:16 stack 
+if lexical declaration | twobyte | eval lazy throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:2:16 stack 
+if lexical declaration | twobyte | Function throw SyntaxError: lexical declarations can't appear in single-statement context at spidermonkey-g2.js:3:16 stack 
+while function declaration | ascii | eval throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:15 stack 
+while function declaration | ascii | eval lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:15 stack 
+while function declaration | ascii | Function throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:3:15 stack 
+while function declaration | latin1 | eval throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:20 stack 
+while function declaration | latin1 | eval lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:20 stack 
+while function declaration | latin1 | Function throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:3:20 stack 
+while function declaration | twobyte | eval throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:1:20 stack 
+while function declaration | twobyte | eval lazy throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:2:20 stack 
+while function declaration | twobyte | Function throw SyntaxError: function declarations can't appear in single-statement context at spidermonkey-g2.js:3:20 stack 
+labelled function in sloppy code | ascii | eval value "lab"
+labelled function in sloppy code | ascii | eval lazy value undefined
+labelled function in sloppy code | ascii | Function value undefined
+labelled function in sloppy code | latin1 | eval value "lab"
+labelled function in sloppy code | latin1 | eval lazy value undefined
+labelled function in sloppy code | latin1 | Function value undefined
+labelled function in sloppy code | twobyte | eval value "lab"
+labelled function in sloppy code | twobyte | eval lazy value undefined
+labelled function in sloppy code | twobyte | Function value undefined
+labelled function in strict code | ascii | eval throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:1:35 stack 
+labelled function in strict code | ascii | eval lazy throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:2:35 stack 
+labelled function in strict code | ascii | Function throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:3:35 stack 
+labelled function in strict code | latin1 | eval throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:1:40 stack 
+labelled function in strict code | latin1 | eval lazy throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:2:40 stack 
+labelled function in strict code | latin1 | Function throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:3:40 stack 
+labelled function in strict code | twobyte | eval throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:1:40 stack 
+labelled function in strict code | twobyte | eval lazy throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:2:40 stack 
+labelled function in strict code | twobyte | Function throw SyntaxError: functions cannot be labelled at spidermonkey-g2.js:3:40 stack 
+block function in strict code | ascii | eval value "undefined"
+block function in strict code | ascii | eval lazy value undefined
+block function in strict code | ascii | Function value undefined
+block function in strict code | latin1 | eval value "undefined"
+block function in strict code | latin1 | eval lazy value undefined
+block function in strict code | latin1 | Function value undefined
+block function in strict code | twobyte | eval value "undefined"
+block function in strict code | twobyte | eval lazy value undefined
+block function in strict code | twobyte | Function value undefined
+parenthesized assignment target | ascii | eval value 5
+parenthesized assignment target | ascii | eval lazy value undefined
+parenthesized assignment target | ascii | Function value undefined
+parenthesized assignment target | latin1 | eval value 5
+parenthesized assignment target | latin1 | eval lazy value undefined
+parenthesized assignment target | latin1 | Function value undefined
+parenthesized assignment target | twobyte | eval value 5
+parenthesized assignment target | twobyte | eval lazy value undefined
+parenthesized assignment target | twobyte | Function value undefined
+parenthesized object pattern | ascii | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized object pattern | ascii | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized object pattern | ascii | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+parenthesized object pattern | latin1 | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized object pattern | latin1 | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized object pattern | latin1 | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+parenthesized object pattern | twobyte | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized object pattern | twobyte | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized object pattern | twobyte | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+parenthesized array pattern | ascii | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized array pattern | ascii | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized array pattern | ascii | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+parenthesized array pattern | latin1 | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized array pattern | latin1 | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized array pattern | latin1 | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+parenthesized array pattern | twobyte | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+parenthesized array pattern | twobyte | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+parenthesized array pattern | twobyte | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+object literal with initializer | ascii | eval throw SyntaxError: missing : after property id at spidermonkey-g2.js:1:6 stack 
+object literal with initializer | ascii | eval lazy throw SyntaxError: missing : after property id at spidermonkey-g2.js:2:6 stack 
+object literal with initializer | ascii | Function throw SyntaxError: missing : after property id at spidermonkey-g2.js:3:6 stack 
+object literal with initializer | latin1 | eval throw SyntaxError: missing : after property id at spidermonkey-g2.js:1:11 stack 
+object literal with initializer | latin1 | eval lazy throw SyntaxError: missing : after property id at spidermonkey-g2.js:2:11 stack 
+object literal with initializer | latin1 | Function throw SyntaxError: missing : after property id at spidermonkey-g2.js:3:11 stack 
+object literal with initializer | twobyte | eval throw SyntaxError: missing : after property id at spidermonkey-g2.js:1:11 stack 
+object literal with initializer | twobyte | eval lazy throw SyntaxError: missing : after property id at spidermonkey-g2.js:2:11 stack 
+object literal with initializer | twobyte | Function throw SyntaxError: missing : after property id at spidermonkey-g2.js:3:11 stack 
+nested parenthesized pattern | ascii | eval throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:2:2 stack 
+nested parenthesized pattern | ascii | eval lazy throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:3:2 stack 
+nested parenthesized pattern | ascii | Function throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:4:2 stack 
+nested parenthesized pattern | latin1 | eval throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:2:2 stack 
+nested parenthesized pattern | latin1 | eval lazy throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:3:2 stack 
+nested parenthesized pattern | latin1 | Function throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:4:2 stack 
+nested parenthesized pattern | twobyte | eval throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:2:2 stack 
+nested parenthesized pattern | twobyte | eval lazy throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:3:2 stack 
+nested parenthesized pattern | twobyte | Function throw SyntaxError: destructuring patterns in assignments can't be parenthesized at spidermonkey-g2.js:4:2 stack 
+parenthesized element target | ascii | eval value 5
+parenthesized element target | ascii | eval lazy value undefined
+parenthesized element target | ascii | Function value undefined
+parenthesized element target | latin1 | eval value 5
+parenthesized element target | latin1 | eval lazy value undefined
+parenthesized element target | latin1 | Function value undefined
+parenthesized element target | twobyte | eval value 5
+parenthesized element target | twobyte | eval lazy value undefined
+parenthesized element target | twobyte | Function value undefined
+destructuring assignment | ascii | eval value 3
+destructuring assignment | ascii | eval lazy value undefined
+destructuring assignment | ascii | Function value undefined
+destructuring assignment | latin1 | eval value 3
+destructuring assignment | latin1 | eval lazy value undefined
+destructuring assignment | latin1 | Function value undefined
+destructuring assignment | twobyte | eval value 3
+destructuring assignment | twobyte | eval lazy value undefined
+destructuring assignment | twobyte | Function value undefined
+comma assignment target | ascii | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+comma assignment target | ascii | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+comma assignment target | ascii | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+comma assignment target | latin1 | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+comma assignment target | latin1 | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+comma assignment target | latin1 | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+comma assignment target | twobyte | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+comma assignment target | twobyte | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+comma assignment target | twobyte | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+literal assignment target | ascii | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:1:1 stack 
+literal assignment target | ascii | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+literal assignment target | ascii | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+literal assignment target | latin1 | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:1:6 stack 
+literal assignment target | latin1 | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:6 stack 
+literal assignment target | latin1 | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:6 stack 
+literal assignment target | twobyte | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:1:6 stack 
+literal assignment target | twobyte | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:6 stack 
+literal assignment target | twobyte | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:6 stack 
+parenthesized arrow parameters | ascii | eval value 8
+parenthesized arrow parameters | ascii | eval lazy value undefined
+parenthesized arrow parameters | ascii | Function value undefined
+parenthesized arrow parameters | latin1 | eval value 8
+parenthesized arrow parameters | latin1 | eval lazy value undefined
+parenthesized arrow parameters | latin1 | Function value undefined
+parenthesized arrow parameters | twobyte | eval value 8
+parenthesized arrow parameters | twobyte | eval lazy value undefined
+parenthesized arrow parameters | twobyte | Function value undefined
+invalid arrow parameters | ascii | eval throw SyntaxError: missing formal parameter at spidermonkey-g2.js:1:13 stack 
+invalid arrow parameters | ascii | eval lazy throw SyntaxError: missing formal parameter at spidermonkey-g2.js:2:13 stack 
+invalid arrow parameters | ascii | Function throw SyntaxError: missing formal parameter at spidermonkey-g2.js:3:13 stack 
+invalid arrow parameters | latin1 | eval throw SyntaxError: missing formal parameter at spidermonkey-g2.js:1:18 stack 
+invalid arrow parameters | latin1 | eval lazy throw SyntaxError: missing formal parameter at spidermonkey-g2.js:2:18 stack 
+invalid arrow parameters | latin1 | Function throw SyntaxError: missing formal parameter at spidermonkey-g2.js:3:18 stack 
+invalid arrow parameters | twobyte | eval throw SyntaxError: missing formal parameter at spidermonkey-g2.js:1:18 stack 
+invalid arrow parameters | twobyte | eval lazy throw SyntaxError: missing formal parameter at spidermonkey-g2.js:2:18 stack 
+invalid arrow parameters | twobyte | Function throw SyntaxError: missing formal parameter at spidermonkey-g2.js:3:18 stack 
+rest in parenthesized expression | ascii | eval throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:1:10 stack 
+rest in parenthesized expression | ascii | eval lazy throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:2:10 stack 
+rest in parenthesized expression | ascii | Function throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:3:10 stack 
+rest in parenthesized expression | latin1 | eval throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:1:15 stack 
+rest in parenthesized expression | latin1 | eval lazy throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:2:15 stack 
+rest in parenthesized expression | latin1 | Function throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:3:15 stack 
+rest in parenthesized expression | twobyte | eval throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:1:15 stack 
+rest in parenthesized expression | twobyte | eval lazy throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:2:15 stack 
+rest in parenthesized expression | twobyte | Function throw SyntaxError: expected '=>' after argument list, got ';' at spidermonkey-g2.js:3:15 stack 
+optional chain assignment | ascii | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+optional chain assignment | ascii | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+optional chain assignment | ascii | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+optional chain assignment | latin1 | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+optional chain assignment | latin1 | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+optional chain assignment | latin1 | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+optional chain assignment | twobyte | eval throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:2:1 stack 
+optional chain assignment | twobyte | eval lazy throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:3:1 stack 
+optional chain assignment | twobyte | Function throw SyntaxError: invalid assignment left-hand side at spidermonkey-g2.js:4:1 stack 
+new with optional chain | ascii | eval throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:1:1 stack 
+new with optional chain | ascii | eval lazy throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:2:1 stack 
+new with optional chain | ascii | Function throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:3:1 stack 
+new with optional chain | latin1 | eval throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:1:6 stack 
+new with optional chain | latin1 | eval lazy throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:2:6 stack 
+new with optional chain | latin1 | Function throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:3:6 stack 
+new with optional chain | twobyte | eval throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:1:6 stack 
+new with optional chain | twobyte | eval lazy throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:2:6 stack 
+new with optional chain | twobyte | Function throw SyntaxError: new keyword cannot be used with an optional chain at spidermonkey-g2.js:3:6 stack 
+prefix increment of parenthesis | ascii | eval value 2
+prefix increment of parenthesis | ascii | eval lazy value undefined
+prefix increment of parenthesis | ascii | Function value undefined
+prefix increment of parenthesis | latin1 | eval value 2
+prefix increment of parenthesis | latin1 | eval lazy value undefined
+prefix increment of parenthesis | latin1 | Function value undefined
+prefix increment of parenthesis | twobyte | eval value 2
+prefix increment of parenthesis | twobyte | eval lazy value undefined
+prefix increment of parenthesis | twobyte | Function value undefined
+prefix increment of object | ascii | eval throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:1:3 stack 
+prefix increment of object | ascii | eval lazy throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:2:3 stack 
+prefix increment of object | ascii | Function throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:3:3 stack 
+prefix increment of object | latin1 | eval throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:1:8 stack 
+prefix increment of object | latin1 | eval lazy throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:2:8 stack 
+prefix increment of object | latin1 | Function throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:3:8 stack 
+prefix increment of object | twobyte | eval throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:1:8 stack 
+prefix increment of object | twobyte | eval lazy throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:2:8 stack 
+prefix increment of object | twobyte | Function throw SyntaxError: invalid increment/decrement operand at spidermonkey-g2.js:3:8 stack 
+nested parentheses and brackets | ascii | eval value 3
+nested parentheses and brackets | ascii | eval lazy value undefined
+nested parentheses and brackets | ascii | Function value undefined
+nested parentheses and brackets | latin1 | eval value 3
+nested parentheses and brackets | latin1 | eval lazy value undefined
+nested parentheses and brackets | latin1 | Function value undefined
+nested parentheses and brackets | twobyte | eval value 3
+nested parentheses and brackets | twobyte | eval lazy value undefined
+nested parentheses and brackets | twobyte | Function value undefined
+template and call nesting | ascii | eval value "11,2"
+template and call nesting | ascii | eval lazy value undefined
+template and call nesting | ascii | Function value undefined
+template and call nesting | latin1 | eval value "11,2"
+template and call nesting | latin1 | eval lazy value undefined
+template and call nesting | latin1 | Function value undefined
+template and call nesting | twobyte | eval value "11,2"
+template and call nesting | twobyte | eval lazy value undefined
+template and call nesting | twobyte | Function value undefined
+ternary and logical chain | ascii | eval value 5
+ternary and logical chain | ascii | eval lazy value undefined
+ternary and logical chain | ascii | Function value undefined
+ternary and logical chain | latin1 | eval value 5
+ternary and logical chain | latin1 | eval lazy value undefined
+ternary and logical chain | latin1 | Function value undefined
+ternary and logical chain | twobyte | eval value 5
+ternary and logical chain | twobyte | eval lazy value undefined
+ternary and logical chain | twobyte | Function value undefined
+unexpected token in deep expression | ascii | eval throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:1:35 stack 
+unexpected token in deep expression | ascii | eval lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:2:35 stack 
+unexpected token in deep expression | ascii | Function throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:3:35 stack 
+unexpected token in deep expression | latin1 | eval throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:1:40 stack 
+unexpected token in deep expression | latin1 | eval lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:2:40 stack 
+unexpected token in deep expression | latin1 | Function throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:3:40 stack 
+unexpected token in deep expression | twobyte | eval throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:1:40 stack 
+unexpected token in deep expression | twobyte | eval lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:2:40 stack 
+unexpected token in deep expression | twobyte | Function throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:3:40 stack 
+missing closing brace | ascii | eval throw SyntaxError: missing } in compound statement at spidermonkey-g2.js:5:1 stack 
+missing closing brace | ascii | eval lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:7:2 stack 
+missing closing brace | ascii | Function throw SyntaxError: missing } in compound statement at spidermonkey-g2.js:8:2 stack 
+missing closing brace | latin1 | eval throw SyntaxError: missing } in compound statement at spidermonkey-g2.js:5:1 stack 
+missing closing brace | latin1 | eval lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:7:2 stack 
+missing closing brace | latin1 | Function throw SyntaxError: missing } in compound statement at spidermonkey-g2.js:8:2 stack 
+missing closing brace | twobyte | eval throw SyntaxError: missing } in compound statement at spidermonkey-g2.js:5:1 stack 
+missing closing brace | twobyte | eval lazy throw SyntaxError: expected expression, got ')' at spidermonkey-g2.js:7:2 stack 
+missing closing brace | twobyte | Function throw SyntaxError: missing } in compound statement at spidermonkey-g2.js:8:2 stack 
+missing closing parenthesis | ascii | eval throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:1:16 stack 
+missing closing parenthesis | ascii | eval lazy throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:2:16 stack 
+missing closing parenthesis | ascii | Function throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:3:16 stack 
+missing closing parenthesis | latin1 | eval throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:1:21 stack 
+missing closing parenthesis | latin1 | eval lazy throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:2:21 stack 
+missing closing parenthesis | latin1 | Function throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:3:21 stack 
+missing closing parenthesis | twobyte | eval throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:1:21 stack 
+missing closing parenthesis | twobyte | eval lazy throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:2:21 stack 
+missing closing parenthesis | twobyte | Function throw SyntaxError: missing ) in parenthetical at spidermonkey-g2.js:3:21 stack 
+early error after identifiers | ascii | eval throw SyntaxError: expected expression, got end of script at spidermonkey-g2.js:2:10 stack 
+early error after identifiers | ascii | eval lazy throw SyntaxError: expected expression, got '}' at spidermonkey-g2.js:4:1 stack 
+early error after identifiers | ascii | Function throw SyntaxError: expected expression, got '}' at spidermonkey-g2.js:5:1 stack 
+early error after identifiers | latin1 | eval throw SyntaxError: expected expression, got end of script at spidermonkey-g2.js:2:10 stack 
+early error after identifiers | latin1 | eval lazy throw SyntaxError: expected expression, got '}' at spidermonkey-g2.js:4:1 stack 
+early error after identifiers | latin1 | Function throw SyntaxError: expected expression, got '}' at spidermonkey-g2.js:5:1 stack 
+early error after identifiers | twobyte | eval throw SyntaxError: expected expression, got end of script at spidermonkey-g2.js:2:10 stack 
+early error after identifiers | twobyte | eval lazy throw SyntaxError: expected expression, got '}' at spidermonkey-g2.js:4:1 stack 
+early error after identifiers | twobyte | Function throw SyntaxError: expected expression, got '}' at spidermonkey-g2.js:5:1 stack 
+non-Latin-1 identifiers | ascii | eval value 6
+non-Latin-1 identifiers | ascii | eval lazy value undefined
+non-Latin-1 identifiers | ascii | Function value undefined
+non-Latin-1 identifiers | latin1 | eval value 6
+non-Latin-1 identifiers | latin1 | eval lazy value undefined
+non-Latin-1 identifiers | latin1 | Function value undefined
+non-Latin-1 identifiers | twobyte | eval value 6
+non-Latin-1 identifiers | twobyte | eval lazy value undefined
+non-Latin-1 identifiers | twobyte | Function value undefined
+string with non-Latin-1 text | ascii | eval value "☃13"
+string with non-Latin-1 text | ascii | eval lazy value undefined
+string with non-Latin-1 text | ascii | Function value undefined
+string with non-Latin-1 text | latin1 | eval value "☃13"
+string with non-Latin-1 text | latin1 | eval lazy value undefined
+string with non-Latin-1 text | latin1 | Function value undefined
+string with non-Latin-1 text | twobyte | eval value "☃13"
+string with non-Latin-1 text | twobyte | eval lazy value undefined
+string with non-Latin-1 text | twobyte | Function value undefined
+throw from nested blocks | ascii | eval throw Error: innermost at spidermonkey-g2.js line 41 > eval:5:15 stack deepThrow@spidermonkey-g2.js line 41 > eval:5:15 | @spidermonkey-g2.js line 41 > eval:10:1
+throw from nested blocks | ascii | eval lazy throw Error: innermost at spidermonkey-g2.js line 42 > eval:6:15 stack deepThrow@spidermonkey-g2.js line 42 > eval:6:15 | @spidermonkey-g2.js line 42 > eval:11:1
+throw from nested blocks | ascii | Function throw Error: innermost at spidermonkey-g2.js line 43 > Function:7:15 stack deepThrow@spidermonkey-g2.js line 43 > Function:7:15 | anonymous@spidermonkey-g2.js line 43 > Function:12:1
+throw from nested blocks | latin1 | eval throw Error: innermost at spidermonkey-g2.js line 41 > eval:5:15 stack deepThrow@spidermonkey-g2.js line 41 > eval:5:15 | @spidermonkey-g2.js line 41 > eval:10:1
+throw from nested blocks | latin1 | eval lazy throw Error: innermost at spidermonkey-g2.js line 42 > eval:6:15 stack deepThrow@spidermonkey-g2.js line 42 > eval:6:15 | @spidermonkey-g2.js line 42 > eval:11:1
+throw from nested blocks | latin1 | Function throw Error: innermost at spidermonkey-g2.js line 43 > Function:7:15 stack deepThrow@spidermonkey-g2.js line 43 > Function:7:15 | anonymous@spidermonkey-g2.js line 43 > Function:12:1
+throw from nested blocks | twobyte | eval throw Error: innermost at spidermonkey-g2.js line 41 > eval:5:15 stack deepThrow@spidermonkey-g2.js line 41 > eval:5:15 | @spidermonkey-g2.js line 41 > eval:10:1
+throw from nested blocks | twobyte | eval lazy throw Error: innermost at spidermonkey-g2.js line 42 > eval:6:15 stack deepThrow@spidermonkey-g2.js line 42 > eval:6:15 | @spidermonkey-g2.js line 42 > eval:11:1
+throw from nested blocks | twobyte | Function throw Error: innermost at spidermonkey-g2.js line 43 > Function:7:15 stack deepThrow@spidermonkey-g2.js line 43 > Function:7:15 | anonymous@spidermonkey-g2.js line 43 > Function:12:1
+runtime error position | ascii | eval throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js line 41 > eval:3:5 stack @spidermonkey-g2.js line 41 > eval:3:5
+runtime error position | ascii | eval lazy throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js line 42 > eval:4:5 stack @spidermonkey-g2.js line 42 > eval:4:5
+runtime error position | ascii | Function throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js line 43 > Function:5:5 stack anonymous@spidermonkey-g2.js line 43 > Function:5:5
+runtime error position | latin1 | eval throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js line 41 > eval:3:5 stack @spidermonkey-g2.js line 41 > eval:3:5
+runtime error position | latin1 | eval lazy throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js line 42 > eval:4:5 stack @spidermonkey-g2.js line 42 > eval:4:5
+runtime error position | latin1 | Function throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js line 43 > Function:5:5 stack anonymous@spidermonkey-g2.js line 43 > Function:5:5
+runtime error position | twobyte | eval throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js line 41 > eval:3:5 stack @spidermonkey-g2.js line 41 > eval:3:5
+runtime error position | twobyte | eval lazy throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js line 42 > eval:4:5 stack @spidermonkey-g2.js line 42 > eval:4:5
+runtime error position | twobyte | Function throw TypeError: can't access property "missing", o is null at spidermonkey-g2.js line 43 > Function:5:5 stack anonymous@spidermonkey-g2.js line 43 > Function:5:5
+lazy inner functions | ascii | eval value "1,2"
+lazy inner functions | ascii | eval lazy value undefined
+lazy inner functions | ascii | Function value undefined
+lazy inner functions | latin1 | eval value "1,2"
+lazy inner functions | latin1 | eval lazy value undefined
+lazy inner functions | latin1 | Function value undefined
+lazy inner functions | twobyte | eval value "1,2"
+lazy inner functions | twobyte | eval lazy value undefined
+lazy inner functions | twobyte | Function value undefined
+inner function syntax error | ascii | eval throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:3:16 stack 
+inner function syntax error | ascii | eval lazy throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:4:16 stack 
+inner function syntax error | ascii | Function throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:5:16 stack 
+inner function syntax error | latin1 | eval throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:3:16 stack 
+inner function syntax error | latin1 | eval lazy throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:4:16 stack 
+inner function syntax error | latin1 | Function throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:5:16 stack 
+inner function syntax error | twobyte | eval throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:3:16 stack 
+inner function syntax error | twobyte | eval lazy throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:4:16 stack 
+inner function syntax error | twobyte | Function throw SyntaxError: expected expression, got ';' at spidermonkey-g2.js:5:16 stack 
+switch and try nesting | ascii | eval value "2,f"
+switch and try nesting | ascii | eval lazy value undefined
+switch and try nesting | ascii | Function value undefined
+switch and try nesting | latin1 | eval value "2,f"
+switch and try nesting | latin1 | eval lazy value undefined
+switch and try nesting | latin1 | Function value undefined
+switch and try nesting | twobyte | eval value "2,f"
+switch and try nesting | twobyte | eval lazy value undefined
+switch and try nesting | twobyte | Function value undefined
+with statement block | ascii | eval value "with"
+with statement block | ascii | eval lazy value undefined
+with statement block | ascii | Function value undefined
+with statement block | latin1 | eval value "with"
+with statement block | latin1 | eval lazy value undefined
+with statement block | latin1 | Function value undefined
+with statement block | twobyte | eval value "with"
+with statement block | twobyte | eval lazy value undefined
+with statement block | twobyte | Function value undefined
+do while asi | ascii | eval value 3
+do while asi | ascii | eval lazy value undefined
+do while asi | ascii | Function value undefined
+do while asi | latin1 | eval value 3
+do while asi | latin1 | eval lazy value undefined
+do while asi | latin1 | Function value undefined
+do while asi | twobyte | eval value 3
+do while asi | twobyte | eval lazy value undefined
+do while asi | twobyte | Function value undefined
+for loops with blocks | ascii | eval value 4
+for loops with blocks | ascii | eval lazy value undefined
+for loops with blocks | ascii | Function value undefined
+for loops with blocks | latin1 | eval value 4
+for loops with blocks | latin1 | eval lazy value undefined
+for loops with blocks | latin1 | Function value undefined
+for loops with blocks | twobyte | eval value 4
+for loops with blocks | twobyte | eval lazy value undefined
+for loops with blocks | twobyte | Function value undefined
+object literal methods | ascii | eval value "mg1"
+object literal methods | ascii | eval lazy value undefined
+object literal methods | ascii | Function value undefined
+object literal methods | latin1 | eval value "mg1"
+object literal methods | latin1 | eval lazy value undefined
+object literal methods | latin1 | Function value undefined
+object literal methods | twobyte | eval value "mg1"
+object literal methods | twobyte | eval lazy value undefined
+object literal methods | twobyte | Function value undefined
+class bodies | ascii | eval value "s1"
+class bodies | ascii | eval lazy value undefined
+class bodies | ascii | Function value undefined
+class bodies | latin1 | eval value "s1"
+class bodies | latin1 | eval lazy value undefined
+class bodies | latin1 | Function value undefined
+class bodies | twobyte | eval value "s1"
+class bodies | twobyte | eval lazy value undefined
+class bodies | twobyte | Function value undefined
+async and generator bodies | ascii | eval value "1,2function"
+async and generator bodies | ascii | eval lazy value undefined
+async and generator bodies | ascii | Function value undefined
+async and generator bodies | latin1 | eval value "1,2function"
+async and generator bodies | latin1 | eval lazy value undefined
+async and generator bodies | latin1 | Function value undefined
+async and generator bodies | twobyte | eval value "1,2function"
+async and generator bodies | twobyte | eval lazy value undefined
+async and generator bodies | twobyte | Function value undefined
+html comment in script | ascii | eval value 1
+html comment in script | ascii | eval lazy value undefined
+html comment in script | ascii | Function value undefined
+html comment in script | latin1 | eval value 1
+html comment in script | latin1 | eval lazy value undefined
+html comment in script | latin1 | Function value undefined
+html comment in script | twobyte | eval value 1
+html comment in script | twobyte | eval lazy value undefined
+html comment in script | twobyte | Function value undefined
+boundary block full accepts 644: accepted; 645: RangeError: too much recursion; then 42
+boundary block lazy accepts 638: accepted; 639: RangeError: too much recursion; then 42
+boundary braced if full accepts 429: accepted; 430: RangeError: too much recursion; then 42
+boundary braced if lazy accepts 425: accepted; 426: RangeError: too much recursion; then 42
+boundary braced else full accepts 429: accepted; 430: RangeError: too much recursion; then 42
+boundary braced else lazy accepts 425: accepted; 426: RangeError: too much recursion; then 42
+boundary label full accepts 1289: accepted; 1290: RangeError: too much recursion; then 42
+boundary label lazy accepts 1276: accepted; 1277: RangeError: too much recursion; then 42
+boundary nested function full accepts 322: accepted; 323: RangeError: too much recursion; then 42
+boundary nested function lazy accepts 319: accepted; 320: RangeError: too much recursion; then 42

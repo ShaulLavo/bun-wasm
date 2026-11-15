@@ -9,8 +9,12 @@ Mozilla revision `a5df22d986d4b626f771b4f8885241941601c35c`.
 
 ## Changes and reasons
 
-Read `BUN_WASM_STACK_KIB` once when initializing the context. A positive decimal
-value selects the quota, clamped to 7 MiB and to the member's available stack.
+Read `BUN_WASM_SPIDERMONKEY_STACK_KIB` once when initializing the context. A
+positive decimal value selects the quota, clamped to 7 MiB and to the member's
+available stack. SpiderMonkey never reads `BUN_WASM_STACK_KIB`, the QuickJS and
+JSC budget: values sized for those engines (32 KiB, as fixtures pass to child
+processes) are far below the roughly 100 KiB SpiderMonkey needs to start, and
+the native launcher sets that variable to 4096 for every guest.
 Missing, zero and malformed values retain the available-stack default. Both
 embeds keep 64 KiB between their largest quota and the bottom of the member's
 shadow stack. The standalone smoke verifies the installed native stack limits.
@@ -50,8 +54,8 @@ Next's webpack hook needs.
 | `Proxy::getInternal`, `setInternal`, `has`, `call`, `construct` | PBL | 1792 | Scripted proxy traps | `proxy` |
 | `SerializeJSONProperty` | both | 896 | Nested arrays and objects in `JSON.stringify` | `stringify` |
 | `array_join` | both | 1536 | Nested arrays converted to strings | `join` |
-| `statement` | both | 336 | Labels and sub-statements (`if`, loop and `with` bodies) | `labels`, with `ifs`, `validator`, `labelWhile` |
-| `statementListItem` | both | 352 | Statements inside blocks and function bodies | `blocks`, with `ifs`, `validator`, `labelWhile` |
+| `statement`, and the braced `if` body path that bypasses it (in `ifStatement`'s frame since the [parser frame merges](spidermonkey-frontend-frames.md)) | both | 336 | Labels and sub-statements (`if`, loop and `with` bodies) | `labels`, with `ifs`, `validator`, `labelWhile` |
+| `statementListItem` (in `statementList`'s frame since the parser frame merges) | both | 352 | Statements inside blocks and function bodies | `blocks`, with `ifs`, `validator`, `labelWhile` |
 | `functionFormalParametersAndBody` | both | 1696 | Nested function bodies | `functions`, `methods`, `classes`, `arrows` |
 | `functionExpr` in `primaryExpr` | both | 2880 | Nested function expressions | `iifes` |
 | `argumentList` | both | 2800 | Nested call arguments | `calls` |

@@ -19,7 +19,8 @@ const cases: Case[] = [
 
 function group(entry: Case): Promise<{ code: number | null; output: string }> {
   const worker = entry.child ? { STACK_DEPTH_WORKER_ENV: JSON.stringify(entry.child) } : {};
-  const env = { ...process.env, BUN_WASM_STACK_KIB: '192', [RESERVE]: entry.parent, ...worker };
+  // The fixed group budget, for every engine: SpiderMonkey reads only its own key.
+  const env = { ...process.env, BUN_WASM_STACK_KIB: '192', BUN_WASM_SPIDERMONKEY_STACK_KIB: '192', [RESERVE]: entry.parent, ...worker };
   return new Promise((resolve, reject) => {
     const parent = spawn(process.execPath, [probe, 'chainWorker', '4096'], { env, stdio: ['ignore', 'pipe', 'inherit'] });
     let output = '';

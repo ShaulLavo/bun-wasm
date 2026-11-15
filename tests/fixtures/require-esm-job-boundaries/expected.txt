@@ -1,0 +1,4 @@
+sync before-require,d,r,after-require
+settled before-require,d,r,after-require,promise-before,microtask-before,p
+d runs 1
+identity true
