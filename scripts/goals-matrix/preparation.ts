@@ -44,11 +44,11 @@ async function stagedEngine(root: string, names: readonly string[], required = f
   if (missing.length && (required || staged.length)) throw new Error(`Preparation error: Missing engine assets: ${missing.join(", ")}`);
   return staged;
 }
-export async function preflight(root: string, engines: readonly Engine[], profile: ProgramMemoryProfile = "split"): Promise<void> {
+export async function preflight(root: string, engines: readonly Engine[], profile: ProgramMemoryProfile = "split", options: { allowMissing?: boolean } = {}): Promise<void> {
   const staged: { name: string; data: Uint8Array }[] = [];
   for (const engine of engines) {
     const files = await stagedEngine(root, profileEngineFiles(engine, profile));
-    if (profile === "shared-group" && !files.length) throw new Error(`Preparation error: Missing ${engine} ${profile} assets`);
+    if (profile === "shared-group" && !files.length && !options.allowMissing) throw new Error(`Preparation error: Missing ${engine} ${profile} assets`);
     staged.push(...files);
   }
   if (!staged.length) return;

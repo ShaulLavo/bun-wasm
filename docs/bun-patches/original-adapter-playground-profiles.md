@@ -23,3 +23,13 @@ SpiderMonkey staging validates the original pair, core and native receipt
 identities before publishing assets. Library bytes and header counts must be
 positive safe integers, with valid SHA-256 digests in both native metadata
 records. Equal missing or malformed identities cannot establish a match.
+
+Angular template launches now select shared-group for the three Wasm engines
+before loading. Explicit selections, Browser and unrelated defaults remain
+unchanged. Goals use the same resolver, preserve omitted overrides across fleet
+execution, and record mixed selection as template-default with actual startup
+profile evidence. Missing shared assets fail before downloading program bytes.
+Full site builds require complete shared-program inputs for published Wasm
+engines; the existing staging verifier checks their real bytes and records.
+No payload, backing, worker codec, allocator, memory budget, stack policy or
+provider pin changes are part of this routing correction.

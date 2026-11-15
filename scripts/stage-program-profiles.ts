@@ -12,6 +12,13 @@ export function sharedProgramReceipts(engine: PairedEngine): string[] {
     ? ["spidermonkey-shared.json", "shared-group-library.json"] : [`${programProfile(engine).side}.engine.json`]);
 }
 
+export function requireSharedProgramInputs(engines: readonly PairedEngine[], env: NodeJS.ProcessEnv = process.env): void {
+  for (const engine of engines) {
+    const variable = `SHARED_${engine.toUpperCase()}_PROGRAM`;
+    if (!env[variable]) throw new Error(`The full site requires ${engine} shared-group assets for Angular. Set ${variable} to its matching program directory before building.`);
+  }
+}
+
 /** Consume complete programs from the existing shared-profile producers. Never build a guest. */
 export async function stageSharedPrograms(out: string, builds: Record<string, string>, inputs: Partial<Record<PairedEngine, string | undefined>> = {
   quickjs: process.env.SHARED_QUICKJS_PROGRAM,

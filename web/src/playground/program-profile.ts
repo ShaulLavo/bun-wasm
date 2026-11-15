@@ -10,7 +10,13 @@ export function playgroundProfile(value: string | null): PlaygroundProfile {
   throw new TypeError(`Unknown Bun program profile: ${value}`);
 }
 
-export function requireProfileEngine(engine: Engine, profile: PlaygroundProfile): void {
+export function templateProfile(engine: Engine, template: string | undefined, requested?: PlaygroundProfile): PlaygroundProfile {
+  const profile = requested ?? (template === "angular" && engine !== "browser" ? "shared-group" : "split");
+  requireProfileEngine(engine, profile);
+  return profile;
+}
+
+function requireProfileEngine(engine: Engine, profile: PlaygroundProfile): void {
   if (profile === "shared-group" && engine === "browser") {
     throw new TypeError(`The ${engine} engine does not support the shared-group playground profile`);
   }

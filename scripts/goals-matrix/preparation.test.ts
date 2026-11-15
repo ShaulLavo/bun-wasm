@@ -11,7 +11,7 @@ import { pinnedBashWeb } from "../bash-web-guests";
 
 test("goals record and carry an explicit memory profile without changing the engine", () => {
   const args = ["--asset-source=fixture", "--engines=quickjs,jsc"];
-  expect(options(args).profile).toBe("split");
+  expect(options(args).profile).toBeUndefined();
   expect(options(args.concat(["--profile=shared-group"])).profile).toBe("shared-group");
   expect(() => options(args.concat(["--profile=shared"]))).toThrow("Unknown Bun program profile");
   expect(options(["--asset-source=fixture", "--profile=shared-group", "--engines=spidermonkey"]).engines).toEqual(["spidermonkey"]);
