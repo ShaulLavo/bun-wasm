@@ -195,7 +195,7 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
     });
   } catch (error) {
     errors.push(error);
-    const observation = Scope.open(4000, admission);
+    const observation = Scope.open(4000, work);
     try { await observation.run(guard => saveFinalLog(transport, options, results, failureLog, guard, "after failed server stop")); }
     catch (error) { errors.push(error); }
     finally { observation.close(); }

@@ -94,6 +94,46 @@ test("a cleanup observation failure retains terminal evidence and still closes t
     expect(closed).toBe(true);
   });
 });
+
+test("optional failure capture preserves close settlement and the original stop error near the work limit", async () => {
+  const framework = frameworks[0]!;
+  await withPlayground(framework, 0, async transport => {
+    const evaluate = transport.evaluate.bind(transport), close = transport.close.bind(transport);
+    const closePreview = transport.closePreview.bind(transport);
+    const observations: Promise<void>[] = [];
+    let cleaning = false, closeFinished = false, closeWork: Promise<void> | undefined;
+    transport.beginCleanup = async () => { cleaning = true; };
+    transport.closePreview = async admission => {
+      if (cleaning) await Bun.sleep(7500);
+      await closePreview(admission);
+    };
+    transport.evaluate = async <T>(expression: string, admission: Admission) => {
+      if (cleaning && expression.includes("function stopState")) throw new Error("original stop observation failure");
+      if (cleaning && expression.includes("function transcript")) {
+        const pending = Bun.sleep(2100);
+        observations.push(pending);
+        await pending;
+      }
+      return evaluate<T>(expression, admission);
+    };
+    transport.close = () => closeWork ??= (async () => {
+      await Bun.sleep(9500);
+      await close();
+      closeFinished = true;
+    })();
+    try {
+      const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" },
+        url: "http://fixture/?engine=browser", timeoutMs: 2000,
+        async createTransport() { return transport; }, async saveLog() { await Bun.sleep(1900); },
+      });
+      expect(closeFinished).toBe(true);
+      expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "fail", error: expect.stringContaining("original stop observation failure") });
+    } finally {
+      await closeWork;
+      await Promise.allSettled(observations);
+    }
+  });
+}, 30_000);
 test("a previous idle zero exit cannot mask a new asynchronous nonzero command", async () => {
   const transport = page(async shell => { await Bun.sleep(30); shell.running = true; await Bun.sleep(30); shell.lastExit = 17; shell.running = false; });
   await expect(withScoped(transport, page => command(page, "fails later", 1000))).rejects.toThrow("exited 17");
