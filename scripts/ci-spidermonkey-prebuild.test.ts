@@ -2,8 +2,9 @@ import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import assert from 'node:assert/strict';
 import { expect, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
+import type { SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { needsRust, needsSharedNative } from './ci-changes.ts';
@@ -162,6 +163,8 @@ test('every producer setup/build step and its environment remains part of the re
     ['CARGO_INCREMENTAL: "0"', 'CARGO_INCREMENTAL: "1"'],
     ['CI_NODE_VERSION: \'26.13.1\'', 'CI_NODE_VERSION: \'26.13.2\''],
     ['wasi-sdk-34.0-x86_64-linux', 'wasi-sdk-35.0-x86_64-linux'],
+    ['apt-get install -y clang-19 llvm-19', 'apt-get install -y clang-20 llvm-20'],
+    ['"/usr/bin/$tool-19"', '"/usr/bin/$tool-20"'],
     ['JOBS: "2"', 'JOBS: "3"'],
   ] satisfies [string, string][]) {
     // Scope identical setup strings to the producer, except the global Node pin.
@@ -218,40 +221,99 @@ test.each(recipeBindings.filter(path => path.startsWith('scripts/ci-')))('%s sel
   expect(needsRust([path])).toBe(true);
 });
 
-test('the maintained native-input command changes identity for tool, SDK and sysroot bytes', () => {
+function hostToolsFixture(run: (value: { root: string; programs: string[]; execute: (script: string, env?: NodeJS.ProcessEnv) => SpawnSyncReturns<string>; identity: (env?: NodeJS.ProcessEnv) => string }) => void): void {
   const root = mkdtempSync(join(tmpdir(), 'bun-wasm-sm-tools-'));
   try {
     const tools = join(root, 'tools'), cargo = join(root, 'cargo'), sysroot = join(root, 'sysroot');
     for (const path of ['bin', 'tools/wasi-sdk/bin', 'cargo/bin', 'sysroot/lib/wasm32-wasip1', 'host']) mkdirSync(join(root, path), { recursive: true });
-    const programs = ['rustc', 'cargo', 'clang', 'clang++', 'llvm-readobj', 'python3', 'autoconf2.13', 'make', 'perl', 'dpkg-query'];
+    const programs = ['rustc', 'cargo', 'python3', 'autoconf2.13', 'make', 'perl', 'dpkg-query'];
     const binary = '#!/bin/sh\nprintf "fixture tool\\n"\n';
     for (const program of programs) writeFileSync(join(root, 'bin', program), binary, { mode: 0o755 });
-    for (const path of ['tools/wasi-sdk/bin/clang++', 'cargo/bin/cbindgen', 'host/clang', 'host/clang++']) writeFileSync(join(root, path), binary, { mode: 0o755 });
-    for (const path of ['bun-wasm-sysroot.json', 'lib/wasm32-wasip1/libc.a']) writeFileSync(join(sysroot, path), 'fixture sysroot');
-    const input = command('shared-spidermonkey-prebuild', 'Identify shared SpiderMonkey native inputs').replaceAll('/usr/bin/clang', join(root, 'host/clang'));
-    const output = join(root, 'output');
-    const identity = () => {
-      writeFileSync(output, '');
-      execFileSync('bash', ['-euo', 'pipefail', '-c', input], { env: { ...process.env, WASM_TOOLS: tools, WASI_SDK_PATH: join(tools, 'wasi-sdk'),
-        CARGO_HOME: cargo, BUN_WASM_SYSROOT: sysroot, PATH: join(root, 'bin') + ':' + process.env.PATH,
-        RUNNER_TEMP: root, GITHUB_ENV: join(root, 'environment'), GITHUB_OUTPUT: output } });
-      const result = readFileSync(output, 'utf8').match(/^hash=([a-f0-9]{64})$/m)?.[1];
-      assert(result);
-      return result;
-    };
-    const original = identity();
-    const paths = programs.filter(program => program !== 'clang++').map(program => join(root, 'bin', program)).concat(
-      ['tools/wasi-sdk/bin/clang++', 'cargo/bin/cbindgen', 'host/clang', 'host/clang++', 'sysroot/bun-wasm-sysroot.json', 'sysroot/lib/wasm32-wasip1/libc.a'].map(path => join(root, path)));
-    for (const path of paths) {
-      const before = readFileSync(path);
-      writeFileSync(path, before.toString().replace('fixture', 'changed'));
-      expect(identity()).not.toBe(original);
-      writeFileSync(path, before);
+    for (const path of ['tools/wasi-sdk/bin/clang', 'tools/wasi-sdk/bin/clang++', 'cargo/bin/cbindgen']) writeFileSync(join(root, path), binary, { mode: 0o755 });
+    for (const tool of ['clang', 'clang++', 'llvm-readobj']) {
+      writeFileSync(join(root, 'host', tool), '#!/bin/sh\nprintf "Ubuntu clang version 18.1.3\\n"\n', { mode: 0o755 });
+      writeFileSync(join(root, 'host', tool + '-19'), `#!/bin/sh\nprintf "Ubuntu ${tool === 'llvm-readobj' ? 'LLVM' : 'clang'} version \${FIXTURE_TOOL_VERSION:-19.1.1} fixture\\n"\n`, { mode: 0o755 });
     }
+    writeFileSync(join(root, 'bin/sudo'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+    writeFileSync(join(root, 'bin/apt-get'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$APT_CALLS"\nif [ "${APT_FAIL:-}" = "$1" ]; then exit 42; fi\n', { mode: 0o755 });
+    for (const path of ['bun-wasm-sysroot.json', 'lib/wasm32-wasip1/libc.a']) writeFileSync(join(sysroot, path), 'fixture sysroot');
+    const output = join(root, 'output');
+    const execute = (script: string, env: NodeJS.ProcessEnv = {}) => spawnSync('bash', ['-euo', 'pipefail', '-c', script.replaceAll('/usr/bin/', join(root, 'host') + '/')], {
+      encoding: 'utf8', env: { ...process.env, WASM_TOOLS: tools, WASI_SDK_PATH: join(tools, 'wasi-sdk'),
+        CARGO_HOME: cargo, BUN_WASM_SYSROOT: sysroot, PATH: join(root, 'host') + ':' + join(root, 'bin') + ':' + process.env.PATH,
+        RUNNER_TEMP: root, GITHUB_ENV: join(root, 'environment'), GITHUB_OUTPUT: output, APT_CALLS: join(root, 'apt-calls'), ...env },
+    });
+    const identity = (env?: NodeJS.ProcessEnv) => {
+      writeFileSync(output, '');
+      const result = execute(command('shared-spidermonkey-prebuild', 'Identify shared SpiderMonkey native inputs'), env);
+      assert.equal(result.status, 0, result.stderr);
+      const digest = readFileSync(output, 'utf8').match(/^hash=([a-f0-9]{64})$/m)?.[1];
+      assert(digest);
+      return digest;
+    };
+    run({ root, programs, execute, identity });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
+}
+
+const installHostTools = command('shared-spidermonkey-prebuild', 'Install the SpiderMonkey producer tools');
+const identifyNativeInputs = command('shared-spidermonkey-prebuild', 'Identify shared SpiderMonkey native inputs');
+
+test('Ubuntu setup selects versioned packages at the absolute mozconfig paths', () => hostToolsFixture(({ root, execute, identity }) => {
+  for (const operation of ['update', 'install']) {
+    expect(execute(installHostTools, { APT_FAIL: operation }).status).toBe(42);
+    expect(realpathSync(join(root, 'host/clang'))).toBe(join(root, 'host/clang'));
+  }
+  expect(execute(installHostTools).status).toBe(0);
+  expect(readFileSync(join(root, 'apt-calls'), 'utf8').split('\n')).toContain('install -y clang-19 llvm-19 autoconf2.13 pkg-config python3-dev python3-venv python3-packaging python3-setuptools libffi-dev zlib1g-dev');
+  for (const tool of ['clang', 'clang++', 'llvm-readobj']) expect(realpathSync(join(root, 'host', tool))).toBe(join(root, 'host', tool + '-19'));
+  const mozconfig = readFileSync('spidermonkey/mozconfig.in', 'utf8');
+  expect(mozconfig).toContain('export HOST_CC="/usr/bin/clang"');
+  expect(mozconfig).toContain('export HOST_CXX="/usr/bin/clang++"');
+  expect(identity()).toMatch(/^[0-9a-f]{64}$/);
+}));
+
+test('the maintained native-input command changes identity for selected tool, SDK and sysroot bytes', () => hostToolsFixture(({ root, programs, execute, identity }) => {
+  expect(execute(installHostTools).status).toBe(0);
+  const original = identity();
+  const paths = programs.map(program => join(root, 'bin', program)).concat(
+    ['tools/wasi-sdk/bin/clang', 'tools/wasi-sdk/bin/clang++', 'cargo/bin/cbindgen', 'host/clang-19', 'host/clang++-19', 'host/llvm-readobj-19', 'sysroot/bun-wasm-sysroot.json', 'sysroot/lib/wasm32-wasip1/libc.a'].map(path => join(root, path)));
+  for (const path of paths) {
+    const before = readFileSync(path);
+    writeFileSync(path, before.toString().replace('fixture', 'changed'));
+    expect(identity()).not.toBe(original);
+    writeFileSync(path, before);
+  }
+  expect(identity({ FIXTURE_TOOL_VERSION: '19.1.2' })).not.toBe(original);
+  cpSync(join(root, 'host/clang-19'), join(root, 'host/clang-copy'));
+  rmSync(join(root, 'host/clang'));
+  symlinkSync(join(root, 'host/clang-copy'), join(root, 'host/clang'));
+  expect(identity()).not.toBe(original);
+}));
+
+test('old, missing and failing selected tools cannot publish a native-input fingerprint', () => hostToolsFixture(({ root, execute }) => {
+  expect(execute(installHostTools).status).toBe(0);
+  const output = join(root, 'output');
+  for (const tool of ['host/clang-19', 'host/clang++-19', 'host/llvm-readobj-19', 'bin/dpkg-query']) {
+    const path = join(root, tool), before = readFileSync(path);
+    const failures = ['#!/bin/sh\nexit 42\n', ''];
+    if (tool.startsWith('host/')) failures.push('#!/bin/sh\nprintf "Ubuntu clang version 18.1.3\\n"\n');
+    for (const replacement of failures) {
+      writeFileSync(output, '');
+      if (replacement) writeFileSync(path, replacement);
+      else rmSync(path);
+      const result = execute(identifyNativeInputs);
+      expect(result.status).not.toBe(0);
+      expect(readFileSync(output, 'utf8')).not.toContain('hash=');
+      writeFileSync(path, before, { mode: 0o755 });
+    }
+  }
+  rmSync(join(root, 'cargo/bin/cbindgen'));
+  writeFileSync(output, '');
+  expect(execute(identifyNativeInputs).status).not.toBe(0);
+  expect(readFileSync(output, 'utf8')).not.toContain('hash=');
+}));
 
 function restoreEnvironment(before: Record<string, string | undefined>): void {
   for (const [key, value] of Object.entries(before)) {
