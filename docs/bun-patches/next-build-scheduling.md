@@ -9,6 +9,21 @@ compiled production runtime files for Turbopack or experimental React. The five
 stable production runtimes remain eligible for tracing. No package, image
 processor, application route, build phase, or production assertion is excluded.
 
+The starter also sets `experimental.webpackBuildWorker: false`. Next 15.5.6's
+`dist/build/index.js` otherwise enables the compiler worker when the application
+has no custom webpack configuration. `dist/build/webpack-build/index.js` creates
+and ends one separate compiler process for each server, edge and client pass.
+The setting runs those passes in the existing build process. It keeps the
+one-CPU policy, TypeScript verification, static generation, dependency tracing
+and production output checks. No upstream source is modified.
+
+Matched Linux WebKit diagnostics on the original post-J11 host and guests
+sampled 5.88% lower build PSS on QuickJS and 21.84% lower PSS on SpiderMonkey,
+and both modified workflows passed all nine phases. These are sampled process
+tree readings, not native Safari qualification or proof of an initiating OOM.
+The separate `webpackMemoryOptimizations` option reduced the QuickJS sample by
+only 0.14% and was not selected.
+
 The upstream selectors are
 `next/dist/server/route-modules/{app-page,app-route,pages,pages-api}/module.compiled.js`.
 Their webpack, production, stable-React branches select the retained runtime
@@ -31,14 +46,9 @@ stable variants eligible. The live Pages fixture does not require unused stable
 App Route files to appear in the trace. Its SSR route requires the stable Pages
 runtime, and restricted production execution tests the actual dependency closure.
 
-The measured default campaign bound is 90,000 ms. Next's build alone has a
-110,000 ms bound, about 14% above the slower measured Chrome build of 96,483 ms.
-All other campaign phases and frameworks keep 90,000 ms. Cleanup retains its
-existing 20,000 ms bound and shorter inner cleanup limits. An explicit larger
-diagnostic campaign bound still applies. Serialized deadline evidence records
-both install and build bounds and rejects missing or different build policy.
-This is a measured budget correction alongside narrow trace pruning, not a claim
-that the engines became faster.
+Campaign limits catch hangs: ordinary phases have 300,000 ms and install/build
+have 600,000 ms. Cleanup retains its existing 20,000 ms bound and shorter inner
+cleanup limits. Serialized evidence records the actual limits and durations.
 
 The goals terminal reader joins xterm soft-wrapped rows using `isWrapped` and
 preserves real newlines. Its failing-first regression covers the missing-runtime
