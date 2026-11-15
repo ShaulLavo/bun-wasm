@@ -965,3 +965,63 @@ index 4ecf3ef44..fccb197d6 100644
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
+diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitter.cpp
+--- a/js/src/frontend/BytecodeEmitter.cpp
++++ b/js/src/frontend/BytecodeEmitter.cpp
+@@ -5221,6 +5221,13 @@
+ bool BytecodeEmitter::emitIf(TernaryNode* ifNode) {
++  // IfStatement applies UpdateEmpty with undefined, unlike a plain block.
++  if (sc->isTopLevelContext() && !sc->noScriptRval()) {
++    if (!emit1(JSOp::Undefined) || !emit1(JSOp::SetRval)) {
++      return false;
++    }
++  }
++
+   IfEmitter ifThenElse(this);
+
+   if (!ifThenElse.emitIf(Some(ifNode->kid1()->pn_pos.begin))) {
+     return false;
+   }
+diff --git a/js/src/frontend/FoldConstants.cpp b/js/src/frontend/FoldConstants.cpp
+--- a/js/src/frontend/FoldConstants.cpp
++++ b/js/src/frontend/FoldConstants.cpp
+@@ -881,6 +881,8 @@
+ static bool FoldIf(FoldInfo info, ParseNode** nodePtr) {
++  ParseNode** originalNodePtr = nodePtr;
++  ParseNode* originalNode = *nodePtr;
+   ParseNode** nextNode = nodePtr;
+
+   do {
+     // |nextNode| on entry points to the initial |if| to be folded.  Reset
+     // it to exit the loop when the |else| arm isn't another |if|.
+@@ -974,7 +976,30 @@
+     }
+   } while (nextNode);
+
++  if (*originalNodePtr == originalNode) {
++    return true;
++  }
++
++  // Preserve the if completion after the entire selected else-if chain folds.
++  RawUndefinedLiteral* undefined;
++  MOZ_TRY_VAR_OR_RETURN(
++      undefined, info.handler->newRawUndefinedLiteral(originalNode->pn_pos),
++      false);
++  UnaryNode* undefinedStatement;
++  MOZ_TRY_VAR_OR_RETURN(
++      undefinedStatement,
++      info.handler->newExprStatement(undefined, originalNode->pn_pos.end), false);
++  ListNode* completion;
++  MOZ_TRY_VAR_OR_RETURN(
++      completion, info.handler->newStatementList(originalNode->pn_pos), false);
++  completion->append(undefinedStatement);
++
++  ParseNode* replacement = *originalNodePtr;
++  ReplaceNode(originalNodePtr, completion);
++  replacement->pn_next = nullptr;
++  completion->append(replacement);
++
+   return true;
+ }
+
+ static double ComputeBinary(ParseNodeKind kind, double left, double right) {

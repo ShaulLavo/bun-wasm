@@ -31,4 +31,10 @@ hoisted declaration: undefined
 else if value: 24
 else if hoist: undefined
 shadowed undefined: undefined
+constant finally return: 27
+dynamic finally return: 28
+finally preserves value: 29
+condition evaluates once: 1
+constant function declaration: 31
+dynamic function declaration: 32
 function returns: preserved

@@ -33,7 +33,13 @@ const cases: readonly CompletionCase[] = [
   ["hoisted declaration", "13; if (1) { } else { var hoisted; }", undefined],
   ["else if value", "21; if (0) { 22; } else if (0) { 23; } else { 24; }", 24],
   ["else if hoist", "21; if (0) { 22; } else if (0) { var hoisted; } else if (1) { }", undefined],
-  ["shadowed undefined", "let undefined = 99; 11; if (0) { 12; }", undefined],
+  ["shadowed undefined", "{ let undefined = 99; 11; if (0) { 12; } }", undefined],
+  ["constant finally return", "(function () { try { return 27; } finally { if (1) { } } })()", 27],
+  ["dynamic finally return", "(function (c) { try { return 28; } finally { if (c) { } } })(true)", 28],
+  ["finally preserves value", "try { 29; } finally { if (1) { } }", 29],
+  ["condition evaluates once", "var calls = 0; if (++calls > 1) { 30; } else { calls; }", 1],
+  ["constant function declaration", "Function('if (1) function f() { return 31; } return f();')()", 31],
+  ["dynamic function declaration", "Function('c', 'if (c) function f() { return 32; } return f();')(true)", 32],
 ];
 
 const indirectEval = eval;
