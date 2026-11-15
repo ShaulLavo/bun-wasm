@@ -212,7 +212,9 @@ export async function preservationScenario(browser: Browser, base: string, obser
     assert.equal(await step("hono.stored", () => stored(page, "hono")), true, "active workspace was evicted");
     assert.equal(await step("hono.server-state", () => active.locator("#server-dot").getAttribute("data-state")), "up", "active Hono server was stopped");
     assert.equal(await step("hono.counter", () => active.frameLocator("#preview").locator("#count").textContent()), "1");
+    checkpoint = "first-vanilla-restoration";
     await openTemplate(page, base, "vanilla", observer);
+    checkpoint = "preservation";
     await step("vanilla.retained-tree", () => retainedUserTree(page));
     const preview = page.frameLocator("#preview");
     await step("vanilla.increment", () => preview.locator("button.counter").click());
@@ -245,7 +247,7 @@ export async function preservationScenario(browser: Browser, base: string, obser
 
 export class StoragePreservationFailure extends Error {
   constructor(readonly report: {
-    checkpoint: "setup" | "vanilla-config-restart" | "first-vite-react-startup" | "first-vite-vue-startup" | "preservation";
+    checkpoint: "setup" | "vanilla-config-restart" | "first-vite-react-startup" | "first-vite-vue-startup" | "first-vanilla-restoration" | "preservation";
     error: string; errors: readonly string[]; pages: readonly (StoragePageDiagnostic | string)[];
   }, cause: unknown) {
     super(report.error, { cause });

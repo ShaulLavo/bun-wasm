@@ -76,7 +76,7 @@ void report_failure(bsm_handle thrown) {
   install("lastFailure", thrown);
   bsm_handle text = 0;
   const char* describe = "String(lastFailure) + '\\n' + (lastFailure && lastFailure.stack)";
-  if (!bsm_eval_script(describe, strlen(describe), "report.js", 1, &text)) return;
+  if (!bsm_eval_script(describe, strlen(describe), "report.js", 9, 1, &text)) return;
   size_t length = 0;
   const char* data = bsm_string_data(text, &length);
   if (data) fprintf(stderr, "thrown: %.*s\n", static_cast<int>(length), data);
@@ -86,7 +86,7 @@ void report_failure(bsm_handle thrown) {
 void loop_success(const char* source) {
   auto entry = loop_stack();
   bsm_handle out = 0;
-  bool ok = bsm_eval_script(source, strlen(source), "getter-control.js", 1, &out);
+  bool ok = bsm_eval_script(source, strlen(source), "getter-control.js", 17, 1, &out);
   if (!ok) report_failure(out);
   check(ok, source);
   bsm_release(out);
@@ -96,7 +96,7 @@ void loop_success(const char* source) {
 void loop_failure(const char* source) {
   auto entry = loop_stack();
   bsm_handle out = 0;
-  check(!bsm_eval_script(source, strlen(source), "getter-control.js", 1, &out), "expected failure");
+  check(!bsm_eval_script(source, strlen(source), "getter-control.js", 17, 1, &out), "expected failure");
   bsm_release(out);
   balanced(entry, "stack balanced after failed evaluation");
 }

@@ -1,0 +1,1 @@
+SpiderMonkey custom CallSites preserve sourceURL text and lazy identities

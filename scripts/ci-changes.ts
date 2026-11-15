@@ -61,6 +61,8 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "scripts/ci-jsc-artifact.ts",
   "scripts/ci-main-coverage.ts", "scripts/ci-refs.ts",
   "scripts/ci-spidermonkey-prebuild.ts", "scripts/ci-spidermonkey-prebuild.test.ts", "checks/quality-ci-spidermonkey-prebuild.json",
+  "scripts/ci-bootstrap-tools.ts", "scripts/ci-install.ts", "scripts/ci-stage-release-packages.ts",
+  "scripts/ci-release-download.ts",
   "scripts/spidermonkey-browser-ci.test.ts", "checks/quality-spidermonkey-browser-ci.json",
   "scripts/spidermonkey-browser-stack.test.ts", "checks/quality-spidermonkey-browser-stack.json",
   "web/tests/shared-wasm-agent/spidermonkey-stack-proof.ts",
@@ -92,7 +94,8 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   // The parent-and-Worker parser reserve ownership case that consumer runs in each group.
   "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",
 ]);
-const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/", "spidermonkey/"];
+const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".cargo/", "web/src/nested/", "jsc/", "spidermonkey/",
+  ".github/actions/setup-tools/", ".github/actions/release-downloads/", ".github/actions/spidermonkey-", "scripts/ci-spidermonkey-"];
 export function needsSharedNative(paths: readonly string[], inputs: readonly string[] = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
   return paths.some(path => !excludedNativeInput(path) && (nativePreparationFiles.has(path) || sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));

@@ -1,6 +1,8 @@
 #include "engine.h"
 #include "stack-budget.h"
+#include "filename.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <new>
@@ -258,6 +260,35 @@ const JSClass nativeClass = {"BunNative", JSCLASS_HAS_RESERVED_SLOTS(1) | JSCLAS
 const JSClass frameClass = {"BunAsyncFrame", JSCLASS_HAS_RESERVED_SLOTS(1), nullptr, nullptr, nullptr, nullptr};
 const JSClass globalClass = {"Bun", JSCLASS_GLOBAL_FLAGS, &JS::DefaultGlobalClassOps, nullptr, nullptr, nullptr};
 
+bool has_percent(JSLinearString* linear) {
+  JS::AutoCheckCannotGC nogc;
+  const size_t length = JS::GetLinearStringLength(linear);
+  if (JS::LinearStringHasLatin1Chars(linear)) {
+    const JS::Latin1Char* chars = JS::GetLatin1LinearStringChars(nogc, linear);
+    return memchr(chars, '%', length) != nullptr;
+  }
+  const char16_t* chars = JS::GetTwoByteLinearStringChars(nogc, linear);
+  return std::find(chars, chars + length, u'%') != chars + length;
+}
+
+// Only compiler filenames carry DiagnosticFilename escapes. A sourceURL label is
+// raw text and an ordinary filename is returned as the same string.
+JSString* frame_filename(JSContext* cx, JS::HandleObject frame, JS::HandleString source,
+                         JS::SavedFrameSelfHosted selfHosted) {
+  JS::SavedFrameSourceKind kind = JS::SavedFrameSourceKind::DisplayURL;
+  if (JS::GetSavedFrameSourceKind(cx, nullptr, frame, &kind, selfHosted) != JS::SavedFrameResult::Ok) return nullptr;
+  if (kind != JS::SavedFrameSourceKind::Filename) return source;
+  // SavedFrame sources are atoms, so this never allocates.
+  JSLinearString* linear = JS_EnsureLinearString(cx, source);
+  if (!linear) return nullptr;
+  if (!has_percent(linear)) return source;
+  JS::RootedValue value(cx, JS::StringValue(source));
+  std::string label;
+  if (!to_utf8(value, &label)) return nullptr;
+  const std::string name = bunsm::original_filename(label);
+  return utf8(name.data(), name.size());
+}
+
 JSObject* saved_frame_object(JSContext* cx, JS::HandleObject frame, JS::SavedFrameSelfHosted selfHosted) {
   JS::RootedString source(cx), name(cx);
   uint32_t line = 0;
@@ -266,6 +297,8 @@ JSObject* saved_frame_object(JSContext* cx, JS::HandleObject frame, JS::SavedFra
       JS::GetSavedFrameFunctionDisplayName(cx, nullptr, frame, &name, selfHosted) != JS::SavedFrameResult::Ok ||
       JS::GetSavedFrameLine(cx, nullptr, frame, &line, selfHosted) != JS::SavedFrameResult::Ok ||
       JS::GetSavedFrameColumn(cx, nullptr, frame, &column, selfHosted) != JS::SavedFrameResult::Ok) return nullptr;
+  source = frame_filename(cx, frame, source, selfHosted);
+  if (!source) return nullptr;
   JS::RootedObject result(cx, JS_NewPlainObject(cx));
   if (!result) return nullptr;
   JS::RootedValue field(cx, name ? JS::StringValue(name) : JS::NullValue());
@@ -424,7 +457,7 @@ bool resolve(const char* specifier, size_t length, const std::string& referrer,
     return restore_exception(exception);
   }
   out->assign(bytes, size);
-  bunsm_host_free(bytes);
+  bunsm_host_free(bytes, size);
   return true;
 }
 
@@ -602,7 +635,8 @@ JSObject* compile_module(const std::string& name, const char* source, size_t len
   JS::SourceText<mozilla::Utf8Unit> text;
   if (!text.init(context, source, length, JS::SourceOwnership::Borrowed)) return nullptr;
   JS::CompileOptions options(context);
-  options.setFileAndLine(name.c_str(), 1);
+  const bunsm::DiagnosticFilename filename(name);
+  options.setFileAndLine(filename.c_str(), 1);
   JS::RootedObject module(context, JS::CompileModule(context, options, text));
   if (!module) return nullptr;
   JS::RootedString privateName(context, utf8(name.data(), name.size()));
@@ -630,7 +664,7 @@ JSObject* load_module(const std::string& name) {
     return nullptr;
   }
   JSObject* module = compile_module(name, source, length);
-  bunsm_host_free(source);
+  bunsm_host_free(source, length);
   return module;
 }
 
@@ -930,7 +964,7 @@ std::string commonjs_source(const char* source, size_t length, std::string_view 
   return adjusted;
 }
 
-bool compile_commonjs(const char* source, size_t length, const char* filename, int32_t line, bsm_handle* out) {
+bool compile_commonjs(const char* source, size_t length, const std::string& filename, int32_t line, bsm_handle* out) {
   std::string_view body;
   if (!commonjs_body(source, length, line, &body)) {
     constexpr const char message[] = "negative script lines require the CommonJS wrapper";
@@ -942,10 +976,11 @@ bool compile_commonjs(const char* source, size_t length, const char* filename, i
   JS::SourceText<mozilla::Utf8Unit> text;
   if (!text.init(context, adjusted.data(), adjusted.size(), JS::SourceOwnership::Borrowed)) return failure(out);
   JS::CompileOptions options(context);
-  options.setFileAndLine(filename, 0);
+  const bunsm::DiagnosticFilename label(filename);
+  options.setFileAndLine(label.c_str(), 0);
   JS::RootedScript script(context, JS::Compile(context, options, text));
   if (!script) return failure(out);
-  JS::RootedString name(context, utf8(filename, strlen(filename)));
+  JS::RootedString name(context, utf8(filename.data(), filename.size()));
   if (!name) return failure(out);
   JS::SetScriptPrivate(script, JS::StringValue(name));
   JS::RootedValue output(context);
@@ -1250,18 +1285,20 @@ extern "C" bool bsm_define_hidden(bsm_handle handle, const char* key, size_t len
   *out = 0;
   return JS_DefinePropertyById(context, obj, id, item, 0) || failure(out);
 }
-extern "C" bool bsm_eval_script(const char* source, size_t length, const char* filename, int32_t line, bsm_handle* out) {
+extern "C" bool bsm_eval_script(const char* source, size_t length, const char* name, size_t nameLength, int32_t line, bsm_handle* out) {
   JSAutoRealm realm(context, global->get());
+  const std::string filename(name, nameLength);
   JS::SourceText<mozilla::Utf8Unit> text;
   if (!text.init(context, source, length, JS::SourceOwnership::Borrowed)) return failure(out);
   JS::CompileOptions options(context);
   if (line < 0) return compile_commonjs(source, length, filename, line, out);
-  options.setFileAndLine(filename, static_cast<uint32_t>(line));
+  const bunsm::DiagnosticFilename label(filename);
+  options.setFileAndLine(label.c_str(), static_cast<uint32_t>(line));
   JS::RootedScript script(context, JS::Compile(context, options, text));
   if (!script) return failure(out);
-  JS::RootedString name(context, utf8(filename, strlen(filename)));
-  if (!name) return failure(out);
-  JS::SetScriptPrivate(script, JS::StringValue(name));
+  JS::RootedString privateName(context, utf8(filename.data(), filename.size()));
+  if (!privateName) return failure(out);
+  JS::SetScriptPrivate(script, JS::StringValue(privateName));
   JS::RootedValue output(context);
   return result(JS_ExecuteScript(context, script, &output), output, out);
 }

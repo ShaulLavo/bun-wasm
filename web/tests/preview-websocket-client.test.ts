@@ -58,6 +58,7 @@ class Tunnel {
 
 class PreviewFixture {
   readonly tunnels: Tunnel[] = [];
+  readonly routes: unknown[] = [];
   readonly nativeCalls: { input: string; protocols: string | string[] }[] = [];
   readonly context: { WebSocket: SocketConstructor; [key: string]: unknown };
   private pagehide: (() => void) | null = null;
@@ -82,7 +83,8 @@ class PreviewFixture {
       WebSocket: NativeWebSocket,
       location: new URL(origin),
       document: { currentScript: { getAttribute: (name: string) => name === "data-bun-port" ? String(previewPort) : null } },
-      navigator: { serviceWorker: { controller: { postMessage: (_message: unknown, transfer: MessagePort[]) => {
+      navigator: { serviceWorker: { controller: { postMessage: (message: unknown, transfer: MessagePort[]) => {
+        this.routes.push(message);
         const port = transfer[0];
         if (!port) throw new Error("Missing fixture tunnel port");
         this.tunnels.push(new Tunnel(port));
@@ -128,7 +130,7 @@ const authorities = [
     port: 5173,
     input: "wss://fxj6.sprockt.dev/?token=fixture",
     requestLine: "GET /?token=fixture HTTP/1.1",
-    host: "localhost:5173",
+    host: "fxj6.sprockt.dev",
   },
   {
     name: "loopback with a scoped path",
@@ -136,7 +138,7 @@ const authorities = [
     port: 5173,
     input: "ws://127.0.0.1:5173/__preview/5173/socket?token=fixture",
     requestLine: "GET /socket?token=fixture HTTP/1.1",
-    host: "localhost:5173",
+    host: "127.0.0.1:5173",
   },
   {
     name: "IPv6 loopback",
@@ -144,28 +146,62 @@ const authorities = [
     port: 5173,
     input: "ws://[::1]:5173/socket",
     requestLine: "GET /socket HTTP/1.1",
-    host: "localhost:5173",
+    host: "[::1]:5173",
   },
   {
-    name: "nondefault virtual port",
-    origin: "https://fxj6.sprockt.dev/",
+    name: "nondefault secure outer and virtual ports",
+    origin: "https://fxj6.sprockt.dev:8443/",
     port: 4174,
-    input: "wss://fxj6.sprockt.dev/socket",
+    input: "wss://fxj6.sprockt.dev:8443/socket",
     requestLine: "GET /socket HTTP/1.1",
-    host: "localhost:4174",
+    host: "fxj6.sprockt.dev:8443",
+  },
+  {
+    name: "secure outer port that is the plain transport default",
+    origin: "https://fxj6.sprockt.dev:80/",
+    port: 4174,
+    input: "wss://fxj6.sprockt.dev:80/socket",
+    requestLine: "GET /socket HTTP/1.1",
+    host: "fxj6.sprockt.dev:80",
+  },
+  {
+    name: "literal replacement characters in the visible authority",
+    origin: "https://price$&.example:80/",
+    port: 4174,
+    input: "wss://price$&.example:80/socket",
+    requestLine: "GET /socket HTTP/1.1",
+    host: "price$&.example:80",
+  },
+  {
+    name: "visible mounted preview with a different guest port",
+    origin: "http://localhost:4179/__preview/3000/some/page?x=1",
+    port: 3000,
+    input: "ws://localhost:4179/__preview/3000/socket?token=fixture",
+    requestLine: "GET /socket?token=fixture HTTP/1.1",
+    host: "localhost:4179",
+  },
+  {
+    name: "foreign document origin targeting the guest loopback",
+    origin: "https://foreign.example/",
+    port: 5173,
+    input: "ws://localhost:5173/_bun/hmr",
+    requestLine: "GET /_bun/hmr HTTP/1.1",
+    host: "localhost:5173",
   },
 ];
 
-for (const item of authorities) test(`preview upgrade preserves virtual authority for ${item.name}`, async () => {
+for (const item of authorities) test(`preview upgrade preserves browser headers and guest routing for ${item.name}`, async () => {
   const preview = fixture(item.origin, item.port);
   const socket = new preview.context.WebSocket(item.input, ["fixture-hmr"]);
   expect(preview.tunnels).toHaveLength(1);
+  expect(preview.routes).toEqual([{ type: "preview-socket", port: item.port }]);
   const tunnel = preview.tunnels[0]!;
   const request = await tunnel.request;
   expect(request).toStartWith(`${item.requestLine}\r\n`);
   expect(request.match(/^host:/gim)).toHaveLength(1);
   expect(request).toContain(`\r\nhost: ${item.host}\r\n`);
-  expect(request).toContain(`\r\norigin: http://localhost:${item.port}\r\n`);
+  expect(request.match(/^origin:/gim)).toHaveLength(1);
+  expect(request).toContain(`\r\norigin: ${new URL(item.origin).origin}\r\n`);
   expect(request).toContain("\r\nsec-websocket-protocol: fixture-hmr\r\n");
   expect(socket.url).toBe(item.input);
   const open = opened(socket);
@@ -180,6 +216,20 @@ test("unrelated WebSockets retain the native constructor and never allocate a tu
   expect(preview.nativeCalls).toEqual([{ input: "wss://example.com:8443/native", protocols: ["chat"] }]);
   expect(preview.tunnels).toHaveLength(0);
   expect(socket.url).toBe("wss://example.com:8443/native");
+});
+
+test("reentrant protocol access keeps each connection's requested authority", async () => {
+  const preview = fixture("https://fxj6.sprockt.dev:80/", 5173);
+  const protocols = ["fixture-hmr"];
+  Object.defineProperty(protocols, "0", { get() {
+    new preview.context.WebSocket("ws://127.0.0.1:5173/inner");
+    return "fixture-hmr";
+  } });
+  new preview.context.WebSocket("wss://fxj6.sprockt.dev:80/outer", protocols);
+  expect(preview.tunnels).toHaveLength(2);
+  const requests = await Promise.all(preview.tunnels.map(tunnel => tunnel.request));
+  expect(requests[0]).toContain("\r\nhost: 127.0.0.1:5173\r\n");
+  expect(requests[1]).toContain("\r\nhost: fxj6.sprockt.dev:80\r\n");
 });
 
 test("a refused preview connection settles its socket and tunnel port", async () => {

@@ -2,6 +2,7 @@ include!("../../bunwasm-engine-quickjs/src/side_modules.rs");
 #[cfg(bun_wasm_shared_group)]
 #[path = "../../bunwasm-engine-quickjs/src/nested_bridge.rs"]
 mod nested_bridge;
+mod reply_buffer;
 #[cfg(bun_wasm_transfer_fault)]
 #[path = "../../bunwasm-engine-quickjs/src/transfer_fault.rs"]
 mod transfer_fault;

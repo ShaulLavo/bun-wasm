@@ -48,10 +48,7 @@ try {
   let instance: WebAssembly.Instance | undefined;
   const { proc } = created.install(imports, () => instance!);
   instance = new WebAssembly.Instance(guest, imports);
-  assert.deepEqual(Object.keys(imports.runtime_fs!).toSorted(), ["path_permissions_get", "watch_close", "watch_open", "watch_read"]);
-  const permissions = imports.runtime_fs!.path_permissions_get;
-  if (typeof permissions !== "function") throw new Error("missing path_permissions_get import");
-  assert.equal(permissions(-1, -1, -1, -1, -1), ENOTSUP);
+  assert.deepEqual(Object.keys(imports.runtime_fs!).toSorted(), ["watch_close", "watch_open", "watch_read"]);
   wasi.start(instance as Parameters<typeof wasi.start>[0]);
   const guestFs = instance.exports as unknown as WatchExports;
   const view = () => new DataView(guestFs.memory.buffer);

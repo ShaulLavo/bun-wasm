@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { ownedCommand, withSignals } from "./lifetime";
 import { requireNativeQueue } from "./mac-queue";
-import { bounded } from "./execute";
+import { bounded } from "./bounded";
 
 export async function runIphoneServer(server: string, cleanupFile: string): Promise<void> {
   if (process.platform !== "darwin" || !isAbsolute(server) || !isAbsolute(cleanupFile)) throw new Error("Require Mac and absolute server/cleanup paths");

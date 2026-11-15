@@ -52,14 +52,6 @@ identity and keep unknown and imported-memory limits distinct. The imported
 control declares eight pages and constructs its actual memory with a four-page
 factory maximum. Telemetry keeps the unobservable factory maximum null.
 
-The minimal fixture advertises the terminal native operations `tlsDispose`,
-`closeAllDirs` and `flushOutput`. Its dispatcher returns wire-encoded undefined
-for those operations without growing memory or trapping. Only the original
-`hostUseModuleRecords` call grows and traps, so EngineHost's setup cleanup cannot
-replace that original trap with a missing-fixture-method error. The unit control
-checks all three cleanup operations, and the eight Browser controls keep their
-exact original-error identity and memory assertions.
-
 The goals executor reads these retained facts through its finite scoped transport
 view. Failure and final terminal observation share their original absolute
 observation budget with the optional fact read. An expired fact read preserves an
