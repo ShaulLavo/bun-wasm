@@ -122,7 +122,7 @@ emitter's walk of a nested pattern (`emitDestructuringOps` and its callees)
 checks neither the counter nor the quota, so only the parse can refuse. An array
 pattern takes more host stack there than an object pattern, so
 `arrayBindingPattern` reserves more, and both sizes keep the depth the parse
-accepts at 188 KiB at or below 75 percent of the depth a cold full compile holds.
+accepts at 188 KiB at or below 73 percent of the depth a cold full compile holds.
 
 Shapes are those of the measurement probe: unbounded `down(n)` recursion through
 each runtime path, and one construct nested 20,000 deep, compiled by `eval` as

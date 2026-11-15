@@ -915,13 +915,16 @@ portable baseline tier, compiled in full:
 
 | Shape | Host stack holds, cold (Mac, Linux) | 188 KiB accepts | Share of the smaller |
 | --- | ---: | ---: | ---: |
-| `let [[x]]` | 124, 168 | 93 | 75% |
-| `let {a: {a: x}}` | 184, 252 | 134 | 73% |
-| `let [...{a: [...{a: x}]}]` (one level is both kinds) | 82, 108 | 55 | 67% |
-| `catch ({a: {a: x}})` | 184, 256 | 135 | 73% |
-| `function ([[x]]) {}` | 288, 312 | 89 | 31% |
+| `let [[x]]` | 124, 168 | 90 | 73% |
+| `let {a: {a: x}}` | 184, 252 | 128 | 70% |
+| `let [...{a: [...{a: x}]}]` (one level is both kinds) | 82, 108 | 53 | 65% |
+| `catch ({a: {a: x}})` | 184, 256 | 132 | 72% |
+| `function ([[x]]) {}` | 288, 312 | 86 | 30% |
 
-On the interpreter tier `let [[x]]` holds 140 and 192 and 188 KiB accepts 101 (72 percent).
+On the interpreter tier `let [[x]]` holds 140 and 192 and 188 KiB accepts 100 (71 percent).
+On both hosts and tiers, at 188 KiB and at 216 KiB, every binding shape's deepest accepted input
+compiles cold and the next level is refused, and the validator, label and `?:` depths above are
+unchanged.
 A lazy parse holds at least 1.7 times what 188 KiB accepts for every pattern shape. Default Chromium and
 Firefox keep the full quota; there the 1300-unit bound refuses about 1,280 levels of array
 patterns and 640 of object patterns, and a full compile at that depth fits Chromium's stack.
