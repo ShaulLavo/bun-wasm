@@ -88,7 +88,7 @@ class Connection {
     this.acceptInput = input;
     const digest = await crypto.subtle.digest("SHA-1", encoder.encode(input));
     if (!this.closed) accepts.set(input, btoa(String.fromCharCode(...new Uint8Array(digest))));
-    return encoder.encode(request.replace(/\r\n\r\n$/, `\r\norigin: http://localhost:${previewPort}\r\n\r\n`));
+    return encoder.encode(request.replace(/\r\n\r\n$/, `\r\norigin: ${location.origin}\r\n\r\n`));
   }
 
   startReading(): void {}
@@ -141,7 +141,7 @@ function tunnelUrl(input: string | URL): URL | null {
   const marker = `${previewPrefix}${previewPort}`;
   if (url.pathname.startsWith(marker + "/")) url.pathname = url.pathname.slice(marker.length);
   url.protocol = "ws:";
-  url.host = `localhost:${previewPort}`;
+  // connect() selects the guest port; the handshake keeps the requested authority.
   return url;
 }
 

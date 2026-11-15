@@ -1,0 +1,24 @@
+# Preview WebSocket request headers
+
+Classification: original local adapter. No upstream implementation is copied.
+
+`web/src/preview-websocket-client.ts` adapts the shared runtime WebSocket client
+to the preview service worker's MessagePort transport. The constructor accepts
+the browser-visible URL. Its handshake keeps that URL's Host and uses the
+preview document's Origin, including its scheme and outer port. The mounted
+preview prefix is removed from the request path. `connect()` still routes the
+stream using the injected guest port, independently of the HTTP authority.
+
+Previously both headers described the virtual localhost endpoint. Applications
+therefore received different headers from those a browser would send. Keeping
+the visible authority also lets Bun's existing HMR origin check compare the
+document hostname with the requested hostname. The shared client, service-worker
+authorization, raw TCP requests and HMR foreign-Origin policy are unchanged.
+
+`web/tests/preview-websocket-client.test.ts` checks the emitted upgrade bytes,
+one Host and Origin, requested paths, negotiated protocol and separate tunnel
+routing for custom names, loopback addresses and different outer/guest ports.
+A foreign document Origin stays foreign when targeting the guest loopback,
+so the adapter does not turn it into an allowed localhost Origin.
+It stays owned by the existing Web unit-test glob. The original
+`web/tests/browser-net.mjs` checks the complete preview path and HMR behavior.
