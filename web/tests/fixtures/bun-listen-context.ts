@@ -23,7 +23,7 @@ import { KINDS, SCENARIO, type Kind, type Sites } from "./bun-listen-scenario.ts
 const MODULES = [
   "net_port.ts", "net_address.ts", "net_hostname.ts", "net_path.ts", "net_listener.ts", "http_common.ts", "http_agent.ts",
   "http_server_response.ts", "node_net_server.ts", "node_net_socket_state.ts", "node_net_socket_options.ts",
-  "node_net_onread.ts", "node_net.js", "tls_transport.ts", "net.js", "bun_tcp.ts",
+  "node_net_onread.ts", "node_net.js", "tls_transport.ts", "io_pump.ts", "net.js", "bun_tcp.ts",
 ];
 const runtime = new URL("../../../crates/bunwasm-runtime/src/js/", import.meta.url);
 

@@ -1633,6 +1633,7 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
             Err(errno) => (-errno).into(),
         })
     });
+    t.add("fsWatchReady", |_| Ok(host::fs_watch_ready().into()));
     t.add("fsWatchRead", |a| {
         Ok(match host::fs_watch_read(a.u32(0)?) {
             Ok(bytes) if bytes.is_empty() => 0.into(),

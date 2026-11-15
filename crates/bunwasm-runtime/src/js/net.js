@@ -63,32 +63,8 @@
   // Run each waiter once; returns whether anything made progress. Filesystem watches step
   // first: a socket step can run a request handler synchronously, so a change already
   // readable this turn reaches its listeners, and queues their deferred work, ahead of it.
-  internal.pumpIo = function pumpIo() {
-    let progressed = false;
-    const turn = Array.from(waiters).sort((a, b) => Number(b.watch === true) - Number(a.watch === true));
-    for (const waiter of turn) {
-      let result;
-      try {
-        result = waiter.step();
-      } catch (err) {
-        // A permanent waiter stays registered whatever its step throws. Taking it out for its
-        // `fail` to put back would need a new set entry after the failure, and an engine that
-        // cannot allocate one would lose the waiter for good.
-        if (!waiter.permanent) waiters.delete(waiter);
-        if (waiter.fail) waiter.fail(err);
-        else throw err;
-        progressed = true;
-        continue;
-      }
-      if (result === true) {
-        waiters.delete(waiter);
-        progressed = true;
-      } else if (result === "progress") {
-        progressed = true;
-      }
-    }
-    return progressed;
-  };
+  const pumpIo = internal.require("io_pump");
+  internal.pumpIo = () => pumpIo(waiters);
 
   function hostError(handle, fallback) {
     const text = native.hostError(handle);

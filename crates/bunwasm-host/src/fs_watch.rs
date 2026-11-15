@@ -122,6 +122,10 @@ impl Watches {
         Ok(id)
     }
 
+    pub fn ready(&self) -> bool {
+        self.open.values().any(Watch::ready)
+    }
+
     pub fn read(&mut self, id: u32, capacity: usize) -> Read {
         let Some(watch) = self.open.get_mut(&id) else {
             return Read::Errno(BADF);
@@ -152,6 +156,14 @@ fn deliver(inbox: &Mutex<Inbox>, event: notify::Result<Event>) {
 }
 
 impl Watch {
+    fn ready(&self) -> bool {
+        if self.ended || !self.queue.is_empty() {
+            return true;
+        }
+        let inbox = self.inbox.lock().unwrap();
+        inbox.overflowed || !inbox.events.is_empty()
+    }
+
     fn read(&mut self, capacity: usize) -> Read {
         if self.ended {
             return Read::Records(Vec::new());
