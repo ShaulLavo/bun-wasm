@@ -1,4 +1,5 @@
 {
   "owner": "runtime",
+  "isolation": "process",
   "path": "scripts/jsc-json-fast-controls.test.ts"
 }

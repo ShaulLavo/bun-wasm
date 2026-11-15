@@ -1185,6 +1185,7 @@ jobs:
         run: bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm
       - name: Blocking native fixture checks
         env:
+          BUN_WASM_RUNTIME_JOBS: "2"
           INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}
           BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}

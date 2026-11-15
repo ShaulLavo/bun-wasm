@@ -90,6 +90,10 @@ plain data with the real factory on Node, without a mock table or callable. This
 out-of-process harness mirrors memory bytes through test-only bridge calls;
 it does not exercise the engine's in-place buffer adapter. The actual engine
 pair fixtures provide that separate evidence.
+Each bridge command has a five-minute hang cap, and the complete Cargo,
+Clippy and Node/FIFO test has a ten-minute hang cap. The exhaustive Rust
+controls and all bridge assertions remain in that test; these caps do not
+judge execution speed.
 The two reference tests embed the repository-owned `tests/wasm-tables/table.wasm`
 compiled with `wasm-tools parse tests/wasm-tables/table.wat -o
 tests/wasm-tables/table.wasm`. The original 395-byte source SHA-256 is
