@@ -8,7 +8,21 @@ other builds keep the original code.
 | --- | --- | --- |
 | `js/src/frontend/Parser.h`, `GeneralParser` declarations | Port | `BUNWASM_PARSER_MERGED` (`MOZ_ALWAYS_INLINE`) on the in-class declarations of `statementListItem`, `blockStatement`, `consequentOrAlternative`, `optionalExpr`, `primaryExpr`, `exprInParens`, `orExpr` and `condExpr`, and a never-inline `unbracedFunctionConsequent`. |
 | `js/src/frontend/Parser.cpp`, the same members' definitions | Port | The same attribute on the definitions (`orExpr` and `condExpr` were already always-inline there). |
-| `js/src/frontend/Parser.cpp`, `consequentOrAlternative` | Port | A braced body goes to `blockStatement` directly. It holds and checks the recursion unit `statement` would hold, before consuming the `{`, then consumes it as `statement` does. The Annex B branch (an unbraced function declaration under `if`) moves unchanged into `unbracedFunctionConsequent`, so its statement and scope objects stay out of `ifStatement`'s merged frame. |
+| `js/src/frontend/Parser.cpp`, `consequentOrAlternative` | Port | A braced body goes to `blockStatement` directly. It holds and checks the recursion unit `statement` would hold, before consuming the `{`, then consumes it as `statement` does, and it holds `statement`'s 336-byte stack budget reservation. The Annex B branch (an unbraced function declaration under `if`) moves unchanged into `unbracedFunctionConsequent`, so its statement and scope objects stay out of `ifStatement`'s merged frame. |
+
+## Stack budget reservations
+
+The [stack budget](spidermonkey-stack-budget.md) reserves shadow bytes in parser functions. Their
+sizes are unchanged here; re-sizing them for the merged frames is calibrated separately.
+
+- `statementListItem`'s 352 bytes now sit in `statementList`'s frame, the function it is merged
+  into, so every statement level still holds them.
+- The braced `if` body no longer passes through `statement`, so the fast path holds `statement`'s
+  336 bytes. A fixed-size local lands in `ifStatement`'s merged frame for the whole call, so an
+  `if` with an unbraced body now holds 336 bytes in `ifStatement` as well as 336 in `statement`.
+- The never-inline reservation wrappers around parenthesised expressions, function expressions
+  and the branches of `?:` stay as they are. Each is one extra frame on its cycle; the structural
+  check accepts a cycle edge that passes through one.
 
 ## Why
 

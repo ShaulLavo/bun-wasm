@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { programProfile } from "../src/engine-kind.ts";
 import { discoverChecks } from "./test-checks.ts";
 
@@ -93,7 +96,7 @@ for (const output of exports) {
 
 test("QuickJS is retained before its consumers or the later JSC producer can fail", () => {
   const upload = sharedSteps.indexOf(uploadFor("quickjs"));
-  for (const name of ["Consume the shared native feature checks", "Consume the shared Browser feature checks", "Produce the shared JSC profile once"]) {
+  for (const name of ["Prepare the same-source shared proof handoff", "Produce the shared JSC profile once"]) {
     expect(upload).toBeLessThan(sharedSteps.indexOf(namedStep(name)));
   }
 });
@@ -134,7 +137,8 @@ test("successful production writes the original core, side, receipts and source 
   expect(builder).toContain("copyFileSync(join(core, 'bun-core.wasm.core.json'), join(program, 'bun-core.wasm.core.json'));");
   expect(builder).toContain("const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' });");
   expect(builder).toContain("if (head.status !== 0) throw new Error('Cannot identify native profile source');");
-  expect(builder).toContain("writeFileSync(join(program, 'source.txt'), head.stdout);\n  return program;");
+  expect(builder).toContain("writeFileSync(join(program, 'source.txt'), head.stdout);");
+  expect(builder).toContain("writeFileSync(join(program, 'current-inputs.json'), JSON.stringify(inputs, null, 2) + '\\n');\n  return program;");
   for (const fragment of [
     "await prepareProgramOutputs([",
     "{ artifact: join(core, 'bun-core.wasm'), scope: 'core', selection: { features: ['engine-split', 'bun-transpiler', 'bun-build'], profile: 'shared-group' }, options: sourceOptions(repository, sysroot, 'browser') }",
@@ -146,31 +150,80 @@ test("successful production writes the original core, side, receipts and source 
   expect(exports.map(output => programProfile(output.engine).side)).toEqual(["quickjs.wasm", "jsc-engine.wasm"]);
 });
 
-test("native and Chromium consumers retain their selection, profile, launcher and blocking commands", () => {
-  const common = "source env.sh\nexport BUN_WASM_PROFILE_PROGRAM=\"$CARGO_TARGET_DIR/shared-native/";
-  const launcher = 'export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"\nexport BUN_WASM_TRACE=1\n';
-  const native = "bun scripts/test-checks.ts native --profile shared-group\n";
-  const browser = "bun scripts/run-with-timeout.mts 420 bun scripts/test-checks.ts browser-guest --profile shared-group\n";
-  const consumers = [
-    { name: "Consume the shared native feature checks", run: `${common}program/bun.wasm"\n${launcher}${native}` },
-    { name: "Consume the shared Browser feature checks", run: 'source env.sh\nbun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts\n(cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)\nexport BUN_WASM_PROFILE_PROGRAM="$CARGO_TARGET_DIR/shared-native/program/bun.wasm"\n' + browser },
-    { name: "Consume the shared JSC feature checks", run: `${common}program-jsc/bun.wasm"\n${launcher}${native}${browser}` },
-  ];
-  for (const consumer of consumers) {
-    expect(namedStep(consumer.name)).toEqual({ name: consumer.name, if: selection, run: consumer.run });
+test("native and Browser consumers use ready artifacts on separate runners and discover checks once per engine", () => {
+  for (const id of ["shared-native", "shared-browser"]) {
+    const job = record(jobs[id]);
+    expect(job.needs).toContain("shared-sysroot");
+    expect(job.if).toContain("!cancelled() && needs.selection.result == 'success'");
+    expect(job.if).toContain(selection);
+    expect(job["timeout-minutes"]).toBe(30);
+    expect(record(job.strategy)).toEqual({ "fail-fast": false, matrix: { engine: ["quickjs", "jsc", "spidermonkey"] } });
+    const body = steps(job);
+    expect(body.filter(step => step.with && record(step.with).name === "shared-proof-inputs")).toHaveLength(1);
+    const commands = body.map(step => String(step.run ?? "")).join("\n");
+    expect(commands).toContain('bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"');
+    expect(commands).toContain("shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm");
+    expect(commands).not.toMatch(/build-native-profile|build-bun|build-jsc|buildSite|browser-guest-site.ts build/);
+    expect(job["continue-on-error"]).toBeUndefined();
+    const owner = id === "shared-native" ? "native" : "browser-guest";
+    expect(commands.match(new RegExp(`test-checks.ts ${owner} --profile shared-group`, "g"))).toHaveLength(1);
+    if (id === "shared-browser") expect(commands).toContain("run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }} bun scripts/test-checks.ts");
+    else expect(commands).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   }
   expect(shared.needs).toEqual(["selection", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
   expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
   expect(shared["timeout-minutes"]).toBe(30);
+  expect(shared.name).toBe("Shared PIC program producer");
+  expect(sharedSteps.some(step => String(step.run).includes("test-checks.ts"))).toBe(false);
   expect(namedStep("Produce the shared JSC profile once").env).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });
 });
 
-test("the matching native launcher stays in its own original source-verified artifact", () => {
+test("consumer scratch remains on the runner after sourcing workstation defaults", () => {
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-consumer-env-"));
+  const probe = 'source env.sh\n"$BUN_BIN" -e \'const {tmpdir}=require("node:os");const {mkdtempSync,rmSync}=require("node:fs");const {join}=require("node:path");if(tmpdir()!==process.env.RUNNER_TEMP)throw Error("Wrong consumer scratch");const path=mkdtempSync(join(tmpdir(),"probe-"));rmSync(path,{recursive:true});\'';
+  const execute = (env: NodeJS.ProcessEnv) => spawnSync("bash", ["-euo", "pipefail", "-c", probe], { cwd: resolve(import.meta.dir, ".."), env, encoding: "utf8" });
+  try {
+    const legacy: NodeJS.ProcessEnv = { ...process.env, RUNNER_TEMP: root, BUN_BIN: process.execPath };
+    for (const name of ["TMPDIR", "TMP", "TEMP"]) delete legacy[name];
+    expect(execute(legacy).status).not.toBe(0);
+    for (const id of ["shared-native", "shared-browser"]) {
+      const consumer = steps(record(jobs[id])).find(step => String(step.name).startsWith("Consume the discovered shared "))!;
+      expect(consumer.env).toEqual({ TMPDIR: "${{ runner.temp }}", TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}" });
+      const env = { ...legacy, ...Object.fromEntries(Object.keys(record(consumer.env)).map(name => [name, root])) };
+      const result = execute(env);
+      expect(result.status, result.stderr).toBe(0);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the matching native launcher stays in its original source-verified artifact", () => {
   const launchers = allSteps.filter(step => step.with && record(step.with).name === "native-profile-launcher");
   expect(launchers).toHaveLength(2);
   expect(launchers.map(step => step.uses)).toEqual(["actions/upload-artifact@v4", "actions/download-artifact@v4"]);
-  expect(namedStep("Verify the native launcher source").run).toBe('test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"\nchmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"\n');
-  expect(namedStep("Require the shared native launcher producer").run).toBe('test "$PROFILE_LAUNCHER_RESULT" = success\n');
+  const native = steps(record(jobs["shared-native"]));
+  expect(native.find(step => step.name === "Verify the native launcher source")?.run).toBe('test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"\nchmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"\n');
+});
+
+test("the protected proof requires every selected producer and consumer, including disabled skips", () => {
+  const guard = record(jobs["shared-proof"]);
+  expect(guard.name).toBe("Shared PIC sysroot proof");
+  expect(guard.needs).toEqual(["selection", "quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser"]);
+  expect(guard.if).toContain("always()");
+  expect(guard["continue-on-error"]).toBeUndefined();
+  const check = steps(guard)[0]!;
+  expect(check.if).toBeUndefined();
+  expect(check["continue-on-error"]).toBeUndefined();
+  if (typeof check.run !== "string") throw new Error("Missing final proof guard");
+  const base = { SELECTION_RESULT: "success", QUALITY_RESULT: "success", SHARED_PREBUILD_RESULT: "success", SHARED_PRODUCER_RESULT: "success", SHARED_NATIVE: "true", RUST_RESULT: "success", SM_RESULT: "success", NATIVE_RESULT: "success", BROWSER_RESULT: "success" };
+  const run = (env: Record<string, string>) => spawnSync("bash", ["-euo", "pipefail", "-c", String(check.run)], { env: { ...process.env, ...env } }).status;
+  expect(run(base)).toBe(0);
+  const disabled = { ...base, SHARED_NATIVE: "false", RUST_RESULT: "skipped", SM_RESULT: "skipped", NATIVE_RESULT: "skipped", BROWSER_RESULT: "skipped" };
+  expect(run(disabled)).toBe(0);
+  for (const field of Object.keys(base).filter(field => field !== "SHARED_NATIVE")) {
+    for (const status of ["failure", "cancelled", "skipped", ""]) expect(run({ ...base, [field]: status })).not.toBe(0);
+  }
+  for (const field of ["SM_RESULT", "NATIVE_RESULT", "BROWSER_RESULT"]) expect(run({ ...disabled, [field]: "success" })).not.toBe(0);
+  expect(run({ ...base, SHARED_NATIVE: "" })).not.toBe(0);
 });
 
 test("handoff contracts have exactly one existing blocking source-check owner", () => {

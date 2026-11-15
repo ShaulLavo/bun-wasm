@@ -61,8 +61,16 @@ Original adapters, none of which retains upstream implementation code:
   `checks/runtime-json-fast-controls.json` assigns it to the blocking runtime owner. It follows the
   native job's `INSTALL_ENGINES` selection, so compiled controls run whenever JSC is selected.
   The controls and benchmark paths select JSC without building it for unrelated native changes.
+  Recovery controls record the cold baseline and each of three pressure peaks and post-GC readings.
+  Recovered heap and allocator live bytes stay within 8 MiB of their own cold baseline, allowing
+  one-time JSC table and arena allocation. Later recovered readings may grow by at most 256 KiB
+  from the first recovered reading. Neither bound scales with unrelated startup allocations or
+  ballast. A 384 KiB buffer retained after the first cycle proves that the growth check fails.
 - `tests/fixtures/json-fast-iterative` compares ordinary and forced-general results on all engines.
   `checks/native-json-fast-iterative.json` assigns that fixture to the native owner.
+  Its deep comparisons use 4100 levels to cross the 4096-frame fast-path cap without repeating
+  QuickJS's quadratic ancestor scans at 39999 levels. The JSC-only controls retain the
+  39998, 39999 and 40000 boundary cases; the shared fixture's 4094 through 4097 cases remain unchanged.
 - `scripts/bench-jsc-json.ts` measures pinned, alternating donor and candidate products.
   `scripts/fixtures/jsc-json-bench.ts` warms up, then waits for stdin at both boundaries of the serialization
   loop. Linux per-thread CPU counters exclude compilation, startup, and waiting. Every

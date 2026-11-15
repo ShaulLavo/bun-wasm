@@ -5,6 +5,17 @@ with each member's core and engine at their own relocated base. This page is the
 admission contract. The group itself (members, regions, futex, budgets) belongs to
 [Waffle's memory groups](https://github.com/ShaulLavo/waffle/blob/main/docs/memory-groups.md).
 
+The native lifetime command runs all 200 workers and then checks a fresh group in the same
+launcher. It has a ten-minute hang cap; other native commands keep a two-minute hang cap.
+The tests assert delivery, output and ownership outcomes, not elapsed-time targets. Worker
+counts and SpiderMonkey tier/accounting checks are unchanged. Durations belong in benchmarks.
+
+Shared proof handoffs preserve component receipts and their original source labels. The producer
+also records freshly captured `current-inputs.json` snapshots for the composition. The handoff
+checks those current scope, profile and input digests against the unchanged component receipts;
+a compatible cached origin can therefore predate the current checkout. SpiderMonkey's pair
+source names its composition separately from the common core's origin.
+
 ## Profiles
 
 `split` is the default profile. Its flags and receipt shape are unchanged: no profile field is

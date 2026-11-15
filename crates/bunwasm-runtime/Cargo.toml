@@ -71,6 +71,7 @@ signature = "2"
 [dev-dependencies]
 bunwasm-glue = { path = "../bunwasm-glue" }
 bunwasm-posix = { path = "../bunwasm-posix" }
+rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"] }
 
 [build-dependencies]
 cc = "1"

@@ -395,6 +395,23 @@ function memberName(symbol: string, instantiation: Instantiation): string | unde
 
 export type InstantiationReport = { label: string; frames: Record<string, { slots: number; shadow: number; bytes: number }> };
 
+// The stack budget wraps some recursive calls in a never-inline `CallWithWasmStackReservation`
+// (docs/bun-patches/spidermonkey-stack-budget.md). A cycle edge may pass through one such frame
+// and the lambda it calls.
+const reservationWrapper = /CallWithWasmStackReservation/;
+
+function calls(functions: ReadonlyMap<number, FunctionFacts>, from: FunctionFacts, target: number, hops = 2): boolean {
+  if (from.calls.has(target)) return true;
+  if (hops === 0) return false;
+  for (const index of from.calls) {
+    const callee = functions.get(index);
+    // Step into a wrapper, or from a wrapper into the lambda it calls.
+    const through = callee && (reservationWrapper.test(callee.name) || reservationWrapper.test(from.name));
+    if (through && calls(functions, callee, target, hops - 1)) return true;
+  }
+  return false;
+}
+
 function checkInstantiation(functions: ReadonlyMap<number, FunctionFacts>, instantiation: Instantiation): InstantiationReport {
   const members = new Map<string, FunctionFacts>();
   for (const facts of functions.values()) {
@@ -408,7 +425,7 @@ function checkInstantiation(functions: ReadonlyMap<number, FunctionFacts>, insta
     const from = members.get(caller);
     const to = members.get(callee);
     assert(from && to, `${instantiation.label}: missing ${from ? callee : caller}`);
-    assert(from.calls.has(to.index), `${instantiation.label}: ${caller} does not call ${callee}`);
+    assert(calls(functions, from, to.index), `${instantiation.label}: ${caller} does not call ${callee}`);
   }
   const frames = Object.fromEntries(reported.map(name => {
     const facts = members.get(name);

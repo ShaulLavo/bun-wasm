@@ -1,0 +1,5 @@
+capacity is positive bytes true
+capacity is page aligned true
+rss stays unknown true
+capacity does not shrink true
+buffer remains usable true

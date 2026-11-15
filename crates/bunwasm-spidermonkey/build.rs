@@ -4,6 +4,8 @@ use std::{env, path::PathBuf};
 mod max_memory;
 #[path = "../bunwasm-runtime/build/program_profile.rs"]
 mod program_profile;
+#[path = "../bunwasm-engine-quickjs/build/transfer_fault.rs"]
+mod transfer_fault;
 
 fn main() {
     program_profile::configure();
@@ -57,6 +59,11 @@ fn main() {
     if shared_group {
         shim.define("BUN_WASM_SHARED_GROUP", "1");
     }
+    // A validation side, never a release: its two natives are a file of their own.
+    println!("cargo:rerun-if-changed=cpp/transfer_fault.cpp");
+    if transfer_fault::configure() {
+        shim.file("cpp/transfer_fault.cpp");
+    }
     if controls {
         shim.define("BUNSM_CONTROLS", "1");
     }
@@ -79,6 +86,7 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/shim.h");
     println!("cargo:rerun-if-changed=cpp/engine.cpp");
     println!("cargo:rerun-if-changed=cpp/engine.h");
+    println!("cargo:rerun-if-changed=cpp/stack-budget.h");
     println!("cargo:rerun-if-changed=tests/engine-semantics.cpp");
     println!("cargo:rerun-if-changed=tests/require-recovery.cpp");
     println!("cargo:rustc-link-search=native={}", native.display());
