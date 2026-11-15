@@ -88,6 +88,16 @@ test("actual native wrapper retains the operation error and attempts the app aft
   expect(JSON.parse(await readFile(f.config.cleanupFile, "utf8"))).toMatchObject({ driverExited: false, safariExited: true });
 });
 
+async function evaluateReply({ transport, scope, failed }: {
+  transport: Parameters<ExitOwner["transport"]>[0];
+  scope: Scope;
+  failed: (error: unknown) => void;
+}) {
+  try { return await transport.evaluate("workload", scope); }
+  catch (error) { failed(error); throw error; }
+  finally { scope.close(); }
+}
+
 async function invalidReply(f: Awaited<ReturnType<typeof fixture>>, cancel: boolean) {
   const server = endpoint(f.native, { fail: "null" });
   cleanup.push(() => server.stop());
@@ -101,11 +111,8 @@ async function invalidReply(f: Awaited<ReturnType<typeof fixture>>, cancel: bool
     const transport = f.owner.transport(inner);
     if (cancel) f.controller.abort(new Error("external cancellation"));
     const scope = Scope.open(5000);
-    return f.owner.attempt(async () => {
-      try { return await transport.evaluate("workload", scope); }
-      catch (error) { original = error; throw error; }
-      finally { scope.close(); }
-    }, [{ phase: "session-delete", run: () => transport.close() }]);
+    return f.owner.attempt(() => evaluateReply({ transport, scope, failed: error => { original = error; } }),
+      [{ phase: "session-delete", run: () => transport.close() }]);
   }, f.config, f.io).catch(error => error);
   expect(result).toBe(original);
   expect(String(result)).toContain("Invalid Safari WebDriver object");
