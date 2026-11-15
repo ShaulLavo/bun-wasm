@@ -132,7 +132,7 @@ extern "C" {
 }
 #[no_mangle]
 pub extern "C" fn install_rust_hooks() {
-    std::panic::set_hook(Box::new(panic_report::fatal));
+    std::panic::set_hook(Box::new(|info| panic_report::fatal(info)));
 }
 /// # Safety
 /// `reason` points to a live, NUL-terminated message for this call.

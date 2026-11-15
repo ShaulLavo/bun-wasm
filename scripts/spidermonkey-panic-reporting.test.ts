@@ -10,8 +10,8 @@ test("the panic hook reports payloads and locations with a bounded fatal fallbac
   try {
     const executable = join(scratch, "panic-report");
     execFileSync("rustc", ["--edition=2021", "-C", "panic=abort", "-o", executable,
-      resolve("crates/bunwasm-spidermonkey/tests/panic-report-control.rs")]);
-    for (const [mode, message] of [["string", "selected-engine panic control"], ["owned", "owned panic control"], ["opaque", "non-string panic payload"]]) {
+      resolve("crates/bunwasm-spidermonkey/tests/fixtures/panic-report-control.rs")]);
+    for (const [mode, message] of [["string", "selected-engine panic control"], ["owned", "owned panic control"], ["opaque", "non-string panic payload"]] as const) {
       const result = spawnSync(executable, [mode], { encoding: "utf8", timeout: 60_000 });
       assert.equal(result.error, undefined);
       assert.equal(result.status, 134);

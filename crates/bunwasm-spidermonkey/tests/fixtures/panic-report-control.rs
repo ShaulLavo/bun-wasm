@@ -21,7 +21,7 @@ pub extern "C" fn __wrap_bunsm_host_call(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[path = "../src/panic_report.rs"]
+#[path = "../../src/panic_report.rs"]
 mod panic_report;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -34,6 +34,6 @@ unsafe extern "C" fn bunsm_host_fatal(message: *const std::ffi::c_char, length: 
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    std::panic::set_hook(Box::new(panic_report::fatal));
+    std::panic::set_hook(Box::new(|info| panic_report::fatal(info)));
     trigger(&std::env::args().nth(1).expect("panic control mode"));
 }
