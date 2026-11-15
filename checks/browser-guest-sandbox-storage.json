@@ -170,6 +170,7 @@
     "web/src/program-profile.ts",
     "scripts/storage-fs-build.ts",
     "scripts/storage-fs-endpoint.ts",
+    "scripts/storage-fs-metadata.ts",
     "scripts/storage-fs-observation.ts",
     "scripts/storage-fs-worker-prelude.ts",
     "scripts/storage-fs-page-prelude.ts"

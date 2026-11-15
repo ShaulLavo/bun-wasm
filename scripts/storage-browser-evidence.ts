@@ -1,5 +1,6 @@
 import { appendFileSync } from "node:fs";
 import type { Browser, BrowserContext, Frame, Page, Request } from "playwright";
+import { retainMetadata } from "./storage-fs-metadata";
 
 export type StorageObservation = Pick<StorageLifetime, "step" | "event" | "acquire" | "own" | "observeContext" | "secondary">;
 type RecordEvent = (event: { sequence: number; time: string; kind: string; detail: unknown }) => void;
@@ -20,7 +21,7 @@ export class StorageLifetime {
   private sequence = 0;
   private operation = 0;
   private page = 0;
-  private readonly filesystemRings = new Map<number, { rows: unknown[]; dropped: number }>();
+  private readonly filesystemRings = new Map<number, { rows: object[]; dropped: number }>();
   private filesystemRetained = false;
   private filesystemPagesDropped = 0;
 
@@ -34,21 +35,21 @@ export class StorageLifetime {
     if (["error", "preservation-error", "primary-error", "secondary-error"].includes(kind)) this.retainFilesystemFailure();
   }
 
-  private retainFilesystemFailure(): void {
-    if (this.filesystemRetained || !this.filesystemRings.size) return;
+  private retainFilesystemFailure(final = false): void {
+    if (!this.filesystemRings.size || (final ? !this.filesystemRetained : this.filesystemRetained)) return;
     this.filesystemRetained = true;
-    this.event("filesystem-retained", { pagesDropped: this.filesystemPagesDropped,
-      streams: Array.from(this.filesystemRings, ([page, ring]) => ({ page, ...ring })), limits: { pages: 8, recentPerPage: 32 } });
+    this.event(final ? "filesystem-retained-final" : "filesystem-retained", { pagesDropped: this.filesystemPagesDropped,
+      streams: Array.from(this.filesystemRings, ([page, ring]) => ({ page, rows: ring.rows.slice(), dropped: ring.dropped })), limits: { pages: 8, recentPerPage: 32 } });
   }
 
   private filesystemMetadata(page: number, text: string): void {
     try {
       if (text.length > 32768) throw Error("Filesystem observation metadata exceeded its bound");
       const row: unknown = JSON.parse(text);
+      if (!row || typeof row !== "object") throw Error("Filesystem observation has no metadata object");
       let ring = this.filesystemRings.get(page);
       if (!ring) { ring = { rows: [], dropped: 0 }; this.filesystemRings.set(page, ring); }
-      ring.rows.push(row);
-      if (ring.rows.length > 32) { ring.rows.shift(); ring.dropped++; }
+      if (retainMetadata(ring.rows, row)) ring.dropped++;
       if (this.filesystemRings.size <= 8) return;
       this.filesystemRings.delete(this.filesystemRings.keys().next().value!);
       this.filesystemPagesDropped++;
@@ -120,7 +121,7 @@ export class StorageLifetime {
 
   cleanup(): Promise<void> {
     this.closing = true;
-    return this.cleanupTask ??= Promise.all(this.releases.map(release => release()).concat(this.acquisitions)).then(() => {});
+    return this.cleanupTask ??= Promise.all(this.releases.map(release => release()).concat(this.acquisitions)).then(() => { this.retainFilesystemFailure(true); });
   }
 
   assertClean(): void {

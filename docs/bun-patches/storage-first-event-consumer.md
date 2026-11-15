@@ -10,6 +10,12 @@ Private imports select the consuming app's installed Waffle. The adaptation adds
 bounded observation notifications and preserves the original post result.
 Frame-inspection failures are reported separately so the original send still runs
 and preserves its native result or exception, even if the diagnostic reporter throws.
+The extension keeps the first 128 ordered endpoint events and an exact dropped-row
+count, following the bounded history approach in Waffle's reviewed Firefox
+initial-announcement control. Rows describe sends, successful returns, receives,
+native errors, and native close calls, returns, and errors. Original close receivers,
+argument tuples, results, and exceptions are preserved too. The existing handler
+qualification and close boundaries publish complete histories without per-frame output.
 No Waffle package source, export or release pin changes.
 
 Build hooks read Waffle 0.0.131 at `5515535c372ea4b7c93bd90ceda3cf4756ef9373`:
@@ -43,6 +49,26 @@ page streams of 32 rows each and reports dropped rows or streams. Local messagee
 transportClosed and previously shared closure stay distinct. Trust and the first
 observed close reason do not prove the native initiating cause. Request payloads,
 file contents, request argument strings and guest buffers are never retained.
+
+First-event records also read the failed identity's `revocations[0]`, service
+`ownerStates[0]`, and the connection's owner-state word before original handlers.
+Those immutable scalar samples remain separate from `closedBefore`, which reads
+only the request transport error. A null scalar means unavailable, never unrevoked.
+Each later snapshot reads current state separately. The page's existing Worker
+post hook records call and return or error order for the actual `connect` service
+port transfer, with owner, request generation, and transfer-list membership.
+Client bootstrap transfers are not substitutes. Native Firefox port UUIDs are
+unavailable and remain null. Page transfer order and service endpoint order are
+separate sequences, not a total cross-realm order.
+
+`storage-fs-metadata.ts` is an original retention adapter shared by the page and
+host. Their existing 32-row rings replace older snapshots of the same endpoint
+with its complete history. Failure retention therefore includes the matched
+service's latest history when it remains within that quota. Evicted endpoints,
+dropped history rows, and causal-emission overflow remain explicit. Host bounds
+remain eight pages, 32 rows per page, and 32 KiB per incoming metadata row.
+Failure retention emits one final bounded snapshot after owned cleanup so that
+metadata received after the primary failure is retained too.
 
 The Browser guest control checks successful original root, Bun, shell and selected terminal
 Preview1 entries. A separate native-port unit control checks the local error path. It makes no Preview1 fault-path, plain-branch, segment-delivery,

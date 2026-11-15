@@ -371,3 +371,24 @@ async function lostRequest(page: Page, events: Event[], lifetime: StorageLifetim
   expect(requestEvents(events, "lost").map(event => event.kind)).toEqual(["request"]);
   expect(events.some(event => event.kind === "page-close")).toBe(true);
 }
+
+test("complete endpoint histories received after failure survive final host retention", async () => {
+  const { page, events, lifetime } = await fixture(chromium);
+  const identity = { documentId: "document", runtimeId: "runtime", workerId: 1 };
+  async function metadata(sends: number): Promise<void> {
+    const row = { ...identity, snapshot: { endpoint: "service", owner: 16, generation: 16, sends,
+      history: Array.from({ length: sends * 2 }, (_, sequence) => ({ sequence, event: sequence % 2 ? "send-return" : "send-call" })) } };
+    const received = page.waitForEvent("console", message => message.text().startsWith("[storage-fs-metadata] "));
+    await page.evaluate(row => console.debug("[storage-fs-metadata] " + JSON.stringify(row)), row);
+    await received;
+  }
+  await metadata(1);
+  lifetime.event("primary-error", { expected: "metadata retention fixture" });
+  await metadata(32);
+  await lifetime.cleanup();
+  const first = eventDetail(events.find(event => event.kind === "filesystem-retained"));
+  const final = eventDetail(events.find(event => event.kind === "filesystem-retained-final"));
+  expect(first).toMatchObject({ streams: [{ dropped: 0, rows: [{ snapshot: { sends: 1 } }] }] });
+  expect(final).toMatchObject({ streams: [{ dropped: 0, rows: [{ snapshot: { sends: 32, history: expect.arrayContaining([{ sequence: 63, event: "send-return" }]) } }] }] });
+  expect(events.filter(event => event.kind === "filesystem-retained-final").length).toBe(1);
+}, 60_000);
