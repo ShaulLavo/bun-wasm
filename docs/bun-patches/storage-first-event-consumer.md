@@ -10,6 +10,14 @@ Private imports select the consuming app's installed Waffle. The adaptation adds
 bounded observation notifications and preserves the original post result.
 No Waffle package source, export or release pin changes.
 
+Build hooks read Waffle 0.0.131 at `5515535c372ea4b7c93bd90ceda3cf4756ef9373`:
+`fs/client.ts`, `fs/service.ts`, `runtime.ts`, and `browser/shared-fs.ts`.
+They add observation around the original port setup, transport-error check,
+runtime return, and connection-alias handoff. The installed Bash entry is
+`src/runtime/worker.ts` at `e6d29598eb0111f16bc3068ad52a9167dac51da7`.
+Its hook reads process identity before the original bootstrap call.
+These transformations affect only the consumer bundle, preserving installed files.
+
 `scripts/storage-fs-build.ts`, `storage-fs-observation.ts`,
 `storage-fs-worker-prelude.ts`, and `storage-fs-page-prelude.ts` are original adapters.
 The ordinary Browser guest site builder includes them. Deployed product builds omit them by default.
