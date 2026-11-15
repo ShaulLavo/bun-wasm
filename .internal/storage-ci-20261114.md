@@ -185,7 +185,7 @@ checks, then marks it ready so normal GitHub-hosted CI validates the real path.
 
 ### Firefox removal gate
 
-Status: Approved draft source, awaiting the runtime pin and hosted proof. This
+Status: Approved source and Waffle .136 pin integrated, awaiting hosted proof. This
 branch removes only production acceptance of `firefox-first-vue-closed` and its
 private matcher inputs. The original Firefox protocol stays byte-for-byte as
 rejection evidence. With CI quarantine enabled, the handler must retain the
@@ -210,19 +210,12 @@ The original-entry control has 25 assertions and six actual client/service joins
 These app results are local development evidence, not hosted storage proof or a
 claim that the correction caused the historical failure to disappear.
 
-Keep this PR draft. The current source pin is Waffle .133 and lacks PR 526.
-The normal PR 526-containing .136 release and its reviewed consumer pin are
-pending, owned by fresh Safari. The parent must integrate and fetch that actual
-pin through its normal owner before marking the PR ready or commissioning the
-unchanged hosted scenario. This is a missing runtime input, not a CI artifact
-wait. This unit changes no pin, scenario, readiness predicate, oracle, deadline,
-retry, workflow, guest, runtime, observer or selector policy.
-
-After pin integration, the parent owns independent review, normal green CI and
+Waffle released .136 with PR 526, and the reviewed runtime and relay pin is
+integrated here. Safari owns consumer adoption. The parent owns normal green CI and
 TWO independently executed GitHub-hosted Firefox preservation passes on the
 exact final head with the Firefox entry absent. Each new head needs its own
-proof pair. Earlier passes with the entry present or without PR 526 do not
-qualify. Local validation and cleanup records belong under
+proof pair. The product pin also requires the three-cell C4D2 iPhone smoke
+success before merge. Both gates remain pending. Local validation and cleanup records belong under
 `/work/reports/goals/storage-ci-20261114/firefox-quarantine-removal/`.
 
 ### React reopening evidence gap
