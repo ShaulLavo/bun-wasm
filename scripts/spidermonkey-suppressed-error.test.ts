@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "bun:test";
+import { maxMemoryBytes } from "./src/program-profile.ts";
 
 test("JSAPI preserves suppressed error operand identity on explicit interpreter and PBL tiers", () => {
   const native = process.env.SPIDERMONKEY_NATIVE_DIR;
@@ -36,7 +37,7 @@ test("JSAPI preserves suppressed error operand identity on explicit interpreter 
       "crates/bunwasm-spidermonkey/tests/suppressed-error-jsapi.cpp",
       join(native, "libspidermonkey_bunwasm.a"),
       join(target, "wasm32-wasip1/release/libbunwasm_spidermonkey.a"),
-      "-Wl,-z,stack-size=8388608", "-Wl,--max-memory=1073741824",
+      "-Wl,-z,stack-size=8388608", `-Wl,--max-memory=${maxMemoryBytes()}`,
       "-Wl,--export=__stack_low", "-Wl,--export=__stack_high", "-Wl,--export=__stack_pointer",
       "-lwasi-emulated-process-clocks", "-lwasi-emulated-getpid", "-lwasi-emulated-signal",
       "-o", wasm,
