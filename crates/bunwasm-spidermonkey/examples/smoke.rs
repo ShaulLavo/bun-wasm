@@ -158,10 +158,19 @@ pub fn main() {
             "missing argument",
             "function f(a, b) { d++; return f(1) + 1; } f(1);",
         ),
+        (
+            "call",
+            "function f() { d++; return f.call(this) + 1; } f();",
+        ),
+        (
+            "apply",
+            "function f() { d++; return f.apply(this, arguments) + 1; } f(1);",
+        ),
     ] {
         let depth = number(&format!(
             "var d = 0; try {{ {code} }} catch (e) {{ if (!(e instanceof RangeError)) throw e; }} d"
         ));
+        // Getters, call and apply run as C++ interpreter frames, on PBL once the stack is deep.
         let counted = label == "setter" || label == "bound";
         assert!(depth > 100.0, "{label} recursion depth {depth}");
         assert!(!counted || depth < 350.0, "{label} recursion depth {depth}");
@@ -171,6 +180,7 @@ pub fn main() {
     }
     println!("ok counted reentrant recursion");
     println!("ok named getter frame storage and recovery");
+    println!("ok call and apply frame storage and recovery");
     let polls = unsafe { sys::bsm_poll_count(tier) };
     let entries = unsafe { sys::bsm_pbl_entries() };
     assert!(polls >= 30000);
@@ -186,6 +196,19 @@ pub fn main() {
 fn budget_checks(pbl: bool) {
     for (label, code) in [
         ("call", "function f() { d++; return f.call(null); } f();"),
+        (
+            "apply",
+            "function f() { d++; return f.apply(null, [1]); } f();",
+        ),
+        // `call` and `apply` that keep the native route reenter through RunScript.
+        (
+            "apply array-like",
+            "function f() { d++; return f.apply(null, { length: 0 }); } f();",
+        ),
+        (
+            "call of call",
+            "function f() { d++; return f.call.call(f, null); } f();",
+        ),
         (
             "getter",
             "var o = { get x() { d++; return this.x; } }; o.x;",
@@ -230,6 +253,7 @@ fn budget_checks(pbl: bool) {
             depth > 0.0,
             "{label} must end in a caught RangeError, got {depth}"
         );
+        println!("budget {label} depth {depth}");
         assert_eq!(number("6 * 7"), 42.0);
         // Without the quota the counter stops reentrant getters near 175 levels (interp) or 234
         // (PBL). `a.b` getters run as interpreter frames that use no host stack, so the frame
@@ -237,16 +261,25 @@ fn budget_checks(pbl: bool) {
         // (docs/bun-patches/spidermonkey-pbl-handover.md). A computed-key getter still reenters
         // through RunScript, and its reservation must let the quota stop it
         // (docs/bun-patches/spidermonkey-loop-dispatch.md).
-        let in_loop = label == "getter";
+        // `call` and `apply` to a scripted target with a packed list also run in the loop there.
+        // `apply` with an array-like and `call` of `call` keep the native route: without the quota
+        // the counter stops them at 87 to 172 levels, so stopping below 85 shows the RunScript
+        // reservation still governs them on both tiers.
+        let in_loop = matches!(label, "getter" | "call" | "apply");
         let reentrant = label == "computed getter";
+        let native_call = matches!(label, "apply array-like" | "call of call");
         let bound = if pbl { 300.0 } else { 140.0 };
         assert!(
             !reentrant || (depth > 20.0 && depth < bound),
             "{label} depth {depth} under the budget"
         );
         assert!(
+            !native_call || (depth > 20.0 && depth < 85.0),
+            "{label} depth {depth} under the budget"
+        );
+        assert!(
             !in_loop || depth > 4096.0,
-            "named getter depth {depth} in the interpreter loop"
+            "{label} depth {depth} in the interpreter loop"
         );
     }
     // The frontend's own bound admits 400 nested `if` blocks; the budget refuses 300.
