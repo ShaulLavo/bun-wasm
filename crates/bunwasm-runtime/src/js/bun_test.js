@@ -538,27 +538,37 @@
 
   function createMock(implementation, restore) {
     const state = {
-      impl: implementation,
+      impl: typeof implementation === "function" || implementation === undefined ? implementation : () => implementation,
       once: [],
-      name: undefined,
+      name: mockFunctionName(implementation),
       restore,
       record: newRecord(),
     };
     const fn = function (...args) {
       return callMock(fn, state, this, args, new.target);
     };
-    Object.defineProperty(fn, "name", { value: (implementation && implementation.name) || "mockConstructor" });
-    Object.defineProperty(fn, "length", { value: implementation ? implementation.length : 0 });
-    Object.defineProperty(fn, "mock", { get: () => state.record, enumerable: false });
-    Object.defineProperty(fn, "_isMockFunction", { value: true });
+    Object.defineProperty(fn, "name", { value: state.name });
+    Object.defineProperty(fn, "length", { value: typeof implementation === "function" ? implementation.length : 0 });
+    Object.setPrototypeOf(fn, mockPrototype);
     mockStates.set(fn, state);
     allMocks.add(fn);
-    Object.assign(fn, mockMethods(fn, state));
     return fn;
   }
 
+  function mockFunctionName(implementation) {
+    try {
+      const name = typeof implementation === "function" && implementation.name;
+      if (typeof name === "string" && name) return name;
+    } catch {}
+    return "mockConstructor";
+  }
+
+  const recordPrototype = Object.create(Object.prototype, {
+    lastCall: { enumerable: true, get() { return this?.calls?.[this.calls.length - 1]; } },
+  });
+
   function newRecord() {
-    return { calls: [], results: [], instances: [], contexts: [], invocationCallOrder: [], lastCall: undefined };
+    return Object.assign(Object.create(recordPrototype), { calls: [], results: [], instances: [], contexts: [], invocationCallOrder: [] });
   }
 
   let mockCallOrder = 0;
@@ -569,7 +579,6 @@
     record.contexts.push(self);
     record.instances.push(newTarget ? undefined : self);
     record.invocationCallOrder.push(++mockCallOrder);
-    record.lastCall = args;
     const result = { type: "incomplete", value: undefined };
     record.results.push(result);
     const impl = state.once.length > 0 ? state.once.shift() : state.impl;
@@ -586,43 +595,67 @@
     }
   }
 
-  function mockMethods(fn, state) {
+  function mockState(receiver) {
+    const state = mockStates.get(receiver);
+    if (state) return state;
+    const error = new TypeError("Expected this to be instanceof Mock");
+    error.code = "ERR_INVALID_THIS";
+    throw error;
+  }
+
+  function mockMethods() {
     const chain = (action) =>
       function (...args) {
-        action(...args);
-        return fn;
+        action(mockState(this), ...args);
+        return this;
       };
     return {
-      getMockName: () => state.name || "mock",
-      getMockImplementation: () => state.impl,
-      mockName: chain((name) => (state.name = name)),
-      mockClear: chain(() => (state.record = newRecord())),
-      mockReset: chain(() => {
+      getMockName() { return mockState(this).name; },
+      getMockImplementation() { return mockState(this).impl; },
+      mockName(name) {
+        const state = mockState(this);
+        if (name) {
+          state.name = String(name);
+          Object.defineProperty(this, "name", { value: state.name });
+        }
+        return this;
+      },
+      mockClear: chain((state) => (state.record = newRecord())),
+      mockReset: chain((state) => {
         state.record = newRecord();
         state.impl = undefined;
         state.once = [];
       }),
-      mockRestore: chain(() => {
+      mockRestore: chain((state) => {
         state.record = newRecord();
         state.impl = undefined;
         state.once = [];
         if (state.restore) state.restore();
       }),
-      mockImplementation: chain((impl) => (state.impl = impl)),
-      mockImplementationOnce: chain((impl) => state.once.push(impl)),
-      mockReturnValue: chain((value) => (state.impl = () => value)),
-      mockReturnValueOnce: chain((value) => state.once.push(() => value)),
-      mockResolvedValue: chain((value) => (state.impl = () => Promise.resolve(value))),
-      mockResolvedValueOnce: chain((value) => state.once.push(() => Promise.resolve(value))),
-      mockRejectedValue: chain((value) => (state.impl = () => Promise.reject(value))),
-      mockRejectedValueOnce: chain((value) => state.once.push(() => Promise.reject(value))),
-      mockReturnThis: chain(() => (state.impl = function () {
+      mockImplementation: chain((state, impl) => (state.impl = impl)),
+      mockImplementationOnce: chain((state, impl) => state.once.push(impl)),
+      mockReturnValue: chain((state, value) => (state.impl = () => value)),
+      mockReturnValueOnce: chain((state, value) => state.once.push(() => value)),
+      mockResolvedValue: chain((state, value) => {
+        const promise = Promise.resolve(value);
+        state.impl = () => promise;
+      }),
+      mockResolvedValueOnce: chain((state, value) => {
+        const promise = Promise.resolve(value);
+        state.once.push(() => promise);
+      }),
+      mockRejectedValue: chain((state, value) => (state.impl = () => Promise.reject(value))),
+      mockRejectedValueOnce: chain((state, value) => state.once.push(() => Promise.reject(value))),
+      mockReturnThis: chain((state) => (state.impl = function () {
         return this;
       })),
       withImplementation(impl, callback) {
+        const state = mockState(this);
         const saved = state.impl;
+        const savedOnce = state.once;
         state.impl = impl;
-        const restore = () => (state.impl = saved);
+        state.once = [];
+        const restore = () => { state.impl = saved; state.once = savedOnce; };
         const result = callback();
         if (isThenable(result)) return result.then(restore, (err) => (restore(), Promise.reject(err)));
         restore();
@@ -631,21 +664,42 @@
     };
   }
 
+  const mockPrototype = Object.create(Function.prototype, {
+    mock: { enumerable: true, get() { return mockState(this).record; } },
+    _protoImpl: { enumerable: true, get() { return mockState(this).impl; } },
+    _isMockFunction: { value: true, enumerable: true, writable: true, configurable: true },
+  });
+  for (const [name, method] of Object.entries(mockMethods())) {
+    Object.defineProperty(mockPrototype, name, { value: method, enumerable: true });
+  }
+  Object.defineProperty(mockPrototype, Symbol.dispose, { value: mockPrototype.mockRestore, configurable: true });
+
   function mock(implementation) {
     return createMock(implementation);
   }
 
   function spyOn(object, method) {
     if (!isObjectLike(object)) throw new TypeError("spyOn(target, prop) expects a target object and a property");
+    const key = typeof method === "symbol" ? method : String(method);
+    let owner = object;
+    while (owner && !Object.prototype.hasOwnProperty.call(owner, key)) owner = Object.getPrototypeOf(owner);
+    const descriptor = owner && Object.getOwnPropertyDescriptor(owner, key);
+    if (descriptor && !Object.prototype.hasOwnProperty.call(descriptor, "value")) throw new TypeError("spyOn does not support accessor properties");
     const original = object[method];
     if (isMock(original)) return original;
-    const hadOwn = Object.prototype.hasOwnProperty.call(object, method);
+    const callable = typeof original === "function";
+    if (typeof object === "function" && key === "prototype" && !callable) {
+      throw new TypeError("Cannot spy on the `prototype` property because it is not a function");
+    }
+    const ownDescriptor = Object.getOwnPropertyDescriptor(object, key);
     const restore = () => {
-      if (hadOwn) object[method] = original;
-      else delete object[method];
+      if (ownDescriptor) Object.defineProperty(object, key, ownDescriptor);
+      else if (callable) delete object[key];
+      else Object.defineProperty(object, key, { value: original, writable: true, enumerable: true, configurable: true });
     };
-    const spy = createMock(typeof original === "function" ? original : undefined, restore);
-    object[method] = spy;
+    const spy = createMock(original, restore);
+    if (callable) object[key] = spy;
+    else Object.defineProperty(object, key, { get: spy, set: spy, enumerable: true, configurable: true });
     return spy;
   }
 
@@ -1187,7 +1241,18 @@
     return args.length === expected.length && args.every((arg, i) => equals(arg, expected[i], false));
   }
 
-  defineMatcher("toHaveBeenCalled", "", (ctx, received) => {
+  function mockMatcherCount(value, minimum) {
+    if (typeof value !== "number" || !Number.isInteger(value) || value < minimum) {
+      throw new TypeError(`Expected count must be an integer greater than or equal to ${minimum}`);
+    }
+  }
+
+  function mockMatcherNoArguments(args) {
+    if (args.length) throw new TypeError("This mock matcher does not accept arguments");
+  }
+
+  defineMatcher("toHaveBeenCalled", "", (ctx, received, ...args) => {
+    mockMatcherNoArguments(args);
     const record = mockRecord(received);
     const count = record.calls.length;
     if (!failed(ctx, count > 0)) return null;
@@ -1195,7 +1260,8 @@
     return { body: `\n\nExpected number of calls: >= 1\nReceived number of calls: ${count}\n` };
   });
 
-  defineMatcher("toHaveBeenCalledOnce", "", (ctx, received) => {
+  defineMatcher("toHaveBeenCalledOnce", "", (ctx, received, ...args) => {
+    mockMatcherNoArguments(args);
     const count = mockRecord(received).calls.length;
     if (!failed(ctx, count === 1)) return null;
     const not = ctx.not ? "not " : "";
@@ -1203,6 +1269,7 @@
   });
 
   defineMatcher("toHaveBeenCalledTimes", "expected", (ctx, received, times) => {
+    mockMatcherCount(times, 0);
     const count = mockRecord(received).calls.length;
     if (!failed(ctx, count === times)) return null;
     const not = ctx.not ? "not " : "";
@@ -1236,6 +1303,7 @@
   });
 
   defineMatcher("toHaveBeenNthCalledWith", "n, ...expected", (ctx, received, n, ...expected) => {
+    mockMatcherCount(n, 1);
     const record = mockRecord(received, true);
     if (record.failure) return record.failure;
     const calls = record.calls;
@@ -1249,18 +1317,24 @@
   });
 
   function returnCounts(record) {
-    const returned = record.results.filter((r) => r.type === "return");
+    const returned = [];
+    for (const result of record.results) {
+      if (!isObjectLike(result)) throw new TypeError("Expected value must be a mock function with returns");
+      if (result.type === "return") returned.push(result);
+    }
     return { returned, calls: record.results.length };
   }
 
-  defineMatcher("toHaveReturned", "", (ctx, received) => {
-    const { returned } = returnCounts(mockRecord(received));
+  defineMatcher("toHaveReturned", "expected", (ctx, received, ...args) => {
+    mockMatcherNoArguments(args);
+    const { returned, calls } = returnCounts(mockRecord(received));
     if (!failed(ctx, returned.length > 0)) return null;
     if (ctx.not) return { body: `\n\nExpected number of succesful returns: 0\nReceived number of succesful returns: ${returned.length}\n` };
-    return { body: `\n\nExpected number of succesful returns: >= 1\nReceived number of succesful returns: ${returned.length}\n` };
+    return { body: `\n\nExpected number of succesful returns: >= 1\nReceived number of succesful returns:    ${returned.length}\nReceived number of calls:                ${calls}\n` };
   });
 
   defineMatcher("toHaveReturnedTimes", "expected", (ctx, received, times) => {
+    mockMatcherCount(times, 0);
     const { returned } = returnCounts(mockRecord(received));
     if (!failed(ctx, returned.length === times)) return null;
     const not = ctx.not ? "not " : "";

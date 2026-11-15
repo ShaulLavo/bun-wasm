@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/test-mock-spy.test.ts",
+  "localRuntime": true
+}
