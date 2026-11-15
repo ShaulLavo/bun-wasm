@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { options } from "./run";
@@ -247,6 +247,35 @@ test.each([
   expect(await Bun.file(join(f.remote, "queue-exit")).exists()).toBe(true);
   expect(await Bun.file(join(f.home, "fleet-cleanup.json")).exists()).toBe(false);
 }), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
+async function readonlyStaging(f: Fixture): Promise<void> {
+  const original = join(f.home, "common"), copied = join(f.remote, "dist"), asset = join(original, "asset");
+  try {
+    await mkdir(original); await writeFile(asset, "unchanged common bytes\n");
+    await chmod(asset, 0o444); await chmod(original, 0o555);
+    await cp(original, copied, { recursive: true });
+    await symlink(original, join(f.remote, "common-link"));
+    await mkdir(join(f.remote, "report"));
+    await writeFile(join(f.remote, "queue-exit"), "0\n");
+    await writeFile(join(f.remote, "queue-workload-started"), "started\n");
+    const receipt = join(f.remote, "report/native-cleanup.json");
+    await writeFile(receipt, JSON.stringify({ driverExited: false, safariExited: true, admissionOwner: "installed-mac-queue" }));
+    const request = { ...config(), output: f.home };
+    await expect(removeStaging(f.remote, true, request)).rejects.toThrow("native shutdown is unproved");
+    expect((await lstat(copied)).mode & 0o777).toBe(0o555);
+    expect(await readFile(join(copied, "asset"), "utf8")).toBe("unchanged common bytes\n");
+    await writeFile(receipt, JSON.stringify({ driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" }));
+    await removeStaging(f.remote, true, request);
+    expect(existsSync(f.remote)).toBe(false);
+    expect(await readFile(asset, "utf8")).toBe("unchanged common bytes\n");
+    expect((await lstat(original)).mode & 0o777).toBe(0o555);
+    expect((await lstat(asset)).mode & 0o777).toBe(0o444);
+    expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: true, consumersStopped: true });
+  } finally {
+    await Promise.all([original, copied].filter(existsSync).map(directory => chmod(directory, 0o755)));
+  }
+}
+test("remote readonly copies change permissions only after native settlement and preserve linked common inputs", () => fixture(f => localMesh(f, () => readonlyStaging(f)), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
 
 installedTest.each([false, true])("native teardown completes inside admission after operation failure %j", fail => fixture(async f => {
   const control = join(f.remote, "native-control.ts");
