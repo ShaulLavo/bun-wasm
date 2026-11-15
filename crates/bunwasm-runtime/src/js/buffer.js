@@ -651,6 +651,7 @@
     let s = start === undefined || start <= 0 ? 0 : start >= len ? len : Math.trunc(start) || 0;
     let e = end === undefined || end > len ? len : Math.trunc(end) || 0;
     if (e <= s) return "";
+    if (encoding === "") throw unknownEncoding(encoding);
     const enc = encoding === undefined ? "utf8" : getEncoding(String(encoding));
     return bytesToString(s === 0 && e === len ? buf : buf.subarray(s, e), enc);
   }
@@ -768,36 +769,40 @@
   // indexOf / lastIndexOf / includes
   // ---------------------------------------------------------------------------
 
-  function indexOfOffset(length, offset, needleLength, forward) {
+  function indexOfOffset(length, offset, needleLength, forward, wrapLength) {
     if (offset < 0) {
-      if (offset + length >= 0) return length + offset;
-      if (forward || needleLength === 0) return 0;
-      return -1;
+      offset += wrapLength;
+      if (offset < 0) return forward || needleLength === 0 ? 0 : -1;
     }
     if (offset + needleLength <= length) return offset;
     if (needleLength === 0) return length;
     return forward ? -1 : length - 1;
   }
 
-  function matchesAt(haystack, needle, pos) {
-    for (let j = 0; j < needle.length; j++) {
+  function matchesAt(haystack, needle, pos, needleLength) {
+    for (let j = 0; j < needleLength; j++) {
       if (haystack[pos + j] !== needle[j]) return false;
     }
     return true;
   }
 
-  function searchBytes(haystack, needle, byteOffset, forward) {
-    const start = indexOfOffset(haystack.length, byteOffset, needle.length, forward);
+  function searchBytes(haystack, needle, byteOffset, forward, unitSize = 1, stringNeedle = false) {
+    const length = haystack.length - haystack.length % unitSize;
+    const needleLength = needle.length - needle.length % unitSize;
+    if (needle.length > length) return -1;
+    const wrapLength = stringNeedle ? length : haystack.length;
+    const start = indexOfOffset(length, byteOffset, needle.length, forward, wrapLength);
     if (needle.length === 0) return start;
-    if (haystack.length === 0 || start <= -1) return -1;
+    if (needleLength === 0 || length === 0 || start <= -1) return -1;
+    const alignedStart = Math.floor(start / unitSize) * unitSize;
     if (forward) {
-      for (let i = start; i <= haystack.length - needle.length; i++) {
-        if (matchesAt(haystack, needle, i)) return i;
+      for (let i = alignedStart; i <= length - needleLength; i += unitSize) {
+        if (matchesAt(haystack, needle, i, needleLength)) return i;
       }
       return -1;
     }
-    for (let i = Math.min(start, haystack.length - needle.length); i >= 0; i--) {
-      if (matchesAt(haystack, needle, i)) return i;
+    for (let i = Math.min(alignedStart, length - needleLength); i >= 0; i -= unitSize) {
+      if (matchesAt(haystack, needle, i, needleLength)) return i;
     }
     return -1;
   }
@@ -820,9 +825,12 @@
     if (typeof val === "number") return searchBytes(buf, [val >>> 0 & 255], offset, forward);
     if (typeof val === "string") {
       const normalized = enc === undefined ? "utf8" : getEncoding(enc);
-      return searchBytes(buf, stringToBytes(val, normalized), offset, forward);
+      return searchBytes(buf, stringToBytes(val, normalized), offset, forward, normalized === "utf16le" ? 2 : 1, true);
     }
-    if (isUint8Array(val)) return searchBytes(buf, val, offset, forward);
+    if (isUint8Array(val)) {
+      const unitSize = typeof enc === "string" && normalizeEncoding(enc) === "utf16le" ? 2 : 1;
+      return searchBytes(buf, val, offset, forward, unitSize);
+    }
     throw invalidArgType("value", ["number", "string", "Buffer", "Uint8Array"], val);
   }
 
@@ -833,7 +841,7 @@
   function checkReadOffset(buf, offset, byteLength) {
     if (offset === undefined) offset = 0;
     if (typeof offset !== "number") throw invalidArgType("offset", "number", offset);
-    if (!Number.isInteger(offset)) throw outOfRange("offset", "an integer", offset);
+    if (Math.floor(offset) !== offset) throw outOfRange("offset", "an integer", offset);
     const max = buf.length - byteLength;
     if (max < 0) throw bufferOutOfBounds();
     if (offset < 0 || offset > max) throw outOfRange("offset", `>= 0 and <= ${max}`, offset);
@@ -969,10 +977,6 @@
 
   defineMethods(proto, {
     toString(encoding, start, end) {
-      if (arguments.length === 0) return utf8Slice(this);
-      return toStringRange(this, encoding, start, end);
-    },
-    toLocaleString(encoding, start, end) {
       if (arguments.length === 0) return utf8Slice(this);
       return toStringRange(this, encoding, start, end);
     },
@@ -1117,6 +1121,8 @@
       return writeBig(this, value, offset, false, false);
     },
   });
+
+  defineMethods(proto, { toLocaleString: proto.toString });
 
   // Fixed-width integer accessors: readUInt8, readInt16LE, writeUInt32BE, ...
   function defineFixedInt(bytes, signed, endian) {

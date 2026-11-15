@@ -1,0 +1,7 @@
+fill selects overloads by value and ignores end without a start
+fill validates encoding before an empty range without encoding the value
+fill defaults null and empty encoding while toString rejects them
+numeric offsets distinguish infinity from fractional and NaN offsets
+UTF-16 searches reject odd-byte matches and floor reverse offsets
+UTF-16 buffer and string needles wrap odd-length haystacks differently
+toLocaleString shares the toString function

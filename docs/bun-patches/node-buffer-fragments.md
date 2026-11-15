@@ -56,6 +56,27 @@ Bun 1.4.4 and Node 26.12.1 agree on the five-byte latin1/hex controls in
 the production Buffer factory with the helper emitted by the production
 TypeScript stripping script. No upstream source was copied for this fix.
 
+The residual argument and search corrections are original adapter changes,
+checked against unchanged `test/js/node/buffer.test.js` and
+`test/js/node/buffer-concat.test.ts` at Bun
+`9510e74152073d850a18758ca41114d8f214ffa6`, plus native Bun 1.4.4 controls.
+`buffer_fill_args.ts` only selects encoding overloads for string fill values.
+An omitted start ignores the end for every value, and string encodings are
+validated before an empty-range return without encoding the fill value.
+The public `toString` gate rejects an explicit empty encoding independently of
+fill's default encoding policy.
+
+UTF-16 search compares complete two-byte units at aligned positions, retaining
+the raw needle length for bounds checks. Buffer needles wrap a negative offset
+against the original byte length; string needles wrap against the even search
+length. An empty needle returns a clamped byte offset. The common numeric
+offset check distinguishes NaN and fractions from infinities, which receive
+the bounds error. `toLocaleString` references the exact `toString` function.
+The maintained small-buffer checks are
+`tests/fixtures/buffer-residual-semantics` and
+`scripts/buffer-residual-semantics.test.ts`. They require no private hooks or
+large allocations and preserve the existing raw encoding binding tests.
+
 ## Classification
 
 | Patch or source | Class | Change |
