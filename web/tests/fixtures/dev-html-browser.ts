@@ -27,6 +27,7 @@ export async function developmentFixture() {
     printError(error: unknown) { errors.push(error); },
     require(name: string): unknown {
       if (modules.has(name)) return modules.get(name);
+      if (name === "text_decoder") return TextDecoder;
       if (name === "streams") return { ReadableStream };
       if (name === "url_search_params") return {};
       if (name === "web_brand") return () => {};

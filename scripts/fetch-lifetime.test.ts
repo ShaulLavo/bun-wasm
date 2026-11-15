@@ -30,7 +30,7 @@ function fixture() {
   let headReads = 0;
   let responseRead: Uint8Array | number = 0;
   const modules: Record<string, unknown> = {
-    streams, buffer: { Buffer }, http_common: load("http_common.ts")(),
+    streams, text_decoder: TextDecoder, buffer: { Buffer }, http_common: load("http_common.ts")(),
     websocket: { clientClass: () => undefined },
     html_server: { websocket: () => undefined, developmentEnabled: () => false, attach() {}, dispose() {}, upgrade: () => false, asset: () => null },
   };

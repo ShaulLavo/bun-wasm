@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { cloopFrame, cloopFrameFindings, cloopFrameFloor, cloopValueSlotCeiling } from "./jsc-cloop-frame.ts";
+import { cloopFrame, cloopFrameFindings, cloopFrameFloor, cloopValueSlotCeiling, wasmFrame } from "./jsc-cloop-frame.ts";
 
 // A side with an imported callee and the interpreter function under test. Global 0 is the
 // imported, exported stack pointer, as wasm-ld lays out a PIC side. Locals 0 and 1 hold the two
@@ -118,6 +118,16 @@ for (const [name, body, retainedBytes] of shallow) {
     expect(cloopFrameFindings(frame)).toHaveLength(1);
   });
 }
+
+test("a compiler may tee the frame address back into its own local", () => {
+  const frame = cloopFrame(side(framed(localGet(1).concat(localTee(1), drop, call))));
+  expect(frame.retainedBytes).toBe(cloopFrameFloor);
+});
+
+test("the checked walk also measures another engine's named frame", () => {
+  const bytes = side(framed(call), { names: ["js::RunScript(JSContext*, js::RunState&)"] });
+  expect(wasmFrame(bytes, "js::RunScript(").retainedBytes).toBe(cloopFrameFloor);
+});
 
 const rejected: ReadonlyArray<readonly [string, Uint8Array, string]> = [
   ["a release through a local that was written again", side(framed(globalGet(1).concat(localTee(1), drop, call))), "released through local 1, which holds no known allocation"],

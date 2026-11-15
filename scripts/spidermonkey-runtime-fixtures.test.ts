@@ -306,7 +306,7 @@ for (const context of ["native", "hooks"]) {
     const result = invoke(box, ["--engine", "browser", "--context", context, "--no-build", "hello"], { BUN_WASM_RUNTIME_CHECKED: "1" });
     expect(result.code).toBe(0);
     const record = records(box)[0]!;
-    expect(record.argv.slice(0, 6)).toEqual(["--no-warnings", join(box.root, "web/scripts/node-host.mjs"), "--wasm", join(box.root, "dist/bun-browser.wasm"), "--context", context]);
+    expect(record.argv.slice(0, 10)).toEqual(["--no-warnings", join(box.root, "web/scripts/node-host.mjs"), "--wasm", join(box.root, "dist/bun-browser.wasm"), "--shell", box.shell, "--env-utility", box.utility, "--context", context]);
     expect(record.argv).not.toContain("--engine");
     expect(record.tier).toBe("ambient-must-not-win");
   });

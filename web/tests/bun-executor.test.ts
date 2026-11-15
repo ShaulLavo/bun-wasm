@@ -10,7 +10,7 @@ import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
-import { qualifiedParserReserves, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
+import { qualifiedParserReserves, spiderMonkeyWebKitStackKib, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
 import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/executor-guest";
 import { createSharedObjectBroker } from "../src/shared-objects/broker";
 import type { SharedObjectService } from "../src/shared-objects/service";
@@ -144,6 +144,71 @@ test("a ready browser guest exits with the status its engine host reports", cont
   const { messages } = await run();
   expect(startEngineHost).toHaveBeenCalledTimes(1);
   expect(exits(messages)).toEqual([{ type: "exit", code: 5, signal: undefined, sleep: "atomics" }]);
+}));
+
+test("the browser host transfers only executor-owned controls to the real bootstrap", controlled(async () => {
+  const control = new DefaultSignal(15);
+  const ordinary = new Error("process image replaced");
+  startEngineHost.mockImplementationOnce(async options => {
+    const owns = options.isExecutionUnwind;
+    expect(typeof owns).toBe("function");
+    if (typeof owns !== "function") throw new Error("No native control transfer");
+    expect(owns(ordinary)).toBe(false);
+    expect(owns({ signal: 15 })).toBe(false);
+    expect(owns(143)).toBe(false);
+    expect(owns(control)).toBe(true);
+    expect(owns(new WasiExit(2))).toBe(true);
+    throw control;
+  });
+  const { messages } = await run();
+  expect(exits(messages)).toEqual([{ type: "exit", code: 143, signal: 15, sleep: "atomics" }]);
+}));
+
+test("the private exec throw passes unchanged through browser policy to bootstrap replacement cleanup", controlled(async () => {
+  const { ProcessReplaced, bootstrap, createFilesystemConnection, childTransport, controlLoad } =
+    await import("../../tests/package/fixtures/engine-host-exec.ts");
+  const marker = new ProcessReplaced("process image replaced");
+  const connection = createFilesystemConnection();
+  const runtimeProcess = childTransport();
+  const messages: WorkerMessage[] = [];
+  const host: BunExecutorHost & RuntimeWorkerHost = {
+    crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message: WorkerMessage) { if (message.type === "shared-control-allocation") control.allocated(message.buffer); messages.push(message); },
+    async fetch() { return new Response("ok"); },
+  };
+  const request: RunRequest = { controlGrant: control.grant, engine: "browser", module: guest(1), args: ["bun"], env: {},
+    filesystem: connection.client, runtimeProcess, trace: false, net: null };
+  const executor = createBunExecutor(request, host);
+  let handoff: WebAssembly.ImportValue | undefined;
+  startEngineHost.mockImplementationOnce(async options => {
+    const instance = options.instance as WebAssembly.Instance;
+    const memory = instance.exports.memory;
+    const owns = options.isExecutionUnwind;
+    if (!(memory instanceof WebAssembly.Memory) || typeof handoff !== "function" || typeof owns !== "function") throw new Error("Missing private binding");
+    const plan = new TextEncoder().encode(JSON.stringify({ version: 1, cwd: "/", env: {}, silent: true, color: false,
+      pre: null, main: { name: "build", original: "echo ok", command: "echo ok" }, post: null, footer: "" }));
+    new Uint8Array(memory.buffer).set(plan, 1024);
+    expect(owns(marker)).toBe(false);
+    try { handoff(1024, plan.length, 4096, 4096); }
+    catch (error) { expect(error).toBe(marker); expect(owns(error)).toBe(true); throw error; }
+    throw new Error("Successful exec returned");
+  });
+  try {
+    control.attach(runtimeProcess);
+    await bootstrap(request, { ...executor,
+      namespaces(context) { const imports = executor.namespaces!(context); handoff = imports.bun_package_scripts?.handoff; return imports; },
+      setup(context) { setupLocalFilesystem(context, executor); },
+      async instantiated(context) {
+        if (!context.process) throw new Error("No process ABI");
+        if (!context.runtimeState) throw new Error("No process state");
+        expect(controlLoad(context.runtimeState.signals.signalState, 1)).toBe(0);
+        context.process.imports.exec = () => { throw marker; };
+        await executor.instantiated?.(context);
+      },
+    }, host);
+    expect(messages).toContainEqual({ type: "replaced" });
+    expect(exits(messages)).toEqual([]);
+  } finally { connection.client.port.close(); connection.server.port.close(); }
 }));
 
 for (const [label, options] of [
@@ -837,13 +902,13 @@ test("each armed JSC instance gets a fresh allocation-boundary generation; other
 const geckoStack = "smallStackKib@http://localhost/worker.js:1:1\ncreateBunExecutor@http://localhost/worker.js:2:1";
 const v8Stack = "Error\n    at smallStackKib (http://localhost/worker.js:1:1)";
 const stackHosts = [
-  { name: "Firefox", agent: "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: undefined, jsc: "208" },
-  { name: "Chrome", agent: "Mozilla/5.0 Chrome/147.0.0.0 Safari/537.36", stack: v8Stack, quickjs: undefined, jsc: "800" },
-  { name: "Safari", agent: "Mozilla/5.0 Version/26.0 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
-  { name: "Firefox on Android", agent: "Mozilla/5.0 (Android 14; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192" },
-  { name: "Firefox on an unknown platform", agent: "Mozilla/5.0 Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192" },
-  { name: "Firefox on iOS", agent: "Mozilla/5.0 FxiOS/147.0 Mobile/15E148 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
-  { name: "unmeasured host", agent: "Unknown/1.0", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "Firefox", agent: "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: undefined, jsc: "208", spidermonkey: undefined },
+  { name: "Chrome", agent: "Mozilla/5.0 Chrome/147.0.0.0 Safari/537.36", stack: v8Stack, quickjs: undefined, jsc: "800", spidermonkey: undefined },
+  { name: "Safari", agent: "Mozilla/5.0 Version/26.0 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192", spidermonkey: spiderMonkeyWebKitStackKib },
+  { name: "Firefox on Android", agent: "Mozilla/5.0 (Android 14; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192", spidermonkey: undefined },
+  { name: "Firefox on an unknown platform", agent: "Mozilla/5.0 Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192", spidermonkey: undefined },
+  { name: "Firefox on iOS", agent: "Mozilla/5.0 FxiOS/147.0 Mobile/15E148 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192", spidermonkey: spiderMonkeyWebKitStackKib },
+  { name: "unmeasured host", agent: "Unknown/1.0", stack: geckoStack, quickjs: "32", jsc: "192", spidermonkey: spiderMonkeyWebKitStackKib },
 ];
 
 /** Runs with exactly these qualified parser reserves, whatever the shipped table holds. */
@@ -881,10 +946,13 @@ for (const host of stackHosts) {
     expect(stackEnvironment(host, "quickjs")?.BUN_WASM_STACK_KIB).toBe(host.quickjs);
     expect(stackEnvironment(host, "jsc")?.BUN_WASM_STACK_KIB).toBe(host.jsc);
     expect(stackEnvironment(host, "browser")).toEqual({});
-    expect(stackEnvironment(host, "spidermonkey")).toEqual({});
+    // WebKit hosts bound SpiderMonkey's byte quota; V8 and Gecko keep its full quota.
+    expect(stackEnvironment(host, "spidermonkey")).toEqual(host.spidermonkey ? { BUN_WASM_STACK_KIB: host.spidermonkey } : {});
     expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
     expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "" })).toEqual({ BUN_WASM_STACK_KIB: "" });
     expect(stackEnvironment(host, "jsc", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
+    expect(stackEnvironment(host, "spidermonkey", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
+    expect(stackEnvironment(host, "spidermonkey", { BUN_WASM_STACK_KIB: "" })).toEqual({ BUN_WASM_STACK_KIB: "" });
   })));
 }
 
@@ -913,6 +981,7 @@ test("no engine but JSC ever receives the parser reserve", controlled(() => with
   expect(stackEnvironment(linuxFirefox, "quickjs")).toEqual({});
   expect(stackEnvironment(linuxFirefox, "browser")).toEqual({});
   expect(stackEnvironment(linuxFirefox, "spidermonkey")).toEqual({});
+  expect(stackEnvironment(macSafari, "spidermonkey", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: spiderMonkeyWebKitStackKib });
   expect(stackEnvironment(macSafari, "quickjs", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "32" });
   expect(stackEnvironment(linuxFirefox, "quickjs", { [reserveKey]: "512" })).toEqual({ [reserveKey]: "512" });
 })));

@@ -76,7 +76,7 @@ for (const [path, expected, error] of [
   try {
     writeFileSync(join(f.broker.preopens["/bin"]!, "plain"), "not executable");
     expect(await f.query(path)).toBe(expected);
-    if (error !== "ENOTDIR") expect(await f.spawn(path)).toMatchObject({ kind: "start-failed", error });
+    if (error !== "ENOTDIR") expect(await f.spawn(path)).toMatchObject({ kind: "start-failed", error: path === "/bin/plain" ? "ENOEXEC" : error });
   } finally { await f.close(); }
 });
 
@@ -90,11 +90,11 @@ test("Node admission follows guest symlinks and rechecks live files and registra
     expect(await f.query("node", "/bin")).toBe(0);
     f.broker.registry.unregister("/bin/node");
     expect(await f.query("/bin/alias")).toBe(-2);
-    expect(await f.spawn("/bin/alias")).toMatchObject({ error: "EACCES" });
+    expect(await f.spawn("/bin/alias")).toMatchObject({ error: "ENOEXEC" });
     f.broker.registry.register("/bin/node", { module, adapter: "bun" });
     f.broker.registry.unregister("/bin/bun");
     expect(await f.query("/bin/bun")).toBe(-2);
-    expect(await f.spawn("/bin/bun")).toMatchObject({ error: "EACCES" });
+    expect(await f.spawn("/bin/bun")).toMatchObject({ error: "ENOEXEC" });
     rmSync(join(bin, "node"));
     expect(await f.query("/bin/node")).toBe(-44);
     expect(await f.spawn("/bin/node")).toMatchObject({ error: "ENOENT" });

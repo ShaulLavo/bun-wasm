@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { runInContext } from "node:vm";
 import { runOwned, sourceModuleTools, sourceRuntime } from "./fixtures/stream-consumers-runtime";
 import { consumptionControls } from "./fixtures/stream-consumers-control";
 import { selectChecks } from "./test-checks";
@@ -44,6 +45,29 @@ test("stream consumers resolves through public require and import metadata with 
 
 test("stream consumers regression is selected by CI and local runtime checks", () => {
   for (const owner of ["runtime", "local-runtime"]) expect(selectChecks(owner)).toContain("scripts/runtime-stream-consumers.test.ts");
+});
+
+test("whole source bootstrap installs the production decoder with native codec state and cleanup", () => {
+  const source = sourceRuntime(scratch);
+  const Decoder: typeof TextDecoder = runInContext("TextDecoder", source.context);
+  expect(Decoder).not.toBe(TextDecoder);
+  expect(source.emitted.get("text_decoder")).toContain("native.decoder(");
+  const baseline = source.decoderHandles.size;
+  const decoder = new Decoder("utf-8", { fatal: true });
+  expect(source.decoderHandles.size).toBe(baseline + 1);
+  expect(decoder.encoding).toBe("utf-8");
+  expect(decoder.fatal).toBe(true);
+  expect(decoder.ignoreBOM).toBe(false);
+  expect(decoder.decode(Uint8Array.of(0xef, 0xbb), { stream: true })).toBe("");
+  const sentinel = new Error("stream getter");
+  expect(() => decoder.decode(undefined, { get stream(): boolean { throw sentinel; } })).toThrow(sentinel);
+  expect(source.decoderHandles.size).toBe(baseline + 1);
+  expect(decoder.decode(Uint8Array.of(0xbf, 65))).toBe("A");
+  expect(source.decoderHandles.size).toBe(baseline);
+  expect(() => decoder.decode(Uint8Array.of(0xff), { stream: true })).toThrow(expect.objectContaining({ code: "ERR_ENCODING_INVALID_ENCODED_DATA" }));
+  expect(source.decoderHandles.size).toBe(baseline);
+  expect(decoder.decode(Uint8Array.of(0xef, 0xbb, 0xbf, 66))).toBe("B");
+  expect(source.decoderHandles.size).toBe(baseline);
 });
 
 test("emitted consumers use real portable web and Node streams", async () => {

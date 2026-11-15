@@ -362,15 +362,38 @@ target, caller name and PID, and signal or exit code. `logs/causal-capture-settl
 names the first invalid response, any identity loss and the first initiating
 event, or `unknown`. Capture failures after arming are recorded there and never
 change the cell or cleanup result. Fleet keeps the staging directory unless that
-receipt is settled.
+receipt and the outer native-exit receipt are settled.
 
-Attribution accepts only timestamped events strictly inside the interval between
+Launchd-log attribution accepts only timestamped events strictly inside the interval between
 attachment and the last confirmed read of that same PID and kernel start time.
 An event in the uncertain interval before disappearance or PID reuse stays
 unattributed. A reader exception stops observation and records a degraded capture.
 After interrupted collection, fleet validates and saves the complete report,
 history, logs and native cleanup receipt before removing settled staging.
 
-Native qualification is pending. The first controlled run stopped before
-installation because its own control process was unreadable. Source checks
-do not establish that the current native reader or event control works on Safari.
+The same opt-in also attaches one public `EVFILT_PROC` exit subscription after
+the unique association, checking the kernel birth immediately before and after
+registration. A mismatch blocks workload admission. Exit polling continues
+independently after rusage loss, PID reuse and an invalid protocol reply. It keeps
+the original birth and never registers a replacement PID.
+
+`logs/native-exit-<uuid>.jsonl` retains all 48 raw event bytes and fields,
+registration receipts, observer clocks, protocol facts and cleanup dispatch
+boundaries. The inner capture settles first. Driver and application teardown are
+then attempted independently, preserving an original operation error if cleanup
+also fails. Only afterward does the outer owner stop polling, perform a finite
+nonblocking drain, close once and join the writer. It never waits for target death
+before cleanup. Outer teardown and writer joins use finite allowances; a resource
+that does not join remains unproved. `logs/native-exit-settlement.json` reports
+descriptor closure, resource/writer joins, cleanup failures and degraded
+observation. Fleet requires this receipt as well as the inner capture and native
+resource receipts before removing staging.
+
+Normal nonchild exit delivery is qualified on one owned launchd target exiting
+23. Safari exit delivery, nonchild signals and a native positive memory-detail bit
+remain unqualified. Missing status/detail fields stay null; no event means no
+event was observed. An exit before binding can be missed, and birth checks are
+not atomic with registration. Receipt times do not identify the kernel exit time
+or the initiating actor. A cleanup-phase receipt cannot establish that cleanup
+caused death. See [the ABI record](bun-patches/goals-safari-native-exit.md) for
+source pins, qualification and interpretation limits.

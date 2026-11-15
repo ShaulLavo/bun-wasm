@@ -64,7 +64,9 @@ function withoutStackCapabilityDeltas(source: string) {
   expect(source.split(awaitingCaller)).toHaveLength(2);
   expect(source.split("custom && parseCapturedStack")).toHaveLength(2);
   expect(source.split('native.engine === "quickjs" || parseCapturedStack')).toHaveLength(2);
-  return source.replace(declaration, "")
+  const prototypeWrapper = /  if \(native.engine === "spidermonkey"\) \{\n[\s\S]*?\n  \}\n\n/;
+  expect(source.match(prototypeWrapper)).not.toBeNull();
+  return source.replace(prototypeWrapper, "").replace(declaration, "")
     .replace(awaitingCaller, 'this.#frame.name.startsWith("async ")')
     .replace("custom && parseCapturedStack", 'custom && native.engine === "jsc"')
     .replace('native.engine === "quickjs" || parseCapturedStack', 'native.engine === "quickjs" || native.engine === "jsc"');
@@ -130,6 +132,7 @@ test("stack descriptor records are the only executable delta", () => {
   expect(records).toEqual([
     { target: "target", properties: ["__proto__", "value", "writable", "configurable", "enumerable"], nullPrototype: true },
     { target: "Error.prototype", properties: ["configurable", "get", "set"], nullPrototype: false },
+    { target: "Error.prototype", properties: ["__proto__", "configurable", "enumerable", "get", "set"], nullPrototype: true },
     { target: "target", properties: ["__proto__", "configurable", "enumerable", "get", "set"], nullPrototype: true },
   ]);
 });
