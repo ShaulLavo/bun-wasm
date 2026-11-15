@@ -50,7 +50,7 @@ async function fixture(engine: BrowserType, write?: (event: Event) => void, cont
   });
   const context = await opening;
   if (contextClosing) throw new Error("Storage diagnostic context closed during setup");
-  lifetime.observeContext(context);
+  await lifetime.observeContext(context);
   const page = await context.newPage();
   page.setDefaultTimeout(30_000);
   await page.route("http://storage.test/**", route => route.fulfill({ contentType: "text/html", body: "<!doctype html><h1>Host</h1>" }));
@@ -320,7 +320,8 @@ async function lateContext(engine: BrowserType): Promise<void> {
 async function rejectedSetup(engine: BrowserType): Promise<void> {
   const started = performance.now();
   const acquired = Promise.withResolvers<Browser>();
-  await assert.rejects(fixture(engine, undefined, { open: async browser => {
+  const events: Event[] = [];
+  await assert.rejects(fixture(engine, event => events.push(event), { open: async browser => {
     acquired.resolve(browser);
     const context = await browser.newContext();
     await context.close();
@@ -330,6 +331,10 @@ async function rejectedSetup(engine: BrowserType): Promise<void> {
   const lifetime = lifetimes.at(-1);
   assert(lifetime);
   await lifetime.cleanup();
+  assert.deepEqual(lifetime.failures, []);
+  assert(events.some(event => event.kind === "error" && event.detail && typeof event.detail === "object"
+    && "phase" in event.detail && event.detail.phase === "filesystem-observation.install"));
+  assert.equal(events.some(event => event.kind === "secondary-error"), false);
   assert.equal(browser.isConnected(), false);
   console.log(JSON.stringify({ browser: engine.name(), control: "setup rejection", durationMs: performance.now() - started }));
 }
