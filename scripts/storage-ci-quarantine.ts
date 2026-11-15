@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { StoragePreservationFailure, storageReportPath } from "../sandbox/tests/storage-browser";
 import firefoxProtocol from "./fixtures/storage-ci/firefox.json";
 import webkitProtocol from "./fixtures/storage-ci/webkit.json";
+import webkitRestorationProtocol from "./fixtures/storage-ci/webkit-restoration.json";
 
 type Diagnostic = StoragePreservationFailure["report"]["pages"][number];
 type PageDiagnostic = Exclude<Diagnostic, string>;
@@ -40,7 +41,34 @@ function knownConsoleError(browser: string, error: string): boolean {
     || /^\[JavaScript Error: "Failed to load ‘’. A ServiceWorker intercepted the request and encountered an unexpected error\." \{file: "http:\/\/127\.0\.0\.1:\d+\/sandbox\/sw\.js" line: 8\}\]$/.test(error);
 }
 
+function firstVanillaRestoration(failure: StoragePreservationFailure): string | undefined {
+  const { error, errors, pages } = failure.report;
+  const original = webkitRestorationProtocol;
+  if (error !== original.error || errors.length !== original.errors.length || !errors.every((error, index) => error === original.errors[index])) return;
+  if (pages.length !== 2) return;
+  const [active, page] = pages;
+  if (!isActiveHono(active) || !isNativePage(page, "vanilla")) return;
+  const origin = new URL(active.url).origin;
+  if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) return;
+  if (!/^dev server ready in \d+\.\d s · Browser \(native\) · 20\.2 MB$/.test(active.status ?? "")) return;
+  if (page.status !== "loading preview…" || page.runtime?.editorPath !== "src/main.ts") return;
+  if (!restorationPage(active, original.pages[0]!, origin) || !restorationPage(page, original.pages[1]!, origin)) return;
+  return "webkit-first-vanilla-restoration";
+}
+
+function restorationPage(page: PageDiagnostic, original: typeof webkitRestorationProtocol.pages[number], origin: string): boolean {
+  if (page.url !== original.url.replace(new URL(original.url).origin, origin) || page.storage != null) return false;
+  if (page.runtime?.filesystem.error !== undefined || page.frames.length !== 1) return false;
+  if (!matchesTerminal(page.terminal, original.terminal)) return false;
+  const frame = page.frames[0];
+  const expected = original.frames[0]!;
+  return frame?.src === expected.src.replace(new URL(original.url).origin, origin)
+    && frame.documentUrl === frame.src && frame.body === expected.body
+    && frame.readyState === expected.readyState && frame.acceptedDocument === expected.acceptedDocument;
+}
+
 export function storageQuarantine(browser: string, failure: StoragePreservationFailure): string | undefined {
+  if (failure.report.checkpoint === "first-vanilla-restoration") return browser === "webkit" ? firstVanillaRestoration(failure) : undefined;
   if (browser !== "firefox" && browser !== "webkit") return;
   const { checkpoint, error, errors, pages } = failure.report;
   if (pages.length !== 2 || !errors.every(error => knownConsoleError(browser, error))) return;
@@ -72,6 +100,6 @@ export async function handleStorageFailure(browser: string, error: unknown, env 
   const report = base ? `${base.replace(/\.json$/, "")}-${browser}-preservation.json` : undefined;
   if (report) await writeFile(report, JSON.stringify({ browser, quarantine: quarantine ?? null, ...error.report }, null, 2));
   if (!quarantine || !report || !env.GITHUB_STEP_SUMMARY) throw error;
-  await appendFile(env.GITHUB_STEP_SUMMARY, `\n### Storage quarantine: ${quarantine}\n\nThe preservation scenario failed with the known signature. This is a quarantined failure, not a product pass. Full original diagnostics: \`${basename(report)}\` in this job's Browser guest diagnostics artifact. Removal is tracked in \`.internal/storage-ci-20261114.md\`.\n`);
+  await appendFile(env.GITHUB_STEP_SUMMARY, `\n### Storage quarantine: ${quarantine}\n\nThe preservation scenario failed with the known signature. This is a quarantined failure, not a product pass. The remaining preservation checks were skipped. Full original diagnostics: \`${basename(report)}\` in this job's Browser guest diagnostics artifact. Removal is tracked in \`.internal/storage-ci-20261114.md\`.\n`);
   console.error(`::warning title=Storage quarantine::${quarantine}: preservation failed with the known signature; original diagnostics retained in ${basename(report)}. See .internal/storage-ci-20261114.md for removal.`);
 }
