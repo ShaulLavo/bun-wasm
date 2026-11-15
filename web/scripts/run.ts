@@ -4,7 +4,6 @@
 // WASI_TRACE=1 logs every syscall to stderr. NET=0 leaves out the networking slots (fetch, Bun.serve);
 // SLOTS=imports installs them as calls through the WASI import (the playground's ?slots=imports).
 // Guest servers are served on real 127.0.0.1 ports by the helper worker (scripts/net-helper.ts).
-import { readFileSync } from "node:fs";
 import { HOME, examples } from "../src/examples";
 import { MemFS } from "../src/fs";
 import { NetHost } from "../src/net/host";
@@ -14,6 +13,8 @@ import { Wasi } from "waffle/core";
 import { ProcessABI, ProcessSignalExit } from "waffle/proc/abi";
 import { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessSupervisor } from "waffle/proc/supervisor";
+import { adoptLinkPlan, instantiateLinkPlan, type LinkedGroup } from "waffle/link";
+import { loadNodeProgram } from "./node-linked";
 
 const [wasmPath, ...args] = process.argv.slice(2);
 if (!wasmPath) {
@@ -29,7 +30,7 @@ function testEnv(): Record<string, string> {
 }
 
 const cell = new Int32Array(new SharedArrayBuffer(4));
-const module = new WebAssembly.Module(readFileSync(wasmPath));
+const program = await loadNodeProgram(wasmPath);
 const processImports: Record<string, (...args: number[]) => number> = {};
 const wasi = new Wasi({
   hostCallFd: HOST_CALL_FD,
@@ -51,27 +52,48 @@ const supervisor = new ProcessSupervisor({
 const pid = supervisor.createRoot({ descriptors: wasi.descriptors });
 const root = supervisor.get(pid)!;
 let instance: WebAssembly.Instance;
+function memory(): WebAssembly.Memory {
+  const value = instance.exports.memory;
+  if (!(value instanceof WebAssembly.Memory)) throw new TypeError("CLI program must export memory");
+  return value;
+}
 const abi = new ProcessABI({
-  memory: () => instance.exports.memory as WebAssembly.Memory,
+  memory,
   descriptors: wasi.descriptors, fs, pid, service: supervisor,
   signals: root,
 });
 Object.assign(processImports, abi.imports);
-instance = new WebAssembly.Instance(module, wasi.imports(module));
-if (process.env.NET !== "0") {
-  // The helper needs its own thread: this one blocks inside bun.wasm until it exits.
-  const ring = createRing();
-  const helper = new Worker(new URL("./net-helper.ts", import.meta.url).href);
-  helper.postMessage({ type: "init", ring });
-  const host = new NetHost(ring, (req, transfer = []) => helper.postMessage(req, transfer));
-  host.attach(instance.exports.memory as WebAssembly.Memory);
-  if (process.env.SLOTS === "imports") wasi.hostCall = installHostSlotsViaImport(instance, host.slots());
-  else installHostSlots(instance, host.slots());
-}
+let linked: LinkedGroup | undefined;
+let helper: Worker | undefined;
 let code: number;
-try { code = wasi.start(instance); }
+try {
+  if (program.linkPlan) {
+    linked = instantiateLinkPlan(adoptLinkPlan(program.linkPlan), {
+      wasi, coreImports: wasi.imports(program.module), checkActive() {},
+    });
+    instance = linked.entry;
+  } else instance = new WebAssembly.Instance(program.module, wasi.imports(program.module));
+  if (process.env.NET !== "0") {
+    // The helper needs its own thread: this one blocks inside bun.wasm until it exits.
+    const ring = createRing();
+    const worker = helper = new Worker(new URL("./net-helper.ts", import.meta.url).href);
+    worker.postMessage({ type: "init", ring });
+    const host = new NetHost(ring, (req, transfer = []) => worker.postMessage(req, transfer));
+    host.attach(memory());
+    if (process.env.SLOTS === "imports") wasi.hostCall = installHostSlotsViaImport(instance, host.slots());
+    else installHostSlots(instance, host.slots());
+  }
+  linked?.initialize();
+  code = wasi.start(instance);
+}
 catch (error) {
   if (!(error instanceof ProcessSignalExit)) throw error;
   code = error.status;
-} finally { supervisor.dispose(); }
+} finally {
+  try { await helper?.terminate(); }
+  finally {
+    try { linked?.dispose(); }
+    finally { supervisor.dispose(); }
+  }
+}
 process.exit(code);
