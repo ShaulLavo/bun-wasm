@@ -82,34 +82,34 @@
     return { body: `\n\n${message}\n` };
   }
 
+  function arrayOfSize(inspect: (value: unknown) => string, ctx: Context, received: unknown, ...args: unknown[]): Failure {
+    if (args.length === 0) throw new TypeError("toBeArrayOfSize() requires 1 argument");
+    const size = args[0];
+    if (typeof size !== "number" || !Number.isInteger(size) || Object.is(size, -0)) {
+      throw new Error("toBeArrayOfSize() requires the first argument to be a number");
+    }
+    if ((Array.isArray(received) && received.length === size) !== !!ctx.not) return null;
+    return { body: `\n\nReceived: ${inspect(received)}\n` };
+  }
+
+  function ignoringWhitespace(inspect: (value: unknown) => string, ctx: Context, received: unknown, ...args: unknown[]): Failure {
+    if (args.length === 0) throw new TypeError("toEqualIgnoringWhitespace() requires 1 argument");
+    const expected = args[0];
+    if (typeof expected !== "string" && !(expected instanceof String)) {
+      throw new Error("toEqualIgnoringWhitespace() requires argument to be a string");
+    }
+    const pass = (typeof received === "string" || received instanceof String)
+      && String(received).replace(/[ \t-\r]/g, "") === String(expected).replace(/[ \t-\r]/g, "");
+    if (pass !== !!ctx.not) return null;
+    return { body: `\n\nExpected: ${ctx.not ? "not " : ""}${inspect(expected)}\nReceived: ${inspect(received)}\n` };
+  }
+
   function extended(inspect: (value: unknown) => string) {
-    function arrayOfSize(ctx: Context, received: unknown, ...args: unknown[]): Failure {
-      if (args.length === 0) throw new TypeError("toBeArrayOfSize() requires 1 argument");
-      const size = args[0];
-      if (typeof size !== "number" || !Number.isInteger(size) || Object.is(size, -0)) {
-        throw new Error("toBeArrayOfSize() requires the first argument to be a number");
-      }
-      if ((Array.isArray(received) && received.length === size) !== !!ctx.not) return null;
-      return { body: `\n\nReceived: ${inspect(received)}\n` };
-    }
-
-    function ignoringWhitespace(ctx: Context, received: unknown, ...args: unknown[]): Failure {
-      if (args.length === 0) throw new TypeError("toEqualIgnoringWhitespace() requires 1 argument");
-      const expected = args[0];
-      if (typeof expected !== "string" && !(expected instanceof String)) {
-        throw new Error("toEqualIgnoringWhitespace() requires argument to be a string");
-      }
-      const pass = (typeof received === "string" || received instanceof String)
-        && String(received).replace(/[ \t-\r]/g, "") === String(expected).replace(/[ \t-\r]/g, "");
-      if (pass !== !!ctx.not) return null;
-      return { body: `\n\nExpected: ${ctx.not ? "not " : ""}${inspect(expected)}\nReceived: ${inspect(received)}\n` };
-    }
-
     return {
       pass: (ctx: Context, _received: unknown, ...args: unknown[]) => constant(ctx, "pass", true, args),
       fail: (ctx: Context, _received: unknown, ...args: unknown[]) => constant(ctx, "fail", false, args),
-      arrayOfSize,
-      ignoringWhitespace,
+      arrayOfSize: arrayOfSize.bind(undefined, inspect),
+      ignoringWhitespace: ignoringWhitespace.bind(undefined, inspect),
     };
   }
 
