@@ -10,16 +10,12 @@ import type { RuntimeWorkerRequest, RuntimeWorkerMessage, WorkerExecutor } from 
 import { NetHost } from "./net/host.js";
 import { engineStackBudgets, jscParserReserve, type StackHost } from "./engine-stack-budget.js";
 import { DefaultSignal } from "./default-signal.js";
-import { WasiExit } from "waffle/core";
-import { RuntimeWorkerSignal } from "waffle/browser/worker";
-import { isProcessExecutionTerminated, observedProcessExit } from "waffle/proc/observation";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
 import { createLookupClient, type LookupClient } from "./net/lookup.js";
 import { exportSharedObjects, type SharedObjectService } from "./shared-objects/service.js";
 import type { BunSharedConnection, BunSharedNativeHost } from "./shared-objects/protocol.js";
 import type { BunTerminal } from "./bun-terminal.js";
-import { packageBinding } from "../../src/package-continuation-binding.js";
 
 import type { Engine } from "../../src/engine-kind.js";
 export type { Engine } from "../../src/engine-kind.js";
@@ -101,7 +97,6 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   let sharedObjects: SharedObjectService | undefined;
   let terminal: BunTerminal | undefined;
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
-  const packages = packageBinding(req, HOST_CALL_FD);
   const baseEnv = stackEnvironment(req, new Error().stack ?? "", globalThis.navigator?.userAgent ?? "");
   const generation = allocationBoundaryGeneration(req);
   const env = generation === undefined ? baseEnv : { ...baseEnv, BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: String(generation) };
@@ -119,19 +114,14 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     ...linked,
     hostCallFd: HOST_CALL_FD,
     namespaces(context): WebAssembly.Imports {
-      const imports = packages.namespaces(context);
-      if (!req.memoryGroup) return imports;
+      if (!req.memoryGroup) return {};
       if (!nestedModule || nestedModule instanceof Error) throw nestedModule ?? new TypeError("A group member needs the nested execution host");
       nested = new nestedModule.NestedHost(
         context.checkActive,
         text => { context.post("stderr", new TextEncoder().encode(text)); },
         req.engine === "spidermonkey" ? SPIDERMONKEY_REENTRY_LIMIT : undefined,
       );
-      return { ...imports, runtime_nested: nested.imports };
-    },
-    imports(imports, context) {
-      packages.imports(context);
-      return imports;
+      return { runtime_nested: nested.imports };
     },
     beforeBindings({ wasi }) {
       if (nested && nestedModule && !(nestedModule instanceof Error)) nested.bindProvider(nestedModule.regionProvider(wasi));
@@ -152,9 +142,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     // Bun's own fatal-unwind type, which the engine interruption probes recognize.
     signalError(signal): never { throw new DefaultSignal(signal); },
     terminalSignal: error => error instanceof DefaultSignal ? error.signal : undefined,
-    async instantiated(context) {
-      packages.instantiated(context);
-      const { instance, wasi, fs, checkActive, notifications } = context;
+    async instantiated({ instance, wasi, fs, checkActive, notifications }) {
       // No guest code runs until this member holds every pre-attached buffer; a failed grant fails the start.
       if (sharedObjects) { await sharedObjects.ready; checkActive(); }
       netHost = req.net ? new NetHost(req.net, (net, transfer = []) => host.postMessage({ type: "net", req: net }, transfer), (path, bytes) => fs.writeFile(path, bytes), { shared: true }) : null;
@@ -199,8 +187,6 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       // with or without a service worker controlling this worker.
       return startEngineHost({
         instance, moduleUrls: "blob",
-        isExecutionUnwind: error => packages.isExecUnwind(error) || error instanceof DefaultSignal || error instanceof WasiExit ||
-          error instanceof RuntimeWorkerSignal || isProcessExecutionTerminated(error) || observedProcessExit(error) !== null,
         onWasmCallTrap: telemetry ? (_error, index) => publishBrowserCallTrap(instance, index, telemetry, message => host.postMessage(message)) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
         sharedObjects, net, terminal, processWake: runtimeState?.wake, onExit: code => finish({ code }),
