@@ -1,8 +1,11 @@
 # Playground program profiles
 
-Angular on QuickJS, JSC and SpiderMonkey defaults to `shared-group`, which
-provides the shared backing and worker publication needed by its compiler.
-Browser and every other template keep the `split` default.
+Vite 8 React, Vite 8 vanilla and Angular on QuickJS, JSC and experimental
+SpiderMonkey default to `shared-group`. Their compilers need shared Wasm memory
+or shared buffers published to workers. The common template catalog declares
+`sharedWorkers`, and `templateProfile(engine, template, requested?)` selects the
+profile for the playground, sandbox and maintained goals. Browser, Vite 7
+templates, Next.js, Hono and standalone examples keep the `split` default.
 
 An explicit `?profile=split` or `?profile=shared-group` overrides the template
 default before any guest loads. Browser rejects shared-group. The host verifies
@@ -20,4 +23,4 @@ the core, companion and original build records. Shared assets live under
 Goals runs without `--profile` use the same template defaults. Their source
 metadata records `template-default`, and each startup records the actual engine
 and profile. An explicit `--profile=split` remains a split diagnostic, including
-for Angular. Qualification still requires the ordinary lifecycle checks.
+for worker templates. Qualification still requires the ordinary lifecycle checks.

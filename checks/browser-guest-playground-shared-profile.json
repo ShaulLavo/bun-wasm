@@ -1,1 +1,1 @@
-{"owner":"browser-guest","path":"scripts/playground-shared-profile.test.ts","profile":"shared-group"}
+{"owner":"browser-guest","path":"scripts/playground-shared-profile.test.ts","profile":"shared-group","inputs":["web/src/playground/project-templates.ts","web/src/playground/program-profile.ts","sandbox/src/template-catalog.ts","sandbox/src/sandbox.ts"]}

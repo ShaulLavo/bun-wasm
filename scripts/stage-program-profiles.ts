@@ -15,7 +15,7 @@ export function sharedProgramReceipts(engine: PairedEngine): string[] {
 export function requireSharedProgramInputs(engines: readonly PairedEngine[], env: NodeJS.ProcessEnv = process.env): void {
   for (const engine of engines) {
     const variable = `SHARED_${engine.toUpperCase()}_PROGRAM`;
-    if (!env[variable]) throw new Error(`The full site requires ${engine} shared-group assets for Angular. Set ${variable} to its matching program directory before building.`);
+    if (!env[variable]) throw new Error(`The full site requires ${engine} shared-group assets for worker templates. Set ${variable} to its matching program directory before building.`);
   }
 }
 

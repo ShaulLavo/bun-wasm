@@ -1,5 +1,6 @@
 import type { GuestLauncher, Runtime } from "waffle";
 import { isSharedGroupCore, type Engine } from "../../../src/engine-kind";
+import { projectTemplate } from "./project-templates";
 import { ENGINE_BIN } from "../../../src/executable-paths";
 import { packageService, preparePackageContinuation } from "../../../src/package-continuation-installation";
 
@@ -12,7 +13,7 @@ export function playgroundProfile(value: string | null): PlaygroundProfile {
 }
 
 export function templateProfile(engine: Engine, template: string | undefined, requested?: PlaygroundProfile): PlaygroundProfile {
-  const profile = requested ?? (template === "angular" && engine !== "browser" ? "shared-group" : "split");
+  const profile = requested ?? (projectTemplate(template ?? null)?.sharedWorkers && engine !== "browser" ? "shared-group" : "split");
   requireProfileEngine(engine, profile);
   return profile;
 }

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import type { Runtime } from "waffle";
+import { projectTemplates } from "../src/playground/project-templates";
 import { stageFixtureTree } from "../../scripts/fixture-tree";
 import { verifySite } from "../../scripts/browser-guest-site";
 import { stageSharedPrograms } from "../../scripts/stage-program-profiles";
@@ -128,20 +129,20 @@ async function shared(page: Page, base: string, engine: string): Promise<void> {
   }
 }
 
-async function angularDefault(page: Page, base: string, engine: string): Promise<void> {
+async function workerTemplateDefault(page: Page, base: string, engine: string, template: string): Promise<void> {
   const requests: string[] = [];
   const observe = (request: import("playwright").Request) => requests.push(new URL(request.url()).pathname);
   page.on("request", observe);
   try {
-    await page.goto(`${base}?template=angular&engine=${engine}&mode=memory&prompt=off`);
+    await page.goto(`${base}?template=${template}&engine=${engine}&mode=memory&prompt=off`);
     await page.waitForFunction(() => typeof playground !== "undefined", undefined, { timeout: 60_000 });
     assert.equal(new URL(page.url()).searchParams.has("profile"), false);
     assert.deepEqual(await page.evaluate(() => ({ engine: playground.engine, profile: playground.profile })), { engine, profile: "shared-group" });
     assert.ok(isPairedEngine(engine));
     const names = programProfile(engine);
     const allowed = [names.core, names.side].map(name => `/profiles/shared-group/${name}.gz`);
-    assert.ok(requests.filter(path => /\.wasm(?:\.gz)?$/.test(path)).every(path => allowed.includes(path) || path.startsWith("/programs/")), "Angular eagerly fetched another engine or profile");
-    console.log(JSON.stringify({ template: "angular", engine, profile: "shared-group", explicitProfile: false, requests }));
+    assert.ok(requests.filter(path => /\.wasm(?:\.gz)?$/.test(path)).every(path => allowed.includes(path) || path.startsWith("/programs/")), `${template} eagerly fetched another engine or profile`);
+    console.log(JSON.stringify({ template, engine, profile: "shared-group", explicitProfile: false, requests }));
   } finally { page.off("request", observe); }
 }
 
@@ -200,7 +201,7 @@ try {
   const program = process.env.BUN_WASM_PROFILE_PROGRAM;
   const selected = program ? [programKind(new WebAssembly.Module(await Bun.file(program).bytes()))] : ["quickjs", "jsc"];
   for (const engine of selected) {
-    await angularDefault(page, base, engine);
+    for (const template of projectTemplates.filter(template => template.sharedWorkers)) await workerTemplateDefault(page, base, engine, template.id);
     await shared(page, base, engine);
   }
   await ready(page, base, "quickjs", "split");

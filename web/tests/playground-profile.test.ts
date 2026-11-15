@@ -24,7 +24,7 @@ test("playground defaults to Browser split and rejects unsupported profile selec
 for (const engine of ["quickjs", "jsc", "spidermonkey", "browser"] as const) test(`${engine} Angular selects its worker-capable profile before loading`, () => {
   expect(new Playground(`?template=angular&engine=${engine}`).profile).toBe(engine === "browser" ? "split" : "shared-group");
   expect(new Playground(`?template=angular&engine=${engine}&profile=split`).profile).toBe("split");
-  expect(new Playground(`?template=vite-react&engine=${engine}`).profile).toBe("split");
+  expect(new Playground(`?template=vite-react&engine=${engine}`).profile).toBe(engine === "browser" ? "split" : "shared-group");
   expect(new Playground(`?engine=${engine}`).profile).toBe("split");
   expect(new Playground("?template=angular").profileForEngine(engine)).toBe(engine === "browser" ? "split" : "shared-group");
   expect(new Playground("?template=angular&profile=split").profileForEngine(engine)).toBe("split");
