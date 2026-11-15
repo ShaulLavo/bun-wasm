@@ -45,8 +45,8 @@ test("ordinary live gate has one runtime owner, no local selection and serial gu
   expect(selectChecks("quality", checks)).not.toContain(live);
   expect(selectChecks("local-runtime", checks)).not.toContain(live);
   expect(readFileSync(resolve("scripts/spidermonkey-ordinary-fixtures.ts"), "utf8")).toContain("scripts/spidermonkey-engine-semantics.sh");
-  expect(ordinaryFixtures).toHaveLength(20);
-  expect(ordinaryFixtureTimeout).toBe(20 * 65_000 + 30_000);
+  expect(ordinaryFixtures).toHaveLength(23);
+  expect(ordinaryFixtureTimeout).toBe(23 * 65_000 + 30_000);
 });
 
 test("the getter-loop fixture runs on both SpiderMonkey tiers through the ordinary gate", () => {
