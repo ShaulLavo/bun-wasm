@@ -180,10 +180,12 @@
   }
 
   function onceWrapper(this: BunWasm.Events.OnceState) {
-    if (this.fired) return undefined;
-    this.target.removeListener(this.type, this.wrapFn as Listener);
+    if (this.fired || this.target === undefined) return undefined;
+    const target = this.target;
+    target.removeListener(this.type, this.wrapFn as Listener);
     this.fired = true;
-    return this.listener.apply(this.target, arguments);
+    this.target = undefined;
+    return this.listener.apply(target, arguments);
   }
 
   function onceWrap(target: Emitter, type: Name, listener: Listener) {
@@ -254,6 +256,8 @@
   };
 
   proto.getMaxListeners = function getMaxListeners(this: Emitter) {
+    // Bun's borrowed native method observes the event table before its limit.
+    void this._events;
     return maxListenersOf(this);
   };
 
@@ -284,6 +288,7 @@
 
   proto.once = function once(this: Emitter, type: Name, listener: Listener) {
     checkListener(listener);
+    void this._events;
     this.on(type, onceWrap(this, type, listener));
     return this;
   };
@@ -409,7 +414,8 @@
   proto.listenerCount = listenerCount;
 
   proto.eventNames = function eventNames(this: Emitter) {
-    return this._eventsCount > 0 ? Reflect.ownKeys(this._events) : [];
+    const events = this._events;
+    return this._eventsCount > 0 ? Reflect.ownKeys(events) : [];
   };
 
   // ---------------------------------------------------------------------------
@@ -446,8 +452,8 @@
   });
 
   EventEmitter.listenerCount = function staticListenerCount(emitter: Emitter, type: Name) {
-    if (typeof emitter.listenerCount === "function") return emitter.listenerCount(type);
-    return listenerCount.call(emitter, type);
+    if (emitter != null && typeof emitter.listenerCount === "function") return emitter.listenerCount(type);
+    throw invalidArgType("emitter", "an instance of EventEmitter or EventTarget", emitter);
   };
 
   function isEventTarget(value: Source): value is Source & Required<Pick<Source, "addEventListener">> {
@@ -460,8 +466,11 @@
   };
 
   EventEmitter.getMaxListeners = function getMaxListeners(emitterOrTarget: Source) {
-    if (typeof emitterOrTarget.getMaxListeners === "function") return emitterOrTarget.getMaxListeners();
-    return defaultMaxListeners;
+    if (emitterOrTarget != null && typeof emitterOrTarget.getMaxListeners === "function") return emitterOrTarget.getMaxListeners();
+    if (emitterOrTarget instanceof EventTarget) {
+      return Reflect.get(emitterOrTarget, EventEmitter.kMaxEventTargetListeners) ?? defaultMaxListeners;
+    }
+    throw invalidArgType("emitter", "an instance of EventEmitter or EventTarget", emitterOrTarget);
   };
 
   EventEmitter.setMaxListeners = function setMaxListeners(n = defaultMaxListeners) {
@@ -472,7 +481,8 @@
       return;
     }
     for (const target of targets) {
-      if (typeof target.setMaxListeners === "function") target.setMaxListeners(n);
+      if (target != null && typeof target.setMaxListeners === "function") target.setMaxListeners(n);
+      else if (target instanceof EventTarget) Reflect.set(target, EventEmitter.kMaxEventTargetListeners, n);
       else throw invalidArgType("eventTargets", "an instance of EventEmitter or EventTarget", target);
     }
   };
@@ -492,6 +502,26 @@
     }
   }
 
+  function validateOptions(options: unknown) {
+    if (options === null || typeof options !== "object" || Array.isArray(options)) {
+      throw invalidArgType("options", "of type object", options);
+    }
+  }
+
+  function watermark(value: number, name: string) {
+    if (typeof value !== "number") throw invalidArgType(name, "of type number", value);
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw makeError(RangeError, "ERR_OUT_OF_RANGE", `The value of "${name}" is out of range. It must be a positive safe integer. Received ${String(value)}`);
+    }
+    return value;
+  }
+
+  function controlFlow(emitter: Source, action: "pause" | "resume") {
+    const method = emitter[action];
+    if (typeof method !== "function") throw new TypeError(`emitter.${action} is not a function`);
+    method.call(emitter);
+  }
+
   function listen(target: Source, name: Name, handler: Listener, flags: { once?: boolean }) {
     if (typeof target.on === "function") {
       if (flags.once) target.once(name, handler);
@@ -505,8 +535,9 @@
     throw invalidArgType("emitter", "an instance of EventEmitter or EventTarget", target);
   }
 
-  EventEmitter.once = function once(emitter: Source, name: Name, options?: { signal?: AbortSignal }) {
-    const signal = options ? options.signal : undefined;
+  EventEmitter.once = async function once(emitter: Source, name: Name, options: BunWasm.Events.WaitOptions = {}) {
+    validateOptions(options);
+    const signal = options.signal;
     validateSignal(signal);
     if (signal && signal.aborted) return Promise.reject(abortError(signal));
     return new Promise<unknown[]>((resolve, reject) => {
@@ -546,23 +577,33 @@
   };
 
   // Async iterator over `event` emissions. Each item is the array of emitted args.
-  EventEmitter.on = function on(emitter: Source, event: Name, options?: { signal?: AbortSignal; close?: Name[] }) {
-    const signal = options ? options.signal : undefined;
+  EventEmitter.on = function on(emitter: Source, event: Name, options: BunWasm.Events.IteratorOptions = {}) {
+    validateOptions(options);
+    const signal = options.signal;
     validateSignal(signal);
     if (signal && signal.aborted) throw abortError(signal);
-    const close = options && options.close ? options.close : [];
+    const high = watermark(options.highWaterMark ?? Number.MAX_SAFE_INTEGER, "options.highWaterMark");
+    const low = watermark(options.lowWaterMark ?? 1, "options.lowWaterMark");
+    const first = Reflect.get(options, Symbol.for("nodejs.kFirstEventParam"));
+    const close = options.close || [];
     const queue: Item[] = [];
     const waiters: BunWasm.Events.Waiter[] = [];
     let error: unknown = null;
     let finished = false;
+    let paused = false;
     const removers: (() => void)[] = [];
 
     function settle(result: Item) {
       if (waiters.length > 0) (waiters.shift() as BunWasm.Events.Waiter).resolve(result);
-      else queue.push(result);
+      else {
+        queue.push(result);
+        if (paused || queue.length <= high) return;
+        paused = true;
+        controlFlow(emitter, "pause");
+      }
     }
     function onEvent() {
-      settle({ value: Array.prototype.slice.call(arguments), done: false });
+      settle({ value: first ? arguments[0] : Array.prototype.slice.call(arguments), done: false });
     }
     function onError(err: unknown) {
       if (waiters.length > 0) {
@@ -576,6 +617,7 @@
     function finish() {
       if (finished) return;
       finished = true;
+      paused = false;
       for (const remove of removers) remove();
       for (const waiter of waiters.splice(0)) waiter.resolve({ value: undefined, done: true });
     }
@@ -598,6 +640,7 @@
       next() {
         if (queue.length > 0) {
           const item = queue.shift() as Item;
+          resumeIfNeeded();
           return Promise.resolve<Item>(item.close ? { value: undefined, done: true } : item);
         }
         if (error) {
@@ -620,6 +663,11 @@
         return this;
       },
     };
+    function resumeIfNeeded() {
+      if (!paused || queue.length >= low) return;
+      paused = false;
+      controlFlow(emitter, "resume");
+    }
     return iterator;
   };
 

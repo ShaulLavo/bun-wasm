@@ -2,6 +2,22 @@
 
 `crates/bunwasm-runtime/src/js/events.ts`. Class **Port**. Comparison sources are Node `lib/events.js` at the Node comparison revision and Bun `src/js/node/events.ts` at the Bun pin. The Node comparison revision is `caa20e28dc1f21a97f7b2a7134973fd6435b65f0`; the Bun pin is `9510e74152073d850a18758ca41114d8f214ffa6`. The direct Node import revision is not recorded.
 
+The async helper correction adapts `once`, `on`, `_onceWrap`, and listener-limit
+handling from Bun `src/js/node/events.ts` at that same pin. `once` is an async
+function and validates options before registering listeners. `on` preserves
+`nodejs.kFirstEventParam`, validates positive safe-integer watermarks, pauses above
+the high watermark, and resumes below the low watermark. Closing clears the paused
+state before queued events drain. A fired once wrapper clears its emitter reference
+while retaining its public `.listener`, original receiver, and removal ordering.
+EventTarget limits use the exported limit symbol. Borrowed native methods observe
+the `_events` getter before performing `once`, `eventNames`, or `getMaxListeners`.
+These changes keep local scheduling, listener storage and Promise construction;
+they do not copy Bun's private native helpers. The additional declarations in
+`events-types.d.ts` remain an original adapter. The feature-owned
+`events-async-helpers` fixture checks success, rejection, getter identity, queue
+draining, watermark boundaries and cleanup. GC evidence uses a separate live
+control; unsupported GC or private hooks cannot establish collection.
+
 Retain listener storage conventions, once-wrapper state, listener removal, and remove-all behavior. Replace primordials, internal validators, and native async-resource or EventTarget integration with local validation and runtime scheduling. The module also supplies local promise and async-iterator helpers. These changes provide Node-style listener semantics on the guest event loop without native async hooks.
 
 The TypeScript conversion separates initialized instance storage from optional prototype
@@ -47,15 +63,11 @@ The conversion still includes these executable changes, so the whole runtime AST
 - Annotate local Symbol aliases before reading the optional disposal symbol. Both the public
   and implementation return types model a sparse symbol record, not a callable at every key.
 
-The R3 correction restores the complete original executable AST of `onceWrapper`, `onceWrap`
-and `EventEmitter.on` against immutable approved source `ac43127c85addabed7e0c2a4883247ae074e858c`.
-That comparison covers the original finish-path splice and iteration and every failure path in
-those regions. The full AST regression check pins the remaining audited changes and separately
-verifies exactly 57 unchanged top-level statements, including strictness and the lazy export.
-The rejection-capture fix separately owns the initialization and listener-invocation
-statements previously counted in that remainder. Its private symbol and two
-helpers are excluded explicitly, with the full changed AST pinned by the same fence.
-It does not claim blanket AST or emitted-byte identity.
+The earlier R3 conversion preserved the executable AST of `onceWrapper`, `onceWrap`
+and `EventEmitter.on` against `ac43127c85addabed7e0c2a4883247ae074e858c`.
+The helper corrections below intentionally change that behavior. The obsolete whole-module
+AST hashes are removed; the constructor, disposal, private-intrinsic, reentrancy and type
+controls remain. Current assertions check behavior rather than pinning an implementation hash.
 
 The private-intrinsics fixture and actual-factory controls cover absent results at each shift
 position, a global TypeError getter sentinel, close waiter settlement and every listener cleanup,
