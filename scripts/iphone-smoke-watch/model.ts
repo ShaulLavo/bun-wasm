@@ -18,7 +18,7 @@ export function object(value: unknown): Record<string, unknown> {
   return Object.fromEntries(Object.entries(value));
 }
 
-export function text(value: unknown): string {
+function text(value: unknown): string {
   if (typeof value !== "string" || value.length === 0) throw new Error("Expected nonempty text");
   return value;
 }

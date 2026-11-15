@@ -12,6 +12,8 @@ login. It writes a durable queue, then uses the supported `t3 thread send --json
 CLI to dispatch one revision to the coordinator. The default coordinator is
 `mcp:launch:d5c5eb90071799276e00d53b8b67c40ffef4a1f7b453c759a2d6463dc98733ec`.
 Change it with `--dispatch-thread=<thread>` when ownership changes.
+The CLI defaults to `/home/shaul/.local/bin/t3`. Set `T3_CLI` to use a different
+installed executable or a test adapter.
 
 The receiving harness turn claims the attempt before starting any work. It builds
 the scheduled source locally on the PC through the heavy runner, obtains a fresh

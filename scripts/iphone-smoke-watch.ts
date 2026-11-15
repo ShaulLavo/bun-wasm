@@ -40,7 +40,7 @@ function selected(state: State, config: Options): Job {
 }
 
 function send(thread: string, message: string): void {
-  execFileSync("t3", ["thread", "send", "--json", thread, message], { encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+  execFileSync(process.env.T3_CLI ?? "/home/shaul/.local/bin/t3", ["thread", "send", "--json", thread, message], { encoding: "utf8", timeout: 60_000, maxBuffer: 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 async function dispatch(directory: string, checkout: string, thread: string, job: Job): Promise<void> {

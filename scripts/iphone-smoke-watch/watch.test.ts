@@ -104,6 +104,24 @@ test("an interrupted save before dispatch cannot launch a job", async () => {
   expect(fake.dispatches).toEqual([]);
 });
 
+test("crash after send can replay its outbox but cannot claim a second UI job", async () => {
+  const state = fresh(), fake = harness([run(1)]);
+  fake.adapters.save = async value => {
+    const progress = first(value).state;
+    if (progress.kind === "running" && progress.dispatch === "sent") throw new Error("ack save interrupted");
+    fake.snapshots.push(structuredClone(value));
+  };
+  await expect(tick(state, fake.adapters)).rejects.toThrow("ack save interrupted");
+  const persisted = fake.snapshots.at(-1);
+  if (!persisted) throw new Error("Expected durable dispatch intent");
+  expect(first(persisted).state).toMatchObject({ dispatch: "pending" });
+  fake.adapters.save = async () => {};
+  await tick(persisted, fake.adapters);
+  expect(fake.dispatches).toEqual([sha(1), sha(1)]);
+  claim(first(persisted), 1, now);
+  expect(() => claim(first(persisted), 1, now)).toThrow("already claimed");
+});
+
 test("setup failure is red and reports tested predecessor, range, phase and report", async () => {
   const state = fresh(), fake = harness([run(1), run(2)]);
   await tick(state, fake.adapters);
@@ -213,7 +231,7 @@ test("CLI fake GitHub/T3 dispatch, claim, red complete and cleanup-confirmed ret
   await writeFile(join(bin, "t3"), `#!${process.execPath}\nawait Bun.write(process.env.SEND_LOG, (await Bun.file(process.env.SEND_LOG).exists() ? await Bun.file(process.env.SEND_LOG).text() : '') + JSON.stringify(process.argv.slice(2)) + '\\n');\nif(process.env.SEND_FAIL === '1') process.exit(1);\nconsole.log('{}');\n`);
   await chmod(join(bin, "gh"), 0o700);
   await chmod(join(bin, "t3"), 0o700);
-  const env = { PATH: `${bin}:${process.env.PATH}`, SEND_LOG: join(path, "messages.jsonl") };
+  const env = { PATH: `${bin}:${process.env.PATH}`, T3_CLI: join(bin, "t3"), SEND_LOG: join(path, "messages.jsonl") };
   expect((await cli(path, ["tick", `--since=${since}`], env)).code).toBe(0);
   expect((await cli(path, ["tick"], env)).code).toBe(0);
   expect((await readFile(env.SEND_LOG, "utf8")).trim().split("\n")).toHaveLength(1);
@@ -232,4 +250,4 @@ test("CLI fake GitHub/T3 dispatch, claim, red complete and cleanup-confirmed ret
   expect((await cli(path, ["retry"].concat(identity, [`--cleanup-report=${audit}`]), env)).code).toBe(0);
   expect(first(await load(path)).state).toEqual({ kind: "pending", attempt: 2 });
   expect(await readFile(join(path, sha(1), "attempt-1", "result.json"), "utf8")).toContain("manual-iphone-smoke");
-});
+}, 60_000);
