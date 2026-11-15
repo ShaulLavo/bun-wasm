@@ -63,6 +63,9 @@ checked against unchanged `test/js/node/buffer.test.js` and
 `buffer_fill_args.ts` only selects encoding overloads for string fill values.
 An omitted start ignores the end for every value, and string encodings are
 validated before an empty-range return without encoding the fill value.
+Unrecognized string encodings receive `ERR_UNKNOWN_ENCODING`; unrecognized
+non-string encodings receive `ERR_INVALID_ARG_TYPE`. Object conversion errors
+still propagate.
 The public `toString` gate rejects an explicit empty encoding independently of
 fill's default encoding policy.
 

@@ -32,7 +32,7 @@ export function residualChecks(factory: typeof Buffer) {
         assert.equal(buffer.toString("hex"), "aa6161aaaa");
         assert.throws(() => Reflect.apply(buffer.toString, buffer, [encoding]), { code: "ERR_UNKNOWN_ENCODING" });
       }
-      assert.throws(() => Reflect.apply(factory.alloc, factory, [3, "a", new String("")]), TypeError);
+      assert.throws(() => Reflect.apply(factory.alloc, factory, [3, "a", new String("")]), { code: "ERR_INVALID_ARG_TYPE" });
     } },
     { name: "numeric offsets distinguish infinity from fractional and NaN offsets", run() {
       const buffer = factory.alloc(16);
@@ -50,8 +50,8 @@ export function residualChecks(factory: typeof Buffer) {
     { name: "UTF-16 searches reject odd-byte matches and floor reverse offsets", run() {
       const buffer = factory.from([0, 0x61, 0, 0]);
       const needle = factory.from("a", "utf16le");
-      assert.equal(buffer.lastIndexOf(needle, undefined, "utf16le"), -1);
-      assert.equal(buffer.lastIndexOf("a", undefined, "utf16le"), -1);
+      assert.equal(Reflect.apply(buffer.lastIndexOf, buffer, [needle, undefined, "utf16le"]), -1);
+      assert.equal(Reflect.apply(buffer.lastIndexOf, buffer, ["a", undefined, "utf16le"]), -1);
       assert.equal(buffer.indexOf("a", 0, "utf16le"), -1);
       assert.equal(factory.from("aaaa", "utf16le").lastIndexOf("a", 5, "ucs2"), 4);
       assert.equal(factory.from("aaaa", "utf16le").lastIndexOf("a", 3, "ucs2"), 2);

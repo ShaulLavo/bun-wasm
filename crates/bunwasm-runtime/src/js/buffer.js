@@ -745,7 +745,7 @@
   }
 
   function fillImpl(buf, value, offset, end, encoding) {
-    let { start, stop, encoding: enc } = internal.require("buffer_fill_args")(getEncoding, value, buf.length, offset, end, encoding);
+    let { start, stop, encoding: enc } = internal.require("buffer_fill_args")(fillEncoding, value, buf.length, offset, end, encoding);
     start = start === undefined ? 0 : rangeArg(start, "offset", 0, kMaxLength, " &&");
     stop = stop === undefined ? buf.length : rangeArg(stop, "end", buf.length, buf.length, " &&");
     if (stop <= start) return buf;
@@ -763,6 +763,13 @@
       buf.set(take === bytes.length ? bytes : bytes.subarray(0, take), pos);
     }
     return buf;
+  }
+
+  function fillEncoding(encoding) {
+    const normalized = normalizeEncoding(encoding);
+    if (normalized !== undefined) return normalized;
+    if (typeof encoding !== "string") throw invalidArgType("encoding", "string", encoding);
+    throw unknownEncoding(encoding);
   }
 
   // ---------------------------------------------------------------------------
