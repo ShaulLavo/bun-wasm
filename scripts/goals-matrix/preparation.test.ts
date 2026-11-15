@@ -14,6 +14,8 @@ test("local preparation consumes built assets without a CI delivery manifest", a
   try {
     const commit = "a".repeat(40);
     const selected = preparationOptions([scratch, `--local-source=${commit}`]);
+    expect(selected.profile).toBeUndefined();
+    expect(preparationOptions([scratch, `--local-source=${commit}`, "--profile=shared-group"]).profile).toBe("shared-group");
     const input = await preparationInput(selected.delivery, selected.localSource);
     expect(input).toEqual({ assets: scratch, manifest: { guestSource: { head: commit }, build: "local" } });
     const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
@@ -28,7 +30,7 @@ test("local preparation consumes built assets without a CI delivery manifest", a
 
 test("goals record and carry an explicit memory profile without changing the engine", () => {
   const args = ["--asset-source=fixture", "--engines=quickjs,jsc"];
-  expect(options(args).profile).toBe("split");
+  expect(options(args).profile).toBeUndefined();
   expect(options(args.concat(["--profile=shared-group"])).profile).toBe("shared-group");
   expect(() => options(args.concat(["--profile=shared"]))).toThrow("Unknown Bun program profile");
   expect(options(["--asset-source=fixture", "--profile=shared-group", "--engines=spidermonkey"]).engines).toEqual(["spidermonkey"]);

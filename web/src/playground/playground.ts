@@ -3,7 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { createRuntime, type Runtime } from "waffle";
 import { BUN_MEMORY_GROUP_POLICY } from "../../../src/engine-kind";
-import { playgroundProfile, registerPlaygroundBun, requireProfileEngine, type PlaygroundProfile } from "./program-profile";
+import { playgroundProfile, registerPlaygroundBun, templateProfile, type PlaygroundProfile } from "./program-profile";
 import { BrowserPrograms } from "../browser-programs";
 import { ENGINES, type Engine, WasmMissing, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
@@ -37,6 +37,7 @@ const HOST_VERSIONS = {};
 export class Playground extends TypedEventTarget<{ change: Event }> {
   readonly engine: Engine;
   readonly profile: PlaygroundProfile;
+  private readonly requestedProfile: PlaygroundProfile | undefined;
   readonly template: ProjectTemplate | undefined;
   term?: Terminal;
   editor?: Editor;
@@ -61,8 +62,13 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const requested = this.params.get("engine");
     if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
     this.engine = requested ?? DEFAULT_ENGINE;
-    this.profile = playgroundProfile(this.params.get("profile"));
-    requireProfileEngine(this.engine, this.profile);
+    const profile = this.params.get("profile");
+    this.requestedProfile = profile === null ? undefined : playgroundProfile(profile);
+    this.profile = this.profileForEngine(this.engine);
+  }
+
+  profileForEngine(engine: Engine): PlaygroundProfile {
+    return templateProfile(engine, this.template?.id, this.requestedProfile);
   }
 
   get status(): Status {
