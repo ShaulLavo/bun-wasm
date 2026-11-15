@@ -4,13 +4,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { assertSafariCaseRows, selectSafariCaseNames } from "./browser-safari";
+import { interruptionProofs } from "./engine-interruption-cases";
 import { assertEngineInterruptionResult } from "./engine-interruption-result";
 import { collectRunnerCleanup, finishRunnerCleanup, runBrowserGate, type RunnerCleanup } from "./browser-engine-interruption";
 
 function green() {
-  const checks = ["quickjs", "jsc"].flatMap(engine => Array.from({ length: 14 }, (_, index) => ({
-    engine, route: index < 7 ? "runtimeProcess" : "legacy", name: `proof-${index}`,
-  }))).concat(Array.from({ length: 4 }, (_, index) => ({ engine: "browser", route: "legacy", name: `browser-${index}` })));
+  const checks = interruptionProofs(["quickjs", "jsc"]);
   return { ok: true, checks, outcomes: [{ ok: true, cleanup: { safe: true } }], pageErrors: [],
     cleanup: { safe: true, activeWorkers: 0 }, benchmarks: [{ engine: "quickjs" }, { engine: "jsc" }] };
 }
@@ -327,9 +326,9 @@ test("all strict green admissions and benchmark measurements are preserved", asy
 });
 
 for (const [label, mutate, benchmark] of [
-  ["28 checks", (r: any) => r.checks.pop(), false],
-  ["12 per engine", (r: any) => { r.checks[0].engine = "browser"; }, false],
-  ["10 generic", (r: any) => { r.checks[0].route = "legacy"; }, false],
+  ["32 checks", (r: any) => r.checks.pop(), false],
+  ["14 per engine", (r: any) => { r.checks[0].engine = "browser"; }, false],
+  ["14 generic", (r: any) => { r.checks[7].route = "legacy"; }, false],
   ["distinct proofs", (r: any) => { r.checks[1].name = r.checks[0].name; }, false],
   ["page errors", (r: any) => { r.pageErrors.push("uncaught"); }, false],
   ["no workers", (r: any) => { r.cleanup.activeWorkers = 1; }, false],
