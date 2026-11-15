@@ -54,7 +54,7 @@ function cleanup(): Promise<void> {
 }
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 
-test("a clean consumer install prepares Waffle Node exports from the pinned release", async () => {
+test("a clean consumer installs prepared Waffle Node exports without lifecycle scripts", async () => {
   const root = resolve(import.meta.dir, "..");
   const source = join(root, "web");
   const scratch = mkdtempSync(join(process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-waffle-install-"));
@@ -75,7 +75,7 @@ test("a clean consumer install prepares Waffle Node exports from the pinned rele
     }
     expect(readdirSync(cache)).toEqual([]);
     expect(existsSync(join(consumer, "node_modules"))).toBe(false);
-    await run("bun", ["install", "--frozen-lockfile"], consumer, {
+    await run("bun", ["install", "--frozen-lockfile", "--ignore-scripts"], consumer, {
       BUN_INSTALL_CACHE_DIR: cache,
       BUN_INSTALL_GLOBAL_DIR: global,
       BUN_CONFIG_DIR: config,
@@ -83,9 +83,15 @@ test("a clean consumer install prepares Waffle Node exports from the pinned rele
     const metadata = JSON.parse(readFileSync(join(consumer, "node_modules/waffle/package.json"), "utf8")) as {
       name: string;
       version: string;
+      waffleHostInterface: number;
       exports: Record<string, { node?: string }>;
     };
     expect(metadata.version).toBe(release.version);
+    expect(metadata.waffleHostInterface).toBe(release.hostInterface);
+    for (const [path, sha256] of Object.entries(release.files)) {
+      const bytes = readFileSync(join(consumer, "node_modules/waffle", path));
+      expect(new Bun.CryptoHasher("sha256").update(bytes).digest("hex")).toBe(sha256);
+    }
     const nodeEntries = Object.entries(metadata.exports).filter(([, target]) => target.node !== undefined);
     for (const [, target] of nodeEntries) expect(existsSync(join(consumer, "node_modules/waffle", target.node!))).toBe(true);
     const specifiers = nodeEntries.map(([key]) => key === "." ? metadata.name : `${metadata.name}${key.slice(1)}`);
