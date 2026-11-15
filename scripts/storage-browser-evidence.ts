@@ -1,5 +1,5 @@
 import { appendFileSync } from "node:fs";
-import type { Browser, BrowserContext, Page } from "playwright";
+import type { Browser, BrowserContext, Frame, Page, Request } from "playwright";
 
 export type StorageObservation = Pick<StorageLifetime, "step" | "event" | "acquire" | "own" | "observeContext" | "secondary">;
 type RecordEvent = (event: { sequence: number; time: string; kind: string; detail: unknown }) => void;
@@ -126,11 +126,36 @@ export class StorageLifetime {
 
   private observePage(page: Page): void {
     const id = ++this.page;
+    const requests = new WeakMap<Request, { request: number; startObserved: boolean }>();
+    const frames = new WeakMap<Frame, number>();
+    let requestId = 0;
+    let frameId = 0;
+    const identifyFrame = (frame: Frame): number => {
+      const existing = frames.get(frame);
+      if (existing !== undefined) return existing;
+      const next = ++frameId;
+      frames.set(frame, next);
+      return next;
+    };
+    const frameDetail = (frame: Frame) => {
+      const parent = frame.parentFrame();
+      return { frame: identifyFrame(frame), url: frame.url(), name: frame.name(),
+        main: frame === page.mainFrame(), parent: parent ? identifyFrame(parent) : null };
+    };
+    const requestDetail = (request: Request, startObserved = false) => {
+      let identity = requests.get(request);
+      if (!identity) { identity = { request: ++requestId, startObserved }; requests.set(request, identity); }
+      return { page: id, ...identity, url: request.url(), method: request.method(), resourceType: request.resourceType(),
+        navigation: request.isNavigationRequest(), ...requestFrame(request, frameDetail) };
+    };
     this.event("page", { page: id });
     page.on("console", message => this.event("console", { page: id, type: message.type(), text: message.text(), location: message.location() }));
     page.on("pageerror", error => this.event("pageerror", { page: id, ...errorObject(error) }));
-    page.on("requestfailed", request => this.event("requestfailed", { page: id, url: request.url(), failure: request.failure() }));
-    page.on("framenavigated", frame => this.event("navigation", { page: id, url: frame.url(), main: frame === page.mainFrame() }));
+    page.on("request", request => this.event("request", requestDetail(request, true)));
+    page.on("response", response => this.event("response", { ...requestDetail(response.request()), status: response.status() }));
+    page.on("requestfinished", request => this.event("requestfinished", requestDetail(request)));
+    page.on("requestfailed", request => this.event("requestfailed", { ...requestDetail(request), failure: request.failure() }));
+    page.on("framenavigated", frame => this.event("navigation", { page: id, ...frameDetail(frame) }));
     page.on("crash", () => this.event("page-crash", { page: id }));
     page.on("close", () => this.event("page-close", { page: id }));
     page.on("worker", worker => {
@@ -138,6 +163,11 @@ export class StorageLifetime {
       worker.on("close", () => this.event("worker-close", { page: id, url: worker.url() }));
     });
   }
+}
+
+function requestFrame<T>(request: Request, detail: (frame: Frame) => T): { frame: T } | { frame: null; frameUnavailable: string } {
+  try { return { frame: detail(request.frame()) }; }
+  catch (error) { return { frame: null, frameUnavailable: String(error) }; }
 }
 
 function errorObject(error: unknown): { failure: unknown } { return { failure: errorDetail(error) }; }

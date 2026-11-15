@@ -448,7 +448,10 @@ void s15_sweep() {
   }
   check(firstFailure != static_cast<size_t>(-1), "S15 coarse refusal");
   size_t start = firstFailure > 4096 ? firstFailure - 4096 : 0;
-  for (size_t depth = start; depth <= firstFailure + 256 && !state.target; depth += 16) {
+  // The refusal may first land in a deeper frame; reservations such as PBL's
+  // script entry (docs/bun-patches/spidermonkey-stack-budget.md) put up to a
+  // few KiB between it and require_loaded's own check.
+  for (size_t depth = start; depth <= firstFailure + 4096 && !state.target; depth += 16) {
     s15_iteration(state, depth);
   }
   check(state.target && state.error, "S15 require_loaded entry refusal");
@@ -716,6 +719,10 @@ void natives() {
   check(finalized.size() == 1 && finalized[0] == 100, "native finalizer exactly once");
 }
 #include "require-recovery.cpp"
+#if defined(BUNSM_LOOP_CONTROLS)
+#include "loop-dispatch.cpp"
+#endif
+
 }  // namespace
 
 extern "C" bool bunsm_host_call(uint32_t id, bsm_handle, const bsm_handle* args, size_t argc, bsm_handle* out) {
@@ -768,6 +775,12 @@ extern "C" int engine_semantics_main() {
       static_cast<uint8_t>(tier && !strcmp(tier, "pbl")), 1};
   finalized.reserve(16);
   bsm_init(&config);
+#if defined(BUNSM_LOOP_CONTROLS)
+  loop_controls();
+  bsm_shutdown();
+  puts("SpiderMonkey loop controls passed");
+  return 0;
+#endif
   if (mode && !strcmp(mode, "fault-terminate")) {
     termination_fault();
     bsm_shutdown();

@@ -51,6 +51,7 @@ export class ExitOwner {
   private recordsClosed = false;
   private lateFacts = 0;
   private firstInvalid: SafariProtocolFact | null = null;
+  private nativeSnapshot: (() => unknown) | undefined;
 
   constructor(private readonly options: {
     native: Pick<NativePort, "read">; open(pid: number): Subscription;
@@ -105,8 +106,22 @@ export class ExitOwner {
     if (fact.result.kind === "valid" || this.firstInvalid) return;
     this.firstInvalid = fact;
     this.emit("first-invalid", fact);
+    this.snapshotNative("first-invalid");
     this.drain();
   };
+
+  // Synchronous reads of retained local handles only; no observer or browser work.
+  observeNative(read: () => unknown): () => void {
+    this.nativeSnapshot = read;
+    return () => { if (this.nativeSnapshot === read) this.nativeSnapshot = undefined; };
+  }
+
+  snapshotNative(moment: "first-invalid" | "cancellation" | "before-teardown" | "after-teardown"): void {
+    if (this.recordsClosed) { this.lateFacts++; return; }
+    if (!this.nativeSnapshot) return;
+    try { this.emit("native-state", { moment, state: this.nativeSnapshot() }); }
+    catch (error) { this.degraded.push({ source: "native-state", error }); }
+  }
 
   drain(): void {
     if (!this.subscription || this.descriptor !== "open") return;
@@ -149,7 +164,9 @@ export class ExitOwner {
 
   private async step<T>(step: CleanupStep, result: Outcome<T>): Promise<Outcome<T>> {
     this.boundary(step.phase);
+    this.snapshotNative("before-teardown");
     const settled = await bounded(step.run, this.options.joinMs ?? 20_000);
+    this.snapshotNative("after-teardown");
     this.cleanup.push({ phase: step.phase, result: settled });
     this.emit("cleanup-settled", { phase: step.phase, result: settled });
     if (result.kind === "error") return result;

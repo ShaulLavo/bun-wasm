@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "stack-budget.h"
 
 #include <cmath>
 #include <cstring>
@@ -16,6 +17,9 @@
 #include "js/CallAndConstruct.h"
 #include "js/CompilationAndEvaluation.h"
 #include "js/Context.h"
+#if defined(BUNSM_LOOP_CONTROLS)
+#include "js/Debug.h"
+#endif
 #include "js/Conversions.h"
 #include "js/Equality.h"
 #include "js/Exception.h"
@@ -982,7 +986,7 @@ extern "C" void bsm_init(const bsm_config* config) {
   JS_SetGlobalJitCompilerOption(context, JSJITCOMPILER_PORTABLE_BASELINE_ENABLE, config->tier);
   JS_SetGlobalJitCompilerOption(context, JSJITCOMPILER_PORTABLE_BASELINE_WARMUP_THRESHOLD, 0);
   require(config->stack_high > config->stack_low + 65536, "invalid stack bounds");
-  JS_SetNativeStackQuota(context, config->stack_high - config->stack_low - 65536);
+  JS_SetNativeStackQuota(context, bunsm_stack_quota(config->stack_high - config->stack_low - 65536));
 #if defined(BUN_WASM_SHARED_GROUP)
   // The group futex parks a member safely, so its JS may block in Atomics.wait.
   JS_SetFutexCanWait(context);

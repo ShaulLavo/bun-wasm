@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
-import { discoverChecks, namedCheckBatches, parseCheck, selectCheckBatch, selectChecks } from "./test-checks";
+import { automaticChecks, discoverChecks, namedCheckBatches, parseCheck, selectCheckBatch, selectChecks } from "./test-checks";
 import { webBrowserShards } from "./ci-web-browser-shards";
+import { needsRust } from "./ci-changes";
 
 function object(value: unknown): Record<string, unknown> {
   assert(value && typeof value === "object" && !Array.isArray(value));
@@ -15,6 +16,22 @@ const jobs = object(workflow.jobs);
 const browser = object(jobs.web);
 const shards = object(jobs["web-browser"]);
 const unit = object(jobs["web-unit"]);
+
+test("a package exact-exec fixture-only edit retains its blocking Web unit owner", () => {
+  const fixture = "tests/package/fixtures/engine-host-exec.ts";
+  const owner = "web/tests/bun-executor.test.ts";
+  expect(needsRust([fixture])).toBe(false);
+  const pullRequest = object(object(workflow.on).pull_request);
+  expect(pullRequest).not.toHaveProperty("paths");
+  expect(pullRequest).not.toHaveProperty("paths-ignore");
+  expect(unit.needs).toBe("selection");
+  expect(unit.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}");
+  expect(unit).not.toHaveProperty("continue-on-error");
+  expect(steps(unit).filter(step => step.run === "bash ../scripts/test-web-host.sh --unit")).toHaveLength(1);
+  expect(readFileSync(new URL("./test-web-host.sh", import.meta.url), "utf8")).toContain("bun run test");
+  expect(automaticChecks().filter(check => check.path === owner)).toEqual([{ owner: "web", path: owner }]);
+  expect(readFileSync(new URL("../web/tests/bun-executor.test.ts", import.meta.url), "utf8")).toContain('import("../../tests/package/fixtures/engine-host-exec.ts")');
+});
 
 function steps(job: Record<string, unknown>) {
   assert(Array.isArray(job.steps));
