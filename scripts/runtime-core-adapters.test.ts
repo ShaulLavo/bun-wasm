@@ -71,6 +71,8 @@ function withoutStackCapabilityDeltas(source: string) {
   expect(source.match(jscWrapper)).not.toBeNull();
   expect(source.match(hostWrapper)).not.toBeNull();
   return source.replace(prototypeWrapper, "").replace(jscWrapper, "").replace(hostWrapper, "").replace(declaration, "")
+    .replace(/function formatStack\(target\s*, raw\s*, materializing = false\)/, "function formatStack(target, raw)")
+    .replace("      if (!custom && materializing) return raw;\n", "")
     .replace(awaitingCaller, 'this.#frame.name.startsWith("async ")')
     .replace("custom && parseCapturedStack", 'custom && native.engine === "jsc"')
     .replace('native.engine === "quickjs" || parseCapturedStack', 'native.engine === "quickjs" || native.engine === "jsc"');

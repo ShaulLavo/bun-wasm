@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { chromium, firefox, webkit } from "playwright";
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
@@ -129,6 +130,65 @@ test("native V8 CallSites preserve anonymous awaiters and distinguish program fr
     expect(result.awaiting).toEqual([null, "awaitingParent", null]);
     expect(result.program.length).toBeGreaterThan(0);
     expect(result.program.every((frame: boolean[]) => frame[0] && !frame[1])).toBe(true);
+  } finally { await browser.close(); }
+}, 30_000);
+
+test("Node preserves a null-name anonymous awaiter whose enclosing position is 1:1", async () => {
+  const script = `import { runInNewContext } from "node:vm";
+    const context = {};
+    runInNewContext(${JSON.stringify(`(${factories.host_call_sites})({}); Error.prepareStackTrace = (_, sites) => sites;
+      globalThis.leaf = async function leaf() { await 0; return new Error().stack; };`)}, context);
+    const awaiter = runInNewContext("async () => await leaf()", context, { filename: "anonymous-await.js" });
+    const sites = await awaiter();
+    const caller = sites.find(site => site.getFileName() === "anonymous-await.js");
+    console.log(JSON.stringify([caller.getFunctionName(), caller.getEnclosingLineNumber(), caller.getEnclosingColumnNumber(), caller.isAsync()]));`;
+  const child = Bun.spawn(["node", "--input-type=module", "-e", script], { stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+  expect(JSON.parse(stdout)).toEqual([null, 1, 1, true]);
+});
+
+test("Chromium preserves a renamed anonymous awaiting function at 1:1", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.addScriptTag({ content: initialize("host") });
+    await page.addScriptTag({ content: `async function awaiter() { return await leaf(); }
+      Object.defineProperty(awaiter, "name", { value: "" });
+//# sourceURL=anonymous-script.js` });
+    const result = await page.evaluate(`(async () => {
+      Error.prepareStackTrace = (_, sites) => sites;
+      globalThis.leaf = async function leaf() { await 0; return new Error().stack; };
+      const sites = await awaiter();
+      const caller = sites.find(site => site.getScriptNameOrSourceURL() === "anonymous-script.js");
+      return [caller.getFunctionName(), caller.getEnclosingLineNumber(), caller.getEnclosingColumnNumber(), caller.isAsync()];
+    })()`);
+    expect(result).toEqual([null, 1, 1, true]);
+  } finally { await browser.close(); }
+}, 30_000);
+
+test("only the loader-registered module hash identifies a suspended program", async () => {
+  const source = "void 0; globalThis.programSites = await leaf();";
+  const hash = createHash("sha256").update(source).digest("hex");
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.addScriptTag({ content: initialize("host") });
+    await page.addScriptTag({ content: `stackTest.runtime.isProgramScriptHash = hash => hash === ${JSON.stringify(hash)};
+      Error.prepareStackTrace = (_, sites) => sites;
+      globalThis.leaf = async function leaf() { await 0; return new Error().stack; };` });
+    await page.route("http://stack.test/program.js", route => route.fulfill({ contentType: "text/javascript", headers: { "access-control-allow-origin": "*" }, body: source }));
+    await page.evaluate(`import("http://stack.test/program.js")`);
+    const program = await page.evaluate(`programSites.filter(site => site.getScriptHash() === ${JSON.stringify(hash)}).map(site => [site.getFunctionName(), site.isAsync()])`);
+    expect(program).toEqual([[null, false]]);
+    await page.addScriptTag({ content: `async function awaiter() { return await leaf(); }
+      Object.defineProperty(awaiter, "name", { value: "" });
+//# sourceURL=http://stack.test/program.js` });
+    const anonymous = await page.evaluate(`(async () => {
+      const sites = await awaiter();
+      return sites.filter(site => site.getScriptNameOrSourceURL() === "http://stack.test/program.js").map(site => [site.getFunctionName(), site.isAsync()]);
+    })()`);
+    expect(anonymous).toEqual([[null, true]]);
   } finally { await browser.close(); }
 }, 30_000);
 

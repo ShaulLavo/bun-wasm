@@ -19,10 +19,6 @@
 #include "JSValueRef.h"
 #include "Completion.h"
 #include "ErrorInstance.h"
-#include "Error.h"
-#include "Interpreter.h"
-#include "StackFrame.h"
-#include "Symbol.h"
 #include "DeferredWorkTimer.h"
 #include <wtf/Threading.h>
 #include "Identifier.h"
@@ -96,22 +92,14 @@ static std::string utf8(const String& s)
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.length());
 }
 
-static JSValue formatErrorStack(VM& vm, Vector<StackFrame>& frames, unsigned& line, unsigned& column, String& sourceURL, JSObject* error)
+static JSValue formatErrorStack(VM& vm, JSObject* error, JSValue raw)
 {
     JSGlobalObject* globalObject = error->globalObject();
     auto scope = DECLARE_THROW_SCOPE(vm);
-    LineColumn position;
-    getLineColumnAndSource(vm, &frames, position, sourceURL);
-    line = position.line;
-    column = position.column;
-    JSValue raw = jsString(vm, Interpreter::stackTraceAsString(vm, frames));
     auto symbol = vm.symbolRegistry().symbolForKey("bunwasm.internal.jsc.formatStack"_s);
     JSValue formatter = globalObject->getDirect(vm, Identifier::fromUid(symbol.get()));
     if (!formatter || formatter.isUndefined())
         return raw;
-    // ErrorInstance marks itself materialized before this callback. Publish the
-    // native value so a formatter reading this same error gets its raw stack.
-    error->putDirect(vm, vm.propertyNames->stack, raw, static_cast<unsigned>(PropertyAttribute::DontEnum));
     MarkedArgumentBuffer arguments;
     arguments.append(error);
     arguments.append(raw);
@@ -350,7 +338,7 @@ JSGlobalContextRef bunjsc_create_context()
     });
     Ref<VM> vm = VM::createContextGroup();
     JSLockHolder locker(vm.ptr());
-    vm->setOnComputeErrorInfoJSValue(formatErrorStack);
+    vm->setOnMaterializeErrorStack(formatErrorStack);
 #if defined(BUN_WASM_SHARED_GROUP)
     // The group futex parks a member safely, so its JS may block in Atomics.wait.
     vm->m_typedArrayController = adoptRef(new SimpleTypedArrayController(true));

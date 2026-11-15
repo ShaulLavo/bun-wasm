@@ -1,4 +1,4 @@
-(function () {
+(function (internal: BunWasm.Internal) {
   "use strict";
   const defaultPrepare = Error.prepareStackTrace;
   const wrappers = new WeakMap<Function, NonNullable<ErrorConstructor["prepareStackTrace"]>>();
@@ -7,12 +7,14 @@
   interface NativeCallSite extends BunWasm.StackCallSite {
     getEnclosingLineNumber?(): number | null;
     getEnclosingColumnNumber?(): number | null;
+    getScriptHash?(): string;
   }
 
   function programFrame(site: NativeCallSite) {
+    const hash = site.getScriptHash?.();
+    if (typeof hash !== "string" || internal.isProgramScriptHash?.(hash) !== true) return false;
     const line = site.getEnclosingLineNumber?.();
     const column = site.getEnclosingColumnNumber?.();
-    if (typeof line !== "number" || typeof column !== "number") return undefined;
     return !site.getFunctionName() && line === 1 && column === 1;
   }
 

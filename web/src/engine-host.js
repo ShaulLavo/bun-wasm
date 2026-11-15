@@ -1,5 +1,6 @@
 import { installNativeWasmLifetime } from "./native-wasm-lifetime.ts";
 import { createScriptEvaluation } from "./script-evaluation.ts";
+import { createStackPrograms } from "./stack-programs.ts";
 import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
 import { oversizedCryptoInput } from "./crypto-inputs.js";
@@ -437,6 +438,7 @@ class EngineHost {
     this.storing = [];
     this.writing = new Set();
     this.paths = new Map();
+    this.stackPrograms = createStackPrograms(bytes => this.native.hash("sha256", bytes));
     this.contentModules = o.modules && o.moduleUrls === "blob" ? new ContentModules({
       named: o.modules, source: key => this.moduleSource(key), contentUrl: (source, key) => this.url(source, key),
       paths: this.paths, storing: this.storing,
@@ -474,6 +476,7 @@ class EngineHost {
       return this.exit(70);
     }
     this.internal = internal;
+    internal.isProgramScriptHash = hash => this.stackPrograms.has(hash);
     installHostCrypto(nativeSubtleCrypto,NativeCryptoKey,internal.crypto,native);
     // Module URLs show as their paths; frames of this host itself (and the
     // worker bundle it lives in) are internal, like the polyfills.
@@ -738,7 +741,13 @@ class EngineHost {
 
   moduleSource(key) {
     const info = this.native.hostModuleSource(key);
-    if (info.format === "esm") return this.linkEsm(key, info);
+    if (info.format === "esm") {
+      const code = this.linkEsm(key, info);
+      // hostModuleSource prefixes import.meta setup before user code, excluding
+      // user functions from position 1:1 in this exact compiled source.
+      if (this.internal.hasNativeStackTrace) this.stackPrograms.register(code);
+      return code;
+    }
     // CommonJS, JSON, text and builtins: evaluated now (sharing require's
     // cache), re-exported by a small wrapper.
     const handoff = this.handoff(key, info.format);

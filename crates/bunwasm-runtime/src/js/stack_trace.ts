@@ -66,7 +66,7 @@
     return native.engine === "quickjs" ? Reflect.apply(defaultPrepare!, Error, [target, raw]) : raw;
   }
 
-  function formatStack(target: object, raw: unknown) {
+  function formatStack(target: object, raw: unknown, materializing = false) {
     if (formatted.has(target)) return formatted.get(target);
     if (formatting) return store(target, defaultStack(target, raw));
     formatting = true;
@@ -74,6 +74,7 @@
     try {
       const prepare = Error.prepareStackTrace;
       const custom = typeof prepare === "function" && prepare !== defaultPrepare;
+      if (!custom && materializing) return raw;
       const sites = custom && parseCapturedStack
         ? internal.require("inspect").parseStack(raw).map(frame => new CallSite(frame))
         : raw;
@@ -86,7 +87,7 @@
 
   if (native.engine === "jsc") {
     Object.defineProperty(globalThis, Symbol.for("bunwasm.internal.jsc.formatStack"), nullPrototypeDescriptor({
-      __proto__: null, value: formatStack,
+      __proto__: null, value: (target: object, raw: unknown) => formatStack(target, raw, true),
     }));
   }
 
