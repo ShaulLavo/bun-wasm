@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { StorageLifetime, storageEvidence, storageStep } from "./storage-browser-evidence";
 import { StoragePreservationFailure } from "../sandbox/tests/storage-browser";
 import { handleStorageFailure } from "./storage-ci-quarantine";
-import protocol from "./fixtures/storage-ci/webkit.json";
+import protocol from "./fixtures/storage-ci/firefox.json";
 import { discoverChecks } from "./test-checks";
 import { needsJsc, needsRust } from "./ci-changes";
 
@@ -129,7 +129,7 @@ test("report failure cannot replace a product error and cannot pass its hook", a
 
 for (const phase of ["context.close", "session.cleanup", "progress-report"]) test(`known quarantine plus ${phase} remains failing`, async () => {
   const path = directory();
-  const original = new StoragePreservationFailure({ ...structuredClone(protocol), checkpoint: "vanilla-config-restart" }, new Error(protocol.error));
+  const original = new StoragePreservationFailure({ ...structuredClone(protocol), checkpoint: "first-vite-vue-startup" }, new Error(protocol.error));
   const secondary = new Error(`${phase} failure`);
   const raw: unknown[] = [];
   const lifetime = new StorageLifetime(event => {
@@ -144,14 +144,14 @@ for (const phase of ["context.close", "session.cleanup", "progress-report"]) tes
   expect(accepted).toBe(true);
   expect(lifetime.failures).toEqual([secondary]);
   expect(() => lifetime.assertClean()).toThrow(AggregateError);
-  expect(JSON.stringify(raw)).toContain(original.message);
+  expect(JSON.stringify(raw)).toContain(JSON.stringify(original.message));
   expect(readFileSync(join(path, "summary.md"), "utf8")).toContain("Storage quarantine");
 
   async function body(): Promise<void> {
     try { await lifetime.step("preservation", () => { throw original; }); }
     catch (error) {
       expect(error).toBe(original);
-      await handleStorageFailure("webkit", error, { CI: "true", BUN_WASM_STORAGE_CI_QUARANTINE: "known-20261114", BUN_WASM_BROWSER_REPORT_DIR: path, GITHUB_STEP_SUMMARY: join(path, "summary.md") });
+      await handleStorageFailure("firefox", error, { CI: "true", BUN_WASM_STORAGE_CI_QUARANTINE: "known-20261114", BUN_WASM_BROWSER_REPORT_DIR: path, GITHUB_STEP_SUMMARY: join(path, "summary.md") });
       accepted = true;
     }
   }

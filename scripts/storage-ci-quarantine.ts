@@ -2,11 +2,9 @@ import { appendFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { StoragePreservationFailure, storageReportPath } from "../sandbox/tests/storage-browser";
 import firefoxProtocol from "./fixtures/storage-ci/firefox.json";
-import webkitProtocol from "./fixtures/storage-ci/webkit.json";
 
 type Diagnostic = StoragePreservationFailure["report"]["pages"][number];
 type PageDiagnostic = Exclude<Diagnostic, string>;
-const protocols = { firefox: firefoxProtocol, webkit: webkitProtocol };
 
 function normalizedTerminal(terminal: string): string {
   return terminal.replace(/\s+/g, "").replace(/\[\d+ms\]/g, "[ms]").replace(/readyin\d+ms/g, "readyinms")
@@ -41,16 +39,14 @@ function knownConsoleError(browser: string, error: string): boolean {
 }
 
 export function storageQuarantine(browser: string, failure: StoragePreservationFailure): string | undefined {
-  if (browser !== "firefox" && browser !== "webkit") return;
+  if (browser !== "firefox") return;
   const { checkpoint, error, errors, pages } = failure.report;
   if (pages.length !== 2 || !errors.every(error => knownConsoleError(browser, error))) return;
   const [active, page] = pages;
-  const template = browser === "firefox" ? "vite-vue" : "vanilla";
-  if (!isActiveHono(active) || !isNativePage(page, template)) return;
+  if (!isActiveHono(active) || !isNativePage(page, "vite-vue")) return;
   if (new URL(active.url).origin !== new URL(page.url).origin) return;
-  const origin = new URL(active.url).origin;
   if (page.frames.length !== 1) return;
-  const original = protocols[browser].pages;
+  const original = firefoxProtocol.pages;
   if (!matchesTerminal(active.terminal, original[0]?.terminal) || !matchesTerminal(page.terminal, original[1]?.terminal)) return;
   if (browser === "firefox") {
     if (checkpoint !== "first-vite-vue-startup" || !error.startsWith("Error: waitForFunction: Dev server stopped before it was ready (exit 254).")) return;
@@ -58,10 +54,6 @@ export function storageQuarantine(browser: string, failure: StoragePreservationF
     if (page.frames[0]?.src !== "" || page.frames[0].body !== "" || page.runtime?.editorPath !== "src/App.vue") return;
     return "firefox-first-vue-closed";
   }
-  if (checkpoint !== "vanilla-config-restart" || error !== "Error: Storage readiness deadline: vanilla") return;
-  if (page.status !== "loading preview…" || page.runtime?.editorPath !== "vite.config.ts") return;
-  if (page.frames[0]?.src !== `${origin}/sandbox/__preview/5173/` || page.frames[0].body !== "No bun.wasm server is listening on port 5173.\nStart one in the playground (Bun.serve), then reload this page.\n") return;
-  return "webkit-vanilla-config-restart";
 }
 
 export async function handleStorageFailure(browser: string, error: unknown, env = process.env): Promise<void> {

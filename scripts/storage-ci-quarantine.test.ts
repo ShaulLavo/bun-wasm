@@ -42,9 +42,34 @@ async function evidence(): Promise<NodeJS.ProcessEnv> {
   };
 }
 
-test("original Firefox and WebKit protocols match only their explicit source checkpoints", () => {
+test("original Firefox protocol still matches its explicit source checkpoint", () => {
   expect(storageQuarantine("firefox", failure("firefox"))).toBe("firefox-first-vue-closed");
-  expect(storageQuarantine("webkit", failure("webkit"))).toBe("webkit-vanilla-config-restart");
+});
+
+test("former vanilla restart protocol never matches any browser or checkpoint", () => {
+  const checkpoints: Report["checkpoint"][] = ["setup", "preservation", "vanilla-config-restart", "first-vite-vue-startup", "first-vite-react-startup"];
+  for (const checkpoint of checkpoints) {
+    for (const browser of ["webkit", "firefox", "chromium"]) expect(storageQuarantine(browser, failure("webkit", { checkpoint }))).toBeUndefined();
+  }
+});
+
+test("former vanilla restart failure retains diagnostics and rethrows the same error without acceptance, including enabled CI", async () => {
+  const env = await evidence();
+  const original = failure("webkit");
+  await assertWebkitRejected(original, env);
+  await assertWebkitRejected(failure("webkit", { checkpoint: "preservation" }), env);
+  await assertWebkitRejected(original, { ...env, CI: undefined });
+  await assertWebkitRejected(original, { ...env, BUN_WASM_STORAGE_CI_QUARANTINE: undefined });
+});
+
+test("former vanilla restart failure still blocks with missing destinations or failed report writes", async () => {
+  const original = failure("webkit");
+  const env = await evidence();
+  await expect(handleStorageFailure("webkit", original, { ...env, BUN_WASM_BROWSER_REPORT_DIR: undefined })).rejects.toBe(original);
+  await expect(handleStorageFailure("webkit", original, { ...env, GITHUB_STEP_SUMMARY: undefined })).rejects.toBe(original);
+  const blocked = join(env.BUN_WASM_BROWSER_REPORT_DIR!, "blocked");
+  await writeFile(blocked, "not a directory");
+  await expect(handleStorageFailure("webkit", original, { ...env, BUN_WASM_BROWSER_REPORT_DIR: blocked })).rejects.toMatchObject({ code: "ENOTDIR" });
 });
 
 test.each(webkitReactProtocols)("former React optimizer protocol %# never matches a quarantine", record => {
@@ -55,7 +80,7 @@ test.each(webkitReactProtocols)("former React optimizer protocol %# never matche
   }
 });
 
-async function assertReactRejected(original: StoragePreservationFailure, env: NodeJS.ProcessEnv): Promise<void> {
+async function assertWebkitRejected(original: StoragePreservationFailure, env: NodeJS.ProcessEnv): Promise<void> {
   const summary = "Existing job summary\n";
   await writeFile(env.GITHUB_STEP_SUMMARY!, summary);
   const warnings = spyOn(console, "error").mockImplementation(() => {});
@@ -71,10 +96,10 @@ async function assertReactRejected(original: StoragePreservationFailure, env: No
 test.each(webkitReactProtocols)("former React optimizer protocol %# retains diagnostics and rethrows without acceptance, including enabled CI", async record => {
   const env = await evidence();
   const original = reactFailure({}, record);
-  await assertReactRejected(original, env);
-  await assertReactRejected(reactFailure({ checkpoint: "preservation" }, record), env);
-  await assertReactRejected(original, { ...env, CI: undefined });
-  await assertReactRejected(original, { ...env, BUN_WASM_STORAGE_CI_QUARANTINE: undefined });
+  await assertWebkitRejected(original, env);
+  await assertWebkitRejected(reactFailure({ checkpoint: "preservation" }, record), env);
+  await assertWebkitRejected(original, { ...env, CI: undefined });
+  await assertWebkitRejected(original, { ...env, BUN_WASM_STORAGE_CI_QUARANTINE: undefined });
 });
 
 test("former React optimizer failure still blocks with missing destinations or failed report writes", async () => {
@@ -146,19 +171,20 @@ for (const browser of ["firefox", "webkit"]) {
     }
   });
 
-  test(`${browser}: only timing and local stack address differences are normalized`, () => {
+  test(`${browser}: timing and local stack address differences preserve the acceptance decision`, () => {
     const report = failure(browser).report;
     const pages = report.pages.map(page => typeof page === "string" ? page : {
       ...page,
       terminal: page.terminal.replace(/\[\d+ms\]/g, "[99999ms]").replace(/ready in \d+ ms/g, "ready in 99999 ms")
         .replace(/127\.0\.0\.1:\d+/g, "127.0.0.1:45678").replace(/worker-[a-z0-9]+\.js:\d+:\d+/g, "worker-newhash.js:999:888"),
     });
-    expect(storageQuarantine(browser, failure(browser, { pages }))).toBe(browser === "firefox" ? "firefox-first-vue-closed" : "webkit-vanilla-config-restart");
+    expect(storageQuarantine(browser, failure(browser, { pages }))).toBe(browser === "firefox" ? "firefox-first-vue-closed" : undefined);
   });
 
-  test(`${browser}: matching failure retains the complete protocol and labels the quarantine`, async () => {
+  test(`${browser}: original failure retains the complete protocol and the current quarantine decision`, async () => {
     const env = await evidence();
     const original = failure(browser);
+    if (browser === "webkit") return assertWebkitRejected(original, env);
     const warnings = spyOn(console, "error").mockImplementation(() => {});
     try {
       await handleStorageFailure(browser, original, env);
@@ -181,14 +207,14 @@ test("outside the explicit CI switch, original matching failures still throw and
 });
 
 test("missing evidence destinations, failed writes, and summary failures remain blocking", async () => {
-  const original = failure("webkit");
+  const original = failure("firefox");
   const env = await evidence();
-  await expect(handleStorageFailure("webkit", original, { ...env, BUN_WASM_BROWSER_REPORT_DIR: undefined })).rejects.toBe(original);
-  await expect(handleStorageFailure("webkit", original, { ...env, GITHUB_STEP_SUMMARY: undefined })).rejects.toBe(original);
+  await expect(handleStorageFailure("firefox", original, { ...env, BUN_WASM_BROWSER_REPORT_DIR: undefined })).rejects.toBe(original);
+  await expect(handleStorageFailure("firefox", original, { ...env, GITHUB_STEP_SUMMARY: undefined })).rejects.toBe(original);
   const blocked = join(env.BUN_WASM_BROWSER_REPORT_DIR!, "file");
   await writeFile(blocked, "not a directory");
-  await expect(handleStorageFailure("webkit", original, { ...env, BUN_WASM_BROWSER_REPORT_DIR: blocked })).rejects.toThrow();
-  await expect(handleStorageFailure("webkit", original, { ...env, GITHUB_STEP_SUMMARY: join(blocked, "summary.md") })).rejects.toThrow();
+  await expect(handleStorageFailure("firefox", original, { ...env, BUN_WASM_BROWSER_REPORT_DIR: blocked })).rejects.toThrow();
+  await expect(handleStorageFailure("firefox", original, { ...env, GITHUB_STEP_SUMMARY: join(blocked, "summary.md") })).rejects.toThrow();
 });
 
 test("ordinary assertions and cleanup or receipt errors never enter quarantine", async () => {

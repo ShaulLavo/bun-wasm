@@ -1,11 +1,11 @@
 # Browser-native storage CI repair
 
-Status: Approved. Owner: storage CI coordinator. Updated: 2026-11-14.
+Status: Approved. Owner: storage CI coordinator. Updated: 2026-11-15.
 
 ## Immediate mitigation
 
 Run every existing storage scenario with its existing deadlines and verified site.
-Only CI may quarantine the two remaining historical preservation failures below. Match an
+Only CI may quarantine the remaining historical Firefox preservation failure below. Match an
 explicit scenario checkpoint and the complete diagnostic signature. Persist the
 original per-browser failure before accepting a match. A missing report, failed
 write, unknown signature, receipt mismatch, cleanup failure, storage assertion,
@@ -15,10 +15,11 @@ or later restoration, HMR, or unsupported-symlink failure remains blocking.
   The dev shell exits 254 after fork reports FilesystemTransportError CLOSED,
   errno 29, and failure to deserialize a message. Hono remains ready on 5174
   with counter 1. The Vue preview has no URL and its filesystem reports ready.
-- WebKit, first vanilla restart after saving the guest-writing config.
-  Readiness reaches its existing deadline, the second dev invocation has no new
-  ready message, and the preview reports no server on 5173. Hono remains ready
-  on 5174 with counter 1. Vanilla storage is ready with no pending editor text.
+
+The WebKit vanilla restart entry is absent in this candidate retirement under the
+approved non-reproduction gate below. Its historical failure now writes original
+diagnostics with `quarantine: null` and rethrows the same error even with the CI
+switch enabled. It emits no acceptance warning or summary.
 
 The first Vite React optimizer entry is absent in this candidate removal. Its
 historical failures now retain complete diagnostics with `quarantine: null` and
@@ -201,11 +202,11 @@ an established transient cause that would make a retry a demonstrated repair.
 
 ## Mitigation verification
 
-`scripts/storage-ci-quarantine.test.ts` matches only the Firefox and vanilla
-protocols at their source checkpoints. It rejects other checkpoints and browsers, unknown console
+`scripts/storage-ci-quarantine.test.ts` matches only the Firefox protocol at its
+source checkpoint. It rejects other checkpoints and browsers, unknown console
 errors, altered transport or restart output, a missing or changed Hono control,
 failed filesystem state, pending edits, ordinary assertions, and failed report
-or summary writes. Every retained React protocol is rejected at all checkpoints;
+or summary writes. The retained vanilla and React protocols are rejected at all checkpoints;
 the real handler retains and rethrows it without warning or summary acceptance,
 including with the CI switch enabled. `checks/quality-storage-ci-quarantine.json` keeps these tests
 blocking in Source quality. The existing browser manifest also selects the
@@ -216,3 +217,37 @@ tests, then checks discovery, lint, TypeScript, unused code, and duplicates.
 GitHub-hosted CI validates the unchanged real scenarios on the verified site
 when the draft becomes ready. A matching failure remains a recorded quarantine,
 not a successful preservation result. The coordinator owns review and CI follow-up.
+
+## Vanilla retirement gate
+
+Status: Approved candidate under the owner's bounded non-reproduction rule.
+The historical vanilla stall is **cause unknown, not reproducing**. No source
+repair is claimed. React acceptance remains removed by PR 783, merge
+`a86f2c4915e334cb27590639eba214a602c35a4e`. The original Firefox first Vue
+CLOSED exception, fixture and complete transcript matching remain unchanged.
+
+The original exact-producer hosted WebKit replay with Waffle .128 passed the
+unchanged preservation scenario. Exact-version Node source controls passed
+three times. They establish that creating the first config does not select
+Vite's config self-restart branch and that its bundle loader can execute the
+original guest writer. Three actual newer WebKit Browser-guest config-only
+commands also passed with Vite 8.3.5 and Rolldown 1.2.16, checking the original
+writer's files and normal command exit. Those commands used a newer delivery
+without the original dev-server restart, concurrent Hono or hosted history.
+None of these results proves the historical cause or a repair.
+
+The original readiness, HMR, storage and preservation assertions, deadlines,
+cleanup, evidence-write failures and every unmatched failure remain blocking.
+Historical vanilla fixtures remain handler rejection controls with the CI
+switch enabled. If the stall recurs, the strict original readiness assertion
+must fail loudly with its original diagnostics. Follow-through remains
+Storage-owned.
+
+Parent gates remain independent review, normal green CI, and TWO independent
+unchanged GitHub-hosted WebKit preservation executions with the vanilla entry
+ABSENT on the final reviewed head. Local controls do not count. The Storage
+coordinator owns those executions, review, merge and any recurrence. The
+implementation worker runs no new guest, browser, framework or hosted replay.
+
+Local retirement evidence belongs under
+`/work/reports/goals/storage-ci-20261114/vanilla-quarantine-removal/`.
