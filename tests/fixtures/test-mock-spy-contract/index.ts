@@ -86,7 +86,12 @@ for (const invalid of [undefined, null, "1", {}, -1, 1.5, NaN, Infinity]) {
   assert.throws(() => Reflect.apply(expect(called).not.toHaveReturnedTimes, expect(called).not, [invalid]));
 }
 assert.throws(() => Reflect.apply(expect(called).toHaveBeenCalled, expect(called), [undefined]));
-assert.throws(() => Reflect.apply(expect(called).not.toHaveReturned, expect(called).not, [undefined]));
+const uncalled = mock();
+assert.throws(() => Reflect.apply(expect(uncalled).not.toHaveBeenCalled, expect(uncalled).not, [undefined]));
+assert.throws(() => Reflect.apply(expect(uncalled).not.toHaveReturned, expect(uncalled).not, [undefined]));
+for (const invalid of [undefined, "1", 0, -1, 1.5, NaN, Infinity]) {
+  assert.throws(() => Reflect.apply(expect(called).not.toHaveBeenNthCalledWith, expect(called).not, [invalid, "return"]));
+}
 expect(called).toHaveBeenCalledTimes(1);
 expect(called).toHaveReturnedWith("return");
 const results: unknown[] = called.mock.results;
