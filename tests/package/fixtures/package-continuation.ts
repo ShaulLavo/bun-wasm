@@ -14,7 +14,7 @@ export function plan(patch: Partial<PackagePlan> = {}): PackagePlan {
   return { version: 1, pre: null, main, post: null, env: { PATH: "/bin", EMPTY: "", npm_execpath: "/actual/bun" }, cwd: "/", silent: false, color: false, footer: "Bun v1.4.4 (WASI wasm32)\n", ...patch };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-export async function fixture(launch?: GuestLauncher, setup?: (context: RuntimeProcessContext, filesystem: FilesystemClient) => void) {
+export async function fixture(launch?: GuestLauncher, setup?: (context: RuntimeProcessContext, filesystem: FilesystemClient, service: Parameters<GuestLauncher>[1]) => void) {
   const hostErrors: unknown[] = [];
   const runtime = createRuntime({ processHost: options => new BrowserProcessBroker({ ...options, onError: error => { hostErrors.push(error); } }), filesystem: { mode: "memory", workerURL: new URL(import.meta.resolve("waffle/browser/fs-worker")) } });
   const tables: DescriptorTable[] = [];
@@ -33,7 +33,7 @@ export async function fixture(launch?: GuestLauncher, setup?: (context: RuntimeP
     client.retain(handle);
     client.reserve(handle, admittedIdentity(context, service));
     context.descriptors.openAt(3, { kind: "directory", handle }, (1n << 29n) - 1n, (1n << 29n) - 1n, () => client.release(handle), "/");
-    setup?.(context, client);
+    setup?.(context, client, service);
     return (launch ?? continuation)({ ...context,
       fail(error) { errors.push(error); context.fail(error); },
       startFailed(error) { errors.push(error); context.startFailed(error); },

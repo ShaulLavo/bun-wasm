@@ -23,3 +23,20 @@ implementation review and actual maintained-engine acceptance. Child controllers
 installed launchers; runtime-proc diagnostic retention supplies startup details without
 an extra continuation controller. Synchronous reservation errors use the release's
 bounded diagnostic encoding.
+
+The host continuation now preserves interactive stdin across its Bash children. It
+attaches the incoming process's real terminal through the existing Bun terminal
+adapter, whose Waffle `attachTerminal`, `createTerminalInputPolicy` and `inherit`
+calls validate the admitted session and derive child metadata. Each phase receives
+that context and the existing shared input transport alongside its filesystem and
+pipe registry. The descriptor codec still decides which inherited bindings are
+terminal destinations; redirected pipes and files retain their own provenance.
+The parent disposes only its own attachment after its work settles. PID-only kill
+and subtree cancellation behavior do not change.
+
+Without this metadata, Waffle correctly restores an inherited terminal destination
+as its default EOF input. Vite 8.3.5 interprets that EOF as a parent shutdown and
+closes its listener immediately after reporting ready. The regression uses an
+actual Waffle terminal authority, process directory, input transport and codecs
+to prove that pre, main and post children each wait for and receive foreground
+keys. It creates no replacement policy or synthetic authority in production.

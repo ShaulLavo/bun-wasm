@@ -217,7 +217,10 @@ function launchContinuation(runtime: Pick<Runtime, "filesystem">, context: Param
     let settlement: Promise<void> | undefined;
     let reported: { readonly error: unknown } | undefined;
     let entered = false;
-    const settle = () => settlement ??= io?.settle() ?? Promise.resolve();
+    const settle = () => settlement ??= (async () => {
+      try { await io?.settle(); }
+      finally { children?.dispose(); }
+    })();
     const work = Promise.resolve().then(async () => {
       const plan = parsePackagePlan(JSON.parse(context.request.argv[1] ?? "null"));
       const supervisor = await owner.wait(service.ready());
@@ -229,7 +232,7 @@ function launchContinuation(runtime: Pick<Runtime, "filesystem">, context: Param
       io = new ContinuationIO(context.descriptors, filesystem, owner.abort.signal);
       const transport = service.transportFor(context.pid);
       if (!transport) throw new Error("Continuation transport disappeared");
-      children = new PackageChildren(filesystem, service, context, transport, identity);
+      children = new PackageChildren(filesystem, service, context, transport, identity, () => owner.check());
       service.registerController(context.pid, { filesystem: identity });
       if (!context.started()) return;
       entered = true;

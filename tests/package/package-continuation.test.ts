@@ -6,6 +6,60 @@ import { packageContinuation, admittedIdentity } from "../../src/package-continu
 import { parsePackagePlan } from "../../src/package-continuation-plan.js";
 import { startupDiagnostic } from "../../src/package-continuation-diagnostics.js";
 import { fixture, plan, using, exit, main } from "./fixtures/package-continuation.js";
+import { claimTerminalAuthority, createTerminalInput, createTerminalInputPolicy, createTerminalSession } from "waffle/browser/runtime-terminals";
+import { attachBunTerminal } from "../../web/src/bun-terminal.js";
+import { workerProcessState } from "waffle/proc/worker-client";
+import type { GuestLauncher } from "waffle";
+
+function terminalValue<T>(result: { kind: "ok"; value: T } | { kind: "error"; code: string }): T {
+  if (result.kind === "error") throw new Error(result.code);
+  return result.value;
+}
+
+test("package phases inherit actual foreground terminal input instead of an EOF destination", async () => {
+  const input = createTerminalInput({ capacity: 64 });
+  let session: ReturnType<typeof createTerminalSession> | undefined;
+  let admit: ((pid: number) => void) | undefined;
+  const f = await fixture(undefined, (context, _filesystem, service) => {
+    const process = service.transportFor(context.pid);
+    if (!process || !process.data || typeof process.data !== "object") throw new Error("Missing real continuation transport");
+    const root = service.transportFor(workerProcessState(process).rootPid);
+    if (!root) throw new Error("Missing real terminal root");
+    session = createTerminalSession({ controller: root, geometry: { columns: 80, rows: 24 } });
+    const policy = createTerminalInputPolicy({ input });
+    const authority = terminalValue(claimTerminalAuthority({ identity: session.identity, process: root, checkActive() {}, policy }));
+    const group = terminalValue(authority.createGroup({ initialMode: "raw" }));
+    admit = pid => { terminalValue(authority.admitExisting({ group, pid })); };
+    admit(context.pid);
+    terminalValue(authority.acquire({ group, expected: null }));
+    process.data = { ...process.data, terminalContext: session.inherit(), terminalInput: input.buffer };
+  });
+  const events: string[] = [];
+  const launch: GuestLauncher = (context, service) => {
+    const process = service.transportFor(context.pid);
+    if (!process || !admit) throw new Error("Missing child transport");
+    admit(context.pid);
+    const terminal = attachBunTerminal({ runtimeProcess: process }, () => {});
+    if (!terminal) throw new Error("Package child lost terminal metadata");
+    const bytes = new Uint8Array(16);
+    try {
+      expect(terminal.resolve(0)?.tryRead?.([bytes])).toBe(-6);
+      expect(input.push(new TextEncoder().encode("keys"))).toBe(4);
+      expect(terminal.resolve(0)?.tryRead?.([bytes])).toBe(4);
+      expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe("keys");
+      events.push(context.request.env.npm_lifecycle_event ?? "");
+      if (context.started()) context.exit(0);
+    } finally { terminal.dispose(); }
+    return { terminate() {} };
+  };
+  try {
+    await f.register("/bin/bash", launch);
+    const run = await f.start(plan({ pre: { ...main, name: "prebuild" }, post: { ...main, name: "postbuild" } }));
+    expect(await run.exit).toMatchObject({ kind: "exited", code: 0 });
+    expect(events).toEqual(["prebuild", "build", "postbuild"]);
+    expect(f.errors).toEqual([]);
+  } finally { await f.dispose(); session?.close("disposed"); }
+});
 
 function testRuntime(name: string, run: Parameters<typeof using>[0]) { test(name, () => using(run)); }
 
