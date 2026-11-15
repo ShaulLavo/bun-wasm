@@ -66,3 +66,19 @@ through `heavy-runner --host local` with `env.sh`. Do not build a guest, rerun t
 full storage workload or capture new browser diagnostics for this retirement.
 Component results and cleanup belong in
 `/work/reports/goals/storage-ci-20261116/webkit-quarantine-retirement/REPORT.md`.
+
+## Ordinary routing observation, approved
+
+The integration retires both remaining WebKit exceptions and enables the
+qualified observer through the existing storage diagnostic build/context path.
+Initial Hono and vanilla traffic in the unchanged preservation case must qualify
+actual SW, page, registered server, runtime and real helper request coverage
+before config restart. The historical cause remains unproved. The next failure
+reports `/@vite/client` and `/src/main.ts` from bounded scalar routing rows,
+including late metadata retained after context closure. The summary distinguishes
+explicit refusal/error, accepted without headers, and missing or ambiguous hops.
+It does not infer a guest transform or filesystem cause from a missing reply.
+Routing retention is separate from filesystem causal history. The ordinary
+entry-absent hosted validation gate remains blocking. PR 840's page-load stall is
+separate and unchanged. Parent owns the single full-source review and normal CI;
+no separate diagnostic campaign or full local preservation replay is added.

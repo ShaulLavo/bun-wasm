@@ -183,6 +183,7 @@ export async function preservationScenario(browser: Browser, base: string, obser
     const active = await step("hono.page.create", () => context.newPage());
     const page = await step("preservation.page.create", () => context.newPage());
     await openTemplate(active, base, "hono", observer);
+    if (observer) await step("routing.qualify-initial-hono", () => observer.qualifyRouting(["/"]));
     const server = await step("hono.read-source", () => active.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/server.ts"))));
     observer?.event("assert", { phase: "hono.source-port" });
     assert.match(server, /port: 5173/);
@@ -192,6 +193,7 @@ export async function preservationScenario(browser: Browser, base: string, obser
     assert.match(await step("hono.preview-src", () => active.locator("#preview").getAttribute("src")) ?? "", /\/5174\//);
     await step("hono.increment", () => active.frameLocator("#preview").locator("#increment:not([disabled])").click());
     await openTemplate(page, base, "vanilla", observer);
+    if (observer) await step("routing.qualify-initial-vanilla", () => observer.qualifyRouting());
     const original = await step("vanilla.read-source", () => page.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/src/main.ts"))));
     const main = original.replace('import "./App.css";\n', "").replace("Hello from vanilla TypeScript", "Storage source one");
     await step("vanilla.edit-source", () => edit(page, "src/main.ts", main));
