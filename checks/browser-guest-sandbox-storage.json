@@ -91,6 +91,7 @@
     "web/src/runner.ts",
     "web/src/preview.ts",
     "web/src/playground/project-templates.ts",
+    "web/src/playground/program-profile.ts",
     "sandbox/template-angular/angular.json",
     "sandbox/template-angular/package.json",
     "sandbox/template-angular/preview.ts",
