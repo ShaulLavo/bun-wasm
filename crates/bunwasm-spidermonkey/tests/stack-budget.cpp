@@ -13,15 +13,17 @@ int main() {
       {"999999999999999999999999999999999999999", 7 * 1024 * 1024},
       {"99999999999999999999999999999999999999x", available},
   };
+  // The QuickJS and JSC budget never reaches SpiderMonkey's quota.
+  setenv("BUN_WASM_STACK_KIB", "32", 1);
   for (const auto& item : cases) {
-    if (item.value) setenv("BUN_WASM_STACK_KIB", item.value, 1);
-    else unsetenv("BUN_WASM_STACK_KIB");
+    if (item.value) setenv(BUNSM_STACK_KIB_ENV, item.value, 1);
+    else unsetenv(BUNSM_STACK_KIB_ENV);
     if (bunsm_stack_quota(available) != item.expected) {
       fprintf(stderr, "wrong quota for %s\n", item.value ? item.value : "unset");
       return 1;
     }
   }
-  setenv("BUN_WASM_STACK_KIB", "7168", 1);
+  setenv(BUNSM_STACK_KIB_ENV, "7168", 1);
   if (bunsm_stack_quota(32768) != 32768) return 1;
-  puts("ok positive decimal quotas, saturation, invalid input and member bounds");
+  puts("ok positive decimal quotas, saturation, invalid input, member bounds and its own variable");
 }

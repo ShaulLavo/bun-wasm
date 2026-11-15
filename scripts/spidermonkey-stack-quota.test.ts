@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { spiderMonkeyWebKitStackKib } from "../web/src/engine-stack-budget.ts";
+import { engineStackBudgetKey, spiderMonkeyWebKitStackKib } from "../web/src/engine-stack-budget.ts";
 
 test("installed SpiderMonkey quotas and overflow recovery on both tiers and member bounds", () => {
   const build = process.env.SPIDERMONKEY_BUILD_DIR;
@@ -27,8 +27,9 @@ test("installed SpiderMonkey quotas and overflow recovery on both tiers and memb
     { cwd: resolve(import.meta.dir, ".."), env, stdio: "pipe" });
     const smoke = join(env.CARGO_TARGET_DIR, "wasm32-wasip1/release/examples/smoke.wasm");
     for (const args of [["interp"], ["pbl"], ["interp", "--relocated-stack"], ["pbl", "--relocated-stack"]]) {
-      const stdout = execFileSync("timeout", ["--kill-after=5s", "60s", "wasmtime", "run", "-W", "max-wasm-stack=16777216", smoke].concat(args),
-        { env, encoding: "utf8" });
+      // A QuickJS-sized budget is not SpiderMonkey's: the full quota still applies.
+      const stdout = execFileSync("timeout", ["--kill-after=5s", "60s", "wasmtime", "run", "-W", "max-wasm-stack=16777216",
+        "--env", "BUN_WASM_STACK_KIB=32", smoke].concat(args), { env, encoding: "utf8" });
       expect(stdout).toContain(`ok init tier=${args[0]}`);
       expect(stdout).toContain("ok catchable stack overflow RangeError");
       expect(stdout).toContain("ok evaluation and second recursion after caught overflow");
@@ -38,9 +39,11 @@ test("installed SpiderMonkey quotas and overflow recovery on both tiers and memb
       expect(stdout).toContain("ok tier evidence");
     }
     // The budget WebKit hosts pass: every reserved path is caught by the quota, then recovers.
+    // A QuickJS-sized BUN_WASM_STACK_KIB alongside it must change nothing.
     for (const tier of ["interp", "pbl"]) {
       const stdout = execFileSync("timeout", ["--kill-after=5s", "60s", "wasmtime", "run", "-W", "max-wasm-stack=16777216",
-        "--env", `BUN_WASM_STACK_KIB=${spiderMonkeyWebKitStackKib}`, smoke, tier], { env, encoding: "utf8" });
+        "--env", `${engineStackBudgetKey("spidermonkey")}=${spiderMonkeyWebKitStackKib}`, "--env", "BUN_WASM_STACK_KIB=32", smoke, tier],
+      { env, encoding: "utf8" });
       expect(stdout).toContain(`ok init tier=${tier}`);
       expect(stdout).toContain("ok budget recursion caught and recovered on every reserved path");
     }

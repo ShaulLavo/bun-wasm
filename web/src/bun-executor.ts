@@ -8,7 +8,7 @@ import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { startEngineHost } from "./engine-host.js";
 import type { RuntimeWorkerRequest, RuntimeWorkerMessage, WorkerExecutor } from "waffle/browser/worker";
 import { NetHost } from "./net/host.js";
-import { engineStackBudgets, jscParserReserve, type StackHost } from "./engine-stack-budget.js";
+import { engineStackBudgetKey, engineStackBudgets, jscParserReserve, type StackHost } from "./engine-stack-budget.js";
 import { DefaultSignal } from "./default-signal.js";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
@@ -85,7 +85,7 @@ function withDefault(env: Record<string, string>, key: string, value: string | u
  * it, independently of the other: an explicit or empty value of one never changes the other's default.
  */
 function stackEnvironment(req: RunRequest, stack: string, userAgent: string): Record<string, string> {
-  const budgeted = withDefault(req.env, "BUN_WASM_STACK_KIB", engineStackBudgets(stack, userAgent, req.stackHost)?.[req.engine]);
+  const budgeted = withDefault(req.env, engineStackBudgetKey(req.engine), engineStackBudgets(stack, userAgent, req.stackHost)?.[req.engine]);
   if (req.engine !== "jsc") return budgeted;
   return withDefault(budgeted, "BUN_WASM_JSC_PARSER_RESERVE", jscParserReserve(stack, userAgent, req.stackHost));
 }
