@@ -91,7 +91,7 @@ declare namespace BunWasm.Events {
     listenerCount(emitter: Emitter, type: Name): number;
     getEventListeners(target: Emitter | EventTarget, type: Name): Listener[];
     getMaxListeners(target: Emitter | EventTarget): number;
-    setMaxListeners(n?: number, ...targets: Emitter[]): void;
+    setMaxListeners(n?: number, ...targets: (Emitter | EventTarget)[]): void;
     once(emitter: Emitter | EventTarget, name: Name, options?: { signal?: AbortSignal }): Promise<unknown[]>;
     on(emitter: Emitter | EventTarget, name: Name, options?: IteratorOptions): Iterator;
     addAbortListener(signal: AbortSignal, listener: Listener): Disposable;

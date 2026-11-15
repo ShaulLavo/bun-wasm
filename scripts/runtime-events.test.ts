@@ -177,6 +177,7 @@ const storage: BunWasm.Events.Table | undefined = prototype._events;
 const initializedStorage: BunWasm.Events.Table = emitter._events;
 const emitterSource: BunWasm.Events.Source = emitter;
 const targetSource: BunWasm.Events.Source = new EventTarget();
+EventEmitter.setMaxListeners(2, new EventTarget());
 const values: Promise<unknown[]> = EventEmitter.once(emitter, key);
 const disposable = EventEmitter.addAbortListener(new AbortController().signal, listener);
 const dispose = disposable[Symbol("optional")];
