@@ -18,6 +18,10 @@ before further admission, and charges leave only with their backing owner.
 Physical-stop failure retains the member's memory and ownership debt;
 only settlement of the same incarnation releases it.
 
+Reused chunks are cleared with relaxed atomic stores over one checked backing
+span. This avoids taking Wasmtime's memory-size lock for every four-byte word
+while preserving zeroed reuse and the contents of neighboring regions.
+
 `GroupPolicy::member_pages` is an original cumulative member cap matching the
 reviewed Waffle contract (Waffle PR
 [478](https://github.com/ShaulLavo/waffle/pull/478) at

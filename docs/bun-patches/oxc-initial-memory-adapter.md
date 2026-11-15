@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | `crates/bunwasm-runtime/src/oxc_memory.rs` and its call in `modules.rs` | Host feature | Original package adapter that reduces the initial capacity of three byte-identified published Oxc loaders. |
 | `scripts/oxc-memory.test.ts` and `scripts/fixtures/oxc-memory-{adapter.rs,probe.ts}` | Host feature | Original controls that compile the adapter and exercise the real published Wasm packages. |
+| `tests/real-oxc-consumer/` and `scripts/real-oxc-consumer{,.test}.ts` | Host feature | Original table-driven consumer controls for the official parser, transform and minify packages on selected shared engine profiles. |
 
 ## Upstream identities
 
@@ -77,5 +78,16 @@ guest. Normal CI builds the changed cores. With the pinned test dependencies,
 stock Node async parser and transform currently fail in Emnapi's worker setup.
 Native Bun 1.4.4 fails loading the stock bindings because its WASI object lacks
 `initialize`. The controls preserve and expose those baseline limitations.
+
+The separate real-consumer driver accepts JSC, QuickJS and SpiderMonkey shared
+profiles and preserves the Browser-engine and production Browser-host controls.
+It installs frozen official 0.94.0 packages with the guest, then checks public
+package selection and direct WASI binding calls separately. Parser checks decode
+the direct JSON AST envelope. Transform checks use a TypeScript filename and
+explicit language and working-directory options. Generated JavaScript must
+compute 42, and minification must shorten its input. Bounded public parser and
+transform async calls check resolved semantics as well. The Quality source check
+uses synthetic controls for driver logic; it does not qualify live addons or
+Nuxt. Live acceptance requires matching producer artifacts and successful runs.
 
 [Ledger scope and pinned revisions](scope.md).

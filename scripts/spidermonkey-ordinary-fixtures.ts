@@ -10,6 +10,7 @@ export const ordinaryFixtures: readonly string[] = [
   "require-esm-caught-failure", "rejection-inspect-still-unhandled",
   "require-esm-after-lowered-import", "require-esm-after-native-import",
   "require-esm-failure-cache", "require-esm-limit-recovery",
+  "stack-callsite-predicates", "stack-getter-loop", "ts-stack-trace",
   "spidermonkey-getter-loop", "spidermonkey-call-loop",
 ];
 

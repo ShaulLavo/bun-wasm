@@ -1425,7 +1425,8 @@
   }
 
   function nativeFrame(name, source, line, col) {
-    if (source.startsWith("bun-wasm:")) return null;
+    const constructed = native.engine === "spidermonkey" && /^bun-wasm:function line \d+ > (?:Function|AsyncFunction|GeneratorFunction|AsyncGenerator)(?:$| > )/.test(source);
+    if (source.startsWith("bun-wasm:") && !constructed) return null;
     const generated = native.engine === "host" && native.preparedSourceName(source) !== undefined;
     const url = source.startsWith("bunwasm:hot:") ? source : typeof internal.displayName === "function" ? internal.displayName(source) : source;
     let [file, lineNo, column] = [url, line, col];
@@ -1442,7 +1443,7 @@
     const stack = internal.hotErrorStacks?.get(error) ?? formattedStack;
     if (native.engine !== "spidermonkey" || typeof savedErrorFrames !== "function") return parseStack(stack);
     let frames;
-    try { frames = savedErrorFrames(error, stack); }
+    try { frames = savedErrorFrames(error, stack, true); }
     catch { return parseStack(stack); }
     if (!Array.isArray(frames)) return parseStack(stack);
     return frames.map(frame => nativeFrame(frame.name, frame.file, frame.line, frame.column)).filter(frame => frame !== null);

@@ -10,7 +10,7 @@ import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
-import { qualifiedParserReserves, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
+import { qualifiedParserReserves, spiderMonkeyWebKitStackKib, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
 import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/executor-guest";
 import { createSharedObjectBroker } from "../src/shared-objects/broker";
 import type { SharedObjectService } from "../src/shared-objects/service";
@@ -837,13 +837,13 @@ test("each armed JSC instance gets a fresh allocation-boundary generation; other
 const geckoStack = "smallStackKib@http://localhost/worker.js:1:1\ncreateBunExecutor@http://localhost/worker.js:2:1";
 const v8Stack = "Error\n    at smallStackKib (http://localhost/worker.js:1:1)";
 const stackHosts = [
-  { name: "Firefox", agent: "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: undefined, jsc: "208" },
-  { name: "Chrome", agent: "Mozilla/5.0 Chrome/147.0.0.0 Safari/537.36", stack: v8Stack, quickjs: undefined, jsc: "800" },
-  { name: "Safari", agent: "Mozilla/5.0 Version/26.0 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
-  { name: "Firefox on Android", agent: "Mozilla/5.0 (Android 14; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192" },
-  { name: "Firefox on an unknown platform", agent: "Mozilla/5.0 Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192" },
-  { name: "Firefox on iOS", agent: "Mozilla/5.0 FxiOS/147.0 Mobile/15E148 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192" },
-  { name: "unmeasured host", agent: "Unknown/1.0", stack: geckoStack, quickjs: "32", jsc: "192" },
+  { name: "Firefox", agent: "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: undefined, jsc: "208", spidermonkey: undefined },
+  { name: "Chrome", agent: "Mozilla/5.0 Chrome/147.0.0.0 Safari/537.36", stack: v8Stack, quickjs: undefined, jsc: "800", spidermonkey: undefined },
+  { name: "Safari", agent: "Mozilla/5.0 Version/26.0 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192", spidermonkey: spiderMonkeyWebKitStackKib },
+  { name: "Firefox on Android", agent: "Mozilla/5.0 (Android 14; Mobile; rv:157.0) Gecko/157.0 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192", spidermonkey: undefined },
+  { name: "Firefox on an unknown platform", agent: "Mozilla/5.0 Gecko/20100101 Firefox/157.0", stack: geckoStack, quickjs: "32", jsc: "192", spidermonkey: undefined },
+  { name: "Firefox on iOS", agent: "Mozilla/5.0 FxiOS/147.0 Mobile/15E148 Safari/605.1.15", stack: geckoStack, quickjs: "32", jsc: "192", spidermonkey: spiderMonkeyWebKitStackKib },
+  { name: "unmeasured host", agent: "Unknown/1.0", stack: geckoStack, quickjs: "32", jsc: "192", spidermonkey: spiderMonkeyWebKitStackKib },
 ];
 
 /** Runs with exactly these qualified parser reserves, whatever the shipped table holds. */
@@ -881,10 +881,13 @@ for (const host of stackHosts) {
     expect(stackEnvironment(host, "quickjs")?.BUN_WASM_STACK_KIB).toBe(host.quickjs);
     expect(stackEnvironment(host, "jsc")?.BUN_WASM_STACK_KIB).toBe(host.jsc);
     expect(stackEnvironment(host, "browser")).toEqual({});
-    expect(stackEnvironment(host, "spidermonkey")).toEqual({});
+    // WebKit hosts bound SpiderMonkey's byte quota; V8 and Gecko keep its full quota.
+    expect(stackEnvironment(host, "spidermonkey")).toEqual(host.spidermonkey ? { BUN_WASM_STACK_KIB: host.spidermonkey } : {});
     expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
     expect(stackEnvironment(host, "quickjs", { BUN_WASM_STACK_KIB: "" })).toEqual({ BUN_WASM_STACK_KIB: "" });
     expect(stackEnvironment(host, "jsc", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
+    expect(stackEnvironment(host, "spidermonkey", { BUN_WASM_STACK_KIB: "64" })).toEqual({ BUN_WASM_STACK_KIB: "64" });
+    expect(stackEnvironment(host, "spidermonkey", { BUN_WASM_STACK_KIB: "" })).toEqual({ BUN_WASM_STACK_KIB: "" });
   })));
 }
 
@@ -913,6 +916,7 @@ test("no engine but JSC ever receives the parser reserve", controlled(() => with
   expect(stackEnvironment(linuxFirefox, "quickjs")).toEqual({});
   expect(stackEnvironment(linuxFirefox, "browser")).toEqual({});
   expect(stackEnvironment(linuxFirefox, "spidermonkey")).toEqual({});
+  expect(stackEnvironment(macSafari, "spidermonkey", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: spiderMonkeyWebKitStackKib });
   expect(stackEnvironment(macSafari, "quickjs", {}, { maxTouchPoints: 0 })).toEqual({ [budgetKey]: "32" });
   expect(stackEnvironment(linuxFirefox, "quickjs", { [reserveKey]: "512" })).toEqual({ [reserveKey]: "512" });
 })));

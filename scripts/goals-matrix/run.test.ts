@@ -75,7 +75,7 @@ test.each(loopControls)("two selected cells preserve evidence and resource teard
     if (control.stop && !control.cleanupFails) expect(outcome).toBe(`Error: Error: ${control.firstError}`);
     const stored: unknown = await Bun.file(join(scratch, "report/TABLE.json")).json();
     validateReport(stored);
-    if (control.visibleIphone) expect(await Bun.file(join(scratch, "factory.json")).json()).toEqual({ timeoutMs: control.timeoutMs ?? 90_000, cleanupTimeoutMs: stored.deadlines.cleanupTimeoutMs });
+    if (control.visibleIphone) expect(await Bun.file(join(scratch, "factory.json")).json()).toEqual({ timeoutMs: control.timeoutMs ?? 300_000, cleanupTimeoutMs: stored.deadlines.cleanupTimeoutMs });
     const first = stored.cells.find(cell => cell.browser === control.browser && cell.engine === "browser" && cell.framework === "nuxt");
     expect(first).toMatchObject({ status: "fail", phase: "startup", error: `Error: ${control.firstError}` });
     expect(first?.attempts).toHaveLength(1);

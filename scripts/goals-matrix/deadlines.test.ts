@@ -27,7 +27,7 @@ test("an explicit Nuxt install budget leaves the campaign phase timeout unchange
   for (const framework of frameworks) expect(policy.installTimeouts[framework.id]).toBe(framework.id === "nuxt" ? 110_000 : 90_000);
 });
 
-test("default runs select calibration while explicit equal-budget controls keep their original bounds", () => {
+test("default runs select hang caps while explicit install controls keep their recorded bounds", () => {
   expect(options(["--asset-source=test"]).timeoutMs).toBeUndefined();
   const strict = options(campaign), equal = options(campaign.concat("--install-timeout-ms=nuxt:90000"));
   expect(strict.installTimeouts).toEqual({});
@@ -83,7 +83,7 @@ test("an install override never extends a stalled render phase", async () => {
 
 function sampleReport(overrides: Record<string, number> = {}): Report {
   return { schema: 2, run: "unit-deadlines", createdAt: "now", command: `bun scripts/goals-matrix/run.ts --timeout-ms=90000${overrides.nuxt ? ` --install-timeout-ms=nuxt:${overrides.nuxt}` : ""}`,
-    source: { commit: "test", dirty: false, assets: {} }, deadlines: deadlinePolicy(90_000, overrides), cells: initialCells(),
+    source: { commit: "test", dirty: false, assets: {} }, deadlines: deadlinePolicy(90_000, overrides, 90_000), cells: initialCells(),
   };
 }
 test("report evidence states and validates the effective install and phase bounds", () => {
@@ -106,7 +106,7 @@ test("report evidence states and validates the effective install and phase bound
 });
 test("shard combination rejects different effective policies even without overlapping attempts", () => {
   expect(() => combine(sampleReport(), sampleReport({ nuxt: 110_000 }))).toThrow("deadline policies");
-  expect(combine(sampleReport(), sampleReport({ nuxt: 90_000 })).deadlines).toEqual(deadlinePolicy(90_000));
+  expect(combine(sampleReport(), sampleReport({ nuxt: 90_000 })).deadlines).toEqual(deadlinePolicy(90_000, {}, 90_000));
 });
 const invalidPolicies: unknown[] = [
   {},
@@ -228,16 +228,17 @@ async function stageUnitHost(root: string, framework: string): Promise<void> {
 test.each(["nuxt", "astro"])("the real runner and WebDriver transport apply the override only to %s's install in a local unit fixture", async id => {
   const framework = frameworks.find(item => item.id === id);
   if (!framework) throw new Error("Missing framework fixture");
-  await withPlayground(framework, 300, transport => withDriver(transport, (endpoint, timeouts) => runFixture(framework.id, endpoint, timeouts)));
+  await withPlayground(framework, 300, transport => withDriver(transport, (endpoint, timeouts) => runFixture(framework.id, endpoint, timeouts)), 300);
 });
 async function runFixture(framework: string, endpoint: string, timeouts: unknown[]): Promise<void> {
   await withReportRoot(async (root, output) => {
     await stageUnitHost(root, framework);
-    const config = options(["--asset-source=unit-fixture-not-acceptance", `--root=${root}`, `--output=${output}`, "--timeout-ms=200", "--install-timeout-ms=nuxt:900", "--browsers=safari", "--engines=browser", `--frameworks=${framework}`, `--safari-endpoint=${endpoint}`]);
+    const config = options(["--asset-source=unit-fixture-not-acceptance", `--root=${root}`, `--output=${output}`, "--timeout-ms=200", "--install-timeout-ms=nuxt:900", "--build-timeout-ms=900", "--browsers=safari", "--engines=browser", `--frameworks=${framework}`, `--safari-endpoint=${endpoint}`]);
     const report = await run(config);
     const cell = report.cells.find(cell => cell.framework === framework && cell.browser === "safari" && cell.engine === "browser");
     expect(cell).toMatchObject(framework === "nuxt" ? { status: "pass" } : { status: "fail", phase: "install", error: expect.stringContaining("200 ms") });
     expect(cell?.attempts[0]?.phases.find(phase => phase.phase === "install")?.timeoutMs).toBe(framework === "nuxt" ? 900 : 200);
+    if (framework === "nuxt") expect(cell?.attempts[0]?.phases.find(phase => phase.phase === "build")).toMatchObject({ status: "pass", timeoutMs: 900 });
     expect(timeouts).toEqual([{ script: 200, pageLoad: 200, implicit: 0 }, { script: 200, pageLoad: 200, implicit: 0 }]);
     const resource = report.resources?.[0];
     if (!resource) throw new Error("Missing owned server receipt");
@@ -246,7 +247,7 @@ async function runFixture(framework: string, endpoint: string, timeouts: unknown
   });
 }
 
-test.each(["session", "preview", "transcript"] as const)("the real calibrated native runner preserves the %s cleanup allowance", async delayed => {
+test.each(["session", "preview", "transcript"] as const)("the real default native runner preserves the %s cleanup allowance", async delayed => {
   const framework = frameworks.find(item => item.id === "hono");
   if (!framework) throw new Error("Missing Hono fixture");
   const delays: CleanupDelays = {};
@@ -260,10 +261,10 @@ test.each(["session", "preview", "transcript"] as const)("the real calibrated na
     expect(cell.status).toBe("pass");
     expect(cell.attempts[0]?.phases.find(phase => phase.phase === "cleanup")?.durationMs).toBeGreaterThanOrEqual(1800);
     const limits = cellDeadlines(campaignDeadlines(), cell);
-    expect(limits.timeoutMs).toBe(1470);
+    expect(limits.timeoutMs).toBe(300_000);
     for (const phase of cell.attempts[0]?.phases ?? []) expect(phase.timeoutMs).toBe(phase.phase === "cleanup" ? 20_000 : phase.phase === "install" ? limits.installTimeoutMs : phase.phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs);
     expect(timeouts).toEqual([{ script: limits.timeoutMs, pageLoad: limits.timeoutMs, implicit: 0 }, { script: 10_000, pageLoad: 10_000, implicit: 0 }]);
-    expect(report.deadlines.overrides).toEqual({ timeoutMs: null, installTimeouts: {} });
+    expect(report.deadlines.overrides).toEqual({ timeoutMs: null, installTimeouts: {}, buildTimeoutMs: null });
     expect(report.resources?.every(resource => resource.stopped)).toBe(true);
     for (const resource of report.resources ?? []) expect(() => process.kill(resource.pid, 0)).toThrow();
   }), delays));

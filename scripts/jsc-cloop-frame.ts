@@ -66,9 +66,9 @@ function stackPointerGlobal(exported: ReadonlyMap<string, number>, imported: rea
   return index;
 }
 
-function interpreterFunction(functions: readonly WasmFunction[]): WasmFunction {
-  const matches = functions.filter(candidate => candidate.name.startsWith(interpreterName));
-  if (matches.length !== 1) throw new WasmShapeError(`expected one ${interpreterName}...) function, found ${matches.length}`);
+function frameFunction(functions: readonly WasmFunction[], name: string): WasmFunction {
+  const matches = functions.filter(candidate => candidate.name.startsWith(name));
+  if (matches.length !== 1) throw new WasmShapeError(`expected one ${name}...) function, found ${matches.length}`);
   return matches[0]!;
 }
 
@@ -189,12 +189,20 @@ class FrameWalk {
         return null;
       case op.localSet:
       case op.localTee:
-        return state.locals.has(instruction.operand) ? { depth: state.depth, locals: without(state.locals, instruction.operand) } : state;
+        return this.writeLocal(index, state);
       case op.globalSet:
         return instruction.operand === this.stackPointer ? this.writeStackPointer(index, state) : state;
       default:
         return state;
     }
+  }
+
+  private writeLocal(index: number, state: PathState): PathState {
+    const local = this.code[index]!.operand;
+    const previous = this.code[index - 1];
+    const held = is(previous, op.localGet) ? state.locals.get(previous!.operand) : undefined;
+    if (held !== undefined) return { depth: state.depth, locals: new Map(state.locals).set(local, held) };
+    return state.locals.has(local) ? { depth: state.depth, locals: without(state.locals, local) } : state;
   }
 
   private writeStackPointer(index: number, state: PathState): PathState {
@@ -230,9 +238,14 @@ function without(locals: ReadonlyMap<number, number>, local: number): Map<number
 
 /** The frame `CLoop::execute` holds at its calls. Throws on anything the walk cannot prove. */
 export function cloopFrame(bytes: Uint8Array): CLoopFrame {
+  return wasmFrame(bytes, interpreterName);
+}
+
+/** The retained shadow frame of one named function, using the same checked walk as JSC. */
+export function wasmFrame(bytes: Uint8Array, name: string): CLoopFrame {
   const module = readWasmModule(bytes);
   const stackPointer = stackPointerGlobal(module.exportedGlobals, module.importedGlobals);
-  const target = interpreterFunction(module.functions);
+  const target = frameFunction(module.functions, name);
   const code = readInstructions(module, target);
   const walk = new FrameWalk(code, stackPointer);
   walk.run(structure(code), { depth: 0, locals: new Map() });

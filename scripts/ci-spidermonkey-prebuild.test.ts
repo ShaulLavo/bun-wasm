@@ -27,19 +27,18 @@ const producer = job('shared-spidermonkey-prebuild');
 const consumer = job('shared-sysroot');
 
 test('one bounded SM library prebuild feeds the original blocking owner and all unchanged consumers', () => {
-  expect(producer).toContain('needs: [quality, shared-prebuild]');
-  expect(producer).toContain("needs.quality.outputs.shared-native == 'true'");
+  expect(producer).toContain('needs: [selection, shared-prebuild]');
+  expect(producer).toContain("needs.selection.outputs.shared-native == 'true'");
   expect(producer).toContain('timeout-minutes: 30');
   expect(producer).not.toMatch(/build-native-profile|build-bun-core|build-engine|test-checks|build-libcxx/);
-  expect(consumer).toContain('needs: [quality, rust, shared-prebuild, shared-spidermonkey-prebuild]');
-  expect(consumer).toContain('!cancelled() && needs.quality.result');
+  expect(consumer).toContain('needs: [selection, rust, shared-prebuild, shared-spidermonkey-prebuild]');
+  expect(consumer).toContain('!cancelled() && needs.selection.result');
   expect(consumer).toContain('timeout-minutes: 30');
   expect(consumer).not.toContain('spidermonkey/build-shared-group.sh');
   expect(consumer).not.toContain('id: shared-spidermonkey-cache');
-  for (const name of ['Consume the shared native feature checks', 'Consume the shared Browser feature checks',
-    'Consume the shared JSC feature checks', 'Consume the shared SpiderMonkey native feature checks', 'Consume the shared SpiderMonkey Browser feature checks']) {
+  for (const [id, name] of [['shared-native', 'Consume the discovered shared native checks sequentially'], ['shared-browser', 'Consume the discovered shared Browser checks sequentially']]) {
     expect(workflow.match(new RegExp(`name: ${name}\\n`, 'g'))).toHaveLength(1);
-    expect(consumer).toContain(`name: ${name}\n`);
+    expect(job(id!)).toContain(`name: ${name}\n`);
   }
   expect(command('shared-spidermonkey-prebuild', 'Import only the verified shared sysroot for SpiderMonkey')).not.toContain('tar --posix -xOf "$transfer" prebuild.tar.zst |');
   const upload = producer.split('          name: shared-spidermonkey-prebuild\n')[1]!.split('      - name:')[0]!;
@@ -59,8 +58,8 @@ test.each(['failure', 'cancelled', 'skipped'])('a selected %s SM producer fails 
 test('successful SM production is admitted and an unselected SM prebuild leaves the libc proof running', () => {
   const guard = command('shared-sysroot', 'Require the shared SpiderMonkey library producer');
   expect(spawnSync('bash', ['-euo', 'pipefail', '-c', guard], { env: { ...process.env, SM_PREBUILD_RESULT: 'success' } }).status).toBe(0);
-  expect(consumer).toContain("(needs.quality.outputs.shared == 'true' || needs.quality.outputs.shared-native == 'true')");
-  expect(consumer.split('name: Require the shared SpiderMonkey library producer\n')[1]).toStartWith("        if: needs.quality.outputs.shared-native == 'true'\n");
+  expect(consumer).toContain("(needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true')");
+  expect(consumer.split('name: Require the shared SpiderMonkey library producer\n')[1]).toStartWith("        if: needs.selection.outputs.shared-native == 'true'\n");
   expect(consumer).toContain('bash scripts/test-shared-sysroot.sh');
 });
 

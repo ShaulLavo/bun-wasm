@@ -4,11 +4,14 @@ Pushes to main share one workflow concurrency group. GitHub preserves its runnin
 member and replaces its pending member. PR cancellation and isolated manual runs
 keep their existing behavior. Old uniquely grouped runs are unaffected.
 
-The main-only `Resolve cumulative main coverage v1` step is the baseline marker.
+The main-only `Resolve cumulative main coverage v1` step in the successful
+`CI selection` job is the baseline marker.
 Only a successful whole CI workflow with a successful Code quality job and that
 successful marker qualifies. The helper verifies workflow ID and path, push/main,
-immutable SHA and the successful run's exact attempt. Legacy green runs cannot
-bootstrap coverage. A rerun uses its own attempt's jobs.
+immutable SHA and the successful run's exact attempt. Runs with the marker in
+the former Source quality job cannot bootstrap coverage. The first successful
+selection-marked run establishes a new baseline after selecting all families.
+A rerun uses its own attempt's jobs.
 
 The helper walks the immutable head's first-parent chain nearest first and queries
 successful runs for each exact ancestor SHA. API ordering and rerun ordering do

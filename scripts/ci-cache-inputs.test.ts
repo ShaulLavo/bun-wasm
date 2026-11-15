@@ -53,8 +53,8 @@ test("native-only selections provision the tools JSC prerequisite without enabli
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
   }
-  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
-  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true') }}");
+  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') }}");
+  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true') }}");
   for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps)]) {
     expect(prerequisite).not.toHaveProperty("if");
   }
@@ -67,7 +67,7 @@ test("native-only selections provision the tools JSC prerequisite without enabli
   expect(position("Import the verified JSC prebuild and sysroot")).toBeLessThan(stepList.indexOf(tools));
   expect(position("Import the verified JSC prebuild and sysroot")).toBeLessThan(position("Blocking native quality checks"));
   for (const engine of [byId("jsc-cargo-cache"), named("Build the JSC Cargo guest"), named("Blocking JSC embedding and allocation checks"), named("Blocking Web guest case (JSC)")]) {
-    expect(field(engine, "if")).toBe("needs.quality.outputs.jsc == 'true'");
+    expect(field(engine, "if")).toBe("needs.selection.outputs.jsc == 'true'");
   }
 });
 

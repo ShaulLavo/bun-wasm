@@ -4,6 +4,10 @@
 
 export const BACKEND = 0x8000_0000;
 export const MAX_RESOURCES = 4096;
+/** The `Count` a `Withdraw` is answered with. The publication is gone after the first two. */
+export const WITHDRAWN = 0;
+export const WITHDRAW_ABSENT = 1;
+export const WITHDRAW_REFUSED = 2;
 export const MAX_VALUES = 32;
 export const MAX_DEPTH = 64;
 export const FRAME_BYTES = 520;

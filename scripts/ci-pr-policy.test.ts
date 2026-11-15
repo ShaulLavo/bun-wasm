@@ -30,7 +30,7 @@ test("draft PRs defer native and browser work until ready without changing push 
   for (const [id, value] of Object.entries(jobs)) {
     if (id === "update-status") continue;
     const job = record(value);
-    expect(admitted(job, "pull_request", true), id).toBe(id === "quality" || id === "ci-result");
+    expect(admitted(job, "pull_request", true), id).toBe(id === "selection" || id === "quality" || id === "ci-result");
     expect(admitted(job, "pull_request", false), id).toBe(true);
     expect(admitted(job, "push", false), id).toBe(true);
     expect(admitted(job, "workflow_dispatch", false), id).toBe(true);

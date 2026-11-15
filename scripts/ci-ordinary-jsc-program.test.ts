@@ -111,8 +111,8 @@ test("the normal Rust job exports only selected JSC after its existing blocking 
   const exporter = steps.find((step: { name?: string }) => step.name === "Export the validated ordinary JSC pair");
   const upload = steps.find(step => record(step.with) && step.with.name === "ordinary-jsc-program");
   if (!exporter || !upload) throw new Error("Missing ordinary JSC export steps");
-  expect(exporter).toEqual({ name: "Export the validated ordinary JSC pair", if: "needs.quality.outputs.jsc == 'true'", run: 'source env.sh\nbun scripts/ci-ordinary-jsc-program.ts export "$RUNNER_TEMP/ordinary-jsc-program"\n' });
-  expect(upload).toEqual({ uses: "actions/upload-artifact@v4", "timeout-minutes": 5, if: "needs.quality.outputs.jsc == 'true'", with: { name: "ordinary-jsc-program", path: "${{ runner.temp }}/ordinary-jsc-program/", "if-no-files-found": "error", "retention-days": 1 } });
+  expect(exporter).toEqual({ name: "Export the validated ordinary JSC pair", if: "needs.selection.outputs.jsc == 'true'", run: 'source env.sh\nbun scripts/ci-ordinary-jsc-program.ts export "$RUNNER_TEMP/ordinary-jsc-program"\n' });
+  expect(upload).toEqual({ uses: "actions/upload-artifact@v4", "timeout-minutes": 5, if: "needs.selection.outputs.jsc == 'true'", with: { name: "ordinary-jsc-program", path: "${{ runner.temp }}/ordinary-jsc-program/", "if-no-files-found": "error", "retention-days": 1 } });
   for (const name of ["Build the JSC Cargo guest", "Blocking JSC embedding and allocation checks", "Blocking native fixture checks"]) expect(steps.indexOf(exporter)).toBeGreaterThan(steps.findIndex((step: { name?: string }) => step.name === name));
   expect(steps.indexOf(upload)).toBe(steps.indexOf(exporter) + 1);
   expect(needsRust(["scripts/ci-ordinary-jsc-program.ts"])).toBe(true);
