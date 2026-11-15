@@ -37,6 +37,7 @@ const HOST_VERSIONS = {};
 export class Playground extends TypedEventTarget<{ change: Event }> {
   readonly engine: Engine;
   readonly profile: PlaygroundProfile;
+  private readonly requestedProfile: PlaygroundProfile | undefined;
   readonly template: ProjectTemplate | undefined;
   term?: Terminal;
   editor?: Editor;
@@ -62,7 +63,12 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
     this.engine = requested ?? DEFAULT_ENGINE;
     const profile = this.params.get("profile");
-    this.profile = templateProfile(this.engine, this.template?.id, profile === null ? undefined : playgroundProfile(profile));
+    this.requestedProfile = profile === null ? undefined : playgroundProfile(profile);
+    this.profile = this.profileForEngine(this.engine);
+  }
+
+  profileForEngine(engine: Engine): PlaygroundProfile {
+    return templateProfile(engine, this.template?.id, this.requestedProfile);
   }
 
   get status(): Status {

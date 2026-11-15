@@ -25,6 +25,13 @@ for (const engine of ["quickjs", "jsc", "spidermonkey", "browser"] as const) tes
   expect(new Playground(`?template=angular&engine=${engine}&profile=split`).profile).toBe("split");
   expect(new Playground(`?template=vite-react&engine=${engine}`).profile).toBe("split");
   expect(new Playground(`?engine=${engine}`).profile).toBe("split");
+  expect(new Playground("?template=angular").profileForEngine(engine)).toBe(engine === "browser" ? "split" : "shared-group");
+  expect(new Playground("?template=angular&profile=split").profileForEngine(engine)).toBe("split");
+});
+
+test("Angular's engine picker can return to Browser while an explicit shared override still rejects it", () => {
+  expect(new Playground("?template=angular&engine=quickjs").profileForEngine("browser")).toBe("split");
+  expect(() => new Playground("?template=angular&engine=quickjs&profile=shared-group").profileForEngine("browser")).toThrow("browser engine");
 });
 
 for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) test(`${engine} prepared split aliases register only for the explicit split profile`, async () => {
