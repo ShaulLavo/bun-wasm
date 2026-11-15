@@ -43,6 +43,8 @@ bypass. It checks today's sources; it does not prove arbitrary C++ data flow.
 The internal script-evaluation ABI carries the filename length, like module
 evaluation already does. Host reply buffers have explicit lengths on release,
 so an embedded NUL does not truncate their contents or their allocation size.
+The engine-semantics and loop-dispatch controls pass that length at every script
+evaluation call, including the failure reporter and successful getter controls.
 
 ## Controls
 
@@ -61,3 +63,6 @@ The `filename` control mode selects this subset locally.
 `tests/fixtures/virtual-filenames` exercises the runtime's `node:vm` entry point
 and formatted call-site filenames. Its native manifest selects the ordinary
 SpiderMonkey producer. These are source controls, not a Nuxt compatibility claim.
+`tests/fixtures/spidermonkey-callsite-frames` checks direct, eval and Function
+sourceURL text with literal percent escapes and Unicode, lazy formatter identity
+and captured holders on the same producer.
