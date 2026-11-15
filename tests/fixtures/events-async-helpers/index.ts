@@ -131,6 +131,19 @@ function listenerLimits() {
     assert.throws(() => Reflect.apply(setMaxListeners, undefined, [1, value]), value == null ? TypeError : invalidArgument);
   }
   assert.throws(() => setMaxListeners(1, Object.freeze(new EventTarget())), TypeError);
+  const savedDefault = EventEmitter.defaultMaxListeners;
+  try {
+    EventEmitter.defaultMaxListeners = 10;
+    const fresh = new EventTarget();
+    assert.equal(getMaxListeners(fresh), 10);
+    assert.equal(Reflect.get(fresh, EventEmitter.kMaxEventTargetListeners), 10);
+    EventEmitter.defaultMaxListeners = 2;
+    assert.equal(getMaxListeners(fresh), 10);
+    assert.equal(getMaxListeners(new EventTarget()), 2);
+    assert.throws(() => getMaxListeners(Object.freeze(new EventTarget())), TypeError);
+  } finally {
+    EventEmitter.defaultMaxListeners = savedDefault;
+  }
   console.log("listener limits support EventTarget and static helpers reject invalid targets");
 }
 

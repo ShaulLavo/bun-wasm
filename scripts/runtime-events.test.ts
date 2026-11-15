@@ -21,6 +21,22 @@ function enclosingFunction(node: ts.Node) {
   return owner;
 }
 
+test("EventTarget limits initialize once from the current default", () => {
+  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  Events.defaultMaxListeners = 10;
+  const target = new EventTarget();
+  expect(Events.getMaxListeners(target)).toBe(10);
+  expect(Reflect.get(target, Events.kMaxEventTargetListeners)).toBe(10);
+  Events.defaultMaxListeners = 2;
+  expect(Events.getMaxListeners(target)).toBe(10);
+  expect(Events.getMaxListeners(new EventTarget())).toBe(2);
+});
+
+test("EventTarget limit initialization propagates failed writes", () => {
+  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  expect(() => Events.getMaxListeners(Object.freeze(new EventTarget()))).toThrow(TypeError);
+});
+
 test("events permits only the exact audited constructor and private-invariant views", () => {
   const file = ts.createSourceFile("events.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const escapes: string[] = [];

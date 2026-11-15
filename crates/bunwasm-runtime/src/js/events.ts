@@ -468,7 +468,11 @@
   EventEmitter.getMaxListeners = function getMaxListeners(emitterOrTarget: Source) {
     if (emitterOrTarget != null && typeof emitterOrTarget.getMaxListeners === "function") return emitterOrTarget.getMaxListeners();
     if (emitterOrTarget instanceof EventTarget) {
-      return Reflect.get(emitterOrTarget, EventEmitter.kMaxEventTargetListeners) ?? defaultMaxListeners;
+      const stored = Reflect.get(emitterOrTarget, EventEmitter.kMaxEventTargetListeners);
+      if (stored != null) return stored;
+      const initial = defaultMaxListeners;
+      setEventTargetLimit(emitterOrTarget, initial);
+      return initial;
     }
     throw invalidArgType("emitter", "an instance of EventEmitter or EventTarget", emitterOrTarget);
   };
