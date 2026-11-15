@@ -1,10 +1,11 @@
 import { test, expect } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { types, isDeepStrictEqual } from "node:util";
 import { runInThisContext } from "node:vm";
 
 const runtime = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
-const fixture = new URL("../tests/fixtures/test-extend-results/", import.meta.url);
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
 function expression(source: string) {
@@ -16,7 +17,8 @@ function factory(name: string) {
   return expression(source);
 }
 
-test("custom extensions through the runtime expect factory", async () => {
+async function runFixture(name: string) {
+  const fixture = new URL(`../tests/fixtures/${name}/`, import.meta.url);
   const support = factory("test_matchers.ts")({
     isPromise: types.isPromise,
     promiseThen: (promise: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (value: unknown) => unknown) =>
@@ -35,8 +37,20 @@ test("custom extensions through the runtime expect factory", async () => {
     require: (name: keyof typeof available) => available[name],
   });
   const source = readFileSync(new URL("index.ts", fixture), "utf8").replace(/^import[^\n]+\n/, "");
-  const run = expression(`(async (expect, console) => {${source}\n})`);
+  const run = expression(`(async (expect, console, Bun) => {${source}\n})`);
   const lines: string[] = [];
-  await run(exports.expect, { log: (line: string) => lines.push(line) });
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-extended-"));
+  try {
+    await run(exports.expect, { log: (line: string) => lines.push(line) }, {
+      write: (path: string, value: string) => Bun.write(join(directory, path), value),
+      file: (path: string) => Bun.file(join(directory, path)),
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
   expect(lines.join("\n") + "\n").toBe(readFileSync(new URL("expected.txt", fixture), "utf8"));
-});
+}
+
+for (const name of ["test-extend-results", "test-extended-contract"]) {
+  test(`${name} through the runtime expect factory`, () => runFixture(name));
+}

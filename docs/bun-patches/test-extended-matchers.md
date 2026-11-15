@@ -25,4 +25,4 @@ Async asymmetric extension results and recursive deep equality are outside this
 adapter. No mock, spy, engine or host interface code changes.
 
 `tests/fixtures/test-extended-contract` runs the same contract on the guest and
-through the source factory in `scripts/test-extended-matchers.test.ts`.
+through the source factory in `scripts/test-extensions.test.ts`.
