@@ -384,6 +384,7 @@ declare namespace BunWasm {
     mappedCallSites: WeakSet<object>;
     formatCallSite(site: StackCallSite): string;
     require(name: "inspect"): ConsoleInspector;
+    require(name: "host_call_sites"): object;
   }
   interface ShellFs {
     readonly constants: object;

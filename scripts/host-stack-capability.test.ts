@@ -10,17 +10,22 @@ function factory(name: string) {
   return transpiler.transformSync(`globalThis.factory = ${read(name)};`).replace("globalThis.factory =", "").trim().replace(/;$/, "")
     .replace(/^(function[^{]*\{)/, '$1"use strict";');
 }
-const factories = { stack_trace: factory("stack_trace.ts"), stack_capability: factory("stack_capability.ts"), inspect: read("inspect.js") };
+const factories = { stack_trace: factory("stack_trace.ts"), stack_capability: factory("stack_capability.ts"), host_call_sites: factory("host_call_sites.ts"), inspect: read("inspect.js") };
 const initialize = (engine: string) => `
 const nativeError = Error;
 const nativeCapture = Error.captureStackTrace;
 const nativeStack = Object.getOwnPropertyDescriptor(Error.prototype, "stack");
 const factories = Object.fromEntries(Object.entries(${JSON.stringify(factories)}).map(([name, source]) => [name, (0, eval)("(" + source + ")")]));
 const runtime = (${bootstrap})({ engine: ${JSON.stringify(engine)}, loadPolyfill: name => factories[name], mapPosition: () => undefined, preparedSourceName: () => undefined });
-globalThis.stackTest = { nativeError, nativeCapture, nativeStack, runtime };
+function restorePrepare(descriptor, prepare) {
+  if (descriptor.set) descriptor.set.call(Error, prepare);
+  Object.defineProperty(Error, "prepareStackTrace", descriptor);
+}
+globalThis.stackTest = { nativeError, nativeCapture, nativeStack, runtime, restorePrepare };
 `;
 const depd = `
 const saved = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+const savedPrepare = Error.prepareStackTrace;
 let result;
 try {
   Error.prepareStackTrace = (error, sites) => sites;
@@ -29,7 +34,7 @@ try {
   const sites = deprecatedCaller();
   const site = sites[0];
   result = { methods: [typeof site.getFileName, typeof site.getLineNumber, typeof site.getFunctionName], file: site.getFileName(), line: site.getLineNumber(), name: site.getFunctionName() };
-} finally { Object.defineProperty(Error, "prepareStackTrace", saved); }
+} finally { stackTest.restorePrepare(saved, savedPrepare); }
 return result;
 `;
 
@@ -54,6 +59,7 @@ finally { if (saved) Object.defineProperty(Error, "prepareStackTrace", saved); e
 
 const captureContracts = `
 const saved = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+const savedPrepare = Error.prepareStackTrace;
 const original = new TypeError("original failure");
 const originalStack = original.stack;
 let calls = 0, errorIdentity = false, receiver = false;
@@ -71,19 +77,20 @@ try {
   const trimmed = caller().stack;
   const missing = {}; Error.captureStackTrace(missing, function absent() {});
   const missingConstructor = missing.stack.length;
-  Error.prepareStackTrace = saved.value;
+  Error.prepareStackTrace = savedPrepare;
   const holder = {}; Error.captureStackTrace(holder);
   result = { nativeError: Error === stackTest.nativeError, nativeCapture: Error.captureStackTrace === stackTest.nativeCapture, nativeSites, structured: stackTest.runtime.hasNativeStackTrace, errorIdentity, receiver, lazy, memoized,
     defaultStack: typeof holder.stack === "string" && typeof originalStack === "string" && original.message === "original failure" && original instanceof TypeError,
     descriptors: descriptor.configurable && !descriptor.enumerable,
     constructorOpt: trimmed[0].getFunctionName(), missingConstructor };
-} finally { Object.defineProperty(Error, "prepareStackTrace", saved); }
-result.restored = Error.prepareStackTrace === saved.value;
+} finally { stackTest.restorePrepare(saved, savedPrepare); }
+result.restored = Error.prepareStackTrace === savedPrepare;
 return result;
 `;
 
 const awaitingCaller = `
 const saved = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+const savedPrepare = Error.prepareStackTrace;
 Error.prepareStackTrace = (error, sites) => sites;
 function capture() { const holder = {}; Error.captureStackTrace(holder, capture); return holder.stack; }
 async function resumedLeaf() { await 0; return capture(); }
@@ -91,8 +98,39 @@ async function awaitingParent() { return await resumedLeaf(); }
 return awaitingParent().then(sites => ({
   leaf: [sites[0].getFunctionName(), sites[0].isAsync()],
   awaiting: sites.filter(site => site.isAsync()).map(site => site.getFunctionName().endsWith("awaitingParent")),
-})).finally(() => Object.defineProperty(Error, "prepareStackTrace", saved));
+})).finally(() => stackTest.restorePrepare(saved, savedPrepare));
 `;
+
+const predicateContracts = `
+Error.prepareStackTrace = (error, sites) => sites;
+const named = Function('return function sloppyNamed() { return new Error().stack; }')();
+const sites = named();
+const sloppy = sites.find(site => site.getFunctionName() === "sloppyNamed");
+const leaf = Function('return async function resumedLeaf() { await 0; return new Error().stack; }')();
+async function awaitingParent() { return await leaf(); }
+const resumed = await awaitingParent();
+return {
+  sloppy: sloppy.isToplevel(),
+  leaf: resumed.find(site => site.getFunctionName() === "resumedLeaf").isToplevel(),
+  awaiting: resumed.filter(site => site.isAsync()).map(site => site.getFunctionName()),
+  program: sites.filter(site => !site.getFunctionName()).map(site => [site.isToplevel(), site.isAsync()]),
+};
+`;
+
+test("native V8 CallSites distinguish named calls and awaiting program code", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.addScriptTag({ content: initialize("host") });
+    await page.addScriptTag({ content: `globalThis.predicateResult = (async () => {${predicateContracts}})()` });
+    const result = await page.evaluate(() => Reflect.get(globalThis, "predicateResult"));
+    expect(result.sloppy).toBe(false);
+    expect(result.leaf).toBe(false);
+    expect(result.awaiting).toEqual(["awaitingParent"]);
+    expect(result.program.length).toBeGreaterThan(0);
+    expect(result.program.every((frame: boolean[]) => frame[0] && !frame[1])).toBe(true);
+  } finally { await browser.close(); }
+}, 30_000);
 
 // Firefox is SpiderMonkey. Under the guest's engine name it runs the adapter against the
 // native text capture the SpiderMonkey guest has, which ignores the formatter.
@@ -150,7 +188,7 @@ for (const [name, launcher, engine] of engines) {
       await page.addScriptTag({ url: "http://stack.test/depd-capture.js" });
       const result = await page.evaluate(() => Reflect.get(globalThis, "stackResult"));
       expect(errors).toEqual([]);
-      expect(result).toEqual({ methods: ["function", "function", "function"], file: "http://stack.test/depd-capture.js", line: 7, name: "deprecatedCaller" });
+      expect(result).toEqual({ methods: ["function", "function", "function"], file: "http://stack.test/depd-capture.js", line: 8, name: "deprecatedCaller" });
       await page.route("http://stack.test/contracts.js", route => route.fulfill({ contentType: "text/javascript", body: `globalThis.stackContracts = (function () {${captureContracts}\n})()` }));
       await page.addScriptTag({ url: "http://stack.test/contracts.js" });
       expect(errors).toEqual([]);

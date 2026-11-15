@@ -65,8 +65,12 @@ function withoutStackCapabilityDeltas(source: string) {
   expect(source.split("custom && parseCapturedStack")).toHaveLength(2);
   expect(source.split('native.engine === "quickjs" || parseCapturedStack')).toHaveLength(2);
   const prototypeWrapper = /  if \(native.engine === "spidermonkey"\) \{\n[\s\S]*?\n  \}\n\n/;
+  const jscWrapper = /  if \(native.engine === "jsc"\) \{\n[\s\S]*?\n  \}\n\n/;
+  const hostWrapper = /  if \(native.engine === "host" && internal.hasNativeStackTrace\) \{\n[\s\S]*?\n  \}\n\n/;
   expect(source.match(prototypeWrapper)).not.toBeNull();
-  return source.replace(prototypeWrapper, "").replace(declaration, "")
+  expect(source.match(jscWrapper)).not.toBeNull();
+  expect(source.match(hostWrapper)).not.toBeNull();
+  return source.replace(prototypeWrapper, "").replace(jscWrapper, "").replace(hostWrapper, "").replace(declaration, "")
     .replace(awaitingCaller, 'this.#frame.name.startsWith("async ")')
     .replace("custom && parseCapturedStack", 'custom && native.engine === "jsc"')
     .replace('native.engine === "quickjs" || parseCapturedStack', 'native.engine === "quickjs" || native.engine === "jsc"');
@@ -125,7 +129,8 @@ const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
   bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
 };
-const originalEmbeddedBytes = { stack_trace: 4330, bun_builtins: 4092 };
+// Allow the JSC formatter registration and host adapter dispatch.
+const originalEmbeddedBytes = { stack_trace: 5000, bun_builtins: 4092 };
 test("stack descriptor records are the only executable delta", () => {
   const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/stack_trace.ts"), "utf8");
   const records = stackDescriptorRecords(source);
@@ -224,7 +229,7 @@ test("emitted builtin loader keeps caches, private symbols and unsupported error
 });
 
 test("emitted stack adapter leaves host hooks intact", () => {
-  const context = { internal: { native: { engine: "host" }, hasNativeStackTrace: true, defineHidden: Object.assign } };
+  const context = { internal: { native: { engine: "host" }, hasNativeStackTrace: true, defineHidden: Object.assign, require() {} } };
   const source = emit("stack_trace", true);
   expect(runInNewContext(`const capture = Error.captureStackTrace; (${source})(internal); Error.captureStackTrace === capture`, context)).toBe(true);
 });

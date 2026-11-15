@@ -84,6 +84,16 @@
     return store(target, value);
   }
 
+  if (native.engine === "jsc") {
+    Object.defineProperty(globalThis, Symbol.for("bunwasm.internal.jsc.formatStack"), nullPrototypeDescriptor({
+      __proto__: null, value: formatStack,
+    }));
+  }
+
+  if (native.engine === "host" && internal.hasNativeStackTrace) {
+    internal.require("host_call_sites");
+  }
+
   if (native.engine === "quickjs") {
     const holder: { stack?: BunWasm.StackCallSite[] } = {};
     Error.prepareStackTrace = (error, sites) => sites;
