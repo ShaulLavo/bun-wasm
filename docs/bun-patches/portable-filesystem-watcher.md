@@ -6,7 +6,7 @@ Class **Host feature**, **original adapter** in `src/js/fs_watch.ts`, wired by
 wraps a private native filesystem watcher that these engines cannot call.
 
 Each watcher owns one process-local watch id from Waffle's `runtime_fs` imports
-(`watch_open`, `watch_read`, `watch_close`; Waffle `docs/host-abi.md`, "Guest
+(`watch_open`, `watch_ready`, `watch_read`, `watch_close`; Waffle `docs/host-abi.md`, "Guest
 filesystem watches", frozen in wave 2026-10-29 `waffle/guest-watch/DESIGN.md`
 revision 2). The `fsWatchOpen(path, recursive)` native opens the path with symlink
 follow after the existing `statSync` check, registers the watch on that descriptor
@@ -29,7 +29,22 @@ Node does for an exhausted inotify limit. A throwing `change` listener becomes a
 `error` event and releases the watch. Events can coalesce, and the adapter promises
 no OS event count.
 
-`net.js` `pumpIo` steps watch waiters before the others. A socket step can run a
+`net.js` delegates each turn to the original TypeScript adapter `io_pump.ts`.
+It queries the non-consuming `runtime_fs.watch_ready() -> i32` once when the
+turn contains watches. Zero means no watch read can make progress; nonzero means
+records, an end or an error may be available. Idle turns skip every per-watch
+read, avoiding host allocation traffic proportional to the watch count. The
+decision belongs to that turn, including during a reentrant pump. A write racing
+a negative query wakes the normal notification path and is delivered next turn.
+There is no timer, forced collection or old-host fallback.
+
+The provider's `ready()` includes ended registrations until close/drop as well as
+queued records, read errors and revocation. Its scheduling-only `pending()` stays
+false for ended/revoked registrations. Consumer controls use the actual provider
+table to verify that a terminal read closes the native id and removes its waiter
+within the same turn, including when scheduling readiness is false.
+
+`io_pump.ts` steps ready watch waiters before the others. A socket step can run a
 request handler synchronously, so a change already readable this turn reaches its
 listeners, and queues their deferred work, ahead of it. That is a tie-breaker only.
 The actual fix is waking on commit: the guest drains the watch as soon as a write
@@ -68,7 +83,7 @@ checks that invalid encodings stat nothing and open no watch, and
 `scripts/runtime-fs-watch-events.test.ts` covers delivery, ordering and lifecycle
 over the real `net.js` scheduler.
 
-The native wasmtime host (`crates/bunwasm-host/src/fs_watch.rs`) implements the same three
+The native wasmtime host (`crates/bunwasm-host/src/fs_watch.rs`) implements the same four
 `runtime_fs` imports over the `notify` crate 8.2.0: inotify on Linux and FSEvents on macOS,
 with no polling fallback. A watch follows the node the descriptor holds, never a saved
 pathname, so a rename, a replacement at the old path or `fd_renumber` cannot redirect it.
@@ -114,7 +129,7 @@ Class **Host feature**, **adapted implementation** in `web/scripts/node-process.
 
 The Node host (`web/scripts/node-host.ts`, used by `scripts/jsc-embedding.ts` and
 `scripts/test.sh --engine browser`) runs guests on Node's `node:wasi` over the real
-filesystem, with no Waffle filesystem service and no change source. It answers the three
+filesystem, with no Waffle filesystem service and no change source. It answers the four
 `runtime_fs` imports as Waffle's `Wasi` does for a filesystem without `watches`. `watch_open`
 checks the output range (EFAULT), the flags (EINVAL), the guest descriptor in the host's own
 descriptor table (EBADF) and its kind (EINVAL for pipes and terminals). A valid file or
@@ -123,11 +138,12 @@ EFAULT for an out-of-range buffer and otherwise EBADF, and `watch_close` reports
 `fs.watch` on this host throws `ENOTSUP`; there is no polling fallback. Local change: it
 validates against the Node host's `DescriptorTable` instead of `Wasi.descriptors`, because
 Waffle's `Wasi` methods are private and bound to its own table.
+The original `watch_ready` extension returns zero because this host cannot register a watch.
 
 Releasing the host after a start failure is original. Before `wasi.start()` binds memory,
 Node WASI rejects every call with `ERR_WASI_NOT_STARTED`. Only preopens exist then, and the
 unstarted instance's own table releases them, so the release ignores that one error code.
-`web/tests/node-runtime-fs.test.ts` instantiates a guest importing the three names on a real
+`web/tests/node-runtime-fs.test.ts` instantiates guests importing all four names on a real
 Node WASI host and checks each errno and the unstarted release.
 
 
