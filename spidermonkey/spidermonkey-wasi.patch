@@ -869,7 +869,7 @@ index 6241cd45d..6cd08791c 100644
                                       HandleObject parent, gc::AllocSite* site) {
    MOZ_ASSERT(site);
 diff --git i/js/src/vm/PortableBaselineInterpret.cpp w/js/src/vm/PortableBaselineInterpret.cpp
-index d38cebe3e..7c462d79b 100644
+index d38cebe3e..3aa05d895 100644
 --- i/js/src/vm/PortableBaselineInterpret.cpp
 +++ w/js/src/vm/PortableBaselineInterpret.cpp
 @@ -105,8 +105,35 @@ static const bool kHybridICsInterp = PBL_HYBRID_ICS_DEFAULT;
@@ -1234,6 +1234,18 @@ index d38cebe3e..7c462d79b 100644
  #ifdef ENABLE_INTERRUPT_CHECKS
          if (ctx.frameMgr.cxForLocalUseOnly()->hasAnyPendingInterrupt()) {
            PUSH_EXIT_FRAME();
+@@ -8890,9 +9122,9 @@ PBIResult PortableBaselineInterpret(
+       CASE(CreateSuppressedError) {
+         ErrorObject* errorObj;
+         {
+-          ReservedRooted<JS::Value> error(&state.value0, VIRTPOP().asValue());
+-          ReservedRooted<JS::Value> suppressed(&state.value1,
++          ReservedRooted<JS::Value> suppressed(&state.value0,
+                                                VIRTPOP().asValue());
++          ReservedRooted<JS::Value> error(&state.value1, VIRTPOP().asValue());
+           PUSH_EXIT_FRAME();
+           errorObj = CreateSuppressedError(cx, error, suppressed);
+           if (!errorObj) {
 diff --git i/mfbt/Assertions.h w/mfbt/Assertions.h
 index b26a32f2e..691424f65 100644
 --- i/mfbt/Assertions.h
