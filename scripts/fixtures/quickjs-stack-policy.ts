@@ -1,5 +1,6 @@
 import { mock } from "bun:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 
 const budget = process.env.QUICKJS_STACK_KIB;
@@ -27,6 +28,7 @@ const browser = {
   async newContext(options: { userAgent: string }) {
     assert.match(options.userAgent, /Version\/26\.4 Safari\/605\.1\.15$/);
     opened++;
+    const events = new EventEmitter();
     return {
       async addInitScript(install: () => void) {
         install();
@@ -36,9 +38,9 @@ const browser = {
       },
       async newPage() {
         files.clear();
-        return { goto: navigate };
+        return Object.assign(events, { goto: navigate });
       },
-      async close() { closed++; },
+      async close() { closed++; assert.deepEqual(events.eventNames(), []); },
     };
   },
   async close() {},
