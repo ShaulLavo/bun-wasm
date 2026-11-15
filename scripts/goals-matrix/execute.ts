@@ -29,7 +29,7 @@ export interface Execution {
 type TerminalCapture = { status: "observed"; text: string } | { status: "unavailable"; reason: string };
 type LogObservation = { terminal: TerminalCapture; diagnostic: string };
 type FailureLog = LogObservation & { saved: boolean; preview: string };
-type ObservationTiming = "after server stop" | "before owned transport cleanup";
+type ObservationTiming = "after server stop" | "after failed server stop" | "before owned transport cleanup";
 async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, operation: (admission: Admission) => Promise<unknown>, signal?: AbortSignal): Promise<void> {
   const startedAt = new Date().toISOString();
   const started = performance.now();
@@ -193,7 +193,13 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
       await stopServer(page, 5000, options.port);
       await saveFinalLog(transport, options, results, failureLog, guard, "after server stop");
     });
-  } catch (error) { errors.push(error); }
+  } catch (error) {
+    errors.push(error);
+    const observation = Scope.open(4000, admission);
+    try { await observation.run(guard => saveFinalLog(transport, options, results, failureLog, guard, "after failed server stop")); }
+    catch (error) { errors.push(error); }
+    finally { observation.close(); }
+  }
   finally { work.close(); }
   try { await bounded(() => transport.close(true, 10_000), 10_000); }
   catch (error) { errors.push(error); }
@@ -267,7 +273,7 @@ function failureObservation(capture: FailureLog | undefined): string {
 }
 
 function finalObservation(text: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, timing: ObservationTiming): string {
-  if (!results.some(result => result.status === "fail")) return text;
+  if (timing !== "after failed server stop" && !results.some(result => result.status === "fail")) return text;
   return `${failureObservation(failureLog)}\n--- Cleanup-time terminal observation (${timing}) ---\n${text}\n--- End cleanup-time terminal observation ---\n`;
 }
 

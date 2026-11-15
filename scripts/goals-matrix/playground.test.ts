@@ -2,7 +2,7 @@ import { admit, awaitWithin, type Admission } from "./scope";
 import { withScoped, withAdmission } from "./scope-fixture";
 import { test, expect } from "bun:test";
 import { createContext, runInContext } from "node:vm";
-import { command, foreground, ObservationTimeout, start, terminal, until } from "./playground";
+import { command, foreground, ObservationTimeout, start, stopServer, terminal, until } from "./playground";
 import { execute } from "./execute";
 import { frameworks } from "./catalog";
 import type { Transport } from "./transport";
@@ -15,6 +15,29 @@ test("an expired observation bound does not dispatch another operation", async (
   expect(dispatched).toBe(0);
 });
 
+test("an observation expiry retains the last rejected state", async () => {
+  const original = Date.now;
+  let now = original();
+  Date.now = () => now;
+  const value = { running: true, listening: false, runtime: { liveProcesses: 1 } };
+  try {
+    await expect(until(async () => value, () => { now += 1000; return false; }, 100)).rejects.toThrow(JSON.stringify(value));
+  } finally { Date.now = original; }
+});
+
+test("a later timed-out operation preserves the earlier observed state", async () => {
+  const original = Date.now;
+  let now = original();
+  let calls = 0;
+  Date.now = () => now;
+  try {
+    await expect(until(async () => {
+      if (calls++) { now += 1000; return new Promise<never>(() => {}); }
+      return { running: false, listening: true };
+    }, () => false, 100)).rejects.toThrow('"listening":true');
+  } finally { Date.now = original; }
+});
+
 function page(submit: (shell: { running: boolean; lastExit: number }, listen: () => void) => Promise<void>, previewReady = Promise.resolve("ready"), lines: readonly { text: string; isWrapped: boolean }[] = [], listeningPort = 5173): Transport {
   const shell = { running: false, lastExit: 0, submit: async (_text: string) => submit(shell, () => { listening = true; }), input() {} };
   let listening = false;
@@ -23,6 +46,54 @@ function page(submit: (shell: { running: boolean; lastExit: number }, listen: ()
     async evaluate<T>(expression: string, admission: Admission): Promise<T> { admit(admission); return awaitWithin(Promise.resolve(runInContext(expression, context)), admission); },
   };
 }
+
+test("stop requires the shell acknowledgement even when a runtime snapshot reports no live child", async () => {
+  const transport = page(async () => {});
+  const seen = Promise.withResolvers<void>();
+  const evaluate = transport.evaluate.bind(transport);
+  const states: unknown[] = [];
+  transport.evaluate = async <T>(expression: string, admission: Admission) => {
+    const value = await evaluate<T>(expression, admission);
+    if (expression.includes("function stopState")) { states.push(value); seen.resolve(); }
+    return value;
+  };
+  await withScoped(transport, page => page.evaluate('playground.shell.running = true; playground.shell.runtimeSnapshot = () => ({ liveProcesses: 0 }); void 0'));
+  let stopped = false;
+  const stopping = withScoped(transport, page => stopServer(page, 2000)).then(() => { stopped = true; });
+  try {
+    await seen.promise;
+    expect(stopped).toBe(false);
+    expect(states[0]).toMatchObject({ running: true, listening: false, runtime: { liveProcesses: 0 } });
+  } finally {
+    await withScoped(transport, page => page.evaluate("playground.shell.running = false; void 0"));
+    await stopping;
+  }
+  expect(stopped).toBe(true);
+});
+
+test("a cleanup observation failure retains terminal evidence and still closes the transport", async () => {
+  const framework = frameworks[0]!;
+  await withPlayground(framework, 0, async transport => {
+    let cleaning = false, closed = false, saved = "";
+    const evaluate = transport.evaluate.bind(transport);
+    const close = transport.close.bind(transport);
+    transport.beginCleanup = async () => { cleaning = true; };
+    transport.close = async () => { closed = true; await close(); };
+    transport.evaluate = async <T>(expression: string, admission: Admission) => {
+      if (cleaning && expression.includes("function stopState")) throw new Error("stop observation unavailable");
+      return evaluate<T>(expression, admission);
+    };
+    await withScoped(transport, page => page.evaluate('playground.term.buffer.active = { length: 1, getLine: () => ({ isWrapped: false, translateToString: () => "retained terminal" }) }; void 0'));
+    const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" },
+      url: "http://fixture/?engine=browser", timeoutMs: 2000,
+      async createTransport() { return transport; }, async saveLog(text) { saved = text; },
+    });
+    expect(result).toMatchObject({ status: "fail", phase: "cleanup" });
+    expect(saved).toContain("retained terminal");
+    expect(saved).toContain("after failed server stop");
+    expect(closed).toBe(true);
+  });
+});
 test("a previous idle zero exit cannot mask a new asynchronous nonzero command", async () => {
   const transport = page(async shell => { await Bun.sleep(30); shell.running = true; await Bun.sleep(30); shell.lastExit = 17; shell.running = false; });
   await expect(withScoped(transport, page => command(page, "fails later", 1000))).rejects.toThrow("exited 17");

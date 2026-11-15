@@ -38,6 +38,12 @@ decision belongs to that turn, including during a reentrant pump. A write racing
 a negative query wakes the normal notification path and is delivered next turn.
 There is no timer, forced collection or old-host fallback.
 
+The provider's `ready()` includes ended registrations until close/drop as well as
+queued records, read errors and revocation. Its scheduling-only `pending()` stays
+false for ended/revoked registrations. Consumer controls use the actual provider
+table to verify that a terminal read closes the native id and removes its waiter
+within the same turn, including when scheduling readiness is false.
+
 `io_pump.ts` steps ready watch waiters before the others. A socket step can run a
 request handler synchronously, so a change already readable this turn reaches its
 listeners, and queues their deferred work, ahead of it. That is a tie-breaker only.

@@ -2,6 +2,13 @@
 
 Classification: original local adapter. No upstream source is copied or patched.
 
+Server-stop observation failures retain their last completed observation, including
+the shell's metadata-only runtime snapshot while stop remains pending. Cleanup
+also tries to save the terminal after a failed stop before closing the transport.
+This distinguishes a live process or listener from a pending shell acknowledgement;
+it does not accept the stop until both shell and listener report stopped, change
+the stop deadline, or turn failed cleanup into a pass.
+
 `scripts/goals-matrix/native.ts` and `native-safari.ts` adapt the installed macOS
 `launchctl`, `ps`, and SafariDriver commands for the goals campaign. The existing
 Mac lock, owner availability check, and unlocked-console check run first.
