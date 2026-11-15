@@ -2225,6 +2225,67 @@ index 2465a89b4..110b3281c 100644
  /*****************************************************************************/
 
  InterpreterFrame* InterpreterStack::pushInvokeFrame(
+diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitter.cpp
+index 18e469828..a6d3f5f4b 100644
+--- a/js/src/frontend/BytecodeEmitter.cpp
++++ b/js/src/frontend/BytecodeEmitter.cpp
+@@ -5219,6 +5219,13 @@ MOZ_NEVER_INLINE bool BytecodeEmitter::emitTry(TryNode* tryNode) {
+ }
+ 
+ bool BytecodeEmitter::emitIf(TernaryNode* ifNode) {
++  // IfStatement applies UpdateEmpty with undefined, unlike a plain block.
++  if (sc->isTopLevelContext() && !sc->noScriptRval()) {
++    if (!emit1(JSOp::Undefined) || !emit1(JSOp::SetRval)) {
++      return false;
++    }
++  }
++
+   IfEmitter ifThenElse(this);
+ 
+   if (!ifThenElse.emitIf(Some(ifNode->kid1()->pn_pos.begin))) {
+diff --git a/js/src/frontend/FoldConstants.cpp b/js/src/frontend/FoldConstants.cpp
+index 8d1b3bf5d..766c8d956 100644
+--- a/js/src/frontend/FoldConstants.cpp
++++ b/js/src/frontend/FoldConstants.cpp
+@@ -879,6 +879,8 @@ static bool FoldConditional(FoldInfo info, ParseNode** nodePtr) {
+ }
+ 
+ static bool FoldIf(FoldInfo info, ParseNode** nodePtr) {
++  ParseNode** originalNodePtr = nodePtr;
++  ParseNode* originalNode = *nodePtr;
+   ParseNode** nextNode = nodePtr;
+ 
+   do {
+@@ -974,6 +976,29 @@ static bool FoldIf(FoldInfo info, ParseNode** nodePtr) {
+     }
+   } while (nextNode);
+ 
++  if (*originalNodePtr == originalNode) {
++    return true;
++  }
++
++  // Preserve the if completion after the entire selected else-if chain folds.
++  RawUndefinedLiteral* undefined;
++  MOZ_TRY_VAR_OR_RETURN(
++      undefined, info.handler->newRawUndefinedLiteral(originalNode->pn_pos),
++      false);
++  UnaryNode* undefinedStatement;
++  MOZ_TRY_VAR_OR_RETURN(
++      undefinedStatement,
++      info.handler->newExprStatement(undefined, originalNode->pn_pos.end), false);
++  ListNode* completion;
++  MOZ_TRY_VAR_OR_RETURN(
++      completion, info.handler->newStatementList(originalNode->pn_pos), false);
++  completion->append(undefinedStatement);
++
++  ParseNode* replacement = *originalNodePtr;
++  ReplaceNode(originalNodePtr, completion);
++  replacement->pn_next = nullptr;
++  completion->append(replacement);
++
+   return true;
+ }
+ 
 diff --git i/js/src/jit/Jit.cpp w/js/src/jit/Jit.cpp
 index 94ac11bfa..eb1d5c5ba 100644
 --- i/js/src/jit/Jit.cpp
