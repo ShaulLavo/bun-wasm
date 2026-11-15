@@ -65,8 +65,12 @@ function withoutStackCapabilityDeltas(source: string) {
   expect(source.split("custom && parseCapturedStack")).toHaveLength(2);
   expect(source.split('native.engine === "quickjs" || parseCapturedStack')).toHaveLength(2);
   const prototypeWrapper = /  if \(native.engine === "spidermonkey"\) \{\n[\s\S]*?\n  \}\n\n/;
+  const capturedFrames = /  function capturedFrames\(target[^)]*\) \{\n[\s\S]*?\n  \}\n\n/;
   expect(source.match(prototypeWrapper)).not.toBeNull();
-  return source.replace(prototypeWrapper, "").replace(declaration, "")
+  expect(source.match(capturedFrames)).not.toBeNull();
+  expect(source.split("capturedFrames(target, raw)")).toHaveLength(2);
+  return source.replace(prototypeWrapper, "").replace(capturedFrames, "").replace(declaration, "")
+    .replace("capturedFrames(target, raw)", 'internal.require("inspect").parseStack(raw)')
     .replace(awaitingCaller, 'this.#frame.name.startsWith("async ")')
     .replace("custom && parseCapturedStack", 'custom && native.engine === "jsc"')
     .replace('native.engine === "quickjs" || parseCapturedStack', 'native.engine === "quickjs" || native.engine === "jsc"');
@@ -119,13 +123,14 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
   return target;
 }
 
-// Hashes pin original syntax; stack capability selection, SpiderMonkey's awaiting-caller name, descriptors and builtin changes have explicit deltas.
+// Hashes pin original syntax; stack capability selection, SpiderMonkey's structured frames, awaiting-caller name, descriptors and builtin changes have explicit deltas.
 // The stack_trace hash also covers the call-site predicates React's stack collector calls.
 const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
   bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
 };
-const originalEmbeddedBytes = { stack_trace: 4330, bun_builtins: 4092 };
+// Structured SpiderMonkey CallSites measure 4,424 bytes; keep 10% growth headroom.
+const originalEmbeddedBytes = { stack_trace: 4870, bun_builtins: 4092 };
 test("stack descriptor records are the only executable delta", () => {
   const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/stack_trace.ts"), "utf8");
   const records = stackDescriptorRecords(source);

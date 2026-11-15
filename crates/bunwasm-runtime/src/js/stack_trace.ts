@@ -66,6 +66,11 @@
     return native.engine === "quickjs" ? Reflect.apply(defaultPrepare!, Error, [target, raw]) : raw;
   }
 
+  function capturedFrames(target: object, raw: unknown) {
+    const inspect = internal.require("inspect");
+    return native.engine === "spidermonkey" ? inspect.errorFrames(target, raw) : inspect.parseStack(raw);
+  }
+
   function formatStack(target: object, raw: unknown) {
     if (formatted.has(target)) return formatted.get(target);
     if (formatting) return store(target, defaultStack(target, raw));
@@ -75,7 +80,7 @@
       const prepare = Error.prepareStackTrace;
       const custom = typeof prepare === "function" && prepare !== defaultPrepare;
       const sites = custom && parseCapturedStack
-        ? internal.require("inspect").parseStack(raw).map(frame => new CallSite(frame))
+        ? capturedFrames(target, raw).map(frame => new CallSite(frame))
         : raw;
       value = custom ? Reflect.apply(prepare, Error, [target, sites]) : defaultStack(target, raw);
     } finally {

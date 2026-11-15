@@ -28,6 +28,9 @@ It accepts an already captured raw stack, so a custom stack formatter can reuse
 decoded native filenames without recursively reading the stack accessor. Native
 metadata remains authoritative even for an empty trace; unavailable metadata
 falls back to parsing the supplied text.
+SpiderMonkey's custom `Error.prepareStackTrace` route uses this conversion for
+ordinary Errors and captured holders before constructing mapped CallSites.
+Other engines retain their existing frame selection.
 
 Every compiler filename the adapter passes to SpiderMonkey must be a
 `DiagnosticFilename` or a plain literal without escapes, percent or NUL, because
