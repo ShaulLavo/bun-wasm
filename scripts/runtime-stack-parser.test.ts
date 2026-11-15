@@ -59,6 +59,16 @@ for (const engine of ["jsc", "host", "quickjs"]) {
   });
 }
 
+for (const engine of ["jsc", "host"]) {
+  test(`${engine} retains generated function frames without a source position`, () => {
+    expect(inspector(engine).parseStack("sloppyNamed@\nasyncLeaf@\nforEach@[native code]"))
+      .toEqual([
+        { name: "sloppyNamed", file: "<eval>", line: 0, column: 0 },
+        { name: "asyncLeaf", file: "<eval>", line: 0, column: 0 },
+      ]);
+  });
+}
+
 for (const generated of [false, true]) {
   test(`JSC-style source mapping preserves the ${generated ? "prepared" : "ordinary"} frame contract`, () => {
     const rawFile = "/prepared/module.js";
