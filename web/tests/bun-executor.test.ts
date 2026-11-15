@@ -4,8 +4,7 @@ import { createFilesystemConnection, revokeFilesystem } from "waffle/fs";
 import { controlAdd, controlLoad } from "waffle/proc/control";
 import { WasiExit, type Wasi } from "waffle/core";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
-import { createWorkerProcessTransport, workerProcessState, WorkerProcessClient, type WorkerProcessTransport } from "waffle/proc/worker-client";
-import { DescriptorTable } from "waffle/core/descriptors";
+import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { bootstrap, type RuntimeWorkerHost, type WorkerSetupContext } from "waffle/browser/worker";
 import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
@@ -166,8 +165,8 @@ test("the browser host transfers only executor-owned controls to the real bootst
 }));
 
 test("the private exec throw passes unchanged through browser policy to bootstrap replacement cleanup", controlled(async () => {
-  const { ProcessReplaced }: { ProcessReplaced: new (message: string) => Error } =
-    await import(new URL("../proc/exec.js", import.meta.resolve("waffle/browser/worker")).href);
+  const { ProcessReplaced, bootstrap, createFilesystemConnection, childTransport, controlLoad } =
+    await import("../../tests/package/fixtures/engine-host-exec.ts");
   const marker = new ProcessReplaced("process image replaced");
   const connection = createFilesystemConnection();
   const runtimeProcess = childTransport();
@@ -201,6 +200,8 @@ test("the private exec throw passes unchanged through browser policy to bootstra
       setup(context) { setupLocalFilesystem(context, executor); },
       async instantiated(context) {
         if (!context.process) throw new Error("No process ABI");
+        if (!context.runtimeState) throw new Error("No process state");
+        expect(controlLoad(context.runtimeState.signals.signalState, 1)).toBe(0);
         context.process.imports.exec = () => { throw marker; };
         await executor.instantiated?.(context);
       },
@@ -209,20 +210,6 @@ test("the private exec throw passes unchanged through browser policy to bootstra
     expect(exits(messages)).toEqual([]);
   } finally { connection.client.port.close(); connection.server.port.close(); }
 }));
-
-function childTransport(): WorkerProcessTransport {
-  const root = createWorkerProcessTransport({ pid: 1, job: 1 });
-  const descriptors = new DescriptorTable();
-  let child: WorkerProcessTransport | undefined;
-  const client = new WorkerProcessClient({ transport: root, descriptors,
-    codec: { export() { throw new Error("No inherited descriptors"); }, import() { throw new Error("No inherited descriptors"); }, discard() {} },
-    postMessage(message) { if (message.operation === "spawn") child = message.transport; },
-  });
-  try { client.spawn(1, { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/", fds: [], job: 0 }); }
-  finally { descriptors.dispose(); }
-  if (!child) throw new Error("No admitted child transport");
-  return child;
-}
 
 for (const [label, options] of [
   ["a non-browser engine", { engine: "quickjs" as const }],

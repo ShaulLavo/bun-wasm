@@ -43,6 +43,10 @@ The automatic Web test owner covers synchronous transfer, the actual asynchronou
 cleanup. Executor tests exercise the actual Worker replacement path with the exact
 private native throw. The isolated direct-WASI QuickJS fixtures explicitly supply the
 unsupported handoff namespace, matching the maintained native consumer.
+The direct executor test obtains its bootstrap, signal cells and replacement
+constructor through the package fixture's Waffle installation. Separate root and
+Web development installs remain separate; no tagged control object crosses those
+module identities. Real consumers keep their existing single-peer bundle contract.
 
 Browser guests expose a resizable Wasm buffer. WebIDL's `TextDecoder` rejects a view
 of that buffer, so the binding copies the bounded prepared JSON into a fixed byte
