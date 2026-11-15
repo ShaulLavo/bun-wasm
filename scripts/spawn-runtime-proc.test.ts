@@ -39,9 +39,11 @@ for (const stack of ["webkit", "native", "empty", "missing"] as const) test(`pro
   if (stack === "empty" || stack === "missing") expect(error.stack).toBe(header);
   const before = captured.descriptors[0]!;
   const after = Object.getOwnPropertyDescriptors(error);
-  expect(after.message).toEqual(before.message);
+  expect(Object.getOwnPropertyDescriptor(error, "message")).toEqual(before.message);
   expect(after.stack).toEqual({ ...before.stack, value: error.stack });
-  expect(after.code).toEqual({ value: "ENOMEM", writable: true, enumerable: true, configurable: true });
+  for (const [key, value] of Object.entries({ code: "ENOMEM", errno: -12, syscall: "spawn", path: "bun" })) {
+    expect(after[key]).toEqual({ value, writable: true, enumerable: true, configurable: true });
+  }
   expect(fake.calls).toEqual(["spawn", "spawnError:0"]);
   expect(fake.children.size).toBe(0);
   expect(fake.open()).toBe(0);
@@ -75,6 +77,29 @@ for (const boundary of ["access", "pipe", "job"] as const) test(`WebKit stack-on
   const error = captured.errors[0]!;
   expect(error.stack).toContain(boundary === "pipe" ? "Error: pipe EIO" : "Error: spawn bun EIO");
   expect(fake.calls).toEqual([]);
+  expect(fake.open()).toBe(0);
+});
+
+test("WebKit startup settlement preserves the published bounded detail and shared error identity", async () => {
+  const captured = capturedErrors("webkit");
+  const detail = "x".repeat(4096);
+  const fake = service({ deferStart: true, spawnDetail: detail });
+  const { module, pump } = load(fake, captured);
+  const callbacks: unknown[] = [];
+  const child = module.spawn(["bun"], { stdio: "pipe", onExit(_child: unknown, _code: unknown, _signal: unknown, error: unknown) { callbacks.push(error); } });
+  expect(captured.errors).toEqual([]);
+  expect(fake.calls).toEqual(["spawn"]);
+  const rejected = child.exited.catch((error: unknown) => error);
+  const record = fake.children.get(child.pid)!;
+  fake.select(record, [2, 48]);
+  fake.publish(record);
+  await pump();
+  const error = await rejected;
+  if (!(error instanceof captured.Error)) throw new Error("Expected the original startup Error");
+  expect(captured.errors).toContain(error);
+  expect(callbacks).toEqual([error]);
+  expect(error.stack).toContain(`Error: spawn /bin/bun ENOMEM: ${detail}\nprocessError@`);
+  expect(fake.calls).toEqual(["spawn", `spawnError:${child.pid}`]);
   expect(fake.open()).toBe(0);
 });
 

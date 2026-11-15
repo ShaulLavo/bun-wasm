@@ -45,7 +45,7 @@ Its `processError` keeps the original Error object, errno fields and host startu
 and prefixes frame-only or empty stacks with the original name and message. An existing
 matching native header is retained unchanged. This lets stack-only consumers distinguish
 synchronous admission refusals without changing process admission or later startup settlement.
-Source-factory controls cover WebKit-shaped stacks, error identity, descriptors, distinct
+Source-factory controls cover WebKit-shaped stacks, error identity, property descriptors, distinct
 errnos and descriptor cleanup; the `process-error-stack` fixture is selected on QuickJS,
 JSC and Browser. This is an original diagnostic adapter, not copied upstream code or a
 thread-lifecycle repair.
