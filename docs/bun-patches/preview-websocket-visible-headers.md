@@ -8,6 +8,10 @@ the browser-visible URL. Its handshake keeps that URL's Host and uses the
 preview document's Origin, including its scheme and outer port. The mounted
 preview prefix is removed from the request path. `connect()` still routes the
 stream using the injected guest port, independently of the HTTP authority.
+The adapter captures that authority before converting to the plain transport
+scheme, which can otherwise discard an explicit secure port 80. Synchronous
+constructor scope binds each stream to its own authority and restores the prior
+scope even when protocol access constructs another socket or throws.
 
 Previously both headers described the virtual localhost endpoint. Applications
 therefore received different headers from those a browser would send. Keeping

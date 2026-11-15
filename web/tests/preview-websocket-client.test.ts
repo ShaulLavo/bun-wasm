@@ -157,6 +157,14 @@ const authorities = [
     host: "fxj6.sprockt.dev:8443",
   },
   {
+    name: "secure outer port that is the plain transport default",
+    origin: "https://fxj6.sprockt.dev:80/",
+    port: 4174,
+    input: "wss://fxj6.sprockt.dev:80/socket",
+    requestLine: "GET /socket HTTP/1.1",
+    host: "fxj6.sprockt.dev:80",
+  },
+  {
     name: "visible mounted preview with a different guest port",
     origin: "http://localhost:4179/__preview/3000/some/page?x=1",
     port: 3000,
@@ -200,6 +208,20 @@ test("unrelated WebSockets retain the native constructor and never allocate a tu
   expect(preview.nativeCalls).toEqual([{ input: "wss://example.com:8443/native", protocols: ["chat"] }]);
   expect(preview.tunnels).toHaveLength(0);
   expect(socket.url).toBe("wss://example.com:8443/native");
+});
+
+test("reentrant protocol access keeps each connection's requested authority", async () => {
+  const preview = fixture("https://fxj6.sprockt.dev:80/", 5173);
+  const protocols = ["fixture-hmr"];
+  Object.defineProperty(protocols, "0", { get() {
+    new preview.context.WebSocket("ws://127.0.0.1:5173/inner");
+    return "fixture-hmr";
+  } });
+  new preview.context.WebSocket("wss://fxj6.sprockt.dev:80/outer", protocols);
+  expect(preview.tunnels).toHaveLength(2);
+  const requests = await Promise.all(preview.tunnels.map(tunnel => tunnel.request));
+  expect(requests[0]).toContain("\r\nhost: 127.0.0.1:5173\r\n");
+  expect(requests[1]).toContain("\r\nhost: fxj6.sprockt.dev:80\r\n");
 });
 
 test("a refused preview connection settles its socket and tunnel port", async () => {
