@@ -1,23 +1,100 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { verifySharedSysroot } from './src/program-profile.ts';
 
 const hash = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 const fileHash = (path: string) => hash(readFileSync(path));
 const repository = resolve(import.meta.dir, '..');
 const recipePaths = ['spidermonkey', 'crates/bunwasm-spidermonkey', 'Cargo.lock', 'rust-toolchain.toml', 'env.sh',
-  'scripts/src/program-profile.ts', 'src/engine-kind.ts', 'scripts/ci-spidermonkey-prebuild.ts', '.github/workflows/ci.yml'];
+  'scripts/src/program-profile.ts', 'src/engine-kind.ts', 'scripts/ci-spidermonkey-prebuild.ts',
+  'package.json', 'bun.lock', 'scripts/ci-bootstrap-tools.ts', 'scripts/ci-install.ts',
+  'scripts/ci-stage-release-packages.ts', 'scripts/ci-release-download.ts', 'scripts/ci-build-tools.ts'];
 
 function git(args: string[]): string {
   return execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim();
 }
 
-export function sharedSpiderMonkeyRecipes(): string {
-  const paths = git(['ls-files', '-z', '--'].concat(recipePaths)).split('\0').filter(Boolean).sort();
-  return hash(JSON.stringify(paths.map(path => ({ path, sha256: fileHash(join(repository, path)) }))));
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+  if (record(value)) return '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}';
+  const result = JSON.stringify(value);
+  assert(result !== undefined, 'Invalid producer recipe value');
+  return result;
+}
+
+/** Setup and compilation can change native work. Transfer/reporting and other jobs cannot. */
+function producerRecipe(root: string) {
+  const workflow: unknown = Bun.YAML.parse(readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8'));
+  assert(record(workflow) && record(workflow.jobs));
+  const producer = workflow.jobs['shared-spidermonkey-prebuild'];
+  assert(record(producer) && Array.isArray(producer.steps), 'Missing shared SpiderMonkey producer');
+  const steps: unknown[] = producer.steps;
+  const boundary = steps.findIndex(step => record(step) && step.id === 'shared-sm-artifact');
+  assert(boundary > 0, 'Missing SpiderMonkey transfer boundary');
+  const build = steps.slice(0, boundary);
+  assert(build.some(step => record(step) && typeof step.run === 'string' && step.run.includes('bash spidermonkey/build-shared-group.sh')),
+    'Missing shared SpiderMonkey build command');
+  const metadata = new Set(['name', 'needs', 'if', 'outputs', 'timeout-minutes', 'steps']);
+  const configuration = Object.fromEntries(Object.entries(producer).filter(([key]) => !metadata.has(key)));
+  return { workflow: { env: workflow.env ?? {}, defaults: workflow.defaults ?? {}, permissions: workflow.permissions ?? {} },
+    configuration, steps: build };
+}
+
+function localActions(root: string, value: unknown, paths = new Set<string>()): Set<string> {
+  if (Array.isArray(value)) {
+    for (const entry of value) localActions(root, entry, paths);
+    return paths;
+  }
+  if (!record(value)) return paths;
+  if (typeof value.uses === 'string' && value.uses.startsWith('./') && !paths.has(value.uses)) {
+    const path = value.uses;
+    assert(/^\.\/\.github\/actions\/[\w/-]+$/.test(path), 'Unexpected local producer action path');
+    paths.add(path);
+    const action: unknown = Bun.YAML.parse(readFileSync(join(root, path, 'action.yml'), 'utf8'));
+    localActions(root, action, paths);
+  }
+  for (const entry of Object.values(value)) localActions(root, entry, paths);
+  return paths;
+}
+
+function commandRecipes(root: string, producer: unknown, actions: Set<string>): string[] {
+  const commands = canonical(producer) + Array.from(actions, path => readFileSync(join(root, path, 'action.yml'), 'utf8')).join('\n');
+  return Array.from(commands.matchAll(/(?:scripts|spidermonkey)\/[\w/.-]+\.(?:ts|mts|sh|json)\b/g), match => match[0]);
+}
+
+/** Follow local tool/verification imports too, so extracting a helper cannot hide later edits. */
+function importedRecipes(root: string, paths: string[]): string[] {
+  const inputs = new Set(paths);
+  const scanner = new Bun.Transpiler({ loader: 'ts' });
+  for (const path of inputs) {
+    if (!/\.(?:ts|mts)$/.test(path)) continue;
+    const imports = scanner.scanImports(readFileSync(join(root, path), 'utf8'));
+    for (const entry of imports) {
+      if (!entry.path.startsWith('.')) continue;
+      const base = join(dirname(path), entry.path);
+      const dependency = [base, base + '.ts', join(base, 'index.ts')].find(candidate => existsSync(join(root, candidate)) && lstatSync(join(root, candidate)).isFile());
+      assert(dependency, `Missing producer import: ${path}: ${entry.path}`);
+      assert(!relative(root, resolve(root, dependency)).startsWith('..'), 'Producer import escapes repository');
+      inputs.add(dependency);
+    }
+  }
+  return Array.from(inputs).sort();
+}
+
+export function sharedSpiderMonkeyRecipes(root = repository): string {
+  const producer = producerRecipe(root);
+  const actions = localActions(root, producer);
+  const commands = commandRecipes(root, producer, actions);
+  for (const path of commands) assert(existsSync(join(root, path)), `Missing producer command input: ${path}`);
+  const inputs = recipePaths.concat(Array.from(actions, path => path.slice(2)), commands);
+  const tracked = execFileSync('git', ['ls-files', '-z', '--'].concat(inputs), { cwd: root, encoding: 'utf8' })
+    .split('\0').filter(Boolean);
+  const imports = importedRecipes(root, recipePaths.filter(path => path.endsWith('.ts')).concat(commands, ['spidermonkey/shared-group.ts']));
+  const paths = Array.from(new Set(tracked.concat(imports))).sort();
+  return hash(canonical({ producer, files: paths.map(path => ({ path, sha256: fileHash(join(root, path)) })) }));
 }
 
 /** Only the staged archive, dereferenced headers and verification receipts cross jobs. */
