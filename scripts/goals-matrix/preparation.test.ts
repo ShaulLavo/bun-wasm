@@ -2,12 +2,31 @@ import { test, expect } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { preflight, preparationOptions, withStagedAssets } from "./preparation";
+import { preflight, preparationInput, preparationOptions, withStagedAssets } from "./preparation";
 import { options, playgroundURL } from "./run";
 import { frameworks } from "./catalog";
 import { engineFiles, profileEngineFiles } from "./engines";
 import { writePreparedSiteInventory, verifyPreparedSiteInventory } from "./prepared-site";
 import { pinnedBashWeb } from "../bash-web-guests";
+
+test("local preparation consumes built assets without a CI delivery manifest", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-local-prepare-"));
+  try {
+    const commit = "a".repeat(40);
+    const selected = preparationOptions([scratch, `--local-source=${commit}`]);
+    expect(selected.profile).toBeUndefined();
+    expect(preparationOptions([scratch, `--local-source=${commit}`, "--profile=shared-group"]).profile).toBe("shared-group");
+    const input = await preparationInput(selected.delivery, selected.localSource);
+    expect(input).toEqual({ assets: scratch, manifest: { guestSource: { head: commit }, build: "local" } });
+    const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+    await Bun.write(join(scratch, "bun-browser.wasm"), wasm);
+    await withStagedAssets(input.assets, async assets => {
+      expect(await Bun.file(join(assets, "bun-browser.wasm")).bytes()).toEqual(wasm);
+    });
+    expect(() => preparationOptions([scratch, "--local-source=main"])).toThrow("full source commit");
+    await expect(preparationInput(scratch)).rejects.toThrow("ENOENT");
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
 
 test("goals record and carry an explicit memory profile without changing the engine", () => {
   const args = ["--asset-source=fixture", "--engines=quickjs,jsc"];

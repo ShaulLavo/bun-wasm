@@ -7,19 +7,26 @@ import { parseMemoryProfile, profileAsset, type ProgramMemoryProfile } from "../
 import { programProfile, type PairedEngine } from "../../src/engine-kind";
 import { sharedProgramReceipts } from "../stage-program-profiles";
 export interface SpiderMonkeyInput { directory: string; source: string }
-export function preparationOptions(args: readonly string[]): { delivery: string; spidermonkey?: SpiderMonkeyInput; shell?: string; profile?: ProgramMemoryProfile } {
+export function preparationOptions(args: readonly string[]): { delivery: string; spidermonkey?: SpiderMonkeyInput; shell?: string; profile?: ProgramMemoryProfile; localSource?: string } {
   const [delivery, ...flags] = args;
-  if (!delivery || delivery.startsWith("--")) throw new Error("Usage: bun scripts/goals-matrix/prepare.ts /absolute/delivery [--spidermonkey=/absolute/pair --spidermonkey-source=/absolute/source.json] [--shell=/absolute/guests] [--profile=split|shared-group]");
+  if (!delivery || delivery.startsWith("--")) throw new Error("Usage: bun scripts/goals-matrix/prepare.ts DIRECTORY [--local-source=COMMIT] [--spidermonkey=/absolute/pair --spidermonkey-source=/absolute/source.json] [--shell=/absolute/guests] [--profile=split|shared-group]");
   const options = new Map<string, string>();
   for (const flag of flags) {
-    const match = /^--(spidermonkey|spidermonkey-source|shell|profile)=(.+)$/.exec(flag);
+    const match = /^--(spidermonkey|spidermonkey-source|shell|profile|local-source)=(.+)$/.exec(flag);
     if (!match?.[1] || !match[2] || options.has(match[1])) throw new Error(`Unknown or repeated preparation option: ${flag}`);
     options.set(match[1], match[2]);
   }
   const directory = options.get("spidermonkey"), source = options.get("spidermonkey-source");
   if (Boolean(directory) !== Boolean(source)) throw new Error("Set --spidermonkey and --spidermonkey-source together");
   const shell = options.get("shell");
-  return { delivery: resolve(delivery), spidermonkey: directory && source ? { directory: resolve(directory), source: resolve(source) } : undefined, shell: shell ? resolve(shell) : undefined, ...(options.has("profile") ? { profile: parseMemoryProfile(options.get("profile")) } : {}) };
+  const localSource = options.get("local-source");
+  if (localSource && !/^[a-f0-9]{40}$/.test(localSource)) throw new Error("--local-source requires the local build's full source commit");
+  return { delivery: resolve(delivery), spidermonkey: directory && source ? { directory: resolve(directory), source: resolve(source) } : undefined, shell: shell ? resolve(shell) : undefined, ...(options.has("profile") ? { profile: parseMemoryProfile(options.get("profile")) } : {}), ...(localSource ? { localSource } : {}) };
+}
+
+export async function preparationInput(directory: string, localSource?: string): Promise<{ assets: string; manifest: unknown }> {
+  if (localSource) return { assets: directory, manifest: { guestSource: { head: localSource }, build: "local" } };
+  return { assets: join(directory, "web"), manifest: JSON.parse(await readFile(resolve(directory, "../delivery-manifest.json"), "utf8")) };
 }
 function hashes(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Preparation error: expected an engine fingerprint map");
