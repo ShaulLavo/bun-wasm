@@ -5,14 +5,29 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { interpreterFrames } from "./spidermonkey-interpreter-frames.ts";
 
-function interpreterCommand(build: string): { directory: string; args: string[] } {
+// The C++ interpreter and PBL carry the control hooks; each is its own archive member.
+const controlledSources = ["Interpreter", "PortableBaselineInterpret"];
+
+function compileCommand(build: string, source: string): { directory: string; args: string[] } {
   const commands: unknown = JSON.parse(readFileSync(join(build, "compile_commands.json"), "utf8"));
   assert(Array.isArray(commands), "missing native compile commands");
-  const entry: unknown = commands.find(command => command?.file === join(build, "firefox/js/src/vm/Interpreter.cpp"));
+  const entry: unknown = commands.find(command => command?.file === join(build, `firefox/js/src/vm/${source}.cpp`));
   assert(entry && typeof entry === "object" && "directory" in entry && typeof entry.directory === "string" && "arguments" in entry);
   assert(Array.isArray(entry.arguments));
   const args = Array.from(entry.arguments, arg => { assert.equal(typeof arg, "string"); return String(arg); });
   return { directory: entry.directory, args };
+}
+
+function compileControlled(build: string, source: string, scratch: string): string {
+  const command = compileCommand(build, source);
+  const output = command.args.indexOf("-o");
+  assert(output >= 0 && command.args[output + 1] === "/dev/null", "unexpected compile database output");
+  const object = join(scratch, `${source}.o`);
+  command.args[output + 1] = object;
+  const compiler = command.args.shift();
+  assert(compiler);
+  execFileSync(compiler, ["-DBUNWASM_INTERPRETER_CONTROLS=1"].concat(command.args), { cwd: command.directory, stdio: "inherit" });
+  return object;
 }
 
 export function runLoopControls(): void {
@@ -25,16 +40,10 @@ export function runLoopControls(): void {
   console.log(JSON.stringify({ frames: interpreterFrames(readFileSync(join(side, "engine.wasm"))) }));
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-sm-loop-controls-"));
   try {
-    const command = interpreterCommand(build);
-    const output = command.args.indexOf("-o");
-    assert(output >= 0 && command.args[output + 1] === "/dev/null", "unexpected compile database output");
-    command.args[output + 1] = join(scratch, "Interpreter.o");
-    const compiler = command.args.shift();
-    assert(compiler);
-    execFileSync(compiler, ["-DBUNWASM_INTERPRETER_CONTROLS=1"].concat(command.args), { cwd: command.directory, stdio: "inherit" });
+    const objects = controlledSources.map(source => compileControlled(build, source, scratch));
     const library = join(scratch, "libspidermonkey_g2.a");
     copyFileSync(join(native, "libspidermonkey_g2.a"), library);
-    execFileSync(join(sdk, "bin/llvm-ar"), ["r", library, join(scratch, "Interpreter.o")], { stdio: "inherit" });
+    execFileSync(join(sdk, "bin/llvm-ar"), ["r", library].concat(objects), { stdio: "inherit" });
     symlinkSync(join(native, "include"), join(scratch, "include"));
     symlinkSync(join(native, "js-confdefs.h"), join(scratch, "js-confdefs.h"));
     const env = {
