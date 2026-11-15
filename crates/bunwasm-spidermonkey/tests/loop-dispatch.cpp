@@ -45,9 +45,29 @@ bool stack_stats(JSContext* cx, unsigned argc, JS::Value* vp) {
   return true;
 }
 
+// Prints a failed evaluation's thrown value and stack before the check aborts.
+void report_failure(bsm_handle thrown) {
+  if (!thrown) {
+    fputs("evaluation failed with no exception\n", stderr);
+    return;
+  }
+  install("lastFailure", thrown);
+  bsm_handle text = 0;
+  const char* describe = "String(lastFailure) + '\\n' + (lastFailure && lastFailure.stack)";
+  if (!bsm_eval_script(describe, strlen(describe), "report.js", 1, &text)) return;
+  size_t length = 0;
+  const char* data = bsm_string_data(text, &length);
+  if (data) fprintf(stderr, "thrown: %.*s\n", static_cast<int>(length), data);
+  bsm_release(text);
+}
+
 void loop_success(const char* source) {
   auto entry = loop_stack();
-  { Value result(script(source, "getter-control.js")); }
+  bsm_handle out = 0;
+  bool ok = bsm_eval_script(source, strlen(source), "getter-control.js", 1, &out);
+  if (!ok) report_failure(out);
+  check(ok, source);
+  bsm_release(out);
   balanced(entry, "stack balanced after successful evaluation");
 }
 
@@ -268,13 +288,13 @@ const HandOverShape handOverShapes[] = {
      "function P(n) { this.n = n; if (!n) { BOTTOM } var inner = new P(n - 1); if (!(inner instanceof P) || inner.n !== n - 1) throw new Error('construct ' + n); return 5; }",
      "(new P(DEPTH).n === DEPTH ? 42 : 0)", "300", "return 5;"},
     {"derived", true,
-     "class B { constructor(n) { this.b = n; } } class D extends B { constructor(n) { super(n); if (!n) { BOTTOM } var x = new D(n - 1); if (!(x instanceof D) || x.b !== n - 1) throw new Error('derived ' + n); } }",
+     "var B = class B { constructor(n) { this.b = n; } }; var D = class D extends B { constructor(n) { super(n); if (!n) { BOTTOM } var x = new D(n - 1); if (!(x instanceof D) || x.b !== n - 1) throw new Error('derived ' + n); } };",
      "(new D(DEPTH).b === DEPTH ? 42 : 0)", "300", "return;"},
     {"getter", false,
      "var proto = { get value() { if (this.left-- <= 0) { BOTTOM } return this.value; } };",
      "Object.assign(Object.create(proto), { left: DEPTH, marker: 42 }).value", "300", "return this.marker;"},
     {"setter", false,
-     "var last; var proto = { set value(v) { if (this.left-- <= 0) { BOTTOM } if ((this.value = v + 1) !== v + 1) throw new Error('setter'); return 'ignored'; } };",
+     "var last = undefined; var proto = { set value(v) { if (this.left-- <= 0) { BOTTOM } if ((this.value = v + 1) !== v + 1) throw new Error('setter'); return 'ignored'; } };",
      "((Object.assign(Object.create(proto), { left: DEPTH, marker: 42 }).value = 1) === 1 && last === 42 ? 42 : 0)", "180",
      "last = v === 181 ? this.marker : -1; return 'ignored';"},
     {"bound", false,
