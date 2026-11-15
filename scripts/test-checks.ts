@@ -14,7 +14,8 @@ type Check = { path: string; localRuntime: boolean; batch: string; entry?: strin
   | { owner: "native-probe"; inputs: string[] }
   | ({ owner: "native"; inputs?: never } & NativeSelection)
   | { owner: "browser-guest"; profile?: "shared-group"; inputs: string[] }
-  | { owner: Exclude<Owner, "native-probe" | "native" | "browser-guest">; inputs?: never; profile?: never }
+  | { owner: "runtime"; inputs: string[]; profile?: never }
+  | { owner: Exclude<Owner, "native-probe" | "native" | "browser-guest" | "runtime">; inputs?: never; profile?: never }
 );
 const root = resolve(import.meta.dir, "..");
 
@@ -107,8 +108,9 @@ export function parseCheck(value: unknown, file: string): Check {
     if (profile === "shared-group") return { owner, path, localRuntime, batch, profile, inputs };
     return { owner, path, localRuntime, batch, inputs };
   }
+  if (owner === "runtime") return { owner, path, localRuntime, batch, inputs: "inputs" in value ? inputFiles(value.inputs, file) : [] };
   if (owner !== "native-probe") {
-    if ("inputs" in value) throw new Error(`Only native-probe and browser-guest checks declare input files: ${file}`);
+    if ("inputs" in value) throw new Error(`Only runtime, native-probe and browser-guest checks declare input files: ${file}`);
     if (owner === "native") return { owner, path, localRuntime, batch, ...nativeSelection(value, profile, file), ...(entry === undefined ? {} : { entry }) };
     return { owner, path, localRuntime, batch };
   }

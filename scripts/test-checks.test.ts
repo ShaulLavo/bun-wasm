@@ -216,7 +216,7 @@ test("a later hostname feature keeps the formats limit under its existing single
   }
   expect(selectChecks("runtime", discoverChecks(directory))).toEqual(["scripts/example.test.ts", "scripts/formats-input-limit.test.ts", "scripts/hostname-normalization.test.ts"]);
   expect(discoverChecks().filter(check => check.path === "scripts/formats-input-limit.test.ts")).toEqual([
-    { owner: "runtime", path: "scripts/formats-input-limit.test.ts", localRuntime: true, batch: "default" },
+    { owner: "runtime", path: "scripts/formats-input-limit.test.ts", localRuntime: true, batch: "default", inputs: [] },
   ]);
 });
 
@@ -294,8 +294,18 @@ test("Browser guest secondary inputs preserve the blocking owner and profile sel
   expect(() => parseCheck({ owner: "web", path, inputs }, "web-example.json")).toThrow();
 });
 
-test.each([[], ["../outside.ts"], ["/outside.ts"], ["web/src/*.ts"], ["web/src/../outside.ts"], ["web/src/"], ["web/src/file.ts", "web/src/file.ts"], [17], "web/src/file.ts", null].map(inputs => ({ inputs })))("Browser guest rejects unsafe secondary inputs $inputs", ({ inputs }) => {
-  expect(() => parseCheck({ owner: "browser-guest", path: "scripts/example.test.ts", inputs }, "browser-guest-example.json")).toThrow();
+test.each([[], ["../outside.ts"], ["/outside.ts"], ["web/src/*.ts"], ["web/src/../outside.ts"], ["web/src/"], ["web/src/file.ts", "web/src/file.ts"], [17], "web/src/file.ts", null].map(inputs => ({ inputs })))("producer consumers reject unsafe secondary inputs $inputs", ({ inputs }) => {
+  for (const owner of ["browser-guest", "runtime"]) expect(() => parseCheck({ owner, path: "scripts/example.test.ts", inputs }, `${owner}-example.json`)).toThrow();
+});
+
+test("runtime helpers preserve one blocking owner and local preflight selection", () => {
+  const path = "scripts/example.test.ts";
+  const inputs = ["web/scripts/run.ts", "tests/fixtures/net-fetch/expected.txt"];
+  const check = parseCheck({ owner: "runtime", path, localRuntime: true, inputs }, "runtime-example.json");
+  expect(check).toMatchObject({ owner: "runtime", path, inputs });
+  expect(selectChecks("runtime", [check])).toEqual([path]);
+  expect(selectChecks("local-runtime", [check])).toEqual([path]);
+  expect(() => selectChecks("web", [check])).toThrow("Missing checks for web");
 });
 
 test("runner uses argv, no-build fixtures and failure propagation, not a shell command string", () => {

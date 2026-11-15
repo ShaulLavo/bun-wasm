@@ -307,33 +307,35 @@ test.each(unsafeSnapshots)("$event rejects $kind manifests in the $side snapshot
   expect(() => repo.select(side === "base" ? invalid : clean, side === "base" ? repaired : invalid, event)).toThrow();
 });
 
-for (const event of ["pull_request", "push"]) test(`${event} retains native-probe secondary and deleted inputs`, () => {
+for (const event of ["pull_request", "push"]) for (const owner of ["native-probe", "runtime"]) test(`${event} retains ${owner} secondary and deleted inputs`, () => {
   const repo = repository();
-  repo.write("checks/native-probe-fixture.json", JSON.stringify({ owner: "native-probe", path: "scripts/fixture-live.test.ts", inputs: ["scripts/fixture-byte-driver.ts"] }));
+  const manifest = `checks/${owner}-fixture.json`;
+  repo.write(manifest, JSON.stringify({ owner, path: "scripts/fixture-live.test.ts", inputs: ["scripts/fixture-byte-driver.ts"] }));
   repo.write("scripts/fixture-live.test.ts", "live source fixture\n");
   repo.write("scripts/fixture-byte-driver.ts", "original fixture\n");
   const base = repo.commit();
   repo.write("scripts/fixture-byte-driver.ts", "changed fixture\n");
   const changed = repo.commit();
   expect(repo.select(base, changed, event).output).toBe("rust=true\njsc=false\nshared=false");
-  rmSync(join(repo.directory, "checks/native-probe-fixture.json"));
+  rmSync(join(repo.directory, manifest));
   rmSync(join(repo.directory, "scripts/fixture-byte-driver.ts"));
   const deleted = repo.commit();
   expect(repo.select(changed, deleted, event).output).toBe("rust=true\njsc=false\nshared=false");
 });
 
-test("diverged TLS probe deletion still selects secondary inputs from its merge ancestor", () => {
+test.each(["native-probe", "runtime"])("diverged %s deletion still selects secondary inputs from its merge ancestor", owner => {
   const repo = repository();
-  repo.write("checks/native-probe-ancestor.json", JSON.stringify({ owner: "native-probe", path: "scripts/fixture-live.test.ts", inputs: ["scripts/fixture-ancestor-driver.ts"] }));
+  const manifest = `checks/${owner}-ancestor.json`;
+  repo.write(manifest, JSON.stringify({ owner, path: "scripts/fixture-live.test.ts", inputs: ["scripts/fixture-ancestor-driver.ts"] }));
   repo.write("scripts/fixture-live.test.ts", "synthetic live check\n");
   repo.write("scripts/fixture-ancestor-driver.ts", "before\n");
   const ancestor = repo.commit();
   repo.git(["checkout", "-qb", "target"]);
   repo.write("target-only.txt", "force a distinct merge-ancestor fixture\n");
-  rmSync(join(repo.directory, "checks/native-probe-ancestor.json"));
+  rmSync(join(repo.directory, manifest));
   const base = repo.commit();
   repo.git(["checkout", "--detach", ancestor]);
-  rmSync(join(repo.directory, "checks/native-probe-ancestor.json"));
+  rmSync(join(repo.directory, manifest));
   repo.commit();
   repo.write("scripts/fixture-ancestor-driver.ts", "changed after both sides dropped metadata\n");
   const head = repo.commit();

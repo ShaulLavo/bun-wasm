@@ -75,6 +75,9 @@ building native guests. The native selector reads registered harness paths and
 fixture directories from the verified base, head and their merge ancestor,
 including removed inputs. Every snapshot manifest must be a regular file with
 valid metadata; empty files and symlinks fail selection.
+Runtime manifests may also declare `inputs` as a nonempty list of exact repository
+paths for their helpers and fixtures. These inputs select the existing native
+preflight from the same three snapshots, including removed declarations.
 Browser guest harnesses and their manifests also select the existing Rust producer,
 which builds the receipt-verified guest and bundles the site once. A `browser-guest`
 manifest may declare `inputs` as a nonempty list of exact repository paths for

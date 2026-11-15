@@ -1,5 +1,36 @@
 {
   "owner": "runtime",
   "path": "scripts/legacy-cli-runtime.test.ts",
-  "localRuntime": true
+  "localRuntime": true,
+  "inputs": [
+    "scripts/legacy-cli.ts",
+    "scripts/test-web.sh",
+    "web/scripts/run.ts",
+    "web/scripts/node-linked.ts",
+    "web/scripts/net-helper.ts",
+    "tests/servers/http.ts",
+    "tests/servers/tls-fixtures.ts",
+    "scripts/run-with-timeout.mts",
+    "scripts/process-owner.mts",
+    "scripts/linux-subreaper.mts",
+    "scripts/guest-build-receipt.ts",
+    "scripts/guest-core-receipt.ts",
+    "scripts/guest-source-manifest.ts",
+    "src/engine-kind.ts",
+    "src/quickjs-program.ts",
+    "tests/fixtures/net-fetch/index.js",
+    "tests/fixtures/net-fetch/expected.txt",
+    "tests/fixtures/net-serve/index.js",
+    "tests/fixtures/net-serve/expected.txt",
+    "tests/fixtures/net-node-http/index.js",
+    "tests/fixtures/net-node-http/expected.txt",
+    "tests/fixtures/net-tcp/index.js",
+    "tests/fixtures/net-tcp/expected.txt",
+    "tests/fixtures/net-bun-tcp/index.js",
+    "tests/fixtures/net-bun-tcp/expected.txt",
+    "tests/fixtures/net-http-upgrade/index.js",
+    "tests/fixtures/net-http-upgrade/expected.txt",
+    "tests/fixtures/net-ws-builtin/index.js",
+    "tests/fixtures/net-ws-builtin/expected.txt"
+  ]
 }
