@@ -23,7 +23,8 @@ namespace exports named `then`. A rejected load is returned with its original
 reason and handled by the Rust require bridge. A still-pending asynchronous
 graph retains the existing import operation on the same cached record, so its
 eventual completion and rejection remain owned after require reports that it
-cannot return an asynchronous module. No module record is replaced or removed.
+cannot return an asynchronous module. The adapter does not replace or remove
+module records.
 
 The Rust FFI declaration and `Engine::require_module` implementation route only
 synchronous require through the new adapter. Ordinary import, the event loop,
