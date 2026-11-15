@@ -319,7 +319,7 @@ test.each([false, true])("native workers execute source factories and host wrapp
   const failed = Promise.withResolvers<never>();
   const timeout = Promise.withResolvers<never>();
   const deadline = setTimeout(() => timeout.reject(new Error("Native mailbox fixture exceeded 5 seconds")), 5000);
-  let received = 0, sent = 0;
+  let received = 0, sent = 0, replied = 0;
   try {
     const receiverLease = broker.register(), senderLease = broker.register();
     const receiver = new Worker(new URL("./fixtures/shared-objects/mailbox-worker.ts", import.meta.url), { workerData: { owner: receiverLease.id, role: "receiver", deferReceived } });
@@ -336,6 +336,7 @@ test.each([false, true])("native workers execute source factories and host wrapp
       if (value.kind === "received") { received++; receivedAck.resolve(); return; }
       if (value.kind === "cleanup") { states.push(value.state); return; }
       if (value.kind === "replied") {
+        replied++;
         expect(value.callbacksWhileBlocked).toBe(0); expect(value.timerFired).toBe(false);
         if (deferReceived) expect(received).toBe(0);
         repliedAck.resolve();
@@ -350,10 +351,11 @@ test.each([false, true])("native workers execute source factories and host wrapp
       worker.once("exit", () => lease.close());
     }
     await Promise.race([Promise.all([sentAck.promise, receivedAck.promise, repliedAck.promise]), failed.promise, timeout.promise]);
-    expect({ received, sent }).toEqual({ received: 1, sent: 1 });
+    expect({ received, sent, replied }).toEqual({ received: 1, sent: 1, replied: 1 });
     const exits = workers.map(worker => once(worker, "exit"));
     for (const worker of workers) worker.postMessage({ kind: "stop" });
-    expect(await Promise.race([Promise.all(exits), timeout.promise])).toEqual([[0], [0]]);
+    expect(await Promise.race([Promise.all(exits), failed.promise, timeout.promise])).toEqual([[0], [0]]);
+    expect({ received, sent, replied }).toEqual({ received: 1, sent: 1, replied: 1 });
     // Frames committed before a close stay in the outbox for the broker, which drains them on exit.
     const closed = { outbound: expect.any(Number), terminals: 0, enabled: true };
     expect(states).toEqual([closed, closed]);
