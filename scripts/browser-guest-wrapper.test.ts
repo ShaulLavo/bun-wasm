@@ -1,9 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { coverageFixture } from "./browser-guest-coverage-fixture";
 import { rowIdentity, type BrowserGuestSelection } from "./browser-guest-catalogue";
 import { withBrowserGuestRegression, type BrowserGuestContext } from "./browser-guest-wrapper";
+import { linuxProcess } from "./process-owner.mts";
 
 const cleanup = new Set<string>();
 afterEach(() => { for (const directory of cleanup) rmSync(directory, { recursive: true, force: true }); cleanup.clear(); });
@@ -73,3 +75,38 @@ test("zero exit without marker and failed children remain red after safe cleanup
     await expect(withBrowserGuestRegression({ owner: "installer-links", controls: () => [], execute: context => smallChild(context, code) }, env)).rejects.toThrow("wrapper failed");
   }
 });
+
+test("cancellation reaches the real supervisor and finally removes scratch after drain", async () => {
+  const { env, reports } = await fixture();
+  let scratch = "";
+  await expect(withBrowserGuestRegression({ owner: "installer-links", controls: () => [], execute: async context => {
+    scratch = context.scratch;
+    const child = smallChild(context, "setInterval(()=>{},1000)");
+    process.emit("SIGTERM");
+    await child;
+  } }, env)).rejects.toThrow();
+  const name = readdirSync(reports)[0]; if (!name) throw new Error("Missing cancellation ledger");
+  const ledger = JSON.parse(readFileSync(join(reports, name, "rows.json"), "utf8"));
+  expect(ledger.children[0].cancelled).toBe(true);
+  expect(ledger.children[0].cleanup.kind).toBe("drained");
+  expect(existsSync(scratch)).toBe(false);
+}, 30_000);
+
+test("unsafe cleanup retains its scratch and ownership evidence, with no next engine", async () => {
+  const { env, reports } = await fixture();
+  let scratch = "";
+  await expect(withBrowserGuestRegression({ owner: "installer-links", controls: () => [], execute: async context => {
+    scratch = context.scratch; cleanup.add(scratch);
+    await smallChild(context, `require('node:fs').writeFileSync(${JSON.stringify(join(context.scratch, "owned.pid"))},String(process.pid)); process.kill(process.ppid,'SIGKILL'); process.exit(0)`);
+    expect(context.regression.safeToReuse).toBe(false);
+  } }, env)).rejects.toThrow();
+  const name = readdirSync(reports)[0]; if (!name) throw new Error("Missing unsafe ledger");
+  expect(JSON.parse(readFileSync(join(reports, name, "ownership.json"), "utf8")).status).toBe("unsafe-retained");
+  expect(existsSync(scratch)).toBe(true);
+  const pid = Number(readFileSync(join(scratch, "owned.pid"), "utf8"));
+  const cap = Date.now() + 10_000;
+  while (linuxProcess(pid) && linuxProcess(pid)?.state !== "Z") {
+    if (Date.now() > cap) throw new Error("Owned unsafe fixture child failed to exit");
+    await delay(10);
+  }
+}, 30_000);

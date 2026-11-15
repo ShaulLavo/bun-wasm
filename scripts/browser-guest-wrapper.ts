@@ -73,7 +73,10 @@ function teardown(request: { scratch: string | undefined; directory: string; reg
   const { scratch, directory, regression, failures } = request;
   if (!scratch) return;
   try {
-    if (!regression.safeToReuse) throw new Error(`Unsafe child drain; retained private scratch: ${scratch}`);
+    if (!regression.safeToReuse) {
+      writeFileSync(join(directory, "ownership.json"), JSON.stringify({ scratch, status: "unsafe-retained" }) + "\n");
+      throw new Error(`Unsafe child drain; retained private scratch: ${scratch}`);
+    }
     rmSync(scratch, { recursive: true, force: true });
     writeFileSync(join(directory, "ownership.json"), JSON.stringify({ scratch, status: "removed" }) + "\n");
   } catch (error) { failures.push(error); }
