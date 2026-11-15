@@ -27,3 +27,14 @@ Related evidence only: PR 767 head `cb1`, run 43650963407/job 132633504039 fails
 ## Local verification
 
 The first focused run passed 34 tests and 338 assertions. Two requested repeats were canceled while waiting for shared runner admission; the hosted controller runs all three short repetitions before qualification. No local browser, app, guest build, downloaded producer packet or dependency installation was created. The original provider's separately approved 30 WebKit outcomes remain qualification of its fixture only. This integration's actual runtime coverage is pending the hosted Hono gate.
+
+
+## Setup correction, same capture unit
+
+Run 43659843205 failed before packet admission, Hono qualification or preservation. Artifact 14139567499, SHA256 `69f7b4167e68eff75fe91752f05d5344c9164bc59e06d10022287ed0eab6daae`, preserves the three passing 34-test repetitions, the strict typecheck error and actual outer cleanup. This is setup-only evidence, not a product attempt. Actual outer records show root and subject removed, zero owned survivors and removal errors, and listeners equal to the before snapshot. The extra package-manager `packagekitd` daemon was outside descendant custody until disposable runner teardown.
+
+The correction preserves Bun's generic websocket-data and route parameters through the diagnostic server-options wrapper. The diagnostic SHA helper now declares the byte-array input its implementation already supports. These are two annotation-only edits. The full original strict typecheck flags are unchanged, with no new casts or weaker gate. The observer, original 3000 ms claim and all app predicates are unchanged.
+
+A private archive of the exact synthetic source installed root, web and Sandbox dependencies from each unchanged frozen lockfile, with a private install cache and no shared PC package resolution. All resolved Waffle .130, base .16, TypeScript 7.0.2 and Playwright 1.64.1 package paths were inside the private root. The original source reproduced the same seven hosted TS errors. The corrected source passed the full strict typecheck. Bun transpilation was byte-identical for both corrected files. All 34 controls and 338 assertions passed in each of two repetitions. No local app, site packet or guest build ran. The actual host confirms the entire private root is absent and there are no owned survivors. Reproducer, logs, isolation proof and cleanup are retained in the parent report's `exact-subject-typecheck/` directory.
+
+The narrowly filtered branch push commissions the intended capture after this setup-only correction. Remove its automatic trigger again immediately after queuing. There is still at most one actual original preservation workload, and no passing natural capture is repeated.

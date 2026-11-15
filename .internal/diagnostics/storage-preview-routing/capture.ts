@@ -114,7 +114,7 @@ async function servedSW(request: Request, response: globalThis.Response) {
   line("actually-served-sw.jsonl", { url: request.url, status: response.status, headers: Array.from(response.headers), sha256, bytes: bytes.byteLength, build: build.build });
   await Bun.write(join(output, `served-sw-${sha256}.js.gz`), Bun.gzipSync(new Uint8Array(bytes)));
 }
-function interceptServe(options: Parameters<typeof Bun.serve>[0]) {
+function interceptServe<WebSocketData, R extends string>(options: Bun.Serve.Options<WebSocketData, R>) {
   const originalFetch = options.fetch; assert(typeof originalFetch === "function");
   const fetch: typeof originalFetch = async function(...args) {
     const path = new URL(args[0].url).pathname;

@@ -63,7 +63,7 @@ export function instrumentRouter(source: string) {
   return prelude + result;
 }
 
-export function sha(source: string) {
+export function sha(source: string | Uint8Array) {
   return createHash("sha256").update(source).digest("hex");
 }
 
