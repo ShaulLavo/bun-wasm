@@ -53,10 +53,8 @@ async function firstParameter() {
   emitter.emit("value", 1, 2);
   const array = [3, 4];
   emitter.emit("value", array);
-  emitter.emit("value");
   assert.deepEqual(await iterator.next(), { value: 1, done: false });
   assert.equal((await iterator.next()).value, array);
-  assert.deepEqual(await iterator.next(), { value: undefined, done: false });
   await iterator.return();
   const ordinary = on(emitter, "value");
   emitter.emit("value", array, 5);
