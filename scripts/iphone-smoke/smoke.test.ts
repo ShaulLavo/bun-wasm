@@ -11,6 +11,8 @@ import { deviceUDID, smokeOptions, phaseTimeoutMs, installTimeoutMs } from "./op
 import { completedCase, smokeCases, smokePhases, unsafeToContinue } from "./model";
 import { queueTicket } from "./admission";
 import { runSmoke } from "./run";
+import { templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
+import { engineFiles, profileEngineFiles } from "../goals-matrix/engines";
 
 const source: Report["source"] = { commit: "a".repeat(40), dirty: false, assets: { source: "local-test-build" } };
 const capabilities = { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": deviceUDID, transport: "visible-safari-xctest" };
@@ -29,18 +31,18 @@ function frameworkFor(box: Box): Framework {
   return framework;
 }
 type Scenario = Phase | "device";
-function nativeFixture(transport: Transport, box: Box, fail?: Scenario, afterCleanup?: () => void): Transport {
+function nativeFixture(transport: Transport, box: Box, fail?: Scenario, afterCleanup?: () => Promise<void>, profile = templateProfile(box.engine, frameworkFor(box).template), onNavigate?: (url: string) => void): Transport {
   const evaluate: Transport["evaluate"] = async (expression, admission, options) => {
-    if (expression.includes("function readyState")) return transport.evaluate(`(${JSON.stringify({ ready: true, status: box.engine === "browser" ? "Browser (native) ready" : "QuickJS ready", engine: box.engine, observedEngine: box.engine, profile: "split", agent: "iPhone Safari" })})`, admission, options);
+    if (expression.includes("function readyState")) return transport.evaluate(`(${JSON.stringify({ ready: true, status: box.engine === "browser" ? "Browser (native) ready" : "QuickJS ready", engine: box.engine, observedEngine: box.engine, profile, agent: "iPhone Safari" })})`, admission, options);
     if (fail === "install" && expression.includes("function shellState")) throw new Error("install fixture failed");
     if (fail === "dev" && expression.includes("function listener")) throw new Error("dev fixture failed");
     if (fail === "render" && expression.includes("function rendered")) throw new Error("render fixture failed");
     return transport.evaluate(expression, admission, options);
   };
   return { ...transport, capabilities, evaluate,
-    navigate: fail === "startup" ? async () => { throw new Error("startup fixture failed"); } : transport.navigate,
+    navigate: async (url, admission) => { if (fail === "startup") throw new Error("startup fixture failed"); onNavigate?.(url); await transport.navigate(url, admission); },
     nativeClick: async () => { if (fail === "device") throw new Error("T3 device command failed: fixture"); if (fail === "click") throw new Error("click fixture failed"); return { before: "count 0", after: "count 1", trusted: true, inputMethod: "fixture native tap" }; },
-    cleanup: async () => { await transport.close(); afterCleanup?.(); if (fail === "cleanup") throw new Error("cleanup fixture failed"); return { browserClosed: true, foregroundStopped: true, previewClosed: true }; },
+    cleanup: async () => { await transport.close(); await afterCleanup?.(); if (fail === "cleanup") throw new Error("cleanup fixture failed"); return { browserClosed: true, foregroundStopped: true, previewClosed: true }; },
   };
 }
 function attempt(): Attempt {
@@ -143,7 +145,7 @@ test.each([undefined, "startup", "install", "dev", "render", "click", "cleanup",
   await scratch(async root => {
     const entered: string[] = [];
     const config = smokeOptions(argumentsFor(root));
-    const report = await withFixtures(config, entered, fail);
+    const report = await withFixtures(config, entered, { fail });
     expect(report.cases.map(value => value.id)).toEqual(smokeCases.map(boxId));
     const stops = fail === "cleanup" || fail === "device";
     expect(entered).toEqual(stops ? [boxId(smokeCases[0]!)] : smokeCases.map(boxId));
@@ -155,20 +157,76 @@ test.each([undefined, "startup", "install", "dev", "render", "click", "cleanup",
     expect(await Bun.file(join(config.matrix.output, "TABLE.json")).exists()).toBe(false);
   });
 });
-async function withFixtures(config: ReturnType<typeof smokeOptions>, entered: string[], fail?: Scenario, controller?: AbortController) {
+type FixtureOptions = {
+  fail?: Scenario;
+  controller?: AbortController;
+  overrides?: Parameters<typeof runSmoke>[1];
+  onNavigate?(url: string): void;
+  readyProfile?(box: Box): PlaygroundProfile;
+  preflight?: boolean;
+  afterCleanup?(caseNumber: number): Promise<void>;
+};
+test("common template selection is reused for preflight, execution and URLs", async () => {
+  await scratch(async root => {
+    const config = smokeOptions(argumentsFor(root)), urls: string[] = [];
+    expect(config.matrix.profile).toBeUndefined();
+    let qualified: unknown;
+    const result = await withFixtures(config, [], { onNavigate: url => urls.push(url), overrides: {
+      qualify: async (_config, programs) => {
+        qualified = programs;
+        expect(programs.map(({ box, profile }) => [box.engine, profile])).toEqual([["browser", "split"], ["quickjs", "shared-group"]]);
+      },
+      verify: async (_root, programs) => { expect(Object.is(programs, qualified)).toBe(true); },
+    } });
+    expect(result.status).toBe("green");
+    expect(urls.map(url => new URL(url).searchParams.get("profile"))).toEqual(["split", "split", "shared-group"]);
+    expect(result.cases[2]?.phases[0]).toMatchObject({ phase: "startup", status: "pass", evidence: { profile: "shared-group" } });
+  });
+});
+test("a QuickJS split startup cannot satisfy shared-group execution", async () => {
+  await scratch(async root => {
+    const result = await withFixtures(smokeOptions(argumentsFor(root)), [], { readyProfile: () => "split" });
+    expect(result.cases.slice(0, 2).every(value => value.status === "pass")).toBe(true);
+    expect(result.cases[2]).toMatchObject({ status: "fail", failures: [{ phase: "startup", error: expect.stringContaining("expected shared-group, observed split") }] });
+  });
+});
+test("ordinary QuickJS assets never substitute for the selected shared-group program", async () => {
+  await scratch(async root => {
+    const config = smokeOptions(argumentsFor(root));
+    await mkdir(config.matrix.root);
+    await Bun.write(join(config.matrix.root, "index.html"), "fixture");
+    await Bun.write(join(config.matrix.root, "engine-builds.json"), "{}");
+    for (const name of engineFiles("browser").concat(engineFiles("quickjs"))) await Bun.write(join(config.matrix.root, name), new Uint8Array());
+    let admitted = false;
+    const result = await runSmoke(config, { admission: async () => { admitted = true; return "ticket"; } });
+    expect(admitted).toBe(false);
+    expect(result.failures[0]?.error).toContain(profileEngineFiles("quickjs", "shared-group")[0]!);
+    expect(result.cases.every(value => value.status === "blocked")).toBe(true);
+  });
+});
+async function withFixtures(config: ReturnType<typeof smokeOptions>, entered: string[], options: FixtureOptions = {}) {
   const transports: Transport[] = [];
   const run = async (index: number): Promise<Awaited<ReturnType<typeof runSmoke>>> => {
     const box = smokeCases[index];
-    if (!box) return runSmoke(config, { qualify: async () => {}, admission: async () => "ticket", verify: async () => {}, transport: async (_config, selected) => {
-      entered.push(boxId(selected));
-      const fixture = transports[smokeCases.findIndex(box => boxId(box) === boxId(selected))];
-      if (!fixture) throw new Error("Missing transport");
-      return nativeFixture(fixture, selected, entered.length === 1 ? fail : undefined,
-        entered.length === 3 ? () => controller?.abort(new Error("cancelled during final cleanup")) : undefined);
-    } }, controller?.signal);
+    const preflight = options.preflight ? {} : { qualify: async () => {}, verify: async () => {} };
+    if (!box) return runSmoke(config, { ...preflight, admission: async () => "ticket", ...options.overrides,
+      transport: async (_config, selected) => fixtureTransport(transports, entered, selected, options),
+    }, options.controller?.signal);
     return withPlayground(frameworkFor(box), 0, async transport => { transports.push(transport); return run(index + 1); });
   };
   return run(0);
+}
+function fixtureTransport(transports: Transport[], entered: string[], selected: Box, options: FixtureOptions): Transport {
+  entered.push(boxId(selected));
+  const fixture = transports[smokeCases.findIndex(box => boxId(box) === boxId(selected))];
+  if (!fixture) throw new Error("Missing transport");
+  const caseNumber = entered.length;
+  return nativeFixture(fixture, selected, caseNumber === 1 ? options.fail : undefined,
+    () => cleanupFixture(options, caseNumber), options.readyProfile?.(selected), options.onNavigate);
+}
+async function cleanupFixture(options: FixtureOptions, caseNumber: number): Promise<void> {
+  if (caseNumber === 3) options.controller?.abort(new Error("cancelled during final cleanup"));
+  await options.afterCleanup?.(caseNumber);
 }
 test("missing engine manifest records an exact prerequisite and never touches a device", async () => {
   await scratch(async root => {
@@ -207,7 +265,7 @@ test("interruption saves blocked remaining cases without dispatching native work
 test("interruption during final cleanup retains cleanup evidence and cannot report green", async () => {
   await scratch(async root => {
     const controller = new AbortController(), entered: string[] = [];
-    const result = await withFixtures(smokeOptions(argumentsFor(root)), entered, undefined, controller);
+    const result = await withFixtures(smokeOptions(argumentsFor(root)), entered, { controller });
     expect(controller.signal.aborted).toBe(true);
     expect(entered).toEqual(smokeCases.map(boxId));
     expect(result.cases.every(value => value.status === "pass" && value.cleanup?.status === "pass")).toBe(true);
@@ -248,18 +306,34 @@ async function cliResult(cli: string, args: string[]): Promise<{ code: number; s
 test("a local build and recorded commit need no CI origin or goals inventory metadata", async () => {
   await scratch(async root => {
     const config = smokeOptions(argumentsFor(root));
-    await mkdir(config.matrix.root);
     await Bun.write(config.sourceFile, JSON.stringify({ commit: source.commit }));
-    const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
-    const fingerprint = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-    const builds = Object.fromEntries(["bun-browser.wasm", "bun.wasm", "quickjs.wasm"].map(name => [name, fingerprint]));
-    for (const name of Object.keys(builds)) await Bun.write(join(config.matrix.root, name), bytes);
-    await Bun.write(join(config.matrix.root, "index.html"), `globalThis.__bunwasmBuilds = ${JSON.stringify(builds)};`);
-    await Bun.write(join(config.matrix.root, "engine-builds.json"), JSON.stringify(builds));
+    await preparedRoot(config.matrix.root);
     let admitted = false;
     const result = await runSmoke(config, { admission: async () => { admitted = true; throw new Error("stop before native work"); } });
     expect(admitted).toBe(true);
     expect(result.source).toEqual({ commit: source.commit, dirty: null, assets: { source: config.matrix.root } });
     expect(result.failures[0]?.error).toBe("Error: stop before native work");
+  });
+});
+async function preparedRoot(root: string): Promise<void> {
+  await mkdir(root);
+  const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  const fingerprint = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+  const builds = Object.fromEntries(profileEngineFiles("browser", "split").concat(profileEngineFiles("quickjs", "shared-group")).map(name => [name, fingerprint]));
+  for (const name of Object.keys(builds)) await Bun.write(join(root, name), bytes);
+  await Bun.write(join(root, "index.html"), `globalThis.__bunwasmBuilds = ${JSON.stringify(builds)};`);
+  await Bun.write(join(root, "engine-builds.json"), JSON.stringify(builds));
+}
+test("final verification checks the selected shared program after all case cleanups", async () => {
+  await scratch(async root => {
+    const config = smokeOptions(argumentsFor(root));
+    await preparedRoot(config.matrix.root);
+    const result = await withFixtures(config, [], { preflight: true, afterCleanup: async caseNumber => {
+      if (caseNumber === 3) await Bun.write(join(config.matrix.root, profileEngineFiles("quickjs", "shared-group")[0]!), "changed shared core");
+    } });
+    expect(result.cases.every(value => value.status === "pass")).toBe(true);
+    expect(result.status).toBe("red");
+    expect(result.failures[0]?.error).toContain("embedded host, manifest, and staged bytes disagree");
+    expect(result.failures[0]?.error).toContain(profileEngineFiles("quickjs", "shared-group")[0]!);
   });
 });
