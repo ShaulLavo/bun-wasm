@@ -1,0 +1,75 @@
+name: Storage WebKit original routing diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [t3/storage-routing-diagnostic]
+    paths: [.github/workflows/storage-webkit-routing-diagnostic.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  capture:
+    name: Original Hono route gate then one WebKit preservation capture
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      SR_SUBJECT: ${{ github.workspace }}/subject
+    steps:
+      - name: Initialize evidence before setup
+        run: |
+          mkdir -p "$RUNNER_TEMP/storage-preview-routing-evidence"
+          ps -eo pid,ppid,pgid,comm > "$RUNNER_TEMP/storage-preview-routing-evidence/outer-before-processes.txt"
+          ss -ltnp > "$RUNNER_TEMP/storage-preview-routing-evidence/outer-before-listeners.txt"
+          {
+            echo "SR_ROOT=$RUNNER_TEMP/storage-preview-routing"
+            echo "SR_EVIDENCE=$RUNNER_TEMP/storage-preview-routing-evidence"
+            echo "TMPDIR=$RUNNER_TEMP"
+            echo "BUN_WASM_TEST_TMP=$RUNNER_TEMP"
+            echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/storage-preview-routing/bun-cache"
+            echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/storage-preview-routing/browsers"
+          } >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 2f44db5644a75283c7b2157d3b2e4d3d54d486c0
+          path: subject
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.13.1
+      - name: Use the normal Ubuntu HTTPS dependency sources
+        run: |
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
+          if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
+            sudo sed -i 's|http://archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+      - name: Verify original packets, qualify actual route and capture once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source env.sh
+          git rev-parse HEAD HEAD^{tree} > "$SR_EVIDENCE/instrumentation-source.txt"
+          git -C "$SR_SUBJECT" rev-parse HEAD HEAD^{tree} > "$SR_EVIDENCE/subject-source.txt"
+          bun .internal/diagnostics/storage-preview-routing/supervise.ts hosted
+      - name: Outer actual-host teardown
+        if: always()
+        run: bun .internal/diagnostics/storage-preview-routing/teardown.ts
+      - name: Compress raw streams losslessly
+        if: always()
+        run: find "$SR_EVIDENCE" -type f -name '*.jsonl' -exec gzip -9 {} +
+      - name: Preserve raw diagnostics and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-webkit-original-routing
+          path: ${{ runner.temp }}/storage-preview-routing-evidence
+          retention-days: 7
+          if-no-files-found: error
