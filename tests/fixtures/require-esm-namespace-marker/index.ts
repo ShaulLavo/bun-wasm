@@ -14,10 +14,20 @@ assert.deepEqual(Object.keys(namespace), ["count", "default", "increment"]);
 assert.equal(Object.prototype.propertyIsEnumerable.call(namespace, "__esModule"), false);
 assert.equal(Object.hasOwn(namespace, "__esModule"), false);
 assert.equal(Object.prototype.toString.call(namespace), "[object Module]");
+assert.deepEqual(Object.getOwnPropertyDescriptor(namespace, "count"), {
+  value: 0, writable: true, enumerable: true, configurable: false,
+});
+const markerDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(namespace), "__esModule");
+assert.equal(markerDescriptor?.enumerable, false);
+assert.equal(markerDescriptor?.configurable, false);
+assert.equal(Reflect.defineProperty(namespace, "count", { value: 0 }), true);
+assert.equal(Reflect.defineProperty(namespace, "count", { value: 99 }), false);
+assert.equal(Reflect.deleteProperty(namespace, "count"), false);
 console.log("default marker, call, and cached identity");
 
 namespace.increment();
 assert.equal(namespace.count, 1);
+assert.equal(Object.getOwnPropertyDescriptor(namespace, "count")?.value, 1);
 const imported = await import("./default.mts");
 assert.equal(namespace, imported, "require and dynamic import preserve namespace identity");
 assert.equal(require("./reexport.mts").child, namespace, "namespace re-exports preserve identity");
@@ -66,11 +76,28 @@ assert.equal(require("./empty.mts"), empty);
 assert.equal(empty.__esModule, true);
 assert.deepEqual(Object.keys(empty), []);
 assert.equal(types.isModuleNamespaceObject(empty), true);
+assert.equal(Object.getPrototypeOf(empty), Object.getPrototypeOf(namespace));
+assert.equal(Reflect.setPrototypeOf(namespace, Object.getPrototypeOf(namespace)), true);
+assert.equal(Reflect.setPrototypeOf(namespace, null), false);
 assert.equal(Reflect.set(namespace, "count", 10), false);
 assert.equal(Object.getPrototypeOf(Object.getPrototypeOf(namespace)), null);
 console.log("canonical namespaces across static-first and dynamic-first imports");
 
 const prototype = Object.getPrototypeOf(namespace);
+const inheritedSymbol = Symbol("namespace prototype");
+for (const key of ["namespacePrototypeValue", inheritedSymbol]) {
+  Object.defineProperty(prototype, key, {
+    configurable: true,
+    get() { return this.count; },
+  });
+  assert.equal(namespace[key], namespace.count, "inherited getters retain the native namespace receiver");
+  assert.equal(key in namespace, true);
+  assert.equal(Object.hasOwn(namespace, key), false);
+  assert.equal(types.isModuleNamespaceObject(namespace), true);
+  assert.equal(delete prototype[key], true);
+  assert.equal(namespace[key], undefined);
+  assert.equal(key in namespace, false);
+}
 for (const base of [null, prototype]) {
   const fabricated = Object.create(base);
   Object.defineProperty(fabricated, Symbol.toStringTag, { value: "Module" });

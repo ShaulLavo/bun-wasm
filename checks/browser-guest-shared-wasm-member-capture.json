@@ -1,0 +1,1 @@
+{"owner":"browser-guest","path":"scripts/shared-wasm-member-capture.test.ts","profile":"shared-group","inputs":["web/tests/shared-wasm-agent/capture.ts","web/tests/shared-wasm-agent/capture-page.ts","web/tests/shared-wasm-agent/capture-controls.ts"]}
