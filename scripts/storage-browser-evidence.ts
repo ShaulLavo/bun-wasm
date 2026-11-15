@@ -22,6 +22,7 @@ export class StorageLifetime {
   private operation = 0;
   private page = 0;
   private readonly filesystemRings = new Map<number, { rows: object[]; dropped: number }>();
+  private filesystemFailed = false;
   private filesystemRetained = false;
   private filesystemPagesDropped = 0;
 
@@ -32,11 +33,13 @@ export class StorageLifetime {
   event(kind: string, detail: unknown = null): void {
     try { this.write?.({ sequence: ++this.sequence, time: new Date().toISOString(), kind, detail }); }
     catch (error) { this.failProgress(error); }
-    if (["error", "preservation-error", "primary-error", "secondary-error"].includes(kind)) this.retainFilesystemFailure();
+    if (!["error", "preservation-error", "primary-error", "secondary-error"].includes(kind)) return;
+    this.filesystemFailed = true;
+    this.retainFilesystemFailure();
   }
 
   private retainFilesystemFailure(final = false): void {
-    if (!this.filesystemRings.size || (final ? !this.filesystemRetained : this.filesystemRetained)) return;
+    if (!this.filesystemRings.size || (final ? !this.filesystemFailed : this.filesystemRetained)) return;
     this.filesystemRetained = true;
     this.event(final ? "filesystem-retained-final" : "filesystem-retained", { pagesDropped: this.filesystemPagesDropped,
       streams: Array.from(this.filesystemRings, ([page, ring]) => ({ page, rows: ring.rows.slice(), dropped: ring.dropped })), limits: { pages: 8, recentPerPage: 32 } });
