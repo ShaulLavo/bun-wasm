@@ -23,6 +23,7 @@ import { isEngine } from "../../web/src/engine-loader";
 import { mutableRoots, nextOutputs } from "./lifecycle-model";
 import { assetIdentity } from "../goals-matrix/assets";
 import { preflight } from "../goals-matrix/preparation";
+import waffleRelease from "../waffle-release-inputs.json";
 import { verifyResolution } from "./lifecycle-lock";
 import { chromeRetention } from "./lifecycle-profile-retention";
 
@@ -181,7 +182,7 @@ async function analysis(config: Config, window: { before: number; after: number 
 async function campaign(config: Config, signal: AbortSignal) {
   await mkdir(config.output);
   const host = object(await json(join(config.host, "lifecycle-host.json")));
-  if (host.waffle !== "0.0.131") throw new Error("Waffle 0.0.131 required");
+  if (host.waffle !== waffleRelease.version) throw new Error(`Waffle ${waffleRelease.version} required`);
   await preflight(config.host, [config.engine]);
   const hostIdentity = sha256(JSON.stringify(await assetIdentity(config.host)));
   await save(join(config.output, "sources.json"), { host, hostIdentity });
