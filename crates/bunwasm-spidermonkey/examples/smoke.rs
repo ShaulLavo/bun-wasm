@@ -161,12 +161,15 @@ pub fn main() {
         let depth = number(&format!(
             "var d = 0; try {{ {code} }} catch (e) {{ if (!(e instanceof RangeError)) throw e; }} d"
         ));
-        let counted = pbl || label != "missing argument";
+        let counted = pbl || (label != "missing argument" && label != "getter");
         assert!(depth > 100.0, "{label} recursion depth {depth}");
         assert!(!counted || depth < 350.0, "{label} recursion depth {depth}");
+        assert!(pbl || label != "getter" || depth > 4096.0);
+
         assert_eq!(number("6 * 7"), 42.0);
     }
     println!("ok counted reentrant recursion");
+    println!("ok named getter frame storage and recovery");
     let polls = unsafe { sys::bsm_poll_count(tier) };
     let entries = unsafe { sys::bsm_pbl_entries() };
     assert!(polls >= 30000);
@@ -185,6 +188,10 @@ fn budget_checks(pbl: bool) {
         (
             "getter",
             "var o = { get x() { d++; return this.x; } }; o.x;",
+        ),
+        (
+            "computed getter",
+            "var k = 'x', o = { get x() { d++; return this[k]; } }; o[k];",
         ),
         (
             "setter",
@@ -223,11 +230,21 @@ fn budget_checks(pbl: bool) {
             "{label} must end in a caught RangeError, got {depth}"
         );
         assert_eq!(number("6 * 7"), 42.0);
-        // Without the quota the counter stops getters near 175 levels (interp) or 350 (PBL).
+        // Without the quota the counter stops reentrant getters near 175 levels (interp) or 350
+        // (PBL). On the interpreter tier, `a.b` getters run as interpreter frames that use no
+        // host stack, so the frame limit ends them; a computed-key getter still reenters through
+        // RunScript, and its reservation must let the quota stop it
+        // (docs/bun-patches/spidermonkey-loop-dispatch.md).
+        let in_loop = !pbl && label == "getter";
+        let reentrant = label == "computed getter" || (pbl && label == "getter");
         let bound = if pbl { 300.0 } else { 140.0 };
         assert!(
-            label != "getter" || (depth > 20.0 && depth < bound),
-            "getter depth {depth} under the budget"
+            !reentrant || (depth > 20.0 && depth < bound),
+            "{label} depth {depth} under the budget"
+        );
+        assert!(
+            !in_loop || depth > 4096.0,
+            "named getter depth {depth} in the interpreter loop"
         );
     }
     // The frontend's own bound admits 400 nested `if` blocks; the budget refuses 300.
