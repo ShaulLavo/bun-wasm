@@ -29,7 +29,7 @@ function frameworkFor(box: Box): Framework {
   return framework;
 }
 type Scenario = Phase | "device";
-function nativeFixture(transport: Transport, box: Box, fail?: Scenario): Transport {
+function nativeFixture(transport: Transport, box: Box, fail?: Scenario, afterCleanup?: () => void): Transport {
   const evaluate: Transport["evaluate"] = async (expression, admission, options) => {
     if (expression.includes("function readyState")) return transport.evaluate(`(${JSON.stringify({ ready: true, status: box.engine === "browser" ? "Browser (native) ready" : "QuickJS ready", engine: box.engine, observedEngine: box.engine, profile: "split", agent: "iPhone Safari" })})`, admission, options);
     if (fail === "install" && expression.includes("function shellState")) throw new Error("install fixture failed");
@@ -40,7 +40,7 @@ function nativeFixture(transport: Transport, box: Box, fail?: Scenario): Transpo
   return { ...transport, capabilities, evaluate,
     navigate: fail === "startup" ? async () => { throw new Error("startup fixture failed"); } : transport.navigate,
     nativeClick: async () => { if (fail === "device") throw new Error("T3 device command failed: fixture"); if (fail === "click") throw new Error("click fixture failed"); return { before: "count 0", after: "count 1", trusted: true, inputMethod: "fixture native tap" }; },
-    cleanup: async () => { await transport.close(); if (fail === "cleanup") throw new Error("cleanup fixture failed"); return { browserClosed: true, foregroundStopped: true, previewClosed: true }; },
+    cleanup: async () => { await transport.close(); afterCleanup?.(); if (fail === "cleanup") throw new Error("cleanup fixture failed"); return { browserClosed: true, foregroundStopped: true, previewClosed: true }; },
   };
 }
 function attempt(): Attempt {
@@ -155,7 +155,7 @@ test.each([undefined, "startup", "install", "dev", "render", "click", "cleanup",
     expect(await Bun.file(join(config.matrix.output, "TABLE.json")).exists()).toBe(false);
   });
 });
-async function withFixtures(config: ReturnType<typeof smokeOptions>, entered: string[], fail?: Scenario) {
+async function withFixtures(config: ReturnType<typeof smokeOptions>, entered: string[], fail?: Scenario, controller?: AbortController) {
   const transports: Transport[] = [];
   const run = async (index: number): Promise<Awaited<ReturnType<typeof runSmoke>>> => {
     const box = smokeCases[index];
@@ -163,8 +163,9 @@ async function withFixtures(config: ReturnType<typeof smokeOptions>, entered: st
       entered.push(boxId(selected));
       const fixture = transports[smokeCases.findIndex(box => boxId(box) === boxId(selected))];
       if (!fixture) throw new Error("Missing transport");
-      return nativeFixture(fixture, selected, entered.length === 1 ? fail : undefined);
-    } });
+      return nativeFixture(fixture, selected, entered.length === 1 ? fail : undefined,
+        entered.length === 3 ? () => controller?.abort(new Error("cancelled during final cleanup")) : undefined);
+    } }, controller?.signal);
     return withPlayground(frameworkFor(box), 0, async transport => { transports.push(transport); return run(index + 1); });
   };
   return run(0);
@@ -200,6 +201,18 @@ test("interruption saves blocked remaining cases without dispatching native work
     expect(entered).toBe(false);
     expect(result.cases.every(value => value.status === "blocked")).toBe(true);
     expect(result.finishedAt).not.toBeNull();
+    expect(await Bun.file(result.reportPath).json()).toEqual(result);
+  });
+});
+test("interruption during final cleanup retains cleanup evidence and cannot report green", async () => {
+  await scratch(async root => {
+    const controller = new AbortController(), entered: string[] = [];
+    const result = await withFixtures(smokeOptions(argumentsFor(root)), entered, undefined, controller);
+    expect(controller.signal.aborted).toBe(true);
+    expect(entered).toEqual(smokeCases.map(boxId));
+    expect(result.cases.every(value => value.status === "pass" && value.cleanup?.status === "pass")).toBe(true);
+    expect(result.status).toBe("red");
+    expect(result.failures).toContainEqual({ phase: "interruption", error: "Error: cancelled during final cleanup" });
     expect(await Bun.file(result.reportPath).json()).toEqual(result);
   });
 });

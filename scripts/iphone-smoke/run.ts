@@ -63,9 +63,11 @@ export async function runSmoke(config: SmokeOptions, overrides: Partial<SmokeIO>
     await io.qualify(config);
     const ticket = await io.admission(config.thread, undefined, signal);
     await cases(config, report, io, ticket, signal);
+    signal?.throwIfAborted();
     await io.verify(config.matrix.root);
+    signal?.throwIfAborted();
   } catch (error) {
-    report.failures.push({ phase: "prerequisite", error: String(error) });
+    report.failures.push({ phase: signal?.aborted ? "interruption" : "prerequisite", error: String(error) });
     report.cases = report.cases.map(result => result.status === "pending" ? blocked(result, String(error)) : result);
   } finally {
     report.finishedAt = new Date().toISOString();
