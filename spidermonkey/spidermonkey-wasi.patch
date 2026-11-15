@@ -2010,14 +2010,75 @@ index 2465a89b4..110b3281c 100644
  /*****************************************************************************/
 
  InterpreterFrame* InterpreterStack::pushInvokeFrame(
-diff --git i/js/public/SavedFrameAPI.h w/js/public/SavedFrameAPI.h
+diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitter.cpp
+index 18e469828..a6d3f5f4b 100644
+--- a/js/src/frontend/BytecodeEmitter.cpp
++++ b/js/src/frontend/BytecodeEmitter.cpp
+@@ -5219,6 +5219,13 @@ MOZ_NEVER_INLINE bool BytecodeEmitter::emitTry(TryNode* tryNode) {
+ }
+ 
+ bool BytecodeEmitter::emitIf(TernaryNode* ifNode) {
++  // IfStatement applies UpdateEmpty with undefined, unlike a plain block.
++  if (sc->isTopLevelContext() && !sc->noScriptRval()) {
++    if (!emit1(JSOp::Undefined) || !emit1(JSOp::SetRval)) {
++      return false;
++    }
++  }
++
+   IfEmitter ifThenElse(this);
+ 
+   if (!ifThenElse.emitIf(Some(ifNode->kid1()->pn_pos.begin))) {
+diff --git a/js/src/frontend/FoldConstants.cpp b/js/src/frontend/FoldConstants.cpp
+index 8d1b3bf5d..766c8d956 100644
+--- a/js/src/frontend/FoldConstants.cpp
++++ b/js/src/frontend/FoldConstants.cpp
+@@ -879,6 +879,8 @@ static bool FoldConditional(FoldInfo info, ParseNode** nodePtr) {
+ }
+ 
+ static bool FoldIf(FoldInfo info, ParseNode** nodePtr) {
++  ParseNode** originalNodePtr = nodePtr;
++  ParseNode* originalNode = *nodePtr;
+   ParseNode** nextNode = nodePtr;
+ 
+   do {
+@@ -974,6 +976,29 @@ static bool FoldIf(FoldInfo info, ParseNode** nodePtr) {
+     }
+   } while (nextNode);
+ 
++  if (*originalNodePtr == originalNode) {
++    return true;
++  }
++
++  // Preserve the if completion after the entire selected else-if chain folds.
++  RawUndefinedLiteral* undefined;
++  MOZ_TRY_VAR_OR_RETURN(
++      undefined, info.handler->newRawUndefinedLiteral(originalNode->pn_pos),
++      false);
++  UnaryNode* undefinedStatement;
++  MOZ_TRY_VAR_OR_RETURN(
++      undefinedStatement,
++      info.handler->newExprStatement(undefined, originalNode->pn_pos.end), false);
++  ListNode* completion;
++  MOZ_TRY_VAR_OR_RETURN(
++      completion, info.handler->newStatementList(originalNode->pn_pos), false);
++  completion->append(undefinedStatement);
++
++  ParseNode* replacement = *originalNodePtr;
++  ReplaceNode(originalNodePtr, completion);
++  replacement->pn_next = nullptr;
++  completion->append(replacement);
++
+   return true;
+ }
+ 
+diff --git a/js/public/SavedFrameAPI.h b/js/public/SavedFrameAPI.h
 index 688d1e185..1e3d64721 100644
---- i/js/public/SavedFrameAPI.h
-+++ w/js/public/SavedFrameAPI.h
+--- a/js/public/SavedFrameAPI.h
++++ b/js/public/SavedFrameAPI.h
 @@ -72,6 +72,31 @@ extern JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
      uint32_t* sourceIdp,
      SavedFrameSelfHosted selfHosted = SavedFrameSelfHosted::Include);
-
+ 
 +/**
 + * Which capture-time branch produced a SavedFrame's source string.
 + * Cloned and reconstructed frames have no provenance and report DisplayURL,
@@ -2046,10 +2107,10 @@ index 688d1e185..1e3d64721 100644
  /**
   * Given a SavedFrame JSObject, get its line property (1-origin).
   * Defaults to 0.
-diff --git i/js/src/vm/SavedFrame.h w/js/src/vm/SavedFrame.h
+diff --git a/js/src/vm/SavedFrame.h b/js/src/vm/SavedFrame.h
 index f5b41efc2..16d49b764 100644
---- i/js/src/vm/SavedFrame.h
-+++ w/js/src/vm/SavedFrame.h
+--- a/js/src/vm/SavedFrame.h
++++ b/js/src/vm/SavedFrame.h
 @@ -11,6 +11,7 @@
  #include "js/ColumnNumber.h"  // JS::TaggedColumnNumberOneOrigin
  #include "js/GCHashTable.h"
@@ -2057,7 +2118,7 @@ index f5b41efc2..16d49b764 100644
 +#include "js/SavedFrameAPI.h"  // JS::SavedFrameSourceKind
  #include "js/UbiNode.h"
  #include "vm/NativeObject.h"
-
+ 
 @@ -56,6 +57,7 @@ class SavedFrame : public NativeObject {
    SavedFrame* getParent() const;
    JSPrincipals* getPrincipals();
@@ -2065,7 +2126,7 @@ index f5b41efc2..16d49b764 100644
 +  JS::SavedFrameSourceKind getSourceKind();
    bool isSelfHosted(JSContext* cx);
    bool isWasm();
-
+ 
 @@ -126,9 +128,11 @@ class SavedFrame : public NativeObject {
    void initFunctionDisplayName(JSAtom* maybeName);
    void initAsyncCause(JSAtom* maybeCause);
@@ -2078,66 +2139,13 @@ index f5b41efc2..16d49b764 100644
 +      JS::SavedFrameSourceKind sourceKind);
 +  void initPrincipalsAndMutedErrors(JSPrincipals* principals, bool mutedErrors,
 +                                    JS::SavedFrameSourceKind sourceKind);
-
+ 
    enum {
      // The reserved slots in the SavedFrame class.
-diff --git i/js/src/vm/SavedStacks.h w/js/src/vm/SavedStacks.h
-index b7dfe4dd9..74eabe7e5 100644
---- i/js/src/vm/SavedStacks.h
-+++ w/js/src/vm/SavedStacks.h
-@@ -242,10 +242,19 @@ class SavedStacks {
-
-  public:
-   struct LocationValue {
--    LocationValue() : source(nullptr), sourceId(0), line(0) {}
-+    LocationValue()
-+        : source(nullptr),
-+          sourceId(0),
-+          line(0),
-+          sourceKind(JS::SavedFrameSourceKind::DisplayURL) {}
-     LocationValue(JSAtom* source, uint32_t sourceId, size_t line,
--                  JS::TaggedColumnNumberOneOrigin column)
--        : source(source), sourceId(sourceId), line(line), column(column) {}
-+                  JS::TaggedColumnNumberOneOrigin column,
-+                  JS::SavedFrameSourceKind sourceKind)
-+        : source(source),
-+          sourceId(sourceId),
-+          line(line),
-+          column(column),
-+          sourceKind(sourceKind) {}
-
-     void trace(JSTracer* trc) {
-       TraceEdge(trc, &source, "SavedStacks::LocationValue::source");
-@@ -266,6 +275,9 @@ class SavedStacks {
-
-     // Column number in UTF-16 code units.
-     JS::TaggedColumnNumberOneOrigin column;
-+
-+    // The branch that produced |source|, stored with it.
-+    JS::SavedFrameSourceKind sourceKind;
-   };
-
-  private:
-@@ -305,6 +317,7 @@ struct WrappedPtrOperations<SavedStacks::LocationValue, Wrapper> {
-   uint32_t sourceId() const { return loc().sourceId; }
-   size_t line() const { return loc().line; }
-   JS::TaggedColumnNumberOneOrigin column() const { return loc().column; }
-+  JS::SavedFrameSourceKind sourceKind() const { return loc().sourceKind; }
-
-  private:
-   const SavedStacks::LocationValue& loc() const {
-@@ -319,6 +332,7 @@ struct MutableWrappedPtrOperations<SavedStacks::LocationValue, Wrapper>
-   void setSourceId(uint32_t v) { loc().sourceId = v; }
-   void setLine(size_t v) { loc().line = v; }
-   void setColumn(JS::TaggedColumnNumberOneOrigin v) { loc().column = v; }
-+  void setSourceKind(JS::SavedFrameSourceKind v) { loc().sourceKind = v; }
-
-  private:
-   SavedStacks::LocationValue& loc() {
-diff --git i/js/src/vm/SavedStacks.cpp w/js/src/vm/SavedStacks.cpp
+diff --git a/js/src/vm/SavedStacks.cpp b/js/src/vm/SavedStacks.cpp
 index 7c26d9c97..144ff4da0 100644
---- i/js/src/vm/SavedStacks.cpp
-+++ w/js/src/vm/SavedStacks.cpp
+--- a/js/src/vm/SavedStacks.cpp
++++ b/js/src/vm/SavedStacks.cpp
 @@ -174,7 +174,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
    Lookup(JSAtom* source, uint32_t sourceId, uint32_t line,
           JS::TaggedColumnNumberOneOrigin column, JSAtom* functionDisplayName,
@@ -2168,7 +2176,7 @@ index 7c26d9c97..144ff4da0 100644
    JSPrincipals* principals;
    bool mutedErrors;
 +  JS::SavedFrameSourceKind sourceKind;
-
+ 
    // These are used only by the LiveSavedFrameCache and not used for identity or
    // hashing.
 @@ -261,6 +264,7 @@ class WrappedPtrOperations<SavedFrame::Lookup, Wrapper> {
@@ -2187,11 +2195,11 @@ index 7c26d9c97..144ff4da0 100644
 +                   lookup.mutedErrors, uint8_t(lookup.sourceKind), parentHash,
                     JSPrincipalsPtrHasher::hash(lookup.principals));
  }
-
+ 
 @@ -357,6 +361,12 @@ bool SavedFrame::HashPolicy::match(SavedFrame* existing, const Lookup& lookup) {
      return false;
    }
-
+ 
 +  // Frames whose equal labels come from different capture branches stay
 +  // distinct, because their labels are interpreted differently.
 +  if (existing->getSourceKind() != lookup.sourceKind) {
@@ -2200,11 +2208,11 @@ index 7c26d9c97..144ff4da0 100644
 +
    return true;
  }
-
+ 
 @@ -479,12 +489,22 @@ SavedFrame* SavedFrame::getParent() const {
    return v.isObject() ? &v.toObject().as<SavedFrame>() : nullptr;
  }
-
+ 
 +// JSSLOT_PRINCIPALS holds the principals pointer with two flags in its low
 +// bits: bit 0 is mutedErrors, bit 1 marks a compiler-filename source.
 +static constexpr uintptr_t MutedErrorsBit = 0b01;
@@ -2223,7 +2231,7 @@ index 7c26d9c97..144ff4da0 100644
 +  return reinterpret_cast<JSPrincipals*>(uintptr_t(v.toPrivate()) &
 +                                         ~PrincipalsFlagBits);
  }
-
+ 
  bool SavedFrame::getMutedErrors() {
 @@ -492,7 +512,17 @@ bool SavedFrame::getMutedErrors() {
    if (v.isUndefined()) {
@@ -2242,12 +2250,12 @@ index 7c26d9c97..144ff4da0 100644
 +             ? JS::SavedFrameSourceKind::Filename
 +             : JS::SavedFrameSourceKind::DisplayURL;
  }
-
+ 
  void SavedFrame::initSource(JSAtom* source) {
 @@ -515,18 +545,24 @@ void SavedFrame::initColumn(JS::TaggedColumnNumberOneOrigin column) {
    initReservedSlot(JSSLOT_COLUMN, PrivateUint32Value(column.rawValue()));
  }
-
+ 
 -void SavedFrame::initPrincipalsAndMutedErrors(JSPrincipals* principals,
 -                                              bool mutedErrors) {
 +void SavedFrame::initPrincipalsAndMutedErrors(
@@ -2259,7 +2267,7 @@ index 7c26d9c97..144ff4da0 100644
 -  initPrincipalsAlreadyHeldAndMutedErrors(principals, mutedErrors);
 +  initPrincipalsAlreadyHeldAndMutedErrors(principals, mutedErrors, sourceKind);
  }
-
+ 
  void SavedFrame::initPrincipalsAlreadyHeldAndMutedErrors(
 -    JSPrincipals* principals, bool mutedErrors) {
 +    JSPrincipals* principals, bool mutedErrors,
@@ -2282,12 +2290,12 @@ index 7c26d9c97..144ff4da0 100644
 +  initPrincipalsAndMutedErrors(lookup.principals(), lookup.mutedErrors(),
 +                               lookup.sourceKind());
  }
-
+ 
  /* static */
 @@ -812,6 +849,27 @@ JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
    return SavedFrameResult::Ok;
  }
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceKind(
 +    JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
@@ -2330,11 +2338,11 @@ index 7c26d9c97..144ff4da0 100644
      }
 +    // |locationp| is reused across frames, so always overwrite the kind.
 +    locationp.setSourceKind(JS::SavedFrameSourceKind::Filename);
-
+ 
      JS::TaggedColumnNumberOneOrigin column;
      locationp.setLine(iter.computeLine(&column));
 @@ -1914,11 +1975,14 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
-
+ 
    if (!p) {
      Rooted<JSAtom*> source(cx);
 +    JS::SavedFrameSourceKind sourceKind;
@@ -2349,7 +2357,7 @@ index 7c26d9c97..144ff4da0 100644
      if (!source) {
        return false;
 @@ -1930,7 +1994,7 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
-
+ 
      PCKey key(script, pc);
      LocationValue value(source, sourceId, line,
 -                        JS::TaggedColumnNumberOneOrigin(column));
@@ -2368,19 +2376,73 @@ index 7c26d9c97..144ff4da0 100644
        ReportOutOfMemory(cx);
        return false;
      }
-diff --git i/js/src/vm/StructuredClone.cpp w/js/src/vm/StructuredClone.cpp
+diff --git a/js/src/vm/SavedStacks.h b/js/src/vm/SavedStacks.h
+index b7dfe4dd9..74eabe7e5 100644
+--- a/js/src/vm/SavedStacks.h
++++ b/js/src/vm/SavedStacks.h
+@@ -242,10 +242,19 @@ class SavedStacks {
+ 
+  public:
+   struct LocationValue {
+-    LocationValue() : source(nullptr), sourceId(0), line(0) {}
++    LocationValue()
++        : source(nullptr),
++          sourceId(0),
++          line(0),
++          sourceKind(JS::SavedFrameSourceKind::DisplayURL) {}
+     LocationValue(JSAtom* source, uint32_t sourceId, size_t line,
+-                  JS::TaggedColumnNumberOneOrigin column)
+-        : source(source), sourceId(sourceId), line(line), column(column) {}
++                  JS::TaggedColumnNumberOneOrigin column,
++                  JS::SavedFrameSourceKind sourceKind)
++        : source(source),
++          sourceId(sourceId),
++          line(line),
++          column(column),
++          sourceKind(sourceKind) {}
+ 
+     void trace(JSTracer* trc) {
+       TraceEdge(trc, &source, "SavedStacks::LocationValue::source");
+@@ -266,6 +275,9 @@ class SavedStacks {
+ 
+     // Column number in UTF-16 code units.
+     JS::TaggedColumnNumberOneOrigin column;
++
++    // The branch that produced |source|, stored with it.
++    JS::SavedFrameSourceKind sourceKind;
+   };
+ 
+  private:
+@@ -305,6 +317,7 @@ struct WrappedPtrOperations<SavedStacks::LocationValue, Wrapper> {
+   uint32_t sourceId() const { return loc().sourceId; }
+   size_t line() const { return loc().line; }
+   JS::TaggedColumnNumberOneOrigin column() const { return loc().column; }
++  JS::SavedFrameSourceKind sourceKind() const { return loc().sourceKind; }
+ 
+  private:
+   const SavedStacks::LocationValue& loc() const {
+@@ -319,6 +332,7 @@ struct MutableWrappedPtrOperations<SavedStacks::LocationValue, Wrapper>
+   void setSourceId(uint32_t v) { loc().sourceId = v; }
+   void setLine(size_t v) { loc().line = v; }
+   void setColumn(JS::TaggedColumnNumberOneOrigin v) { loc().column = v; }
++  void setSourceKind(JS::SavedFrameSourceKind v) { loc().sourceKind = v; }
+ 
+  private:
+   SavedStacks::LocationValue& loc() {
+diff --git a/js/src/vm/StructuredClone.cpp b/js/src/vm/StructuredClone.cpp
 index 075aa3638..5af89759a 100644
---- i/js/src/vm/StructuredClone.cpp
-+++ w/js/src/vm/StructuredClone.cpp
-@@ -3802,7 +3802,9 @@ JSObject* JSStructuredCloneReader::readSavedFrameHeader(
+--- a/js/src/vm/StructuredClone.cpp
++++ b/js/src/vm/StructuredClone.cpp
+@@ -3802,8 +3802,10 @@ JSObject* JSStructuredCloneReader::readSavedFrameHeader(
      }
    }
-
+ 
 -  savedFrame->initPrincipalsAlreadyHeldAndMutedErrors(principals,
 -                                                      mutedErrors.toBoolean());
 +  // The clone format carries no source provenance, so the label stays opaque.
 +  savedFrame->initPrincipalsAlreadyHeldAndMutedErrors(
 +      principals, mutedErrors.toBoolean(),
 +      JS::SavedFrameSourceKind::DisplayURL);
-
+ 
    savedFrame->initSource(&source.toString()->asAtom());
+ 
