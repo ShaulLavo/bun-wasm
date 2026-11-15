@@ -226,7 +226,7 @@ for (const [name, original] of [
   ["if", "if true; then echo safe; fi"],
   ["command", "command printf safe"],
   ["for", "for word in safe; do printf %s \"$word\"; done"],
-]) test(`package manifest bin ${name} preserves shell command precedence`, () => project({ dev: original }, async cwd => {
+] satisfies [string, string][]) test(`package manifest bin ${name} preserves shell command precedence`, () => project({ dev: original }, async cwd => {
   const directory = path.join(cwd, "node_modules/collision");
   mkdirSync(directory, { recursive: true });
   writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: "collision", bin: { [name]: "cli.ts" } }));
