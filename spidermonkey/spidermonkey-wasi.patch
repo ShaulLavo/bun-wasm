@@ -1511,9 +1511,10 @@ index a60aef921..47c01b676 100644
    AutoCheckRecursionLimit recursion(cx);
    if (!recursion.check(cx)) {
      return false;
-diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendContext.cpp
---- a/js/src/frontend/FrontendContext.cpp
-+++ b/js/src/frontend/FrontendContext.cpp
+diff --git i/js/src/frontend/FrontendContext.cpp w/js/src/frontend/FrontendContext.cpp
+index 80dcf1142..8bdb258ce 100644
+--- i/js/src/frontend/FrontendContext.cpp
++++ w/js/src/frontend/FrontendContext.cpp
 @@ -203,6 +203,9 @@ void FrontendContext::setCurrentJSContext(JSContext* cx) {
    nameCollectionPool_ = &cx->frontendCollectionPool();
    scriptDataTableHolder_ = &cx->runtime()->scriptDataTableHolder();
@@ -1521,13 +1522,13 @@ diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendConte
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  wasiEntryDepth_ = JS::RootingContext::get(cx)->wasiRecursionDepth;
 +#endif
-
+ 
  #ifdef DEBUG
    setNativeStackLimitThread();
 @@ -297,9 +300,38 @@ void FrontendContext::decWasiRecursionDepth() {
    }
  }
-
+ 
 +#  if defined(BUNWASM_EMBED)
 +// The parser and bytecode emitter spend far less host stack per depth unit
 +// than runtime reentry, so they get their own bound on the shared counter,
@@ -1563,13 +1564,14 @@ diff --git a/js/src/frontend/FrontendContext.cpp b/js/src/frontend/FrontendConte
    }
    return true;
  }
-diff --git a/js/src/frontend/FrontendContext.h b/js/src/frontend/FrontendContext.h
---- a/js/src/frontend/FrontendContext.h
-+++ b/js/src/frontend/FrontendContext.h
+diff --git i/js/src/frontend/FrontendContext.h w/js/src/frontend/FrontendContext.h
+index a5d32bb53..528cc2add 100644
+--- i/js/src/frontend/FrontendContext.h
++++ w/js/src/frontend/FrontendContext.h
 @@ -119,6 +119,11 @@ class FrontendContext {
    // Set by setCurrentJSContext.
    JSContext* maybeCx_ = nullptr;
-
+ 
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +  // The JSContext's WASI recursion depth when this compile attached to it.
 +  uint32_t wasiEntryDepth_ = 0;
