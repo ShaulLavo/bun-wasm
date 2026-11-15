@@ -20,12 +20,12 @@ export async function closeIphoneTab(command: NativeCommand, title: string, dead
   try {
     await command(["press", 'label="More" role=button'], remaining(), lifetime.signal);
     const before = await batch([
-      { command: "press", input: { target: { kind: "selector", selector: 'label="All Tabs"' } } },
+      { command: "press", input: { target: { kind: "selector", selector: 'label="All Tabs"' }, settle: true } },
       { command: "snapshot", input: { interactiveOnly: true } },
     ]);
     const ref = ownedTabClose(before, title);
     const after = await batch([
-      { command: "press", input: { target: { kind: "ref", ref } } },
+      { command: "press", input: { target: { kind: "ref", ref }, settle: true } },
       { command: "snapshot", input: { interactiveOnly: true } },
     ]);
     proveTabClosed(before, after, title);
