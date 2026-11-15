@@ -4,10 +4,13 @@ Class **Original adapter**. `web/scripts/node-shell.ts`, `node-host.ts`,
 `node-spawn.ts` and `node-process.ts` connect the existing Node worker host to
 the pinned Bash and env guests. No upstream implementation is copied.
 
-The consumer pins bash-web at `e6d29598eb0111f16bc3068ad52a9167dac51da7`
-and Waffle at `b6ce9c22e4032637814a3985fab934915be02bcc`, released as
-0.0.130. The existing `scripts/bash-web-guests.ts` receipt verifier checks the
-Bash pin and both guest hashes before loading either program. The Node host
+The consumer pins bash-web 0.0.111 at `e362a4752b505606cc009be59ccfa7a90e4b8cf5`
+and Waffle 0.0.131 through its existing checked release inputs.
+The ordinary producer builds Bash's `shell-runtime` binary from that exact
+source. Self INT and TERM retain signaled outcomes 2 and 15; ordinary exits
+130 and 143 remain exited outcomes. The existing `scripts/bash-web-guests.ts`
+receipt verifier checks the Bash pin and both guest hashes before loading either
+program. The Node host
 accepts the native launcher's `--shell` and `--env-utility` arguments as one
 complete receipt-backed pair. Partial, modified or stale inputs fail startup.
 
@@ -37,6 +40,12 @@ owner or prompt provider, and permission queries returning WASI NOTSUP because
 Node's native filesystem has no Waffle inode metadata. These imports share the
 process cancellation guard and never read memory for an unsupported query.
 The private package handoff remains cancellation-first NOTSUP.
+
+The native launcher's `runtime_proc.getpid` returns the calling process's existing
+directory identity, including root identity 0 and allocated child identities,
+under the same cancellation guard. It does not expose the operating-system
+launcher's PID. This supplies the existing import used by Bash 0.0.111's PID
+expansion and self-signal path without changing the process ABI.
 
 `scripts/test.sh` builds the existing pinned pair for Browser runs and passes it
 explicitly, including under `--no-build`. The package behavior fixture retains

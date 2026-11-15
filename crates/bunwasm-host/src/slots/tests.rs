@@ -126,6 +126,38 @@ fn bash_54a_terminal_geometry_phase_and_no_prompt_contract() {
 }
 
 #[test]
+fn runtime_proc_getpid_uses_the_calling_process_identity() {
+    use wasm_encoder::{
+        EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
+    };
+
+    let mut types = TypeSection::new();
+    types.ty().function([], [ValType::I32]);
+    let mut imports = ImportSection::new();
+    imports.import("runtime_proc", "getpid", EntityType::Function(0));
+    let mut exports = ExportSection::new();
+    exports.export("getpid", ExportKind::Func, 0);
+    let mut binary = wasm_encoder::Module::new();
+    binary.section(&types).section(&imports).section(&exports);
+    let binary = binary.finish();
+
+    for expected in [0, 37, 8192] {
+        let mut stdio = Stdio::inherited();
+        stdio.pid = expected;
+        let mut f = Fixture::with_stdio(stdio);
+        let module = Module::new(f.store.engine(), &binary).unwrap();
+        let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+        let getpid = instance
+            .get_typed_func::<(), i32>(&mut f.store, "getpid")
+            .unwrap();
+        assert_eq!(getpid.call(&mut f.store, ()).unwrap(), expected);
+        assert_eq!(getpid.call(&mut f.store, ()).unwrap(), expected);
+        f.store.data().cancel.select(FinalOutcome::Signal(15));
+        assert!(getpid.call(&mut f.store, ()).is_err());
+    }
+}
+
+#[test]
 fn runtime_proc_inherited_fds_are_a_stable_launch_snapshot() {
     use wasm_encoder::{
         EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
