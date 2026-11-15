@@ -247,10 +247,7 @@ function observingLauncher(name: string, launch: HostLauncher, observation: Pick
 
 async function registerConsumer(runtime: ReturnType<typeof createRuntime>, registration: Registration): Promise<Installation> {
   if (registration === "package") return installBunAdapters(runtime, { module: empty, workerUrl, notificationWorkerUrl });
-  if (registration === "playground") return registerPlaygroundBun({ runtime, engine: "browser", module: empty, profile: "split",
-    launcher: () => () => { throw new Error("Caller uses the executor fixture"); },
-    async loadModule() { throw new Error("Caller uses the executor fixture"); },
-  });
+  if (registration === "playground") return registerPlaygroundBun({ runtime, engine: "browser", module: empty, profile: "split", launcher() { throw new Error("Caller uses the executor fixture"); } });
   const broker = new SubprocessBroker(workerUrl, runtime);
   try { await broker.ready(); return broker; }
   catch (error) { broker.dispose(); throw error; }

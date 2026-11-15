@@ -12,7 +12,7 @@ beforeAll(async () => {
     await Promise.all(browsers.map(browser => browser.close()));
     throw error;
   }
-}, 120_000);
+});
 afterAll(async () => { await Promise.all(browsers.map(browser => browser.close())); });
 
 async function pageFixture(body: (page: Page, server: PageServer, errors: string[]) => Promise<void>, html = counterHtml): Promise<void> {

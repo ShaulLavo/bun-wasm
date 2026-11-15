@@ -1,4 +1,5 @@
 import type { FilesystemClient } from "waffle/fs/client";
+import { FilesystemError } from "waffle/fs/protocol";
 
 export class BunWasmExecutableConflictError extends Error {
   readonly code = "BUN_WASM_EXECUTABLE_CONFLICT";
@@ -17,7 +18,7 @@ export async function createExecutable(filesystem: FilesystemClient, name: strin
     await filesystem.asyncCall("writeFile", [name, false, true], executableMarker);
     return true;
   } catch (error) {
-    if (!error || typeof error !== "object" || !("errno" in error) || error.errno !== 20) throw error;
+    if (!(error instanceof FilesystemError) || error.errno !== 20) throw error;
     const entry = await filesystem.asyncCall("lookup", [name]);
     if (entry?.kind !== "file" || !matchesMarker(await filesystem.asyncCall("readFile", [name]))) {
       throw new BunWasmExecutableConflictError(name);
