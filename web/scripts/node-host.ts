@@ -184,7 +184,7 @@ async function run(data: GuestData) {
     const wasi = new WASI({ version: "preview1", args: request?.argv ?? ["bun"].concat(args), env: processHost.env, preopens: config.preopens, returnOnExit: true });
     const imports: NodeWasiImports = { wasi_snapshot_preview1: wasi.wasiImport };
     let instance: WebAssembly.Instance;
-    if (config.withNet && data.adapter === "bun") cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
+    if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
     const host = processHost.install(imports, () => instance, cliFetch?.call);
     const module = request && data.adapter === "bun" ? await nodeModule({ args, baseModule: data.module, wasmPath: config.wasmPath }) : data.module;
     if (data.linkPlan && module === data.module) linked = await linkNodeProgram(data.linkPlan, imports, config.engineAllocationFault);
