@@ -118,7 +118,9 @@ function padded(n: number, pad?: unknown): number {
   check(pad === undefined, "padded argument");
   return n ? 1 + padded(n - 1) : 0;
 }
-check(padded(depth) === depth, "missing-argument recursion");
+// PBL's own frame stack bounds plain calls in the guest near 3,600 levels; padded calls share it.
+const paddedDepth = pbl ? 2048 : depth;
+check(padded(paddedDepth) === paddedDepth, "missing-argument recursion");
 console.log("deep constructors, setters, bound calls and padded arguments preserved");
 
 let traps = 0;
