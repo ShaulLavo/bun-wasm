@@ -27,6 +27,7 @@ function fixture() {
       if (name === "http_common") return {};
       if (name === "websocket") return { clientClass: () => class {} };
       if (name === "resource_frame") return resourceFrames();
+      if (name === "io_pump") return factory("io_pump.ts")(internal);
       if (name !== "net") throw new Error(`unexpected ${name}`);
       if (!netLoaded) { netLoaded = true; factory("net.js")(internal); }
       return {};

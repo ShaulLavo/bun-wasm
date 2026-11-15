@@ -3,6 +3,7 @@
   "batch": "10-storage",
   "path": "scripts/sandbox-fs-observation-browser.test.ts",
   "inputs": [
+    "scripts/storage-fs-control.ts",
     "scripts/storage-fs-build.ts",
     "scripts/storage-fs-endpoint.ts",
     "scripts/storage-fs-metadata.ts",
