@@ -4,12 +4,24 @@
   const wrappers = new WeakMap<Function, NonNullable<ErrorConstructor["prepareStackTrace"]>>();
   let prepare = defaultPrepare;
 
-  function adapt(site: BunWasm.StackCallSite) {
+  interface NativeCallSite extends BunWasm.StackCallSite {
+    getEnclosingLineNumber?(): number | null;
+    getEnclosingColumnNumber?(): number | null;
+  }
+
+  function programFrame(site: NativeCallSite) {
+    const line = site.getEnclosingLineNumber?.();
+    const column = site.getEnclosingColumnNumber?.();
+    if (typeof line !== "number" || typeof column !== "number") return undefined;
+    return !site.getFunctionName() && line === 1 && column === 1;
+  }
+
+  function adapt(site: NativeCallSite) {
     return new Proxy(site, {
       get(target, key) {
-        if (key === "isToplevel") return () => !target.getFunctionName();
+        if (key === "isToplevel") return () => programFrame(target) ?? target.isToplevel();
         // V8 includes the suspended module program among its async frames.
-        if (key === "isAsync") return () => !!target.getFunctionName() && target.isAsync();
+        if (key === "isAsync") return () => target.isAsync() && programFrame(target) !== true;
         const value = Reflect.get(target, key, target);
         return typeof value === "function" ? value.bind(target) : value;
       },

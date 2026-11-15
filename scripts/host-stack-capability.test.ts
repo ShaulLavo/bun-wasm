@@ -107,17 +107,17 @@ const named = Function('return function sloppyNamed() { return new Error().stack
 const sites = named();
 const sloppy = sites.find(site => site.getFunctionName() === "sloppyNamed");
 const leaf = Function('return async function resumedLeaf() { await 0; return new Error().stack; }')();
-async function awaitingParent() { return await leaf(); }
+async function awaitingParent() { return await (async function () { return await leaf(); })(); }
 const resumed = await awaitingParent();
 return {
   sloppy: sloppy.isToplevel(),
   leaf: resumed.find(site => site.getFunctionName() === "resumedLeaf").isToplevel(),
-  awaiting: resumed.filter(site => site.isAsync()).map(site => site.getFunctionName()),
-  program: sites.filter(site => !site.getFunctionName()).map(site => [site.isToplevel(), site.isAsync()]),
+  awaiting: resumed.filter(site => site.isAsync()).map(site => [site.getFunctionName(), site.isToplevel()]),
+  program: sites.filter(site => !site.getFunctionName() && site.getEnclosingLineNumber() === 1 && site.getEnclosingColumnNumber() === 1).map(site => [site.isToplevel(), site.isAsync()]),
 };
 `;
 
-test("native V8 CallSites distinguish named calls and awaiting program code", async () => {
+test("native V8 CallSites preserve anonymous awaiters and distinguish program frames", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -126,7 +126,7 @@ test("native V8 CallSites distinguish named calls and awaiting program code", as
     const result = await page.evaluate(() => Reflect.get(globalThis, "predicateResult"));
     expect(result.sloppy).toBe(false);
     expect(result.leaf).toBe(false);
-    expect(result.awaiting).toEqual(["awaitingParent"]);
+    expect(result.awaiting).toEqual([[null, false], ["awaitingParent", false], [null, false]]);
     expect(result.program.length).toBeGreaterThan(0);
     expect(result.program.every((frame: boolean[]) => frame[0] && !frame[1])).toBe(true);
   } finally { await browser.close(); }
