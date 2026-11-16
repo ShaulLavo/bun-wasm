@@ -108,6 +108,7 @@ declare namespace BunWasm {
       listeners(target: EventTarget, type: Events.Name): object[];
       count(target: EventTarget, type: Events.Name): number;
       addAbortListener(signal: AbortSignal, listener: EventListener): () => void;
+      observe(target: EventTarget, changed: (type: string) => void): () => void;
     };
     listenerChanged?: (target: object, name?: string | symbol) => void;
     require(name: "inspect"): ConsoleInspector;

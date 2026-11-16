@@ -141,7 +141,7 @@
     get [Symbol.toStringTag]() { return "Worker"; }
   }
 
-  function initialize(port: BunWasm.WebParentPort, options: BunWasm.WebWorkerOptions, webMessageEvent: (event: MessageEvent) => MessageEvent) {
+  function initialize(port: BunWasm.WebParentPort, options: BunWasm.WebWorkerOptions, webMessageEvent: (event: MessageEvent) => MessageEvent, forward: BunWasm.WebParentForwarder) {
     const scope = new EventTarget();
     const initImportMeta = internal.initImportMeta;
     const start = port.start.bind(port);
@@ -210,10 +210,10 @@
         return accepted;
       },
     });
-    EventTarget.prototype.addEventListener.call(port, "message", event => {
+    forward("message", event => {
       if (event instanceof MessageEvent) scope.dispatchEvent(webMessageEvent(event));
     });
-    EventTarget.prototype.addEventListener.call(port, "messageerror", event => {
+    forward("messageerror", event => {
       if (event instanceof MessageEvent) scope.dispatchEvent(messageEvent("messageerror", event.data));
     });
     internal.addIoWaiter({

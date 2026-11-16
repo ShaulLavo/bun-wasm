@@ -482,7 +482,7 @@
     }
   }
 
-  let targetListeners, isTarget, isSignal, signalAborted, signalReason, addAbortAlgorithm, abortSignal;
+  let targetListeners, targetObserver, observeTarget, isTarget, isSignal, signalAborted, signalReason, addAbortAlgorithm, abortSignal;
   const callListener = Function.prototype.call.bind(Function.prototype.call);
   const protectedListeners = new WeakMap();
   const protectedListener = protectedListeners.get.bind(protectedListeners);
@@ -495,7 +495,13 @@
     if (listener == null || typeof listener === "object" || typeof listener === "function") return;
     throw new TypeError("Event listener must be a function or an object");
   }
-  function removeTargetEntry(table, type, entry) {
+  function notifyTarget(target, type) {
+    const record = targetObserver(target);
+    if (!record || !record.callback) return;
+    try { callListener(record.callback, undefined, type); }
+    catch (error) { internal.nextTick(() => { throw error; }); }
+  }
+  function removeTargetEntry(target, table, type, entry, notify = true) {
     if (entry.removed) return;
     entry.removed = true;
     const list = table.get(type);
@@ -505,6 +511,7 @@
     const cleanup = entry.signalCleanup;
     entry.signalCleanup = null;
     if (cleanup) cleanup();
+    if (notify) notifyTarget(target, type);
   }
   function removeListenerIndex(list, index) {
     for (let i = index; i + 1 < list.length; i++) list[i] = list[i + 1];
@@ -523,7 +530,7 @@
   function setAbortAttribute(target, entry, value) {
     const table = targetListeners(target);
     if (value === null || typeof value !== "object" && typeof value !== "function") {
-      if (entry) removeTargetEntry(table, "abort", entry);
+      if (entry) removeTargetEntry(target, table, "abort", entry, false);
       return null;
     }
     if (entry) { entry.listener = value; return entry; }
@@ -550,7 +557,7 @@
     for (const entry of entries) {
       const protectedCallback = protectedListener(entry);
       if (entry.removed || event[kImmediateStop] && !protectedCallback) continue;
-      if (entry.once) removeTargetEntry(table, type, entry);
+      if (entry.once) removeTargetEntry(target, table, type, entry);
       deliverTargetEntry(target, entry, event, protectedCallback || entry.listener);
     }
   }
@@ -568,8 +575,21 @@
 
   class EventTarget {
     #listeners = new Map();
+    #observer = null;
     static {
       targetListeners = target => target.#listeners;
+      targetObserver = target => target.#observer;
+      observeTarget = (target, callback) => {
+        if (!isTarget(target)) throw new TypeError("target must be an EventTarget");
+        if (typeof callback !== "function") throw new TypeError("observer must be a function");
+        if (target.#observer) throw new TypeError("EventTarget already has an observer");
+        const record = { callback };
+        target.#observer = record;
+        return () => {
+          if (target.#observer === record) target.#observer = null;
+          record.callback = null;
+        };
+      };
       isTarget = value => value !== null && (typeof value === "object" || typeof value === "function") && #listeners in value;
     }
     addEventListener(type, listener, options) {
@@ -583,7 +603,8 @@
       const list = table.get(name);
       if (list && list.some(entry => entry.kind === "listener" && entry.listener === listener && entry.capture === capture)) return;
       const entry = addTargetEntry(table, name, listener, { capture, once, passive });
-      if (signal) entry.signalCleanup = addAbortAlgorithm(signal, () => removeTargetEntry(table, name, entry));
+      if (signal) entry.signalCleanup = addAbortAlgorithm(signal, () => removeTargetEntry(this, table, name, entry));
+      notifyTarget(this, name);
     }
     removeEventListener(type, listener, options) {
       const table = this.#listeners;
@@ -593,7 +614,7 @@
       const list = table.get(name);
       if (!list) return;
       const entry = list.find(item => item.kind === "listener" && item.listener === listener && item.capture === capture);
-      if (entry) removeTargetEntry(table, name, entry);
+      if (entry) removeTargetEntry(this, table, name, entry);
     }
     dispatchEvent(event) {
       if (!(event instanceof Event)) throw new TypeError("Argument 1 ('event') to EventTarget.dispatchEvent must be an instance of Event");
@@ -653,7 +674,9 @@
       return this.#onabort ? this.#onabort.listener : null;
     }
     set onabort(value) {
+      const previous = this.#onabort ? this.#onabort.listener : null;
       this.#onabort = setAbortAttribute(this, this.#onabort, value);
+      if (previous !== (this.#onabort ? this.#onabort.listener : null)) notifyTarget(this, "abort");
     }
     throwIfAborted() {
       if (this.#aborted) throw this.#reason;
@@ -736,9 +759,13 @@
       return list ? list.length : 0;
     },
     addAbortListener(signal, listener) {
-      addTargetEntry(targetListeners(signal), "abort", listener, { capture: false, once: true, passive: false }, true);
+      const table = targetListeners(signal);
+      const before = table.get("abort")?.length || 0;
+      addTargetEntry(table, "abort", listener, { capture: false, once: true, passive: false }, true);
+      if (table.get("abort").length !== before) notifyTarget(signal, "abort");
       return () => signal.removeEventListener("abort", listener);
     },
+    observe: observeTarget,
   };
 
   // --- Blob / File ------------------------------------------------------------
