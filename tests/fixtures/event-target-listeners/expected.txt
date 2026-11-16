@@ -1,0 +1,21 @@
+identity, capture, duplicates, receiver and fresh snapshots
+listener object getter is resolved once at delivery
+live removal, late registration and reentrant once
+protected abort order, public stop and idempotent disposal
+suppressed signal rejects once and cleans both emitter listeners
+successful waits release abort hooks and pre-aborted hooks are queued
+registration signals cancel despite stopped abort and reject pre-aborted adds
+removed and fired registrations release signal hooks
+genuine subclasses and forged or proxied brands
+public duck signals retain ordinary registration and disposal
+Bun event-name conversion and option getter order
+onabort descriptor, ordered replacement, clear and snapshot values
+attribute and ordinary duplicate, capture and once domains
+inert attribute objects are visible without handleEvent access and primitives clear
+live attribute replacement and removed-slot dispatch rules
+private attribute dispatch ignores own shadows and callback call or apply properties
+ordinary-first and protected-first duplicate options remain independent
+public disposal repeats current two-argument removal and preserves no-op or thrown behavior
+hidden cancellation and composition bypass public methods and preserve reason
+passive, once, signal and capture options stay owned by first registration
+active-event rejection and repeated-dispatch state reset
