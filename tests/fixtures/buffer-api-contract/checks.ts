@@ -58,7 +58,7 @@ export function apiChecks(factory: typeof Buffer, transcode: Transcode) {
     } },
     { name: "transcode reports encoding and malformed conversion errors", run() {
       assert.throws(() => Reflect.apply(transcode, undefined, []), { code: "ERR_INVALID_ARG_TYPE" });
-      assert.throws(() => transcode(factory.from([65]), "base64", "utf8"), { code: "U_ILLEGAL_ARGUMENT_ERROR", errno: 1 });
+      assert.throws(() => Reflect.apply(transcode, undefined, [factory.from([65]), "base64", "utf8"]), { code: "U_ILLEGAL_ARGUMENT_ERROR", errno: 1 });
       assert.throws(() => transcode(factory.from([0xc0, 65]), "utf8", "ucs2"), { code: "U_INVALID_CHAR_FOUND", errno: 10 });
       assert.throws(() => transcode(factory.from([0, 0xd8]), "ucs2", "utf8"), { code: "U_INVALID_CHAR_FOUND", errno: 10 });
       assert.equal(Reflect.apply(transcode, undefined, [factory.alloc(0), "bad", "bad"]).length, 0);
