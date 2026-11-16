@@ -807,7 +807,56 @@ function captureCallback(callback: () => void, thrown: unknown[]) {
   try { callback(); } catch (error) { thrown.push(error); }
 }
 
-test("a delivery batch that cannot queue its next step ends, and the loop delivers the rest in order", async () => {
+function refuseDeliveryStep(timers: { setImmediate(callback: () => void): unknown }, schedule: (callback: () => void) => unknown, failureAt: string, failure: Error) {
+  timers.setImmediate = callback => {
+    timers.setImmediate = schedule;
+    if (failureAt === "after enqueue") schedule(callback);
+    throw failure;
+  };
+}
+
+const closeFailures = ["before enqueue", "after enqueue"].flatMap(failureAt => [1, 3].map(afterMessage => ({ failureAt, afterMessage })));
+for (const { failureAt, afterMessage } of closeFailures) {
+  test(`local close retains selected batch and close ownership after failure ${failureAt} following message ${afterMessage}`, async () => {
+    const runtime = sourcePorts();
+    cleanup.add(() => runtime.__fixtureShutdown());
+    const { port1, port2 } = new runtime.MessageChannel();
+    const received: unknown[] = [], thrown: unknown[] = [];
+    let closes = 0, pending = 0;
+    const queue = runtime.internal.realTimers.setImmediate;
+    const schedule = (callback: () => void) => {
+      pending++;
+      return queue(() => { pending--; captureCallback(callback, thrown); });
+    };
+    const failure = new Error(failureAt);
+    runtime.internal.realTimers.setImmediate = schedule;
+    port2.on("close", () => { closes++; });
+    port2.on("message", value => {
+      received.push(value);
+      if (value === 1) { port2.close(); port1.postMessage("later"); }
+      if (value === afterMessage) refuseDeliveryStep(runtime.internal.realTimers, schedule, failureAt, failure);
+    });
+    try {
+      port1.postMessage(1); port1.postMessage(2); port1.postMessage(3);
+      for (let turn = 0; turn < 12; turn++) { await loopTurn(); runtime.step(); }
+      expect(received).toEqual([1, 2, 3]);
+      expect(closes).toBe(1);
+      expect(thrown).toEqual([failure]);
+      expect(pending).toBe(0);
+      expect(runtime.internal.messagePortRefs.size).toBe(0);
+      expect(runtime.__fixtureOwners()).toEqual([]);
+      expect(runtime.step()).toBe(false);
+      expect(runtime.step()).toBe(false);
+    } finally {
+      runtime.internal.realTimers.setImmediate = schedule;
+      runtime.__fixtureShutdown();
+      await loopTurn();
+      expect(pending).toBe(0);
+    }
+  });
+}
+
+test("a delivery batch that cannot queue its next step remains owed, and the loop delivers the rest in order", async () => {
   const { made, port1, port2, delivered, timers } = selfTransferRefused();
   // Errors a delivery callback throws are kept here instead of ending the test process.
   const queue = timers.setImmediate, thrown: unknown[] = [];

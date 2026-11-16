@@ -19,13 +19,20 @@ through the existing timer queue. This is an original **Host feature** correctio
 in `worker_threads.ts::MessagePort.#continueBatch`. A microtask continuation could
 deliver the next message before an async `events.once()` waiter had finished
 adopting its inner promise and installed its next listener. A task boundary lets
-the complete promise queue drain between selected messages. The selected batch,
-local-close behavior, turn token, and failed-scheduling recovery remain unchanged.
+the complete promise queue drain between selected messages. A failed scheduling
+attempt retains its selected batch or local-close work and invalidates any
+callback it already queued. The loop resumes that work for both open and closing
+ports. Local-close completion uses the same tracked scheduler, so selected
+messages survive a failed continuation while later packets stay discarded.
 The real-source continuation check uses the actual events and worker factories,
 including extra awaited continuations. The unchanged `worker-port-closure` guest
 fixture remains the integration regression. The scheduling-failure source
 control now refuses the actual task scheduler and retains its original recovery
-and ordering assertions. No native binding or provider interface changes.
+and ordering assertions. Additional controls combine local close with failures
+before and after enqueue, during both batch delivery and close scheduling. They
+check every selected message, one close, no duplicate or later delivery, no
+pending callbacks, no references, no broker owners and a quiescent loop.
+No native binding or provider interface changes.
 
 A file worker's guest is started as `<execPath> -- <file>`. `--` marks a file operand
 both for `bun` and for a process started as `node`, whose operands are always files

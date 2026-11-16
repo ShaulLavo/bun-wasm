@@ -470,6 +470,7 @@
     /** `backlog`: the last drain stopped at its quota. `terminal`: the writing end is gone and drained. */
     group: { io: BunWasm.GroupSharedLane; backlog: boolean; terminal: boolean } | null;
     phase: "open" | "closing" | "closed";
+    /** Owns selected messages across failed scheduling, including after local close replaces queue. */
     batch: DeliveryBatch | null;
     started: boolean;
     /**
@@ -962,12 +963,16 @@
      */
     static #retry(port: MessagePort): boolean {
       const state = port.#state;
-      if (state?.phase !== "open") return false;
-      try {
-        if (state.pending.size && !port.#attachmentWait) port.#accept();
-        else port.#schedule();
-      } catch { /* still owed */ }
-      return state.started && !state.scheduled && !state.batch && state.queue.length > 0;
+      if (!state || state.phase === "closed") return false;
+      try { port.#retryDelivery(state); } catch { /* still owed */ }
+      return !state.scheduled && Boolean(state.batch || state.phase === "closing" || state.started && state.queue.length);
+    }
+    #retryDelivery(state: PortState) {
+      if (state.scheduled) return;
+      if (state.batch) { this.#continueBatch(state, state.batch); return; }
+      if (state.phase === "closing") { this.#scheduleLocalClose(state); return; }
+      if (state.pending.size && !this.#attachmentWait) this.#accept();
+      else this.#schedule();
     }
     #maybeClose() {
       const state = this.#state;
@@ -1049,9 +1054,7 @@
     #schedule() {
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.started || state.scheduled || state.batch || !state.queue.length) return;
-      const turn = ++state.turn;
-      internal.realTimers.setImmediate(() => { if (state.turn === turn) this.#deliver(state); });
-      state.scheduled = turn;
+      this.#scheduleStep(state, () => this.#deliver(state));
     }
     #deliver(state: PortState) {
       state.scheduled = 0;
@@ -1080,19 +1083,29 @@
       if (this.#state !== state) { this.#stopBatch(state); return; }
       if (!batch.remaining || !batch.queue.length) {
         state.batch = null;
-        if (state.phase === "closing") { internal.realTimers.setImmediate(() => this.#finishLocalClose(state)); return; }
+        if (state.phase === "closing") { this.#scheduleLocalClose(state); return; }
         this.#schedule(); this.#maybeClose(); return;
       }
+      this.#scheduleStep(state, () => this.#deliverBatch(state, batch));
+    }
+    #scheduleStep(state: PortState, callback: () => void) {
       const turn = ++state.turn;
-      const deliver = () => { if (state.turn === turn) this.#deliverBatch(state, batch); };
+      const deliver = () => {
+        if (this.#state !== state || state.turn !== turn) return;
+        state.scheduled = 0;
+        callback();
+      };
       try { internal.realTimers.setImmediate(deliver); }
       catch (error) {
-        // A batch with no continuation would hold the queue for ever. It ends here, a callback
-        // the failed call may still have queued is overtaken, and the rest is owed as above.
-        state.turn++; state.batch = null;
+        // Keep the selected batch or local close owed. A failed call may have queued its
+        // callback: invalidate that turn so only the pump's next attempt can advance it.
+        state.turn++; state.scheduled = 0;
         throw error;
       }
       state.scheduled = turn;
+    }
+    #scheduleLocalClose(state: PortState) {
+      this.#scheduleStep(state, () => this.#finishLocalClose(state));
     }
     // Each of these first settles earlier posts: a post that was refused beyond its own cleanup
     // has left this port detached or counted, and is rolled back before the port is used.
@@ -1118,7 +1131,7 @@
       for (const graph of state.pending.values()) discardPendingTransfers(graph);
       MessagePort.#closeQueuedPorts(state.queue);
       state.queue = []; state.pending.clear(); this.unref();
-      if (!state.batch) internal.realTimers.setImmediate(() => this.#finishLocalClose(state));
+      if (!state.batch) this.#scheduleLocalClose(state);
     }
     static #closeQueuedPorts(queue: unknown[]) {
       for (const value of queue) {
