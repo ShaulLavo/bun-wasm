@@ -872,7 +872,10 @@
         // The head frame cannot decode in this synchronous turn. It stays pending, whole, and delivers once this thread's event loop runs.
         throw Object.assign(new Error("receiveMessageOnPort: the next message needs a shared backing that is not attached in this thread; it will be delivered once this thread's event loop runs"), { code: "ERR_WORKER_MESSAGE_BACKING_NOT_ATTACHED" });
       }
-      const message = messagePacket(state.queue.shift()).data;
+      const queue = state.queue, batch = state.batch;
+      const packet = queue.shift();
+      if (batch && batch.queue === queue && batch.remaining > 0) batch.remaining--;
+      const message = messagePacket(packet).data;
       port.#maybeClose();
       return { message };
     }
@@ -1086,16 +1089,16 @@
         if (state.phase === "closing") { this.#scheduleLocalClose(state); return; }
         this.#schedule(); this.#maybeClose(); return;
       }
-      this.#scheduleStep(state, () => this.#deliverBatch(state, batch));
+      this.#scheduleStep(state, () => this.#deliverBatch(state, batch), internal.realTimers.queueSelectedTask);
     }
-    #scheduleStep(state: PortState, callback: () => void) {
+    #scheduleStep(state: PortState, callback: () => void, enqueue: (callback: () => void) => unknown = internal.realTimers.setImmediate) {
       const turn = ++state.turn;
       const deliver = () => {
         if (this.#state !== state || state.turn !== turn) return;
         state.scheduled = 0;
         callback();
       };
-      try { internal.realTimers.setImmediate(deliver); }
+      try { enqueue(deliver); }
       catch (error) {
         // Keep the selected batch or local close owed. A failed call may have queued its
         // callback: invalidate that turn so only the pump's next attempt can advance it.

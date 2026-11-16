@@ -15,7 +15,7 @@ control messages over two private host pipes. `worker_stdio.ts` adapts the exist
 subprocess streams to Node streams. These are original TypeScript implementations.
 
 Selected MessagePort batches schedule each subsequent message as a real task
-through the existing timer queue. This is an original **Host feature** correction
+through the private selected-continuation queue. This is an original **Host feature** correction
 in `worker_threads.ts::MessagePort.#continueBatch`. A microtask continuation could
 deliver the next message before an async `events.once()` waiter had finished
 adopting its inner promise and installed its next listener. A task boundary lets
@@ -24,6 +24,9 @@ attempt retains its selected batch or local-close work and invalidates any
 callback it already queued. The loop resumes that work for both open and closing
 ports. Local-close completion uses the same tracked scheduler, so selected
 messages survive a failed continuation while later packets stay discarded.
+Selected continuations retain their batch order ahead of unrelated immediate
+work, including BroadcastChannel gates. Synchronous receives consume the same
+finite selection allowance; new packets start another ordinary batch.
 The real-source continuation check uses the actual events and worker factories,
 including extra awaited continuations. The unchanged `worker-port-closure` guest
 fixture remains the integration regression. The scheduling-failure source
@@ -33,6 +36,8 @@ before and after enqueue, during both batch delivery and close scheduling. They
 check every selected message, one close, no duplicate or later delivery, no
 pending callbacks, no references, no broker owners and a quiescent loop.
 No native binding or provider interface changes.
+The queue, quota and failure contract is classified in
+[Selected message tasks](selected-message-tasks.md).
 
 A file worker's guest is started as `<execPath> -- <file>`. `--` marks a file operand
 both for `bun` and for a process started as `node`, whose operands are always files
