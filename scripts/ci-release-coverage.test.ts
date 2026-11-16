@@ -200,7 +200,10 @@ test("release caches can grow after partial restore without saving duplicate war
     expect(save).toContain("if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.inventory.outputs.changed == 'true'");
     expect(save).not.toContain("github.run_id");
     const workflow = expandedCiWorkflow();
-    expect(workflow.match(/uses: \.\/\.github\/actions\/save-release-downloads/g)?.length).toBe(workflow.match(/uses: \.\/\.github\/actions\/release-downloads/g)?.length);
+    expect(workflow.match(/uses: \.\/\.github\/actions\/save-release-downloads/g)?.length).toBe((workflow.match(/uses: \.\/\.github\/actions\/release-downloads/g)?.length ?? 0) - 1);
+    const readOnly = workflow.split("\n  ordinary-web-guests:\n")[1]!.split("\n  shared-jsc-identity:\n")[0]!;
+    expect(readOnly).toContain("uses: ./.github/actions/release-downloads");
+    expect(readOnly).not.toContain("uses: ./.github/actions/save-release-downloads");
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 

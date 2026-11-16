@@ -291,25 +291,26 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
     "jsc-prebuild": { needs: ["selection", "jsc-identity"], minutes: 45 },
     "native-quality": { needs: ["selection", "jsc-prebuild"], minutes: 45 },
     rust: { needs: ["selection", "jsc-prebuild", "native-quality"], minutes: 60 },
+    "ordinary-web-guests": { needs: ["selection", "rust"], minutes: 20 },
     package: { needs: "selection", minutes: 10 },
     "shared-jsc-identity": { needs: "selection", minutes: 15 },
     "shared-prebuild": { needs: ["selection", "shared-jsc-identity"], minutes: 45 },
     "shared-spidermonkey-prebuild": { needs: ["selection", "shared-prebuild"], minutes: 30 },
-    "shared-sysroot": { needs: ["selection", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"], minutes: 30 },
-    "shared-native": { needs: ["selection", "rust", "shared-sysroot"], minutes: 30 },
+    "shared-sysroot": { needs: ["selection", "ordinary-web-guests", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"], minutes: 30 },
+    "shared-native": { needs: ["selection", "ordinary-web-guests", "rust", "shared-sysroot"], minutes: 30 },
     "shared-browser": { needs: ["selection", "shared-sysroot"], minutes: 30 },
-    "shared-proof": { needs: ["selection", "quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser"], minutes: 5 },
+    "shared-proof": { needs: ["selection", "ordinary-web-guests", "quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser"], minutes: 5 },
     web: { needs: ["selection", "web-unit", "web-browser"], minutes: 10 },
     "web-unit": { needs: "selection", minutes: 10 },
     "web-browser": { needs: "selection", minutes: 10 },
     "process-bundles": { needs: "selection", minutes: 10 },
-    "browser-guest": { needs: ["selection", "rust"], minutes: 10 },
-    "browser-process": { needs: ["selection", "rust", "process-bundles", "browser-guest"], minutes: 10 },
-    "ci-result": { needs: ["selection", "quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process"], minutes: 5 },
-    "update-status": { needs: ["selection", "quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process", "ci-result"], minutes: 5 },
+    "browser-guest": { needs: ["selection", "ordinary-web-guests", "rust"], minutes: 10 },
+    "browser-process": { needs: ["selection", "ordinary-web-guests", "rust", "process-bundles", "browser-guest"], minutes: 10 },
+    "ci-result": { needs: ["selection", "ordinary-web-guests", "quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process"], minutes: 5 },
+    "update-status": { needs: ["selection", "ordinary-web-guests", "quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process", "ci-result"], minutes: 5 },
   });
   const browser = object(jobs["browser-process"]);
   expect(object(browser.strategy).matrix).toEqual({ browser: ["chromium", "firefox", "webkit"] });
   expect(browser.if).toContain("needs.process-bundles.result == 'success'");
-  expect(browser.if).toContain("needs.rust.result == 'success' || needs.rust.result == 'skipped'");
+  expect(browser.if).toContain("needs.ordinary-web-guests.result == 'success'");
 });
