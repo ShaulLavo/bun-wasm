@@ -104,3 +104,26 @@ test("preflight verifies only engine/profile pairs used by the selected template
     await expect(preflightSelection({ ...angular, profile: "split" })).resolves.toBeUndefined();
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("Nuxt goals and FIFO use the catalog default and require its actual shared pair", async () => {
+  const nuxt = frameworks.find(item => item.id === "nuxt");
+  if (!nuxt) throw new Error("Missing Nuxt template");
+  const config = options(args.concat("--frameworks=nuxt"));
+  expect(options(nativeRunnerArgs(config, "/Users/test/goals")).profile).toBeUndefined();
+  for (const engine of sharedEngines.concat(["browser"])) {
+    const url = new URL(playgroundURL("http://test/", nuxt, engine));
+    expect(url.searchParams.has("profile")).toBe(false);
+    expect(new Playground(url.search).profile).toBe(engine === "browser" ? "split" : "shared-group");
+    expect(new Playground(new URL(playgroundURL("http://test/", nuxt, engine, "split")).search).profile).toBe("split");
+  }
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-nuxt-profile-"));
+  try {
+    await Bun.write(join(root, "nuxt.json"), "{}");
+    await Bun.write(join(root, "bun.wasm.gz"), "split core");
+    await Bun.write(join(root, "quickjs.wasm.gz"), "split side");
+    const box = { framework: "nuxt", engine: "quickjs", browser: "iphone-safari" } as const;
+    expect(prerequisites(box, { root })?.reason).toContain("profiles/shared-group/bun.wasm.gz");
+    expect(prerequisites(box, { root, profile: "split", iphoneControlUrl: "http://test/control" })).toBeUndefined();
+    expect(prerequisites({ ...box, engine: "browser" }, { root })?.reason).toContain("bun-browser.wasm.gz");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

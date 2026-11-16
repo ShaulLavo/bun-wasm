@@ -2,7 +2,7 @@ export const projectTemplates = [
   { id: "vite-react", label: "Vite + React", directory: "template", file: "vite-react.json", sharedWorkers: true, editorFile: "src/App.tsx" },
   { id: "next", label: "Next.js", directory: "template-next", file: "next.json", sharedWorkers: false, editorFile: "pages/index.tsx" },
   { id: "next-app", label: "Next.js App Router", directory: "template-next-app", file: "next-app.json", sharedWorkers: false, editorFile: "app/page.tsx" },
-  { id: "nuxt", label: "Nuxt", directory: "template-nuxt", file: "nuxt.json", sharedWorkers: false, editorFile: "app.vue" },
+  { id: "nuxt", label: "Nuxt", directory: "template-nuxt", file: "nuxt.json", sharedWorkers: true, editorFile: "app.vue" },
   { id: "sveltekit", label: "SvelteKit", directory: "template-sveltekit", file: "sveltekit.json", sharedWorkers: false, editorFile: "src/routes/+page.svelte" },
   { id: "astro", label: "Astro", directory: "template-astro", file: "astro.json", sharedWorkers: false, editorFile: "src/pages/index.astro" },
   { id: "react-router", label: "React Router", directory: "template-react-router", file: "react-router.json", sharedWorkers: false, editorFile: "app/routes/home.tsx" },
