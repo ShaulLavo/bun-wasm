@@ -451,8 +451,9 @@
     },
   });
 
-  EventEmitter.listenerCount = function staticListenerCount(emitter: Emitter, type: Name) {
+  EventEmitter.listenerCount = function staticListenerCount(emitter: Source, type: Name) {
     if (emitter != null && typeof emitter.listenerCount === "function") return emitter.listenerCount(type);
+    if (internal.eventTargets.isTarget(emitter)) return internal.eventTargets.count(emitter, type);
     throw invalidArgType("emitter", "an instance of EventEmitter or EventTarget", emitter);
   };
 
@@ -461,8 +462,9 @@
   }
 
   EventEmitter.getEventListeners = function getEventListeners(emitterOrTarget: Source, type: Name) {
-    if (typeof emitterOrTarget.listeners === "function") return emitterOrTarget.listeners(type);
-    return [];
+    if (emitterOrTarget != null && typeof emitterOrTarget.listeners === "function") return emitterOrTarget.listeners(type);
+    if (internal.eventTargets.isTarget(emitterOrTarget)) return internal.eventTargets.listeners(emitterOrTarget, type);
+    throw invalidArgType("emitter", "an instance of EventEmitter or EventTarget", emitterOrTarget);
   };
 
   EventEmitter.getMaxListeners = function getMaxListeners(emitterOrTarget: Source) {
@@ -542,6 +544,12 @@
     throw invalidArgType("emitter", "an instance of EventEmitter or EventTarget", target);
   }
 
+  function listenForAbort(signal: Pick<AbortSignal, "addEventListener" | "removeEventListener">, listener: Listener) {
+    if (internal.eventTargets.isSignal(signal)) return internal.eventTargets.addAbortListener(signal, listener);
+    signal.addEventListener("abort", listener, { once: true });
+    return () => signal.removeEventListener("abort", listener);
+  }
+
   EventEmitter.once = async function once(emitter: Source, name: Name, options: BunWasm.Events.WaitOptions = {}) {
     validateOptions(options);
     const signal = options.signal;
@@ -578,8 +586,7 @@
         removeError();
         reject(abortError(signal));
       };
-      signal.addEventListener("abort", onAbort, { once: true });
-      removeAbort = () => signal.removeEventListener("abort", onAbort);
+      removeAbort = listenForAbort(signal, onAbort);
     });
   };
 
@@ -639,8 +646,7 @@
     }
     if (signal) {
       const onAbort = () => onError(abortError(signal));
-      signal.addEventListener("abort", onAbort, { once: true });
-      removers.push(() => signal.removeEventListener("abort", onAbort));
+      removers.push(listenForAbort(signal, onAbort));
     }
 
     const iterator: BunWasm.Events.Iterator = {
@@ -686,11 +692,11 @@
       const symbol: SymbolConstructor & { dispose?: symbol } = Symbol;
       return { [symbol.dispose || Symbol.for("Symbol.dispose")]() {} };
     }
-    signal.addEventListener("abort", listener, { once: true });
+    const remove = listenForAbort(signal, listener);
     const symbol: SymbolConstructor & { dispose?: symbol } = Symbol;
     return {
       [symbol.dispose || Symbol.for("Symbol.dispose")]() {
-        signal.removeEventListener("abort", listener);
+        remove();
       },
     };
   };

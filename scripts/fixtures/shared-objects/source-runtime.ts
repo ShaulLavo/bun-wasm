@@ -1,11 +1,11 @@
-import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
+import { inspect } from "node:util";
 import { runInThisContext } from "node:vm";
 import type { SharedObjects } from "../../../web/src/shared-objects/protocol";
 import type { Channel, Codec, CodecHooks, Graph } from "./runtime-types";
 import type { ImmediateQueue } from "../../../crates/bunwasm-runtime/src/js/immediate_queue-types";
 
-export interface SourcePort {
+export interface SourcePort extends EventTarget {
   on(event: string, listener: (value: unknown) => void): void;
   postMessage(value: unknown, transfer?: readonly unknown[]): void;
   close(): void;
@@ -36,14 +36,38 @@ const native = {
   base64Decode: (value: string) => new Uint8Array(Buffer.from(value, "base64")),
   transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
 };
-function factory(name: string, overlay?: (source: string) => string, extension = "ts") {
+function factory(name: string, overlay?: (source: string) => string, extension = "ts", bindings?: Record<string, unknown>) {
   const path = new URL(`../../../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url);
   const input = readFileSync(path, "utf8");
-  const source = overlay ? overlay(input) : input;
-  const emitted = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__sharedFixture = ${source}`);
-  const value: unknown = runInThisContext(emitted);
+  const source = (overlay ? overlay(input) : input).trim().replace(/;$/, "");
+  const expression = bindings ? `(function(${Object.keys(bindings).join(",")}) { return (\n${source}\n); })` : source;
+  const emitted = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__sharedFixture = ${expression}`);
+  const evaluate: unknown = runInThisContext(emitted);
+  if (typeof evaluate !== "function") throw new Error(`Missing ${name} evaluator`);
+  const value: unknown = bindings ? Reflect.apply(evaluate, undefined, Object.values(bindings)) : evaluate;
   if (typeof value !== "function") throw new Error(`Missing ${name} factory`);
   return value;
+}
+/** Real web and events factories share the broker consumer's realm without replacing host globals. */
+function sourceWeb() {
+  const globals: Record<string, unknown> = {};
+  const internal = {
+    native: { ...native, utf8Encode: (value: string) => new TextEncoder().encode(value),
+      timeOrigin: () => performance.timeOrigin, now: () => performance.now(), platformInfo: { version: Bun.version, arch: process.arch } },
+    nextTick: (callback: () => void) => queueMicrotask(callback),
+    web: { Event, EventTarget, AbortController, AbortSignal },
+    require(name: string): unknown {
+      if (name === "text_decoder") return TextDecoder;
+      if (name === "web_brand") return factory(name);
+      if (name === "url_search_params") return factory(name)(internal);
+      if (name === "inspect") return { nodeInspect: inspect };
+      if (name === "streams" || name === "body_streams") return {};
+      throw new Error(`Unexpected web module ${name}`);
+    },
+  };
+  factory("web", undefined, "js")(internal)((name: string, value: unknown) => { globals[name] = value; }, () => {});
+  const events = factory("events", undefined, "ts", globals)(internal);
+  return { internal, events, globals };
 }
 export function sourceCodec(sharedObjects?: SharedObjects, hooks?: CodecHooks): Codec {
   return factory("worker_codec")({ native, sharedObjects }).create({ sharedObjects, ...(hooks ?? {
@@ -90,12 +114,13 @@ function childOverlay(source: string) {
  * Loads net.js into `internal`, which gives it the real waiter set, `addIoWaiter` and `pumpIo`.
  * Only what the module touches while loading is supplied; nothing here opens a socket.
  */
-function sourceLoop(internal: { native: object; require(name: string): unknown; pumpIo?: () => boolean }, modules: Map<string, unknown>) {
+function sourceLoop(internal: { native: object; web: object; require(name: string): unknown; pumpIo?: () => boolean }, modules: Map<string, unknown>) {
   const unused = () => { throw new Error("No networking in this fixture"); };
   modules.set("http_common", { validateHeaderName: unused, validateHeaderValue: unused, validateMethod: unused, validatePath: unused, validateStatus: unused, outgoingHeaders: unused });
   modules.set("websocket", { clientClass: () => class {} });
   modules.set("io_pump", factory("io_pump")(internal));
-  modules.set("net", factory("net", undefined, "js")(Object.assign(internal, { web: { Request, Response, Headers } })));
+  Object.assign(internal.web, { Request, Response, Headers });
+  modules.set("net", factory("net", undefined, "js")(internal));
   const pumpIo = internal.pumpIo;
   if (!pumpIo) throw new Error("net.js installed no pumpIo");
   return { pumpIo };
@@ -166,6 +191,7 @@ function sourceImmediateClock(active?: () => boolean) {
   };
 }
 export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; route?: number[]; lanes?: { ledger: number; cell: [number, number] }; active?: () => boolean; realLoop?: boolean; core?: CommitNatives } & TransferHooks = {}) {
+  const source = sourceWeb();
   const runtimeNative = { ...native, transferArrayBuffers: transferNative(options, options.core), transferSettled() { options.settled?.(); } };
   let codec: Codec | undefined;
   let pump: (() => void) | undefined;
@@ -174,24 +200,26 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.S
   const env = options.graph ? { BUNWASM_WORKER_INIT: JSON.stringify({ route: options.route ?? [0], envGroup: "fixture", argv: ["bun", "child.ts"], execArgv: [], graph: options.graph, lanes: options.lanes }), BUNWASM_WORKER_CONTROL: JSON.stringify({ input: 3, output: 4 }) } : {};
   const modules = new Map<string, unknown>([
     ["process", { env, execArgv: [], execPath: "bun", cwd: () => "/" }],
-    ["events", EventEmitter], ["structured_clone", { structuredClone }], ["net", {}],
+    ["events", source.events], ["structured_clone", { structuredClone }], ["net", {}],
     ["worker_channel", { open: () => options.channel }],
     ["worker_codec", { create(hooks: CodecHooks) { codec = factory("worker_codec")({ native: runtimeNative, sharedObjects: options.sharedObjects }).create(hooks); return codec; } }],
   ]);
   const lifecycle: Pick<BunWasm.Internal, "workerStartup" | "workerErrorData" | "clonePorts" | "workerExit"> = {};
   const clock = sourceImmediateClock(options.active);
   modules.set("immediate_queue", clock.Constructor);
-  const internal = Object.assign({
+  const runtimeInternal = {
     native: runtimeNative,
     realTimers: clock.timers, messagePortRefs: new Set<object>(), sharedObjects: options.sharedObjects,
     require(name: string) { if (!modules.has(name)) throw new Error(`Unexpected module ${name}`); return modules.get(name); },
     builtin: () => ({ createRequire: () => () => { throw new Error("No fixture preloads"); } }),
     addIoWaiter(value: BunWasm.IoWaiter) { waiter = value; return value; },
     set workerPump(callback: () => void) { pump = callback; },
-  }, lifecycle);
+  };
+  const internal = Object.assign(source.internal, runtimeInternal, lifecycle);
+  Object.defineProperties(internal, Object.getOwnPropertyDescriptors(runtimeInternal));
   // The runtime's own I/O loop (net.js): its waiter set and the pumpIo the engine driver calls.
   const loop = options.realLoop ? sourceLoop(internal, modules) : undefined;
-  const runtime: PortsRuntime = factory("worker_threads", childOverlay)(internal);
+  const runtime: PortsRuntime = factory("worker_threads", childOverlay, "ts", { ...source.globals, URL })(internal);
   if (!codec || !pump) throw new Error("Missing codec or pump");
   /** One ordinary event-loop step of this runtime's waiter, housekeeping included. */
   const step = () => waiter?.step();

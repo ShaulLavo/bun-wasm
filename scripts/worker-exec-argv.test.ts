@@ -1,31 +1,32 @@
 import { expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
+import { runInContext } from "node:vm";
+import { eventTargetSource } from "./event-target-source";
 import * as path from "node:path";
 
 const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${readFileSync(
   new URL("../crates/bunwasm-runtime/src/js/worker_threads.ts", import.meta.url), "utf8")}`);
 
 function workerModule(env: Record<string, string> = {}, execArgv: string[] = [], execPath = "bun") {
+  const target = eventTargetSource({ structuredClone });
   const preloads: string[] = [];
   const launches: { argv: string[]; env: Record<string, string>; worker: object }[] = [];
   const stop = new Error("captured spawn");
   const process = { env: { ...env }, execArgv, execPath, cwd: () => "/", noDeprecation: false };
   let port: unknown;
   const modules = {
-    process, path, events: EventEmitter, structured_clone: { structuredClone }, net: {},
+    process, path, events: target.events, structured_clone: { structuredClone }, net: {},
     worker_codec: { create: () => ({ wait: () => null, prepare: () => ({ graph: {}, commit() {}, abort() {} }), decode: () => [null, [], port] }) },
     spawn: { spawnWorker(argv: string[], options: { env: Record<string, string> }, worker: object) { expect(Object.hasOwn(options, "_worker")).toBe(false); launches.push({ argv, env: options.env, worker }); throw stop; } },
     worker_channel: { open: () => ({ send() {} }) },
   };
-  const internal = {
+  const internal = Object.assign(target.internal, {
     native: {}, realTimers: { setImmediate() {} }, messagePortRefs: new Set<object>(), addIoWaiter() {}, workerNoWarnings: false,
     require(name: string) { if (!(name in modules)) throw new Error(name); return Reflect.get(modules, name); },
     builtin: () => ({ createRequire: () => (name: string) => preloads.push(name) }),
-  };
-  const context = { EventTarget, Event, MessageEvent, DOMException, URL, structuredClone };
-  const implementation = runInNewContext(source, context)(internal);
+  });
+  const context = target.context;
+  const implementation = runInContext(source, context)(internal);
   port = new implementation.MessageChannel().port1;
   function launch(options: object = {}, filename = "") {
     expect(() => new implementation.Worker(filename, { eval: true, ...options })).toThrow(stop);

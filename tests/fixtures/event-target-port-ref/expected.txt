@@ -1,0 +1,8 @@
+port base listener membership
+port once and signal release refs
+port duplicate capture demand
+port explicit ref choices stay sticky
+port onmessage selects explicit ref mode
+port mixed and reentrant demand
+port explicit unref still receives asynchronously
+worker forwarder excludes only its trusted identity

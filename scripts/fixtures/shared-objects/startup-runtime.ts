@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext, runInNewContext } from "node:vm";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "../../../web/src/buffer-transfer";
@@ -47,13 +46,15 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
   const channel = { send(frame: unknown) { frames.push(frame); }, drain() {}, pump() { return false; },
     subscriptions: () => new Uint8Array(), close() { closes++; }, pending: false, ended: false };
   const modules: Record<string, unknown> = {
-    process, events: EventEmitter, structured_clone: { structuredClone }, net: {},
-    web: () => {}, crypto: () => {}, console: {}, bun: {},
+    process, structured_clone: { structuredClone }, net: {},
+    text_decoder: TextDecoder, streams: {}, body_streams: {},
+    crypto: () => {}, console: {}, bun: {},
     worker_channel: { open: () => channel },
   };
   const empty = new Set(["stack_trace", "exit_provenance", "loop_scheduler", "builtins", "bun_builtin_globals", "function", "fake_timers"]);
   const native = {
     engine: "host", contextHooks: false, prepareVersion: 6,
+    platformInfo: { version: Bun.version, arch: "x64" }, timeOrigin: () => performance.timeOrigin,
     mainPath: () => "/entry.ts", now: () => performance.now(), getAsyncContext() {}, setAsyncContext() {},
     base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
     base64Decode: (text: string) => new Uint8Array(Buffer.from(text, "base64")),
@@ -63,8 +64,9 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     loadPolyfill(name: string) {
       if (name in modules) return () => modules[name];
       if (empty.has(name)) return () => ({});
-      if (name !== "stack_capability" && name !== "immediate_queue" && name !== "worker_threads" && name !== "worker_codec" && name !== "module_compile" && name !== "source_prepare" && name !== "import_requests") throw new Error(`Unexpected startup module ${name}`);
-      const source = readFileSync(new URL(`${name}.ts`, runtimeRoot), "utf8");
+      const sources = ["web", "events", "web_brand", "url_search_params", "stack_capability", "immediate_queue", "worker_threads", "worker_codec", "module_compile", "source_prepare", "import_requests"];
+      if (!sources.includes(name)) throw new Error(`Unexpected startup module ${name}`);
+      const source = readFileSync(new URL(`${name}.${name === "web" ? "js" : "ts"}`, runtimeRoot), "utf8");
       return runInContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), context);
     },
   };

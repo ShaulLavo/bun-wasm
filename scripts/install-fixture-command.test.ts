@@ -116,3 +116,21 @@ readFileSync(process.argv[index + 1]);
     else process.env.BUN_WASM_LAUNCHER = previous;
   }
 });
+
+test.each([0, 1, "SIGKILL"] as const)("fixture child diagnostics preserve actual termination %j", async outcome => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-installer-exit-"));
+  const launcher = join(directory, "launcher.ts");
+  const body = outcome === "SIGKILL" ? 'process.kill(process.pid, "SIGKILL");' : `console.log("entered"); process.exit(${outcome});`;
+  writeFileSync(launcher, `#!${process.execPath}\n${body}\n`, { mode: 0o700 });
+  const previous = process.env.BUN_WASM_LAUNCHER;
+  process.env.BUN_WASM_LAUNCHER = launcher;
+  try {
+    const run = installFixture(directory, "http://127.0.0.1:1", [], outcome === "SIGKILL" ? 0 : outcome, true, [], { engine: "jsc", wasm: "/unused.wasm" });
+    if (outcome === "SIGKILL") await expect(run).rejects.toThrow(/engine=jsc code=null expected=0 signal=SIGKILL timerFired=false/);
+    else expect(await run).toBe("entered\n");
+  } finally {
+    if (previous === undefined) delete process.env.BUN_WASM_LAUNCHER;
+    else process.env.BUN_WASM_LAUNCHER = previous;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

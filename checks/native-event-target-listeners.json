@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/event-target-listeners",
+  "engines": ["quickjs", "jsc", "browser", "spidermonkey"]
+}
