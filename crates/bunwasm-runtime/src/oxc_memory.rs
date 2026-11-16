@@ -83,7 +83,7 @@ pub(super) fn adapt<'a>(source: &'a str, path: &str) -> Cow<'a, str> {
     if file_digest(&wasm).ok().as_deref() != Some(binding.wasm) {
         return Cow::Borrowed(source);
     }
-    // Limit the shared reservation to bun-wasm's supported 2 GiB capacity.
+    // Use the maintained Oxc profile's 256 MiB shared-memory maximum.
     // Equal-width replacements keep every original source position unchanged.
     Cow::Owned(
         source
@@ -92,6 +92,6 @@ pub(super) fn adapt<'a>(source: &'a str, path: &str) -> Cow<'a, str> {
                 &format!("initial: {},", binding.initial),
                 1,
             )
-            .replacen("maximum: 65536,", "maximum: 32768,", 1),
+            .replacen("maximum: 65536,", "maximum: 4096 ,", 1),
     )
 }

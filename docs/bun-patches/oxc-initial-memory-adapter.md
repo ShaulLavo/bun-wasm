@@ -51,8 +51,8 @@ Rounding each data end up to a Wasm page gives the corresponding imported
 minimum. The binaries initialize passive data through `memory.init`; successful
 real package initialization and operations at those minima exercise these bounds.
 
-The adapter uses those exact minima and a 32,768-page maximum, matching
-bun-wasm's supported 2 GiB memory capacity. The published shared-memory import
+The adapter uses those exact minima and a 4,096-page maximum, matching
+the maintained Oxc package memory profile's 256 MiB capacity. The published shared-memory import
 allows a smaller maximum. A shared memory can reserve its entire declared
 maximum in Safari even when its current size is small, so reducing only the
 initial allocation leaves a separate reservation cost.
@@ -67,7 +67,7 @@ loader string and no full binary copy or retained adapter cache. Unrelated
 module paths return the borrowed source before hashing or filesystem access.
 
 Initial logical capacity across the three packages falls from 786,432,000 to
-192,806,912 bytes. Their combined declared maximum falls from 12 GiB to 6 GiB.
+192,806,912 bytes. Their combined declared maximum falls from 12 GiB to 768 MiB.
 These are capacity bounds, not RSS measurements.
 
 ## Checks and limits

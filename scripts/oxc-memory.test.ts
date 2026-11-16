@@ -57,9 +57,9 @@ for (const { name, initial } of bindings) {
   test(`${name} bounds published memory and preserves source positions`, () => {
     const source = readFileSync(path, "utf8");
     const adapted = adapt(path);
-    expect(adapted).toBe(source.replace("initial: 4000,", `initial: ${initial} ,`).replace("maximum: 65536,", "maximum: 32768,"));
+    expect(adapted).toBe(source.replace("initial: 4000,", `initial: ${initial} ,`).replace("maximum: 65536,", "maximum: 4096 ,"));
     expect(adapted.length).toBe(source.length);
-    expect(adapted).toContain("maximum: 32768,\n  shared: true,");
+    expect(adapted).toContain("maximum: 4096 ,\n  shared: true,");
     expect(readFileSync(path, "utf8")).toBe(source);
   });
   test(`${name} rejects one page below its real imported minimum`, () => {
