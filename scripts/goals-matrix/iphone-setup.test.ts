@@ -6,8 +6,10 @@ import { tmpdir } from "node:os";
 import { createIphoneTransport } from "./iphone-transport";
 import { Scope } from "./scope";
 import { prepareIphoneSafari } from "./iphone-setup";
-import { tabBatch, tabPage } from "./iphone-tab-fixture";
+import { closeIphoneTab } from "./iphone-cleanup";
+import { tabBatch, tabOverview, tabPage } from "./iphone-tab-fixture";
 import { batchSnapshot } from "./iphone-tab-snapshot";
+import { object } from "./evidence";
 import privateOverview from "./fixtures/iphone-private-overview.json";
 import axOverview from "./fixtures/iphone-group-ax.json";
 import selectedOverview from "./fixtures/iphone-group-selected.json";
@@ -53,6 +55,16 @@ if(args[0]==='batch') {
     const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "a".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 5000 });
     return { transport, configured: () => configured, commands: async (): Promise<string[][]> => (await readFile(log, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line)), close };
   } catch (error) { await close(); throw error; }
+}
+
+async function refusesOwnedNavigation(f: Awaited<ReturnType<typeof fixture>>) {
+  const scope = Scope.open(10_000);
+  try {
+    await expect(f.transport.navigate("http://fixture/task", scope)).rejects.toThrow();
+    expect(f.configured()).toBe(0);
+    expect((await f.commands()).some(args => args[0] === "open" && args.length > 2)).toBe(false);
+    expect(JSON.stringify(await f.commands())).not.toContain("Close");
+  } finally { scope.close(); await f.close(); }
 }
 
 test("Safari selects the ordinary group from captured Private AX before owned navigation", async () => {
@@ -112,12 +124,7 @@ test.each(["different-bounds", "different-label", "different-strip", "missing-ta
   }
   if (scenario === "missing-target") initial.nodes = initial.nodes.filter(node => node.label !== "23 Tabs");
   const f = await fixture(initial, scenario === "no-selected-proof" ? axOverview : selectedOverview);
-  const scope = Scope.open(10_000);
-  try {
-    await expect(f.transport.navigate("http://fixture/task", scope)).rejects.toThrow();
-    expect(f.configured()).toBe(0);
-    expect((await f.commands()).some(args => args[0] === "open" && args.length > 2)).toBe(false);
-  } finally { scope.close(); await f.close(); }
+  await refusesOwnedNavigation(f);
 });
 
 test.each(["missing", "ambiguous", "unselected", "truncated", "foreign"])("%s ordinary setup refuses owned navigation", async scenario => {
@@ -127,13 +134,7 @@ test.each(["missing", "ambiguous", "unselected", "truncated", "foreign"])("%s or
   if (scenario === "truncated") initial.truncated = true;
   if (scenario === "foreign") initial.appBundleId = "other";
   const f = await fixture(initial, scenario === "unselected" ? privateOverview : ordinaryOverview());
-  const scope = Scope.open(10_000);
-  try {
-    await expect(f.transport.navigate("http://fixture/task", scope)).rejects.toThrow();
-    expect(f.configured()).toBe(0);
-    expect((await f.commands()).some(args => args[0] === "open" && args.length > 2)).toBe(false);
-    expect(JSON.stringify(await f.commands())).not.toContain("Close");
-  } finally { scope.close(); await f.close(); }
+  await refusesOwnedNavigation(f);
 });
 
 test("cancelled setup dispatches no native or owned navigation", async () => {
@@ -174,13 +175,7 @@ test.each(["missing-done", "ambiguous-done", "overview-still-open"])("%s refuses
   if (scenario === "missing-done") initial.nodes = initial.nodes.filter(node => node !== done);
   if (scenario === "ambiguous-done") initial.nodes.push({ ...done, index: 91, ref: "e92" });
   const f = await fixture(initial, initial, scenario === "overview-still-open" ? initial : tabPage());
-  const scope = Scope.open(10_000);
-  try {
-    await expect(f.transport.navigate("http://fixture/task", scope)).rejects.toThrow();
-    expect(f.configured()).toBe(0);
-    expect((await f.commands()).some(args => args[0] === "open" && args.length > 2)).toBe(false);
-    expect(JSON.stringify(await f.commands())).not.toContain("Close");
-  } finally { scope.close(); await f.close(); }
+  await refusesOwnedNavigation(f);
 });
 
 test.each(["cancelled", "expired", "command-failed", "partial-batch"])("%s setup never presses a group after an unsettled read", async scenario => {
@@ -200,3 +195,46 @@ test.each(["cancelled", "expired", "command-failed", "partial-batch"])("%s setup
     expect(commands.map(args => args[0])).toEqual(scenario === "expired" ? [] : ["open", "batch"]);
   } finally { scope.close(); }
 });
+
+test.each(["private", "ordinary"] as const)("cleanup from Private closes only its owned %s tab and finishes in normal Safari", async ownedGroup => {
+  const control = cleanupGroups(ownedGroup);
+  await closeIphoneTab(control.command, "Goals owned", Date.now() + 10_000);
+  expect(control.cards.private).toEqual(["Unrelated private"]);
+  expect(control.cards.ordinary).toEqual(["Unrelated ordinary"]);
+  expect(control.selected()).toBe("ordinary");
+  expect(control.inOverview()).toBe(false);
+  expect(control.closed).toEqual(["Goals owned"]);
+});
+
+function cleanupGroups(ownedGroup: "private" | "ordinary") {
+  let selected: "private" | "ordinary" = "private", overview = false;
+  const cards = { private: ["Unrelated private"], ordinary: ["Unrelated ordinary"] };
+  cards[ownedGroup].unshift("Goals owned");
+  const closed: string[] = [];
+  const snapshot = () => {
+    if (!overview) return tabPage();
+    const result = tabOverview(cards[selected], cards.ordinary.length);
+    result.nodes.find(node => node.identifier === "CapsuleTabGroup")!.selected = selected === "ordinary";
+    result.nodes.push({ kind: "button", index: 98, parentIndex: 99, label: "Private, Tab Group", ref: "e98", identifier: "CapsuleTabGroup", selected: selected === "private" });
+    return result;
+  };
+  function input(step: Record<string, unknown>) {
+    if (step.command !== "press") return;
+    const target = object(object(step.input).target);
+    if (target.selector === 'label="All Tabs"') { overview = true; return; }
+    if (target.ref === "@e99") { selected = "ordinary"; return; }
+    if (target.ref === "@e98") { selected = "private"; return; }
+    if (target.ref === "@e100") { overview = false; return; }
+    if (target.ref !== "@e2" || cards[selected][0] !== "Goals owned") throw new Error("Refused to close an unrelated tab");
+    closed.push(cards[selected].shift()!);
+  }
+  const command = async (args: string[]) => {
+    if (args[0] !== "batch") return "Opened";
+    const steps: unknown = JSON.parse(args[2]!);
+    if (!Array.isArray(steps)) throw new Error("Expected native steps");
+    const rows = steps.map(object);
+    rows.forEach(input);
+    return tabBatch(snapshot(), rows.map(row => String(row.command)));
+  };
+  return { command, cards, closed, selected: () => selected, inOverview: () => overview };
+}
