@@ -1,6 +1,6 @@
 import { isAbsolute } from "node:path";
 import type { Transport } from "./transport";
-import { admit, awaitWithin, type Admission } from "./scope";
+import { admit, awaitWithin, within, type Admission } from "./scope";
 import { IphoneLane } from "./iphone-lane";
 import type { IphoneSettlement } from "./iphone-bus";
 import { ownedCommand } from "./lifetime";
@@ -8,6 +8,8 @@ import { until } from "./playground";
 import { armIphoneClick, iphonePreviewLoad, presentIphonePreview } from "./iphone-browser";
 import { object } from "./evidence";
 import { closeIphoneTab } from "./iphone-cleanup";
+import { prepareIphoneSafari } from "./iphone-setup";
+import { safariNodes } from "./iphone-tab-snapshot";
 import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates, saveIphoneEvidence } from "./iphone-click";
 
 type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; cleanupTimeoutMs?: number; saveNative?(text: string): Promise<void> };
@@ -156,6 +158,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   let opening = new AbortController();
   const cleaning = new AbortController();
   let opened = false;
+  let safariStarted = false;
   let deviceFailed = false;
   let title = "";
   let closing: Promise<void> | undefined;
@@ -178,6 +181,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     try {
       const output = await action;
       saveIphoneEvidence(config.saveNative, { command: [config.agent].concat(args), output });
+      if (args[0] === "batch") safariNodes(output, JSON.parse(args[2]!).map((step: { command: string }) => step.command));
       return output;
     } catch (error) {
       deviceFailed = true;
@@ -229,8 +233,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     lifetime.abort(new Error("iPhone transport closing"));
     await Promise.allSettled(Array.from(active));
     if (deviceFailed) throw new Error("T3 device command failed; stopping device interactions, task tab cleanup is unproved");
-    if (!opened) return;
-    await closeIphoneTab(device, title, deadline);
+    if (!safariStarted) return;
+    await closeIphoneTab(device, opened ? title : null, deadline);
     opened = false;
   }
   return {
@@ -265,10 +269,16 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   };
   async function navigate(url: string, admission: Admission): Promise<void> {
       admit(admission);
+      const signal = AbortSignal.any([admission.signal, lifetime.signal]);
+      const setup = within(admission, config.timeoutMs, new Error("iPhone ordinary tab-group setup deadline expired"));
+      admit(setup);
+      safariStarted = true;
+      await prepareIphoneSafari(device, { signal, deadline: setup.deadline, expiryReason: setup.expiryReason });
+      admit(admission);
       const target = await request("host/configure", { url });
       if (typeof target !== "string") throw new Error("Missing iPhone navigation target");
       admit(admission);
-      await device(["open", "com.apple.mobilesafari", target], config.timeoutMs); opened = true;
+      await device(["open", "com.apple.mobilesafari", target], admit(admission), signal); opened = true;
       const state = await until(async () => { admit(admission); return object(await request("host/state") ?? {}); }, attached, config.timeoutMs);
       if (typeof state.userAgent !== "string" || !/iPhone.*Safari/.test(state.userAgent)) throw new Error("Observer did not identify iPhone Safari");
       admit(admission);

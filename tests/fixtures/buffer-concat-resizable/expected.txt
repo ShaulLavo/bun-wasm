@@ -1,0 +1,1 @@
+concat sizes captured views after all getters shrink their backing

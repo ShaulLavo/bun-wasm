@@ -11,7 +11,8 @@ import { profileEngineFiles } from "../goals-matrix/engines";
 import { templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { verifyMacAdmission } from "./admission";
 import { deviceUDID, phaseTimeoutMs, installTimeoutMs, type SmokeOptions } from "./options";
-import { completedCase, pendingCase, smokeCases, unsafeToContinue, type SmokeCase, type SmokeReport } from "./model";
+import { completedCase, pendingCase, unsafeToContinue, type SmokeCase, type SmokeReport } from "./model";
+import { smokeCases } from "./cases";
 
 type Selection = { box: Box; framework: Framework; profile: PlaygroundProfile };
 interface SmokeIO {

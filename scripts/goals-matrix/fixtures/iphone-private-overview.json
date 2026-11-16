@@ -1,0 +1,85 @@
+{
+  "appBundleId": "com.apple.mobilesafari",
+  "truncated": false,
+  "nodes": [
+    {
+      "kind": "button",
+      "index": 4,
+      "parentIndex": 3,
+      "label": "Unrelated private error tab",
+      "ref": "e5",
+      "identifier": "TabOverviewItemView?IsPinned=false"
+    },
+    {
+      "kind": "button",
+      "index": 5,
+      "parentIndex": 4,
+      "label": "Close",
+      "ref": "e6"
+    },
+    {
+      "kind": "button",
+      "index": 6,
+      "parentIndex": 3,
+      "label": "Goals fixture-owned",
+      "ref": "e7",
+      "identifier": "TabOverviewItemView?IsPinned=false"
+    },
+    {
+      "kind": "button",
+      "index": 7,
+      "parentIndex": 6,
+      "label": "Close",
+      "ref": "e8"
+    },
+    {
+      "kind": "button",
+      "index": 11,
+      "parentIndex": 10,
+      "label": "More",
+      "ref": "e12",
+      "identifier": "MoreEditOptionsButton"
+    },
+    {
+      "kind": "button",
+      "index": 12,
+      "parentIndex": 10,
+      "label": "Search",
+      "ref": "e13",
+      "identifier": "SearchButton"
+    },
+    {
+      "kind": "button",
+      "index": 16,
+      "parentIndex": 15,
+      "label": "Private, Tab Group",
+      "ref": "e17",
+      "identifier": "CapsuleTabGroup",
+      "selected": true
+    },
+    {
+      "kind": "button",
+      "index": 17,
+      "parentIndex": 15,
+      "label": "23 Tabs, Tab Group",
+      "ref": "e18",
+      "identifier": "CapsuleTabGroup"
+    },
+    {
+      "kind": "button",
+      "index": 18,
+      "parentIndex": 13,
+      "label": "add",
+      "ref": "e19",
+      "identifier": "NewTabButton"
+    },
+    {
+      "kind": "button",
+      "index": 19,
+      "parentIndex": 13,
+      "label": "Done",
+      "ref": "e20",
+      "identifier": "DoneButton"
+    }
+  ]
+}
