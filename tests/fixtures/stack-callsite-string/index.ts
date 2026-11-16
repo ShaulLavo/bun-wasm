@@ -24,7 +24,11 @@ try {
     assert.deepEqual(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(site), "toString"), descriptor);
     return { text };
   };
-  function namedStringControl() { return new Error("string control"); }
+  function namedStringControl() {
+    const error = new Error("string control");
+    assert(error instanceof Error);
+    return error;
+  }
   const error = namedStringControl();
   const first = error.stack;
   assert.equal(error.stack, first);
