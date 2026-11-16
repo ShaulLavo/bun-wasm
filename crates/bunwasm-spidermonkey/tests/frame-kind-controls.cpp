@@ -81,6 +81,14 @@ void frame_kind_collision(bool programFirst) {
   Value second(script(programFirst ? function : program, label));
   JSAutoRealm realm(context, global->get());
   JS::RootedObject a(context, object(first.handle)), b(context, object(second.handle));
+  uint32_t lineA = 0, lineB = 0;
+  JS::TaggedColumnNumberOneOrigin columnA, columnB;
+  check(JS::GetSavedFrameLine(context, nullptr, a, &lineA) == JS::SavedFrameResult::Ok &&
+        JS::GetSavedFrameLine(context, nullptr, b, &lineB) == JS::SavedFrameResult::Ok &&
+        JS::GetSavedFrameColumn(context, nullptr, a, &columnA) == JS::SavedFrameResult::Ok &&
+        JS::GetSavedFrameColumn(context, nullptr, b, &columnB) == JS::SavedFrameResult::Ok, "collision coordinates");
+  printf("frame-kind coordinates order=%s a=%u:%u b=%u:%u\n", programFirst ? "program-first" : "function-first",
+         lineA, columnA.oneOriginValue(), lineB, columnB.oneOriginValue());
   equal_kind_identity(a, b);
   check(a != b, "same-position cross-kind frames never intern together");
   check(frame_kind(a) == (programFirst ? FrameKind::Program : FrameKind::Function) &&
