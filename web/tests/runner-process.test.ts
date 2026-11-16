@@ -1,6 +1,7 @@
 import { fixtureModule } from "./process-module-fixture.ts";
 import { prepareProgram } from "../../src/assets.ts";
 import { quickjsPair } from "../../tests/package/quickjs-plan-fixture.ts";
+import { initializationPair } from "../../tests/package/engine-initialization-fixture.ts";
 import { programProfile } from "../../src/engine-kind";
 import { TaggedCells, controlLoad } from "waffle/proc/control";
 import type { RootProcessOptions } from "waffle/proc";
@@ -983,6 +984,32 @@ test("worker failure before deferred executable markers cannot adopt a late runn
     const supervisor = await (await state.runtime.processes()).ready();
     expect(supervisor.get(1)).toBeUndefined();
   } finally { gate.resolve(); await state.dispose(); }
+});
+
+test("a stop during adoption cannot publish a late memory group", async () => {
+  const module = await prepareProgram(initializationPair("quickjs", true));
+  const entered = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  const adopt = SubprocessBroker.prototype.adoptRuntimeRoot;
+  const admission = spyOn(SubprocessBroker.prototype, "admitRootGroup");
+  const adoption = spyOn(SubprocessBroker.prototype, "adoptRuntimeRoot").mockImplementation(async function (this: SubprocessBroker, transport, memory, cancelled) {
+    const grant = await adopt.call(this, transport, memory, cancelled);
+    entered.resolve();
+    await gate.promise;
+    return grant;
+  });
+  const state = isolatedRoot(false, "quickjs", {}, [], undefined, module);
+  try {
+    await entered.promise;
+    state.run.kill(9);
+    state.release();
+    expect(await state.run.done).toEqual({ code: 137 });
+    expect(state.worker.terminated).toBe(1);
+    gate.resolve();
+    await adoption.mock.results[0]?.value;
+    expect(admission).not.toHaveBeenCalled();
+    expect(state.request).toBeUndefined();
+  } finally { gate.resolve(); adoption.mockRestore(); admission.mockRestore(); await state.dispose(); }
 });
 
 test("manual roots declare the posted module and keep their grant through physical stop", async () => {
