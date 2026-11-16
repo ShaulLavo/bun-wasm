@@ -13,6 +13,7 @@ async function observe<T>(read: () => Promise<T>, hangCap = 5_000) {
 }
 
 function navigationRequests(page: Page) {
+  const startedAt = Date.now();
   const started = performance.now();
   const pending = new Set<Request>();
   const lifecycle = { documentCommitted: false, domcontentloaded: false, load: false };
@@ -39,7 +40,7 @@ function navigationRequests(page: Page) {
   page.on("framenavigated", committed).on("domcontentloaded", domcontentloaded).on("load", load);
   page.on("crash", crash).on("pageerror", pageerror);
   return {
-    snapshot: () => ({ requested, elapsedMs: performance.now() - started, pending: Array.from(pending, request => request.url()), events: events.slice(), lifecycle: { ...lifecycle } }),
+    snapshot: () => ({ requested, startedAt, elapsedMs: performance.now() - started, pending: Array.from(pending, request => request.url()), events: events.slice(), lifecycle: { ...lifecycle } }),
     stop() {
       page.off("request", request).off("response", response).off("requestfinished", finished).off("requestfailed", failed);
       page.off("framenavigated", committed).off("domcontentloaded", domcontentloaded).off("load", load);

@@ -1,5 +1,0 @@
-{
-  "owner": "browser-guest",
-  "path": "scripts/navigation-server-browser.test.ts",
-  "inputs": ["web/navigation-server-log.ts", "web/serve.ts", "web/tests/playground-navigation.ts"]
-}

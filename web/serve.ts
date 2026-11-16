@@ -88,6 +88,7 @@ const server = Bun.serve({
   hostname: process.env.HOST ?? "127.0.0.1",
   websocket: previewOwner.websocket,
   async fetch(req, server) {
+    if (!process.env.BUN_WASM_NAVIGATION_LOG) return serve(req, server);
     const record = navigationServerLog(req);
     try {
       const response = await serve(req, server);
