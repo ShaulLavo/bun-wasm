@@ -49,11 +49,12 @@ context, or define matcher validity across hooks or tests.
 
 Expected-failure bodies retain timeout failures. Done callbacks use the first
 callback result and keep their invocation open through the callback's return and
-an observed continuation of a returned promise. Same-callback throws and returned
+settlement of a returned promise. Same-callback throws and returned
 rejections therefore fail the owning test. Successful done completion yields one
 microtask before closing; ordinary invocation completion retains its previous
-settlement path. Tracking the final continuation preserves Browser observation
-without changing its host or public Promise behavior.
+settlement path. Direct settlement callbacks avoid depending on Browser observation of an
+unobserved async-function Promise. Completed bodies add no timer checkpoint;
+matcher pending observation, the host and public Promise behavior stay unchanged.
 
 This is bounded completion behavior. Native Bun can complete an already fulfilled
 async return before done is called; this adapter keeps its existing missing-done

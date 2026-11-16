@@ -2013,7 +2013,7 @@
         timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
       };
       startTimer();
-      internal.require("test_lifecycle").body(fn, args, usesDone, finish, invocation.track);
+      internal.require("test_lifecycle").body(fn, args, usesDone, finish);
     });
   }
 

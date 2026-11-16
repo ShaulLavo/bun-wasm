@@ -652,3 +652,8 @@ test("every preload registration rejects before validation or empty-table expans
   expectCounts(result, 1, 0);
   expect(state).toEqual({ reads: 0, callbacks: 0 });
 });
+
+test("a completed done body does not wait for a timer checkpoint", async () => {
+  const result = await runner(api => { api.test("fulfilled done", async done => { done(); }, 1); });
+  expectCounts(result, 1, 0);
+});
