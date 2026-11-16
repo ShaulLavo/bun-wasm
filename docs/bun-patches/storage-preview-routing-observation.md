@@ -46,6 +46,12 @@ storage gate. Installation or HTTP success alone does not qualify it.
 Native response and completion must belong to one page/request lifecycle. Page
 receipt, dispatch and reply must share generation, router and reply-port identity;
 helper evidence additionally shares the actual request and projected helper.
+Mounted navigation may include an intermediate loading redirect. Native
+qualification selects the single completed response with the guest head's actual
+status, then joins its request and completion by page/request identity. The only
+allowed extra lifecycle is one native SW 307 whose Location points into the
+same-origin private loading route. Capture retains only that boolean marker.
+Unexpected errors, network responses and duplicate responses still fail.
 
 The per-browser preservation report includes the concise routing summary. The
 progress report retains the bounded raw trace at failure and again after cleanup,
