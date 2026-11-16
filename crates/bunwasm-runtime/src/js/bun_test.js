@@ -2082,7 +2082,7 @@
       result = await invoke(test.fn, [], test.usesDone, timeout);
       if (result.timeout) result.timeoutMs = timeout;
     }
-    const after = await runHooks(record.afterAll.toReversed().concat(chain.toReversed().flatMap((s) => s.afterEach), record.finished));
+    const after = await runHooks(record.afterAll.reverse().concat(chain.reverse().flatMap((s) => s.afterEach), record.finished));
     if (!result.ok && !after.ok) {
       printFileHeaderIfNeeded();
       const failure = failureFromResult(result, test);
