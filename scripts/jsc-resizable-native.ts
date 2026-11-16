@@ -34,6 +34,7 @@ function compileFlags(entry: Compilation): string[] {
   const args = words(entry.command).slice(1);
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
+    if (arg === "-Xclang" && args[index + 1] === "-include-pch") { index += 3; continue; }
     if (["-c", "-o", "-MF", "-MT", "-MQ"].includes(arg)) { index++; continue; }
     if (["-MD", "-MMD", "-MP"].includes(arg)) continue;
     flags.push(arg);

@@ -4633,7 +4633,7 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
 +    rounded += PageCount::pageSize - 1;
 +    if (rounded.hasOverflowed())
 +        return std::nullopt;
-+    uint64_t capacity = roundDownToMultipleOf<PageCount::pageSize>(rounded.value());
++    uint64_t capacity = rounded.value() & ~(static_cast<uint64_t>(PageCount::pageSize) - 1);
 +    if (!capacity)
 +        capacity = PageCount::pageSize;
 +    if (capacity > std::numeric_limits<size_t>::max())
