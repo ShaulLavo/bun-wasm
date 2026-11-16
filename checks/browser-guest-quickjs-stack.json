@@ -4,6 +4,7 @@
   "inputs": [
     "web/tests/quickjs-stack-navigation.ts",
     "web/tests/playground-navigation.ts",
+    "web/navigation-server-log.ts",
     ".github/actions/native-setup/action.yml",
     ".github/actions/native-seed/action.yml",
     ".github/actions/native-production/action.yml"

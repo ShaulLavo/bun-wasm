@@ -1,0 +1,12 @@
+(module
+  (import "e" "callback" (func $cb))
+  (import "e" "g" (global $g (mut i32)))
+  (import "e" "memory" (memory 1))
+  (import "e" "g" (global $alias (mut i32)))
+  (global (export "defined") (mut i32) (i32.const 7))
+  (export "g" (global $g))
+  (export "alias" (global $alias))
+  (func (export "get") (result i32) global.get $alias)
+  (func (export "set") (param i32) local.get 0 global.set $g)
+  (func (export "reenter") (param i32) (result i32)
+    local.get 0 global.set $g call $cb global.get $alias))

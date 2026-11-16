@@ -128,8 +128,8 @@ const nonTranscriptCallers = [
   "web/tests/browser-child-process-ipc.ts", "web/tests/browser-editor.ts", "web/tests/browser-next-sockets.ts",
   "web/tests/browser-type.ts", "web/tests/browser-native-readable-iteration.ts", "web/tests/playground.mjs", "web/tests/shell-prompt-check.test.ts",
   "scripts/app-matrix/next-acceptance-observer-control.ts",
-  // The navigation helper reads runtime publication, not a terminal transcript.
-  "web/tests/playground-navigation.ts",
+  // Navigation diagnostics and controls read public state, not terminal transcripts.
+  "web/tests/playground-navigation.ts", "scripts/navigation-server-browser.test.ts",
   // Storage checks use lifecycle and public shell state, never a terminal transcript.
   "scripts/sandbox-storage-browser.test.ts", "scripts/sandbox-fs-observation-browser.test.ts",
 ];

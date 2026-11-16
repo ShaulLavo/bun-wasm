@@ -20,13 +20,19 @@ mod nested_description;
 #[path = "wasm/shared_buffer.rs"]
 mod shared_buffer;
 
-use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::BTreeMap,
+    fmt,
+    rc::Rc,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use wasmi::{
-    CompilationMode, Config, Engine, ExternRef, ExternType, Func, FuncRef, Instance, Memory,
-    MemoryType, Module, ResumableCall, ResumableCallHostTrap, Store, Table as WasmTable, TableType,
-    Val as WVal,
-    core::{HostError, ValType},
+    CompilationMode, Config, Engine, ExternRef, ExternType, Func, FuncRef, Global, Instance,
+    Memory, MemoryType, Module, ResumableCall, ResumableCallHostTrap, Store, Table as WasmTable,
+    TableType, Val as WVal,
+    core::{HostError, Mutability, ValType},
 };
 
 use crate::{
@@ -59,7 +65,16 @@ enum Suspended {
 }
 struct Guest {
     instance: Instance,
+    global_exports: BTreeMap<String, u32>,
+    globals: BTreeMap<u32, u32>,
 }
+#[derive(Clone, Copy)]
+struct GlobalResource {
+    global: Global,
+    constructor: bool,
+}
+// A namespace, never a root. Each registry and all its backend objects die with its Store.
+static NEXT_GLOBAL_STORE: AtomicU32 = AtomicU32::new(1);
 struct Runtime {
     engine: Engine,
     store: Store<()>,
@@ -68,6 +83,9 @@ struct Runtime {
     memories: Vec<Memory>,
     tables: Vec<WasmTable>,
     functions: Vec<Func>,
+    global_store: u32,
+    globals: Vec<GlobalResource>,
+    module_global_exports: BTreeMap<u32, BTreeMap<String, u32>>,
     references: BTreeMap<u32, ExternRef>,
     calls: BTreeMap<u32, Suspended>,
     next_call: u32,
@@ -86,6 +104,9 @@ impl Default for Runtime {
             memories: Vec::new(),
             tables: Vec::new(),
             functions: Vec::new(),
+            global_store: NEXT_GLOBAL_STORE.fetch_add(1, Ordering::Relaxed),
+            globals: Vec::new(),
+            module_global_exports: BTreeMap::new(),
             references: BTreeMap::new(),
             calls: BTreeMap::new(),
             next_call: 0,
@@ -167,6 +188,37 @@ fn resource_id(value: &Val) -> Result<u32, NativeError> {
     }
     Ok(*value as u32)
 }
+fn field<'a>(value: &'a Val, name: &str) -> Option<&'a Val> {
+    let Val::Object(fields) = value else {
+        return None;
+    };
+    fields
+        .iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value)
+}
+fn global_exports(bytes: &[u8]) -> Result<BTreeMap<String, u32>, NativeError> {
+    let mut exports = BTreeMap::new();
+    for payload in wasmparser::Parser::new(0).parse_all(bytes) {
+        let wasmparser::Payload::ExportSection(section) = payload.map_err(error)? else {
+            continue;
+        };
+        add_global_exports(section, &mut exports)?;
+    }
+    Ok(exports)
+}
+fn add_global_exports(
+    section: wasmparser::ExportSectionReader<'_>,
+    exports: &mut BTreeMap<String, u32>,
+) -> Result<(), NativeError> {
+    for item in section {
+        let item = item.map_err(error)?;
+        if item.kind == wasmparser::ExternalKind::Global {
+            exports.insert(item.name.to_owned(), item.index);
+        }
+    }
+    Ok(())
+}
 impl Guest {
     fn memory(&self, store: &Store<()>, name: &str) -> Result<Memory, NativeError> {
         self.instance
@@ -175,6 +227,177 @@ impl Guest {
     }
 }
 impl Runtime {
+    fn global_handle(&self, binding: &Val) -> Result<u32, NativeError> {
+        let id = handle(binding, "global")?;
+        if field(binding, "backend") != Some(&Val::from("wasmi"))
+            || field(binding, "store") != Some(&Val::Num(self.global_store as f64))
+        {
+            return Err(error(
+                "WebAssembly global belongs to another backend or member Store",
+            ));
+        }
+        let resource = self.global_resource(id)?;
+        let ty = resource.global.ty(&self.store);
+        if field(binding, "type") != Some(&value_type(&ty.content()))
+            || field(binding, "mutable") != Some(&Val::Bool(ty.mutability().is_mut()))
+        {
+            return Err(error("Invalid WebAssembly global metadata"));
+        }
+        Ok(id)
+    }
+    fn global_resource(&self, id: u32) -> Result<GlobalResource, NativeError> {
+        self.globals
+            .get(id as usize)
+            .copied()
+            .ok_or_else(|| error("Invalid WebAssembly global handle"))
+    }
+    fn global_info(&self, id: u32) -> NativeResult {
+        let resource = self.global_resource(id)?;
+        let ty = resource.global.ty(&self.store);
+        Ok(Record::new()
+            .set("kind", "global")
+            .set("backend", "wasmi")
+            .set("store", self.global_store)
+            .set("id", id)
+            .set("type", value_type(&ty.content()))
+            .set("mutable", ty.mutability().is_mut())
+            .set(
+                "origin",
+                if resource.constructor {
+                    "constructor"
+                } else {
+                    "export"
+                },
+            )
+            .into())
+    }
+    fn register_global(&mut self, global: Global, constructor: bool) -> u32 {
+        let id = self.globals.len() as u32;
+        self.globals.push(GlobalResource {
+            global,
+            constructor,
+        });
+        id
+    }
+    fn create_global(&mut self, ty: &str, mutable: bool, value: &Val) -> NativeResult {
+        let ty = match ty {
+            "i32" => ValType::I32,
+            "i64" => ValType::I64,
+            "f32" => ValType::F32,
+            "f64" => ValType::F64,
+            _ => {
+                return Err(NativeError::type_error(
+                    "Unsupported WebAssembly global type",
+                ));
+            }
+        };
+        let value = self.wasm(value, ty)?;
+        let mutability = if mutable {
+            Mutability::Var
+        } else {
+            Mutability::Const
+        };
+        let global = Global::new(&mut self.store, value, mutability);
+        let id = self.register_global(global, true);
+        self.global_info(id)
+    }
+    fn global_identity(&mut self, instance: u32, name: &str) -> NativeResult {
+        let guest = self.guest(instance)?;
+        let index = *guest
+            .global_exports
+            .get(name)
+            .ok_or_else(|| error("Missing WebAssembly global declaration"))?;
+        if let Some(id) = guest.globals.get(&index) {
+            return self.global_info(*id);
+        }
+        let global = guest
+            .instance
+            .get_global(&self.store, name)
+            .ok_or_else(|| error("Missing WebAssembly global"))?;
+        let id = self.register_global(global, false);
+        self.guests[instance as usize].globals.insert(index, id);
+        self.global_info(id)
+    }
+    fn global_value(&mut self, binding: &Val, value: Option<&Val>) -> NativeResult {
+        let id = self.global_handle(binding)?;
+        let global = self.global_resource(id)?.global;
+        if let Some(value) = value {
+            let ty = global.ty(&self.store);
+            if !ty.mutability().is_mut() {
+                return Err(NativeError::type_error("Immutable WebAssembly global"));
+            }
+            let value = self.wasm(value, ty.content())?;
+            global.set(&mut self.store, value).map_err(error)?;
+        }
+        self.js(&global.get(&self.store))
+    }
+    fn scalar_global_import(&mut self, binding: &Val) -> NativeResult {
+        let id = self.global_handle(binding)?;
+        let resource = self.global_resource(id)?;
+        if resource.constructor {
+            return Err(
+                error("Constructor-created WebAssembly globals cannot cross backends")
+                    .named("LinkError"),
+            );
+        }
+        let ty = resource.global.ty(&self.store);
+        if ty.mutability().is_mut()
+            || !matches!(
+                ty.content(),
+                ValType::I32 | ValType::I64 | ValType::F32 | ValType::F64
+            )
+        {
+            return Err(error(
+                "Only immutable exported numeric WebAssembly globals can cross backends",
+            )
+            .named("LinkError"));
+        }
+        self.global_value(binding, None)
+    }
+    fn import_global(
+        &mut self,
+        ty: &wasmi::core::GlobalType,
+        binding: &Val,
+    ) -> Result<Global, NativeError> {
+        if matches!(binding, Val::Object(_)) {
+            let id = self.global_handle(binding)?;
+            let global = self.global_resource(id)?.global;
+            if global.ty(&self.store) != *ty {
+                return Err(error("Incompatible WebAssembly global import"));
+            }
+            return Ok(global);
+        }
+        if ty.mutability().is_mut() {
+            return Err(error("Mutable WebAssembly global import requires a Global"));
+        }
+        if !matches!(
+            ty.content(),
+            ValType::I32 | ValType::I64 | ValType::F32 | ValType::F64
+        ) {
+            return Err(error("Unsupported WebAssembly global import type"));
+        }
+        let value = self.wasm(binding, ty.content())?;
+        Ok(Global::new(&mut self.store, value, Mutability::Const))
+    }
+    fn imported_global_ids(
+        &self,
+        module: &Module,
+        bindings: &[Val],
+    ) -> Result<BTreeMap<u32, u32>, NativeError> {
+        let mut globals = BTreeMap::new();
+        let mut ordinal = 0;
+        for (index, import) in module.imports().enumerate() {
+            if !matches!(import.ty(), ExternType::Global(_)) {
+                continue;
+            }
+            let binding = bindings.get(index).unwrap_or(&Val::Undefined);
+            if matches!(binding, Val::Object(_)) {
+                globals.insert(ordinal, self.global_handle(binding)?);
+            }
+            ordinal += 1;
+        }
+        Ok(globals)
+    }
     fn js(&mut self, value: &WVal) -> Result<Val, NativeError> {
         Ok(match value {
             WVal::V128(_) => {
@@ -330,6 +553,7 @@ impl Runtime {
     }
     fn compile(&mut self, bytes: &[u8]) -> NativeResult {
         let module = Module::new(&self.engine, bytes).map_err(error)?;
+        let global_exports = global_exports(bytes)?;
         let imports: Vec<Val> = module
             .imports()
             .map(|i| {
@@ -344,10 +568,17 @@ impl Runtime {
             .collect();
         let exports: Vec<Val> = module
             .exports()
-            .map(|i| describe(Record::new().set("name", i.name()), i.ty()).into())
+            .map(|i| {
+                let mut record = describe(Record::new().set("name", i.name()), i.ty());
+                if let Some(index) = global_exports.get(i.name()) {
+                    record = record.set("index", *index);
+                }
+                record.into()
+            })
             .collect();
         let id = self.modules.len();
         self.modules.push(module);
+        self.module_global_exports.insert(id as u32, global_exports);
         Ok(Record::new()
             .set("id", id as u32)
             .set("imports", imports)
@@ -457,7 +688,7 @@ impl Runtime {
             ExternType::Func(ty) => Ok(self.import_function(ty, binding)?.into()),
             ExternType::Memory(_) => Ok(self.memory(self.memory_id(binding)?)?.into()),
             ExternType::Table(_) => Ok(self.table(resource_id(binding)?)?.into()),
-            _ => Err(error("Unsupported WebAssembly import kind")),
+            ExternType::Global(ty) => Ok(self.import_global(ty, binding)?.into()),
         }
     }
     fn instantiate(&mut self, id: u32, bindings: &[Val]) -> NativeResult {
@@ -473,6 +704,7 @@ impl Runtime {
                 self.import(import.ty(), bindings.get(index).unwrap_or(&Val::Undefined))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let globals = self.imported_global_ids(&module, bindings)?;
         let instance = Instance::new(&mut self.store, &module, &imports).map_err(error)?;
         let memories: Vec<_> = instance
             .exports(&self.store)
@@ -481,9 +713,18 @@ impl Runtime {
         for memory in memories {
             self.intern_memory(memory);
         }
-        let id = self.guests.len();
-        self.guests.push(Guest { instance });
-        Ok(Val::Num(id as f64))
+        let global_exports = self
+            .module_global_exports
+            .get(&id)
+            .cloned()
+            .unwrap_or_default();
+        let instance_id = self.guests.len();
+        self.guests.push(Guest {
+            instance,
+            global_exports,
+            globals,
+        });
+        Ok(Val::Num(instance_id as f64))
     }
 }
 
@@ -754,6 +995,24 @@ pub fn install(table: &mut Table) {
             .map_err(error)?;
         Ok(Val::Num(old as f64))
     });
+    let rt = runtime.clone();
+    table.add("wasm.createGlobal", move |a| {
+        rt.borrow_mut()
+            .create_global(a.str(0)?, a.bool(1), a.get(2))
+    });
+    let rt = runtime.clone();
+    table.add("wasm.globalIdentity", move |a| {
+        rt.borrow_mut().global_identity(a.u32(0)?, a.str(1)?)
+    });
+    let rt = runtime.clone();
+    table.add("wasm.globalValue", move |a| {
+        rt.borrow_mut()
+            .global_value(a.get(0), (a.0.len() > 1).then(|| a.get(1)))
+    });
+    let rt = runtime.clone();
+    table.add("wasm.globalImport", move |a| {
+        rt.borrow_mut().scalar_global_import(a.get(0))
+    });
     table.add("wasm.global", move |a| {
         let id = a.u32(0)?;
         #[cfg(bun_wasm_shared_group)]
@@ -779,6 +1038,124 @@ pub fn install(table: &mut Table) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn replace_field(value: &Val, name: &str, replacement: Val) -> Val {
+        let Val::Object(fields) = value else {
+            panic!("global record");
+        };
+        Val::Object(
+            fields
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        if key == name {
+                            replacement.clone()
+                        } else {
+                            value.clone()
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+    #[test]
+    fn global_handles_validate_kind_backend_store_type_mutability_and_resource() {
+        let mut runtime = Runtime::default();
+        let info = runtime.create_global("i32", true, &Val::Num(7.0)).unwrap();
+        for (key, value) in [
+            ("kind", Val::from("table")),
+            ("backend", Val::from("nested")),
+            ("store", Val::Num(0.0)),
+            ("id", Val::Num(-1.0)),
+            ("id", Val::Num(0.5)),
+            ("id", Val::Num(1.0)),
+            ("type", Val::from("f32")),
+            ("mutable", Val::Bool(false)),
+        ] {
+            assert!(
+                runtime
+                    .global_value(&replace_field(&info, key, value), None)
+                    .is_err()
+            );
+        }
+        let mut other = Runtime::default();
+        other.create_global("i32", true, &Val::Num(7.0)).unwrap();
+        assert!(other.global_value(&info, None).is_err());
+        assert!(runtime.global_value(&tagged("global", 0), None).is_err());
+        assert_eq!(runtime.globals.len(), 1);
+    }
+    #[test]
+    fn globals_publish_only_after_validation_and_keep_constructor_origin_through_aliases() {
+        let mut runtime = Runtime::default();
+        for ty in ["externref", "funcref", "v128", "invalid"] {
+            assert!(runtime.create_global(ty, false, &Val::Num(0.0)).is_err());
+        }
+        assert!(runtime.create_global("i64", false, &Val::Num(0.0)).is_err());
+        assert!(runtime.globals.is_empty());
+        let info = runtime.create_global("i32", false, &Val::Num(7.0)).unwrap();
+        runtime
+            .compile(include_bytes!(
+                "../../../tests/fixtures/wasm-globals/immutable.wasm"
+            ))
+            .unwrap();
+        runtime.instantiate(0, std::slice::from_ref(&info)).unwrap();
+        let exported = runtime.global_identity(0, "g").unwrap();
+        assert_eq!(exported, info);
+        // Client metadata is not authority for constructor-origin admission.
+        let fabricated_origin = replace_field(&exported, "origin", Val::from("export"));
+        assert!(
+            runtime
+                .scalar_global_import(&fabricated_origin)
+                .unwrap_err()
+                .message
+                .contains("Constructor-created")
+        );
+        let before = runtime.globals.len();
+        assert!(runtime.instantiate(0, &[tagged("memory", 0)]).is_err());
+        assert_eq!(runtime.guests.len(), 1);
+        assert_eq!(runtime.globals.len(), before);
+        assert!(
+            runtime
+                .global_value(&info, Some(&Val::from("invalid")))
+                .unwrap_err()
+                .message
+                .contains("Immutable")
+        );
+    }
+    #[test]
+    fn exported_immutable_globals_keep_the_cross_backend_numeric_subset() {
+        let mut runtime = Runtime::default();
+        runtime
+            .compile(include_bytes!(
+                "../../../tests/fixtures/wasm-globals/provider.wasm"
+            ))
+            .unwrap();
+        runtime.instantiate(0, &[]).unwrap();
+        let immutable = runtime.global_identity(0, "immutable").unwrap();
+        assert_eq!(
+            runtime.scalar_global_import(&immutable).unwrap(),
+            Val::Num(7.0)
+        );
+        let mutable = runtime.global_identity(0, "g").unwrap();
+        assert!(runtime.scalar_global_import(&mutable).is_err());
+        assert_eq!(runtime.global_identity(0, "alias").unwrap(), mutable);
+        assert_ne!(runtime.global_identity(0, "equal").unwrap(), mutable);
+    }
+    #[test]
+    fn failed_start_publishes_no_global_handles_but_keeps_imported_writes() {
+        let mut runtime = Runtime::default();
+        let info = runtime.create_global("i32", true, &Val::Num(0.0)).unwrap();
+        runtime
+            .compile(include_bytes!(
+                "../../../tests/fixtures/wasm-globals/trap.wasm"
+            ))
+            .unwrap();
+        assert!(runtime.instantiate(0, std::slice::from_ref(&info)).is_err());
+        assert!(runtime.guests.is_empty());
+        assert_eq!(runtime.globals.len(), 1);
+        assert_eq!(runtime.global_value(&info, None).unwrap(), Val::Num(31.0));
+    }
 
     const IMPORTED_MEMORY_MODULE: &[u8] = &[
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x09, 0x02, 0x60, 0x00, 0x01, 0x7f,

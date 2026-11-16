@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Browser, Page } from "playwright";
 import { playwright, run, session, writeFile } from "./playground.mjs";
 import { openQuickjsStackPage } from "./quickjs-stack-navigation";
 
 const task = session("bun-wasm-quickjs-stack-");
+process.env.BUN_WASM_NAVIGATION_LOG = join(task.scratch, "navigation.jsonl");
 const probe = readFileSync(new URL("../../tests/stack-depth.js", import.meta.url), "utf8");
 const modes = ["plain", "getter", "proxy", "json", "jsonplain", "jsonparse", "reviver", "parse", "block", "arrow", "unary",
   "power", "ternary", "statement", "regexpnc", "lookahead", "proxychain", "isarray", "bound", "join", "flat", "tostring", "async", "promise", "console"];
