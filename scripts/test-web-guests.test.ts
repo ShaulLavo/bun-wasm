@@ -90,7 +90,7 @@ function nativeStepNames(id = "rust"): string[] {
 }
 
 test("the existing native producer owns each guest group once, after completed cache checkpoints", () => {
-  const names = nativeStepNames("native-quality").concat(nativeStepNames());
+  const names = nativeStepNames("native-quality").concat(nativeStepNames(), nativeStepNames("ordinary-web-guests"));
   const consumers = ["Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)"];
   const saves = ["Save the JSC Cargo cache once per input revision", "Save the refined native Cargo cache once per input revision", "Save the native quality checkpoint"];
   for (const name of consumers.concat(saves)) expect(names.filter(value => value === name)).toHaveLength(1);
@@ -100,7 +100,8 @@ test("the existing native producer owns each guest group once, after completed c
   expect(names.indexOf(saves[1]!)).toBeGreaterThan(names.indexOf(consumers[0]!));
   for (const command of ["test-web-guests.ts quickjs browser", "test-web-guests.ts jsc", "bash scripts/build-bun-tools.sh"]) {
     expect(workflow.split(command)).toHaveLength(2);
-    expect(rust.indexOf(command)).toBeGreaterThan(0);
+    const owner = command.startsWith("test-web-guests") ? nativeStepNames("ordinary-web-guests") : nativeStepNames();
+    expect(owner).toContain(command.startsWith("test-web-guests") ? command.endsWith("jsc") ? "Blocking Web guest case (JSC)" : "Blocking Web guest cases (QuickJS and host engine)" : "Build the single tools fixture in the existing native target");
   }
   expect(rust).toContain('TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2');
   expect(rust.split("CARGO_BUILD_JOBS=2 bash scripts/build.sh")).toHaveLength(2);
@@ -115,11 +116,12 @@ test("the existing native producer owns each guest group once, after completed c
 });
 
 test("guest gate logs retain stderr and cannot hide failure behind tee", () => {
-  const steps = rust.split("      - name: Blocking Web guest ").slice(1);
+  const consumer = workflow.split("\n  ordinary-web-guests:\n")[1]!.split("\n  shared-jsc-identity:\n")[0]!;
+  expect(consumer).toContain("shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}");
+  const steps = consumer.split("      - name: Blocking Web guest ").slice(1);
   expect(steps).toHaveLength(2);
   for (const step of steps) {
     const gate = step.split("      - ")[0]!;
-    expect(gate).toContain("shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}");
     expect(gate).toContain("2>&1 | tee dist/web-guests-");
   }
 });
@@ -168,7 +170,7 @@ test("engine-specific changes keep their own native gates", () => {
 
 test("the prebuild job saves its completed cache, and the native job imports it before every guest gate", () => {
   const producer = nativeStepNames("jsc-prebuild");
-  const names = nativeStepNames("native-quality").concat(nativeStepNames());
+  const names = nativeStepNames("native-quality").concat(nativeStepNames(), nativeStepNames("ordinary-web-guests"));
   const owner = "Build or verify the JSC prebuild";
   const importer = "Import the verified JSC prebuild and sysroot";
   expect(producer.filter(value => value === owner)).toHaveLength(1);
