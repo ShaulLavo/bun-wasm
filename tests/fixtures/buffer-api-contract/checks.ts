@@ -43,6 +43,13 @@ export function apiChecks(factory: typeof Buffer, transcode: Transcode) {
       assert.throws(() => Reflect.apply(transcode, undefined, [bytes, Symbol("utf8"), "utf8"]), { name: "TypeError" });
       assert.throws(() => Reflect.apply(transcode, undefined, [bytes, "utf8", Symbol("utf8")]), { name: "TypeError" });
       assert.equal(Reflect.apply(transcode, undefined, [factory.alloc(0), Symbol("from"), Symbol("to")]).length, 0);
+      const backing = new ArrayBuffer(1);
+      const detached = factory.from(backing);
+      const events: string[] = [];
+      const from = { toString() { events.push("from"); backing.transfer(); return "bad"; } };
+      const to = { toString() { events.push("to"); return "bad"; } };
+      assert.equal(Reflect.apply(transcode, undefined, [detached, from, to]).length, 0);
+      assert.deepEqual(events, ["from", "to"]);
     } },
     { name: "numeric accessors validate receivers after offset arguments", run() {
       for (const method of ["readInt32LE", "readFloatLE", "readBigInt64LE"]) {

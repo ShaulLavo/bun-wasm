@@ -18,7 +18,8 @@ returns an empty Buffer before encoding validation, matching both native oracles
 
 Source bounds come from intrinsic typed-array getters. Both encoding arguments
 are coerced before validating their supported names, with ordinary string
-coercion rejecting Symbols. For same-encoding UTF-16 conversion, an unpaired
+coercion rejecting Symbols. If coercion empties or detaches the source, the live
+empty view returns before encoding-name validation. For same-encoding UTF-16 conversion, an unpaired
 surrogate followed by an odd byte produces two replacements, matching Bun rather
 than WHATWG TextDecoder's combined replacement. These corrections stay local to
 transcoding; shared decoder semantics are unchanged.

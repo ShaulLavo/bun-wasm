@@ -18,3 +18,20 @@ test("transcode accepts a byte array from another realm and rejects tag spoofs",
     assert.throws(() => transcode(source, "ascii", "utf8"), { name: "TypeError", code: "ERR_INVALID_ARG_TYPE" });
   }
 });
+
+test("transcode checks the live source after encoding coercion and before name validation", () => {
+  for (const mode of ["detach", "shrink", "out-of-bounds"]) {
+    const backing = new ArrayBuffer(4, { maxByteLength: 8 });
+    const source = SourceBuffer.from(backing, 2, 2);
+    const events: string[] = [];
+    const from = { toString() {
+      events.push("from");
+      if (mode === "detach") backing.transfer();
+      else backing.resize(mode === "shrink" ? 0 : 2);
+      return "bad";
+    } };
+    const to = { toString() { events.push("to"); return "bad"; } };
+    assert.equal(Reflect.apply(transcode, undefined, [source, from, to]).length, 0);
+    assert.deepEqual(events, ["from", "to"]);
+  }
+});

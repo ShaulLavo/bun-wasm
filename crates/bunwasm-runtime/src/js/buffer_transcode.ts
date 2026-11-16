@@ -84,9 +84,9 @@
       if (readLength.call(source) === 0) return allocate(0);
       const fromValue = fromEncoding == null ? fromEncoding : `${fromEncoding}`;
       const toValue = toEncoding == null ? toEncoding : `${toEncoding}`;
-      const from = encoding(fromValue), to = encoding(toValue);
       const length = readLength.call(source);
       if (length === 0) return allocate(0);
+      const from = encoding(fromValue), to = encoding(toValue);
       const bytes = new Uint8Array(readBuffer.call(source), readOffset.call(source), length);
       const text = decode(bytes, from, to);
       return to === "ascii" || to === "latin1" ? narrow(text, to) : fromString(text, to);
