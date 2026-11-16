@@ -4,6 +4,7 @@
 // never serviced. The lane provider is the topology model in fixtures/shared-objects/group-lanes.ts;
 // lane.rs's own unit tests cover the Rust algorithm.
 import { afterEach, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { PipeController, type PipeEndpoint } from "../node_modules/waffle/proc/pipes.ts";
 import { createGroupLaneModel, groupSharedObjects } from "./fixtures/shared-objects/group-lanes";
 import { sourceChannels, sourcePorts, type SourcePort, type TransferHooks } from "./fixtures/shared-objects/source-runtime";
@@ -1233,14 +1234,18 @@ test("a closed peer's committed messages arrive in order and then the port close
   const { spawn } = group();
   const { child, port } = spawn();
   let closed = false;
-  child.parentPort.on("close", () => { closed = true; });
+  const close = new Promise<void>(resolve => {
+    const onClose = () => { closed = true; resolve(); };
+    child.parentPort.on("close", onClose);
+    cleanup.add(() => { EventEmitter.prototype.removeListener.call(child.parentPort, "close", onClose); });
+  });
   for (const value of [1, 2, 3]) port.postMessage(value);
   port.close();
   await new Promise(resolve => setImmediate(resolve));
   const got: unknown[] = [];
   for (let item = child.receiveMessageOnPort(child.parentPort); item; item = child.receiveMessageOnPort(child.parentPort)) got.push(item.message);
   expect(got).toEqual([1, 2, 3]);
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await close;
   expect(closed).toBe(true);
 });
 
