@@ -1001,10 +1001,11 @@ test("manual roots declare the posted module and keep their grant through physic
     expect(state.request.controlGrant).toBe(grant);
     const allocated = spyOn(service, "rootControlAllocated");
     const received = Promise.withResolvers<void>();
-    const stop = SubprocessBroker.prototype.rootStopped;
-    const physicalStop = spyOn(SubprocessBroker.prototype, "rootStopped").mockImplementation(function (this: SubprocessBroker) {
-      stop.call(this);
-      received.resolve();
+    const capture = SubprocessBroker.prototype.captureRootStop;
+    let physicalStops = 0;
+    const physicalStop = spyOn(SubprocessBroker.prototype, "captureRootStop").mockImplementation(function (this: SubprocessBroker) {
+      const receipt = capture.call(this);
+      return { terminating: receipt.terminating, stopped: () => { receipt.stopped(); physicalStops++; received.resolve(); } };
     });
     const terminate = spyOn(state.worker, "terminate").mockImplementation(() => stopped.promise);
     try {
@@ -1014,17 +1015,50 @@ test("manual roots declare the posted module and keep their grant through physic
       state.worker.exit(0);
       expect(await state.run.done).toEqual({ code: 0 });
       expect(terminate).toHaveBeenCalledTimes(1);
-      expect(physicalStop).not.toHaveBeenCalled();
+      expect(physicalStops).toBe(0);
       expect(service.rootControlGrant(pid)).toBe(grant);
       const late = allocate(16);
       expect(allocated).toHaveBeenCalledWith(pid, late);
       expect(allocated).toHaveBeenCalledTimes(2);
       stopped.resolve();
       await received.promise;
-      expect(physicalStop).toHaveBeenCalledTimes(1);
+      expect(physicalStops).toBe(1);
       expect(() => service.rootControlGrant(pid)).toThrow("not admitted");
     } finally { stopped.resolve(); terminate.mockRestore(); allocated.mockRestore(); physicalStop.mockRestore(); }
   } finally { admission.mockRestore(); await state.dispose(); }
+});
+
+for (const owner of ["embedder", "controller"] as const) test(`${owner} root stop forwards the captured receipt before awaiting native completion`, async () => {
+  const state = isolatedRoot(false);
+  const joined = Promise.withResolvers<void>();
+  const attempted = Promise.withResolvers<void>();
+  const stopped = Promise.withResolvers<void>();
+  const events: string[] = [];
+  const capture = SubprocessBroker.prototype.captureRootStop;
+  const receipt = spyOn(SubprocessBroker.prototype, "captureRootStop").mockImplementation(function (this: SubprocessBroker) {
+    const captured = capture.call(this);
+    return { terminating: () => { events.push("terminating"); captured.terminating(); attempted.resolve(); }, stopped: () => {
+      events.push("stopped"); captured.stopped(); stopped.resolve();
+    } };
+  });
+  let disposal: Promise<void> | undefined;
+  try {
+    await state.ready;
+    const terminate = spyOn(state.worker, "terminate").mockImplementation(() => { events.push("native"); return joined.promise; });
+    try {
+      state.release();
+      if (owner === "controller") disposal = state.runtime.dispose();
+      else state.worker.exit(0);
+      await attempted.promise;
+      expect(events).toEqual(["native", "terminating"]);
+      expect(receipt).toHaveBeenCalledTimes(1);
+      expect(terminate).toHaveBeenCalledTimes(1);
+      joined.resolve();
+      await stopped.promise;
+      await disposal;
+      expect(events).toEqual(["native", "terminating", "stopped"]);
+    } finally { joined.resolve(); terminate.mockRestore(); }
+  } finally { receipt.mockRestore(); await state.dispose(); }
 });
 
 test("a source-unknown compiled root fails before admission or worker dispatch", async () => {
