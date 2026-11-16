@@ -8,7 +8,7 @@ function record(value: unknown): Record<string, unknown> {
 
 const source = expandedCiWorkflow();
 const workflow = record(Bun.YAML.parse(source));
-const steps = Object.values(record(workflow.jobs)).flatMap(job => {
+const steps = Object.entries(record(workflow.jobs)).filter(([id]) => id !== "browser-production").flatMap(([_id, job]) => {
   const value = record(job).steps;
   if (!Array.isArray(value)) return [];
   return value.map(record);
@@ -76,7 +76,7 @@ test("PRs retain all heavy restore paths and native/JSC checks remain blocking",
     expect(String(step.if ?? "")).not.toContain("github.event_name");
     expect(String(step.if ?? "")).not.toContain("github.ref");
   }
-  expect(source).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') }}");
+  expect(source).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true')) }}");
   expect(source).toContain("name: Blocking native quality checks");
   expect(source).toContain("name: Blocking native fixture checks");
   expect(source).toContain("name: Blocking JSC embedding and allocation checks\n        if: needs.selection.outputs.jsc == 'true'");

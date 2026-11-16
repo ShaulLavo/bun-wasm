@@ -17,7 +17,7 @@ function fixture() {
     const generation = String(extra.generation ?? "sw");
     const sequence = (sequences.get(generation) ?? 0) + 1;
     sequences.set(generation, sequence);
-    evidence.receive({ kind, target, port: 5173, generation, realm: "worker", sequence, ask: 1, channel: 3, clientURL: "http://localhost/app", ...extra });
+    evidence.receive({ kind, target, port: 5173, generation, realm: "worker", sequence, ask: 1, channel: 3, clientURL: "http://localhost/app", ...(kind === "claim-reply" && extra.reply === "head" ? { status: 200 } : {}), ...extra });
   };
   const page = (kind: string, extra: RoutingRow = {}) => row(kind, { generation: "page", realm: "page", realmURL: "http://localhost/app", router: 4, replyPort: 5, request: 7, ...extra });
   const native = () => evidence.request({ kind: "request", url, page: 1, request: 1 });
@@ -81,7 +81,7 @@ test("positive qualification needs native completion and real runtime/helper plu
   expect(() => f.evidence.qualify([target])).toThrow("coverage missing");
   f.page("page-send-return", { reply: "head" }); f.row("claim-reply", { reply: "head" }); f.row("claim-reply", { reply: "end" });
   expect(() => f.evidence.qualify([target])).toThrow("coverage missing");
-  f.evidence.request({ kind: "response", url, page: 1, request: 1, fromServiceWorker: true });
+  f.evidence.request({ kind: "response", url, page: 1, request: 1, status: 200, fromServiceWorker: true });
   f.evidence.request({ kind: "requestfinished", url, page: 1, request: 1 });
   expect(() => f.evidence.qualify([target])).not.toThrow();
 });
@@ -181,7 +181,7 @@ test("native response and completion must belong to the same page and request", 
   for (const mismatch of [{ page: 1, request: 2 }, { page: 2, request: 1 }]) {
     const f = fixture();
     complete(f);
-    f.evidence.request({ kind: "response", page: 1, request: 1, url, fromServiceWorker: true });
+    f.evidence.request({ kind: "response", page: 1, request: 1, url, status: 200, fromServiceWorker: true });
     f.evidence.request({ kind: "requestfinished", url, ...mismatch });
     expect(() => f.evidence.qualify([target])).toThrow();
   }
@@ -192,14 +192,54 @@ test("page receipt and head send cannot borrow another generation or reply port"
   for (const mismatch of mismatches) {
     const receipt = fixture();
     complete(receipt, mismatch);
-    receipt.evidence.request({ kind: "response", page: 1, request: 1, url, fromServiceWorker: true });
+    receipt.evidence.request({ kind: "response", page: 1, request: 1, url, status: 200, fromServiceWorker: true });
     receipt.evidence.request({ kind: "requestfinished", page: 1, request: 1, url });
     expect(() => receipt.evidence.qualify([target])).toThrow();
     const sent = fixture();
     complete(sent, {}, mismatch);
-    sent.evidence.request({ kind: "response", page: 1, request: 1, url, fromServiceWorker: true });
+    sent.evidence.request({ kind: "response", page: 1, request: 1, url, status: 200, fromServiceWorker: true });
     sent.evidence.request({ kind: "requestfinished", page: 1, request: 1, url });
     expect(() => sent.evidence.qualify([target])).toThrow();
+  }
+});
+
+test("a loading redirect is distinct from the completed native response matching the real guest head", () => {
+  const f = fixture();
+  complete(f);
+  f.evidence.request({ kind: "response", page: 1, request: 1, url, status: 307, fromServiceWorker: true, loadingNavigation: true });
+  f.evidence.request({ kind: "requestfinished", page: 1, request: 1, url });
+  f.evidence.request({ kind: "request", page: 1, request: 2, url });
+  f.evidence.request({ kind: "response", page: 1, request: 2, url, status: 200, fromServiceWorker: true });
+  f.evidence.request({ kind: "requestfinished", page: 1, request: 2, url });
+  expect(() => f.evidence.qualify([target])).not.toThrow();
+});
+
+test("native completion rejects a different status and duplicate matching response lifecycles", () => {
+  const wrong = fixture();
+  complete(wrong);
+  wrong.evidence.request({ kind: "response", page: 1, request: 1, url, status: 502, fromServiceWorker: true });
+  wrong.evidence.request({ kind: "requestfinished", page: 1, request: 1, url });
+  expect(() => wrong.evidence.qualify([target])).toThrow();
+  const repeated = fixture();
+  complete(repeated);
+  for (const request of [1, 2]) {
+    repeated.evidence.request({ kind: "request", page: 1, request, url });
+    repeated.evidence.request({ kind: "response", page: 1, request, url, status: 200, fromServiceWorker: true });
+    repeated.evidence.request({ kind: "requestfinished", page: 1, request, url });
+  }
+  expect(() => repeated.evidence.qualify([target])).toThrow();
+});
+
+test("a completed response cannot hide an extra error, network response or unmarked redirect", () => {
+  for (const extra of [{ status: 502, fromServiceWorker: true }, { status: 200, fromServiceWorker: false }, { status: 307, fromServiceWorker: true }]) {
+    const f = fixture();
+    complete(f);
+    f.evidence.request({ kind: "response", page: 1, request: 1, url, status: 200, fromServiceWorker: true });
+    f.evidence.request({ kind: "requestfinished", page: 1, request: 1, url });
+    f.evidence.request({ kind: "request", page: 1, request: 2, url });
+    f.evidence.request({ kind: "response", page: 1, request: 2, url, ...extra });
+    f.evidence.request({ kind: "requestfinished", page: 1, request: 2, url });
+    expect(() => f.evidence.qualify([target])).toThrow();
   }
 });
 

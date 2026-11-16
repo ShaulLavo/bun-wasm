@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { expandNativeActions } from "./ci-native-workflow";
 
 export function expandedCiWorkflow(): string {
   const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
@@ -27,7 +28,7 @@ export function expandedCiWorkflow(): string {
       .replaceAll("${{ inputs.expected-key }}", "${{ needs.shared-jsc-identity.outputs.key }}")
       .replaceAll("inputs.shared-native", "needs.quality.outputs.shared-native"),
   );
-  return expand(shared)
+  return expandNativeActions(expand(shared))
     .replaceAll("${{ inputs.key }}", key)
     .replaceAll("${{ inputs.prefix }}", prefix)
     .replaceAll("${{ inputs.expected-key }}", "${{ needs.jsc-identity.outputs.key }}")

@@ -6,9 +6,12 @@ import { needsRust } from "../../scripts/ci-changes.ts";
 import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { guestBuilds, hash } from "../../scripts/guest-source-manifest.ts";
 import { fixtureReceipt, receiptCli, wasm, withCliReceiptFixture } from "./guest-receipt-fixture.ts";
+import { expandedCiWorkflow } from "../../scripts/fixtures/ci-jsc-workflow";
+import { nativePipeline } from "../../scripts/ci-native-pipeline";
 
-const workflow = await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
-const producer = workflow.split("      - name: Build the standard Browser guest once\n")[1]?.split("      - name: Build the JSC Cargo guest\n")[0];
+const workflow = expandedCiWorkflow();
+const native = nativePipeline(workflow).consumer;
+const producer = native.split("      - name: Build the standard Browser guest once\n")[1]?.split("      - name: Build the JSC Cargo guest\n")[0];
 
 test("CI uses one standard Browser recipe while C1 retains its distinct source-cache recipe", () => {
   expect(needsRust(["scripts/guest-source-manifest.ts"])).toBe(true);
@@ -17,7 +20,7 @@ test("CI uses one standard Browser recipe while C1 retains its distinct source-c
   expect(producer).toContain('source env.sh\n          BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
   expect(workflow).not.toContain("source-cache-browser-guest");
   expect(workflow).not.toContain("dist/source-cache-browser");
-  expect(workflow.match(/bash scripts\/build-bun-browser\.sh/g)).toHaveLength(1);
+  expect(native.match(/bash scripts\/build-bun-browser\.sh/g)).toHaveLength(1);
 });
 
 test("source-cache CLI receipts bind synthetic artifact identity without claiming a final Wasm size", async () => {

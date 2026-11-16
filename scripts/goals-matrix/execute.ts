@@ -200,7 +200,8 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
   try { await observation.run(guard => saveFinalLog(transport, options, results, failureLog, guard, errors.length ? "after failed server stop" : "after server stop")); }
   catch { /* Optional diagnostics cannot replace a stop failure or consume the close reserve. */ }
   finally { observation.close(); work.close(); }
-  try { await bounded(() => transport.close(true, 10_000), 10_000); }
+  // Teardown still dispatches after expiry; only an in-budget settlement can pass.
+  try { await awaitWithin(transport.close(true, Math.max(1, admission.deadline - Date.now())), admission); }
   catch (error) { errors.push(error); }
   if (errors.length) throw new AggregateError(errors, errors.map(String).join("; "));
   return { browserClosed: true, foregroundStopped: true, previewClosed: true };

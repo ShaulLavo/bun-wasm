@@ -140,7 +140,7 @@ export class StorageRoutingEvidence {
   private completeClaim(forward: RoutingRow, head: RoutingRow, worker: RoutingRow[]): boolean {
     if (!positiveId(head.channel) || !worker.some(row => row.kind === "claim-open" && row.channel === head.channel && row.clientURL === head.clientURL)) return false;
     if (!worker.some(row => row.kind === "claim-reply" && row.channel === head.channel && row.reply === "end")) return false;
-    if (!this.nativeComplete(forward.url)) return false;
+    if (!this.nativeComplete(forward.url, head.status)) return false;
     const page = this.rows.filter(row => row.realm === "page" && row.realmURL === head.clientURL && row.target === forward.target && row.port === forward.port);
     const receipts = page.filter(row => row.kind === "page-receive");
     if (receipts.length !== 1) return false;
@@ -153,14 +153,21 @@ export class StorageRoutingEvidence {
     return bound && helper.filter(row => row.kind === "helper-request-return" && row.accepted === true).length === 1
       && claimPage.some(row => row.kind === "page-send-return" && row.reply === "head");
   }
-  private nativeComplete(url: RoutingRow[string] | undefined): boolean {
+  private nativeComplete(url: RoutingRow[string] | undefined, status: RoutingRow[string] | undefined): boolean {
+    if (typeof status !== "number") return false;
+    const responses = this.requests.filter(row => row.kind === "response" && row.url === url);
+    const matches = responses.filter(row => row.status === status && row.fromServiceWorker === true && row.loadingNavigation !== true);
+    if (matches.length !== 1) return false;
+    const match = matches[0]!;
+    const loading = responses.filter(row => row !== match);
+    if (loading.length > 1 || loading.some(row => row.loadingNavigation !== true || row.status !== 307 || row.fromServiceWorker !== true || row.page !== match.page)) return false;
     const starts = this.requests.filter(row => row.kind === "request" && row.url === url);
-    if (starts.length !== 1) return false;
-    const start = starts[0]!;
-    if (!positiveId(start.page) || !positiveId(start.request)) return false;
-    const lifecycle = this.requests.filter(row => row.url === url && row.page === start.page && row.request === start.request);
-    return lifecycle.some(row => row.kind === "response" && row.fromServiceWorker === true)
-      && lifecycle.some(row => row.kind === "requestfinished");
+    if (starts.length !== responses.length || new Set(starts.map(row => `${row.page}:${row.request}`)).size !== starts.length) return false;
+    return responses.every(response => {
+      if (!positiveId(response.page) || !positiveId(response.request)) return false;
+      const lifecycle = this.requests.filter(row => row.url === url && row.page === response.page && row.request === response.request);
+      return lifecycle.some(row => row.kind === "request") && lifecycle.some(row => row.kind === "requestfinished");
+    });
   }
 }
 function positiveId(value: unknown): boolean { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }

@@ -1,0 +1,324 @@
+name: Native production setup
+description: Shared pinned tools and verified JSC backing, with clean checkpoint or source preparation
+inputs:
+  mode:
+    description: native runs native setup checks, seed prepares cold sources, checkpoint leaves handoff destinations empty
+    required: true
+  node-version:
+    description: Exact host Node version
+    required: true
+  jsc-manifest:
+    description: Authenticated same-run JSC manifest digest
+    required: true
+  cache-scope:
+    description: Existing reader namespace, retaining each original writer identity
+    default: ${{ github.job }}
+outputs:
+  host-tools:
+    description: Effective pinned host tools
+    value: ${{ steps.host-tools.outputs.hash }}
+  native-inputs:
+    description: Effective native toolchain and verified sysroot
+    value: ${{ steps.native-inputs.outputs.hash }}
+  object-key:
+    description: Existing compiler object writer key
+    value: ${{ steps.rust-objects.outputs.cache-primary-key }}
+runs:
+  using: composite
+  steps:
+    - name: Configure portable quality toolchain homes
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+        echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+        echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
+        echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+        echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/release-downloads
+      with:
+        scope: ${{ inputs.cache-scope }}
+    - uses: ./.github/actions/setup-tools
+      with:
+        bun-version: 1.4.4
+        node-version: ${{ inputs.node-version }}
+    - uses: ./.github/actions/rust-build-cache
+      id: rust-objects
+      with:
+        scope: ${{ inputs.cache-scope }}
+    - uses: actions/cache/restore@v4
+      id: rustup-cache
+      with:
+        path: ${{ env.RUSTUP_HOME }}
+        key: rust-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+    # Install everything rust-toolchain.toml lists, so the saved toolchain is complete.
+    # Otherwise rustup re-downloads rust-src on first use, and its new timestamps
+    # rebuild std for the QuickJS engine's -Zbuild-std target every run.
+    - uses: dtolnay/rust-toolchain@nightly
+      with:
+        toolchain: nightly-2026-09-15
+        components: rust-src, rustfmt, clippy
+        targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
+    - name: Save completed rustup-cache setup
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.rustup-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.RUSTUP_HOME }}
+        key: ${{ steps.rustup-cache.outputs.cache-primary-key }}
+    - name: Blocking owned Rust formatting
+      if: inputs.mode == 'native'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        bun scripts/quality-rust.ts --format-only
+    - name: Install native build tools
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
+           command -v ruby && command -v gperf && command -v bison &&
+           ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
+        if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
+        if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
+    # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
+    # land on different runner images. Every producer and consumer uses the same pinned bytes.
+    - uses: actions/cache/restore@v4
+      id: build-tools-cache
+      with:
+        path: |
+          ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+          ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+        key: build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}
+    - name: Install pinned CMake and Ninja
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: bun scripts/ci-build-tools.ts
+    - name: Save completed build-tools-cache setup
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-tools-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+          ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+        key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
+    # Image updates change many unrelated packages. Build caches follow the host
+    # tools these builds run; each layer's own input hash covers its toolchain.
+    - name: Identify host build tools
+      id: host-tools
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        report="$RUNNER_TEMP/host-tools.txt"
+        {
+          for tool in cc c++ clang cmake ninja make nasm pkg-config ruby perl python3 gperf bison; do
+            command -v "$tool"
+            "$tool" --version | sed -n '1,2p'
+          done
+          ldd --version | sed -n '1p'
+          ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' | sort
+        } > "$report"
+        cat "$report"
+        echo "hash=$(sha256sum "$report" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: sdk
+      with:
+        path: ${{ env.WASM_TOOLS }}/wasi-sdk
+        key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
+    - name: Install pinned WASI SDK
+      if: steps.sdk.outputs.cache-hit != 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
+        trap 'rm -f "$archive"' EXIT
+        bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+          https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz "$archive"
+        echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
+        mkdir -p "$WASM_TOOLS/wasi-sdk"
+        tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
+    - name: Save completed sdk setup
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sdk.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.WASM_TOOLS }}/wasi-sdk
+        key: ${{ steps.sdk.outputs.cache-primary-key }}
+    - uses: actions/cache/restore@v4
+      id: binaryen-cache
+      with:
+        path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+        key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
+    - name: Install pinned Binaryen
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: bun scripts/ci-binaryen.ts
+    - name: Save completed binaryen-cache setup
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.binaryen-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+        key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
+    - uses: actions/cache/restore@v4
+      id: wasm-tools-cache
+      with:
+        path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
+        key: wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}
+    - name: Install pinned wasm-tools
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        set -euo pipefail
+        mkdir -p "$WASM_TOOLS"
+        archive="$WASM_TOOLS/wasm-tools-1.262.0-x86_64-linux.tar.gz"
+        stage=$(mktemp -d "$WASM_TOOLS/.wasm-tools-XXXXXX")
+        trap 'rm -rf -- "$stage"' EXIT
+        input="$archive"
+        if [[ ! -f "$input" ]]; then
+          input="$stage/archive.tar.gz"
+          bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+            https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/wasm-tools-1.262.0-x86_64-linux.tar.gz "$input"
+        fi
+        echo "655b8df67d54c3ef9b52fc237c4e94bbfbb5f5f43825245cb0940a7002a9ed65  $input" | sha256sum --check
+        if [[ "$input" != "$archive" ]]; then mv "$input" "$archive"; fi
+        tar -xzf "$archive" --strip-components=1 -C "$stage"
+        test "$("$stage/wasm-tools" --version)" = "wasm-tools 1.262.0 (e22db44da 2026-10-13)"
+        mkdir -p "$WASM_TOOLS/wasm-tools-bin"
+        mv "$stage/wasm-tools" "$WASM_TOOLS/wasm-tools-bin/wasm-tools"
+        echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
+    - name: Save completed wasm-tools setup
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasm-tools-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
+        key: ${{ steps.wasm-tools-cache.outputs.cache-primary-key }}
+    - uses: actions/cache/restore@v4
+      id: wasmtime-cache
+      with:
+        path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
+        key: wasmtime-49.0.3-${{ runner.os }}-${{ runner.arch }}
+    - name: Install pinned Wasmtime
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        set -euo pipefail
+        mkdir -p "$WASM_TOOLS"
+        archive="$WASM_TOOLS/wasmtime-v49.0.3-x86_64-linux.tar.xz"
+        stage=$(mktemp -d "$WASM_TOOLS/.wasmtime-XXXXXX")
+        trap 'rm -rf -- "$stage"' EXIT
+        input="$archive"
+        if [[ ! -f "$input" ]]; then
+          input="$stage/archive.tar.xz"
+          bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+            https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz "$input"
+        fi
+        echo "4001225413f208345b980525f31c4080e1873808b38d0ddc7918497340667fbb  $input" | sha256sum --check
+        if [[ "$input" != "$archive" ]]; then mv "$input" "$archive"; fi
+        tar -xJf "$archive" --strip-components=1 -C "$stage"
+        test "$("$stage/wasmtime" --version)" = "wasmtime 49.0.3 (f96eabaa1 2026-10-14)"
+        "$stage/wasmtime" run --help > "$stage/run-help"
+        grep -q -- '--dir' "$stage/run-help"
+        mkdir -p "$WASM_TOOLS/wasmtime"
+        mv "$stage/wasmtime" "$WASM_TOOLS/wasmtime/wasmtime"
+        echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
+    - name: Save completed wasmtime-cache setup
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.wasmtime-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
+        key: ${{ steps.wasmtime-cache.outputs.cache-primary-key }}
+    - name: Check transpiler example command prerequisites
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: bash scripts/test-transpiler-example.sh --check-tools
+    - uses: actions/cache/restore@v4
+      with:
+        path: .ci-bun-cache
+        key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+    - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+    - uses: actions/cache/restore@v4
+      id: sources-cache
+      if: inputs.mode != 'checkpoint'
+      with:
+        path: |
+          vendor/bun
+          vendor/boringssl
+        key: native-sources-${{ runner.os }}-${{ hashFiles('scripts/sync-*.sh', 'patches/**') }}
+    - name: Prepare pinned upstream sources
+      if: inputs.mode != 'checkpoint'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        bash scripts/sync-bun.sh
+        bash scripts/sync-crypto.sh
+    - name: Save completed sources-cache setup
+      if: inputs.mode != 'checkpoint' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sources-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          vendor/bun
+          vendor/boringssl
+        key: ${{ steps.sources-cache.outputs.cache-primary-key }}
+    - name: Blocking EncodedSlice address regression
+      if: inputs.mode == 'native'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        bun scripts/check-encoded-slice.ts
+    - name: Configure private JSC build paths
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
+        echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
+    - name: Import the verified JSC prebuild and sysroot
+      env:
+        JOBS: "2"
+        CAGE: ""
+        JSC_PREBUILD_MANIFEST_SHA256: ${{ inputs.jsc-manifest }}
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        set -euo pipefail
+        source env.sh
+        # Members stream from the downloaded transfer straight into the final trees; no second unpacked copy.
+        transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
+        manifest="$RUNNER_TEMP/jsc-prebuild-manifest"
+        # Only the manifest this run's prebuild job reported, for this commit and these paths.
+        [[ "$JSC_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+        [[ "$(tar --posix -tf "$transfer")" == $'prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest' ]]
+        [[ ! -e "$manifest" ]]
+        tar --posix -xOf "$transfer" manifest > "$manifest"
+        echo "$JSC_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
+        expected=$(printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT")
+        [[ "$(head -n 4 "$manifest")" == "$expected" ]]
+        [[ "$(tail -n +5 "$manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
+        prebuild_digest=$(tail -n +5 "$manifest" | awk '$2 == "prebuild.tar.zst" { print $1 }')
+        sysroot_digest=$(tail -n +5 "$manifest" | awk '$2 == "sysroot.tar.zst" { print $1 }')
+        [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]
+        [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]
+        # Never overlay another tree.
+        [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]
+        mkdir -p "$(dirname "$JSC_BUILD_DIR")" "$(dirname "$BUN_WASM_SYSROOT")"
+        tar --posix -xOf "$transfer" prebuild.tar.zst | zstd -dc | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
+        tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
+        tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"
+        rm -r -- "$manifest" "$RUNNER_TEMP/jsc-prebuild-transfer"
+        source jsc/common.sh
+        check_jsc_inputs_stamp
+    - name: Build patched WASI sysroot
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        time bun scripts/build-wasi-sysroot.ts
+    - name: Identify effective native build environment
+      id: native-inputs
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        inputs=$({
+          for variable in CC CXX AR RANLIB LD CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH SDKROOT RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS; do
+            printf '%s=%s\n' "$variable" "${!variable-}"
+          done
+          for compiler in "${CC:-cc}" "${CXX:-c++}"; do
+            read -r -a command <<< "$compiler"
+            command -v "${command[0]}" || exit 1
+            "${command[@]}" --version || exit 1
+          done
+          rustc --version --verbose || exit 1
+          cargo --version || exit 1
+          cmake --version || exit 1
+          ninja --version || exit 1
+          sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" || exit 1
+        } | sha256sum | cut -d' ' -f1)
+        echo "hash=$inputs" >> "$GITHUB_OUTPUT"

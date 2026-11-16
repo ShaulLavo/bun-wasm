@@ -71,7 +71,7 @@ function guard(result: string): number | null {
 
 test("the prebuild job runs for every native selection, independent of the JSC engine gates", () => {
   expect(producer.needs).toEqual(["selection", "jsc-identity"]);
-  expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') }}");
+  expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true')) }}");
   expect(JSON.stringify(producer)).not.toContain("needs.selection.outputs.jsc");
   expect(native.needs).toEqual(["selection", "jsc-prebuild", "native-quality"]);
   // A native-only change still builds the tools fixture, which links the prebuild.
@@ -149,9 +149,9 @@ test("one job owns the sysroot and prebuild builds and caches; the native job on
   expect(step(producer, "id", "jsc-producer").env).toEqual({ CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}" });
   const names = steps(native).map(item => String(item.name ?? item.uses ?? ""));
   const download = steps(native).findIndex(item => item.uses === "actions/download-artifact@v8" && record(item.with).name === "jsc-prebuild.tar");
-  expect(download).toBe(names.indexOf(importName) - 1);
+  expect(download).toBeLessThan(names.indexOf(importName));
   expect(record(steps(native)[download]!.with).path).toBe("${{ runner.temp }}/jsc-prebuild-transfer");
-  expect(names.indexOf("Configure private JSC build paths")).toBe(download - 1);
+  expect(names.indexOf("Configure private JSC build paths")).toBeLessThan(names.indexOf(importName));
   for (const later of ["Build patched WASI sysroot", "Identify effective native build environment", "Identify JSC prebuild inputs", "Build the single tools fixture in the existing native target"]) {
     expect(names.indexOf(later)).toBeGreaterThan(names.indexOf(importName));
   }

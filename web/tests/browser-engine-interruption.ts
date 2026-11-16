@@ -1,3 +1,4 @@
+import { selectInterruptionEngines, interruptionInputs, type InterruptionEngine } from "./engine-interruption-cases";
 // Real-worker step 7a gate. Never builds WASM. Run after the matching fresh builds:
 // BUN_WASM_INTERRUPTION_DIST=/absolute/dist bun tests/browser-engine-interruption.ts chromium firefox webkit
 // BUN_WASM_INTERRUPTION_DIST=/absolute/dist bun tests/browser-engine-interruption.ts --benchmark safari
@@ -88,6 +89,7 @@ export async function runBrowserGate(options: {
   names: readonly string[];
   artifacts: readonly unknown[];
   benchmark?: boolean;
+  engines?: readonly InterruptionEngine[];
   cleanupTimeoutMs?: number;
   prepare?: () => Promise<void>;
   runBrowser: (name: string, report: BrowserGateReport) => Promise<Record<string, any>>;
@@ -114,7 +116,7 @@ export async function runBrowserGate(options: {
           report.cleanup = { ...result.cleanup, safe: false };
           output.unsafeCleanup = `${name}: ${result.unsafeCleanup ?? "page execution quiescence or resource cleanup is unproved"}`;
         }
-        assertEngineInterruptionResult(result, Boolean(options.benchmark));
+        assertEngineInterruptionResult(result, Boolean(options.benchmark), options.engines);
       } catch (error) { report.ok = false; report.error = errorText(error); }
       finally {
         let closed: RunnerCleanup;
@@ -158,7 +160,10 @@ async function main(): Promise<boolean> {
   const functionalBrowserTimeoutMs = 640_000;
   const args = process.argv.slice(2);
   const benchmark = args.includes("--benchmark");
-  const names = args.filter(name => name !== "--benchmark");
+  const engineArgs = args.filter(arg => arg.startsWith("--engines="));
+  assert.ok(engineArgs.length <= 1, "duplicate interruption engine selection");
+  const engines = selectInterruptionEngines(engineArgs[0]?.slice("--engines=".length));
+  const names = args.filter(name => name !== "--benchmark" && !name.startsWith("--engines="));
   if (!names.length) names.push("chromium", "firefox", "webkit");
   const root = resolve(import.meta.dir, "../..");
   const dist = resolve(process.env.BUN_WASM_INTERRUPTION_DIST ?? join(root, "dist"));
@@ -271,14 +276,14 @@ async function main(): Promise<boolean> {
   process.once("SIGINT", onInterrupt); process.once("SIGTERM", onTerminate);
   const deadline = setTimeout(() => interrupt("engine interruption gate exceeded its bounded deadline"), names.length * (benchmark ? 550_000 : functionalBrowserTimeoutMs) + 30_000);
   try {
-    const result = await runBrowserGate({ names, artifacts, benchmark, onState(report) { state = report; }, writeReport, cleanup,
+    const result = await runBrowserGate({ names, artifacts, benchmark, engines, onState(report) { state = report; }, writeReport, cleanup,
       onReport(report) { console.log(JSON.stringify(report)); },
       prepare() { return preparing = (async () => {
         for (const name of names) assert.ok(["chromium", "firefox", "webkit", "safari"].includes(name), `unknown browser ${name}`);
         if (names.includes("safari")) assert.equal(process.platform, "darwin", "actual Safari runs on the Mac fleet host");
         assert.ok(!baselineDist || benchmark, "baseline artifacts are used only with --benchmark");
         assert.ok(Number.isInteger(requestedDriverPort) && (requestedDriverPort === 0 || requestedDriverPort > 1023 && requestedDriverPort < 65536), "invalid Safari driver port");
-        const inputs = ["bun.wasm", "quickjs.wasm", "bun-jsc.wasm", "jsc-engine.wasm", "bun-browser.wasm"].map(name => ({ name, path: join(dist, name), route: `/${name}` }))
+        const inputs = interruptionInputs(engines).map(name => ({ name, path: join(dist, name), route: `/${name}` }))
           .concat(baselineDist ? ["bun.wasm", "quickjs.wasm", "bun-jsc.wasm", "jsc-engine.wasm"].map(name => ({ name, path: resolve(baselineDist, name), route: `/baseline/${name}` })) : []);
         for (const input of inputs) {
           const info = await stat(input.path);
@@ -287,7 +292,7 @@ async function main(): Promise<boolean> {
         }
         assertRunning();
         const scratchRoot = process.env.TMPDIR ?? (process.platform === "linux" ? "/work/tmp" : tmpdir());
-        scratch = await (scratchCreation = mkdtemp(join(scratchRoot, "bun-wasm-engine-interruption-")));
+        scratch = await (scratchCreation = mkdtemp(join(scratchRoot, "bwi-")));
         assertRunning(); process.env.TMPDIR = scratch;
         console.log(JSON.stringify({ resources: { scratch, artifacts, browsers: names, safariDriverPort: names.includes("safari") ? driverPort : null },
           host: { platform: process.platform, arch: process.arch, logicalCpus: availableParallelism(), loadAverage: loadavg(), bun: Bun.version }, benchmark }));
@@ -309,7 +314,7 @@ async function main(): Promise<boolean> {
           if (!file.startsWith(out + sep) || !await Bun.file(file).exists()) return new Response(null, { status: 404, headers });
           return new Response(Bun.file(file), { headers });
         } });
-        url = `http://127.0.0.1:${server.port}/${benchmark ? `?benchmark=1${baselineDist ? "&baseline=1" : ""}` : ""}`;
+        url = `http://127.0.0.1:${server.port}/?engines=${engines.join(",")}${benchmark ? `&benchmark=1${baselineDist ? "&baseline=1" : ""}` : ""}`;
       })(); },
       teardownBrowser,
       async runBrowser(name, report) {

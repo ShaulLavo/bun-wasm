@@ -2,6 +2,14 @@
 
 Classification: original host integration. No upstream implementation was copied.
 
+The playground shares one lazy tools loader across its engine launchers. It retains
+the verified compiled module for later lint/fmt commands, including while optional
+CacheStorage persistence is pending or unavailable. A rejected load clears only its
+pending result so a later command can fetch and verify again. The runner uses the
+same loader factory. Fresh consumers still verify and compile persisted bytes.
+The tools-cache controls cover concurrent loads, blocked and failed persistence,
+integrity rejection and reload. No Waffle implementation or provider pin changes.
+
 `web/src/playground/program-profile.ts` registers the playground's existing Bun
 adapter and executable aliases only after checking the requested `split` or
 `shared-group` profile against the prepared core with `isSharedGroupCore`.

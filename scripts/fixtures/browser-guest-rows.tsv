@@ -1,0 +1,45 @@
+group	browser	engine	case
+installer-links	chromium	browser	bun run dev tail
+installer-links	chromium	quickjs	bun run dev tail
+installer-links	chromium	jsc	bun run dev tail
+installer-links	webkit	browser	bun run dev tail
+installer-links	webkit	quickjs	bun run dev tail
+installer-links	webkit	jsc	bun run dev tail
+subprocess	chromium	quickjs	eight executable aliases and API completion
+subprocess	chromium	jsc	eight executable aliases and API completion
+subprocess	chromium	browser	eight executable aliases and API completion
+subprocess	webkit	quickjs	eight executable aliases and API completion
+subprocess	webkit	jsc	eight executable aliases and API completion
+subprocess	webkit	browser	eight executable aliases and API completion
+preview-websocket	chromium	browser	visible preview Origin and Host
+preview-websocket	chromium	quickjs	visible preview Origin and Host
+preview-websocket	webkit	browser	visible preview Origin and Host
+preview-websocket	webkit	quickjs	visible preview Origin and Host
+engine-interruption	chromium	quickjs	runtimeProcess/page-kill sleepSync-default-SIGUSR1
+engine-interruption	chromium	jsc	runtimeProcess/page-kill sleepSync-default-SIGUSR1
+engine-interruption	firefox	quickjs	runtimeProcess/page-kill sleepSync-default-SIGUSR1
+engine-interruption	firefox	jsc	runtimeProcess/page-kill sleepSync-default-SIGUSR1
+engine-interruption	webkit	quickjs	runtimeProcess/page-kill sleepSync-default-SIGUSR1
+engine-interruption	webkit	jsc	runtimeProcess/page-kill sleepSync-default-SIGUSR1
+worker-modules	chromium	browser	controlled atomic-transfer 20 repetitions
+worker-modules	chromium	browser	uncontrolled descendant atomic-transfer
+worker-modules	webkit	browser	controlled atomic-transfer 20 repetitions
+worker-modules	webkit	browser	uncontrolled descendant atomic-transfer
+terminal-stdin	chromium	browser	direct bun run stdin-probe.ts
+terminal-stdin	chromium	browser	env bun run stdin-probe.ts
+terminal-stdin	chromium	browser	package sh -c cd stdin-script and bun run probe
+terminal-stdin	chromium	browser	shebang ./stdin-tool
+terminal-stdin	chromium	browser	printf pipe via env
+terminal-stdin	chromium	browser	file redirection via env
+terminal-stdin	webkit	browser	direct bun run stdin-probe.ts
+terminal-stdin	webkit	browser	env bun run stdin-probe.ts
+terminal-stdin	webkit	browser	package sh -c cd stdin-script and bun run probe
+terminal-stdin	webkit	browser	shebang ./stdin-tool
+terminal-stdin	webkit	browser	printf pipe via env
+terminal-stdin	webkit	browser	file redirection via env
+tools-integrity	chromium	quickjs	intentional wrong tools payload exit/cache/compile outcome
+tools-integrity	chromium	jsc	intentional wrong tools payload exit/cache/compile outcome
+tools-integrity	chromium	browser	intentional wrong tools payload exit/cache/compile outcome
+tools-integrity	webkit	quickjs	intentional wrong tools payload exit/cache/compile outcome
+tools-integrity	webkit	jsc	intentional wrong tools payload exit/cache/compile outcome
+tools-integrity	webkit	browser	intentional wrong tools payload exit/cache/compile outcome

@@ -7,7 +7,7 @@ import { programMetadata } from "../../src/assets.js";
 // and the sandbox (../sandbox/).
 
 import type { ProcessRuntime } from "../../src/process-runtime.js";
-import { loadEngineProgram, loadWasm, MODULE_SCOPE } from "./engine-loader";
+import { createToolsLoader, loadEngineProgram, MODULE_SCOPE } from "./engine-loader";
 import { verifyMemoryProfile, type ProgramMemoryProfile } from "./program-profile";
 import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, type RuntimeNetworkHelper } from "./net/helper";
 import { createRing } from "./net/ring";
@@ -27,12 +27,7 @@ import { pageFacts } from "./engine-stack-budget";
 import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
 import type { BunSharedConnection } from "./shared-objects/protocol.js";
 
-let toolsModule: Promise<WebAssembly.Module> | undefined;
-function loadTools(): Promise<WebAssembly.Module> {
-  return toolsModule ??= loadWasm("bun-tools.wasm", () => {})
-    .then(result => result.module)
-    .catch(error => { toolsModule = undefined; throw error; });
-}
+const loadTools = createToolsLoader();
 
 export function physicalStop(worker: Pick<Worker, "terminate">, terminating: () => void, returned: () => void, stopped: () => void): Promise<void> {
   const terminate = worker.terminate.bind(worker);

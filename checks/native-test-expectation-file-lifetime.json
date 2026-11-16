@@ -1,0 +1,10 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-expectation-file-lifetime",
+  "engines": [
+    "quickjs",
+    "jsc",
+    "spidermonkey",
+    "browser"
+  ]
+}
