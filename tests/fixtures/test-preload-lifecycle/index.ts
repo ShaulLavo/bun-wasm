@@ -57,7 +57,7 @@ const cases = [
   scenario("all-skip", { a: file("a", 'console.log("must not run")', "test.skip"), b: file("b", 'console.log("must not run")', "test.skip"),
     lines: prefix.concat(["import b", "after"]), pass: 0 }),
   scenario("all-empty", { a: 'console.log("import a");\n', b: 'console.log("import b");\n', lines: prefix.concat(["import b", "after"]), pass: 0 }),
-  scenario("todo-run", { args: ["--todo"], a: file("a", 'console.log("body a")', "test.todo"), b: file("b", 'console.log("body b")', "test.todo") }),
+  scenario("todo-run", { args: ["--todo"], a: file("a", 'console.log("body a")', "test.todo"), b: file("b", 'console.log("body b")', "test.todo"), pass: 0, fail: 2, exit: 1 }),
   scenario("first-import-fails", { a: 'console.log("import a"); throw new Error("first import failed");\n',
     lines: prefix.concat(["import b"], each("b"), ["after"]), pass: 1, fail: 1, exit: 1 }),
   scenario("last-import-fails", { b: 'console.log("import b"); throw new Error("last import failed");\n',
