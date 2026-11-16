@@ -14,6 +14,28 @@ cleanup. Individual test and hook caps are separate and remain unchanged here.
 The observations below are historical reports, not correctness thresholds or
 instructions to recalibrate a batch after a slow run.
 
+## Open: intermittent WebKit hangs (November 16, 2026)
+
+Rare WebKit tests in the 10-interface shard run into their whole test cap
+without an error. Each time, Bun reports `killed 1 dangling process` (the WebKit
+child) before the failure. Since the WebKit process was still alive, the stall
+happened at or before `browser.close()`. A stuck close in a `finally` block also
+hides any earlier error. Different tests hang, so this is not one test's logic:
+
+| Run | Commit or branch | WebKit test | Usual time |
+| --- | --- | --- | --- |
+| 43841729585 | `fix/worker-port-continuations`, 09:39 UTC (before the last green main, bbf316576) | Playwright fences late preview close | about 0.4 s |
+| 43888116284 | main 6b815599e | iphone-browser preview reload, iphone-click trusted input | 1.6 s, 0.4 s |
+| 43934455471 | PR 890 | iphone-browser preview reload | 1.6 s |
+
+PR 825 changed nothing on this path, so it is not the cause. Both the Azure
+(20261111.196.1) and the AWS (20261111.82.6) ubuntu-26.04 images hit it. The PC
+did not reproduce it: 50 runs of both iPhone files, 40 WebKit-only reruns pinned
+to two cores, one complete 10-interface batch on four cores, and 300 bare
+launch, page, goto and close rounds on four cores all passed. Next step: run the
+same launch loop in an `ubuntu:26.04` container with the Playwright 1.64.1 WebKit
+build, or record which Playwright call is still pending when the cap fires.
+
 ## Historical rollout
 
 PR 657's [hosted Web host job](https://github.com/ShaulLavo/bun-wasm/actions/runs/43461758984/job/132016209809)

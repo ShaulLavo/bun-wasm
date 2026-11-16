@@ -586,6 +586,17 @@ test("apt prefetch uses signed-index SHA256 hashes and preserves mirror resoluti
   expect(() => parseArchives(row.replace(" 42 ", " 0 "))).toThrow("size");
 });
 
+test("apt prefetch accepts x86-64-v3 security archives only after HTTPS selection", () => {
+  // Shape printed by the AWS-hosted ubuntu-26.04 image (20261111.82.6), whose sources list the security pocket directly.
+  const hash = "b".repeat(64);
+  const path = "ubuntu/pool/main/g/gst-plugins-base1.0/libgstreamer-plugins-base1.0-0_1.28.2-1ubuntu0.3_amd64v3.deb";
+  const row = (uri: string) => `'${uri}' libgstreamer-plugins-base1.0-0_1.28.2-1ubuntu0.3_amd64v3.deb 912034 SHA256:${hash}`;
+  expect(parseArchives(row(`https://security.ubuntu.com/${path}`))).toEqual([{
+    uri: `https://security.ubuntu.com/${path}`, filename: "libgstreamer-plugins-base1.0-0_1.28.2-1ubuntu0.3_amd64v3.deb", size: 912034, sha256: hash,
+  }]);
+  expect(() => parseArchives(row(`http://security.ubuntu.com/${path}`))).toThrow(".github/actions/browser-deps");
+});
+
 test("prefetch starts a bounded batch before waiting, unlike serial apt downloads", async () => {
   const started: number[] = [];
   const release: (() => void)[] = [];
