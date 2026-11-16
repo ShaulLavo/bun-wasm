@@ -87,6 +87,7 @@
   // --- URLSearchParams / URL --------------------------------------------------
 
   const { toUSVString, initFromObject, convertMethodArgs } = internal.require("url_search_params");
+  const removeQueryPairs = internal.require("url_pairs");
 
   // application/x-www-form-urlencoded byte serializer.
   function formEncode(str) {
@@ -136,21 +137,24 @@
       params.#url = url;
     }
     static _reset(params, search) {
-      params.#list = parseQuery(search.startsWith("?") ? search.slice(1) : search);
+      const list = parseQuery(search.startsWith("?") ? search.slice(1) : search);
+      params.#list.length = 0;
+      for (const pair of list) params.#list.push(pair);
     }
     #update() {
-      if (this.#url) internal.urlSetSearchFromParams(this.#url, this.toString());
+      if (this.#url) internal.urlSetSearchFromParams(this.#url);
     }
     get size() {
       return this.#list.length;
     }
     append(name, value) {
-      this.#list.push([toUSVString(name), toUSVString(value)]);
+      const [n, val] = convertMethodArgs(() => this.#list, name, value, true);
+      this.#list.push([n, val]);
       this.#update();
     }
     delete(name, value) {
       const [n, val] = convertMethodArgs(() => this.#list, name, value);
-      this.#list = this.#list.filter(([k, v]) => k !== n || (val !== undefined && v !== val));
+      removeQueryPairs(this.#list, n, val);
       this.#update();
     }
     get(name) {
@@ -173,7 +177,7 @@
         this.#list.push([n, val]);
       } else {
         this.#list[i][1] = val;
-        this.#list = this.#list.filter(([k], j) => k !== n || j <= i);
+        removeQueryPairs(this.#list, n, undefined, i + 1);
       }
       this.#update();
     }
@@ -206,6 +210,7 @@
   }
 
   // Component array, or undefined when the input doesn't parse.
+  const stringifyParams = URLSearchParams.prototype.toString;
   const urlErrors = internal.require("url_errors");
   function parseUrl(input, base) {
     if (base === undefined) return native.urlParse(urlErrors.toString(input));
@@ -217,6 +222,7 @@
   class URL {
     #parts;
     #searchParams = null;
+    #searchDirty = false;
     constructor(input, base) {
       if (arguments.length === 0) throw urlErrors.missingArguments();
       input = urlErrors.toString(input);
@@ -239,16 +245,27 @@
         return null;
       }
     }
-    static _setSearch(url, query) {
-      url.#set("search", query);
+    static _setSearch(url) {
+      url.#searchDirty = true;
     }
-    #set(field, value) {
-      const parts = native.urlSet(this.#parts[0], field, String(value));
+    #syncSearch() {
+      if (!this.#searchDirty) return;
+      const parts = native.urlSet(this.#parts[0], "search", stringifyParams.call(this.#searchParams));
       if (!parts) return;
       this.#parts = parts;
-      if (this.#searchParams && field !== "search-from-params") URLSearchParams._reset(this.#searchParams, this.#parts[7]);
+      this.#searchDirty = false;
+    }
+    #set(field, value) {
+      value = urlErrors.toString(value);
+      if (field !== "search") this.#syncSearch();
+      const parts = native.urlSet(this.#parts[0], field, value);
+      if (!parts) return;
+      this.#parts = parts;
+      this.#searchDirty = false;
+      if (this.#searchParams && field === "search") URLSearchParams._reset(this.#searchParams, this.#parts[7]);
     }
     get href() {
+      this.#syncSearch();
       return this.#parts[0];
     }
     set href(value) {
@@ -256,63 +273,78 @@
       const parts = native.urlParse(value);
       if (!parts) throw urlErrors.invalidURL(value);
       this.#parts = parts;
+      this.#searchDirty = false;
       if (this.#searchParams) URLSearchParams._reset(this.#searchParams, this.#parts[7]);
     }
     get protocol() {
+      this.#syncSearch();
       return this.#parts[1];
     }
     set protocol(v) {
       this.#set("protocol", v);
     }
     get username() {
+      this.#syncSearch();
       return this.#parts[2];
     }
     set username(v) {
       this.#set("username", v);
     }
     get password() {
+      this.#syncSearch();
       return this.#parts[3];
     }
     set password(v) {
       this.#set("password", v);
     }
     get host() {
+      this.#syncSearch();
       return this.#parts[5] ? `${this.#parts[4]}:${this.#parts[5]}` : this.#parts[4];
     }
     set host(v) {
       this.#set("host", v);
     }
     get hostname() {
+      this.#syncSearch();
       return this.#parts[4];
     }
     set hostname(v) {
       this.#set("hostname", v);
     }
     get port() {
+      this.#syncSearch();
       return this.#parts[5];
     }
     set port(v) {
       this.#set("port", v);
     }
     get pathname() {
+      this.#syncSearch();
       return this.#parts[6];
     }
     set pathname(v) {
       this.#set("pathname", v);
     }
     get search() {
+      this.#syncSearch();
       return this.#parts[7];
     }
     set search(v) {
       this.#set("search", v);
     }
     get hash() {
+      this.#syncSearch();
       return this.#parts[8];
     }
     set hash(v) {
       this.#set("hash", v);
     }
     get origin() {
+      this.#syncSearch();
+      if (this.#parts[1] === "blob:") {
+        const inner = native.urlParse(this.#parts[6]);
+        if (inner && inner[1] === "file:") return "file://" + inner[4];
+      }
       return this.#parts[9];
     }
     get searchParams() {
@@ -342,9 +374,8 @@
   }
   void URL_FIELDS;
 
-  internal.urlSetSearchFromParams = function (url, query) {
-    const parts = native.urlSet(url.href, "search", query);
-    if (parts) URL._setSearch(url, query);
+  internal.urlSetSearchFromParams = function (url) {
+    URL._setSearch(url);
   };
 
   // --- events -----------------------------------------------------------------

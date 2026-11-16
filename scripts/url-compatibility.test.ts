@@ -23,6 +23,8 @@ function sourceRuntime() {
   const realm = createContext({ TypeError, Error, RangeError, ArrayBuffer, Uint8Array, TextEncoder, TextDecoder, assert });
   const modules = new Map<string, unknown>();
   const lines: string[] = [];
+  const sets: string[] = [];
+  const parts = (url: URL) => [url.href, url.protocol, url.username, url.password, url.hostname, url.port, url.pathname, url.search, url.hash, url.origin];
   const internal = {
     native: {
       timeOrigin: () => 0,
@@ -34,7 +36,13 @@ function sourceRuntime() {
       urlParse(input: string, base?: string) {
         const url = URL.parse(input, base);
         if (!url) return undefined;
-        return [url.href, url.protocol, url.username, url.password, url.hostname, url.port, url.pathname, url.search, url.hash, url.origin];
+        return parts(url);
+      },
+      urlSet(href: string, field: string, value: string) {
+        sets.push(field);
+        const url = new URL(href);
+        Reflect.set(url, field, value);
+        return parts(url);
       },
     },
     web: { URL, URLSearchParams, Blob, File },
@@ -54,7 +62,7 @@ function sourceRuntime() {
   realm.console = { log: (line: string) => lines.push(line) };
   realm.adapter = internal.require("node_url");
   realm.buffer = internal.require("buffer");
-  return { realm, lines };
+  return { realm, lines, sets };
 }
 
 test("production URL and buffer factories satisfy the native Bun URL contract", async () => {
@@ -79,4 +87,40 @@ test("resolved Blobs cannot mutate the registry or the creating Blob", async () 
     return result;
   })()`, realm);
   expect(Array.from(result)).toEqual(["hello", "hello"]);
+});
+
+test("query mutations serialize once at a read and direct replacements discard pending queries", () => {
+  const { realm, sets } = sourceRuntime();
+  runInContext(`
+    const u = new URL("http://h/");
+    const p = u.searchParams;
+    for (let i = 0; i < 100; i++) p.append("k", "v");
+  `, realm);
+  expect(sets).toEqual([]);
+  runInContext(`assert.equal(p.size, 100); assert(u.href.endsWith("k=v"));`, realm);
+  expect(sets).toEqual(["search"]);
+  runInContext(`void u.href; void u.search; void u.origin; void u.toJSON();`, realm);
+  expect(sets).toEqual(["search"]);
+  runInContext(`p.append("drop", "x"); u.search = "?only=1"; assert.equal(u.search, "?only=1");`, realm);
+  expect(sets).toEqual(["search", "search"]);
+  runInContext(`p.append("drop", "x"); u.href = "https://other/?q=v"; assert.equal(p.toString(), "q=v");`, realm);
+  expect(sets).toEqual(["search", "search"]);
+});
+
+test("each immediate public query read flushes once without calling an overridden serializer", () => {
+  const { realm, sets } = sourceRuntime();
+  for (const read of ["href", "search", "toString", "origin"]) {
+    sets.length = 0;
+    realm.read = read;
+    runInContext(`(() => {
+      const u = new URL("http://h/");
+      const p = u.searchParams;
+      p.toString = () => { throw new Error("public serializer called"); };
+      p.append("k", "v");
+      const value = u[read];
+      if (typeof value === "function") value.call(u);
+      assert.equal(u.href, "http://h/?k=v");
+    })()`, realm);
+    expect(sets).toEqual(["search"]);
+  }
 });

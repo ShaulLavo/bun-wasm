@@ -15,6 +15,21 @@ converted base. Conversion runs once per user value and preserves thrown errors.
 Symbol conversion throws even from `URL.parse`, whose null result represents a
 parse failure. `URL.canParse.length` and `URL.parse.length` are one.
 
+The existing URL private-field code defers query serialization until a URL
+component is read or an unrelated component is set. Direct search and href
+replacement discard pending queries. Input conversion finishes before the setter
+reads the current URL, preserving mutations made by conversion callbacks.
+`url_pairs.ts` compacts deleted or duplicate pairs in place. Query replacement also
+keeps the list object, so existing iterators and the public searchParams handle
+remain live. URLSearchParams string conversion and branding are unchanged.
+Blob URLs containing a valid file URL expose Bun's `file://` origin plus its host.
+
+The public fixture covers immediate reads, query replacement, duplicate keys,
+iteration, and coercion errors and reentry. A production-factory control counts
+native query updates to check that many appends serialize once on a read and that
+replacement never serializes a discarded query. The unchanged upstream 10,000
+append test retains its own hang guard; no speed assertion is added.
+
 `object_urls.ts` owns one private registry per guest. `web.js` installs its standard
 URL methods before user code runs, and `buffer.js` exports its resolver through the
 existing module factory. The registry validates Blob state through the captured

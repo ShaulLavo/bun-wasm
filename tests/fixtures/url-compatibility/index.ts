@@ -33,6 +33,14 @@ async function main() {
     assert.throws(() => Reflect.apply(method, URL, []), { code: "ERR_MISSING_ARGS" });
     assert.throws(() => Reflect.apply(method, URL, [Symbol("url")]), TypeError);
   }
+  for (const [input, origin] of [
+    ["blob:file://text.txt", "file://text.txt"],
+    ["blob:file:///folder/text.txt", "file://"],
+    ["blob:file://localhost/a", "file://"],
+    ["blob:file://host/a", "file://host"],
+    ["blob:file://[bad]/a", "null"],
+  ]) assert.equal(new URL(input).origin, origin);
+  verifyQueryMutations();
   assert.equal(buffer.resolveObjectURL, resolveObjectURL);
   const blob = new Blob(["hello"], { type: "application/octet-stream" });
   const first = URL.createObjectURL(blob);
@@ -68,6 +76,69 @@ async function main() {
   URL.revokeObjectURL(second);
   URL.revokeObjectURL(fileURL);
   console.log("URL compatibility ok");
+}
+
+function verifyQueryMutations() {
+  const u = new URL("http://h/?a=1&a=2");
+  const p = u.searchParams;
+  p.append("b", "3");
+  assert.equal(u.href, "http://h/?a=1&a=2&b=3");
+  p.append("c", "4");
+  assert.equal(u.search, "?a=1&a=2&b=3&c=4");
+  p.delete("a", "1");
+  assert.equal(u.toString(), "http://h/?a=2&b=3&c=4");
+  p.sort();
+  assert.equal(u.origin, "http://h");
+  assert.equal(u.toJSON(), "http://h/?a=2&b=3&c=4");
+  p.append("drop", "x");
+  u.search = "?z=1&z=2&a=3";
+  assert.equal(u.searchParams, p);
+  assert.deepEqual(Array.from(p), [["z", "1"], ["z", "2"], ["a", "3"]]);
+  p.sort();
+  p.append("z", "4");
+  p.delete("z", "2");
+  assert.equal(u.search, "?a=3&z=1&z=4");
+  p.set("z", "5");
+  assert.equal(u.href, "http://h/?a=3&z=5");
+  const iterator = p.entries();
+  assert.deepEqual(iterator.next().value, ["a", "3"]);
+  u.href = "https://other/?first=1&second=2";
+  assert.equal(u.searchParams, p);
+  assert.deepEqual(iterator.next().value, ["second", "2"]);
+  const sentinel = new Error("query coercion");
+  assert.throws(() => Reflect.apply(p.set, p, [{ toString() {
+    p.append("kept", "yes");
+    throw sentinel;
+  } }, "x"]), error => error === sentinel);
+  assert.equal(u.href, "https://other/?first=1&second=2&kept=yes");
+  Reflect.apply(p.append, p, [
+    { toString() { u.search = "?r=3"; return "k"; } },
+    { toString() { u.pathname = "/changed"; return "v"; } },
+  ]);
+  assert.equal(u.href, "https://other/changed?r=3&k=v");
+  assert.throws(() => Reflect.set(u, "pathname", { toString() {
+    p.append("during", "2");
+    throw sentinel;
+  } }), error => error === sentinel);
+  assert.equal(u.href, "https://other/changed?r=3&k=v&during=2");
+  Reflect.set(u, "pathname", { toString() {
+    u.href = "https://reset/?fresh=1";
+    p.append("kept", "2");
+    return "/next";
+  } });
+  assert.equal(u.href, "https://reset/next?fresh=1&kept=2");
+  assert.equal(p.toString(), "fresh=1&kept=2");
+  const live = p.entries();
+  assert.deepEqual(live.next().value, ["fresh", "1"]);
+  p.append("last", "3");
+  p.delete("kept");
+  assert.deepEqual(live.next().value, ["last", "3"]);
+  p.delete("fresh");
+  p.delete("last");
+  assert.equal(u.href, "https://reset/next");
+  p.toString = () => { throw new Error("public serializer called"); };
+  p.append("k", "v");
+  assert.equal(u.href, "https://reset/next?k=v");
 }
 
 main();
