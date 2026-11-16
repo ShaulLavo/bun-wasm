@@ -1,10 +1,10 @@
-# Oxc package initial memory
+# Oxc package memory
 
 ## Classification
 
 | Source | Class | Change |
 | --- | --- | --- |
-| `crates/bunwasm-runtime/src/oxc_memory.rs` and its call in `modules.rs` | Host feature | Original package adapter that reduces the initial capacity of three byte-identified published Oxc loaders. |
+| `crates/bunwasm-runtime/src/oxc_memory.rs` and its call in `modules.rs` | Host feature | Original package adapter that bounds the initial and maximum capacity of three byte-identified published Oxc loaders. |
 | `scripts/oxc-memory.test.ts` and `scripts/fixtures/oxc-memory-{adapter.rs,probe.ts}` | Host feature | Original controls that compile the adapter and exercise the real published Wasm packages. |
 | `tests/real-oxc-consumer/` and `scripts/real-oxc-consumer{,.test}.ts` | Host feature | Original table-driven consumer controls for the official parser, transform and minify packages on selected shared engine profiles. |
 
@@ -51,8 +51,13 @@ Rounding each data end up to a Wasm page gives the corresponding imported
 minimum. The binaries initialize passive data through `memory.init`; successful
 real package initialization and operations at those minima exercise these bounds.
 
-The adapter uses those exact minima. The shared flag, 65,536-page maximum,
-worker settings, imports, exports, package files, and binaries remain unchanged.
+The adapter uses those exact minima and a 32,768-page maximum, matching
+bun-wasm's supported 2 GiB memory capacity. The published shared-memory import
+allows a smaller maximum. A shared memory can reserve its entire declared
+maximum in Safari even when its current size is small, so reducing only the
+initial allocation leaves a separate reservation cost.
+
+The shared flag, worker settings, imports, exports, package files, and binaries remain unchanged.
 Equal-width numeric replacements preserve all source positions. The adapter
 runs at the existing file-module preparation boundary before transpilation and
 source caching, for both Browser and in-guest engines.
@@ -62,8 +67,8 @@ loader string and no full binary copy or retained adapter cache. Unrelated
 module paths return the borrowed source before hashing or filesystem access.
 
 Initial logical capacity across the three packages falls from 786,432,000 to
-192,806,912 bytes. This is a capacity reduction, not an RSS measurement or an
-explanation of Safari's process footprint.
+192,806,912 bytes. Their combined declared maximum falls from 12 GiB to 6 GiB.
+These are capacity bounds, not RSS measurements.
 
 ## Checks and limits
 

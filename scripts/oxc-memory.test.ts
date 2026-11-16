@@ -54,12 +54,12 @@ for (const { name, initial } of bindings) {
   const directory = join(scratch, "node_modules", `@oxc-${name}/binding-wasm32-wasi`);
   const path = join(directory, `${name}.wasi.cjs`);
   const wasm = join(directory, `${name}.wasm32-wasi.wasm`);
-  test(`${name} changes only the published initial memory and preserves source positions`, () => {
+  test(`${name} bounds published memory and preserves source positions`, () => {
     const source = readFileSync(path, "utf8");
     const adapted = adapt(path);
-    expect(adapted).toBe(source.replace("initial: 4000,", `initial: ${initial} ,`));
+    expect(adapted).toBe(source.replace("initial: 4000,", `initial: ${initial} ,`).replace("maximum: 65536,", "maximum: 32768,"));
     expect(adapted.length).toBe(source.length);
-    expect(adapted).toContain("maximum: 65536,\n  shared: true,");
+    expect(adapted).toContain("maximum: 32768,\n  shared: true,");
     expect(readFileSync(path, "utf8")).toBe(source);
   });
   test(`${name} rejects one page below its real imported minimum`, () => {
