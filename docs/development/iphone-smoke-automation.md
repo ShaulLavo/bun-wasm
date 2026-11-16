@@ -40,6 +40,13 @@ as red, with the phase and a report explaining what failed.
 The timer runs no detached device workload. The low-level runner and its manual
 deploy procedure are owned separately from this watcher.
 
+Before opening the task URL, the native transport opens Safari's tab overview
+and proves that the ordinary numbered tab group is selected. Setup can locate
+an ordinary group from its AX text, including duplicate nodes at the same bounds
+in the same group strip. Selection still requires a settled snapshot with one
+selected numbered group button. Missing or ambiguous targets stop navigation.
+Setup never closes a tab or reads a private tab total.
+
 ## Queue and reports
 
 The default report directory is `/work/reports/goals/iphone-smoke`. Every command
@@ -92,6 +99,13 @@ range, failed phase and report path to managing thread
 `bd2baec7-7e23-49b0-8d20-31486beeb178`. Override it with `--notify-thread=<thread>`.
 Failed notifications stay pending. A crash after delivery but before saving can
 repeat a notification, which includes revision and attempt for identification.
+The exact `Cannot identify Safari tab count` cleanup failure sends an
+`OPERATIONAL ALERT` when every executed case passed startup, install, dev,
+render and click, and remaining cases were blocked only by that cleanup failure.
+The raw result stays red, cleanup stays unproved, and the tested-green baseline
+does not advance. Mixed failures, cancellation, ownership failures and other
+cleanup failures retain the ordinary red notification. The classification survives
+watcher restart and notification failure.
 Only continued absence of a claim after both delivery windows queues an
 operational dispatch-failure notification. This is separate from a smoke red
 result; the attempt stays running and can still claim and complete normally.

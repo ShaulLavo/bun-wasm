@@ -25,7 +25,8 @@ async function control(observation: Record<string, unknown> | "pending", save?: 
   const closed = join(root, "closed");
   const beforeTabs = tabBatch(tabOverview(["Goals task-nonce", "fixture owner"]));
   const afterTabs = tabBatch(tabOverview(["fixture owner"]));
-  await writeFile(agent, `#!${process.execPath}\nimport{writeFile}from'node:fs/promises';\nconst args=process.argv.slice(2);\nif(args[0]==='batch'){const closing=JSON.parse(args[2])[0].input.target.ref==='@e2';if(closing)await writeFile(${JSON.stringify(closed)},'closed');console.log(closing?${JSON.stringify(afterTabs)}:${JSON.stringify(beforeTabs)});}else console.log('@e1 [button] "Increment"');\n`);
+  const setupTabs = tabBatch(tabOverview(["fixture owner"]), ["snapshot"]);
+  await writeFile(agent, `#!${process.execPath}\nimport{writeFile}from'node:fs/promises';\nconst args=process.argv.slice(2);\nif(args[0]==='batch'){const first=JSON.parse(args[2])[0];const closing=first.input.target?.ref==='@e2';if(closing)await writeFile(${JSON.stringify(closed)},'closed');console.log(first.command==='snapshot'?${JSON.stringify(setupTabs)}:closing?${JSON.stringify(afterTabs)}:${JSON.stringify(beforeTabs)});}else console.log('@e1 [button] "Increment"');\n`);
   await chmod(agent, 0o755);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const path = new URL(request.url).pathname;

@@ -78,7 +78,8 @@ test("transport close is cached and reaps its timed-out native command before an
   const path = "/__goals_iphone/" + "c".repeat(64);
   const log = join(root, "commands.jsonl");
   const agent = join(root, "agent-device");
-  await writeFile(agent, `#!${process.execPath}\nimport {appendFile} from 'node:fs/promises';\nawait appendFile(${JSON.stringify(log)},JSON.stringify({args:process.argv.slice(2),pid:process.pid})+'\\n');\nif(process.argv[2]==='press')await Bun.sleep(2000);\n`);
+  const setup = tabBatch(tabOverview(["owner tab"]), ["snapshot"]);
+  await writeFile(agent, `#!${process.execPath}\nimport {appendFile} from 'node:fs/promises';\nawait appendFile(${JSON.stringify(log)},JSON.stringify({args:process.argv.slice(2),pid:process.pid})+'\\n');\nif(process.argv[2]==='batch')console.log(${JSON.stringify(setup)});\nif(process.argv[2]==='press')await Bun.sleep(2000);\n`);
   await chmod(agent, 0o755);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     return Response.json(new URL(request.url).pathname.endsWith("/configure") ? "http://127.0.0.1:1234/" : { nonce: "own-tab", timeOrigin: 1, visible: true, userAgent: "iPhone Safari" });
@@ -92,10 +93,10 @@ test("transport close is cached and reaps its timed-out native command before an
     await expect(closing).rejects.toThrow("T3 device command failed");
     expect(Date.now() - started).toBeLessThan(1000);
     const rows = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
-    expect(rows.map(row => row.args[0])).toEqual(["open", "press"]);
-    expect(() => process.kill(rows[1].pid, 0)).toThrow();
+    expect(rows.map(row => row.args[0])).toEqual(["open", "batch", "open", "press"]);
+    expect(() => process.kill(rows[3].pid, 0)).toThrow();
     await Bun.sleep(200);
-    expect((await readFile(log, "utf8")).trim().split("\n")).toHaveLength(2);
+    expect((await readFile(log, "utf8")).trim().split("\n")).toHaveLength(4);
   } finally { await transport.close(true, 150).catch(() => {}); await server.stop(true); await rm(root, { recursive: true, force: true }); }
 });
 
@@ -135,7 +136,8 @@ test("an outstanding install observation cannot block confirmed native tab clean
   const log = join(root, "commands.jsonl");
   const snapshot = tabBatch(tabOverview(["Goals own-tab", "owner tab"]));
   const after = tabBatch(tabOverview(["owner tab"]));
-  await writeFile(agent, `#!${process.execPath}\nimport{appendFile,writeFile}from'node:fs/promises';import{existsSync}from'node:fs';\nconst args=process.argv.slice(2);await appendFile(${JSON.stringify(log)},JSON.stringify(args)+'\\n');\nif(args[0]==='batch'){const steps=JSON.parse(args[2]);if(steps[0].input.target.ref==='@e2')await writeFile(${JSON.stringify(closed)},'closed');console.log(existsSync(${JSON.stringify(closed)})?${JSON.stringify(after)}:${JSON.stringify(snapshot)});}\n`);
+  const setup = tabBatch(tabOverview(["owner tab"]), ["snapshot"]);
+  await writeFile(agent, `#!${process.execPath}\nimport{appendFile,writeFile}from'node:fs/promises';import{existsSync}from'node:fs';\nconst args=process.argv.slice(2);await appendFile(${JSON.stringify(log)},JSON.stringify(args)+'\\n');\nif(args[0]==='batch'){const steps=JSON.parse(args[2]);if(steps[0].input.target?.ref==='@e2')await writeFile(${JSON.stringify(closed)},'closed');console.log(steps[0].command==='snapshot'?${JSON.stringify(setup)}:existsSync(${JSON.stringify(closed)})?${JSON.stringify(after)}:${JSON.stringify(snapshot)});}\n`);
   await chmod(agent, 0o755);
   try { await pendingCleanupControl(agent, log, closed); }
   finally { await rm(root, { recursive: true, force: true }); }
@@ -315,7 +317,7 @@ async function pendingCleanupControl(agent: string, log: string, closed: string)
       expect(logs[0]).toContain("Final terminal observation unavailable");
       expect(await readFile(closed, "utf8")).toBe("closed");
       const commands = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
-      expect(commands.map(args => args[0])).toEqual(["open", "press", "batch", "batch"]);
+      expect(commands.map(args => args[0])).toEqual(["open", "batch", "open", "press", "batch", "batch"]);
     } finally { release.resolve(); await transport.close(true).catch(() => {}); await server.stop(true); }
   });
 }

@@ -1,0 +1,54 @@
+{
+  "appBundleId": "com.apple.mobilesafari",
+  "truncated": false,
+  "nodes": [
+    {
+      "kind": "scroll-area",
+      "index": 20,
+      "parentIndex": 1,
+      "ref": "e21",
+      "identifier": "ScrollingCapsuleCollectionView",
+      "enabled": true,
+      "hittable": true,
+      "rect": {
+        "x": 33.999999999999986,
+        "y": 762,
+        "width": 322,
+        "height": 48
+      }
+    },
+    {
+      "kind": "button",
+      "index": 21,
+      "parentIndex": 20,
+      "label": "Private, Tab Group",
+      "ref": "e22",
+      "identifier": "CapsuleTabGroup",
+      "enabled": true,
+      "hittable": true,
+      "rect": {
+        "x": 119.50000000000001,
+        "y": 762,
+        "width": 55.66666666666667,
+        "height": 48
+      }
+    },
+    {
+      "kind": "button",
+      "index": 22,
+      "parentIndex": 20,
+      "label": "23 Tabs, Tab Group",
+      "ref": "e23",
+      "identifier": "CapsuleTabGroup",
+      "selected": true,
+      "enabled": true,
+      "hittable": true,
+      "rect": {
+        "x": 207.16666666666663,
+        "y": 762,
+        "width": 63.333333333333314,
+        "height": 48
+      }
+    }
+  ]
+}
