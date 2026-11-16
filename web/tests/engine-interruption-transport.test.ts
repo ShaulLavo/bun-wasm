@@ -37,15 +37,19 @@ for (const root of [false, true]) test(`Preview1 ${root ? "Bun composition root"
   expect(selected.waitWord.byteOffset).toBe(state.signals.interrupt.byteOffset);
   expect(selected.waitWord.length).toBe(1);
   expect(selected.waitWord.byteOffset).not.toBe(state.wake.byteOffset);
+  const readiness = controlLoad(state.wake, 0);
   controlStore(selected.waitWord, 0, 2);
   expect(controlLoad(state.signals.interrupt, 0)).toBe(2);
-  expect(controlLoad(state.wake, 0)).toBe(0);
+  expect(controlLoad(state.wake, 0)).toBe(readiness);
 });
 
 test("both Bun engines observe the same service-owned readiness sequence", () => {
   const runtimeProcess = createWorkerProcessTransport();
   const quickjs = engineInterruptionTransport({ runtimeProcess, engine: "quickjs" });
   const jsc = engineInterruptionTransport({ runtimeProcess, engine: "jsc" });
-  controlAdd(quickjs.waitWord, 0, 1);
-  expect(controlLoad(jsc.waitWord, 0)).toBe(1);
+  expect(jsc.waitWord.buffer).toBe(quickjs.waitWord.buffer);
+  expect(jsc.waitWord.byteOffset).toBe(quickjs.waitWord.byteOffset);
+  const readiness = controlLoad(quickjs.waitWord, 0);
+  expect(controlAdd(quickjs.waitWord, 0, 1)).toBe(readiness);
+  expect(controlLoad(jsc.waitWord, 0)).toBe((readiness + 1) | 0);
 });
