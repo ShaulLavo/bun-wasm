@@ -36,4 +36,11 @@ It asserts zero PBL entries for interpreter and positive entries for PBL.
 It does not load Bun's runtime. Only `console.log` is replaced with a function
 that returns the fixture's final success string for the C++ assertion.
 
+The driver invokes locked, offline Cargo with the ordinary adapter control's
+compiler flags and checkout-owned `target/spidermonkey-controls` directory.
+Cargo can reuse its controls-enabled library or build it when run alone.
+`SPIDERMONKEY_CONTROLS_TARGET_DIR` selects a caller-owned target whose cleanup
+belongs to that caller. The generated fixture header and final Wasm remain
+private temporary files and are removed after success or failure.
+
 The existing statement-spine and completion fixtures remain unchanged.

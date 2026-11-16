@@ -13,11 +13,13 @@ test("JSAPI preserves suppressed error operand identity on explicit interpreter 
   assert(native && sdk && sysroot, "source env.sh and set the private native output directory");
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-sm-disposal-"));
   try {
-    const target = process.env.SPIDERMONKEY_CONTROLS_TARGET_DIR ?? join(scratch, "target");
+    // The checkout owns ordinary controls objects; the caller owns an explicit override.
+    const target = process.env.SPIDERMONKEY_CONTROLS_TARGET_DIR || join(import.meta.dir, "../target/spidermonkey-controls");
     const env = {
       ...process.env,
       CARGO_TARGET_DIR: target,
       CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS: `-C relocation-model=pic -C panic=abort -C link-self-contained=no -L native=${sysroot}/lib/wasm32-wasip1`,
+      CFLAGS_wasm32_wasip1: `--sysroot=${sysroot} -fPIC`,
       CXXFLAGS_wasm32_wasip1: `--sysroot=${sysroot} -fPIC -fno-exceptions`,
     };
     execFileSync("cargo", [
