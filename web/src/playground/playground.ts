@@ -5,7 +5,7 @@ import { createRuntime, type Runtime } from "waffle";
 import { BUN_MEMORY_GROUP_POLICY } from "../../../src/engine-kind";
 import { playgroundProfile, registerPlaygroundBun, templateProfile, type PlaygroundProfile } from "./program-profile";
 import { BrowserPrograms } from "../browser-programs";
-import { ENGINES, type Engine, WasmMissing, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
+import { ENGINES, type Engine, WasmMissing, createToolsLoader, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
 import { HOME, examples } from "../examples";
 import { normalize } from "../fs";
@@ -220,6 +220,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     if (wasm instanceof Error) throw wasm;
     const module = wasm.module;
     const engine = this.engine;
+    const loadTools = createToolsLoader();
     const registration = await registerPlaygroundBun({ runtime, engine, module, profile: this.profile,
       loadModule: (provider, profile) => loadEngineProgram(provider, profile, () => {}).then(loaded => loaded.module),
       launcher: provider => async (context, service) => {
@@ -228,7 +229,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
           runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
           // web/build.ts emits the notification helper at the page root in both modes.
           notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,
-          loadTools: () => loadWasm("bun-tools.wasm", () => {}).then(loaded => loaded.module),
+          loadTools,
         })(context, service);
       },
     });

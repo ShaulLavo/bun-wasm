@@ -17,6 +17,9 @@
     "scripts/goals-matrix/transport.ts",
     "scripts/goals-matrix/scoped-transport.ts",
     "scripts/goals-matrix/scope.ts",
-    "web/tests/playground.mjs"
+    "web/tests/playground.mjs",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml"
   ]
 }

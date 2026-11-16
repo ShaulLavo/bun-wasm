@@ -32,7 +32,7 @@ test("checker cache accepts only its exact pinned tool and host identity", () =>
   expect(restore).not.toHaveProperty("if");
   expect(record(restore.with)).toEqual({
     path: "${{ env.CARGO_HOME }}/bin/cargo-machete",
-    key: "cargo-machete-v1-0.9.2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**') }}",
+    key: "cargo-machete-v1-0.9.2-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-setup.outputs.host-tools }}-${{ steps.native-setup.outputs.native-inputs }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**') }}",
   });
   expect(save.uses).toBe("actions/cache/save@v4");
   expect(record(save.with)).toEqual({
@@ -57,7 +57,7 @@ test.each([
 });
 
 test("checker setup follows broad restores and precedes blocking native quality checks", () => {
-  for (const id of ["host-tools", "native-inputs", "native-cargo-cache", "native-cache"]) {
+  for (const id of ["native-setup", "native-seed"]) {
     const index = steps.findIndex(step => step.id === id);
     expect(index).toBeGreaterThanOrEqual(0);
     expect(index).toBeLessThan(steps.indexOf(restore));

@@ -2,9 +2,12 @@
   "owner": "browser-guest",
   "path": "scripts/browser-import-rejections.test.ts",
   "inputs": [
-    "web/src/engine-host.js",
+    ".github/actions/native-production/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-setup/action.yml",
     "crates/bunwasm-runtime/src/js/bootstrap.js",
+    "crates/bunwasm-runtime/src/js/bun.js",
     "crates/bunwasm-runtime/src/js/inspect.js",
-    "crates/bunwasm-runtime/src/js/bun.js"
+    "web/src/engine-host.js"
   ]
 }

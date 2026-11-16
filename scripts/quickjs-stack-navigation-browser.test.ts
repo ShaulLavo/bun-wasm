@@ -11,6 +11,27 @@ const consumers = [
   { name: "quickjs", prefix: "quickjs-stack-navigation", open: openQuickjsStackPage },
   { name: "browser", prefix: "playground-navigation", open: (page: Page, url: string) => openPlaygroundPage(page, `${url}?engine=browser&prompt=off&mode=memory`) },
 ];
+
+test("tools navigation retains its explicit load condition", async () => {
+  const browser = await chromium.launch();
+  let release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const page = await browser.newPage();
+    await page.route("http://stack.test/**", route => serveFixture(route, held));
+    let loaded = false;
+    page.once("load", () => { loaded = true; });
+    const requested = page.waitForRequest("http://stack.test/held.png");
+    const opening = openPlaygroundPage(page, "http://stack.test/?engine=browser&prompt=off", { waitUntil: "load" })
+      .then(status => { expect(loaded).toBe(true); return status; });
+    const result = opening.then(value => ({ value }), error => ({ error }));
+    await requested;
+    await page.waitForFunction(() => document.readyState === "interactive");
+    release();
+    expect(await result).toEqual({ value: "ready" });
+    expect(await page.evaluate(() => document.readyState)).toBe("complete");
+  } finally { release(); await browser.close(); }
+}, 30_000);
 type Consumer = typeof consumers[number];
 
 async function serveFixture(route: Route, held: Promise<void>, published = true): Promise<void> {

@@ -68,3 +68,44 @@ export function assertGuestQuiescence(guests: readonly { evidence: { startEntere
     if (!stopped) throw new Error(`guest execution quiescence is unproved after failed case: ${JSON.stringify(guest.evidence)}`);
   }
 }
+
+export type InterruptionEngine = "quickjs" | "jsc";
+export const defaultInterruptionEngines: readonly InterruptionEngine[] = ["quickjs", "jsc"];
+
+export function selectInterruptionEngines(value?: string): readonly InterruptionEngine[] {
+  if (value === undefined) return defaultInterruptionEngines;
+  const supplied = value.split(",");
+  const selected = defaultInterruptionEngines.filter(engine => supplied.includes(engine));
+  if (!selected.length || selected.join(",") !== value) throw new Error("Select quickjs, jsc or quickjs,jsc interruption engines");
+  return selected;
+}
+
+export function interruptionInputs(engines: readonly InterruptionEngine[]): string[] {
+  return ["bun-browser.wasm"].concat(engines.flatMap(engine => engine === "quickjs"
+    ? ["bun.wasm", "quickjs.wasm"] : ["bun-jsc.wasm", "jsc-engine.wasm"]));
+}
+
+export function interruptionProofs(engines: readonly InterruptionEngine[]) {
+  const paired: { engine: string; route: string; name: string }[] = engines.flatMap(engine => [
+    { engine, route: "legacy", name: "default-2-status-130" },
+    { engine, route: "legacy", name: "default-15-status-143" },
+    { engine, route: "legacy", name: "native-interrupt-true-unwinds-current-frame" },
+    { engine, route: "legacy", name: "handled-SIGINT-queued-until-yield-and-exits-23" },
+    { engine, route: "legacy", name: "nested-SIGINT-handler-default-15-status-143" },
+    { engine, route: "legacy", name: "idle-handled-SIGINT-notifies-blocked-generation-and-exits-23" },
+    { engine, route: "legacy", name: "legacy-page-kill-and-killJob-idle-handled-SIGINT-notifies-blocked-generation-and-exits-23" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-default-2-status-130" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-default-15-status-143" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-handled-SIGINT-queued-until-yield-and-exits-23" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-nested-SIGINT-handler-default-15-status-143" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-kill-and-killJob-idle-handled-SIGINT-notifies-blocked-generation-and-exits-23" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-sleepSync-SIGUSR1-deferred-handler" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-sleepSync-default-SIGUSR1-unwinds" },
+  ]);
+  return paired.concat([
+    { engine: "browser", route: "legacy", name: "default-2-status-130" },
+    { engine: "browser", route: "legacy", name: "default-15-status-143" },
+    { engine: "browser", route: "legacy", name: "legacy-preview1-root-clock-EINTR-dequeue-and-nonsticky-wait" },
+    { engine: "browser", route: "legacy", name: "legacy-preview1-child-clock-EINTR-dequeue-and-nonsticky-wait" },
+  ]);
+}
