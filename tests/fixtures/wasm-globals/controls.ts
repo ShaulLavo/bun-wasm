@@ -12,24 +12,42 @@ function global(api: GlobalAPI, instance: WebAssembly.Instance, name: string) {
   if (!(value instanceof api.Global)) throw new Error(`Expected Global ${name}`);
   return value;
 }
-function call(instance: WebAssembly.Instance, name: string, ...args: number[]) {
+function call(instance: WebAssembly.Instance, name: string, ...args: (number | bigint)[]) {
   const value = instance.exports[name];
   if (typeof value !== 'function') throw new Error(`Expected function ${name}`);
   return value(...args);
 }
-function numericControls(api: GlobalAPI, check: Check) {
+function numericCase(api: GlobalAPI, check: Check, type: WebAssembly.ValueType, value: number | bigint) {
+  for (const mutable of [false, true]) {
+    const item = new api.Global({ value: type, mutable }, value);
+    same(check, item.value, value, `${type} initial`);
+    same(check, item.valueOf(), value, `${type} valueOf`);
+    const zero = type === 'i64' ? 0n : 0;
+    same(check, new api.Global({ value: type }).value, zero, `${type} omitted default`);
+    same(check, new api.Global({ value: type }, undefined).value, zero, `${type} undefined default`);
+    if (mutable) {
+      item.value = zero;
+      same(check, item.value, zero, `${type} set`);
+      continue;
+    }
+    rejects(check, () => { item.value = zero; }, 'TypeError');
+  }
+}
+function numericControls(api: GlobalAPI, fixture: Fixture, check: Check) {
   const cases = [['i32', 42], ['i64', 42n], ['f32', Math.fround(1.1)], ['f64', 1.1]] satisfies [WebAssembly.ValueType, number | bigint][];
   for (const [type, value] of cases) {
-    for (const mutable of [false, true]) {
-      const item = new api.Global({ value: type, mutable }, value);
-      same(check, item.value, value, `${type} initial`);
-      same(check, item.valueOf(), value, `${type} valueOf`);
-      const zero = type === 'i64' ? 0n : 0;
-      same(check, new api.Global({ value: type }).value, zero, `${type} omitted default`);
-      same(check, new api.Global({ value: type }, undefined).value, zero, `${type} undefined default`);
-      if (mutable) { item.value = zero; same(check, item.value, zero, `${type} set`); }
-      else rejects(check, () => { item.value = zero; }, 'TypeError');
-    }
+    numericCase(api, check, type, value);
+    const g = new api.Global({ value: type, mutable: true }, value);
+    const module = fixture(`numeric-${type}`);
+    const first = new api.Instance(module, { e: { g } });
+    const second = new api.Instance(module, { e: { g } });
+    same(check, first.exports.g, g, `${type} mutable import identity`);
+    same(check, second.exports.g, g, `${type} second mutable import identity`);
+    const zero = type === 'i64' ? 0n : 0;
+    call(first, 'set', zero);
+    same(check, g.value, zero, `${type} Wasm writes reach JS`);
+    g.value = value;
+    same(check, call(second, 'get'), value, `${type} JS writes reach Wasm`);
   }
   same(check, new api.Global({ value: 'i32' }, 4294967297).value, 1, 'i32 wrap');
   same(check, new api.Global({ value: 'i32' }, Infinity).value, 0, 'i32 infinity');
@@ -72,6 +90,9 @@ function brandControls(api: GlobalAPI, check: Check) {
   const getter = descriptor.get;
   const setter = descriptor.set;
   const valueOf = api.Global.prototype.valueOf;
+  same(check, descriptor.enumerable, true, 'Global value is enumerable');
+  same(check, api.Global.length, 1, 'Global constructor arity');
+  same(check, Object.prototype.toString.call(new api.Global({ value: 'i32' })), '[object WebAssembly.Global]', 'Global toStringTag');
   const item = new api.Global({ value: 'i32', mutable: true }, 5);
   for (const receiver of [{}, Object.create(api.Global.prototype), new Proxy(item, {}), null, 5]) {
     rejects(check, () => getter.call(receiver), 'TypeError');
@@ -147,7 +168,7 @@ function startControls(api: GlobalAPI, fixture: Fixture, check: Check) {
   check(scalar.exports.a !== scalar.exports.defined, 'initializer from import defines distinct storage');
 }
 export function runGlobalControls(api: GlobalAPI, fixture: Fixture, check: Check) {
-  numericControls(api, check);
+  numericControls(api, fixture, check);
   coercionControls(api, check);
   brandControls(api, check);
   aliasControls(api, fixture, check);

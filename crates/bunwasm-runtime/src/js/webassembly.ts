@@ -185,7 +185,7 @@
     throw new TypeError('Unsupported WebAssembly.Global value type');
   }
   class Global {
-    constructor(descriptor: { mutable?: unknown; value: unknown }, value?: unknown) {
+    constructor(descriptor: { mutable?: unknown; value: unknown }, value: unknown = undefined) {
       if (!isObject(descriptor)) throw new TypeError('WebAssembly.Global descriptor must be an object');
       const mutable = !!descriptor.mutable;
       const type = globalType(descriptor.value);
@@ -202,6 +202,9 @@
     }
     valueOf() { return globalValue(globalState(this)); }
   }
+  Object.defineProperty(Global.prototype, 'value', { enumerable: true });
+  Object.defineProperty(Global.prototype, 'valueOf', { enumerable: true });
+  Object.defineProperty(Global.prototype, Symbol.toStringTag, { value: 'WebAssembly.Global', configurable: true });
   function memoryState(memory: Memory) {
     const state = memoryStates.get(memory);
     if (!state) throw new TypeError('Expected a WebAssembly.Memory');
