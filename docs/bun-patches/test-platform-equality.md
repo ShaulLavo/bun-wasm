@@ -17,7 +17,9 @@ constructor names, so different String subclasses remain distinct.
 Array comparisons read own data descriptors. Indexed accessors remain unread
 unless a loose expectation comparison encounters an asymmetric matcher on the
 other side. Strict comparisons check index presence before invoking matchers.
-Proxy arrays retain ordinary property reads. Both comparison paths visit arrays
+Data descriptors still perform an ordinary index read, preserving data-index
+proxy getters when Browser's proxy detector is unavailable. Recognized proxy
+arrays retain their existing property reads. Both comparison paths visit arrays
 before the intrinsic brand probes used for other object types. This removes
 repeated caught exceptions from Set searches containing arrays, without a new
 candidate index, result cache, or collection copy. Public Bun.deepEquals remains

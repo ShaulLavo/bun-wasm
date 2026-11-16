@@ -951,7 +951,7 @@
 
   function arrayIndex(array: unknown[], index: number): unknown {
     const descriptor = Object.getOwnPropertyDescriptor(array, index);
-    return descriptor && "value" in descriptor ? descriptor.value : emptyArrayIndex;
+    return descriptor && "value" in descriptor ? array[index] : emptyArrayIndex;
   }
 
   function bunCompareArrays(a: unknown[], b: unknown, strict: boolean, memo: BunWasm.EqualityMemo): boolean {

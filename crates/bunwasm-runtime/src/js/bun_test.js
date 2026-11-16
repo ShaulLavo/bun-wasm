@@ -346,7 +346,11 @@
   function formatDiff(received, expected, not) {
     const expectedText = prettyFormat(expected);
     if (not) return `Expected: not ${expectedText}`;
-    return diffStrings(prettyFormat(received), expectedText);
+    const receivedText = prettyFormat(received);
+    if (typeof received !== typeof expected && (isObjectLike(received) || isObjectLike(expected))) {
+      return `Expected: ${expectedText}\nReceived: ${receivedText}`;
+    }
+    return diffStrings(receivedText, expectedText);
   }
 
   function diffStrings(receivedText, expectedText) {

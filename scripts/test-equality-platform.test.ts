@@ -9,7 +9,7 @@ const runtimeRoot = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url
 const fixtures = new URL("../tests/fixtures/", import.meta.url);
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
-function runtime() {
+function runtime(isProxy = types.isProxy) {
   const lines: string[] = [];
   const process = Object.assign(new EventEmitter(), { env: { CI: "1", AGENT: "0" }, exitCode: 0 });
   const context = createContext({ process, setTimeout, clearTimeout, URL, URLSearchParams, Headers, FormData, Blob,
@@ -20,7 +20,7 @@ function runtime() {
   let stderr = "";
   let load = (_file: string) => {};
   const internal = {
-    isPromise: types.isPromise, isProxy: types.isProxy,
+    isPromise: types.isPromise, isProxy,
     promiseState: (value: Promise<unknown>) => Bun.peek.status(value),
     promiseThen: (value: Promise<unknown>, pass: (value: unknown) => unknown, fail?: (error: unknown) => unknown) => Promise.prototype.then.call(value, pass, fail),
     realTimers: { setTimeout, clearTimeout }, fakeTimers: { api: {} },
@@ -50,13 +50,26 @@ function runtime() {
     setLoader(callback: (file: string) => void) { load = callback; } };
 }
 
-test("platform equality, accessor order, promise throws and assertion diagnostics", async () => {
-  const control = runtime();
+async function checkEqualityFixture(control: ReturnType<typeof runtime>) {
   const fixture = new URL("test-equality-platform/", fixtures);
   const body = control.source(readFileSync(new URL("index.ts", fixture), "utf8"));
   const run = control.evaluate(`(function(){return async function(expect){${body}\n};})()`);
   await run(control.runner.exports.expect);
   expect(control.lines.join("\n") + "\n").toBe(readFileSync(new URL("expected.txt", fixture), "utf8"));
+}
+
+test("platform equality, accessor order, promise throws and assertion diagnostics", async () => {
+  await checkEqualityFixture(runtime());
+});
+
+test("Browser data-index reads retain proxy getter order without a proxy detector", async () => {
+  await checkEqualityFixture(runtime(() => false));
+});
+
+test("mixed object and primitive diagnostics retain the received class label", () => {
+  const control = runtime();
+  const value = Object.defineProperty(new FormData(), "toJSON", { value: 42 });
+  expect(() => control.runner.exports.expect(value).toEqual(1)).toThrow("Received: FormData");
 });
 
 test("snapshot file identity permits hooks and asynchronous same-file use", async () => {

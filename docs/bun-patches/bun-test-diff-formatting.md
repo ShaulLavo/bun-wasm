@@ -10,6 +10,11 @@ in the diagnostic without calling it. Snapshot property enumeration keeps its
 existing behavior. Native Bun 1.4.4 and the unchanged upstream
 `test/js/bun/test/expect-formdata-tojson-crash.test.ts` qualify this difference.
 
+Mixed object and primitive mismatches use labeled Expected and Received
+sections. This keeps the object's class attached to Received, as the pinned
+FormData test requires. Native Bun 1.4.4 instead uses a multiline diff for this
+case; its current formatting does not satisfy that pinned test's label check.
+
 
 ## Classification
 
