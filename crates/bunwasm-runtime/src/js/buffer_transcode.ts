@@ -13,7 +13,7 @@
 
   return function createTranscode(bindings: Bindings) {
     const { normalizeEncoding, isUint8Array, invalidArgType, bytesToString, fromString, allocate } = bindings;
-    let utf8: TextDecoder, utf8Fatal: TextDecoder, utf16: TextDecoder, utf16Fatal: TextDecoder;
+    const decoders: (TextDecoder | undefined)[] = [];
 
     function encoding(value: unknown): Encoding {
       const normalized = normalizeEncoding(value);
@@ -26,11 +26,12 @@
     }
 
     function unicode(source: Uint8Array, from: "utf8" | "utf16le", fatal: boolean): string {
-      utf8 ??= new TextDecoder("utf-8", { ignoreBOM: true });
-      utf8Fatal ??= new TextDecoder("utf-8", { ignoreBOM: true, fatal: true });
-      utf16 ??= new TextDecoder("utf-16le", { ignoreBOM: true });
-      utf16Fatal ??= new TextDecoder("utf-16le", { ignoreBOM: true, fatal: true });
-      const decoder = from === "utf8" ? (fatal ? utf8Fatal : utf8) : (fatal ? utf16Fatal : utf16);
+      const index = (from === "utf8" ? 0 : 2) + Number(fatal);
+      let decoder = decoders[index];
+      if (!decoder) {
+        decoder = new TextDecoder(from === "utf8" ? "utf-8" : "utf-16le", { ignoreBOM: true, fatal });
+        decoders[index] = decoder;
+      }
       try { return decoder.decode(source); } catch (error) {
         if (!(error instanceof TypeError)) throw error;
         throw failure("U_INVALID_CHAR_FOUND", 10);
