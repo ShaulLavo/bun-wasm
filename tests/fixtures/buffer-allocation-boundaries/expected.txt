@@ -1,0 +1,5 @@
+pass inferred concat limit differs from explicit length validation
+pass size validation runs before allocation and retains its error code
+pass isAscii calls match native Bun and construction throws
+pass Bun concat caps the allocation and returns one exact backing store
+pass Bun concat preserves errors from input getters

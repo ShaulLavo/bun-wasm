@@ -1198,6 +1198,38 @@ diff --git a/Source/JavaScriptCore/heap/Heap.h b/Source/JavaScriptCore/heap/Heap
 +    size_t ramSize() const { return m_ramSize; }
 +#endif
      // Everything the mutator has allocated (cells and reported extra memory), the current cycle included. Mutator thread only.
+diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInlines.h
+--- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInlines.h
++++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInlines.h
+@@ -41,2 +41,3 @@
+ #include <cstddef>
++#include <limits>
+ #include <optional>
+@@ -296,1 +297,14 @@
++inline size_t typedArrayLengthFromIndex(JSGlobalObject* globalObject, JSValue value)
++{
++    VM& vm = globalObject->vm();
++    auto scope = DECLARE_THROW_SCOPE(vm);
++    uint64_t length = value.toIndex(globalObject, "length"_s);
++    RETURN_IF_EXCEPTION(scope, 0);
++    if (length > std::numeric_limits<size_t>::max()) [[unlikely]] {
++        throwOutOfMemoryError(globalObject, scope);
++        return 0;
++    }
++    return static_cast<size_t>(length);
++}
++
+ template<typename ViewClass>
+@@ -306,3 +320,3 @@
+         // the step 9 of https://tc39.es/ecma262/2026/#sec-typedarray
+-        length = firstValue.toIndex(globalObject, "length"_s);
++        length = typedArrayLengthFromIndex(globalObject, firstValue);
+         RETURN_IF_EXCEPTION(scope, { });
+@@ -365,3 +379,3 @@
+             // the step 9 of https://tc39.es/ecma262/2026/#sec-typedarray
+-            length = firstValue.toIndex(globalObject, "length"_s);
++            length = typedArrayLengthFromIndex(globalObject, firstValue);
+             RETURN_IF_EXCEPTION(scope, { });
 diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
 --- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
 +++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h

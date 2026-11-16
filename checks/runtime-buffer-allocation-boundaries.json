@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/buffer-allocation-boundaries.test.ts",
+  "localRuntime": true
+}
