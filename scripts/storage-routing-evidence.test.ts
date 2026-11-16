@@ -17,8 +17,8 @@ function fixture() {
     sequences.set(generation, sequence);
     evidence.receive({ kind, target, port: 5173, generation, realm: "worker", sequence, ask: 1, channel: 3, clientURL: "http://localhost/app", ...extra });
   };
-  const page = (kind: string, extra: RoutingRow = {}) => row(kind, { generation: "page", realm: "page", realmURL: "http://localhost/app", router: 4, request: 7, ...extra });
-  const native = () => evidence.request({ kind: "request", url, request: 1 });
+  const page = (kind: string, extra: RoutingRow = {}) => row(kind, { generation: "page", realm: "page", realmURL: "http://localhost/app", router: 4, replyPort: 5, request: 7, ...extra });
+  const native = () => evidence.request({ kind: "request", url, page: 1, request: 1 });
   const first = () => JSON.stringify(evidence.summaries()[1]);
   return { evidence, row, page, native, first };
 }
@@ -79,8 +79,8 @@ test("positive qualification needs native completion and real runtime/helper plu
   expect(() => f.evidence.qualify([target])).toThrow("coverage missing");
   f.page("page-send-return", { reply: "head" }); f.row("claim-reply", { reply: "head" }); f.row("claim-reply", { reply: "end" });
   expect(() => f.evidence.qualify([target])).toThrow("coverage missing");
-  f.evidence.request({ kind: "response", url, fromServiceWorker: true });
-  f.evidence.request({ kind: "requestfinished", url });
+  f.evidence.request({ kind: "response", url, page: 1, request: 1, fromServiceWorker: true });
+  f.evidence.request({ kind: "requestfinished", url, page: 1, request: 1 });
   expect(() => f.evidence.qualify([target])).not.toThrow();
 });
 
@@ -137,4 +137,65 @@ test("missing scalar stream coverage refuses attribution and qualification", () 
   expect(f.first()).toContain("routing stream coverage is missing");
   const coverage = f.evidence.snapshot().coverage.find(stream => stream.generation === "missing");
   expect(coverage?.missing).toBe(2);
+});
+
+function complete(f: ReturnType<typeof fixture>, receipt: RoutingRow = {}, sent: RoutingRow = {}) {
+  claim(f);
+  f.page("page-receive", receipt);
+  f.page("request-dispatch", { current: 11 });
+  f.page("runtime-router", { runtime: 2 });
+  f.page("helper-projection", { capability: 11, helper: 12 });
+  f.page("helper-request-return", { helper: 12, accepted: true });
+  f.page("page-send-return", { reply: "head", ...sent });
+  f.row("claim-reply", { reply: "head" });
+  f.row("claim-reply", { reply: "end" });
+}
+
+test("native response and completion must belong to the same page and request", () => {
+  for (const mismatch of [{ page: 1, request: 2 }, { page: 2, request: 1 }]) {
+    const f = fixture();
+    complete(f);
+    f.evidence.request({ kind: "response", page: 1, request: 1, url, fromServiceWorker: true });
+    f.evidence.request({ kind: "requestfinished", url, ...mismatch });
+    expect(() => f.evidence.qualify([target])).toThrow();
+  }
+});
+
+test("page receipt and head send cannot borrow another generation or reply port", () => {
+  const mismatches: readonly RoutingRow[] = [{ generation: "old-page" }, { replyPort: 99 }];
+  for (const mismatch of mismatches) {
+    const receipt = fixture();
+    complete(receipt, mismatch);
+    receipt.evidence.request({ kind: "response", page: 1, request: 1, url, fromServiceWorker: true });
+    receipt.evidence.request({ kind: "requestfinished", page: 1, request: 1, url });
+    expect(() => receipt.evidence.qualify([target])).toThrow();
+    const sent = fixture();
+    complete(sent, {}, mismatch);
+    sent.evidence.request({ kind: "response", page: 1, request: 1, url, fromServiceWorker: true });
+    sent.evidence.request({ kind: "requestfinished", page: 1, request: 1, url });
+    expect(() => sent.evidence.qualify([target])).toThrow();
+  }
+});
+
+test("a current page receipt cannot borrow stale helper or acceptance evidence", () => {
+  const f = fixture();
+  claim(f);
+  f.page("page-receive", { generation: "new-page" });
+  f.page("request-dispatch", { current: 11 });
+  f.page("helper-projection", { capability: 11, helper: 12 });
+  f.page("helper-request-return", { helper: 12, accepted: true });
+  f.page("page-send-return", { reply: "accepted" });
+  expect(f.first()).toContain("registered-server dispatch not observed");
+});
+
+test("restart fetch evidence excludes the previous observation window", () => {
+  const f = fixture();
+  f.row("sw-fetch", { url });
+  f.evidence.beginRestart();
+  f.native();
+  expect(f.first()).toContain("no SW event observed");
+  f.row("sw-fetch", { url });
+  expect(f.first()).toContain("SW fetch observed; forward not observed");
+  f.row("sw-fetch", { url });
+  expect(f.first()).toContain("ambiguous browser/SW fetch join");
 });

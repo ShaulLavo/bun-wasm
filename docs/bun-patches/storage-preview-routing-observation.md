@@ -20,8 +20,8 @@ implementation is retained in bun-wasm commit
 They add scalar observations around original calls, without changing request
 payloads, ports, candidate ordering, receivers, return values, thrown errors,
 or the original 3000 ms claim deadline. Page send-before-call and send-return
-are separate events. SW reply records expose response status, chunk length and
-completion, never header values, file contents or body bytes.
+are separate events. SW reply records expose response status, first body progress
+and terminal chunk totals, never header values, file contents or body bytes.
 
 Original adapters are `scripts/storage-routing-build.ts`,
 `scripts/storage-routing-collector.ts`, and
@@ -32,12 +32,18 @@ The queue holds at most 256 rows; the host retains at most 4096 routing rows and
 128 target request observations, independently of filesystem causal retention.
 Every overflow is counted. No retained row contains a Request, MessagePort,
 runtime, filesystem tree, or payload object.
+Runtime/router bindings store only scalar IDs. Transport selects the required
+targets and lifecycle bindings before assigning published sequence numbers.
+Intermediate body chunks update scalar counters without emitting per-chunk rows.
 
 The ordinary preservation case qualifies initial Hono and vanilla traffic using
 native browser completion, actual SW receipt of head/end, page receipt,
 registered-server selection, runtime/router binding, helper projection and the
 real helper's successful request return. Missing coverage fails the existing
 storage gate. Installation or HTTP success alone does not qualify it.
+Native response and completion must belong to one page/request lifecycle. Page
+receipt, dispatch and reply must share generation, router and reply-port identity;
+helper evidence additionally shares the actual request and projected helper.
 
 The per-browser preservation report includes the concise routing summary. The
 progress report retains the bounded raw trace at failure and again after cleanup,

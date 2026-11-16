@@ -35,11 +35,12 @@ export class StorageRoutingEvidence {
     if (!requests.length) return { ...base, firstIncomplete: "No observed browser request" };
     if (this.dropped || rows.some(row => Number(row.dropped) > 0)) return { ...base, firstIncomplete: "Unknown: routing retention or transport overflow", dropped: this.dropped };
     if (this.coverage().some(stream => stream.missing > 0)) return { ...base, firstIncomplete: "Unknown: routing stream coverage is missing", coverage: this.coverage() };
+    if (requests.length !== 1 || forwards.length > 1) return { ...base, firstIncomplete: "Unknown: ambiguous same-target browser/SW join" };
     if (!forwards.length) {
-      const fetch = this.rows.some(row => row.kind === "sw-fetch" && requests.some(request => request.url === row.url));
-      return { ...base, firstIncomplete: fetch ? "SW fetch observed; forward not observed" : "Unknown: browser request observed; no SW event observed" };
+      const fetches = this.rows.filter(row => Number(row.observed) > this.boundary && row.kind === "sw-fetch" && row.url === requests[0]!.url);
+      if (fetches.length > 1) return { ...base, firstIncomplete: "Unknown: ambiguous browser/SW fetch join" };
+      return { ...base, firstIncomplete: fetches.length ? "SW fetch observed; forward not observed" : "Unknown: browser request observed; no SW event observed" };
     }
-    if (requests.length !== 1 || forwards.length !== 1) return { ...base, firstIncomplete: "Unknown: ambiguous same-target browser/SW join" };
     const forward = forwards[0]!;
     if (requests[0]!.url !== forward.url) return { ...base, firstIncomplete: "Unknown: browser and SW request URLs differ" };
     const worker = rows.filter(row => row.generation === forward.generation && row.ask === forward.ask);
@@ -48,7 +49,9 @@ export class StorageRoutingEvidence {
     const explicit = worker.find(row => row.kind === "claim-post-failure" || row.kind === "claim-timeout" || row.kind === "claim-reply" && row.reply === "error");
     const refusal = replies.find(row => row.reply === "error");
     if (refusal) return { ...base, firstIncomplete: "SW received explicit server error", error: refusal.error };
-    if (replies.some(row => row.reply === "head")) return { ...base, firstIncomplete: replies.some(row => row.reply === "end") ? "Routing body completed; inspect native completion" : "Response head received; body completion not observed", explicit };
+    const heads = replies.filter(row => row.reply === "head");
+    if (heads.length > 1) return { ...base, firstIncomplete: "Unknown: ambiguous response-head join", explicit };
+    if (heads.length) return { ...base, firstIncomplete: replies.some(row => row.reply === "end" && row.channel === heads[0]!.channel) ? "Routing body completed; inspect native completion" : "Response head received; body completion not observed", explicit };
     if (replies.some(row => row.reply === "accepted")) return { ...base, firstIncomplete: "Accepted by SW; no response headers observed", explicit };
     if (worker.some(row => row.kind === "unavailable")) return { ...base, firstIncomplete: candidates.length ? "All observed candidates refused, expired or failed to post" : "Discovery completed without an eligible candidate", explicit };
     const pending = candidates.find(claim => !replies.some(reply => reply.channel === claim.channel));
@@ -58,18 +61,22 @@ export class StorageRoutingEvidence {
     const page = rows.filter(row => row.realm === "page" && row.realmURL === pending.clientURL && row.port === forward.port);
     const received = page.filter(row => row.kind === "page-receive");
     if (received.length !== 1) return { ...base, firstIncomplete: received.length ? "Unknown: ambiguous page receipt join" : "Claim opened; actual page receipt not observed", explicit };
-    const dispatched = page.find(row => row.kind === "request-dispatch");
+    const claimPage = pageClaimRows(page, received[0]!);
+    if (!claimPage.length) return { ...base, firstIncomplete: "Unknown: page claim identity is incomplete", explicit };
+    const dispatches = claimPage.filter(row => row.kind === "request-dispatch");
+    if (dispatches.length > 1) return { ...base, firstIncomplete: "Unknown: ambiguous page dispatch join", explicit };
+    const dispatched = dispatches[0];
     if (!dispatched) return { ...base, firstIncomplete: "Page received claim; registered-server dispatch not observed", explicit };
     if (dispatched.current === null) return { ...base, firstIncomplete: "Page received claim without a registered server", explicit };
-    const projection = this.rows.find(row => row.kind === "helper-projection" && row.generation === dispatched.generation && row.capability === dispatched.current);
-    const helperError = page.find(row => row.kind === "helper-request-error" && row.request === dispatched.request && row.helper === projection?.helper);
+    const helper = helperRows(this.rows, dispatched);
+    const helperError = helper.find(row => row.kind === "helper-request-error");
     if (helperError) return { ...base, firstIncomplete: "Real helper.request threw", error: helperError.error, explicit };
-    const helper = page.filter(row => row.kind === "helper-request-return" && row.request === dispatched.request && row.helper === projection?.helper);
-    if (helper.length !== 1) return { ...base, firstIncomplete: "Registered-server dispatch observed; real helper.request return missing or ambiguous", explicit };
-    if (helper[0]!.accepted === false) return { ...base, firstIncomplete: "Real helper.request explicitly refused", explicit };
-    const sendError = page.find(row => row.kind === "page-send-error");
+    const returned = helper.filter(row => row.kind === "helper-request-return");
+    if (returned.length !== 1) return { ...base, firstIncomplete: "Registered-server dispatch observed; real helper.request return missing or ambiguous", explicit };
+    if (returned[0]!.accepted === false) return { ...base, firstIncomplete: "Real helper.request explicitly refused", explicit };
+    const sendError = claimPage.find(row => row.kind === "page-send-error");
     if (sendError) return { ...base, firstIncomplete: "Page reply send threw", error: sendError.error, explicit };
-    const sent = page.find(row => row.kind === "page-send-return" && row.reply === "accepted");
+    const sent = claimPage.find(row => row.kind === "page-send-return" && row.reply === "accepted");
     return { ...base, firstIncomplete: sent ? "Page acceptance send returned; SW receipt not observed" : "Real helper accepted; page acceptance send return not observed", explicit };
   }
   private candidateDetails(rows: RoutingRow[]) {
@@ -82,20 +89,23 @@ export class StorageRoutingEvidence {
         sendCalled: worker.some(row => row.kind === "claim-post"), sendReturned: worker.some(row => row.kind === "claim-post-return"),
         expired: worker.some(row => row.kind === "claim-timeout"), postFailed: worker.some(row => row.kind === "claim-post-failure"),
         replies: worker.filter(row => row.kind === "claim-reply" && row.reply !== "data").map(row => ({ reply: row.reply, status: row.status, error: row.error })),
-        bodyChunks: worker.filter(row => row.kind === "claim-reply" && row.reply === "data").length,
+        observedBodyChunks: progress(worker, "bodyChunks"), bodyProgress: "First chunk and terminal totals; intermediate chunks are not transported",
         page: receipts.length === 1 ? this.pageDetails(page, receipts[0]!) : { join: receipts.length ? "ambiguous same-target page receipts" : "page receipt not observed" } };
     }) };
   }
   private pageDetails(rows: RoutingRow[], receipt: RoutingRow) {
-    const selected = rows.find(row => row.generation === receipt.generation && row.router === receipt.router && row.kind === "request-dispatch");
-    const projection = this.rows.find(row => row.generation === receipt.generation && row.kind === "helper-projection" && row.capability === selected?.current);
-    const helper = rows.filter(row => row.generation === receipt.generation && row.helper === projection?.helper && row.request === selected?.request);
+    const page = pageClaimRows(rows, receipt);
+    const dispatches = page.filter(row => row.kind === "request-dispatch");
+    if (dispatches.length !== 1) return { join: "Page dispatch missing or ambiguous" };
+    const selected = dispatches[0]!;
+    const helper = helperRows(this.rows, selected);
     return { join: "unique observed target, candidate URL and port", generation: receipt.generation, router: receipt.router, replyPort: receipt.replyPort,
-      selectedServer: selected?.current, realHelper: projection?.helper,
+      selectedServer: selected.current, realHelper: helper[0]?.helper,
       helperReturns: helper.filter(row => row.kind === "helper-request-return").map(row => row.accepted),
       helperErrors: helper.filter(row => row.kind === "helper-request-error").map(row => row.error),
-      sendsCalled: rows.filter(row => row.kind === "page-send").map(row => row.reply),
-      sendsReturned: rows.filter(row => row.kind === "page-send-return").map(row => row.reply) };
+      sendsCalled: page.filter(row => row.kind === "page-send").map(row => row.reply),
+      sendsReturned: page.filter(row => row.kind === "page-send-return").map(row => row.reply),
+      observedBodyCalls: progress(page, "bodyCalls"), observedBodyReturns: progress(page, "bodyReturns") };
   }
   private coverage() {
     const streams = new Map<string, number[]>();
@@ -122,24 +132,56 @@ export class StorageRoutingEvidence {
     if (this.coverage().some(stream => stream.missing > 0)) throw Error("Routing stream coverage is missing");
   }
   private complete(forward: RoutingRow): boolean {
+    if (this.rows.filter(row => row.kind === "forward" && row.url === forward.url).length !== 1) return false;
     const worker = this.rows.filter(row => row.generation === forward.generation && row.ask === forward.ask);
     const accepted = worker.filter(row => row.kind === "claim-reply" && row.reply === "head");
     return accepted.some(head => this.completeClaim(forward, head, worker));
   }
   private completeClaim(forward: RoutingRow, head: RoutingRow, worker: RoutingRow[]): boolean {
+    if (!positiveId(head.channel) || !worker.some(row => row.kind === "claim-open" && row.channel === head.channel && row.clientURL === head.clientURL)) return false;
     if (!worker.some(row => row.kind === "claim-reply" && row.channel === head.channel && row.reply === "end")) return false;
-    if (!this.requests.some(row => row.kind === "response" && row.url === forward.url && row.fromServiceWorker === true)) return false;
-    if (!this.requests.some(row => row.kind === "requestfinished" && row.url === forward.url)) return false;
+    if (!this.nativeComplete(forward.url)) return false;
     const page = this.rows.filter(row => row.realm === "page" && row.realmURL === head.clientURL && row.target === forward.target && row.port === forward.port);
-    const dispatches = page.filter(row => row.kind === "request-dispatch" && row.current !== null);
+    const receipts = page.filter(row => row.kind === "page-receive");
+    if (receipts.length !== 1) return false;
+    const claimPage = pageClaimRows(page, receipts[0]!);
+    const dispatches = claimPage.filter(row => row.kind === "request-dispatch" && positiveId(row.current) && positiveId(row.request));
     if (dispatches.length !== 1) return false;
     const dispatch = dispatches[0]!;
-    const bound = this.rows.some(row => row.kind === "runtime-router" && row.generation === dispatch.generation && row.router === dispatch.router);
-    const projection = this.rows.find(row => row.kind === "helper-projection" && row.generation === dispatch.generation && row.capability === dispatch.current);
-    return bound && !!projection && page.some(row => row.kind === "helper-request-return" && row.helper === projection.helper && row.request === dispatch.request && row.accepted === true)
-      && page.some(row => row.kind === "page-receive" && row.router === dispatch.router)
-      && page.some(row => row.kind === "page-send-return" && row.reply === "head");
+    const bound = this.rows.some(row => row.kind === "runtime-router" && row.generation === dispatch.generation && row.router === dispatch.router && positiveId(row.runtime));
+    const helper = helperRows(this.rows, dispatch);
+    return bound && helper.filter(row => row.kind === "helper-request-return" && row.accepted === true).length === 1
+      && claimPage.some(row => row.kind === "page-send-return" && row.reply === "head");
   }
+  private nativeComplete(url: RoutingRow[string] | undefined): boolean {
+    const starts = this.requests.filter(row => row.kind === "request" && row.url === url);
+    if (starts.length !== 1) return false;
+    const start = starts[0]!;
+    if (!positiveId(start.page) || !positiveId(start.request)) return false;
+    const lifecycle = this.requests.filter(row => row.url === url && row.page === start.page && row.request === start.request);
+    return lifecycle.some(row => row.kind === "response" && row.fromServiceWorker === true)
+      && lifecycle.some(row => row.kind === "requestfinished");
+  }
+}
+function positiveId(value: unknown): boolean { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
+
+function pageClaimRows(rows: RoutingRow[], receipt: RoutingRow): RoutingRow[] {
+  if (!positiveId(receipt.router) || !positiveId(receipt.replyPort) || typeof receipt.realmURL !== "string" || !receipt.realmURL
+    || typeof receipt.target !== "string" || !positiveId(receipt.port)) return [];
+  return rows.filter(row => row.realm === "page" && row.generation === receipt.generation && row.realmURL === receipt.realmURL
+    && row.router === receipt.router && row.replyPort === receipt.replyPort && row.target === receipt.target && row.port === receipt.port);
+}
+
+function helperRows(rows: RoutingRow[], dispatch: RoutingRow): RoutingRow[] {
+  if (!positiveId(dispatch.request) || !positiveId(dispatch.current)) return [];
+  const projections = rows.filter(row => row.kind === "helper-projection" && row.generation === dispatch.generation && row.capability === dispatch.current && positiveId(row.helper));
+  if (projections.length !== 1) return [];
+  return rows.filter(row => row.realm === "page" && row.generation === dispatch.generation && row.request === dispatch.request
+    && row.helper === projections[0]!.helper && row.target === dispatch.target && row.port === dispatch.port);
+}
+
+function progress(rows: RoutingRow[], key: string): number {
+  return Math.max(0, ...rows.map(row => typeof row[key] === "number" ? Number(row[key]) : 0));
 }
 function path(value: unknown): string | undefined {
   if (typeof value !== "string") return;

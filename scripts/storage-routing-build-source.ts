@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 const prelude = `
-const __state = Reflect.get(globalThis, "__routingState") ?? { ids: new WeakMap<object, number>(), nextId: 0, sequence: 0, runtimes: new WeakMap<object, object>() };
+const __state = Reflect.get(globalThis, "__routingState") ?? { ids: new WeakMap<object, number>(), nextId: 0, sequence: 0, runtimes: new WeakMap<object, number>() };
 Reflect.set(globalThis, "__routingState", __state);
 function __id(value: object | undefined) {
   if (!value) return null;
@@ -29,15 +29,20 @@ export function instrumentWorker(source: string) {
   verifySource("browser/service-worker.ts", source);
   return applyEdits(source, [
     ["      const channel = createChannel();\n      let body:", `      const channel = createChannel();
-      const __claim = (kind: string, extra: object = {}) => __trace(kind, {
+      let __bodyChunks = 0;
+      const __claimFields = {
         ask: __id(ask), target: ask.target, port: ask.port, clientId: Reflect.get(client, "id") ?? null,
-        clientURL: client.url, channel: __id(channel.port1), ...extra,
-      });
+        clientURL: client.url, channel: __id(channel.port1),
+      };
+      const __claim = (kind: string, extra: object = {}) => __trace(kind, { ...__claimFields, ...extra });
       __claim("claim-open");
       let body:`],
     ["        finished = true;\n        clearTimeout(timer);", "        __claim(\"claim-close\");\n        finished = true;\n        clearTimeout(timer);"],
     ["      const timer = setTimeout(() => {\n        close();", "      const timer = setTimeout(() => {\n        __claim(\"claim-timeout\");\n        close();"],
-    ["        const msg = event.data;\n        switch", "        const msg = event.data;\n        __claim(\"claim-reply\", { reply: msg.type, status: msg.type === \"head\" ? msg.status : null, error: msg.type === \"error\" ? msg.message : null, bytes: msg.type === \"data\" ? msg.chunk.byteLength : null });\n        switch"],
+    ["        const msg = event.data;\n        switch", `        const msg = event.data;
+        if (msg.type === "data") __bodyChunks++;
+        if (msg.type !== "data" || __bodyChunks === 1) __claim("claim-reply", { reply: msg.type, status: msg.type === "head" ? msg.status : null, error: msg.type === "error" ? msg.message : null, bodyChunks: __bodyChunks });
+        switch`],
     ["        client.postMessage(ask, [channel.port2]);", "        __claim(\"claim-post\", { transferredPort: __id(channel.port2) });\n        client.postMessage(ask, [channel.port2]);\n        __claim(\"claim-post-return\");"],
     ["      } catch {\n        close();\n        channel.port2.close();", "      } catch {\n        __claim(\"claim-post-failure\");\n        close();\n        channel.port2.close();"],
     ["    const windows = await options.clients.matchAll({ type: \"window\", includeUncontrolled: true });\n    for (const client of windows) {\n      if (isPreview(client)) continue;", `    __trace("forward", { ask: __id(ask), target, port, url: request.url, method: request.method });
@@ -58,14 +63,20 @@ export function instrumentRouter(source: string) {
     ["    if (this.servers.get(port) === server) return;", "    __trace(\"register\", { router: __id(this), port, server: __id(server), current: __id(this.servers.get(port)) });\n    if (this.servers.get(port) === server) return;"],
     ["    if (this.servers.get(port) !== server) return;", "    __trace(\"unregister\", { router: __id(this), port, server: __id(server), current: __id(this.servers.get(port)) });\n    if (this.servers.get(port) !== server) return;"],
     ["    const reply = event.ports[0];", "    const reply = event.ports[0];\n    __trace(\"page-receive\", { router: __id(this), target: ask?.target, port: ask?.port, replyPort: __id(reply), current: ask ? __id(this.servers.get(ask.port)) : null });"],
-    ["    const send = (msg: PreviewReply, transfer: Transferable[] = []) =>\n      reply.postMessage(msg, transfer);", `    const send = (msg: PreviewReply, transfer: Transferable[] = []) => {
-      __trace("page-send", { router: __id(this), target: ask.target, port: ask.port, replyPort: __id(reply), reply: msg.type });
+    ["    const send = (msg: PreviewReply, transfer: Transferable[] = []) =>\n      reply.postMessage(msg, transfer);", `    let __bodyCalls = 0, __bodyReturns = 0;
+    const __replyFields = { router: __id(this), target: ask.target, port: ask.port, replyPort: __id(reply) };
+    const __replyTrace = (kind: string, extra: object) => __trace(kind, { ...__replyFields, bodyCalls: __bodyCalls, bodyReturns: __bodyReturns, ...extra });
+    const send = (msg: PreviewReply, transfer: Transferable[] = []) => {
+      if (msg.type === "data") __bodyCalls++;
+      const __report = msg.type !== "data" || __bodyCalls === 1;
+      if (__report) __replyTrace("page-send", { reply: msg.type });
       try {
         const result = reply.postMessage(msg, transfer);
-        __trace("page-send-return", { router: __id(this), target: ask.target, port: ask.port, replyPort: __id(reply), reply: msg.type });
+        if (msg.type === "data") __bodyReturns++;
+        if (__report) __replyTrace("page-send-return", { reply: msg.type });
         return result;
       } catch (error) {
-        __trace("page-send-error", { router: __id(this), target: ask.target, port: ask.port, replyPort: __id(reply), reply: msg.type, error: __error(error) });
+        __replyTrace("page-send-error", { reply: msg.type, error: __error(error) });
         throw error;
       }
     };`],
@@ -80,7 +91,7 @@ function sha(source: string) {
 
 export function instrumentConsumerPreview(source: string) {
   const result = insert(source, "    container.addEventListener(\"message\", event => this.onMessage(event));", `    container.addEventListener("message", event => {
-      __trace("container-receive", { router: __id(this), runtime: __id(__state.runtimes.get(this)), target: event.data?.target, port: event.data?.port, replyPort: __id(event.ports[0]), sourceWorker: __id(event.source), sourceURL: event.source && "scriptURL" in event.source ? event.source.scriptURL : null });
+      __trace("container-receive", { router: __id(this), runtime: __state.runtimes.get(this) ?? null, target: event.data?.target, port: event.data?.port, replyPort: __id(event.ports[0]), sourceWorker: __id(event.source), sourceURL: event.source && "scriptURL" in event.source ? event.source.scriptURL : null });
       return this.onMessage(event);
     });`);
   return prelude + result;
@@ -93,7 +104,7 @@ export function verifySource(path: string, source: string): void {
 }
 
 export function instrumentSandbox(source: string): string {
-  return prelude + insert(source, "    const sharedObjects = installBunSharedObjects(runtime);", `    __state.runtimes.set(this.previews, runtime);
+  return prelude + insert(source, "    const sharedObjects = installBunSharedObjects(runtime);", `    __state.runtimes.set(this.previews, __id(runtime));
     __trace("runtime-router", { runtime: __id(runtime), router: __id(this.previews), template: this.template });
     const sharedObjects = installBunSharedObjects(runtime);`);
 }

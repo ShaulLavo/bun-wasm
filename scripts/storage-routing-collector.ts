@@ -15,7 +15,7 @@ function scalar(value: unknown): string | number | boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 function record(value: Record<string, unknown>): void {
-  if (!enabled) return;
+  if (!enabled || !selected(value)) return;
   const fields = Object.fromEntries(Object.entries(value).map(([key, value]) => [key, scalar(value)]));
   const row = { ...fields, generation, realm, scope: realm === "worker" ? Reflect.get(globalThis, "registration")?.scope ?? null : null,
     realmURL: location.href, sequence: ++sequence, dropped };
@@ -23,6 +23,15 @@ function record(value: Record<string, unknown>): void {
   if (pending.length === 256) { dropped++; return; }
   pending.push(row);
   void drain();
+}
+function selected(value: Record<string, unknown>): boolean {
+  if (typeof value.kind === "string" && ["evaluated-generation", "runtime-router", "register", "unregister", "helper-projection"].includes(value.kind)) return true;
+  const target = value.target ?? value.url;
+  if (typeof target !== "string") return false;
+  try {
+    const path = new URL(target, "https://diagnostic.invalid").pathname.replace(/^.*\/__preview\/\d+/, "");
+    return ["/", "/@vite/client", "/src/main.ts"].includes(path);
+  } catch { return false; }
 }
 async function drain(): Promise<void> {
   if (sending) return;

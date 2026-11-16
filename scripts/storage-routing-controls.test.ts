@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { instrumentHelper, instrumentRouter, instrumentWorker } from "./storage-routing-build-source";
+import { instrumentHelper, instrumentRouter, instrumentWorker, instrumentSandbox } from "./storage-routing-build-source";
 
 const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-routing-"));
 afterAll(() => rm(scratch, { recursive: true, force: true }));
@@ -162,6 +162,67 @@ test("source identity guard rejects changed inputs and exact consumer binding pa
   expect(() => instrumentWorker(workerSource + "\n")).toThrow("Storage routing source differs");
   expect(() => instrumentRouter(routerSource + "\n")).toThrow("Storage routing source differs");
 
+});
+
+test("runtime binding retains only a scalar identity", () => {
+  const source = "function bind(runtime) {\n    const sharedObjects = installBunSharedObjects(runtime);\n}";
+  const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(instrumentSandbox(source));
+  const bind = new Function("installBunSharedObjects", compiled + "\nreturn bind;")(() => undefined);
+  const previews = {}, runtime = { stopped: true };
+  Reflect.apply(bind, { previews, template: "vanilla" }, [runtime]);
+  const identity = Reflect.get(globalThis, "__routingState").runtimes.get(previews);
+  expect(typeof identity).toBe("number");
+  expect(identity).toBeGreaterThan(0);
+});
+
+for (const target of ["/unrelated-stream.bin", "/src/main.ts"]) test(`streaming ${target} records bounded body progress`, async () => {
+  const collected: Row[] = [];
+  const previous = Reflect.get(globalThis, "__routingTrace");
+  Reflect.set(globalThis, "__routingTrace", (row: Row) => collected.push(row));
+  const channels: MessageChannel[] = [];
+  const client = { id: "stream-owner", url: "https://control.test/app", postMessage(_ask: unknown, ports: MessagePort[]) {
+    const port = ports[0]!;
+    port.postMessage({ type: "head", status: 200, statusText: "OK", headers: [] });
+    for (let chunk = 0; chunk < 5000; chunk++) port.postMessage({ type: "data", chunk: new Uint8Array([42]) });
+    port.postMessage({ type: "end" });
+    port.close();
+  } };
+  const worker = observedWorker.createPreviewServiceWorker({ scope,
+    clients: { get: async () => client, matchAll: async () => [client] }, fetch: async () => new Response("network"),
+    createChannel() { const channel = new MessageChannel(); channels.push(channel); return channel; },
+  });
+  try {
+    const response = await worker.fetch(new Request(`${scope}5173${target}`), "preview");
+    if (!response) throw Error("Missing original streamed response");
+    expect((await response.arrayBuffer()).byteLength).toBe(5000);
+    expect(collected.filter(row => row.kind === "claim-reply" && row.reply === "data")).toHaveLength(1);
+    expect(collected.find(row => row.kind === "claim-reply" && row.reply === "end")?.bodyChunks).toBe(5000);
+  } finally {
+    for (const channel of channels) { channel.port1.close(); channel.port2.close(); }
+    Reflect.set(globalThis, "__routingTrace", previous);
+  }
+}, 30_000);
+
+test("collector selects required targets before scalar transport without sequence gaps", async () => {
+  const source = await Bun.file(`${import.meta.dir}/storage-routing-collector.ts`).text();
+  const compiled = new Bun.Transpiler({ loader: "ts", target: "browser" }).transformSync(source);
+  const emitted: Row[] = [];
+  const output = { debug(text: string) { expect(this).toBe(output); emitted.push(JSON.parse(text.slice("[storage-routing] ".length))); } };
+  const previous = Reflect.get(globalThis, "__routingTrace");
+  const enabled = Reflect.get(globalThis, "__bunwasmStorageFirstEvent");
+  Reflect.set(globalThis, "__bunwasmStorageFirstEvent", true);
+  try {
+    const record = new Function("document", "location", "navigator", "console", compiled + "\nreturn record;")(
+      {}, { href: "https://control.test/app" }, { serviceWorker: { addEventListener() {} } }, output);
+    for (let chunk = 0; chunk < 5000; chunk++) record({ kind: "claim-reply", target: "/unrelated.bin", reply: "data" });
+    record({ kind: "claim-reply", target: "/src/main.ts?updated=1", reply: "head" });
+    expect(emitted.map(row => row.sequence)).toEqual([1, 2]);
+    expect(emitted[1]?.target).toBe("/src/main.ts?updated=1");
+  } finally {
+    Reflect.set(globalThis, "__routingTrace", previous);
+    if (enabled === undefined) Reflect.deleteProperty(globalThis, "__bunwasmStorageFirstEvent");
+    else Reflect.set(globalThis, "__bunwasmStorageFirstEvent", enabled);
+  }
 });
 
 test("replacement and stale unregister retain exact current server identity", () => {
