@@ -54,10 +54,10 @@ void equal_kind_identity(JS::HandleObject first, JS::HandleObject second) {
   static const JSSecurityCallbacks callbacks = {nullptr, nullptr, provenance_subsumes};
   JS_SetSecurityCallbacks(context, &callbacks);
   lastSubsumed = &framePrincipals;
-  check(JS::GetFirstSubsumedSavedFrame(context, nullptr, first) == first && lastSubsumed == nullptr,
+  check(js::GetFirstSubsumedSavedFrame(context, nullptr, first, includeSelfHosted) == first && lastSubsumed == nullptr,
         "first collision frame has null principals");
   lastSubsumed = &framePrincipals;
-  check(JS::GetFirstSubsumedSavedFrame(context, nullptr, second) == second && lastSubsumed == nullptr,
+  check(js::GetFirstSubsumedSavedFrame(context, nullptr, second, includeSelfHosted) == second && lastSubsumed == nullptr,
         "second collision frame has equal null principals");
   JS_SetSecurityCallbacks(context, previous);
   JS::RootedString sourceA(context), sourceB(context), nameA(context), nameB(context), causeA(context), causeB(context);
