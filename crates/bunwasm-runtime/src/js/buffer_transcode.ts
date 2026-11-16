@@ -13,8 +13,13 @@
   return function createTranscode(bindings: Bindings) {
     const { normalizeEncoding, invalidArgType, bytesToString, fromString, allocate } = bindings;
     const decoders: (TextDecoder | undefined)[] = [];
-    const tag = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag)?.get;
-    if (!tag) throw new TypeError("Missing TypedArray tag getter");
+    const tag = tagGetter();
+
+    function tagGetter() {
+      const read = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag)?.get;
+      if (typeof read !== "function") throw new TypeError("Missing TypedArray tag getter");
+      return read;
+    }
 
     function isSource(value: unknown): value is Uint8Array {
       return ArrayBuffer.isView(value) && tag.call(value) === "Uint8Array";
