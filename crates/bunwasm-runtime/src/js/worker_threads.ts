@@ -968,11 +968,11 @@
       return !state.scheduled && Boolean(state.batch || state.phase === "closing" || state.started && state.queue.length);
     }
     #retryDelivery(state: PortState) {
+      if (state.phase === "open" && state.pending.size && !this.#attachmentWait) this.#accept();
       if (state.scheduled) return;
       if (state.batch) { this.#continueBatch(state, state.batch); return; }
       if (state.phase === "closing") { this.#scheduleLocalClose(state); return; }
-      if (state.pending.size && !this.#attachmentWait) this.#accept();
-      else this.#schedule();
+      this.#schedule();
     }
     #maybeClose() {
       const state = this.#state;
