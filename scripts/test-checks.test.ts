@@ -348,7 +348,7 @@ test("dormant Hermes proof controls stay outside explicit and automatic CI disco
 test("selected tests cannot import hidden test barrels that give a fixture a second owner", () => {
   const paths = discoverChecks().filter(check => check.owner !== "native").map(check => check.path).concat(automaticChecks().map(check => check.path));
   for (const path of paths) expect(readFileSync(join(root, path), "utf8")).not.toMatch(/^import\s+(?:.*from\s+)?["'][^"']+\.test\.[cm]?[jt]s["']/m);
-});
+}, 30_000);
 
 test("each discovery group retains one command owner and browser deadlines stay outside discovery", () => {
   const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");

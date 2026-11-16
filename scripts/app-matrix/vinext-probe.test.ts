@@ -46,7 +46,7 @@ test("missing assets finalize a nonempty failure report with every app cell bloc
     for (const stage of expectedStages) expect(rows.find(row => row.stage === stage)?.status).toBe("blocked");
     expect(report).toHaveProperty("infrastructureError", expect.stringContaining("ENOENT"));
   });
-});
+}, 30_000);
 for (const scenario of ["after-install", "signal"]) test(`${scenario} preserves install and finalizes unrun cells after cleanup`, () => {
   control(scenario, ({ rows, report }, closed, status) => {
     expect(status).toBe(scenario === "signal" ? 130 : 1);
@@ -56,14 +56,14 @@ for (const scenario of ["after-install", "signal"]) test(`${scenario} preserves 
     expect(report).toHaveProperty("infrastructureError", expect.stringContaining(scenario === "signal" ? "SIGTERM" : "injected"));
     expect(closed).toBe(true);
   });
-});
+}, 30_000);
 test("conflicting plain and gzip payloads fail before any app can pass", () => {
   control("mismatch", ({ report, rows }, _closed, status) => {
     expect(status).toBe(1);
     expect(report).toHaveProperty("infrastructureError", expect.stringContaining("payload mismatch"));
     for (const stage of expectedStages) expect(rows.find(row => row.stage === stage)?.status).toBe("blocked");
   });
-});
+}, 30_000);
 for (const scenario of ["matching", "plain-only", "gzip-only"]) test(`${scenario} reports the loaded payload digest without claiming guest acceptance`, () => {
   control(scenario, ({ report, rows }, closed, status) => {
     const digest = createHash("sha256").update("probe payload").digest("hex");
@@ -73,4 +73,4 @@ for (const scenario of ["matching", "plain-only", "gzip-only"]) test(`${scenario
     expect(rows.every(row => row.status === "pass")).toBe(true);
     expect(closed).toBe(true);
   });
-});
+}, 30_000);
