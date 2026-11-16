@@ -16,6 +16,13 @@ UTF-16 byte is replaced for UTF-16 output and discarded for narrow output. Stric
 UTF-8/UTF-16 conversions report ICU-style error codes and numbers. Empty input
 returns an empty Buffer before encoding validation, matching both native oracles.
 
+Source bounds come from intrinsic typed-array getters. Both encoding arguments
+are coerced before validating their supported names, with ordinary string
+coercion rejecting Symbols. For same-encoding UTF-16 conversion, an unpaired
+surrogate followed by an odd byte produces two replacements, matching Bun rather
+than WHATWG TextDecoder's combined replacement. These corrections stay local to
+transcoding; shared decoder semantics are unchanged.
+
 Bun preserves a leading Unicode BOM when converting to ASCII or latin1; the
 observed Node release discards it in those conversions. The adapter follows Bun.
 Existing codecs, native backing allocation, heap limits, and shared-memory

@@ -6,8 +6,9 @@ Retain recognizable Buffer constructor dispatch, `fromObject` array-like handlin
 
 The `Blob` and `File` exports are original bun-wasm wiring, not copied upstream code.
 
-The public `inspect()` method delegates to the maintained Node inspector instead
-of adding another formatter. Numeric accessors validate an offset's type before
+The public `inspect()` method formats the real byte view directly, ignoring
+custom inspection hooks and rejecting invalid receivers. Numeric accessors use
+intrinsic view getters rather than shadowable backing properties and validate an offset's type before
 the receiver, retain element-count bounds for wider typed-array receivers, and
 read or write their underlying bytes. One-byte writers check the offset's type
 before the value range; wider writers preserve value-first validation. Variable

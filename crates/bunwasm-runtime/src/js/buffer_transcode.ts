@@ -13,11 +13,14 @@
   return function createTranscode(bindings: Bindings) {
     const { normalizeEncoding, invalidArgType, bytesToString, fromString, allocate } = bindings;
     const decoders: (TextDecoder | undefined)[] = [];
-    const tag = tagGetter();
+    const tag = viewGetter(Symbol.toStringTag);
+    const readLength = viewGetter("length");
+    const readBuffer = viewGetter("buffer");
+    const readOffset = viewGetter("byteOffset");
 
-    function tagGetter() {
-      const read = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag)?.get;
-      if (typeof read !== "function") throw new TypeError("Missing TypedArray tag getter");
+    function viewGetter(name: string | symbol) {
+      const read = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), name)?.get;
+      if (typeof read !== "function") throw new TypeError("Missing TypedArray getter");
       return read;
     }
 
@@ -54,6 +57,9 @@
         return from === "ascii" && to !== "utf16le" ? text.replace(/[\x80-\xff]/g, "\ufffd") : text;
       }
       const fatal = from !== to && (to === "utf8" || to === "utf16le");
+      if (from === "utf16le" && to === "utf16le" && source.length % 2) {
+        return unicode(source.subarray(0, source.length - 1), from, false) + "\ufffd";
+      }
       const truncate = from === "utf16le" && to !== "utf16le" && source.length > 1;
       const bytes = truncate ? source.subarray(0, source.length - source.length % 2) : source;
       if (from === "utf16le" && to !== "utf8" && to !== "utf16le" && source.length === 1) return "";
@@ -75,9 +81,14 @@
 
     return function transcode(source: unknown, fromEncoding?: unknown, toEncoding?: unknown): Uint8Array {
       if (!isSource(source)) throw invalidArgType("source", ["Buffer", "Uint8Array"], source);
-      if (source.length === 0) return allocate(0);
-      const from = encoding(fromEncoding), to = encoding(toEncoding);
-      const text = decode(source, from, to);
+      if (readLength.call(source) === 0) return allocate(0);
+      const fromValue = fromEncoding == null ? fromEncoding : `${fromEncoding}`;
+      const toValue = toEncoding == null ? toEncoding : `${toEncoding}`;
+      const from = encoding(fromValue), to = encoding(toValue);
+      const length = readLength.call(source);
+      if (length === 0) return allocate(0);
+      const bytes = new Uint8Array(readBuffer.call(source), readOffset.call(source), length);
+      const text = decode(bytes, from, to);
       return to === "ascii" || to === "latin1" ? narrow(text, to) : fromString(text, to);
     };
   };

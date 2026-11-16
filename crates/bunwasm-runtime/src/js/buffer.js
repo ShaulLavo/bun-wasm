@@ -7,6 +7,15 @@
   const kMaxLength = 4294967296;
   const kStringMaxLength = 2147483647;
   const INSPECT_MAX_BYTES = 50;
+  const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+  const typedArrayTag = Object.getOwnPropertyDescriptor(typedArrayPrototype, Symbol.toStringTag).get;
+  const typedArrayLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, "length").get;
+  const typedArrayBuffer = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer").get;
+  const typedArrayOffset = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset").get;
+  const typedArrayByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength").get;
+  const dataViewBuffer = Object.getOwnPropertyDescriptor(DataView.prototype, "buffer").get;
+  const dataViewOffset = Object.getOwnPropertyDescriptor(DataView.prototype, "byteOffset").get;
+  const dataViewByteLength = Object.getOwnPropertyDescriptor(DataView.prototype, "byteLength").get;
 
   // ---------------------------------------------------------------------------
   // Errors (Node-style codes and messages)
@@ -909,7 +918,11 @@
   }
 
   function numericBytes(buf) {
-    return isUint8Array(buf) ? buf : new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    if (isUint8Array(buf)) return buf;
+    if (typedArrayTag.call(buf) === undefined) {
+      return new Uint8Array(dataViewBuffer.call(buf), dataViewOffset.call(buf), dataViewByteLength.call(buf));
+    }
+    return new Uint8Array(typedArrayBuffer.call(buf), typedArrayOffset.call(buf), typedArrayByteLength.call(buf));
   }
 
   function writeInt(buf, value, offset, n, little, signed, powerForm, offsetRequired = false) {
@@ -997,7 +1010,19 @@
 
   defineMethods(proto, {
     inspect() {
-      return internal.require("inspect").nodeInspect(this);
+      if (typedArrayTag.call(this) !== "Uint8Array") {
+        throw makeError(TypeError, "ERR_INVALID_THIS", "Can only call Buffer.inspect on instances of Buffer");
+      }
+      const length = typedArrayLength.call(this);
+      const shown = Math.min(length, INSPECT_MAX_BYTES);
+      let text = "";
+      for (let index = 0; index < shown; index++) {
+        if (index) text += " ";
+        text += this[index].toString(16).padStart(2, "0");
+      }
+      const remaining = length - shown;
+      if (remaining) text += ` ... ${remaining} more byte${remaining === 1 ? "" : "s"}`;
+      return `<Buffer ${text}>`;
     },
     toString(encoding, start, end) {
       if (arguments.length === 0) return utf8Slice(this);

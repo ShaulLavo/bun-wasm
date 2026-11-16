@@ -4,6 +4,46 @@ type Transcode = typeof import("node:buffer").transcode;
 
 export function apiChecks(factory: typeof Buffer, transcode: Transcode) {
   return [
+    { name: "numeric accessors ignore shadowed view backing properties", run() {
+      const words = new Uint16Array([0x1234, 0x5678]);
+      const bytes = new DataView(words.buffer);
+      const fail = () => { throw new Error("shadowed view property"); };
+      Object.defineProperties(words, { buffer: { get: fail }, byteOffset: { get: fail }, byteLength: { get: fail } });
+      assert.equal(Reflect.apply(factory.prototype.readUInt16LE, words, [0]), bytes.getUint16(0, true));
+      Reflect.apply(factory.prototype.writeUInt16LE, words, [0x4321, 0]);
+      assert.equal(bytes.getUint16(0, true), 0x4321);
+    } },
+    { name: "inspect formats bytes directly without custom-hook redispatch", run() {
+      const inspect = Reflect.get(factory.prototype, "inspect");
+      assert.equal(typeof inspect, "function");
+      const buffer = factory.from([65]);
+      const custom = Symbol.for("nodejs.util.inspect.custom");
+      Object.defineProperty(buffer, custom, { get() { throw new Error("custom inspect getter"); } });
+      Object.defineProperty(buffer, "length", { value: 0 });
+      assert.equal(Reflect.apply(inspect, buffer, []), "<Buffer 41>");
+      const recursive = factory.from([65]);
+      Reflect.set(recursive, custom, inspect);
+      assert.equal(Reflect.apply(inspect, recursive, []), "<Buffer 41>");
+      assert.equal(Reflect.apply(inspect, new Uint8Array([65]), []), "<Buffer 41>");
+      assert.throws(() => Reflect.apply(inspect, {}, []), { code: "ERR_INVALID_THIS" });
+      assert.match(Reflect.apply(inspect, factory.alloc(51), []), / \.\.\. 1 more byte>$/);
+      assert.match(Reflect.apply(inspect, factory.alloc(52), []), / \.\.\. 2 more bytes>$/);
+    } },
+    { name: "transcode retains separate malformed UTF16 replacements", run() {
+      assert.equal(transcode(factory.from([0, 0xd8, 65]), "utf16le", "utf16le").toString("hex"), "fdfffdff");
+      assert.equal(transcode(factory.from([0, 0xdc, 65]), "utf16le", "utf16le").toString("hex"), "fdfffdff");
+    } },
+    { name: "transcode uses intrinsic bytes and coerces both encodings before validation", run() {
+      const bytes = factory.from([65]);
+      Object.defineProperties(bytes, { length: { value: 0 }, buffer: { get() { throw new Error("shadowed backing"); } } });
+      assert.equal(transcode(bytes, "utf8", "utf8").toString("hex"), "41");
+      assert.equal(transcode(bytes, "latin1", "ascii").toString("hex"), "41");
+      const marker = new Error("encoding coercion marker");
+      assert.throws(() => Reflect.apply(transcode, undefined, [bytes, "bad", { toString() { throw marker; } }]), error => error === marker);
+      assert.throws(() => Reflect.apply(transcode, undefined, [bytes, Symbol("utf8"), "utf8"]), { name: "TypeError" });
+      assert.throws(() => Reflect.apply(transcode, undefined, [bytes, "utf8", Symbol("utf8")]), { name: "TypeError" });
+      assert.equal(Reflect.apply(transcode, undefined, [factory.alloc(0), Symbol("from"), Symbol("to")]).length, 0);
+    } },
     { name: "numeric accessors validate receivers after offset arguments", run() {
       for (const method of ["readInt32LE", "readFloatLE", "readBigInt64LE"]) {
         const read = Reflect.get(factory.prototype, method);
