@@ -31,16 +31,13 @@ export function navigationServerLog(request: Request) {
 export async function readNavigationServerLog(id: string, url: string) {
   const path = process.env.BUN_WASM_NAVIGATION_LOG;
   if (!path) return { enabled: false };
-  let content: string;
-  try { content = await readFile(path, "utf8"); }
-  catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") content = "";
-    else throw error;
-  }
+  const content = await readFile(path, "utf8");
   const records: unknown[] = content.split("\n").filter(Boolean).map(line => JSON.parse(line));
   const events = records.filter(record => hasId(record, id));
   const listening = records.filter(record => hasId(record, null) && "url" in record && record.url === `${new URL(url).origin}/`);
-  return { enabled: true, id, listening, events, meaning: "response-return records a constructed Response, not socket delivery" };
+  const availability = listening.length === 1 ? "observed" : "unknown";
+  return { enabled: true, availability, id, listening, events,
+    meaning: "Empty events require one matching listening record and no journal failure; response-return records a constructed Response, not socket delivery" };
 }
 
 function hasId(value: unknown, id: string | null): value is Record<string, unknown> {
