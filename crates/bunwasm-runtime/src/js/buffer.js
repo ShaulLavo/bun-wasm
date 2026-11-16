@@ -584,21 +584,22 @@
   Buffer.concat = function concat(list, totalLength) {
     if (!Array.isArray(list)) throw invalidArgType("list", "Array", list);
     if (list.length === 0) return new FastBuffer(0);
-    let length = totalLength;
-    if (length === undefined) {
-      length = 0;
-      for (let i = 0; i < list.length; i++) {
-        if (!isUint8Array(list[i])) throw invalidArgType(`list[${i}]`, ["Buffer", "Uint8Array"], list[i]);
-        length += list[i].length;
-      }
-    } else {
-      validateLengthArg(length);
+    const items = new Array(list.length);
+    for (let i = 0; i < items.length; i++) items[i] = list[i];
+    let actualLength = 0;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!isUint8Array(item)) throw invalidArgType(`list[${i}]`, ["Buffer", "Uint8Array"], item);
+      Uint8Array.prototype.values.call(item);
+      actualLength += item.length;
     }
+    let length = totalLength;
+    if (length === undefined) length = actualLength;
+    else validateLengthArg(length);
     const out = Buffer.allocUnsafe(length);
     let pos = 0;
-    for (let i = 0; i < list.length && pos < length; i++) {
-      const item = list[i];
-      if (!isUint8Array(item)) throw invalidArgType(`list[${i}]`, ["Buffer", "Uint8Array"], item);
+    for (let i = 0; i < items.length && pos < length; i++) {
+      const item = items[i];
       const take = Math.min(item.length, length - pos);
       out.set(take === item.length ? item : item.subarray(0, take), pos);
       pos += take;
@@ -849,9 +850,12 @@
     if (offset === undefined) offset = 0;
     if (typeof offset !== "number") throw invalidArgType("offset", "number", offset);
     if (Math.floor(offset) !== offset) throw outOfRange("offset", "an integer", offset);
+    if (!ArrayBuffer.isView(buf)) {
+      throw makeError(TypeError, "ERR_INVALID_ARG_TYPE", `The "buf" argument must be of type Buffer. Received ${describeReceived(buf)}`);
+    }
     const max = buf.length - byteLength;
     if (max < 0) throw bufferOutOfBounds();
-    if (offset < 0 || offset > max) throw outOfRange("offset", `>= 0 and <= ${max}`, offset);
+    if (!(offset >= 0 && offset <= max)) throw outOfRange("offset", `>= 0 and <= ${max}`, offset);
     return offset;
   }
 
@@ -862,6 +866,7 @@
   }
 
   function readUnsigned(buf, offset, n, little) {
+    buf = numericBytes(buf);
     let val = 0;
     let mul = 1;
     for (let i = 0; i < n; i++) {
@@ -878,6 +883,7 @@
   }
 
   function writeBytes(buf, value, offset, n, little) {
+    buf = numericBytes(buf);
     const lo = value;
     const hi = Math.floor(value * 2 ** -32);
     for (let i = 0; i < n; i++) {
@@ -902,10 +908,16 @@
     };
   }
 
-  function writeInt(buf, value, offset, n, little, signed, powerForm) {
+  function numericBytes(buf) {
+    return isUint8Array(buf) ? buf : new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+
+  function writeInt(buf, value, offset, n, little, signed, powerForm, offsetRequired = false) {
     const v = +value;
+    if (n === 1 && (offsetRequired || offset !== undefined) && typeof offset !== "number") throw invalidArgType("offset", "number", offset);
     const range = intRange(n, signed, powerForm);
     if (v > range.max || v < range.min) throw outOfRange("value", range.text, v);
+    if (offsetRequired && offset === undefined) throw invalidArgType("offset", "number", offset);
     const off = checkReadOffset(buf, offset, n);
     return writeBytes(buf, v, off, n, little);
   }
@@ -917,6 +929,7 @@
   const hostLittleEndian = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
   function copyScratch(scratch, buf, offset, little, toScratch) {
+    buf = numericBytes(buf);
     const n = scratch.length;
     const reverse = little !== hostLittleEndian;
     for (let i = 0; i < n; i++) {
@@ -983,6 +996,9 @@
   // ---------------------------------------------------------------------------
 
   defineMethods(proto, {
+    inspect() {
+      return internal.require("inspect").nodeInspect(this);
+    },
     toString(encoding, start, end) {
       if (arguments.length === 0) return utf8Slice(this);
       return toStringRange(this, encoding, start, end);
@@ -1065,19 +1081,19 @@
     },
     writeUIntLE(value, offset, byteLength) {
       checkByteLength(byteLength);
-      return writeInt(this, value, offset, byteLength, true, false, byteLength > 4);
+      return writeInt(this, value, offset, byteLength, true, false, byteLength > 4, true);
     },
     writeUIntBE(value, offset, byteLength) {
       checkByteLength(byteLength);
-      return writeInt(this, value, offset, byteLength, false, false, byteLength > 4);
+      return writeInt(this, value, offset, byteLength, false, false, byteLength > 4, true);
     },
     writeIntLE(value, offset, byteLength) {
       checkByteLength(byteLength);
-      return writeInt(this, value, offset, byteLength, true, true, byteLength > 4);
+      return writeInt(this, value, offset, byteLength, true, true, byteLength > 4, true);
     },
     writeIntBE(value, offset, byteLength) {
       checkByteLength(byteLength);
-      return writeInt(this, value, offset, byteLength, false, true, byteLength > 4);
+      return writeInt(this, value, offset, byteLength, false, true, byteLength > 4, true);
     },
     readFloatLE(offset) {
       return readFloat(this, offset, true, false);
@@ -1257,6 +1273,11 @@
     return base64Slice(latin1ToBytes(String(data)), false);
   }
 
+  const transcode = internal.require("buffer_transcode")({
+    normalizeEncoding, isUint8Array, invalidArgType, bytesToString, fromString,
+    allocate: Buffer.allocUnsafe,
+  });
+
   return {
     Buffer,
     SlowBuffer,
@@ -1270,5 +1291,6 @@
     btoa: btoaExport,
     isAscii,
     isUtf8,
+    transcode,
   };
 });
