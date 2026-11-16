@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
-import { runInContext, runInThisContext, type Context } from "node:vm";
-import { eventTargetSource } from "../../event-target-source";
+import { inspect } from "node:util";
+import { runInThisContext } from "node:vm";
 import type { SharedObjects } from "../../../web/src/shared-objects/protocol";
 import type { Channel, Codec, CodecHooks, Graph } from "./runtime-types";
 
-export interface SourcePort {
+export interface SourcePort extends EventTarget {
   on(event: string, listener: (value: unknown) => void): void;
   postMessage(value: unknown, transfer?: readonly unknown[]): void;
   close(): void;
@@ -35,14 +35,38 @@ const native = {
   base64Decode: (value: string) => new Uint8Array(Buffer.from(value, "base64")),
   transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
 };
-function factory(name: string, overlay?: (source: string) => string, extension = "ts", context?: Context) {
+function factory(name: string, overlay?: (source: string) => string, extension = "ts", bindings?: Record<string, unknown>) {
   const path = new URL(`../../../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url);
   const input = readFileSync(path, "utf8");
-  const source = overlay ? overlay(input) : input;
-  const emitted = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__sharedFixture = ${source}`);
-  const value: unknown = context ? runInContext(emitted, context) : runInThisContext(emitted);
+  const source = (overlay ? overlay(input) : input).trim().replace(/;$/, "");
+  const expression = bindings ? `(function(${Object.keys(bindings).join(",")}) { return (\n${source}\n); })` : source;
+  const emitted = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__sharedFixture = ${expression}`);
+  const evaluate: unknown = runInThisContext(emitted);
+  if (typeof evaluate !== "function") throw new Error(`Missing ${name} evaluator`);
+  const value: unknown = bindings ? Reflect.apply(evaluate, undefined, Object.values(bindings)) : evaluate;
   if (typeof value !== "function") throw new Error(`Missing ${name} factory`);
   return value;
+}
+/** Real web and events factories share the broker consumer's realm without replacing host globals. */
+function sourceWeb() {
+  const globals: Record<string, unknown> = {};
+  const internal = {
+    native: { ...native, utf8Encode: (value: string) => new TextEncoder().encode(value),
+      timeOrigin: () => performance.timeOrigin, now: () => performance.now(), platformInfo: { version: Bun.version, arch: process.arch } },
+    nextTick: (callback: () => void) => queueMicrotask(callback),
+    web: { Event, EventTarget, AbortController, AbortSignal },
+    require(name: string): unknown {
+      if (name === "text_decoder") return TextDecoder;
+      if (name === "web_brand") return factory(name);
+      if (name === "url_search_params") return factory(name)(internal);
+      if (name === "inspect") return { nodeInspect: inspect };
+      if (name === "streams" || name === "body_streams") return {};
+      throw new Error(`Unexpected web module ${name}`);
+    },
+  };
+  factory("web", undefined, "js")(internal)((name: string, value: unknown) => { globals[name] = value; }, () => {});
+  const events = factory("events", undefined, "ts", globals)(internal);
+  return { internal, events, globals };
 }
 export function sourceCodec(sharedObjects?: SharedObjects, hooks?: CodecHooks): Codec {
   return factory("worker_codec")({ native, sharedObjects }).create({ sharedObjects, ...(hooks ?? {
@@ -129,11 +153,7 @@ function transferNative(hooks: TransferHooks, core?: CommitNatives) {
   };
 }
 export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; route?: number[]; lanes?: { ledger: number; cell: [number, number] }; active?: () => boolean; realLoop?: boolean; core?: CommitNatives } & TransferHooks = {}) {
-  // Collection fault controls still intercept the production collections in this realm.
-  const source = eventTargetSource({ Map, Set, WeakMap, WeakSet, ArrayBuffer, SharedArrayBuffer, DataView,
-    Uint8Array, Uint8ClampedArray, Int8Array, Uint16Array, Int16Array, Uint32Array, Int32Array,
-    Float32Array, Float64Array, BigInt64Array, BigUint64Array, TextEncoder, TextDecoder, Buffer, setImmediate,
-    queueMicrotask: (callback: () => void) => queueMicrotask(callback) });
+  const source = sourceWeb();
   const runtimeNative = { ...native, transferArrayBuffers: transferNative(options, options.core), transferSettled() { options.settled?.(); } };
   let codec: Codec | undefined;
   let pump: (() => void) | undefined;
@@ -159,7 +179,7 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.S
   Object.defineProperties(internal, Object.getOwnPropertyDescriptors(runtimeInternal));
   // The runtime's own I/O loop (net.js): its waiter set and the pumpIo the engine driver calls.
   const loop = options.realLoop ? sourceLoop(internal, modules) : undefined;
-  const runtime: PortsRuntime = factory("worker_threads", childOverlay, "ts", source.context)(internal);
+  const runtime: PortsRuntime = factory("worker_threads", childOverlay, "ts", { ...source.globals, URL })(internal);
   if (!codec || !pump) throw new Error("Missing codec or pump");
   /** One ordinary event-loop step of this runtime's waiter, housekeeping included. */
   const step = () => waiter?.step();

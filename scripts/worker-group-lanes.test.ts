@@ -81,6 +81,54 @@ function spawnPipes(pid: number, trace: Trace, direct: boolean, parentOpen: Retu
 }
 
 type Runtime = ReturnType<typeof sourcePorts>;
+
+const refRestoreCases: ["add" | "delete", "before" | "after"][] = [
+  ["add", "before"], ["add", "after"], ["delete", "before"], ["delete", "after"],
+];
+
+for (const [operation, when] of refRestoreCases) {
+  test(`listener refs recover through public transfer settlement after ${when} ${operation} failure`, () => {
+    const nativeFailure = new Error("native entry refusal"), refFailure = new Error("restore ref refusal");
+    let intercept = () => {};
+    const made = group({ beforeTransfer: () => { intercept(); throw nativeFailure; } });
+    const spawned = made.spawn(), extra = new made.root.MessageChannel();
+    const controller = new made.root.internal.web.AbortController();
+    extra.port2.addEventListener("message", () => {}, { signal: controller.signal });
+    const refs = made.root.internal.messagePortRefs;
+    const write: { state: object | null } = { state: null };
+    intercept = () => {
+      if (operation === "delete") controller.abort();
+      interruptRefWrite(refs, operation, when, refFailure, write);
+    };
+    const buffer = new ArrayBuffer(32);
+    expect(() => spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).toThrow(nativeFailure);
+    expect(() => made.root.receiveMessageOnPort(extra.port1)).toThrow(refFailure);
+    if (!write.state) throw new Error("restore did not attempt its physical ref write");
+    expect(refs.has(write.state)).toBe(operation === "add" && when === "after");
+    if (operation === "add") controller.abort();
+    else extra.port2.addEventListener("message", () => {});
+    made.root.step();
+    expect(extra.port2.hasRef()).toBe(operation === "delete");
+    expect(made.model.control.staged).toBe(0);
+    expect(buffer.byteLength).toBe(32);
+    expect(spawned.child.receiveMessageOnPort(spawned.child.parentPort)).toBeUndefined();
+    extra.port1.postMessage("still owned after rollback");
+    expect(made.root.receiveMessageOnPort(extra.port2)).toEqual({ message: "still owned after rollback" });
+    extra.port1.close(); extra.port2.close(); spawned.port.close(); spawned.child.parentPort.close();
+    expect(refs.size).toBe(0);
+  });
+}
+
+function interruptRefWrite(refs: Set<object>, operation: "add" | "delete", when: "before" | "after", failure: Error, write: { state: object | null }) {
+  const original = refs[operation];
+  Reflect.set(refs, operation, function (state: object) {
+    Reflect.set(refs, operation, original);
+    write.state = state;
+    if (when === "before") throw failure;
+    Reflect.apply(original, refs, [state]);
+    throw failure;
+  });
+}
 /** `realLoop` gives every guest the runtime's own I/O loop (net.js) in place of a bare waiter. */
 function group(options: { realLoop?: boolean; child?: TransferHooks } & TransferHooks = {}) {
   const model = createGroupLaneModel();
