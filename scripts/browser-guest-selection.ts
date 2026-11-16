@@ -244,6 +244,8 @@ const ownerInputs = {
   ],
   "tools-integrity": [
     "web/tests/browser-tools.ts",
+    "web/tests/tools-lifecycle.ts",
+    "web/tests/playground-navigation.ts",
     "web/tests/browser-type.ts",
     "web/tests/foreground.ts",
     "web/tests/playground-cleanup.ts",
