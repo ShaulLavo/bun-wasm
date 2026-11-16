@@ -13,7 +13,8 @@ function fixture() {
   const requests: Request[] = [];
   const response = Promise.withResolvers<Response>();
   const responses = [response];
-  const router = previewNavigations({ scope, fetch(request) {
+  const clients = new Map<string, { url: string }>();
+  const router = previewNavigations({ scope, clients: { async get(id) { return clients.get(id); } }, fetch(request) {
     if (requests.length) responses.push(Promise.withResolvers<Response>());
     requests.push(request);
     return responses[requests.length - 1]!.promise;
@@ -23,14 +24,23 @@ function fixture() {
     if (!(result instanceof Response)) throw new Error("Expected immediate loading redirect");
     const loading = result.headers.get("location");
     if (!loading) throw new Error("Missing loading URL");
+    clients.set(loading, { url: loading });
+    router.fetch(navigation(loading), "", loading);
+    router.fetch(request(loading + "/status", loading), loading);
     return loading;
   };
-  return { router, response, responses, requests, begin };
+  return { router, response, responses, requests, clients, begin };
 }
 async function status(router: ReturnType<typeof previewNavigations>, loading: string): Promise<Response> {
-  const response = await router.fetch(request(loading + "/status", loading), "loading-client");
+  const response = await router.fetch(request(loading + "/status", loading), loading);
   if (!response) throw new Error("Missing loading status response");
   return response;
+}
+async function until(accept: () => boolean | Promise<boolean>): Promise<void> {
+  while (!await accept()) await Bun.sleep(0);
+}
+async function ready(router: ReturnType<typeof previewNavigations>, loading: string): Promise<void> {
+  await until(async () => (await (await status(router, loading)).json()).ready === true);
 }
 
 test("loading navigation hands back the original status, headers and stream without another guest request", async () => {
@@ -40,7 +50,7 @@ test("loading navigation hands back the original status, headers and stream with
   const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode("guest body")); controller.close(); } });
   const original = new Response(body, { status: 451, statusText: "Unavailable For Legal Reasons", headers: { "x-guest": "preserved", "content-security-policy": "default-src 'none'", "content-type": "text/plain" } });
   response.resolve(original);
-  await response.promise;
+  await ready(router, loading);
   expect(await (await status(router, loading)).json()).toEqual({ ready: true });
   const delivered = await router.fetch(navigation(url, loading), "loading-client");
   expect(delivered).toBe(original);
@@ -65,18 +75,18 @@ test("same-URL navigations have separate loading identities and reject foreign s
   expect((await router.fetch(navigation(url, first), "first"))?.status).toBe(200);
   expect(await (await status(router, second)).json()).toEqual({ ready: false });
   responses[1]!.resolve(new Response("second response"));
-  await responses[1]!.promise;
+  await ready(router, second);
   expect(await (await status(router, second)).json()).toEqual({ ready: true });
-  await router.fetch(request(second + "/cancel/0", second, "POST"), "second");
+  await router.fetch(request(second + "/cancel/1", second, "POST"), second);
 });
 
 test("closing a loading page cancels a late body and releases its pending response", async () => {
   const { router, response, begin } = fixture();
   const loading = begin();
   let cancelled = false;
-  expect((await router.fetch(request(loading + "/cancel/0", loading, "POST"), "loader"))?.status).toBe(204);
+  expect((await router.fetch(request(loading + "/cancel/1", loading, "POST"), loading))?.status).toBe(204);
   response.resolve(new Response(new ReadableStream({ cancel() { cancelled = true; } })));
-  await response.promise;
+  await until(() => cancelled);
   expect(cancelled).toBe(true);
   expect((await status(router, loading)).status).toBe(410);
 });
@@ -86,8 +96,8 @@ test("closing a loaded waiting response cancels the stream", async () => {
   const loading = begin();
   let cancelled = false;
   response.resolve(new Response(new ReadableStream({ cancel() { cancelled = true; } })));
-  await response.promise;
-  await router.fetch(request(loading + "/cancel/0", loading, "POST"), "loader");
+  await ready(router, loading);
+  await router.fetch(request(loading + "/cancel/1", loading, "POST"), loading);
   expect(cancelled).toBe(true);
 });
 
@@ -115,11 +125,35 @@ test("subresources, other origins and non-GET navigations keep their existing ro
 test("a replaced loading document cannot cancel its replacement's request", async () => {
   const { router, response, begin } = fixture();
   const loading = begin();
-  await router.fetch(navigation(loading), "first-document");
-  await router.fetch(navigation(loading), "replacement-document");
-  await router.fetch(request(loading + "/cancel/1", loading, "POST"), "first-document");
+  await router.fetch(navigation(loading), "", loading);
+  await router.fetch(request(loading + "/cancel/1", loading, "POST"), loading);
   expect(await (await status(router, loading)).json()).toEqual({ ready: false });
   response.resolve(new Response("Reloaded preview"));
   await response.promise;
   expect(await (await router.fetch(navigation(url, loading), "replacement-document"))?.text()).toBe("Reloaded preview");
+});
+
+test("only the bound loading client can poll or cancel, and a closed client cannot deliver a saved body", async () => {
+  const { router, response, clients, begin } = fixture();
+  const loading = begin();
+  expect((await router.fetch(request(loading + "/status", loading), "foreign-client"))?.status).toBe(403);
+  expect((await router.fetch(request(loading + "/cancel/1", loading, "POST"), "foreign-client"))?.status).toBe(403);
+  response.resolve(new Response("owned body"));
+  await response.promise;
+  clients.delete(loading);
+  expect((await router.fetch(navigation(url, loading), "", "new-document"))?.status).toBe(403);
+  expect((await status(router, loading)).status).toBe(410);
+});
+
+test("simultaneous consumers cannot both own the saved response body", async () => {
+  const { router, response, begin } = fixture();
+  const loading = begin();
+  response.resolve(new Response("one owner"));
+  await ready(router, loading);
+  const results = await Promise.all([
+    router.fetch(navigation(url, loading), "", "first-result"),
+    router.fetch(navigation(url, loading), "", "second-result"),
+  ]);
+  expect(results.map(result => result?.status).sort()).toEqual([200, 403]);
+  expect(await results.find(result => result?.status === 200)?.text()).toBe("one owner");
 });

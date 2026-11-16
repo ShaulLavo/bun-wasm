@@ -7,13 +7,17 @@ WebKit abandons a service-worker fetch that has not produced a response head
 after 70 seconds. A guest server can legitimately take longer to compile its
 first route. Increasing a test deadline cannot keep that navigation alive.
 
-For a mounted GET navigation, Bun starts the original guest request and immediately
-redirects to a private loading document in the same service-worker scope. This
-document polls short status requests while the guest prepares its real response.
+For a mounted GET navigation, Bun immediately redirects to a private loading
+document in the same service-worker scope. Its first authenticated poll starts
+the original guest request. It polls short status requests while the guest
+prepares its real response.
 Once the head arrives, it replaces itself with the original application URL.
 The loading document's browser-supplied same-origin referrer identifies the saved
 response. Each navigation has a separate random identity, including simultaneous
 requests for the same application URL.
+The worker binds polling and cancellation to that document's browser client ID,
+and checks its live URL before retaining or delivering the response. Closing or
+navigating away releases the response, including a body arriving after closure.
 Fragment identifiers survive the temporary redirect. Reloading the loading page
 retains its request, while cancellation from its replaced document is ignored.
 

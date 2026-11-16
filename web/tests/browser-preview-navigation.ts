@@ -70,6 +70,22 @@ try {
       await page.locator("iframe").evaluate(element => element.remove());
       console.log(JSON.stringify({ browser: type.name(), status, headers: "preserved", url: "original", guestRequests: 1, waitMs: Date.now() - started }));
     }
+    const abandoned = await page.evaluate(() => Reflect.get(globalThis, "navigationFixture").url("/abandoned"));
+    await page.evaluate(preview => { const iframe = document.createElement("iframe"); iframe.src = preview; document.body.append(iframe); }, abandoned);
+    await page.frameLocator("iframe").locator('[role="status"]').waitFor();
+    const frame = page.frames().find(frame => frame !== page.mainFrame());
+    assert(frame);
+    const loadingURL = frame.url().split("#")[0];
+    const cancellation = context.waitForEvent("response", reply => reply.url().startsWith(loadingURL + "/cancel/") && reply.status() === 204);
+    await frame.evaluate(() => location.replace("about:blank"));
+    await cancellation;
+    const probe = await context.newPage();
+    assert.equal((await probe.goto(loadingURL + "/status"))?.status(), 410);
+    await probe.close();
+    await page.evaluate(() => Reflect.get(globalThis, "navigationFixture").answer("/abandoned", 200, "Closed preview body"));
+    assert.equal(await page.evaluate(() => Reflect.get(globalThis, "navigationFixture").count("/abandoned")), 1);
+    await page.locator("iframe").evaluate(element => element.remove());
+    console.log(JSON.stringify({ browser: type.name(), navigationAway: "pending response released", guestRequests: 1 }));
     await context.close();
     context = undefined;
   }

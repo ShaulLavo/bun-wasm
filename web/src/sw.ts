@@ -36,7 +36,7 @@ const previews = createPreviewServiceWorker({
   serverErrorResponse: message => text(502, `bun.wasm server error: ${message}\n`),
   unusableResponse: (status, error) => text(502, `bun.wasm server sent an unusable response (status ${status}): ${String(error)}\n`),
 });
-const navigations = previewNavigations({ scope: sw.registration.scope, fetch: (request, clientId) => previews.fetch(request, clientId) ?? fetch(request) });
+const navigations = previewNavigations({ scope: sw.registration.scope, clients: sw.clients, fetch: (request, clientId) => previews.fetch(request, clientId) ?? fetch(request) });
 
 sw.addEventListener("install", () => void sw.skipWaiting());
 sw.addEventListener("activate", event => event.waitUntil(sw.clients.claim()));
@@ -51,7 +51,7 @@ sw.addEventListener("fetch", event => {
     event.respondWith(new Response(__PREVIEW_SOCKET_SCRIPT__, { headers: { "content-type": "text/javascript" } }));
     return;
   }
-  const response = navigations.fetch(event.request, event.clientId) ?? previews.fetch(event.request, event.clientId);
+  const response = navigations.fetch(event.request, event.clientId, event.resultingClientId) ?? previews.fetch(event.request, event.clientId);
   if (response) event.respondWith(response);
 });
 
