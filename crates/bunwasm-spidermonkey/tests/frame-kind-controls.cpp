@@ -13,8 +13,8 @@ class ConcreteStackFrame<FrameKindOffline> final : public BaseStackFrame {
   }
   StackFrame parent() const override { return StackFrame(); }
   uint32_t line() const override { return 1; }
-  JS::TaggedColumnNumberOneOrigin column() const override { return JS::TaggedColumnNumberOneOrigin(14); }
-  AtomOrTwoByteChars source() const override { return u"/offline-kind.ts"; }
+  JS::TaggedColumnNumberOneOrigin column() const override { return JS::TaggedColumnNumberOneOrigin::fromRaw(14); }
+  AtomOrTwoByteChars source() const override { return static_cast<const char16_t*>(u"/offline-kind.ts"); }
   uint32_t sourceId() const override { return 0; }
   AtomOrTwoByteChars functionDisplayName() const override { return static_cast<JSAtom*>(nullptr); }
   bool isSystem() const override { return false; }
