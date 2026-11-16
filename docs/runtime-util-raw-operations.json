@@ -2,139 +2,109 @@
   "scope": "parseArgs implementation only; erased views describe attempted original JS operations, not validated source capabilities",
   "operations": [
     {
-      "line": 1196,
+      "line": 1251,
       "expression": "obj",
       "view": "Record<string, unknown>",
       "classification": "preexisting raw property read returning unknown"
     },
     {
-      "line": 1200,
+      "line": 1255,
       "expression": "longOption",
       "view": "PropertyKey",
       "classification": "attempted ToPropertyKey at original own-property/index operation"
     },
     {
-      "line": 1200,
+      "line": 1255,
       "expression": "longOption",
       "view": "PropertyKey",
       "classification": "attempted ToPropertyKey at original own-property/index operation"
     },
     {
-      "line": 1209,
+      "line": 1264,
       "expression": "value",
       "view": "{ length: number }",
       "classification": "attempted original relational comparison or subtraction on raw length, including coercion"
     },
     {
-      "line": 1209,
+      "line": 1264,
       "expression": "value",
       "view": "{ [index: number]: unknown }",
       "classification": "attempted raw indexed read returning unknown"
     },
     {
-      "line": 1210,
+      "line": 1265,
       "expression": "arg",
       "view": "{ length: unknown }",
       "classification": "original strict length comparison, no result narrowing"
     },
     {
-      "line": 1210,
+      "line": 1265,
       "expression": "arg",
       "view": "{ [index: number]: unknown }",
       "classification": "attempted raw indexed read returning unknown"
     },
     {
-      "line": 1210,
+      "line": 1265,
       "expression": "arg",
       "view": "{ [index: number]: unknown }",
       "classification": "attempted raw indexed read returning unknown"
     },
     {
-      "line": 1211,
+      "line": 1266,
       "expression": "arg",
       "view": "{ length: number }",
       "classification": "attempted original relational comparison or subtraction on raw length, including coercion"
     },
     {
-      "line": 1211,
+      "line": 1266,
       "expression": "arg",
       "view": "{ startsWith(prefix: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1211,
+      "line": 1266,
       "expression": "arg",
       "view": "{ includes(value: unknown, start: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1212,
+      "line": 1267,
       "expression": "arg",
       "view": "{ length: number }",
       "classification": "attempted original relational comparison or subtraction on raw length, including coercion"
     },
     {
-      "line": 1212,
+      "line": 1267,
       "expression": "arg",
       "view": "{ startsWith(prefix: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1212,
+      "line": 1267,
       "expression": "arg",
       "view": "{ includes(value: unknown, start: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1215,
+      "line": 1270,
       "expression": "arg",
       "view": "{ length: number }",
       "classification": "attempted original relational comparison or subtraction on raw length, including coercion"
     },
     {
-      "line": 1215,
+      "line": 1270,
       "expression": "arg",
       "view": "{ [index: number]: unknown }",
       "classification": "attempted raw indexed read returning unknown"
     },
     {
-      "line": 1215,
+      "line": 1270,
       "expression": "arg",
       "view": "{ [index: number]: unknown }",
       "classification": "attempted raw indexed read returning unknown"
     },
     {
-      "line": 1219,
-      "expression": "arg",
-      "view": "{ [index: number]: unknown }",
-      "classification": "attempted raw indexed read returning unknown"
-    },
-    {
-      "line": 1224,
-      "expression": "arg",
-      "view": "{ length: number }",
-      "classification": "attempted original relational comparison or subtraction on raw length, including coercion"
-    },
-    {
-      "line": 1225,
-      "expression": "arg",
-      "view": "{ [index: number]: unknown }",
-      "classification": "attempted raw indexed read returning unknown"
-    },
-    {
-      "line": 1227,
-      "expression": "arg",
-      "view": "{ length: number }",
-      "classification": "attempted original relational comparison or subtraction on raw length, including coercion"
-    },
-    {
-      "line": 1232,
-      "expression": "arg",
-      "view": "{ slice(start: unknown, end?: unknown): unknown }",
-      "classification": "attempted raw method call with original receiver and unknown result"
-    },
-    {
-      "line": 1263,
+      "line": 1274,
       "expression": "arg",
       "view": "{ [index: number]: unknown }",
       "classification": "attempted raw indexed read returning unknown"
@@ -142,8 +112,8 @@
     {
       "line": 1279,
       "expression": "arg",
-      "view": "{ [index: number]: unknown }",
-      "classification": "attempted raw indexed read returning unknown"
+      "view": "{ length: number }",
+      "classification": "attempted original relational comparison or subtraction on raw length, including coercion"
     },
     {
       "line": 1280,
@@ -152,133 +122,163 @@
       "classification": "attempted raw indexed read returning unknown"
     },
     {
-      "line": 1280,
+      "line": 1282,
+      "expression": "arg",
+      "view": "{ length: number }",
+      "classification": "attempted original relational comparison or subtraction on raw length, including coercion"
+    },
+    {
+      "line": 1287,
       "expression": "arg",
       "view": "{ slice(start: unknown, end?: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1284,
+      "line": 1318,
+      "expression": "arg",
+      "view": "{ [index: number]: unknown }",
+      "classification": "attempted raw indexed read returning unknown"
+    },
+    {
+      "line": 1334,
+      "expression": "arg",
+      "view": "{ [index: number]: unknown }",
+      "classification": "attempted raw indexed read returning unknown"
+    },
+    {
+      "line": 1335,
+      "expression": "arg",
+      "view": "{ [index: number]: unknown }",
+      "classification": "attempted raw indexed read returning unknown"
+    },
+    {
+      "line": 1335,
       "expression": "arg",
       "view": "{ slice(start: unknown, end?: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1292,
+      "line": 1339,
+      "expression": "arg",
+      "view": "{ slice(start: unknown, end?: unknown): unknown }",
+      "classification": "attempted raw method call with original receiver and unknown result"
+    },
+    {
+      "line": 1347,
       "expression": "arg",
       "view": "{ indexOf(value: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1293,
+      "line": 1348,
       "expression": "arg",
       "view": "{ slice(start: unknown, end?: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1294,
+      "line": 1349,
       "expression": "arg",
       "view": "{ slice(start: unknown, end?: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1294,
+      "line": 1349,
       "expression": "equalIndex",
       "view": "number",
       "classification": "attempted original JS addition with unknown external indexOf result, including string concatenation"
     },
     {
-      "line": 1304,
+      "line": 1359,
       "expression": "token.rawName",
       "view": "{ startsWith(prefix: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1322,
+      "line": 1377,
       "expression": "name",
       "view": "PropertyKey",
       "classification": "attempted ToPropertyKey at original own-property/index operation"
     },
     {
-      "line": 1323,
+      "line": 1378,
       "expression": "name",
       "view": "{ startsWith(prefix: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1326,
+      "line": 1381,
       "expression": "name",
       "view": "{ slice(start: unknown, end?: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1346,
+      "line": 1401,
       "expression": "name",
       "view": "{ startsWith(prefix: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1346,
+      "line": 1401,
       "expression": "name",
       "view": "PropertyKey",
       "classification": "attempted ToPropertyKey at original own-property/index operation"
     },
     {
-      "line": 1347,
+      "line": 1402,
       "expression": "name",
       "view": "{ slice(start: unknown, end?: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1351,
+      "line": 1406,
       "expression": "name",
       "view": "PropertyKey",
       "classification": "attempted ToPropertyKey at original own-property/index operation"
     },
     {
-      "line": 1354,
+      "line": 1409,
       "expression": "name",
       "view": "PropertyKey",
       "classification": "attempted ToPropertyKey at original own-property/index operation"
     },
     {
-      "line": 1354,
+      "line": 1409,
       "expression": "name",
       "view": "PropertyKey",
       "classification": "attempted ToPropertyKey at original own-property/index operation"
     },
     {
-      "line": 1355,
+      "line": 1410,
       "expression": "values[name as PropertyKey]",
       "view": "{ push(value: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1355,
+      "line": 1410,
       "expression": "name",
       "view": "PropertyKey",
       "classification": "attempted ToPropertyKey at original own-property/index operation"
     },
     {
-      "line": 1417,
+      "line": 1472,
       "expression": "token.name",
       "view": "{ startsWith(prefix: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1417,
+      "line": 1472,
       "expression": "token.name",
       "view": "PropertyKey",
       "classification": "attempted ToPropertyKey at original own-property/index operation"
     },
     {
-      "line": 1418,
+      "line": 1473,
       "expression": "token.name",
       "view": "{ slice(start: unknown): unknown }",
       "classification": "attempted raw method call with original receiver and unknown result"
     },
     {
-      "line": 1429,
+      "line": 1484,
       "expression": "parseConfig",
       "view": "{ options: Record<PropertyKey, unknown>; allowNegative: boolean; allowPositionals: boolean }",
       "classification": "preexisting internal snapshot of locals proven by original argsCheck calls"

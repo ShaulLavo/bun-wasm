@@ -26,7 +26,7 @@ declare namespace BunWasm {
     parseEnv(content: string): Record<string, string>;
     parseArgs(config?: unknown): ParseArgsResult;
     bunDeepEquals(a: unknown, b: unknown, strict?: boolean): boolean;
-    expectEquals(a: unknown, b: unknown, strict: boolean, asymmetric: AsymmetricComparison): EqualityResult;
+    expectEquals(a: unknown, b: unknown, strict: boolean, asymmetric: AsymmetricComparison, isAsymmetric: (value: unknown) => boolean): EqualityResult;
     deprecate<Fn extends Function>(fn: Fn, msg: string, code?: string): Fn;
     isDeepStrictEqual(a: unknown, b: unknown): boolean;
     types: { isRegExp(value: unknown): value is RegExp; isNativeError(value: unknown): value is Error };
@@ -60,6 +60,7 @@ declare namespace BunWasm {
   type AsymmetricComparison = (received: unknown, expected: unknown) => EqualityResult | undefined;
   interface ExpectComparison {
     asymmetric: AsymmetricComparison;
+    isAsymmetric: (value: unknown) => boolean;
     memo?: EqualityMemo;
   }
   interface ComparisonError extends Error { errors?: unknown }

@@ -83,7 +83,8 @@
   }
 
   function throwOutcome(ctx: Context, received: unknown): Outcome | Promise<Outcome> {
-    if (ctx.promise) return { threw: ctx.promise === "rejects", value: received };
+    if (ctx.promise === "rejects") return { threw: true, value: received };
+    if (ctx.promise === "resolves" && typeof received !== "function") return { threw: received instanceof Error, value: received };
     if (typeof received !== "function") return { invalid: true };
     let result: unknown;
     try {
