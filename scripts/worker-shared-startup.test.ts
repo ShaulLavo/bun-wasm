@@ -41,6 +41,20 @@ function start(graph: Parameters<typeof startupRuntime>[0]["graph"], service?: P
   return value;
 }
 
+test("actual startup bootstrap loads the production immediate queue for scheduled callbacks", () => {
+  const sender = sourcePorts();
+  cleanup.add(() => sender.__fixtureShutdown());
+  const initial = initialGraph(sender, null);
+  initial.commit();
+  const receiver = start(initial.graph);
+  const seen: string[] = [];
+  receiver.internal.realTimers.setImmediate(() => seen.push("queued"));
+  expect(seen).toEqual([]);
+  receiver.internal.runTimers();
+  expect(seen).toEqual(["queued"]);
+  expect(receiver.failures).toEqual([]);
+});
+
 test("installed service does not grant shared permission to direct codecs, clones, errors or broadcast", async () => {
   const { client } = setup(), sender = client(), receiver = client();
   const runtime = sourcePorts({ sharedObjects: receiver.service });

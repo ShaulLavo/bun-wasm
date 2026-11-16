@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 import { runInContext } from "node:vm";
 import { eventTargetSource } from "./event-target-source";
+import { bootstrapTimers } from "./fixtures/bootstrap-timer-runtime";
 
 /** Real factories and canonical tables; only private staging is exposed to fault controls. */
 export function eventTargetPortSource() {
   const source = eventTargetSource({ TextDecoder, TextEncoder, setImmediate });
+  const clock = bootstrapTimers();
+  Object.assign(source.context, { clock: clock.runtime });
   const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
   const transpiler = new Bun.Transpiler({ loader: "ts" });
   for (const name of ["worker_codec", "worker_threads", "web_worker"]) {
@@ -13,10 +16,10 @@ export function eventTargetPortSource() {
     runInContext(transpiler.transformSync(`globalThis.${name}Factory = ${input}`), source.context);
   }
   runInContext(`
-    const queued = [], waiters = [];
+    const waiters = [];
     const processFixture = { env: {}, execArgv: [], cwd: () => '/' };
-    internal.realTimers = { setImmediate(callback) { queued.push(callback); return queued.length; } };
-    internal.messagePortRefs = new Set();
+    internal.realTimers = clock.realTimers;
+    internal.messagePortRefs = clock.messagePortRefs;
     internal.addIoWaiter = value => { waiters.push(value); return value; };
     internal.initImportMeta = () => {};
     internal.runMain = () => {};
@@ -31,9 +34,10 @@ export function eventTargetPortSource() {
       throw new Error('Unexpected module ' + name);
     };
     const ports = worker_threadsFactory(internal);
+    clock.workerPump = () => internal.workerPump();
     const worker = web_workerFactory(internal);
     const assert = (value, message = 'source assertion failed') => { if (!value) throw new Error(message); };
-    const flush = () => { while (queued.length) queued.shift()(); };
+    const flush = () => { while (clock.loopState().immediates) clock.runTimers(); };
     const cleanup = () => { ports.__fixtureShutdown(); flush(); assert(internal.messagePortRefs.size === 0, 'leaked ref'); };
   `, source.context);
   return source;

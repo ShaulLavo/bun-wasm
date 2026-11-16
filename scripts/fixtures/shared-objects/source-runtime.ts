@@ -3,6 +3,7 @@ import { inspect } from "node:util";
 import { runInThisContext } from "node:vm";
 import type { SharedObjects } from "../../../web/src/shared-objects/protocol";
 import type { Channel, Codec, CodecHooks, Graph } from "./runtime-types";
+import type { ImmediateQueue } from "../../../crates/bunwasm-runtime/src/js/immediate_queue-types";
 
 export interface SourcePort extends EventTarget {
   on(event: string, listener: (value: unknown) => void): void;
@@ -152,6 +153,42 @@ function transferNative(hooks: TransferHooks, core?: CommitNatives) {
     core.laneCommitStaged(slot, generation, side, high, low);
   };
 }
+type SourceImmediate = { callback: () => void; active: boolean };
+function dispatchImmediate(queue: ImmediateQueue<SourceImmediate>, active?: () => boolean) {
+  for (let immediate = queue.shift(); immediate; immediate = queue.shift()) {
+    if (!immediate.active) continue;
+    if (active?.() !== false) immediate.callback();
+    return;
+  }
+}
+function enqueueImmediate(queue: ImmediateQueue<SourceImmediate>, state: { pending: number }, wake: () => void, callback: () => void, selected: boolean) {
+  const immediate = { callback, active: true };
+  try {
+    if (selected) queue.pushFront(immediate);
+    else queue.push(immediate);
+    state.pending++;
+    setImmediate(wake);
+    return immediate;
+  } catch (error) {
+    if (selected) immediate.active = false;
+    throw error;
+  }
+}
+function sourceImmediateClock(active?: () => boolean) {
+  const Constructor = factory("immediate_queue")();
+  const queue: ImmediateQueue<SourceImmediate> = new Constructor();
+  const state = { pending: 0 };
+  const wake = () => { state.pending--; dispatchImmediate(queue, active); };
+  return {
+    Constructor,
+    timers: {
+      setImmediate(callback: () => void) { return enqueueImmediate(queue, state, wake, callback, false); },
+      queueSelectedTask(callback: () => void) { return enqueueImmediate(queue, state, wake, callback, true); },
+    },
+    pending: () => state.pending,
+    queued: () => queue.length,
+  };
+}
 export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; route?: number[]; lanes?: { ledger: number; cell: [number, number] }; active?: () => boolean; realLoop?: boolean; core?: CommitNatives } & TransferHooks = {}) {
   const source = sourceWeb();
   const runtimeNative = { ...native, transferArrayBuffers: transferNative(options, options.core), transferSettled() { options.settled?.(); } };
@@ -167,9 +204,11 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.S
     ["worker_codec", { create(hooks: CodecHooks) { codec = factory("worker_codec")({ native: runtimeNative, sharedObjects: options.sharedObjects }).create(hooks); return codec; } }],
   ]);
   const lifecycle: Pick<BunWasm.Internal, "workerStartup" | "workerErrorData" | "clonePorts" | "workerExit"> = {};
+  const clock = sourceImmediateClock(options.active);
+  modules.set("immediate_queue", clock.Constructor);
   const runtimeInternal = {
     native: runtimeNative,
-    realTimers: { setImmediate(callback: () => void) { return setImmediate(() => { if (options.active?.() !== false) callback(); }); } }, messagePortRefs: new Set<object>(), sharedObjects: options.sharedObjects,
+    realTimers: clock.timers, messagePortRefs: new Set<object>(), sharedObjects: options.sharedObjects,
     require(name: string) { if (!modules.has(name)) throw new Error(`Unexpected module ${name}`); return modules.get(name); },
     builtin: () => ({ createRequire: () => () => { throw new Error("No fixture preloads"); } }),
     addIoWaiter(value: BunWasm.IoWaiter) { waiter = value; return value; },
@@ -185,5 +224,8 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.S
   const step = () => waiter?.step();
   /** One pass of the real I/O loop over every registered waiter, as the driver runs it. */
   const pumpIo = () => { if (!loop) throw new Error("This runtime was made without the real loop"); return loop.pumpIo(); };
-  return Object.assign(runtime, { codec, pump, step, pumpIo, internal });
+  return Object.assign(runtime, { codec, pump, step, pumpIo, internal,
+    pendingImmediateCallbacks: clock.pending,
+    queuedImmediateTasks: clock.queued,
+  });
 }
