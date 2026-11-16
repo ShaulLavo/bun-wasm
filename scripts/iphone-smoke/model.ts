@@ -2,13 +2,7 @@ import { boxId, type Box } from "../goals-matrix/catalog";
 import type { Attempt, PhaseResult } from "../goals-matrix/model";
 import { object, observed } from "../goals-matrix/evidence";
 import { deviceUDID } from "./options";
-
-export const smokeCases: readonly Box[] = [
-  { framework: "vite-react", browser: "iphone-safari", engine: "browser" },
-  { framework: "hono", browser: "iphone-safari", engine: "browser" },
-  { framework: "vite-react", browser: "iphone-safari", engine: "quickjs" },
-];
-export const smokePhases = ["startup", "install", "dev", "render", "click", "cleanup"] as const;
+import { smokePhases } from "./cases";
 type Failure = { phase: string; error: string };
 type SmokeSource = { commit: string; dirty: boolean | null; assets: unknown };
 export interface SmokeCase {

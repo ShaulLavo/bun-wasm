@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import "../iphone-smoke-watch";
-import { chmod, mkdir, mkdtemp, readFile, rm, watch, writeFile } from "node:fs/promises";
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, watch, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { instructions } from "./dispatch";
@@ -451,6 +451,26 @@ async function cli(path: string, args: string[], env: Record<string, string> = {
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   return { code, stdout, stderr };
 }
+
+test("watcher status runs from a builtin-only source fixture without browser packages", async () => {
+  const root = await directory(), reports = join(root, "reports");
+  await mkdir(reports);
+  await save(reports, fresh());
+  const original = await readFile(join(reports, "state.json"), "utf8");
+  const project = resolve(import.meta.dir, "../..");
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "cold-iphone-watcher", private: true, type: "module" }));
+  await cp(join(project, "scripts/iphone-smoke-watch"), join(root, "scripts/iphone-smoke-watch"), { recursive: true, filter: source => !source.endsWith(".test.ts") });
+  for (const name of ["scripts/iphone-smoke-watch.ts", "scripts/iphone-smoke/cases.ts", "scripts/goals-matrix/catalog.ts", "scripts/goals-matrix/evidence.ts"]) {
+    await mkdir(dirname(join(root, name)), { recursive: true });
+    await copyFile(join(project, name), join(root, name));
+  }
+  const child = Bun.spawn([process.execPath, join(root, "scripts/iphone-smoke-watch.ts"), "status", `--report-dir=${reports}`],
+    { cwd: root, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code, stderr).toBe(0);
+  expect(stdout).toContain("# iPhone smoke automation");
+  expect(await readFile(join(reports, "state.json"), "utf8")).toBe(original);
+}, 60_000);
 
 test("CLI fake GitHub/T3 dispatch, claim, red complete and cleanup-confirmed retry", async () => {
   const path = await directory(), bin = join(path, "bin");

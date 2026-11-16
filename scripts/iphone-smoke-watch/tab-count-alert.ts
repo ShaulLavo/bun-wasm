@@ -1,5 +1,5 @@
 import { boxId } from "../goals-matrix/catalog";
-import { smokeCases, smokePhases } from "../iphone-smoke/model";
+import { smokeCases, smokePhases } from "../iphone-smoke/cases";
 import { object } from "../goals-matrix/evidence";
 
 function records(value: unknown): Record<string, unknown>[] {
