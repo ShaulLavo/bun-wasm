@@ -1,4 +1,5 @@
 {
   "owner": "browser-guest",
-  "path": "scripts/install-download-browser.test.ts"
+  "path": "scripts/install-download-browser.test.ts",
+  "inputs": ["web/tests/playground-navigation.ts"]
 }
