@@ -17,7 +17,9 @@ interface Threads {
   MessageChannel: new() => { port1: SourcePort; port2: SourcePort };
 }
 interface StartupInternal extends Pick<BunWasm.Internal, "sharedObjects" | "workerStartup" | "workerErrorData" | "clonePorts"> {
+  realTimers: import("../../../crates/bunwasm-runtime/src/js/immediate_queue-types").ImmediateTimers;
   runMain(path: string): void;
+  runTimers(): number;
   require(name: "worker_threads"): Threads;
 }
 const runtimeRoot = new URL("../../../crates/bunwasm-runtime/src/js/", import.meta.url);
@@ -61,7 +63,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     loadPolyfill(name: string) {
       if (name in modules) return () => modules[name];
       if (empty.has(name)) return () => ({});
-      if (name !== "stack_capability" && name !== "worker_threads" && name !== "worker_codec" && name !== "module_compile" && name !== "source_prepare" && name !== "import_requests") throw new Error(`Unexpected startup module ${name}`);
+      if (name !== "stack_capability" && name !== "immediate_queue" && name !== "worker_threads" && name !== "worker_codec" && name !== "module_compile" && name !== "source_prepare" && name !== "import_requests") throw new Error(`Unexpected startup module ${name}`);
       const source = readFileSync(new URL(`${name}.ts`, runtimeRoot), "utf8");
       return runInContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), context);
     },

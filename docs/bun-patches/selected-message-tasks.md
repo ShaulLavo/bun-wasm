@@ -30,3 +30,9 @@ Separate controls execute the real bootstrap timer source with a deterministic
 clock for quota, cancellation, publication/wake failure, fairness, context and
 receiver behavior. The full unchanged web-worker and closure fixtures cover the
 actual worker and async-once paths on locally built guests.
+
+The Bun.listen and I/O resource context harnesses evaluate the production
+TypeScript queue factory in their VM realm before running bootstrap timers.
+The startup harness admits the same factory through its existing source loader.
+These are test-registry dependencies; they add no scheduler fallback or substitute
+queue implementation.

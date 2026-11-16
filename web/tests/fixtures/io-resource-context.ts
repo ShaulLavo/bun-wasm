@@ -46,6 +46,8 @@ function hostContext(native: boolean): Context {
     EventEmitter, Buffer, nodePath, nodeUtil, Request, Response, Headers, ReadableStream, DOMException, structuredClone, WeakRef,
     provider: native ? createNodeAsyncContext() : undefined,
   });
+  const queueSource = readFileSync(new URL("immediate_queue.ts", runtime), "utf8");
+  context.immediateQueueFactory = runInContext(stripTypeScriptTypes(queueSource), context);
   runInContext(`${engineHostSource()}
     const host = new EngineHost({ instance: { exports: {} }, asyncContext: provider }, () => {});
     host.pendingAsync = 1; host.schedule = () => {}; host.uncaught = error => { throw error; };
@@ -74,6 +76,7 @@ function hostContext(native: boolean): Context {
     });
     host.native = native;
     const modules = {
+      immediate_queue: immediateQueueFactory(),
       events: EventEmitter, buffer: { Buffer }, path: nodePath,
       process: Object.assign(new EventEmitter(), { env: {}, execPath: "bun", execArgv: [], cwd: () => "/work" }),
       package_scripts: { spawnArguments: argv => argv }, websocket: { clientClass: () => undefined },
