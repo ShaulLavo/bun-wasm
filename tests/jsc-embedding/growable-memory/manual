@@ -1,1 +1,3 @@
-JSC WASI rejects resizable backing stores with a catchable error. Native Bun supports them.
+JSC WASI supports resizable ArrayBuffers through a malloc backing but rejects growable
+SharedArrayBuffers with a catchable error. Native Bun 1.4.4 prints the first line, then fails
+the SharedArrayBuffer assertion because it creates growable SharedArrayBuffers.
