@@ -24,7 +24,11 @@ After that contract is available, add one data-native `processIdentity` returnin
 
 ## Reproduction and remaining gates
 
-`reproduce.ts` beside the external result report runs two guest subprocesses and one worker thread, prints their identities, then asserts handle equality, distinct siblings, parent identity and shared thread identity. Native Bun is the control. The maintained Browser guest producer is run from the recorded base before changing runtime code.
+`.internal/reproducers/process-identity-199.ts` runs two guest subprocesses and one worker thread, prints their identities, then asserts handle equality, distinct siblings, parent identity and shared thread identity. Native Bun passes as the control. The maintained Browser guest producer ran from the recorded base before changing runtime code, through the PC heavy runner with four compiler jobs.
+
+The actual Browser-engine guest on the Node host reports root `1/0`, child handles `2` and `3`, both child identities `1/0`, and thread identity `1/0`. It exits 1 at the child-handle assertion. The thread's public equality is the same constant-value bug, not acceptance of shared provider identity. This is actual guest execution; it is not a browser-host or native-launcher acceptance result.
+
+A separate probe of the installed Waffle supervisor reserves root `1/0`, siblings `2/1` and `3/1`, and a worker record `4/1`. The first child's creation-parent ID stays `1` after root exit. That proves the current record behavior, without claiming it is the provider owner's final thread identity contract.
 
 The external report is `/work/reports/wave-20261116/engines/process-identity-199/RESULT.md`. It records actual commands, results and cleanup. No compiled guest result is inferred from source tests, tiny Wasm modules or a native Bun control.
 
