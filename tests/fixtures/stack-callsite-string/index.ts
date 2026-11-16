@@ -17,7 +17,10 @@ try {
     const text = site.toString();
     assert.equal(String(site), text);
     assert(text.includes("namedStringControl"));
-    assert(text.includes("/index.ts:"));
+    const file = site.getScriptNameOrSourceURL() || site.getFileName();
+    assert(file);
+    assert(text.includes(file), text);
+    if (process.env.BUNWASM_TEST_HOST === "native") assert.equal(file, "/index.ts");
     assert.deepEqual(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(site), "toString"), descriptor);
     return { text };
   };
