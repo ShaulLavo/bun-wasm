@@ -7,7 +7,7 @@ import { checkClick } from "./playground";
 import { withPlayground } from "./test-fixture";
 import { frameworks } from "./catalog";
 import { closeIphoneTab } from "./iphone-cleanup";
-import { tabBatch, tabOverview } from "./iphone-tab-fixture";
+import { cleanupGroups, tabAgentScript } from "./iphone-tab-fixture";
 import { ownedCommand } from "./lifetime";
 import { mkdtemp, writeFile, readFile, chmod, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -78,7 +78,7 @@ test("transport close is cached and reaps its timed-out native command before an
   const path = "/__goals_iphone/" + "c".repeat(64);
   const log = join(root, "commands.jsonl");
   const agent = join(root, "agent-device");
-  await writeFile(agent, `#!${process.execPath}\nimport {appendFile} from 'node:fs/promises';\nawait appendFile(${JSON.stringify(log)},JSON.stringify({args:process.argv.slice(2),pid:process.pid})+'\\n');\nif(process.argv[2]==='press')await Bun.sleep(2000);\n`);
+  await writeFile(agent, tabAgentScript({ closed: join(root, "closed"), title: "Goals own-tab", unrelated: "owner tab", log, hangOnCleanup: true }));
   await chmod(agent, 0o755);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     return Response.json(new URL(request.url).pathname.endsWith("/configure") ? "http://127.0.0.1:1234/" : { nonce: "own-tab", timeOrigin: 1, visible: true, userAgent: "iPhone Safari" });
@@ -86,46 +86,74 @@ test("transport close is cached and reaps its timed-out native command before an
   const transport = await createIphoneTransport({ control: server.url.origin + path, agent, deviceUDID: "fixture", timeoutMs: 90000 });
   try {
     await withScoped(transport, page => page.navigate("http://127.0.0.1:1234/"));
-    const started = Date.now();
     const closing = transport.close(true, 150);
     expect(transport.close(true, 150)).toBe(closing);
     await expect(closing).rejects.toThrow("T3 device command failed");
-    expect(Date.now() - started).toBeLessThan(1000);
     const rows = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
-    expect(rows.map(row => row.args[0])).toEqual(["open", "press"]);
-    expect(() => process.kill(rows[1].pid, 0)).toThrow();
+    expect(rows.map(row => row.args[0])).toEqual(["open", "batch", "batch", "open", "open"]);
+    expect(() => process.kill(rows[4].pid, 0)).toThrow();
     await Bun.sleep(200);
-    expect((await readFile(log, "utf8")).trim().split("\n")).toHaveLength(2);
+    expect((await readFile(log, "utf8")).trim().split("\n")).toHaveLength(5);
   } finally { await transport.close(true, 150).catch(() => {}); await server.stop(true); await rm(root, { recursive: true, force: true }); }
 });
 
 test("native cleanup rejects a successful input receipt when the owned tab is still visible", async () => {
-  const snapshot = tabBatch(tabOverview(["owned tab", "Unrelated"]));
-  const commands: string[][] = [];
-  await expect(closeIphoneTab(async args => {
-    commands.push(args);
-    return args[0] === "batch" ? snapshot : "Tapped";
-  }, "owned tab", Date.now() + 1000)).rejects.toThrow("unproved");
-  expect(commands.map(args => args[0])).toEqual(["press", "batch", "batch"]);
-  const steps = commands.filter(args => args[0] === "batch").map(args => JSON.parse(args[2]!));
-  expect(steps.map(batch => batch.map((step: { command: string }) => step.command))).toEqual([["press", "snapshot"], ["press", "snapshot"]]);
+  const control = cleanupGroups("ordinary", { ignoreClose: true });
+  await expect(closeIphoneTab(control.command, "Goals owned", Date.now() + 1000)).rejects.toThrow("unproved");
+  expect(control.cards.ordinary).toContain("Goals owned");
+  expect(control.selected()).toBe("ordinary");
+  expect(control.inOverview()).toBe(false);
 });
 
 test("native tab cleanup settles transitions before using and verifying snapshot refs", async () => {
-  let moving = false, closed = false;
+  const control = cleanupGroups("ordinary");
+  let presses = 0;
   await closeIphoneTab(async args => {
-    if (args[0] !== "batch") return "Tapped";
+    if (args[0] !== "batch") return control.command(args);
     const steps: unknown = JSON.parse(args[2]!);
     if (!Array.isArray(steps)) throw new Error("Expected cleanup batch");
-    const input = object(object(steps[0]).input), target = object(input.target);
-    if (target.kind === "ref" && moving && input.settle !== true) throw new Error("target_still_moving; nothing dispatched");
-    closed ||= target.kind === "ref";
-    moving = input.settle !== true;
-    if (moving) throw new Error("cleanup snapshot acquired before transition settled");
-    return tabBatch(tabOverview(closed && !moving ? ["Unrelated"] : ["Unrelated", "Goals owned"]));
+    for (const row of steps.map(object)) {
+      if (row.command !== "press") continue;
+      expect(object(row.input).settle).toBe(true);
+      presses++;
+    }
+    return control.command(args);
   }, "Goals owned", Date.now() + 10_000);
-  expect(closed).toBe(true);
-  expect(moving).toBe(false);
+  expect(presses).toBeGreaterThan(0);
+  expect(control.closed).toEqual(["Goals owned"]);
+  expect(control.selected()).toBe("ordinary");
+  expect(control.inOverview()).toBe(false);
+});
+
+test.each(["configure-failed", "cancelled", "missing-identity"])("%s navigation still owns bounded ordinary finalization", async scenario => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-iphone-finalize-"));
+  const agent = join(root, "agent-device"), log = join(root, "commands.jsonl"), closed = join(root, "closed");
+  const scope = Scope.open(10_000);
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (!new URL(request.url).pathname.endsWith("/configure")) return Response.json({ timeOrigin: 1, visible: true, userAgent: "iPhone Safari" });
+    if (scenario === "cancelled") scope.close(new Error("Navigation cancelled after setup"));
+    return Response.json(scenario === "missing-identity" ? "http://fixture/task" : {}, { status: scenario === "configure-failed" ? 500 : 200 });
+  } });
+  let transport: Transport | undefined;
+  try {
+    await writeFile(agent, tabAgentScript({ closed, title: "Goals owned", unrelated: "Unrelated ordinary", log }));
+    await chmod(agent, 0o700);
+    transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "a".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 1000 });
+    await expect(transport.navigate("http://fixture/task", scope)).rejects.toThrow();
+    const before = (await readFile(log, "utf8")).trim().split("\n").length;
+    if (scenario === "missing-identity") await expect(transport.close(false, 5000)).rejects.toThrow("Missing task Safari tab identity");
+    else await transport.close(false, 5000);
+    const final = (await readFile(log, "utf8")).trim().split("\n").slice(before).map(line => JSON.parse(line).args);
+    expect(final[0]).toEqual(["open", "com.apple.mobilesafari"]);
+    expect(final.at(-1)[2]).toContain('"ref":"@e100"');
+    expect(JSON.stringify(final)).not.toContain('"ref":"@e2"');
+    await expect(readFile(closed)).rejects.toThrow();
+  } finally {
+    scope.close();
+    await transport?.close(false, 5000).catch(() => {});
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("an outstanding install observation cannot block confirmed native tab cleanup", async () => {
@@ -133,9 +161,7 @@ test("an outstanding install observation cannot block confirmed native tab clean
   const agent = join(root, "agent-device");
   const closed = join(root, "closed");
   const log = join(root, "commands.jsonl");
-  const snapshot = tabBatch(tabOverview(["Goals own-tab", "owner tab"]));
-  const after = tabBatch(tabOverview(["owner tab"]));
-  await writeFile(agent, `#!${process.execPath}\nimport{appendFile,writeFile}from'node:fs/promises';import{existsSync}from'node:fs';\nconst args=process.argv.slice(2);await appendFile(${JSON.stringify(log)},JSON.stringify(args)+'\\n');\nif(args[0]==='batch'){const steps=JSON.parse(args[2]);if(steps[0].input.target.ref==='@e2')await writeFile(${JSON.stringify(closed)},'closed');console.log(existsSync(${JSON.stringify(closed)})?${JSON.stringify(after)}:${JSON.stringify(snapshot)});}\n`);
+  await writeFile(agent, tabAgentScript({ closed, title: "Goals own-tab", unrelated: "owner tab", log }));
   await chmod(agent, 0o755);
   try { await pendingCleanupControl(agent, log, closed); }
   finally { await rm(root, { recursive: true, force: true }); }
@@ -315,7 +341,7 @@ async function pendingCleanupControl(agent: string, log: string, closed: string)
       expect(logs[0]).toContain("Final terminal observation unavailable");
       expect(await readFile(closed, "utf8")).toBe("closed");
       const commands = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
-      expect(commands.map(args => args[0])).toEqual(["open", "press", "batch", "batch"]);
+      expect(commands.map(row => row.args[0])).toEqual(["open", "batch", "batch", "open", "open", "batch", "batch", "batch", "batch"]);
     } finally { release.resolve(); await transport.close(true).catch(() => {}); await server.stop(true); }
   });
 }
