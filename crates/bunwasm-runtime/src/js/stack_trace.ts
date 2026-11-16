@@ -46,6 +46,9 @@
   } satisfies ThisType<BunWasm.StackCallSite>;
 
   class CallSite {
+    declare isToplevel: typeof methods.isToplevel;
+    declare isPromiseAll: typeof methods.isPromiseAll;
+    declare getPromiseIndex: typeof methods.getPromiseIndex;
     #frame: BunWasm.StackFrame;
     constructor(frame: BunWasm.StackFrame) { this.#frame = frame; internal.mappedCallSites.add(this); }
     getFileName() { return this.#frame.file; }

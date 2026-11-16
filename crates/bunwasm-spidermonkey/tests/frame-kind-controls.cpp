@@ -50,6 +50,16 @@ bool capture_kind(JSContext* cx, unsigned argc, JS::Value* vp) {
 
 void equal_kind_identity(JS::HandleObject first, JS::HandleObject second) {
   same_position(first, second);
+  const JSSecurityCallbacks* previous = JS_GetSecurityCallbacks(context);
+  static const JSSecurityCallbacks callbacks = {nullptr, nullptr, provenance_subsumes};
+  JS_SetSecurityCallbacks(context, &callbacks);
+  lastSubsumed = &framePrincipals;
+  check(JS::GetFirstSubsumedSavedFrame(context, nullptr, first) == first && lastSubsumed == nullptr,
+        "first collision frame has null principals");
+  lastSubsumed = &framePrincipals;
+  check(JS::GetFirstSubsumedSavedFrame(context, nullptr, second) == second && lastSubsumed == nullptr,
+        "second collision frame has equal null principals");
+  JS_SetSecurityCallbacks(context, previous);
   JS::RootedString sourceA(context), sourceB(context), nameA(context), nameB(context), causeA(context), causeB(context);
   JS::RootedObject parentA(context), parentB(context);
   check(JS::GetSavedFrameSource(context, nullptr, first, &sourceA) == JS::SavedFrameResult::Ok &&
@@ -178,6 +188,12 @@ void kind_copy(JS::HandleObject original, FrameKind expected, const mozilla::May
   check(JS::GetSavedFrameAsyncCause(context, nullptr, copy, &actualCause) == JS::SavedFrameResult::Ok &&
         string_bytes(actualCause) == "frame-kind", "async copy cause");
   same_position(original, copy);
+  check(read_frame(copy).raw == read_frame(original).raw && read_frame(copy).kind == read_frame(original).kind,
+        "async copy preserves source and provenance");
+  JS::RootedString originalName(context), copyName(context);
+  check(JS::GetSavedFrameFunctionDisplayName(context, nullptr, original, &originalName) == JS::SavedFrameResult::Ok &&
+        JS::GetSavedFrameFunctionDisplayName(context, nullptr, copy, &copyName) == JS::SavedFrameResult::Ok &&
+        originalName == copyName, "async copy preserves true name");
   JS::RootedObject parent(context), originalParent(context);
   check(JS::GetSavedFrameParent(context, nullptr, original, &originalParent) == JS::SavedFrameResult::Ok &&
         JS::GetSavedFrameParent(context, nullptr, copy, &parent) == JS::SavedFrameResult::Ok, "async copy parents");
@@ -230,6 +246,10 @@ void frame_kind_async_and_reentry() {
         read_frame(selfHosted, includeSelfHosted).raw == "self-hosted", "Include selects builtin function");
   check(frame_kind(selfHosted, excludeSelfHosted) == FrameKind::Program &&
         read_frame(selfHosted, excludeSelfHosted).raw == "/kind-categories.ts", "Exclude selects same program as source");
+  JS::RootedString builtinName(context), programName(context);
+  check(JS::GetSavedFrameFunctionDisplayName(context, nullptr, selfHosted, &builtinName, includeSelfHosted) == JS::SavedFrameResult::Ok &&
+        builtinName && JS::GetSavedFrameFunctionDisplayName(context, nullptr, selfHosted, &programName, excludeSelfHosted) == JS::SavedFrameResult::Ok &&
+        !programName, "self-hosted kind, name and source select the same visible frame");
   Value reentry(script("globalThis.kindOuter = captureKind(true); [1].map(() => { globalThis.kindInner = captureKind(); }); globalThis.kindAfter = captureKind();"));
   // Native capture reenters while another SavedFrame is retained, then repeats the outer capture.
   for (const char* property : {"kindOuter", "kindInner", "kindAfter", "kindReentered"}) {
@@ -238,6 +258,50 @@ void frame_kind_async_and_reentry() {
     JS::RootedObject saved(context, &value.toObject());
     check(frame_kind(saved) == ((!strcmp(property, "kindInner") || !strcmp(property, "kindReentered")) ? FrameKind::Function : FrameKind::Program), "reentry kind");
   }
+}
+
+bool kind_visible_parent(JSPrincipals* requester, JSPrincipals* saved) {
+  return requester != &deniedPrincipals || saved != &framePrincipals;
+}
+
+void frame_kind_principal_selection() {
+  JSAutoRealm realm(context, global->get());
+  run_named("/kind-visible.ts", "globalThis.kindError = new Error();");
+  JS::RootedObject parent(context, global_error_stack("kindError"));
+  const JSSecurityCallbacks* previous = JS_GetSecurityCallbacks(context);
+  static const JSSecurityCallbacks callbacks = {nullptr, nullptr, kind_visible_parent};
+  JS_SetSecurityCallbacks(context, &callbacks);
+  JS::RealmOptions options;
+  JS::RootedObject hidden(context, JS_NewGlobalObject(context, &globalClass, &framePrincipals,
+                                                    JS::DontFireOnNewGlobalHook, options));
+  check(hidden != nullptr, "hidden principal global");
+  JS::RootedObject child(context);
+  {
+    JSAutoRealm foreign(context, hidden);
+    check(JS::InitRealmStandardClasses(context), "hidden standard classes");
+    JS::AutoSetAsyncStackForNewCalls async(context, parent, "visible-parent");
+    child = principal_frame(hidden, true, false, true);
+  }
+  check(frame_kind(child) == FrameKind::Function, "unfiltered child is Function");
+  FrameKind selected = FrameKind::Unknown;
+  JS::SavedFrameSourceKind sourceKind = displayKind;
+  JS::RootedString source(context), name(context);
+  uint32_t line = 0, parentLine = 0;
+  JS::TaggedColumnNumberOneOrigin column, parentColumn;
+  check(JS::GetSavedFrameKind(context, &deniedPrincipals, child, &selected) == JS::SavedFrameResult::Ok &&
+        selected == FrameKind::Program, "denied Function selects accessible Program parent");
+  check(JS::GetSavedFrameSource(context, &deniedPrincipals, child, &source) == JS::SavedFrameResult::Ok &&
+        string_bytes(source) == "/kind-visible.ts", "kind and source select same principal-visible parent");
+  check(JS::GetSavedFrameSourceKind(context, &deniedPrincipals, child, &sourceKind) == JS::SavedFrameResult::Ok &&
+        sourceKind == filenameKind, "principal-visible parent source kind");
+  check(JS::GetSavedFrameFunctionDisplayName(context, &deniedPrincipals, child, &name) == JS::SavedFrameResult::Ok &&
+        !name, "principal-visible parent keeps null name");
+  check(JS::GetSavedFrameLine(context, &deniedPrincipals, child, &line) == JS::SavedFrameResult::Ok &&
+        JS::GetSavedFrameLine(context, nullptr, parent, &parentLine) == JS::SavedFrameResult::Ok && line == parentLine &&
+        JS::GetSavedFrameColumn(context, &deniedPrincipals, child, &column) == JS::SavedFrameResult::Ok &&
+        JS::GetSavedFrameColumn(context, nullptr, parent, &parentColumn) == JS::SavedFrameResult::Ok && column == parentColumn,
+        "principal-visible parent positions match all selected fields");
+  JS_SetSecurityCallbacks(context, previous);
 }
 
 void frame_kind_reconstruction() {
@@ -286,6 +350,13 @@ void frame_kind_controls() {
   frame_kind_categories();
   frame_kind_lifetime();
   frame_kind_async_and_reentry();
+  bsm_gc();
+  bsm_gc();
+  const int32_t principalsBefore = framePrincipals.refcount;
+  frame_kind_principal_selection();
+  bsm_gc();
+  bsm_gc();
+  check(framePrincipals.refcount == principalsBefore, "principal selection drops every hidden realm and frame hold");
   frame_kind_reconstruction();
   puts("SpiderMonkey SavedFrame frame kind controls passed");
 }
