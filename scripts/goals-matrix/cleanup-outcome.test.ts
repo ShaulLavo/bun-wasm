@@ -20,6 +20,44 @@ const cases: TestCell[] = [
   { framework: "tanstack-start", engine: "spidermonkey", profile: "shared-group" },
 ];
 
+test.each([false, true])("optional logging cannot fail successful cleanup, owned=%s", async owned => {
+  const framework = frameworks[0]!;
+  await withPlayground(framework, 0, async transport => {
+    let closed = false;
+    const close = transport.close.bind(transport);
+    transport.close = async () => { await close(); closed = true; };
+    if (owned) transport.cleanup = async () => {
+      await transport.close();
+      return { browserClosed: true, foregroundStopped: true, previewClosed: true };
+    };
+    const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" },
+      url: "http://fixture/?engine=browser", timeoutMs: 2000, createTransport: async () => transport,
+      async saveLog() { throw new Error("optional log write failed"); },
+    });
+    expect(closed).toBe(true);
+    expect(result.status).toBe("pass");
+  });
+});
+
+test("required owned handoff failure survives optional logging failure and successful close", async () => {
+  const framework = frameworks[0]!;
+  await withPlayground(framework, 0, async transport => {
+    let closed = false;
+    const close = transport.close.bind(transport);
+    transport.beginCleanup = async () => { throw new Error("required handoff failed"); };
+    transport.cleanup = async () => {
+      await close(); closed = true;
+      return { browserClosed: true, foregroundStopped: true, previewClosed: true };
+    };
+    const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "browser" },
+      url: "http://fixture/?engine=browser", timeoutMs: 2000, createTransport: async () => transport,
+      async saveLog() { throw new Error("optional log write failed"); },
+    });
+    expect(closed).toBe(true);
+    expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("required handoff failed") });
+  });
+});
+
 type Control = {
   entered: Promise<void>;
   result: ReturnType<typeof execute>;

@@ -58,7 +58,9 @@ Both disposal promises settle before their failures are reported. A disposed fla
 logical exit, selected process outcome or session deletion is not this barrier.
 
 Optional terminal/diagnostic collection cannot fail cleanup or consume the close
-reserve. Stop/disposal failures remain failures even when the later owned session
+reserve. Owned cleanup also separates its required handoff from optional log
+collection within the same bounded window. Handoff and owned-close failures stay
+failures. Stop/disposal failures remain failures even when the later owned session
 deletion succeeds. Safari keeps serialized in-flight requests and their protocol
 identities through raw settlement, and interruption still closes only its owned
 session. The command allowance matches the work window; session deletion retains

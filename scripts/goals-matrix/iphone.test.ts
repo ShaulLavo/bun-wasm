@@ -218,9 +218,9 @@ test("a stalled final terminal read saves the completed transcript and still clo
   expect(logs[0]).toContain("saved build transcript");
 });
 
-test("a terminal log write failure cannot skip native resource teardown", async () => {
+test("an optional terminal log write failure cannot fail successful native resource teardown", async () => {
   const { result, closed } = await nativeLifecycle("write-failure");
-  expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("log write failed") });
+  expect(result.status).toBe("pass");
   expect(closed).toBe(true);
 });
 

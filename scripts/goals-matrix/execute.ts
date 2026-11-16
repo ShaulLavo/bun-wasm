@@ -212,10 +212,12 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
   try {
     await handoff.run(async guard => {
       await transport.beginCleanup?.(guard);
-      await saveFinalLog(transport, options, results, failureLog, guard);
     });
   } catch (error) { errors.push(error); }
-  finally { handoff.close(); }
+  const observation = Scope.open(4000, handoff);
+  try { await observation.run(guard => saveFinalLog(transport, options, results, failureLog, guard)); }
+  catch { /* Optional logging cannot determine the owned cleanup outcome. */ }
+  finally { observation.close(); handoff.close(); }
   let evidence: unknown;
   try { evidence = await awaitWithin(close(admit(admission)), admission); }
   catch (error) { errors.push(error); }

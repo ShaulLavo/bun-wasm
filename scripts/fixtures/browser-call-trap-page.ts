@@ -25,10 +25,11 @@ async function runControl(): Promise<void> {
   }
 }
 
-// Only the matrix harness's shell and terminal contract; no framework or guest build.
+// The control owns and terminates its Worker above; this synthetic playground owns no runtime.
 Reflect.set(globalThis, "playground", {
   profile: "split",
-  shell: { running: false, lastExit: 1, input() {}, async submit() { await runControl(); throw new Error("real Browser core trap control"); } },
+  runtime: { async dispose() {} },
+  shell: { running: false, lastExit: 1, input() {}, async dispose() {}, async submit() { await runControl(); throw new Error("real Browser core trap control"); } },
   previews: { serves: () => false },
   term: { write(_text: string, done: () => void) { done(); }, buffer: { active: { length: 0 } } },
 });
