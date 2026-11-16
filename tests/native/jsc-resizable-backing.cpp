@@ -165,7 +165,7 @@ static void liveControls(JSGlobalContextRef context, WASIResizableBufferTestHook
         observation.views[index] = dynamicDowncast<JSArrayBufferView>(toJS(global, value));
         require(observation.views[index], "real JS typed-array or DataView");
     }
-    require(hooks.initialRequestBytes == PageCount::pageSize, "logical maximum is not reserved eagerly");
+    require(hooks.initialRequestBytes == 16, "initial capacity is the length, not the maximum or a page");
     hooks.forceMove = true;
     hooks.forcePressure = true;
     hooks.didPublish = didPublish;
@@ -214,8 +214,11 @@ static void allocationControls(JSGlobalContextRef context, WASIResizableBufferTe
     require(!ArrayBuffer::tryCreate(16, 1, 1073741824), "initial allocator refusal is fallible");
     require(hooks.rollbacks == 2 && !hooks.chargedBytes && accounting() == before, "initial refusal releases every charge");
     auto attempts = hooks.chargeAttempts;
-    require(!ArrayBuffer::tryCreate(MAX_ARRAY_BUFFER_SIZE, 1, MAX_ARRAY_BUFFER_SIZE), "rounded unsupported initial capacity is rejected");
-    require(hooks.chargeAttempts == attempts, "rounding rejection precedes charging");
+    require(!ArrayBuffer::tryCreate(16, 1, static_cast<size_t>(MAX_ARRAY_BUFFER_SIZE) + 1), "maximum above the array buffer limit is rejected");
+    require(hooks.chargeAttempts == attempts, "maximum rejection precedes charging");
+    require(!ArrayBuffer::tryCreate(MAX_ARRAY_BUFFER_SIZE, 1, MAX_ARRAY_BUFFER_SIZE), "initial capacity beyond linear memory fails");
+    require(!hooks.chargedBytes && accounting() == before, "failed large initial capacity releases its charge");
+    attempts = hooks.chargeAttempts;
     auto* global = toJS(context);
     require(!ArrayBuffer::tryCreateShared(global->vm(), 0, 1, 0), "GSAB zero maximum stays unavailable");
     require(!ArrayBuffer::tryCreateShared(global->vm(), 16, 1, 32), "GSAB positive maximum stays unavailable");
@@ -248,6 +251,37 @@ static void repeatedOwnership(JSGlobalContextRef context, WASIResizableBufferTes
     require(hooks.finalFrees == frees + 32, "one final free for every repeated lifetime");
 }
 
+static void growthControls(JSGlobalContextRef context, WASIResizableBufferTestHooks& hooks)
+{
+    auto* global = toJS(context);
+    JSLockHolder lock(global);
+    hooks.forceMove = false;
+    hooks.forcePressure = false;
+    auto before = accounting();
+    {
+        auto small = ArrayBuffer::tryCreate(8, 1, 16);
+        require(!!small && hooks.lastCreated->size() == 8, "small buffer allocates its length, not a page");
+        require(!!small->resize(global->vm(), 16) && hooks.lastCreated->size() == 16, "capacity stops at the maximum");
+        auto empty = ArrayBuffer::tryCreate(0, 1, 0);
+        require(!!empty && hooks.lastCreated->size() == 1 && !empty->isDetached(), "empty buffer keeps live one-byte backing");
+    }
+    constexpr size_t maximum = 4194307;
+    auto stepped = ArrayBuffer::tryCreate(0, 1, maximum);
+    require(!!stepped, "stepped buffer");
+    auto* handle = hooks.lastCreated;
+    auto reallocations = hooks.reallocations;
+    for (size_t length = 4096; length < maximum; length += 4096)
+        require(!!stepped->resize(global->vm(), length), "stepwise growth");
+    require(!!stepped->resize(global->vm(), maximum), "growth to the exact maximum");
+    require(handle->size() == maximum, "capacity ends at the maximum, not a page above it");
+    require(hooks.reallocations - reallocations <= 24, "stepwise growth reallocates geometrically");
+    require(hooks.chargedBytes == handle->size(), "charge follows geometric capacity");
+    zeroRange(static_cast<uint8_t*>(stepped->data()), maximum);
+    std::printf("stepwise reallocations=%u\n", hooks.reallocations - reallocations);
+    stepped = nullptr;
+    require(!hooks.chargedBytes && accounting() == before, "growth controls return every charge");
+}
+
 int main()
 {
     auto context = JSGlobalContextCreate(nullptr);
@@ -257,6 +291,7 @@ int main()
     allocationControls(context, hooks);
     liveControls(context, hooks);
     repeatedOwnership(context, hooks);
+    growthControls(context, hooks);
     // Destroying a VM aborts in AtomStringImpl::remove on WASI JSC even with no resizable buffer,
     // and the guest never destroys its VM, so the control keeps the context alive. Every malloc
     // backing above already reached its single final free.

@@ -2,7 +2,7 @@
 
 Status: Approved. Parent Engines owns independent implementation review, CI and merge.
 
-The WASI C-loop engine uses an explicit nonshared malloc backing kind. Its logical maximum is metadata, while retained page-rounded capacity is allocated and charged as needed. Shrink retains capacity and clears removed bytes. A successful noncollecting growth publishes the handle, contents and every incoming JS view before any heap notification or collection. Native wrappers reload the current base. Failed attempts roll pending charges back before retry or reclamation.
+The WASI C-loop engine uses an explicit nonshared malloc backing kind. Its page-rounded maximum is metadata. Capacity starts at the initial length, grows by at least half again, never exceeds the maximum, and is allocated and charged as needed. Shrink retains capacity and clears removed bytes. A successful noncollecting growth publishes the handle, contents and every incoming JS view before any heap notification or collection. Native wrappers reload the current base. Failed attempts roll pending charges back before retry or reclamation.
 
 Preserving transfer completes fallible growth before detaching its source. Public resize and transfer lengths stay wide through coercion and detached validation. Fixed transfer checks its destination bound. Existing shared-constructor rejection remains intact, and shared contents reject the malloc kind. No profile or memory maximum changes.
 

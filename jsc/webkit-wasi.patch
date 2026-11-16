@@ -4552,10 +4552,11 @@ index 3bd4ebd8a4..dbe091015c 100644
  #endif
 
 diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+index 2f06666b36..5e620f0a66 100644
 --- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
 +++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
 @@ -43,6 +43,10 @@
-
+ 
  #if OS(WASI)
  #include "WASIMemoryTelemetry.h"
 +#include <limits>
@@ -4563,12 +4564,12 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
 +#include "WASIResizableBufferTesting.h"
 +#endif
  #endif
-
+ 
  #if defined(BUN_WASM_SHARED_GROUP)
-@@ -90,41 +94,71 @@
+@@ -90,41 +94,85 @@ Ref<SharedTask<void(void*)>> ArrayBuffer::primitiveGigacageDestructor()
      return destructor.get().copyRef();
  }
-
+ 
 +static void reclaimBufferMemory(VM* vm, bool synchronous)
 +{
 +    if (!vm)
@@ -4609,51 +4610,61 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
 -                vm->heap.collectSync(CollectionScope::Full);
              break;
          }
--    }
--    return success;
--}
--
--static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory(VM* vm, size_t sizeInBytes, size_t maxByteLength)
--{
 +        if (!attempt)
 +            reclaimBufferMemory(vm, true);
-+    }
+     }
+-    return success;
 +    return false;
+ }
+ 
+-static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory(VM* vm, size_t sizeInBytes, size_t maxByteLength)
++#if OS(WASI)
++// Page-rounded maximum for the handle's PageCount metadata. It is never allocated.
++static std::optional<PageCount> wasiResizableMaximumPages(size_t maxByteLength)
++{
++    CheckedUint64 rounded = maxByteLength;
++    rounded += PageCount::pageSize - 1;
++    if (rounded.hasOverflowed())
++        return std::nullopt;
++    uint64_t bytes = rounded.value() & ~(static_cast<uint64_t>(PageCount::pageSize) - 1);
++    if (!bytes)
++        bytes = PageCount::pageSize;
++    if (bytes > std::numeric_limits<size_t>::max())
++        return std::nullopt;
++    return PageCount::fromBytes(bytes);
 +}
 +
++// Linear memory is real and never shrinks, so capacity is exactly what is needed (at least one byte,
++// because null data means detached). Growth takes at least half again the old capacity, so stepwise
++// growth reallocates a logarithmic number of times. Capacity never exceeds the buffer's maximum.
++static size_t wasiResizableCapacity(size_t oldCapacity, size_t requested, size_t maxByteLength)
++{
++    uint64_t grown = static_cast<uint64_t>(oldCapacity) + oldCapacity / 2;
++    uint64_t capacity = std::max<uint64_t>(requested, grown);
++    capacity = std::min<uint64_t>(capacity, maxByteLength);
++    return static_cast<size_t>(std::max<uint64_t>(capacity, 1));
++}
++#endif
++
++static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory(VM* vm, size_t sizeInBytes, size_t maxByteLength, MemorySharingMode sharingMode = MemorySharingMode::Default)
+ {
  #if OS(WASI)
 -    // WASI has no virtual reservation/protection for resizable backing stores.
 -    UNUSED_PARAM(vm);
 -    UNUSED_PARAM(sizeInBytes);
 -    UNUSED_PARAM(maxByteLength);
 -    return nullptr;
-+static std::optional<size_t> wasiResizableCapacity(size_t byteLength)
-+{
-+    CheckedUint64 rounded = byteLength;
-+    rounded += PageCount::pageSize - 1;
-+    if (rounded.hasOverflowed())
-+        return std::nullopt;
-+    uint64_t capacity = rounded.value() & ~(static_cast<uint64_t>(PageCount::pageSize) - 1);
-+    if (!capacity)
-+        capacity = PageCount::pageSize;
-+    if (capacity > std::numeric_limits<size_t>::max())
-+        return std::nullopt;
-+    return static_cast<size_t>(capacity);
-+}
-+#endif
-+
-+static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory(VM* vm, size_t sizeInBytes, size_t maxByteLength, MemorySharingMode sharingMode = MemorySharingMode::Default)
-+{
-+#if OS(WASI)
 +    if (sharingMode != MemorySharingMode::Default)
 +        return nullptr;
-+    auto capacity = wasiResizableCapacity(sizeInBytes);
-+    auto maximum = wasiResizableCapacity(maxByteLength);
-+    if (!capacity || !maximum || capacity.value() > MAX_ARRAY_BUFFER_SIZE)
++    if (sizeInBytes > maxByteLength || maxByteLength > MAX_ARRAY_BUFFER_SIZE)
 +        return nullptr;
++    auto maximum = wasiResizableMaximumPages(maxByteLength);
++    if (!maximum)
++        return nullptr;
++    size_t capacity = wasiResizableCapacity(0, sizeInBytes, maxByteLength);
 +    RefPtr<BufferMemoryHandle> handle;
 +    tryAllocate(vm, [&] {
-+        return BufferMemoryHandle::tryCreateWASIResizable(capacity.value(), PageCount::fromBytes(maximum.value()), handle);
++        return BufferMemoryHandle::tryCreateWASIResizable(capacity, maximum.value(), handle);
 +    });
 +    return handle;
  #else
@@ -4661,10 +4672,10 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
      // Make sure malloc actually allocates something, but not too much. We use null to mean that the buffer is detached.
      size_t initialBytes = roundUpToMultipleOf<PageCount::pageSize>(sizeInBytes);
      if (!initialBytes)
-@@ -491,7 +525,12 @@
+@@ -491,7 +539,12 @@ void ArrayBuffer::refreshAfterWasmMemoryGrow(Wasm::Memory* memory)
      if (newData == oldData)
          return;
-
+ 
 -    // JSArrayBufferViews (typed arrays) effectively cache their buffer's data pointer.
 +    refreshViews(newData);
 +}
@@ -4675,28 +4686,27 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
      for (size_t i = numberOfIncomingReferences(); i--;) {
          JSCell* cell = incomingReferenceAt(i);
          auto* view = dynamicDowncast<JSArrayBufferView>(cell);
-@@ -595,6 +634,11 @@
-     int64_t deltaByteLength = static_cast<int64_t>(newByteLength) - static_cast<int64_t>(m_contents.m_sizeInBytes);
+@@ -596,6 +649,11 @@ std::expected<int64_t, GrowFailReason> ArrayBuffer::resize(VM& vm, size_t newByt
      if (!deltaByteLength)
          return 0;
-+
+ 
 +#if OS(WASI)
 +    if (memoryHandle->isWASIResizable())
 +        return resizeWASI(vm, newByteLength);
 +#endif
-
++
      // A buffer's maxByteLength may exceed the region actually mapped for it, so growth is bounded by
      // the mapping.
-@@ -665,6 +709,51 @@
+     if (newByteLength > memoryHandle->mappedCapacity())
+@@ -665,6 +723,50 @@ std::expected<int64_t, GrowFailReason> ArrayBuffer::resize(VM& vm, size_t newByt
      return deltaByteLength;
  }
-
+ 
 +#if OS(WASI)
 +std::expected<int64_t, GrowFailReason> ArrayBuffer::resizeWASI(VM& vm, size_t newByteLength)
 +{
-+    auto desiredCapacity = wasiResizableCapacity(newByteLength);
-+    if (!desiredCapacity || desiredCapacity.value() > MAX_ARRAY_BUFFER_SIZE)
-+        return makeUnexpected(GrowFailReason::WouldExceedMaximum);
++    if (newByteLength > m_contents.m_maxByteLength)
++        return makeUnexpected(GrowFailReason::InvalidGrowSize);
 +
 +    Ref<ArrayBuffer> protect(*this);
 +    int64_t logicalDelta = 0;
@@ -4706,8 +4716,8 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
 +        size_t oldLength = m_contents.m_sizeInBytes;
 +        size_t oldCapacity = handle->size();
 +        auto result = BufferMemoryResult::Kind::Success;
-+        if (desiredCapacity.value() > oldCapacity)
-+            result = handle->tryGrowWASIResizable(desiredCapacity.value());
++        if (newByteLength > oldCapacity)
++            result = handle->tryGrowWASIResizable(wasiResizableCapacity(oldCapacity, newByteLength, m_contents.m_maxByteLength));
 +        if (result == BufferMemoryResult::Kind::SyncTryToReclaimMemory)
 +            return result;
 +
@@ -4739,19 +4749,20 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
  RefPtr<ArrayBuffer> ArrayBuffer::tryCreateShared(VM& vm, size_t numElements, unsigned elementByteSize, size_t maxByteLength)
  {
      CheckedSize sizeInBytes = numElements;
-@@ -672,7 +761,7 @@
+@@ -672,7 +774,7 @@ RefPtr<ArrayBuffer> ArrayBuffer::tryCreateShared(VM& vm, size_t numElements, uns
      if (sizeInBytes.hasOverflowed() || sizeInBytes.value() > maxByteLength || maxByteLength > MAX_ARRAY_BUFFER_SIZE)
          return nullptr;
-
+ 
 -    auto handle = tryAllocateResizableMemory(&vm, sizeInBytes.value(), maxByteLength);
 +    auto handle = tryAllocateResizableMemory(&vm, sizeInBytes.value(), maxByteLength, MemorySharingMode::Shared);
      if (!handle)
          return nullptr;
-
+ 
 diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.h b/Source/JavaScriptCore/runtime/ArrayBuffer.h
+index e781a0fc76..74bd723518 100644
 --- a/Source/JavaScriptCore/runtime/ArrayBuffer.h
 +++ b/Source/JavaScriptCore/runtime/ArrayBuffer.h
-@@ -115,6 +115,9 @@
+@@ -115,6 +115,9 @@ private:
          , m_mode(mode)
      {
          RELEASE_ASSERT(m_maxByteLength <= MAX_ARRAY_BUFFER_SIZE);
@@ -4761,31 +4772,31 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.h b/Source/JavaScriptCore
  #if ASSERT_ENABLED
          if (m_hasMaxByteLength)
              ASSERT(m_memoryHandle);
-@@ -285,6 +288,10 @@
+@@ -285,6 +288,10 @@ public:
      inline bool isGrowableShared() const { return m_contents.isGrowableShared(); }
      inline bool isResizableNonShared() const { return m_contents.isResizableNonShared(); }
-
+ 
 +#if OS(WASI)
 +    bool isWASIResizable() const { return m_contents.m_memoryHandle && m_contents.m_memoryHandle->isWASIResizable(); }
 +#endif
 +
      inline size_t gcSizeEstimateInBytes() const;
-
+ 
      JS_EXPORT_PRIVATE RefPtr<ArrayBuffer> slice(double begin, double end) const;
-@@ -303,6 +310,11 @@
-     inline bool isWasmMemory();
+@@ -304,6 +311,11 @@ public:
      // When a resizable buffer is associated with a non-shared Wasm memory, this function is called by the memory's growthSuccessCallback.
      void refreshAfterWasmMemoryGrow(Wasm::Memory*);
-+
+ 
 +    void refreshViews(void* newData);
 +#if OS(WASI)
 +    std::expected<int64_t, GrowFailReason> resizeWASI(VM&, size_t newByteLength);
 +#endif
-
++
      JS_EXPORT_PRIVATE bool transferTo(VM&, ArrayBufferContents&);
      JS_EXPORT_PRIVATE bool shareWith(ArrayBufferContents&);
-@@ -383,6 +395,10 @@
-
+ 
+@@ -383,6 +395,10 @@ bool ArrayBuffer::isShared() const
+ 
  size_t ArrayBuffer::gcSizeEstimateInBytes() const
  {
 +#if OS(WASI)
@@ -4796,9 +4807,10 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.h b/Source/JavaScriptCore
      return sizeof(ArrayBuffer) + byteLength();
  }
 diff --git a/Source/JavaScriptCore/runtime/ArrayBufferView.h b/Source/JavaScriptCore/runtime/ArrayBufferView.h
+index f9dc82afe3..8a14512129 100644
 --- a/Source/JavaScriptCore/runtime/ArrayBufferView.h
 +++ b/Source/JavaScriptCore/runtime/ArrayBufferView.h
-@@ -76,6 +76,10 @@
+@@ -76,6 +76,10 @@ public:
      {
          if (isDetached())
              return nullptr;
@@ -4808,23 +4820,24 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBufferView.h b/Source/JavaScript
 +#endif
          return m_baseAddress.getMayBeNull();
      }
-
+ 
 diff --git a/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp b/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp
+index 92bc17e3f3..2281a1c226 100644
 --- a/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp
 +++ b/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp
 @@ -41,6 +41,10 @@
  #include <wtf/TZoneMallocInlines.h>
  #include <wtf/Vector.h>
-
+ 
 +#if OS(WASI) && defined(BUN_WASM_JSC_RESIZABLE_TESTING)
 +#include "WASIResizableBufferTesting.h"
 +#endif
 +
  WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
-
+ 
  namespace JSC {
-@@ -277,6 +281,20 @@
-
+@@ -277,6 +281,20 @@ void* BufferMemoryHandle::nullBasePointer()
+ 
  BufferMemoryHandle::~BufferMemoryHandle()
  {
 +#if OS(WASI)
@@ -4844,10 +4857,10 @@ diff --git a/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp b/Source/JavaS
      if (m_memory) {
          void* memory = this->memory();
          BufferMemoryManager::singleton().freePhysicalBytes(m_size);
-@@ -324,6 +342,116 @@
+@@ -324,6 +342,118 @@ BufferMemoryHandle::~BufferMemoryHandle()
      }
  }
-
+ 
 +#if OS(WASI)
 +static BufferMemoryResult::Kind tryChargeWASIResizable(size_t bytes)
 +{
@@ -4904,6 +4917,8 @@ diff --git a/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp b/Source/JavaS
 +        --hooks->refuseReallocations;
 +        return nullptr;
 +    }
++    if (hooks)
++        ++hooks->reallocations;
 +    if (hooks && hooks->forceMove) {
 +        void* moved = Gigacage::tryMalloc(Gigacage::Primitive, capacity);
 +        if (!moved)
@@ -4929,7 +4944,7 @@ diff --git a/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp b/Source/JavaS
 +        rollbackWASIResizableCharge(capacity);
 +        return BufferMemoryResult::Kind::SyncTryToReclaimMemory;
 +    }
-+    auto handle = adoptRef(*new BufferMemoryHandle(memory, capacity, capacity, PageCount::fromBytes(capacity), maximum, MemorySharingMode::Default, MemoryMode::BoundsChecking));
++    auto handle = adoptRef(*new BufferMemoryHandle(memory, capacity, capacity, PageCount::fromBytesWithRoundUp(capacity), maximum, MemorySharingMode::Default, MemoryMode::BoundsChecking));
 +    handle->m_allocationKind = AllocationKind::WASIResizable;
 +    result = WTF::move(handle);
 +#if defined(BUN_WASM_JSC_RESIZABLE_TESTING)
@@ -4962,6 +4977,7 @@ diff --git a/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp b/Source/JavaS
  // For now, putting NEVER_INLINE to suppress inlining of this.
  NEVER_INLINE void* BufferMemoryHandle::memory() const
 diff --git a/Source/JavaScriptCore/runtime/BufferMemoryHandle.h b/Source/JavaScriptCore/runtime/BufferMemoryHandle.h
+index e6220da4a8..2787fe23fe 100644
 --- a/Source/JavaScriptCore/runtime/BufferMemoryHandle.h
 +++ b/Source/JavaScriptCore/runtime/BufferMemoryHandle.h
 @@ -34,6 +34,7 @@
@@ -4972,10 +4988,10 @@ diff --git a/Source/JavaScriptCore/runtime/BufferMemoryHandle.h b/Source/JavaScr
  #include <wtf/StdSet.h>
  #include <wtf/TZoneMalloc.h>
  #include <wtf/ThreadSafeRefCounted.h>
-@@ -145,6 +146,12 @@
+@@ -145,6 +146,12 @@ public:
      BufferMemoryHandle(void*, size_t size, size_t mappedCapacity, PageCount initial, PageCount maximum, MemorySharingMode, MemoryMode);
      JS_EXPORT_PRIVATE ~BufferMemoryHandle();
-
+ 
 +#if OS(WASI)
 +    static BufferMemoryResult::Kind tryCreateWASIResizable(size_t capacity, PageCount maximum, RefPtr<BufferMemoryHandle>&);
 +    BufferMemoryResult::Kind tryGrowWASIResizable(size_t capacity);
@@ -4985,25 +5001,26 @@ diff --git a/Source/JavaScriptCore/runtime/BufferMemoryHandle.h b/Source/JavaScr
      JS_EXPORT_PRIVATE void* memory() const;
      size_t size(std::memory_order order = std::memory_order_seq_cst) const
      {
-@@ -181,6 +188,11 @@
-
+@@ -182,6 +189,11 @@ public:
  private:
      using CagedMemory = CagedPtr<Gigacage::Primitive, void>;
-+
+ 
 +#if OS(WASI)
 +    enum class AllocationKind : uint8_t { VirtualPages, WASIResizable };
 +    AllocationKind m_allocationKind { AllocationKind::VirtualPages };
 +#endif
-
++
      Lock m_lock;
      MemorySharingMode m_sharingMode { MemorySharingMode::Default };
+     MemoryMode m_mode { MemoryMode::BoundsChecking };
 diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp b/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
+index 7bf1d179f2..caa0b72d99 100644
 --- a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
 +++ b/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
-@@ -342,7 +342,11 @@
+@@ -342,7 +342,11 @@ JSC_DEFINE_HOST_FUNCTION(arrayBufferProtoFuncResize, (JSGlobalObject* globalObje
      }
  #endif
-
+ 
 -    if (!thisObject->impl()->resize(vm, newByteLength))
 +#if OS(WASI)
 +    if (newByteLength > thisObject->impl()->maxByteLength().value())
@@ -5011,9 +5028,9 @@ diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp b/Source/J
 +#endif
 +    if (!thisObject->impl()->resize(vm, static_cast<size_t>(newByteLength)))
          return throwVMRangeError(globalObject, scope, makeString("ArrayBuffer resize failed with new byte length "_s, newByteLength));
-
+ 
      return JSValue::encode(jsUndefined());
-@@ -353,6 +357,20 @@
+@@ -353,6 +357,20 @@ enum class CopyAndDetachMode {
      PreserveResizability,
      FixedLength
  };
@@ -5034,10 +5051,10 @@ diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp b/Source/J
  static JSArrayBuffer* arrayBufferCopyAndDetach(JSGlobalObject* globalObject, JSArrayBuffer* arrayBuffer, size_t newByteLength, CopyAndDetachMode mode)
  {
      VM& vm = globalObject->vm();
-@@ -383,6 +401,10 @@
+@@ -383,6 +401,10 @@ static JSArrayBuffer* arrayBufferCopyAndDetach(JSGlobalObject* globalObject, JSA
              return nullptr;
          }
-
+ 
 +#if OS(WASI)
 +        if (!resizeBeforeWASITransfer(globalObject, *arrayBuffer->impl(), newByteLength))
 +            return nullptr;
@@ -5045,19 +5062,19 @@ diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp b/Source/J
          ArrayBufferContents contents;
          if (!arrayBuffer->impl()->transferTo(vm, contents)) [[unlikely]] {
              throwVMRangeError(globalObject, scope, "ArrayBuffer transfer failed"_s);
-@@ -431,7 +453,7 @@
+@@ -431,7 +453,7 @@ static JSArrayBuffer* arrayBufferProtoFuncTransferImpl(JSGlobalObject* globalObj
          return nullptr;
      }
-
+ 
 -    size_t newByteLength = 0;
 +    uint64_t newByteLength = 0;
      if (newLengthValue.isUndefined()) {
          if (!thisObject->impl()->isDetached())
              newByteLength = thisObject->impl()->byteLength();
-@@ -440,7 +462,21 @@
+@@ -440,7 +462,21 @@ static JSArrayBuffer* arrayBufferProtoFuncTransferImpl(JSGlobalObject* globalObj
          RETURN_IF_EXCEPTION(scope, { });
      }
-
+ 
 -    RELEASE_AND_RETURN(scope, arrayBufferCopyAndDetach(globalObject, thisObject, newByteLength, mode));
 +#if OS(WASI)
 +    if (thisObject->impl()->isDetached()) {
@@ -5075,13 +5092,14 @@ diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp b/Source/J
 +#endif
 +    RELEASE_AND_RETURN(scope, arrayBufferCopyAndDetach(globalObject, thisObject, static_cast<size_t>(newByteLength), mode));
  }
-
+ 
  // https://tc39.es/proposal-arraybuffer-transfer/#sec-arraybuffer.prototype.transfer
 diff --git a/Source/JavaScriptCore/runtime/WASIResizableBufferTesting.h b/Source/JavaScriptCore/runtime/WASIResizableBufferTesting.h
 new file mode 100644
+index 0000000000..aeaf24d9e2
 --- /dev/null
 +++ b/Source/JavaScriptCore/runtime/WASIResizableBufferTesting.h
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,28 @@
 +#pragma once
 +
 +#if OS(WASI) && defined(BUN_WASM_JSC_RESIZABLE_TESTING)
@@ -5098,6 +5116,7 @@ new file mode 100644
 +    unsigned chargeAttempts { 0 };
 +    unsigned rollbacks { 0 };
 +    unsigned moves { 0 };
++    unsigned reallocations { 0 };
 +    unsigned finalFrees { 0 };
 +    size_t chargedBytes { 0 };
 +    size_t initialRequestBytes { 0 };
