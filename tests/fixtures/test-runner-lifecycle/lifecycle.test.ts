@@ -2,14 +2,12 @@ import assert from "node:assert/strict";
 import { afterAll, afterEach, beforeEach, describe, jest, onTestFinished, test } from "bun:test";
 
 assert.throws(() => test.failing("missing"), /test.failing expects a function as the second argument/);
-assert.throws(() => describe(() => {}, () => {}), /describe\(\) expects first argument/);
 assert.throws(() => onTestFinished(() => {}), /Cannot call onTestFinished\(\) outside of a test/);
 assert.throws(() => Reflect.apply(onTestFinished, undefined, [1]), {
   name: "Error", message: "onTestFinished() expects a function as the first argument",
 });
 assert.throws(() => test("both", () => {}, { retry: 1, repeats: 1 }), /Cannot set both retry and repeats/);
 assert.equal(jest.setTimeout(5000), undefined);
-describe(() => { test("sole callback", () => console.log("sole callback ran")); });
 
 describe("retry lifecycle", () => {
   const log: string[] = [];
@@ -54,4 +52,25 @@ describe("repeat lifecycle", () => {
 test("validation completed", () => {
   assert.throws(() => test.failing("missing"), /test.failing expects a function as the second argument/);
   console.log("validation verified");
+});
+
+describe("live cleanup", () => {
+  const log: string[] = [];
+  function local() {
+    log.push("local");
+    afterAll(() => { log.push("local reentry"); });
+    onTestFinished(() => { log.push("local finished"); });
+  }
+  function finished() {
+    log.push("finished");
+    onTestFinished(() => { log.push("finished reentry"); });
+  }
+  describe("one attempt", () => {
+    afterEach(() => { log.push("after"); onTestFinished(() => { log.push("after finished"); }); });
+    test("live queues", () => { afterAll(local); onTestFinished(finished); });
+  });
+  test("verify live queues", () => {
+    assert.deepEqual(log, ["local", "local reentry", "after", "finished", "local finished", "after finished", "finished reentry"]);
+    console.log("live cleanup verified");
+  });
 });

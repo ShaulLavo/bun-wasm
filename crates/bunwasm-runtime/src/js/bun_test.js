@@ -1820,14 +1820,14 @@
 
   function registerDescribe(modifiers, name, fn) {
     const parent = currentScope();
-    const disabled = modifiers.mode === "skip" || modifiers.mode === "todo";
-    const { name: label, fn: callback } = internal.require("test_lifecycle").registration("describe", name, fn, disabled);
+    const label = typeof name === "function" ? name.name : String(name);
     const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
     if (scope.only) collecting.hasOnly = true;
     parent.children.push(scope);
+    if (typeof fn !== "function") return;
     collecting.scope = scope;
     try {
-      if (callback) callback();
+      fn();
     } finally {
       collecting.scope = parent;
     }

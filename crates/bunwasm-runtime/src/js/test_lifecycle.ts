@@ -1,20 +1,4 @@
 (function () {
-  function description(value: unknown, signature: string) {
-    if (value === undefined || value === null) return "";
-    if (typeof value === "string" || typeof value === "number") return String(value);
-    if (typeof value === "function" && (value.name || /^class\b/.test(Function.prototype.toString.call(value)))) return value.name;
-    throw new Error(`${signature}() expects first argument to be a named class, named function, number, or string`);
-  }
-
-  function registration(signature: string, name: unknown, fn: unknown, allowEmpty = false) {
-    if (typeof name === "function" && (fn === undefined || fn === null)) return { name: "", fn: name };
-    if (allowEmpty && fn == null) return { name: description(name, signature), fn: null };
-    if (typeof fn !== "function") {
-      throw new Error(`${signature} expects a function as the second argument`);
-    }
-    return { name: description(name, signature), fn };
-  }
-
   function count(value: unknown, key: string, signature: string) {
     if (value === undefined) return 0;
     if (typeof value !== "number") throw new Error(`${signature}() expects ${key} to be a number`);
@@ -59,5 +43,5 @@
     return { ...outcome, elapsed, label };
   }
 
-  return { registration, repeatOptions, attempts };
+  return { repeatOptions, attempts };
 })

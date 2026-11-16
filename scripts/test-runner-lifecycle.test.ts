@@ -52,13 +52,6 @@ async function runner(load: (api: API) => void) {
   return { stderr, exit: process.exitCode };
 }
 
-function registerCallable(api: API, order: string[]) {
-  api.describe(() => { api.test("sole", () => order.push("sole")); });
-  const anonymous = () => {};
-  expect(() => api.describe(anonymous, anonymous)).not.toThrow();
-  expect(() => Reflect.apply(api.describe, undefined, [() => {}, () => {}])).toThrow("describe() expects first argument");
-}
-
 function registerValidation(api: API) {
   expect(() => api.test.failing("missing")).toThrow("test.failing expects a function as the second argument");
   expect(api.jest.setTimeout(5000)).toBeUndefined();
@@ -93,14 +86,6 @@ function registerDoubleFailure(api: API, order: string[]) {
     throw new Error("body failed first");
   });
 }
-
-test("callable describe executes and anonymous labels reject two arguments", async () => {
-  const order: string[] = [];
-  const result = await runner(api => registerCallable(api, order));
-  expect(order).toEqual(["sole"]);
-  expect(result.exit).toBe(0);
-  expect(result.stderr).toContain("1 pass");
-});
 
 test("failing registration requires its callback and jest timeout keeps native return", async () => {
   const result = await runner(registerValidation);

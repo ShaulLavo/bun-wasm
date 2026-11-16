@@ -2,8 +2,8 @@
 
 Class: Original adapter.
 
-`crates/bunwasm-runtime/src/js/test_lifecycle.ts` implements callable describe
-labels, retry/repeat options and repeated serial test execution. The wiring in
+`crates/bunwasm-runtime/src/js/test_lifecycle.ts` implements retry/repeat options
+and repeated serial test execution. The wiring in
 `bun_test.js` adds `jest.setTimeout`, `onTestFinished` and test-local `afterAll`
 hooks. No upstream implementation is copied.
 
@@ -23,7 +23,11 @@ the final test count. Repeats continue only after a passing attempt.
 Cleanup consumes live local and finished queues: newly registered cleanup runs
 in its phase instead of being lost from an earlier snapshot. Reentrant rejection
 still fails the test and stops later cleanup. Skipped and todo describe scopes
-retain their callback-free overload without disabling normal callback validation.
+retain their pre-existing callback-free behavior.
+
+Callable describe and new label validation are deferred. The existing describe
+registration function is unchanged from the original base. This adapter does not
+claim async describe completion or recover the two upstream callable cases.
 
 Concurrency remains serial. Concurrent scheduling needs separate asynchronous
 test and invocation ownership before overlapping tests can safely share this
