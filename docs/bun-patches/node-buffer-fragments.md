@@ -18,6 +18,9 @@ can shrink an earlier resizable view without leaving an oversized result. These
 are original adapter corrections against unchanged Bun tests at
 `9510e74152073d850a18758ca41114d8f214ffa6` and native Bun 1.4.4 and Node 26.12.1.
 The new transcoding adapter has its own [record](buffer-transcode.md).
+`tests/fixtures/buffer-concat-resizable` keeps the shrink assertions mandatory
+on QuickJS, Browser and SpiderMonkey. Its manifest excludes JSC's unsupported
+native resizable allocation; it uses no capability probe or caught OOM to pass.
 `web.js` creates the shared constructors in `internal.web` and installs those same
 references as globals; the Buffer factory now re-exports those exact references. This
 preserves constructor identity across global, CommonJS, and named/default ESM access, so
