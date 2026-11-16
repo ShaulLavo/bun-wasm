@@ -8,6 +8,7 @@ export function apiChecks(factory: typeof Buffer, transcode: Transcode) {
       for (const method of ["readInt32LE", "readFloatLE", "readBigInt64LE"]) {
         const read = Reflect.get(factory.prototype, method);
         assert.throws(() => Reflect.apply(read, {}, [0]), { code: "ERR_INVALID_ARG_TYPE" });
+        assert.throws(() => Reflect.apply(read, {}, [1.5]), { code: "ERR_INVALID_ARG_TYPE" });
         assert.throws(() => Reflect.apply(read, {}, ["bad"]), /"offset" argument/);
         assert.throws(() => Reflect.apply(read, new DataView(new ArrayBuffer(16)), [0]), /<= NaN/);
       }
@@ -30,6 +31,7 @@ export function apiChecks(factory: typeof Buffer, transcode: Transcode) {
         assert.throws(() => Reflect.apply(Reflect.get(buffer, method), buffer, [300, "bad", 1]), /"offset" argument/);
       }
       assert.throws(() => Reflect.apply(buffer.writeUIntLE, buffer, [2 ** 24, "bad", 2]), /"value"/);
+      assert.throws(() => Reflect.apply(buffer.writeUIntLE, buffer, [1, undefined, 2]), /"offset" argument/);
     } },
     { name: "concat captures each input getter once before copying", run() {
       let calls = 0;

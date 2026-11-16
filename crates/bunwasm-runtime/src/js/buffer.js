@@ -849,10 +849,10 @@
   function checkReadOffset(buf, offset, byteLength) {
     if (offset === undefined) offset = 0;
     if (typeof offset !== "number") throw invalidArgType("offset", "number", offset);
-    if (Math.floor(offset) !== offset) throw outOfRange("offset", "an integer", offset);
     if (!ArrayBuffer.isView(buf)) {
       throw makeError(TypeError, "ERR_INVALID_ARG_TYPE", `The "buf" argument must be of type Buffer. Received ${describeReceived(buf)}`);
     }
+    if (Math.floor(offset) !== offset) throw outOfRange("offset", "an integer", offset);
     const max = buf.length - byteLength;
     if (max < 0) throw bufferOutOfBounds();
     if (!(offset >= 0 && offset <= max)) throw outOfRange("offset", `>= 0 and <= ${max}`, offset);
