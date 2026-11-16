@@ -10,11 +10,13 @@ import { browserBuildConfig } from "../../../scripts/browser-build.ts";
 import type { RunRequest } from "../../src/bun-executor.ts";
 import { engineLinkPlan } from "../../../src/quickjs-program.ts";
 import { initializationPair } from "../../../tests/package/engine-initialization-fixture.ts";
+import { physicalStop } from "../../src/runner.ts";
 
 const mode = process.argv[2];
 const gate = new Int32Array(new SharedArrayBuffer(8));
 const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-entry-observation-"));
 let worker: Worker | undefined;
+let stopWorker = () => Promise.resolve();
 const runtime = createRuntime({ filesystem: { workerURL: new URL("../../src/fs-worker.ts", import.meta.url), mode: "memory" } });
 const filesystem = runtime.filesystem.fork();
 try {
@@ -41,6 +43,13 @@ try {
   const completed = Promise.withResolvers<void>();
   const messages: { type: string; code?: number; signal?: number }[] = [];
   worker = new Worker(new URL("./worker-entry-observation-worker.ts", import.meta.url));
+  const rootWorker = worker;
+  let physicalStopCompletion: Promise<void> | undefined;
+  stopWorker = () => physicalStopCompletion ??= physicalStop(rootWorker, () => group?.terminating(), returned, () => {
+    if (group) group.stopped();
+    else service.rootStopped(transport.pid);
+    release();
+  });
   worker.addEventListener("error", event => completed.reject(event));
   worker.addEventListener("message", event => {
     messages.push(event.data);
@@ -65,16 +74,15 @@ try {
   assert.equal(messages.some(message => message.type === "executor-environment"), false, "terminal process must not construct the Bun executor after imports");
   const exits = messages.filter(message => message.type === "exit" || message.type === "error");
   assert.deepEqual(exits.map(message => ({ type: message.type, code: message.code, signal: message.signal })), mode?.endsWith("terminated") ? [] : [{ type: "exit", code: 143, signal: 15 }]);
-  returned();
-  release();
-  if (group) group.stopped();
-  else service.rootStopped(transport.pid);
+  await stopWorker();
   console.log(`PASS held Bun entry import ${mode}`);
 } finally {
   Atomics.store(gate, 1, 1);
   Atomics.notify(gate, 1);
-  await worker?.terminate();
-  filesystem.port.close();
-  await runtime.dispose().catch(() => {});
-  await rm(scratch, { recursive: true, force: true });
+  try { await stopWorker(); }
+  finally {
+    filesystem.port.close();
+    await runtime.dispose().catch(() => {});
+    await rm(scratch, { recursive: true, force: true });
+  }
 }

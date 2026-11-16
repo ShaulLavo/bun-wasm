@@ -231,6 +231,14 @@ function payload(bytes: number) {
   return { task: "x".repeat(bytes), filename: "/control/attribute.mjs", flag: true, missing: undefined };
 }
 
+function closeEvent(port: SourcePort): Promise<void> {
+  return new Promise(resolve => {
+    const onClose = () => resolve();
+    port.on("close", onClose);
+    cleanup.add(() => { EventEmitter.prototype.removeListener.call(port, "close", onClose); });
+  });
+}
+
 test("the child's pipe is in relay mode and its relay is never serviced", () => {
   const { spawn } = group();
   const { pipes } = spawn();
@@ -1297,9 +1305,9 @@ test("a carried port is restored and sent on before its first sender ever settle
 });
 
 /**
- * The runtime's real loop (net.js `pumpIo`) drops a waiter whose step throws and hands the error
- * to its `fail`. The worker waiter pumps every control channel, lane and the lane housekeeping of
- * its thread, so it has to come back, and the error has to leave `pumpIo` as it was thrown: the
+ * The runtime's real loop (net.js `pumpIo`) hands a failing waiter's error to its `fail`.
+ * The worker waiter pumps every control channel, lane and the lane housekeeping of its thread,
+ * so it has to stay registered, and the error has to leave `pumpIo` as it was thrown: the
  * engine driver gives whatever `pumpIo` throws to the thread's uncaught-error handling.
  */
 const loopCases = (["root", "worker"] as const).flatMap(thread => (["before", "after"] as const).map(when => ({ thread, when })));
@@ -1310,9 +1318,10 @@ for (const { thread, when } of loopCases) {
     const [receiver, sender, listening, tag] = thread === "root" ? [root, child.parentPort, port, 1] : [child, port, child.parentPort, pid];
     const got: unknown[] = [];
     let closed = false;
-    listening.on("message", value => got.push(value));
+    const delivered = Promise.withResolvers<void>();
+    listening.on("message", value => { got.push(value); if (got.length === 2) delivered.resolve(); });
     listening.on("close", () => { closed = true; });
-    const turn = () => new Promise(resolve => setTimeout(resolve, 5));
+    const senderClosed = closeEvent(sender), receiverClosed = closeEvent(listening);
     // A pass that made progress is followed by another, as in the engine's loop. No test
     // below calls a synchronous receive: that would read the lane without the loop.
     const passes = () => { for (let pass = 0; pass < 6 && receiver.pumpIo(); pass++); };
@@ -1329,7 +1338,7 @@ for (const { thread, when } of loopCases) {
     // The frames the core kept (or never read) arrive through the loop, with what came after.
     sender.postMessage("second");
     passes();
-    await turn();
+    await delivered.promise;
     expect(got).toEqual(["first", "second"]);
     expect(swept(false)).toBeGreaterThan(before);
     // A death anywhere in the group still gets its full sweep on the root, from the loop.
@@ -1341,10 +1350,11 @@ for (const { thread, when } of loopCases) {
     }
     // And a later closure reaches the port through the loop alone.
     sender.close();
-    await turn();
+    await senderClosed;
     passes();
-    await turn();
+    await receiverClosed;
     expect(closed).toBe(true);
+    expect(got).toEqual(["first", "second"]);
   });
 }
 
@@ -1354,13 +1364,16 @@ for (const thread of ["root", "worker"] as const) {
     const { child, port, pid } = spawn();
     const [receiver, sender, listening, tag] = thread === "root" ? [root, child.parentPort, port, 1] : [child, port, child.parentPort, pid];
     const got: unknown[] = [];
-    listening.on("message", value => got.push(value));
-    const turn = () => new Promise(resolve => setTimeout(resolve, 5));
+    const delivered = Promise.withResolvers<void>();
+    listening.on("message", value => { got.push(value); if (got.length === 2) delivered.resolve(); });
+    const senderClosed = closeEvent(sender), receiverClosed = closeEvent(listening);
     const passes = () => { for (let pass = 0; pass < 6 && receiver.pumpIo(); pass++); };
     const pending = Reflect.get(receiver.internal, "ioPending") as () => number;
     const before = pending();
     // From here on, registering a waiter fails: the engine has no memory for one more entry.
     const add = Set.prototype.add as (this: Set<unknown>, value: unknown) => Set<unknown>;
+    const restoreAdd = () => { Set.prototype.add = add; };
+    cleanup.add(restoreAdd);
     let refused = 0;
     Set.prototype.add = function (this: Set<unknown>, value: unknown) {
       const waiter = typeof value === "object" && value !== null && "step" in value && "fail" in value;
@@ -1383,19 +1396,20 @@ for (const thread of ["root", "worker"] as const) {
       const sweeps = swept();
       sender.postMessage("second");
       passes();
-      await turn();
+      await delivered.promise;
       expect(got).toEqual(["first", "second"]);
       expect(swept()).toBeGreaterThan(sweeps);
       // And a later closure reaches the port through the same loop.
       let closed = false;
       listening.on("close", () => { closed = true; });
       sender.close();
-      await turn();
+      await senderClosed;
       passes();
-      await turn();
+      await receiverClosed;
       expect(closed).toBe(true);
+      expect(got).toEqual(["first", "second"]);
       expect(refused).toBe(0);
-    } finally { Set.prototype.add = add; }
+    } finally { restoreAdd(); cleanup.delete(restoreAdd); }
   });
 }
 
@@ -1404,17 +1418,19 @@ test("one lane that fails to drain does not hold back the thread's other lanes a
   const first = spawn();
   const second = spawn();
   const got: string[] = [];
-  first.port.on("message", value => got.push(`first ${value}`));
-  second.port.on("message", value => got.push(`second ${value}`));
+  const otherDelivered = Promise.withResolvers<void>();
+  const failedDelivered = Promise.withResolvers<void>();
+  first.port.on("message", value => { got.push(`first ${value}`); failedDelivered.resolve(); });
+  second.port.on("message", value => { got.push(`second ${value}`); otherDelivered.resolve(); });
   first.child.parentPort.postMessage("a");
   second.child.parentPort.postMessage("b");
   // The first lane with frames fails after it read them. The same pass still serves the rest.
   model.control.fault = { native: "laneDrain", when: "after" };
   expect(() => root.pumpIo()).toThrow("core data allocation failed");
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await otherDelivered.promise;
   expect(got).toHaveLength(1);
   for (let pass = 0; pass < 4 && root.pumpIo(); pass++);
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await failedDelivered.promise;
   expect(got.toSorted()).toEqual(["first a", "second b"]);
 });
 
@@ -1443,12 +1459,13 @@ test("ports carried in unread frames close when the reader closes", async () => 
   const carried = new root.MessageChannel();
   let closed = false;
   carried.port1.on("close", () => { closed = true; });
+  const close = closeEvent(carried.port1);
   port.postMessage({ port: carried.port2 }, [carried.port2]);
   child.parentPort.close();
   // The carrying frame is never parsed: the ledger closes the carried end and its peer sees it.
   root.pump();
   expect(root.receiveMessageOnPort(carried.port1)).toBeUndefined();
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await close;
   expect(closed).toBe(true);
   port.postMessage("discarded after the reader closed");
 });
@@ -1458,9 +1475,10 @@ test("a worker exit closes its ends and the parent's port sees the lane end", as
   const { port, cell } = spawn();
   let closed = false;
   port.on("close", () => { closed = true; });
+  const close = closeEvent(port);
   rootLanes.exited(cell);
   root.pump();
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await close;
   expect(closed).toBe(true);
 });
 
@@ -1476,6 +1494,7 @@ async function carriedToIdlePeer(finish: (receiver: ReturnType<ReturnType<typeof
   const peer = carried(holder.child.workerData);
   let closed = false;
   peer.on("close", () => { closed = true; });
+  const close = closeEvent(peer);
   // The root learns the holder's bind and the carried port's move.
   root.step();
   receiver.port.postMessage({ port: pair.port2 }, [pair.port2]);
@@ -1489,7 +1508,7 @@ async function carriedToIdlePeer(finish: (receiver: ReturnType<ReturnType<typeof
   expect(root.__fixtureOwners().length).toBeLessThan(records);
   // The frame on its pipe is what wakes the idle holder; its next step closes the port.
   holder.child.step();
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await close;
   expect(closed).toBe(true);
 }
 
