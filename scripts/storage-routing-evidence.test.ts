@@ -206,7 +206,7 @@ test("page receipt and head send cannot borrow another generation or reply port"
 test("a loading redirect is distinct from the completed native response matching the real guest head", () => {
   const f = fixture();
   complete(f);
-  f.evidence.request({ kind: "response", page: 1, request: 1, url, status: 307, fromServiceWorker: true });
+  f.evidence.request({ kind: "response", page: 1, request: 1, url, status: 307, fromServiceWorker: true, loadingNavigation: true });
   f.evidence.request({ kind: "requestfinished", page: 1, request: 1, url });
   f.evidence.request({ kind: "request", page: 1, request: 2, url });
   f.evidence.request({ kind: "response", page: 1, request: 2, url, status: 200, fromServiceWorker: true });
@@ -228,6 +228,19 @@ test("native completion rejects a different status and duplicate matching respon
     repeated.evidence.request({ kind: "requestfinished", page: 1, request, url });
   }
   expect(() => repeated.evidence.qualify([target])).toThrow();
+});
+
+test("a completed response cannot hide an extra error, network response or unmarked redirect", () => {
+  for (const extra of [{ status: 502, fromServiceWorker: true }, { status: 200, fromServiceWorker: false }, { status: 307, fromServiceWorker: true }]) {
+    const f = fixture();
+    complete(f);
+    f.evidence.request({ kind: "response", page: 1, request: 1, url, status: 200, fromServiceWorker: true });
+    f.evidence.request({ kind: "requestfinished", page: 1, request: 1, url });
+    f.evidence.request({ kind: "request", page: 1, request: 2, url });
+    f.evidence.request({ kind: "response", page: 1, request: 2, url, ...extra });
+    f.evidence.request({ kind: "requestfinished", page: 1, request: 2, url });
+    expect(() => f.evidence.qualify([target])).toThrow();
+  }
 });
 
 test("a current page receipt cannot borrow stale helper or acceptance evidence", () => {

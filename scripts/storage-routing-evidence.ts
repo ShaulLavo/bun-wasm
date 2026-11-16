@@ -155,13 +155,19 @@ export class StorageRoutingEvidence {
   }
   private nativeComplete(url: RoutingRow[string] | undefined, status: RoutingRow[string] | undefined): boolean {
     if (typeof status !== "number") return false;
-    const responses = this.requests.filter(row => row.kind === "response" && row.url === url && row.status === status && row.fromServiceWorker === true);
-    if (responses.length !== 1) return false;
-    const start = responses[0]!;
-    if (!positiveId(start.page) || !positiveId(start.request)) return false;
-    const lifecycle = this.requests.filter(row => row.url === url && row.page === start.page && row.request === start.request);
-    return lifecycle.some(row => row.kind === "request")
-      && lifecycle.some(row => row.kind === "requestfinished");
+    const responses = this.requests.filter(row => row.kind === "response" && row.url === url);
+    const matches = responses.filter(row => row.status === status && row.fromServiceWorker === true && row.loadingNavigation !== true);
+    if (matches.length !== 1) return false;
+    const match = matches[0]!;
+    const loading = responses.filter(row => row !== match);
+    if (loading.length > 1 || loading.some(row => row.loadingNavigation !== true || row.status !== 307 || row.fromServiceWorker !== true || row.page !== match.page)) return false;
+    const starts = this.requests.filter(row => row.kind === "request" && row.url === url);
+    if (starts.length !== responses.length || new Set(starts.map(row => `${row.page}:${row.request}`)).size !== starts.length) return false;
+    return responses.every(response => {
+      if (!positiveId(response.page) || !positiveId(response.request)) return false;
+      const lifecycle = this.requests.filter(row => row.url === url && row.page === response.page && row.request === response.request);
+      return lifecycle.some(row => row.kind === "request") && lifecycle.some(row => row.kind === "requestfinished");
+    });
   }
 }
 function positiveId(value: unknown): boolean { return typeof value === "number" && Number.isSafeInteger(value) && value > 0; }
