@@ -44,6 +44,14 @@ export function mb(bytes: number): string {
 
 export class WasmMissing extends Error {}
 
+/** Retain verified tools for one consumer; optional persistence can finish after launch. */
+export function createToolsLoader(): () => Promise<WebAssembly.Module> {
+  let loading: Promise<WebAssembly.Module> | undefined;
+  return () => loading ??= loadWasm("bun-tools.wasm", () => {})
+    .then(result => result.module)
+    .catch(error => { loading = undefined; throw error; });
+}
+
 /** Select the engine and memory profile before fetching any program bytes. */
 export async function loadEngineProgram(engine: Engine, profile: ProgramMemoryProfile, progress: (text: string) => void, override?: string) {
   requireProfileEngine(engine, profile);

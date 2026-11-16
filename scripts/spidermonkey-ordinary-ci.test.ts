@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,9 +82,8 @@ test("ordinary invocation passes explicit inputs once on either tier", () => {
 });
 
 test("workflow caches only native work and Cargo objects and exports after its single live gate", () => {
-  const source = resolve(import.meta.dir, "..");
-  const workflow = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
-  const rust = workflow.slice(workflow.indexOf("  rust:\n"), workflow.indexOf("\n  package:", workflow.indexOf("  rust:\n")));
+  const workflow = expandedCiWorkflow();
+  const rust = workflow.slice(workflow.indexOf("  rust:\n"), workflow.indexOf("\n  browser-production:", workflow.indexOf("  rust:\n")));
   expect(rust.match(/bash scripts\/build-bun-core.sh/g)).toHaveLength(1);
   expect(rust.match(/bash scripts\/build-bun-spidermonkey.sh/g)).toHaveLength(1);
   expect(rust.match(/bun scripts\/test-checks.ts native\n/g)).toHaveLength(1);

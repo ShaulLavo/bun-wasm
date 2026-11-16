@@ -4,8 +4,8 @@ Class **Original adapter**. `web/scripts/node-shell.ts`, `node-host.ts`,
 `node-spawn.ts` and `node-process.ts` connect the existing Node worker host to
 the pinned Bash and env guests. No upstream implementation is copied.
 
-The consumer pins bash-web 0.0.111 at
-`e362a4752b505606cc009be59ccfa7a90e4b8cf5` and Waffle 0.0.137 at
+The consumer pins the prepared public bash-web 0.0.112 archive at
+`ed616905ff32a3431d5d3e72b721ac3d73cabc62` and Waffle 0.0.137 at
 `27b03a8c519b4d48d00d3723b4ee2993d735f27d`. The adapter originally used Waffle
 0.0.130 at `b6ce9c22e4032637814a3985fab934915be02bcc`; its inherited-descriptor
 contract remains unchanged. Self INT and TERM retain signaled outcomes 2 and 15;
@@ -50,3 +50,11 @@ explicitly, including under `--no-build`. The package behavior fixture retains
 its assertions and its single native owner selecting all three maintained
 engines. Focused tests cover strict admission, byte/pin rejection, linking,
 cancellation and removal of private files.
+
+The Web and sandbox locks select the public Bash archive. Its release URL, source
+commit, size and SHA-256 live in `scripts/bash-web-release-inputs.json`. The
+ordinary shell builder rebuilds that source against the consumer-owned Waffle
+libc. Prepared workers ship unchanged and need no prepare lifecycle. Accepted
+child startup EIO yields command status 126 and reader continuation; genuine
+synchronous fork refusal retains status 254. The wrong tools payload still fails
+its original hash assertion. Waffle remains 0.0.137, base 0.0.16 and host ABI 2.

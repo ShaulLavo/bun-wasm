@@ -18,6 +18,7 @@ function admitted(job: Record<string, unknown>, event: string, draft: boolean, r
     .replaceAll("always()", "true")
     .replaceAll("github.ref", JSON.stringify(ref))
     .replace(/needs\.[\w-]+\.outputs\.[\w-]+/g, '"true"')
+    .replaceAll("needs.browser-production.result", '"skipped"')
     .replace(/needs\.[\w-]+\.result/g, '"success"');
   const result: unknown = new Function(`return (${expression})`)();
   if (typeof result !== "boolean") throw new Error("Expected boolean admission");
@@ -31,9 +32,9 @@ test("draft PRs defer native and browser work until ready without changing push 
     if (id === "update-status") continue;
     const job = record(value);
     expect(admitted(job, "pull_request", true), id).toBe(id === "selection" || id === "quality" || id === "ci-result");
-    expect(admitted(job, "pull_request", false), id).toBe(true);
-    expect(admitted(job, "push", false), id).toBe(true);
-    expect(admitted(job, "workflow_dispatch", false), id).toBe(true);
+    expect(admitted(job, "pull_request", false), id).toBe(id !== "browser-production");
+    expect(admitted(job, "push", false), id).toBe(id !== "browser-production");
+    expect(admitted(job, "workflow_dispatch", false), id).toBe(id !== "browser-production");
   }
 });
 

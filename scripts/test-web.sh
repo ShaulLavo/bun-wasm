@@ -21,15 +21,9 @@ bash "$root/scripts/test-web-host.sh" --unit
 bun run build >/dev/null
 
 scratch_root="${BUN_WASM_TEST_TMP:-${TMPDIR:-/tmp}}"
-scratch=""
 isolated_scratch=""
 isolated_backups=()
-server_pid=""
 cleanup() {
-  if [[ -n "$server_pid" ]]; then
-    kill "$server_pid" 2>/dev/null || true
-    wait "$server_pid" 2>/dev/null || true
-  fi
   for app in ${isolated_backups[@]+"${isolated_backups[@]}"}; do
     backup="$isolated_scratch/$app.bunfig.toml"
     if [[ -f "$backup" ]]; then
@@ -40,12 +34,11 @@ cleanup() {
     # Put back the default layout, or the next typecheck sees two copies of waffle.
     (cd "$root/$app" && bun install --frozen-lockfile >/dev/null 2>&1) || true
   done
-  rm -rf "$scratch" "$isolated_scratch"
+  rm -rf "$isolated_scratch"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
-scratch="$(mktemp -d "$scratch_root/bun-wasm-web-net-XXXXXX")"
 isolated_scratch="$(mktemp -d "$scratch_root/bun-wasm-web-isolated-XXXXXX")"
 
 printf '[install]\nlinker = "isolated"\n' >"$isolated_scratch/bunfig.toml"
@@ -62,30 +55,8 @@ for app in web sandbox site; do
 done
 (cd "$root/web" && bun test tests/build-splitting.test.ts)
 
-bun "$root/tests/servers/http.ts" >"$scratch/port" &
-server_pid=$!
-for _ in $(seq 50); do [[ -s "$scratch/port" ]] && break; sleep 0.1; done
-export TEST_SERVER="http://127.0.0.1:$(head -1 "$scratch/port")"
-
 failed=0
-# Both ways of installing the host functions: table slots (default) and calls through the WASI
-# import (SLOTS=imports, the playground's ?slots=imports).
-for slots in table imports; do
-  for fixture in net-fetch net-serve net-node-http net-tcp net-bun-tcp net-http-upgrade net-ws-builtin; do
-    dir="$root/tests/fixtures/$fixture"
-    output="$scratch/$fixture-$slots.out"
-    comparison="$scratch/$fixture-$slots.diff"
-    if SLOTS=$slots node "$root/scripts/run-with-timeout.mts" 60 bun scripts/run.ts "$root/dist/bun.wasm" -e "$(cat "$dir/index.js")" >"$output" 2>&1 &&
-      diff -u "$dir/expected.txt" "$output" >"$comparison"; then
-      echo "ok   cli $fixture ($slots)"
-    else
-      echo "FAIL cli $fixture ($slots)"
-      cat "$output"
-      if [[ -s "$comparison" ]]; then cat "$comparison"; fi
-      failed=1
-    fi
-  done
-done
+bun "$root/scripts/legacy-cli.ts" || failed=1
 
 if [[ $browser == 1 ]]; then
   browser_test node --test "$root/sandbox/tests/first-visit-lifecycle.test.ts" || failed=1

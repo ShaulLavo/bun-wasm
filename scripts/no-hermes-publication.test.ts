@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
@@ -51,7 +52,7 @@ test("old Hermes program input receipts cannot become current paired-engine rece
 });
 
 test("normal CI retires Hermes work instead of recording it as passed", () => {
-  const workflow = read(".github/workflows/ci.yml");
+  const workflow = expandedCiWorkflow();
   expect(workflow).not.toMatch(/hermes/i);
   expect(workflow).toContain("bun scripts/jsc-embedding.ts verify dist/bun-jsc.wasm");
   expect(workflow).toContain("name: browser-program");

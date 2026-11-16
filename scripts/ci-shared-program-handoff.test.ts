@@ -171,7 +171,7 @@ test("native and Browser consumers use ready artifacts on separate runners and d
     else expect(commands).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   }
   expect(shared.needs).toEqual(["selection", "ordinary-web-guests", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
-  expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && ((needs.selection.outputs.rust == 'true' && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success') || (needs.selection.outputs.rust == 'false' && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped')) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
+  expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (((needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')) && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success') || ((needs.selection.outputs.rust == 'false' && (github.event_name == 'pull_request' || needs.selection.outputs.browser_guest == 'false')) && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped')) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
   expect(shared["timeout-minutes"]).toBe(30);
   expect(shared.name).toBe("Shared PIC program producer");
   expect(sharedSteps.some(step => String(step.run).includes("test-checks.ts"))).toBe(false);

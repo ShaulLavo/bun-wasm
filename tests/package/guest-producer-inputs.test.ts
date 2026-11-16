@@ -9,8 +9,9 @@ import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture } fro
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { appendCustomSection, ENGINE_SECTION, programKind } from "../../src/engine-kind.ts";
 import waffleRelease from "../../scripts/waffle-release-inputs.json";
+import { expandedCiWorkflow } from "../../scripts/fixtures/ci-jsc-workflow";
 
-const workflow = await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+const workflow = expandedCiWorkflow();
 
 test("fixture Git failures preserve the command and subprocess result", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-fixture-git-error-"));
