@@ -1,0 +1,7 @@
+numeric accessors validate receivers after offset arguments
+numeric accessors address bytes within the receiver element bound
+one-byte writes validate offset types before value ranges
+concat captures each input getter once before copying
+transcode substitutes once per code point and preserves BOMs
+transcode reports encoding and malformed conversion errors
+inspect uses the maintained Buffer formatter
