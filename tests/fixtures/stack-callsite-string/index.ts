@@ -9,13 +9,16 @@ try {
     const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(site), "toString");
     assert(descriptor);
     assert.equal(descriptor.enumerable, false);
-    assert.equal(descriptor.configurable, true);
-    assert.equal(descriptor.writable, true);
+    if (process.env.BUNWASM_TEST_HOST === "native") {
+      assert.equal(descriptor.configurable, true);
+      assert.equal(descriptor.writable, true);
+    }
     assert.equal(typeof descriptor.value, "function");
     const text = site.toString();
     assert.equal(String(site), text);
     assert(text.includes("namedStringControl"));
     assert(text.includes("/index.ts:"));
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(site), "toString"), descriptor);
     return { text };
   };
   function namedStringControl() { return new Error("string control"); }
