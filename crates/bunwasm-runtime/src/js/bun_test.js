@@ -58,6 +58,15 @@
   let currentTest = null;
   // The pending invocation, so uncaught errors can fail it.
   let activeInvocation = null;
+  // Opaque token for the file being loaded or run; expectations keep it for snapshot guards.
+  let activeFile = null;
+  let preloadScope = null;
+  let preloading = false;
+  /** @type {"unattempted" | "loading" | "ready" | "stopped"} */
+  let preloadImport = "unattempted";
+  /** @type {"pending" | "running" | "ready" | "stopped"} */
+  let preloadSetup = "pending";
+  let preloadTeardown = false;
 
   // ───────────────────────────── asymmetric matchers ─────────────────────────────
 
@@ -195,7 +204,7 @@
 
   /** toEqual / toStrictEqual semantics, with asymmetric matchers on either side. */
   function equals(received, expected, strict) {
-    return internal.require("util").expectEquals(received, expected, strict, compareAsymmetric);
+    return internal.require("util").expectEquals(received, expected, strict, compareAsymmetric, isAsymmetric);
   }
 
   function compareAsymmetric(received, expected) {
@@ -309,13 +318,20 @@
     }
     const name = constructorName(value);
     const prefix = name === "Object" || name === "" ? "{" : `${name} {`;
-    const keys = snapshot ? Object.keys(value).concat(Object.getOwnPropertySymbols(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key))) : Object.keys(value);
+    const keys = snapshot ? Object.keys(value).concat(Object.getOwnPropertySymbols(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key))) : Object.getOwnPropertyNames(value);
     keys.sort((a, b) => compareStrings(typeof a === "symbol" ? a.description || "" : a, typeof b === "symbol" ? b.description || "" : b));
     const items = keys.map((key) => {
       const label = typeof key === "symbol" ? `[${String(key)}]` : snapshot ? JSON.stringify(key) : `"${key}"`;
-      return `${label}: ${prettyValue(value[key], inner, seen, snapshot)}`;
+      return `${label}: ${snapshot ? prettyValue(value[key], inner, seen, snapshot) : prettyProperty(value, key, inner, seen)}`;
     });
     return block(prefix, "}", items);
+  }
+
+  // Assertion diagnostics never run accessors; native Bun prints them as [native code].
+  function prettyProperty(value, key, indent, seen) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor && !("value" in descriptor)) return "[native code]";
+    return prettyValue(value[key], indent, seen, false);
   }
 
   function constructorName(value) {
@@ -340,7 +356,11 @@
   function formatDiff(received, expected, not) {
     const expectedText = prettyFormat(expected);
     if (not) return `Expected: not ${expectedText}`;
-    return diffStrings(prettyFormat(received), expectedText);
+    const receivedText = prettyFormat(received);
+    if (typeof received !== typeof expected && (isObjectLike(received) || isObjectLike(expected))) {
+      return `Expected: ${expectedText}\nReceived: ${receivedText}`;
+    }
+    return diffStrings(receivedText, expectedText);
   }
 
   function diffStrings(receivedText, expectedText) {
@@ -707,20 +727,22 @@
 
   const expectProto = {
     get not() {
-      return makeExpectation(this.received, { not: !this.flags.not, promise: this.flags.promise });
+      return makeExpectation(this.received, { not: !this.flags.not, promise: this.flags.promise }, this.label, this.file);
     },
     get resolves() {
-      return makeExpectation(this.received, { not: this.flags.not, promise: "resolves" });
+      return makeExpectation(this.received, { not: this.flags.not, promise: "resolves" }, this.label, this.file);
     },
     get rejects() {
-      return makeExpectation(this.received, { not: this.flags.not, promise: "rejects" });
+      return makeExpectation(this.received, { not: this.flags.not, promise: "rejects" }, this.label, this.file);
     },
   };
 
-  function makeExpectation(received, flags) {
+  function makeExpectation(received, flags, label, file) {
     const expectation = Object.create(expectProto);
     expectation.received = received;
     expectation.flags = flags;
+    expectation.label = label;
+    expectation.file = file;
     return expectation;
   }
 
@@ -746,10 +768,21 @@
 
   function defineMatcher(name, params, impl) {
     matcherParams[name] = params;
+    const snapshot = name === "toMatchSnapshot" || name === "toMatchInlineSnapshot" || name === "toThrowErrorMatchingSnapshot" || name === "toThrowErrorMatchingInlineSnapshot";
+    const fileSnapshot = name === "toMatchSnapshot" || name === "toThrowErrorMatchingSnapshot";
     expectProto[name] = function (...args) {
       const error = new Error();
       const origin = { invocation: activeInvocation, test: currentTest };
-      const context = { not: this.flags.not, promise: this.flags.promise, error, origin };
+      const context = { not: this.flags.not, promise: this.flags.promise, error, origin, label: this.label };
+      if (snapshot && this.flags.not) {
+        countExpectation(origin.test);
+        error.message = (this.label || signature(name, "", true)) + "\n\nMatcher error: Snapshot matchers cannot be used with not\n";
+        throw error;
+      }
+      if (fileSnapshot && this.file !== activeFile) {
+        error.message = (this.label || signature(name, "", false)) + "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n";
+        throw error;
+      }
       if (name.endsWith("Snapshot")) context.snapshot = reserveSnapshot(origin, name, args);
       const result = this.flags.promise
         ? matcherSupport.settle(matchPromise(this, name, impl, args, context), () => undefined)
@@ -767,7 +800,7 @@
     return matcherSupport.settle(impl(context, received, ...args), (failure) => {
       if (!failure) return;
       const params = failure.params === undefined ? matcherParams[name] : failure.params;
-      context.error.message = failure.raw ? failure.body : signature(name, params, context.not) + failure.body;
+      context.error.message = failure.raw ? failure.body : (context.label || signature(name, params, context.not)) + failure.body;
       throw context.error;
     });
   }
@@ -776,7 +809,7 @@
     const { flags, received } = expectation;
     const { error } = context;
     const fail = (body) => {
-      error.message = signature(name, matcherParams[name], flags.not, flags.promise) + body;
+      error.message = (context.label || signature(name, matcherParams[name], flags.not, flags.promise)) + body;
       throw error;
     };
     if (!isThenable(received)) return fail(`\n\nExpected promise\nReceived: ${inspect(received)}\n`);
@@ -798,8 +831,8 @@
     return undefined;
   }
 
-  function expect(value) {
-    return makeExpectation(value, { not: false, promise: undefined });
+  function expect(value, label) {
+    return makeExpectation(value, { not: false, promise: undefined }, typeof label === "string" ? label : undefined, activeFile);
   }
 
   expect.any = (ctor) => {
@@ -1443,7 +1476,6 @@
   }
 
   function prepareSnapshot(ctx, received, args, inline) {
-    if (ctx.not) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used with not\n" } };
     if (!ctx.origin.test) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n" } };
     const parsed = snapshotArguments(args, inline);
     if (parsed.properties !== undefined && !isObjectLike(received)) {
@@ -1575,7 +1607,6 @@
 
   function defineErrorSnapshotMatcher(name, inline) {
     defineMatcher(name, "expected", (ctx, received, ...args) => {
-      if (ctx.not) return { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used with not\n" };
       if (args.length > 1) throw new Error("\n\nMatcher error: Expected zero or one arguments\n");
       if (args.length === 1 && typeof args[0] !== "string") throw new Error("\n\nMatcher error: Expected first argument to be a string\n");
       return matcherSupport.settle(typeof received === "function" ? throwOutcome({}, received) : throwOutcome(ctx, received), (outcome) => {
@@ -1778,8 +1809,8 @@
     return { kind: "scope", name, parent, mode, only, children: [], beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
   }
 
-  function currentScope() {
-    if (!collecting) throw new Error("Cannot call test() or describe() outside of a test file");
+  function currentScope(kind) {
+    if (!collecting) throw new Error(`Cannot use ${kind} outside of the test runner. Run "bun test" to run tests.`);
     return collecting.scope;
   }
 
@@ -1795,14 +1826,19 @@
     return typeof timeout === "number" ? timeout : undefined;
   }
 
+  function guardRegistration(kind) {
+    if (preloading) throw new Error(`Cannot use ${kind} during preload.`);
+  }
+
   function registerTest(modifiers, name, fn, timeoutOrOptions) {
+    guardRegistration("test");
     const hasFn = typeof fn === "function";
     const mode = modifiers.mode || "run";
     const signature = modifiers.failing ? "test.failing" : "test";
     if (!hasFn && mode === "run") throw new Error(`${signature} expects a function as the second argument`);
     const timeout = readTimeout(timeoutOrOptions);
     const repeat = internal.require("test_lifecycle").repeatOptions(timeoutOrOptions, signature);
-    const scope = currentScope();
+    const scope = currentScope("test");
     const test = {
       kind: "test",
       name: name === undefined ? "" : String(name),
@@ -1821,7 +1857,8 @@
   }
 
   function registerDescribe(modifiers, name, fn) {
-    const parent = currentScope();
+    guardRegistration("describe");
+    const parent = currentScope("describe");
     const label = typeof name === "function" ? name.name : String(name);
     const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
     if (scope.only) collecting.hasOnly = true;
@@ -1908,6 +1945,7 @@
     fn.concurrent = fn;
     fn.serial = fn;
     fn.each = (table) => (name, callback, timeout) => {
+      guardRegistration("test");
       eachRows(table).forEach((args, index) => {
         const label = formatLabel(String(name), args, index);
         const usesDone = typeof callback === "function" && callback.length > args.length;
@@ -1923,6 +1961,7 @@
     fn.concurrent = fn;
     fn.serial = fn;
     fn.each = (table) => (name, callback) => {
+      guardRegistration("describe");
       eachRows(table).forEach((args, index) => {
         registerDescribe(modifiers, formatLabel(String(name), args, index), () => callback(...args));
       });
@@ -1951,7 +1990,7 @@
   function hookRegistrar(kind) {
     return (fn, timeout) => {
       if (typeof fn !== "function") throw new TypeError(`${kind}() expects a function as the first argument`);
-      const hooks = kind === "afterAll" && currentTest ? currentTest.afterAll : currentScope()[kind];
+      const hooks = kind === "afterAll" && currentTest ? currentTest.afterAll : currentScope(`${kind}()`)[kind];
       hooks.push({ fn, timeout: readTimeout(timeout) });
     };
   }
@@ -1978,7 +2017,7 @@
     return new Promise((resolve) => {
       let timer = null;
       const invocation = matcherSupport.pending();
-      const finish = (result) => invocation.complete(result, finalize);
+      const finish = (result) => invocation.complete(result, finalize, usesDone);
       const finalize = (result) => {
         if (invocation.settled) return;
         invocation.settled = true;
@@ -1991,21 +2030,8 @@
       const startTimer = () => {
         timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
       };
-      try {
-        if (usesDone) {
-          const done = (err) => finish(err === undefined || err === null ? { ok: true } : { error: err });
-          startTimer();
-          const result = fn(...args.concat([done]));
-          if (isThenable(result)) result.then(null, (err) => finish({ error: err }));
-          return;
-        }
-        startTimer();
-        const result = fn(...args);
-        if (!isThenable(result)) return finish({ ok: true });
-        result.then(() => finish({ ok: true }), (err) => finish({ error: err }));
-      } catch (err) {
-        finish({ error: err });
-      }
+      startTimer();
+      internal.require("test_lifecycle").body(fn, args, usesDone, finish);
     });
   }
 
@@ -2131,7 +2157,7 @@
 
   function classify(test, result, record) {
     if (test.mode === "todo") return result.ok ? { status: "fail", note: "todoPassed" } : { status: "todo" };
-    if (test.failing) return result.ok ? { status: "fail", note: "failingPassed" } : { status: "pass" };
+    if (test.failing && !result.timeout) return result.ok ? { status: "fail", note: "failingPassed" } : { status: "pass" };
     if (!result.ok) return failureFromResult(result, test);
     const assertions = record.assertions;
     if (assertions && assertions.exact !== undefined && assertions.exact !== record.expectCount) {
@@ -2478,28 +2504,101 @@
     });
   }
 
-  async function runFile(abs, cwd) {
-    summary.files++;
-    const file = { root: createScope("", null, "run", false), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
-    file.scope = file.root;
-    startFileHeader(relativePath(cwd, abs));
-    collecting = file;
+  async function runFile(abs, cwd, last) {
+    const previousFile = activeFile;
+    activeFile = {};
+    try {
+      await runActiveFile(abs, cwd, last);
+    } finally {
+      activeFile = previousFile;
+    }
+  }
+
+  async function importPreloads(file, cwd) {
+    if (preloads.length === 0 || preloadImport === "ready") return true;
+    if (preloadImport !== "unattempted") return false;
+    preloadImport = "loading";
+    preloadScope = createScope("", null, "run", false);
+    const previousScope = file.scope;
+    const previousCollecting = collecting;
+    file.scope = preloadScope;
+    preloading = true;
     try {
       for (const preload of preloads) await internal.importModule(resolveArgument(cwd, preload));
-      await internal.importModule(abs);
+      preloadImport = "ready";
+      return true;
     } catch (error) {
-      // A file that fails to load counts as one failed test.
+      preloadImport = "stopped";
+      preloadSetup = "stopped";
+      throw error;
+    } finally {
+      preloading = false;
+      file.scope = previousScope;
+      collecting = previousCollecting;
+    }
+  }
+
+  async function collectFile(file, cwd) {
+    if (preloadImport === "stopped") return false;
+    collecting = file;
+    try {
+      if (!await importPreloads(file, cwd)) return false;
+      file.root.parent = preloadScope;
+      await internal.importModule(file.path);
+      return true;
+    } catch (error) {
       reportUnhandledError(error);
       summary.fail++;
-      return;
+      return false;
     } finally {
       collecting = null;
     }
-    await runScope(file.root, file);
+  }
+
+  async function setupPreloads() {
+    if (!preloadScope || preloadImport !== "ready" || preloadSetup !== "pending") return;
+    preloadSetup = "running";
+    try {
+      const result = await runHooks(preloadScope.beforeAll);
+      preloadSetup = result.ok ? "ready" : "stopped";
+      if (!result.ok) reportHookFailure(preloadScope, result);
+    } catch (error) {
+      preloadSetup = "stopped";
+      reportHookFailure(preloadScope, { error });
+    }
+  }
+
+  async function finishPreloads() {
+    if (!preloadScope || preloadImport !== "ready" || preloadTeardown) return;
+    preloadTeardown = true;
+    try {
+      const result = await runHooks(preloadScope.afterAll);
+      if (!result.ok) reportHookFailure(preloadScope, result);
+    } catch (error) {
+      reportHookFailure(preloadScope, { error });
+    }
+  }
+
+  function flushFileSnapshots(file) {
     try {
       flushSnapshots(file);
     } catch (error) {
       reportUnhandledError(error);
+    }
+  }
+
+  async function runActiveFile(abs, cwd, last) {
+    summary.files++;
+    const file = { root: createScope("", null, "run", false), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
+    file.scope = file.root;
+    startFileHeader(relativePath(cwd, abs));
+    const collected = await collectFile(file, cwd);
+    await setupPreloads();
+    try {
+      if (collected && preloadSetup !== "stopped") await runScope(file.root, file);
+    } finally {
+      if (last) await finishPreloads();
+      flushFileSnapshots(file);
     }
   }
 
@@ -2518,7 +2617,7 @@
     }
     installErrorHandlers();
     Object.assign(globalThis, exports);
-    for (const abs of state.files) await runFile(abs, cwd);
+    for (let index = 0; index < state.files.length; index++) await runFile(state.files[index], cwd, index === state.files.length - 1);
     const filteredAll = printSummary();
     if (filteredAll || summary.fail > 0 || summary.errors > 0) globalThis.process.exitCode = 1;
   }

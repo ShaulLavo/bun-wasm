@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/test-equality-platform.test.ts",
+  "localRuntime": true
+}

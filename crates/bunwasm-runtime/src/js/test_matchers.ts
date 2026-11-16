@@ -83,8 +83,7 @@
   }
 
   function throwOutcome(ctx: Context, received: unknown): Outcome | Promise<Outcome> {
-    if (ctx.promise) return { threw: ctx.promise === "rejects", value: received };
-    if (typeof received !== "function") return { invalid: true };
+    if (typeof received !== "function") return ctx.promise ? { threw: true, value: received } : { invalid: true };
     let result: unknown;
     try {
       result = received();
@@ -247,7 +246,9 @@
     function tick(): Promise<void> {
       return new Promise(resolve => schedule(resolve, 0));
     }
-    async function complete<T extends { ok?: boolean }>(result: T, finish: (value: T | { error: unknown }) => void) {
+    async function complete<T extends { ok?: boolean }>(result: T, finish: (value: T | { error: unknown }) => void, checkpoint = false) {
+      if (closed) return;
+      if (result.ok && checkpoint) await undefined;
       if (closed) return;
       if (!result.ok || records.size === 0) {
         close(!result.ok);

@@ -98,7 +98,7 @@ assert.equal(badArgument?.code, 'StringExpected');
 assert.equal(memories.length, 1);
 const descriptor = descriptors[0];
 assert(descriptor);
-assert.equal(descriptor.maximum, 65536);
+assert.equal(descriptor.maximum, mode === 'stock' ? 65536 : 4096);
 assert.equal(descriptor.shared, true);
 assert.equal(startedBytes[0], (mode === 'stock' ? 4000 : initial) * 65536);
 console.log(JSON.stringify({ engine: process.versions.bun ? 'bun' : 'node', mode, name, descriptors, startedBytes,
