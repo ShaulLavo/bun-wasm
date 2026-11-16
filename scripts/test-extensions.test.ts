@@ -8,8 +8,9 @@ import { runInNewContext, runInThisContext } from "node:vm";
 const runtime = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
-function expression(source: string) {
-  return runInThisContext(`(function () {${transpiler.transformSync(`return (\n${source}\n)`)}\n})()`);
+function expression(source: string, bindings?: Record<string, unknown>) {
+  const code = `(function () {${transpiler.transformSync(`return (\n${source}\n)`)}\n})()`;
+  return bindings ? runInNewContext(code, { setTimeout, ...bindings }) : runInThisContext(code);
 }
 
 function factory(name: string) {
@@ -17,13 +18,37 @@ function factory(name: string) {
   return expression(source);
 }
 
-function matcherSupport(BunFile?: { readonly prototype: object }) {
-  return factory("test_matchers.ts")({
+function matcherSupport(BunFile?: { readonly prototype: object }, bindings?: Record<string, unknown>) {
+  const source = readFileSync(new URL("test_matchers.ts", runtime), "utf8");
+  return expression(source, bindings)({
     BunFile,
     isPromise: types.isPromise,
     promiseThen: (promise: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (value: unknown) => unknown) =>
       Promise.prototype.then.call(promise, fulfilled, rejected),
   });
+}
+
+function runtimeBlob() {
+  const state: {
+    native: { platformInfo: { version: string; arch: string }; timeOrigin(): number; utf8Encode(text: string): Uint8Array };
+    require(name: string): unknown;
+    web?: { Blob: typeof Blob };
+  } = {
+    native: {
+      platformInfo: { version: "test", arch: "test" },
+      timeOrigin: () => 0,
+      utf8Encode: text => new TextEncoder().encode(text),
+    },
+    require(name) {
+      if (name === "text_decoder") return TextDecoder;
+      if (name === "streams") return { ReadableStream };
+      if (name === "body_streams") return {};
+      return factory(`${name}.ts`)(state);
+    },
+  };
+  factory("web.js")(state);
+  if (!state.web) throw new Error("Runtime web factory did not publish its classes");
+  return state.web.Blob;
 }
 
 async function runFixture(name: string) {
@@ -95,11 +120,26 @@ test("emptiness retains the lazy BunFile size accessor", () => {
   class LazyFile extends Blob {
     #storedSize = 1;
     override get size() { return this.#storedSize; }
-    _bytes() { reads++; throw new Error("must not read file bytes"); }
+    override _bytes(): never { reads++; throw new Error("must not read file bytes"); }
   }
   const support = matcherSupport({ prototype: LazyFile.prototype });
   const file = new LazyFile();
   Object.defineProperty(file, "size", { get() { throw new Error("shadow file size"); } });
   expect(support.empty(file)).toBe(false);
   expect(reads).toBe(0);
+});
+
+test("runtime Blob emptiness never dispatches an own byte-reader shadow", () => {
+  const RuntimeBlob = runtimeBlob();
+  const support = matcherSupport(undefined, { Blob: RuntimeBlob });
+  const sentinel = new Error("shadow byte reader");
+  const empty = new RuntimeBlob();
+  Object.defineProperty(empty, "_bytes", { get() { throw sentinel; } });
+  expect(support.empty(empty)).toBe(true);
+  const fakeFull = new RuntimeBlob();
+  Object.defineProperty(fakeFull, "_bytes", { value: () => new Uint8Array(1) });
+  expect(support.empty(fakeFull)).toBe(true);
+  const full = new RuntimeBlob(["x"]);
+  Object.defineProperty(full, "_bytes", { value: () => new Uint8Array() });
+  expect(support.empty(full)).toBe(false);
 });

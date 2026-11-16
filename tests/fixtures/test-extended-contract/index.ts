@@ -115,6 +115,15 @@ call(emptyBlob, "toBeEmpty");
 const fullBlob = new Blob(["x"]);
 Object.defineProperty(fullBlob, "size", { value: 0 });
 call(fullBlob, "toBeEmpty", [], true);
+const readerShadow = new Blob();
+Object.defineProperty(readerShadow, "_bytes", { get() { throw shadowFailure; } });
+call(readerShadow, "toBeEmpty");
+const fakeFullBlob = new Blob();
+Object.defineProperty(fakeFullBlob, "_bytes", { value: () => new Uint8Array(1) });
+call(fakeFullBlob, "toBeEmpty");
+const fakeEmptyBlob = new Blob(["x"]);
+Object.defineProperty(fakeEmptyBlob, "_bytes", { value: () => new Uint8Array() });
+call(fakeEmptyBlob, "toBeEmpty", [], true);
 let visits = 0;
 function* values() { visits++; yield 1; visits++; yield 2; visits++; }
 const iterator = values();

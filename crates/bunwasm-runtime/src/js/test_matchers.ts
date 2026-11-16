@@ -17,6 +17,7 @@
   const arrayBufferByteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
   const typedArrayByteLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "byteLength")?.get;
   const blobSize = Object.getOwnPropertyDescriptor(Blob.prototype, "size")?.get;
+  const blobBytes = Object.getOwnPropertyDescriptor(Blob.prototype, "_bytes")?.value;
   const bunFilePrototype = internal.BunFile?.prototype;
   const bunFileSize = bunFilePrototype && Object.getOwnPropertyDescriptor(bunFilePrototype, "size")?.get;
 
@@ -89,6 +90,7 @@
     if (value instanceof Map || value instanceof Set) return value.size === 0;
     if (value instanceof Blob && blobSize) {
       if (bunFilePrototype && bunFileSize && apply(isPrototypeOf, bunFilePrototype, [value])) return apply(bunFileSize, value, noArgs) === 0;
+      if (typeof blobBytes === "function" && typedArrayByteLength) return apply(typedArrayByteLength, apply(blobBytes, value, noArgs), noArgs) === 0;
       return apply(blobSize, value, noArgs) === 0;
     }
     if (value instanceof ArrayBuffer && arrayBufferByteLength) {
