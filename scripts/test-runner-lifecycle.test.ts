@@ -48,42 +48,61 @@ async function runner(load: (api: API) => void) {
   return { stderr, exit: process.exitCode };
 }
 
+function registerCallable(api: API, order: string[]) {
+  api.describe(() => { api.test("sole", () => order.push("sole")); });
+  const anonymous = () => {};
+  expect(() => api.describe(anonymous, anonymous)).not.toThrow();
+  expect(() => Reflect.apply(api.describe, undefined, [() => {}, () => {}])).toThrow("describe() expects first argument");
+}
+
+function registerValidation(api: API) {
+  expect(() => api.test.failing("missing")).toThrow("test.failing expects a function as the second argument");
+  expect(api.jest.setTimeout(5000)).toBeUndefined();
+  api.test("registered", () => {
+    expect(() => api.test.failing("missing")).toThrow("test.failing expects a function as the second argument");
+  });
+}
+
+function registerRetry(api: API, order: string[], state: { retries: number }) {
+  api.beforeEach(() => { order.push("before"); });
+  api.afterEach(() => { order.push("after"); });
+  api.test("retry", () => {
+    state.retries++;
+    api.onTestFinished(() => { order.push("finished"); });
+    api.afterAll(() => { order.push("inner"); });
+    order.push("test");
+    if (state.retries < 3) throw new Error("intentional retry");
+  }, { retry: 3 });
+  api.test("repeat", () => { order.push("repeat"); }, { repeats: 2 });
+  expect(() => api.test("both", () => {}, { retry: 1, repeats: 1 })).toThrow("Cannot set both retry and repeats");
+}
+
+function registerDoubleFailure(api: API, order: string[]) {
+  api.afterEach(() => { order.push("must not run"); });
+  api.test("both fail", () => {
+    api.afterAll(() => { order.push("must not run"); });
+    api.afterAll(() => { order.push("cleanup"); throw new Error("cleanup also failed"); });
+    api.onTestFinished(() => { order.push("must not run"); });
+    throw new Error("body failed first");
+  });
+}
+
 test("callable describe executes and anonymous labels reject two arguments", async () => {
   const order: string[] = [];
-  const result = await runner(api => {
-    api.describe(() => { api.test("sole", () => order.push("sole")); });
-    expect(() => api.describe(() => {}, () => {})).toThrow("describe() expects first argument");
-  });
+  const result = await runner(api => registerCallable(api, order));
   expect(order).toEqual(["sole"]);
   expect(result.exit).toBe(0);
   expect(result.stderr).toContain("1 pass");
 });
 
 test("failing registration requires its callback and jest timeout keeps native return", async () => {
-  const result = await runner(api => {
-    expect(() => api.test.failing("missing")).toThrow("test.failing expects a function as the second argument");
-    expect(api.jest.setTimeout(5000)).toBeUndefined();
-    api.test("registered", () => {});
-  });
+  const result = await runner(registerValidation);
   expect(result.exit).toBe(0);
 });
 
 test("retry and repeats rerun hooks and report only the final outcome", async () => {
   const order: string[] = [];
-  let retries = 0;
-  const result = await runner(api => {
-    api.beforeEach(() => { order.push("before"); });
-    api.afterEach(() => { order.push("after"); });
-    api.test("retry", () => {
-      retries++;
-      api.onTestFinished(() => { order.push("finished"); });
-      api.afterAll(() => { order.push("inner"); });
-      order.push("test");
-      if (retries < 3) throw new Error("intentional retry");
-    }, { retry: 3 });
-    api.test("repeat", () => { order.push("repeat"); }, { repeats: 2 });
-    expect(() => api.test("both", () => {}, { retry: 1, repeats: 1 })).toThrow("Cannot set both retry and repeats");
-  });
+  const result = await runner(api => registerRetry(api, order, { retries: 0 }));
   expect(order).toEqual(Array.from({ length: 3 }, () => ["before", "test", "inner", "after", "finished"]).flat()
     .concat(Array.from({ length: 3 }, () => ["before", "repeat", "after"]).flat()));
   expect(result.exit).toBe(0);
@@ -109,15 +128,7 @@ test("repeat stops on failure and retry exhaustion preserves failure", async () 
 
 test("body and cleanup failures both remain visible and cleanup stops", async () => {
   const order: string[] = [];
-  const result = await runner(api => {
-    api.afterEach(() => { order.push("must not run"); });
-    api.test("both fail", () => {
-      api.afterAll(() => { order.push("must not run"); });
-      api.afterAll(() => { order.push("cleanup"); throw new Error("cleanup also failed"); });
-      api.onTestFinished(() => { order.push("must not run"); });
-      throw new Error("body failed first");
-    });
-  });
+  const result = await runner(api => registerDoubleFailure(api, order));
   expect(order).toEqual(["cleanup"]);
   expect(result.stderr).toContain("body failed first");
   expect(result.stderr).toContain("cleanup also failed");

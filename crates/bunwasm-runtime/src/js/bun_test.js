@@ -1777,12 +1777,12 @@
   }
 
   function registerTest(modifiers, name, fn, timeoutOrOptions) {
-    const scope = currentScope();
     const hasFn = typeof fn === "function";
     const mode = modifiers.mode || "run";
     const signature = modifiers.failing ? "test.failing" : "test";
     if (!hasFn && mode === "run") throw new Error(`${signature} expects a function as the second argument`);
     const repeat = internal.require("test_lifecycle").repeatOptions(timeoutOrOptions, signature);
+    const scope = currentScope();
     const test = {
       kind: "test",
       name: name === undefined ? "" : String(name),
