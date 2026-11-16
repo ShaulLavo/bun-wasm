@@ -26,6 +26,8 @@ headers and streaming body. It does not issue a second guest request, send an
 invented success head, buffer the whole body, or impose a compile deadline.
 Closing the loading page cancels its pending response body. Subresources,
 non-GET navigations and root-origin previews retain their existing transport.
+Browser checks use the typed `navigatePreview` helper to await the final response,
+including an unavailable server's real 502 after the temporary loading document.
 
 The WebKit mechanism is in
 [`ServiceWorkerFetchTask::timeoutTimerFired`](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/NetworkProcess/ServiceWorker/ServiceWorkerFetchTask.cpp),
