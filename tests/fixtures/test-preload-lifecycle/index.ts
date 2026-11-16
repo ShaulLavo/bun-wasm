@@ -26,6 +26,8 @@ interface Scenario {
   fail: number;
   exit: number;
   snapshot: boolean;
+  // Replaces the pass/fail summary check: a filter that matches nothing prints only this error.
+  summary?: RegExp;
 }
 
 function scenario(name: string, values: Partial<Omit<Scenario, "name">>): Scenario {
@@ -52,7 +54,8 @@ console.log("guarded", reads, callbacks);\n`;
 
 const cases = [
   scenario("filter-first", { args: ["-t", "b"], lines: prefix.concat(["import b"], each("b"), ["after"]), pass: 1 }),
-  scenario("filter-none", { args: ["-t", "missing"], lines: prefix.concat(["import b", "after"]), pass: 0, exit: 1 }),
+  scenario("filter-none", { args: ["-t", "missing"], lines: prefix.concat(["import b", "after"]), exit: 1,
+    summary: /error: regex "missing" matched 0 tests\. Searched 2 files \(skipping 2 tests\)/ }),
   scenario("only-none", { args: ["--only"], lines: prefix.concat(["import b", "after"]), pass: 0 }),
   scenario("all-skip", { a: file("a", 'console.log("must not run")', "test.skip"), b: file("b", 'console.log("must not run")', "test.skip"),
     lines: prefix.concat(["import b", "after"]), pass: 0 }),
@@ -80,6 +83,14 @@ const cases = [
     lines: prefix.concat(each("a")), pass: 0, fail: 1, exit: 1 }),
 ];
 
+function assertSummary(item: Scenario, stderr: string) {
+  if (item.summary) return assert.match(stderr, item.summary, item.name);
+  // Like native Bun, a bailed run prints no pass/fail summary.
+  if (item.name.startsWith("bail")) return assert.match(stderr, /Bailed out after 1 failure/);
+  assert.match(stderr, new RegExp(` ${item.pass} pass\\n`), item.name);
+  assert.match(stderr, new RegExp(` ${item.fail} fail\\n`), item.name);
+}
+
 function runCase(item: Scenario) {
   const work = join(directory, item.name);
   mkdirSync(work, { recursive: true });
@@ -90,10 +101,8 @@ function runCase(item: Scenario) {
   const lines = child.stdout.toString().trim().split("\n").filter(line => !line.startsWith("bun test "));
   assert.equal(child.exitCode, item.exit, `${item.name}\n${stderr}`);
   assert.deepEqual(lines, item.lines, item.name);
-  assert.match(stderr, new RegExp(` ${item.pass} pass\\n`), item.name);
-  assert.match(stderr, new RegExp(` ${item.fail} fail\\n`), item.name);
+  assertSummary(item, stderr);
   if (item.snapshot) assert.match(readFileSync(join(work, "__snapshots__/b.test.ts.snap"), "utf8"), /queued final snapshot/);
-  if (item.name.startsWith("bail")) assert.match(stderr, /Bailed out after 1 failure/);
   console.log(`${item.name}: pass`);
 }
 
