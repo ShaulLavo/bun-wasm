@@ -14,6 +14,7 @@ function inverted(name: string, ...args: unknown[]): unknown {
 
 const events: string[] = [];
 const original = new Error("asymmetric rejection");
+const rejectedReason = "asymmetric rejection";
 expect.extend({
   asyncValue(value, expected) {
     events.push(`start ${String(value)}`);
@@ -23,7 +24,7 @@ expect.extend({
     });
   },
   syncValue(value, expected) { return { pass: Object.is(value, expected) }; },
-  rejectedValue() { return Promise.reject(original); },
+  rejectedValue() { return Promise.reject(rejectedReason); },
   thrownValue() { throw original; },
   timerValue() {
     events.push("matcher");
@@ -112,7 +113,7 @@ const cases: [string, () => unknown][] = [
     let caught: unknown;
     try { await expect({ value: 1 }).toEqual({ value: asymmetric("rejectedValue") }); } catch (error) { caught = error; }
     if (!(caught instanceof Error)) throw new Error("missing matcher rejection wrapper");
-    expect(caught).not.toBe(original);
+    expect(caught).not.toBe(rejectedReason);
     expect(caught.message).toBe("Matcher `rejectedValue` returned a promise that rejected");
     expect("cause" in caught).toBe(false);
     try { expect(1).toEqual(asymmetric("thrownValue")); } catch (error) { caught = error; }

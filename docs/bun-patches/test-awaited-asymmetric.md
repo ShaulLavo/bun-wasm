@@ -59,3 +59,12 @@ subprocesses, checks distinct failed names independently of recap lines, and
 checks late settlement and snapshot call order. Existing upstream assertions
 remain unchanged. Feature-owned native manifests cover all four local engines;
 the source factory test uses the actual private util entry.
+
+Promise modifiers return an intrinsic final continuation that resolves to
+undefined. That final Promise is the one returned and tracked. This makes its
+settlement visible through the existing Browser reaction implementation, where
+an otherwise unobserved async-function Promise has no known state. Ordinary
+assertions retain their existing reaction count. No host observation or pump
+changes are involved. Stack-bearing Error rejection checks run inside the owned
+subprocess fixture; the comparison fixture pins the existing two-line primitive
+diagnostic without depending on engine-specific stack columns.

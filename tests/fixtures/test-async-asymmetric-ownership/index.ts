@@ -34,3 +34,10 @@ const order = run("order");
 expect(order.code).toBe(0);
 expect(order.text).toContain("2 pass");
 console.log("PASS snapshot identity follows call order");
+
+const rejection = run("rejection");
+expect(rejection.code).toBe(0);
+expect(rejection.text).toContain("2 pass");
+expect(Array.from(rejection.text.matchAll(/^error: owned Error rejection$/gm)).length).toBe(1);
+expect(rejection.text).not.toContain("Unhandled error between tests");
+console.log("PASS Error rejection wrapper and direct throw identity");

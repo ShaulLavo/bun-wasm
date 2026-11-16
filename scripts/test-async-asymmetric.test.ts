@@ -40,5 +40,5 @@ test("async asymmetric comparisons through the actual util and expect factories"
     throw new Error(lines.join("\n"), { cause });
   }
   expect(lines.join("\n") + "\n").toBe(readFileSync(new URL("expected.txt", fixture), "utf8"));
-  expect(diagnostics).toEqual(["Error: asymmetric rejection\n"]);
+  expect(diagnostics).toEqual(["asymmetric rejection\n"]);
 });

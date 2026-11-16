@@ -750,7 +750,9 @@
       const origin = { invocation: activeInvocation, test: currentTest };
       const context = { not: this.flags.not, promise: this.flags.promise, error, origin };
       if (name.endsWith("Snapshot")) context.snapshot = reserveSnapshot(origin, name, args);
-      const result = this.flags.promise ? matchPromise(this, name, impl, args, context) : matchImmediate(this, name, impl, args, context);
+      const result = this.flags.promise
+        ? matcherSupport.settle(matchPromise(this, name, impl, args, context), () => undefined)
+        : matchImmediate(this, name, impl, args, context);
       return origin.invocation ? origin.invocation.track(result) : result;
     };
   }

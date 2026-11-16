@@ -3,3 +3,4 @@ PASS unawaited false belongs to each invocation
 PASS unawaited rejection belongs to each invocation
 PASS late snapshot and modifier settlement stays isolated
 PASS snapshot identity follows call order
+PASS Error rejection wrapper and direct throw identity
