@@ -7,6 +7,9 @@ assert.throws(() => Reflect.apply(onTestFinished, undefined, [1]), {
   name: "Error", message: "onTestFinished() expects a function as the first argument",
 });
 assert.throws(() => test("both", () => {}, { retry: 1, repeats: 1 }), /Cannot set both retry and repeats/);
+for (const repeats of [null, "bad", false]) {
+  assert.throws(() => Reflect.apply(test, undefined, ["invalid repeats", () => {}, { retry: 1, repeats }]), /expects repeats to be a number/);
+}
 assert.equal(jest.setTimeout(5000), undefined);
 
 describe("retry lifecycle", () => {

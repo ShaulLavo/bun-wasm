@@ -2116,14 +2116,15 @@
     const after = await runHooks(cleanupHooks(record, chain.reverse().flatMap((s) => s.afterEach)));
     if (!result.ok && !after.ok) {
       printFileHeaderIfNeeded();
-      const failure = failureFromResult(result, test);
+      const failure = failureFromResult(test.failing ? after : result, test);
       printFailure(failure);
       writeErr(resultNote(failure));
     }
-    if (!after.ok) result = after;
+    if (!after.ok && !test.failing) result = after;
     const elapsed = now() - start;
     currentTest = null;
-    return { result: classify(test, result, record), elapsed, expectCount: record.expectCount };
+    const classified = test.failing && !after.ok && result.ok ? failureFromResult(after, test) : classify(test, result, record);
+    return { result: classified, elapsed, expectCount: record.expectCount };
   }
 
   function classify(test, result, record) {

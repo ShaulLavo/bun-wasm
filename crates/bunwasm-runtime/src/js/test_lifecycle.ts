@@ -9,8 +9,9 @@
     if (!options || typeof options !== "object") return { retry: 0, repeats: 0 };
     const retry = count(Reflect.get(options, "retry"), "retry", signature);
     const repeatsValue: unknown = Reflect.get(options, "repeats");
+    const repeats = count(repeatsValue, "repeats", signature);
     if (retry && repeatsValue !== undefined) throw new Error(`${signature}(): Cannot set both retry and repeats`);
-    return { retry, repeats: count(repeatsValue, "repeats", signature) };
+    return { retry, repeats };
   }
 
   interface Outcome {

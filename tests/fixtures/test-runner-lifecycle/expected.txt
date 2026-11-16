@@ -14,3 +14,9 @@ cleanup failed
 reentrant finished failed
 reentrant local failed
 failure.test.ts: 0 pass, 5 fail
+bun test vVERSION
+local/successful cleanup
+local/failing cleanup
+finished/successful cleanup
+finished/failing cleanup
+failing-cleanup.test.ts: 2 pass, 2 fail

@@ -87,6 +87,51 @@ function registerDoubleFailure(api: API, order: string[]) {
   });
 }
 
+function registerFailingCleanup(api: API, phase: string, bodyFails: boolean) {
+  api.test.failing("cleanup status", () => {
+    const cleanup = async () => { throw new Error("cleanup rejection"); };
+    if (phase === "local") api.afterAll(cleanup);
+    else api.onTestFinished(cleanup);
+    if (bodyFails) throw new Error("expected body");
+  });
+}
+
+function registerOptionValidation(api: API) {
+  for (const repeats of [null, "bad", false]) {
+    const options = { retry: 1, repeats };
+    expect(() => Reflect.apply(api.test, undefined, ["invalid", () => {}, options])).toThrow("expects repeats to be a number");
+    expect(() => Reflect.apply(Reflect.get(api.test, "skip"), undefined, ["invalid", () => {}, options])).toThrow("expects repeats to be a number");
+  }
+  expect(() => api.test("conflict", () => {}, { retry: 1, repeats: 0 })).toThrow("Cannot set both retry and repeats");
+  api.test("sentinel", () => {});
+}
+
+test("failing tests do not absorb cleanup failure after a successful body", async () => {
+  for (const phase of ["local", "finished"]) {
+    const result = await runner(api => registerFailingCleanup(api, phase, false));
+    expect(result.exit).toBe(1);
+    expect(result.stderr).toContain("0 pass");
+    expect(result.stderr).toContain("1 fail");
+    expect(result.stderr.match(/error: cleanup rejection/g)?.length).toBe(1);
+  }
+});
+
+test("failing bodies still pass while cleanup rejection stays visible", async () => {
+  for (const phase of ["local", "finished"]) {
+    const result = await runner(api => registerFailingCleanup(api, phase, true));
+    expect(result.exit).toBe(0);
+    expect(result.stderr).toContain("1 pass");
+    expect(result.stderr).toContain("0 fail");
+    expect(result.stderr.match(/error: cleanup rejection/g)?.length).toBe(1);
+    expect(result.stderr).not.toContain("expected body");
+  }
+});
+
+test("repeats type validation precedes retry conflict even for skipped tests", async () => {
+  const result = await runner(registerOptionValidation);
+  expect(result.exit).toBe(0);
+});
+
 test("failing registration requires its callback and jest timeout keeps native return", async () => {
   const result = await runner(registerValidation);
   expect(result.exit).toBe(0);

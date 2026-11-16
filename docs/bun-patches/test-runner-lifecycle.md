@@ -25,6 +25,11 @@ in its phase instead of being lost from an earlier snapshot. Reentrant rejection
 still fails the test and stops later cleanup. Skipped and todo describe scopes
 retain their pre-existing callback-free behavior.
 
+Expected-failure tests classify the body separately from cleanup. A successful
+body with rejected cleanup fails; an already failing body remains an expected
+failure, while the cleanup diagnostic stays visible. Retry and repeats option
+types are both validated before checking their mutual exclusion.
+
 Callable describe and new label validation are deferred. The existing describe
 registration function is unchanged from the original base. This adapter does not
 claim async describe completion or recover the two upstream callable cases.
