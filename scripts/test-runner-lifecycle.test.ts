@@ -1,5 +1,56 @@
 import { expect, test } from "bun:test";
-import { runner, type API } from "./test-runner-source.ts";
+import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { isDeepStrictEqual, types } from "node:util";
+import { createContext, runInContext } from "node:vm";
+
+const root = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
+const transpiler = new Bun.Transpiler({ loader: "ts" });
+
+interface API {
+  test: ((name: string, fn?: () => unknown, options?: { retry?: number; repeats?: number }) => void) & {
+    failing(name: string, fn?: () => unknown): void;
+  };
+  describe: {
+    (name: string | (() => void), fn?: () => void): void;
+    skip(name: string, fn?: () => void): void;
+    todo(name: string, fn?: () => void): void;
+  };
+  beforeEach(fn: () => unknown): void;
+  afterEach(fn: () => unknown): void;
+  afterAll(fn: () => unknown): void;
+  onTestFinished(fn: () => unknown): void;
+  jest: { setTimeout(ms: number): void };
+}
+
+async function runner(load: (api: API) => void) {
+  const process = Object.assign(new EventEmitter(), { env: { AGENT: "0" }, exitCode: 0 });
+  const context = createContext({ process, setTimeout, clearTimeout, Blob, Headers, FormData, URLSearchParams,
+    Bun: { version: "test", revision: "test" } });
+  const factory = (name: string) => runInContext(`(function () {${transpiler.transformSync(`return (${readFileSync(new URL(name, root), "utf8")})`)}\n})()`, context);
+  let stderr = "";
+  const modules: Record<string, unknown> = {
+    path,
+    inspect: { bunInspect: Bun.inspect },
+    util: { bunDeepEquals: isDeepStrictEqual },
+    test_matchers: factory("test_matchers.ts")({ isPromise: types.isPromise, realTimers: { setTimeout },
+      promiseThen: (promise: Promise<unknown>, resolve: (value: unknown) => unknown, reject: (value: unknown) => unknown) => promise.then(resolve, reject) }),
+  };
+  const internal = {
+    native: { now: () => performance.now(), cwd: () => "/", stat: () => ({ mode: 0o100644 }),
+      writeStdout() {}, writeStderr: (value: string) => { stderr += value; } },
+    require: (name: string) => modules[name],
+    realTimers: { setTimeout, clearTimeout },
+    fakeTimers: { api: {} },
+    importModule: async () => load(runtime.exports),
+  };
+  modules.test_extensions = factory("test_extensions.ts")(internal);
+  modules.test_lifecycle = factory("test_lifecycle.ts")();
+  const runtime = factory("bun_test.js")(internal);
+  await runtime.run(["/control.test.ts"]);
+  return { stderr, exit: process.exitCode };
+}
 
 function registerCallable(api: API, order: string[]) {
   api.describe(() => { api.test("sole", () => order.push("sole")); });

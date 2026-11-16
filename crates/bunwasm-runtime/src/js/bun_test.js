@@ -52,6 +52,8 @@
 
   const summary = { pass: 0, fail: 0, skip: 0, todo: 0, filtered: 0, files: 0, expectations: 0, errors: 0 };
 
+  // The file whose module is being evaluated (tests register into it).
+  let collecting = null;
   // The test whose body or hooks are running: { expectCount, assertions }.
   let currentTest = null;
   // The pending invocation, so uncaught errors can fail it.
@@ -1755,15 +1757,12 @@
   // ───────────────────────────── collection ─────────────────────────────
 
   function createScope(name, parent, mode, only) {
-    return { kind: "scope", name, parent, mode, only, collection: { kind: "collected" }, children: [], beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
-  }
-
-  function collectionSupport() {
-    return internal.require("test_collection");
+    return { kind: "scope", name, parent, mode, only, children: [], beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
   }
 
   function currentScope() {
-    return collectionSupport().registrationFrame().scope;
+    if (!collecting) throw new Error("Cannot call test() or describe() outside of a test file");
+    return collecting.scope;
   }
 
   // A scope's mode wins over its children's ("skip" and "todo" propagate).
@@ -1783,8 +1782,7 @@
     const signature = modifiers.failing ? "test.failing" : "test";
     if (!hasFn && mode === "run") throw new Error(`${signature} expects a function as the second argument`);
     const repeat = internal.require("test_lifecycle").repeatOptions(timeoutOrOptions, signature);
-    const frame = collectionSupport().registrationFrame();
-    const scope = frame.scope;
+    const scope = currentScope();
     const test = {
       kind: "test",
       name: name === undefined ? "" : String(name),
@@ -1798,19 +1796,23 @@
       repeats: repeat.repeats,
       usesDone: modifiers.usesDone !== undefined ? modifiers.usesDone : hasFn && fn.length > 0,
     };
-    if (test.only) frame.owner.file.hasOnly = true;
+    if (test.only) collecting.hasOnly = true;
     scope.children.push(test);
   }
 
   function registerDescribe(modifiers, name, fn) {
-    const frame = collectionSupport().registrationFrame();
-    const parent = frame.scope;
+    const parent = currentScope();
     const disabled = modifiers.mode === "skip" || modifiers.mode === "todo";
     const { name: label, fn: callback } = internal.require("test_lifecycle").registration("describe", name, fn, disabled);
     const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
-    if (scope.only) frame.owner.file.hasOnly = true;
+    if (scope.only) collecting.hasOnly = true;
     parent.children.push(scope);
-    frame.owner.file.collection.enqueue(scope, callback);
+    collecting.scope = scope;
+    try {
+      if (callback) callback();
+    } finally {
+      collecting.scope = parent;
+    }
   }
 
   // printf-style labels for .each (jest.rs format_label).
@@ -1929,16 +1931,14 @@
   function hookRegistrar(kind) {
     return (fn, timeout) => {
       if (typeof fn !== "function") throw new TypeError(`${kind}() expects a function as the first argument`);
-      const frame = collectionSupport().executionRegistrationFrame();
-      const hooks = frame ? frame.scope[kind] : kind === "afterAll" && currentTest ? currentTest.afterAll : currentScope()[kind];
+      const hooks = kind === "afterAll" && currentTest ? currentTest.afterAll : currentScope()[kind];
       hooks.push({ fn, timeout: readTimeout(timeout) });
     };
   }
 
   function onTestFinished(fn, timeout) {
     if (typeof fn !== "function") throw new Error("onTestFinished() expects a function as the first argument");
-    const frame = collectionSupport().executionRegistrationFrame();
-    if (frame || !currentTest) throw new Error("Cannot call onTestFinished() outside of a test. It can only be called inside a test.");
+    if (!currentTest) throw new Error("Cannot call onTestFinished() outside of a test. It can only be called inside a test.");
     currentTest.finished.push({ fn, timeout: readTimeout(timeout) });
   }
 
@@ -2029,12 +2029,10 @@
 
   function willRun(node, file) {
     if (node.kind === "test") return node.mode === "run" && isSelected(node, file) && labelMatches(node);
-    if (node.collection.kind === "failed") return false;
     return node.children.some((child) => willRun(child, file));
   }
 
   async function runScope(scope, file) {
-    if (scope.collection.kind === "failed") return;
     const active = willRun(scope, file);
     if (active) {
       const before = await runHooks(scope.beforeAll);
@@ -2462,21 +2460,19 @@
   async function runFile(abs, cwd) {
     summary.files++;
     const file = { root: createScope("", null, "run", false), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
-    file.collection = collectionSupport().createSession(file, reportUnhandledError);
+    file.scope = file.root;
     startFileHeader(relativePath(cwd, abs));
+    collecting = file;
     try {
-      await file.collection.enterRoot(async () => {
-        for (const preload of preloads) await internal.importModule(resolveArgument(cwd, preload));
-        await internal.importModule(abs);
-      });
-      await file.collection.collect();
+      for (const preload of preloads) await internal.importModule(resolveArgument(cwd, preload));
+      await internal.importModule(abs);
     } catch (error) {
       // A file that fails to load counts as one failed test.
       reportUnhandledError(error);
       summary.fail++;
       return;
     } finally {
-      file.collection.close();
+      collecting = null;
     }
     await runScope(file.root, file);
     try {

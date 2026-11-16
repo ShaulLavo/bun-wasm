@@ -25,7 +25,6 @@ in its phase instead of being lost from an earlier snapshot. Reentrant rejection
 still fails the test and stops later cleanup. Skipped and todo describe scopes
 retain their callback-free overload without disabling normal callback validation.
 
-Describe collection is owned by the [deferred collection adapter](test-collection.md).
 Concurrency remains serial. Concurrent scheduling needs separate asynchronous
 test and invocation ownership before overlapping tests can safely share this
 runner. This adapter does not change assertion settlement or snapshot values.
