@@ -26,8 +26,10 @@ test("listener errors retain identity and do not prevent protected abort cleanup
     if (calls.join(',') !== 'protected') throw new Error('protected cleanup did not run');
   `, context);
   expect(ticks.length).toBe(1);
+  const tick = ticks[0];
+  if (!tick) throw new Error("missing listener error tick");
   let thrown: unknown;
-  try { ticks[0](); } catch (error) { thrown = error; }
+  try { tick(); } catch (error) { thrown = error; }
   expect(thrown).toBe(sentinel);
 });
 

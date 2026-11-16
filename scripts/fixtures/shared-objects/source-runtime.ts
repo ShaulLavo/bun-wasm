@@ -1,6 +1,6 @@
-import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import { runInThisContext } from "node:vm";
+import { runInContext, runInThisContext, type Context } from "node:vm";
+import { eventTargetSource } from "../../event-target-source";
 import type { SharedObjects } from "../../../web/src/shared-objects/protocol";
 import type { Channel, Codec, CodecHooks, Graph } from "./runtime-types";
 
@@ -35,12 +35,12 @@ const native = {
   base64Decode: (value: string) => new Uint8Array(Buffer.from(value, "base64")),
   transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
 };
-function factory(name: string, overlay?: (source: string) => string, extension = "ts") {
+function factory(name: string, overlay?: (source: string) => string, extension = "ts", context?: Context) {
   const path = new URL(`../../../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url);
   const input = readFileSync(path, "utf8");
   const source = overlay ? overlay(input) : input;
   const emitted = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__sharedFixture = ${source}`);
-  const value: unknown = runInThisContext(emitted);
+  const value: unknown = context ? runInContext(emitted, context) : runInThisContext(emitted);
   if (typeof value !== "function") throw new Error(`Missing ${name} factory`);
   return value;
 }
@@ -129,6 +129,11 @@ function transferNative(hooks: TransferHooks, core?: CommitNatives) {
   };
 }
 export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.SharedObjects; channel?: Channel; graph?: Graph; route?: number[]; lanes?: { ledger: number; cell: [number, number] }; active?: () => boolean; realLoop?: boolean; core?: CommitNatives } & TransferHooks = {}) {
+  // Collection fault controls still intercept the production collections in this realm.
+  const source = eventTargetSource({ Map, Set, WeakMap, WeakSet, ArrayBuffer, SharedArrayBuffer, DataView,
+    Uint8Array, Uint8ClampedArray, Int8Array, Uint16Array, Int16Array, Uint32Array, Int32Array,
+    Float32Array, Float64Array, BigInt64Array, BigUint64Array, TextEncoder, TextDecoder, Buffer, setImmediate,
+    queueMicrotask: (callback: () => void) => queueMicrotask(callback) });
   const runtimeNative = { ...native, transferArrayBuffers: transferNative(options, options.core), transferSettled() { options.settled?.(); } };
   let codec: Codec | undefined;
   let pump: (() => void) | undefined;
@@ -137,22 +142,24 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.S
   const env = options.graph ? { BUNWASM_WORKER_INIT: JSON.stringify({ route: options.route ?? [0], envGroup: "fixture", argv: ["bun", "child.ts"], execArgv: [], graph: options.graph, lanes: options.lanes }), BUNWASM_WORKER_CONTROL: JSON.stringify({ input: 3, output: 4 }) } : {};
   const modules = new Map<string, unknown>([
     ["process", { env, execArgv: [], execPath: "bun", cwd: () => "/" }],
-    ["events", EventEmitter], ["structured_clone", { structuredClone }], ["net", {}],
+    ["events", source.events], ["structured_clone", { structuredClone }], ["net", {}],
     ["worker_channel", { open: () => options.channel }],
     ["worker_codec", { create(hooks: CodecHooks) { codec = factory("worker_codec")({ native: runtimeNative, sharedObjects: options.sharedObjects }).create(hooks); return codec; } }],
   ]);
   const lifecycle: Pick<BunWasm.Internal, "workerStartup" | "workerErrorData" | "clonePorts" | "workerExit"> = {};
-  const internal = Object.assign({
+  const runtimeInternal = {
     native: runtimeNative,
     realTimers: { setImmediate(callback: () => void) { return setImmediate(() => { if (options.active?.() !== false) callback(); }); } }, messagePortRefs: new Set<object>(), sharedObjects: options.sharedObjects,
     require(name: string) { if (!modules.has(name)) throw new Error(`Unexpected module ${name}`); return modules.get(name); },
     builtin: () => ({ createRequire: () => () => { throw new Error("No fixture preloads"); } }),
     addIoWaiter(value: BunWasm.IoWaiter) { waiter = value; return value; },
     set workerPump(callback: () => void) { pump = callback; },
-  }, lifecycle);
+  };
+  const internal = Object.assign(source.internal, runtimeInternal, lifecycle);
+  Object.defineProperties(internal, Object.getOwnPropertyDescriptors(runtimeInternal));
   // The runtime's own I/O loop (net.js): its waiter set and the pumpIo the engine driver calls.
   const loop = options.realLoop ? sourceLoop(internal, modules) : undefined;
-  const runtime: PortsRuntime = factory("worker_threads", childOverlay)(internal);
+  const runtime: PortsRuntime = factory("worker_threads", childOverlay, "ts", source.context)(internal);
   if (!codec || !pump) throw new Error("Missing codec or pump");
   /** One ordinary event-loop step of this runtime's waiter, housekeeping included. */
   const step = () => waiter?.step();

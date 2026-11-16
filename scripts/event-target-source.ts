@@ -21,11 +21,12 @@ export function eventTargetSource(globals: Record<string, unknown> = {}, overrid
   };
   const context = createContext({ internal, queueMicrotask,
     console: { log: (...values: unknown[]) => lines.push(values.map(String).join(" ")) }, ...globals });
-  runInContext(readFileSync(new URL("web.js", directory), "utf8"), context)(internal);
+  const install = runInContext(readFileSync(new URL("web.js", directory), "utf8"), context)(internal);
+  install((name: string, value: unknown) => { Reflect.set(context, name, value); }, () => {});
   Object.assign(context, internal.web);
   Object.assign(internal, overrides);
   const factory = emitted ?? transpiler.transformSync(`globalThis.eventsFactory = ${readFileSync(new URL("events.ts", directory), "utf8")}`);
   const events = runInContext(factory, context)(internal);
   Object.assign(context, { events });
-  return { context, lines, ticks, events, web: internal.web };
+  return { context, lines, ticks, events, web: internal.web, internal };
 }

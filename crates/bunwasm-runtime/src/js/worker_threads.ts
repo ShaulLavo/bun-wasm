@@ -604,7 +604,13 @@
   }
   class MessagePort extends EventTarget {
     #state: PortState | null;
-    #webListeners = new Map<EventListenerOrEventListenerObject, Set<boolean>>();
+    #refMode: "automatic" | "explicit-ref" | "explicit-unref" = "automatic";
+    #refReconciling = false;
+    #refDirty = false;
+    #forwarder: EventListener | null = null;
+    #messageBridge: EventListener = event => {
+      if (event instanceof MessageEvent) this.emit("message", messagePayloads.has(event) ? messagePayloads.get(event) : event.data);
+    };
     #onmessage: ((event: MessageEvent) => unknown) | null = null;
     #attachmentWait: (() => void) | null = null;
     onmessageerror: ((event: MessageEvent) => unknown) | null = null;
@@ -620,9 +626,8 @@
       if (value.groupLane && !value.closed) this.#adoptGroupLane(value.groupLane, value.version);
       localPorts.set(value.id, this);
       EventEmitter.call(this);
-      super.addEventListener("message", event => {
-        if (event instanceof MessageEvent) this.emit("message", messagePayloads.has(event) ? messagePayloads.get(event) : event.data);
-      });
+      internal.eventTargets.observe(this, type => { if (type === "message") this.#messageChanged(); });
+      super.addEventListener("message", this.#messageBridge);
       super.addEventListener("messageerror", event => { if (event instanceof MessageEvent) this.emit("messageerror", event.data); });
       super.addEventListener("close", () => this.emit("close"));
     }
@@ -844,7 +849,7 @@
         // before that call and undone by `restore` when it refuses. The ledger is not touched
         // here; the native moves the end.
         stage() {
-          const held = state.group, referenced = internal.messagePortRefs.has(state);
+          const held = state.group;
           return {
             detach() {
               internal.messagePortRefs.delete(state);
@@ -854,7 +859,7 @@
             // queued, and the wait for an attachment that staging cancelled.
             restore() {
               value.#state = state; state.group = held; localPorts.set(state.id, value);
-              if (referenced) internal.messagePortRefs.add(state);
+              value.#reconcileRef();
               if (state.phase === "open") value.#accept();
               else value.#schedule();
             },
@@ -984,25 +989,69 @@
     get onmessage() { return this.#onmessage; }
     set onmessage(listener: ((event: MessageEvent) => unknown) | null) {
       this.#onmessage = typeof listener === "function" ? listener : null;
-      if (this.#onmessage) { this.start(); this.ref(); }
-      else if (!this.#hasMessageListeners()) this.unref();
+      if (this.#onmessage) this.start();
+      else settlePosts();
+      this.#refMode = this.#onmessage ? "explicit-ref" : "explicit-unref";
+      this.#reconcileRef();
     }
     addEventListener(type: string, listener: EventListenerOrEventListenerObject | null, options?: AddEventListenerOptions | boolean) {
       super.addEventListener(type, listener, options);
-      if (type !== "message" || !listener) return;
-      const captures = this.#webListeners.get(listener) || new Set<boolean>();
-      captures.add(typeof options === "boolean" ? options : Boolean(options?.capture));
-      this.#webListeners.set(listener, captures); this.start(); this.ref();
     }
     removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null, options?: EventListenerOptions | boolean) {
       super.removeEventListener(type, listener, options);
-      if (type !== "message" || !listener) return;
-      const captures = this.#webListeners.get(listener);
-      captures?.delete(typeof options === "boolean" ? options : Boolean(options?.capture));
-      if (!captures?.size) this.#webListeners.delete(listener);
-      if (!this.#hasMessageListeners()) this.unref();
     }
-    #hasMessageListeners() { return this.#onmessage !== null || this.#webListeners.size > 0 || this.listenerCount("message") > 0; }
+    #hasMessageListeners() {
+      if (this.#onmessage !== null || EventEmitter.prototype.listenerCount.call(this, "message") > 0) return true;
+      return internal.eventTargets.listeners(this, "message").some(listener => listener !== this.#messageBridge && listener !== this.#forwarder);
+    }
+    #messageChanged() {
+      const state = this.#state;
+      if (!state || state.phase !== "open") return;
+      if (this.#hasMessageListeners()) { state.started = true; this.#schedule(); }
+      this.#reconcileRef();
+    }
+    #wantsRef(state: PortState) {
+      if (this.#state !== state || state.phase !== "open") return false;
+      return this.#refMode === "explicit-ref" || this.#refMode === "automatic" && this.#hasMessageListeners();
+    }
+    #reconcileRef() {
+      if (this.#refReconciling) { this.#refDirty = true; return; }
+      this.#refReconciling = true;
+      try { this.#writeRef(); }
+      finally { this.#refReconciling = false; }
+    }
+    #writeRef() {
+      do {
+        this.#refDirty = false;
+        const state = this.#state;
+        if (!state) return;
+        const wanted = this.#wantsRef(state);
+        if (wanted) internal.messagePortRefs.add(state);
+        else internal.messagePortRefs.delete(state);
+        if (this.#state !== state) internal.messagePortRefs.delete(state);
+        this.#refDirty = this.#state !== state || wanted !== this.#wantsRef(state);
+      } while (this.#refDirty);
+    }
+    #registerForwarder(type: "message" | "messageerror", listener: EventListener) {
+      if (type === "messageerror") { super.addEventListener(type, listener); return; }
+      const list = internal.eventTargets.listeners(this, "message");
+      if (this.#forwarder && list.includes(this.#forwarder)) throw new TypeError("MessagePort already has a worker forwarder");
+      this.#forwarder = listener;
+      try { super.addEventListener(type, listener); }
+      catch (error) {
+        if (!internal.eventTargets.listeners(this, type).includes(listener)) this.#forwarder = null;
+        throw error;
+      }
+    }
+    #mutateListeners(event: string | symbol | undefined, mutate: () => unknown) {
+      try { mutate(); }
+      catch (error) {
+        try { if (event === undefined || event === "message") this.#messageChanged(); }
+        catch { /* Preserve the emitter's original failure after a committed mutation. */ }
+        throw error;
+      }
+      if (event === undefined || event === "message") this.#messageChanged();
+    }
     postMessage(value: unknown, transfer?: unknown) {
       if (!arguments.length) throw Object.assign(new TypeError("Not enough arguments to MessagePort.postMessage"), { code: "ERR_MISSING_ARGS" });
       settlePosts();
@@ -1097,8 +1146,8 @@
     // has left this port detached or counted, and is rolled back before the port is used.
     start() { settlePosts(); if (this.#state) { this.#state.started = true; this.#schedule(); } }
     // A port's state is in the keepalive set exactly while the port is referenced.
-    ref() { settlePosts(); if (this.#state?.phase === "open") internal.messagePortRefs.add(this.#state); }
-    unref() { settlePosts(); if (this.#state) internal.messagePortRefs.delete(this.#state); }
+    ref() { settlePosts(); this.#refMode = "explicit-ref"; this.#reconcileRef(); }
+    unref() { settlePosts(); this.#refMode = "explicit-unref"; this.#reconcileRef(); }
     hasRef() { settlePosts(); return this.#state ? internal.messagePortRefs.has(this.#state) : false; }
     close(callback?: () => void) {
       settlePosts();
@@ -1148,25 +1197,22 @@
       this.dispatchEvent(new Event("close"));
     }
     on(event: string | symbol, listener: BunWasm.EventListener) {
-      EventEmitter.prototype.on.call(this, event, listener);
-      if (event === "message") { this.start(); this.ref(); }
+      this.#mutateListeners(event, () => EventEmitter.prototype.on.call(this, event, listener));
       return this;
     }
     addListener(event: string | symbol, listener: BunWasm.EventListener) { return this.on(event, listener); }
     once(event: string | symbol, listener: BunWasm.EventListener) {
-      EventEmitter.prototype.once.call(this, event, listener);
+      this.#mutateListeners(event, () => EventEmitter.prototype.once.call(this, event, listener));
       return this;
     }
     off(event: string | symbol, listener: BunWasm.EventListener) { return this.removeListener(event, listener); }
     removeListener(event: string | symbol, listener: BunWasm.EventListener) {
-      EventEmitter.prototype.removeListener.call(this, event, listener);
-      if (event === "message" && !this.#hasMessageListeners()) this.unref();
+      this.#mutateListeners(event, () => EventEmitter.prototype.removeListener.call(this, event, listener));
       return this;
     }
     removeAllListeners(event?: string | symbol) {
-      if (arguments.length) EventEmitter.prototype.removeAllListeners.call(this, event);
-      else EventEmitter.prototype.removeAllListeners.call(this);
-      if (!this.#hasMessageListeners()) this.unref();
+      const supplied = arguments.length > 0;
+      this.#mutateListeners(event, () => supplied ? EventEmitter.prototype.removeAllListeners.call(this, event) : EventEmitter.prototype.removeAllListeners.call(this));
       return this;
     }
     emit(event: string | symbol, ...args: unknown[]) { return EventEmitter.prototype.emit.call(this, event, ...args); }
@@ -1177,18 +1223,18 @@
     getMaxListeners() { return EventEmitter.prototype.getMaxListeners.call(this); }
     setMaxListeners(count: number) { EventEmitter.prototype.setMaxListeners.call(this, count); return this; }
     prependListener(event: string | symbol, listener: BunWasm.EventListener) {
-      EventEmitter.prototype.prependListener.call(this, event, listener);
-      if (event === "message") { this.start(); this.ref(); }
+      this.#mutateListeners(event, () => EventEmitter.prototype.prependListener.call(this, event, listener));
       return this;
     }
     prependOnceListener(event: string | symbol, listener: BunWasm.EventListener) {
-      EventEmitter.prototype.prependOnceListener.call(this, event, listener);
+      this.#mutateListeners(event, () => EventEmitter.prototype.prependOnceListener.call(this, event, listener));
       return this;
     }
     static get internals() {
       return { pair: MessagePort.#pair, restore: MessagePort.#restore, activate: MessagePort.#activate,
         prepare: MessagePort.#prepare, retry: MessagePort.#retry, discard: MessagePort.#discard, discardRestored: MessagePort.#discardRestored, resume: MessagePort.#resume, receive: MessagePort.#receive, drainLane: (port: MessagePort) => MessagePort.#drainLane(port), receivePacket: MessagePort.#receivePacket,
-        isClosed: MessagePort.#isClosed, drained: MessagePort.#drained, sent: MessagePort.#sent, received: MessagePort.#received };
+        isClosed: MessagePort.#isClosed, drained: MessagePort.#drained, sent: MessagePort.#sent, received: MessagePort.#received,
+        forward: (port: MessagePort, type: "message" | "messageerror", listener: EventListener) => port.#registerForwarder(type, listener) };
     }
     get [Symbol.toStringTag]() { return "MessagePort"; }
   }
@@ -1556,7 +1602,8 @@
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "error", child: route[route.length - 1], graph, code } });
     };
     if (config.web) {
-      internal.require("web_worker").initialize(parentPort, config.web, webMessageEvent);
+      const port = parentPort;
+      internal.require("web_worker").initialize(port, config.web, webMessageEvent, (type, listener) => portOps.forward(port, type, listener));
       parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
     }
     const requirePreload = internal.builtin("node:module").createRequire(process.cwd() + "/__worker_preload__.cjs");
