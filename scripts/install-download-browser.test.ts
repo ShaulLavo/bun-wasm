@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { chromium, webkit } from "playwright";
 import { buildSite, verifySite } from "./browser-guest-site";
 import { assertClosed, fixture } from "./install-download-fixture";
-import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
+import { run, session, writeFile } from "../web/tests/playground.mjs";
+import { openPlaygroundPage } from "../web/tests/playground-navigation";
 
 for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",")) {
   test(`${name}: Waffle metadata and archives overlap under body backpressure`, async () => {
@@ -39,8 +40,7 @@ async function scenario(browser: Awaited<ReturnType<typeof chromium.launch>>, ur
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
-    await page.goto(`${url}?engine=browser&prompt=off&mode=memory`);
-    assert.match(await ready(page), /ready/);
+    assert.match(await openPlaygroundPage(page, `${url}?engine=browser&prompt=off&mode=memory`), /ready/);
     await writeFile(page, "/home/user/package.json", JSON.stringify({ name: "fixture", dependencies: registry.dependencies }));
     await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);
     const result = await run(page, stage === "metadata" ? "bun install --lockfile-only" : "bun install", 30000);

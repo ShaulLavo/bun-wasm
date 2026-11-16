@@ -18,6 +18,7 @@ mock.module("node:fs/promises", () => ({
 }));
 
 const { openQuickjsStackPage } = await import("../../web/tests/quickjs-stack-navigation");
+const { openPlaygroundPage } = await import("../../web/tests/playground-navigation");
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("probe body") });
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let closing: Promise<unknown> | undefined;
@@ -29,12 +30,15 @@ try {
   const page = await browser.newPage();
   const count = Reflect.get(page, "listenerCount");
   assert.equal(typeof count, "function");
-  const events = ["request", "response", "requestfinished", "requestfailed", "domcontentloaded", "load", "crash", "pageerror"];
+  const events = ["request", "response", "requestfinished", "requestfailed", "framenavigated", "domcontentloaded", "load", "crash", "pageerror"];
   const counts = () => events.map(event => Reflect.apply(count, page, [event]));
   const before = counts();
   const failure = new errors.TimeoutError("fixture navigation timeout");
   page.goto = async () => { throw failure; };
-  await assert.rejects(() => openQuickjsStackPage(page, String(server.url)), error => error === failure);
+  const open = () => process.env.NAVIGATION_CONSUMER === "browser"
+    ? openPlaygroundPage(page, `${server.url}?engine=browser&prompt=off&mode=memory`)
+    : openQuickjsStackPage(page, String(server.url));
+  await assert.rejects(open, error => error === failure);
   assert.equal(writes, 1);
   assert.deepEqual(counts(), before);
   console.log("STALLED_REPORT_RESULT original error preserved; listeners removed");
