@@ -92,7 +92,7 @@ test("successful cleanup records completion without rewriting the body operation
 test("tools owns each imported diagnostic helper in its canonical manifest", () => {
   const manifest = JSON.parse(readFileSync(new URL("../checks/browser-guest-tools-integrity.json", import.meta.url), "utf8"));
   expect(manifest).toEqual(browserGuestManifest("tools-integrity"));
-  for (const helper of ["web/tests/tools-lifecycle.ts", "web/tests/playground-navigation.ts", "web/navigation-server-log.ts"]) {
+  for (const helper of ["web/tests/tools-lifecycle.ts", "web/tests/tools-route.ts", "web/tests/playground-navigation.ts", "web/navigation-server-log.ts"]) {
     expect(browserGuestOwnerInputs("tools-integrity")).toContain(helper);
   }
 });

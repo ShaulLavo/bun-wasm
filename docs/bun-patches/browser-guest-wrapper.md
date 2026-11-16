@@ -22,7 +22,18 @@ engine and serving-root options. The intentional
 wrong QuickJS payload now comes from that same root, including for Browser and
 JSC rows. Result markers follow the original negative and final cache assertions.
 No upstream source is adapted. The local source revision is the foundation named
-above; the original driver assertions, context reuse and operation order remain.
+above; the original driver assertions and context reuse remain.
+
+`web/tests/tools-route.ts` is an original test adapter. The tools driver installs
+its exact tools URL handler before navigation, then switches that handler from
+the unchanged wrong payload to network continuation after the negative checks.
+It keeps interception installed until context close. Playwright 1.64.1 Chromium
+changes request interception by awaiting cache-control commands on every attached
+worker, including terminating workers. Installing or removing a route after guest
+commands can therefore wait for unrelated worker teardown. The early installation
+avoids that dependency; it does not repair worker termination or establish the
+initiating protocol command in a historical CI stall. Ordinary no-tools-fetch,
+integrity, compilation, verified reuse and persistent-cache assertions remain.
 
 The tools driver and `web/tests/tools-lifecycle.ts` are original diagnostic
 adapters. They synchronously record each awaited operation, body errors and the

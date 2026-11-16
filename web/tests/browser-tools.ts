@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { session, ready, writeFile, run, web } from "./playground.mjs";
 import { ToolsLifecycle } from "./tools-lifecycle.ts";
 import { openPlaygroundPage } from "./playground-navigation.ts";
+import { installToolsRoute } from "./tools-route.ts";
 
 const args = process.argv.slice(2);
 const engineArgs = args.filter(arg => arg.startsWith("--engine="));
@@ -40,6 +41,7 @@ async function checkTools(name: string, engine: string, url: string): Promise<vo
   const page = await progress.step("page-create", () => context.newPage());
   const downloads: string[] = [];
   page.on("request", request => { if (request.url().includes("bun-tools.wasm")) downloads.push(request.url()); });
+  const useVerifiedTools = await progress.step("wrong-payload-route", () => installToolsRoute(page, readFileSync(join(root, "bun.wasm.gz"))));
   assert.match(await progress.step("navigation-and-readiness", () => openPlaygroundPage(page, `${url}?engine=${engine}&prompt=off`, {
     waitUntil: "load", diagnostic: { prefix: "tools-navigation", title: "Tools navigation", fields: { engine } },
   })), /ready/);
@@ -56,12 +58,6 @@ async function checkTools(name: string, engine: string, url: string): Promise<vo
     };
     Reflect.set(globalThis, "__bunwasmCompileCount", 0);
   }));
-  const substituted = readFileSync(join(root, "bun.wasm.gz"));
-  await progress.step("wrong-payload-route", () => page.route("**/bun-tools.wasm.gz*", route => route.fulfill({
-    status: 200,
-    headers: { "content-type": "application/wasm" },
-    body: substituted,
-  })));
   const rejected = await progress.step("wrong-payload-lint", () => run(page, "bun lint tool-source.ts"));
   assert.equal(rejected.code, 126, rejected.output);
   const hashes = await progress.step("wrong-payload-hashes", () => page.evaluate(() => {
@@ -74,7 +70,7 @@ async function checkTools(name: string, engine: string, url: string): Promise<vo
   assert.equal(cacheHit, false, "mismatched tools are not cached");
   console.log(JSON.stringify({ coverage: "tools-integrity", phase: "wrong-payload", browser: name, engine,
     exit: rejected.code, expected: hashes.expected, received: hashes.received, compileCount: 0, cacheHit }));
-  await progress.step("wrong-payload-unroute", () => page.unroute("**/bun-tools.wasm.gz*"));
+  await progress.step("verified-payload-route", async () => { useVerifiedTools(); });
   const first = await progress.step("verified-lint", () => run(page, "bun lint tool-source.ts"));
   assert.equal(first.code, 0, first.output);
   assert.equal(downloads.length, 2, "the rejected and verified lint each fetch tools once");
