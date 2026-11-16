@@ -131,12 +131,27 @@ async function teardownRoots() {
   assert.equal(weak.buffer.deref(), undefined, 'memory buffer/state released with factory realm');
   console.log('PASS actual JS realm teardown releases externref roots');
 }
+async function globalLifetime() {
+  const retained = (() => {
+    const creator = new api.Global({ value: 'i32', mutable: true }, 41);
+    const hidden = new api.Instance(fixture('global-hidden'), { e: { g: creator } });
+    return { weak: new WeakRef(creator), get: hidden.exports.get, set: hidden.exports.set };
+  })();
+  for (let i = 0; i < 12; i++) await collect();
+  assert.equal(retained.weak.deref(), undefined, 'weak canonical Global wrapper is collectible');
+  assert.equal(retained.get(), 41, 'imported storage survives creator wrapper');
+  retained.set(53);
+  assert.equal(retained.get(), 53, 'retained Wasm functions still share storage');
+  for (const type of ['externref', 'funcref', 'anyfunc', 'v128']) assert.throws(() => new api.Global({ value: type }), TypeError);
+  console.log('PASS Global wrapper collection, retained storage and explicit unsupported types');
+}
 
 try {
   const globalControls = readFileSync(join(process.cwd(), 'tests/fixtures/wasm-globals/controls.ts'), 'utf8').replace('export function runGlobalControls', 'function runGlobalControls');
   const controls = stripTypeScriptTypes(globalControls) + '\nrunGlobalControls(WebAssembly, fixture, check);';
   const globalFixture = (name: string) => fixture('global-' + name);
   for (let round = 0; round < 3; round++) await runInNewContext(controls, { WebAssembly: api, fixture: globalFixture, check, console });
+  await globalLifetime();
   const contract = readFileSync(join(process.cwd(), 'tests/wasm-tables/contract.ts'), 'utf8');
   const oracleFixture = (name: string) => new WebAssembly.Module(readFileSync(join(scratch, name + '.wasm')));
   await runInNewContext(stripTypeScriptTypes(contract), { WebAssembly, fixture: oracleFixture, check, gc: globalThis.gc, console, WeakRef, FinalizationRegistry, setImmediate });

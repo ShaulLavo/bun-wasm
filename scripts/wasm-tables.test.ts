@@ -31,7 +31,6 @@ test('real production native table/reference bridge', () => {
     run(['cargo', 'build', '--offline', '--manifest-path', join(scratch, 'Cargo.toml'), '-j', '2'], { CARGO_TARGET_DIR: join(scratch, 'target') });
     for (const name of ['table', 'import-table', 'externref', 'memory-owner', 'signatures', 'reuse', 'numeric', 'memory-lifetime', 'memory-reexport']) run(['wasm-tools', 'parse', join(root, 'tests/wasm-tables/' + name + '.wat'), '-o', join(scratch, name + '.wasm')]);
     for (const name of ['provider', 'consumer', 'scalars', 'immutable', 'start', 'trap', 'hidden']) run(['wasm-tools', 'parse', join(root, 'tests/fixtures/wasm-globals/' + name + '.wat'), '-o', join(scratch, 'global-' + name + '.wasm')]);
-    console.log(run(['bun', 'run', 'tests/fixtures/wasm-globals/index.ts']));
     console.log(run(['env', '-u', 'WASM_TABLE_SCRATCH', '-u', 'TABLE_FIXTURES', 'cargo', 'test', '--offline', '--manifest-path', join(scratch, 'Cargo.toml'), '-j', '2'], { CARGO_TARGET_DIR: join(scratch, 'target') }));
     console.log(run(['cargo', 'clippy', '--offline', '--manifest-path', join(scratch, 'Cargo.toml'), '-j', '2', '--all-targets', '--no-deps', '--', '-Dwarnings'], { CARGO_TARGET_DIR: join(scratch, 'target') }));
     run(['mkfifo', join(scratch, 'input'), join(scratch, 'output')]);

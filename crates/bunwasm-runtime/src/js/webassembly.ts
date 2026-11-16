@@ -383,6 +383,10 @@
     try { return info.imports.map(item => binding(item, imports[item.module]?.[item.name], provisional, info.backend, importedGlobals)); }
     catch (error) { releaseCallbacks(info, provisional); throw error; }
   }
+  function scalarGlobalImport(state: BunWasm.WasmGlobal) {
+    try { return native.globalImport(state); }
+    catch (error) { throw new LinkError(message(error)); }
+  }
   function binding(item: BunWasm.WasmImport, value: unknown, provisional: number[], backend: 'nested' | undefined, importedGlobals: (Global | undefined)[]): BunWasm.WasmBinding {
     if (item.kind === 'function' && typeof value === 'function') {
       const existing = functionStates.get(value);
@@ -404,7 +408,7 @@
       if (state.backend === 'wasmi' && backend !== 'nested') return state;
       if (item.mutable) throw new LinkError('Mutable WebAssembly globals cannot cross backends');
       if (backend !== 'nested') throw new LinkError('Nested WebAssembly globals cannot enter the ordinary backend');
-      const input = state.backend === 'wasmi' ? native.globalImport(state) : native.global(state.id, state.name);
+      const input = state.backend === 'wasmi' ? scalarGlobalImport(state) : native.global(state.id, state.name);
       importedGlobals.push(value);
       return input;
     }
