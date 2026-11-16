@@ -14,6 +14,10 @@ and fail helpers live in `src/runtime/test_runner/expect.rs`.
 The adapter adds the missing pass, fail, array-size and whitespace matchers.
 It validates arguments before applying negation, preserves unsigned array
 lengths, handles arbitrary-size bigint parity, and ignores only ASCII whitespace.
+Array sizes retain Bun's signed integer-argument range. Message and whitespace
+inputs recognize boxed string data independently of its prototype or realm.
+Boxed messages normalize once before the assertion result. Forged prototypes do not confer string or
+ArrayBuffer data, and function receivers retain their non-iterating behavior.
 Repeated-substring counts reject negative zero, preserving the existing
 non-overlapping search and unsigned count conversion.
 

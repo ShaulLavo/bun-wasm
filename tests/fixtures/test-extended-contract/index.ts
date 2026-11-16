@@ -30,6 +30,17 @@ for (const name of ["pass", "fail"]) {
   for (const value of [1, undefined, null, {}]) {
     check(message(thrown(() => call(1, name, [value], !not))).includes(`Expected message to be a string for '${name}'.`), `${name} validates before negation`);
   }
+  let coercions = 0;
+  const boxed = new String("boxed message");
+  boxed.toString = () => { coercions++; return "boxed message"; };
+  check(call(1, name, [boxed], !not) === undefined, `${name} accepts boxed messages`);
+  check(coercions === 1, `${name} normalizes boxed messages before the assertion result`);
+  check(message(thrown(() => call(1, name, [boxed], not))).includes("boxed message"), `${name} boxed failure message`);
+  check(coercions === 2, `${name} coerces each message only once`);
+  const sentinel = new Error("message coercion");
+  boxed.toString = () => { throw sentinel; };
+  check(thrown(() => call(1, name, [boxed], not)) === sentinel, `${name} message coercion identity`);
+  check(thrown(() => call(1, name, [boxed], !not)) === sentinel, `${name} successful-path coercion identity`);
 }
 console.log("PASS pass and fail helpers");
 
@@ -38,9 +49,10 @@ for (const size of [0, 3, 3_000_000_000, 2 ** 32 - 1]) {
   call(new Array(size), "toBeArrayOfSize", [size + 1], true);
 }
 for (const value of [null, {}, "three", new Uint8Array(3)]) call(value, "toBeArrayOfSize", [3], true);
-for (const args of [[], [undefined], ["3"], [3n], [NaN], [Infinity], [1.5], [-0]]) {
+for (const args of [[], [undefined], ["3"], [3n], [NaN], [Infinity], [1.5], [-0], [2 ** 51], [-(2 ** 51) - 1]]) {
   check(message(thrown(() => call([], "toBeArrayOfSize", args, true))).includes("toBeArrayOfSize() requires"), "array size validation");
 }
+for (const size of [-(2 ** 51), 2 ** 51 - 1]) call([], "toBeArrayOfSize", [size], true);
 console.log("PASS array size and validation");
 
 for (const value of [0, -0, 2, -2, 2n, -2n, 1n << 100n, -(1n << 100n)]) {
@@ -62,6 +74,14 @@ call("a\u00a0b", "toEqualIgnoringWhitespace", ["ab"], true);
 call("a\ufeffb", "toEqualIgnoringWhitespace", ["ab"], true);
 call(1, "toEqualIgnoringWhitespace", ["1"], true);
 call(new String(" h e l l o "), "toEqualIgnoringWhitespace", [new String("hello")]);
+call(String.prototype, "toEqualIgnoringWhitespace", [""]);
+call("", "toEqualIgnoringWhitespace", [String.prototype]);
+let fakeCoercions = 0;
+const fakeString = Object.assign(Object.create(String.prototype), { toString() { fakeCoercions++; return "a"; } });
+thrown(() => call(fakeString, "toEqualIgnoringWhitespace", ["a"]));
+call(fakeString, "toEqualIgnoringWhitespace", ["a"], true);
+thrown(() => call("a", "toEqualIgnoringWhitespace", [fakeString], true));
+check(fakeCoercions === 0, "forged string data is never coerced");
 for (const args of [[], [undefined], [1]]) {
   check(message(thrown(() => call("hello", "toEqualIgnoringWhitespace", args, true))).includes("toEqualIgnoringWhitespace() requires"), "whitespace validation");
 }
@@ -88,6 +108,10 @@ const iterator = values();
 call(iterator, "toBeEmpty", [], true);
 check(visits === 3 && iterator.next().done, "emptiness consumes the full iterable");
 const sentinel = new Error("iterator failure");
+const callable = () => {};
+Object.defineProperty(callable, Symbol.iterator, { value: function* () { throw sentinel; } });
+call(callable, "toBeEmpty");
+call(Object.create(ArrayBuffer.prototype), "toBeEmpty");
 const broken = { *[Symbol.iterator]() { yield 1; throw sentinel; } };
 check(thrown(() => call(broken, "toBeEmpty", [], true)) === sentinel, "iterator error identity");
 let iteratorReads = 0;

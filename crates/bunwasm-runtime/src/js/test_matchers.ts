@@ -9,6 +9,19 @@
 
   const promiseThen = internal.promiseThen;
   const schedule = setTimeout.bind(globalThis);
+  const stringValueOf = String.prototype.valueOf;
+  const arrayBufferByteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
+
+  function isStringValue(value: unknown): boolean {
+    if (typeof value === "string") return true;
+    if (value === null || typeof value !== "object") return false;
+    try {
+      Reflect.apply(stringValueOf, value, []);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
     return internal.isPromise(value);
@@ -66,9 +79,12 @@
   function empty(value: unknown): boolean {
     if (typeof value === "string" || value instanceof String || Array.isArray(value)) return value.length === 0;
     if (value instanceof Map || value instanceof Set || value instanceof Blob) return value.size === 0;
-    if (value instanceof ArrayBuffer) return value.byteLength === 0;
+    if (value instanceof ArrayBuffer && arrayBufferByteLength) {
+      try { return Reflect.apply(arrayBufferByteLength, value, []) === 0; } catch {}
+    }
     if (ArrayBuffer.isView(value) && !(value instanceof DataView)) return value.byteLength === 0;
-    if (value === null || typeof value !== "object" && typeof value !== "function") return false;
+    if (typeof value === "function") return Object.keys(value).length === 0;
+    if (value === null || typeof value !== "object") return false;
     if (!isIterable(value)) return Object.keys(value).length === 0;
     let empty = true;
     for (const _item of value) empty = false;
@@ -76,16 +92,16 @@
   }
 
   function constant(ctx: Context, name: "pass" | "fail", pass: boolean, args: unknown[]): Failure {
-    if (args.length > 0 && typeof args[0] !== "string") throw new TypeError(`Expected message to be a string for '${name}'.`);
+    if (args.length > 0 && !isStringValue(args[0])) throw new TypeError(`Expected message to be a string for '${name}'.`);
+    const message = args.length === 0 ? `${pass ? "passes" : "fails"} by .${name}() assertion` : String(args[0]);
     if (pass !== !!ctx.not) return null;
-    const message = args.length === 0 ? `${pass ? "passes" : "fails"} by .${name}() assertion` : args[0];
     return { body: `\n\n${message}\n` };
   }
 
   function arrayOfSize(inspect: (value: unknown) => string, ctx: Context, received: unknown, ...args: unknown[]): Failure {
     if (args.length === 0) throw new TypeError("toBeArrayOfSize() requires 1 argument");
     const size = args[0];
-    if (typeof size !== "number" || !Number.isInteger(size) || Object.is(size, -0)) {
+    if (typeof size !== "number" || !Number.isInteger(size) || Object.is(size, -0) || size < -(2 ** 51) || size >= 2 ** 51) {
       throw new Error("toBeArrayOfSize() requires the first argument to be a number");
     }
     if ((Array.isArray(received) && received.length === size) !== !!ctx.not) return null;
@@ -95,10 +111,10 @@
   function ignoringWhitespace(inspect: (value: unknown) => string, ctx: Context, received: unknown, ...args: unknown[]): Failure {
     if (args.length === 0) throw new TypeError("toEqualIgnoringWhitespace() requires 1 argument");
     const expected = args[0];
-    if (typeof expected !== "string" && !(expected instanceof String)) {
+    if (!isStringValue(expected)) {
       throw new Error("toEqualIgnoringWhitespace() requires argument to be a string");
     }
-    const pass = (typeof received === "string" || received instanceof String)
+    const pass = isStringValue(received)
       && String(received).replace(/[ \t-\r]/g, "") === String(expected).replace(/[ \t-\r]/g, "");
     if (pass !== !!ctx.not) return null;
     return { body: `\n\nExpected: ${ctx.not ? "not " : ""}${inspect(expected)}\nReceived: ${inspect(received)}\n` };
