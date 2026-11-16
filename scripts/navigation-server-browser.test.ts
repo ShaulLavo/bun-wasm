@@ -38,6 +38,8 @@ async function boundary(mode: "before-arrival" | "in-handler" | "returned") {
     const report: unknown = JSON.parse(readFileSync(join(reports, names[0]!), "utf8"));
     expect(report).toMatchObject({
       url: originalTarget, error: String(failure), stage: mode === "returned" ? "runtime-publication" : "navigation",
+      pageAtFailure: { url: mode === "returned" ? originalTarget : "about:blank", closed: false, browserConnected: true },
+      requests: { lifecycle: { documentCommitted: mode === "returned", domcontentloaded: mode === "returned" } },
       originalServerRequest: { outcome: "ok", value: {
         enabled: true, id: expect.any(String), listening: [expect.objectContaining({ event: "listening", url })],
         events: mode === "returned"
@@ -54,7 +56,6 @@ async function boundary(mode: "before-arrival" | "in-handler" | "returned") {
     for (const entry of entries) {
       expect(entry !== null && typeof entry === "object" && "id" in entry && (entry.id === null || entry.id === id)).toBe(true);
     }
-    expect(await page.evaluate(() => location.href)).toBe(mode === "returned" ? page.url() : "about:blank");
   } finally {
     await task.cleanup();
     if (previous === undefined) delete process.env.BUN_WASM_NAVIGATION_LOG;
