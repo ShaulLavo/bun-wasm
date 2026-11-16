@@ -58,6 +58,12 @@
   let currentTest = null;
   // The pending invocation, so uncaught errors can fail it.
   let activeInvocation = null;
+  let activeFile = null;
+
+  /** @returns {Readonly<{ test: object | null, invocation: object | null, file: object | null }>} */
+  function getExpectationOrigin() {
+    return { test: currentTest, invocation: activeInvocation, file: activeFile };
+  }
 
   // ───────────────────────────── asymmetric matchers ─────────────────────────────
 
@@ -2479,6 +2485,16 @@
   }
 
   async function runFile(abs, cwd) {
+    const previousFile = activeFile;
+    activeFile = {};
+    try {
+      await runActiveFile(abs, cwd);
+    } finally {
+      activeFile = previousFile;
+    }
+  }
+
+  async function runActiveFile(abs, cwd) {
     summary.files++;
     const file = { root: createScope("", null, "run", false), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
     file.scope = file.root;
