@@ -17,8 +17,9 @@ function factory(name: string) {
   return expression(source);
 }
 
-function matcherSupport() {
+function matcherSupport(BunFile?: { readonly prototype: object }) {
   return factory("test_matchers.ts")({
+    BunFile,
     isPromise: types.isPromise,
     promiseThen: (promise: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (value: unknown) => unknown) =>
       Promise.prototype.then.call(promise, fulfilled, rejected),
@@ -70,4 +71,35 @@ test("whitespace matchers recognize string data across realms and reject forged 
   expect(matchers.ignoringWhitespace({}, fake, "a")).not.toBeNull();
   expect(() => matchers.ignoringWhitespace({ not: true }, "a", fake)).toThrow(/argument to be a string/);
   expect(coercions).toBe(0);
+});
+
+test("emptiness uses actual view and Blob sizes without reading own shadows", () => {
+  const support = matcherSupport();
+  const failure = new Error("shadow size");
+  const full = new Uint8Array(1);
+  Object.defineProperty(full, "byteLength", { value: 0 });
+  expect(support.empty(full)).toBe(false);
+  const empty = new Uint8Array();
+  Object.defineProperty(empty, "byteLength", { get() { throw failure; } });
+  expect(support.empty(empty)).toBe(true);
+  const blob = new Blob();
+  Object.defineProperty(blob, "size", { get() { throw failure; } });
+  expect(support.empty(blob)).toBe(true);
+  const fullBlob = new Blob(["x"]);
+  Object.defineProperty(fullBlob, "size", { value: 0 });
+  expect(support.empty(fullBlob)).toBe(false);
+});
+
+test("emptiness retains the lazy BunFile size accessor", () => {
+  let reads = 0;
+  class LazyFile extends Blob {
+    #storedSize = 1;
+    override get size() { return this.#storedSize; }
+    _bytes() { reads++; throw new Error("must not read file bytes"); }
+  }
+  const support = matcherSupport({ prototype: LazyFile.prototype });
+  const file = new LazyFile();
+  Object.defineProperty(file, "size", { get() { throw new Error("shadow file size"); } });
+  expect(support.empty(file)).toBe(false);
+  expect(reads).toBe(0);
 });

@@ -1,4 +1,5 @@
 (function (internal: {
+  BunFile?: { readonly prototype: object };
   isPromise(value: unknown): boolean;
   promiseState(value: Promise<unknown>): string;
   promiseThen<T, U>(value: Promise<T>, fulfilled: (value: T) => U, rejected?: (error: unknown) => U): Promise<U>;
@@ -10,13 +11,20 @@
   const promiseThen = internal.promiseThen;
   const schedule = setTimeout.bind(globalThis);
   const stringValueOf = String.prototype.valueOf;
+  const apply = Reflect.apply;
+  const noArgs: readonly unknown[] = [];
+  const isPrototypeOf = Object.prototype.isPrototypeOf;
   const arrayBufferByteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
+  const typedArrayByteLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "byteLength")?.get;
+  const blobSize = Object.getOwnPropertyDescriptor(Blob.prototype, "size")?.get;
+  const bunFilePrototype = internal.BunFile?.prototype;
+  const bunFileSize = bunFilePrototype && Object.getOwnPropertyDescriptor(bunFilePrototype, "size")?.get;
 
   function isStringValue(value: unknown): boolean {
     if (typeof value === "string") return true;
     if (value === null || typeof value !== "object") return false;
     try {
-      Reflect.apply(stringValueOf, value, []);
+      apply(stringValueOf, value, noArgs);
       return true;
     } catch {
       return false;
@@ -78,11 +86,18 @@
 
   function empty(value: unknown): boolean {
     if (typeof value === "string" || value instanceof String || Array.isArray(value)) return value.length === 0;
-    if (value instanceof Map || value instanceof Set || value instanceof Blob) return value.size === 0;
-    if (value instanceof ArrayBuffer && arrayBufferByteLength) {
-      try { return Reflect.apply(arrayBufferByteLength, value, []) === 0; } catch {}
+    if (value instanceof Map || value instanceof Set) return value.size === 0;
+    if (value instanceof Blob && blobSize) {
+      if (bunFilePrototype && bunFileSize && apply(isPrototypeOf, bunFilePrototype, [value])) return apply(bunFileSize, value, noArgs) === 0;
+      return apply(blobSize, value, noArgs) === 0;
     }
-    if (ArrayBuffer.isView(value) && !(value instanceof DataView)) return value.byteLength === 0;
+    if (value instanceof ArrayBuffer && arrayBufferByteLength) {
+      try { return apply(arrayBufferByteLength, value, noArgs) === 0; } catch {}
+    }
+    if (ArrayBuffer.isView(value) && typedArrayByteLength) {
+      try { return apply(typedArrayByteLength, value, noArgs) === 0; }
+      catch (error) { if (!(error instanceof TypeError)) throw error; }
+    }
     if (typeof value === "function") return Object.keys(value).length === 0;
     if (value === null || typeof value !== "object") return false;
     if (!isIterable(value)) return Object.keys(value).length === 0;

@@ -102,6 +102,19 @@ for (const value of [new Headers({ a: "b" }), new URLSearchParams("a=b"), form, 
   check(call(value, "toBeEmpty", [], true) === undefined, "nonempty container");
 }
 for (const value of [new Headers(), new URLSearchParams(), new FormData(), new Blob(), new Uint8Array(), new ArrayBuffer(0)]) call(value, "toBeEmpty");
+const shadowFailure = new Error("shadow container size");
+const fullView = new Uint8Array(1);
+Object.defineProperty(fullView, "byteLength", { value: 0 });
+call(fullView, "toBeEmpty", [], true);
+const emptyView = new Uint8Array();
+Object.defineProperty(emptyView, "byteLength", { get() { throw shadowFailure; } });
+call(emptyView, "toBeEmpty");
+const emptyBlob = new Blob();
+Object.defineProperty(emptyBlob, "size", { get() { throw shadowFailure; } });
+call(emptyBlob, "toBeEmpty");
+const fullBlob = new Blob(["x"]);
+Object.defineProperty(fullBlob, "size", { value: 0 });
+call(fullBlob, "toBeEmpty", [], true);
 let visits = 0;
 function* values() { visits++; yield 1; visits++; yield 2; visits++; }
 const iterator = values();
@@ -144,4 +157,10 @@ await Bun.write("expect-empty.txt", "");
 await Bun.write("expect-full.txt", "x");
 call(Bun.file("expect-empty.txt"), "toBeEmpty");
 call(Bun.file("expect-full.txt"), "toBeEmpty", [], true);
+const emptyFile = Bun.file("expect-empty.txt");
+Object.defineProperty(emptyFile, "size", { get() { throw shadowFailure; } });
+call(emptyFile, "toBeEmpty");
+const fullFile = Bun.file("expect-full.txt");
+Object.defineProperty(fullFile, "size", { value: 0 });
+call(fullFile, "toBeEmpty", [], true);
 console.log("PASS container emptiness and iterator errors");

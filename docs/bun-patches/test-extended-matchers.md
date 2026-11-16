@@ -27,6 +27,9 @@ without materializing their contents, and iterator exceptions propagate unchange
 Bun probes iterability before acquiring the iterator. The adapter preserves both
 iterator getter reads, reads `next` once, and uses the second iterator method.
 Existing array, string, Map, Set and ordinary object behavior remains in place.
+Blob and typed-array sizes come from their captured accessors instead of instance
+properties. BunFile uses its existing internal prototype's stat-based accessor,
+so checking a file does not load its bytes or trust an own size shadow.
 Async asymmetric extension results and recursive deep equality are outside this
 adapter. No mock, spy, engine or host interface code changes.
 
