@@ -35,6 +35,7 @@ function boundsAndZeroing(): void {
   buffer.resize(16);
   equal(Array.from(new Uint8Array(buffer)), new Array(16).fill(0));
   throws(() => buffer.resize(262145), RangeError);
+  throws(() => buffer.resize(2 ** 32 + 16), RangeError);
   equal(buffer.byteLength, 16);
 }
 
@@ -62,6 +63,9 @@ function callbackGrowth(): void {
 }
 
 function maximumMetadata(): void {
+  const empty = new ArrayBuffer(0, { maxByteLength: 0 });
+  equal([empty.byteLength, empty.maxByteLength, empty.resizable], [0, 0, true]);
+  empty.resize(0);
   const buffers = Array.from({ length: 8 }, () => new ArrayBuffer(0, { maxByteLength: 268435456 }));
   for (const buffer of buffers) {
     equal([buffer.byteLength, buffer.maxByteLength, buffer.resizable], [0, 268435456, true]);
@@ -85,6 +89,15 @@ function transferAndLifetime(): void {
     moved.resize(8);
     moved.resize(131073);
     equal(new Uint8Array(moved)[65536], 0);
+    const direct = moved.transfer(16);
+    equal([moved.byteLength, direct.byteLength, direct.maxByteLength, direct.resizable], [0, 16, 131073, true]);
+    equal(new Uint8Array(direct)[0], 29);
+    throws(() => direct.transfer(2 ** 32 + 16), RangeError);
+    equal(direct.byteLength, 16);
+    const fixed = direct.transferToFixedLength(32);
+    equal([direct.byteLength, fixed.byteLength, fixed.resizable], [0, 32, false]);
+    equal(new Uint8Array(fixed)[31], 0);
+    Bun.gc(true);
   }
   const ordinary = new ArrayBuffer(4);
   const alias = new Uint8Array(ordinary);
