@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import "../iphone-smoke-watch";
-import { chmod, mkdir, mkdtemp, readFile, rm, watch, writeFile } from "node:fs/promises";
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, watch, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { instructions } from "./dispatch";
 import { discover } from "./github";
 import { claimWindowMs, outcome, state as parseState, type Job, type Run, type State } from "./model";
-import { claim, complete, retry, tick, type Adapters } from "./scheduler";
+import { claim, complete, retry, status, tick, type Adapters } from "./scheduler";
 import { load, save } from "./storage";
 
 const since = "2026-11-15T00:00:00.000Z";
@@ -16,6 +16,87 @@ const run = (number: number): Run => ({ revision: sha(number), id: number + 100,
 const fresh = (): State => ({ schema: 1, since, polledAt: null, error: null, jobs: [] });
 const green = (job: Job) => outcome({ revision: job.revision, status: "green", failedPhase: null, reportPath: "/reports/result.json" }, job.revision);
 const red = (job: Job) => outcome({ revision: job.revision, status: "red", failedPhase: "prepare-artifacts", reportPath: "/reports/failure.md" }, job.revision);
+
+function tabCountReport(revision = sha(1)) {
+  const error = "AggregateError: Error: Cannot identify Safari tab count";
+  const phases = ["startup", "install", "dev", "render", "click", "cleanup"].map(phase => ({ phase, status: phase === "cleanup" ? "fail" : "pass", error: phase === "cleanup" ? error : undefined }));
+  const failures: { phase: string; error: string }[] = [];
+  return { kind: "manual-iphone-smoke", revision, status: "red", failedPhase: "cleanup", reportPath: "/reports/cleanup.json", failures,
+    cases: ["vite-react/iphone-safari/browser", "hono/iphone-safari/browser", "vite-react/iphone-safari/quickjs"].map((id, index) => ({ id,
+      status: index === 0 ? "fail" : "blocked", phases: index === 0 ? phases : [],
+      failures: [{ phase: index === 0 ? "cleanup" : "prerequisite", error: index === 0 ? error : "Previous case cleanup failed: " + error }],
+    })) };
+}
+
+test("only exact tab-count cleanup failure after passing functional phases is operational", () => {
+  expect(outcome(tabCountReport(), sha(1))).toMatchObject({ status: "red", failedPhase: "cleanup", operational: "safari-tab-count" });
+  for (const phase of ["startup", "install", "dev", "render", "click"]) {
+    const report = tabCountReport();
+    report.cases[0]!.phases.find(row => row.phase === phase)!.status = "fail";
+    expect(outcome(report, sha(1))).not.toHaveProperty("operational");
+  }
+});
+
+test.each([1, 2])("operational cleanup can follow %s complete passing cases", passed => {
+  const report = tabCountReport();
+  const failed = structuredClone(report.cases[0]!);
+  for (const [index, result] of report.cases.entries()) {
+    if (index < passed) {
+      result.status = "pass";
+      result.phases = failed.phases.map(phase => ({ ...phase, status: "pass", error: undefined }));
+      result.failures = [];
+    }
+    if (index === passed) Object.assign(result, failed, { id: result.id });
+  }
+  expect(outcome(report, sha(1))).toMatchObject({ status: "red", operational: "safari-tab-count" });
+});
+
+test("additional aggregate cleanup errors and interrupted functional phases remain red", () => {
+  const report = tabCountReport();
+  const cleanup = report.cases[0]!.phases[5]!;
+  const error = "AggregateError: Error: Cannot identify Safari tab count; Error: owned tab identity failed";
+  cleanup.error = error;
+  report.cases[0]!.failures[0]!.error = error;
+  expect(outcome(report, sha(1))).not.toHaveProperty("operational");
+  const interrupted = tabCountReport();
+  interrupted.cases[0]!.phases[4]!.status = "cancelled";
+  expect(outcome(interrupted, sha(1))).not.toHaveProperty("operational");
+});
+
+test.each(["ownership", "closure", "mixed", "cancellation", "blocked-product", "missing-phase", "no-cases", "forged-label"])("%s failure never becomes an operational tab-count alert", scenario => {
+  const report = tabCountReport();
+  if (scenario === "ownership") report.cases[0]!.phases[5]!.error = "Error: Cannot identify the task's Safari tab for cleanup";
+  if (scenario === "closure") report.cases[0]!.phases[5]!.error = "Error: Task Safari tab closure is unproved";
+  if (scenario === "mixed") report.cases[0]!.failures.push({ phase: "render", error: "guest failed" });
+  if (scenario === "cancellation") report.failures.push({ phase: "interruption", error: "cancelled during cleanup" });
+  if (scenario === "blocked-product") report.cases[1]!.failures[0]!.error = "install failed";
+  if (scenario === "missing-phase") report.cases[0]!.phases.splice(3, 1);
+  if (scenario === "no-cases" || scenario === "forged-label") report.cases = [];
+  expect(outcome({ ...report, operational: "safari-tab-count" }, sha(1))).not.toHaveProperty("operational");
+});
+
+test("operational notification survives restart and failure without advancing tested green", async () => {
+  const state = fresh(), fake = harness([run(1), run(2), run(3)]);
+  await tick(state, fake.adapters);
+  finish(state, 1);
+  await tick(state, fake.adapters);
+  const job = state.jobs[1]!;
+  claim(job, 1, now);
+  complete(job, outcome(tabCountReport(sha(2)), sha(2)), now);
+  const restored = parseState(JSON.parse(JSON.stringify(state)));
+  fake.adapters.notify = async () => { throw new Error("notification unavailable"); };
+  await expect(tick(restored, fake.adapters)).rejects.toThrow("notification unavailable");
+  expect(restored.jobs[1]?.state).toMatchObject({ notified: false, outcome: { status: "red" } });
+  fake.adapters.notify = async message => { fake.messages.push(message); };
+  await tick(restored, fake.adapters);
+  expect(fake.messages[0]).toContain("OPERATIONAL ALERT");
+  expect(fake.messages[0]).not.toContain("smoke RED");
+  for (const text of [sha(2), "cleanup", "/reports/cleanup.json", "unproved", "raw result remains red"]) expect(fake.messages[0]).toContain(text);
+  expect(status(restored)).toContain("OPERATIONAL ALERT");
+  expect(restored.jobs[2]?.state).toMatchObject({ kind: "running", lastGreen: sha(1) });
+  await tick(restored, fake.adapters);
+  expect(fake.messages).toHaveLength(1);
+});
 
 function harness(runs: Run[]) {
   const snapshots: State[] = [], dispatches: string[] = [], messages: string[] = [];
@@ -371,6 +452,26 @@ async function cli(path: string, args: string[], env: Record<string, string> = {
   return { code, stdout, stderr };
 }
 
+test("watcher status runs from a builtin-only source fixture without browser packages", async () => {
+  const root = await directory(), reports = join(root, "reports");
+  await mkdir(reports);
+  await save(reports, fresh());
+  const original = await readFile(join(reports, "state.json"), "utf8");
+  const project = resolve(import.meta.dir, "../..");
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "cold-iphone-watcher", private: true, type: "module" }));
+  await cp(join(project, "scripts/iphone-smoke-watch"), join(root, "scripts/iphone-smoke-watch"), { recursive: true, filter: source => !source.endsWith(".test.ts") });
+  for (const name of ["scripts/iphone-smoke-watch.ts", "scripts/iphone-smoke/cases.ts", "scripts/goals-matrix/catalog.ts", "scripts/goals-matrix/evidence.ts"]) {
+    await mkdir(dirname(join(root, name)), { recursive: true });
+    await copyFile(join(project, name), join(root, name));
+  }
+  const child = Bun.spawn([process.execPath, join(root, "scripts/iphone-smoke-watch.ts"), "status", `--report-dir=${reports}`],
+    { cwd: root, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code, stderr).toBe(0);
+  expect(stdout).toContain("# iPhone smoke automation");
+  expect(await readFile(join(reports, "state.json"), "utf8")).toBe(original);
+}, 60_000);
+
 test("CLI fake GitHub/T3 dispatch, claim, red complete and cleanup-confirmed retry", async () => {
   const path = await directory(), bin = join(path, "bin");
   await mkdir(bin);
@@ -387,11 +488,15 @@ test("CLI fake GitHub/T3 dispatch, claim, red complete and cleanup-confirmed ret
   expect((await cli(path, ["claim"].concat(identity), env)).code).toBe(0);
   expect((await cli(path, ["claim"].concat(identity), env)).code).toBe(1);
   const result = join(path, "manual-result.json");
-  await writeFile(result, JSON.stringify({ kind: "manual-iphone-smoke", revision: sha(1), source: {}, status: "red", failedPhase: "prepare", reportPath: result, cases: [], ownership: {} }));
+  const raw = JSON.stringify(tabCountReport());
+  await writeFile(result, raw);
   expect((await cli(path, ["complete"].concat(identity, [`--result-file=${result}`]), { ...env, SEND_FAIL: "1" })).code).toBe(1);
   expect(first(await load(path)).state).toMatchObject({ kind: "complete", notified: false, outcome: { status: "red" } });
   expect((await cli(path, ["tick"], env)).code).toBe(0);
   expect(first(await load(path)).state).toMatchObject({ notified: true });
+  expect(await readFile(join(path, "STATUS.md"), "utf8")).toContain("OPERATIONAL ALERT");
+  expect(await readFile(env.SEND_LOG, "utf8")).toContain("OPERATIONAL ALERT");
+  expect(await readFile(join(path, sha(1), "attempt-1", "result.json"), "utf8")).toBe(raw);
   const audit = join(path, "audit.md");
   await writeFile(audit, "No Mac work started. No resources remain.\n");
   expect((await cli(path, ["retry"].concat(identity), env)).code).toBe(1);
