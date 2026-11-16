@@ -5,7 +5,8 @@ import type { PlaygroundProfile } from "../../web/src/playground/program-profile
 import { admit, awaitWithin, type Admission } from "./scope";
 interface Playground {
   profile: PlaygroundProfile;
-  shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void; runtimeSnapshot?(): unknown };
+  runtime: { dispose(): Promise<void> };
+  shell: { running: boolean; lastExit: number; submit(text: string): Promise<void>; input(text: string): void; dispose(): Promise<void>; runtimeSnapshot?(): unknown };
   previews: { readonly ready: Promise<"ready" | "unsupported" | "failed">; serves(port: number): boolean; url(port: number): string };
   editor: { open(path: string): Promise<void>; save(): Promise<void>; view: { state: { doc: { toString(): string; length: number } }; dispatch(change: { changes: { from: number; to: number; insert: string } }): void } };
   term: { write(text: string, callback: () => void): void; buffer: { active: { length: number; getLine(index: number): { isWrapped: boolean; translateToString(trim: boolean): string } | undefined } } };
@@ -182,12 +183,22 @@ export async function stopServer(transport: ScopedTransport, timeoutMs: number, 
   await until(() => transport.evaluate<ReturnType<typeof stopState>>(expression(stopState, port)), value => !value.running && !value.listening, timeoutMs);
 }
 function stopState(port: number) {
-  if (typeof playground === "undefined") return { listening: false, running: false, observedAt: Date.now(), runtime: null };
+  if (typeof playground === "undefined") return { listening: false, running: false, observedAt: Date.now() };
   const listening = playground.previews.serves(port), running = playground.shell.running;
-  let runtime: unknown = null;
-  try { if (listening || running) runtime = playground.shell.runtimeSnapshot?.() ?? null; }
-  catch (error) { runtime = { unavailable: String(error) }; }
-  return { listening, running, observedAt: Date.now(), runtime };
+  return { listening, running, observedAt: Date.now() };
+}
+async function disposeOwnedPlayground(): Promise<void> {
+  if (typeof playground === "undefined") return;
+  const outcomes = await Promise.allSettled([
+    Promise.resolve().then(() => playground.runtime.dispose()),
+    Promise.resolve().then(() => playground.shell.dispose()),
+  ]);
+  const failures = outcomes.filter(outcome => outcome.status === "rejected").map(outcome => outcome.reason);
+  if (failures.length) throw new AggregateError(failures, failures.map(String).join("; "));
+}
+export async function disposePlayground(transport: ScopedTransport): Promise<void> {
+  await transport.useHost();
+  await transport.evaluate(expression(disposeOwnedPlayground, undefined));
 }
 function rendered(input: { selector: string; text: string }): { text: string; matched: boolean } {
   const text = document.querySelector(input.selector)?.textContent ?? "";

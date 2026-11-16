@@ -5,13 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initialReport, options, run } from "./run";
 import { writePreparedSiteInventory } from "./prepared-site";
-import { deadlinePolicy, campaignDeadlines, cellDeadlines } from "./deadlines";
+import { deadlinePolicy, campaignDeadlines, cellDeadlines, validateDeadlines } from "./deadlines";
 import { frameworks } from "./catalog";
 import { execute } from "./execute";
 import { combine, nativeRunnerArgs } from "./fleet";
 import { finish, initialCells, validateReport, type Report } from "./model";
 import { object } from "./evidence";
 import type { Transport } from "./transport";
+
+test("historical cleanup budgets and failed attempts retain their recorded meaning", () => {
+  const policy = validateDeadlines({ ...deadlinePolicy(90_000), cleanupTimeoutMs: 20_000 });
+  expect(policy.cleanupTimeoutMs).toBe(20_000);
+});
 import { markdown, saveReport } from "./report";
 import { completeAttempt, withPlayground } from "./test-fixture";
 
@@ -23,7 +28,7 @@ test("an explicit Nuxt install budget leaves the campaign phase timeout unchange
   expect(config).toMatchObject({ timeoutMs: 90_000, installTimeouts: { nuxt: 110_000 } });
   const policy = deadlinePolicy(config.timeoutMs, config.installTimeouts);
   expect(policy.timeoutMs).toBe(90_000);
-  expect(policy.cleanupTimeoutMs).toBe(20_000);
+  expect(policy.cleanupTimeoutMs).toBe(60_000);
   for (const framework of frameworks) expect(policy.installTimeouts[framework.id]).toBe(framework.id === "nuxt" ? 110_000 : 90_000);
 });
 
@@ -73,7 +78,7 @@ test("the install's outer deadline and command polling both get the override, an
   expect(relaxed.status).toBe("pass");
   const results = relaxed.attempts[0]?.phases;
   expect(results).toHaveLength(9);
-  for (const result of results ?? []) expect(result.timeoutMs).toBe(result.phase === "install" ? 500 : result.phase === "cleanup" ? 20_000 : 100);
+  for (const result of results ?? []) expect(result.timeoutMs).toBe(result.phase === "install" ? 500 : result.phase === "cleanup" ? 60_000 : 100);
 });
 
 test("an install override never extends a stalled render phase", async () => {
@@ -92,11 +97,11 @@ test("report evidence states and validates the effective install and phase bound
   const box = report.cells[index];
   if (!box) throw new Error("Missing box");
   const attempt = completeAttempt();
-  for (const phase of attempt.phases) phase.timeoutMs = phase.phase === "install" ? 110_000 : phase.phase === "cleanup" ? 20_000 : 90_000;
+  for (const phase of attempt.phases) phase.timeoutMs = phase.phase === "install" ? 110_000 : phase.phase === "cleanup" ? 60_000 : 90_000;
   report.cells[index] = finish(box, attempt);
   const text = markdown(report);
   expect(text).toContain(override);
-  expect(text).toContain("Campaign phases: 90000 ms by default. Cleanup: 20000 ms");
+  expect(text).toContain("Campaign phases: 90000 ms by default. Cleanup: 60000 ms");
   expect(text).toContain("| Nuxt | 110000 |");
   expect(text).toContain("| Astro | 90000 |");
   const install = attempt.phases.find(phase => phase.phase === "install");
@@ -111,7 +116,7 @@ test("shard combination rejects different effective policies even without overla
 const invalidPolicies: unknown[] = [
   {},
   { timeoutMs: "90000" },
-  { ...deadlinePolicy(90_000), cleanupTimeoutMs: 90_000 },
+  { ...deadlinePolicy(90_000), cleanupTimeoutMs: -1 },
   { ...deadlinePolicy(90_000), installTimeouts: { nuxt: 110_000 } },
   { ...deadlinePolicy(90_000), installTimeouts: { ...deadlinePolicy(90_000).installTimeouts, unknown: 110_000 } },
   { ...deadlinePolicy(90_000), installTimeouts: { ...deadlinePolicy(90_000).installTimeouts, nuxt: -1 } },
@@ -239,7 +244,7 @@ async function runFixture(framework: string, endpoint: string, timeouts: unknown
     expect(cell).toMatchObject(framework === "nuxt" ? { status: "pass" } : { status: "fail", phase: "install", error: expect.stringContaining("200 ms") });
     expect(cell?.attempts[0]?.phases.find(phase => phase.phase === "install")?.timeoutMs).toBe(framework === "nuxt" ? 900 : 200);
     if (framework === "nuxt") expect(cell?.attempts[0]?.phases.find(phase => phase.phase === "build")).toMatchObject({ status: "pass", timeoutMs: 900 });
-    expect(timeouts).toEqual([{ script: 200, pageLoad: 200, implicit: 0 }, { script: 200, pageLoad: 200, implicit: 0 }]);
+    expect(timeouts).toEqual([{ script: 200, pageLoad: 200, implicit: 0 }, { script: 45_000, pageLoad: 45_000, implicit: 0 }]);
     const resource = report.resources?.[0];
     if (!resource) throw new Error("Missing owned server receipt");
     expect(resource.stopped).toBe(true);
@@ -262,8 +267,8 @@ test.each(["session", "preview", "transcript"] as const)("the real default nativ
     expect(cell.attempts[0]?.phases.find(phase => phase.phase === "cleanup")?.durationMs).toBeGreaterThanOrEqual(1800);
     const limits = cellDeadlines(campaignDeadlines(), cell);
     expect(limits.timeoutMs).toBe(300_000);
-    for (const phase of cell.attempts[0]?.phases ?? []) expect(phase.timeoutMs).toBe(phase.phase === "cleanup" ? 20_000 : phase.phase === "install" ? limits.installTimeoutMs : phase.phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs);
-    expect(timeouts).toEqual([{ script: limits.timeoutMs, pageLoad: limits.timeoutMs, implicit: 0 }, { script: 10_000, pageLoad: 10_000, implicit: 0 }]);
+    for (const phase of cell.attempts[0]?.phases ?? []) expect(phase.timeoutMs).toBe(phase.phase === "cleanup" ? 60_000 : phase.phase === "install" ? limits.installTimeoutMs : phase.phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs);
+    expect(timeouts).toEqual([{ script: limits.timeoutMs, pageLoad: limits.timeoutMs, implicit: 0 }, { script: 45_000, pageLoad: 45_000, implicit: 0 }]);
     expect(report.deadlines.overrides).toEqual({ timeoutMs: null, installTimeouts: {}, buildTimeoutMs: null });
     expect(report.resources?.every(resource => resource.stopped)).toBe(true);
     for (const resource of report.resources ?? []) expect(() => process.kill(resource.pid, 0)).toThrow();
@@ -295,7 +300,7 @@ test("a stalled cleanup-mode switch stays inside the existing owned observation 
     const cell = await execute({ framework, box: { framework: framework.id, browser: "iphone-safari", engine: "browser" },
       url: "http://fixture/?engine=browser", timeoutMs: 1000, async createTransport() { return transport; }, async saveLog() {} });
     expect(cell).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("4000 ms") });
-    expect(cell.attempts[0]?.phases.at(-1)?.timeoutMs).toBe(20_000);
+    expect(cell.attempts[0]?.phases.at(-1)?.timeoutMs).toBe(60_000);
     expect(closed).toBe(true);
   });
 }, 7000);
