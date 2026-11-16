@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { instrumentConsumerPreview, instrumentHelper, instrumentProjection, instrumentRouter, instrumentSandbox, instrumentWorker, verifySource } from "./storage-routing-build-source";
+import release from "./waffle-release-inputs.json";
 
 const transforms = {
   "browser/service-worker.ts": instrumentWorker,
@@ -19,6 +20,6 @@ export function routingObservationSource(path: string, source: string): string |
 }
 export function verifyRoutingInstallation(runtime: string): void {
   const metadata: unknown = JSON.parse(readFileSync(join(runtime, "package.json"), "utf8"));
-  if (!metadata || typeof metadata !== "object" || !("version" in metadata) || metadata.version !== "0.0.136") throw Error("Storage routing requires the complete installed Waffle .136");
+  if (!metadata || typeof metadata !== "object" || !("version" in metadata) || metadata.version !== release.version) throw Error(`Storage routing requires the complete installed Waffle ${release.version}`);
   for (const name of Object.keys(transforms)) verifySource(name, readFileSync(join(runtime, name), "utf8"));
 }

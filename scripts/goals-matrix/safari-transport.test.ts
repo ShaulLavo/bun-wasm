@@ -6,6 +6,7 @@ import { createSafariTransport, type SafariTransport, type SafariTransportOption
 import { campaignDeadlines, cellDeadlines } from "./deadlines";
 import { Scope } from "./scope";
 import { armNativeClick, observeNativeClick } from "./native-click";
+import { disposePlayground, stopServer } from "./playground";
 
 type Call = { method: string; path: string; body: Record<string, unknown> };
 type FixtureOptions = {
@@ -25,6 +26,34 @@ function failure(message: string): Response { return reply({ error: "unknown err
 const desktop = { browserName: "Safari", browserVersion: "26.4", platformName: "macOS", "safari:automaticInspection": false };
 const iphone = { browserName: "Safari", browserVersion: "26.5", platformName: "iOS", "safari:useSimulator": true,
   "safari:deviceType": "iPhone", "safari:deviceUDID": "owned-iphone" };
+
+test.each([false, true])("shared Safari cleanup awaits physical disposal and preserves rejection=%s", async fail => {
+  const driver = fixture();
+  const transport = await driver.connect({ cleanupTimeoutMs: 45_000 });
+  const pending = withScoped(transport, async page => {
+    await page.evaluate(`globalThis.retirement = Promise.withResolvers(); globalThis.foreign = { stopped: false };
+      globalThis.playground = { shell: { running: false, input() {}, dispose: async () => {} },
+        runtime: { dispose: () => retirement.promise }, previews: { serves: () => false } }; void 0`);
+    await stopServer(page, 45_000);
+    return disposePlayground(page);
+  });
+  let finished = false;
+  void pending.then(() => { finished = true; }, () => { finished = true; });
+  try {
+    // The request really runs through HTTP, WebDriver serialization and the page callback.
+    while (!driver.calls.some(call => String(call.body.args).includes("disposeOwnedPlayground"))) await Bun.sleep(1);
+    expect(finished).toBe(false);
+    runInContext(fail ? "retirement.reject(new Error('physical retirement failed'))" : "retirement.resolve()", driver.context());
+    if (fail) await expect(pending).rejects.toThrow("physical retirement failed");
+    else await pending;
+    expect(await withScoped(transport, page => page.evaluate("foreign.stopped"))).toBe(false);
+  } finally {
+    runInContext("retirement.resolve()", driver.context());
+    await pending.catch(() => {});
+    await transport.close(true);
+  }
+  expect(driver.deleted).toBe(true);
+});
 
 class FixtureFrame {
   id = "";

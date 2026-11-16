@@ -1,4 +1,4 @@
-import { deadlinePolicy } from "./deadlines";
+import { cleanupTimeoutMs, deadlinePolicy } from "./deadlines";
 import { completeAttempt } from "./test-fixture";
 import { describe, expect, test } from "bun:test";
 import { inventory, browsers, engines } from "./catalog";
@@ -31,7 +31,7 @@ describe("honest goals matrix", () => {
   test("never overwrites first failure with later cleanup failure", () => {
     const attempt = complete();
     attempt.phases[0] = { phase: "startup", status: "fail", startedAt: "now", durationMs: 0, timeoutMs: 180_000, error: "real error" };
-    attempt.phases.push({ phase: "cleanup", status: "fail", startedAt: "now", durationMs: 0, timeoutMs: 20_000, error: "cleanup error" });
+    attempt.phases.push({ phase: "cleanup", status: "fail", startedAt: "now", durationMs: 0, timeoutMs: cleanupTimeoutMs, error: "cleanup error" });
     expect(finish(box, attempt)).toMatchObject({ status: "fail", phase: "startup", error: "real error" });
     const retried = finish(box, complete(), [attempt]);
     expect(retried.attempts).toHaveLength(2);

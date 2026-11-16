@@ -1,4 +1,5 @@
 (function (internal: {
+  BunFile?: { readonly prototype: object };
   isPromise(value: unknown): boolean;
   promiseState(value: Promise<unknown>): string;
   promiseThen<T, U>(value: Promise<T>, fulfilled: (value: T) => U, rejected?: (error: unknown) => U): Promise<U>;
@@ -9,6 +10,27 @@
 
   const promiseThen = internal.promiseThen;
   const schedule = setTimeout.bind(globalThis);
+  const stringValueOf = String.prototype.valueOf;
+  const apply = Reflect.apply;
+  const noArgs: readonly unknown[] = [];
+  const isPrototypeOf = Object.prototype.isPrototypeOf;
+  const arrayBufferByteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")?.get;
+  const typedArrayByteLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "byteLength")?.get;
+  const blobSize = Object.getOwnPropertyDescriptor(Blob.prototype, "size")?.get;
+  const blobBytes = Object.getOwnPropertyDescriptor(Blob.prototype, "_bytes")?.value;
+  const bunFilePrototype = internal.BunFile?.prototype;
+  const bunFileSize = bunFilePrototype && Object.getOwnPropertyDescriptor(bunFilePrototype, "size")?.get;
+
+  function isStringValue(value: unknown): boolean {
+    if (typeof value === "string") return true;
+    if (value === null || typeof value !== "object") return false;
+    try {
+      apply(stringValueOf, value, noArgs);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
     return internal.isPromise(value);
@@ -47,6 +69,81 @@
     const pass = typeof received === "number" && received >= start && received < end;
     if (pass !== !!ctx.not) return null;
     return { body: `\n\nExpected: ${ctx.not ? "not " : ""}between ${start} (inclusive) and ${end} (exclusive)\nReceived: ${String(received)}\n` };
+  }
+
+  function even(value: unknown): boolean {
+    if (typeof value === "bigint") return value % 2n === 0n;
+    return typeof value === "number" && Number.isInteger(value) && value % 2 === 0;
+  }
+
+  function odd(value: unknown): boolean {
+    if (typeof value === "bigint") return value % 2n !== 0n;
+    return typeof value === "number" && Number.isInteger(value) && Math.abs(value % 2) === 1;
+  }
+
+  function isIterable(value: object): value is Iterable<unknown> {
+    return typeof Reflect.get(value, Symbol.iterator) === "function";
+  }
+
+  function empty(value: unknown): boolean {
+    if (typeof value === "string" || value instanceof String || Array.isArray(value)) return value.length === 0;
+    if (value instanceof Map || value instanceof Set) return value.size === 0;
+    if (value instanceof Blob && blobSize) {
+      if (bunFilePrototype && bunFileSize && apply(isPrototypeOf, bunFilePrototype, [value])) return apply(bunFileSize, value, noArgs) === 0;
+      if (typeof blobBytes === "function" && typedArrayByteLength) return apply(typedArrayByteLength, apply(blobBytes, value, noArgs), noArgs) === 0;
+      return apply(blobSize, value, noArgs) === 0;
+    }
+    if (value instanceof ArrayBuffer && arrayBufferByteLength) {
+      try { return apply(arrayBufferByteLength, value, noArgs) === 0; } catch {}
+    }
+    if (ArrayBuffer.isView(value) && typedArrayByteLength) {
+      try { return apply(typedArrayByteLength, value, noArgs) === 0; }
+      catch (error) { if (!(error instanceof TypeError)) throw error; }
+    }
+    if (typeof value === "function") return Object.keys(value).length === 0;
+    if (value === null || typeof value !== "object") return false;
+    if (!isIterable(value)) return Object.keys(value).length === 0;
+    let empty = true;
+    for (const _item of value) empty = false;
+    return empty;
+  }
+
+  function constant(ctx: Context, name: "pass" | "fail", pass: boolean, args: unknown[]): Failure {
+    if (args.length > 0 && !isStringValue(args[0])) throw new TypeError(`Expected message to be a string for '${name}'.`);
+    const message = args.length === 0 ? `${pass ? "passes" : "fails"} by .${name}() assertion` : String(args[0]);
+    if (pass !== !!ctx.not) return null;
+    return { body: `\n\n${message}\n` };
+  }
+
+  function arrayOfSize(inspect: (value: unknown) => string, ctx: Context, received: unknown, ...args: unknown[]): Failure {
+    if (args.length === 0) throw new TypeError("toBeArrayOfSize() requires 1 argument");
+    const size = args[0];
+    if (typeof size !== "number" || !Number.isInteger(size) || Object.is(size, -0) || size < -(2 ** 51) || size >= 2 ** 51) {
+      throw new Error("toBeArrayOfSize() requires the first argument to be a number");
+    }
+    if ((Array.isArray(received) && received.length === size) !== !!ctx.not) return null;
+    return { body: `\n\nReceived: ${inspect(received)}\n` };
+  }
+
+  function ignoringWhitespace(inspect: (value: unknown) => string, ctx: Context, received: unknown, ...args: unknown[]): Failure {
+    if (args.length === 0) throw new TypeError("toEqualIgnoringWhitespace() requires 1 argument");
+    const expected = args[0];
+    if (!isStringValue(expected)) {
+      throw new Error("toEqualIgnoringWhitespace() requires argument to be a string");
+    }
+    const pass = isStringValue(received)
+      && String(received).replace(/[ \t-\r]/g, "") === String(expected).replace(/[ \t-\r]/g, "");
+    if (pass !== !!ctx.not) return null;
+    return { body: `\n\nExpected: ${ctx.not ? "not " : ""}${inspect(expected)}\nReceived: ${inspect(received)}\n` };
+  }
+
+  function extended(inspect: (value: unknown) => string) {
+    return {
+      pass: (ctx: Context, _received: unknown, ...args: unknown[]) => constant(ctx, "pass", true, args),
+      fail: (ctx: Context, _received: unknown, ...args: unknown[]) => constant(ctx, "fail", false, args),
+      arrayOfSize: arrayOfSize.bind(undefined, inspect),
+      ignoringWhitespace: ignoringWhitespace.bind(undefined, inspect),
+    };
   }
 
   function nthReturned(options: {
@@ -128,5 +225,5 @@
     return { track, unhandled, complete };
   }
 
-  return { settle, throwOutcome, within, nthReturned, pending };
+  return { settle, throwOutcome, within, nthReturned, pending, even, odd, empty, extended };
 })

@@ -114,7 +114,7 @@ async function nativeTransport(box: Cell, config: Options, timeoutMs: number, re
   const receipt = config.safariOwnership ? ownershipReceipt(config.output, captureIdentity(box, report)) : undefined;
   const ownershipSink = capture ? capture.ownership(receipt) : receipt;
   const transport = await createSafariTransport({ ownershipSink, protocolSink: capture || exit ? fact => { capture?.protocol(fact); exit?.protocol(fact); } : undefined, browser: box.browser, endpoint, deviceUDID: config.deviceUDID, timeoutMs,
-    cleanupTimeoutMs: Math.min(config.timeoutMs ?? 90_000, 10_000) });
+    cleanupTimeoutMs: report.deadlines.cleanupTimeoutMs - 15_000 });
   return exit ? exit.transport(transport) : transport;
 }
 export async function initialReport(config: Options): Promise<Report> {

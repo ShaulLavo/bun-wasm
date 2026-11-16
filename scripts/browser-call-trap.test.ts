@@ -13,6 +13,7 @@ import { reportWasmCallTrap } from "../web/src/wasm-call-trap.ts";
 import { browserTrapSource } from "./fixtures/browser-call-trap.ts";
 import { browserTrapLog } from "./goals-matrix/browser-memory.ts";
 import { execute } from "./goals-matrix/execute.ts";
+import { cleanupTimeoutMs } from "./goals-matrix/deadlines.ts";
 import { frameworks } from "./goals-matrix/catalog.ts";
 import { withPlayground } from "./goals-matrix/test-fixture.ts";
 
@@ -123,7 +124,7 @@ test.each([false, true])("a stalled diagnostic keeps the original error and log 
     expect(saved).toContain("kept terminal");
     expect(saved).toContain("Browser core trap memory snapshots unavailable within the final observation budget");
     expect(closed).toBe(true);
-    expect(result.attempts[0]?.phases.find(value => value.phase === "cleanup")).toMatchObject({ status: "pass", timeoutMs: 20_000 });
+    expect(result.attempts[0]?.phases.find(value => value.phase === "cleanup")).toMatchObject({ status: "pass", timeoutMs: cleanupTimeoutMs });
     diagnostic.resolve("late diagnostic");
     await Bun.sleep(0);
     expect(saves).toBe(1);

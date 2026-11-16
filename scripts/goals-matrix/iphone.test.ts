@@ -150,24 +150,24 @@ test("successful native-owned cleanup preserves the final terminal log", async (
 
 test("owned cleanup uses the remaining campaign admission after handoff and logging", async () => {
   const { result, budgets, settled } = await cleanupDeadlineControl("elapsed");
-  expect(budgets).toEqual([18_500]);
+  expect(budgets).toEqual([58_500]);
   expect(settled).toBe(true);
   expect(result.status).toBe("pass");
-  expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000,
+  expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 60_000,
     evidence: { browserClosed: true, foregroundStopped: true, previewClosed: true } });
 });
 
 test.each(["expired", "cancelled"] as const)("%s cleanup admission dispatches no owned close", async scenario => {
   const { result, budgets } = await cleanupDeadlineControl(scenario);
   expect(budgets).toEqual([]);
-  expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining(scenario === "expired" ? "Phase timed out after 20000 ms" : "cleanup cancelled") });
+  expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining(scenario === "expired" ? "Phase timed out after 60000 ms" : "cleanup cancelled") });
 });
 
 test.each(["late-success", "late-error"] as const)("owned cleanup consumes %s but never passes after expiry", async scenario => {
   const { result, budgets, settled } = await cleanupDeadlineControl(scenario);
-  expect(budgets).toEqual([18_500]);
+  expect(budgets).toEqual([58_500]);
   expect(settled).toBe(true);
-  expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("Phase timed out after 20000 ms") });
+  expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("Phase timed out after 60000 ms") });
 });
 
 async function cleanupDeadlineControl(scenario: "elapsed" | "expired" | "cancelled" | "late-success" | "late-error") {
@@ -178,7 +178,7 @@ async function cleanupDeadlineControl(scenario: "elapsed" | "expired" | "cancell
   let cleanupScope: Scope | undefined;
   const scopes = spyOn(Scope, "open").mockImplementation((timeoutMs, parent) => {
     const scope = open(timeoutMs, parent);
-    if (timeoutMs === 20_000 && !parent) cleanupScope = scope;
+    if (timeoutMs === 60_000 && !parent) cleanupScope = scope;
     return scope;
   });
   const budgets: number[] = [];
@@ -188,7 +188,7 @@ async function cleanupDeadlineControl(scenario: "elapsed" | "expired" | "cancell
     transport.beginCleanup = () => { now += 1200; };
     transport.cleanup = async timeoutMs => {
       budgets.push(timeoutMs);
-      now += scenario.startsWith("late-") ? 18_501 : 13_196;
+      now += scenario.startsWith("late-") ? 58_501 : 13_196;
       settled = true;
       if (scenario === "late-error") throw new Error("late close rejection is consumed");
       if (timeoutMs < 13_196) throw new Error("owned close budget exhausted");
@@ -218,9 +218,9 @@ test("a stalled final terminal read saves the completed transcript and still clo
   expect(logs[0]).toContain("saved build transcript");
 });
 
-test("a terminal log write failure cannot skip native resource teardown", async () => {
+test("an optional terminal log write failure cannot fail successful native resource teardown", async () => {
   const { result, closed } = await nativeLifecycle("write-failure");
-  expect(result).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("log write failed") });
+  expect(result.status).toBe("pass");
   expect(closed).toBe(true);
 });
 

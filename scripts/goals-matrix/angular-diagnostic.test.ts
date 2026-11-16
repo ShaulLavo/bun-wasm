@@ -122,7 +122,7 @@ test.each([false, true])("successful terminal output remains unchanged, owned = 
 test.each([false, true])("failed Angular diagnostic survives final log save before owned cleanup = %s", async owned => {
   const observed = await runFixture({ owned });
   expect(observed.result).toMatchObject({ status: "fail", phase: "dev", error: expect.stringContaining("without listening") });
-  expect(observed.result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000 });
+  expect(observed.result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 60_000 });
   expect(observed.reads).toEqual(["preopen", "resolve", "stat", "resolve", "stat", "resolve", "stat", "stat", "read"]);
   expect(observed.readInodes).toEqual([observed.expected]);
   expect(observed.ranges).toEqual([[16_384, 0]]);
