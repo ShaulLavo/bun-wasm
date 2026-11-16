@@ -52,8 +52,8 @@ inputs, so a policy-only edit still exercises matched-pair admission.
 
 ## iPhone shared-memory bounds
 
-`web/src/host-memory-policy.ts` is an original host adapter. The playground uses
-it to select a 768 MiB QuickJS group maximum on iPhone. The cumulative member
+`web/src/host-memory-policy.ts` is an original host adapter. The playground and
+sandbox select a 768 MiB QuickJS group maximum on iPhone. The cumulative member
 allowance is also 768 MiB, as required by Waffle's policy validation. Stacks stay
 8 MiB. Desktop keeps the existing 2 GiB group and 1 GiB member allowance.
 
@@ -67,6 +67,10 @@ JSC uses a 1,280 MiB iPhone group maximum and retains its 1 GiB cumulative membe
 allowance. Its complete instrumented Chrome workflows reach 760,545,280 bytes for
 Angular and 996,737,024 bytes for Vite React. The maximum leaves about 35% above
 the larger measured capacity. Desktop keeps its original policy.
+
+SpiderMonkey also uses a 1,280 MiB iPhone group maximum with the original 1 GiB
+member allowance. Its complete Angular Chrome workflow reaches 1,033,568,256
+bytes, leaving about 30% growth room. Desktop keeps its original policy.
 
 The same host adapter sets the native Browser tool-memory fact for iPhone and
 removes it from other engine environments. The byte-qualified Rolldown loader
