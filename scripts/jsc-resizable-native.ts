@@ -79,7 +79,7 @@ export function nativeBackingControl(options: { root: string; prebuild: string; 
   });
   const control = join(options.scratch, "control.o");
   run(compiler, compileFlags(shell).concat(["-DBUN_WASM_JSC_RESIZABLE_TESTING=1", "-c", options.source, "-o", control]), shell.directory);
-  const command = run("ninja", ["-C", build, "-t", "commands", "bin/jsc"], options.root).trim().split("\n").at(-1);
+  const command = run("ninja", ["-C", build, "-t", "commands", "-s", "bin/jsc"], options.root).trim().split("\n").at(-1);
   if (!command) throw new Error("Missing native link recipe");
   const raw = join(options.scratch, "native-control.raw.wasm");
   const final = join(options.scratch, "native-control.wasm");
