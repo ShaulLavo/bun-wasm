@@ -1,5 +1,9 @@
 import { controlLoad } from "waffle/proc/control";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { prepareLinkPlan } from "waffle/link";
+import { engineLinkPlan } from "../../src/quickjs-program.ts";
+import { initializationPair } from "../../tests/package/engine-initialization-fixture.ts";
+import { physicalStop } from "../src/runner.ts";
 import { readOutcome } from "waffle/proc/outcome";
 import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { workerProcessState } from "waffle/proc/worker-client";
@@ -9,6 +13,49 @@ import { importingModule, rootFixture } from "./process-root-fixture";
 import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+
+test("root stop receipts retain the exact admitted group across same-PID replacement", async () => {
+  const state = rootFixture();
+  const events: string[] = [];
+  try {
+    await state.broker.adoptRuntimeRoot(state.root, "group");
+    const service = await state.runtime.processes();
+    const admit = service.admitRootMemoryGroup.bind(service);
+    let incarnation = 0;
+    const admission = spyOn(service, "admitRootMemoryGroup").mockImplementation((pid, program) => {
+      const admitted = admit(pid, program);
+      const identity = ++incarnation;
+      return { ...admitted, terminating: () => { events.push(`terminating ${identity}`); admitted.terminating(); }, stopped: () => {
+        events.push(`stopped ${identity}`);
+        admitted.stopped();
+      } };
+    });
+    try {
+      const { plan } = await engineLinkPlan(initializationPair("quickjs", true), prepareLinkPlan);
+      if (!plan.shared) throw new Error("Expected a shared fixture plan");
+      const program = { module: plan.entryModule, linkPlan: plan.shared };
+      const unadmitted = state.broker.captureRootStop();
+      state.broker.admitRootGroup(program);
+      const first = state.broker.captureRootStop();
+      unadmitted.terminating();
+      expect(events).toEqual([]);
+      await physicalStop({ terminate() { events.push("helper native"); } }, () => {}, () => events.push("helper returned"), () => {});
+      expect(events).toEqual(["helper native", "helper returned"]);
+      events.length = 0;
+      first.terminating();
+      first.stopped();
+      state.broker.admitRootGroup(program);
+      // A retained old handle must not select the newer membership using its PID.
+      first.terminating();
+      first.stopped();
+      const second = state.broker.captureRootStop();
+      second.terminating();
+      second.stopped();
+      expect(events).toEqual(["terminating 1", "stopped 1", "terminating 1", "stopped 1", "terminating 2", "stopped 2"]);
+      expect(admission.mock.calls.map(([pid]) => pid)).toEqual([state.root.pid, state.root.pid]);
+    } finally { admission.mockRestore(); }
+  } finally { await state.dispose(); }
+});
 
 test("third-party preview1 programs need source bytes or an explicit cooperative assertion", () => {
   const state = rootFixture();

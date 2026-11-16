@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-runner-lifecycle",
+  "engines": ["quickjs", "jsc", "browser", "spidermonkey"]
+}

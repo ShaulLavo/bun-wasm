@@ -98,20 +98,28 @@ export class SubprocessBroker {
     if (this.root && !this.runtime.disposed) this.service?.rootControlAllocated(this.root.pid, buffer);
   }
   /** Admits the adopted root as the first member of a new memory group. */
-  async admitRootGroup(program: { readonly module: WebAssembly.Module; readonly linkPlan: SharedLinkPlan }): Promise<RootMemoryGroupMember> {
-    if (!this.root) throw new Error("Memory group admission needs an adopted root");
-    const service = await this.processService();
-    this.rootGroup = service.admitRootMemoryGroup(this.root.pid, program);
+  admitRootGroup(program: { readonly module: WebAssembly.Module; readonly linkPlan: SharedLinkPlan }): RootMemoryGroupMember {
+    if (!this.root || !this.service) throw new Error("Memory group admission needs an adopted root");
+    this.rootGroup = this.service.admitRootMemoryGroup(this.root.pid, program);
     return this.rootGroup;
   }
-  rootStopped(): void {
-    if (!this.root) return;
-    // A group root's lease reclaims its memory and also settles the root ticket.
-    if (this.rootGroup) this.rootGroup.stopped();
-    else if (!this.runtime.disposed) this.service?.rootStopped(this.root.pid);
-    this.rootGroup = undefined;
-    this.releaseRoot();
+  /** Capture once for the actual native stop, before invoking it or awaiting its completion. */
+  captureRootStop(): { terminating(): void; stopped(): void } {
+    const group = this.rootGroup, root = this.root, service = this.service;
+    const release = this.releaseRootLease;
+    return {
+      terminating: () => group?.terminating(),
+      stopped: () => {
+        // The receipt owns this admission even if the broker later admits the same PID again.
+        if (group) group.stopped();
+        else if (root && root === this.root && this.rootGroup === group && !this.runtime.disposed) service?.rootStopped(root.pid);
+        if (this.rootGroup === group) this.rootGroup = undefined;
+        if (this.releaseRootLease === release) this.releaseRootLease = undefined;
+        release?.();
+      },
+    };
   }
+  rootStopped(): void { this.captureRootStop().stopped(); }
   private releaseRoot(): void {
     const release = this.releaseRootLease;
     this.releaseRootLease = undefined;
