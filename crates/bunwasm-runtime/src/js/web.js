@@ -206,9 +206,10 @@
   }
 
   // Component array, or undefined when the input doesn't parse.
+  const urlErrors = internal.require("url_errors");
   function parseUrl(input, base) {
-    if (base === undefined) return native.urlParse(String(input));
-    return native.urlParse(String(input), String(base));
+    if (base === undefined) return native.urlParse(urlErrors.toString(input));
+    return native.urlParse(urlErrors.toString(input), urlErrors.toString(base));
   }
 
   const URL_FIELDS = ["href", "protocol", "username", "password", "hostname", "port", "pathname", "search", "hash", "origin"];
@@ -217,20 +218,21 @@
     #parts;
     #searchParams = null;
     constructor(input, base) {
-      if (arguments.length === 0) throw new TypeError("URL constructor requires at least 1 argument");
+      if (arguments.length === 0) throw urlErrors.missingArguments();
+      input = urlErrors.toString(input);
+      if (base !== undefined) base = urlErrors.toString(base);
       const parts = parseUrl(input, base);
-      if (!parts) {
-        const err = new TypeError(`"${input}" cannot be parsed as a URL.`);
-        err.code = "ERR_INVALID_URL";
-        err.input = String(input);
-        throw err;
-      }
+      if (!parts) throw urlErrors.invalidURL(input, base);
       this.#parts = parts;
     }
-    static canParse(input, base) {
+    static canParse(input, base = undefined) {
+      if (arguments.length === 0) throw urlErrors.missingArguments();
       return parseUrl(input, base) != null;
     }
-    static parse(input, base) {
+    static parse(input, base = undefined) {
+      if (arguments.length === 0) throw urlErrors.missingArguments();
+      input = urlErrors.toString(input);
+      if (base !== undefined) base = urlErrors.toString(base);
       try {
         return new URL(input, base);
       } catch {
@@ -250,8 +252,9 @@
       return this.#parts[0];
     }
     set href(value) {
-      const parts = native.urlParse(String(value));
-      if (!parts) throw new TypeError(`"${value}" cannot be parsed as a URL.`);
+      value = urlErrors.toString(value);
+      const parts = native.urlParse(value);
+      if (!parts) throw urlErrors.invalidURL(value);
       this.#parts = parts;
       if (this.#searchParams) URLSearchParams._reset(this.#searchParams, this.#parts[7]);
     }
@@ -1225,8 +1228,9 @@
       defineLazyGlobal(name, () => internal.require("worker_threads")[name]);
     }
     defineLazyGlobal("Worker", () => internal.require("web_worker").Worker);
-    URL.createObjectURL = blob => internal.require("web_worker").createObjectURL(blob);
-    URL.revokeObjectURL = url => internal.require("web_worker").revokeObjectURL(url);
+    const objectURLs = internal.require("object_urls");
+    URL.createObjectURL = objectURLs.createObjectURL;
+    URL.revokeObjectURL = objectURLs.revokeObjectURL;
     defineLazyGlobal("WebSocket", () => internal.require("net").WebSocket);
   };
 })

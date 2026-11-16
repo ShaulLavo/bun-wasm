@@ -8,6 +8,14 @@ The format query path retains the pinned Bun `src/js/node/url.ts` object-key gat
 
 The adjacent `domainToUnicode` native in `crates/bunwasm-runtime/src/natives.rs` is an original **Host feature** adapter, not a copied punycode implementation. It uses the existing `url` 2.5.8 dependency, `src/quirks.rs` `set_hostname` and `domain_to_unicode`, and its resolved `idna` 1.1.0 dependency. Hostname parsing rejects credentials, ports, invalid IDNA and spaces before decoding. Parsed IPv4 and IPv6 addresses retain their normalized forms. No upstream source is copied or changed. Precise native and URLSearchParams constructor declarations live in `src/js/runtime.d.ts`; the `runtime-ts-url-decoder` fixture covers public coercion, errors, query values, encoding, IDNA, and IP hosts.
 
+Legacy parsing keeps brackets in IPv6 `host` and removes them from `hostname`.
+Unicode hostnames use the existing `domainToASCII` native, while ASCII hosts
+retain legacy spelling, including abbreviated IPv4 and explicit default ports.
+`urlToHttpOptions` returns a null-prototype object. These original adapter
+corrections are checked against Bun 1.4.4 and unchanged
+`test/js/node/url/url.test.ts` at Bun
+`9510e74152073d850a18758ca41114d8f214ffa6`.
+
 
 ## Classification
 

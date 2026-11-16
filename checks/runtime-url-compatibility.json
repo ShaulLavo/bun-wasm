@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/url-compatibility.test.ts",
+  "localRuntime": true
+}

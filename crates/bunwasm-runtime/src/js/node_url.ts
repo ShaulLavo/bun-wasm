@@ -121,8 +121,11 @@
         if (portMatch[1]) result.port = portMatch[1];
         authority = authority.slice(0, portMatch.index);
       }
-      result.hostname = authority.toLowerCase();
-      result.host = result.hostname + (result.port ? ":" + result.port : "");
+      const ipv6 = authority.startsWith("[") && authority.endsWith("]");
+      const hostname = authority.toLowerCase();
+      const asciiHostname = /[^\x00-\x7f]/.test(hostname) ? native.domainToASCII(hostname) : hostname;
+      result.hostname = ipv6 ? hostname.slice(1, -1) : asciiHostname;
+      result.host = (ipv6 ? hostname : asciiHostname) + (result.port ? ":" + result.port : "");
     }
     if (rest || result.host) {
       result.pathname = rest || (SLASHED_PROTOCOLS.has(result.protocol) ? "/" : rest);
@@ -194,6 +197,7 @@
       path: `${url.pathname || ""}${url.search || ""}`,
       href: url.href,
     };
+    Object.setPrototypeOf(options, null);
     if (url.port !== "") options.port = Number(url.port);
     if (url.username || url.password) options.auth = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`;
     return options;
