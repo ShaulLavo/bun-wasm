@@ -804,16 +804,94 @@ test("a delivery callback queued by a call that then failed is overtaken by the 
   expect(made.root.receiveMessageOnPort(port2)).toBeUndefined();
 });
 
-test("a delivery batch that cannot queue its next step ends, and the loop delivers the rest in order", async () => {
-  const { made, port1, port2, delivered, timers } = selfTransferRefused();
+function captureCallback(callback: () => void, thrown: unknown[]) {
+  try { callback(); } catch (error) { thrown.push(error); }
+}
+
+function refuseDeliveryStep(timers: { setImmediate(callback: () => void): unknown }, schedule: (callback: () => void) => unknown, failureAt: string, failure: Error) {
+  timers.setImmediate = callback => {
+    timers.setImmediate = schedule;
+    if (failureAt === "after enqueue") schedule(callback);
+    throw failure;
+  };
+}
+
+function refuseSelectedPublication(runtime: Runtime, afterPublish: boolean, failure: Error) {
+  const Queue = runtime.internal.require("immediate_queue");
+  if (typeof Queue !== "function") throw new Error("Missing actual immediate queue factory");
+  const pushFront = Queue.prototype.pushFront;
+  Queue.prototype.pushFront = function (value: unknown) {
+    Queue.prototype.pushFront = pushFront;
+    if (afterPublish) Reflect.apply(pushFront, this, [value]);
+    throw failure;
+  };
+}
+
+function guardImmediateCallbacks(runtime: Runtime, thrown: unknown[]) {
+  const timers = runtime.internal.realTimers;
+  const ordinary = timers.setImmediate, selected = timers.queueSelectedTask;
+  timers.setImmediate = callback => ordinary(() => captureCallback(callback, thrown));
+  timers.queueSelectedTask = callback => selected(() => captureCallback(callback, thrown));
+  return () => { timers.setImmediate = ordinary; timers.queueSelectedTask = selected; };
+}
+
+function refuseCloseStep(runtime: Runtime, schedule: (callback: () => void) => unknown, failureAt: string, failure: Error, selected: boolean) {
+  if (selected) { refuseSelectedPublication(runtime, failureAt === "after enqueue", failure); return; }
+  refuseDeliveryStep(runtime.internal.realTimers, schedule, failureAt, failure);
+}
+
+const closeFailures = ["before enqueue", "after enqueue"].flatMap(failureAt => [1, 3].map(afterMessage => ({ failureAt, afterMessage })));
+for (const { failureAt, afterMessage } of closeFailures) {
+  test(`local close retains selected batch and close ownership after failure ${failureAt} following message ${afterMessage}`, async () => {
+    const runtime = sourcePorts();
+    cleanup.add(() => runtime.__fixtureShutdown());
+    const { port1, port2 } = new runtime.MessageChannel();
+    const received: unknown[] = [], thrown: unknown[] = [];
+    let closes = 0, pending = 0;
+    const restore = guardImmediateCallbacks(runtime, thrown);
+    const schedule = runtime.internal.realTimers.setImmediate;
+    const failure = new Error(failureAt);
+    runtime.internal.realTimers.setImmediate = schedule;
+    port2.on("close", () => { closes++; });
+    port2.on("message", value => {
+      received.push(value);
+      if (value === 1) { port2.close(); port1.postMessage("later"); }
+      if (value === afterMessage) refuseCloseStep(runtime, schedule, failureAt, failure, afterMessage === 1);
+    });
+    try {
+      port1.postMessage(1); port1.postMessage(2); port1.postMessage(3);
+      for (let turn = 0; turn < 12; turn++) { await loopTurn(); runtime.step(); }
+      expect(received).toEqual([1, 2, 3]);
+      expect(closes).toBe(1);
+      expect(thrown).toEqual([failure]);
+      pending = runtime.pendingImmediateCallbacks();
+      expect(pending).toBe(0);
+      expect(runtime.queuedImmediateTasks()).toBe(0);
+      expect(runtime.internal.messagePortRefs.size).toBe(0);
+      expect(runtime.__fixtureOwners()).toEqual([]);
+      expect(runtime.step()).toBe(false);
+      expect(runtime.step()).toBe(false);
+    } finally {
+      runtime.internal.realTimers.setImmediate = schedule;
+      runtime.__fixtureShutdown();
+      await loopTurn();
+      pending = runtime.pendingImmediateCallbacks();
+      expect(pending).toBe(0);
+      restore();
+    }
+  });
+}
+
+test("a delivery batch that cannot queue its next step remains owed, and the loop delivers the rest in order", async () => {
+  const { made, port1, port2, delivered } = selfTransferRefused();
   // Errors a delivery callback throws are kept here instead of ending the test process.
-  const queue = timers.setImmediate, thrown: unknown[] = [];
-  timers.setImmediate = callback => queue(() => { try { callback(); } catch (error) { thrown.push(error); } });
-  const microtask = globalThis.queueMicrotask, failure = new RangeError("Maximum call stack size exceeded");
+  const thrown: unknown[] = [];
+  const restore = guardImmediateCallbacks(made.root, thrown);
+  const failure = new RangeError("Maximum call stack size exceeded");
   port2.on("message", value => {
     if (value !== "second") return;
     // The step that would continue the batch after this handler cannot be queued.
-    globalThis.queueMicrotask = () => { globalThis.queueMicrotask = microtask; throw failure; };
+    refuseSelectedPublication(made.root, false, failure);
   });
   try {
     port1.postMessage("first"); port1.postMessage("second"); port1.postMessage("third"); port1.postMessage("fourth");
@@ -827,7 +905,7 @@ test("a delivery batch that cannot queue its next step ends, and the loop delive
     for (let turn = 0; turn < 4; turn++) await loopTurn();
     expect(delivered).toEqual(["first", "second", "third", "fourth"]);
     expect(made.root.receiveMessageOnPort(port2)).toBeUndefined();
-  } finally { globalThis.queueMicrotask = microtask; timers.setImmediate = queue; }
+  } finally { restore(); }
 });
 
 /**

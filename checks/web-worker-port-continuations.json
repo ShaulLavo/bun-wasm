@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/worker-port-continuations.test.ts",
+  "localRuntime": true
+}
