@@ -31,7 +31,9 @@ test("transcode checks the live source after encoding coercion and before name v
       return "bad";
     } };
     const to = { toString() { events.push("to"); return "bad"; } };
-    assert.equal(Reflect.apply(transcode, undefined, [source, from, to]).length, 0);
+    const result = Reflect.apply(transcode, undefined, [source, from, to]);
+    assert(ArrayBuffer.isView(result));
+    assert.equal(result.byteLength, 0);
     assert.deepEqual(events, ["from", "to"]);
   }
 });
