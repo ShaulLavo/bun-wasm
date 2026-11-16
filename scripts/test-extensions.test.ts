@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { types, isDeepStrictEqual } from "node:util";
+import { types } from "node:util";
 import { runInNewContext, runInThisContext } from "node:vm";
 
 const runtime = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
@@ -15,7 +15,7 @@ function expression(source: string, bindings?: Record<string, unknown>) {
 
 function factory(name: string) {
   const source = readFileSync(new URL(name, runtime), "utf8");
-  return expression(source);
+  return expression(source.replace(/;\s*$/, ""));
 }
 
 function matcherSupport(BunFile?: { readonly prototype: object }, bindings?: Record<string, unknown>) {
@@ -56,10 +56,10 @@ async function runFixture(name: string) {
   const support = matcherSupport();
   const modules = {
     inspect: { bunInspect: Bun.inspect },
-    util: { bunDeepEquals: isDeepStrictEqual },
+    util: factory("util.ts")({ isPromise: types.isPromise, promiseThen: (value: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (error: unknown) => unknown) => Promise.prototype.then.call(value, fulfilled, rejected) }),
     test_matchers: support,
   };
-  const extensions = factory("test_extensions.ts")({ require: (name: keyof typeof modules) => modules[name] });
+  const extensions = factory("test_extensions.ts")({ isPromise: types.isPromise, promiseThen: (value: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (error: unknown) => unknown) => Promise.prototype.then.call(value, fulfilled, rejected), require: (name: keyof typeof modules) => modules[name] });
   const available = { ...modules, test_extensions: extensions };
   const { exports } = factory("bun_test.js")({
     native: {},

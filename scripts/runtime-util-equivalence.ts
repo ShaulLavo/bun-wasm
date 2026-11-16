@@ -72,8 +72,27 @@ function restoreParseEnv(text: string): string {
   return text;
 }
 
+function restoreExpectEquality(text: string): string {
+  const source = parseRuntime(text);
+  const names = new Set(["expectEquals", "expectSettle", "expectEvery", "expectSome", "expectEq", "expectMemo", "expectArrays", "expectSets", "expectMapEntry", "expectMaps", "expectErrors", "expectObjects", "expectProperties", "expectExtraProperties"]);
+  const matches: ts.Node[] = [];
+  function visit(node: ts.Node): void {
+    if (ts.isFunctionDeclaration(node) && names.has(node.name?.text ?? "")) matches.push(node);
+    if (ts.isShorthandPropertyAssignment(node) && node.name.text === "expectEquals") matches.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  if (matches.length !== names.size + 1) throw new Error("Expected private expect equality declarations and export");
+  for (const node of matches.toSorted((left, right) => right.getStart(source) - left.getStart(source))) {
+    const end = ts.isShorthandPropertyAssignment(node) && text[node.end] === "," ? node.end + 1 : node.end;
+    text = text.slice(0, node.getStart(source)) + text.slice(end);
+  }
+  return text;
+}
+
 // Restore the two reviewed extractions and the separately tested parseEnv addition.
 export function restoreDestinations(text: string): string {
+  text = restoreExpectEquality(text);
   text = restoreParseEnv(text);
   const source = parseRuntime(text);
   const capture = declarations(source, "ConstructorSet");

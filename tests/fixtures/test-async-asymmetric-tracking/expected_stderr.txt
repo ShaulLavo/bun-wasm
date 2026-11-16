@@ -1,0 +1,11 @@
+
+index.test.ts:
+(pass) waits for an unawaited nested asymmetric assertion
+(pass) keeps the completed assertion in its invocation
+error: owned asymmetric rejection
+(pass) tracks promise modifier assertions
+
+ 3 pass
+ 0 fail
+ 6 expect() calls
+Ran 3 tests across 1 file. [TIME]

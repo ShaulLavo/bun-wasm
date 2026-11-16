@@ -1,0 +1,1 @@
+Approved bounded awaited behavior. Native Bun drains actual matcher results synchronously; timeout and after-call behavior here intentionally exercises the final assertion Promise contract. All child files and snapshot writes run inside the fixture harness's disposable copy.

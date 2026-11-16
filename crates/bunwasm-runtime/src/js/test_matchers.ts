@@ -2,7 +2,7 @@
   BunFile?: { readonly prototype: object };
   isPromise(value: unknown): boolean;
   promiseState(value: Promise<unknown>): string;
-  promiseThen<T, U>(value: Promise<T>, fulfilled: (value: T) => U, rejected?: (error: unknown) => U): Promise<U>;
+  promiseThen<T, U>(value: Promise<T>, fulfilled: (value: T) => U | Promise<U>, rejected?: (error: unknown) => U | Promise<U>): Promise<U>;
 }) {
   type Context = { not?: boolean; promise?: string };
   type Outcome = { invalid: true } | { invalid?: false; threw: boolean; value: unknown };
@@ -36,13 +36,47 @@
     return internal.isPromise(value);
   }
 
-  function react<T, U>(value: Promise<T>, fulfilled: (value: T) => U, rejected?: (error: unknown) => U): Promise<U> {
+  function react<T, U>(value: Promise<T>, fulfilled: (value: T) => U | Promise<U>, rejected?: (error: unknown) => U | Promise<U>): Promise<U> {
     return promiseThen(value, fulfilled, rejected);
   }
 
-  function settle<T, U>(value: T | Promise<T>, consume: (value: T) => U): U | Promise<U> {
+  function settle<T, U>(value: T | Promise<T>, consume: (value: T) => U | Promise<U>): U | Promise<U> {
     if (isPromise(value)) return react(value, consume);
     return consume(value);
+  }
+
+  function every<T>(values: readonly T[], compare: (value: T, index: number) => boolean | Promise<boolean>, index = 0): boolean | Promise<boolean> {
+    for (let i = index; i < values.length; i++) {
+      if (!(i in values)) continue;
+      const result = compare(values[i], i);
+      if (isPromise(result)) return settle(result, pass => pass && every(values, compare, i + 1));
+      if (!result) return false;
+    }
+    return true;
+  }
+
+  function some<T>(values: readonly T[], compare: (value: T, index: number) => boolean | Promise<boolean>, index = 0): boolean | Promise<boolean> {
+    for (let i = index; i < values.length; i++) {
+      if (!(i in values)) continue;
+      const result = compare(values[i], i);
+      if (isPromise(result)) return settle(result, pass => pass || some(values, compare, i + 1));
+      if (result) return true;
+    }
+    return false;
+  }
+
+  function ancestors<T>(seen: Set<T>, value: T, compare: () => boolean | Promise<boolean>): boolean | Promise<boolean> {
+    if (seen.has(value)) return true;
+    seen.add(value);
+    try {
+      const result = compare();
+      if (isPromise(result)) return react(result, pass => { seen.delete(value); return pass; }, error => { seen.delete(value); throw error; });
+      seen.delete(value);
+      return result;
+    } catch (error) {
+      seen.delete(value);
+      throw error;
+    }
   }
 
   function throwOutcome(ctx: Context, received: unknown): Outcome | Promise<Outcome> {
@@ -151,10 +185,10 @@
     results: readonly unknown[];
     nth: unknown;
     expected: unknown;
-    equals(received: unknown, expected: unknown, strict: boolean): boolean;
+    equals(received: unknown, expected: unknown, strict: boolean): boolean | Promise<boolean>;
     inspect(value: unknown): string;
     formatDiff(received: string, expected: string, strict: boolean): string;
-  }): Failure {
+  }): Failure | Promise<Failure> {
     const { not, results, nth, expected, equals, inspect, formatDiff } = options;
     if (typeof nth !== "number" || !Number.isInteger(nth) || Object.is(nth, -0) || nth < -(2 ** 51) || nth >= 2 ** 51) {
       throw new TypeError("toHaveNthReturnedWith() first argument must be an integer");
@@ -166,10 +200,15 @@
     const type = record && "type" in record ? record.type : undefined;
     const value = record && "value" in record ? record.value : undefined;
     const pass = type === "return" && equals(value, expected, false);
+    return settle(pass, matched => nthReturnFailure(matched, !!not, call, results.length, type, value, expected, inspect, formatDiff));
+  }
+
+  function nthReturnFailure(pass: boolean, not: boolean, call: number, count: number, type: unknown, value: unknown, expected: unknown,
+    inspect: (value: unknown) => string, formatDiff: (received: string, expected: string, strict: boolean) => string): Failure {
     if (pass !== !!not) return null;
     if (not) return { body: `\n\nExpected mock function not to have returned on call ${call}: ${inspect(expected)}\nBut it did.\n` };
-    if (call > results.length) {
-      return { body: `\n\nThe mock function was called ${results.length} time${results.length === 1 ? "" : "s"}, but call ${call} was requested.\n` };
+    if (call > count) {
+      return { body: `\n\nThe mock function was called ${count} time${count === 1 ? "" : "s"}, but call ${call} was requested.\n` };
     }
     if (type === "throw") return { body: `\n\nCall ${call} threw an error: ${inspect(value)}\n` };
     if (typeof value === "string" && typeof expected === "string") {
@@ -225,5 +264,5 @@
     return { track, unhandled, complete };
   }
 
-  return { settle, throwOutcome, within, nthReturned, pending, even, odd, empty, extended };
+  return { settle, every, some, ancestors, throwOutcome, within, nthReturned, pending, even, odd, empty, extended };
 })
