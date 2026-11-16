@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [tree, mode, packageRoot, adapted] = process.argv.slice(2);
-assert(tree && packageRoot && isAbsolute(packageRoot) && (mode === "stock" || mode === "small"));
+assert(tree && packageRoot && isAbsolute(packageRoot) && (mode === "stock" || mode === "small" || mode === "iphone"));
 const manifestPath = join(packageRoot, "package.json");
 const manifest: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
 assert(manifest && typeof manifest === "object" && "name" in manifest && typeof manifest.name === "string");
@@ -13,7 +13,7 @@ assert.equal(manifest.name, "rolldown");
 const packageEntry = createRequire(manifestPath).resolve(manifest.name);
 const filename = join(tree, "node_modules/@rolldown/binding-wasm32-wasi/rolldown-binding.wasi.cjs");
 const require = createRequire(filename);
-const source = readFileSync(mode === "small" && adapted ? adapted : filename, "utf8");
+const source = readFileSync(mode !== "stock" && adapted ? adapted : filename, "utf8");
 const descriptors: WebAssembly.MemoryDescriptor[] = [];
 const memories: WebAssembly.Memory[] = [];
 const phases: string[] = [];
@@ -89,6 +89,6 @@ phases.push("bundle:return");
 const grownBytes = memories.map(memory => memory.buffer.byteLength);
 await binding[Symbol.for("napi.rs.wasi.dispose")]();
 phases.push("dispose:return");
-assert.deepEqual(descriptors, [{ initial: mode === "stock" ? 16384 : 1001, maximum: mode === "stock" ? 65536 : 32768, shared: true }]);
+assert.deepEqual(descriptors, [{ initial: mode === "stock" ? 16384 : 1001, maximum: mode === "stock" ? 65536 : mode === "iphone" ? 4096 : 32768, shared: true }]);
 console.log(JSON.stringify({ mode, phases, descriptors, startedBytes, grownBytes,
   output: { transformed, minified, errors, bundle: chunk.code }, badArgument }));
