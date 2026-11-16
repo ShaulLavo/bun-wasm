@@ -1084,7 +1084,8 @@
         this.#schedule(); this.#maybeClose(); return;
       }
       const turn = ++state.turn;
-      try { queueMicrotask(() => { if (state.turn === turn) this.#deliverBatch(state, batch); }); }
+      const deliver = () => { if (state.turn === turn) this.#deliverBatch(state, batch); };
+      try { internal.realTimers.setImmediate(deliver); }
       catch (error) {
         // A batch with no continuation would hold the queue for ever. It ends here, a callback
         // the failed call may still have queued is overtaken, and the rest is owed as above.

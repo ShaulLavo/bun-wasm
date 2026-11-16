@@ -803,16 +803,21 @@ test("a delivery callback queued by a call that then failed is overtaken by the 
   expect(made.root.receiveMessageOnPort(port2)).toBeUndefined();
 });
 
+function captureCallback(callback: () => void, thrown: unknown[]) {
+  try { callback(); } catch (error) { thrown.push(error); }
+}
+
 test("a delivery batch that cannot queue its next step ends, and the loop delivers the rest in order", async () => {
   const { made, port1, port2, delivered, timers } = selfTransferRefused();
   // Errors a delivery callback throws are kept here instead of ending the test process.
   const queue = timers.setImmediate, thrown: unknown[] = [];
-  timers.setImmediate = callback => queue(() => { try { callback(); } catch (error) { thrown.push(error); } });
-  const microtask = globalThis.queueMicrotask, failure = new RangeError("Maximum call stack size exceeded");
+  const guarded = (callback: () => void) => queue(() => captureCallback(callback, thrown));
+  timers.setImmediate = guarded;
+  const failure = new RangeError("Maximum call stack size exceeded");
   port2.on("message", value => {
     if (value !== "second") return;
     // The step that would continue the batch after this handler cannot be queued.
-    globalThis.queueMicrotask = () => { globalThis.queueMicrotask = microtask; throw failure; };
+    timers.setImmediate = () => { timers.setImmediate = guarded; throw failure; };
   });
   try {
     port1.postMessage("first"); port1.postMessage("second"); port1.postMessage("third"); port1.postMessage("fourth");
@@ -826,7 +831,7 @@ test("a delivery batch that cannot queue its next step ends, and the loop delive
     for (let turn = 0; turn < 4; turn++) await loopTurn();
     expect(delivered).toEqual(["first", "second", "third", "fourth"]);
     expect(made.root.receiveMessageOnPort(port2)).toBeUndefined();
-  } finally { globalThis.queueMicrotask = microtask; timers.setImmediate = queue; }
+  } finally { timers.setImmediate = queue; }
 });
 
 /**

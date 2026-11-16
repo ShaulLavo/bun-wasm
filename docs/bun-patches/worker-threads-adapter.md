@@ -14,6 +14,19 @@ object graphs and transferable buffers and ports. `worker_channel.ts` frames
 control messages over two private host pipes. `worker_stdio.ts` adapts the existing
 subprocess streams to Node streams. These are original TypeScript implementations.
 
+Selected MessagePort batches schedule each subsequent message as a real task
+through the existing timer queue. This is an original **Host feature** correction
+in `worker_threads.ts::MessagePort.#continueBatch`. A microtask continuation could
+deliver the next message before an async `events.once()` waiter had finished
+adopting its inner promise and installed its next listener. A task boundary lets
+the complete promise queue drain between selected messages. The selected batch,
+local-close behavior, turn token, and failed-scheduling recovery remain unchanged.
+The real-source continuation check uses the actual events and worker factories,
+including extra awaited continuations. The unchanged `worker-port-closure` guest
+fixture remains the integration regression. The scheduling-failure source
+control now refuses the actual task scheduler and retains its original recovery
+and ordering assertions. No native binding or provider interface changes.
+
 A file worker's guest is started as `<execPath> -- <file>`. `--` marks a file operand
 both for `bun` and for a process started as `node`, whose operands are always files
 (`crates/bunwasm-cli/src/main.rs`). The former `run <file>` form made such a worker
