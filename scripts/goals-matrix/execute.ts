@@ -6,7 +6,7 @@ import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from ".
 import { scoped, type ScopedTransport, type Transport } from "./transport";
 import { admit, awaitWithin, Scope, type Admission } from "./scope";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
-import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
+import { checkClick, command, disposePlayground, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 import { bounded } from "./bounded";
 import { NextBuildObserver, closeNextBuildObserver, retainNextBuildObservation, type NextBuildObservation } from "./next-build-observer";
 export { bounded } from "./bounded";
@@ -184,23 +184,22 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
   const ownedCleanup = transport.cleanup?.bind(transport);
   if (ownedCleanup) return cleanupOwned(transport, options, results, failureLog, ownedCleanup, admission);
   const errors: unknown[] = [];
-  const work = Scope.open(8000, admission);
+  const work = Scope.open(Math.max(0, admission.deadline - Date.now() - 15_000), admission);
   try {
     await work.run(async guard => {
       const page = scoped(transport, guard);
       await transport.beginCleanup?.(guard);
       await page.closePreview();
-      await stopServer(page, 5000, options.port);
-      await saveFinalLog(transport, options, results, failureLog, guard, "after server stop");
+      await stopServer(page, admit(guard), options.port);
+      await disposePlayground(page);
     });
   } catch (error) {
     errors.push(error);
-    const observation = Scope.open(4000, work);
-    try { await observation.run(guard => saveFinalLog(transport, options, results, failureLog, guard, "after failed server stop")); }
-    catch (error) { errors.push(error); }
-    finally { observation.close(); }
   }
-  finally { work.close(); }
+  const observation = Scope.open(4000, work);
+  try { await observation.run(guard => saveFinalLog(transport, options, results, failureLog, guard, errors.length ? "after failed server stop" : "after server stop")); }
+  catch { /* Optional diagnostics cannot replace a stop failure or consume the close reserve. */ }
+  finally { observation.close(); work.close(); }
   try { await bounded(() => transport.close(true, 10_000), 10_000); }
   catch (error) { errors.push(error); }
   if (errors.length) throw new AggregateError(errors, errors.map(String).join("; "));

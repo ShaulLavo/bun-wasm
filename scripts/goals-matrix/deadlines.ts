@@ -5,12 +5,12 @@ import reviewed from "./cell-deadlines.json";
 import type { CalibrationMetadata, CellLimits } from "./calibration-model";
 import { hangCaps } from "./generate-deadlines";
 
-export const cleanupTimeoutMs = 20_000;
+export const cleanupTimeoutMs = 60_000;
 interface FrameworkDeadlinePolicy {
   timeoutMs: number;
   installTimeouts: Record<string, number>;
   buildTimeouts: Record<string, number>;
-  cleanupTimeoutMs: typeof cleanupTimeoutMs;
+  cleanupTimeoutMs: number;
 }
 interface CellDeadlinePolicy {
   calibration: CalibrationMetadata;
@@ -93,10 +93,11 @@ function validateCellPolicy(data: Record<string, unknown>, policy: DeadlinePolic
 }
 export function validateDeadlines(value: unknown): DeadlinePolicy {
   const data = object(value);
-  if (typeof data.timeoutMs !== "number" || data.cleanupTimeoutMs !== cleanupTimeoutMs) throw new Error("Invalid deadline policy");
+  if (typeof data.timeoutMs !== "number" || typeof data.cleanupTimeoutMs !== "number") throw new Error("Invalid deadline policy");
+  parseTimeout(String(data.cleanupTimeoutMs));
   parseTimeout(String(data.timeoutMs));
   const policy: FrameworkDeadlinePolicy = { timeoutMs: data.timeoutMs, installTimeouts: frameworkTimeouts(data.installTimeouts, "install"),
-    buildTimeouts: frameworkTimeouts(data.buildTimeouts, "build"), cleanupTimeoutMs };
+    buildTimeouts: frameworkTimeouts(data.buildTimeouts, "build"), cleanupTimeoutMs: data.cleanupTimeoutMs };
   return validateCellPolicy(data, policy);
 }
 function frameworkTimeouts(value: unknown, phase: string): Record<string, number> {

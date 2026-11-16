@@ -35,7 +35,7 @@ async function fixture<T>(action: (value: { fs: ReturnType<typeof nextBuildFiles
         const originalInput = playground.shell.input.bind(playground.shell);
         playground.shell.input = text => { inputs.push(text); originalInput(text); };
         playground.term.buffer.active = { get length() { return lines.length; }, getLine(index) { return { translateToString() { return lines[index]; } }; } };
-        playground.runtime = { async processes() { return { workerMemory() { return [{pid:7,parentPid:2,rootPid:2,job:1,bytes:null,directory:'PRIVATE',opaque:'SECRET'}]; }, memoryGroups() { return [{id:'group',members:2,pids:[2,7],committedBytes:131072,opaque:'SECRET'}]; } }; } };
+        playground.runtime = { async dispose() {}, async processes() { return { workerMemory() { return [{pid:7,parentPid:2,rootPid:2,job:1,bytes:null,directory:'PRIVATE',opaque:'SECRET'}]; }, memoryGroups() { return [{id:'group',members:2,pids:[2,7],committedBytes:131072,opaque:'SECRET'}]; } }; } };
         globalThis.__bunMemorySnapshots = async (engine, refresh) => { if (engine !== 'quickjs' || refresh !== false) throw Error('forced refresh'); return [{engine:'quickjs',id:'qjs',time:1,jsHeapBytes:null,notes:'Host snapshot was not acknowledged for this phase.',opaque:'SECRET',frozenAllocatorFailure:{bytes:4096,category:'libc.malloc',reason:'unknown'}}]; };
       `));
       return action({ fs, transport, events: [] });
@@ -255,7 +255,7 @@ test.each([false, true])("full execution retains original deadlines, cleanup and
     });
     expect(result.status).toBe("pass");
     expect(result.attempts[0]?.phases.find(phase => phase.phase === "build")).toMatchObject({ status: "pass", timeoutMs: 110_000 });
-    expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000 });
+    expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 60_000 });
     expect(cleanup).toBe(true);
     expect(events.filter(value => value.kind === "snapshot")).toEqual([]);
     expect(events).toContainEqual(expect.objectContaining({ kind: "cleanup", status: failedClose ? "unavailable" : "closed" }));
@@ -282,7 +282,7 @@ test.each([false, true])("stalled optional close leaves time for complete teardo
     try {
       const result = await execute(config);
       expect(cleaned).toBe(true);
-      expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000 });
+      expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 60_000 });
       expect(events).toContainEqual(expect.objectContaining({ kind: "cleanup", status: "unavailable" }));
     } finally { releaseClose(); }
   }, 0);
@@ -333,7 +333,7 @@ test("full execution cancels a pending baseline and disposes before owned cleanu
         nextBuildObservation: value => events.push(value), async createTransport() { return transport; }, async saveLog() {},
       });
       expect(result).toMatchObject({ status: "fail", phase: "build", error: expect.stringContaining("outer cancelled") });
-      expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000 });
+      expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 60_000 });
       const commands = await withScoped(transport, page => page.evaluate<string[]>("commands"));
       expect(commands.filter(text => text === "bun run build")).toEqual([]);
       const reads = fs.operations.length;
@@ -368,7 +368,7 @@ test.each(["failure", "final"])("opt-in Next observer preserves current launch-f
       nextBuildObservation: value => events.push(value), async createTransport() { return transport; }, async saveLog(text) { expect(cleaned).toBe(false); logs.push(text); },
     });
     expect(result).toMatchObject({ status: "fail", phase: "build", error: expect.stringContaining("original native refusal") });
-    expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 20_000 });
+    expect(result.attempts[0]?.phases.at(-1)).toMatchObject({ phase: "cleanup", status: "pass", timeoutMs: 60_000 });
     expect(logs.at(-1)).toContain('"commandId":"failed-build"');
     expect(logs.at(-1)).toContain('"message":"original native refusal"');
     expect(logs.at(-1)).toContain(failedRead === "failure" ? "Cleanup-time terminal observation" : "Failure-time terminal observation");

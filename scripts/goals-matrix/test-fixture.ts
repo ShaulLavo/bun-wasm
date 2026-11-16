@@ -18,7 +18,7 @@ function evidence(phase: Phase): unknown {
   }
 }
 export function completeAttempt(): Attempt {
-  return { startedAt: "now", finishedAt: "now", browser: { browserName: "chrome" }, phases: phases.map(phase => ({ phase, status: "pass", evidence: evidence(phase), startedAt: "now", durationMs: 1, timeoutMs: phase === "cleanup" ? 20_000 : 180_000 })) };
+  return { startedAt: "now", finishedAt: "now", browser: { browserName: "chrome" }, phases: phases.map(phase => ({ phase, status: "pass", evidence: evidence(phase), startedAt: "now", durationMs: 1, timeoutMs: phase === "cleanup" ? 60_000 : 180_000 })) };
 }
 
 export async function withPlayground<T>(framework: Framework, installDelayMs: number, action: (transport: Transport) => Promise<T>, buildDelayMs = 0, filesystem?: Pick<Runtime["filesystem"], "fork">): Promise<T> {
@@ -33,6 +33,7 @@ export async function withPlayground<T>(framework: Framework, installDelayMs: nu
       return new Promise(() => {});
     },
     input() { shell.running = false; listening = false; },
+    async dispose() {},
   };
   const view = { state: { doc: { toString: () => message, get length() { return message.length; } } },
     dispatch(change: { changes: { insert: string } }) { message = change.changes.insert; },
@@ -50,7 +51,7 @@ export async function withPlayground<T>(framework: Framework, installDelayMs: nu
       if (selector === framework.button || selector === framework.clicked) return counter;
       return { textContent: message };
     } },
-    playground: { profile: "split", fs: filesystem, shell, previews: { ready: Promise.resolve("ready"), serves: () => listening, url: () => "http://fixture/preview" },
+    playground: { profile: "split", runtime: { async dispose() {} }, fs: filesystem, shell, previews: { ready: Promise.resolve("ready"), serves: () => listening, url: () => "http://fixture/preview" },
       editor: { async open() {}, async save() {}, view },
       term: { write(_text: string, callback: () => void) { callback(); }, buffer: { active: { length: 0 } } },
     },

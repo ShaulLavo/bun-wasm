@@ -31,7 +31,7 @@ test("all 208 cells use the same hang caps, independent of earlier measurements"
   expect(reviewed.cells).toHaveLength(208);
   const policy = campaignDeadlines();
   for (const box of inventory()) expect(cellDeadlines(policy, box)).toEqual(hangCaps);
-  expect(policy.cleanupTimeoutMs).toBe(20_000);
+  expect(policy.cleanupTimeoutMs).toBe(60_000);
   expect(validateDeadlines(policy)).toEqual(policy);
 });
 test("hang cap metadata makes no measurement or margin claim", () => {
@@ -65,7 +65,7 @@ test("per-cell report validation and archive reading enforce recorded limits, ne
   const box = inventory()[0]!;
   const report: Report = { schema: 2, run: "fixture", createdAt: "2026-11-11T20:00:00Z", command: "fixture", source: { commit: "original", dirty: false, assets: {} }, cells: initialCells(), deadlines: campaignDeadlines() };
   const original = attempt(box, date), limits = cellDeadlines(report.deadlines, box);
-  for (const phase of original.phases) phase.timeoutMs = phase.phase === "cleanup" ? 20_000 : phase.phase === "install" ? limits.installTimeoutMs : phase.phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs;
+  for (const phase of original.phases) phase.timeoutMs = phase.phase === "cleanup" ? 60_000 : phase.phase === "install" ? limits.installTimeoutMs : phase.phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs;
   report.cells[0] = finish(box, original);
   const before = JSON.stringify(report);
   validateReport(report); validateArchive(report);
@@ -81,7 +81,7 @@ test("historical calibrated reports retain independent build bounds, metadata an
     cellTimeouts: Object.fromEntries(inventory().map(cell => [boxId(cell), { timeoutMs: 90_000, installTimeoutMs: 90_000, buildTimeoutMs: cell.framework === "next" ? 110_000 : 90_000 }])),
     overrides: { timeoutMs: null, installTimeouts: {} } });
   const original = attempt(box, date), limits = cellDeadlines(deadlines, box);
-  for (const phase of original.phases) phase.timeoutMs = phase.phase === "cleanup" ? 20_000 : phase.phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs;
+  for (const phase of original.phases) phase.timeoutMs = phase.phase === "cleanup" ? 60_000 : phase.phase === "build" ? limits.buildTimeoutMs : limits.timeoutMs;
   const report: Report = { ...input(), schema: 2, command: "historical", deadlines };
   report.cells[0] = finish(box, original);
   const before = JSON.stringify(report);

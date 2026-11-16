@@ -12,8 +12,8 @@ Safari paired with the previous session and blocking later cells.
 Interrupted matrix cleanup aborts pending HTTP requests, rejects queued page
 operations, and deletes the owned session through a separate request. Ordinary
 non-interrupted transport close still drains its queue. Session deletion remains
-cached, runs once, and keeps its original 10-second maximum. The matrix phase and
-20-second outer cleanup deadlines do not change.
+cached, runs once, and keeps its original 10-second maximum. Functional phase
+deadlines do not change.
 
 The focused regression holds a real HTTP command open with a 90-second deadline,
 requests interrupted cleanup, and verifies that deletion and a second session
@@ -35,6 +35,41 @@ cannot satisfy this evidence. Failed native input is not retried. iPhone input
 keeps its existing device transport.
 
 HTTP fixtures check request order, failures, cancellation, and cleanup ownership.
+
+## Final playground retirement
+
+Final cleanup uses a fixed 60-second hang cap. Its required stop and disposal
+work gets up to 45 seconds, optional diagnostics share that window for at most four
+seconds, and transport close keeps a separate ten-second reserve. This allows
+asynchronous retirement and delayed page/WebDriver observation without judging
+healthy stops against the former five-second cutoff. These are generous hang
+bounds, not a measured duration plus a margin. Build and other phase admissions
+retain their existing semantics and limits.
+
+The work deadline subtracts the reserve from the outer deadline after setup and
+observer teardown. Those earlier operations cannot borrow time from owned close.
+
+The stop predicate still requires both shell acknowledgement and listener absence.
+It performs no runtime snapshot. Only after that observation does the adapter await
+the existing public `Runtime.dispose()` and `BrowserSession.dispose()` promises.
+The runtime promise joins filesystem quiescence, physical consumer stops, network
+retirement and host disposal; failed or hung retirement cannot produce a pass.
+Both disposal promises settle before their failures are reported. A disposed flag,
+logical exit, selected process outcome or session deletion is not this barrier.
+
+Optional terminal/diagnostic collection cannot fail cleanup or consume the close
+reserve. Stop/disposal failures remain failures even when the later owned session
+deletion succeeds. Safari keeps serialized in-flight requests and their protocol
+identities through raw settlement, and interruption still closes only its owned
+session. The command allowance matches the work window; session deletion retains
+its ten-second request bound. Recorded reports validate and preserve their own
+numeric cleanup limit so historical failed attempts are not rewritten.
+
+Deferred controls cover all eight affected framework/engine/profile combinations
+without running those frameworks. They cover delayed healthy observations,
+separate disposal barriers, failed/hung retirement, optional diagnostics, close
+reserve and untouched foreign resources. HTTP/WebDriver controls exercise the
+same serialized transport path. Native framework validation is a separate result.
 Chromium and Playwright WebKit controls check real event trust and reject DOM
 clicks. These controls do not prove native Safari input. The first coherent
 delivery's desktop Safari session must run a bounded trusted-counter control
