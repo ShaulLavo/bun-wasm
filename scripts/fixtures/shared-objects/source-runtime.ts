@@ -114,12 +114,13 @@ function childOverlay(source: string) {
  * Loads net.js into `internal`, which gives it the real waiter set, `addIoWaiter` and `pumpIo`.
  * Only what the module touches while loading is supplied; nothing here opens a socket.
  */
-function sourceLoop(internal: { native: object; require(name: string): unknown; pumpIo?: () => boolean }, modules: Map<string, unknown>) {
+function sourceLoop(internal: { native: object; web: object; require(name: string): unknown; pumpIo?: () => boolean }, modules: Map<string, unknown>) {
   const unused = () => { throw new Error("No networking in this fixture"); };
   modules.set("http_common", { validateHeaderName: unused, validateHeaderValue: unused, validateMethod: unused, validatePath: unused, validateStatus: unused, outgoingHeaders: unused });
   modules.set("websocket", { clientClass: () => class {} });
   modules.set("io_pump", factory("io_pump")(internal));
-  modules.set("net", factory("net", undefined, "js")(Object.assign(internal, { web: { Request, Response, Headers } })));
+  Object.assign(internal.web, { Request, Response, Headers });
+  modules.set("net", factory("net", undefined, "js")(internal));
   const pumpIo = internal.pumpIo;
   if (!pumpIo) throw new Error("net.js installed no pumpIo");
   return { pumpIo };
