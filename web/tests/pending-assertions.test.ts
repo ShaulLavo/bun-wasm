@@ -6,7 +6,7 @@ type Completion = { ok: true } | { error: unknown };
 type Observer = { track<T>(value: T): T; complete(result: { ok: true }, finish: (result: Completion) => void): Promise<void> };
 const factory = new Bun.Transpiler({ loader: "ts", deadCodeElimination: false }).transformSync(readFileSync(new URL("../../crates/bunwasm-runtime/src/js/test_matchers.ts", import.meta.url), "utf8"));
 // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
-const support: { pending(): Observer } = (0, eval)(factory)({ isPromise: types.isPromise, promiseState: Bun.peek.status });
+const support: { pending(): Observer } = (0, eval)(factory)({ realTimers: { setTimeout }, isPromise: types.isPromise, promiseState: Bun.peek.status });
 
 test("pending assertion observers retain fulfilled accessor identity", async () => {
   let reads = 0;

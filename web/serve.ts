@@ -8,6 +8,7 @@ import { join, normalize, resolve } from "node:path";
 import { brotliDecompressSync } from "node:zlib";
 import { acceptedEncodings, type Encoding } from "../scripts/accept-encoding";
 import { PreviewOwnerHost } from "./scripts/preview-owner-host";
+import { navigationServerListening, navigationServerLog } from "./navigation-server-log";
 
 const root = process.env.ROOT ? resolve(process.env.ROOT) : join(import.meta.dir, "dist");
 const isolate = process.env.ISOLATE !== "0";
@@ -87,22 +88,36 @@ const server = Bun.serve({
   hostname: process.env.HOST ?? "127.0.0.1",
   websocket: previewOwner.websocket,
   async fetch(req, server) {
-    const url = new URL(req.url);
-    if (rootPreviews && previewOwner.handles(url.pathname)) return previewOwner.fetch(req, server);
-    if (latency > 0) await Bun.sleep(latency);
-    let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");
-    if (path.endsWith("/")) path += "index.html";
-    const headers: Record<string, string> = { "cache-control": cacheControl(url.pathname) };
-    if (isolate) {
-      headers["cross-origin-opener-policy"] = "same-origin";
-      headers["cross-origin-embedder-policy"] = "require-corp";
+    if (!process.env.BUN_WASM_NAVIGATION_LOG) return serve(req, server);
+    const record = navigationServerLog(req);
+    try {
+      const response = await serve(req, server);
+      record("response-return", { status: response?.status ?? null });
+      return response;
+    } catch (error) {
+      record("handler-error", String(error));
+      throw error;
     }
-    if (path.endsWith(".wasm")) return wasmResponse(join(root, path), req.headers.get("accept-encoding"), headers);
-    const file = Bun.file(join(root, path));
-    if (!(await file.exists())) return new Response("not found", { status: 404 });
-    return new Response(file, { headers });
   },
 });
+
+async function serve(req: Request, server: Parameters<PreviewOwnerHost["fetch"]>[1]) {
+  const url = new URL(req.url);
+  if (rootPreviews && previewOwner.handles(url.pathname)) return previewOwner.fetch(req, server);
+  if (latency > 0) await Bun.sleep(latency);
+  let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");
+  if (path.endsWith("/")) path += "index.html";
+  const headers: Record<string, string> = { "cache-control": cacheControl(url.pathname) };
+  if (isolate) {
+    headers["cross-origin-opener-policy"] = "same-origin";
+    headers["cross-origin-embedder-policy"] = "require-corp";
+  }
+  if (path.endsWith(".wasm")) return wasmResponse(join(root, path), req.headers.get("accept-encoding"), headers);
+  const file = Bun.file(join(root, path));
+  if (!(await file.exists())) return new Response("not found", { status: 404 });
+  return new Response(file, { headers });
+}
+navigationServerListening(server.url);
 console.log(`serving ${root} at ${server.url} (${isolate ? "cross-origin isolated" : "not isolated"})`);
 
 

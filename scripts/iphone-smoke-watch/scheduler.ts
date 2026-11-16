@@ -1,4 +1,4 @@
-import { compareRuns, redMessage, type Completed, type Job, type Outcome, type Run, type State } from "./model";
+import { claimWindowMs, compareRuns, dispatchFailure, redMessage, type Completed, type Dispatch, type Job, type Outcome, type Run, type State } from "./model";
 
 export type Adapters = {
   discover(): Promise<Run[]>;
@@ -31,11 +31,19 @@ export function retry(job: Job): void {
 
 async function notifications(state: State, adapters: Adapters): Promise<void> {
   for (const job of state.jobs) {
+    await dispatchNotification(state, job, adapters);
     if (job.state.kind !== "complete" || job.state.notified) continue;
     await adapters.notify(redMessage(job, job.state));
     job.state.notified = true;
     await adapters.save(state);
   }
+}
+
+async function dispatchNotification(state: State, job: Job, adapters: Adapters): Promise<void> {
+  if (job.state.kind !== "running" || job.state.claimedAt || job.state.dispatch.kind !== "unclaimed" || job.state.dispatch.notified) return;
+  await adapters.notify(dispatchFailure(job, job.state.attempt));
+  job.state.dispatch.notified = true;
+  await adapters.save(state);
 }
 
 function precedingGreen(state: State, next: Job): string | null {
@@ -64,15 +72,27 @@ export async function tick(state: State, adapters: Adapters): Promise<void> {
   const next = state.jobs.filter(job => job.state.kind === "pending").sort(compareRuns)[0];
   if (!next) return;
   const attempt = next.state.attempt;
-  next.state = { kind: "running", attempt, lastGreen: precedingGreen(state, next), startedAt: adapters.now(), dispatch: "pending", claimedAt: null };
+  next.state = { kind: "running", attempt, lastGreen: precedingGreen(state, next), startedAt: adapters.now(), dispatch: { kind: "pending" }, claimedAt: null };
   await adapters.save(state);
   await dispatch(state, next, adapters);
 }
 
 async function dispatch(state: State, job: Job, adapters: Adapters): Promise<void> {
-  if (job.state.kind !== "running" || job.state.dispatch === "sent" || job.state.claimedAt) return;
-  await adapters.dispatch(job, job.state.attempt);
-  job.state.dispatch = "sent";
+  if (job.state.kind !== "running" || job.state.claimedAt) return;
+  const previous = job.state.dispatch;
+  if (previous.kind === "unclaimed") return;
+  if (previous.kind === "waiting" && Date.parse(adapters.now()) < Date.parse(previous.claimDeadline)) return;
+  if (previous.kind === "waiting" && previous.delivery === 2) {
+    job.state.dispatch = { kind: "unclaimed", notified: false };
+    await adapters.save(state);
+    await dispatchNotification(state, job, adapters);
+    return;
+  }
+  job.state.dispatch = { kind: "waiting", delivery: previous.kind === "pending" ? 1 : 2, claimDeadline: new Date(Date.parse(adapters.now()) + claimWindowMs).toISOString() };
+  await adapters.save(state);
+  try { await adapters.dispatch(job, job.state.attempt); }
+  catch (error) { state.error = String(error); }
+  job.state.dispatch.claimDeadline = new Date(Date.parse(adapters.now()) + claimWindowMs).toISOString();
   await adapters.save(state);
 }
 
@@ -84,12 +104,18 @@ function enroll(state: State, run: Run, known: Set<string>): void {
 
 export function status(state: State): string {
   const rows = state.jobs.toSorted(compareRuns).map(job => `| ${job.revision} | ${job.id} | ${job.state.attempt} | ${label(job)} |`);
-  return ["# iPhone smoke automation", "", `Activation: ${state.since}. Last poll: ${state.polledAt ?? "never"}.`, `Discovery error: ${state.error ?? "none"}.`, "", "| Source revision | CI run | Attempt | Result |", "| --- | --- | --- | --- |"].concat(rows, [""]).join("\n");
+  return ["# iPhone smoke automation", "", `Activation: ${state.since}. Last poll: ${state.polledAt ?? "never"}.`, `Watcher error: ${state.error ?? "none"}.`, "", "| Source revision | CI run | Attempt | Result |", "| --- | --- | --- | --- |"].concat(rows, [""]).join("\n");
 }
 
 function label(job: Job): string {
-  if (job.state.kind === "running") return `running; dispatch ${job.state.dispatch}; claimed ${job.state.claimedAt ?? "no"}`;
+  if (job.state.kind === "running") return `running; dispatch ${job.state.claimedAt ? "claimed" : dispatchLabel(job.state.dispatch)}; claimed ${job.state.claimedAt ?? "no"}`;
   if (job.state.kind !== "complete") return job.state.kind;
   const result: Completed = job.state;
   return `${result.outcome.status}${result.outcome.failedPhase ? ` at ${result.outcome.failedPhase}` : ""}; report ${result.outcome.reportPath}; notification ${result.notified ? "sent or unnecessary" : "pending"}`;
+}
+
+function dispatchLabel(delivery: Dispatch): string {
+  if (delivery.kind === "unclaimed") return `unclaimed; dispatch alert ${delivery.notified ? "sent" : "pending"}`;
+  if (delivery.kind !== "waiting") return delivery.kind;
+  return `delivery ${delivery.delivery}; claim deadline ${delivery.claimDeadline}`;
 }

@@ -1,0 +1,19 @@
+PASS synchronous returns
+PASS direct and negated settlement
+PASS bounded async after-call order
+PASS bounded timer after-call order
+PASS nested order and single getter reads
+PASS short circuit
+PASS missing keys and sparse arrays
+PASS maps sets and cycles
+PASS containing and property callers
+PASS rejection wrapping and cleanup
+PASS plain thenables and intrinsic reactions
+PASS reentrant comparisons
+PASS expected-first precedence and silent mismatch messages
+PASS Map first matching key and Set candidate reuse
+PASS context equals requires await for nested async comparisons
+PASS all mock comparison callers and throw callers settle
+PASS later getter and settled validation errors preserve identity
+PASS error cause getters and async causes are visited once
+PASS completed siblings and failed candidates release memo frames

@@ -1,6 +1,8 @@
 declare namespace BunWasm {
   type WasmType = 'v128' | 'i32' | 'i64' | 'f32' | 'f64' | 'funcref' | 'externref';
   type WasmElement = 'funcref' | 'externref';
+  type WasmNumericType = 'i32' | 'i64' | 'f32' | 'f64';
+  interface WasmGlobal { kind: 'global'; backend: 'wasmi'; store: number; id: number; type: WasmType; mutable: boolean; origin: 'constructor' | 'export' }
   type WasmReference = { kind: 'function' | 'externref'; id: number };
   type WasmValue = number | bigint | WasmReference | null;
   interface WasmFunction { backend?: "nested"; id: number; params: WasmType[]; results: WasmType[] }
@@ -61,7 +63,7 @@ declare namespace BunWasm {
     laneEpochs(): number;
     validate(bytes: Uint8Array): boolean;
     compile(bytes: Uint8Array): WasmModule;
-    instantiate(id: number, bindings: (number | bigint | null | WasmReference | { kind: 'callback'; id: number })[], invocation?: number): number;
+    instantiate(id: number, bindings: WasmBinding[], invocation?: number): number;
     functionIdentity(id: number, name: string): WasmFunction;
     functionInfo(id: number): WasmFunction;
     call(id: number, args: WasmValue[], invocation?: number): WasmCall;
@@ -78,7 +80,12 @@ declare namespace BunWasm {
     memorySpan(id: number): { pointer: number; length: number; generation: bigint; shared?: boolean; maximum?: number };
     growMemory(id: number, count: number): number;
     global(id: number, name: string, value?: WasmValue): WasmValue;
+    createGlobal(type: WasmNumericType, mutable: boolean, value: WasmValue): WasmGlobal;
+    globalIdentity(id: number, name: string): WasmGlobal;
+    globalValue(global: WasmGlobal, value?: WasmValue): WasmValue;
+    globalImport(global: WasmGlobal): WasmValue;
   }
+  type WasmBinding = WasmValue | WasmGlobal | { kind: 'callback'; id: number };
   interface WasmInternal {
     native: { wasm: WasmNative; wasmMemoryBuffer(resource: number, previous: ArrayBuffer | undefined): ArrayBuffer; wasmSharedMemoryBuffer(resource: number, visible?: number): SharedArrayBuffer; sharedBufferResource?(buffer: SharedArrayBuffer): number | undefined; wasmNestedExecute<T>(operation: (token: number) => T, callback: (id: number, args: WasmValue[]) => { type: WasmType; value: WasmValue }[]): T };
     isWasmMemoryBuffer?: (value: unknown) => boolean;

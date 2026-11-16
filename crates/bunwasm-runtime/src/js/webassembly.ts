@@ -8,9 +8,13 @@
   const native = internal.native.wasm;
   const modules = new WeakMap<Module, BunWasm.WasmModule>();
   const memoryStates = new WeakMap<Memory, MemoryState>();
-  type GlobalState = { id: number; name: string; type: BunWasm.WasmType; mutable: boolean };
+  type GlobalState = BunWasm.WasmGlobal | { backend: 'nested'; id: number; name: string; type: BunWasm.WasmType; mutable: boolean };
   const tableStates = new WeakMap<object, BunWasm.WasmTable>();
   const globalStates = new WeakMap<object, GlobalState>();
+  const globals = new Map<string, WeakRef<Global>>();
+  const globalCleanup = new FinalizationRegistry<{ key: string; reference: WeakRef<Global> }>(({ key, reference }) => {
+    if (globals.get(key) === reference) globals.delete(key);
+  });
   const instanceExports = new WeakMap<Instance, Exports>();
   const memories = new Map<number, WeakRef<Memory>>();
   const memoryResources = new Map<number, WeakRef<MemoryState>>();
@@ -159,18 +163,48 @@
   }
   function globalValue(state: GlobalState) {
     if (state.type === 'v128') throw new TypeError('WebAssembly v128 cannot cross the JavaScript boundary');
-    return decode(native.global(state.id, state.name));
+    return decode(state.backend === 'nested' ? native.global(state.id, state.name) : native.globalValue(state));
+  }
+  function rememberGlobal(global: Global, state: BunWasm.WasmGlobal) {
+    const key = `${state.store}/${state.id}`;
+    const reference = new WeakRef(global);
+    globalStates.set(global, state);
+    globals.set(key, reference);
+    globalCleanup.register(global, { key, reference });
+  }
+  function globalObject(state: BunWasm.WasmGlobal) {
+    const known = globals.get(`${state.store}/${state.id}`)?.deref();
+    if (known) return known;
+    const global: Global = Object.create(Global.prototype);
+    rememberGlobal(global, state);
+    return global;
+  }
+  function globalType(value: unknown): BunWasm.WasmNumericType {
+    const type = String(value);
+    if (type === 'i32' || type === 'i64' || type === 'f32' || type === 'f64') return type;
+    throw new TypeError('Unsupported WebAssembly.Global value type');
   }
   class Global {
-    constructor() { throw new LinkError('Standalone WebAssembly globals are not supported'); }
+    constructor(descriptor: { mutable?: unknown; value: unknown }, value: unknown = undefined) {
+      if (!isObject(descriptor)) throw new TypeError('WebAssembly.Global descriptor must be an object');
+      const mutable = !!descriptor.mutable;
+      const type = globalType(descriptor.value);
+      const initial = coerce(value === undefined ? (type === 'i64' ? 0n : 0) : value, type);
+      rememberGlobal(this, native.createGlobal(type, mutable, initial));
+    }
     get value() { return globalValue(globalState(this)); }
     set value(value: unknown) {
       const state = globalState(this);
       if (!state.mutable) throw new TypeError('Immutable WebAssembly global');
-      native.global(state.id, state.name, coerce(value, state.type));
+      const input = coerce(value, state.type);
+      if (state.backend === 'nested') native.global(state.id, state.name, input);
+      else native.globalValue(state, input);
     }
     valueOf() { return globalValue(globalState(this)); }
   }
+  Object.defineProperty(Global.prototype, 'value', { enumerable: true });
+  Object.defineProperty(Global.prototype, 'valueOf', { enumerable: true });
+  Object.defineProperty(Global.prototype, Symbol.toStringTag, { value: 'WebAssembly.Global', configurable: true });
   function memoryState(memory: Memory) {
     const state = memoryStates.get(memory);
     if (!state) throw new TypeError('Expected a WebAssembly.Memory');
@@ -324,7 +358,7 @@
       const exports: Exports = Object.create(null);
       const globals = new Map<number, Global>();
       importedGlobals.forEach((global, index) => { if (global) globals.set(index, global); });
-      for (const item of info.exports) installExport(id, exports, item, globals);
+      for (const item of info.exports) installExport(id, exports, item, globals, info.backend);
       if (info.backend !== 'nested') sync(refreshMemory);
       instanceExports.set(this, Object.freeze(exports));
     }
@@ -352,7 +386,11 @@
     try { return info.imports.map(item => binding(item, imports[item.module]?.[item.name], provisional, info.backend, importedGlobals)); }
     catch (error) { releaseCallbacks(info, provisional); throw error; }
   }
-  function binding(item: BunWasm.WasmImport, value: unknown, provisional: number[], backend: 'nested' | undefined, importedGlobals: (Global | undefined)[]): number | bigint | null | BunWasm.WasmReference | { kind: 'callback'; id: number } {
+  function scalarGlobalImport(state: BunWasm.WasmGlobal) {
+    try { return native.globalImport(state); }
+    catch (error) { throw new LinkError(message(error)); }
+  }
+  function binding(item: BunWasm.WasmImport, value: unknown, provisional: number[], backend: 'nested' | undefined, importedGlobals: (Global | undefined)[]): BunWasm.WasmBinding {
     if (item.kind === 'function' && typeof value === 'function') {
       const existing = functionStates.get(value);
       if (existing) return { kind: 'function', id: existing.id };
@@ -363,34 +401,35 @@
     }
     if (item.kind === 'memory' && value instanceof Memory) return memoryState(value).resource;
     if (item.kind === 'table' && value instanceof Table) return tableState(value).id;
-    if (item.kind === 'global' && backend === 'nested') return globalImport(item, value, importedGlobals);
+    if (item.kind === 'global') return globalImport(item, value, importedGlobals, backend);
     throw new LinkError(`Missing or unsupported WebAssembly import ${item.module}.${item.name}`);
   }
-  function globalImport(item: Extract<BunWasm.WasmImport, { kind: 'global' }>, value: unknown, importedGlobals: (Global | undefined)[]) {
-    let input = value;
-    let global: Global | undefined;
+  function globalImport(item: Extract<BunWasm.WasmImport, { kind: 'global' }>, value: unknown, importedGlobals: (Global | undefined)[], backend: 'nested' | undefined): BunWasm.WasmBinding {
     if (isGlobal(value)) {
       const state = globalState(value);
       if (state.type !== item.type || state.mutable !== item.mutable) throw new LinkError('Incompatible WebAssembly global import');
-      input = globalValue(state);
-      global = value;
-    } else {
-      const expected = item.type === 'i64' ? 'bigint' : 'number';
-      if (typeof value !== expected) throw new LinkError('Invalid WebAssembly global import value');
+      if (state.backend === 'wasmi' && backend !== 'nested') return state;
+      if (item.mutable) throw new LinkError('Mutable WebAssembly globals cannot cross backends');
+      if (backend !== 'nested') throw new LinkError('Nested WebAssembly globals cannot enter the ordinary backend');
+      const input = state.backend === 'wasmi' ? scalarGlobalImport(state) : native.global(state.id, state.name);
+      importedGlobals.push(value);
+      return input;
     }
-    const imported = coerce(input, item.type);
-    // Global indices number imports first; retain the same privately validated object.
-    importedGlobals.push(global);
-    return imported;
+    if (item.mutable) throw new LinkError('Mutable WebAssembly global import requires a Global');
+    const expected = item.type === 'i64' ? 'bigint' : 'number';
+    if (typeof value !== expected) throw new LinkError('Invalid WebAssembly global import value');
+    importedGlobals.push(undefined);
+    return coerce(value, item.type);
   }
-  function installExport(id: number, exports: Exports, item: BunWasm.WasmExport, globals: Map<number, Global>) {
+  function installExport(id: number, exports: Exports, item: BunWasm.WasmExport, globals: Map<number, Global>, backend: 'nested' | undefined) {
     const name = item.name;
     if (item.kind === 'function') { exports[name] = callable(native.functionIdentity(id, name)); return; }
     if (item.kind === 'global') {
+      if (backend !== 'nested') { exports[name] = globalObject(native.globalIdentity(id, name)); return; }
       const known = item.index === undefined ? undefined : globals.get(item.index);
       if (known) { exports[name] = known; return; }
       const global: Global = Object.create(Global.prototype);
-      globalStates.set(global, { id, name, type: item.type, mutable: item.mutable });
+      globalStates.set(global, { backend: 'nested', id, name, type: item.type, mutable: item.mutable });
       if (item.index !== undefined) globals.set(item.index, global);
       exports[name] = global;
       return;

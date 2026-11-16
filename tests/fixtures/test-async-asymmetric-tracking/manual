@@ -1,0 +1,1 @@
+Expected assertions use native Bun's matcher rejection wrapper. Directly thrown matcher errors remain owned by their original invocation.
