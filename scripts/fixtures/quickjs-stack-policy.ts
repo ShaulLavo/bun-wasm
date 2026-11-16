@@ -1,7 +1,10 @@
 import { mock } from "bun:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { navigationParameter } from "../../web/navigation-server-log";
 
 const budget = process.env.QUICKJS_STACK_KIB;
 const commands: string[] = [];
@@ -15,11 +18,21 @@ const fixtures = [
 ];
 const visitedFixtures: string[] = [];
 const files = new Map<string, string>();
+const scratch = mkdtempSync(join(tmpdir(), "qjs-policy-"));
+process.once("exit", () => rmSync(scratch, { recursive: true, force: true }));
+const navigations = new Set<string>();
 let opened = 0;
 let closed = 0;
 let cleanups = 0;
 async function navigate(url: string, options: { waitUntil: string; timeout: number }): Promise<void> {
-  assert.equal(url, "https://stack.test/?engine=quickjs&prompt=off&mode=memory");
+  const target = new URL(url);
+  const id = target.searchParams.get(navigationParameter);
+  assert.ok(id);
+  assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.ok(!navigations.has(id), "each fresh page needs its own request identity");
+  navigations.add(id);
+  target.searchParams.delete(navigationParameter);
+  assert.equal(target.href, "https://stack.test/?engine=quickjs&prompt=off&mode=memory");
   assert.deepEqual(options, { waitUntil: "domcontentloaded", timeout: 30_000 });
 }
 
@@ -48,7 +61,7 @@ const browser = {
 
 mock.module("../../web/tests/playground.mjs", () => ({
   playwright: { webkit: {} },
-  session: () => ({ launch: async () => browser, serve: async () => "https://stack.test/", cleanup: async () => { cleanups++; } }),
+  session: () => ({ scratch, launch: async () => browser, serve: async () => "https://stack.test/", cleanup: async () => { cleanups++; } }),
   ready: async (_page: unknown, timeout: number) => { assert.equal(timeout, 90_000); },
   writeFile: async (_page: unknown, path: string, source: string) => { files.set(path, source); },
   run: async (_page: unknown, command: string, timeout: number) => {
@@ -88,7 +101,9 @@ const expectedCases = originalModes.length + fixtures.length + 1;
 assert.deepEqual(visitedFixtures, fixtures.map(fixture => fixture.name));
 assert.equal(opened, expectedCases + (budget ? 0 : 1));
 assert.equal(closed, opened);
+assert.equal(navigations.size, opened);
 assert.equal(cleanups, 1);
+assert.equal(process.env.BUN_WASM_NAVIGATION_LOG, join(scratch, "navigation.jsonl"));
 assert.deepEqual(inputs, originalModes.map(mode => ({ mode, depth: mode === "bound" ? 2000 : 200000 })));
 assert.equal(commands.filter(command => command.startsWith("BUN_WASM_STACK_KIB=32 ")).length, budget ? 0 : 1);
 assert.equal(commands.filter(command => command.startsWith(`BUN_WASM_STACK_KIB=${budget} `)).length, budget ? expectedCases : 0);

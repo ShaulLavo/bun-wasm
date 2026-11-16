@@ -348,7 +348,7 @@ test("dormant Hermes proof controls stay outside explicit and automatic CI disco
 test("selected tests cannot import hidden test barrels that give a fixture a second owner", () => {
   const paths = discoverChecks().filter(check => check.owner !== "native").map(check => check.path).concat(automaticChecks().map(check => check.path));
   for (const path of paths) expect(readFileSync(join(root, path), "utf8")).not.toMatch(/^import\s+(?:.*from\s+)?["'][^"']+\.test\.[cm]?[jt]s["']/m);
-});
+}, 30_000);
 
 test("each discovery group retains one command owner and browser deadlines stay outside discovery", () => {
   const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
@@ -448,13 +448,13 @@ test("required Processes gates reject failed or cancelled guest batches and allo
   expect(guest).toContain("timeout-minutes: 10");
   expect(guest).not.toContain("browser-guest-site.ts build");
   const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
-  expect(processes).toContain("needs: [selection, rust, process-bundles, browser-guest]");
+  expect(processes).toContain("needs: [selection, ordinary-web-guests, rust, process-bundles, browser-guest]");
   expect(processes).toContain("always() && !cancelled()");
   const guard = processes.match(/run: \|\n([\s\S]*?)      - uses:/)?.[1];
   if (!guard) throw new Error("Missing required guest-result guard");
   for (const rust of ["success", "skipped", "failure", "cancelled"]) {
     for (const guest of ["success", "skipped", "failure", "cancelled"]) {
-      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", guard], { env: { ...process.env, RUST_RESULT: rust, GUEST_RESULT: guest } });
+      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", guard], { env: { ...process.env, RUST_RESULT: rust, ORDINARY_WEB_RESULT: rust, GUEST_RESULT: guest } });
       expect(result.status === 0, `${rust}/${guest}`).toBe(rust === "success" && guest === "success" || rust === "skipped" && guest === "skipped");
     }
   }

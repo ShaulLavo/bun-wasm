@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/test-async-asymmetric.test.ts",
+  "localRuntime": true
+}

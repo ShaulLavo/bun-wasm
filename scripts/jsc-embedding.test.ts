@@ -1,9 +1,13 @@
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 import { artifactIdentity } from "./guest-build-receipt";
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { parseEngineAllocationFault, refusingAllocator } from "../web/scripts/node-linked";
-import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, proxyGetForwardingFixture, proxyGetLifetimeFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt } from "./jsc-embedding";
+import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, jscEmbeddingArchives, parserChainFixture, proxyGetForwardingFixture, proxyGetLifetimeFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt, verifyJscEmbedding } from "./jsc-embedding";
+import { deliveryFixtureSource, writeJscDeliveryFixture } from "./fixtures/ordinary-web-delivery.ts";
+import { hash } from "./guest-source-manifest.ts";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
 
@@ -30,6 +34,19 @@ test("JSC receipts bind the committed source, prebuild and guest bytes", () => {
   expect(() => verifyEmbeddingReceipt(receipt, { ...inputs, jscInputsSha256: "f".repeat(64) }, bytes)).toThrow("mismatch");
   expect(() => verifyEmbeddingReceipt(receipt, inputs, { ...bytes, side: new Uint8Array(Array.from(bytes.side).concat([0, 2, 1, 120])) })).toThrow("mismatch");
   expect(() => verifyEmbeddingReceipt(receipt, inputs, { ...bytes, core: new Uint8Array(Array.from(bytes.core).concat([0, 2, 1, 120])) })).toThrow("mismatch");
+});
+
+test("split embedding verification retains original archive, source and companion checks", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-embedding-verify-"));
+  try {
+    await writeJscDeliveryFixture(directory);
+    const artifact = join(directory, "bun-jsc.wasm");
+    const current = { sourceHead: deliveryFixtureSource.head, sourceTree: deliveryFixtureSource.tree, jscInputsSha256: "c".repeat(64), archives: jscEmbeddingArchives.map(path => ({ path, sha256: hash(path) })) };
+    await verifyJscEmbedding(artifact, current);
+    await expect(verifyJscEmbedding(artifact, { ...current, sourceHead: "0".repeat(40) })).rejects.toThrow("mismatch");
+    rmSync(join(directory, "jsc-engine.wasm"));
+    await expect(verifyJscEmbedding(artifact, current)).rejects.toThrow();
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("the JSC artifact check runs the busy-loop stdout handshake on the same guest", () => {

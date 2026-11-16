@@ -247,7 +247,14 @@
   let timerSeq = 1;
   // Pending timers sorted by (when, seq).
   let timerQueue = [];
-  const immediates = [];
+  let immediates = null;
+  function immediateQueue() {
+    if (!immediates) {
+      const ImmediateQueue = internal.require("immediate_queue");
+      immediates = new ImmediateQueue();
+    }
+    return immediates;
+  }
   let immediateBatchRemaining = null;
   let refedTimers = 0;
 
@@ -407,9 +414,27 @@
   function realSetImmediate(callback, ...args) {
     checkCallback(callback);
     const immediate = new Immediate(callback, args);
-    immediates.push(immediate);
+    immediateQueue().push(immediate);
     if (native.wake) native.wake(0);
     return immediate;
+  }
+
+  function queueSelectedTask(callback) {
+    checkCallback(callback);
+    const immediate = new Immediate(callback, []);
+    const queue = immediateQueue();
+    const previousLength = queue.length;
+    let reserved = false;
+    try {
+      queue.pushFront(immediate);
+      if (immediateBatchRemaining !== null) { immediateBatchRemaining++; reserved = true; }
+      if (native.wake) native.wake(0);
+      return immediate;
+    } catch (error) {
+      immediate._active = false;
+      if (!reserved && immediateBatchRemaining !== null && queue.length > previousLength) immediateBatchRemaining++;
+      throw error;
+    }
   }
 
   function clearImmediate(immediate) {
@@ -442,8 +467,8 @@
     const workerProgress = internal.workerPump && internal.workerPump();
     // Immediates first: like Bun, setImmediate callbacks queued by the
     // main script run before even a due setTimeout(0).
-    if (immediateBatchRemaining === null) immediateBatchRemaining = immediates.length;
-    while (immediateBatchRemaining > 0 && immediates.length > 0) {
+    if (immediateBatchRemaining === null) immediateBatchRemaining = immediates?.length || 0;
+    while (immediateBatchRemaining > 0 && immediates && immediates.length > 0) {
       immediateBatchRemaining--;
       const immediate = immediates.shift();
       if (!immediate._active) continue;
@@ -457,7 +482,7 @@
       runOneTimer(now);
       return 0;
     }
-    if (immediates.length > 0 || workerProgress || internal.pendingIo > 0) return 0;
+    if (immediates?.length || workerProgress || internal.pendingIo > 0) return 0;
     if (refedTimers <= 0 && !internal.messagePortRefs.size) return -1;
     // Unref'd timers at the front don't keep us alive but still fire if a
     // ref'd one is pending later.
@@ -467,7 +492,7 @@
   internal.messagePortRefs = new Set();
   internal.loopState = () => ({
     refedTimers,
-    immediates: immediates.length,
+    immediates: immediates?.length || 0,
     ticks: tickQueue.length,
     pendingIo: internal.pendingIo,
     messagePortRefs: internal.messagePortRefs.size,
@@ -525,6 +550,7 @@
     setTimeout: realSetTimeout,
     clearTimeout: realClearTimeout,
     setImmediate: realSetImmediate,
+    queueSelectedTask,
     clearImmediate: realClearImmediate,
   };
   internal.timers = { setTimeout, setInterval, clearTimeout, clearInterval: clearTimeout, setImmediate, clearImmediate, Timeout, Immediate };
@@ -928,7 +954,7 @@
     if (listenerCount("beforeExit") === 0) return false;
     const process = globalThis.process;
     process.emit("beforeExit", process.exitCode || 0);
-    return refedTimers > 0 || immediates.length > 0 || tickQueue.length > 0 || internal.ioPending() > 0;
+    return refedTimers > 0 || Boolean(immediates?.length) || tickQueue.length > 0 || internal.ioPending() > 0;
   };
 
   internal.beforeExit = function beforeExit() {

@@ -239,6 +239,7 @@ for (const engine of [chromium, webkit]) {
   test(`page rejects delivery received after its cutoff in ${engine.name()}`, () => delayedReceipt(engine), 10_000);
   test(`cancelled click arm starts no native snapshot or press in ${engine.name()}`, () => cancelledArm(engine), 10_000);
   for (const stage of ["close", "creation"] satisfies Array<"close" | "creation">) {
-    test(`Playwright fences late preview ${stage} in ${engine.name()}`, () => latePlaywrightStep(engine, stage), 10_000);
+    // Native browser setup and shutdown run outside the 3-second cancellation scopes.
+    test(`Playwright fences late preview ${stage} in ${engine.name()}`, () => latePlaywrightStep(engine, stage), 60_000);
   }
 }

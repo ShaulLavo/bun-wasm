@@ -1,0 +1,1 @@
+Approved bounded awaited contract. Synchronous matchers return undefined. Actual matcher Promises return a final assertion Promise; after-call effects differ from native Bun. The unmodified native timing oracle is retained separately in the implementation report. this.equals callbacks must await or chain nested async comparisons.

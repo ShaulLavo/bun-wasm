@@ -60,7 +60,7 @@ test("the Rust compiler cache dispatcher selects every affected producer", () =>
   expect(needsSharedNative(paths)).toBe(true);
 });
 
-test.each(["web/src/bun-executor.ts", "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js"])("QuickJS browser stack input %s selects its guest producer", path => {
+test.each(["web/src/bun-executor.ts", "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "web/tests/quickjs-stack-navigation.ts", "web/tests/playground-navigation.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js"])("QuickJS browser stack input %s selects its guest producer", path => {
   expect(needsRust([path])).toBe(true);
 });
 
@@ -405,7 +405,7 @@ test("unrelated page changes skip JSC; its selected gate builds and executes onc
   expect(workflow).toContain("if: needs.selection.outputs.jsc == 'true'");
   expect(workflow.match(/^\s+bash scripts\/build-jsc\.sh$/gm)).toHaveLength(1);
   expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
-  expect(workflow).toContain("bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm");
+  expect(workflow).toContain("bun scripts/jsc-embedding.ts verify dist/bun-jsc.wasm");
 });
 
 test("the paired JSC contract selects its crate, producer and consumer inputs", () => {

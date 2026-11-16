@@ -43,6 +43,8 @@ function hostContext(native: boolean): Context {
     EventEmitter, Readable, Writable, Duplex, getDefaultHighWaterMark, Buffer, WeakRef,
     provider: native ? createNodeAsyncContext() : undefined,
   });
+  const queueSource = readFileSync(new URL("immediate_queue.ts", runtime), "utf8");
+  context.immediateQueueFactory = runInContext(stripTypeScriptTypes(queueSource), context);
   runInContext(`${engineHostSource()}
     const host = new EngineHost({ instance: { exports: {} }, asyncContext: provider }, () => {});
     host.pendingAsync = 1;
@@ -61,7 +63,7 @@ function hostContext(native: boolean): Context {
       hostError: () => '{"name":"Error","message":"connection failed","code":"ECONNRESET"}',
     });
     host.native = native;
-    const modules = { events: EventEmitter, buffer: { Buffer }, websocket: { clientClass: () => undefined } };
+    const modules = { immediate_queue: immediateQueueFactory(), events: EventEmitter, buffer: { Buffer }, websocket: { clientClass: () => undefined } };
     const internal = {
       native, builtinFactories: {}, web: {}, require: name => modules[name] ?? {},
       builtin: name => name === "node:net" ? modules.net.nodeNet() : name === "node:http" ? { STATUS_CODES: { 200: "OK" } } : { Readable, Writable, Duplex, getDefaultHighWaterMark },

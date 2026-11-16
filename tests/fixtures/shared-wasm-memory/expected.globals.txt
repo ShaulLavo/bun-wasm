@@ -1,0 +1,2 @@
+shared-wasm-memory Global validation: pass
+shared-wasm-memory partial numeric Global constructor: pass

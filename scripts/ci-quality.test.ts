@@ -118,11 +118,11 @@ test("native job budgets and names stay unchanged beside the lightweight update 
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    selection: 5, quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, "shared-native": 30, "shared-browser": 30, "shared-proof": 5, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
+    selection: 5, quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, "ordinary-web-guests": 20, package: 10, "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, "shared-native": 30, "shared-browser": 30, "shared-proof": 5, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
-    selection: "CI selection", quality: "Source quality", "jsc-identity": "Resolve effective JSC inputs", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
+    selection: "CI selection", quality: "Source quality", "jsc-identity": "Resolve effective JSC inputs", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)", "ordinary-web-guests": "Ordinary Web guest checks",
     package: "Browser adapter package", "shared-jsc-identity": "Resolve effective shared JSC inputs", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC program producer", "shared-native": "Shared native (${{ matrix.engine }})", "shared-browser": "Shared Browser (${{ matrix.engine }})", "shared-proof": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
     "web-browser": "Web browser (${{ matrix.batch }})", "process-bundles": "Shared process browser bundles", "browser-guest": "Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})", "browser-process": "Processes (${{ matrix.browser }})", "ci-result": "Code quality", "update-status": "Report automated update statuses",
   });
@@ -708,7 +708,7 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
   const browsers = workflow.split("\n  browser-process:\n")[1]!;
   expect(producer).toContain("bun web/scripts/ci-process-bundles.ts");
   expect(producer).toContain("actions/upload-artifact@v4");
-  expect(browsers).toContain("needs: [selection, rust, process-bundles, browser-guest]");
+  expect(browsers).toContain("needs: [selection, ordinary-web-guests, rust, process-bundles, browser-guest]");
   expect(browsers).toContain("actions/download-artifact@v4");
   expect(browsers).toContain("BUN_WASM_PROCESS_BUNDLES:");
   expect(browsers).toContain("BUN_WASM_RUNTIME_PROC_BUNDLE:");
@@ -787,7 +787,7 @@ test("completed producers seed caches before unrelated guest gates", () => {
   expect(bootstrapSave).toBeGreaterThan(rust.indexOf("name: Blocking native quality checks"));
   expect(bootstrapSave).toBeLessThan(rust.indexOf("name: Build native fixtures"));
   expect(jscCargoSave).toBeGreaterThan(rust.indexOf("name: Build the JSC Cargo guest"));
-  expect(jscCargoSave).toBeLessThan(rust.indexOf("bun scripts/jsc-embedding.ts test"));
+  expect(jscCargoSave).toBeLessThan(rust.indexOf("bun scripts/jsc-embedding.ts verify"));
   expect(nativeSave).toBeGreaterThan(rust.indexOf("bash scripts/build-bun-tools.sh"));
   expect(nativeSave).toBeLessThan(rust.indexOf("test-web-guests.ts quickjs browser"));
   expect(nativeSave).toBeLessThan(rust.indexOf("test-web-guests.ts jsc"));
@@ -848,7 +848,7 @@ test("source cache runs in real browsers using one source-built host guest", () 
   expect(rust).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
   expect(rust).toContain("uses: actions/upload-artifact@v4");
   expect(processes).toContain("uses: actions/download-artifact@v4");
-  expect(processes).toContain("needs: [selection, rust, process-bundles, browser-guest]");
+  expect(processes).toContain("needs: [selection, ordinary-web-guests, rust, process-bundles, browser-guest]");
   expect(processes).toContain("needs.rust.result == 'skipped'");
   expect(processes).toContain("BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache");
   expect(processes).toContain("BUN_WASM_RUNTIME_PROC_PORT: \"4187\"");

@@ -1144,14 +1144,14 @@ jobs:
             exit 1
           fi
       - name: Package the native profile launcher
-        if: needs.selection.outputs.shared-native == 'true'
+        if: needs.selection.outputs.jsc == 'true' || needs.selection.outputs.shared-native == 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/native-profile-launcher"
           cp "$CARGO_TARGET_DIR/release/bun-wasm" "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
           git rev-parse HEAD > "$RUNNER_TEMP/native-profile-launcher/source.txt"
       - uses: actions/upload-artifact@v4
         timeout-minutes: 5
-        if: needs.selection.outputs.shared-native == 'true'
+        if: needs.selection.outputs.jsc == 'true' || needs.selection.outputs.shared-native == 'true'
         with:
           name: native-profile-launcher
           path: ${{ runner.temp }}/native-profile-launcher/
@@ -1180,9 +1180,9 @@ jobs:
           path: ${{ runner.temp }}/jsc/engine
           key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts') }}
 
-      - name: Blocking JSC embedding and allocation checks
+      - name: Verify JSC embedding source and native backing
         if: needs.selection.outputs.jsc == 'true'
-        run: bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm
+        run: bun scripts/jsc-embedding.ts verify dist/bun-jsc.wasm
       - name: Blocking native fixture checks
         env:
           BUN_WASM_RUNTIME_JOBS: "2"
@@ -1275,11 +1275,6 @@ jobs:
             ${{ env.CARGO_TARGET_DIR }}
           key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp', 'scripts/build-bun-tools.sh', 'scripts/build-bun-browser.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
 
-      - name: Blocking Web guest cases (QuickJS and host engine)
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          source env.sh
-          bun scripts/test-web-guests.ts quickjs browser 2>&1 | tee dist/web-guests-quickjs-browser.log
       # The playground site the browser-guest checks serve, bundled once from the verified guest
       # (and the bash-web shell) linked above; each Processes browser leg verifies and serves it.
       - name: Build the browser-guest site once
@@ -1293,12 +1288,6 @@ jobs:
           path: ${{ runner.temp }}/browser-guest-site
           if-no-files-found: error
           retention-days: 1
-      - name: Blocking Web guest case (JSC)
-        if: needs.selection.outputs.jsc == 'true'
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-        run: |
-          source env.sh
-          bun scripts/test-web-guests.ts jsc 2>&1 | tee dist/web-guests-jsc.log
       - name: Export the validated standard Browser and tools guests
         run: |
           source env.sh
@@ -1324,6 +1313,8 @@ jobs:
             ${{ runner.temp }}/jsc/engine/engine-link.map
           if-no-files-found: error
           retention-days: 1
+      # These main-only compiler/download seeds are source/native-qualified.
+      # Independent Web checks qualify the run in ordinary-web-guests and Code quality.
       - uses: ./.github/actions/save-rust-build-cache
         with:
           key: ${{ steps.rust-objects.outputs.cache-primary-key }}
@@ -1357,6 +1348,93 @@ jobs:
       - name: Test vectored reads and browser dependency resolution
         run: bun scripts/test-checks.ts package-extra
       - uses: ./.github/actions/save-release-downloads
+
+  ordinary-web-guests:
+    name: Ordinary Web guest checks
+    needs: [selection, rust]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true' && needs.rust.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - name: Require the selected full producer
+        env:
+          FULL_SELECTED: ${{ needs.selection.outputs.rust }}
+          JSC_SELECTED: ${{ needs.selection.outputs.jsc }}
+          RUST_RESULT: ${{ needs.rust.result }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in pull_request|push|workflow_dispatch) ;; *) exit 1 ;; esac
+          test "$FULL_SELECTED" = true
+          test "$RUST_RESULT" = success
+          case "$JSC_SELECTED" in true|false) ;; *) exit 1 ;; esac
+      - uses: actions/checkout@v4
+      - name: Configure consumer scratch
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/release-downloads
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+          node-version: ${{ env.CI_NODE_VERSION }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun scripts/ci-install.ts --frozen-lockfile --ignore-scripts
+      - run: bun scripts/ci-install.ts --cwd web --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: browser-program
+          path: ${{ runner.temp }}/ordinary-browser-program
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        if: needs.selection.outputs.jsc == 'true'
+        with:
+          name: ordinary-jsc-program
+          path: ${{ runner.temp }}/ordinary-jsc-program
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        if: needs.selection.outputs.jsc == 'true'
+        with:
+          name: native-profile-launcher
+          path: ${{ runner.temp }}/ordinary-native-launcher
+      - name: Verify and stage the original ordinary deliveries
+        env:
+          JSC_SELECTED: ${{ needs.selection.outputs.jsc }}
+        run: |
+          case "$JSC_SELECTED" in
+            true)
+              bun scripts/ci-ordinary-web-inputs.ts "$RUNNER_TEMP/ordinary-browser-program" true "$RUNNER_TEMP/ordinary-jsc-program" "$RUNNER_TEMP/ordinary-native-launcher"
+              echo "BUN_WASM_LAUNCHER=$RUNNER_TEMP/ordinary-native-launcher/bun-wasm" >> "$GITHUB_ENV"
+              ;;
+            false) bun scripts/ci-ordinary-web-inputs.ts "$RUNNER_TEMP/ordinary-browser-program" false ;;
+            *) exit 1 ;;
+          esac
+      - name: Blocking JSC embedding and allocation checks
+        if: needs.selection.outputs.jsc == 'true'
+        run: |
+          source env.sh
+          bun scripts/jsc-embedding.ts fixtures dist/bun-jsc.wasm 2>&1 | tee dist/jsc-embedding-fixtures.log
+      - name: Blocking Web guest cases (QuickJS and host engine)
+        run: |
+          source env.sh
+          bun scripts/test-web-guests.ts quickjs browser 2>&1 | tee dist/web-guests-quickjs-browser.log
+      - name: Blocking Web guest case (JSC)
+        if: needs.selection.outputs.jsc == 'true'
+        run: |
+          source env.sh
+          bun scripts/test-web-guests.ts jsc 2>&1 | tee dist/web-guests-jsc.log
+      - name: Retain ordinary Web guest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: ordinary-web-guest-diagnostics
+          path: dist/*.log
+          if-no-files-found: ignore
+          retention-days: 1
 
   shared-jsc-identity:
     name: Resolve effective shared JSC inputs
@@ -1674,8 +1752,8 @@ jobs:
 
   shared-sysroot:
     name: Shared PIC program producer
-    needs: [selection, rust, shared-prebuild, shared-spidermonkey-prebuild]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
+    needs: [selection, ordinary-web-guests, rust, shared-prebuild, shared-spidermonkey-prebuild]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && ((needs.selection.outputs.rust == 'true' && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success') || (needs.selection.outputs.rust == 'false' && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped')) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1701,9 +1779,11 @@ jobs:
       - name: Require the shared native launcher producer
         if: needs.selection.outputs.shared-native == 'true'
         env:
+          ORDINARY_WEB_RESULT: ${{ needs.ordinary-web-guests.result }}
           PROFILE_LAUNCHER_RESULT: ${{ needs.rust.result }}
         run: |
           test "$PROFILE_LAUNCHER_RESULT" = success
+          test "$ORDINARY_WEB_RESULT" = success
       - name: Require the shared SpiderMonkey library producer
         if: needs.selection.outputs.shared-native == 'true'
         env:
@@ -2043,8 +2123,8 @@ jobs:
 
   shared-native:
     name: Shared native (${{ matrix.engine }})
-    needs: [selection, rust, shared-sysroot]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.selection.outputs.shared-native == 'true' }}
+    needs: [selection, ordinary-web-guests, rust, shared-sysroot]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success' && needs.shared-sysroot.result == 'success' && needs.selection.outputs.shared-native == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -2160,7 +2240,7 @@ jobs:
 
   shared-proof:
     name: Shared PIC sysroot proof
-    needs: [selection, quality, rust, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser]
+    needs: [selection, ordinary-web-guests, quality, rust, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser]
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2172,6 +2252,8 @@ jobs:
           SHARED_PREBUILD_RESULT: ${{ needs.shared-prebuild.result }}
           SHARED_PRODUCER_RESULT: ${{ needs.shared-sysroot.result }}
           SHARED_NATIVE: ${{ needs.selection.outputs.shared-native }}
+          FULL_SELECTED: ${{ needs.selection.outputs.rust }}
+          ORDINARY_WEB_RESULT: ${{ needs.ordinary-web-guests.result }}
           RUST_RESULT: ${{ needs.rust.result }}
           SM_RESULT: ${{ needs.shared-spidermonkey-prebuild.result }}
           NATIVE_RESULT: ${{ needs.shared-native.result }}
@@ -2181,6 +2263,11 @@ jobs:
           test "$QUALITY_RESULT" = success
           test "$SHARED_PREBUILD_RESULT" = success
           test "$SHARED_PRODUCER_RESULT" = success
+          case "$FULL_SELECTED" in
+            true) test "$RUST_RESULT" = success; test "$ORDINARY_WEB_RESULT" = success ;;
+            false) test "$RUST_RESULT" = skipped; test "$ORDINARY_WEB_RESULT" = skipped ;;
+            *) exit 1 ;;
+          esac
           case "$SHARED_NATIVE" in
             true) test "$RUST_RESULT" = success; expected=success ;;
             false) expected=skipped ;;
@@ -2362,8 +2449,8 @@ jobs:
       - uses: ./.github/actions/save-release-downloads
 
   browser-guest:
-    needs: [selection, rust]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.rust.result == 'success' }}
+    needs: [selection, ordinary-web-guests, rust]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true' && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success' }}
     name: Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2420,8 +2507,8 @@ jobs:
       - uses: ./.github/actions/save-release-downloads
 
   browser-process:
-    needs: [selection, rust, process-bundles, browser-guest]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (always() && !cancelled() && needs.selection.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped')) }}
+    needs: [selection, ordinary-web-guests, rust, process-bundles, browser-guest]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (always() && !cancelled() && needs.selection.result == 'success' && needs.process-bundles.result == 'success' && ((needs.selection.outputs.rust == 'true' && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success') || (needs.selection.outputs.rust == 'false' && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped'))) }}
     name: Processes (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2438,11 +2525,14 @@ jobs:
       - name: Require every selected Browser guest batch
         env:
           RUST_RESULT: ${{ needs.rust.result }}
+          ORDINARY_WEB_RESULT: ${{ needs.ordinary-web-guests.result }}
           GUEST_RESULT: ${{ needs.browser-guest.result }}
         run: |
           if [[ "$RUST_RESULT" == success ]]; then
+            test "$ORDINARY_WEB_RESULT" = success
             test "$GUEST_RESULT" = success
           else
+            test "$ORDINARY_WEB_RESULT" = skipped
             test "$RUST_RESULT" = skipped
             test "$GUEST_RESULT" = skipped
           fi
@@ -2513,7 +2603,7 @@ jobs:
 
   ci-result:
     name: Code quality
-    needs: [selection, quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
+    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2530,7 +2620,7 @@ jobs:
 
   update-status:
     name: Report automated update statuses
-    needs: [selection, quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process, ci-result]
+    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process, ci-result]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

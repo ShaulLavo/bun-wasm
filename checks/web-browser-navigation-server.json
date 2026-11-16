@@ -1,0 +1,5 @@
+{
+  "owner": "web-browser",
+  "path": "scripts/navigation-server-browser.test.ts",
+  "batch": "20-preview"
+}

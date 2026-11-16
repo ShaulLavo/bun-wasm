@@ -91,12 +91,7 @@ declare namespace BunWasm {
     require(name: "node_url"): { fileURLToPath(url: string | URL): string };
     readonly native: Native;
     readonly builtinFactories: Record<string, () => object>;
-    readonly realTimers: {
-      setTimeout(callback: () => void, delay: number): unknown;
-      clearTimeout(handle: unknown): void;
-      setImmediate(callback: () => void): unknown;
-      clearImmediate(handle: unknown): void;
-    };
+    readonly realTimers: import("./immediate_queue-types").ImmediateTimers;
     require(name: "net_address"): {
       isIP(value: string): 0 | 4 | 6;
       isIPv6(value: string): boolean;

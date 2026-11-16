@@ -14,7 +14,7 @@
         "@remix-run/component": "1.1.0",
         "@xterm/addon-fit": "^0.11.0",
         "@xterm/xterm": "^6.0.0",
-        "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#ed616905ff32a3431d5d3e72b721ac3d73cabc62",
+        "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#08a8e9757e90d4e75771e84a04e14b02d507f21d",
         "codemirror": "^6.0.2",
         "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.137/waffle-0.0.137.tgz",
         "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-base-0.0.16.tgz",
@@ -127,7 +127,7 @@
 
     "base64-js": ["base64-js@1.5.1", "", {}, "sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA=="],
 
-    "bash-web": ["bash-web@github:ShaulLavo/bash-web#ed61690", { "dependencies": { "@waffle/python": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.22/waffle-python-0.0.22.tgz", "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.22/waffle-base-0.0.22.tgz", "waffle-git": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.22/waffle-git-0.0.22.tgz", "waffle-ripgrep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.22/waffle-ripgrep-0.0.22.tgz" }, "peerDependencies": { "waffle": "*" }, "hasInstallScript": true }, "ShaulLavo-bash-web-ed61690", "sha512-Aozz0P/EYHIzQkudoIKV0GYQrc/WMfcgve5hn8g8wel/gzudX9GTvjJcZZmeF0mpyEHmwaq4WncAqQ1RnbX4bg=="],
+    "bash-web": ["bash-web@github:ShaulLavo/bash-web#08a8e97", { "dependencies": { "@waffle/python": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.22/waffle-python-0.0.22.tgz", "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.22/waffle-base-0.0.22.tgz", "waffle-git": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.22/waffle-git-0.0.22.tgz", "waffle-ripgrep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.22/waffle-ripgrep-0.0.22.tgz" }, "peerDependencies": { "waffle": "*" }, "hasInstallScript": true }, "ShaulLavo-bash-web-08a8e97", "sha512-oecbG7AkgfJT/FpiFhYU6wkk3NGYDkhkLdd0F1Imy75LlZ/IX0MLeZY9fuq7Uuqqft+rt60hhnFH7igHyk8DcA=="],
 
     "buffer": ["buffer@6.0.3", "", { "dependencies": { "base64-js": "^1.3.1", "ieee754": "^1.2.1" } }, "sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA=="],
 

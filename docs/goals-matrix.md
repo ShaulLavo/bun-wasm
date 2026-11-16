@@ -173,7 +173,34 @@ Owned tab cleanup receives only the time left in that cleanup phase after
 handoff and logging. Expiry prevents new cleanup input and cannot turn a late
 close result into a pass. The existing shorter logging and fallback bounds remain.
 
-Stop the wrapper and owned port forward after the campaign, copy its cleanup
+The PC controller must finish in the ordinary numbered Safari tab group, outside
+the overview. Navigation and cleanup share the same group selection and settled
+Done/exit proof. Cleanup selects ordinary tabs before reading their count. An
+owned Private card is closed only through its unique recorded title and associated
+Close child, with before/after content proof and unchanged ordinary tabs.
+Unrelated cards in both groups stay open. Private ownership proof carries no
+Private total. Missing identity or unproved cleanup fails the run.
+
+For a gate job, install the PC-bound finalizer before setup and keep the Mac FIFO
+wrapper alive until that finalizer joins. On success, failure and cancellation,
+restore ordinary tabs and prove Done/exit before `device_close`, wrapper stop or
+FIFO release. Use the task's existing live bound command and bounded helpers.
+The controller calls `closeIphoneTab(boundCommand, recordedTitle, deadline)` from
+`scripts/goals-matrix/iphone-cleanup.ts` and awaits it in its finalizer. Pass `null`
+only if no owned URL was opened. An opened URL without a recorded title is an
+ownership failure, even if ordinary restoration succeeds. Retain the same absolute
+cleanup deadline for closure and restoration; never start a fresh allowance after
+failure. Save any restoration error alongside the original failure.
+Stop input after native-command failure, deadline or lost admission; preserve the
+original error and report unproved restoration. Manual checks and the SafariDriver
+iPhone path have the same finish requirement. Delete and join the exact owned
+SafariDriver session before using the bound device command for restoration.
+The C4D2 CLI refuses the WebDriver-only path because it cannot prove this finish.
+Use the bound visible transport for that simulator. Desktop Safari is unchanged.
+The Mac-only `iphone-mac` asset server has no device binding and cannot perform
+this step through SSH or simctl. Its server receipt proves no Safari finish state.
+
+Stop the wrapper and owned port forward after the PC finalizer, copy its cleanup
 receipt, and verify the recorded server PID and listeners are absent. Check the
 installed queue status for the completed task before removing staging. A native
 cleanup receipt never claims queue release, and another task may already hold the lock. Close only the task's T3 device session without

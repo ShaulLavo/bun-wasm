@@ -25,7 +25,7 @@ run_report() {
   test "$(grep -c '^api --method POST repos/ShaulLavo/fixture/statuses/tested-head ' "$STATUS_LOG")" = 11
 }
 baseline=$(cat <<'JSON'
-{"selection":{"result":"success","outputs":{"rust":"true","shared":"true"}},"quality":{"result":"success"},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-proof":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
+{"selection":{"result":"success","outputs":{"rust":"true","shared":"true"}},"quality":{"result":"success"},"ci-result":{"result":"success"},"ordinary-web-guests":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-proof":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
 JSON
 )
 export RESULTS="$baseline"
@@ -58,6 +58,11 @@ Processes (chromium)|browser-process|
 Processes (firefox)|browser-process|
 Processes (webkit)|browser-process|
 CASES
+for result in failure cancelled skipped; do
+  RESULTS=$(jq --arg result "$result" '."ordinary-web-guests".result = $result | ."ci-result".result = "failure"' <<< "$baseline")
+  run_report
+  grep -Fq -- '-f context=Code quality -f state=failure ' "$STATUS_LOG"
+done
 RESULTS=$(jq 'del(."ci-result")' <<< "$baseline")
 if bash -euo pipefail "$scratch/report.sh"; then
   echo 'Missing CI result was accepted' >&2; exit 1
