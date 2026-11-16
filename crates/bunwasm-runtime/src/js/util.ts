@@ -1006,39 +1006,57 @@
   }
 
   const urlHref = typeof URL === "function" ? getterOf(URL.prototype, "href") : undefined;
+  const searchParamsSize = typeof URLSearchParams === "function" ? getterOf(URLSearchParams.prototype, "size") : undefined;
 
-  function bunCompareWebObjects(a: object, b: object, strict: boolean): false | undefined {
-    if (typeof URL === "function" && (a instanceof URL || b instanceof URL)) {
-      if (a instanceof URL && b instanceof URL) return urlHref?.call(a) === urlHref?.call(b) ? undefined : false;
-      return strict ? false : undefined;
-    }
-    if (typeof URLSearchParams === "function" && (a instanceof URLSearchParams || b instanceof URLSearchParams)) {
-      if (a instanceof URLSearchParams && b instanceof URLSearchParams) return equalSearchParams(a, b) ? undefined : false;
-      return strict ? false : undefined;
-    }
-    if (typeof Headers === "function" && (a instanceof Headers || b instanceof Headers)) {
-      if (a instanceof Headers && b instanceof Headers) return equalHeaders(a, b) ? undefined : false;
-      return strict ? false : undefined;
-    }
-    return undefined;
+  // instanceof only screens the prototype; the brand check rejects Object.create(URL.prototype) and similar,
+  // which native Bun compares as plain objects.
+  function isUrl(value: object): boolean {
+    return typeof URL === "function" && value instanceof URL && brandCheck(urlHref, value);
   }
 
-  function equalSearchParams(a: URLSearchParams, b: URLSearchParams): boolean {
-    const size = getterOf(URLSearchParams.prototype, "size");
-    if (size?.call(a) !== size?.call(b)) return false;
+  function isSearchParams(value: object): boolean {
+    return typeof URLSearchParams === "function" && value instanceof URLSearchParams && brandCheck(searchParamsSize, value);
+  }
+
+  function isHeaders(value: object): boolean {
+    return typeof Headers === "function" && value instanceof Headers && brandCheck(Headers.prototype.has, value, ["a"]);
+  }
+
+  type WebKind = "url" | "params" | "headers" | undefined;
+
+  function webKind(value: object): WebKind {
+    if (isUrl(value)) return "url";
+    if (isSearchParams(value)) return "params";
+    return isHeaders(value) ? "headers" : undefined;
+  }
+
+  // Native Bun applies these rules only when both values are platform wrappers. A plain object,
+  // including one built from a web prototype, falls through to the ordinary property comparison.
+  function bunCompareWebObjects(a: object, b: object, strict: boolean): false | undefined {
+    const kindA = webKind(a), kindB = webKind(b);
+    if (kindA === undefined || kindB === undefined) return undefined;
+    if (kindA !== kindB) return strict ? false : undefined;
+    if (kindA === "url") return urlHref?.call(a) === urlHref?.call(b) ? undefined : false;
+    if (kindA === "params") return equalSearchParams(a, b) ? undefined : false;
+    return equalHeaders(a, b) ? undefined : false;
+  }
+
+  // Prototype methods take brand-checked receivers, so instance shadows cannot hide differences.
+  function equalSearchParams(a: object, b: object): boolean {
+    if (searchParamsSize?.call(a) !== searchParamsSize?.call(b)) return false;
     for (const [key, value] of URLSearchParams.prototype.entries.call(a)) {
       if (URLSearchParams.prototype.get.call(b, key) !== value) return false;
     }
     return true;
   }
 
-  function headerCount(headers: Headers): number {
+  function headerCount(headers: object): number {
     let size = 0;
     for (const _key of Headers.prototype.keys.call(headers)) size++;
     return size;
   }
 
-  function equalHeaders(a: Headers, b: Headers): boolean {
+  function equalHeaders(a: object, b: object): boolean {
     if (headerCount(a) !== headerCount(b)) return false;
     for (const [key, value] of Headers.prototype.entries.call(a)) {
       if (Headers.prototype.get.call(b, key) !== value) return false;

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { shared, sharedPromise, sharedRejection } from "./shared";
+import { shared, sharedPromise, sharedRejection, sharedThrower } from "./shared";
 function rejectedSnapshot(run: () => unknown) {
   let message = "";
   try { run(); } catch (error) { if (error instanceof Error) message = error.message; }
@@ -8,6 +8,7 @@ function rejectedSnapshot(run: () => unknown) {
 }
 test("plain assertion permits cross-file reuse", () => shared().toBe(1));
 test("file snapshot rejects original-file reuse", () => rejectedSnapshot(() => shared().toMatchSnapshot()));
+test("thrown-error snapshot rejects original-file reuse", () => rejectedSnapshot(() => sharedThrower().toThrowErrorMatchingSnapshot()));
 test("inline snapshot permits cross-file reuse", () => shared().toMatchInlineSnapshot(`1`));
 test("not error precedes snapshot lifetime", () => {
   expect(() => shared().not.toMatchSnapshot()).toThrow("Snapshot matchers cannot be used with not");

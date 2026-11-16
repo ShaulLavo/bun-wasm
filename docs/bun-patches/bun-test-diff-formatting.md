@@ -6,8 +6,10 @@ Translate the colorless formatting path, sorted keys, expected/received sections
 
 Assertion diagnostics enumerate own string property names, including
 non-enumerable properties. This preserves a non-callable FormData.toJSON value
-in the diagnostic without calling it. Snapshot property enumeration keeps its
-existing behavior. Native Bun 1.4.4 and the unchanged upstream
+in the diagnostic without calling it. Accessor properties print as
+`[native code]` without running the getter, as native Bun does, so a throwing
+getter cannot replace the assertion error. Snapshot property enumeration keeps
+its existing behavior. Native Bun 1.4.4 and the unchanged upstream
 `test/js/bun/test/expect-formdata-tojson-crash.test.ts` qualify this difference.
 
 Mixed object and primitive mismatches use labeled Expected and Received

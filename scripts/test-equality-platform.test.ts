@@ -94,6 +94,6 @@ test("cached expectations retain file identity through modifiers before snapshot
   });
   await control.runner.run(["/first.ts", "/second.ts"]);
   expect(control.process.exitCode, control.stderr()).toBe(0);
-  expect(control.stderr()).toContain("7 pass");
+  expect(control.stderr()).toContain("8 pass");
   expect(control.stderr()).not.toContain("Snapshot storage reached");
 });

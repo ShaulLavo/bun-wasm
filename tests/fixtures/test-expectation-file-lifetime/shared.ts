@@ -4,5 +4,8 @@ let promised: ReturnType<typeof expect> | undefined;
 export function shared() { return cached ??= expect(1); }
 export function sharedPromise() { return promised ??= expect(Promise.resolve(1)); }
 
+let thrower: ReturnType<typeof expect> | undefined;
+export function sharedThrower() { return thrower ??= expect(() => { throw new Error("x"); }); }
+
 let rejected: ReturnType<typeof expect> | undefined;
 export function sharedRejection() { return rejected ??= expect(Promise.reject(1)); }

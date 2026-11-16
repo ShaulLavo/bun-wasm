@@ -18,6 +18,11 @@ for (const [a, b] of [
   expect(Bun.deepEquals(a, b)).toBe(false);
   expect(Bun.deepEquals(a, b, true)).toBe(false);
 }
+for (const real of [new URL("https://example.com/"), new URLSearchParams(), new Headers()]) {
+  const fake = Object.create(Object.getPrototypeOf(real));
+  expect(fake).toEqual(real);
+  expect(fake).toStrictEqual(real);
+}
 expect(new URLSearchParams("a=1&b=2")).toEqual(new URLSearchParams("b=2&a=1"));
 expect(new Headers({ a: "1", b: "2" })).toEqual(new Headers({ b: "2", a: "1" }));
 expect(new URL("https://example.com")).toEqual(new URL("https://example.com/"));
@@ -76,8 +81,16 @@ let calls = 0;
 await expect(Promise.resolve(() => { calls++; throw new Error("resolved callback"); })).resolves.toThrow("resolved callback");
 await expect(Promise.resolve(new Error("resolved error"))).resolves.toThrow("resolved error");
 await expect(Promise.resolve(() => { calls++; })).resolves.not.toThrow();
-await expect(Promise.reject(() => { throw new Error("must not invoke rejection"); })).rejects.toThrow();
-expect(calls).toBe(2);
+await expect(Promise.resolve(42)).resolves.toThrow();
+await expect(Promise.resolve("boom")).resolves.toThrow("boom");
+let resolvedValue = "";
+try { await expect(Promise.resolve(42)).resolves.not.toThrow(); } catch (error) {
+  if (error instanceof Error) resolvedValue = error.message;
+}
+expect(resolvedValue).toContain("Thrown value: 42");
+await expect(Promise.reject(() => { calls++; throw new Error("rejected callback"); })).rejects.toThrow("rejected callback");
+await expect(Promise.reject(() => 1)).rejects.not.toThrow();
+expect(calls).toBe(3);
 console.log("promise throw invocation");
 
 expect(failure(() => expect("a", "label").toBe("b")).message).toContain("label\n\nExpected");
@@ -95,4 +108,11 @@ const data = Object.defineProperty(new FormData(), "toJSON", { value: 42 });
 const message = failure(() => expect(data).toEqual(1)).message;
 expect(message).toContain('"toJSON": 42');
 expect(message).not.toContain("is not a function");
+let getterReads = 0;
+const accessors = Object.defineProperty({ a: 1 }, "hidden", { get() { getterReads++; throw new Error("getter ran"); } });
+Object.defineProperty(accessors, "shown", { enumerable: true, get() { getterReads++; return 5; } });
+const accessorMessage = failure(() => expect(accessors).toEqual(1)).message;
+expect(accessorMessage).toContain('"hidden": [native code]');
+expect(accessorMessage).toContain('"shown": [native code]');
+expect(getterReads).toBe(0);
 console.log("non-callable toJSON diagnostics");

@@ -58,12 +58,8 @@
   let currentTest = null;
   // The pending invocation, so uncaught errors can fail it.
   let activeInvocation = null;
+  // Opaque token for the file being loaded or run; expectations keep it for snapshot guards.
   let activeFile = null;
-
-  /** @returns {Readonly<{ test: object | null, invocation: object | null, file: object | null }>} */
-  function getExpectationOrigin() {
-    return { test: currentTest, invocation: activeInvocation, file: activeFile };
-  }
 
   // ───────────────────────────── asymmetric matchers ─────────────────────────────
 
@@ -319,9 +315,16 @@
     keys.sort((a, b) => compareStrings(typeof a === "symbol" ? a.description || "" : a, typeof b === "symbol" ? b.description || "" : b));
     const items = keys.map((key) => {
       const label = typeof key === "symbol" ? `[${String(key)}]` : snapshot ? JSON.stringify(key) : `"${key}"`;
-      return `${label}: ${prettyValue(value[key], inner, seen, snapshot)}`;
+      return `${label}: ${snapshot ? prettyValue(value[key], inner, seen, snapshot) : prettyProperty(value, key, inner, seen)}`;
     });
     return block(prefix, "}", items);
+  }
+
+  // Assertion diagnostics never run accessors; native Bun prints them as [native code].
+  function prettyProperty(value, key, indent, seen) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor && !("value" in descriptor)) return "[native code]";
+    return prettyValue(value[key], indent, seen, false);
   }
 
   function constructorName(value) {
@@ -759,6 +762,7 @@
   function defineMatcher(name, params, impl) {
     matcherParams[name] = params;
     const snapshot = name === "toMatchSnapshot" || name === "toMatchInlineSnapshot" || name === "toThrowErrorMatchingSnapshot" || name === "toThrowErrorMatchingInlineSnapshot";
+    const fileSnapshot = name === "toMatchSnapshot" || name === "toThrowErrorMatchingSnapshot";
     expectProto[name] = function (...args) {
       const error = new Error();
       const origin = { invocation: activeInvocation, test: currentTest };
@@ -768,7 +772,7 @@
         error.message = (this.label || signature(name, "", true)) + "\n\nMatcher error: Snapshot matchers cannot be used with not\n";
         throw error;
       }
-      if (name === "toMatchSnapshot" && this.file !== getExpectationOrigin().file) {
+      if (fileSnapshot && this.file !== activeFile) {
         error.message = (this.label || signature(name, "", false)) + "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n";
         throw error;
       }
@@ -821,7 +825,7 @@
   }
 
   function expect(value, label) {
-    return makeExpectation(value, { not: false, promise: undefined }, typeof label === "string" ? label : undefined, getExpectationOrigin().file);
+    return makeExpectation(value, { not: false, promise: undefined }, typeof label === "string" ? label : undefined, activeFile);
   }
 
   expect.any = (ctor) => {

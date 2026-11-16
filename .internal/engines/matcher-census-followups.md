@@ -31,6 +31,17 @@ cases. Inspect the actual errors before deciding whether names share a root.
 Missing asymmetric factories and numeric validation need their native behavior
 qualified before implementation. No new public matching API is designed here.
 
+Array comparison cost (PR 890 review): `arrayIndex` in
+`crates/bunwasm-runtime/src/js/util.ts` reads one property descriptor per element
+so indexed accessors stay unread. A million-element `Bun.deepEquals` of two equal
+integer arrays takes about 1.16 s on the QuickJS guest versus 0.13 s with main's
+plain index reads, and 150 ms versus 1 ms on host JSC. Reusing `descriptor.value`
+does not help; the allocation dominates. The likely fix is an engine native that
+returns an index's data value, or a hole or accessor marker, without allocating
+or running accessors, called from `arrayIndex`. Measure with a script that loads
+both `util.ts` versions through the factory and calls `bunDeepEquals` five times
+on `Array.from({ length: 1e6 }, (_, i) => i)` and a copy, run under the launcher.
+
 First observed QuickJS failure keys follow. The final report records all engines
 and distinguishes retained failures from newly completed coverage.
 
