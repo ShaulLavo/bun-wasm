@@ -1555,10 +1555,14 @@ jobs:
           echo "BUN_WASM_PROFILE_PROGRAM=$RUNNER_TEMP/shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm" >> "$GITHUB_ENV"
           echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/shared-proof-inputs/browser" >> "$GITHUB_ENV"
           echo "BUN_WASM_PREPARED_SHARED_SITE=1" >> "$GITHUB_ENV"
-      - name: Prepare Chromium dependencies
-        run: |
-          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
-          (cd web && bun scripts/ci-browser-deps.ts chromium && bunx playwright install chromium)
+      - name: Install Web browser test dependencies
+        run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
+      - uses: ./.github/actions/browser-deps
+        with:
+          browsers: chromium
+      - name: Install Chromium
+        working-directory: web
+        run: bunx playwright install chromium
       - name: Consume the discovered shared Browser checks sequentially
         env:
           TMPDIR: ${{ runner.temp }}
