@@ -1,7 +1,9 @@
 (function (internal: {
+  isPromise(value: unknown): value is Promise<unknown>;
+  promiseThen<T, U>(value: Promise<T>, fulfilled: (value: T) => U, rejected?: (error: unknown) => U): Promise<U>;
   require(name: "inspect"): { bunInspect(value: unknown): string };
   require(name: "test_matchers"): {
-    settle<T, U>(value: T | Promise<T>, consume: (value: T) => U): U | Promise<U>;
+    settle<T, U>(value: T | Promise<T>, consume: (value: T) => U | Promise<U>): U | Promise<U>;
   };
 }) {
   type Matcher = (...args: unknown[]) => unknown;
@@ -43,10 +45,8 @@
   }
 
   function failure(name: string, result: unknown, not: boolean) {
+    if (asymmetricPass(name, result) !== not) return null;
     if (result === null || typeof result !== "object") invalidResult(name, result);
-    const pass: unknown = Reflect.get(result, "pass");
-    if (pass === undefined) invalidResult(name, result);
-    if (!!pass !== not) return null;
     const message: unknown = Reflect.get(result, "message");
     const value: unknown = typeof message === "function" ? message.call(result) : message;
     return { raw: true, body: value === undefined ? "No message was specified for this matcher." : String(value) };
@@ -56,7 +56,23 @@
     return settle(value, settled => failure(name, settled, not));
   }
 
-  function context(not: boolean, promise: string | undefined, equals: (a: unknown, b: unknown) => boolean) {
+  function asymmetricPass(name: string, value: unknown): boolean {
+    if (value === null || typeof value !== "object") invalidResult(name, value);
+    const pass: unknown = Reflect.get(value, "pass");
+    if (pass === undefined || internal.isPromise(pass)) invalidResult(name, value);
+    return !!pass;
+  }
+
+  function asymmetric(name: string, value: unknown, diagnostic: (error: unknown) => void): boolean | Promise<boolean> {
+    if (!internal.isPromise(value)) return asymmetricPass(name, value);
+    // Attach both intrinsic reactions before validation or any user continuation.
+    return internal.promiseThen(value, settled => asymmetricPass(name, settled), error => {
+      diagnostic(error);
+      throw new Error(`Matcher \`${name}\` returned a promise that rejected`);
+    });
+  }
+
+  function context(not: boolean, promise: string | undefined, equals: (a: unknown, b: unknown) => boolean | Promise<boolean>) {
     return {
       isNot: not,
       promise: promise || "",
@@ -72,5 +88,5 @@
     };
   }
 
-  return { register, result, context };
+  return { register, result, asymmetric, context };
 })
