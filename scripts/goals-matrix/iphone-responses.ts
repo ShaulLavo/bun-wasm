@@ -1,4 +1,4 @@
-type Page = { readonly url: string; readonly nonce: string };
+type Page = { readonly url: string; readonly nonce: string; readonly issued: boolean };
 type Scalar = string | number | boolean | null;
 type Grant = { readonly id: string; readonly nonce: string; readonly url: string; readonly method: string };
 export type IphoneResponseObservation = Readonly<Record<string, Scalar>>;
@@ -13,7 +13,11 @@ export class IphoneResponses {
   private readonly grants = new Map<string, Grant>();
   private readonly rows: IphoneResponseObservation[] = [];
   constructor(private readonly page: () => Page | null, private readonly emit?: (row: IphoneResponseObservation) => void) {}
+  configure(): void { this.grants.clear(); }
   close(): void { this.grants.clear(); this.rows.length = 0; }
+  scriptNonce(id: string, url: string): string | undefined {
+    return this.reserve({ id, url, method: "GET" }, this.page())?.nonce;
+  }
   async handle(request: Request, origin: string): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path.endsWith("/state")) {
@@ -31,16 +35,24 @@ export class IphoneResponses {
     const grant = typeof value.id === "string" ? this.grants.get(value.id) : undefined;
     if (!grant || value.nonce !== grant.nonce || value.url !== grant.url) return new Response(null, { status: 403, headers });
     const row = this.event(value);
-    Object.assign(row, grant, { serverAt: Date.now(), currentNonce: page?.nonce ?? null, sameConfiguration: page?.url === grant.url && page.nonce === grant.nonce });
+    Object.assign(row, grant, { serverAt: Date.now(), currentNonce: page?.nonce ?? null, sameConfiguration: page?.url === grant.url });
     this.rows.push(row);
     this.emit?.(row);
     return new Response(null, { status: 204, headers });
   }
   private start(value: Record<string, unknown>, page: Page | null, headers: Record<string, string>): Response {
-    if (!page || value.url !== page.url || (value.method !== "GET" && value.method !== "HEAD") || this.grants.size >= 32) return new Response(null, { status: 204, headers });
-    const grant = { id: crypto.randomUUID(), url: page.url, nonce: page.nonce, method: value.method };
+    const grant = this.reserve(value, page);
+    return grant ? Response.json(grant, { headers }) : new Response(null, { status: 204, headers });
+  }
+  private reserve(value: Record<string, unknown>, page: Page | null): Grant | undefined {
+    if (!page || value.url !== page.url || (value.method !== "GET" && value.method !== "HEAD") || typeof value.id !== "string" || !/^[0-9a-f-]{36}$/.test(value.id)) return;
+    const previous = this.grants.get(value.id);
+    if (previous) return previous.method === value.method ? previous : undefined;
+    if (this.grants.size >= 32) return;
+    const nonce = page.issued || this.grants.size > 0 ? crypto.randomUUID() : page.nonce;
+    const grant = { id: value.id, url: page.url, nonce, method: value.method };
     this.grants.set(grant.id, grant);
-    return Response.json(grant, { headers });
+    return grant;
   }
   private event(value: Record<string, unknown>): Record<string, Scalar> {
     if (typeof value.event !== "string" || !events.has(value.event) || !Number.isSafeInteger(value.sequence) || Number(value.sequence) < 1 || Number(value.sequence) > 16 || this.rows.length >= 256) throw new Error("Invalid or excessive response event");

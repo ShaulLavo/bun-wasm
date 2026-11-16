@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
+import { runInNewContext } from "node:vm";
 import { IphoneBus } from "./iphone-bus";
 import type { IphoneResponseObservation } from "./iphone-responses";
+import { observeIphoneServiceWorker } from "./iphone-service-worker";
 
 const origin = "http://127.0.0.1:41001";
 const preview = origin + "/__preview/5173/";
@@ -8,8 +10,8 @@ const endpoint = "http://127.0.0.1:41002/test/preview/response/";
 function post(bus: IphoneBus, action: string, body: unknown, from = origin): Promise<Response> {
   return bus.handle(new Request(endpoint + action, { method: "POST", headers: { origin: from, "content-type": "application/json" }, body: JSON.stringify(body) }), origin);
 }
-async function grant(bus: IphoneBus): Promise<{ id: string; nonce: string; url: string }> {
-  const response = await post(bus, "start", { url: preview, method: "GET" });
+async function grant(bus: IphoneBus, id = crypto.randomUUID()): Promise<{ id: string; nonce: string; url: string }> {
+  const response = await post(bus, "start", { id, url: preview, method: "GET" });
   expect(response.status).toBe(200);
   const row: unknown = await response.json();
   if (!row || typeof row !== "object" || !("id" in row) || typeof row.id !== "string" || !("nonce" in row) || typeof row.nonce !== "string" || !("url" in row) || typeof row.url !== "string") throw new Error("Invalid granted response identity");
@@ -53,20 +55,46 @@ test("response capture rejects non-scalar fields and bounded text overflow", () 
   expect(rows).toEqual([]);
 }));
 
-test("a late response remains bound to its old document and cannot weaken replacement guards", () => fixture(async (bus, rows) => {
+test("reconfiguration rejects an obsolete response grant and preserves replacement guards", () => fixture(async (bus, rows) => {
   const old = await grant(bus);
   bus.configure("preview", preview);
   const current = bus.state("preview")!;
   expect(current.nonce).not.toBe(old.nonce);
-  expect((await post(bus, "event", { ...old, event: "body-end", sequence: 1, characters: 123 })).status).toBe(204);
-  expect(rows[0]).toMatchObject({ nonce: old.nonce, currentNonce: current.nonce, sameConfiguration: false });
+  expect((await post(bus, "event", { ...old, event: "body-end", sequence: 1, characters: 123 })).status).toBe(403);
+  expect(rows).toEqual([]);
   expect(() => bus.poll("preview", { nonce: old.nonce, url: preview, timeOrigin: 1, visible: true }, origin)).toThrow("Wrong iPhone observer document");
 }));
 
 test("request grants are bounded and closing releases scalar response records", () => fixture(async (bus, rows) => {
   for (let index = 0; index < 32; index++) await grant(bus);
-  expect((await post(bus, "start", { url: preview, method: "GET" })).status).toBe(204);
+  expect((await post(bus, "start", { id: crypto.randomUUID(), url: preview, method: "GET" })).status).toBe(204);
   bus.close();
   expect(rows).toEqual([]);
   expect(await (await bus.handle(new Request(endpoint + "state"), origin)).json()).toEqual([]);
 }));
+
+test("script delivery and diagnostic grant can arrive in either order", () => fixture(async (bus, rows) => {
+  for (const scriptFirst of [false, true]) {
+    const id = crypto.randomUUID();
+    const script = () => bus.handle(new Request("http://127.0.0.1:41002/test/preview/script?url=" + encodeURIComponent(preview) + "&response=" + id, { headers: { origin } }), origin);
+    if (scriptFirst) expect((await script()).status).toBe(200);
+    const key = await grant(bus, id);
+    if (!scriptFirst) expect((await script()).status).toBe(200);
+    expect(key.nonce).toBe(bus.state("preview")!.nonce);
+    expect((await post(bus, "event", { ...key, event: "head", sequence: 1, status: 200 })).status).toBe(204);
+    expect(rows.at(-1)).toMatchObject({ id, nonce: bus.state("preview")!.nonce });
+  }
+}));
+
+test("response diagnostics preserve a rejection whose formatting throws", async () => {
+  const failure = { toString() { throw new Error("diagnostic conversion failed"); } };
+  class FixtureEvent {
+    readonly request = { url: origin + "/asset", method: "GET", mode: "cors" };
+    response: Promise<Response> | undefined;
+    respondWith(value: Promise<Response>) { this.response = value; }
+  }
+  runInNewContext(`(${observeIphoneServiceWorker.toString()})("http://127.0.0.1/control")`, { FetchEvent: FixtureEvent, Response });
+  const event = new FixtureEvent();
+  event.respondWith(Promise.reject(failure));
+  await expect(event.response).rejects.toBe(failure);
+});

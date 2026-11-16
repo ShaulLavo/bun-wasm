@@ -10,6 +10,11 @@ port, byte buffer, page content or owner-tab data. Response and observer bytes k
 their existing transformation path. Existing document replacement, nonce,
 time-origin and trusted-input checks remain the authority for phase results.
 
+Each response reserves a host-generated document nonce, shared with its injected
+observer through the response ID even when those requests arrive out of order.
+Reconfiguration invalidates outstanding grants. Diagnostic failures preserve the
+original response rejection, including values that cannot be formatted.
+
 The collector owns `scripts/goals-matrix/iphone-responses.ts`; its caller is the
 visible iPhone controller in `iphone-bus.ts` and `iphone-server.ts`. The serialized
 service-worker adapter is `scripts/goals-matrix/iphone-service-worker.ts`.

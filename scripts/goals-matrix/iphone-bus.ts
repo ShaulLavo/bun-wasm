@@ -22,19 +22,24 @@ export class IphoneBus {
   private readonly responses: IphoneResponses;
   private sequence = 0;
   constructor(readonly path: string, observeResponse?: (row: IphoneResponseObservation) => void) {
-    this.responses = new IphoneResponses(() => this.state("preview"), observeResponse);
+    this.responses = new IphoneResponses(() => {
+      const page = this.state("preview");
+      return page && { ...page, issued: this.issued.has("preview") || page.timeOrigin !== undefined };
+    }, observeResponse);
   }
   configure(role: Role, url: string): void {
     this.cancel(role);
+    if (role === "preview") this.responses.configure();
     this.issued.delete(role);
     this.pages.set(role, { url, nonce: crypto.randomUUID(), visible: false });
   }
   state(role: Role): Page | null { return this.pages.get(role) ?? null; }
-  script(url: string, endpoint: string): string | undefined {
+  script(url: string, endpoint: string, responseNonce?: string): string | undefined {
     const entry = Array.from(this.pages).find(([, page]) => page.url === url);
     if (!entry) return;
     const [role, previous] = entry;
-    const page = (this.issued.has(role) || previous.timeOrigin !== undefined) ? this.reload(role, previous) : previous;
+    const replacing = this.issued.has(role) || previous.timeOrigin !== undefined || responseNonce !== undefined && responseNonce !== previous.nonce;
+    const page = replacing ? this.reload(role, previous, responseNonce) : previous;
     this.issued.add(role);
     const title = role === "host" ? `document.title = ${JSON.stringify("Goals " + page.nonce)};` : "";
     return title + `(${installIphoneObserver.toString()})(${JSON.stringify(endpoint + this.path + "/" + role + "/")},${JSON.stringify(page.nonce)},${iphonePreviewFocus.toString()});`;
@@ -46,12 +51,12 @@ export class IphoneBus {
     if (closing === undefined) throw new Error("iPhone observer needs closing body HTML");
     return html.slice(0, closing) + `<script>${source.replace(/<\/script/gi, "<\\/script")}</script>` + html.slice(closing);
   }
-  private reload(role: Role, previous: Page): Page {
+  private reload(role: Role, previous: Page, nonce: string = crypto.randomUUID()): Page {
     if (role !== "preview") throw new Error("Unexpected iPhone document replacement");
     const pending = this.pending.get(role);
     if (pending?.observation) { pending.delivered = false; this.expireDelivery(role, pending); }
     else this.cancel(role, new Error("iPhone preview document replaced"));
-    const page = { url: previous.url, nonce: crypto.randomUUID(), visible: false };
+    const page = { url: previous.url, nonce, visible: false };
     this.pages.set(role, page);
     return page;
   }
@@ -119,9 +124,12 @@ export class IphoneBus {
     if (route.startsWith("preview/response/")) return this.responses.handle(request, productOrigin).catch(error => Response.json({ error: String(error) }, { status: 400, headers }));
     if (request.method === "OPTIONS") return new Response(null, { headers });
     if (route === "preview/script" && request.method === "GET") {
-      const url = new URL(request.url).searchParams.get("url");
+      const params = new URL(request.url).searchParams;
+      const url = params.get("url");
       if (!url || url !== this.state("preview")?.url || request.headers.get("origin") !== productOrigin) return new Response(null, { status: 204, headers });
-      const source = this.script(url, new URL(request.url).origin);
+      const id = params.get("response");
+      const nonce = id ? this.responses.scriptNonce(id, url) : undefined;
+      const source = this.script(url, new URL(request.url).origin, nonce);
       return new Response(source, { headers: { ...headers, "content-type": "text/javascript" } });
     }
     try { return Response.json(await this.route(route, request, productOrigin), { headers }); }

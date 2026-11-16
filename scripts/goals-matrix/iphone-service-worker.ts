@@ -2,6 +2,7 @@
 export function observeIphoneServiceWorker(endpoint: string): void {
   type Fields = Record<string, string | number | null>;
   type Binding = { id: string; nonce: string; url: string };
+  type Trace = ((event: string, fields?: Fields) => void) & { id: string };
   const original = FetchEvent.prototype.respondWith;
   Object.defineProperty(FetchEvent.prototype, "respondWith", { value(this: FetchEvent, response: Response | PromiseLike<Response>) {
     const request = this.request;
@@ -19,15 +20,16 @@ export function observeIphoneServiceWorker(endpoint: string): void {
     const body = JSON.stringify({ ...grant, ...row });
     void fetch(endpoint + "/preview/response/event", { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(3000) }).catch(() => {});
   }
-  function start(url: string, method: string, mode: string): (event: string, fields?: Fields) => void {
+  function start(url: string, method: string, mode: string): Trace {
     let sequence = 0;
+    const id = mode === "navigate" ? crypto.randomUUID() : "";
     const grant = mode === "navigate" ? fetch(endpoint + "/preview/response/start", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url, method }), signal: AbortSignal.timeout(3000),
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, url, method }), signal: AbortSignal.timeout(3000),
     }).then(binding).catch(() => null) : Promise.resolve(null);
-    return (event, fields = {}) => {
+    return Object.assign((event: string, fields: Fields = {}) => {
       const row = { event, sequence: ++sequence, clientAt: Date.now(), ...fields };
-      void grant.then(value => send(value, row));
-    };
+      void grant.then(value => send(value, row)).catch(() => {});
+    }, { id });
   }
   async function transform(pending: Promise<Response>, request: Request, trace: ReturnType<typeof start>): Promise<Response> {
     const progress = { stage: "response" };
@@ -35,7 +37,7 @@ export function observeIphoneServiceWorker(endpoint: string): void {
     try {
       return await respond(pending, request, trace, progress);
     } catch (error) {
-      trace("failure", { stage: progress.stage, error: String(error).slice(0, 2048) });
+      try { trace("failure", { stage: progress.stage, error: String(error).slice(0, 2048) }); } catch {}
       throw error;
     }
   }
@@ -45,7 +47,7 @@ export function observeIphoneServiceWorker(endpoint: string): void {
     if (request.mode !== "navigate" || response.status !== 200 || !response.headers.get("content-type")?.startsWith("text/html")) return response;
     progress.stage = "observer-fetch";
     trace("observer-fetch-start");
-    const observer = await fetch(endpoint + "/preview/script?url=" + encodeURIComponent(request.url), { cache: "no-store" });
+    const observer = await fetch(endpoint + "/preview/script?url=" + encodeURIComponent(request.url) + "&response=" + encodeURIComponent(trace.id), { cache: "no-store" });
     trace("observer-fetch-end", { status: observer.status });
     if (observer.status === 204) return response;
     if (!observer.ok || response.headers.has("content-encoding")) throw new Error("Cannot instrument iPhone service-worker preview");

@@ -95,7 +95,12 @@ test("real product service worker injects the configured preview even when HTTP 
   if (!built.success || !built.outputs[0]) throw new AggregateError(built.logs, "Product service worker did not build");
   const source = await built.outputs[0].text();
   const responseEvents: IphoneResponseObservation[] = [];
-  const bus = new IphoneBus("/__goals_iphone/" + "b".repeat(64), row => responseEvents.push(row));
+  let changed = Promise.withResolvers<void>();
+  const bus = new IphoneBus("/__goals_iphone/" + "b".repeat(64), row => {
+    responseEvents.push(row);
+    changed.resolve();
+    changed = Promise.withResolvers<void>();
+  });
   let ownerOrigin = "";
   const control = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: request => bus.handle(request, ownerOrigin) });
   let networkPreviewRequests = 0;
@@ -142,6 +147,11 @@ test("real product service worker injects the configured preview even when HTTP 
       const pending = bus.execute("preview", read, 3000, true, Date.now() + 3000).catch((error: unknown) => error);
       await page.evaluate(() => document.querySelector<HTMLIFrameElement>("iframe")!.contentWindow!.location.reload());
       expect(await pending).toBe(`real worker preview ${revision}`);
+      const nonce = bus.state("preview")!.nonce;
+      while (!responseEvents.some(row => row.event === "transform-end" && row.nonce === nonce)) await changed.promise;
+      const replacementHead = responseEvents.find(row => row.event === "head" && row.nonce === nonce);
+      expect(replacementHead).toMatchObject({ status: 200, url: preview });
+      expect(nonce).not.toBe(initialNonce);
     }
     expect(bus.state("preview")?.url).toBe(preview);
     expect(networkPreviewRequests).toBe(0);
