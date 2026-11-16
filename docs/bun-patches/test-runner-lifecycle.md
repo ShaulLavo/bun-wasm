@@ -39,3 +39,9 @@ claim async describe completion or recover the two upstream callable cases.
 Concurrency remains serial. Concurrent scheduling needs separate asynchronous
 test and invocation ownership before overlapping tests can safely share this
 runner. This adapter does not change assertion settlement or snapshot values.
+
+A private, opaque file token now spans serial file collection, execution and
+snapshot flushing, and is restored in `finally`. The closure-local
+`getExpectationOrigin()` exposes only readonly opaque identities for the active
+file, test and invocation. It does not change their records, carry asynchronous
+context, or define matcher validity across hooks or tests.
