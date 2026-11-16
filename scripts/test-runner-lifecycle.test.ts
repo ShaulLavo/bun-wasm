@@ -28,6 +28,15 @@ interface API {
   jest: { setTimeout(ms: number): void };
 }
 
+// The runner keeps its current test, invocation and file token in closure slots. Tests read
+// them through an accessor added only here; a renamed anchor fails loudly instead of silently.
+const runnerReturn = "return { exports, run };";
+function exposeOrigin(source: string): string {
+  if (source.split(runnerReturn).length !== 2) throw new Error(`bun_test.js must contain exactly one \`${runnerReturn}\``);
+  return source.replace(runnerReturn,
+    "return { exports, run, getExpectationOrigin: () => Object.freeze({ test: currentTest, invocation: activeInvocation, file: activeFile }) };");
+}
+
 async function runner(load: (api: API, file: string, uncaught: (error: unknown) => void, origin: () => Origin) => unknown, files = ["/control.test.ts"], preloads: string[] = [], args: readonly string[] = [], onWrite?: (name: string, origin: Origin) => void) {
   const imported = new Set<string>();
   const written = new Map<string, string>();
@@ -36,7 +45,7 @@ async function runner(load: (api: API, file: string, uncaught: (error: unknown) 
     Bun: { version: "test", revision: "test" } });
   const factory = (name: string) => {
     let source = readFileSync(new URL(name, root), "utf8");
-    if (name === "bun_test.js") source = source.replace("return { exports, run };", "return { exports, run, getExpectationOrigin };");
+    if (name === "bun_test.js") source = exposeOrigin(source);
     return runInContext(`(function () {${transpiler.transformSync(`return (${source})`)}\n})()`, context);
   };
   let stderr = "";

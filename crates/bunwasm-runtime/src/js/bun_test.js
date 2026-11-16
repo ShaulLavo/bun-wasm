@@ -58,6 +58,7 @@
   let currentTest = null;
   // The pending invocation, so uncaught errors can fail it.
   let activeInvocation = null;
+  // Opaque token for the file being loaded or run; expectations keep it for snapshot guards.
   let activeFile = null;
   let preloadScope = null;
   let preloading = false;
@@ -66,11 +67,6 @@
   /** @type {"pending" | "running" | "ready" | "stopped"} */
   let preloadSetup = "pending";
   let preloadTeardown = false;
-
-  /** @returns {Readonly<{ test: object | null, invocation: object | null, file: object | null }>} */
-  function getExpectationOrigin() {
-    return { test: currentTest, invocation: activeInvocation, file: activeFile };
-  }
 
   // ───────────────────────────── asymmetric matchers ─────────────────────────────
 
@@ -208,7 +204,7 @@
 
   /** toEqual / toStrictEqual semantics, with asymmetric matchers on either side. */
   function equals(received, expected, strict) {
-    return internal.require("util").expectEquals(received, expected, strict, compareAsymmetric);
+    return internal.require("util").expectEquals(received, expected, strict, compareAsymmetric, isAsymmetric);
   }
 
   function compareAsymmetric(received, expected) {
@@ -322,13 +318,20 @@
     }
     const name = constructorName(value);
     const prefix = name === "Object" || name === "" ? "{" : `${name} {`;
-    const keys = snapshot ? Object.keys(value).concat(Object.getOwnPropertySymbols(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key))) : Object.keys(value);
+    const keys = snapshot ? Object.keys(value).concat(Object.getOwnPropertySymbols(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key))) : Object.getOwnPropertyNames(value);
     keys.sort((a, b) => compareStrings(typeof a === "symbol" ? a.description || "" : a, typeof b === "symbol" ? b.description || "" : b));
     const items = keys.map((key) => {
       const label = typeof key === "symbol" ? `[${String(key)}]` : snapshot ? JSON.stringify(key) : `"${key}"`;
-      return `${label}: ${prettyValue(value[key], inner, seen, snapshot)}`;
+      return `${label}: ${snapshot ? prettyValue(value[key], inner, seen, snapshot) : prettyProperty(value, key, inner, seen)}`;
     });
     return block(prefix, "}", items);
+  }
+
+  // Assertion diagnostics never run accessors; native Bun prints them as [native code].
+  function prettyProperty(value, key, indent, seen) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor && !("value" in descriptor)) return "[native code]";
+    return prettyValue(value[key], indent, seen, false);
   }
 
   function constructorName(value) {
@@ -353,7 +356,11 @@
   function formatDiff(received, expected, not) {
     const expectedText = prettyFormat(expected);
     if (not) return `Expected: not ${expectedText}`;
-    return diffStrings(prettyFormat(received), expectedText);
+    const receivedText = prettyFormat(received);
+    if (typeof received !== typeof expected && (isObjectLike(received) || isObjectLike(expected))) {
+      return `Expected: ${expectedText}\nReceived: ${receivedText}`;
+    }
+    return diffStrings(receivedText, expectedText);
   }
 
   function diffStrings(receivedText, expectedText) {
@@ -720,20 +727,22 @@
 
   const expectProto = {
     get not() {
-      return makeExpectation(this.received, { not: !this.flags.not, promise: this.flags.promise });
+      return makeExpectation(this.received, { not: !this.flags.not, promise: this.flags.promise }, this.label, this.file);
     },
     get resolves() {
-      return makeExpectation(this.received, { not: this.flags.not, promise: "resolves" });
+      return makeExpectation(this.received, { not: this.flags.not, promise: "resolves" }, this.label, this.file);
     },
     get rejects() {
-      return makeExpectation(this.received, { not: this.flags.not, promise: "rejects" });
+      return makeExpectation(this.received, { not: this.flags.not, promise: "rejects" }, this.label, this.file);
     },
   };
 
-  function makeExpectation(received, flags) {
+  function makeExpectation(received, flags, label, file) {
     const expectation = Object.create(expectProto);
     expectation.received = received;
     expectation.flags = flags;
+    expectation.label = label;
+    expectation.file = file;
     return expectation;
   }
 
@@ -759,10 +768,21 @@
 
   function defineMatcher(name, params, impl) {
     matcherParams[name] = params;
+    const snapshot = name === "toMatchSnapshot" || name === "toMatchInlineSnapshot" || name === "toThrowErrorMatchingSnapshot" || name === "toThrowErrorMatchingInlineSnapshot";
+    const fileSnapshot = name === "toMatchSnapshot" || name === "toThrowErrorMatchingSnapshot";
     expectProto[name] = function (...args) {
       const error = new Error();
       const origin = { invocation: activeInvocation, test: currentTest };
-      const context = { not: this.flags.not, promise: this.flags.promise, error, origin };
+      const context = { not: this.flags.not, promise: this.flags.promise, error, origin, label: this.label };
+      if (snapshot && this.flags.not) {
+        countExpectation(origin.test);
+        error.message = (this.label || signature(name, "", true)) + "\n\nMatcher error: Snapshot matchers cannot be used with not\n";
+        throw error;
+      }
+      if (fileSnapshot && this.file !== activeFile) {
+        error.message = (this.label || signature(name, "", false)) + "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n";
+        throw error;
+      }
       if (name.endsWith("Snapshot")) context.snapshot = reserveSnapshot(origin, name, args);
       const result = this.flags.promise
         ? matcherSupport.settle(matchPromise(this, name, impl, args, context), () => undefined)
@@ -780,7 +800,7 @@
     return matcherSupport.settle(impl(context, received, ...args), (failure) => {
       if (!failure) return;
       const params = failure.params === undefined ? matcherParams[name] : failure.params;
-      context.error.message = failure.raw ? failure.body : signature(name, params, context.not) + failure.body;
+      context.error.message = failure.raw ? failure.body : (context.label || signature(name, params, context.not)) + failure.body;
       throw context.error;
     });
   }
@@ -789,7 +809,7 @@
     const { flags, received } = expectation;
     const { error } = context;
     const fail = (body) => {
-      error.message = signature(name, matcherParams[name], flags.not, flags.promise) + body;
+      error.message = (context.label || signature(name, matcherParams[name], flags.not, flags.promise)) + body;
       throw error;
     };
     if (!isThenable(received)) return fail(`\n\nExpected promise\nReceived: ${inspect(received)}\n`);
@@ -811,8 +831,8 @@
     return undefined;
   }
 
-  function expect(value) {
-    return makeExpectation(value, { not: false, promise: undefined });
+  function expect(value, label) {
+    return makeExpectation(value, { not: false, promise: undefined }, typeof label === "string" ? label : undefined, activeFile);
   }
 
   expect.any = (ctor) => {
@@ -1456,7 +1476,6 @@
   }
 
   function prepareSnapshot(ctx, received, args, inline) {
-    if (ctx.not) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used with not\n" } };
     if (!ctx.origin.test) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n" } };
     const parsed = snapshotArguments(args, inline);
     if (parsed.properties !== undefined && !isObjectLike(received)) {
@@ -1588,7 +1607,6 @@
 
   function defineErrorSnapshotMatcher(name, inline) {
     defineMatcher(name, "expected", (ctx, received, ...args) => {
-      if (ctx.not) return { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used with not\n" };
       if (args.length > 1) throw new Error("\n\nMatcher error: Expected zero or one arguments\n");
       if (args.length === 1 && typeof args[0] !== "string") throw new Error("\n\nMatcher error: Expected first argument to be a string\n");
       return matcherSupport.settle(typeof received === "function" ? throwOutcome({}, received) : throwOutcome(ctx, received), (outcome) => {
@@ -2487,7 +2505,7 @@
   }
 
   async function runFile(abs, cwd, last) {
-    const previousFile = getExpectationOrigin().file;
+    const previousFile = activeFile;
     activeFile = {};
     try {
       await runActiveFile(abs, cwd, last);

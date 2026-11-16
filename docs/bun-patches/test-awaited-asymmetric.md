@@ -29,6 +29,13 @@ settlement; completed siblings, failed candidates and independent assertions do
 not share memo entries. Maps choose the first matching key and compare that
 entry's value once. Sets retain insertion-order search and candidate reuse.
 
+The private util entry also receives the expectation factory's matcher predicate.
+Array data descriptors distinguish holes and indexed accessors without invoking
+getters. A loose comparison reads an indexed accessor when the other side is a
+matcher, then settles that comparison before visiting the next index. Strict
+presence checks still precede matcher calls. Ordinary proxy-array reads retain
+their order. Public Bun.deepEquals never receives the predicate.
+
 Direct throws preserve their identity. Actual matcher Promises get intrinsic
 fulfillment and rejection reactions immediately, without reading public `then`,
 constructor or species. Rejection prints the original reason once through the

@@ -40,11 +40,12 @@ Concurrency remains serial. Concurrent scheduling needs separate asynchronous
 test and invocation ownership before overlapping tests can safely share this
 runner. This adapter does not change matcher values or ordinary assertion settlement.
 
-A private, opaque file token now spans serial file collection, execution and
-snapshot flushing, and is restored in `finally`. The closure-local
-`getExpectationOrigin()` exposes only readonly opaque identities for the active
-file, test and invocation. It does not change their records, carry asynchronous
-context, or define matcher validity across hooks or tests.
+The private, opaque `activeFile` token (see `test-platform-equality.md`, which
+owns its snapshot guard) spans serial file collection, preload hooks, execution
+and snapshot flushing, and is restored in `finally`. The runner exposes no
+accessor for it; `scripts/test-runner-lifecycle.test.ts` adds a frozen,
+test-only accessor over the current test, invocation and file token, and fails
+if the runner's return statement it hooks moves.
 
 
 Expected-failure bodies retain timeout failures. Done callbacks use the first

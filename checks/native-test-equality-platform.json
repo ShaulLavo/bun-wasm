@@ -1,0 +1,10 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-equality-platform",
+  "engines": [
+    "quickjs",
+    "jsc",
+    "spidermonkey",
+    "browser"
+  ]
+}
