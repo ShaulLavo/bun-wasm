@@ -3,20 +3,27 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, errors, webkit, type BrowserType, type Route } from "playwright";
+import { chromium, errors, webkit, type BrowserType, type Page, type Route } from "playwright";
 import { openQuickjsStackPage } from "../web/tests/quickjs-stack-navigation";
+import { openPlaygroundPage } from "../web/tests/playground-navigation";
 
-async function serveFixture(route: Route, held: Promise<void>): Promise<void> {
+const consumers = [
+  { name: "quickjs", prefix: "quickjs-stack-navigation", open: openQuickjsStackPage },
+  { name: "browser", prefix: "playground-navigation", open: (page: Page, url: string) => openPlaygroundPage(page, `${url}?engine=browser&prompt=off&mode=memory`) },
+];
+type Consumer = typeof consumers[number];
+
+async function serveFixture(route: Route, held: Promise<void>, published = true): Promise<void> {
   if (route.request().url().endsWith("/held.png")) {
     await held;
     await route.abort();
     return;
   }
   await route.fulfill({ contentType: "text/html", body: `<span id="status">loading</span><img src="/held.png">
-    <script>setTimeout(() => { globalThis.playground = {}; document.querySelector('#status').textContent = 'ready'; }, 50);</script>` });
+    <script>setTimeout(() => { globalThis.playground = ${published ? "{}" : "undefined"}; document.querySelector('#status').textContent = 'ready'; }, 50);</script>` });
 }
 
-async function heldResource(engine: BrowserType): Promise<void> {
+async function heldResource(engine: BrowserType, consumer: Consumer): Promise<void> {
   const browser = await engine.launch();
   let release = () => {};
   const held = new Promise<void>(resolve => { release = resolve; });
@@ -27,9 +34,9 @@ async function heldResource(engine: BrowserType): Promise<void> {
     const requested = page.waitForRequest("http://stack.test/held.png");
     // Release even with the old load wait, so the regression fails without waiting 30 seconds.
     timer = setTimeout(release, 5_000);
-    await openQuickjsStackPage(page, "http://stack.test/");
+    await consumer.open(page, "http://stack.test/");
     await requested;
-    expect(page.url()).toBe("http://stack.test/?engine=quickjs&prompt=off&mode=memory");
+    expect(page.url()).toBe(`http://stack.test/?engine=${consumer.name}&prompt=off&mode=memory`);
     expect(await page.textContent("#status")).toBe("ready");
     expect(await page.evaluate(() => document.readyState)).toBe("interactive");
     expect(await page.evaluate(() => Boolean(Reflect.get(globalThis, "playground")))).toBe(true);
@@ -40,16 +47,7 @@ async function heldResource(engine: BrowserType): Promise<void> {
   }
 }
 
-async function unpublishedRuntime(engine: BrowserType): Promise<void> {
-  const browser = await engine.launch();
-  try {
-    const page = await browser.newPage();
-    await page.route("http://stack.test/**", route => route.fulfill({ contentType: "text/html", body: '<span id="status">ready</span>' }));
-    await expect(openQuickjsStackPage(page, "http://stack.test/")).rejects.toThrow("before globalThis.playground was ready");
-  } finally { await browser.close(); }
-}
-
-async function navigationFailure(engine: BrowserType, mode: "timeout" | "connection" | "sink"): Promise<void> {
+async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: "timeout" | "connection" | "sink" | "publication"): Promise<void> {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-stack-navigation-"));
   const previous = process.env.BUN_WASM_BROWSER_REPORT_DIR;
   const occupied = join(directory, "occupied");
@@ -60,17 +58,20 @@ async function navigationFailure(engine: BrowserType, mode: "timeout" | "connect
     hostname: "127.0.0.1", port: 0,
     fetch() { documents++; return new Response("probe body"); },
   });
+  let release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
   let browser;
   try {
     browser = await engine.launch();
     const page = await browser.newPage();
-    const target = `${server.url}?engine=quickjs&prompt=off&mode=memory`;
+    const target = `${server.url}?engine=${consumer.name}&prompt=off&mode=memory`;
     const timeout = new errors.TimeoutError("fixture navigation timeout");
     if (mode === "timeout") page.goto = async () => { throw timeout; };
     if (mode === "connection") await page.route("**/*", route => route.abort());
     if (mode === "sink") await page.close();
+    if (mode === "publication") await page.route("**/*", route => serveFixture(route, held, false));
     let failure: unknown;
-    try { await openQuickjsStackPage(page, String(server.url)); }
+    try { await consumer.open(page, String(server.url)); }
     catch (error) { failure = error; }
     expect(failure).toBeInstanceOf(Error);
     expect(documents).toBe(1);
@@ -81,13 +82,24 @@ async function navigationFailure(engine: BrowserType, mode: "timeout" | "connect
     }
     const files = readdirSync(join(directory, "reports"));
     expect(files).toHaveLength(1);
+    expect(files[0]).toStartWith(`${consumer.prefix}-${engine.name()}-`);
     const report: unknown = JSON.parse(readFileSync(join(directory, "reports", files[0]!), "utf8"));
     expect(report).toMatchObject({
-      browser: engine.name(), url: target, error: String(failure),
+      browser: engine.name(), url: target, error: String(failure), stage: mode === "publication" ? "runtime-publication" : "navigation", waitUntil: "domcontentloaded",
       pageAtFailure: { closed: false, browserConnected: true },
-      requests: { requested: mode === "connection" ? 1 : 0, pending: [] },
+      requests: {
+        requested: mode === "publication" ? 2 : Number(mode === "connection"),
+        pending: mode === "publication" ? [`${server.url}held.png`] : [],
+        lifecycle: { documentCommitted: mode === "publication", domcontentloaded: mode === "publication", load: false },
+      },
       server: { outcome: "ok", value: { status: 200, bytes: Buffer.byteLength("probe body") } },
     });
+    if (consumer.name === "quickjs") expect(report).toMatchObject({ budget: process.env.QUICKJS_STACK_KIB ?? "default" });
+    else expect(report).not.toHaveProperty("budget");
+    if (mode === "publication") {
+      expect(String(failure)).toContain("before globalThis.playground was ready");
+      expect(report).toMatchObject({ pageState: { outcome: "ok", value: { readyState: "interactive", status: "ready", published: false } } });
+    }
     if (mode === "connection") expect(report).toMatchObject({ requests: { events: expect.arrayContaining([
       expect.objectContaining({ event: "requestfailed", url: target }),
     ]) } });
@@ -96,6 +108,7 @@ async function navigationFailure(engine: BrowserType, mode: "timeout" | "connect
       expect(report).toMatchObject({ pageState: { outcome: "ok", value: { readyState: "complete", status: null, published: false } } });
     }
   } finally {
+    release();
     const stopped = await Promise.allSettled([browser?.close(), server.stop(true)]);
     if (previous === undefined) delete process.env.BUN_WASM_BROWSER_REPORT_DIR;
     else process.env.BUN_WASM_BROWSER_REPORT_DIR = previous;
@@ -104,20 +117,23 @@ async function navigationFailure(engine: BrowserType, mode: "timeout" | "connect
   }
 }
 
-for (const engine of [chromium, webkit]) {
-  test(`${engine.name()}: stack readiness does not wait for an unrelated load resource`, () => heldResource(engine), 10_000);
-  test(`${engine.name()}: stack navigation still requires the published runtime`, () => unpublishedRuntime(engine), 10_000);
-  test(`${engine.name()}: a navigation timeout records page and independent server state without retrying`, () => navigationFailure(engine, "timeout"), 30_000);
-  test(`${engine.name()}: a navigation failure records browser requests`, () => navigationFailure(engine, "connection"), 30_000);
-  test(`${engine.name()}: a diagnostic write failure preserves the navigation error`, () => navigationFailure(engine, "sink"), 30_000);
+function registerControls(engine: BrowserType, consumer: Consumer) {
+  const label = `${engine.name()} ${consumer.name}`;
+  test(`${label}: readiness does not wait for an unrelated load resource`, () => heldResource(engine, consumer), 10_000);
+  test(`${label}: runtime publication failure retains document and held-resource stages`, () => navigationFailure(engine, consumer, "publication"), 30_000);
+  test(`${label}: a navigation timeout records page and independent server state without retrying`, () => navigationFailure(engine, consumer, "timeout"), 30_000);
+  test(`${label}: a navigation failure records browser requests`, () => navigationFailure(engine, consumer, "connection"), 30_000);
+  test(`${label}: a diagnostic write failure preserves the navigation error`, () => navigationFailure(engine, consumer, "sink"), 30_000);
 }
 
-test("a diagnostic sink that never settles preserves the navigation error and removes listeners", () => {
+for (const engine of [chromium, webkit]) for (const consumer of consumers) registerControls(engine, consumer);
+
+for (const consumer of consumers) test(`${consumer.name}: a diagnostic sink that never settles preserves the navigation error and removes listeners`, () => {
   const directory = mkdtempSync(join(tmpdir(), "qjs-report-"));
   try {
     const output = execFileSync(process.execPath, [new URL("./fixtures/quickjs-stack-stalled-report.ts", import.meta.url).pathname], {
       encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL",
-      env: { ...process.env, TMPDIR: directory, BUN_WASM_BROWSER_REPORT_DIR: join(directory, "reports") },
+      env: { ...process.env, TMPDIR: directory, BUN_WASM_BROWSER_REPORT_DIR: join(directory, "reports"), NAVIGATION_CONSUMER: consumer.name },
     });
     expect(output).toContain("STALLED_REPORT_WRITE");
     expect(output).toContain("STALLED_REPORT_RESULT original error preserved; listeners removed");
