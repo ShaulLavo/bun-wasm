@@ -45,7 +45,15 @@ registers the one trusted forwarder through closure-local port operations.
 Staged transfer restoration replaces its saved physical ref with live logical
 reconciliation. Ref errors preserve actual Set membership and the original
 mode; retries use the existing transfer settlement machinery. This change does
-not alter transport ownership, packet delivery or scheduling.
+not alter packet delivery or scheduling.
+
+A public detached-buffer/ref-write control reproduces on unmodified main
+`673e0579df86ee43de2817b795495c69c0551128`. Reentrant ref/unref could finish
+an active rollback and remove its recovery record before the outer restore
+failed. An active rollback phase now retains that record until its owning
+invocation finishes. Failure releases the phase for the next existing
+settlement attempt. The original error and latest explicit ref choice survive;
+packet, queue, scheduler and generation contracts are unchanged.
 
 The shared native/guest ref fixture and genuine-factory controls cover base
 EventTarget calls, once/signal removal, capture duplicates, sticky explicit

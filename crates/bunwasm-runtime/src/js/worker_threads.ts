@@ -495,10 +495,11 @@
    * - `gathering`: the codec is walking the message. The only phase that runs user code.
    * - `staged`: the frame and its ports are being staged. No user code from here on.
    * - `committing`: the next thing is the native call, or it has been made.
+   * - `rolling-back`: an active rollback owns this post's recovery obligation.
    * - `abandoned`: given up; an interrupted `rollBack` is finished later.
    */
   type GroupPost = {
-    phase: "gathering" | "staged" | "committing" | "abandoned";
+    phase: "gathering" | "staged" | "committing" | "rolling-back" | "abandoned";
     readonly state: PortState; readonly io: BunWasm.GroupSharedLane; readonly peer: string;
     /** The sequence this post took, once it advanced `state.sent`; -1 before. */
     sequence: number;
@@ -521,12 +522,17 @@
   // the post leaves the registry last.
   /** Undoes a post that did not commit: nothing of it had moved. */
   function rollBack(post: GroupPost) {
-    post.phase = "abandoned";
-    post.io.abort();
-    for (const port of post.ports) port.restore();
-    if (post.sequence >= 0) post.state.sent = post.sequence;
-    post.plan?.settle(false);
-    internal.native.transferSettled?.();
+    if (post.phase === "rolling-back") return;
+    post.phase = "rolling-back";
+    try {
+      post.io.abort();
+      for (const port of post.ports) port.restore();
+      if (post.sequence >= 0) post.state.sent = post.sequence;
+      post.plan?.settle(false);
+      internal.native.transferSettled?.();
+    } finally {
+      post.phase = "abandoned";
+    }
     posts.delete(post);
   }
   /** What a committed post still owes others. A record or hint sent twice changes nothing. */

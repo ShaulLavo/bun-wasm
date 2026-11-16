@@ -129,6 +129,68 @@ function interruptRefWrite(refs: Set<object>, operation: "add" | "delete", when:
     throw failure;
   });
 }
+
+const reentrantRefCases: ["add" | "delete", "ref" | "unref", "before" | "after"][] = [
+  ["add", "ref", "before"], ["add", "ref", "after"], ["add", "unref", "before"], ["add", "unref", "after"],
+  ["delete", "ref", "before"], ["delete", "ref", "after"], ["delete", "unref", "before"], ["delete", "unref", "after"],
+];
+for (const [operation, choice, when] of reentrantRefCases) {
+  test(`public detached-buffer rollback retains recovery after ${choice} and ${when} ${operation} failure`, () => {
+    let settled = 0;
+    const made = group({ settled: () => { settled++; } }), spawned = made.spawn();
+    const extra = new made.root.MessageChannel(), buffer = new ArrayBuffer(32);
+    const failure = new RangeError("interrupted restore ref write");
+    extra.port2.addEventListener("message", () => {});
+    if (operation === "delete") extra.port2.unref();
+    const control = detachingRefFailure(extra.port2, buffer, operation, choice, when, failure);
+    let caught: unknown;
+    try { spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2]); }
+    catch (error) { caught = error; }
+    finally { control.restore(); }
+    expect(caught).toBe(failure);
+    expect(buffer.detached).toBe(true);
+    if (!control.state) throw new Error("carried port was not staged");
+    expect(made.root.internal.messagePortRefs.has(control.state)).toBe(operation === "add" && when === "after");
+    expect(settled).toBe(0);
+    made.root.step();
+    expect(settled).toBe(1);
+    expect(extra.port2.hasRef()).toBe(choice === "ref");
+    expect(made.model.control.staged).toBe(0);
+    expect(spawned.child.receiveMessageOnPort(spawned.child.parentPort)).toBeUndefined();
+    extra.port1.postMessage("after interrupted recovery");
+    expect(made.root.receiveMessageOnPort(extra.port2)).toEqual({ message: "after interrupted recovery" });
+    extra.port1.close(); extra.port2.close(); spawned.port.close(); spawned.child.parentPort.close();
+    expect(made.root.internal.messagePortRefs.size).toBe(0);
+  });
+}
+
+function detachingRefFailure(port: SourcePort, buffer: ArrayBuffer, operation: "add" | "delete", choice: "ref" | "unref", when: "before" | "after", failure: Error) {
+  const add = Set.prototype.add, del = Set.prototype.delete;
+  const control: { state: object | null; restore(): void } = {
+    state: null,
+    restore() { Set.prototype.add = add; Set.prototype.delete = del; },
+  };
+  const original = operation === "add" ? add : del;
+  function write(this: Set<unknown>, value: unknown): unknown {
+    if (value !== control.state) return Reflect.apply(original, this, [value]);
+    Object.defineProperty(Set.prototype, operation, { value: original, writable: true, configurable: true });
+    port[choice]();
+    if (when === "after") Reflect.apply(original, this, [value]);
+    throw failure;
+  }
+  Object.defineProperty(Set.prototype, "delete", { configurable: true, writable: true, value: function (this: Set<unknown>, value: unknown) {
+    if (!hasPortQueue(value)) return Reflect.apply(del, this, [value]);
+    Set.prototype.delete = del;
+    control.state = value;
+    structuredClone(buffer, { transfer: [buffer] });
+    Object.defineProperty(Set.prototype, operation, { value: write, writable: true, configurable: true });
+    return Reflect.apply(del, this, [value]);
+  } });
+  return control;
+}
+function hasPortQueue(value: unknown): value is object {
+  return value !== null && typeof value === "object" && "queue" in value && "phase" in value && "peer" in value;
+}
 /** `realLoop` gives every guest the runtime's own I/O loop (net.js) in place of a bare waiter. */
 function group(options: { realLoop?: boolean; child?: TransferHooks } & TransferHooks = {}) {
   const model = createGroupLaneModel();
