@@ -1,295 +1,91 @@
 # Browser-native storage CI repair
 
-Status: Approved. Owner: storage CI coordinator. Updated: 2026-11-15.
+Status: Approved. Owner: storage CI coordinator. Updated: 2026-11-16.
 
-## Immediate mitigation
+## Retirement decision
 
-Run every existing storage scenario with its existing deadlines and verified site.
-Only CI may quarantine the two remaining historical preservation failures below. Match an
-explicit scenario checkpoint and the complete diagnostic signature. Persist the
-original per-browser failure before accepting a match. A missing report, failed
-write, unknown signature, receipt mismatch, cleanup failure, storage assertion,
-or any unmatched restoration, HMR, or unsupported-symlink failure remains blocking.
+Managing approved retiring both remaining WebKit exceptions, config restart and
+first vanilla restoration, alongside the removed Firefox Vue CLOSED and React
+optimizer exceptions. Exceptions only shrink. This decision supersedes the old
+requirement to demonstrate the historical cause before removal. Source review
+and green ordinary CI remain required. No separate diagnostic run is requested.
 
-- WebKit, first vanilla restart after saving the guest-writing config.
-  Readiness reaches its existing deadline, the second dev invocation has no new
-  ready message, and the preview reports no server on 5173. Hono remains ready
-  on 5174 with counter 1. Vanilla storage is ready with no pending editor text.
-- WebKit, first vanilla restoration after the first LRU eviction. The explicit
-  `first-vanilla-restoration` checkpoint starts just before that open and resets
-  immediately after readiness, before any retained-tree or HMR assertions.
-  Both complete original terminals must match. Vite installs 20 packages and
-  prints ready, but its preview is empty, interactive and unaccepted, with its
-  own document URL on 5173. Hono's accepted complete document on 5174 still
-  renders counter 1. Both filesystems are ready, runtimes started and editors
-  not pending. Console errors must be exactly the original disconnect followed
-  by three 502s. No unknown error or native stack is accepted. This admits only
-  that failed checkpoint and labels the remaining preservation checks skipped.
+Every future preservation failure is blocking. The report-only helper writes the
+complete per-browser protocol and rethrows the identical primary object. Unknown
+errors and failed report writes also reject. Reports have no acceptance label,
+and the obsolete CI switch, matcher, warning and success summary are removed.
+Context, session and progress failures remain independently retained and blocking.
 
-The Firefox first Vue CLOSED and first Vite React optimizer entries are absent
-in this candidate removal. Their
-historical failures now retain complete diagnostics with `quarantine: null` and
-rethrow even with the CI switch enabled. They emit no acceptance warning or job
-summary. The recorded ready status and empty preview remain failed scenarios.
+Keep the original successful storage assertions, readiness, accepted Document
+oracle, scenario workload and generous hang caps unchanged. Keep the existing CI
+owners, selector policy, commands, retries and product pins. The page-load stall
+is separate work.
 
-Chromium preservation, Chromium quota refusal, all unmatched Firefox and WebKit
-failures, and every other required check remain blocking. Emit a warning and a
-job summary for a quarantined failure. No broad continue-on-error, new retry,
-timeout increase, engine change, Waffle pin change, or receipt bypass is allowed.
-The quarantine admits a known failed scenario; it does not claim product success.
+## Retained failed history
 
-Both page terminals must match their complete historical transcripts. Normalize
-only whitespace, install and ready timings, loopback ports, and worker chunk
-hashes and stack coordinates. Any added terminal output, including an error
-before the expected failure footer or in the active Hono terminal, stays blocking.
-The former React matcher and its separate normalizer are deleted. Historical
-React and Firefox protocols remain focused-test rejection inputs, not production exceptions.
+The original JSON protocols in `scripts/fixtures/storage-ci/` remain unchanged
+and are rejection/report inputs in `scripts/storage-failure-report.test.ts`.
 
-## Evidence
+- Firefox Vue CLOSED: PR 738, run 43530616509. Fork reported errno 29 and message
+  deserialization failure; Hono stayed ready. Duplicate timestamps in jobs
+  132260477153 and 132268805440 do not prove two independent executions.
+- WebKit config restart: PR 730, run 43516069702, job 132216974765. Vanilla never
+  regained readiness after saving the config; Hono stayed ready. A later hosted
+  control passed, which establishes bounded non-reproduction, not a cause.
+- WebKit React optimizer: all five original protocols and their run/job metadata
+  remain in `webkit-react.json`, including the callback relocation in run
+  43566104389. PR 752 proved and repaired a cached WASI view defect, but did not
+  establish that it caused these historical failures.
+- WebKit first restoration: PR 824, run 43692497763, job 132760205807. Vanilla
+  printed ready after eviction but its preview remained empty and unaccepted.
+  `webkit-restoration.json` retains its original `preservation` checkpoint; tests
+  also replay it at the explicit first-restoration checkpoint.
+- Later React reopening: run 43608394922, job 132533226013. Initial readiness
+  passed; reopening stalled without a bounds exception, CLOSED error or dev exit.
+  This remains a failed scenario, separate from the original optimizer protocol.
 
-Firefox has one known hosted failure. Jobs 132260477153 and 132268805440 have
-identical timestamps and output despite different run-attempt metadata; whether
-the latter executed independently is unresolved. Four local controls passed.
-The retained protocol belongs to PR 738, run 43530616509.
-WebKit failed PR 730, run 43516069702, job 132216974765. The exact-site and
-current-main controls passed locally. Both paths select Browser native.
+The original causes remain unproved. Waffle .135/.136 and PR 849 may have cleared
+the failures; passing controls do not establish attribution. Earlier detailed
+source and failure reports remain under
+`/work/reports/goals/storage-ci-20261114/` and
+`/work/reports/goals/stack-exhaustion-20261113/`.
 
-Full reports and original protocols are under
-`/work/reports/goals/stack-exhaustion-20261113/quickjs-parser/storage-ci/`
-and `/work/reports/goals/stack-exhaustion-20261113/quickjs-core-call/ci/`.
-Mitigation checks and cleanup evidence belong under
-`/work/reports/goals/storage-ci-20261114/mitigation/`.
+## Routing report requirement
 
-React's distinct final protocols are PR 657 run 43545860161 job 132317528894,
-PR 738 run 43546088852 job 132317988768, and PR 730 run 43546081559
-job 132319996195. PR 738 attempt 2 independently reran at 04:03:14 to
-04:07:35 UTC in job 132324771402. Workers 55, 65, 57, and 59 respectively
-show the same stack at host 130:17, 15:27, guard 11:9471, pump 11:8296, and 9:90764. PR 730 labels
-the target ready in 25.7 seconds; the others show loading preview. The captured
-JSON preserves the historical checkpoint, which predated explicit first React
-startup tracking. Tests replay these reports at the new source checkpoint only.
-New mitigation evidence is retained under
-`/work/reports/goals/storage-ci-20261114/react-quarantine/`.
+The combined PR enables the qualified routing observer in ordinary CI through
+the existing storage diagnostic build and context. The implementation and
+checks are recorded below. Request routing, accepted Document checks and
+independent evidence failures keep the same blocking behavior.
 
-PR 738 head `355ecaff6631714a01841921d0cfe0df0788d057`, run 43566104389,
-job 132367629898 records the same failure with final callback frame 9:91027.
-Artifact 14102859682 matches its published archive digest; the original site
-verifier passes against tested merge `ed2bdf1bef0ea3c2191291e3aac8b422080c794b`.
-Actual old and new worker source maps resolve 9:90764 and 9:91027 to the same
-MessageChannel callback calling `this.pump()` at EngineHost line 447, column 14.
-Both embedded EngineHost sources are byte-identical and the new source matches
-the producer commit. The complete new original protocol is an explicit fixture,
-not a coordinate normalization. The top throwing frames remain unresolved; this
-mapping establishes no connection to the independently proved WASI source bug.
-Small receipt, mapping, protocol, and red/green evidence is retained under
-`/work/reports/goals/storage-ci-20261114/fingerprint-drift/`. The downloaded
-archive and extracted site were removed without a browser workload retry.
+## Local verification
 
-## Permanent repair and removal
+Run the changed report/evidence tests three times, storage unit checks, discovery
+and CI selection controls, then lint, types, unused code and duplicate checks
+through `heavy-runner --host local` with `env.sh`. Do not build a guest, rerun the
+full storage workload or capture new browser diagnostics for this retirement.
+Component results and cleanup belong in
+`/work/reports/goals/storage-ci-20261116/webkit-quarantine-retirement/REPORT.md`.
 
-### First vanilla restoration repair and removal
+The latest concrete restart failure is main `d6f19fa9`, run `43736704897`,
+job `132905517968`. The replacement document returned 200 and stayed empty and
+interactive. `/@vite/client` and `/src/main.ts` had no response, completion or
+failure before teardown, while Hono stayed healthy. The unchanged 180-second
+readiness hang cap correctly rejected it. The retained report is
+`/work/reports/goals/storage-ci-20261114/webkit-d6-restart-forward/REPORT.md`.
+Current source cause remains unproved.
 
-Storage owns this temporary entry and its removal. The retained original is
-PR 824 old head `9c4f19a6e1322cb48398380a1ec466f2b261a2d0`, run
-43692497763, job 132760205807, artifact 14154828272. Its first vanilla reopen
-after eviction fails at readiness phase 63, before restored HMR or symlink
-checks. The full protocol is retained unchanged in
-`scripts/fixtures/storage-ci/webkit-restoration.json`. The focused tests change
-only its old `preservation` checkpoint label to `first-vanilla-restoration`.
-Install 9573 ms and ready 4080 ms are observations, not speed assertions.
+## Ordinary routing observation, approved
 
-The initiating cause remains unresolved. This protocol contains no named clock
-failure, CLOSED transport, thread panic, process kill or unknown terminal error.
-It does not prove thread exhaustion or attribute the failure to the rollback.
-Root retains ownership of the underlying runtime causes. The actual late-handle
-repair candidate is [Waffle PR 518](https://github.com/ShaulLavo/waffle/pull/518),
-released as .133. The original-refusal diagnostic is
-[Root PR 828](https://github.com/ShaulLavo/bun-wasm/pull/828). Neither is a
-demonstrated repair of this historical artifact. Current local reproduction
-work is recorded in
-`/work/reports/goals/storage-ci-20261114/local-restart-admission/REPORT.md` and
-`/work/reports/goals/storage-ci-20261114/local-firefox-closed/REPORT.md`.
-Passing controls or a failure in a different phase cannot establish attribution.
-The separate Playground registration fix in PR 834 is unrelated.
-
-Remove this entry only after a demonstrated correction and two unchanged
-GitHub-hosted WebKit preservation passes with this entry absent. Preserve the
-old protocol as a rejection fixture. Later restoration, HMR, symlink, storage,
-context/session cleanup and progress-write failures remain blocking. The .132
-rollback and .133 adoption have separate pin owners; this unit changes neither.
-Local mitigation checks and cleanup are retained under
-`/work/reports/goals/storage-ci-20261114/restoration-mitigation/`.
-
-### Existing entries
-
-1. Firefox research owns the first failing filesystem transport operation.
-   Capture the original MessagePort messageerror, sender and receiver lifecycle,
-   and fork preopen operation. The ordinary sandbox uses FilesystemService,
-   whose synchronous receive failures report reason=protocol, rather than the
-   WorkspaceBridge path. Native .128 controls for inherited and newly published
-   segments passed 72/72 with no messageerror. SAB announcements remain an
-   unproved candidate. Reproduce on GitHub-hosted Ubuntu with the
-   receipt-verified site and unchanged scenario before choosing a runtime fix.
-2. WebKit research owns vanilla restart after config save. Capture the old and
-   new process lifecycle, config evaluation, filesystem flush, preview request,
-   and first exception before the readiness deadline. Hono's liveness excludes
-   a whole-context shutdown but does not explain the stalled vanilla process.
-   A fresh hosted run of the original failed source and producer passed the
-   unchanged scenario after observer qualification. The original edit creates
-   vite.config.ts; simultaneous config self-restart is unproved. Keep this as
-   bounded non-reproduction rather than a demonstrated fence-overlap defect.
-3. PR 752 fixed a demonstrated cached WASI view defect after valid shared memory
-   growth or rebinding. All-engine fixtures and native WebKit top-level and
-   ordinary-child controls fail before the repair and pass with it. The child
-   control also qualifies how the normal forwarding and formatter path can
-   display this error family. It does not map the original anonymous 130/15
-   operation, raw alias, invocation, or memory history. The historical precise
-   cause remains unresolved. PR 754 preserved the exact protocol pair after a
-   mapped lower callback relocation; that mapping proves no historical WASI
-   attribution. Source evidence is retained under
-   `/work/reports/goals/storage-ci-20261114/webkit-wasi-control/REPORT.md` and
-   `/work/reports/goals/storage-ci-20261114/optimizer-source-family/REPORT.md`.
-4. Land the smallest demonstrated fix in its owning repository with a regression
-   check. A dependency repair follows the normal release and consumer-pin path;
-   this mitigation changes no dependency pins.
-5. Remove each signature independently in the same repair PR or its consumer PR
-   once the unchanged preservation scenario passes twice on GitHub-hosted runners
-   for that browser with the matching quarantine entry disabled. Keep deadlines,
-   site receipt verification, and all preservation assertions unchanged.
-6. Delete the quarantine module and its CI switch once both remaining entries are removed.
-
-### React removal gate
-
-Status: Approved candidate, awaiting hosted proof and independent review. This
-branch removes only production acceptance of `webkit-first-react-optimizer-bounds`.
-The WebKit vanilla rules remain. Firefox removal has its own gate below.
-No scenario, readiness assertion, budget, deadline, CI owner, receipt check,
-switch semantics, engine, build, runtime source, or dependency pin changes here.
-
-The coordinator must record TWO independently executed unchanged GitHub-hosted
-WebKit preservation passes with the React entry absent before merging. Normal CI
-is the first gate. After it succeeds, the coordinator explicitly reruns the
-successful WebKit storage job for the second proof if needed. This is postrepair
-validation, not a retry of a product failure. Earlier passing jobs with the entry
-present do not satisfy this removal gate. Each new head needs its own proof
-pair and independent review; passes on an older head do not qualify it.
-Evidence and local check results belong under
-`/work/reports/goals/storage-ci-20261114/react-quarantine-removal/`.
-
-The document identity helper from PR 779 is integrated from current main and
-unchanged. This unit does not weaken the HMR document assertion.
-
-The coordinator owns follow-through and accepts independent review before merge.
-The implementation worker opens a draft early, runs local matcher and discovery
-checks, then marks it ready so normal GitHub-hosted CI validates the real path.
-
-### Firefox removal gate
-
-Status: Approved source and Waffle .136 pin integrated, awaiting hosted proof. This
-branch removes only production acceptance of `firefox-first-vue-closed` and its
-private matcher inputs. The original Firefox protocol stays byte-for-byte as
-rejection evidence. With CI quarantine enabled, the handler must retain the
-complete diagnostic report with `quarantine: null`, throw the identical failure,
-and emit no acceptance warning or job summary. Both WebKit vanilla rules and
-React rejection remain unchanged. Accepted WebKit protocols still exercise
-independently blocking context, session and progress failures.
-
-The historical Firefox failure was the first Vite Vue startup after vanilla
-config restart and Vite React. Its shell exited 254 after fork reported
-FilesystemTransportError CLOSED, errno 29 and message deserialization failure.
-Hono stayed ready on 5174 with counter 1. Vue had no preview URL and its
-filesystem reported ready. These observations do not establish the cause.
-
-Waffle PR 526 merged at `8109d198969290fb910e36e0407a4ecc93cece6c` and corrects
-a private former-service-port lifetime. The reviewed local provider source is
-`1d1e62133c7d5f8401b442360b638197c37bcc19`. The historical Firefox Nuxt cause
-and asynchronous Disentangle remain unproved. The saved local Nuxt and five
-other app results each passed all nine phases once. Their independent review is
-`/work/reports/goals/storage-ci-20261114/firefox-lifetime-candidate-app-review/REPORT.md`.
-The original-entry control has 25 assertions and six actual client/service joins.
-These app results are local development evidence, not hosted storage proof or a
-claim that the correction caused the historical failure to disappear.
-
-Waffle released .136 with PR 526, and the reviewed runtime and relay pin is
-integrated here. Safari owns consumer adoption. The parent owns normal green CI and
-TWO independently executed GitHub-hosted Firefox preservation passes on the
-exact final head with the Firefox entry absent. Each new head needs its own
-proof pair. The product pin also requires the three-cell C4D2 iPhone smoke
-success before merge. Both gates remain pending. Local validation and cleanup records belong under
-`/work/reports/goals/storage-ci-20261114/firefox-quarantine-removal/`.
-
-### React reopening evidence gap
-
-The first entry-absent hosted execution at head
-`135564d953a5802e98523a71b2deb5a749d2fa7a` passed. The second, run 43608394922,
-job 132533226013 on tested merge `9b43a0c6e30afa0eb5b1ddcb61e715fda9084602`,
-failed during later React reopening after eviction. Initial React readiness
-had passed. The later readiness candidate never completed, while Vite printed
-ready and optimizer bundling and the preview stayed empty and loading. The
-retained protocol has no bounds exception, CLOSED error or dev exit. Hono and
-both filesystems remained ready and cleanup completed.
-
-The cause remains unknown. A full exact-source local scenario and focused
-reopening passed. Neither is hosted proof or evidence for a product repair.
-The historical journal lacks request delivery and iframe document state, so it
-cannot distinguish an unfinished dependency from delivery followed by a render
-or preview acceptance failure. The bounded diagnosis is retained under
-`/work/reports/goals/storage-ci-20261114/react-restoration-stall/REPORT.md`.
-
-The ordinary optional observer now records request starts, response statuses,
-completion and failure with per-page weak request identities. Frame identity,
-URL, method, resource type and navigation context locate preview dependencies.
-Events whose start was not observed carry `startObserved: false`; an absent
-terminal event remains absent. No bodies, asynchronous response reads, worker
-hooks, polling or new scenario timeouts are added. The failure snapshot reads
-each iframe Document once and adds its URL, readyState and accepted-Document
-identity. A null Document is never accepted. Historical report fixtures can
-omit these diagnostic-only fields.
-
-The real snapshot and emitted observer events have routed Chromium and WebKit
-controls for delayed module release and rendering, loading and complete
-documents, accepted and unaccepted documents, cross-origin null documents,
-concurrent same-URL requests, failed requests, unknown starts and lost terminal
-events. Suppressed lifecycle listeners are intentional diagnostic controls,
-not naturally occurring browser losses. Evidence write errors stay blocking
-without replacing a primary product error. These tests qualify observation,
-not the cause of the React stall. Existing quarantine rejection and cleanup
-failure controls remain required.
-
-Readiness predicates, scenario order, checkpoint values, Document oracle,
-success assertions and bounds are unchanged. The new head starts at zero of
-two qualifying hosted WebKit passes. The parent owns independent review,
-normal CI and that new proof pair before merge. Local controls and cleanup
-are retained under
-`/work/reports/goals/storage-ci-20261114/react-hosted-diagnostics/`.
-
-## Throughput checkpoint
-
-The initial mitigation covered Firefox and vanilla. The bounded React follow-up
-added only its first optimizer signature. This candidate removes that entry
-after the landed source repair, subject to the React removal gate above.
-Local checks exercise historical protocols and counterexamples; CI provides the
-real-browser validation. Do not spend another diagnosis round retrying controls
-that have already passed locally.
-
-Quarantine is the authorized temporary treatment of a known unrelated failure,
-not a conclusion that a targeted retry has failed twice. The three signatures lack
-an established transient cause that would make a retry a demonstrated repair.
-
-## Mitigation verification
-
-`scripts/storage-ci-quarantine.test.ts` matches only the two WebKit vanilla
-protocols at their source checkpoints. It rejects other checkpoints and browsers, unknown console
-errors, altered transport or restart output, a missing or changed Hono control,
-failed filesystem state, pending edits, ordinary assertions, and failed report
-or summary writes. Every retained Firefox and React protocol is rejected at all checkpoints;
-the real handler retains and rethrows it without warning or summary acceptance,
-including with the CI switch enabled. `checks/quality-storage-ci-quarantine.json` keeps these tests
-blocking in Source quality. The existing browser manifest also selects the
-producer when the quarantine helper changes.
-
-Local verification runs the new tests with storage, discovery, and CI selection
-tests, then checks discovery, lint, TypeScript, unused code, and duplicates.
-GitHub-hosted CI validates the unchanged real scenarios on the verified site
-when the draft becomes ready. A matching failure remains a recorded quarantine,
-not a successful preservation result. The coordinator owns review and CI follow-up.
+The integration retires both remaining WebKit exceptions and enables the
+qualified observer through the existing storage diagnostic build/context path.
+Initial Hono and vanilla traffic in the unchanged preservation case must qualify
+actual SW, page, registered server, runtime and real helper request coverage
+before config restart. The historical cause remains unproved. The next failure
+reports `/@vite/client` and `/src/main.ts` from bounded scalar routing rows,
+including late metadata retained after context closure. The summary distinguishes
+explicit refusal/error, accepted without headers, and missing or ambiguous hops.
+It does not infer a guest transform or filesystem cause from a missing reply.
+Routing retention is separate from filesystem causal history. The ordinary
+entry-absent hosted validation gate remains blocking. PR 840's page-load stall is
+separate and unchanged. Parent owns the single full-source review and normal CI;
+no separate diagnostic campaign or full local preservation replay is added.

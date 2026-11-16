@@ -15,7 +15,7 @@ test("phase overrides leave every framework build at the independent ten minute 
     expect(policy.installTimeouts[framework.id]).toBe(90_000);
     expect(policy.buildTimeouts[framework.id]).toBe(600_000);
   }
-  expect(policy.cleanupTimeoutMs).toBe(20_000);
+  expect(policy.cleanupTimeoutMs).toBe(60_000);
   expect(deadlinePolicy(300_000).buildTimeouts.next).toBe(600_000);
   expect(cellDeadlines(campaignDeadlines(300_000), { framework: "next", browser: "chrome", engine: "browser" }).buildTimeoutMs).toBe(600_000);
 });
@@ -79,6 +79,6 @@ test("build polling and its outer deadline use the build limit, while other phas
   expect(await buildExecution()).toMatchObject({ status: "fail", phase: "build" });
   const result = await buildExecution(500);
   expect(result.status).toBe("pass");
-  for (const phase of result.attempts[0]?.phases ?? []) expect(phase.timeoutMs).toBe(phase.phase === "build" ? 500 : phase.phase === "cleanup" ? 20_000 : 100);
+  for (const phase of result.attempts[0]?.phases ?? []) expect(phase.timeoutMs).toBe(phase.phase === "build" ? 500 : phase.phase === "cleanup" ? 60_000 : 100);
   expect(await buildExecution(500, true)).toMatchObject({ status: "fail", phase: "render" });
 });

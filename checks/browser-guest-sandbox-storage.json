@@ -4,7 +4,7 @@
   "path": "scripts/sandbox-storage-browser.test.ts",
   "inputs": [
     "sandbox/tests/storage-document.ts",
-    "scripts/storage-ci-quarantine.ts",
+    "scripts/storage-failure-report.ts",
     "scripts/storage-browser-evidence.ts",
     "scripts/fixtures/storage-ci/firefox.json",
     "scripts/fixtures/storage-ci/webkit.json",
@@ -185,6 +185,10 @@
     "scripts/storage-fs-metadata.ts",
     "scripts/storage-fs-observation.ts",
     "scripts/storage-fs-worker-prelude.ts",
-    "scripts/storage-fs-page-prelude.ts"
+    "scripts/storage-fs-page-prelude.ts",
+    "scripts/storage-routing-build.ts",
+    "scripts/storage-routing-build-source.ts",
+    "scripts/storage-routing-collector.ts",
+    "scripts/storage-routing-evidence.ts"
   ]
 }

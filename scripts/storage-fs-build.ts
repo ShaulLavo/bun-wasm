@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { routingObservationSource, verifyRoutingInstallation } from "./storage-routing-build";
 
 function replace(source: string, needle: string, replacement: string): string {
   if (source.split(needle).length !== 2) throw Error(`Storage observation seam changed: ${needle}`);
@@ -31,15 +32,17 @@ export function storageObservationSource(path: string, source: string): string |
   } else if (path.endsWith("/waffle/fs/service.ts")) {
     output = replace(source, "  connect(connection: FilesystemConnection): void {", '  connect(connection: FilesystemConnection): void {\n    observeEndpoint(connection, "service");');
     output = replace(output, "    connection.port.start();", "    qualifyEndpoint(connection);\n    connection.port.start();");
-  } else return;
-  return imported + output;
+  } else return routingObservationSource(path, source);
+  const routing = routingObservationSource(path, output);
+  return imported + (routing ?? output);
 }
 export function storageObservationPlugin(runtimePath: () => string): Bun.BunPlugin {
   return { name: "storage-first-event", setup(build) {
+    verifyRoutingInstallation(runtimePath());
     // The helper is private consumer code. Resolve its private type/implementation imports
     // through this app's exact installation, including Sandbox and shell builds.
     build.onResolve({ filter: /node_modules\/waffle\// }, ({ path }) => ({ path: Bun.resolveSync("./" + path.split("node_modules/waffle/")[1]!, runtimePath()) }));
-    build.onLoad({ filter: /(?:\/(?:web|sandbox)\/src\/(?:main|worker|preview1-worker|fs-worker)|\/bash-web\/src\/runtime\/worker|\/waffle\/(?:runtime|browser\/shared-fs|fs\/(?:client|service)))\.ts$/ }, ({ path }) => {
+    build.onLoad({ filter: /(?:\/(?:web|sandbox)\/src\/(?:main|sandbox|sw|preview|worker|preview1-worker|fs-worker)|\/bash-web\/src\/runtime\/worker|\/waffle\/(?:runtime|browser\/(?:shared-fs|preview|service-worker|net\/(?:helper|runtime))|fs\/(?:client|service)))\.ts$/ }, ({ path }) => {
       const contents = storageObservationSource(path, readFileSync(path, "utf8"));
       return contents === undefined ? undefined : { contents, loader: "ts" };
     });

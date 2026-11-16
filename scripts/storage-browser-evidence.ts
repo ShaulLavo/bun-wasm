@@ -1,8 +1,9 @@
 import { appendFileSync } from "node:fs";
 import type { Browser, BrowserContext, Frame, Page, Request } from "playwright";
+import { StorageRoutingEvidence } from "./storage-routing-evidence";
 import { retainMetadata } from "./storage-fs-metadata";
 
-export type StorageObservation = Pick<StorageLifetime, "step" | "event" | "acquire" | "own" | "observeContext" | "secondary">;
+export type StorageObservation = Pick<StorageLifetime, "step" | "event" | "acquire" | "own" | "observeContext" | "secondary" | "qualifyRouting" | "routingReport">;
 type RecordEvent = (event: { sequence: number; time: string; kind: string; detail: unknown }) => void;
 
 function errorDetail(error: unknown): unknown {
@@ -13,6 +14,7 @@ function errorDetail(error: unknown): unknown {
 
 export class StorageLifetime {
   readonly failures: unknown[] = [];
+  private readonly routing = new StorageRoutingEvidence();
   private readonly releases: (() => Promise<void>)[] = [];
   private readonly acquisitions: Promise<void>[] = [];
   private progressError: { error: unknown } | undefined;
@@ -33,7 +35,9 @@ export class StorageLifetime {
   event(kind: string, detail: unknown = null): void {
     try { this.write?.({ sequence: ++this.sequence, time: new Date().toISOString(), kind, detail }); }
     catch (error) { this.failProgress(error); }
+    if (kind === "begin" && detail && typeof detail === "object" && "phase" in detail && detail.phase === "restart.click") this.routing.beginRestart();
     if (!["error", "preservation-error", "primary-error", "secondary-error"].includes(kind)) return;
+    this.event("routing-failure", { summary: this.routing.summaries(), trace: this.routing.snapshot() });
     this.filesystemFailed = true;
     this.retainFilesystemFailure();
   }
@@ -124,7 +128,10 @@ export class StorageLifetime {
 
   cleanup(): Promise<void> {
     this.closing = true;
-    return this.cleanupTask ??= Promise.all(this.releases.map(release => release()).concat(this.acquisitions)).then(() => { this.retainFilesystemFailure(true); });
+    return this.cleanupTask ??= Promise.all(this.releases.map(release => release()).concat(this.acquisitions)).then(() => {
+      this.retainFilesystemFailure(true);
+      if (this.filesystemFailed) this.event("routing-final", { summary: this.routing.summaries(), trace: this.routing.snapshot() });
+    });
   }
 
   assertClean(): void {
@@ -146,6 +153,18 @@ export class StorageLifetime {
 
   observeBrowser(browser: Browser): void {
     browser.on("disconnected", () => this.event("browser-disconnected"));
+  }
+
+  routingReport(): object[] { return this.routing.summaries(); }
+
+  async qualifyRouting(targets?: string[]): Promise<void> {
+    const deadline = Date.now() + 30_000;
+    while (true) {
+      try { this.routing.qualify(targets); break; }
+      catch (error) { if (Date.now() >= deadline) throw error; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    this.event("routing-qualified", this.routing.snapshot());
   }
 
   async observeContext(context: BrowserContext): Promise<void> {
@@ -181,15 +200,37 @@ export class StorageLifetime {
     };
     this.event("page", { page: id });
     page.on("console", message => {
+      const routing = "[storage-routing] ";
+      if (message.text().startsWith(routing)) {
+        try {
+          if (message.text().length > 32768) throw Error("Routing metadata exceeded its bound");
+          this.routing.receive(JSON.parse(message.text().slice(routing.length)));
+        }
+        catch (error) { this.secondary("routing.metadata", error); }
+        return;
+      }
+      if (message.text().startsWith("[storage-routing-error] ")) this.secondary("routing.transport", Error(message.text()));
       const metadata = "[storage-fs-metadata] ";
       if (message.text().startsWith(metadata)) { this.filesystemMetadata(id, message.text().slice(metadata.length)); return; }
       this.event("console", { page: id, type: message.type(), text: message.text(), location: message.location() });
       if (message.text().startsWith("[storage-fs-observation-error] ")) this.secondary("filesystem-observation", new Error(message.text()));
     });
     page.on("pageerror", error => this.event("pageerror", { page: id, ...errorObject(error) }));
-    page.on("request", request => this.event("request", requestDetail(request, true)));
-    page.on("response", response => this.event("response", { ...requestDetail(response.request()), status: response.status() }));
-    page.on("requestfinished", request => this.event("requestfinished", requestDetail(request)));
+    page.on("request", request => {
+      const detail = requestDetail(request, true);
+      this.routing.request({ kind: "request", page: id, request: detail.request, url: detail.url });
+      this.event("request", detail);
+    });
+    page.on("response", response => {
+      const detail = { ...requestDetail(response.request()), status: response.status(), fromServiceWorker: response.fromServiceWorker() };
+      this.routing.request({ kind: "response", page: id, request: detail.request, url: detail.url, status: detail.status, fromServiceWorker: detail.fromServiceWorker });
+      this.event("response", detail);
+    });
+    page.on("requestfinished", request => {
+      const detail = requestDetail(request);
+      this.routing.request({ kind: "requestfinished", page: id, request: detail.request, url: detail.url });
+      this.event("requestfinished", detail);
+    });
     page.on("requestfailed", request => this.event("requestfailed", { ...requestDetail(request), failure: request.failure() }));
     page.on("framenavigated", frame => this.event("navigation", { page: id, ...frameDetail(frame) }));
     page.on("crash", () => this.event("page-crash", { page: id }));

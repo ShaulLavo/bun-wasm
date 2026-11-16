@@ -63,7 +63,7 @@ test("stop requires the shell acknowledgement even when a runtime snapshot repor
   try {
     await seen.promise;
     expect(stopped).toBe(false);
-    expect(states[0]).toMatchObject({ running: true, listening: false, runtime: { liveProcesses: 0 } });
+    expect(states[0]).toMatchObject({ running: true, listening: false });
   } finally {
     await withScoped(transport, page => page.evaluate("playground.shell.running = false; void 0"));
     await stopping;

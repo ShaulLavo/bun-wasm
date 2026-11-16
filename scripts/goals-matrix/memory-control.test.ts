@@ -193,7 +193,7 @@ test.each([[false, false], [true, false], [false, true], [true, true]])("synthet
       return runInNewContext(expression, { __bunMemoryProcesses: () => fixture.observation,
         __bunRetainedMemorySnapshots: () => [{ engine: "spidermonkey", launchFailures: [launchFailure] }],
         playground: { term: { write(_text: string, callback: () => void) { callback(); }, buffer: { active: { length: 0 } } },
-          shell: { running: false }, previews: { serves: () => false } } });
+          runtime: { async dispose() {} }, shell: { running: false, async dispose() {} }, previews: { serves: () => false } } });
     }, async close() { closed = true; } };
   if (owned) transport.cleanup = async () => { closed = true; return { browserClosed: true, foregroundStopped: true, previewClosed: true }; };
   const result = await execute({ framework, box: { framework: framework.id, browser: "chrome", engine: "spidermonkey" }, url: "http://synthetic/", timeoutMs: 1000,
