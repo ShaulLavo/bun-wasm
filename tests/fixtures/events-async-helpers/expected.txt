@@ -1,0 +1,7 @@
+once rejects invalid options and preserves getter errors asynchronously
+once settles exactly once and removes event, error and abort listeners
+iterator first-parameter mode preserves values and normal mode preserves argument arrays
+iterator pauses above high, resumes below low and drains close without resuming
+invalid watermarks reject before registering listeners
+borrowed native methods preserve the original events getter exception
+listener limits support EventTarget and static helpers reject invalid targets

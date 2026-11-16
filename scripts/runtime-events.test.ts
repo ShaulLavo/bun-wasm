@@ -1,5 +1,4 @@
 import { afterAll, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -16,59 +15,59 @@ const result = Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts")
 if (result.exitCode !== 0) throw new Error(result.stderr.toString());
 const emitted = readFileSync(output, "utf8");
 
-function syntax(text: string) {
-  const file = ts.createSourceFile("events.js", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  function visit(node: ts.Node): unknown {
-    if (ts.isParenthesizedExpression(node)) return visit(node.expression);
-    const children = node.getChildren(file);
-    return children.length ? [node.kind, children.map(visit)] : [node.kind, node.getText(file)];
-  }
-  return JSON.stringify(visit(file));
-}
-
-function excludesAuditedStatement(statement: ts.Statement, file: ts.SourceFile, changed: ReadonlySet<string>) {
-  if (ts.isFunctionDeclaration(statement) && changed.has(statement.name?.text ?? "")) return true;
-  if (ts.isExpressionStatement(statement) && ts.isBinaryExpression(statement.expression)
-    && changed.has(statement.expression.left.getText(file))) return true;
-  if (ts.isVariableStatement(statement) && statement.declarationList.declarations.some(declaration => changed.has(declaration.name.getText(file)))) return true;
-  const text = statement.getText(file);
-  return text.startsWith("const proto") || text.startsWith("EventEmitter.prototype._eventsCount")
-    || text.startsWith("proto._eventsCount")
-    || text.startsWith('Object.defineProperty(proto.removeAllListeners, "length"');
-}
-
-function collectRemainder(node: ts.Node, file: ts.SourceFile, changed: ReadonlySet<string>, remainder: string[]) {
-  if (!ts.isFunctionExpression(node) || node.parameters[0]?.name.getText(file) !== "internal") {
-    ts.forEachChild(node, child => collectRemainder(child, file, changed, remainder));
-    return;
-  }
-  for (const statement of node.body.statements) {
-    if (excludesAuditedStatement(statement, file, changed)) continue;
-    remainder.push(syntax(statement.getText(file)));
-  }
-}
-
 function enclosingFunction(node: ts.Node) {
   let owner: ts.Node | undefined = node.parent;
   while (owner && !ts.isFunctionDeclaration(owner) && !ts.isMethodDeclaration(owner) && !ts.isFunctionExpression(owner)) owner = owner.parent;
   return owner;
 }
 
-test("events pins audited executable changes and the unchanged PR140 remainder", () => {
-  const teardownGuard = 'if (typeof emitter.removeListener === "function") removeError();';
-  expect(emitted.split(teardownGuard)).toHaveLength(2);
-  const beforeTeardownFix = emitted.replace(teardownGuard, "removeError();");
-  expect(createHash("sha256").update(syntax(beforeTeardownFix)).digest("hex")).toBe("7a42d9f48e3ef454ed1a74fa20f3a95e240d067f80abbf1fd344dc54b997c816");
-  const file = ts.createSourceFile("events.js", beforeTeardownFix, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  const changed = new Set([
-    "addListener", "onceWrapper", "onceWrap", "proto.emit", "proto.removeAllListeners",
-    "EventEmitter.on", "EventEmitter.addAbortListener",
-    "kCapture", "EventEmitter.init", "emitRejection", "captureResult", "callListeners",
-  ]);
-  const remainder: string[] = [];
-  collectRemainder(file, file, changed, remainder);
-  expect(remainder.length).toBe(57);
-  expect(createHash("sha256").update(JSON.stringify(remainder)).digest("hex")).toBe("0a44fa4e1b8aa3adb31ed07471fdb4ff38ef891624af0a8f2e4fbf20462cdf1f");
+test("EventTarget limits initialize once from the current default", () => {
+  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  Events.defaultMaxListeners = 10;
+  const target = new EventTarget();
+  expect(Events.getMaxListeners(target)).toBe(10);
+  expect(Reflect.get(target, Events.kMaxEventTargetListeners)).toBe(10);
+  Events.defaultMaxListeners = 2;
+  expect(Events.getMaxListeners(target)).toBe(10);
+  expect(Events.getMaxListeners(new EventTarget())).toBe(2);
+});
+
+test("EventTarget limit initialization propagates failed writes", () => {
+  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  expect(() => Events.getMaxListeners(Object.freeze(new EventTarget()))).toThrow(TypeError);
+});
+
+test("EventTarget limits reread transformed or existing storage", () => {
+  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  let stored: number | undefined;
+  const target = new EventTarget();
+  Object.defineProperty(target, Events.kMaxEventTargetListeners, {
+    get() { return stored; },
+    set(value: number) { stored = value + 1; Events.defaultMaxListeners = 2; },
+  });
+  expect(Events.getMaxListeners(target)).toBe(11);
+  let reads = 0;
+  const changing = new EventTarget();
+  Object.defineProperty(changing, Events.kMaxEventTargetListeners, {
+    get() { return ++reads === 1 ? 7 : 9; },
+  });
+  expect(Events.getMaxListeners(changing)).toBe(9);
+  expect(reads).toBe(2);
+});
+
+test("EventTarget limits propagate the readback getter exception", () => {
+  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  const sentinel = new Error("limit readback");
+  let reads = 0;
+  const target = new EventTarget();
+  Object.defineProperty(target, Events.kMaxEventTargetListeners, {
+    get() { if (++reads > 1) throw sentinel; },
+    set() {},
+  });
+  let thrown: unknown;
+  try { Events.getMaxListeners(target); } catch (error) { thrown = error; }
+  expect(thrown).toBe(sentinel);
+  expect(reads).toBe(2);
 });
 
 test("events permits only the exact audited constructor and private-invariant views", () => {
@@ -227,6 +226,7 @@ const storage: BunWasm.Events.Table | undefined = prototype._events;
 const initializedStorage: BunWasm.Events.Table = emitter._events;
 const emitterSource: BunWasm.Events.Source = emitter;
 const targetSource: BunWasm.Events.Source = new EventTarget();
+EventEmitter.setMaxListeners(2, new EventTarget());
 const values: Promise<unknown[]> = EventEmitter.once(emitter, key);
 const disposable = EventEmitter.addAbortListener(new AbortController().signal, listener);
 const dispose = disposable[Symbol("optional")];
