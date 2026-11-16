@@ -18,6 +18,9 @@ Freeing returns malloc capacity for reuse; it does not shrink Wasm linear memory
 `scripts/jsc-resizable-native.ts` are original test adapters. They compile the
 two affected upstream compilation units with test hooks into a separate control,
 link against the matching prebuild, and run it three times. Producer archives are
-read-only inputs. Feature-owned manifests select the existing native probe and
+read-only inputs. The link drops Binaryen from `PATH`, as `jsc/build.sh` does, so
+clang keeps the name section that `jsc/finalize.sh` needs. The control never
+destroys its VM: VM teardown aborts in `AtomStringImpl::remove` on WASI JSC even
+without resizable buffers, and the guest never tears its VM down either. Feature-owned manifests select the existing native probe and
 fixture gates. The fixtures also cover large zeroing ranges, callback coercion,
 species, transfer lifetime and the ordinary JSC memory-cap rejection.

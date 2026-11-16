@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 interface Compilation { command: string; directory: string; file: string }
 
@@ -84,7 +84,10 @@ export function nativeBackingControl(options: { root: string; prebuild: string; 
   if (!command) throw new Error("Missing native link recipe");
   const raw = join(options.scratch, "native-control.raw.wasm");
   const final = join(options.scratch, "native-control.wasm");
-  run(compiler, objects.concat([control], linkFlags(command), ["-Wl,--export=__stack_pointer", "-o", raw]), build);
+  // Link as jsc/build.sh does: with Binaryen on PATH, clang runs wasm-opt after an optimized
+  // link and drops the name section that finalize.sh needs to find __stack_pointer.
+  const path = (process.env.PATH ?? "").split(delimiter).filter(entry => !entry.includes("binaryen")).join(delimiter);
+  run(compiler, objects.concat([control], linkFlags(command), ["-o", raw]), build, { ...process.env, PATH: path });
   run("bash", [join(options.root, "jsc/finalize.sh"), raw, final], options.root, { ...process.env, JSC_BUILD_DIR: options.prebuild, CAGE: "" });
   const outputs = Array.from({ length: 3 }, () => run("wasmtime", ["run", final], options.root));
   for (const output of outputs) {
