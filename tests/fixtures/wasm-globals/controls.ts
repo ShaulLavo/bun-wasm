@@ -57,7 +57,7 @@ function numericControls(api: GlobalAPI, fixture: Fixture, check: Check) {
   for (const value of [0, 2, undefined, null, Symbol('i64')]) {
     if (value !== undefined) rejects(check, () => Reflect.construct(api.Global, [{ value: 'i64' }, value]), 'TypeError');
   }
-  rejects(check, () => new api.Global({ value: 'i32' }, 1n), 'TypeError');
+  rejects(check, () => Reflect.construct(api.Global, [{ value: 'i32' }, 1n]), 'TypeError');
   for (const type of ['f32', 'f64'] satisfies WebAssembly.ValueType[]) {
     for (const value of [-0, NaN, Infinity, -Infinity]) same(check, new api.Global({ value: type }, value).value, value, `${type} special`);
   }
@@ -145,7 +145,7 @@ function aliasControls(api: GlobalAPI, fixture: Fixture, check: Check) {
   const changed = new api.Instance(fixture('consumer'), { e: { ...env, g: fresh } });
   same(check, changed.exports.g, fresh, 'changed-prototype import retains brand');
   for (const input of [3, {}, new Proxy(g, {}), new api.Global({ value: 'i64', mutable: true }), new api.Global({ value: 'i32' })]) {
-    rejects(check, () => new api.Instance(fixture('consumer'), { e: { ...env, g: input } }), 'LinkError');
+    rejects(check, () => Reflect.construct(api.Instance, [fixture('consumer'), { e: { ...env, g: input } }]), 'LinkError');
   }
 }
 function startControls(api: GlobalAPI, fixture: Fixture, check: Check) {
