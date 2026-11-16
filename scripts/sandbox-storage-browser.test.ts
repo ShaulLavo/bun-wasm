@@ -4,7 +4,7 @@ import { resolve, join } from "node:path";
 import { preservationScenario, quotaRefusalScenario, storageReportPath } from "../sandbox/tests/storage-browser";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
-import { handleStorageFailure } from "./storage-ci-quarantine";
+import { reportStorageFailure } from "./storage-failure-report";
 import { storageEvidence, type StorageLifetime, type StorageObservation } from "./storage-browser-evidence";
 
 const requested = (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",");
@@ -59,7 +59,7 @@ async function checkedSite(name: string, run: (browser: Browser, url: string, ob
 
 for (const name of browsers) test(`${name}: sandbox keeps active tabs and restores guest-created source after LRU eviction`, () => siteCheck(name, async (browser, url, observer) => {
   try { await preservationScenario(browser, url, observer); }
-  catch (error) { await handleStorageFailure(name, error); }
+  catch (error) { await reportStorageFailure(name, error); }
 }), 420_000);
 
 test("chromium: full-origin preservation failure keeps idle source and pending editor text", async () => {
