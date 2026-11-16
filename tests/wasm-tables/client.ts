@@ -133,6 +133,10 @@ async function teardownRoots() {
 }
 
 try {
+  const globalControls = readFileSync(join(process.cwd(), 'tests/fixtures/wasm-globals/controls.ts'), 'utf8').replace('export function runGlobalControls', 'function runGlobalControls');
+  const controls = stripTypeScriptTypes(globalControls) + '\nrunGlobalControls(WebAssembly, fixture, check);';
+  const globalFixture = (name: string) => fixture('global-' + name);
+  for (let round = 0; round < 3; round++) await runInNewContext(controls, { WebAssembly: api, fixture: globalFixture, check, console });
   const contract = readFileSync(join(process.cwd(), 'tests/wasm-tables/contract.ts'), 'utf8');
   const oracleFixture = (name: string) => new WebAssembly.Module(readFileSync(join(scratch, name + '.wasm')));
   await runInNewContext(stripTypeScriptTypes(contract), { WebAssembly, fixture: oracleFixture, check, gc: globalThis.gc, console, WeakRef, FinalizationRegistry, setImmediate });
