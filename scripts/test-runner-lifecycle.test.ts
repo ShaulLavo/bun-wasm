@@ -12,7 +12,11 @@ interface API {
   test: ((name: string, fn?: () => unknown, options?: { retry?: number; repeats?: number }) => void) & {
     failing(name: string, fn?: () => unknown): void;
   };
-  describe: { (name: string | (() => void), fn?: () => void): void };
+  describe: {
+    (name: string | (() => void), fn?: () => void): void;
+    skip(name: string, fn?: () => void): void;
+    todo(name: string, fn?: () => void): void;
+  };
   beforeEach(fn: () => unknown): void;
   afterEach(fn: () => unknown): void;
   afterAll(fn: () => unknown): void;
@@ -30,7 +34,7 @@ async function runner(load: (api: API) => void) {
     path,
     inspect: { bunInspect: Bun.inspect },
     util: { bunDeepEquals: isDeepStrictEqual },
-    test_matchers: factory("test_matchers.ts")({ isPromise: types.isPromise,
+    test_matchers: factory("test_matchers.ts")({ isPromise: types.isPromise, realTimers: { setTimeout },
       promiseThen: (promise: Promise<unknown>, resolve: (value: unknown) => unknown, reject: (value: unknown) => unknown) => promise.then(resolve, reject) }),
   };
   const internal = {
@@ -137,4 +141,57 @@ test("body and cleanup failures both remain visible and cleanup stops", async ()
   expect(result.stderr).toContain("cleanup also failed");
   expect(result.stderr).toContain("1 fail");
   expect(result.exit).toBe(1);
+});
+
+function appendLocalCleanup(api: API, order: string[]) {
+  order.push("local");
+  api.afterAll(() => { order.push("local-reentry"); });
+  api.onTestFinished(() => { order.push("local-finished"); });
+}
+
+function appendFinishedCleanup(api: API, order: string[]) {
+  order.push("finished");
+  api.onTestFinished(() => { order.push("finished-reentry"); });
+}
+
+function registerLiveCleanup(api: API, order: string[]) {
+  api.afterEach(() => { order.push("after"); api.onTestFinished(() => { order.push("after-finished"); }); });
+  api.test("live cleanup", () => {
+    api.afterAll(() => appendLocalCleanup(api, order));
+    api.onTestFinished(() => appendFinishedCleanup(api, order));
+  });
+}
+
+test("cleanup drains newly registered local and finished callbacks in phase order", async () => {
+  const order: string[] = [];
+  const result = await runner(api => registerLiveCleanup(api, order));
+  expect(result.exit).toBe(0);
+  expect(order).toEqual(["local", "local-reentry", "after", "finished", "local-finished", "after-finished", "finished-reentry"]);
+});
+
+function registerCleanupRejection(api: API, order: string[]) {
+  api.afterEach(() => {
+    api.onTestFinished(async () => { throw new Error("late cleanup rejection"); });
+    api.onTestFinished(() => { order.push("must not run"); });
+  });
+  api.test("cleanup failure", () => {});
+}
+
+test("reentrant cleanup rejection fails the test and stops following callbacks", async () => {
+  const order: string[] = [];
+  const result = await runner(api => registerCleanupRejection(api, order));
+  expect(result.exit).toBe(1);
+  expect(result.stderr).toContain("late cleanup rejection");
+  expect(result.stderr).toContain("1 fail");
+  expect(order).toEqual([]);
+});
+
+test("callback-free skipped and todo describe preserve following registration", async () => {
+  const result = await runner(api => {
+    api.describe.skip("pending suite");
+    api.describe.todo("todo suite");
+    api.test("sentinel", () => {});
+  });
+  expect(result.exit).toBe(0);
+  expect(result.stderr).toContain("1 pass");
 });

@@ -20,6 +20,11 @@ failure stops the remaining cleanup hooks. Both body and cleanup failures retain
 their diagnostics. Failed retries retain their diagnostics without increasing
 the final test count. Repeats continue only after a passing attempt.
 
+Cleanup consumes live local and finished queues: newly registered cleanup runs
+in its phase instead of being lost from an earlier snapshot. Reentrant rejection
+still fails the test and stops later cleanup. Skipped and todo describe scopes
+retain their callback-free overload without disabling normal callback validation.
+
 Concurrency remains serial. Concurrent scheduling needs separate asynchronous
 test and invocation ownership before overlapping tests can safely share this
 runner. This adapter does not change assertion settlement or snapshot values.

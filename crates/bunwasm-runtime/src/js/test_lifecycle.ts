@@ -6,8 +6,9 @@
     throw new Error(`${signature}() expects first argument to be a named class, named function, number, or string`);
   }
 
-  function registration(signature: string, name: unknown, fn: unknown) {
+  function registration(signature: string, name: unknown, fn: unknown, allowEmpty = false) {
     if (typeof name === "function" && (fn === undefined || fn === null)) return { name: "", fn: name };
+    if (allowEmpty && fn == null) return { name: description(name, signature), fn: null };
     if (typeof fn !== "function") {
       throw new Error(`${signature} expects a function as the second argument`);
     }

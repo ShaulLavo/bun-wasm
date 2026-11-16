@@ -1802,13 +1802,14 @@
 
   function registerDescribe(modifiers, name, fn) {
     const parent = currentScope();
-    const { name: label, fn: callback } = internal.require("test_lifecycle").registration("describe", name, fn);
+    const disabled = modifiers.mode === "skip" || modifiers.mode === "todo";
+    const { name: label, fn: callback } = internal.require("test_lifecycle").registration("describe", name, fn, disabled);
     const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
     if (scope.only) collecting.hasOnly = true;
     parent.children.push(scope);
     collecting.scope = scope;
     try {
-      callback();
+      if (callback) callback();
     } finally {
       collecting.scope = parent;
     }
@@ -2071,6 +2072,18 @@
     reportResult(test, outcome.result, outcome.elapsed, outcome.expectCount, outcome.label);
   }
 
+  function* cleanupHooks(record, afterEach) {
+    let afterIndex = 0;
+    let finishedIndex = 0;
+    while (record.afterAll.length || afterIndex < afterEach.length || finishedIndex < record.finished.length) {
+      if (record.afterAll.length) { yield record.afterAll.pop(); continue; }
+      if (afterIndex < afterEach.length) { yield afterEach[afterIndex++]; continue; }
+      const callback = record.finished[finishedIndex];
+      delete record.finished[finishedIndex++];
+      yield callback;
+    }
+  }
+
   async function executeTest(test, file) {
     const chain = scopeChain(test.parent);
     const record = { expectCount: 0, assertions: null, test, file, afterAll: [], finished: [] };
@@ -2082,7 +2095,7 @@
       result = await invoke(test.fn, [], test.usesDone, timeout);
       if (result.timeout) result.timeoutMs = timeout;
     }
-    const after = await runHooks(record.afterAll.reverse().concat(chain.reverse().flatMap((s) => s.afterEach), record.finished));
+    const after = await runHooks(cleanupHooks(record, chain.reverse().flatMap((s) => s.afterEach)));
     if (!result.ok && !after.ok) {
       printFileHeaderIfNeeded();
       const failure = failureFromResult(result, test);
