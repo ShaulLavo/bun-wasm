@@ -1,3 +1,5 @@
+import { extendedControls } from "./extended.ts";
+
 function equal(actual: unknown, expected: unknown): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected))
     throw new Error(`Expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`);
@@ -110,3 +112,4 @@ callbackGrowth();
 maximumMetadata();
 transferAndLifetime();
 console.log("Resizable backing checks passed");
+extendedControls();
