@@ -11,6 +11,7 @@ function inputs() {
   const sources = Object.fromEntries(names.filter(name => existsSync(join(sourceRoot, name + ".js"))).map(name => [name, readFileSync(join(sourceRoot, name + ".js"), "utf8")]));
   sources.node_stream_bindings = stripTypeScriptTypes(readFileSync(join(sourceRoot, "node_stream_bindings.ts"), "utf8"), { mode: "strip" });
   sources.buffer_encoding_bindings = stripTypeScriptTypes(readFileSync(join(sourceRoot, "buffer_encoding_bindings.ts"), "utf8"), { mode: "strip" });
+  sources.buffer_transcode = stripTypeScriptTypes(readFileSync(join(sourceRoot, "buffer_transcode.ts"), "utf8"), { mode: "strip" });
   sources.events = stripTypeScriptTypes(readFileSync(join(sourceRoot, "events.ts"), "utf8"));
   sources.streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "streams.ts"), "utf8"));
   sources.compression_streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "compression_streams.ts"), "utf8"));
