@@ -185,3 +185,99 @@ test("an optional diagnostic at work expiry cannot steal close reserve or change
     expect(c.closed()).toBe(true);
   }, cases[0]!, true);
 });
+
+type CloseScenario = "delayed" | "rejected" | "expired" | "cancelled" | "late-success" | "late-error";
+
+async function closeControl(scenario: CloseScenario, stopFails = false) {
+  const framework = frameworks[0]!;
+  let now = Date.now(), cleaning = false, finished = false, settled = false;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const open = Scope.open;
+  let cleanupScope: Scope | undefined;
+  const scopes = spyOn(Scope, "open").mockImplementation((timeoutMs, parent) => {
+    const scope = open(timeoutMs, parent);
+    if (timeoutMs === 60_000 && !parent) cleanupScope = scope;
+    return scope;
+  });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const budgets: number[] = [], interrupts: (boolean | undefined)[] = [];
+  let closing: Promise<void> | undefined;
+  async function run(transport: Transport) {
+    transport.capabilities.browserName = "firefox";
+    const evaluate = transport.evaluate.bind(transport), close = transport.close.bind(transport);
+    transport.beginCleanup = () => { cleaning = true; now += 1200; };
+    transport.evaluate = <T>(expression: string, admission: Admission) => {
+      if (cleaning && stopFails && expression.includes("function stopState")) return Promise.reject(new Error("original stop failure"));
+      return evaluate<T>(expression, admission);
+    };
+    transport.close = (interrupt, timeoutMs) => {
+      if (closing) return closing;
+      interrupts.push(interrupt);
+      budgets.push(timeoutMs ?? 0);
+      entered.resolve();
+      return closing = release.promise.then(async () => {
+        await close();
+        settled = true;
+        if (scenario === "rejected" || scenario === "late-error") throw new Error("browser close rejected");
+      });
+    };
+    const result = execute({ framework, box: { framework: framework.id, browser: "firefox", engine: "browser" },
+      url: "http://fixture/?engine=browser", timeoutMs: 2000, createTransport: async () => transport,
+      async saveLog() {
+        now += 300;
+        if (scenario === "expired" && cleanupScope) now = cleanupScope.deadline;
+        if (scenario === "cancelled") cleanupScope?.close(new Error("cleanup cancelled"));
+      },
+    }).then(value => { finished = true; return value; });
+    try {
+      await entered.promise;
+      if (scenario === "late-success" || scenario === "late-error") cleanupScope?.close(cleanupScope.expiryReason);
+      else if (scenario !== "expired" && scenario !== "cancelled") {
+        now += 13_196;
+        await Promise.resolve();
+        expect(finished).toBe(false);
+      }
+      release.resolve();
+      const cell = await result;
+      await closing?.catch(() => {});
+      return { cell, budgets, interrupts, settled };
+    } finally {
+      release.resolve();
+      await Promise.allSettled([result, closing]);
+      transport.close = close;
+    }
+  }
+  try { return await withPlayground(framework, 0, run); }
+  finally { scopes.mockRestore(); clock.mockRestore(); }
+}
+
+test("browser close waits for actual settlement beyond the old cutoff using the remaining cleanup allowance", async () => {
+  const result = await closeControl("delayed");
+  expect(result.budgets).toEqual([58_500]);
+  expect(result.interrupts).toEqual([true]);
+  expect(result.settled).toBe(true);
+  expect(result.cell).toMatchObject({ status: "pass" });
+});
+
+test.each([false, true])("browser close rejection remains a failure with prior stop failure=%s", async stopFails => {
+  const result = await closeControl("rejected", stopFails);
+  expect(result.settled).toBe(true);
+  if (result.cell.status !== "fail") throw new Error("Browser close rejection must fail cleanup");
+  expect(result.cell.phase).toBe("cleanup");
+  expect(result.cell.error).toContain("browser close rejected");
+  if (stopFails) expect(result.cell.error).toContain("original stop failure");
+});
+
+test.each(["expired", "cancelled"] as const)("%s cleanup still dispatches forced close and cannot pass", async scenario => {
+  const result = await closeControl(scenario);
+  expect(result.interrupts).toEqual([true]);
+  expect(result.budgets).toEqual([scenario === "expired" ? 1 : 58_500]);
+  expect(result.settled).toBe(true);
+  expect(result.cell).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining(scenario === "expired" ? "Phase timed out after 60000 ms" : "cleanup cancelled") });
+});
+
+test.each(["late-success", "late-error"] as const)("browser close consumes %s after cleanup expiry without passing", async scenario => {
+  const result = await closeControl(scenario);
+  expect(result.settled).toBe(true);
+  expect(result.cell).toMatchObject({ status: "fail", phase: "cleanup", error: expect.stringContaining("Phase timed out after 60000 ms") });
+});

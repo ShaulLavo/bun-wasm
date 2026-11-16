@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./ci-jsc-workflow";
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -7,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 const [scenario = "", scratch = ""] = process.argv.slice(2);
 assert(scenario && scratch);
 const root = resolve(import.meta.dir, "../..");
-const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+const workflow = expandedCiWorkflow();
 function step(name: string): string {
   const section = workflow.split(`      - name: ${name}\n`)[1]?.split(/\n      - /)[0];
   assert(section, `missing step ${name}`);

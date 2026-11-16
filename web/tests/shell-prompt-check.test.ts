@@ -120,6 +120,8 @@ const transcriptCallers = [
   "web/tests/shell-stop-check.ts",
 ];
 const nonTranscriptCallers = [
+  // The coverage selector declares input paths; it never reads a playground transcript.
+  "scripts/browser-guest-selection.ts",
   // The unit-test module hook substitutes helpers without reading a real browser transcript.
   "scripts/fixtures/stack-measurement-provider.ts", "scripts/fixtures/quickjs-stack-policy.ts",
   "sandbox/tests/startup-cache.mjs", "sandbox/tests/next-dev.ts", "scripts/app-matrix/isolation.test.mjs", "scripts/verify-engine-memory-browser.ts",

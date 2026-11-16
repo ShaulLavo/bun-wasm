@@ -262,6 +262,7 @@ try {
             export const isEngine = (key) => Object.hasOwn(ENGINES, key);
             export const engineUnavailable = (key) => key === "spidermonkey" ? "Artifact-free editor test" : null;
             export const engineBuildHint = () => "Artifact-free editor test";
+            export const createToolsLoader = () => async () => { throw new Error("The artifact-free editor gate must not load tools"); };
             ${app === "web" ? `export { loadEditorEngine as loadWasm, loadEditorEngine as loadEngineProgram } from ${JSON.stringify(join(root, "web/tests/fixtures/editor-execution.ts"))};` : 'export async function loadWasm() { throw new WasmMissing("Artifact-free editor test"); } export const loadEngineProgram = loadWasm;'}
             export async function registerModuleScope() { return false; }
             export const mb = (size) => String(size);

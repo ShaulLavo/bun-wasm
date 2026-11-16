@@ -9,20 +9,23 @@ const always = ["selection", "quality", "package", "web", "web-unit", "web-brows
 const rustJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "ordinary-web-guests", "browser-guest"];
 const sharedJobs = ["shared-jsc-identity", "shared-prebuild", "shared-sysroot", "shared-proof"];
 const sharedNativeJobs = ["shared-spidermonkey-prebuild", "shared-native", "shared-browser"];
-const jobIds = always.concat(rustJobs, sharedJobs, sharedNativeJobs);
+const jobIds = always.concat(rustJobs, sharedJobs, sharedNativeJobs, ["browser-production"]);
 
 function fixture(rust = true, shared = true, sharedNative = true) {
   const enabled = new Set(always.concat(rust ? rustJobs : [], shared || sharedNative ? sharedJobs : [], sharedNative ? sharedNativeJobs : []));
   return Object.fromEntries(jobIds.map(id => [id, { result: enabled.has(id) ? "success" : "skipped",
-    outputs: id === "selection" ? { rust: String(rust), jsc: String(rust), shared: String(shared), "shared-native": String(sharedNative) } : {} }]));
+    outputs: id === "selection" ? { rust: String(rust), browser_guest: String(rust), jsc: "false", shared: String(shared), "shared-native": String(sharedNative) } : {} }]));
 }
 
 test("aggregate accepts success and only classifier-disabled skips for every selection", () => {
   const selections = [true, false].flatMap(rust => [true, false].flatMap(shared => [true, false].map(native => ({ rust, shared, native }))));
-  for (const { rust, shared, native } of selections) expect(() => requireCiSuccess(fixture(rust, shared, native))).not.toThrow();
+  for (const { rust, shared, native } of selections) {
+    if (!rust && native) expect(() => requireCiSuccess(fixture(rust, shared, native))).toThrow("native route");
+    if (rust || !native) expect(() => requireCiSuccess(fixture(rust, shared, native))).not.toThrow();
+  }
 });
 
-test.each(jobIds)("aggregate rejects failure, cancellation, skips and missing results for selected %s", id => {
+test.each(jobIds.filter(id => id !== "browser-production"))("aggregate rejects failure, cancellation, skips and missing results for selected %s", id => {
   for (const result of ["failure", "cancelled", "skipped", "in_progress", ""]) {
     expect(() => requireCiSuccess({ ...fixture(), [id]: { result } })).toThrow();
   }

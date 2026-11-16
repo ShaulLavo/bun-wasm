@@ -22,7 +22,9 @@ export function parseArchives(output: string): Archive[] {
     const match = /^'([^']+)' ([A-Za-z0-9%+_.~-]+\.deb) ([0-9]+) SHA256:([a-f0-9]{64})$/.exec(line);
     if (!match) throw new Error(`Expected a SHA256-verified apt archive: ${line}`);
     const [, uri = "", filename = "", size = "", sha256 = ""] = match;
-    if (!/^(?:https:|mirror\+file:)/.test(uri)) throw new Error(`Unexpected apt transport: ${uri}`);
+    if (!/^(?:https:|mirror\+file:)/.test(uri)) {
+      throw new Error(`Unexpected apt transport: ${uri} (run through .github/actions/browser-deps, which selects HTTPS archives)`);
+    }
     const bytes = Number(size);
     if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error(`Invalid archive size: ${size}`);
     return { uri, filename, size: bytes, sha256 };

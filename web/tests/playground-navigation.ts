@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Frame, Page, Request, Response } from "playwright";
 import { ready } from "./playground.mjs";
-import { navigationParameter, readNavigationServerLog } from "../navigation-server-log";
+import { navigationParameter, readNavigationServerLog } from "../navigation-server-log.ts";
 
 async function observe<T>(read: () => Promise<T>, hangCap = 5_000) {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -61,8 +61,9 @@ async function probeServer(url: string) {
 
 type Diagnostic = { prefix: string; title: string; fields: Readonly<Record<string, string>> };
 type Stage = "navigation" | "runtime-publication";
+type WaitUntil = "load" | "domcontentloaded";
 
-async function reportFailure(page: Page, url: string, error: unknown, requests: ReturnType<ReturnType<typeof navigationRequests>["snapshot"]>, stage: Stage, diagnostic: Diagnostic) {
+async function reportFailure(page: Page, url: string, error: unknown, requests: ReturnType<ReturnType<typeof navigationRequests>["snapshot"]>, stage: Stage, diagnostic: Diagnostic, waitUntil: WaitUntil) {
   const browser = page.context().browser()?.browserType().name() ?? "disconnected";
   const pageAtFailure = { url: page.url(), closed: page.isClosed(), browserConnected: page.context().browser()?.isConnected() ?? false };
   const id = new URL(url).searchParams.get(navigationParameter);
@@ -76,7 +77,7 @@ async function reportFailure(page: Page, url: string, error: unknown, requests: 
     }))),
     observe(() => probeServer(url)),
   ]);
-  const report = { ...diagnostic.fields, browser, url, error: String(error), stage, waitUntil: "domcontentloaded", pageAtFailure, requests, pageState, originalServerRequest, server };
+  const report = { ...diagnostic.fields, browser, url, error: String(error), stage, waitUntil, pageAtFailure, requests, pageState, originalServerRequest, server };
   const json = JSON.stringify(report, null, 2);
   console.error(`${diagnostic.title} failed\n${json}`);
   const directory = process.env.BUN_WASM_BROWSER_REPORT_DIR;
@@ -85,7 +86,7 @@ async function reportFailure(page: Page, url: string, error: unknown, requests: 
   await writeFile(join(directory, `${diagnostic.prefix}-${browser}-${process.pid}-${Date.now()}.json`), `${json}\n`);
 }
 
-export async function openPlaygroundPage(page: Page, target: string, options: { readyTimeout?: number; diagnostic?: Diagnostic } = {}): Promise<string> {
+export async function openPlaygroundPage(page: Page, target: string, options: { readyTimeout?: number; diagnostic?: Diagnostic; waitUntil?: WaitUntil } = {}): Promise<string> {
   if (process.env.BUN_WASM_NAVIGATION_LOG) {
     const correlated = new URL(target);
     correlated.searchParams.set(navigationParameter, crypto.randomUUID());
@@ -93,14 +94,15 @@ export async function openPlaygroundPage(page: Page, target: string, options: { 
   }
   const diagnostic = options.diagnostic ?? { prefix: "playground-navigation", title: "Playground navigation", fields: {} };
   const requests = navigationRequests(page);
+  const waitUntil = options.waitUntil ?? "domcontentloaded";
   let stage: Stage = "navigation";
   // Runtime publication below decides readiness; unrelated resources need not finish loading.
   try {
-    await page.goto(target, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.goto(target, { waitUntil, timeout: 30_000 });
     stage = "runtime-publication";
     return await ready(page, options.readyTimeout);
   } catch (error) {
-    const result = await observe(() => reportFailure(page, target, error, requests.snapshot(), stage, diagnostic), 15_000);
+    const result = await observe(() => reportFailure(page, target, error, requests.snapshot(), stage, diagnostic, waitUntil), 15_000);
     if (result.outcome === "error") console.error(`${diagnostic.title} diagnostic failed:`, result.error);
     throw error;
   } finally { requests.stop(); }

@@ -16,7 +16,7 @@ import { defaultSignalGuest, handledSignalGuest, idleSignalGuest } from "./engin
 import { assertFatalSleepSync, assertHandledSleepSync, sleepSyncSignalGuest } from "./engine-interruption-sleep";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignal, type EngineSignalDelivery } from "./engine-interruption-scope";
-import { FunctionalCases, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
+import { FunctionalCases, selectInterruptionEngines, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
 import { CooperativeWorkerStop } from "./engine-interruption-stop";
 
 interface CaseResources {
@@ -631,7 +631,9 @@ void (async () => {
   try {
     const runEngineMatrix = async () => {
       truth(crossOriginIsolated, "engine interruption requires cross-origin isolation");
-    for (const [engine, name] of [["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["browser", "bun-browser.wasm"]] as const) {
+    const selected = selectInterruptionEngines(new URLSearchParams(location.search).get("engines") ?? undefined);
+    const candidates: { engine: Engine; name: string }[] = selected.map(engine => ({ engine, name: engine === "quickjs" ? "bun.wasm" : "bun-jsc.wasm" }));
+    for (const { engine, name } of candidates.concat([{ engine: "browser", name: "bun-browser.wasm" }])) {
       let module: WebAssembly.Module | undefined, hash = "";
       await runCase({ engine, route: "artifact", name: "load-candidate" }, async () => {
         const loaded = await loadCandidate(engine, name);

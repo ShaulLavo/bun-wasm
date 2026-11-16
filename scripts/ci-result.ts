@@ -9,7 +9,7 @@ function selected(outputs: Record<string, unknown>, name: string): boolean {
   return value === "true";
 }
 
-export function requireCiSuccess(value: unknown, event: string): void {
+export function requireCiSuccess(value: unknown, event = "pull_request"): void {
   if (!["pull_request", "push", "workflow_dispatch"].includes(event)) throw new Error(`Invalid CI event: ${event}`);
   const results = object(value);
   const quality = object(results.quality);
@@ -18,14 +18,20 @@ export function requireCiSuccess(value: unknown, event: string): void {
   if (selection.result !== "success") throw new Error(`CI selection did not pass: ${String(selection.result)}`);
   const outputs = object(selection.outputs);
   const rust = selected(outputs, "rust");
-  selected(outputs, "jsc");
+  const browser = selected(outputs, "browser_guest");
+  const jsc = selected(outputs, "jsc");
+  if (rust && !browser) throw new Error("Native production must retain Browser consumers");
+  if (jsc && !browser) throw new Error("JSC consumers require guest production");
+  const native = rust || (event !== "pull_request" && browser);
   const sharedNative = selected(outputs, "shared-native");
+  if (!rust && sharedNative) throw new Error("Native consumers require the native route");
   const shared = selected(outputs, "shared") || sharedNative;
   const expected = {
-    selection: true, quality: true, "jsc-identity": rust, "jsc-prebuild": rust, "native-quality": rust, rust, "ordinary-web-guests": rust,
+    selection: true, quality: true, "jsc-identity": browser, "jsc-prebuild": browser, "native-quality": native, rust: native,
+    "browser-production": browser && !native, "ordinary-web-guests": native,
     package: true, "shared-jsc-identity": shared, "shared-prebuild": shared, "shared-spidermonkey-prebuild": sharedNative,
     "shared-sysroot": shared, "shared-native": sharedNative, "shared-browser": sharedNative, "shared-proof": shared,
-    web: true, "web-unit": true, "web-browser": true, "process-bundles": true, "browser-guest": rust, "browser-process": true,
+    web: true, "web-unit": true, "web-browser": true, "process-bundles": true, "browser-guest": browser, "browser-process": true,
   };
   for (const [name, required] of Object.entries(expected)) {
     const result = object(results[name]).result;

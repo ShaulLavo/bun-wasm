@@ -1,5 +1,6 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
@@ -52,7 +53,7 @@ test.each(["quickjs", "jsc", "browser"])("singular %s retains its BUN_WASM overr
     .toEqual([{ engine, wasm: "/custom.wasm" }]);
 });
 
-const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const workflow = expandedCiWorkflow();
 
 function workflowStep(name: string): string {
   const step = workflow.split(`      - name: ${name}\n`)[1];

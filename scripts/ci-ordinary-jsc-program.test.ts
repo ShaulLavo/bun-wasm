@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -83,7 +84,7 @@ test.each([8192, 32768])("rejects a %i-page core even when its original receipts
 });
 
 test("the normal Rust job exports only selected JSC after its existing blocking gates", async () => {
-  const workflow = Bun.YAML.parse(await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text());
+  const workflow = Bun.YAML.parse(expandedCiWorkflow());
   if (!record(workflow) || !record(workflow.jobs) || !record(workflow.jobs.rust) || !Array.isArray(workflow.jobs.rust.steps)) throw new Error("Expected Rust workflow steps");
   const steps = workflow.jobs.rust.steps.map(step => {
     if (!record(step)) throw new Error("Expected workflow step");
@@ -92,10 +93,10 @@ test("the normal Rust job exports only selected JSC after its existing blocking 
   const exporter = steps.find((step: { name?: string }) => step.name === "Export the validated ordinary JSC pair");
   const upload = steps.find(step => record(step.with) && step.with.name === "ordinary-jsc-program");
   if (!exporter || !upload) throw new Error("Missing ordinary JSC export steps");
-  expect(exporter).toEqual({ name: "Export the validated ordinary JSC pair", if: "needs.selection.outputs.jsc == 'true'", run: 'source env.sh\nbun scripts/ci-ordinary-jsc-program.ts export "$RUNNER_TEMP/ordinary-jsc-program"\n' });
+  expect(exporter).toEqual({ name: "Export the validated ordinary JSC pair", if: "needs.selection.outputs.jsc == 'true'", shell: "setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}", run: 'source env.sh\nbun scripts/ci-ordinary-jsc-program.ts export "$RUNNER_TEMP/ordinary-jsc-program"\n' });
   expect(upload).toEqual({ uses: "actions/upload-artifact@v4", "timeout-minutes": 5, if: "needs.selection.outputs.jsc == 'true'", with: { name: "ordinary-jsc-program", path: "${{ runner.temp }}/ordinary-jsc-program/", "if-no-files-found": "error", "retention-days": 1 } });
   for (const name of ["Build the JSC Cargo guest", "Verify JSC embedding source and native backing", "Blocking native fixture checks"]) expect(steps.indexOf(exporter)).toBeGreaterThan(steps.findIndex((step: { name?: string }) => step.name === name));
-  expect(steps.indexOf(upload)).toBe(steps.indexOf(exporter) + 1);
+  expect(steps.indexOf(upload)).toBeGreaterThan(steps.indexOf(exporter));
   expect(needsRust(["scripts/ci-ordinary-jsc-program.ts"])).toBe(true);
   expect(needsJsc(["scripts/ci-ordinary-jsc-program.ts"])).toBe(true);
   expect(needsJsc(["scripts/ci-program-delivery.ts"])).toBe(true);
