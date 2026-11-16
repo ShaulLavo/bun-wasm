@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { chromium, webkit, type BrowserContext } from "playwright";
 import { browserBuildConfig, buildClassicWorker } from "../../scripts/browser-build";
 
-const scratch = await mkdtemp(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-navigation-"));
+const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-navigation-"));
 let server: ReturnType<typeof Bun.serve> | undefined;
 let context: BrowserContext | undefined;
 let cleaning: Promise<void> | undefined;

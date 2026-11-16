@@ -18,7 +18,10 @@ async function command(args: string[], cwd: string): Promise<void> {
 }
 
 async function checkPage(page: Page, url: string, mounted: boolean): Promise<number> {
-  const response = await page.goto(url);
+  const application = page.waitForResponse(response => response.url() === url && response.status() === 200 && response.request().isNavigationRequest());
+  await page.goto(url);
+  const response = await application;
+  await page.waitForURL(url, { waitUntil: 'domcontentloaded' });
   const html = await response?.text();
   assert.equal(response?.status(), 200, html ?? 'Missing response');
   assert.ok(html?.includes(`href="${new URL(url).pathname}details"`), 'SSR links must use the browser mount');

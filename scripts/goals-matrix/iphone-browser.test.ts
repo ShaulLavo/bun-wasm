@@ -140,6 +140,7 @@ test("real product service worker injects the configured preview even when HTTP 
     const initialNonce = bus.state("preview")!.nonce;
     await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(preview)})`, 3000, false, Date.now() + 3000);
     await waitReady(bus, "preview");
+    const initialDocumentNonce = bus.state("preview")!.nonce;
     expect(await bus.execute("preview", "document.querySelector('h1').textContent", 3000, false, Date.now() + 3000)).toBe("real worker preview 1");
     for (const revision of [2, 3]) {
       await page.evaluate(value => { document.body.dataset.revision = String(value); }, revision);
@@ -151,11 +152,13 @@ test("real product service worker injects the configured preview even when HTTP 
       while (!responseEvents.some(row => row.event === "transform-end" && row.nonce === nonce)) await changed.promise;
       const replacementHead = responseEvents.find(row => row.event === "head" && row.nonce === nonce);
       expect(replacementHead).toMatchObject({ status: 200, url: preview });
-      expect(nonce).not.toBe(initialNonce);
+      expect(nonce).not.toBe(initialDocumentNonce);
     }
     expect(bus.state("preview")?.url).toBe(preview);
     expect(networkPreviewRequests).toBe(0);
-    const head = responseEvents.find(row => row.event === "head" && row.nonce === initialNonce);
+    const loadingHead = responseEvents.find(row => row.event === "head" && row.nonce === initialNonce);
+    expect(loadingHead).toMatchObject({ status: 307, url: preview });
+    const head = responseEvents.find(row => row.event === "head" && row.nonce === initialDocumentNonce);
     expect(head).toMatchObject({ status: 200, contentType: "text/html", contentEncoding: null, contentLength: null, url: preview, sameConfiguration: true });
     const initialResponse = responseEvents.filter(row => row.id === head?.id);
     expect(initialResponse.some(row => row.event === "body-end")).toBe(true);
