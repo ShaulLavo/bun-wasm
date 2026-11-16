@@ -34,9 +34,12 @@ function loadTools(): Promise<WebAssembly.Module> {
     .catch(error => { toolsModule = undefined; throw error; });
 }
 
-function physicalStop(worker: Worker, returned: () => void, stopped: () => void): Promise<void> {
+export function physicalStop(worker: Pick<Worker, "terminate">, terminating: () => void, returned: () => void, stopped: () => void): Promise<void> {
+  const terminate = worker.terminate.bind(worker);
   return new Promise<void>(resolve => {
-    const completion: unknown = worker.terminate();
+    let completion: unknown;
+    try { completion = terminate(); }
+    finally { terminating(); }
     const complete = () => { returned(); stopped(); };
     if (completion === undefined) { complete(); resolve(); return; }
     resolve(Promise.resolve(completion).then(complete));
@@ -142,10 +145,10 @@ function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<stri
 async function adoptRootProgram(subprocess: SubprocessBroker, transport: Parameters<SubprocessBroker["adoptRuntimeRoot"]>[0], module: WebAssembly.Module, cancelled: () => boolean) {
   const group = isSharedGroupCore(module);
   const controlGrant = await subprocess.adoptRuntimeRoot(transport, group ? "group" : programMemory(module), cancelled);
-  if (!controlGrant) return undefined;
+  if (!controlGrant || cancelled()) return undefined;
   const linkPlan = programMetadata(module).linkPlan;
   if (group && !linkPlan) throw new TypeError("Memory group root requires a prepared link plan");
-  const member = group && linkPlan ? await subprocess.admitRootGroup({ module, linkPlan }) : undefined;
+  const member = group && linkPlan ? subprocess.admitRootGroup({ module, linkPlan }) : undefined;
   return { controlGrant, memoryGroup: member?.request, groupTransfer: member ? Array.from(member.transfer as Iterable<MessagePort>) : [] };
 }
 
@@ -249,7 +252,11 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     const completion = Promise.withResolvers<void>();
     workerStop = completion.promise;
     void workerStop.catch(error => console.error("bun-wasm: root physical stop failed", error));
-    const stop = (taken: Worker) => physicalStop(taken, () => nativeReturned?.(), () => subprocess?.rootStopped());
+    const stop = (taken: Worker) => {
+      const receipt = subprocess?.captureRootStop();
+      const returned = nativeReturned;
+      return physicalStop(taken, () => receipt?.terminating(), () => returned?.(), () => receipt?.stopped());
+    };
     try {
       const pending = worker ? stop(worker) : workerAcquisition?.then(stop, () => {});
       Promise.resolve(pending).then(() => { releaseRootConsumer(); completion.resolve(); }, completion.reject);
