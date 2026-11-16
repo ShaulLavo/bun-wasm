@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { StorageRoutingEvidence, type RoutingRow } from "./storage-routing-evidence";
 import { discoverChecks } from "./test-checks";
 import { needsRust } from "./ci-changes";
 import { verifyRoutingInstallation, routingObservationSource } from "./storage-routing-build";
+import release from "./waffle-release-inputs.json";
 
 const target = "/src/main.ts";
 const url = "http://localhost/__preview/5173/src/main.ts";
@@ -104,7 +106,7 @@ test("restart scopes exclude old traffic while delayed metadata remains availabl
   f.page("page-receive"); expect(f.first()).toContain("registered-server dispatch not observed");
 });
 
-test("installed .136 and each unique consumer anchor fail closed, and helper edits select ordinary storage", () => {
+test("selected installed package and each unique consumer anchor fail closed, and helper edits select ordinary storage", () => {
   verifyRoutingInstallation(resolve(import.meta.dir, "../sandbox/node_modules/waffle"));
   for (const file of ["sandbox/src/sandbox.ts", "web/src/preview.ts"]) {
     const path = resolve(import.meta.dir, "..", file);
@@ -115,6 +117,30 @@ test("installed .136 and each unique consumer anchor fail closed, and helper edi
   for (const file of ["storage-routing-build.ts", "storage-routing-build-source.ts", "storage-routing-collector.ts", "storage-routing-evidence.ts"]) {
     expect(storage?.inputs).toContain(`scripts/${file}`);
     expect(needsRust([`scripts/${file}`])).toBe(true);
+  }
+});
+
+test("routing installation rejects a wrong version and every modified qualified source", () => {
+  const installed = resolve(import.meta.dir, "../sandbox/node_modules/waffle");
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-routing-gate-"));
+  const files = ["browser/service-worker.ts", "browser/preview.ts", "browser/net/helper.ts", "browser/net/runtime.ts"];
+  try {
+    for (const file of files) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      copyFileSync(join(installed, file), join(root, file));
+    }
+    writeFileSync(join(root, "package.json"), JSON.stringify({ version: release.version }));
+    expect(() => verifyRoutingInstallation(root)).not.toThrow();
+    writeFileSync(join(root, "package.json"), JSON.stringify({ version: "0.0.136" }));
+    expect(() => verifyRoutingInstallation(root)).toThrow(`Waffle ${release.version}`);
+    writeFileSync(join(root, "package.json"), JSON.stringify({ version: release.version }));
+    for (const file of files) {
+      writeFileSync(join(root, file), readFileSync(join(installed, file), "utf8") + "\n");
+      expect(() => verifyRoutingInstallation(root)).toThrow(file);
+      copyFileSync(join(installed, file), join(root, file));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

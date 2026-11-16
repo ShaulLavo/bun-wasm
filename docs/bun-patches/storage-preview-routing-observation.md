@@ -5,7 +5,9 @@ Classification: adapted implementation and original diagnostic adapters.
 The private build transforms in `scripts/storage-routing-build-source.ts` adapt
 Waffle's `browser/service-worker.ts`, `browser/preview.ts`,
 `browser/net/helper.ts`, and `browser/net/runtime.ts` from release `0.0.136`,
-revision `022d711d78ffbe6c9c6a45fe1bcbd2d970d09ce7`.
+revision `022d711d78ffbe6c9c6a45fe1bcbd2d970d09ce7`. These four source
+files are byte-identical in selected release `0.0.137`, revision
+`27b03a8c519b4d48d00d3723b4ee2993d735f27d`.
 The exact installed source hashes and unique insertion anchors reject drift or
 incomplete installations. No provider source is edited.
 
