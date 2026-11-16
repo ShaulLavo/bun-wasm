@@ -13,6 +13,13 @@ test("iPhone QuickJS groups have growth room above both measured framework workl
   expect(memoryGroupPolicy("quickjs", desktop)).toBe(BUN_MEMORY_GROUP_POLICY);
 });
 
+test("iPhone JSC backing has growth room while retaining the original member allowance", () => {
+  const policy = memoryGroupPolicy("jsc", iphone);
+  expect(policy.maximumPages * 65536).toBe(1280 << 20);
+  expect(policy.memberPages).toBe(BUN_MEMORY_GROUP_POLICY.memberPages);
+  expect(memoryGroupPolicy("jsc", desktop)).toBe(BUN_MEMORY_GROUP_POLICY);
+});
+
 test("iPhone native tools get the bounded-memory environment and keep caller variables", () => {
   const env = { PATH: "/bin" };
   expect(nativeSharedMemoryEnvironment("browser", env, iphone)).toEqual({ PATH: "/bin", BUN_WASM_IPHONE_NATIVE_MEMORY: "1" });

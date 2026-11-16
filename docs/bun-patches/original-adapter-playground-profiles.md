@@ -63,6 +63,11 @@ nine phases. The 768 MiB maximum leaves about 42% above the larger measurement.
 These are backing capacities, not resident-memory measurements. Native iPhone
 workflow qualification is separate.
 
+JSC uses a 1,280 MiB iPhone group maximum and retains its 1 GiB cumulative member
+allowance. Its complete instrumented Chrome workflows reach 760,545,280 bytes for
+Angular and 996,737,024 bytes for Vite React. The maximum leaves about 35% above
+the larger measured capacity. Desktop keeps its original policy.
+
 The same host adapter sets the native Browser tool-memory fact for iPhone and
 removes it from other engine environments. The byte-qualified Rolldown loader
 adapter owns its tool maximum, recorded in

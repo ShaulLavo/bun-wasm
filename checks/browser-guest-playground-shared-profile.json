@@ -8,6 +8,7 @@
     ".github/actions/native-setup/action.yml",
     "sandbox/src/sandbox.ts",
     "sandbox/src/template-catalog.ts",
+    "web/src/host-memory-policy.ts",
     "web/src/playground/program-profile.ts",
     "web/src/playground/project-templates.ts"
   ]

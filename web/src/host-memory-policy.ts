@@ -1,8 +1,12 @@
 import { BUN_MEMORY_GROUP_POLICY, type Engine } from "../../src/engine-kind";
 
+const iphoneGroupPages = { quickjs: 12288, jsc: 20480, spidermonkey: 32768, browser: 32768 } as const;
+
 export function memoryGroupPolicy(engine: Engine, userAgent: string) {
-  if (engine !== "quickjs" || !/\biPhone\b/.test(userAgent)) return BUN_MEMORY_GROUP_POLICY;
-  return { ...BUN_MEMORY_GROUP_POLICY, maximumPages: 12288, memberPages: 12288 };
+  if (!/\biPhone\b/.test(userAgent)) return BUN_MEMORY_GROUP_POLICY;
+  const maximumPages = iphoneGroupPages[engine];
+  if (maximumPages === BUN_MEMORY_GROUP_POLICY.maximumPages) return BUN_MEMORY_GROUP_POLICY;
+  return { ...BUN_MEMORY_GROUP_POLICY, maximumPages, memberPages: Math.min(BUN_MEMORY_GROUP_POLICY.memberPages, maximumPages) };
 }
 
 export function nativeSharedMemoryEnvironment(engine: Engine, env: Record<string, string>, userAgent: string): Record<string, string> {
