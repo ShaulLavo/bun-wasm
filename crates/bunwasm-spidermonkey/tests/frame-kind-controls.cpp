@@ -75,8 +75,8 @@ void equal_kind_identity(JS::HandleObject first, JS::HandleObject second) {
 
 void frame_kind_collision(bool programFirst) {
   const char* label = programFirst ? "/kind-program-first.ts" : "/kind-function-first.ts";
-  const char* program = "             captureKind()";
-  const char* function = "(function(){ captureKind()})()";
+  const char* program = "                   captureKind()";
+  const char* function = "(function(){return captureKind()})()";
   Value first(script(programFirst ? program : function, label));
   Value second(script(programFirst ? function : program, label));
   JSAutoRealm realm(context, global->get());
@@ -96,7 +96,7 @@ void frame_kind_collision(bool programFirst) {
   uint32_t line = 0;
   JS::TaggedColumnNumberOneOrigin column;
   check(JS::GetSavedFrameLine(context, nullptr, a, &line) == JS::SavedFrameResult::Ok && line == 1 &&
-        JS::GetSavedFrameColumn(context, nullptr, a, &column) == JS::SavedFrameResult::Ok && column.oneOriginValue() == 14,
+        JS::GetSavedFrameColumn(context, nullptr, a, &column) == JS::SavedFrameResult::Ok && column.oneOriginValue() == 20,
         "native callback captures its actual script call site");
   Value againA(script(programFirst ? program : function, label));
   Value againB(script(programFirst ? function : program, label));
@@ -242,7 +242,7 @@ void frame_kind_async_and_reentry() {
 
 void frame_kind_reconstruction() {
   JSAutoRealm realm(context, global->get());
-  Value captured(script("(function(){ captureKind() })()", "/kind-clone.ts"));
+  Value captured(script("(function(){return captureKind()})()", "/kind-clone.ts"));
   JS::RootedObject frame(context, object(captured.handle));
   JS::RootedValue input(context, JS::ObjectValue(*frame)), output(context);
   check(JS_StructuredClone(context, input, &output, nullptr, nullptr) && output.isObject(), "clone real SavedFrame");
