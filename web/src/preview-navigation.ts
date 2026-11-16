@@ -4,7 +4,7 @@ interface NavigationOptions {
 }
 
 type Reply = { kind: "pending" } | { kind: "ready"; response: Response } | { kind: "failed"; error: unknown };
-interface Navigation { url: string; loadingURL: string; reply: Reply }
+interface Navigation { url: string; loadingURL: string; document: number; reply: Reply }
 
 /** A loading document keeps a slow guest request outside WebKit's fetch-head watchdog. */
 export function previewNavigations(options: NavigationOptions) {
@@ -33,7 +33,7 @@ export function previewNavigations(options: NavigationOptions) {
   }
 
   function waiting(navigation: Navigation): Response {
-    const input = JSON.stringify({ url: navigation.url, status: `${navigation.loadingURL}/status`, cancel: `${navigation.loadingURL}/cancel` }).replaceAll("<", "\\u003c");
+    const input = JSON.stringify({ url: navigation.url, status: `${navigation.loadingURL}/status`, cancel: `${navigation.loadingURL}/cancel/${++navigation.document}` }).replaceAll("<", "\\u003c");
     const script = `(${waitForPreview.toString()})(${input});`;
     return new Response(`<!doctype html><meta charset="utf-8"><title>Loading preview</title><body><p role="status">Waiting for the development server…</p><script>${script}</script></body>`, {
       headers: { ...headers, "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'self'" },
@@ -48,13 +48,16 @@ export function previewNavigations(options: NavigationOptions) {
     if (url.href === navigation.loadingURL && request.mode === "navigate") return waiting(navigation);
     if (request.referrer !== navigation.loadingURL) return new Response(null, { status: 403, headers });
     if (url.href === `${navigation.loadingURL}/status` && request.method === "GET") return Response.json({ ready: navigation.reply.kind !== "pending" }, { headers });
-    if (url.href === `${navigation.loadingURL}/cancel` && request.method === "POST") { cancel(id, navigation); return new Response(null, { status: 204, headers }); }
+    if (url.href.startsWith(`${navigation.loadingURL}/cancel/`) && request.method === "POST") {
+      if (url.href === `${navigation.loadingURL}/cancel/${navigation.document}`) cancel(id, navigation);
+      return new Response(null, { status: 204, headers });
+    }
     return new Response(null, { status: 404, headers });
   }
 
-  function begin(request: Request, clientId: string): Response {
+  function begin(request: Request, clientId: string, url: string): Response {
     const id = crypto.randomUUID();
-    const navigation: Navigation = { url: request.url, loadingURL: new URL(id, loading).href, reply: { kind: "pending" } };
+    const navigation: Navigation = { url, loadingURL: new URL(id, loading).href, document: 0, reply: { kind: "pending" } };
     pending.set(id, navigation);
     void options.fetch(request, clientId).then(response => {
       if (pending.get(id) !== navigation) { void response.body?.cancel().catch(() => {}); return; }
@@ -66,12 +69,13 @@ export function previewNavigations(options: NavigationOptions) {
   return {
     fetch(request: Request, clientId: string): Response | Promise<Response> | undefined {
       const url = new URL(request.url);
+      url.hash = "";
       if (url.origin !== scope.origin) return;
       if (url.pathname.startsWith(loading.pathname)) return loadingRequest(request, url);
       if (request.mode !== "navigate" || request.method !== "GET" || !guest.test(url.pathname)) return;
       const id = token(request.referrer);
       const navigation = id ? pending.get(id) : undefined;
-      if (!id || !navigation || navigation.url !== url.href) return begin(request, clientId);
+      if (!id || !navigation || navigation.url !== url.href) return begin(request, clientId, url.href);
       if (navigation.reply.kind === "pending") return redirect(navigation.loadingURL);
       pending.delete(id);
       return navigation.reply.kind === "ready" ? navigation.reply.response : Promise.reject(navigation.reply.error);
@@ -93,7 +97,13 @@ function waitForPreview(input: { url: string; status: string; cancel: string }):
       if (!response.ok) throw new Error("The preview request is no longer available.");
       const state: unknown = await response.json();
       if (stopped) return;
-      if (state && typeof state === "object" && "ready" in state && state.ready === true) { navigating = true; location.replace(input.url); return; }
+      if (state && typeof state === "object" && "ready" in state && state.ready === true) {
+        navigating = true;
+        const target = new URL(input.url);
+        target.hash = location.hash;
+        location.replace(target.href);
+        return;
+      }
       setTimeout(() => { void poll(); }, 250);
     } catch {
       const message = document.querySelector('[role="status"]');

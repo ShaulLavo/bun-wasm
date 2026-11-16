@@ -67,14 +67,14 @@ test("same-URL navigations have separate loading identities and reject foreign s
   responses[1]!.resolve(new Response("second response"));
   await responses[1]!.promise;
   expect(await (await status(router, second)).json()).toEqual({ ready: true });
-  await router.fetch(request(second + "/cancel", second, "POST"), "second");
+  await router.fetch(request(second + "/cancel/0", second, "POST"), "second");
 });
 
 test("closing a loading page cancels a late body and releases its pending response", async () => {
   const { router, response, begin } = fixture();
   const loading = begin();
   let cancelled = false;
-  expect((await router.fetch(request(loading + "/cancel", loading, "POST"), "loader"))?.status).toBe(204);
+  expect((await router.fetch(request(loading + "/cancel/0", loading, "POST"), "loader"))?.status).toBe(204);
   response.resolve(new Response(new ReadableStream({ cancel() { cancelled = true; } })));
   await response.promise;
   expect(cancelled).toBe(true);
@@ -87,7 +87,7 @@ test("closing a loaded waiting response cancels the stream", async () => {
   let cancelled = false;
   response.resolve(new Response(new ReadableStream({ cancel() { cancelled = true; } })));
   await response.promise;
-  await router.fetch(request(loading + "/cancel", loading, "POST"), "loader");
+  await router.fetch(request(loading + "/cancel/0", loading, "POST"), "loader");
   expect(cancelled).toBe(true);
 });
 
@@ -110,4 +110,16 @@ test("subresources, other origins and non-GET navigations keep their existing ro
   const post = Object.defineProperty(new Request(url, { method: "POST", body: "keep the body" }), "mode", { value: "navigate" });
   expect(router.fetch(post, "owner")).toBeUndefined();
   expect(requests).toHaveLength(0);
+});
+
+test("a replaced loading document cannot cancel its replacement's request", async () => {
+  const { router, response, begin } = fixture();
+  const loading = begin();
+  await router.fetch(navigation(loading), "first-document");
+  await router.fetch(navigation(loading), "replacement-document");
+  await router.fetch(request(loading + "/cancel/1", loading, "POST"), "first-document");
+  expect(await (await status(router, loading)).json()).toEqual({ ready: false });
+  response.resolve(new Response("Reloaded preview"));
+  await response.promise;
+  expect(await (await router.fetch(navigation(url, loading), "replacement-document"))?.text()).toBe("Reloaded preview");
 });

@@ -14,6 +14,8 @@ Once the head arrives, it replaces itself with the original application URL.
 The loading document's browser-supplied same-origin referrer identifies the saved
 response. Each navigation has a separate random identity, including simultaneous
 requests for the same application URL.
+Fragment identifiers survive the temporary redirect. Reloading the loading page
+retains its request, while cancellation from its replaced document is ignored.
 
 The final navigation receives that original response, including its status,
 headers and streaming body. It does not issue a second guest request, send an

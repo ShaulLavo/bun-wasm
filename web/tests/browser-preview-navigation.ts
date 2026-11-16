@@ -44,16 +44,20 @@ try {
     assert.equal(await page.evaluate(() => Reflect.get(globalThis, "navigationFixture").ready), "ready");
     for (const status of [201, 404]) {
       const target = `/slow-${status}`;
-      const preview = await page.evaluate(target => Reflect.get(globalThis, "navigationFixture").url(target), target);
+      const preview = await page.evaluate(target => Reflect.get(globalThis, "navigationFixture").url(target), target) + "#kept-fragment";
       await page.evaluate(preview => { const iframe = document.createElement("iframe"); iframe.src = preview; document.body.append(iframe); }, preview);
       await page.frameLocator("iframe").locator('[role="status"]').waitFor().catch(async error => {
         console.error(JSON.stringify(await Promise.all(page.frames().map(async frame => ({ url: frame.url(), html: await frame.content().catch(String) })))));
         throw error;
       });
+      const loadingFrame = page.frames().find(frame => frame !== page.mainFrame());
+      assert(loadingFrame);
+      await Promise.all([loadingFrame.waitForNavigation({ waitUntil: "domcontentloaded" }), loadingFrame.evaluate(() => location.reload())]);
+      await page.frameLocator("iframe").locator('[role="status"]').waitFor();
       const started = Date.now();
       // Cross WebKit's native 70-second pre-head watchdog once. This is a regression stimulus.
       await page.waitForTimeout(type === webkit && status === 201 ? 75000 : 0);
-      const response = page.waitForResponse(reply => reply.url() === preview && reply.status() === status);
+      const response = page.waitForResponse(reply => reply.url() === preview.split("#")[0] && reply.status() === status);
       await page.evaluate(({ target, status }) => Reflect.get(globalThis, "navigationFixture").answer(target, status, `Original guest ${status}`), { target, status });
       const delivered = await response;
       assert.equal(delivered.headers()["x-guest-response"], "original");
