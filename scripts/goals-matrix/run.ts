@@ -73,6 +73,7 @@ export function options(args: readonly string[]): Options {
     if (!iphoneControlUrl || !iphoneAgentCommand || !values.get("device-udid") || values.has("iphone-endpoint")) throw new Error("Visible iPhone mode requires control URL, bound command and device UDID, without SafariDriver");
     validateIphoneControl(iphoneControlUrl, iphoneAgentCommand);
   }
+  if (selectedBrowsers.includes("iphone-safari") && values.get("device-udid")?.toUpperCase() === "C4D2FFD4-A0D2-4608-B180-35854521B830" && !iphoneControlUrl) throw new Error("C4D2 requires the bound visible iPhone transport to prove ordinary Safari finish; WebDriver alone cannot do so");
   return {
     nextBuildObservation: values.has("next-build-observation"),
     profile, safariOwnership: values.has("safari-ownership") || values.has("safari-causal-capture"),

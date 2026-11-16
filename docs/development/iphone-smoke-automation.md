@@ -50,6 +50,17 @@ in the same group strip. Selection still requires a settled snapshot with one
 selected numbered group button. Missing or ambiguous targets stop navigation.
 Setup never closes a tab or reads a private tab total.
 
+The dispatched gate's PC controller also owns the finish procedure in
+[the manual smoke guide](iphone-smoke.md#read-the-result-and-finish-cleanup).
+Install its finalizer before setup. Cleanup selects ordinary tabs before counting,
+closes only its exact owned card in either group, restores ordinary selection and
+proves Done/overview exit before `device_close`, wrapper stop and FIFO release.
+Private closure uses ownership and before/after card contents, never a fabricated
+count. Keep the live binding and admission through finalization, including after
+failure or cancellation. Native-command failure, deadline or lost ownership stops
+all further input and leaves cleanup unproved. The Mac server-only wrapper cannot
+restore Safari through SSH or simctl. Its receipt covers server teardown only.
+
 ## Queue and reports
 
 The default report directory is `/work/reports/goals/iphone-smoke`. Every command

@@ -7,12 +7,12 @@ import { createIphoneTransport } from "./iphone-transport";
 import { Scope } from "./scope";
 import { prepareIphoneSafari } from "./iphone-setup";
 import { closeIphoneTab } from "./iphone-cleanup";
-import { tabBatch, tabOverview, tabPage } from "./iphone-tab-fixture";
+import { cleanupGroups, tabBatch, tabPage } from "./iphone-tab-fixture";
 import { batchSnapshot } from "./iphone-tab-snapshot";
-import { object } from "./evidence";
 import privateOverview from "./fixtures/iphone-private-overview.json";
 import axOverview from "./fixtures/iphone-group-ax.json";
 import selectedOverview from "./fixtures/iphone-group-selected.json";
+import { options } from "./run";
 
 type Snapshot = { appBundleId: string; truncated: boolean; nodes: Record<string, unknown>[] };
 const ordinaryOverview = (): Snapshot => ({ ...privateOverview, nodes: privateOverview.nodes.map(node => ({ ...node,
@@ -206,35 +206,61 @@ test.each(["private", "ordinary"] as const)("cleanup from Private closes only it
   expect(control.closed).toEqual(["Goals owned"]);
 });
 
-function cleanupGroups(ownedGroup: "private" | "ordinary") {
-  let selected: "private" | "ordinary" = "private", overview = false;
-  const cards = { private: ["Unrelated private"], ordinary: ["Unrelated ordinary"] };
-  cards[ownedGroup].unshift("Goals owned");
-  const closed: string[] = [];
-  const snapshot = () => {
-    if (!overview) return tabPage();
-    const result = tabOverview(cards[selected], cards.ordinary.length);
-    result.nodes.find(node => node.identifier === "CapsuleTabGroup")!.selected = selected === "ordinary";
-    result.nodes.push({ kind: "button", index: 98, parentIndex: 99, label: "Private, Tab Group", ref: "e98", identifier: "CapsuleTabGroup", selected: selected === "private" });
-    return result;
-  };
-  function input(step: Record<string, unknown>) {
-    if (step.command !== "press") return;
-    const target = object(object(step.input).target);
-    if (target.selector === 'label="All Tabs"') { overview = true; return; }
-    if (target.ref === "@e99") { selected = "ordinary"; return; }
-    if (target.ref === "@e98") { selected = "private"; return; }
-    if (target.ref === "@e100") { overview = false; return; }
-    if (target.ref !== "@e2" || cards[selected][0] !== "Goals owned") throw new Error("Refused to close an unrelated tab");
-    closed.push(cards[selected].shift()!);
-  }
-  const command = async (args: string[]) => {
-    if (args[0] !== "batch") return "Opened";
-    const steps: unknown = JSON.parse(args[2]!);
-    if (!Array.isArray(steps)) throw new Error("Expected native steps");
-    const rows = steps.map(object);
-    rows.forEach(input);
-    return tabBatch(snapshot(), rows.map(row => String(row.command)));
-  };
-  return { command, cards, closed, selected: () => selected, inOverview: () => overview };
-}
+test("cleanup accepts an already open Private overview and leaves it through Done", async () => {
+  const control = cleanupGroups("private", { overview: true });
+  await closeIphoneTab(control.command, "Goals owned", Date.now() + 10_000);
+  expect(control.closed).toEqual(["Goals owned"]);
+  expect(control.cards).toEqual({ private: ["Unrelated private"], ordinary: ["Unrelated ordinary"] });
+  expect(control.selected()).toBe("ordinary");
+  expect(control.inOverview()).toBe(false);
+});
+
+test.each(["absent", "duplicate", "still-visible"])("%s private ownership remains failed after ordinary restoration", async scenario => {
+  const control = cleanupGroups("private", { ignoreClose: scenario === "still-visible" });
+  if (scenario === "absent") control.cards.private.shift();
+  if (scenario === "duplicate") control.cards.private.push("Goals owned");
+  const before = structuredClone(control.cards);
+  await expect(closeIphoneTab(control.command, "Goals owned", Date.now() + 10_000)).rejects.toThrow();
+  expect(control.cards).toEqual(before);
+  expect(control.closed).toEqual([]);
+  expect(control.selected()).toBe("ordinary");
+  expect(control.inOverview()).toBe(false);
+});
+
+test.each(["native-failure", "partial-batch", "expired"])("%s cleanup stops without a restoration input", async scenario => {
+  const control = cleanupGroups("private");
+  const commands: string[][] = [];
+  await expect(closeIphoneTab(async args => {
+    commands.push(args);
+    if (args[0] !== "batch") return control.command(args);
+    if (scenario === "native-failure") throw new Error("Lost native command ownership");
+    return JSON.stringify({ success: false });
+  }, "Goals owned", Date.now() + (scenario === "expired" ? -1 : 10_000))).rejects.toThrow();
+  expect(commands.map(args => args[0])).toEqual(scenario === "expired" ? [] : ["open", "batch"]);
+  expect(control.closed).toEqual([]);
+});
+
+test("missing recorded identity restores ordinary context but cannot pass cleanup", async () => {
+  const control = cleanupGroups("private");
+  await expect(closeIphoneTab(control.command, "", Date.now() + 10_000)).rejects.toThrow("Missing task Safari tab identity");
+  expect(control.closed).toEqual([]);
+  expect(control.selected()).toBe("ordinary");
+  expect(control.inOverview()).toBe(false);
+});
+
+test("setup-only finalization restores ordinary context without fabricating an owned title", async () => {
+  const control = cleanupGroups("private");
+  await closeIphoneTab(control.command, null, Date.now() + 10_000);
+  expect(control.closed).toEqual([]);
+  expect(control.cards.private).toEqual(["Goals owned", "Unrelated private"]);
+  expect(control.selected()).toBe("ordinary");
+  expect(control.inOverview()).toBe(false);
+});
+
+test("C4D2 WebDriver entry refuses to bypass the bound ordinary finish proof", () => {
+  const args = ["--asset-source=fixture", "--browsers=iphone-safari", "--device-udid=C4D2FFD4-A0D2-4608-B180-35854521B830"];
+  expect(() => options(args)).toThrow("bound visible iPhone transport");
+  expect(() => options(args.concat("--iphone-endpoint=http://127.0.0.1:1234"))).toThrow("bound visible iPhone transport");
+  expect(() => options(["--asset-source=fixture", "--browsers=safari"])).not.toThrow();
+  expect(() => options(args.concat(["--iphone-control-url=http://127.0.0.1:1/__goals_iphone/" + "a".repeat(64), "--iphone-agent-command=/bound/agent-device"]))).not.toThrow();
+});

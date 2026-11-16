@@ -9,6 +9,7 @@ import { armIphoneClick, iphonePreviewLoad, presentIphonePreview } from "./iphon
 import { object } from "./evidence";
 import { closeIphoneTab } from "./iphone-cleanup";
 import { prepareIphoneSafari } from "./iphone-setup";
+import { safariNodes } from "./iphone-tab-snapshot";
 import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates, saveIphoneEvidence } from "./iphone-click";
 
 type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; cleanupTimeoutMs?: number; saveNative?(text: string): Promise<void> };
@@ -157,6 +158,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   let opening = new AbortController();
   const cleaning = new AbortController();
   let opened = false;
+  let safariStarted = false;
   let deviceFailed = false;
   let title = "";
   let closing: Promise<void> | undefined;
@@ -179,6 +181,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     try {
       const output = await action;
       saveIphoneEvidence(config.saveNative, { command: [config.agent].concat(args), output });
+      if (args[0] === "batch") safariNodes(output, JSON.parse(args[2]!).map((step: { command: string }) => step.command));
       return output;
     } catch (error) {
       deviceFailed = true;
@@ -230,8 +233,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     lifetime.abort(new Error("iPhone transport closing"));
     await Promise.allSettled(Array.from(active));
     if (deviceFailed) throw new Error("T3 device command failed; stopping device interactions, task tab cleanup is unproved");
-    if (!opened) return;
-    await closeIphoneTab(device, title, deadline);
+    if (!safariStarted) return;
+    await closeIphoneTab(device, opened ? title : null, deadline);
     opened = false;
   }
   return {
@@ -268,6 +271,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       admit(admission);
       const signal = AbortSignal.any([admission.signal, lifetime.signal]);
       const setup = within(admission, config.timeoutMs, new Error("iPhone ordinary tab-group setup deadline expired"));
+      admit(setup);
+      safariStarted = true;
       await prepareIphoneSafari(device, { signal, deadline: setup.deadline, expiryReason: setup.expiryReason });
       admit(admission);
       const target = await request("host/configure", { url });
