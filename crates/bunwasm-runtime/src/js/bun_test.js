@@ -1936,7 +1936,7 @@
   }
 
   function onTestFinished(fn, timeout) {
-    if (typeof fn !== "function") throw new TypeError("onTestFinished() expects a function as the first argument");
+    if (typeof fn !== "function") throw new Error("onTestFinished() expects a function as the first argument");
     if (!currentTest) throw new Error("Cannot call onTestFinished() outside of a test. It can only be called inside a test.");
     currentTest.finished.push({ fn, timeout: readTimeout(timeout) });
   }

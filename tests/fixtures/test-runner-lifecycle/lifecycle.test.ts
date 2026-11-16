@@ -4,6 +4,9 @@ import { afterAll, afterEach, beforeEach, describe, jest, onTestFinished, test }
 assert.throws(() => test.failing("missing"), /test.failing expects a function as the second argument/);
 assert.throws(() => describe(() => {}, () => {}), /describe\(\) expects first argument/);
 assert.throws(() => onTestFinished(() => {}), /Cannot call onTestFinished\(\) outside of a test/);
+assert.throws(() => Reflect.apply(onTestFinished, undefined, [1]), {
+  name: "Error", message: "onTestFinished() expects a function as the first argument",
+});
 assert.throws(() => test("both", () => {}, { retry: 1, repeats: 1 }), /Cannot set both retry and repeats/);
 assert.equal(jest.setTimeout(5000), undefined);
 describe(() => { test("sole callback", () => console.log("sole callback ran")); });

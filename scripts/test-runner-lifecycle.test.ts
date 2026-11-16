@@ -58,6 +58,9 @@ function registerCallable(api: API, order: string[]) {
 function registerValidation(api: API) {
   expect(() => api.test.failing("missing")).toThrow("test.failing expects a function as the second argument");
   expect(api.jest.setTimeout(5000)).toBeUndefined();
+  let invalid: unknown;
+  try { Reflect.apply(api.onTestFinished, undefined, [1]); } catch (error) { invalid = error; }
+  expect(invalid).toMatchObject({ name: "Error", message: "onTestFinished() expects a function as the first argument" });
   api.test("registered", () => {
     expect(() => api.test.failing("missing")).toThrow("test.failing expects a function as the second argument");
   });
