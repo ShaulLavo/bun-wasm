@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-for (const [file, passes, failures] of [["lifecycle.test.ts", 7, 0], ["failure.test.ts", 0, 5], ["failing-cleanup.test.ts", 2, 2]] as const) {
+for (const [file, passes, failures] of [["lifecycle.test.ts", 9, 0], ["failure.test.ts", 0, 5], ["failing-cleanup.test.ts", 2, 2]] as const) {
   const child = Bun.spawnSync([process.execPath, "test", `./${file}`], {
     stdout: "pipe", stderr: "pipe", env: { ...process.env, AGENT: "0", NO_COLOR: "1" },
   });

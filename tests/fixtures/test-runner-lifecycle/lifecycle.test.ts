@@ -12,6 +12,16 @@ for (const repeats of [null, "bad", false]) {
 }
 assert.equal(jest.setTimeout(5000), undefined);
 
+let optionBodies = 0;
+let timeoutReads = 0;
+const optionOrder = { repeats: 1, get timeout() { timeoutReads++; optionOrder.repeats = 0; return 1000; } };
+test("timeout getter changes repeats before policy parsing", () => { optionBodies++; }, optionOrder);
+test("verify timeout getter order", () => {
+  assert.equal(optionBodies, 1);
+  assert.equal(timeoutReads, 1);
+  console.log("timeout getter order verified");
+});
+
 describe("retry lifecycle", () => {
   const log: string[] = [];
   let attempts = 0;

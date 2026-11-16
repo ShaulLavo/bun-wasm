@@ -1,9 +1,10 @@
 bun test vVERSION
+timeout getter order verified
 retry lifecycle verified
 repeat lifecycle verified
 validation verified
 live cleanup verified
-lifecycle.test.ts: 7 pass, 0 fail
+lifecycle.test.ts: 9 pass, 0 fail
 bun test vVERSION
 retry finished 1
 retry finished 2

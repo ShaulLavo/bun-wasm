@@ -29,6 +29,8 @@ Expected-failure tests classify the body separately from cleanup. A successful
 body with rejected cleanup fails; an already failing body remains an expected
 failure, while the cleanup diagnostic stays visible. Retry and repeats option
 types are both validated before checking their mutual exclusion.
+The timeout accessor is read once before the retry/repeats accessors, preserving
+native error precedence and mutations that alter the requested repeat count.
 
 Callable describe and new label validation are deferred. The existing describe
 registration function is unchanged from the original base. This adapter does not

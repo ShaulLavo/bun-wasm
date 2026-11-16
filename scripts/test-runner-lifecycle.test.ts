@@ -9,7 +9,7 @@ const root = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
 interface API {
-  test: ((name: string, fn?: () => unknown, options?: { retry?: number; repeats?: number }) => void) & {
+  test: ((name: string, fn?: () => unknown, options?: { retry?: number; repeats?: number; timeout?: number }) => void) & {
     failing(name: string, fn?: () => unknown): void;
   };
   describe: {
@@ -105,6 +105,47 @@ function registerOptionValidation(api: API) {
   expect(() => api.test("conflict", () => {}, { retry: 1, repeats: 0 })).toThrow("Cannot set both retry and repeats");
   api.test("sentinel", () => {});
 }
+
+function registerTimeoutOrder(api: API, order: string[], state: { bodies: number }) {
+  let repeats = 1;
+  api.test("runs once", () => { state.bodies++; }, {
+    get timeout() { order.push("timeout"); repeats = 0; return 1000; },
+    get retry() { order.push("retry"); return 0; },
+    get repeats() { order.push("repeats"); return repeats; },
+  });
+}
+
+function registerThrowingTimeout(api: API) {
+  const body = () => {};
+  for (const method of [api.test, Reflect.get(api.test, "skip")]) {
+    const marker = new Error("timeout getter");
+    const reads: string[] = [];
+    const options = {
+      get timeout() { reads.push("timeout"); throw marker; },
+      get retry() { reads.push("retry"); return "bad"; },
+      get repeats() { reads.push("repeats"); return "bad"; },
+    };
+    let error: unknown;
+    try { Reflect.apply(method, undefined, ["must not register", body, options]); } catch (value) { error = value; }
+    expect(error).toBe(marker);
+    expect(reads).toEqual(["timeout"]);
+  }
+  api.test("sentinel", () => {});
+}
+
+test("timeout is read once before repeat policy can change execution count", async () => {
+  const order: string[] = [];
+  const state = { bodies: 0 };
+  const result = await runner(api => registerTimeoutOrder(api, order, state));
+  expect(result.exit).toBe(0);
+  expect(state.bodies).toBe(1);
+  expect(order).toEqual(["timeout", "retry", "repeats"]);
+});
+
+test("timeout getter errors precede retry and repeats validation", async () => {
+  const result = await runner(registerThrowingTimeout);
+  expect(result.exit).toBe(0);
+});
 
 test("failing tests do not absorb cleanup failure after a successful body", async () => {
   for (const phase of ["local", "finished"]) {

@@ -1790,8 +1790,9 @@
 
   function readTimeout(options) {
     if (typeof options === "number") return options;
-    if (options && typeof options === "object" && typeof options.timeout === "number") return options.timeout;
-    return undefined;
+    if (!options || typeof options !== "object") return undefined;
+    const timeout = options.timeout;
+    return typeof timeout === "number" ? timeout : undefined;
   }
 
   function registerTest(modifiers, name, fn, timeoutOrOptions) {
@@ -1799,6 +1800,7 @@
     const mode = modifiers.mode || "run";
     const signature = modifiers.failing ? "test.failing" : "test";
     if (!hasFn && mode === "run") throw new Error(`${signature} expects a function as the second argument`);
+    const timeout = readTimeout(timeoutOrOptions);
     const repeat = internal.require("test_lifecycle").repeatOptions(timeoutOrOptions, signature);
     const scope = currentScope();
     const test = {
@@ -1809,7 +1811,7 @@
       mode: effectiveMode(scope, mode),
       only: !!modifiers.only,
       failing: !!modifiers.failing,
-      timeout: readTimeout(timeoutOrOptions),
+      timeout,
       retry: repeat.retry,
       repeats: repeat.repeats,
       usesDone: modifiers.usesDone !== undefined ? modifiers.usesDone : hasFn && fn.length > 0,
