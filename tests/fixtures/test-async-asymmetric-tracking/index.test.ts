@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 
 let completed = 0;
-const reason = new Error("owned asymmetric rejection");
+// A primitive diagnostic avoids engine-specific stack text; Error identity is covered by the comparison fixture.
+const reason = "owned asymmetric rejection";
 expect.extend({
   eventual(value) {
     return new Promise(resolve => setTimeout(() => {

@@ -26,8 +26,9 @@ test("async asymmetric comparisons through the actual util and expect factories"
   const util = factory("util.ts")({ ...intrinsic, require: (name: keyof typeof modules) => modules[name] });
   const extensions = factory("test_extensions.ts")({ ...intrinsic, require: (name: keyof typeof modules) => modules[name] });
   const available = { ...modules, util, test_extensions: extensions };
+  const diagnostics: string[] = [];
   const { exports } = factory("bun_test.js")({
-    native: { writeStderr: () => {} }, fakeTimers: { api: {} }, require: (name: keyof typeof available) => available[name],
+    native: { writeStderr: (text: string) => diagnostics.push(text) }, fakeTimers: { api: {} }, require: (name: keyof typeof available) => available[name],
   });
   const source = readFileSync(new URL("index.ts", fixture), "utf8").replace(/^import[^\n]+\n/, "");
   const run = expression(`(async (expect, mock, Bun, console) => {${source}\n})`);
@@ -38,4 +39,5 @@ test("async asymmetric comparisons through the actual util and expect factories"
     throw new Error(lines.join("\n"), { cause });
   }
   expect(lines.join("\n") + "\n").toBe(readFileSync(new URL("expected.txt", fixture), "utf8"));
+  expect(diagnostics).toEqual(["Error: asymmetric rejection\n"]);
 });
