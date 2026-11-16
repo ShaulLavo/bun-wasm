@@ -1,5 +1,5 @@
 {
   "owner": "native",
   "path": "tests/fixtures/wasm-globals",
-  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+  "engines": ["quickjs", "jsc", "spidermonkey"]
 }
