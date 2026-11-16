@@ -38,10 +38,48 @@ claim async describe completion or recover the two upstream callable cases.
 
 Concurrency remains serial. Concurrent scheduling needs separate asynchronous
 test and invocation ownership before overlapping tests can safely share this
-runner. This adapter does not change assertion settlement or snapshot values.
+runner. This adapter does not change matcher values or ordinary assertion settlement.
 
 A private, opaque file token now spans serial file collection, execution and
 snapshot flushing, and is restored in `finally`. The closure-local
 `getExpectationOrigin()` exposes only readonly opaque identities for the active
 file, test and invocation. It does not change their records, carry asynchronous
 context, or define matcher validity across hooks or tests.
+
+
+Expected-failure bodies retain timeout failures. Done callbacks use the first
+callback result and keep their invocation open through the callback's return and
+an observed continuation of a returned promise. Same-callback throws and returned
+rejections therefore fail the owning test. Successful done completion yields one
+microtask before closing; ordinary invocation completion retains its previous
+settlement path. Tracking the final continuation preserves Browser observation
+without changing its host or public Promise behavior.
+
+This is bounded completion behavior. Native Bun can complete an already fulfilled
+async return before done is called; this adapter keeps its existing missing-done
+timeout requirement. Native can also print both a done error and a subsequent
+returned rejection; this unit preserves the first failure rather than claiming
+multiple-error diagnostic parity. Neither difference needs a synchronous drain.
+
+CLI preload imports are attempted once into one existing scope-shaped object.
+Ordinary roots retain only its parent pointer, so each hooks inherit in order
+without replaying imports or copying hook arrays. Global setup runs after the
+first ordinary import attempt, including empty or filtered files. Global teardown
+is consumed before awaiting it during the last file's finalization, before
+snapshot flush. Import and local-hook errors do not bypass that finalization;
+teardown and snapshot errors are reported separately. Existing bail exits remain
+process exits.
+
+Registration rejects during preload before validation, option access or each-table
+expansion, including modified, callable and empty-each forms. Hook registration
+continues to use the temporary preload scope. The preload guard and collection
+cursor restore after awaited import failures. Outside-runner errors name the
+specific registration API.
+
+Preload import and setup failures deliberately fail closed. Rejected preload
+imports execute no partial hooks or ordinary modules and do not replay. Failed
+global setup suppresses later test bodies and setup replay, but attempts the
+registered global teardown once. Native Bun 1.4.4 instead runs partially declared
+preload hooks after an import failure and resumes later-file bodies after global
+setup failure. These are explicit product differences, covered by negative
+controls rather than native-parity claims.

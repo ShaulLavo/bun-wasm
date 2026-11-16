@@ -59,6 +59,13 @@
   // The pending invocation, so uncaught errors can fail it.
   let activeInvocation = null;
   let activeFile = null;
+  let preloadScope = null;
+  let preloading = false;
+  /** @type {"unattempted" | "loading" | "ready" | "stopped"} */
+  let preloadImport = "unattempted";
+  /** @type {"pending" | "running" | "ready" | "stopped"} */
+  let preloadSetup = "pending";
+  let preloadTeardown = false;
 
   /** @returns {Readonly<{ test: object | null, invocation: object | null, file: object | null }>} */
   function getExpectationOrigin() {
@@ -1784,8 +1791,8 @@
     return { kind: "scope", name, parent, mode, only, children: [], beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
   }
 
-  function currentScope() {
-    if (!collecting) throw new Error("Cannot call test() or describe() outside of a test file");
+  function currentScope(kind) {
+    if (!collecting) throw new Error(`Cannot use ${kind} outside of the test runner. Run "bun test" to run tests.`);
     return collecting.scope;
   }
 
@@ -1801,14 +1808,19 @@
     return typeof timeout === "number" ? timeout : undefined;
   }
 
+  function guardRegistration(kind) {
+    if (preloading) throw new Error(`Cannot use ${kind} during preload.`);
+  }
+
   function registerTest(modifiers, name, fn, timeoutOrOptions) {
+    guardRegistration("test");
     const hasFn = typeof fn === "function";
     const mode = modifiers.mode || "run";
     const signature = modifiers.failing ? "test.failing" : "test";
     if (!hasFn && mode === "run") throw new Error(`${signature} expects a function as the second argument`);
     const timeout = readTimeout(timeoutOrOptions);
     const repeat = internal.require("test_lifecycle").repeatOptions(timeoutOrOptions, signature);
-    const scope = currentScope();
+    const scope = currentScope("test");
     const test = {
       kind: "test",
       name: name === undefined ? "" : String(name),
@@ -1827,7 +1839,8 @@
   }
 
   function registerDescribe(modifiers, name, fn) {
-    const parent = currentScope();
+    guardRegistration("describe");
+    const parent = currentScope("describe");
     const label = typeof name === "function" ? name.name : String(name);
     const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
     if (scope.only) collecting.hasOnly = true;
@@ -1914,6 +1927,7 @@
     fn.concurrent = fn;
     fn.serial = fn;
     fn.each = (table) => (name, callback, timeout) => {
+      guardRegistration("test");
       eachRows(table).forEach((args, index) => {
         const label = formatLabel(String(name), args, index);
         const usesDone = typeof callback === "function" && callback.length > args.length;
@@ -1929,6 +1943,7 @@
     fn.concurrent = fn;
     fn.serial = fn;
     fn.each = (table) => (name, callback) => {
+      guardRegistration("describe");
       eachRows(table).forEach((args, index) => {
         registerDescribe(modifiers, formatLabel(String(name), args, index), () => callback(...args));
       });
@@ -1957,7 +1972,7 @@
   function hookRegistrar(kind) {
     return (fn, timeout) => {
       if (typeof fn !== "function") throw new TypeError(`${kind}() expects a function as the first argument`);
-      const hooks = kind === "afterAll" && currentTest ? currentTest.afterAll : currentScope()[kind];
+      const hooks = kind === "afterAll" && currentTest ? currentTest.afterAll : currentScope(`${kind}()`)[kind];
       hooks.push({ fn, timeout: readTimeout(timeout) });
     };
   }
@@ -1984,7 +1999,7 @@
     return new Promise((resolve) => {
       let timer = null;
       const invocation = matcherSupport.pending();
-      const finish = (result) => invocation.complete(result, finalize);
+      const finish = (result) => invocation.complete(result, finalize, usesDone);
       const finalize = (result) => {
         if (invocation.settled) return;
         invocation.settled = true;
@@ -1997,21 +2012,8 @@
       const startTimer = () => {
         timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
       };
-      try {
-        if (usesDone) {
-          const done = (err) => finish(err === undefined || err === null ? { ok: true } : { error: err });
-          startTimer();
-          const result = fn(...args.concat([done]));
-          if (isThenable(result)) result.then(null, (err) => finish({ error: err }));
-          return;
-        }
-        startTimer();
-        const result = fn(...args);
-        if (!isThenable(result)) return finish({ ok: true });
-        result.then(() => finish({ ok: true }), (err) => finish({ error: err }));
-      } catch (err) {
-        finish({ error: err });
-      }
+      startTimer();
+      internal.require("test_lifecycle").body(fn, args, usesDone, finish, invocation.track);
     });
   }
 
@@ -2137,7 +2139,7 @@
 
   function classify(test, result, record) {
     if (test.mode === "todo") return result.ok ? { status: "fail", note: "todoPassed" } : { status: "todo" };
-    if (test.failing) return result.ok ? { status: "fail", note: "failingPassed" } : { status: "pass" };
+    if (test.failing && !result.timeout) return result.ok ? { status: "fail", note: "failingPassed" } : { status: "pass" };
     if (!result.ok) return failureFromResult(result, test);
     const assertions = record.assertions;
     if (assertions && assertions.exact !== undefined && assertions.exact !== record.expectCount) {
@@ -2484,38 +2486,101 @@
     });
   }
 
-  async function runFile(abs, cwd) {
-    const previousFile = activeFile;
+  async function runFile(abs, cwd, last) {
+    const previousFile = getExpectationOrigin().file;
     activeFile = {};
     try {
-      await runActiveFile(abs, cwd);
+      await runActiveFile(abs, cwd, last);
     } finally {
       activeFile = previousFile;
     }
   }
 
-  async function runActiveFile(abs, cwd) {
-    summary.files++;
-    const file = { root: createScope("", null, "run", false), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
-    file.scope = file.root;
-    startFileHeader(relativePath(cwd, abs));
-    collecting = file;
+  async function importPreloads(file, cwd) {
+    if (preloads.length === 0 || preloadImport === "ready") return true;
+    if (preloadImport !== "unattempted") return false;
+    preloadImport = "loading";
+    preloadScope = createScope("", null, "run", false);
+    const previousScope = file.scope;
+    const previousCollecting = collecting;
+    file.scope = preloadScope;
+    preloading = true;
     try {
       for (const preload of preloads) await internal.importModule(resolveArgument(cwd, preload));
-      await internal.importModule(abs);
+      preloadImport = "ready";
+      return true;
     } catch (error) {
-      // A file that fails to load counts as one failed test.
+      preloadImport = "stopped";
+      preloadSetup = "stopped";
+      throw error;
+    } finally {
+      preloading = false;
+      file.scope = previousScope;
+      collecting = previousCollecting;
+    }
+  }
+
+  async function collectFile(file, cwd) {
+    if (preloadImport === "stopped") return false;
+    collecting = file;
+    try {
+      if (!await importPreloads(file, cwd)) return false;
+      file.root.parent = preloadScope;
+      await internal.importModule(file.path);
+      return true;
+    } catch (error) {
       reportUnhandledError(error);
       summary.fail++;
-      return;
+      return false;
     } finally {
       collecting = null;
     }
-    await runScope(file.root, file);
+  }
+
+  async function setupPreloads() {
+    if (!preloadScope || preloadImport !== "ready" || preloadSetup !== "pending") return;
+    preloadSetup = "running";
+    try {
+      const result = await runHooks(preloadScope.beforeAll);
+      preloadSetup = result.ok ? "ready" : "stopped";
+      if (!result.ok) reportHookFailure(preloadScope, result);
+    } catch (error) {
+      preloadSetup = "stopped";
+      reportHookFailure(preloadScope, { error });
+    }
+  }
+
+  async function finishPreloads() {
+    if (!preloadScope || preloadImport !== "ready" || preloadTeardown) return;
+    preloadTeardown = true;
+    try {
+      const result = await runHooks(preloadScope.afterAll);
+      if (!result.ok) reportHookFailure(preloadScope, result);
+    } catch (error) {
+      reportHookFailure(preloadScope, { error });
+    }
+  }
+
+  function flushFileSnapshots(file) {
     try {
       flushSnapshots(file);
     } catch (error) {
       reportUnhandledError(error);
+    }
+  }
+
+  async function runActiveFile(abs, cwd, last) {
+    summary.files++;
+    const file = { root: createScope("", null, "run", false), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
+    file.scope = file.root;
+    startFileHeader(relativePath(cwd, abs));
+    const collected = await collectFile(file, cwd);
+    await setupPreloads();
+    try {
+      if (collected && preloadSetup !== "stopped") await runScope(file.root, file);
+    } finally {
+      if (last) await finishPreloads();
+      flushFileSnapshots(file);
     }
   }
 
@@ -2534,7 +2599,7 @@
     }
     installErrorHandlers();
     Object.assign(globalThis, exports);
-    for (const abs of state.files) await runFile(abs, cwd);
+    for (let index = 0; index < state.files.length; index++) await runFile(state.files[index], cwd, index === state.files.length - 1);
     const filteredAll = printSummary();
     if (filteredAll || summary.fail > 0 || summary.errors > 0) globalThis.process.exitCode = 1;
   }

@@ -68,3 +68,12 @@ assertions retain their existing reaction count. No host observation or pump
 changes are involved. Stack-bearing Error rejection checks run inside the owned
 subprocess fixture; the comparison fixture pins the existing two-line primitive
 diagnostic without depending on engine-specific stack columns.
+
+
+The pending observer accepts a done-invocation completion checkpoint. Successful
+done completion yields one microtask before examining its existing pending map,
+so a same-callback throw or returned rejection can retain ownership. Non-done
+completion keeps the previous path. Returned done-body promises contribute their
+observed final continuation, whose settlement is visible in Browser, rather than
+an unobserved async-function promise. Matcher return values, intrinsic reactions,
+assertion origins and snapshot policy are unchanged by this runner wiring.
