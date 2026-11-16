@@ -4,7 +4,6 @@
   type Encoding = "utf8" | "utf16le" | "latin1" | "ascii";
   type Bindings = {
     normalizeEncoding(value: unknown): string | undefined;
-    isUint8Array(value: unknown): value is Uint8Array;
     invalidArgType(name: string, expected: string[], actual: unknown): Error;
     bytesToString(bytes: Uint8Array, encoding: Encoding): string;
     fromString(text: string, encoding: Encoding): Uint8Array;
@@ -12,8 +11,14 @@
   };
 
   return function createTranscode(bindings: Bindings) {
-    const { normalizeEncoding, isUint8Array, invalidArgType, bytesToString, fromString, allocate } = bindings;
+    const { normalizeEncoding, invalidArgType, bytesToString, fromString, allocate } = bindings;
     const decoders: (TextDecoder | undefined)[] = [];
+    const tag = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag)?.get;
+    if (!tag) throw new TypeError("Missing TypedArray tag getter");
+
+    function isSource(value: unknown): value is Uint8Array {
+      return ArrayBuffer.isView(value) && tag.call(value) === "Uint8Array";
+    }
 
     function encoding(value: unknown): Encoding {
       const normalized = normalizeEncoding(value);
@@ -64,7 +69,7 @@
     }
 
     return function transcode(source: unknown, fromEncoding?: unknown, toEncoding?: unknown): Uint8Array {
-      if (!isUint8Array(source)) throw invalidArgType("source", ["Buffer", "Uint8Array"], source);
+      if (!isSource(source)) throw invalidArgType("source", ["Buffer", "Uint8Array"], source);
       if (source.length === 0) return allocate(0);
       const from = encoding(fromEncoding), to = encoding(toEncoding);
       const text = decode(source, from, to);

@@ -1274,7 +1274,7 @@
   }
 
   const transcode = internal.require("buffer_transcode")({
-    normalizeEncoding, isUint8Array, invalidArgType, bytesToString, fromString,
+    normalizeEncoding, invalidArgType, bytesToString, fromString,
     allocate: Buffer.allocUnsafe,
   });
 
