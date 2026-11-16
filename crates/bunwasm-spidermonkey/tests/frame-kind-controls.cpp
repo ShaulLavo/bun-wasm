@@ -1,3 +1,4 @@
+#include "js/AllocationRecording.h"
 #include "js/StructuredClone.h"
 #include "js/UbiNode.h"
 
@@ -244,10 +245,16 @@ void frame_kind_reconstruction() {
   JS::RootedString name(context);
   check(JS::GetSavedFrameFunctionDisplayName(context, nullptr, clone, &name) == JS::SavedFrameResult::Ok && !name,
         "clone keeps null display name");
-  JS::RootedObject live(context);
-  JS::Rooted<JS::ubi::StackFrame> ubi(context, JS::ubi::StackFrame(frame));
-  check(ubi.get().constructSavedFrameStack(context, &live) && live == frame && frame_kind(live) == FrameKind::Function,
-        "live ubi returns same known frame");
+  JS::EnableRecordingAllocations(context, [](JS::RecordAllocationInfo&&) {}, 1.0);
+  Value allocation(script("(function(){ return {}; })()", "/kind-live-ubi.ts"));
+  JS::RootedObject allocated(context, object(allocation.handle)), live(context), again(context);
+  JS::ubi::Node node(allocated.get());
+  check(node.hasAllocationStack(), "recorded allocation has a live SavedFrame stack");
+  JS::Rooted<JS::ubi::StackFrame> ubi(context, node.allocationStack());
+  check(ubi.get().constructSavedFrameStack(context, &live) && live && frame_kind(live) == FrameKind::Function,
+        "live ubi preserves anonymous Function kind");
+  check(ubi.get().constructSavedFrameStack(context, &again) && again == live, "live ubi wraps the same SavedFrame");
+  JS::DisableRecordingAllocations(context);
   JS::ubi::FrameKindOffline offline;
   JS::Rooted<JS::ubi::StackFrame> generic(context, JS::ubi::StackFrame(&offline));
   JS::RootedObject reconstructed(context);

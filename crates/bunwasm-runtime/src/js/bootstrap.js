@@ -97,6 +97,10 @@
     return internal.displayName ? internal.displayName(file, typeof site.isEval === "function" && site.isEval()) : file;
   }
 
+  function syntaxCallSite(site, name, file) {
+    return !isV8 && site.getFunction() === undefined && !name && file;
+  }
+
   function formatCallSite(site, keepIdentity = false, anonymousFunction = false) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
     const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
@@ -107,7 +111,7 @@
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
     // A syntax error's location: no function, just file and any known position.
-    if (!anonymousFunction && !isV8 && site.getFunction() === undefined && !name && file) return formatPosition(file, line, col);
+    if (!anonymousFunction && syntaxCallSite(site, name, file)) return formatPosition(file, line, col);
     const hasCompletePosition = typeof line === "number" && typeof col === "number";
     if (hasCompletePosition && file && !internal.mappedCallSites?.has(site)) {
       const mapped = native.mapPosition(generated ? rawFile : file, line, col);
