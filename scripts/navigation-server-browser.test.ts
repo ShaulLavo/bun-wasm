@@ -40,14 +40,12 @@ async function boundary(mode: "before-arrival" | "in-handler" | "returned") {
       url: originalTarget, error: String(failure), stage: mode === "returned" ? "runtime-publication" : "navigation",
       originalServerRequest: { outcome: "ok", value: {
         enabled: true, id: expect.any(String), listening: [expect.objectContaining({ event: "listening", url })],
-        events: mode === "before-arrival" ? [] : expect.arrayContaining([expect.objectContaining({ event: "arrival" })]),
+        events: mode === "returned"
+          ? [expect.objectContaining({ event: "arrival" }), expect.objectContaining({ event: "response-return", detail: { status: 200 } })]
+          : mode === "in-handler" ? [expect.objectContaining({ event: "arrival" })] : [],
       } },
       server: { outcome: "ok", value: { status: 200 } },
     });
-    expect(report).toMatchObject({ originalServerRequest: { value: { events: mode === "returned"
-      ? [expect.objectContaining({ event: "arrival" }), expect.objectContaining({ event: "response-return", detail: { status: 200 } })]
-      : mode === "in-handler" ? [expect.objectContaining({ event: "arrival" })] : [],
-    } } });
     const entries: unknown[] = readFileSync(process.env.BUN_WASM_NAVIGATION_LOG!, "utf8").trim().split("\n").map(line => JSON.parse(line));
     const id = new URL(originalTarget).searchParams.get(navigationParameter);
     expect(id).toBeTruthy();
