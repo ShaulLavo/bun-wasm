@@ -183,6 +183,7 @@ export async function preservationScenario(browser: Browser, base: string, obser
     const active = await step("hono.page.create", () => context.newPage());
     const page = await step("preservation.page.create", () => context.newPage());
     await openTemplate(active, base, "hono", observer);
+    if (observer) await step("routing.qualify-initial-hono", () => observer.qualifyRouting(["/"]));
     const server = await step("hono.read-source", () => active.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/server.ts"))));
     observer?.event("assert", { phase: "hono.source-port" });
     assert.match(server, /port: 5173/);
@@ -192,6 +193,7 @@ export async function preservationScenario(browser: Browser, base: string, obser
     assert.match(await step("hono.preview-src", () => active.locator("#preview").getAttribute("src")) ?? "", /\/5174\//);
     await step("hono.increment", () => active.frameLocator("#preview").locator("#increment:not([disabled])").click());
     await openTemplate(page, base, "vanilla", observer);
+    if (observer) await step("routing.qualify-initial-vanilla", () => observer.qualifyRouting());
     const original = await step("vanilla.read-source", () => page.evaluate(async () => new TextDecoder().decode(await sandbox.fs.readFile("/home/user/app/src/main.ts"))));
     const main = original.replace('import "./App.css";\n', "").replace("Hello from vanilla TypeScript", "Storage source one");
     await step("vanilla.edit-source", () => edit(page, "src/main.ts", main));
@@ -238,7 +240,7 @@ export async function preservationScenario(browser: Browser, base: string, obser
       observer.secondary("preservation.diagnostics", failure);
       throw error;
     });
-    const report = { checkpoint, error: String(error), errors, pages };
+    const report = { checkpoint, error: String(error), errors, pages, routing: observer?.routingReport() };
     observer?.event("preservation-report", report);
     console.error(JSON.stringify(report, null, 2));
     throw new StoragePreservationFailure(report, error);
@@ -248,7 +250,7 @@ export async function preservationScenario(browser: Browser, base: string, obser
 export class StoragePreservationFailure extends Error {
   constructor(readonly report: {
     checkpoint: "setup" | "vanilla-config-restart" | "first-vite-react-startup" | "first-vite-vue-startup" | "first-vanilla-restoration" | "preservation";
-    error: string; errors: readonly string[]; pages: readonly (StoragePageDiagnostic | string)[];
+    error: string; errors: readonly string[]; pages: readonly (StoragePageDiagnostic | string)[]; routing?: readonly object[];
   }, cause: unknown) {
     super(report.error, { cause });
     this.name = "StoragePreservationFailure";
