@@ -1427,7 +1427,7 @@
     return unlocated ? nativeFrame(unlocated[1], "<eval>", 0, 0) : null;
   }
 
-  function nativeFrame(name, source, line, col) {
+  function nativeFrame(name, source, line, col, frameKind) {
     const constructed = native.engine === "spidermonkey" && /^bun-wasm:function line \d+ > (?:Function|AsyncFunction|GeneratorFunction|AsyncGenerator)(?:$| > )/.test(source);
     if (source.startsWith("bun-wasm:") && !constructed) return null;
     const generated = native.engine === "host" && native.preparedSourceName(source) !== undefined;
@@ -1438,7 +1438,9 @@
     const spiderMonkey = native.engine === "spidermonkey";
     if (!generated) column = spiderMonkey ? constructorColumn(file, lineNo, column) : calleeColumn(file, lineNo, column);
     const topLevel = (spiderMonkey && !name) || name === "global code" || name === "module code" || name === "eval code" || name === "__bunwasm_cjs__";
-    return { name: topLevel ? "" : name || "<anonymous>", file, line: lineNo, column };
+    const frame = { name: topLevel ? "" : name || "<anonymous>", file, line: lineNo, column };
+    if (frameKind === 2 && !name) frame.anonymousFunction = true;
+    return frame;
   }
 
   function parseErrorStack(error) {
@@ -1453,7 +1455,7 @@
     try { frames = savedErrorFrames(error, stack, true); }
     catch { return parseStack(stack); }
     if (!Array.isArray(frames)) return parseStack(stack);
-    return frames.map(frame => nativeFrame(frame.name, frame.file, frame.line, frame.column)).filter(frame => frame !== null);
+    return frames.map(frame => nativeFrame(frame.name, frame.file, frame.line, frame.column, frame.frameKind)).filter(frame => frame !== null);
   }
 
   function parseFrameLine(line) {
@@ -1545,7 +1547,8 @@
   function formatFrame(frame) {
     const file = internal.hotDisplayName?.(frame.file) ?? frame.file;
     const loc = file + ":" + frame.line + ":" + frame.column;
-    return frame.name ? "      at " + frame.name + " (" + loc + ")\n" : "      at " + loc + "\n";
+    const label = frame.name || (frame.anonymousFunction === true ? "<anonymous>" : "");
+    return label ? "      at " + label + " (" + loc + ")\n" : "      at " + loc + "\n";
   }
 
   // VirtualMachine::print_errorlike_object, writing into the formatter.

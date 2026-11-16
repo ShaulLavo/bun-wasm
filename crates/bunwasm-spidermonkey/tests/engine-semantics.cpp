@@ -779,6 +779,8 @@ void natives() {
 
 }  // namespace
 
+#include "frame-kind-controls.cpp"
+
 extern "C" bool bunsm_host_call(uint32_t id, bsm_handle, const bsm_handle* args, size_t argc, bsm_handle* out) {
   if (id == 1) { *out = bsm_async_context(); return true; }
   if (id == 200 || id == 201) return recovery_host_call(id, args, argc, out);
@@ -894,6 +896,7 @@ extern "C" int engine_semantics_main() {
     buffers();
     errors_and_lines();
     filename_controls();
+    frame_kind_controls();
     natives();
     interruptAt = 1;
     bsm_handle interrupted = 0;

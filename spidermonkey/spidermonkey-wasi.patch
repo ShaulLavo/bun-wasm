@@ -1,8 +1,8 @@
 diff --git a/js/public/SavedFrameAPI.h b/js/public/SavedFrameAPI.h
-index 688d1e185..1e3d64721 100644
+index 688d1e185..1b6a63d86 100644
 --- a/js/public/SavedFrameAPI.h
 +++ b/js/public/SavedFrameAPI.h
-@@ -72,6 +72,31 @@ extern JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
+@@ -72,6 +72,50 @@ extern JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
      uint32_t* sourceIdp,
      SavedFrameSelfHosted selfHosted = SavedFrameSelfHosted::Include);
  
@@ -19,7 +19,26 @@ index 688d1e185..1e3d64721 100644
 +  Filename
 +};
 +
++/** Capture-time category, independent of the nullable function display name. */
++enum class SavedFrameKind : uint8_t {
++  Unknown = 0,  // Reconstructed frames without authoritative capture metadata.
++  Program = 1,  // Non-function script, module or eval body.
++  Function = 2,  // JavaScript function, including nameless functions.
++  Wasm = 3
++};
++
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
++/**
++ * Selects the same frame as GetSavedFrameSource for identical principals and
++ * selfHosted arguments. Never allocates, GCs or runs script. Defaults to Unknown.
++ * AccessDenied means no selected frame; Ok may return a stored Unknown kind.
++ * Like other accessors, non-null input must be a SavedFrame, not its prototype.
++ */
++extern JS_PUBLIC_API SavedFrameResult GetSavedFrameKind(
++    JSContext* cx, JSPrincipals* principals, Handle<JSObject*> savedFrame,
++    SavedFrameKind* kindp,
++    SavedFrameSelfHosted selfHosted = SavedFrameSelfHosted::Include);
++
 +/**
 + * Given a SavedFrame JSObject, get the kind of its source property. Selects the
 + * same frame as GetSavedFrameSource for identical principals and selfHosted
@@ -35,26 +54,35 @@ index 688d1e185..1e3d64721 100644
   * Given a SavedFrame JSObject, get its line property (1-origin).
   * Defaults to 0.
 diff --git a/js/src/vm/SavedFrame.h b/js/src/vm/SavedFrame.h
-index f5b41efc2..16d49b764 100644
+index f5b41efc2..815745a02 100644
 --- a/js/src/vm/SavedFrame.h
 +++ b/js/src/vm/SavedFrame.h
 @@ -11,6 +11,7 @@
  #include "js/ColumnNumber.h"  // JS::TaggedColumnNumberOneOrigin
  #include "js/GCHashTable.h"
  #include "js/Principals.h"
-+#include "js/SavedFrameAPI.h"  // JS::SavedFrameSourceKind
++#include "js/SavedFrameAPI.h"  // JS::SavedFrameSourceKind, JS::SavedFrameKind
  #include "js/UbiNode.h"
  #include "vm/NativeObject.h"
  
-@@ -56,6 +57,7 @@ class SavedFrame : public NativeObject {
+@@ -56,6 +57,8 @@ class SavedFrame : public NativeObject {
    SavedFrame* getParent() const;
    JSPrincipals* getPrincipals();
    bool getMutedErrors();
 +  JS::SavedFrameSourceKind getSourceKind();
++  JS::SavedFrameKind getFrameKind();
    bool isSelfHosted(JSContext* cx);
    bool isWasm();
  
-@@ -126,9 +128,11 @@ class SavedFrame : public NativeObject {
+@@ -119,6 +122,7 @@ class SavedFrame : public NativeObject {
+                                                  HandleObject ctor,
+                                                  HandleObject proto);
+   void initFromLookup(JSContext* cx, Handle<Lookup> lookup);
++  void initFrameKind(JS::SavedFrameKind kind);
+   void initSource(JSAtom* source);
+   void initSourceId(uint32_t id);
+   void initLine(uint32_t line);
+@@ -126,9 +130,11 @@ class SavedFrame : public NativeObject {
    void initFunctionDisplayName(JSAtom* maybeName);
    void initAsyncCause(JSAtom* maybeCause);
    void initParent(SavedFrame* maybeParent);
@@ -69,61 +97,75 @@ index f5b41efc2..16d49b764 100644
  
    enum {
      // The reserved slots in the SavedFrame class.
+@@ -140,6 +146,7 @@ class SavedFrame : public NativeObject {
+     JSSLOT_ASYNCCAUSE,
+     JSSLOT_PARENT,
+     JSSLOT_PRINCIPALS,
++    JSSLOT_FRAME_KIND,
+ 
+     // The total number of reserved slots in the SavedFrame class.
+     JSSLOT_COUNT
 diff --git a/js/src/vm/SavedStacks.cpp b/js/src/vm/SavedStacks.cpp
-index 7c26d9c97..144ff4da0 100644
+index 7c26d9c97..54ae24b45 100644
 --- a/js/src/vm/SavedStacks.cpp
 +++ b/js/src/vm/SavedStacks.cpp
-@@ -174,7 +174,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+@@ -174,7 +174,8 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
    Lookup(JSAtom* source, uint32_t sourceId, uint32_t line,
           JS::TaggedColumnNumberOneOrigin column, JSAtom* functionDisplayName,
           JSAtom* asyncCause, SavedFrame* parent, JSPrincipals* principals,
 -         bool mutedErrors,
 +         bool mutedErrors, JS::SavedFrameSourceKind sourceKind,
++         JS::SavedFrameKind frameKind,
           const Maybe<LiveSavedFrameCache::FramePtr>& framePtr = Nothing(),
           jsbytecode* pc = nullptr, Activation* activation = nullptr)
        : source(source),
-@@ -186,6 +186,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+@@ -186,6 +187,8 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
          parent(parent),
          principals(principals),
          mutedErrors(mutedErrors),
 +        sourceKind(sourceKind),
++        frameKind(frameKind),
          framePtr(framePtr),
          pc(pc),
          activation(activation) {
-@@ -206,6 +207,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+@@ -206,6 +209,8 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
          parent(savedFrame.getParent()),
          principals(savedFrame.getPrincipals()),
          mutedErrors(savedFrame.getMutedErrors()),
 +        sourceKind(savedFrame.getSourceKind()),
++        frameKind(savedFrame.getFrameKind()),
          framePtr(Nothing()),
          pc(nullptr),
          activation(nullptr) {
-@@ -226,6 +228,7 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
+@@ -226,6 +231,8 @@ struct MOZ_STACK_CLASS SavedFrame::Lookup {
    SavedFrame* parent;
    JSPrincipals* principals;
    bool mutedErrors;
 +  JS::SavedFrameSourceKind sourceKind;
++  JS::SavedFrameKind frameKind;
  
    // These are used only by the LiveSavedFrameCache and not used for identity or
    // hashing.
-@@ -261,6 +264,7 @@ class WrappedPtrOperations<SavedFrame::Lookup, Wrapper> {
+@@ -261,6 +268,8 @@ class WrappedPtrOperations<SavedFrame::Lookup, Wrapper> {
    SavedFrame* parent() { return value().parent; }
    JSPrincipals* principals() { return value().principals; }
    bool mutedErrors() { return value().mutedErrors; }
 +  JS::SavedFrameSourceKind sourceKind() { return value().sourceKind; }
++  JS::SavedFrameKind frameKind() { return value().frameKind; }
    Maybe<LiveSavedFrameCache::FramePtr> framePtr() { return value().framePtr; }
    jsbytecode* pc() { return value().pc; }
    Activation* activation() { return value().activation; }
-@@ -314,7 +318,7 @@ HashNumber SavedFrame::HashPolicy::calculateHash(const Lookup& lookup,
+@@ -314,7 +323,8 @@ HashNumber SavedFrame::HashPolicy::calculateHash(const Lookup& lookup,
    // and add another overload of AddToHash with more arguments.
    return AddToHash(lookup.line, lookup.column.rawValue(), lookup.source,
                     lookup.functionDisplayName, lookup.asyncCause,
 -                   lookup.mutedErrors, parentHash,
-+                   lookup.mutedErrors, uint8_t(lookup.sourceKind), parentHash,
++                   lookup.mutedErrors, uint8_t(lookup.sourceKind),
++                   uint8_t(lookup.frameKind), parentHash,
                     JSPrincipalsPtrHasher::hash(lookup.principals));
  }
  
-@@ -357,6 +361,12 @@ bool SavedFrame::HashPolicy::match(SavedFrame* existing, const Lookup& lookup) {
+@@ -357,6 +367,16 @@ bool SavedFrame::HashPolicy::match(SavedFrame* existing, const Lookup& lookup) {
      return false;
    }
  
@@ -133,10 +175,14 @@ index 7c26d9c97..144ff4da0 100644
 +    return false;
 +  }
 +
++  if (existing->getFrameKind() != lookup.frameKind) {
++    return false;
++  }
++
    return true;
  }
  
-@@ -479,12 +489,22 @@ SavedFrame* SavedFrame::getParent() const {
+@@ -479,12 +499,22 @@ SavedFrame* SavedFrame::getParent() const {
    return v.isObject() ? &v.toObject().as<SavedFrame>() : nullptr;
  }
  
@@ -160,7 +206,7 @@ index 7c26d9c97..144ff4da0 100644
  }
  
  bool SavedFrame::getMutedErrors() {
-@@ -492,7 +512,17 @@ bool SavedFrame::getMutedErrors() {
+@@ -492,7 +522,29 @@ bool SavedFrame::getMutedErrors() {
    if (v.isUndefined()) {
      return true;
    }
@@ -176,10 +222,22 @@ index 7c26d9c97..144ff4da0 100644
 +  return (uintptr_t(v.toPrivate()) & FilenameSourceBit)
 +             ? JS::SavedFrameSourceKind::Filename
 +             : JS::SavedFrameSourceKind::DisplayURL;
++}
++
++JS::SavedFrameKind SavedFrame::getFrameKind() {
++  const Value& value = getReservedSlot(JSSLOT_FRAME_KIND);
++  if (value.isUndefined()) return JS::SavedFrameKind::Unknown;
++  MOZ_ASSERT(value.isInt32());
++  MOZ_ASSERT(value.toInt32() >= 0 && value.toInt32() <= 3);
++  return static_cast<JS::SavedFrameKind>(value.toInt32());
++}
++
++void SavedFrame::initFrameKind(JS::SavedFrameKind kind) {
++  initReservedSlot(JSSLOT_FRAME_KIND, Int32Value(int32_t(kind)));
  }
  
  void SavedFrame::initSource(JSAtom* source) {
-@@ -515,18 +545,24 @@ void SavedFrame::initColumn(JS::TaggedColumnNumberOneOrigin column) {
+@@ -515,18 +567,24 @@ void SavedFrame::initColumn(JS::TaggedColumnNumberOneOrigin column) {
    initReservedSlot(JSSLOT_COLUMN, PrivateUint32Value(column.rawValue()));
  }
  
@@ -209,21 +267,38 @@ index 7c26d9c97..144ff4da0 100644
    initReservedSlot(JSSLOT_PRINCIPALS,
                     PrivateValue(reinterpret_cast<void*>(ptr)));
  }
-@@ -568,7 +604,8 @@ void SavedFrame::initFromLookup(JSContext* cx, Handle<Lookup> lookup) {
+@@ -568,7 +626,9 @@ void SavedFrame::initFromLookup(JSContext* cx, Handle<Lookup> lookup) {
    initFunctionDisplayName(lookup.functionDisplayName());
    initAsyncCause(lookup.asyncCause());
    initParent(lookup.parent());
 -  initPrincipalsAndMutedErrors(lookup.principals(), lookup.mutedErrors());
 +  initPrincipalsAndMutedErrors(lookup.principals(), lookup.mutedErrors(),
 +                               lookup.sourceKind());
++  initFrameKind(lookup.frameKind());
  }
  
  /* static */
-@@ -812,6 +849,27 @@ JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
+@@ -812,6 +872,43 @@ JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceId(
    return SavedFrameResult::Ok;
  }
  
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
++JS_PUBLIC_API SavedFrameResult GetSavedFrameKind(
++    JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
++    SavedFrameKind* kindp,
++    SavedFrameSelfHosted selfHosted /* = SavedFrameSelfHosted::Include */) {
++  js::AssertHeapIsIdle();
++  CHECK_THREAD(cx);
++  MOZ_RELEASE_ASSERT(cx->realm());
++  *kindp = SavedFrameKind::Unknown;
++  bool skippedAsync;
++  Rooted<js::SavedFrame*> frame(cx, UnwrapSavedFrame(
++      cx, principals, savedFrame, selfHosted, skippedAsync));
++  if (!frame) return SavedFrameResult::AccessDenied;
++  *kindp = frame->getFrameKind();
++  return SavedFrameResult::Ok;
++}
++
 +JS_PUBLIC_API SavedFrameResult GetSavedFrameSourceKind(
 +    JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
 +    SavedFrameSourceKind* kindp,
@@ -247,19 +322,33 @@ index 7c26d9c97..144ff4da0 100644
  JS_PUBLIC_API SavedFrameResult GetSavedFrameLine(
      JSContext* cx, JSPrincipals* principals, HandleObject savedFrame,
      uint32_t* linep,
-@@ -1564,8 +1622,9 @@ bool SavedStacks::insertFrames(JSContext* cx, MutableHandle<SavedFrame*> frame,
+@@ -1409,6 +1506,12 @@ static inline bool captureIsSatisfied(JSContext* cx, JSPrincipals* principals,
+   return capture.match(m);
+ }
+ 
++static JS::SavedFrameKind CaptureFrameKind(const FrameIter& iter) {
++  if (iter.isWasm()) return JS::SavedFrameKind::Wasm;
++  if (iter.isFunctionFrame()) return JS::SavedFrameKind::Function;
++  return JS::SavedFrameKind::Program;
++}
++
+ bool SavedStacks::insertFrames(JSContext* cx, MutableHandle<SavedFrame*> frame,
+                                JS::StackCapture&& capture,
+                                HandleObject startAtObj) {
+@@ -1564,8 +1667,10 @@ bool SavedStacks::insertFrames(JSContext* cx, MutableHandle<SavedFrame*> frame,
                                    displayAtom,
                                    nullptr,  // asyncCause
                                    nullptr,  // parent (not known yet)
 -                                  principals, iter.mutedErrors(), framePtr,
 -                                  iter.pc(), &activation)) {
 +                                  principals, iter.mutedErrors(),
-+                                  location.sourceKind(), framePtr, iter.pc(),
++                                  location.sourceKind(), CaptureFrameKind(iter),
++                                  framePtr, iter.pc(),
 +                                  &activation)) {
          return false;
        }
      }
-@@ -1900,6 +1959,8 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
+@@ -1900,6 +2005,8 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
      if (!locationp.source()) {
        return false;
      }
@@ -268,7 +357,7 @@ index 7c26d9c97..144ff4da0 100644
  
      JS::TaggedColumnNumberOneOrigin column;
      locationp.setLine(iter.computeLine(&column));
-@@ -1914,11 +1975,14 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
+@@ -1914,11 +2021,14 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
  
    if (!p) {
      Rooted<JSAtom*> source(cx);
@@ -283,7 +372,7 @@ index 7c26d9c97..144ff4da0 100644
      }
      if (!source) {
        return false;
-@@ -1930,7 +1994,7 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
+@@ -1930,7 +2040,7 @@ bool SavedStacks::getLocation(JSContext* cx, const FrameIter& iter,
  
      PCKey key(script, pc);
      LocationValue value(source, sourceId, line,
@@ -292,14 +381,15 @@ index 7c26d9c97..144ff4da0 100644
      if (!pcLocationMap.add(p, key, value)) {
        ReportOutOfMemory(cx);
        return false;
-@@ -2114,7 +2178,9 @@ JS_PUBLIC_API bool ConstructSavedFrameStackSlow(
+@@ -2114,7 +2224,10 @@ JS_PUBLIC_API bool ConstructSavedFrameStackSlow(
                                  functionDisplayName,
                                  /* asyncCause */ nullptr,
                                  /* parent */ nullptr, principals,
 -                                /* mutedErrors */ true)) {
 +                                /* mutedErrors */ true,
 +                                // A reconstructed label has no provenance.
-+                                JS::SavedFrameSourceKind::DisplayURL)) {
++                                JS::SavedFrameSourceKind::DisplayURL,
++                                JS::SavedFrameKind::Unknown)) {
        ReportOutOfMemory(cx);
        return false;
      }
@@ -357,10 +447,18 @@ index b7dfe4dd9..74eabe7e5 100644
   private:
    SavedStacks::LocationValue& loc() {
 diff --git a/js/src/vm/StructuredClone.cpp b/js/src/vm/StructuredClone.cpp
-index 075aa3638..5af89759a 100644
+index 075aa3638..dc7029247 100644
 --- a/js/src/vm/StructuredClone.cpp
 +++ b/js/src/vm/StructuredClone.cpp
-@@ -3802,8 +3802,10 @@ JSObject* JSStructuredCloneReader::readSavedFrameHeader(
+@@ -3739,6 +3739,7 @@ JSObject* JSStructuredCloneReader::readSavedFrameHeader(
+   if (!savedFrame) {
+     return nullptr;
+   }
++  savedFrame->initFrameKind(JS::SavedFrameKind::Unknown);
+ 
+   JSPrincipals* principals;
+   if (principalsTag == SCTAG_JSPRINCIPALS) {
+@@ -3802,8 +3803,10 @@ JSObject* JSStructuredCloneReader::readSavedFrameHeader(
      }
    }
  
