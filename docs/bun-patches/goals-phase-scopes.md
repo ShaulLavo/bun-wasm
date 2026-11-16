@@ -15,8 +15,13 @@ Failure and final logging retain discriminated observed or unavailable terminal
 outcomes. Empty output is a successful observation. Optional diagnostic expiry
 preserves an already observed terminal, and unavailable final logs name the final
 and capture reasons. Cleanup handoff scopes close before unguarded resource
-teardown. Existing phase errors and observation, cleanup and close budgets remain
-unchanged. The Angular reader receives the same bound view and observation cutoff.
+teardown. Generic browser close receives the remaining cleanup allowance and its
+settlement is checked against that same admission, replacing the independent
+10-second cutoff. Close still dispatches with interruption enabled after expiry,
+with a positive minimal teardown budget; expiry or rejection remains a cleanup
+failure. The work scope still reserves 15 seconds for teardown, and stop and
+disposal failures survive a successful close. The Angular reader receives the
+same bound view and observation cutoff.
 
 The generic `scoped` wrapper lives separately from the Playwright implementation,
 so the native Safari measurement bundle does not import unused browser automation
