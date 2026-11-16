@@ -67,8 +67,7 @@
       this.inverse = !!inverse;
     }
     asymmetricMatch(other) {
-      const result = this.matches(other);
-      return this.inverse ? !result : result;
+      return matcherSupport.settle(this.matches(other), result => this.inverse ? !result : result);
     }
     // Bun.inspect shows matchers by their pretty description.
     [INSPECT_CUSTOM]() {
@@ -129,11 +128,10 @@
   class ObjectContainingMatcher extends AsymmetricMatcher {
     matches(other) {
       if (!isObjectLike(other)) return false;
-      for (const key of Object.keys(this.sample)) {
+      return matcherSupport.every(Object.keys(this.sample), key => {
         if (!(key in Object(other))) return false;
-        if (!equals(other[key], this.sample[key], false)) return false;
-      }
-      return true;
+        return equals(other[key], this.sample[key], false);
+      });
     }
     describe(format) {
       return `${this.inverse ? "ObjectNotContaining" : "ObjectContaining"} ${format(this.sample)}`;
@@ -143,7 +141,7 @@
   class ArrayContainingMatcher extends AsymmetricMatcher {
     matches(other) {
       if (!Array.isArray(other)) return false;
-      return this.sample.every((item) => other.some((value) => equals(value, item, false)));
+      return matcherSupport.every(this.sample, item => matcherSupport.some(other, value => equals(value, item, false)));
     }
     describe(format) {
       return `${this.inverse ? "ArrayNotContaining" : "ArrayContaining"} ${format(this.sample)}`;
@@ -173,7 +171,7 @@
     }
     matches(other) {
       const result = this.matcher.call(matcherContext(false), other, ...this.sample);
-      return !!(result && result.pass);
+      return extensions.asymmetric(this.name, result, error => writeErr(formatErrorText(error)));
     }
     describe() {
       return `${this.name}(${this.sample.map((v) => inspect(v)).join(", ")})`;
@@ -190,18 +188,6 @@
     return internal.require("util").bunDeepEquals(a, b, strict);
   }
 
-  /** Whether `value` holds an asymmetric matcher anywhere in arrays/plain objects. */
-  function containsAsymmetric(value, seen) {
-    if (isAsymmetric(value)) return true;
-    if (!isObjectLike(value) || typeof value === "function") return false;
-    const visited = seen || new Set();
-    if (visited.has(value)) return false;
-    visited.add(value);
-    if (Array.isArray(value)) return value.some((item) => containsAsymmetric(item, visited));
-    if (!isPlainObject(value)) return false;
-    return Object.keys(value).some((key) => containsAsymmetric(value[key], visited));
-  }
-
   function isPlainObject(value) {
     const proto = Object.getPrototypeOf(value);
     return proto === Object.prototype || proto === null;
@@ -209,35 +195,23 @@
 
   /** toEqual / toStrictEqual semantics, with asymmetric matchers on either side. */
   function equals(received, expected, strict) {
+    return internal.require("util").expectEquals(received, expected, strict, compareAsymmetric);
+  }
+
+  function compareAsymmetric(received, expected) {
     if (isAsymmetric(expected)) return expected.asymmetricMatch(received);
     if (isAsymmetric(received)) return received.asymmetricMatch(expected);
-    if (!containsAsymmetric(expected) && !containsAsymmetric(received)) return bunDeepEquals(received, expected, strict);
-    if (Array.isArray(received) && Array.isArray(expected)) return arraysEqual(received, expected, strict);
-    if (isObjectLike(received) && isObjectLike(expected)) return objectsEqual(received, expected, strict);
-    return false;
-  }
-
-  function arraysEqual(received, expected, strict) {
-    if (received.length !== expected.length) return false;
-    return received.every((item, i) => equals(item, expected[i], strict));
-  }
-
-  function objectsEqual(received, expected, strict) {
-    if (strict && Object.getPrototypeOf(received) !== Object.getPrototypeOf(expected)) return false;
-    const keysOf = (obj) => Object.keys(obj).filter((key) => strict || obj[key] !== undefined);
-    const receivedKeys = keysOf(received);
-    const expectedKeys = keysOf(expected);
-    if (receivedKeys.length !== expectedKeys.length) return false;
-    return expectedKeys.every((key) => Object.prototype.hasOwnProperty.call(received, key) && equals(received[key], expected[key], strict));
+    return undefined;
   }
 
   /** toMatchObject: every property of `expected` is present and matches in `received`. */
   function matchesObject(received, expected, seen) {
-    if (isAsymmetric(expected)) return expected.asymmetricMatch(received);
+    const asymmetric = compareAsymmetric(received, expected);
+    if (asymmetric !== undefined) return asymmetric;
     if (!isObjectLike(expected) || !isObjectLike(received)) return equals(received, expected, false);
     if (Array.isArray(expected)) {
       if (!Array.isArray(received) || received.length !== expected.length) return false;
-      return expected.every((item, i) => matchesObject(received[i], item, seen));
+      return matcherSupport.every(expected, (item, i) => matchesObject(received[i], item, seen));
     }
     if (!isPlainObject(expected) && !isPlainObject(received)) {
       if (expected instanceof Date || expected instanceof RegExp || expected instanceof Map || expected instanceof Set) {
@@ -245,13 +219,10 @@
       }
     }
     const visited = seen || new Set();
-    if (visited.has(expected)) return true;
-    visited.add(expected);
-    for (const key of Object.keys(expected)) {
+    return matcherSupport.ancestors(visited, expected, () => matcherSupport.every(Object.keys(expected), key => {
       if (!(key in received)) return false;
-      if (!matchesObject(received[key], expected[key], visited)) return false;
-    }
-    return true;
+      return matchesObject(received[key], expected[key], visited);
+    }));
   }
 
   // ───────────────────────────── Jest pretty format ─────────────────────────────
@@ -757,8 +728,8 @@
     return `expect(received).${modifiers}${name}(${params})`;
   }
 
-  function countExpectation() {
-    if (currentTest) currentTest.expectCount++;
+  function countExpectation(test = currentTest) {
+    if (test) test.expectCount++;
     else summary.expectations++;
   }
 
@@ -770,29 +741,39 @@
    */
   const matcherSupport = internal.require("test_matchers");
   const extensions = internal.require("test_extensions");
+  const extendedMatchers = matcherSupport.extended(inspect);
 
   function defineMatcher(name, params, impl) {
     matcherParams[name] = params;
     expectProto[name] = function (...args) {
       const error = new Error();
-      if (this.flags.promise) return matchPromise(this, name, impl, args, error);
-      countExpectation();
-      const result = applyMatcher(this.flags, this.received, name, impl, args, error);
-      return activeInvocation ? activeInvocation.track(result) : result;
+      const origin = { invocation: activeInvocation, test: currentTest };
+      const context = { not: this.flags.not, promise: this.flags.promise, error, origin };
+      if (name.endsWith("Snapshot")) context.snapshot = reserveSnapshot(origin, name, args);
+      const result = this.flags.promise
+        ? matcherSupport.settle(matchPromise(this, name, impl, args, context), () => undefined)
+        : matchImmediate(this, name, impl, args, context);
+      return origin.invocation ? origin.invocation.track(result) : result;
     };
   }
 
-  function applyMatcher(flags, received, name, impl, args, error) {
-    return matcherSupport.settle(impl({ not: flags.not, promise: flags.promise, error }, received, ...args), (failure) => {
+  function matchImmediate(expectation, name, impl, args, context) {
+    countExpectation(context.origin.test);
+    return applyMatcher(context, expectation.received, name, impl, args);
+  }
+
+  function applyMatcher(context, received, name, impl, args) {
+    return matcherSupport.settle(impl(context, received, ...args), (failure) => {
       if (!failure) return;
       const params = failure.params === undefined ? matcherParams[name] : failure.params;
-      error.message = failure.raw ? failure.body : signature(name, params, flags.not) + failure.body;
-      throw error;
+      context.error.message = failure.raw ? failure.body : signature(name, params, context.not) + failure.body;
+      throw context.error;
     });
   }
 
-  async function matchPromise(expectation, name, impl, args, error) {
+  async function matchPromise(expectation, name, impl, args, context) {
     const { flags, received } = expectation;
+    const { error } = context;
     const fail = (body) => {
       error.message = signature(name, matcherParams[name], flags.not, flags.promise) + body;
       throw error;
@@ -810,8 +791,9 @@
     if (flags.promise === "resolves" && !settled.ok) {
       return fail("\n\nExpected promise that resolves\nReceived promise that rejected: Promise { <rejected> }\n");
     }
-    countExpectation();
-    await applyMatcher({ not: flags.not, promise: flags.promise }, settled.value, name, impl, args, error);
+    if (context.origin.invocation?.settled) return;
+    countExpectation(context.origin.test);
+    await applyMatcher(context, settled.value, name, impl, args);
     return undefined;
   }
 
@@ -882,8 +864,10 @@
 
   function defineEqualityMatcher(name, test) {
     defineMatcher(name, "expected", (ctx, received, expected) => {
-      if (!failed(ctx, test(received, expected))) return null;
-      return { body: `\n\n${formatDiff(received, expected, ctx.not)}\n` };
+      return matcherSupport.settle(test(received, expected), pass => {
+        if (!failed(ctx, pass)) return null;
+        return { body: `\n\n${formatDiff(received, expected, ctx.not)}\n` };
+      });
     });
   }
 
@@ -893,8 +877,10 @@
   defineMatcher("toMatchObject", "expected", (ctx, received, expected) => {
     if (!isObjectLike(received)) return { body: "\n\nMatcher error: received value must be a non-null object\n" };
     if (!isObjectLike(expected)) return { body: "\n\nMatcher error: expected value must be a non-null object\n" };
-    if (!failed(ctx, matchesObject(received, expected))) return null;
-    return { body: `\n\n${formatDiff(received, expected, ctx.not)}\n` };
+    return matcherSupport.settle(matchesObject(received, expected), pass => {
+      if (!failed(ctx, pass)) return null;
+      return { body: `\n\n${formatDiff(received, expected, ctx.not)}\n` };
+    });
   });
 
   // ── simple value checks: `Received: <value>` ──
@@ -924,8 +910,8 @@
   defineValueMatcher("toBeFinite", (v) => typeof v === "number" && Number.isFinite(v));
   defineValueMatcher("toBePositive", (v) => typeof v === "number" && v > 0 && Number.isFinite(v));
   defineValueMatcher("toBeNegative", (v) => typeof v === "number" && v < 0 && Number.isFinite(v));
-  defineValueMatcher("toBeEven", (v) => Number.isInteger(v) && v % 2 === 0);
-  defineValueMatcher("toBeOdd", (v) => Number.isInteger(v) && Math.abs(v % 2) === 1);
+  defineValueMatcher("toBeEven", matcherSupport.even);
+  defineValueMatcher("toBeOdd", matcherSupport.odd);
   defineValueMatcher("toBeDate", (v) => v instanceof Date);
   defineValueMatcher("toBeValidDate", (v) => v instanceof Date && !Number.isNaN(v.getTime()));
   defineValueMatcher("toBeObject", (v) => typeof v === "object" && v !== null);
@@ -970,6 +956,11 @@
 
   // ── containers ──
 
+  defineMatcher("pass", "", extendedMatchers.pass);
+  defineMatcher("fail", "", extendedMatchers.fail);
+  defineMatcher("toBeArrayOfSize", "", extendedMatchers.arrayOfSize);
+  defineMatcher("toEqualIgnoringWhitespace", "expected", extendedMatchers.ignoringWhitespace);
+
   function iterableItems(value) {
     if (value === null || value === undefined || typeof value[Symbol.iterator] !== "function") return null;
     return Array.from(value);
@@ -977,9 +968,11 @@
 
   function defineContainMatcher(name, test) {
     defineMatcher(name, "expected", (ctx, received, expected) => {
-      if (!failed(ctx, test(received, expected))) return null;
-      if (ctx.not) return { body: `\n\nExpected to not contain: ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
-      return { body: `\n\nExpected to contain: ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
+      return matcherSupport.settle(test(received, expected), pass => {
+        if (!failed(ctx, pass)) return null;
+        if (ctx.not) return { body: `\n\nExpected to not contain: ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
+        return { body: `\n\nExpected to contain: ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
+      });
     });
   }
 
@@ -991,7 +984,7 @@
 
   defineContainMatcher("toContainEqual", (received, expected) => {
     const items = iterableItems(received);
-    return items !== null && items.some((item) => equals(item, expected, false));
+    return items !== null && matcherSupport.some(items, item => equals(item, expected, false));
   });
 
   defineContainMatcher("toContainKey", (received, key) => {
@@ -1016,7 +1009,7 @@
     if (args.length < 2) throw new TypeError("toIncludeRepeated() requires 2 arguments");
     const [substring, count] = args;
     if (typeof substring !== "string") throw new Error("toIncludeRepeated() requires the first argument to be a string");
-    if (!Number.isInteger(count)) throw new Error("toIncludeRepeated() requires the second argument to be a number");
+    if (!Number.isInteger(count) || Object.is(count, -0)) throw new Error("toIncludeRepeated() requires the second argument to be a number");
     if (typeof received !== "string") throw new Error("toIncludeRepeated() requires the expect(value) to be a string");
     if (substring.length === 0) throw new Error("toIncludeRepeated() requires the first argument to be a non-empty string");
     let actual = 0;
@@ -1040,19 +1033,17 @@
   });
 
   defineMatcher("toBeEmpty", "", (ctx, received) => {
-    let empty = false;
-    if (typeof received === "string" || Array.isArray(received)) empty = received.length === 0;
-    else if (received instanceof Map || received instanceof Set) empty = received.size === 0;
-    else if (isObjectLike(received)) empty = Object.keys(received).length === 0;
-    if (!failed(ctx, empty)) return null;
+    if (!failed(ctx, matcherSupport.empty(received))) return null;
     return { body: `\n\nReceived: ${inspect(received)}\n` };
   });
 
   defineMatcher("toBeOneOf", "expected", (ctx, received, list) => {
     const items = iterableItems(list) || [];
-    if (!failed(ctx, items.some((item) => equals(received, item, false)))) return null;
-    const not = ctx.not ? "not " : "";
-    return { body: `\n\nExpected: ${not}one of ${inspect(list)}\nReceived: ${inspect(received)}\n` };
+    return matcherSupport.settle(matcherSupport.some(items, item => equals(received, item, false)), pass => {
+      if (!failed(ctx, pass)) return null;
+      const not = ctx.not ? "not " : "";
+      return { body: `\n\nExpected: ${not}one of ${inspect(list)}\nReceived: ${inspect(received)}\n` };
+    });
   });
 
   function propertyPath(path) {
@@ -1078,13 +1069,15 @@
     const params = hasValue ? "path, value" : "path";
     const lookup = lookupPath(received, path);
     const pass = lookup.found && (!hasValue || equals(lookup.value, expectedValue, false));
-    if (!failed(ctx, pass)) return null;
-    const shownPath = inspect(path);
-    if (ctx.not && hasValue) return { params, body: `\n\nExpected path: ${shownPath}\n\nExpected value: not ${inspect(expectedValue)}\n` };
-    if (ctx.not) return { params, body: `\n\nExpected path: not ${shownPath}\n\nReceived value: ${inspect(lookup.value)}\n` };
-    if (hasValue && lookup.found) return { params, body: `\n\n${formatDiff(lookup.value, expectedValue, false)}\n` };
-    if (hasValue) return { params, body: `\n\nExpected path: ${shownPath}\n\nExpected value: ${inspect(expectedValue)}\n\nUnable to find property\n` };
-    return { params, body: `\n\nExpected path: ${shownPath}\n\nUnable to find property\n` };
+    return matcherSupport.settle(pass, matched => {
+      if (!failed(ctx, matched)) return null;
+      const shownPath = inspect(path);
+      if (ctx.not && hasValue) return { params, body: `\n\nExpected path: ${shownPath}\n\nExpected value: not ${inspect(expectedValue)}\n` };
+      if (ctx.not) return { params, body: `\n\nExpected path: not ${shownPath}\n\nReceived value: ${inspect(lookup.value)}\n` };
+      if (hasValue && lookup.found) return { params, body: `\n\n${formatDiff(lookup.value, expectedValue, false)}\n` };
+      if (hasValue) return { params, body: `\n\nExpected path: ${shownPath}\n\nExpected value: ${inspect(expectedValue)}\n\nUnable to find property\n` };
+      return { params, body: `\n\nExpected path: ${shownPath}\n\nUnable to find property\n` };
+    });
   });
 
   defineMatcher("toMatch", "expected", (ctx, received, expected) => {
@@ -1180,10 +1173,10 @@
       }
       const expected = normalizeThrowExpectation(rawExpected);
       return matcherSupport.settle(throwOutcome(ctx, received), (outcome) => {
-        if (outcome.invalid) throw new Error("Expected value must be a function");
-        if (ctx.not) return notThrowFailure(outcome, expected);
-        if (!outcome.threw) return didNotThrowFailure(outcome, expected);
-        return wrongThrowFailure(outcome.value, expected);
+          if (outcome.invalid) throw new Error("Expected value must be a function");
+          if (ctx.not) return notThrowFailure(outcome, expected);
+          if (!outcome.threw) return didNotThrowFailure(outcome, expected);
+          return wrongThrowFailure(outcome.value, expected);
       });
     });
   }
@@ -1198,12 +1191,14 @@
       if (value instanceof Error) return { params: "", body: `\n\nError name: ${inspect(value.name)}\nError message: ${inspect(value.message)}\n` };
       return { params: "", body: `\n\nThrown value: ${inspect(value)}\n` };
     }
-    if (!throwMatches(value, expected)) return null;
-    const message = inspect(thrownMessage(value));
-    if (typeof expected === "string") return { body: `\n\nExpected substring: not ${inspect(expected)}\nReceived message: ${message}\n` };
-    if (expected instanceof RegExp) return { body: `\n\nExpected pattern: not ${inspect(expected)}\nReceived message: ${message}\n` };
-    if (isObjectLike(expected) && "message" in expected) return { body: `\n\nExpected message: not ${inspect(expected.message)}\n` };
-    return { body: `\n\nExpected constructor: not ${expected.name}\n\nReceived message: ${message}\n` };
+    return matcherSupport.settle(throwMatches(value, expected), pass => {
+      if (!pass) return null;
+      const message = inspect(thrownMessage(value));
+      if (typeof expected === "string") return { body: `\n\nExpected substring: not ${inspect(expected)}\nReceived message: ${message}\n` };
+      if (expected instanceof RegExp) return { body: `\n\nExpected pattern: not ${inspect(expected)}\nReceived message: ${message}\n` };
+      if (isObjectLike(expected) && "message" in expected) return { body: `\n\nExpected message: not ${inspect(expected.message)}\n` };
+      return { body: `\n\nExpected constructor: not ${expected.name}\n\nReceived message: ${message}\n` };
+    });
   }
 
   function didNotThrowFailure(outcome, expected) {
@@ -1216,20 +1211,23 @@
   }
 
   function wrongThrowFailure(value, expected) {
-    if (expected === undefined || throwMatches(value, expected)) return null;
-    const message = thrownMessage(value);
-    const hasMessage = message !== undefined;
-    const receivedLine = hasMessage ? `Received message: ${inspect(message)}\n` : `Received value: ${inspect(value)}`;
-    if (typeof expected === "string") return { body: `\n\nExpected substring: ${inspect(expected)}\n${receivedLine}` };
-    if (expected instanceof RegExp) return { body: `\n\nExpected pattern: ${inspect(expected)}\n${receivedLine}` };
-    if (isAsymmetric(expected)) return { body: `\n\nExpected value: ${inspect(expected)}\nReceived value: ${inspect(value)}\n` };
-    if (isObjectLike(expected) && "message" in expected) {
-      const line = hasMessage ? `Received message: ${inspect(message)}` : `Received value: ${inspect(value)}`;
-      return { body: `\n\nExpected message: ${inspect(expected.message)}\n${line}\n` };
-    }
-    const receivedCtor = isObjectLike(value) && value.constructor ? value.constructor.name : typeof value;
-    const last = hasMessage ? `Received message: ${inspect(message)}` : `Received value: ${inspect(value)}`;
-    return { body: `\n\nExpected constructor: ${expected.name}\nReceived constructor: ${receivedCtor}\n\n${last}\n` };
+    if (expected === undefined) return null;
+    return matcherSupport.settle(throwMatches(value, expected), pass => {
+      if (pass) return null;
+      const message = thrownMessage(value);
+      const hasMessage = message !== undefined;
+      const receivedLine = hasMessage ? `Received message: ${inspect(message)}\n` : `Received value: ${inspect(value)}`;
+      if (typeof expected === "string") return { body: `\n\nExpected substring: ${inspect(expected)}\n${receivedLine}` };
+      if (expected instanceof RegExp) return { body: `\n\nExpected pattern: ${inspect(expected)}\n${receivedLine}` };
+      if (isAsymmetric(expected)) return { body: `\n\nExpected value: ${inspect(expected)}\nReceived value: ${inspect(value)}\n` };
+      if (isObjectLike(expected) && "message" in expected) {
+        const line = hasMessage ? `Received message: ${inspect(message)}` : `Received value: ${inspect(value)}`;
+        return { body: `\n\nExpected message: ${inspect(expected.message)}\n${line}\n` };
+      }
+      const receivedCtor = isObjectLike(value) && value.constructor ? value.constructor.name : typeof value;
+      const last = hasMessage ? `Received message: ${inspect(message)}` : `Received value: ${inspect(value)}`;
+      return { body: `\n\nExpected constructor: ${expected.name}\nReceived constructor: ${receivedCtor}\n\n${last}\n` };
+    });
   }
 
   // ── mock matchers ──
@@ -1243,7 +1241,7 @@
   }
 
   function callsEqual(args, expected) {
-    return args.length === expected.length && args.every((arg, i) => equals(arg, expected[i], false));
+    return args.length === expected.length && matcherSupport.every(args, (arg, i) => equals(arg, expected[i], false));
   }
 
   function mockMatcherCount(value, minimum) {
@@ -1289,11 +1287,13 @@
     const record = mockRecord(received, true);
     if (record.failure) return record.failure;
     const calls = record.calls;
-    if (!failed(ctx, calls.some((args) => callsEqual(args, expected)))) return null;
-    if (ctx.not) return { body: `\n\nExpected mock function not to have been called with: ${inspect(expected)}\nBut it was.` };
-    if (calls.length === 0) return { body: `\n\nExpected: ${inspect(expected)}\nBut it was not called.` };
-    if (calls.length === 1) return { body: `\n\n${formatDiff(calls[0], expected, false)}\n` };
-    return { body: `\n\n    Expected: ${inspect(expected)}\n    Received:\n${allCallsList(calls)}\n\n    Number of calls: ${calls.length}\n` };
+    return matcherSupport.settle(matcherSupport.some(calls, args => callsEqual(args, expected)), pass => {
+      if (!failed(ctx, pass)) return null;
+      if (ctx.not) return { body: `\n\nExpected mock function not to have been called with: ${inspect(expected)}\nBut it was.` };
+      if (calls.length === 0) return { body: `\n\nExpected: ${inspect(expected)}\nBut it was not called.` };
+      if (calls.length === 1) return { body: `\n\n${formatDiff(calls[0], expected, false)}\n` };
+      return { body: `\n\n    Expected: ${inspect(expected)}\n    Received:\n${allCallsList(calls)}\n\n    Number of calls: ${calls.length}\n` };
+    });
   });
 
   defineMatcher("toHaveBeenLastCalledWith", "...expected", (ctx, received, ...expected) => {
@@ -1301,10 +1301,12 @@
     if (record.failure) return record.failure;
     const calls = record.calls;
     const last = calls[calls.length - 1];
-    if (!failed(ctx, last !== undefined && callsEqual(last, expected))) return null;
-    if (ctx.not) return { body: `\n\nExpected last call not to be with: ${inspect(expected)}\nBut it was.` };
-    if (calls.length === 0) return { body: `\n\nExpected: ${inspect(expected)}\nBut it was not called.` };
-    return { body: `\n\n${formatDiff(last, expected, false)}\n` };
+    return matcherSupport.settle(last !== undefined && callsEqual(last, expected), pass => {
+      if (!failed(ctx, pass)) return null;
+      if (ctx.not) return { body: `\n\nExpected last call not to be with: ${inspect(expected)}\nBut it was.` };
+      if (calls.length === 0) return { body: `\n\nExpected: ${inspect(expected)}\nBut it was not called.` };
+      return { body: `\n\n${formatDiff(last, expected, false)}\n` };
+    });
   });
 
   defineMatcher("toHaveBeenNthCalledWith", "n, ...expected", (ctx, received, n, ...expected) => {
@@ -1313,12 +1315,14 @@
     if (record.failure) return record.failure;
     const calls = record.calls;
     const call = calls[n - 1];
-    if (!failed(ctx, call !== undefined && callsEqual(call, expected))) return null;
-    if (ctx.not) return { body: `\n\nExpected call #${n} not to be with: ${inspect(expected)}\nBut it was.` };
-    if (call === undefined) {
-      return { body: `\n\nThe mock function was called ${calls.length} time${calls.length === 1 ? "" : "s"}, but call ${n} was requested.` };
-    }
-    return { body: `\n\nCall #${n}:\n${formatDiff(call, expected, false)}\n` };
+    return matcherSupport.settle(call !== undefined && callsEqual(call, expected), pass => {
+      if (!failed(ctx, pass)) return null;
+      if (ctx.not) return { body: `\n\nExpected call #${n} not to be with: ${inspect(expected)}\nBut it was.` };
+      if (call === undefined) {
+        return { body: `\n\nThe mock function was called ${calls.length} time${calls.length === 1 ? "" : "s"}, but call ${n} was requested.` };
+      }
+      return { body: `\n\nCall #${n}:\n${formatDiff(call, expected, false)}\n` };
+    });
   });
 
   function returnCounts(record) {
@@ -1349,24 +1353,28 @@
   defineMatcher("toHaveReturnedWith", "expected", (ctx, received, expected) => {
     const record = mockRecord(received);
     const { returned, calls } = returnCounts(record);
-    if (!failed(ctx, returned.some((r) => equals(r.value, expected, false)))) return null;
-    if (ctx.not) return { body: `\n\nExpected mock function not to have returned: ${inspect(expected)}\n` };
-    if (calls === 1 && returned.length === 1) {
-      const value = returned[0].value;
-      if (typeof value === "string" && typeof expected === "string") return { body: `\n\n${formatDiff(value, expected, false)}\n` };
-      return { body: `\n\nExpected: ${inspect(expected)}\nReceived: ${inspect(value)}` };
-    }
-    const list = record.results.map((r, i) => `              ${i + 1}: ${inspect(r.value)}`).join("\n");
-    return { body: `\n\n    Expected: ${inspect(expected)}\n    Received:\n${list}\n\n    Number of returns: ${returned.length}\n` };
+    return matcherSupport.settle(matcherSupport.some(returned, r => equals(r.value, expected, false)), pass => {
+      if (!failed(ctx, pass)) return null;
+      if (ctx.not) return { body: `\n\nExpected mock function not to have returned: ${inspect(expected)}\n` };
+      if (calls === 1 && returned.length === 1) {
+        const value = returned[0].value;
+        if (typeof value === "string" && typeof expected === "string") return { body: `\n\n${formatDiff(value, expected, false)}\n` };
+        return { body: `\n\nExpected: ${inspect(expected)}\nReceived: ${inspect(value)}` };
+      }
+      const list = record.results.map((r, i) => `              ${i + 1}: ${inspect(r.value)}`).join("\n");
+      return { body: `\n\n    Expected: ${inspect(expected)}\n    Received:\n${list}\n\n    Number of returns: ${returned.length}\n` };
+    });
   });
 
   defineMatcher("toHaveLastReturnedWith", "expected", (ctx, received, expected) => {
     const results = mockRecord(received).results;
     const last = results[results.length - 1];
     const pass = last !== undefined && last.type === "return" && equals(last.value, expected, false);
-    if (!failed(ctx, pass)) return null;
-    const not = ctx.not ? "not " : "";
-    return { body: `\n\nExpected: ${not}${inspect(expected)}\nReceived: ${inspect(last && last.value)}\n` };
+    return matcherSupport.settle(pass, matched => {
+      if (!failed(ctx, matched)) return null;
+      const not = ctx.not ? "not " : "";
+      return { body: `\n\nExpected: ${not}${inspect(expected)}\nReceived: ${inspect(last && last.value)}\n` };
+    });
   });
 
   defineMatcher("toHaveNthReturnedWith", "n, expected", (ctx, received, nth, expected) =>
@@ -1426,18 +1434,27 @@
     return { properties: args[0], expected: typeof args[1] === "string" ? args[1] : undefined };
   }
 
+  function reserveSnapshot(origin, matcher, args) {
+    if (!origin.test) return null;
+    const inline = matcher.endsWith("InlineSnapshot");
+    const hint = inline ? "" : typeof args[0] === "string" ? args[0] : args[1];
+    return { file: origin.test.file, name: nextSnapshotName(origin.test, hint) };
+  }
+
   function prepareSnapshot(ctx, received, args, inline) {
     if (ctx.not) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used with not\n" } };
-    if (!currentTest) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n" } };
+    if (!ctx.origin.test) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n" } };
     const parsed = snapshotArguments(args, inline);
     if (parsed.properties !== undefined && !isObjectLike(received)) {
       return { failure: { params: "properties, hint", body: "\n\nMatcher error: received values must be an object when the matcher has properties\n" } };
     }
-    if (parsed.properties !== undefined && !matchesObject(received, parsed.properties)) {
-      return { failure: { params: "propertyMatchers", body: `\n\nExpected propertyMatchers to match properties from received object\n\nReceived: ${inspect(received)}\n` } };
-    }
-    if (parsed.properties !== undefined) replaceSnapshotProperties(received, parsed.properties, new Set());
-    return Object.assign(parsed, { text: prettyValue(received, "", new Set(), true) });
+    const comparison = parsed.properties === undefined || matchesObject(received, parsed.properties);
+    return matcherSupport.settle(comparison, pass => {
+        if (ctx.origin.invocation?.settled) return { cancelled: true };
+        if (!pass) return { failure: { params: "propertyMatchers", body: `\n\nExpected propertyMatchers to match properties from received object\n\nReceived: ${inspect(received)}\n` } };
+        if (parsed.properties !== undefined) replaceSnapshotProperties(received, parsed.properties, new Set());
+        return Object.assign(parsed, { text: prettyValue(received, "", new Set(), true) });
+    });
   }
 
   function replaceSnapshotProperties(received, properties, seen) {
@@ -1449,12 +1466,11 @@
     }
   }
 
-  function nextSnapshotName(hint) {
-    const { test, file } = currentTest;
+  function nextSnapshotName(origin, hint) {
+    const { test, file } = origin;
     const name = displayNames(test).concat([test.name || "(unnamed)"]).join(" ") + (hint ? `: ${hint}` : "");
     const count = (file.snapshotCounts.get(name) || 0) + 1;
     file.snapshotCounts.set(name, count);
-    snapshots.total++;
     return `${name} ${count}`;
   }
 
@@ -1503,16 +1519,19 @@
   }
 
   function matchFileSnapshot(ctx, received, ...args) {
-    const prepared = prepareSnapshot(ctx, received, args, false);
-    if (prepared.failure) return prepared.failure;
-    const state = fileSnapshots(currentTest.file);
-    const name = nextSnapshotName(prepared.expected);
-    if (state.values.has(name)) return compareSnapshot(prepared.text, state.values.get(name));
-    if (isSnapshotCI() && !options.updateSnapshots) {
-      throw new Error(`Snapshot creation is disabled in CI environments unless --update-snapshots is used\nTo override, set the environment variable CI=false.\n\nSnapshot name: "${name}"\nReceived: ${prepared.text}`);
-    }
-    addFileSnapshot(state, name, prepared.text);
-    return null;
+    return matcherSupport.settle(prepareSnapshot(ctx, received, args, false), prepared => {
+      if (prepared.cancelled) return null;
+      if (prepared.failure) return prepared.failure;
+      const state = fileSnapshots(ctx.snapshot.file);
+      const name = ctx.snapshot.name;
+      snapshots.total++;
+      if (state.values.has(name)) return compareSnapshot(prepared.text, state.values.get(name));
+      if (isSnapshotCI() && !options.updateSnapshots) {
+        throw new Error(`Snapshot creation is disabled in CI environments unless --update-snapshots is used\nTo override, set the environment variable CI=false.\n\nSnapshot name: "${name}"\nReceived: ${prepared.text}`);
+      }
+      addFileSnapshot(state, name, prepared.text);
+      return null;
+    });
   }
 
   defineMatcher("toMatchSnapshot", "expected", matchFileSnapshot);
@@ -1534,19 +1553,21 @@
   }
 
   function matchInlineSnapshot(ctx, received, ...args) {
-    const prepared = prepareSnapshot(ctx, received, args, true);
-    if (prepared.failure) return prepared.failure;
-    nextSnapshotName("");
-    const expected = prepared.expected === undefined ? undefined : trimInlineSnapshot(prepared.expected);
-    if (expected === prepared.text) { snapshots.passed++; return null; }
-    if (expected !== undefined && !options.updateSnapshots) return compareSnapshot(prepared.text, expected);
-    if (isSnapshotCI() && !options.updateSnapshots) {
-      return { params: "", body: `\n\nMatcher error: Inline snapshot creation is disabled in CI environments unless --update-snapshots is used.\nTo override, set the environment variable CI=false.\n\nReceived: ${prepared.text}` };
-    }
-    queueInlineSnapshot(ctx.error, prepared);
-    if (expected === undefined) snapshots.added++;
-    else snapshots.passed++;
-    return null;
+    return matcherSupport.settle(prepareSnapshot(ctx, received, args, true), prepared => {
+      if (prepared.cancelled) return null;
+      if (prepared.failure) return prepared.failure;
+      snapshots.total++;
+      const expected = prepared.expected === undefined ? undefined : trimInlineSnapshot(prepared.expected);
+      if (expected === prepared.text) { snapshots.passed++; return null; }
+      if (expected !== undefined && !options.updateSnapshots) return compareSnapshot(prepared.text, expected);
+      if (isSnapshotCI() && !options.updateSnapshots) {
+        return { params: "", body: `\n\nMatcher error: Inline snapshot creation is disabled in CI environments unless --update-snapshots is used.\nTo override, set the environment variable CI=false.\n\nReceived: ${prepared.text}` };
+      }
+      queueInlineSnapshot(ctx.snapshot.file, ctx.error, prepared);
+      if (expected === undefined) snapshots.added++;
+      else snapshots.passed++;
+      return null;
+    });
   }
 
   defineMatcher("toMatchInlineSnapshot", "expected", matchInlineSnapshot);
@@ -1557,11 +1578,11 @@
       if (args.length > 1) throw new Error("\n\nMatcher error: Expected zero or one arguments\n");
       if (args.length === 1 && typeof args[0] !== "string") throw new Error("\n\nMatcher error: Expected first argument to be a string\n");
       return matcherSupport.settle(typeof received === "function" ? throwOutcome({}, received) : throwOutcome(ctx, received), (outcome) => {
-        if (outcome.invalid) throw new Error("Expected value must be a function");
-        const threw = outcome.threw || outcome.value instanceof Error || (ctx.promise && typeof received !== "function");
-        if (!threw) return { params: "", body: "\n\nMatcher error: Received function did not throw\n" };
-        const message = outcome.value instanceof Error ? outcome.value.message || undefined : undefined;
-        return inline ? matchInlineSnapshot(ctx, message, ...args) : matchFileSnapshot(ctx, message, ...args);
+          if (outcome.invalid) throw new Error("Expected value must be a function");
+          const threw = outcome.threw || outcome.value instanceof Error || (ctx.promise && typeof received !== "function");
+          if (!threw) return { params: "", body: "\n\nMatcher error: Received function did not throw\n" };
+          const message = outcome.value instanceof Error ? outcome.value.message || undefined : undefined;
+          return inline ? matchInlineSnapshot(ctx, message, ...args) : matchFileSnapshot(ctx, message, ...args);
       });
     });
   }
@@ -1592,8 +1613,7 @@
     return { file, line: mapped ? mapped[0] : Number(match[2]), column: mapped ? mapped[1] : Number(match[3]) };
   }
 
-  function queueInlineSnapshot(error, prepared) {
-    const file = currentTest.file;
+  function queueInlineSnapshot(file, error, prepared) {
     const caller = inlineCaller(error);
     if (caller.file !== file.path) throw new Error(`Inline snapshot matchers must be called from the test file: ${file.path}\nCalled from file: ${caller.file}`);
     if (file.source === undefined) file.source = snapshotFS().readFileSync(file.path, "utf8");

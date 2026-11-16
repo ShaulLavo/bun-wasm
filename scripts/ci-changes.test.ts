@@ -60,7 +60,7 @@ test("the Rust compiler cache dispatcher selects every affected producer", () =>
   expect(needsSharedNative(paths)).toBe(true);
 });
 
-test.each(["web/src/bun-executor.ts", "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js"])("QuickJS browser stack input %s selects its guest producer", path => {
+test.each(["web/src/bun-executor.ts", "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "web/tests/quickjs-stack-navigation.ts", "web/tests/playground-navigation.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js"])("QuickJS browser stack input %s selects its guest producer", path => {
   expect(needsRust([path])).toBe(true);
 });
 

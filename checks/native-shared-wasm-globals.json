@@ -1,0 +1,6 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/shared-wasm-memory",
+  "profile": "shared-group",
+  "entry": "globals"
+}

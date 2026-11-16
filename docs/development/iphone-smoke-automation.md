@@ -64,20 +64,43 @@ a newer descendant as its baseline. Before the first tested green, the baseline
 and range are explicitly unavailable. This is source selection, not a historical
 bisect.
 
-Dispatch is a durable outbox. Failed T3 sends stay pending and retry on the next
-tick. A send acknowledged immediately before a crash can be repeated. The atomic
-claim rejects duplicate messages before they start a second UI session. Claimed
-work survives watcher restarts and requires completion or an explicit audited
-retry. No automatic timeout abandons it or starts another simulator job.
+Dispatch waits for a durable claim. A T3 acknowledgement does not prove the
+receiver claimed the attempt, and a send timeout may occur after delivery. The
+watcher saves a delivery count and ten-minute claim deadline before sending. When
+the send returns or throws, it refreshes that deadline to ten minutes from then.
+Each tick checks `claimedAt` before dispatch recovery. While the deadline is in
+the future, it returns without sending, sleeping or holding the lock for the
+grace period. Claim commands can acquire the lock between ticks.
+
+If the first deadline passes without a claim, the watcher durably records its one
+resend before trying T3 again, using the same revision and attempt. That resend
+gets another ten-minute claim window. A restart preserves both deadlines and the
+resend count. A crash during a send uses the deadline saved before it; it cannot
+cause an immediate resend or an extra retry. The atomic claim rejects duplicate
+messages before they start a second UI session. Claimed work survives watcher
+restarts and requires completion or an explicit audited retry. No automatic
+timeout abandons it or starts another simulator job.
+
+Loading a durable snapshot from before this policy preserves recorded claims.
+Its old pending or sent dispatch is counted as the first delivery, with the first
+deadline based on its original start time. This conservatively handles an old
+send that may have delivered without acknowledgement. The next state save writes
+the deadline representation.
 
 Every completed red sends the last tested green, failing green main, compare
 range, failed phase and report path to managing thread
 `bd2baec7-7e23-49b0-8d20-31486beeb178`. Override it with `--notify-thread=<thread>`.
 Failed notifications stay pending. A crash after delivery but before saving can
 repeat a notification, which includes revision and attempt for identification.
-Dispatch failures also attempt an immediate red operational message. GitHub
-discovery failures remain visible in `state.json`, `STATUS.md` and the service log;
-already enrolled jobs stay intact.
+Only continued absence of a claim after both delivery windows queues an
+operational dispatch-failure notification. This is separate from a smoke red
+result; the attempt stays running and can still claim and complete normally.
+The notification is saved before sending, stays pending on send failure, and
+retries on later ticks after a restart. A late claim cancels an unsent no-claim
+alert. An audited retry starts a new delivery episode. An alert already delivered
+does not replace the actual smoke result.
+GitHub discovery failures and send errors remain visible in `state.json`,
+`STATUS.md` and the service log; already enrolled jobs stay intact.
 
 ## Claim, complete and retry
 
@@ -190,5 +213,8 @@ bun /work/heavy-runner/current/run.js --host local --class light iphone-watch-te
 Tests replace GitHub and T3 with fake adapters and exercise the real CLI in isolated
 directories. They cover adjacent and late greens, pagination, filtered query limits,
 restart, claim deduplication, interrupted persistence, dispatch and notification
-failure, red setup, completion and audited retry. They start no Mac workload and
+failure, red setup, completion and audited retry. Fake time covers both claim
+windows without waiting ten minutes. A real CLI test holds the send acknowledgement,
+returns a fake T3 timeout after delivery, and lets a waiting claim acquire the
+watcher lock, with no red or duplicate claim. Tests start no Mac workload and
 remove their temporary files and child processes.

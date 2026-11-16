@@ -6,9 +6,11 @@ export type Outcome = { revision: string; reportPath: string } & (
   | { status: "red"; failedPhase: string }
 );
 export type Completed = { kind: "complete"; attempt: number; lastGreen: string | null; finishedAt: string; outcome: Outcome; notified: boolean };
+export const claimWindowMs = 10 * 60_000;
+export type Dispatch = { kind: "pending" } | { kind: "waiting"; delivery: 1 | 2; claimDeadline: string } | { kind: "unclaimed"; notified: boolean };
 export type Job = Run & { history: Completed[]; state:
   | { kind: "pending"; attempt: number }
-  | { kind: "running"; attempt: number; lastGreen: string | null; startedAt: string; dispatch: "pending" | "sent"; claimedAt: string | null }
+  | { kind: "running"; attempt: number; lastGreen: string | null; startedAt: string; dispatch: Dispatch; claimedAt: string | null }
   | Completed
 };
 export type State = { schema: 1; since: string; polledAt: string | null; error: string | null; jobs: Job[] };
@@ -71,8 +73,22 @@ function job(value: unknown): Job {
 }
 
 function running(data: Record<string, unknown>, attempt: number): Extract<Job["state"], { kind: "running" }> {
-  if (data.dispatch !== "pending" && data.dispatch !== "sent") throw new Error("Invalid dispatch state");
-  return { kind: "running", attempt, lastGreen: nullableRevision(data.lastGreen), startedAt: timestamp(data.startedAt), dispatch: data.dispatch, claimedAt: data.claimedAt === null ? null : timestamp(data.claimedAt) };
+  const startedAt = timestamp(data.startedAt);
+  return { kind: "running", attempt, lastGreen: nullableRevision(data.lastGreen), startedAt, dispatch: dispatch(data.dispatch, startedAt), claimedAt: data.claimedAt === null ? null : timestamp(data.claimedAt) };
+}
+
+function dispatch(value: unknown, startedAt: string): Dispatch {
+  // Upgrade durable snapshots written before claim deadlines existed.
+  if (value === "pending" || value === "sent") return { kind: "waiting", delivery: 1, claimDeadline: new Date(Date.parse(startedAt) + claimWindowMs).toISOString() };
+  const data = object(value);
+  if (data.kind === "pending") return { kind: "pending" };
+  if (data.kind === "unclaimed" && typeof data.notified === "boolean") return { kind: "unclaimed", notified: data.notified };
+  if (data.kind === "waiting" && (data.delivery === 1 || data.delivery === 2)) return { kind: "waiting", delivery: data.delivery, claimDeadline: timestamp(data.claimDeadline) };
+  throw new Error("Invalid dispatch state");
+}
+
+export function dispatchFailure(job: Job, attempt: number): string {
+  return `iPhone smoke dispatch failure. No durable claim after two delivery windows of ten minutes. Source: ${job.revision}. Attempt: ${attempt}. CI run: https://github.com/ShaulLavo/bun-wasm/actions/runs/${job.id}. Smoke result remains outstanding; inspect watcher STATUS.md and the attempt dispatch.txt before an audited retry.`;
 }
 
 export function state(value: unknown): State {

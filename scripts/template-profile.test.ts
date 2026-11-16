@@ -36,13 +36,27 @@ test("the sandbox default and its Vite 8 vanilla entry use the common catalog", 
   expect(() => new Sandbox("?engine=quickjs&profile=shared")).toThrow("Unknown Bun program memory profile");
 });
 
-test("the declared worker templates match the maintained Rolldown and Angular inputs", async () => {
+test("the declared worker templates match the maintained Rolldown, Angular and Nuxt inputs", async () => {
   for (const template of projectTemplates) {
     const manifest: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } = JSON.parse(await readFile(join(import.meta.dir, "../sandbox", template.directory, "package.json"), "utf8"));
     const vite = manifest.devDependencies?.vite ?? manifest.dependencies?.vite;
-    const sharedWorkers = template.id === "angular" || (typeof vite === "string" && Number(vite.split(".")[0]) >= 8);
+    const sharedWorkers = template.id === "angular" || typeof manifest.dependencies?.nuxt === "string" || (typeof vite === "string" && Number(vite.split(".")[0]) >= 8);
     expect({ id: template.id, sharedWorkers: template.sharedWorkers }).toEqual({ id: template.id, sharedWorkers });
   }
+});
+
+test("Nuxt's Oxc shared memory requirement keeps overrides and Browser's split profile", () => {
+  for (const engine of engines) {
+    const expected = engine === "browser" ? "split" : "shared-group";
+    expect(templateProfile(engine, "nuxt")).toBe(expected);
+    expect(new Playground(`?engine=${engine}&template=nuxt&profile=split`).profile).toBe("split");
+    expect(new Sandbox(`?engine=${engine}&template=nuxt&profile=split`).profile).toBe("split");
+    if (engine === "browser") continue;
+    expect(templateProfile(engine, "nuxt", "shared-group")).toBe("shared-group");
+  }
+  expect(() => templateProfile("browser", "nuxt", "shared-group")).toThrow("does not support");
+  expect(() => new Playground("?engine=browser&template=nuxt&profile=shared-group")).toThrow("does not support");
+  expect(() => new Sandbox("?engine=browser&template=nuxt&profile=shared-group")).toThrow("does not support");
 });
 
 test("worker policy edits select the blocking shared producer and browser check", () => {

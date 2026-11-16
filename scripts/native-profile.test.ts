@@ -52,11 +52,12 @@ test('selection, batching and the command keep both commands of one fixture apar
   expect(selectChecks('native', checks)).toEqual(['tests/fixtures/regular']);
 });
 
-test('the repository declares the lifetime command beside the default one, each once', () => {
+test('the repository declares the default, globals and lifetime commands, each once', () => {
   const path = 'tests/fixtures/shared-wasm-memory';
   const declared = discoverChecks().filter(check => check.path === path);
-  expect(declared.map(checkId)).toEqual([path, `${path}#lifetime`]);
-  expect(selectChecks('native', undefined, 'shared-group').filter(id => id.startsWith(path))).toEqual([path, `${path}#lifetime`]);
+  const expected = [path, `${path}#globals`, `${path}#lifetime`];
+  expect(declared.map(checkId)).toEqual(expected);
+  expect(selectChecks('native', undefined, 'shared-group').filter(id => id.startsWith(path))).toEqual(expected);
   const read = (name: string) => readFileSync(join(import.meta.dir, '..', path, name), 'utf8');
   const lines = (name: string) => read(name).trimEnd().split('\n');
   // The two commands print the original 28 result lines between them, each once.

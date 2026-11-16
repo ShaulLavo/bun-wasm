@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-async-asymmetric",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

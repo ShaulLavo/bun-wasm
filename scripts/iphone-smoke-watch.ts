@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { attemptDirectory, coordinator, dispatchFailure, instructions, managing } from "./iphone-smoke-watch/dispatch";
+import { attemptDirectory, coordinator, instructions, managing } from "./iphone-smoke-watch/dispatch";
 import { discover } from "./iphone-smoke-watch/github";
 import { integer, outcome, redMessage, revision, timestamp, type Job, type State } from "./iphone-smoke-watch/model";
 import { claim, complete, retry, status, tick } from "./iphone-smoke-watch/scheduler";
@@ -86,8 +86,6 @@ async function poll(directory: string, state: State, config: Options): Promise<v
   } catch (error) {
     state.error = String(error);
     await save(directory, state);
-    const active = state.jobs.find(job => job.state.kind === "running" && job.state.dispatch === "pending");
-    if (active) send(notifyThread, dispatchFailure(active, directory));
     throw error;
   }
 }

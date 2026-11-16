@@ -143,6 +143,8 @@ function check(source: string) {
 
 test("accepts inspect, equality, partial assertion, process, and parser token contracts", () => {
   const result = check(`
+    const publicEquality: boolean = internal.require("util").bunDeepEquals(1, 1);
+    const privateEquality: boolean | Promise<boolean> = internal.require("util").expectEquals(1, 1, false, () => Promise.resolve(true));
 internal.require("inspect").nodeInspect({}, { depth: null, sorted: true, getters: "get" });
 internal.require("inspect").nodeFormatWithOptions({ colors: false }, "%s", 1);
 internal.require("util").bunDeepEquals(new Map(), new Map(), true);
@@ -202,6 +204,7 @@ for (const declarations of [
 }
 
 const invalid = [
+  'const sync: boolean = internal.require("util").expectEquals(1, 1, false, () => Promise.resolve(true));',
   'const options: BunWasm.AssertionOptions = { operator: 1 };',
   'const options: BunWasm.AssertionOptions = { details: [1] };',
   'const options: BunWasm.AssertionOptions = { details: {} };',

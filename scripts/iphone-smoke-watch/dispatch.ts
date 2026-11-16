@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { redMessage, type Job } from "./model";
+import type { Job } from "./model";
 
 export const coordinator = "mcp:launch:d5c5eb90071799276e00d53b8b67c40ffef4a1f7b453c759a2d6463dc98733ec";
 export const managing = "bd2baec7-7e23-49b0-8d20-31486beeb178";
@@ -24,9 +24,4 @@ export function instructions(directory: string, checkout: string, job: Job): str
     `Any preparation/infrastructure failure must produce result.json with revision ${job.revision}, status red, failedPhase naming the failed setup phase and an absolute reportPath, then complete the job and notify managing. Never abandon a claimed job silently.`,
     `If this turn is interrupted, audit and stop its owned resources, retain a cleanup report, and explicitly retry with a fresh attempt. Never reuse a stale device session. See docs/development/iphone-smoke-automation.md.`,
   ].join("\n\n");
-}
-
-export function dispatchFailure(job: Job, directory: string): string {
-  if (job.state.kind !== "running") throw new Error("Dispatch failure requires a running job");
-  return redMessage(job, { kind: "complete", attempt: job.state.attempt, lastGreen: job.state.lastGreen, finishedAt: new Date().toISOString(), outcome: { revision: job.revision, status: "red", failedPhase: "dispatch", reportPath: join(directory, "STATUS.md") }, notified: false });
 }
