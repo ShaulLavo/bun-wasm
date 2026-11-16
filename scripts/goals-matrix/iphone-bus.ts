@@ -1,4 +1,5 @@
 import { installIphoneObserver, iphonePreviewFocus } from "./iphone-browser";
+import { IphoneResponses, type IphoneResponseObservation } from "./iphone-responses";
 
 type Page = { url: string; nonce: string; timeOrigin?: number; visible: boolean; userAgent?: string; previewFocus?: ReturnType<typeof iphonePreviewFocus> | null };
 type Pending = { id: number; source: string; deadline: number; deliverByMs: number; delivered: boolean; observation: boolean; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>; deliveryTimer: ReturnType<typeof setTimeout> };
@@ -18,8 +19,11 @@ export class IphoneBus {
   private readonly pages = new Map<Role, Page>();
   private readonly pending = new Map<Role, Pending>();
   private readonly issued = new Set<Role>();
+  private readonly responses: IphoneResponses;
   private sequence = 0;
-  constructor(readonly path: string) {}
+  constructor(readonly path: string, observeResponse?: (row: IphoneResponseObservation) => void) {
+    this.responses = new IphoneResponses(() => this.state("preview"), observeResponse);
+  }
   configure(role: Role, url: string): void {
     this.cancel(role);
     this.issued.delete(role);
@@ -108,10 +112,11 @@ export class IphoneBus {
     clearTimeout(pending.timer); clearTimeout(pending.deliveryTimer); this.pending.delete(role);
     pending.reject(reason);
   }
-  close(): void { this.cancel("host"); this.cancel("preview"); this.pages.clear(); this.issued.clear(); }
+  close(): void { this.cancel("host"); this.cancel("preview"); this.pages.clear(); this.issued.clear(); this.responses.close(); }
   async handle(request: Request, productOrigin: string): Promise<Response> {
     const route = new URL(request.url).pathname.slice(this.path.length + 1);
     const headers = { "access-control-allow-origin": request.headers.get("origin") ?? "null", "access-control-allow-headers": "content-type", "access-control-allow-methods": "POST, GET", "cache-control": "no-store", "vary": "Origin" };
+    if (route.startsWith("preview/response/")) return this.responses.handle(request, productOrigin).catch(error => Response.json({ error: String(error) }, { status: 400, headers }));
     if (request.method === "OPTIONS") return new Response(null, { headers });
     if (route === "preview/script" && request.method === "GET") {
       const url = new URL(request.url).searchParams.get("url");

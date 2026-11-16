@@ -45,7 +45,7 @@ export function observeIphoneOrigins(bus: IphoneBus, endpoint: string): () => vo
 if (import.meta.main) {
   const token = process.env.GOALS_IPHONE_TOKEN;
   if (!token || !/^[a-f0-9]{64}$/.test(token) || process.env.HOST !== "127.0.0.1" || process.env.PREVIEW_ORIGINS !== "1") throw new Error("Require loopback host, preview origins and GOALS_IPHONE_TOKEN");
-  const bus = new IphoneBus("/__goals_iphone/" + token);
+  const bus = new IphoneBus("/__goals_iphone/" + token, row => console.log(JSON.stringify({ iphoneResponse: row })));
   let productOrigin = "";
   const control = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.GOALS_IPHONE_PORT ?? 0), idleTimeout: 0, maxRequestBodySize: 512 * 1024,
     fetch: request => new URL(request.url).pathname.startsWith(bus.path + "/") ? bus.handle(request, productOrigin) : new Response(null, { status: 404 }),
