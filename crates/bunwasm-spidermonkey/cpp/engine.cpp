@@ -293,10 +293,12 @@ JSObject* saved_frame_object(JSContext* cx, JS::HandleObject frame, JS::SavedFra
   JS::RootedString source(cx), name(cx);
   uint32_t line = 0;
   JS::TaggedColumnNumberOneOrigin column;
+  JS::SavedFrameKind kind = JS::SavedFrameKind::Unknown;
   if (JS::GetSavedFrameSource(cx, nullptr, frame, &source, selfHosted) != JS::SavedFrameResult::Ok ||
       JS::GetSavedFrameFunctionDisplayName(cx, nullptr, frame, &name, selfHosted) != JS::SavedFrameResult::Ok ||
       JS::GetSavedFrameLine(cx, nullptr, frame, &line, selfHosted) != JS::SavedFrameResult::Ok ||
-      JS::GetSavedFrameColumn(cx, nullptr, frame, &column, selfHosted) != JS::SavedFrameResult::Ok) return nullptr;
+      JS::GetSavedFrameColumn(cx, nullptr, frame, &column, selfHosted) != JS::SavedFrameResult::Ok ||
+      JS::GetSavedFrameKind(cx, nullptr, frame, &kind, selfHosted) != JS::SavedFrameResult::Ok) return nullptr;
   source = frame_filename(cx, frame, source, selfHosted);
   if (!source) return nullptr;
   JS::RootedObject result(cx, JS_NewPlainObject(cx));
@@ -309,6 +311,8 @@ JSObject* saved_frame_object(JSContext* cx, JS::HandleObject frame, JS::SavedFra
   if (!JS_DefineProperty(cx, result, "line", field, JSPROP_ENUMERATE)) return nullptr;
   field.setNumber(column.oneOriginValue());
   if (!JS_DefineProperty(cx, result, "column", field, JSPROP_ENUMERATE)) return nullptr;
+  field.setInt32(static_cast<int32_t>(kind));
+  if (!JS_DefineProperty(cx, result, "frameKind", field, JSPROP_ENUMERATE)) return nullptr;
   return result;
 }
 
