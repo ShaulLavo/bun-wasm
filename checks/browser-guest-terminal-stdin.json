@@ -66,6 +66,7 @@
     "web/src/fs.ts",
     "web/src/jsc-allocation-boundary.ts",
     "web/src/launch-failure.ts",
+    "web/src/host-memory-policy.ts",
     "web/src/memory-channel.ts",
     "web/src/memory-telemetry.ts",
     "web/src/module-records.ts",
