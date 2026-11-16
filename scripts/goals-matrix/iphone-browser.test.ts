@@ -5,6 +5,7 @@ import { IphoneBus } from "./iphone-bus";
 import { observeIphoneResponse, observeIphoneOrigins } from "./iphone-server";
 import { LoopbackPreviewOrigins } from "../../web/preview-origin-host";
 import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
+import type { IphoneResponseObservation } from "./iphone-responses";
 
 function counterResponse(request: Request, encodings: { asset: string | null; navigations: (string | null)[] }): Response {
   const encoding = request.headers.get("accept-encoding");
@@ -93,7 +94,13 @@ test("real product service worker injects the configured preview even when HTTP 
   const built = await Bun.build({ entrypoints: [new URL("../../web/src/sw.ts", import.meta.url).pathname], target: "browser", define: { __PREVIEW_SOCKET_SCRIPT__: JSON.stringify("/* socket fixture */") } });
   if (!built.success || !built.outputs[0]) throw new AggregateError(built.logs, "Product service worker did not build");
   const source = await built.outputs[0].text();
-  const bus = new IphoneBus("/__goals_iphone/" + "b".repeat(64));
+  const responseEvents: IphoneResponseObservation[] = [];
+  let changed = Promise.withResolvers<void>();
+  const bus = new IphoneBus("/__goals_iphone/" + "b".repeat(64), row => {
+    responseEvents.push(row);
+    changed.resolve();
+    changed = Promise.withResolvers<void>();
+  });
   let ownerOrigin = "";
   const control = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: request => bus.handle(request, ownerOrigin) });
   let networkPreviewRequests = 0;
@@ -130,6 +137,7 @@ test("real product service worker injects the configured preview even when HTTP 
     });
     const preview = owner.url.origin + "/__preview/5173/";
     bus.configure("preview", preview);
+    const initialNonce = bus.state("preview")!.nonce;
     await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(preview)})`, 3000, false, Date.now() + 3000);
     await waitReady(bus, "preview");
     expect(await bus.execute("preview", "document.querySelector('h1').textContent", 3000, false, Date.now() + 3000)).toBe("real worker preview 1");
@@ -139,9 +147,21 @@ test("real product service worker injects the configured preview even when HTTP 
       const pending = bus.execute("preview", read, 3000, true, Date.now() + 3000).catch((error: unknown) => error);
       await page.evaluate(() => document.querySelector<HTMLIFrameElement>("iframe")!.contentWindow!.location.reload());
       expect(await pending).toBe(`real worker preview ${revision}`);
+      const nonce = bus.state("preview")!.nonce;
+      while (!responseEvents.some(row => row.event === "transform-end" && row.nonce === nonce)) await changed.promise;
+      const replacementHead = responseEvents.find(row => row.event === "head" && row.nonce === nonce);
+      expect(replacementHead).toMatchObject({ status: 200, url: preview });
+      expect(nonce).not.toBe(initialNonce);
     }
     expect(bus.state("preview")?.url).toBe(preview);
     expect(networkPreviewRequests).toBe(0);
+    const head = responseEvents.find(row => row.event === "head" && row.nonce === initialNonce);
+    expect(head).toMatchObject({ status: 200, contentType: "text/html", contentEncoding: null, contentLength: null, url: preview, sameConfiguration: true });
+    const initialResponse = responseEvents.filter(row => row.id === head?.id);
+    expect(initialResponse.some(row => row.event === "body-end")).toBe(true);
+    expect(initialResponse.some(row => row.event === "transform-end")).toBe(true);
+    expect(initialResponse.some(row => row.event === "failure")).toBe(false);
+    expect(responseEvents.every(row => Object.values(row).every(value => value === null || ["string", "number", "boolean"].includes(typeof value)))).toBe(true);
     await page.evaluate(async () => { for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister(); });
   } finally { await browser?.close(); bus.close(); await owner.stop(true); await control.stop(true); }
 }, 15000);
