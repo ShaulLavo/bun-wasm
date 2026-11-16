@@ -40,6 +40,11 @@ export function apiChecks(factory: typeof Buffer, transcode: Transcode) {
       assert.equal(factory.concat(input).toString("hex"), "010203");
       assert.equal(calls, 1);
       assert.equal(factory.concat([factory.from([1])], 3).toString("hex"), "010000");
+      assert.throws(() => Reflect.apply(factory.concat, factory, [[factory.alloc(1), 42], 0]), { code: "ERR_INVALID_ARG_TYPE" });
+      const backing = new ArrayBuffer(4);
+      const detached = factory.from(backing);
+      backing.transfer();
+      assert.throws(() => factory.concat([detached], 0), { name: "TypeError" });
     } },
     { name: "transcode substitutes once per code point and preserves BOMs", run() {
       assert.equal(typeof transcode, "function");
