@@ -60,7 +60,7 @@ declare namespace BunWasm {
   type AsymmetricComparison = (received: unknown, expected: unknown) => EqualityResult | undefined;
   interface ExpectComparison {
     asymmetric: AsymmetricComparison;
-    memo: EqualityMemo;
+    memo?: EqualityMemo;
   }
   interface ComparisonError extends Error { errors?: unknown }
   type BoxedPrimitive<Value> = object & { valueOf(): Value };

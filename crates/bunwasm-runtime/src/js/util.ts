@@ -1483,7 +1483,7 @@
 
   // Expect owns this context. Public Bun and Node equality never invoke it.
   function expectEquals(a: unknown, b: unknown, strict: boolean, asymmetric: BunWasm.AsymmetricComparison): BunWasm.EqualityResult {
-    return expectEq(a, b, strict, { asymmetric, memo: { val1: new Map(), val2: new Map(), position: 0 } });
+    return expectEq(a, b, strict, { asymmetric });
   }
 
   function expectSettle<T>(value: T | Promise<T>, consume: (value: T) => BunWasm.EqualityResult): BunWasm.EqualityResult {
@@ -1514,7 +1514,8 @@
     if (asymmetric !== undefined) return asymmetric;
     if (Object.is(a, b)) return true;
     if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
-    return expectMemo(a, b, context.memo, () => expectObjects(a, b, strict, context));
+    const memo = context.memo ??= { val1: new Map(), val2: new Map(), position: 0 };
+    return expectMemo(a, b, memo, () => expectObjects(a, b, strict, context, memo));
   }
 
   function expectMemo(a: object, b: object, memo: BunWasm.EqualityMemo, compare: () => BunWasm.EqualityResult): BunWasm.EqualityResult {
@@ -1591,12 +1592,12 @@
     return expectSettle(cause, pass => pass && expectProperties(a, b, strict, context, undefined, compared));
   }
 
-  function expectObjects(a: object, b: object, strict: boolean, context: BunWasm.ExpectComparison): BunWasm.EqualityResult {
+  function expectObjects(a: object, b: object, strict: boolean, context: BunWasm.ExpectComparison, memo: BunWasm.EqualityMemo): BunWasm.EqualityResult {
     if (isSet(a) || isSet(b)) return isSet(a) && isSet(b) && expectSets(a, b, strict, context);
     if (isMap(a) || isMap(b)) return isMap(a) && isMap(b) && expectMaps(a, b, strict, context);
     if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && expectArrays(a, b, strict, context);
     if (isNativeError(a) || isNativeError(b)) return isNativeError(a) && expectErrors(a, b, strict, context);
-    const special = bunCompareSpecial(a, b, strict, context.memo);
+    const special = bunCompareSpecial(a, b, strict, memo);
     if (special !== undefined) return special;
     if (isTypedArray(a) || isBoxedPrimitive(a)) return expectProperties(a, b, true, context, nonIndexKeys(a, true));
     if (strict && (tagOf(a) !== tagOf(b) || constructorName(a) !== constructorName(b))) return false;

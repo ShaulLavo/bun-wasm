@@ -211,7 +211,7 @@
     if (!isObjectLike(expected) || !isObjectLike(received)) return equals(received, expected, false);
     if (Array.isArray(expected)) {
       if (!Array.isArray(received) || received.length !== expected.length) return false;
-      return matcherSupport.every(Array.from({ length: expected.length }, (_, i) => i), i => matchesObject(received[i], expected[i], seen));
+      return matcherSupport.every(expected, (item, i) => matchesObject(received[i], item, seen));
     }
     if (!isPlainObject(expected) && !isPlainObject(received)) {
       if (expected instanceof Date || expected instanceof RegExp || expected instanceof Map || expected instanceof Set) {
