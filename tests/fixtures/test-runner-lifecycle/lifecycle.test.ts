@@ -1,0 +1,49 @@
+import assert from "node:assert/strict";
+import { afterAll, afterEach, beforeEach, describe, jest, onTestFinished, test } from "bun:test";
+
+assert.throws(() => test.failing("missing"), /test.failing expects a function as the second argument/);
+assert.throws(() => describe(() => {}, () => {}), /describe\(\) expects first argument/);
+assert.throws(() => onTestFinished(() => {}), /Cannot call onTestFinished\(\) outside of a test/);
+assert.throws(() => test("both", () => {}, { retry: 1, repeats: 1 }), /Cannot set both retry and repeats/);
+assert.equal(jest.setTimeout(5000), undefined);
+describe(() => { test("sole callback", () => console.log("sole callback ran")); });
+
+describe("retry lifecycle", () => {
+  const log: string[] = [];
+  let attempts = 0;
+  describe("attempts", () => {
+    beforeEach(() => { log.push("before"); });
+    afterEach(() => { log.push("after"); });
+    test("retry", async () => {
+      attempts++;
+      onTestFinished(async () => { await Promise.resolve(); log.push("finished first"); });
+      onTestFinished(() => { log.push("finished second"); });
+      afterAll(() => { log.push("inner first"); });
+      afterAll(() => { log.push("inner second"); });
+      log.push("test");
+      if (attempts < 3) throw new Error("intentional retry");
+    }, { retry: 3 });
+  });
+  test("verify retry", () => {
+    assert.equal(attempts, 3);
+    assert.deepEqual(log, Array.from({ length: 3 }, () => ["before", "test", "inner second", "inner first", "after", "finished first", "finished second"]).flat());
+    console.log("retry lifecycle verified");
+  });
+});
+
+describe("repeat lifecycle", () => {
+  const log: string[] = [];
+  describe("attempts", () => {
+    beforeEach(() => { log.push("before"); });
+    afterEach(() => { log.push("after"); });
+    test("repeat", () => {
+      log.push("test");
+      onTestFinished(() => { log.push("finished"); });
+    }, { repeats: 2 });
+  });
+  test("verify repeats", () => {
+    assert.deepEqual(log, Array.from({ length: 3 }, () => ["before", "test", "after", "finished"]).flat());
+    console.log("repeat lifecycle verified");
+  });
+});
+test("validation completed", () => console.log("validation verified"));

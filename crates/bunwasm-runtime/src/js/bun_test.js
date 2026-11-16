@@ -726,6 +726,7 @@
     clearAllMocks: () => forEachMock("mockClear"),
     resetAllMocks: () => forEachMock("mockReset"),
     isMockFunction: isMock,
+    setTimeout: setDefaultTimeout,
   };
 
   // ───────────────────────────── expect ─────────────────────────────
@@ -1779,7 +1780,9 @@
     const scope = currentScope();
     const hasFn = typeof fn === "function";
     const mode = modifiers.mode || "run";
-    if (!hasFn && mode === "run") throw new Error("test expects a function as the second argument");
+    const signature = modifiers.failing ? "test.failing" : "test";
+    if (!hasFn && mode === "run") throw new Error(`${signature} expects a function as the second argument`);
+    const repeat = internal.require("test_lifecycle").repeatOptions(timeoutOrOptions, signature);
     const test = {
       kind: "test",
       name: name === undefined ? "" : String(name),
@@ -1789,6 +1792,8 @@
       only: !!modifiers.only,
       failing: !!modifiers.failing,
       timeout: readTimeout(timeoutOrOptions),
+      retry: repeat.retry,
+      repeats: repeat.repeats,
       usesDone: modifiers.usesDone !== undefined ? modifiers.usesDone : hasFn && fn.length > 0,
     };
     if (test.only) collecting.hasOnly = true;
@@ -1797,14 +1802,13 @@
 
   function registerDescribe(modifiers, name, fn) {
     const parent = currentScope();
-    const label = typeof name === "function" ? name.name : String(name);
+    const { name: label, fn: callback } = internal.require("test_lifecycle").registration("describe", name, fn);
     const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
     if (scope.only) collecting.hasOnly = true;
     parent.children.push(scope);
-    if (typeof fn !== "function") return;
     collecting.scope = scope;
     try {
-      fn();
+      callback();
     } finally {
       collecting.scope = parent;
     }
@@ -1926,8 +1930,20 @@
   function hookRegistrar(kind) {
     return (fn, timeout) => {
       if (typeof fn !== "function") throw new TypeError(`${kind}() expects a function as the first argument`);
-      currentScope()[kind].push({ fn, timeout: readTimeout(timeout) });
+      const hooks = kind === "afterAll" && currentTest ? currentTest.afterAll : currentScope()[kind];
+      hooks.push({ fn, timeout: readTimeout(timeout) });
     };
+  }
+
+  function onTestFinished(fn, timeout) {
+    if (typeof fn !== "function") throw new TypeError("onTestFinished() expects a function as the first argument");
+    if (!currentTest) throw new Error("Cannot call onTestFinished() outside of a test. It can only be called inside a test.");
+    currentTest.finished.push({ fn, timeout: readTimeout(timeout) });
+  }
+
+  function setDefaultTimeout(ms) {
+    if (typeof ms !== "number") throw new Error("setTimeout() expects a number (milliseconds)");
+    options.timeout = ms;
   }
 
   // ───────────────────────────── execution ─────────────────────────────
@@ -2047,13 +2063,17 @@
     }
     if (test.mode === "skip") return reportResult(test, { status: "skip" }, 0);
     if (test.mode === "todo" && !(options.runTodo && test.fn)) return reportResult(test, { status: "todo" }, 0);
-    const outcome = await executeTest(test, file);
-    reportResult(test, outcome.result, outcome.elapsed, outcome.expectCount);
+    const outcome = await internal.require("test_lifecycle").attempts(test, () => executeTest(test, file), (failed) => {
+      printFileHeaderIfNeeded();
+      printFailure(failed.result);
+      writeErr(resultNote(failed.result));
+    });
+    reportResult(test, outcome.result, outcome.elapsed, outcome.expectCount, outcome.label);
   }
 
   async function executeTest(test, file) {
     const chain = scopeChain(test.parent);
-    const record = { expectCount: 0, assertions: null, test, file };
+    const record = { expectCount: 0, assertions: null, test, file, afterAll: [], finished: [] };
     currentTest = record;
     const start = now();
     let result = await runHooks(chain.flatMap((s) => s.beforeEach));
@@ -2062,8 +2082,14 @@
       result = await invoke(test.fn, [], test.usesDone, timeout);
       if (result.timeout) result.timeoutMs = timeout;
     }
-    const after = await runHooks(chain.toReversed().flatMap((s) => s.afterEach));
-    if (result.ok && !after.ok) result = after;
+    const after = await runHooks(record.afterAll.toReversed().concat(chain.toReversed().flatMap((s) => s.afterEach), record.finished));
+    if (!result.ok && !after.ok) {
+      printFileHeaderIfNeeded();
+      const failure = failureFromResult(result, test);
+      printFailure(failure);
+      writeErr(resultNote(failure));
+    }
+    if (!after.ok) result = after;
     const elapsed = now() - start;
     currentTest = null;
     return { result: classify(test, result, record), elapsed, expectCount: record.expectCount };
@@ -2122,22 +2148,26 @@
     return ms > 1;
   }
 
-  function reportResult(test, result, elapsed, expectCount) {
+  function reportResult(test, result, elapsed, expectCount, label = "") {
     summary.expectations += expectCount || 0;
     summary[result.status]++;
     // Agents only see failures.
     const quiet = options.agent && result.status !== "fail";
-    if (!quiet) printResult(test, result, elapsed);
+    if (!quiet) printResult(test, result, elapsed, label);
     if (result.status === "fail" && options.bail > 0 && summary.fail === options.bail) bailOut();
   }
 
-  function printResult(test, result, elapsed) {
-    printFileHeaderIfNeeded();
+  function printFailure(result) {
     if (result.error !== undefined) writeErr(formatErrorText(result.error));
     if (result.assertion) writeErr(`AssertionError: ${result.assertion}\n`);
+  }
+
+  function printResult(test, result, elapsed, label) {
+    printFileHeaderIfNeeded();
+    printFailure(result);
     const names = displayNames(test).map((name) => ` ${name} >`).join("");
     const time = showsElapsed(result, elapsed) ? ` ${formatElapsed(elapsed)}` : "";
-    const line = `(${result.status})${names} ${test.name}${time}\n${resultNote(result)}`;
+    const line = `(${result.status})${names} ${test.name}${label}${time}\n${resultNote(result)}`;
     writeErr(line);
     if (result.status in repeated) repeated[result.status] += line;
   }
@@ -2468,15 +2498,13 @@
     afterAll: hookRegistrar("afterAll"),
     beforeEach: hookRegistrar("beforeEach"),
     afterEach: hookRegistrar("afterEach"),
+    onTestFinished,
     mock,
     spyOn,
     jest,
     vi: jest,
     setSystemTime: internal.fakeTimers.api.setSystemTime,
-    setDefaultTimeout(ms) {
-      if (typeof ms !== "number") throw new Error("setTimeout() expects a number (milliseconds)");
-      options.timeout = ms;
-    },
+    setDefaultTimeout,
   };
 
   return { exports, run };

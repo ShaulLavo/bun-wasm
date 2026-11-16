@@ -1,0 +1,14 @@
+bun test vVERSION
+sole callback ran
+retry lifecycle verified
+repeat lifecycle verified
+validation verified
+lifecycle.test.ts: 6 pass, 0 fail
+bun test vVERSION
+retry finished 1
+retry finished 2
+retry finished 3
+repeat attempted once
+failed repeat finished
+cleanup failed
+failure.test.ts: 0 pass, 3 fail
