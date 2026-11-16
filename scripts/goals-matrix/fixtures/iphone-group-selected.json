@@ -49,6 +49,14 @@
         "width": 63.333333333333314,
         "height": 48
       }
+    },
+    {
+      "kind": "button",
+      "index": 24,
+      "parentIndex": 20,
+      "label": "Done",
+      "ref": "e25",
+      "identifier": "DoneButton"
     }
   ]
 }

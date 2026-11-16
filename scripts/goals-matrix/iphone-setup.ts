@@ -57,8 +57,16 @@ export async function prepareIphoneSafari(command: NativeCommand, admission: Adm
   }
   const hasButtons = nodes.some(node => node.kind === "button" && node.identifier === "CapsuleTabGroup");
   const ordinary = hasButtons ? ordinaryGroup(nodes) : textTarget(nodes);
-  if (hasButtons && ordinary.selected === true) return;
-  const selected = ordinaryGroup(await snapshot([press(ordinary)]));
-  const expectedLabel = hasButtons ? ordinary.label : ordinary.label + ", Tab Group";
-  if (selected.selected !== true || selected.label !== expectedLabel) throw new Error("Ordinary Safari tab group selection is unproved before navigation");
+  if (!hasButtons || ordinary.selected !== true) {
+    nodes = await snapshot([press(ordinary)]);
+    const selected = ordinaryGroup(nodes);
+    const expectedLabel = hasButtons ? ordinary.label : ordinary.label + ", Tab Group";
+    if (selected.selected !== true || selected.label !== expectedLabel) throw new Error("Ordinary Safari tab group selection is unproved before navigation");
+  }
+  const done = nodes.filter(node => node.kind === "button" && node.identifier === "DoneButton" && node.label === "Done");
+  if (done.length !== 1) throw new Error("Cannot identify Safari Done before owned navigation");
+  const page = await snapshot([press(done[0]!)]);
+  const overview = page.some(node => typeof node.identifier === "string" &&
+    (node.identifier === "TabOverview" || node.identifier === "CapsuleTabGroup" || node.identifier.startsWith("TabOverviewItemView?")));
+  if (overview) throw new Error("Safari tab overview exit is unproved before navigation");
 }

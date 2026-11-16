@@ -5,7 +5,13 @@ export function tabOverview(labels: string[], count = labels.length) {
     { kind: "button", index: index * 2 + 1, parentIndex: index * 2, label: "Close", ref: `e${index * 2 + 2}` },
   ]);
   nodes.push({ kind: "button", index: 90, parentIndex: 99, label: `${count} Tabs, Tab Group`, ref: "e99", identifier: "CapsuleTabGroup", selected: true });
+  nodes.push({ kind: "button", index: 91, parentIndex: 99, label: "Done", ref: "e100", identifier: "DoneButton" });
   return { appBundleId: "com.apple.mobilesafari", truncated: false, nodes };
+}
+
+export function tabPage() {
+  return { appBundleId: "com.apple.mobilesafari", truncated: false,
+    nodes: [{ kind: "button", index: 92, parentIndex: 99, label: "More", ref: "e101" }] };
 }
 
 export function tabBatch(snapshot: unknown, commands = ["press", "snapshot"]) {

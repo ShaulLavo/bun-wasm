@@ -41,7 +41,10 @@ The timer runs no detached device workload. The low-level runner and its manual
 deploy procedure are owned separately from this watcher.
 
 Before opening the task URL, the native transport opens Safari's tab overview
-and proves that the ordinary numbered tab group is selected. Setup can locate
+and proves that the ordinary numbered tab group is selected. It then presses
+Done with settling enabled and proves the overview closed before opening the
+task URL. Group selection alone can leave the URL in a hidden Private tab.
+Setup can locate
 an ordinary group from its AX text, including duplicate nodes at the same bounds
 in the same group strip. Selection still requires a settled snapshot with one
 selected numbered group button. Missing or ambiguous targets stop navigation.
