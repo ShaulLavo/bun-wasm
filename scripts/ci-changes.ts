@@ -12,6 +12,7 @@ const nativeFiles = new Set([
   "scripts/ci-program-delivery.ts",
   "scripts/ci-browser-program.ts", "scripts/build-bun-browser.sh",
   "scripts/ci-ordinary-jsc-program.ts",
+  "scripts/ci-ordinary-web-inputs.ts",
   "scripts/ci-jsc-artifact.ts",
   "scripts/ci-main-coverage.ts",
   "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js",
@@ -111,6 +112,7 @@ const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
 const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/getter-dispatch/", "tests/fixtures/proxy-get-forwarding/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/assignment-chain-depth/", "tests/fixtures/statement-record-cap/", "tests/fixtures/statement-records-async-using/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
+  "scripts/ci-ordinary-web-inputs.ts",
   "scripts/runtime-file-checks.ts", "scripts/run-with-timeout.mts", "scripts/process-owner.mts", "scripts/linux-subreaper.mts",
   ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml",
   "scripts/ci-program-delivery.ts",

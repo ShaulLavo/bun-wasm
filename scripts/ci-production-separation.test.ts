@@ -66,7 +66,7 @@ function checkProviders(event: string, flags: { rust: string; browser: string })
     const full = (flags.rust === "true" || event !== "pull_request" && flags.rust === "false" && flags.browser === "true") && flags.browser === "true" && result.rust === "success" && result.browser === "skipped";
     const alternate = event === "pull_request" && flags.rust === "false" && flags.browser === "true" && result.rust === "skipped" && result.browser === "success";
     const sourceOnly = flags.rust === "false" && flags.browser === "false" && result.rust === "skipped" && result.browser === "skipped";
-    const needs: Needs = { selection: selection(flags.rust, flags.browser), rust: { result: result.rust }, "browser-production": { result: result.browser }, "process-bundles": { result: "success" }, "browser-guest": { result: sourceOnly ? "skipped" : "success" } };
+    const needs: Needs = { selection: selection(flags.rust, flags.browser), rust: { result: result.rust }, "browser-production": { result: result.browser }, "ordinary-web-guests": { result: full ? "success" : "skipped" }, "process-bundles": { result: "success" }, "browser-guest": { result: sourceOnly ? "skipped" : "success" } };
     expect(admitted("browser-guest", needs, event)).toBe(full || alternate);
     expect(admitted("browser-process", needs, event)).toBe(full || alternate || sourceOnly);
     expect(admitted("browser-guest", needs, event, true)).toBe(false);
@@ -88,7 +88,8 @@ test("selected JSC Browser rows use the alternate producer without acquiring nat
   const producer = steps(job("browser-production"));
   expect(object(producer.find(step => step.uses === "./.github/actions/native-production")!.with).jsc).toBe("${{ needs.selection.outputs.jsc }}");
   const entries = steps(job("browser-production", true));
-  for (const name of ["Start the JSC Cargo guest build", "Build the JSC Cargo guest", "Blocking Web guest case (JSC)"]) expect(named(entries, name).if).toBe("needs.selection.outputs.jsc == 'true'");
+  for (const name of ["Start the JSC Cargo guest build", "Build the JSC Cargo guest"]) expect(named(entries, name).if).toBe("needs.selection.outputs.jsc == 'true'");
+  expect(named(entries, "Blocking Web guest case (JSC)").if).toBe("needs.selection.outputs.jsc == 'true'");
   expect(entries.indexOf(named(entries, "Build the JSC Cargo guest"))).toBeLessThan(entries.indexOf(named(entries, "Build the browser-guest site once")));
 });
 
@@ -119,7 +120,7 @@ function checkProducerSelection(event: string): void {
 }
 
 function results(rust: boolean, browser: boolean) {
-  const native = new Set(["native-quality", "rust"]);
+  const native = new Set(["native-quality", "rust", "ordinary-web-guests"]);
   const backing = new Set(["jsc-identity", "jsc-prebuild", "browser-guest"]);
   const shared = new Set(["shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof"]);
   const required = job("ci-result").needs;
@@ -234,7 +235,7 @@ test("composite steps use supported metadata and transfers retain their five-min
   for (const name of ["native-setup", "native-seed", "native-production"]) {
     for (const step of steps(action(name))) requireSupportedStep(step);
   }
-  for (const id of ["native-quality", "rust", "browser-production"]) {
+  for (const id of ["native-quality", "rust", "ordinary-web-guests", "browser-production"]) {
     const transfers = steps(job(id)).filter(step => /^actions\/(?:upload|download)-artifact@/.test(String(step.uses)));
     expect(transfers.length).toBeGreaterThan(0);
     for (const step of transfers) expect(step["timeout-minutes"]).toBe(5);

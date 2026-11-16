@@ -86,12 +86,28 @@ active command before proceeding, and cannot start later input after expiry.
 Failed iPhone cleanup stops the campaign before another cell starts.
 
 Native tab cleanup uses the documented agent-device batch JSON command to pair
-each All Tabs or Close input with its resulting snapshot. It makes three CLI
-round trips instead of five, under the same shared 10-second deadline. Each
-request contains at most one input because cancellation does not prove native
-work stopped. Close must belong to the unique task-title node in the native
-snapshot hierarchy. The final snapshot must show that title gone, exactly one
-fewer tab, and the other visible tab titles preserved.
+each settled transition with its resulting snapshot under one deadline. Setup
+and cleanup share ordinary-group selection and Done/overview-exit proof. Cleanup
+selects ordinary tabs before counting. Close must belong to the unique recorded
+task-title node in the native snapshot hierarchy. For ordinary cards, closure
+requires exactly one fewer tab and all other visible titles preserved. If the
+owned title is absent from ordinary tabs, cleanup selects Private and requires
+its uniquely titled card and own Close child. Its fresh before/after snapshots
+must preserve all other visible private titles. This proves selective ownership
+without inventing a Private total. Returning to ordinary tabs must also prove
+their count and contents unchanged. Every successful path presses Done and
+proves overview exit.
+
+Cleanup restores ordinary context even when setup ended before navigation. A
+URL opened without a recorded title remains an ownership failure; restoration
+cannot turn it green. Structural cleanup failures retain their original error
+while attempting bounded ordinary restoration through the same live command.
+Failed native commands, incomplete batches and expired deadlines forbid later
+input. The PC gate controller owns this finish before device session closure
+and FIFO wrapper shutdown, including failure and cancellation. The Mac-only
+asset wrapper has no device binding and its receipt proves only server cleanup.
+The C4D2 CLI rejects WebDriver-only runs before native setup because that path
+cannot provide bound ordinary-group finish proof. Desktop Safari is unaffected.
 
 Native cleanup closes the unique owned Safari tab without evaluating through the
 application observer. A phase timeout can leave an observation pending, so asking

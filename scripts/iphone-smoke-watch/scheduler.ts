@@ -111,7 +111,8 @@ function label(job: Job): string {
   if (job.state.kind === "running") return `running; dispatch ${job.state.claimedAt ? "claimed" : dispatchLabel(job.state.dispatch)}; claimed ${job.state.claimedAt ?? "no"}`;
   if (job.state.kind !== "complete") return job.state.kind;
   const result: Completed = job.state;
-  return `${result.outcome.status}${result.outcome.failedPhase ? ` at ${result.outcome.failedPhase}` : ""}; report ${result.outcome.reportPath}; notification ${result.notified ? "sent or unnecessary" : "pending"}`;
+  const classification = result.outcome.status === "red" && result.outcome.operational ? "OPERATIONAL ALERT; raw result red; cleanup unproved" : result.outcome.status;
+  return `${classification}${result.outcome.failedPhase ? ` at ${result.outcome.failedPhase}` : ""}; report ${result.outcome.reportPath}; notification ${result.notified ? "sent or unnecessary" : "pending"}`;
 }
 
 function dispatchLabel(delivery: Dispatch): string {

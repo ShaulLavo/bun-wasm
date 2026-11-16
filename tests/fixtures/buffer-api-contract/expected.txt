@@ -1,0 +1,11 @@
+numeric accessors ignore shadowed view backing properties
+inspect formats bytes directly without custom-hook redispatch
+transcode retains separate malformed UTF16 replacements
+transcode uses intrinsic bytes and coerces both encodings before validation
+numeric accessors validate receivers after offset arguments
+numeric accessors address bytes within the receiver element bound
+one-byte writes validate offset types before value ranges
+concat captures each input getter once before copying
+transcode substitutes once per code point and preserves BOMs
+transcode reports encoding and malformed conversion errors
+inspect uses the maintained Buffer formatter

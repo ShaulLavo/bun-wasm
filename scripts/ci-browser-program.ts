@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { artifactIdentity, verifyGuestBuildReceipt, verifyGuestCompanions } from "./guest-build-receipt.ts";
 import { git, guestBuilds } from "./guest-source-manifest.ts";
-import type { ProgramInputSnapshot } from "./guest-core-receipt.ts";
+import { parseProgramReceipt, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt.ts";
 import { writeProgramDelivery } from "./ci-program-delivery.ts";
 
 type Source = ProgramInputSnapshot["source"];
+export const browserProgramFiles = ["bun-browser.wasm", "bun-browser.wasm.build.json", "bun-tools.wasm", "bun-tools.wasm.build.json",
+  "bun.wasm", "bun.wasm.build.json", "quickjs.wasm", "quickjs.wasm.engine.json"] as const;
 
 export async function verifyBrowserProgram(directory: string, source: Source) {
   const files: { name: string; bytes: Uint8Array }[] = [];
   const programs = [];
-  for (const build of ["browser", "tools"] as const) {
+  for (const build of ["browser", "tools", "quickjs"] as const) {
     const name = guestBuilds[build].artifact;
     const bytes = await Bun.file(join(directory, name)).bytes();
     const receiptBytes = await Bun.file(join(directory, `${name}.build.json`)).bytes();
@@ -23,8 +25,17 @@ export async function verifyBrowserProgram(directory: string, source: Source) {
     programs.push({ build, name, ...artifactIdentity(bytes), source: receipt.sourceManifest.source,
       inputs: { bunHead: receipt.bunHead, bunTree: receipt.bunTree, sysrootReceiptSha256: receipt.sysrootReceiptSha256 } });
     files.push({ name, bytes }, { name: `${name}.build.json`, bytes: receiptBytes });
+    if (build !== "quickjs") continue;
+    assert("engineOrigin" in receipt, "QuickJS origin required");
+    const side = await Bun.file(join(directory, "quickjs.wasm")).bytes();
+    const originBytes = await Bun.file(join(directory, "quickjs.wasm.engine.json")).bytes();
+    const origin = parseProgramReceipt(JSON.parse(new TextDecoder().decode(originBytes)));
+    assert.equal(origin.inputs.scope, "quickjs", "QuickJS side receipt required");
+    verifyProgramReceipt(side, origin, origin.inputs);
+    assert.deepEqual(origin, receipt.engineOrigin, "QuickJS independent origin mismatch");
+    files.push({ name: "quickjs.wasm", bytes: side }, { name: "quickjs.wasm.engine.json", bytes: originBytes });
   }
-  assert.deepEqual(programs[0]?.inputs, programs[1]?.inputs, "Browser/tools patched Bun or sysroot mismatch");
+  for (const program of programs.slice(1)) assert.deepEqual(programs[0]?.inputs, program.inputs, "Browser/tools/QuickJS patched Bun or sysroot mismatch");
   return { files, delivery: { schema: 1, profile: "split", source, programs, files: files.map(file => ({ name: file.name, ...artifactIdentity(file.bytes) })) } };
 }
 

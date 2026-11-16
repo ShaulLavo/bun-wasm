@@ -152,7 +152,7 @@ runs:
           exit 1
         fi
     - name: Package the native profile launcher
-      if: inputs.full == 'true' && inputs.shared-native == 'true'
+      if: inputs.full == 'true' && (inputs.jsc == 'true' || inputs.shared-native == 'true')
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         mkdir -p "$RUNNER_TEMP/native-profile-launcher"
@@ -181,10 +181,10 @@ runs:
         path: ${{ runner.temp }}/jsc/engine
         key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts', '.github/actions/native-*/action.yml') }}
 
-    - name: Blocking JSC embedding and allocation checks
+    - name: Verify JSC embedding source and native backing
       if: inputs.full == 'true' && inputs.jsc == 'true'
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-      run: bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm
+      run: bun scripts/jsc-embedding.ts verify dist/bun-jsc.wasm
     - name: Blocking native fixture checks
       if: inputs.full == 'true'
       env:
@@ -275,6 +275,7 @@ runs:
         key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp', 'scripts/build-bun-tools.sh', 'scripts/build-bun-browser.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', '.github/actions/native-*/action.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
 
     - name: Blocking Web guest cases (QuickJS and host engine)
+      if: inputs.full != 'true'
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh
@@ -288,7 +289,7 @@ runs:
         bun scripts/browser-guest-site.ts build "$RUNNER_TEMP/browser-guest-site"
         bun scripts/browser-guest-coverage.ts "$RUNNER_TEMP/browser-guest-site" "$BUN_WASM_BROWSER_COVERAGE_SELECTION"
     - name: Blocking Web guest case (JSC)
-      if: inputs.jsc == 'true'
+      if: inputs.full != 'true' && inputs.jsc == 'true'
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh
@@ -298,6 +299,9 @@ runs:
       run: |
         source env.sh
         bun scripts/ci-browser-program.ts export "$RUNNER_TEMP/browser-program"
+    # Full-route seeds are qualified by source, native checks and verified exports.
+    # The independent ordinary-web-guests consumer and Code quality qualify the run.
+    # Alternate production retains its inline Web checks before these saves.
     - uses: ./.github/actions/save-rust-build-cache
       with:
         key: ${{ inputs.object-key }}

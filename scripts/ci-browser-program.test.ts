@@ -11,14 +11,13 @@ import { record } from "./guest-core-receipt.ts";
 import { hash } from "./guest-source-manifest.ts";
 import { discoverChecks } from "./test-checks.ts";
 import { writeProgramDelivery } from "./ci-program-delivery.ts";
+import { writeBrowserDeliveryFixture } from "./fixtures/ordinary-web-delivery.ts";
+import { quickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
 
 async function fixture(action: (directory: string, source: { head: string; tree: string }) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), "bun-wasm-browser-program-"));
   try {
-    for (const build of ["browser", "tools"] as const) {
-      await Bun.write(join(directory, `bun-${build}.wasm`), wasm);
-      await Bun.write(join(directory, `bun-${build}.wasm.build.json`), JSON.stringify(fixtureReceipt(wasm, build), null, 2) + "\n");
-    }
+    await writeBrowserDeliveryFixture(directory);
     await action(directory, fixtureReceipt(wasm, "browser").sourceManifest.source);
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
@@ -31,7 +30,7 @@ test("exports one standard Browser and same-source tools guest with unmodified r
     for (const file of result.files) expect(file.bytes).toEqual(await Bun.file(join(directory, file.name)).bytes());
     expect((await readdir(output)).sort()).toEqual(result.files.map(file => file.name).concat(["delivery.json", "source.txt"]).sort());
     expect(await Bun.file(join(output, "delivery.json")).json()).toEqual(result.delivery);
-    expect(result.delivery.programs.map(program => program.build)).toEqual(["browser", "tools"]);
+    expect(result.delivery.programs.map(program => program.build)).toEqual(["browser", "tools", "quickjs"]);
     expect(await Bun.file(join(output, "source.txt")).text()).toBe(`${source.head}\n${source.tree}\n`);
     await expect(exportBrowserProgram(directory, output, source)).rejects.toThrow();
     expect(await Bun.file(join(output, "delivery.json")).json()).toEqual(result.delivery);
@@ -67,6 +66,25 @@ test("a failed delivery write removes its own partial output", async () => {
   });
 });
 
+for (const defect of ["source", "profile", "side bytes", "independent origin"] as const) {
+  test(`QuickJS delivery rejects ${defect} before exporting`, async () => {
+    await fixture(async (directory, source) => {
+      const pair = quickjsPair();
+      const receipt = fixtureReceipt(pair.core, "quickjs", pair.side);
+      if (!("engineOrigin" in receipt)) throw new Error("Expected QuickJS origin");
+      if (defect === "independent origin") await Bun.write(join(directory, "quickjs.wasm.engine.json"), JSON.stringify({ ...receipt.engineOrigin, inputs: { ...receipt.engineOrigin.inputs, source: { head: "1".repeat(40), tree: "2".repeat(40) } } }));
+      if (defect === "side bytes") await Bun.write(join(directory, "quickjs.wasm"), appendCustomSection(pair.side, "changed", new Uint8Array([1])));
+      if (defect === "profile") await Bun.write(join(directory, "bun.wasm.build.json"), JSON.stringify({ ...receipt, profile: "shared-group" }));
+      if (defect === "source") {
+        const sourceManifest = { ...receipt.sourceManifest, source: { head: "1".repeat(40), tree: "2".repeat(40) } };
+        await Bun.write(join(directory, "bun.wasm.build.json"), JSON.stringify({ ...receipt, sourceManifest, sourceManifestSha256: hash(JSON.stringify(sourceManifest)) }));
+      }
+      await expect(exportBrowserProgram(directory, join(directory, "export"), source)).rejects.toThrow();
+      expect(await readdir(directory)).not.toContain("export");
+    });
+  });
+}
+
 function workflowSteps(value: unknown) {
   if (!record(value) || !Array.isArray(value.steps)) throw new Error("Expected workflow steps");
   return value.steps.map(step => {
@@ -96,7 +114,7 @@ test("one maintained standard recipe feeds native, Web and source-cache/transfer
   expect(recipe).toContain('guest-build-receipt.ts" write "$root/dist/bun-browser.wasm"');
   const native = steps.findIndex(step => step.name === "Blocking native fixture checks");
   expect(native).toBeGreaterThan(steps.indexOf(build));
-  for (const name of ["Blocking native fixture checks", "Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)"]) expect(steps.indexOf(exporter)).toBeGreaterThan(steps.findIndex(step => step.name === name));
+  for (const name of ["Blocking native fixture checks", "Build the single tools fixture in the existing native target", "Verify JSC embedding source and native backing"]) expect(steps.indexOf(exporter)).toBeGreaterThan(steps.findIndex(step => step.name === name));
   expect(exporter).toEqual({ name: "Export the validated standard Browser and tools guests", shell: "setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}", run: 'source env.sh\nbun scripts/ci-browser-program.ts export "$RUNNER_TEMP/browser-program"\n' });
   expect(upload).toEqual({ uses: "actions/upload-artifact@v4", "timeout-minutes": 5, with: { name: "browser-program", path: "${{ runner.temp }}/browser-program/", "if-no-files-found": "error", "retention-days": 1 } });
   expect(steps.indexOf(upload)).toBeGreaterThan(steps.indexOf(exporter));

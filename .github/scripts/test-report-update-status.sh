@@ -25,7 +25,7 @@ run_report() {
   test "$(grep -c '^api --method POST repos/ShaulLavo/fixture/statuses/tested-head ' "$STATUS_LOG")" = 11
 }
 baseline=$(cat <<'JSON'
-{"selection":{"result":"success","outputs":{"rust":"true","browser_guest":"true","shared":"true"}},"quality":{"result":"success"},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-proof":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
+{"selection":{"result":"success","outputs":{"rust":"true","browser_guest":"true","shared":"true"}},"ordinary-web-guests":{"result":"success"},"quality":{"result":"success"},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-proof":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
 JSON
 )
 export RESULTS="$baseline"
@@ -62,6 +62,11 @@ for job in jsc-prebuild native-quality rust; do
   RESULTS=$(jq --arg job "$job" '.selection.outputs.rust = "false" | .[$job].result = "skipped"' <<< "$baseline")
   run_report
   test "$(grep -c -- '-f state=failure ' "$STATUS_LOG")" = 1
+done
+for result in failure cancelled skipped; do
+  RESULTS=$(jq --arg result "$result" '."ordinary-web-guests".result = $result | ."ci-result".result = "failure"' <<< "$baseline")
+  run_report
+  grep -Fq -- '-f context=Code quality -f state=failure ' "$STATUS_LOG"
 done
 RESULTS=$(jq 'del(."ci-result")' <<< "$baseline")
 if bash -euo pipefail "$scratch/report.sh"; then

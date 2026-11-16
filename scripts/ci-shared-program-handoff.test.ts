@@ -170,8 +170,8 @@ test("native and Browser consumers use ready artifacts on separate runners and d
     if (id === "shared-browser") expect(commands).toContain("run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }} bun scripts/test-checks.ts");
     else expect(commands).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   }
-  expect(shared.needs).toEqual(["selection", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
-  expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
+  expect(shared.needs).toEqual(["selection", "ordinary-web-guests", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
+  expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (((needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')) && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success') || ((needs.selection.outputs.rust == 'false' && (github.event_name == 'pull_request' || needs.selection.outputs.browser_guest == 'false')) && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped')) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
   expect(shared["timeout-minutes"]).toBe(30);
   expect(shared.name).toBe("Shared PIC program producer");
   expect(sharedSteps.some(step => String(step.run).includes("test-checks.ts"))).toBe(false);
@@ -198,8 +198,8 @@ test("consumer scratch remains on the runner after sourcing workstation defaults
 
 test("the matching native launcher stays in its original source-verified artifact", () => {
   const launchers = allSteps.filter(step => step.with && record(step.with).name === "native-profile-launcher");
-  expect(launchers).toHaveLength(2);
-  expect(launchers.map(step => step.uses)).toEqual(["actions/upload-artifact@v4", "actions/download-artifact@v4"]);
+  expect(launchers).toHaveLength(3);
+  expect(launchers.map(step => step.uses)).toEqual(["actions/upload-artifact@v4", "actions/download-artifact@v4", "actions/download-artifact@v4"]);
   const native = steps(record(jobs["shared-native"]));
   expect(native.find(step => step.name === "Verify the native launcher source")?.run).toBe('test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"\nchmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"\n');
 });
@@ -207,19 +207,19 @@ test("the matching native launcher stays in its original source-verified artifac
 test("the protected proof requires every selected producer and consumer, including disabled skips", () => {
   const guard = record(jobs["shared-proof"]);
   expect(guard.name).toBe("Shared PIC sysroot proof");
-  expect(guard.needs).toEqual(["selection", "quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser"]);
+  expect(guard.needs).toEqual(["selection", "ordinary-web-guests", "quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser"]);
   expect(guard.if).toContain("always()");
   expect(guard["continue-on-error"]).toBeUndefined();
   const check = steps(guard)[0]!;
   expect(check.if).toBeUndefined();
   expect(check["continue-on-error"]).toBeUndefined();
   if (typeof check.run !== "string") throw new Error("Missing final proof guard");
-  const base = { SELECTION_RESULT: "success", QUALITY_RESULT: "success", SHARED_PREBUILD_RESULT: "success", SHARED_PRODUCER_RESULT: "success", SHARED_NATIVE: "true", RUST_RESULT: "success", SM_RESULT: "success", NATIVE_RESULT: "success", BROWSER_RESULT: "success" };
+  const base = { SELECTION_RESULT: "success", QUALITY_RESULT: "success", SHARED_PREBUILD_RESULT: "success", SHARED_PRODUCER_RESULT: "success", SHARED_NATIVE: "true", FULL_SELECTED: "true", ORDINARY_WEB_RESULT: "success", RUST_RESULT: "success", SM_RESULT: "success", NATIVE_RESULT: "success", BROWSER_RESULT: "success" };
   const run = (env: Record<string, string>) => spawnSync("bash", ["-euo", "pipefail", "-c", String(check.run)], { env: { ...process.env, ...env } }).status;
   expect(run(base)).toBe(0);
-  const disabled = { ...base, SHARED_NATIVE: "false", RUST_RESULT: "skipped", SM_RESULT: "skipped", NATIVE_RESULT: "skipped", BROWSER_RESULT: "skipped" };
+  const disabled = { ...base, SHARED_NATIVE: "false", FULL_SELECTED: "false", ORDINARY_WEB_RESULT: "skipped", RUST_RESULT: "skipped", SM_RESULT: "skipped", NATIVE_RESULT: "skipped", BROWSER_RESULT: "skipped" };
   expect(run(disabled)).toBe(0);
-  for (const field of Object.keys(base).filter(field => field !== "SHARED_NATIVE")) {
+  for (const field of Object.keys(base).filter(field => field !== "SHARED_NATIVE" && field !== "FULL_SELECTED")) {
     for (const status of ["failure", "cancelled", "skipped", ""]) expect(run({ ...base, [field]: status })).not.toBe(0);
   }
   for (const field of ["SM_RESULT", "NATIVE_RESULT", "BROWSER_RESULT"]) expect(run({ ...disabled, [field]: "success" })).not.toBe(0);

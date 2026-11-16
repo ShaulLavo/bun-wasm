@@ -66,7 +66,7 @@ test("update statuses run only for manual checks of the standing update branch",
   expect(admitted(reporter, "push", false, branch)).toBe(false);
   expect(admitted(reporter, "workflow_dispatch", false)).toBe(false);
   expect(admitted(reporter, "workflow_dispatch", false, branch)).toBe(true);
-  expect(reporter.needs).toEqual(Object.keys(jobs).filter(id => id !== "update-status"));
+  expect(Array.isArray(reporter.needs) ? reporter.needs.toSorted() : reporter.needs).toEqual(Object.keys(jobs).filter(id => id !== "update-status").sort());
   expect(record(reporter.permissions)).toEqual({ statuses: "write" });
 });
 

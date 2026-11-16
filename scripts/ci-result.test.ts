@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { requireCiSuccess } from "./ci-result";
+import { requireCiSuccess as validateCiSuccess } from "./ci-result";
+
+const requireCiSuccess = (value: unknown) => validateCiSuccess(value, "pull_request");
 
 const always = ["selection", "quality", "package", "web", "web-unit", "web-browser", "process-bundles", "browser-process"];
-const rustJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "browser-guest"];
+const rustJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "ordinary-web-guests", "browser-guest"];
 const sharedJobs = ["shared-jsc-identity", "shared-prebuild", "shared-sysroot", "shared-proof"];
 const sharedNativeJobs = ["shared-spidermonkey-prebuild", "shared-native", "shared-browser"];
 const jobIds = always.concat(rustJobs, sharedJobs, sharedNativeJobs, ["browser-production"]);
@@ -53,6 +55,12 @@ test("aggregate rejects absent or malformed selections and unexpected execution"
 test("passing consumers cannot hide a failed source check or selector", () => {
   expect(() => requireCiSuccess({ ...fixture(), quality: { result: "failure" } })).toThrow("Source quality did not pass");
   expect(() => requireCiSuccess({ ...fixture(), selection: { ...fixture().selection, result: "failure" } })).toThrow("CI selection did not pass");
+});
+
+test("only known events and explicit JSC flags can qualify the full route", () => {
+  for (const event of ["pull_request", "push", "workflow_dispatch"]) expect(() => validateCiSuccess(fixture(), event)).not.toThrow();
+  for (const event of ["", "schedule", "pull_request_target"]) expect(() => validateCiSuccess(fixture(), event)).toThrow("Invalid CI event");
+  for (const jsc of [undefined, "", "yes"]) expect(() => requireCiSuccess({ ...fixture(), selection: { result: "success", outputs: { ...fixture().selection!.outputs, jsc } } })).toThrow("Invalid CI selection: jsc");
 });
 
 function object(value: unknown): Record<string, unknown> {
