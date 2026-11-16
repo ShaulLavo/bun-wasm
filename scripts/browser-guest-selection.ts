@@ -120,6 +120,7 @@ const commonInputs = [
 ];
 const playgroundInputs = [
   "scripts/accept-encoding.ts",
+  "web/navigation-server-log.ts",
   "web/preview-origin-host.ts",
   "web/scripts/preview-exchanges.ts",
   "web/scripts/preview-owner-host.ts",

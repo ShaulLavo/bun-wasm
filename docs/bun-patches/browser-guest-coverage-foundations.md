@@ -13,6 +13,9 @@ those identities. The selector enumerates the drivers' actual local imports and
 fixtures, with historical exact-file inputs supplied by verified Git snapshots.
 It does not replace native producer selection. Shared side sources retain both
 QuickJS and JSC, while the actual rquickjs-sys dependency selects QuickJS only.
+The six playground owners include the navigation logger imported by their static
+host even when logging is disabled. The interruption driver keeps its independent
+server and input set.
 The CI adapter schedules only selected new batches and preserves existing
 Storage/default cells. The selected rows add their actual producer requirements
 to the existing native decision, without making every Rust change require JSC.

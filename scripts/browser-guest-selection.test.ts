@@ -65,6 +65,18 @@ test("unrelated native fixtures, CLI rows, Storage templates, declarations and U
   expect(select(["tests/fixtures/spawn-stdin/expected.txt"]).map(item => item.owner)).toEqual(["subprocess"]);
 });
 
+test("static host navigation logging selects exactly its six page owners on edits and removals", () => {
+  const path = "web/navigation-server-log.ts";
+  const expected = fullBrowserGuestSelection.filter(item => item.owner !== "engine-interruption");
+  expect(select([path])).toEqual(expected);
+  for (const { owner } of expected) expect(browserGuestManifest(owner).inputs).toContain(path);
+  expect(browserGuestManifest("engine-interruption").inputs).not.toContain(path);
+  const present = expected.map(({ owner }) => ({ file: `checks/browser-guest-${owner}.json`, value: browserGuestManifest(owner) }));
+  const removed = present.map(manifest => ({ ...manifest, value: { ...manifest.value, inputs: manifest.value.inputs.filter(input => input !== path) } }));
+  const history = snapshots().map(snapshot => ({ ...snapshot, manifests: snapshot.role === "head" ? removed : present }));
+  expect(selectBrowserGuestCoverage({ changedPaths: [path], snapshots: history, full: false })).toEqual(expected);
+});
+
 test("genuine base/head/ancestor blobs preserve removed manifest/helper inputs", () => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-selection-")); cleanup.add(directory);
   const git = (...args: string[]) => execFileSync("git", args, { cwd: directory, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
