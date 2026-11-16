@@ -1,9 +1,10 @@
 import { isAbsolute } from "node:path";
+import { tabCountAlert } from "./tab-count-alert";
 
 export type Run = { revision: string; id: number; number: number; createdAt: string };
 export type Outcome = { revision: string; reportPath: string } & (
   | { status: "green"; failedPhase: null }
-  | { status: "red"; failedPhase: string }
+  | { status: "red"; failedPhase: string; operational?: "safari-tab-count" }
 );
 export type Completed = { kind: "complete"; attempt: number; lastGreen: string | null; finishedAt: string; outcome: Outcome; notified: boolean };
 export const claimWindowMs = 10 * 60_000;
@@ -49,7 +50,10 @@ export function outcome(value: unknown, expected: string): Outcome {
   if (!isAbsolute(reportPath)) throw new Error("Smoke reportPath must be absolute");
   const base = { revision: expected, reportPath };
   if (data.status === "green" && data.failedPhase === null) return { ...base, status: "green", failedPhase: null };
-  if (data.status === "red") return { ...base, status: "red", failedPhase: text(data.failedPhase) };
+  if (data.status === "red") {
+    const result: Outcome = { ...base, status: "red", failedPhase: text(data.failedPhase) };
+    return tabCountAlert(data) ? { ...result, operational: "safari-tab-count" } : result;
+  }
   throw new Error("Invalid smoke result status or failed phase");
 }
 
@@ -58,7 +62,14 @@ function nullableRevision(value: unknown): string | null { return value === null
 function completed(value: unknown, expected: string): Completed {
   const data = object(value);
   if (data.kind !== "complete" || typeof data.notified !== "boolean") throw new Error("Invalid completed job");
-  return { kind: "complete", attempt: integer(data.attempt), lastGreen: nullableRevision(data.lastGreen), finishedAt: timestamp(data.finishedAt), outcome: outcome(data.outcome, expected), notified: data.notified };
+  return { kind: "complete", attempt: integer(data.attempt), lastGreen: nullableRevision(data.lastGreen), finishedAt: timestamp(data.finishedAt), outcome: storedOutcome(data.outcome, expected), notified: data.notified };
+}
+
+function storedOutcome(value: unknown, expected: string): Outcome {
+  const data = object(value), result = outcome(data, expected);
+  if (data.operational === undefined) return result;
+  if (data.operational !== "safari-tab-count" || result.status !== "red" || result.failedPhase !== "cleanup") throw new Error("Invalid operational smoke classification");
+  return { ...result, operational: data.operational };
 }
 
 function job(value: unknown): Job {
@@ -105,5 +116,6 @@ export function compareRuns(first: Run, second: Run): number { return first.numb
 export function redMessage(job: Job, result: Completed): string {
   const previous = result.lastGreen ?? "none recorded";
   const range = result.lastGreen ? `${result.lastGreen}...${job.revision}` : `unavailable...${job.revision}`;
+  if (result.outcome.status === "red" && result.outcome.operational === "safari-tab-count") return `iPhone smoke OPERATIONAL ALERT. Executed functional phases passed; Safari tab-count cleanup is unproved. The raw result remains red and the tested-green baseline is unchanged. Last tested green: ${previous}. Tested main: ${job.revision}. Compare range: ${range}. Failed phase: ${result.outcome.failedPhase}. Report: ${result.outcome.reportPath}. CI run: https://github.com/ShaulLavo/bun-wasm/actions/runs/${job.id}. Attempt: ${result.attempt}.`;
   return `iPhone smoke RED. Last tested green: ${previous}. Failing green main: ${job.revision}. Compare range: ${range}. Failed phase: ${result.outcome.failedPhase}. Report: ${result.outcome.reportPath}. CI run: https://github.com/ShaulLavo/bun-wasm/actions/runs/${job.id}. Attempt: ${result.attempt}.`;
 }

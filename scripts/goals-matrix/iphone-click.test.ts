@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { bounded } from "./execute";
 import { createIphoneTransport } from "./iphone-transport";
 import { IphoneClickTrace } from "./iphone-click";
-import { tabBatch, tabOverview } from "./iphone-tab-fixture";
+import { tabAgentScript } from "./iphone-tab-fixture";
 import { object } from "./evidence";
 import { Scope } from "./scope";
 
@@ -23,9 +23,7 @@ async function control(observation: Record<string, unknown> | "pending", save?: 
   let arming = 0;
   const commands: string[][] = [];
   const closed = join(root, "closed");
-  const beforeTabs = tabBatch(tabOverview(["Goals task-nonce", "fixture owner"]));
-  const afterTabs = tabBatch(tabOverview(["fixture owner"]));
-  await writeFile(agent, `#!${process.execPath}\nimport{writeFile}from'node:fs/promises';\nconst args=process.argv.slice(2);\nif(args[0]==='batch'){const closing=JSON.parse(args[2])[0].input.target.ref==='@e2';if(closing)await writeFile(${JSON.stringify(closed)},'closed');console.log(closing?${JSON.stringify(afterTabs)}:${JSON.stringify(beforeTabs)});}else console.log('@e1 [button] "Increment"');\n`);
+  await writeFile(agent, tabAgentScript({ closed, title: "Goals task-nonce", unrelated: "fixture owner" }));
   await chmod(agent, 0o755);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const path = new URL(request.url).pathname;

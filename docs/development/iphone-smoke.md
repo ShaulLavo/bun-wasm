@@ -90,8 +90,25 @@ URL. Startup must report that same running profile, and final verification check
 the same selected assets after cleanup. Profile policy stays in the shared
 frontend helper; the smoke command has no separate template/profile map.
 
-The runner closes only its owned Safari tabs and guest processes. After it exits,
-stop the wrapper and owned forward, collect the wrapper's cleanup receipt, verify
+The runner selects the ordinary numbered group before counting tabs. It closes
+only the unique recorded task title through that card's own Close child. If the
+owned card is in Private, cleanup proves its removal and preserves the other
+visible private cards without treating the ordinary number as a Private count.
+It also proves the ordinary count and contents unchanged. Cleanup finishes by
+selecting ordinary tabs, pressing Done with settling, and proving overview exit.
+Missing ownership or failed proof remains red.
+
+Install the PC controller's finalizer before opening Safari. On success, failure
+or cancellation, while the same device binding and FIFO admission are still
+owned, finish owned-tab cleanup and ordinary restoration before `device_close`,
+stopping the wrapper or releasing FIFO. Use the same bounded cleanup helpers as
+the runner. A manual deploy check must follow this finish procedure too. Never
+close unrelated private tabs. After a failed native command, expired deadline or
+lost ownership, issue no further UI input and record that restoration is unproved.
+Preserve the original failure. The Mac server wrapper has no PC device binding
+and must not drive Safari through SSH or simctl.
+
+After the PC finalizer exits, stop the wrapper and owned forward, collect the wrapper's cleanup receipt, verify
 that its server and listeners stopped, and check that its FIFO ticket is gone.
 Remove task staging only after its consumers stop. Close your T3 device session
 without shutting down the retained simulator. Keep the results. Remove disposable
