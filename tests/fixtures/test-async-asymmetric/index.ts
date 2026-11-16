@@ -160,6 +160,9 @@ const cases: [string, () => unknown][] = [
     await expect(new Map([[1, "bad"], [2, "good"]])).not.toEqual(expected);
     expect(order).toEqual(["any"]);
     await expect(new Set([1, 2])).toEqual(new Set([asymmetric("asyncValue", 1), asymmetric("anyKey")]));
+    order.length = 0;
+    await expect(new Set([1, 2])).toEqual(new Set([asymmetric("anyKey"), asymmetric("oneKey")]));
+    expect(order).toEqual(["any", "any"]);
   }],
   ["context equals requires await for nested async comparisons", async () => {
     expect.extend({ nested: async function(value, expected) {

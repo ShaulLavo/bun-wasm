@@ -1531,9 +1531,11 @@
     };
     try {
       const result = compare();
-      if (isPromise(result)) return internal.promiseThen(result, pass => { release(); return pass; }, error => { release(); throw error; });
-      release();
-      return result;
+      if (!isPromise(result)) {
+        release();
+        return result;
+      }
+      return internal.promiseThen(result, pass => { release(); return pass; }, error => { release(); throw error; });
     } catch (error) {
       release();
       throw error;
@@ -1627,10 +1629,8 @@
   function expectExtraProperties(a: object, b: object, strict: boolean, fast: boolean, keysA: readonly PropertyKey[], keysB: readonly PropertyKey[], readB: Map<PropertyKey, unknown>): boolean {
     const extra = fast ? keysB : keysB.slice(keysA.length);
     for (const key of extra) {
-      if (!strict) {
-        const value = readB.has(key) ? readB.get(key) : Reflect.get(b, key);
-        if (value === undefined) continue;
-      }
+      const value = strict ? undefined : readB.has(key) ? readB.get(key) : Reflect.get(b, key);
+      if (!strict && value === undefined) continue;
       if (!fast || !hasOwn(a, key)) return false;
     }
     return true;

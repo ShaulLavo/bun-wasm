@@ -22,9 +22,22 @@ function matcherSupport(BunFile?: { readonly prototype: object }, bindings?: Rec
   const source = readFileSync(new URL("test_matchers.ts", runtime), "utf8");
   return expression(source, bindings)({
     BunFile,
+    realTimers: { setTimeout },
+    promiseState: Bun.peek.status,
     isPromise: types.isPromise,
     promiseThen: (promise: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (value: unknown) => unknown) =>
       Promise.prototype.then.call(promise, fulfilled, rejected),
+  });
+}
+
+for (const replacement of ["replaced timer", Symbol("timer"), 1n]) {
+  test(`matcher initialization and assertion observation use the stable timer when global timeout is ${typeof replacement}`, async () => {
+    const support = matcherSupport(undefined, { setTimeout: replacement, Blob });
+    const observer = support.pending();
+    let completed = false;
+    observer.track(new Promise<void>(resolve => setTimeout(() => { completed = true; resolve(); }, 0)));
+    await observer.complete({ ok: true }, (result: unknown) => expect(result).toEqual({ ok: true }));
+    expect(completed).toBe(true);
   });
 }
 

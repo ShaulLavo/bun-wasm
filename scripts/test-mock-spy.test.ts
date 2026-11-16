@@ -21,6 +21,7 @@ test("mock and spy contracts through the runtime factory", async () => {
     inspect: { bunInspect: Bun.inspect },
     util: factory("util.ts")({ isPromise: types.isPromise, promiseThen: (value: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (error: unknown) => unknown) => Promise.prototype.then.call(value, fulfilled, rejected) }),
     test_matchers: factory("test_matchers.ts")({
+      realTimers: { setTimeout },
       isPromise: types.isPromise,
       promiseThen: (promise: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (value: unknown) => unknown) =>
         Promise.prototype.then.call(promise, fulfilled, rejected),

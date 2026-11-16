@@ -1,5 +1,6 @@
 (function (internal: {
   BunFile?: { readonly prototype: object };
+  realTimers: { setTimeout(callback: () => void, delay: number): unknown };
   isPromise(value: unknown): boolean;
   promiseState(value: Promise<unknown>): string;
   promiseThen<T, U>(value: Promise<T>, fulfilled: (value: T) => U | Promise<U>, rejected?: (error: unknown) => U | Promise<U>): Promise<U>;
@@ -9,7 +10,7 @@
   type Failure = { params?: string; body: string; raw?: boolean } | null;
 
   const promiseThen = internal.promiseThen;
-  const schedule = setTimeout.bind(globalThis);
+  const schedule = internal.realTimers.setTimeout;
   const stringValueOf = String.prototype.valueOf;
   const apply = Reflect.apply;
   const noArgs: readonly unknown[] = [];
@@ -70,9 +71,11 @@
     seen.add(value);
     try {
       const result = compare();
-      if (isPromise(result)) return react(result, pass => { seen.delete(value); return pass; }, error => { seen.delete(value); throw error; });
-      seen.delete(value);
-      return result;
+      if (!isPromise(result)) {
+        seen.delete(value);
+        return result;
+      }
+      return react(result, pass => { seen.delete(value); return pass; }, error => { seen.delete(value); throw error; });
     } catch (error) {
       seen.delete(value);
       throw error;

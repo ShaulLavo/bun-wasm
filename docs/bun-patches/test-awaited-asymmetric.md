@@ -45,6 +45,14 @@ resolves and rejects. Snapshot file, error and call-order identity are captured
 at entry. A continuation after timeout does not update another case's counters,
 snapshots or input object.
 
+The pending assertion observer captures `internal.realTimers.setTimeout`, the
+existing startup timer authority, rather than reading the replaceable global
+during lazy matcher initialization. Source controls replace the global with a
+string, Symbol and bigint before loading the factory and complete pending
+observations through the stable timer. This also preserves lazy Bun.jest
+initialization before fake-timer activation. No clock, native timer, provider or
+global timer behavior changes.
+
 The maintained comparison fixture documents bounded timing expectations. The
 ownership fixture runs successful, false and rejected unawaited assertions in
 subprocesses, checks distinct failed names independently of recap lines, and

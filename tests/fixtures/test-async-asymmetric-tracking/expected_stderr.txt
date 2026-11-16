@@ -3,6 +3,7 @@ index.test.ts:
 (pass) waits for an unawaited nested asymmetric assertion
 (pass) keeps the completed assertion in its invocation
 error: owned asymmetric rejection
+owned asymmetric rejection
 (pass) tracks promise modifier assertions
 
  3 pass

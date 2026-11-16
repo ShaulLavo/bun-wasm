@@ -17,6 +17,7 @@ function factory(name: string) {
 
 test("async asymmetric comparisons through the actual util and expect factories", async () => {
   const support = factory("test_matchers.ts")({
+    realTimers: { setTimeout },
     isPromise: types.isPromise,
     promiseThen: (promise: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (value: unknown) => unknown) =>
       Promise.prototype.then.call(promise, fulfilled, rejected),

@@ -17,6 +17,7 @@ const stop = promiseHooks.onSettled(promise => settled.add(promise));
 // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
 const factory = (0, eval)(stripTypeScriptTypes(readFileSync(`${root}/crates/bunwasm-runtime/src/js/test_matchers.ts`, "utf8")));
 const support: { pending(): Observer } = factory({
+  realTimers: { setTimeout },
   isPromise: types.isPromise,
   promiseState: (promise: Promise<unknown>) => settled.has(promise) ? "settled" : "pending",
 });
