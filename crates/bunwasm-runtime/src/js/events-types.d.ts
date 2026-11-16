@@ -9,6 +9,8 @@ declare namespace BunWasm.Events {
   interface List extends Array<Listener> { warned?: boolean; listener?: Listener }
   type Table = Record<Name, Listener | List | undefined>;
   interface Options { captureRejections?: boolean }
+  interface WaitOptions { signal?: AbortSignal }
+  interface IteratorOptions extends WaitOptions { close?: Name[]; highWaterMark?: number; lowWaterMark?: number }
   interface Emit {
     (this: Emitter, type: Name, ...args: unknown[]): boolean;
     apply(receiver: Emitter, args: unknown[]): boolean;
@@ -43,18 +45,19 @@ declare namespace BunWasm.Events {
     removeEventListener(name: Name, listener: Listener, options: { once?: boolean; capture?: boolean }): void;
   }
   type Source = Partial<Pick<Emitter, "listeners" | "getMaxListeners" | "setMaxListeners" | "listenerCount">>
+    & { pause?: () => void; resume?: () => void }
     & (EmitterMethods | { on?: undefined; once?: undefined; removeListener?: undefined })
     & (TargetMethods | { addEventListener?: undefined; removeEventListener?: undefined });
   interface OnceState {
     fired: boolean;
     wrapFn: Listener | undefined;
-    target: Emitter;
+    target: Emitter | undefined;
     type: Name;
     listener: Listener;
   }
   interface EventError extends Error { code?: string; context?: unknown }
   interface LeakWarning extends Error { emitter?: Emitter; type?: Name; count?: number }
-  type Item = { value: unknown[]; done: false; close?: false } | { value: undefined; done: true; close?: true };
+  type Item = { value: unknown; done: false; close?: false } | { value: undefined; done: true; close?: true };
   interface Waiter { resolve(result: Item): void; reject(error: unknown): void }
   interface Iterator {
     next(): Promise<Item>;
@@ -88,9 +91,9 @@ declare namespace BunWasm.Events {
     listenerCount(emitter: Emitter, type: Name): number;
     getEventListeners(target: Emitter | EventTarget, type: Name): Listener[];
     getMaxListeners(target: Emitter | EventTarget): number;
-    setMaxListeners(n?: number, ...targets: Emitter[]): void;
+    setMaxListeners(n?: number, ...targets: (Emitter | EventTarget)[]): void;
     once(emitter: Emitter | EventTarget, name: Name, options?: { signal?: AbortSignal }): Promise<unknown[]>;
-    on(emitter: Emitter | EventTarget, name: Name, options?: { signal?: AbortSignal; close?: Name[] }): Iterator;
+    on(emitter: Emitter | EventTarget, name: Name, options?: IteratorOptions): Iterator;
     addAbortListener(signal: AbortSignal, listener: Listener): Disposable;
   }
 }
