@@ -1,10 +1,10 @@
 # SpiderMonkey resizable ArrayBuffer backing
 
 Mozilla is pinned to `mozilla-firefox/firefox@a5df22d986d4b626f771b4f8885241941601c35c`.
-These changes are in `spidermonkey/spidermonkey-wasi.patch`, and every changed line
-is compiled only for `__wasi__`, except `growCapacity()`, which never grows anything
-when the backing already holds the maximum. The split and shared-group libraries
-both apply that patch.
+These changes are in `spidermonkey/spidermonkey-wasi.patch`. The new slot, the lazy
+allocation and the capacity storage compile only for `__wasi__`. Elsewhere the capacity
+is the maximum, so `growCapacity()` never grows anything. The split and shared-group
+libraries both apply that patch.
 
 | Upstream paths | Class | Local change and reason |
 | --- | --- | --- |
@@ -21,9 +21,10 @@ run, or copy the input first. A length pin does not stop `resize()`.
 
 Growable `SharedArrayBuffer` keeps upstream behavior, because other threads may hold
 its data pointer and it can never move: `SharedArrayRawBuffer::Allocate` allocates the
-maximum up front and `grow()` only publishes a new length. The split library is
-configured with `--disable-shared-memory`; the shared-group library refuses a growable
-`SharedArrayBuffer` with RangeError ([shared-group record](spidermonkey-shared-group.md)).
+maximum up front and `grow()` only publishes a new length. On the split guest, three
+growable buffers with a 256 MiB maximum fit and the fourth throws `out of memory`. The
+shared-group library refuses a growable `SharedArrayBuffer` with RangeError
+([shared-group record](spidermonkey-shared-group.md)).
 
 `tests/fixtures/resizable-backing` now runs its eight 256 MiB maxima on every engine,
 including SpiderMonkey. `tests/fixtures/resizable-growth` checks stepwise growth with
