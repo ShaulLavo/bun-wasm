@@ -27,4 +27,4 @@ function loadConcat() {
 }
 
 const source = loadBufferSource();
-for (const check of boundaryChecks(source.Buffer, source.isAscii, loadConcat())) test(check.name, check.run);
+for (const check of boundaryChecks(source.Buffer, source, loadConcat())) test(check.name, check.run);

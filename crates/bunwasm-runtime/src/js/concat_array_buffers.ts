@@ -37,23 +37,26 @@
 
   return function concatArrayBuffers(buffers: readonly unknown[], maximum?: unknown, asUint8Array?: unknown): ArrayBuffer | Uint8Array<ArrayBuffer> {
     const limit = maximumLength(maximum);
-    const chunks = buffers.map(toUint8);
+    // Read each element once by index, as native Bun does: no species, no user iterator.
+    const count = buffers.length;
+    const chunks = new Array<Uint8Array>(count);
+    for (let index = 0; index < count; index++) chunks[index] = toUint8(buffers[index]);
     let length = 0;
-    for (const chunk of chunks) {
-      values.call(chunk);
-      length += byteLength.call(chunk);
+    for (let index = 0; index < count; index++) {
+      values.call(chunks[index]);
+      length += byteLength.call(chunks[index]);
     }
     const outputLength = Math.min(length, limit);
     const output = allocate(outputLength);
     let offset = 0;
-    for (const chunk of chunks) {
-      if (offset === outputLength) break;
+    for (let index = 0; index < count && offset < outputLength; index++) {
+      const chunk = chunks[index];
       const length = byteLength.call(chunk);
-      const count = Math.min(length, outputLength - offset);
-      if (count === 0) continue;
-      const source = count === length ? chunk : new Bytes(buffer.call(chunk), byteOffset.call(chunk), count);
+      const copied = Math.min(length, outputLength - offset);
+      if (copied === 0) continue;
+      const source = copied === length ? chunk : new Bytes(buffer.call(chunk), byteOffset.call(chunk), copied);
       set.call(output, source, offset);
-      offset += count;
+      offset += copied;
     }
     return asUint8Array ? output : buffer.call(output);
   };

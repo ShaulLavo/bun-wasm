@@ -11,7 +11,10 @@ boundary previously embedded in `bun.js`. Comparison sources are Bun
 (`38afee6c84fcf48c0edb2466aa4b27d287a59c30`). No upstream implementation is
 copied.
 
-The adapter reads all input getters before measuring the resulting byte views.
+The adapter reads each input element once, by index, into a plain array, as
+native Bun's `forEachInArrayLike` does. An Array subclass's species constructor
+and iterator are never called, so all input getters run before it measures the
+resulting byte views.
 It validates those views, measures their intrinsic byte lengths, applies the
 numeric maximum before allocation, and copies into one exact backing store.
 Allocation failure becomes TypeError with `Failed to allocate ArrayBuffer`,

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { isAscii } from "node:buffer";
+import type { isAscii, isUtf8 } from "node:buffer";
 
-export function boundaryChecks(factory: typeof Buffer, ascii: typeof isAscii, concat: typeof Bun.concatArrayBuffers) {
+type Validators = { isAscii: typeof isAscii; isUtf8: typeof isUtf8 };
+
+export function boundaryChecks(factory: typeof Buffer, validators: Validators, concat: typeof Bun.concatArrayBuffers) {
   return [
     { name: "inferred concat limit differs from explicit length validation", run() {
       const input = factory.allocUnsafe(64 * 1024 * 1024);
@@ -19,10 +21,18 @@ export function boundaryChecks(factory: typeof Buffer, ascii: typeof isAscii, co
       }
     } },
     { name: "isAscii calls match native Bun and construction throws", run() {
+      const ascii = validators.isAscii;
       assert.equal(ascii(factory.from("abc")), true);
       assert.equal(ascii(factory.from("What did the 🦊 say?")), false);
       assert.throws(() => Reflect.construct(ascii, [factory.from("What did the 🦊 say?")]), TypeError);
       assert.equal(Object.hasOwn(ascii, "prototype"), false);
+    } },
+    { name: "isUtf8 calls match native Bun and construction throws", run() {
+      const utf8 = validators.isUtf8;
+      assert.equal(utf8(factory.from("What did the 🦊 say?")), true);
+      assert.equal(utf8(factory.from([0xc3])), false);
+      assert.throws(() => Reflect.construct(utf8, [factory.from("abc")]), TypeError);
+      assert.equal(Object.hasOwn(utf8, "prototype"), false);
     } },
     { name: "Bun concat caps the allocation and returns one exact backing store", run() {
       const input = factory.from([1, 2, 3]);
@@ -40,6 +50,17 @@ export function boundaryChecks(factory: typeof Buffer, ascii: typeof isAscii, co
       const capped = concat([hostile], 2, true);
       assert(capped instanceof Uint8Array);
       assert.deepEqual(Array.from(capped), [4, 5]);
+    } },
+    { name: "Bun concat reads array elements once by index", run() {
+      const calls = { species: 0, iterator: 0 };
+      class Chunks extends Array<Uint8Array> {
+        static get [Symbol.species]() { calls.species++; return Chunks; }
+        *[Symbol.iterator]() { calls.iterator++; yield new Uint8Array(calls.iterator === 1 ? [1] : [9, 9, 9, 9]); }
+      }
+      const chunks = new Chunks();
+      chunks.push(new Uint8Array([1, 2]), new Uint8Array([3]));
+      assert.deepEqual(Array.from(concat(chunks, undefined, true) as Uint8Array), [1, 2, 3]);
+      assert.deepEqual(calls, { species: 0, iterator: 0 });
     } },
     { name: "Bun concat preserves errors from input getters", run() {
       const failure = new RangeError("input getter");

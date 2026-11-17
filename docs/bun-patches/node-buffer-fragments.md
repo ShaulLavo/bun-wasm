@@ -109,7 +109,8 @@ typed-array allocation-limit error. Explicit lengths still use the existing
 `length` argument validation, and allocation methods retain their `size`
 validation. Native Bun 1.4.4 confirms those separate errors.
 
-`isAscii` is callable without being constructible, matching native Bun 1.4.4.
+`isAscii` and `isUtf8` are callable without being constructible, and have no
+`prototype`, matching native Bun 1.4.4.
 The unchanged upstream `new isAscii(...)` expectation of primitive `false`
 still fails; the native oracle rejects construction with TypeError. The adapter
 does not alter that upstream expectation or pretend it passes.

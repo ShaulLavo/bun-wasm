@@ -1273,7 +1273,7 @@
     return need + 1;
   }
 
-  function isUtf8(input) {
+  const isUtf8 = (input) => {
     const bytes = toBytesView(input);
     let i = 0;
     while (i < bytes.length) {
@@ -1282,7 +1282,7 @@
       i += n;
     }
     return true;
-  }
+  };
 
   const globalAtob = typeof atob === "function" ? atob : undefined;
   const globalBtoa = typeof btoa === "function" ? btoa : undefined;
