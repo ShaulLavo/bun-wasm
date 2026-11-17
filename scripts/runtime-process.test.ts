@@ -25,6 +25,7 @@ function originalSyntax(text: string): string {
     [/resourceUsage: \(\) => \{\n      const rss = native\.memoryUsage\(\)\.rss;\n      return \{ userCPUTime: 0, systemCPUTime: 0, maxRSS: rss === null \? null : rss \/ 1024 \};\n    \}/g, "resourceUsage: () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: native.memoryUsage().rss / 1024 })", 1],
     [/availableMemory: \(\) => \{\n      const rss = native\.memoryUsage\(\)\.rss;\n      return rss === null \? null : 4294967296 - rss;\n    \}/g, "availableMemory: () => 4294967296 - native.memoryUsage().rss", 1],
     [/execArgv: native\.execArgv\(\)/g, "execArgv: []", 1],
+    [/\.\.\.\(native\.engineVersion \? \{ \[native\.engineVersion\[0\]\]: native\.engineVersion\[1\] \} : \{\}\),/g, "quickjs: \"ng\",", 1],
     [/  function makeReader\(\) \{\n    return internal\.require\("process_stdin"\)\(\);\n  \}\n/g, readFileSync(join(root, "scripts/fixtures/process-reader-before.txt"), "utf8"), 1],
     [/  function validateCursorCallback[\s\S]*?(?=  \/\/ stdout\/stderr:)/g, "", 1],
     [/      clearLine,\n      clearScreenDown,\n      cursorTo,\n      moveCursor,\n/g, "", 1],
