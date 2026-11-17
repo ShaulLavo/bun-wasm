@@ -222,8 +222,10 @@ static JSObject* createImportMeta(JSGlobalObject* globalObject, JSModuleLoader*,
     return meta;
 }
 
-// Invoked only by the C loop's trap slow path, after its PC and stack
-// pointer have been saved. Rust only polls fatal cancellation; it must not enter JS.
+// Invoked by the C loop's trap slow path, after its PC and stack pointer have
+// been saved, and by the Yarr interpreter's backtrack poll in the middle of a
+// match (webkit-wasi.patch, RegExpInlines.h). Rust only polls fatal
+// cancellation; it must not enter JS, allocate on the JS heap or touch regexps.
 static bool interruptScriptBeforeTimeout(const JSGlobalObject*)
 {
     return bunjsc_host_interrupt();
