@@ -2068,14 +2068,24 @@
         timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
       };
       startTimer();
-      const returned = internal.require("test_lifecycle").body(fn, args, usesDone, finish);
+      internal.require("test_lifecycle").body(fn, args, usesDone, finish);
       // In a concurrent group, the next test starts only once this one really waits, as in Bun.
-      if (slot.blocked && !invocation.settled && !alreadySettled(returned)) slot.blocked();
+      if (slot.blocked && !invocation.settled) whenStillPending(invocation, slot.blocked);
     });
   }
 
-  function alreadySettled(value) {
-    return internal.isPromise(value) && internal.promiseState(value) !== "pending";
+  // A callback that already finished, an async one included, settles its invocation within
+  // two microtask turns: its promise reaction, then completion. One still pending after
+  // three turns really waits; no timer can have run yet. This does not read promise state,
+  // which the Browser host cannot see for async functions.
+  function whenStillPending(invocation, blocked) {
+    let turns = 3;
+    const check = () => {
+      if (invocation.settled) return;
+      if (turns-- === 0) return blocked();
+      internal.promiseThen(Promise.resolve(), check);
+    };
+    check();
   }
 
   function invokeHook(hook) {
