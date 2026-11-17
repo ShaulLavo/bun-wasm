@@ -74,13 +74,28 @@
     constructor(sample, inverse) {
       this.sample = sample;
       this.inverse = !!inverse;
+      /** @type {"resolves" | "rejects" | undefined} set by expect.resolvesTo and expect.rejectsTo */
+      this.promise = undefined;
     }
+    // A resolvesTo/rejectsTo matcher compares a real promise's settled value through an
+    // intrinsic reaction; thenables never match. A non-promise or the other settlement
+    // fails before `not` inverts, as in Bun.
     asymmetricMatch(other) {
+      if (this.promise === undefined) return this.matchValue(other);
+      if (!internal.isPromise(other)) return this.inverse;
+      const resolves = this.promise === "resolves";
+      return internal.promiseThen(other, value => resolves ? this.matchValue(value) : this.inverse, error => resolves ? this.inverse : this.matchValue(error));
+    }
+    matchValue(other) {
       return matcherSupport.settle(this.matches(other), result => this.inverse ? !result : result);
+    }
+    label(format) {
+      if (this.promise === undefined) return this.describe(format);
+      return `promise ${this.promise === "resolves" ? "resolved" : "rejected"} to ${this.describe(format)}`;
     }
     // Bun.inspect shows matchers by their pretty description.
     [INSPECT_CUSTOM]() {
-      return this.describe(inspect);
+      return this.label(inspect);
     }
   }
 
@@ -89,18 +104,20 @@
       return matchesConstructor(this.sample, other);
     }
     describe() {
-      return `Any<${this.sample.name}>`;
+      return `${this.inverse ? "NotAny" : "Any"}<${this.sample.name}>`;
     }
   }
 
+  // Bun's expect.any: primitives by type, boxed values and everything else by instanceof,
+  // and Object as Jest's `typeof other === "object"`, so null matches and functions do not.
   function matchesConstructor(ctor, value) {
-    if (ctor === String) return typeof value === "string" || value instanceof String;
-    if (ctor === Number) return typeof value === "number" || value instanceof Number;
-    if (ctor === Boolean) return typeof value === "boolean" || value instanceof Boolean;
-    if (ctor === BigInt) return typeof value === "bigint";
-    if (ctor === Symbol) return typeof value === "symbol";
-    if (ctor === Function) return typeof value === "function";
-    if (ctor === Object) return typeof value === "object" && value !== null;
+    if (ctor === String && typeof value === "string") return true;
+    if (ctor === Number && typeof value === "number") return true;
+    if (ctor === Boolean && typeof value === "boolean") return true;
+    if (ctor === BigInt && typeof value === "bigint") return true;
+    if (ctor === Symbol && typeof value === "symbol") return true;
+    if (ctor === Function && typeof value === "function") return true;
+    if (ctor === Object) return typeof value === "object";
     return isObjectLike(value) && value instanceof ctor;
   }
 
@@ -109,7 +126,7 @@
       return other !== null && other !== undefined;
     }
     describe() {
-      return "Anything";
+      return this.inverse ? "NotAnything" : "Anything";
     }
   }
 
@@ -137,7 +154,7 @@
   class ObjectContainingMatcher extends AsymmetricMatcher {
     matches(other) {
       if (!isObjectLike(other)) return false;
-      return matcherSupport.every(Object.keys(this.sample), key => {
+      return matcherSupport.every(enumerableOwnKeys(this.sample), key => {
         if (!(key in Object(other))) return false;
         return equals(other[key], this.sample[key], false);
       });
@@ -145,6 +162,12 @@
     describe(format) {
       return `${this.inverse ? "ObjectNotContaining" : "ObjectContaining"} ${format(this.sample)}`;
     }
+  }
+
+  // objectContaining compares enumerable own symbol keys as well as string keys.
+  function enumerableOwnKeys(object) {
+    const symbols = Object.getOwnPropertySymbols(object).filter(key => Object.prototype.propertyIsEnumerable.call(object, key));
+    return Object.keys(object).concat(symbols);
   }
 
   class ArrayContainingMatcher extends AsymmetricMatcher {
@@ -162,12 +185,16 @@
       super(sample, inverse);
       this.precision = precision === undefined ? 2 : precision;
     }
-    matches(other) {
+    // A non-number never matches, even negated.
+    matchValue(other) {
       if (typeof other !== "number") return false;
+      return super.matchValue(other);
+    }
+    matches(other) {
       return closeTo(other, this.sample, this.precision).pass;
     }
     describe() {
-      return `NumberCloseTo ${this.sample} (${this.precision} digits)`;
+      return `${this.inverse ? "NumberNotCloseTo" : "NumberCloseTo"} ${this.sample} (${this.precision} digit${this.precision === 1 ? "" : "s"})`;
     }
   }
 
@@ -279,7 +306,7 @@
   function prettyAsymmetric(matcher, indent, seen, snapshot) {
     // Bun prints arrayContaining through its generic object path.
     if (matcher instanceof ArrayContainingMatcher) return "ExpectArrayContaining {}";
-    return matcher.describe((sample) => prettyValue(sample, indent, seen, snapshot));
+    return matcher.label((sample) => prettyValue(sample, indent, seen, snapshot));
   }
 
   function prettyObject(value, indent, seen, snapshot) {
@@ -835,22 +862,100 @@
     return makeExpectation(value, { not: false, promise: undefined }, typeof label === "string" ? label : undefined, activeFile);
   }
 
-  expect.any = (ctor) => {
-    if (typeof ctor !== "function") throw new TypeError("any() expects to be passed a constructor function. Please pass one or use anything() to match any object.");
-    return new AnyMatcher(ctor);
-  };
-  expect.anything = () => new AnythingMatcher();
-  expect.stringContaining = (s) => new StringContainingMatcher(s);
-  expect.stringMatching = (re) => new StringMatchingMatcher(re);
-  expect.objectContaining = (obj) => new ObjectContainingMatcher(obj);
-  expect.arrayContaining = (arr) => new ArrayContainingMatcher(arr);
-  expect.closeTo = (n, precision) => new CloseToMatcher(n, precision);
-  expect.not = {
-    stringContaining: (s) => new StringContainingMatcher(s, true),
-    stringMatching: (re) => new StringMatchingMatcher(re, true),
-    objectContaining: (obj) => new ObjectContainingMatcher(obj, true),
-    arrayContaining: (arr) => new ArrayContainingMatcher(arr, true),
-  };
+  // expect, expect.not, expect.resolvesTo, expect.not.rejectsTo and so on each create
+  // asymmetric matchers with their own flags, like Bun's ExpectStatic. Factories validate
+  // their samples when called, with Bun's messages.
+  const STATIC_FLAGS = Symbol("expect static flags");
+  const statics = new Map();
+
+  function expectStatic(not, promise) {
+    const key = `${not}:${promise}`;
+    let value = statics.get(key);
+    if (!value) statics.set(key, value = new ExpectStatic(not, promise));
+    return value;
+  }
+
+  function factoryError(signature, problem) {
+    return new Error(`expect.${signature}\n\n${problem}`);
+  }
+
+  function isConstructor(value) {
+    try {
+      Reflect.construct(String, [], value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  class ExpectStatic {
+    constructor(not, promise) {
+      this[STATIC_FLAGS] = { not, promise };
+    }
+    get not() {
+      const { not, promise } = this[STATIC_FLAGS];
+      return expectStatic(!not, promise);
+    }
+    get resolvesTo() {
+      return settledStatic(this, "resolves");
+    }
+    get rejectsTo() {
+      return settledStatic(this, "rejects");
+    }
+    anything() {
+      return flagged(this, new AnythingMatcher());
+    }
+    any(...args) {
+      if (args.length === 0) throw new TypeError("any() expects to be passed a constructor function. Please pass one or use anything() to match any object.");
+      if (!isConstructor(args[0])) throw factoryError("any(constructor)", "Expected a constructor\n");
+      return flagged(this, new AnyMatcher(args[0]));
+    }
+    stringContaining(sample) {
+      if (typeof sample !== "string") throw factoryError("stringContaining(string)", "Expected a string\n");
+      return flagged(this, new StringContainingMatcher(sample));
+    }
+    stringMatching(sample) {
+      // Bun names stringContaining in this message too.
+      if (typeof sample !== "string" && !(sample instanceof RegExp)) throw factoryError("stringContaining(string)", "Expected a string or regular expression\n");
+      return flagged(this, new StringMatchingMatcher(sample));
+    }
+    objectContaining(sample) {
+      if (!isObjectLike(sample)) throw factoryError("objectContaining(object)", "Expected an object\n");
+      return flagged(this, new ObjectContainingMatcher(sample));
+    }
+    arrayContaining(sample) {
+      if (!Array.isArray(sample)) throw factoryError("arrayContaining(array)", "Expected a array\n");
+      return flagged(this, new ArrayContainingMatcher(sample));
+    }
+    closeTo(...args) {
+      if (typeof args[0] !== "number") throw factoryError("closeTo(number, precision?)", "Expected a number value");
+      if (args[1] !== undefined && typeof args[1] !== "number") throw factoryError("closeTo(number, precision?)", "Precision must be a number or undefined");
+      return flagged(this, new CloseToMatcher(args[0], args[1]));
+    }
+  }
+
+  const PROMISE_CHAINS = { resolves: "resolvesTo", rejects: "rejectsTo" };
+
+  function settledStatic(chain, promise) {
+    const flags = chain[STATIC_FLAGS];
+    if (flags.promise) throw new Error(`expect.${PROMISE_CHAINS[promise]}: already called expect.${PROMISE_CHAINS[flags.promise]} on this chain`);
+    return expectStatic(flags.not, promise);
+  }
+
+  function flagged(chain, matcher) {
+    const { not, promise } = chain[STATIC_FLAGS];
+    matcher.inverse = not;
+    matcher.promise = promise;
+    return matcher;
+  }
+
+  const rootStatic = expectStatic(false, undefined);
+  for (const name of ["anything", "any", "stringContaining", "stringMatching", "objectContaining", "arrayContaining", "closeTo"]) {
+    expect[name] = (...args) => rootStatic[name](...args);
+  }
+  for (const name of ["not", "resolvesTo", "rejectsTo"]) {
+    Object.defineProperty(expect, name, { get: () => rootStatic[name], configurable: true });
+  }
   expect.assertions = (count) => {
     if (currentTest) currentTest.assertions = { exact: count };
   };
@@ -873,8 +978,10 @@
       const result = matcher.call(matcherContext(ctx.not, ctx.promise), received, ...args);
       return extensions.result(name, result, ctx.not);
     });
-    expect[name] = (...args) => new CustomAsymmetricMatcher(name, matcher, args);
-    expect.not[name] = (...args) => new CustomAsymmetricMatcher(name, matcher, args, true);
+    ExpectStatic.prototype[name] = function (...args) {
+      return flagged(this, new CustomAsymmetricMatcher(name, matcher, args));
+    };
+    expect[name] = (...args) => rootStatic[name](...args);
   }
 
   // Whether a matcher with outcome `pass` fails once `.not` is applied.
