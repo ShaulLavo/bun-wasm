@@ -2833,18 +2833,43 @@ diff --git i/js/src/irregexp/imported/regexp-interpreter.cc w/js/src/irregexp/im
  // Use token threaded dispatch iff the compiler supports computed gotos and the
  // build argument v8_enable_regexp_interpreter_threaded_dispatch was set.
  #if V8_HAS_COMPUTED_GOTO && \
-@@ -634,6 +638,14 @@
+@@ -553,6 +557,16 @@
+   BacktrackStack backtrack_stack;
+
+   uint32_t backtrack_count = 0;
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++  // Single-threaded WASI has nobody to request an interrupt, so the check in
++  // Backtrack never fires on its own. Ask the host every 8,192 backtracks; a
++  // stop requests the urgent callback that HandleInterrupts reads next. The
++  // host poll shares the limit's compare, so the hot path is unchanged.
++  constexpr uint32_t kHostPollBacktracks = 8192;
++  uint32_t next_backtrack_check =
++      backtrack_limit && backtrack_limit < kHostPollBacktracks ? backtrack_limit
++                                                               : kHostPollBacktracks;
++#endif
+
+   while (true) {
+     const uint8_t* next_pc = pc;
+@@ -631,9 +645,22 @@
+     }
+     BYTECODE(Backtrack, return_code) {
+       static_assert(JSRegExp::kNoBacktrackLimit == 0);
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++      if (++backtrack_count == next_backtrack_check) [[unlikely]] {
++        if (backtrack_count == backtrack_limit) {
++          return static_cast<IrregexpInterpreter::Result>(return_code);
++        }
++        bunsm_poll_interrupt(isolate->cx(), 2);
++        next_backtrack_check = backtrack_count + kHostPollBacktracks;
++        if (backtrack_limit && backtrack_limit - backtrack_count < kHostPollBacktracks) {
++          next_backtrack_check = backtrack_limit;
++        }
++      }
++#else
+       if (++backtrack_count == backtrack_limit) {
          return static_cast<IrregexpInterpreter::Result>(return_code);
        }
-
-+#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+      // Single-threaded WASI has nobody to request an interrupt, so the check
-+      // below never fires on its own. Ask the host every 8,192 backtracks; a
-+      // stop requests the urgent callback that HandleInterrupts reads next.
-+      if (!(backtrack_count & 8191)) [[unlikely]] {
-+        bunsm_poll_interrupt(isolate->cx(), 2);
-+      }
 +#endif
+
        IrregexpInterpreter::Result result =
            HandleInterrupts(isolate, call_origin, code_array, subject_string,
-                            &code_base, &subject, &pc);
