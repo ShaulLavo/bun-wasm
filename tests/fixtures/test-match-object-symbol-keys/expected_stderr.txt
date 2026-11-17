@@ -1,0 +1,9 @@
+
+index.test.ts:
+(pass) toMatchObject compares the expected object's enumerable symbol keys
+(pass) a non-enumerable symbol in the expected object is ignored
+
+ 2 pass
+ 0 fail
+ 11 expect() calls
+Ran 2 tests across 1 file. [TIME]

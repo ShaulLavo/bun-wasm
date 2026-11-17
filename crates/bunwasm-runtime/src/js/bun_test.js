@@ -255,7 +255,8 @@
       }
     }
     const visited = seen || new Set();
-    return matcherSupport.ancestors(visited, expected, () => matcherSupport.every(Object.keys(expected), key => {
+    // Bun__deepMatch reads the expected object's enumerable symbol keys as well as its strings.
+    return matcherSupport.ancestors(visited, expected, () => matcherSupport.every(enumerableOwnKeys(expected), key => {
       if (!(key in received)) return false;
       return matchesObject(received[key], expected[key], visited);
     }));

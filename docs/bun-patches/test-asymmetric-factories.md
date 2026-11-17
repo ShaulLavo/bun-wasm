@@ -35,6 +35,8 @@ Matching follows Bun's rules:
   functions do not. Other constructors match their primitive type, then fall
   back to `instanceof`, so boxed BigInt and Symbol values match.
 - `objectContaining` compares enumerable own symbol keys as well as string keys.
+  `toMatchObject` does the same for the expected object's keys, as
+  `Bun__deepMatch` does; the `test-match-object-symbol-keys` fixture covers it.
 
 Printed forms add `NotAny<...>`, `NotAnything`, `NumberNotCloseTo` and the
 `promise resolved to ` / `promise rejected to ` prefixes. One difference is
