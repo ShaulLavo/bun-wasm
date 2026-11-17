@@ -779,8 +779,8 @@ page SIGKILL to the `_start` unwind:
 
 | Guest workload | QuickJS | JSC | SpiderMonkey | Browser engine (real terminate) |
 | --- | --- | --- | --- | --- |
-| `while (true) {}` | 5.1 ms Chromium, 9.6 ms WebKit | 4.8 ms, 8.0 ms | SM_LOOP | heartbeat ran 2,007 ms on Chromium, stopped at once on WebKit |
-| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 5.3 ms (one call takes 342 ms) | no stop within 15 s (one call takes 1,677 ms); with Yarr polling 5.0 to 11.2 ms, 8.0 to 16.0 ms | SM_REGEXP | not run |
+| `while (true) {}` | 5.1 ms Chromium, 9.6 ms WebKit | 4.8 ms, 8.0 ms | 6.8 ms, 20 ms | heartbeat ran 2,007 ms on Chromium, stopped at once on WebKit |
+| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 5.3 ms (one call takes 342 ms) | no stop within 15 s (one call takes 1,677 ms); with Yarr polling 5.0 to 11.2 ms, 8.0 to 16.0 ms | no stop within 15 s, zero checkpoints (one call takes 1,366 ms); with irregexp polling 4.8 to 5.4 ms, 6.4 to 8.0 ms | not run |
 
 Open items:
 
@@ -792,7 +792,6 @@ Open items:
   8.0 ms (one call takes 866 to 1,245 ms), over three runs. Against controls built from the same
   tree without the poll, regex benchmarks ran within run-to-run noise. Record: `docs/bun-patches/engine-interruption.md` and
   `docs/bun-patches/spidermonkey-g2.md`.
-- SM_GAP
 - **Group pages after the stop.** Waffle's per-incarnation exit lock (Waffle `fix/gap1-exit-lock`)
   returns a stopped member's pages only after the worker exits. Once it ships in a Waffle release,
   move the bun-wasm pin and extend the proof to show the stopped guest's pages return.

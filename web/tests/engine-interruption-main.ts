@@ -352,36 +352,50 @@ function stopGuest(engine: Engine, workload: StopWorkload): string {
   if (workload === "regexp") return nativeRegexpGuest();
   return engine === "browser" ? heartbeatBusyGuest() : defaultSignalGuest();
 }
-/** Milliseconds one native regexp call took before readiness, as the guest reported it. */
-function regexpCallMs(stderr: string): number | undefined {
-  const match = /regexp-ms (\d+)\n/.exec(stderr);
-  return match ? Number(match[1]) : undefined;
+/** The busy-page phase: only the stop proofs, each guest stopped before the next starts. */
+async function runBusyStops(module: WebAssembly.Module, engine: Engine): Promise<void> {
+  await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-busy-stop" }, () => testKillStop(module, engine));
+  if (engine === "browser" || !nativePollingEngines.includes(engine)) return;
+  await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-native-regexp-stop" }, () => testKillStop(module, engine, "regexp"));
+}
+/** A failed proof may leave its paired guest spinning with native terminate disabled. Stop it
+ * the same way, by SIGKILL and its own poll, before the case's cleanup and the next case. */
+async function stopLeftover(owned: Awaited<ReturnType<typeof scope>>, child: Child | undefined, killed: boolean): Promise<void> {
+  const worker = child && guestWorkers.get(child.pid);
+  if (!child || !worker || worker.guestEngine === "browser" || controlLoad(worker.probe, probeCell.runReturned) === 1) return;
+  if (!killed) await owned.kill(child, 9);
+  await until(() => controlLoad(worker.probe, probeCell.runReturned) === 1, `${worker.guestEngine} leftover busy guest unwound after SIGKILL`);
 }
 /** Waffle's own stop for a busy guest: a page SIGKILL publishes the signaled outcome, then the
  * broker calls Worker.terminate(). The guest must stop running, and its exit must be observed. */
 async function testKillStop(module: WebAssembly.Module, engine: Engine, workload: StopWorkload = "loop"): Promise<void> {
   const owned = await scope(module, engine, "runtimeProcess");
   let diagnostics: () => unknown = () => ({ phase: "before guest spawn" });
+  let child: Child | undefined, killed = false;
   try {
-    const child = owned.spawn(stopGuest(engine, workload));
-    const beat = () => guestWorkers.get(child.pid)?.heartbeat;
-    diagnostics = () => ({ stdout: child.stdout, stderr: child.stderr, status: owned.wait(child),
-      heartbeat: beat()?.[0], evidence: guestWorkers.has(child.pid) ? snapshotProbe(guestWorkers.get(child.pid)!.probe) : null });
-    const worker = await owned.ready(child);
+    const spawned = child = owned.spawn(stopGuest(engine, workload));
+    const beat = () => guestWorkers.get(spawned.pid)?.heartbeat;
+    diagnostics = () => ({ stdout: spawned.stdout, stderr: spawned.stderr, status: owned.wait(spawned),
+      heartbeat: beat()?.[0], evidence: guestWorkers.has(spawned.pid) ? snapshotProbe(guestWorkers.get(spawned.pid)!.probe) : null });
+    const worker = await owned.ready(spawned);
     if (engine === "browser" && workload === "loop") await until(() => (beat()?.[0] ?? 0) > 0, "Browser-engine guest heartbeat is running");
     else await new Promise<void>(resolve => setTimeout(resolve, 20));
     if (engine !== "browser") equal(controlLoad(worker.probe, probeCell.startLeft), 0, "guest is still executing before the stop");
     const started = performance.now();
-    equal(await owned.kill(child, 9), 0, "SIGKILL accepted");
-    await owned.exit(child, 137);
-    const result = await owned.outcome(child);
+    killed = true;
+    equal(await owned.kill(spawned, 9), 0, "SIGKILL accepted");
+    await owned.exit(spawned, 137);
+    const result = await owned.outcome(spawned);
     equal(result.kind, "signaled", "typed signal outcome"); equal(result.code, 9, "SIGKILL outcome");
     const stop = engine === "browser" ? await assertBrowserStop(worker, beat()!, started) : await assertPairedStop(worker, engine, started);
     const name = workload === "loop" ? stopProofName : nativeStopProofName;
-    checks.push({ engine, route: "runtimeProcess", delivery: "page-kill", name, evidence: { ...stop, regexpCallMs: regexpCallMs(child.stderr) }, elapsedMs: performance.now() - started });
+    checks.push({ engine, route: "runtimeProcess", delivery: "page-kill", name, evidence: stop, elapsedMs: performance.now() - started });
   } catch (error) {
     throw engineInterruptionFailure(`${engine} SIGKILL stop of a busy ${workload} guest failed`, error, diagnostics);
-  } finally { await owned.dispose(); }
+  } finally {
+    try { await stopLeftover(owned, child, killed); }
+    finally { await owned.dispose(); }
+  }
 }
 async function testNativeInterrupt(module: WebAssembly.Module, engine: Engine): Promise<void> {
   const owned = await scope(module, engine);
@@ -710,6 +724,9 @@ void (async () => {
   const modules: { engine: Engine; name: string; hash: string; module: WebAssembly.Module }[] = [];
   let fatalError: unknown;
   let functionalComplete = false;
+  // Busy-guest stops run last, in their own fresh page: a busy guest that ever outlived its
+  // proof would spin on in this page's process and starve every case after it.
+  const busyPhase = new URLSearchParams(location.search).get("phase") === "busy";
   try {
     const runEngineMatrix = async () => {
       truth(crossOriginIsolated, "engine interruption requires cross-origin isolation");
@@ -726,6 +743,7 @@ void (async () => {
       if (!module) continue;
       const loaded = module;
       modules.push({ engine, name, hash, module: loaded });
+      if (busyPhase) { await runBusyStops(loaded, engine); continue; }
       await runCase({ engine, route: "legacy", name: "boot" }, async () => {
         const boot = await scope(loaded, engine);
         try {
@@ -735,9 +753,7 @@ void (async () => {
         } finally { await boot.dispose(); }
       });
       for (const signal of [2, 15] as const) await runCase({ engine, route: "legacy", name: `default-${signal}` }, () => testDefault(loaded, engine, signal));
-      await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-busy-stop" }, () => testKillStop(loaded, engine));
       if (engine !== "browser") {
-        if (nativePollingEngines.includes(engine)) await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-native-regexp-stop" }, () => testKillStop(loaded, engine, "regexp"));
         await runCase({ engine, route: "legacy", name: "native-true-return" }, () => testNativeInterrupt(loaded, engine));
         await runCase({ engine, route: "legacy", name: "handled-SIGINT" }, () => testHandled(loaded, engine));
         await runCase({ engine, route: "legacy", name: "nested-SIGINT-default-15" }, () => testDefault(loaded, engine, 15, true));
@@ -750,12 +766,12 @@ void (async () => {
         await testSleepSyncSignals(loaded, engine);
       }
     }
-    await testPreview1Clock(true); await testPreview1Clock(false);
+    if (!busyPhase) { await testPreview1Clock(true); await testPreview1Clock(false); }
     functionalComplete = true;
     // Never start timings when even one functional scenario is RED. Functional
     // matrix runs have already retained every safely reachable independent case.
     const query = new URLSearchParams(location.search);
-    if (functional.ok && query.has("benchmark")) {
+    if (functional.ok && query.has("benchmark") && !busyPhase) {
       for (const { engine, name, hash, module } of modules) {
         if (engine === "browser") continue;
         let pristine: WebAssembly.Module | undefined, pristineSha256: string | undefined;

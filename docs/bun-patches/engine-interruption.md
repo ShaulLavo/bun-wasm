@@ -96,11 +96,21 @@ pages depends on Waffle's per-incarnation exit lock, which is not in the pinned 
 release yet; this proof covers the stop and the exit, not page reuse.
 
 The original `runtimeProcess-page-SIGKILL-stops-guest-in-native-regexp` proof repeats that
-stop while the guest loops on a catastrophically backtracking regexp (each call backtracks
-about 2^24 times) inside an inner `catch {}`. It runs only for engines that poll inside their
-native matcher, listed in `nativePollingEngines`: QuickJS's regexp engine calls the interrupt
-handler, and JSC's Yarr interpreter polls every 16,384 backtracks, so the stop lands in
-milliseconds although one call takes hundreds (QuickJS) or about 1.7 s (JSC).
+stop while the guest is inside one catastrophically backtracking regexp call (about 2^32
+backtracks, inside an inner `catch {}`), far longer than any proof waits on any machine.
+The stop can only land inside that call; if the call ever returned, the finally block and
+the code after it would write their markers. The guest writes its readiness before the
+call, so the proof does not depend on machine speed. It runs only for engines that poll
+inside their native matcher, listed in `nativePollingEngines`: QuickJS's regexp engine
+calls the interrupt handler, JSC's Yarr interpreter polls every 16,384 backtracks and
+SpiderMonkey's irregexp every 8,192, so all three paired engines run it.
+
+The stop proofs run last, in a separate page (`?phase=busy`) that the runner opens in a
+fresh browser context after the main matrix's context has closed, and closes right after.
+A busy guest that ever outlived its proof would keep spinning in its page's process and
+starve every later case. A stop proof that fails after its guest started still kills that
+guest and waits for its own poll to unwind it before the next case. The runner merges both
+pages into one result, which is green only if both are.
 
 
 ## Classification
@@ -115,7 +125,8 @@ milliseconds although one call takes hundreds (QuickJS) or about 1.7 s (JSC).
 
 The original browser harness now accepts an explicit QuickJS/JSC subset through
 its driver option, page query and controller. Its local default remains both
-pairs, with 37 named checks per browser and 111 checks over the three browsers.
+pairs; `interruptionProofs` in `web/tests/engine-interruption-cases.ts` is the one list of
+named checks, and the gate and its unit tests count from it.
 SpiderMonkey joins only when selected explicitly (`--engines=quickjs,jsc,spidermonkey`
 with a staged `bun-spidermonkey.wasm` and `spidermonkey-engine.wasm`), because the CI
 interruption job builds no SpiderMonkey pair; it then runs the same paired-engine cases.
