@@ -83,10 +83,15 @@ pub(super) fn adapt<'a>(source: &'a str, path: &str) -> Cow<'a, str> {
     if file_digest(&wasm).ok().as_deref() != Some(binding.wasm) {
         return Cow::Borrowed(source);
     }
-    // Equal-width replacement keeps every original source position unchanged.
-    Cow::Owned(source.replacen(
-        "initial: 4000,",
-        &format!("initial: {},", binding.initial),
-        1,
-    ))
+    // Use the maintained Oxc profile's 256 MiB shared-memory maximum.
+    // Equal-width replacements keep every original source position unchanged.
+    Cow::Owned(
+        source
+            .replacen(
+                "initial: 4000,",
+                &format!("initial: {},", binding.initial),
+                1,
+            )
+            .replacen("maximum: 65536,", "maximum: 4096 ,", 1),
+    )
 }

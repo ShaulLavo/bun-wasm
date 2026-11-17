@@ -2,7 +2,7 @@
   "name": "bun-wasm",
   "version": "0.0.61",
   "private": true,
-  "waffleHostInterface": 2,
+  "waffleHostInterface": 3,
   "type": "module",
   "exports": {
     ".": {
@@ -85,6 +85,7 @@
     "web/src/tool-command.ts",
     "web/src/bun-executor.ts",
     "web/src/engine-stack-budget.ts",
+    "web/src/host-memory-policy.ts",
     "web/src/memory-telemetry.ts",
     "web/src/launch-failure.ts",
     "web/src/jsc-allocation-boundary.ts",
@@ -112,8 +113,8 @@
   },
   "peerDependencies": {
     "waffle": "*",
-    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-base-0.0.16.tgz",
-    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.137/waffle-relay-0.0.137.tgz"
+    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz",
+    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.140/waffle-relay-0.0.140.tgz"
   },
   "devDependencies": {
     "@builder.io/qwik": "1.17.2",
@@ -122,7 +123,7 @@
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.137/waffle-0.0.137.tgz",
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.140/waffle-0.0.140.tgz",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "miniflare": "5.20261012.0-beta",

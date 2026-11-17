@@ -91,12 +91,7 @@ declare namespace BunWasm {
     require(name: "node_url"): { fileURLToPath(url: string | URL): string };
     readonly native: Native;
     readonly builtinFactories: Record<string, () => object>;
-    readonly realTimers: {
-      setTimeout(callback: () => void, delay: number): unknown;
-      clearTimeout(handle: unknown): void;
-      setImmediate(callback: () => void): unknown;
-      clearImmediate(handle: unknown): void;
-    };
+    readonly realTimers: import("./immediate_queue-types").ImmediateTimers;
     require(name: "net_address"): {
       isIP(value: string): 0 | 4 | 6;
       isIPv6(value: string): boolean;
@@ -325,7 +320,7 @@ declare namespace BunWasm {
 declare function __bunwasm_meta(meta: object, path: string): void;
 declare function __bunwasm_dynamicImport(from: string): (specifier: unknown, options?: unknown) => Promise<unknown>;
 declare namespace BunWasm {
-  interface StackFrame { file: string; name: string; line: number; column: number }
+  interface StackFrame { file: string; name: string; line: number; column: number; anonymousFunction?: boolean }
   interface InspectOptions {
     showHidden?: boolean; depth?: number | null; colors?: boolean; customInspect?: boolean;
     showProxy?: boolean; maxArrayLength?: number | null; maxStringLength?: number | null;
@@ -385,7 +380,7 @@ declare namespace BunWasm {
     pathToFileHref(path: string): string;
     require(name: "caller_origin"): () => string | null;
     mappedCallSites: WeakSet<object>;
-    formatCallSite(site: StackCallSite): string;
+    formatCallSite(site: StackCallSite, keepIdentity?: boolean, anonymousFunction?: boolean): string;
     require(name: "inspect"): ConsoleInspector;
     require(name: "host_call_sites"): object;
   }

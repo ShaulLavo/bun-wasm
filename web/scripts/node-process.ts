@@ -149,7 +149,7 @@ export function createNodeProcess(options: NodeProcessOptions) {
         if (!(memory instanceof WebAssembly.Memory)) throw new Error("Missing guest memory");
         return memory;
       };
-      abi = new ProcessABI({ memory, descriptors, fs: new MemFS(), pid: client.pid, service: client,
+      abi = new ProcessABI({ memory, descriptors, fs: new MemFS(), pid: client.pid, processIdentity: client.processIdentity, service: client,
         signals: client.signals, wake: client.wake, createPipe: () => client.createPipe() });
       const proc = Object.fromEntries(Object.entries(abi.imports).map(([name, fn]) => [name, guard(fn)]));
       proc.inherited_fd = guard(index => inherited[index >>> 0] ?? -44);

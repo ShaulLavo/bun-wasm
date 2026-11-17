@@ -1,5 +1,9 @@
 name: Rust object cache
 description: Restore compiler objects independently of Cargo build artifacts
+inputs:
+  scope:
+    description: Existing compiler object reader namespace
+    default: ${{ github.job }}
 outputs:
   cache-primary-key:
     description: Dependency namespace for content-keyed main-only object snapshots
@@ -12,7 +16,7 @@ runs:
       run: |
         echo "SCCACHE_DIR=$RUNNER_TEMP/sccache" >> "$GITHUB_ENV"
         echo "SCCACHE_CACHE_SIZE=512M" >> "$GITHUB_ENV"
-        echo "key=rust-objects-v3-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}" >> "$GITHUB_OUTPUT"
+        echo "key=rust-objects-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.scope }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}" >> "$GITHUB_OUTPUT"
     - uses: actions/cache/restore@v4
       id: objects
       with:
@@ -20,9 +24,9 @@ runs:
         key: ${{ steps.object-key.outputs.key }}-restore
         restore-keys: |
           ${{ steps.object-key.outputs.key }}-
-          rust-objects-v3-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-          rust-objects-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
-          rust-objects-v2-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+          rust-objects-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.scope }}-
+          rust-objects-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.scope }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          rust-objects-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.scope }}-
     - name: Record restored compiler objects
       shell: bash
       run: bun "$GITHUB_WORKSPACE/scripts/ci-sccache-cache.ts" capture "$RUNNER_TEMP/sccache" "$RUNNER_TEMP/sccache-inventory.json"

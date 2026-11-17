@@ -2,7 +2,8 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { runInNewContext } from "node:vm";
+import { runInContext } from "node:vm";
+import { eventTargetSource } from "./event-target-source";
 import ts from "typescript-api";
 
 const root = resolve(import.meta.dir, "..");
@@ -22,7 +23,7 @@ function enclosingFunction(node: ts.Node) {
 }
 
 test("EventTarget limits initialize once from the current default", () => {
-  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  const { events: Events, web: { EventTarget } } = eventTargetSource({ TypeError }, {}, emitted);
   Events.defaultMaxListeners = 10;
   const target = new EventTarget();
   expect(Events.getMaxListeners(target)).toBe(10);
@@ -33,12 +34,12 @@ test("EventTarget limits initialize once from the current default", () => {
 });
 
 test("EventTarget limit initialization propagates failed writes", () => {
-  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  const { events: Events, web: { EventTarget } } = eventTargetSource({ TypeError }, {}, emitted);
   expect(() => Events.getMaxListeners(Object.freeze(new EventTarget()))).toThrow(TypeError);
 });
 
 test("EventTarget limits reread transformed or existing storage", () => {
-  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  const { events: Events, web: { EventTarget } } = eventTargetSource({ TypeError }, {}, emitted);
   let stored: number | undefined;
   const target = new EventTarget();
   Object.defineProperty(target, Events.kMaxEventTargetListeners, {
@@ -56,7 +57,7 @@ test("EventTarget limits reread transformed or existing storage", () => {
 });
 
 test("EventTarget limits propagate the readback getter exception", () => {
-  const Events = runInNewContext(emitted, { EventTarget, TypeError })({});
+  const { events: Events, web: { EventTarget } } = eventTargetSource({ TypeError }, {}, emitted);
   const sentinel = new Error("limit readback");
   let reads = 0;
   const target = new EventTarget();
@@ -100,13 +101,12 @@ test("events permits only the exact audited constructor and private-invariant vi
 test("emitted events retains publication rollback, once identity and strict receivers", () => {
   const changed: unknown[][] = [];
   const rejection = new Error("registration rejected");
-  const factory = runInNewContext(emitted);
-  const EventEmitter = factory({
+  const { events: EventEmitter } = eventTargetSource({}, {
     listenerChanged(target: object, type: string | symbol) {
       changed.push([target, type]);
       if (type === "reject") throw rejection;
     },
-  });
+  }, emitted);
   expect(EventEmitter.prototype._events).toBeUndefined();
   expect(() => EventEmitter.prototype._events["never"]).toThrow();
   const emitter = new EventEmitter();
@@ -127,9 +127,9 @@ test("emitted events retains publication rollback, once identity and strict rece
 test("constructor bridge matches actual call, construction, prototype and installed static descriptors", () => {
   const required: string[] = [];
   function AsyncResource() {}
-  const EventEmitter = runInNewContext(emitted)({
+  const { events: EventEmitter } = eventTargetSource({}, {
     require(name: string) { required.push(name); return AsyncResource; },
-  });
+  }, emitted);
   expect(required).toEqual([]);
   expect(Object.getOwnPropertyDescriptor(EventEmitter, "prototype")).toEqual({
     value: EventEmitter.prototype, writable: true, enumerable: false, configurable: false,
@@ -177,7 +177,7 @@ test("constructor bridge matches actual call, construction, prototype and instal
 });
 
 test("emitted iterator retains its pending close result and FIFO error cleanup", async () => {
-  const EventEmitter = runInNewContext(emitted)({});
+  const { events: EventEmitter } = eventTargetSource({}, {}, emitted);
   const emitter = new EventEmitter();
   const iterator = EventEmitter.on(emitter, "item", { close: ["done"] });
   const first = iterator.next();
@@ -274,10 +274,8 @@ for (const [label, body] of invalid) {
 }
 
 function intrinsicControl(body: string): Promise<unknown> {
-  const factory = emitted.trim().replace(/;$/, "");
-  return runInNewContext(`const E = (${factory})({}); (async () => { ${body} })()`, {
-    AbortController, queueMicrotask,
-  });
+  const { context } = eventTargetSource({}, {}, emitted);
+  return runInContext(`const E = events; (async () => { ${body} })()`, context);
 }
 
 test("error monitor preserves concat and does not consume the mutable array iterator", async () => {
@@ -460,9 +458,9 @@ for (const mode of ["native", "fallback"]) {
       (description?: string) => Symbol(description),
       { for: Symbol.for, asyncIterator: Symbol.asyncIterator },
     );
-    const EventEmitter = runInNewContext(emitted, { Symbol: symbol, queueMicrotask })({});
+    const { events: EventEmitter, web } = eventTargetSource({ Symbol: symbol }, {}, emitted);
     const key = mode === "native" ? Symbol.dispose : Symbol.for("Symbol.dispose");
-    const controller = new AbortController();
+    const controller = new web.AbortController();
     let count = 0;
     const handle = EventEmitter.addAbortListener(controller.signal, () => { count++; });
     expect(Reflect.ownKeys(handle)).toEqual([key]);

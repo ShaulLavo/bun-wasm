@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import "../iphone-smoke-watch";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, watch, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { instructions } from "./dispatch";
 import { discover } from "./github";
-import { outcome, state as parseState, type Job, type Run, type State } from "./model";
-import { claim, complete, retry, tick, type Adapters } from "./scheduler";
+import { claimWindowMs, outcome, state as parseState, type Job, type Run, type State } from "./model";
+import { claim, complete, retry, status, tick, type Adapters } from "./scheduler";
 import { load, save } from "./storage";
 
 const since = "2026-11-15T00:00:00.000Z";
@@ -17,16 +17,98 @@ const fresh = (): State => ({ schema: 1, since, polledAt: null, error: null, job
 const green = (job: Job) => outcome({ revision: job.revision, status: "green", failedPhase: null, reportPath: "/reports/result.json" }, job.revision);
 const red = (job: Job) => outcome({ revision: job.revision, status: "red", failedPhase: "prepare-artifacts", reportPath: "/reports/failure.md" }, job.revision);
 
+function tabCountReport(revision = sha(1)) {
+  const error = "AggregateError: Error: Cannot identify Safari tab count";
+  const phases = ["startup", "install", "dev", "render", "click", "cleanup"].map(phase => ({ phase, status: phase === "cleanup" ? "fail" : "pass", error: phase === "cleanup" ? error : undefined }));
+  const failures: { phase: string; error: string }[] = [];
+  return { kind: "manual-iphone-smoke", revision, status: "red", failedPhase: "cleanup", reportPath: "/reports/cleanup.json", failures,
+    cases: ["vite-react/iphone-safari/browser", "hono/iphone-safari/browser", "vite-react/iphone-safari/quickjs"].map((id, index) => ({ id,
+      status: index === 0 ? "fail" : "blocked", phases: index === 0 ? phases : [],
+      failures: [{ phase: index === 0 ? "cleanup" : "prerequisite", error: index === 0 ? error : "Previous case cleanup failed: " + error }],
+    })) };
+}
+
+test("only exact tab-count cleanup failure after passing functional phases is operational", () => {
+  expect(outcome(tabCountReport(), sha(1))).toMatchObject({ status: "red", failedPhase: "cleanup", operational: "safari-tab-count" });
+  for (const phase of ["startup", "install", "dev", "render", "click"]) {
+    const report = tabCountReport();
+    report.cases[0]!.phases.find(row => row.phase === phase)!.status = "fail";
+    expect(outcome(report, sha(1))).not.toHaveProperty("operational");
+  }
+});
+
+test.each([1, 2])("operational cleanup can follow %s complete passing cases", passed => {
+  const report = tabCountReport();
+  const failed = structuredClone(report.cases[0]!);
+  for (const [index, result] of report.cases.entries()) {
+    if (index < passed) {
+      result.status = "pass";
+      result.phases = failed.phases.map(phase => ({ ...phase, status: "pass", error: undefined }));
+      result.failures = [];
+    }
+    if (index === passed) Object.assign(result, failed, { id: result.id });
+  }
+  expect(outcome(report, sha(1))).toMatchObject({ status: "red", operational: "safari-tab-count" });
+});
+
+test("additional aggregate cleanup errors and interrupted functional phases remain red", () => {
+  const report = tabCountReport();
+  const cleanup = report.cases[0]!.phases[5]!;
+  const error = "AggregateError: Error: Cannot identify Safari tab count; Error: owned tab identity failed";
+  cleanup.error = error;
+  report.cases[0]!.failures[0]!.error = error;
+  expect(outcome(report, sha(1))).not.toHaveProperty("operational");
+  const interrupted = tabCountReport();
+  interrupted.cases[0]!.phases[4]!.status = "cancelled";
+  expect(outcome(interrupted, sha(1))).not.toHaveProperty("operational");
+});
+
+test.each(["ownership", "closure", "mixed", "cancellation", "blocked-product", "missing-phase", "no-cases", "forged-label"])("%s failure never becomes an operational tab-count alert", scenario => {
+  const report = tabCountReport();
+  if (scenario === "ownership") report.cases[0]!.phases[5]!.error = "Error: Cannot identify the task's Safari tab for cleanup";
+  if (scenario === "closure") report.cases[0]!.phases[5]!.error = "Error: Task Safari tab closure is unproved";
+  if (scenario === "mixed") report.cases[0]!.failures.push({ phase: "render", error: "guest failed" });
+  if (scenario === "cancellation") report.failures.push({ phase: "interruption", error: "cancelled during cleanup" });
+  if (scenario === "blocked-product") report.cases[1]!.failures[0]!.error = "install failed";
+  if (scenario === "missing-phase") report.cases[0]!.phases.splice(3, 1);
+  if (scenario === "no-cases" || scenario === "forged-label") report.cases = [];
+  expect(outcome({ ...report, operational: "safari-tab-count" }, sha(1))).not.toHaveProperty("operational");
+});
+
+test("operational notification survives restart and failure without advancing tested green", async () => {
+  const state = fresh(), fake = harness([run(1), run(2), run(3)]);
+  await tick(state, fake.adapters);
+  finish(state, 1);
+  await tick(state, fake.adapters);
+  const job = state.jobs[1]!;
+  claim(job, 1, now);
+  complete(job, outcome(tabCountReport(sha(2)), sha(2)), now);
+  const restored = parseState(JSON.parse(JSON.stringify(state)));
+  fake.adapters.notify = async () => { throw new Error("notification unavailable"); };
+  await expect(tick(restored, fake.adapters)).rejects.toThrow("notification unavailable");
+  expect(restored.jobs[1]?.state).toMatchObject({ notified: false, outcome: { status: "red" } });
+  fake.adapters.notify = async message => { fake.messages.push(message); };
+  await tick(restored, fake.adapters);
+  expect(fake.messages[0]).toContain("OPERATIONAL ALERT");
+  expect(fake.messages[0]).not.toContain("smoke RED");
+  for (const text of [sha(2), "cleanup", "/reports/cleanup.json", "unproved", "raw result remains red"]) expect(fake.messages[0]).toContain(text);
+  expect(status(restored)).toContain("OPERATIONAL ALERT");
+  expect(restored.jobs[2]?.state).toMatchObject({ kind: "running", lastGreen: sha(1) });
+  await tick(restored, fake.adapters);
+  expect(fake.messages).toHaveLength(1);
+});
+
 function harness(runs: Run[]) {
   const snapshots: State[] = [], dispatches: string[] = [], messages: string[] = [];
+  let clock = Date.parse(now);
   const adapters: Adapters = {
     discover: async () => runs,
     save: async value => { snapshots.push(structuredClone(value)); },
     dispatch: async job => { dispatches.push(job.revision); },
     notify: async message => { messages.push(message); },
-    now: () => now,
+    now: () => new Date(clock).toISOString(),
   };
-  return { adapters, snapshots, dispatches, messages };
+  return { adapters, snapshots, dispatches, messages, advance: (ms: number) => { clock += ms; } };
 }
 
 function first(state: State): Job {
@@ -46,7 +128,7 @@ test("every adjacent successful source is queued once, in source order", async (
   const state = fresh(), fake = harness([run(3), run(1), run(2), { ...run(1), id: 999 }]);
   await tick(state, fake.adapters);
   expect(state.jobs.map(job => job.revision)).toEqual([sha(1), sha(2), sha(3)]);
-  expect(fake.snapshots.find(snapshot => first(snapshot).state.kind === "running")?.jobs[0]?.state).toMatchObject({ dispatch: "pending" });
+  expect(fake.snapshots.find(snapshot => first(snapshot).state.kind === "running")?.jobs[0]?.state).toMatchObject({ dispatch: { kind: "pending" } });
   finish(state, 1);
   await tick(state, fake.adapters);
   finish(state, 2);
@@ -87,15 +169,148 @@ test("restart preserves running identity and duplicate messages cannot claim aga
   expect(first(restored).state).toMatchObject({ attempt: 2, claimedAt: null });
 });
 
-test("failed dispatch remains pending and retries without inventing delivery", async () => {
+test("acknowledged dispatch still needs a claim, then one retry and a separate operational alert", async () => {
   const state = fresh(), fake = harness([run(1)]);
-  fake.adapters.dispatch = async () => { throw new Error("T3 unavailable"); };
-  await expect(tick(state, fake.adapters)).rejects.toThrow("T3 unavailable");
-  expect(first(state).state).toMatchObject({ kind: "running", dispatch: "pending" });
-  fake.adapters.dispatch = async job => { fake.dispatches.push(job.revision); };
   await tick(state, fake.adapters);
-  expect(first(state).state).toMatchObject({ dispatch: "sent" });
+  fake.advance(claimWindowMs - 1);
+  await tick(state, fake.adapters);
   expect(fake.dispatches).toEqual([sha(1)]);
+  fake.advance(1);
+  await tick(state, fake.adapters);
+  expect(fake.dispatches).toEqual([sha(1), sha(1)]);
+  expect(fake.messages).toEqual([]);
+  fake.advance(claimWindowMs - 1);
+  await tick(state, fake.adapters);
+  expect(fake.messages).toEqual([]);
+  fake.advance(1);
+  await tick(state, fake.adapters);
+  expect(fake.messages).toHaveLength(1);
+  expect(fake.messages[0]).toContain("dispatch failure");
+  expect(fake.messages[0]).not.toContain("smoke RED");
+  expect(first(state).state).toMatchObject({ kind: "running", dispatch: { kind: "unclaimed" } });
+  fake.advance(claimWindowMs * 3);
+  await tick(state, fake.adapters);
+  expect(fake.dispatches).toHaveLength(2);
+  expect(fake.messages).toHaveLength(1);
+  finish(state, 1);
+  await tick(state, fake.adapters);
+  expect(first(state).state).toMatchObject({ kind: "complete", outcome: { status: "green" } });
+  expect(fake.messages).toHaveLength(1);
+});
+
+test("a dispatch timeout waits for a durable claim without an immediate resend or red", async () => {
+  const state = fresh(), fake = harness([run(1)]);
+  fake.adapters.dispatch = async job => { fake.dispatches.push(job.revision); throw new Error("ETIMEDOUT after delivery"); };
+  await tick(state, fake.adapters);
+  await tick(state, fake.adapters);
+  expect(fake.dispatches).toEqual([sha(1)]);
+  expect(fake.messages).toEqual([]);
+  claim(first(state), 1, now);
+  await tick(state, fake.adapters);
+  expect(fake.dispatches).toEqual([sha(1)]);
+  expect(() => claim(first(state), 1, now)).toThrow("already claimed");
+});
+
+test.each([false, true])("claim during grace, after retry = %s, stops dispatch recovery", async afterRetry => {
+  const state = fresh(), fake = harness([run(1), run(2)]);
+  fake.adapters.dispatch = async job => { fake.dispatches.push(job.revision); throw new Error("timeout"); };
+  await tick(state, fake.adapters);
+  if (afterRetry) { fake.advance(claimWindowMs); await tick(state, fake.adapters); }
+  claim(first(state), 1, fake.adapters.now());
+  fake.advance(claimWindowMs * 3);
+  await tick(state, fake.adapters);
+  expect(fake.dispatches).toHaveLength(afterRetry ? 2 : 1);
+  expect(fake.messages).toEqual([]);
+  expect(state.jobs[1]?.state.kind).toBe("pending");
+  expect(() => claim(first(state), 1, fake.adapters.now())).toThrow("already claimed");
+  complete(first(state), red(first(state)), fake.adapters.now());
+  await tick(state, fake.adapters);
+  expect(fake.messages).toHaveLength(1);
+  expect(fake.messages[0]).toContain("smoke RED");
+  expect(fake.messages[0]).toContain("prepare-artifacts");
+});
+
+test("restart retains both deadlines, the single retry, and a failed operational notification", async () => {
+  let state = fresh();
+  const path = await directory(), fake = harness([run(1)]);
+  fake.adapters.save = value => save(path, value);
+  fake.adapters.dispatch = async job => { fake.dispatches.push(job.revision); throw new Error("timeout"); };
+  await tick(state, fake.adapters);
+  const firstDeadline = first(state).state;
+  state = await load(path);
+  expect(first(state).state).toEqual(firstDeadline);
+  fake.advance(claimWindowMs - 1);
+  await tick(state, fake.adapters);
+  expect(fake.dispatches).toHaveLength(1);
+  fake.advance(1);
+  await tick(state, fake.adapters);
+  const secondDeadline = first(state).state;
+  state = await load(path);
+  expect(first(state).state).toEqual(secondDeadline);
+  fake.advance(claimWindowMs - 1);
+  await tick(state, fake.adapters);
+  expect(fake.messages).toEqual([]);
+  fake.advance(1);
+  fake.adapters.notify = async () => { throw new Error("notification timeout"); };
+  await expect(tick(state, fake.adapters)).rejects.toThrow("notification timeout");
+  state = await load(path);
+  expect(first(state).state).toMatchObject({ dispatch: { kind: "unclaimed", notified: false } });
+  fake.adapters.notify = async message => { fake.messages.push(message); };
+  await tick(state, fake.adapters);
+  state = await load(path);
+  await tick(state, fake.adapters);
+  expect(fake.dispatches).toHaveLength(2);
+  expect(fake.messages).toHaveLength(1);
+  expect(first(state).state).toMatchObject({ dispatch: { kind: "unclaimed", notified: true } });
+}, 60_000);
+
+test("each send return refreshes a full claim window even after a slow timeout", async () => {
+  const state = fresh(), fake = harness([run(1)]);
+  fake.adapters.dispatch = async job => { fake.dispatches.push(job.revision); fake.advance(60_000); throw new Error("timeout"); };
+  await tick(state, fake.adapters);
+  expect(first(state).state).toMatchObject({ dispatch: { claimDeadline: new Date(Date.parse(fake.adapters.now()) + claimWindowMs).toISOString() } });
+  fake.advance(claimWindowMs - 1);
+  await tick(state, fake.adapters);
+  expect(fake.dispatches).toHaveLength(1);
+  fake.advance(1);
+  await tick(state, fake.adapters);
+  expect(first(state).state).toMatchObject({ dispatch: { delivery: 2, claimDeadline: new Date(Date.parse(fake.adapters.now()) + claimWindowMs).toISOString() } });
+  fake.advance(claimWindowMs - 1);
+  await tick(state, fake.adapters);
+  expect(fake.messages).toEqual([]);
+});
+
+test("a late durable claim cancels an unsent no-claim alert and preserves real red reporting", async () => {
+  const state = fresh(), fake = harness([run(1)]);
+  await tick(state, fake.adapters);
+  fake.advance(claimWindowMs);
+  await tick(state, fake.adapters);
+  fake.advance(claimWindowMs);
+  fake.adapters.notify = async () => { throw new Error("offline"); };
+  await expect(tick(state, fake.adapters)).rejects.toThrow("offline");
+  claim(first(state), 1, fake.adapters.now());
+  complete(first(state), red(first(state)), fake.adapters.now());
+  fake.adapters.notify = async message => { fake.messages.push(message); };
+  await tick(state, fake.adapters);
+  expect(fake.messages).toHaveLength(1);
+  expect(fake.messages[0]).toContain("smoke RED");
+});
+
+test("pre-deadline durable snapshots retain claims and conservatively count their first delivery", async () => {
+  const state = fresh(), fake = harness([run(1)]);
+  await tick(state, fake.adapters);
+  const job = first(state);
+  if (job.state.kind !== "running") throw new Error("Expected running state");
+  for (const dispatch of ["pending", "sent"]) {
+    const restored = parseState({ ...state, jobs: [{ ...job, state: { ...job.state, dispatch } }] });
+    expect(first(restored).state).toMatchObject({ dispatch: { kind: "waiting", delivery: 1, claimDeadline: new Date(Date.parse(now) + claimWindowMs).toISOString() }, claimedAt: null });
+  }
+  claim(job, 1, now);
+  const restored = parseState({ ...state, jobs: [{ ...job, state: { ...job.state, dispatch: "sent" } }] });
+  fake.advance(claimWindowMs * 3);
+  await tick(restored, fake.adapters);
+  expect(fake.dispatches).toHaveLength(1);
+  expect(() => claim(first(restored), 1, now)).toThrow("already claimed");
 });
 
 test("an interrupted save before dispatch cannot launch a job", async () => {
@@ -105,22 +320,35 @@ test("an interrupted save before dispatch cannot launch a job", async () => {
   expect(fake.dispatches).toEqual([]);
 });
 
-test("crash after send can replay its outbox but cannot claim a second UI job", async () => {
+test("crash after send preserves its claim window and consumes at most one retry", async () => {
   const state = fresh(), fake = harness([run(1)]);
   fake.adapters.save = async value => {
-    const progress = first(value).state;
-    if (progress.kind === "running" && progress.dispatch === "sent") throw new Error("ack save interrupted");
+    if (fake.dispatches.length > 0) throw new Error("ack save interrupted");
     fake.snapshots.push(structuredClone(value));
   };
   await expect(tick(state, fake.adapters)).rejects.toThrow("ack save interrupted");
   const persisted = fake.snapshots.at(-1);
   if (!persisted) throw new Error("Expected durable dispatch intent");
-  expect(first(persisted).state).toMatchObject({ dispatch: "pending" });
-  fake.adapters.save = async () => {};
+  expect(first(persisted).state).toMatchObject({ dispatch: { kind: "waiting", delivery: 1 } });
+  fake.adapters.save = async value => {
+    if (fake.dispatches.length === 2) throw new Error("retry ack save interrupted");
+    fake.snapshots.push(structuredClone(value));
+  };
   await tick(persisted, fake.adapters);
+  expect(fake.dispatches).toEqual([sha(1)]);
+  fake.advance(claimWindowMs);
+  await expect(tick(persisted, fake.adapters)).rejects.toThrow("retry ack save interrupted");
   expect(fake.dispatches).toEqual([sha(1), sha(1)]);
-  claim(first(persisted), 1, now);
-  expect(() => claim(first(persisted), 1, now)).toThrow("already claimed");
+  const retried = fake.snapshots.at(-1);
+  if (!retried) throw new Error("Expected durable retry intent");
+  expect(first(retried).state).toMatchObject({ dispatch: { delivery: 2 } });
+  fake.adapters.save = async () => {};
+  fake.advance(claimWindowMs);
+  await tick(retried, fake.adapters);
+  expect(fake.dispatches).toHaveLength(2);
+  expect(fake.messages).toHaveLength(1);
+  claim(first(retried), 1, now);
+  expect(() => claim(first(retried), 1, now)).toThrow("already claimed");
 });
 
 test("setup failure is red and reports tested predecessor, range, phase and report", async () => {
@@ -219,10 +447,30 @@ test("dispatch requires atomic claim, exact-source preparation, FIFO and cleanup
 });
 
 async function cli(path: string, args: string[], env: Record<string, string> = {}) {
-  const child = Bun.spawn([process.execPath, resolve("scripts/iphone-smoke-watch.ts")].concat(args, [`--report-dir=${path}`]), { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env } });
+  const child = Bun.spawn([process.execPath, resolve("scripts/iphone-smoke-watch.ts")].concat(args, [`--report-dir=${path}`]), { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env }, timeout: 60_000 });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   return { code, stdout, stderr };
 }
+
+test("watcher status runs from a builtin-only source fixture without browser packages", async () => {
+  const root = await directory(), reports = join(root, "reports");
+  await mkdir(reports);
+  await save(reports, fresh());
+  const original = await readFile(join(reports, "state.json"), "utf8");
+  const project = resolve(import.meta.dir, "../..");
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "cold-iphone-watcher", private: true, type: "module" }));
+  await cp(join(project, "scripts/iphone-smoke-watch"), join(root, "scripts/iphone-smoke-watch"), { recursive: true, filter: source => !source.endsWith(".test.ts") });
+  for (const name of ["scripts/iphone-smoke-watch.ts", "scripts/iphone-smoke/cases.ts", "scripts/goals-matrix/catalog.ts", "scripts/goals-matrix/evidence.ts"]) {
+    await mkdir(dirname(join(root, name)), { recursive: true });
+    await copyFile(join(project, name), join(root, name));
+  }
+  const child = Bun.spawn([process.execPath, join(root, "scripts/iphone-smoke-watch.ts"), "status", `--report-dir=${reports}`],
+    { cwd: root, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code, stderr).toBe(0);
+  expect(stdout).toContain("# iPhone smoke automation");
+  expect(await readFile(join(reports, "state.json"), "utf8")).toBe(original);
+}, 60_000);
 
 test("CLI fake GitHub/T3 dispatch, claim, red complete and cleanup-confirmed retry", async () => {
   const path = await directory(), bin = join(path, "bin");
@@ -240,11 +488,15 @@ test("CLI fake GitHub/T3 dispatch, claim, red complete and cleanup-confirmed ret
   expect((await cli(path, ["claim"].concat(identity), env)).code).toBe(0);
   expect((await cli(path, ["claim"].concat(identity), env)).code).toBe(1);
   const result = join(path, "manual-result.json");
-  await writeFile(result, JSON.stringify({ kind: "manual-iphone-smoke", revision: sha(1), source: {}, status: "red", failedPhase: "prepare", reportPath: result, cases: [], ownership: {} }));
+  const raw = JSON.stringify(tabCountReport());
+  await writeFile(result, raw);
   expect((await cli(path, ["complete"].concat(identity, [`--result-file=${result}`]), { ...env, SEND_FAIL: "1" })).code).toBe(1);
   expect(first(await load(path)).state).toMatchObject({ kind: "complete", notified: false, outcome: { status: "red" } });
   expect((await cli(path, ["tick"], env)).code).toBe(0);
   expect(first(await load(path)).state).toMatchObject({ notified: true });
+  expect(await readFile(join(path, "STATUS.md"), "utf8")).toContain("OPERATIONAL ALERT");
+  expect(await readFile(env.SEND_LOG, "utf8")).toContain("OPERATIONAL ALERT");
+  expect(await readFile(join(path, sha(1), "attempt-1", "result.json"), "utf8")).toBe(raw);
   const audit = join(path, "audit.md");
   await writeFile(audit, "No Mac work started. No resources remain.\n");
   expect((await cli(path, ["retry"].concat(identity), env)).code).toBe(1);
@@ -252,6 +504,54 @@ test("CLI fake GitHub/T3 dispatch, claim, red complete and cleanup-confirmed ret
   expect(first(await load(path)).state).toEqual({ kind: "pending", attempt: 2 });
   expect(await readFile(join(path, sha(1), "attempt-1", "result.json"), "utf8")).toContain("manual-iphone-smoke");
 }, 60_000);
+
+test("CLI timeout after delivery releases the lock for a waiting claim without red or a second claim", async () => {
+  const path = await directory(), bin = join(path, "bin");
+  await mkdir(bin);
+  await writeFile(join(bin, "gh"), `#!${process.execPath}\nconsole.log(JSON.stringify(process.argv.at(-1).endsWith('ci.yml') ? {id:42,path:'.github/workflows/ci.yml'} : ${JSON.stringify({ total_count: 1, workflow_runs: [apiRun(1)] })}));\n`);
+  await writeFile(join(bin, "t3"), `#!${process.execPath}\nimport {execFileSync} from 'node:child_process';\nawait Bun.write(process.env.SEND_LOG, (await Bun.file(process.env.SEND_LOG).exists() ? await Bun.file(process.env.SEND_LOG).text() : '') + JSON.stringify(process.argv.slice(2)) + '\\n');\nif (process.argv.at(-1).startsWith('Run scheduled')) {\n  await Bun.write(process.env.SEND_READY, 'delivered');\n  execFileSync('flock', [process.env.SEND_GATE, 'true']);\n  console.error('ETIMEDOUT after delivery');\n  process.exit(124);\n}\nconsole.log('{}');\n`);
+  await chmod(join(bin, "gh"), 0o700);
+  await chmod(join(bin, "t3"), 0o700);
+  const env = { PATH: `${bin}:${process.env.PATH}`, T3_CLI: join(bin, "t3"), SEND_LOG: join(path, "messages.jsonl"), SEND_READY: join(path, "delivered"), SEND_GATE: join(path, "send-gate") };
+  const holder = await holdLock(env.SEND_GATE);
+  try {
+    await timeoutClaim(path, env, () => holder.stdin.end());
+  } finally { holder.stdin.end(); holder.kill(); await holder.exited; }
+  const messages = (await readFile(env.SEND_LOG, "utf8")).trim().split("\n");
+  expect(messages).toHaveLength(1);
+  expect(messages[0]).not.toContain("smoke RED");
+  expect(first(await load(path)).state).toMatchObject({ kind: "complete", outcome: { status: "green" } });
+}, 60_000);
+
+async function timeoutClaim(path: string, env: Record<string, string> & { SEND_READY: string }, release: () => void) {
+  const ready = fileWritten(env.SEND_READY);
+  const ticking = cli(path, ["tick", `--since=${since}`], env);
+  let claiming: ReturnType<typeof cli> | null = null;
+  try {
+    await ready;
+    const identity = [`--revision=${sha(1)}`, "--attempt=1"];
+    claiming = cli(path, ["claim"].concat(identity), env);
+    expect((await cli(path, ["tick"], env)).code).toBe(75);
+    release();
+    expect((await ticking).code).toBe(0);
+    expect((await claiming).code).toBe(0);
+    expect(first(await load(path)).state).toMatchObject({ claimedAt: expect.any(String) });
+    expect((await cli(path, ["claim"].concat(identity), env)).code).toBe(1);
+    expect((await cli(path, ["tick"], env)).code).toBe(0);
+    const result = join(path, "green.json");
+    await writeFile(result, JSON.stringify(green(first(await load(path)))));
+    expect((await cli(path, ["complete"].concat(identity, [`--result-file=${result}`]), env)).code).toBe(0);
+  } finally { release(); await ticking; if (claiming) await claiming; }
+}
+
+async function fileWritten(path: string): Promise<void> {
+  const abort = new AbortController();
+  const events = watch(dirname(path), { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(60_000)]) });
+  try {
+    if (await Bun.file(path).exists()) return;
+    for await (const event of events) { if (event.filename === basename(path)) return; }
+  } finally { abort.abort(); }
+}
 
 test("claim and complete survive a busy watcher lock while duplicate claims stay rejected", async () => {
   const path = await directory(), state = fresh(), fake = harness([run(1)]);
@@ -268,13 +568,20 @@ test("claim and complete survive a busy watcher lock while duplicate claims stay
 }, 60_000);
 
 async function contendedCli(path: string, args: string[]) {
-  const holder = Bun.spawn(["flock", join(path, ".lock"), process.execPath, "--eval", 'process.stdout.write("held\\n"); await new Response(Bun.stdin).text();'], { stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 60_000 });
-  const reader = holder.stdout.getReader();
+  const holder = await holdLock(join(path, ".lock"));
   try {
-    expect((await reader.read()).done).toBe(false);
     const release = Bun.sleep(500).then(() => holder.stdin.end());
     const result = await cli(path, args);
     await release;
     return result;
-  } finally { reader.releaseLock(); holder.stdin.end(); holder.kill(); await holder.exited; }
+  } finally { holder.stdin.end(); holder.kill(); await holder.exited; }
+}
+
+async function holdLock(path: string) {
+  const holder = Bun.spawn(["flock", path, process.execPath, "--eval", 'process.stdout.write("held\\n"); await new Response(Bun.stdin).text();'], { stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+  const reader = holder.stdout.getReader();
+  try { expect((await reader.read()).done).toBe(false); }
+  catch (error) { holder.stdin.end(); holder.kill(); await holder.exited; throw error; }
+  finally { reader.releaseLock(); }
+  return holder;
 }

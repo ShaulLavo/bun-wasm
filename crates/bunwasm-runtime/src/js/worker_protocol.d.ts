@@ -197,6 +197,7 @@ declare namespace BunWasm {
     on(event: string, callback: EventListener): unknown;
   }
   interface Native {
+    processIdentity(): [pid: number, parentPid: number];
     sharedObjects?: SharedObjects;
     gc(): void;
     hostCaps: Record<string, boolean>;
@@ -362,6 +363,7 @@ declare namespace BunWasm {
 
 declare namespace BunWasm {
   interface WebWorkerOptions { name: string; preload: string[]; }
+  type WebParentForwarder = (type: "message" | "messageerror", listener: EventListener) => void;
   interface WebParentPort extends NodeEmitter, EventTarget {
     start(): void;
     postMessage(value: unknown, transfer?: unknown): void;
@@ -378,7 +380,7 @@ declare namespace BunWasm {
     workerSource(source: string, path: string): string;
   }
   interface Internal {
-    require(name: "web_worker"): { initialize(port: WebParentPort, options: WebWorkerOptions, webMessageEvent: (event: MessageEvent) => MessageEvent): void };
+    require(name: "web_worker"): { initialize(port: WebParentPort, options: WebWorkerOptions, webMessageEvent: (event: MessageEvent) => MessageEvent, forward: WebParentForwarder): void };
     randomUUID(): string;
     initImportMeta(meta: object, path: string, main: boolean): void;
     runMain(path: string): unknown;

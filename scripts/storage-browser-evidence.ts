@@ -1,10 +1,23 @@
 import { appendFileSync } from "node:fs";
-import type { Browser, BrowserContext, Frame, Page, Request } from "playwright";
+import type { Browser, BrowserContext, Frame, Page, Request, Response } from "playwright";
 import { StorageRoutingEvidence } from "./storage-routing-evidence";
 import { retainMetadata } from "./storage-fs-metadata";
 
 export type StorageObservation = Pick<StorageLifetime, "step" | "event" | "acquire" | "own" | "observeContext" | "secondary" | "qualifyRouting" | "routingReport">;
 type RecordEvent = (event: { sequence: number; time: string; kind: string; detail: unknown }) => void;
+
+function loadingNavigation(response: Response): boolean {
+  if (response.status() !== 307 || !response.fromServiceWorker() || !response.request().isNavigationRequest()) return false;
+  const location = response.headers().location;
+  if (!location) return false;
+  const request = new URL(response.url());
+  const prefix = /^(.*\/__preview\/)\d{1,5}(?:\/|$)/.exec(request.pathname)?.[1];
+  if (!prefix) return false;
+  try {
+    const target = new URL(location, request);
+    return target.origin === request.origin && new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.loading/[a-f0-9-]{36}$`).test(target.pathname);
+  } catch { return false; }
+}
 
 function errorDetail(error: unknown): unknown {
   if (!(error instanceof Error)) return { error: String(error) };
@@ -223,7 +236,7 @@ export class StorageLifetime {
     });
     page.on("response", response => {
       const detail = { ...requestDetail(response.request()), status: response.status(), fromServiceWorker: response.fromServiceWorker() };
-      this.routing.request({ kind: "response", page: id, request: detail.request, url: detail.url, status: detail.status, fromServiceWorker: detail.fromServiceWorker });
+      this.routing.request({ kind: "response", page: id, request: detail.request, url: detail.url, status: detail.status, fromServiceWorker: detail.fromServiceWorker, loadingNavigation: loadingNavigation(response) });
       this.event("response", detail);
     });
     page.on("requestfinished", request => {

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { auditTemporaryPaths, ciTemporarySources, temporaryPathFailures } from "./ci-temp-guard";
+import { auditTemporaryPaths, ciTemporarySources, temporaryPathFailures, webTemporarySources } from "./ci-temp-guard";
 import { automaticChecks, discoverChecks, selectChecks } from "./test-checks";
 
 const root = join(import.meta.dir, "..");
@@ -70,6 +70,34 @@ test.each([
   '// mkdtempSync("/work/tmp/comment-")\nmkdtempSync(join(tmpdir(), "test-"));',
 ])("accepts configured roots and fixture/output strings: %s", text => {
   expect(failures(text)).toEqual([]);
+});
+
+test.each([
+  'mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "test-"));',
+  'mkdtempSync(join(process.env.TMPDIR || "/work/tmp", "test-"));',
+  'await mkdtemp(resolve(process.env.TMPDIR ?? "/work/tmp", "test-"));',
+  'mkdtempSync(join((process.env.TMPDIR ?? "/work/tmp"), "test-"));',
+])("Web-owned sources reject a hard-coded fallback for an unset TMPDIR: %s", text => {
+  expect(temporaryPathFailures("control.ts", text, true)).toHaveLength(1);
+  expect(failures(text)).toEqual([]);
+});
+
+test.each([
+  'mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "test-"));',
+  'mkdtempSync(join(tmpdir(), "test-"));',
+  'fs.mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "test-"), callback);',
+])("Web-owned sources accept portable fallbacks: %s", text => {
+  expect(temporaryPathFailures("control.ts", text, true)).toEqual([]);
+});
+
+test("the Web-owned process identity test turns RED with its original hosted CI fallback", () => {
+  const path = "scripts/process-identity.test.ts";
+  expect(webTemporarySources()).toContain(path);
+  const source = readFileSync(join(root, path), "utf8");
+  const original = source.replace('join(tmpdir(), "bun-wasm-process-identity-")', 'join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-process-identity-")');
+  expect(original).not.toBe(source);
+  expect(temporaryPathFailures(path, source, true)).toEqual([]);
+  expect(temporaryPathFailures(path, original, true)).toHaveLength(1);
 });
 
 test("blocking quality discovery owns this guard and every selected test is audited", () => {

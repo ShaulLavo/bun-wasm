@@ -5,6 +5,23 @@
 Retain recognizable Buffer constructor dispatch, `fromObject` array-like handling, and concatenation fragments. Adapt the FastBuffer pattern to locally allocated `Uint8Array` storage without Node's native binding, unsafe allocator, or pool. Local codecs, `DataView` numeric access, validation helpers, and factory wiring provide the remaining implementation. `copyBytesFrom` validates the view first and returns an empty Buffer for an empty view before checking either range argument. For nonempty views it validates the offset, returns empty at or past the end, then validates the length before slicing. This ordering is an original adapter correction checked against native Bun 1.4.4 and Node 26.12.1, not a newly copied upstream implementation. Negative and fractional ranges still throw when their validation is reached. This is a mixed file with adapted routines, not an unmodified copy of Node's entire Buffer module.
 
 The `Blob` and `File` exports are original bun-wasm wiring, not copied upstream code.
+
+The public `inspect()` method formats the real byte view directly, ignoring
+custom inspection hooks and rejecting invalid receivers. Numeric accessors use
+intrinsic view getters rather than shadowable backing properties and validate an offset's type before
+the receiver, retain element-count bounds for wider typed-array receivers, and
+read or write their underlying bytes. One-byte writers check the offset's type
+before the value range; wider writers preserve value-first validation. Variable
+width writers require an offset while fixed-width writers default it to zero.
+`Buffer.concat` captures every input getter once, validates all resulting views
+including detached views, then measures their current lengths. A later getter
+can shrink an earlier resizable view without leaving an oversized result. These
+are original adapter corrections against unchanged Bun tests at
+`9510e74152073d850a18758ca41114d8f214ffa6` and native Bun 1.4.4 and Node 26.12.1.
+The new transcoding adapter has its own [record](buffer-transcode.md).
+`tests/fixtures/buffer-concat-resizable` keeps the shrink assertions mandatory
+on QuickJS, Browser, SpiderMonkey and JSC, which has a [malloc resizable
+backing](jsc-resizable-backing.md). It uses no capability probe or caught OOM to pass.
 `web.js` creates the shared constructors in `internal.web` and installs those same
 references as globals; the Buffer factory now re-exports those exact references. This
 preserves constructor identity across global, CommonJS, and named/default ESM access, so
@@ -38,11 +55,12 @@ programs at Bun `9510e74152073d850a18758ca41114d8f214ffa6`,
 `test/js/node/buffer.test.js` lines 4415 and 4691, in the factory directly.
 The encoding and ordinary ArrayBuffer constructor fixtures select QuickJS, JSC
 and Browser. Every resizable ArrayBuffer assertion remains in the RAB fixture,
-which selects QuickJS and Browser. The JSC WASI patch explicitly returns null
-from `tryAllocateResizableMemory`, so RAB and GSAB construction fail before
-Buffer is used. The full shared-growth assertion remains in the blocking
-host/source controls. Those unavailable guest capabilities are not passing
-coverage. No constructor probe, error catch or OOM suppression selects tests.
+which selects QuickJS, Browser and JSC; JSC backs resizable ArrayBuffers with
+[malloc memory](jsc-resizable-backing.md). JSC on WASI still refuses growable
+SharedArrayBuffers ([record](wasi-resizable-buffer-allocation.md)), so GSAB
+construction fails there before Buffer is used. The full shared-growth assertion
+remains in the blocking host/source controls. That unavailable guest capability
+is not passing coverage. No constructor probe, error catch or OOM suppression selects tests.
 
 
 `buffer_fill_args.ts` is an original adapter, not copied upstream code. It selects
@@ -86,11 +104,32 @@ The maintained small-buffer checks are
 `scripts/buffer-residual-semantics.test.ts`. They require no private hooks or
 large allocations and preserve the existing raw encoding binding tests.
 
+
+`buffer_concat_length.ts` is an original allocation-boundary adapter, using
+Bun `src/jsc/bindings/JSBuffer.cpp` at
+`9510e74152073d850a18758ca41114d8f214ffa6` as its comparison source.
+An inferred concatenation length beyond `constants.MAX_LENGTH` raises Bun's
+typed-array allocation-limit error. Explicit lengths still use the existing
+`length` argument validation, and allocation methods retain their `size`
+validation. Native Bun 1.4.4 confirms those separate errors.
+
+`isAscii` and `isUtf8` are callable without being constructible, and have no
+`prototype`, matching native Bun 1.4.4.
+The unchanged upstream `new isAscii(...)` expectation of primitive `false`
+still fails; the native oracle rejects construction with TypeError. The adapter
+does not alter that upstream expectation or pretend it passes.
+
+`scripts/buffer-allocation-boundaries.test.ts` loads the production factories.
+`tests/fixtures/buffer-allocation-boundaries` checks the public functions across
+QuickJS, JSC, Browser and SpiderMonkey, using one 64 MiB input repeated by
+reference for the oversized concatenation.
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays; preserve omitted-length tracking and empty-copy range ordering, delegate fill overload selection to the original typed adapter, and re-export the shared web `Blob`/`File` constructors without wrapping them. |
+| `crates/bunwasm-runtime/src/js/buffer_concat_length.ts` | Original adapter | Preserve Bun's allocation-limit error for an inferred concatenation length. |
 
 [Parent context](bun-patch-series.md).
 

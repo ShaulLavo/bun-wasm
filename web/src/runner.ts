@@ -7,7 +7,7 @@ import { programMetadata } from "../../src/assets.js";
 // and the sandbox (../sandbox/).
 
 import type { ProcessRuntime } from "../../src/process-runtime.js";
-import { loadEngineProgram, loadWasm, MODULE_SCOPE } from "./engine-loader";
+import { createToolsLoader, loadEngineProgram, MODULE_SCOPE } from "./engine-loader";
 import { verifyMemoryProfile, type ProgramMemoryProfile } from "./program-profile";
 import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, type RuntimeNetworkHelper } from "./net/helper";
 import { createRing } from "./net/ring";
@@ -27,16 +27,14 @@ import { pageFacts } from "./engine-stack-budget";
 import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
 import type { BunSharedConnection } from "./shared-objects/protocol.js";
 
-let toolsModule: Promise<WebAssembly.Module> | undefined;
-function loadTools(): Promise<WebAssembly.Module> {
-  return toolsModule ??= loadWasm("bun-tools.wasm", () => {})
-    .then(result => result.module)
-    .catch(error => { toolsModule = undefined; throw error; });
-}
+const loadTools = createToolsLoader();
 
-function physicalStop(worker: Worker, returned: () => void, stopped: () => void): Promise<void> {
+export function physicalStop(worker: Pick<Worker, "terminate">, terminating: () => void, returned: () => void, stopped: () => void): Promise<void> {
+  const terminate = worker.terminate.bind(worker);
   return new Promise<void>(resolve => {
-    const completion: unknown = worker.terminate();
+    let completion: unknown;
+    try { completion = terminate(); }
+    finally { terminating(); }
     const complete = () => { returned(); stopped(); };
     if (completion === undefined) { complete(); resolve(); return; }
     resolve(Promise.resolve(completion).then(complete));
@@ -142,10 +140,10 @@ function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<stri
 async function adoptRootProgram(subprocess: SubprocessBroker, transport: Parameters<SubprocessBroker["adoptRuntimeRoot"]>[0], module: WebAssembly.Module, cancelled: () => boolean) {
   const group = isSharedGroupCore(module);
   const controlGrant = await subprocess.adoptRuntimeRoot(transport, group ? "group" : programMemory(module), cancelled);
-  if (!controlGrant) return undefined;
+  if (!controlGrant || cancelled()) return undefined;
   const linkPlan = programMetadata(module).linkPlan;
   if (group && !linkPlan) throw new TypeError("Memory group root requires a prepared link plan");
-  const member = group && linkPlan ? await subprocess.admitRootGroup({ module, linkPlan }) : undefined;
+  const member = group && linkPlan ? subprocess.admitRootGroup({ module, linkPlan }) : undefined;
   return { controlGrant, memoryGroup: member?.request, groupTransfer: member ? Array.from(member.transfer as Iterable<MessagePort>) : [] };
 }
 
@@ -249,7 +247,11 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     const completion = Promise.withResolvers<void>();
     workerStop = completion.promise;
     void workerStop.catch(error => console.error("bun-wasm: root physical stop failed", error));
-    const stop = (taken: Worker) => physicalStop(taken, () => nativeReturned?.(), () => subprocess?.rootStopped());
+    const stop = (taken: Worker) => {
+      const receipt = subprocess?.captureRootStop();
+      const returned = nativeReturned;
+      return physicalStop(taken, () => receipt?.terminating(), () => returned?.(), () => receipt?.stopped());
+    };
     try {
       const pending = worker ? stop(worker) : workerAcquisition?.then(stop, () => {});
       Promise.resolve(pending).then(() => { releaseRootConsumer(); completion.resolve(); }, completion.reject);

@@ -59,7 +59,7 @@ function memory(): WebAssembly.Memory {
 }
 const abi = new ProcessABI({
   memory,
-  descriptors: wasi.descriptors, fs, pid, service: supervisor,
+  descriptors: wasi.descriptors, fs, pid, processIdentity: root.processIdentity, service: supervisor,
   signals: root,
 });
 Object.assign(processImports, abi.imports);

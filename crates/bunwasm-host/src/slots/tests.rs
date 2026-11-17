@@ -141,10 +141,12 @@ fn runtime_proc_getpid_uses_the_calling_process_identity() {
     binary.section(&types).section(&imports).section(&exports);
     let binary = binary.finish();
 
-    for expected in [0, 37, 8192] {
-        let mut stdio = Stdio::inherited();
-        stdio.pid = expected;
-        let mut f = Fixture::with_stdio(stdio);
+    for (kind, expected) in [
+        (None, 0),
+        (Some(process::ProcessKind::Process), 2),
+        (Some(process::ProcessKind::Thread), 2),
+    ] {
+        let mut f = Fixture::with_kind(kind);
         let module = Module::new(f.store.engine(), &binary).unwrap();
         let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
         let getpid = instance
@@ -154,6 +156,74 @@ fn runtime_proc_getpid_uses_the_calling_process_identity() {
         assert_eq!(getpid.call(&mut f.store, ()).unwrap(), expected);
         f.store.data().cancel.select(FinalOutcome::Signal(15));
         assert!(getpid.call(&mut f.store, ()).is_err());
+    }
+}
+
+#[test]
+fn logical_identity_scalars_have_exact_signatures_and_refuse_after_cancellation() {
+    use wasm_encoder::{
+        EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
+    };
+    let mut types = TypeSection::new();
+    types.ty().function([], [ValType::I32]);
+    let names = ["getpid", "process_id", "parent_process_id"];
+    let mut imports = ImportSection::new();
+    let mut exports = ExportSection::new();
+    for (index, name) in names.into_iter().enumerate() {
+        imports.import("runtime_proc", name, EntityType::Function(0));
+        exports.export(name, ExportKind::Func, index as u32);
+    }
+    let mut binary = wasm_encoder::Module::new();
+    binary.section(&types).section(&imports).section(&exports);
+    let bytes = binary.finish();
+    for (kind, expected) in [
+        (None, [0, 1, 0]),
+        (Some(process::ProcessKind::Process), [2, 2, 1]),
+        (Some(process::ProcessKind::Thread), [2, 1, 0]),
+    ] {
+        for outcome in [FinalOutcome::Exit(23), FinalOutcome::Signal(15)] {
+            assert_scalar_identity(&bytes, kind, expected, outcome);
+        }
+    }
+}
+
+fn assert_scalar_identity(
+    bytes: &[u8],
+    kind: Option<process::ProcessKind>,
+    expected: [i32; 3],
+    outcome: FinalOutcome,
+) {
+    let mut f = Fixture::with_kind(kind);
+    let module = Module::new(f.store.engine(), bytes).unwrap();
+    let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+    let queries = ["getpid", "process_id", "parent_process_id"].map(|name| {
+        instance
+            .get_typed_func::<(), i32>(&mut f.store, name)
+            .unwrap()
+    });
+    for _ in 0..3 {
+        for (query, value) in queries.iter().zip(expected) {
+            assert_eq!(query.call(&mut f.store, ()).unwrap(), value);
+        }
+    }
+    let next = f
+        .runtime
+        .admit_fixture(expected[0], process::ProcessKind::Process, Arc::default())
+        .unwrap();
+    assert_eq!(
+        next.execution_id().get(),
+        if kind.is_some() { 3 } else { 2 }
+    );
+    f.store.data().cancel.select(outcome);
+    for query in queries
+        .into_iter()
+        .skip(if matches!(outcome, FinalOutcome::Exit(_)) {
+            1
+        } else {
+            0
+        })
+    {
+        assert!(query.call(&mut f.store, ()).is_err());
     }
 }
 
@@ -347,6 +417,22 @@ impl Fixture {
         Self::with_memory_and_stdio(directory, shared, Stdio::inherited())
     }
     fn with_memory_and_stdio(directory: &std::path::Path, shared: bool, stdio: Stdio) -> Self {
+        Self::with_memory_stdio_and_kind(directory, shared, stdio, None)
+    }
+    fn with_kind(kind: Option<process::ProcessKind>) -> Self {
+        Self::with_memory_stdio_and_kind(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+            false,
+            Stdio::inherited(),
+            kind,
+        )
+    }
+    fn with_memory_stdio_and_kind(
+        directory: &std::path::Path,
+        shared: bool,
+        stdio: Stdio,
+        kind: Option<process::ProcessKind>,
+    ) -> Self {
         let mut config = Config::new();
         config.epoch_interruption(true);
         let engine = Engine::new(&config).unwrap();
@@ -366,8 +452,17 @@ impl Fixture {
             )
             .unwrap();
         }
-        let processes =
-            process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
+        let root_cancel = if kind.is_some() {
+            Arc::default()
+        } else {
+            cancel.clone()
+        };
+        let root = runtime.admit_root(root_cancel).unwrap();
+        let admission = match kind {
+            Some(kind) => runtime.admit_fixture(0, kind, cancel.clone()).unwrap(),
+            None => root,
+        };
+        let processes = process::Processes::new(admission, stdio, net.notify());
         let watches = crate::fs_watch::Watches::new(net.notify());
         let mut store = Store::new(
             &engine,

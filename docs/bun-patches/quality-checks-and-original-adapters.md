@@ -16,6 +16,10 @@ name dependencies referenced only by unchanged path-included Bun modules. Browse
 fixtures keep consumer-local build inputs but leave Playwright profiles under the
 short host temporary root, avoiding Chromium Unix-socket path limits.
 
+The unused-file failure probe runs whole-repository Knip with a 60-second hang
+cap. It still requires the exact unused-file diagnostic and removes its fixture
+in finally; correctness does not depend on Bun's five-second default test cap.
+
 
 ## Classification
 

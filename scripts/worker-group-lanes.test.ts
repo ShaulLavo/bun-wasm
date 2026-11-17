@@ -4,6 +4,7 @@
 // never serviced. The lane provider is the topology model in fixtures/shared-objects/group-lanes.ts;
 // lane.rs's own unit tests cover the Rust algorithm.
 import { afterEach, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { PipeController, type PipeEndpoint } from "../node_modules/waffle/proc/pipes.ts";
 import { createGroupLaneModel, groupSharedObjects } from "./fixtures/shared-objects/group-lanes";
 import { sourceChannels, sourcePorts, type SourcePort, type TransferHooks } from "./fixtures/shared-objects/source-runtime";
@@ -80,6 +81,116 @@ function spawnPipes(pid: number, trace: Trace, direct: boolean, parentOpen: Retu
 }
 
 type Runtime = ReturnType<typeof sourcePorts>;
+
+const refRestoreCases: ["add" | "delete", "before" | "after"][] = [
+  ["add", "before"], ["add", "after"], ["delete", "before"], ["delete", "after"],
+];
+
+for (const [operation, when] of refRestoreCases) {
+  test(`listener refs recover through public transfer settlement after ${when} ${operation} failure`, () => {
+    const nativeFailure = new Error("native entry refusal"), refFailure = new Error("restore ref refusal");
+    let intercept = () => {};
+    const made = group({ beforeTransfer: () => { intercept(); throw nativeFailure; } });
+    const spawned = made.spawn(), extra = new made.root.MessageChannel();
+    const controller = new made.root.internal.web.AbortController();
+    extra.port2.addEventListener("message", () => {}, { signal: controller.signal });
+    const refs = made.root.internal.messagePortRefs;
+    const write: { state: object | null } = { state: null };
+    intercept = () => {
+      if (operation === "delete") controller.abort();
+      interruptRefWrite(refs, operation, when, refFailure, write);
+    };
+    const buffer = new ArrayBuffer(32);
+    expect(() => spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2])).toThrow(nativeFailure);
+    expect(() => made.root.receiveMessageOnPort(extra.port1)).toThrow(refFailure);
+    if (!write.state) throw new Error("restore did not attempt its physical ref write");
+    expect(refs.has(write.state)).toBe(operation === "add" && when === "after");
+    if (operation === "add") controller.abort();
+    else extra.port2.addEventListener("message", () => {});
+    made.root.step();
+    expect(extra.port2.hasRef()).toBe(operation === "delete");
+    expect(made.model.control.staged).toBe(0);
+    expect(buffer.byteLength).toBe(32);
+    expect(spawned.child.receiveMessageOnPort(spawned.child.parentPort)).toBeUndefined();
+    extra.port1.postMessage("still owned after rollback");
+    expect(made.root.receiveMessageOnPort(extra.port2)).toEqual({ message: "still owned after rollback" });
+    extra.port1.close(); extra.port2.close(); spawned.port.close(); spawned.child.parentPort.close();
+    expect(refs.size).toBe(0);
+  });
+}
+
+function interruptRefWrite(refs: Set<object>, operation: "add" | "delete", when: "before" | "after", failure: Error, write: { state: object | null }) {
+  const original = refs[operation];
+  Reflect.set(refs, operation, function (state: object) {
+    Reflect.set(refs, operation, original);
+    write.state = state;
+    if (when === "before") throw failure;
+    Reflect.apply(original, refs, [state]);
+    throw failure;
+  });
+}
+
+const reentrantRefCases: ["add" | "delete", "ref" | "unref", "before" | "after"][] = [
+  ["add", "ref", "before"], ["add", "ref", "after"], ["add", "unref", "before"], ["add", "unref", "after"],
+  ["delete", "ref", "before"], ["delete", "ref", "after"], ["delete", "unref", "before"], ["delete", "unref", "after"],
+];
+for (const [operation, choice, when] of reentrantRefCases) {
+  test(`public detached-buffer rollback retains recovery after ${choice} and ${when} ${operation} failure`, () => {
+    let settled = 0;
+    const made = group({ settled: () => { settled++; } }), spawned = made.spawn();
+    const extra = new made.root.MessageChannel(), buffer = new ArrayBuffer(32);
+    const failure = new RangeError("interrupted restore ref write");
+    extra.port2.addEventListener("message", () => {});
+    if (operation === "delete") extra.port2.unref();
+    const control = detachingRefFailure(extra.port2, buffer, operation, choice, when, failure);
+    let caught: unknown;
+    try { spawned.port.postMessage({ buffer, port: extra.port2 }, [buffer, extra.port2]); }
+    catch (error) { caught = error; }
+    finally { control.restore(); }
+    expect(caught).toBe(failure);
+    expect(buffer.detached).toBe(true);
+    if (!control.state) throw new Error("carried port was not staged");
+    expect(made.root.internal.messagePortRefs.has(control.state)).toBe(operation === "add" && when === "after");
+    expect(settled).toBe(0);
+    made.root.step();
+    expect(settled).toBe(1);
+    expect(extra.port2.hasRef()).toBe(choice === "ref");
+    expect(made.model.control.staged).toBe(0);
+    expect(spawned.child.receiveMessageOnPort(spawned.child.parentPort)).toBeUndefined();
+    extra.port1.postMessage("after interrupted recovery");
+    expect(made.root.receiveMessageOnPort(extra.port2)).toEqual({ message: "after interrupted recovery" });
+    extra.port1.close(); extra.port2.close(); spawned.port.close(); spawned.child.parentPort.close();
+    expect(made.root.internal.messagePortRefs.size).toBe(0);
+  });
+}
+
+function detachingRefFailure(port: SourcePort, buffer: ArrayBuffer, operation: "add" | "delete", choice: "ref" | "unref", when: "before" | "after", failure: Error) {
+  const add = Set.prototype.add, del = Set.prototype.delete;
+  const control: { state: object | null; restore(): void } = {
+    state: null,
+    restore() { Set.prototype.add = add; Set.prototype.delete = del; },
+  };
+  const original = operation === "add" ? add : del;
+  function write(this: Set<unknown>, value: unknown): unknown {
+    if (value !== control.state) return Reflect.apply(original, this, [value]);
+    Object.defineProperty(Set.prototype, operation, { value: original, writable: true, configurable: true });
+    port[choice]();
+    if (when === "after") Reflect.apply(original, this, [value]);
+    throw failure;
+  }
+  Object.defineProperty(Set.prototype, "delete", { configurable: true, writable: true, value: function (this: Set<unknown>, value: unknown) {
+    if (!hasPortQueue(value)) return Reflect.apply(del, this, [value]);
+    Set.prototype.delete = del;
+    control.state = value;
+    structuredClone(buffer, { transfer: [buffer] });
+    Object.defineProperty(Set.prototype, operation, { value: write, writable: true, configurable: true });
+    return Reflect.apply(del, this, [value]);
+  } });
+  return control;
+}
+function hasPortQueue(value: unknown): value is object {
+  return value !== null && typeof value === "object" && "queue" in value && "phase" in value && "peer" in value;
+}
 /** `realLoop` gives every guest the runtime's own I/O loop (net.js) in place of a bare waiter. */
 function group(options: { realLoop?: boolean; child?: TransferHooks } & TransferHooks = {}) {
   const model = createGroupLaneModel();
@@ -118,6 +229,14 @@ function isPort(value: unknown): value is SourcePort {
 }
 function payload(bytes: number) {
   return { task: "x".repeat(bytes), filename: "/control/attribute.mjs", flag: true, missing: undefined };
+}
+
+function closeEvent(port: SourcePort): Promise<void> {
+  return new Promise(resolve => {
+    const onClose = () => resolve();
+    port.on("close", onClose);
+    cleanup.add(() => { EventEmitter.prototype.removeListener.call(port, "close", onClose); });
+  });
 }
 
 test("the child's pipe is in relay mode and its relay is never serviced", () => {
@@ -803,16 +922,94 @@ test("a delivery callback queued by a call that then failed is overtaken by the 
   expect(made.root.receiveMessageOnPort(port2)).toBeUndefined();
 });
 
-test("a delivery batch that cannot queue its next step ends, and the loop delivers the rest in order", async () => {
-  const { made, port1, port2, delivered, timers } = selfTransferRefused();
+function captureCallback(callback: () => void, thrown: unknown[]) {
+  try { callback(); } catch (error) { thrown.push(error); }
+}
+
+function refuseDeliveryStep(timers: { setImmediate(callback: () => void): unknown }, schedule: (callback: () => void) => unknown, failureAt: string, failure: Error) {
+  timers.setImmediate = callback => {
+    timers.setImmediate = schedule;
+    if (failureAt === "after enqueue") schedule(callback);
+    throw failure;
+  };
+}
+
+function refuseSelectedPublication(runtime: Runtime, afterPublish: boolean, failure: Error) {
+  const Queue = runtime.internal.require("immediate_queue");
+  if (typeof Queue !== "function") throw new Error("Missing actual immediate queue factory");
+  const pushFront = Queue.prototype.pushFront;
+  Queue.prototype.pushFront = function (value: unknown) {
+    Queue.prototype.pushFront = pushFront;
+    if (afterPublish) Reflect.apply(pushFront, this, [value]);
+    throw failure;
+  };
+}
+
+function guardImmediateCallbacks(runtime: Runtime, thrown: unknown[]) {
+  const timers = runtime.internal.realTimers;
+  const ordinary = timers.setImmediate, selected = timers.queueSelectedTask;
+  timers.setImmediate = callback => ordinary(() => captureCallback(callback, thrown));
+  timers.queueSelectedTask = callback => selected(() => captureCallback(callback, thrown));
+  return () => { timers.setImmediate = ordinary; timers.queueSelectedTask = selected; };
+}
+
+function refuseCloseStep(runtime: Runtime, schedule: (callback: () => void) => unknown, failureAt: string, failure: Error, selected: boolean) {
+  if (selected) { refuseSelectedPublication(runtime, failureAt === "after enqueue", failure); return; }
+  refuseDeliveryStep(runtime.internal.realTimers, schedule, failureAt, failure);
+}
+
+const closeFailures = ["before enqueue", "after enqueue"].flatMap(failureAt => [1, 3].map(afterMessage => ({ failureAt, afterMessage })));
+for (const { failureAt, afterMessage } of closeFailures) {
+  test(`local close retains selected batch and close ownership after failure ${failureAt} following message ${afterMessage}`, async () => {
+    const runtime = sourcePorts();
+    cleanup.add(() => runtime.__fixtureShutdown());
+    const { port1, port2 } = new runtime.MessageChannel();
+    const received: unknown[] = [], thrown: unknown[] = [];
+    let closes = 0, pending = 0;
+    const restore = guardImmediateCallbacks(runtime, thrown);
+    const schedule = runtime.internal.realTimers.setImmediate;
+    const failure = new Error(failureAt);
+    runtime.internal.realTimers.setImmediate = schedule;
+    port2.on("close", () => { closes++; });
+    port2.on("message", value => {
+      received.push(value);
+      if (value === 1) { port2.close(); port1.postMessage("later"); }
+      if (value === afterMessage) refuseCloseStep(runtime, schedule, failureAt, failure, afterMessage === 1);
+    });
+    try {
+      port1.postMessage(1); port1.postMessage(2); port1.postMessage(3);
+      for (let turn = 0; turn < 12; turn++) { await loopTurn(); runtime.step(); }
+      expect(received).toEqual([1, 2, 3]);
+      expect(closes).toBe(1);
+      expect(thrown).toEqual([failure]);
+      pending = runtime.pendingImmediateCallbacks();
+      expect(pending).toBe(0);
+      expect(runtime.queuedImmediateTasks()).toBe(0);
+      expect(runtime.internal.messagePortRefs.size).toBe(0);
+      expect(runtime.__fixtureOwners()).toEqual([]);
+      expect(runtime.step()).toBe(false);
+      expect(runtime.step()).toBe(false);
+    } finally {
+      runtime.internal.realTimers.setImmediate = schedule;
+      runtime.__fixtureShutdown();
+      await loopTurn();
+      pending = runtime.pendingImmediateCallbacks();
+      expect(pending).toBe(0);
+      restore();
+    }
+  });
+}
+
+test("a delivery batch that cannot queue its next step remains owed, and the loop delivers the rest in order", async () => {
+  const { made, port1, port2, delivered } = selfTransferRefused();
   // Errors a delivery callback throws are kept here instead of ending the test process.
-  const queue = timers.setImmediate, thrown: unknown[] = [];
-  timers.setImmediate = callback => queue(() => { try { callback(); } catch (error) { thrown.push(error); } });
-  const microtask = globalThis.queueMicrotask, failure = new RangeError("Maximum call stack size exceeded");
+  const thrown: unknown[] = [];
+  const restore = guardImmediateCallbacks(made.root, thrown);
+  const failure = new RangeError("Maximum call stack size exceeded");
   port2.on("message", value => {
     if (value !== "second") return;
     // The step that would continue the batch after this handler cannot be queued.
-    globalThis.queueMicrotask = () => { globalThis.queueMicrotask = microtask; throw failure; };
+    refuseSelectedPublication(made.root, false, failure);
   });
   try {
     port1.postMessage("first"); port1.postMessage("second"); port1.postMessage("third"); port1.postMessage("fourth");
@@ -826,7 +1023,7 @@ test("a delivery batch that cannot queue its next step ends, and the loop delive
     for (let turn = 0; turn < 4; turn++) await loopTurn();
     expect(delivered).toEqual(["first", "second", "third", "fourth"]);
     expect(made.root.receiveMessageOnPort(port2)).toBeUndefined();
-  } finally { globalThis.queueMicrotask = microtask; timers.setImmediate = queue; }
+  } finally { restore(); }
 });
 
 /**
@@ -1108,9 +1305,9 @@ test("a carried port is restored and sent on before its first sender ever settle
 });
 
 /**
- * The runtime's real loop (net.js `pumpIo`) drops a waiter whose step throws and hands the error
- * to its `fail`. The worker waiter pumps every control channel, lane and the lane housekeeping of
- * its thread, so it has to come back, and the error has to leave `pumpIo` as it was thrown: the
+ * The runtime's real loop (net.js `pumpIo`) hands a failing waiter's error to its `fail`.
+ * The worker waiter pumps every control channel, lane and the lane housekeeping of its thread,
+ * so it has to stay registered, and the error has to leave `pumpIo` as it was thrown: the
  * engine driver gives whatever `pumpIo` throws to the thread's uncaught-error handling.
  */
 const loopCases = (["root", "worker"] as const).flatMap(thread => (["before", "after"] as const).map(when => ({ thread, when })));
@@ -1121,9 +1318,10 @@ for (const { thread, when } of loopCases) {
     const [receiver, sender, listening, tag] = thread === "root" ? [root, child.parentPort, port, 1] : [child, port, child.parentPort, pid];
     const got: unknown[] = [];
     let closed = false;
-    listening.on("message", value => got.push(value));
+    const delivered = Promise.withResolvers<void>();
+    listening.on("message", value => { got.push(value); if (got.length === 2) delivered.resolve(); });
     listening.on("close", () => { closed = true; });
-    const turn = () => new Promise(resolve => setTimeout(resolve, 5));
+    const senderClosed = closeEvent(sender), receiverClosed = closeEvent(listening);
     // A pass that made progress is followed by another, as in the engine's loop. No test
     // below calls a synchronous receive: that would read the lane without the loop.
     const passes = () => { for (let pass = 0; pass < 6 && receiver.pumpIo(); pass++); };
@@ -1140,7 +1338,7 @@ for (const { thread, when } of loopCases) {
     // The frames the core kept (or never read) arrive through the loop, with what came after.
     sender.postMessage("second");
     passes();
-    await turn();
+    await delivered.promise;
     expect(got).toEqual(["first", "second"]);
     expect(swept(false)).toBeGreaterThan(before);
     // A death anywhere in the group still gets its full sweep on the root, from the loop.
@@ -1152,10 +1350,11 @@ for (const { thread, when } of loopCases) {
     }
     // And a later closure reaches the port through the loop alone.
     sender.close();
-    await turn();
+    await senderClosed;
     passes();
-    await turn();
+    await receiverClosed;
     expect(closed).toBe(true);
+    expect(got).toEqual(["first", "second"]);
   });
 }
 
@@ -1165,13 +1364,16 @@ for (const thread of ["root", "worker"] as const) {
     const { child, port, pid } = spawn();
     const [receiver, sender, listening, tag] = thread === "root" ? [root, child.parentPort, port, 1] : [child, port, child.parentPort, pid];
     const got: unknown[] = [];
-    listening.on("message", value => got.push(value));
-    const turn = () => new Promise(resolve => setTimeout(resolve, 5));
+    const delivered = Promise.withResolvers<void>();
+    listening.on("message", value => { got.push(value); if (got.length === 2) delivered.resolve(); });
+    const senderClosed = closeEvent(sender), receiverClosed = closeEvent(listening);
     const passes = () => { for (let pass = 0; pass < 6 && receiver.pumpIo(); pass++); };
     const pending = Reflect.get(receiver.internal, "ioPending") as () => number;
     const before = pending();
     // From here on, registering a waiter fails: the engine has no memory for one more entry.
     const add = Set.prototype.add as (this: Set<unknown>, value: unknown) => Set<unknown>;
+    const restoreAdd = () => { Set.prototype.add = add; };
+    cleanup.add(restoreAdd);
     let refused = 0;
     Set.prototype.add = function (this: Set<unknown>, value: unknown) {
       const waiter = typeof value === "object" && value !== null && "step" in value && "fail" in value;
@@ -1194,19 +1396,20 @@ for (const thread of ["root", "worker"] as const) {
       const sweeps = swept();
       sender.postMessage("second");
       passes();
-      await turn();
+      await delivered.promise;
       expect(got).toEqual(["first", "second"]);
       expect(swept()).toBeGreaterThan(sweeps);
       // And a later closure reaches the port through the same loop.
       let closed = false;
       listening.on("close", () => { closed = true; });
       sender.close();
-      await turn();
+      await senderClosed;
       passes();
-      await turn();
+      await receiverClosed;
       expect(closed).toBe(true);
+      expect(got).toEqual(["first", "second"]);
       expect(refused).toBe(0);
-    } finally { Set.prototype.add = add; }
+    } finally { restoreAdd(); cleanup.delete(restoreAdd); }
   });
 }
 
@@ -1215,17 +1418,19 @@ test("one lane that fails to drain does not hold back the thread's other lanes a
   const first = spawn();
   const second = spawn();
   const got: string[] = [];
-  first.port.on("message", value => got.push(`first ${value}`));
-  second.port.on("message", value => got.push(`second ${value}`));
+  const otherDelivered = Promise.withResolvers<void>();
+  const failedDelivered = Promise.withResolvers<void>();
+  first.port.on("message", value => { got.push(`first ${value}`); failedDelivered.resolve(); });
+  second.port.on("message", value => { got.push(`second ${value}`); otherDelivered.resolve(); });
   first.child.parentPort.postMessage("a");
   second.child.parentPort.postMessage("b");
   // The first lane with frames fails after it read them. The same pass still serves the rest.
   model.control.fault = { native: "laneDrain", when: "after" };
   expect(() => root.pumpIo()).toThrow("core data allocation failed");
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await otherDelivered.promise;
   expect(got).toHaveLength(1);
   for (let pass = 0; pass < 4 && root.pumpIo(); pass++);
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await failedDelivered.promise;
   expect(got.toSorted()).toEqual(["first a", "second b"]);
 });
 
@@ -1233,14 +1438,18 @@ test("a closed peer's committed messages arrive in order and then the port close
   const { spawn } = group();
   const { child, port } = spawn();
   let closed = false;
-  child.parentPort.on("close", () => { closed = true; });
+  const close = new Promise<void>(resolve => {
+    const onClose = () => { closed = true; resolve(); };
+    child.parentPort.on("close", onClose);
+    cleanup.add(() => { EventEmitter.prototype.removeListener.call(child.parentPort, "close", onClose); });
+  });
   for (const value of [1, 2, 3]) port.postMessage(value);
   port.close();
   await new Promise(resolve => setImmediate(resolve));
   const got: unknown[] = [];
   for (let item = child.receiveMessageOnPort(child.parentPort); item; item = child.receiveMessageOnPort(child.parentPort)) got.push(item.message);
   expect(got).toEqual([1, 2, 3]);
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await close;
   expect(closed).toBe(true);
 });
 
@@ -1250,12 +1459,13 @@ test("ports carried in unread frames close when the reader closes", async () => 
   const carried = new root.MessageChannel();
   let closed = false;
   carried.port1.on("close", () => { closed = true; });
+  const close = closeEvent(carried.port1);
   port.postMessage({ port: carried.port2 }, [carried.port2]);
   child.parentPort.close();
   // The carrying frame is never parsed: the ledger closes the carried end and its peer sees it.
   root.pump();
   expect(root.receiveMessageOnPort(carried.port1)).toBeUndefined();
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await close;
   expect(closed).toBe(true);
   port.postMessage("discarded after the reader closed");
 });
@@ -1265,9 +1475,10 @@ test("a worker exit closes its ends and the parent's port sees the lane end", as
   const { port, cell } = spawn();
   let closed = false;
   port.on("close", () => { closed = true; });
+  const close = closeEvent(port);
   rootLanes.exited(cell);
   root.pump();
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await close;
   expect(closed).toBe(true);
 });
 
@@ -1283,6 +1494,7 @@ async function carriedToIdlePeer(finish: (receiver: ReturnType<ReturnType<typeof
   const peer = carried(holder.child.workerData);
   let closed = false;
   peer.on("close", () => { closed = true; });
+  const close = closeEvent(peer);
   // The root learns the holder's bind and the carried port's move.
   root.step();
   receiver.port.postMessage({ port: pair.port2 }, [pair.port2]);
@@ -1296,7 +1508,7 @@ async function carriedToIdlePeer(finish: (receiver: ReturnType<ReturnType<typeof
   expect(root.__fixtureOwners().length).toBeLessThan(records);
   // The frame on its pipe is what wakes the idle holder; its next step closes the port.
   holder.child.step();
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await close;
   expect(closed).toBe(true);
 }
 

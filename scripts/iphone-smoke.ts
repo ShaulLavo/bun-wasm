@@ -1,6 +1,6 @@
 import { smokeOptions } from "./iphone-smoke/options";
 import { smoke } from "./iphone-smoke/run";
-import { smokeCases } from "./iphone-smoke/model";
+import { smokeCases } from "./iphone-smoke/cases";
 import { boxId } from "./goals-matrix/catalog";
 
 if (import.meta.main) {

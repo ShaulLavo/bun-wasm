@@ -1,5 +1,5 @@
 import { spawnSync, type SpawnOptions, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isatty } from "node:tty";
 import { createContext, runInContext } from "node:vm";
@@ -50,9 +50,8 @@ export function runOwned(command: string, args: string[], timeout = 4000) {
 }
 
 export function sourceModuleTools(scratch: string) {
-  const root = resolve(import.meta.dirname, "../..");
-  const resolver = readFileSync(join(root, "crates/bunwasm-runtime/src/resolve.rs"), "utf8");
-  const modules = readFileSync(join(root, "crates/bunwasm-runtime/src/modules.rs"), "utf8");
+  const resolver = readFileSync(join(sourceRoot, "crates/bunwasm-runtime/src/resolve.rs"), "utf8");
+  const modules = readFileSync(join(sourceRoot, "crates/bunwasm-runtime/src/modules.rs"), "utf8");
   const tables = resolver.slice(resolver.indexOf("pub const NODE_BUILTINS:"), resolver.indexOf("/// Extensions probed"));
   const builtin = resolver.slice(resolver.indexOf("pub fn builtin_name("), resolver.indexOf("/// Lexically normalize"));
   const wrapper = modules.slice(modules.indexOf("fn is_plain_identifier("), modules.indexOf("/// ESM source for a module file:"));
@@ -67,7 +66,7 @@ export function sourceModuleTools(scratch: string) {
     }
     print!("{}", wrapper_source(&args[1..]));
   }\n`);
-  const compile = runOwned("rustc", ["--crate-name", "module_tools", "--cfg", 'feature="engine-split"', source, "-o", binary]);
+  const compile = runOwned("rustc", ["--crate-name", "module_tools", "--cfg", 'feature="engine-split"', source, "-o", binary], SOURCE_BUILD_HANG_CAP_MS);
   if (compile.status !== 0) throw new Error(`Compile production module helpers: ${compile.stderr}`, { cause: compile.error });
   return (mode: "builtin" | "wrapper", names: string[]) => {
     const args: string[] = [mode];
@@ -77,25 +76,43 @@ export function sourceModuleTools(scratch: string) {
   };
 }
 
-export function sourceRuntime(scratch: string) {
-  const root = resolve(import.meta.dirname, "../..");
-  const directory = join(root, "crates/bunwasm-runtime/src/js");
+/** Hang cap for the one-time runtime build; it catches a stuck build, not a slow one. */
+export const SOURCE_BUILD_HANG_CAP_MS = 180_000;
+
+const sourceRoot = resolve(import.meta.dirname, "../..");
+const polyfillDirectory = join(sourceRoot, "crates/bunwasm-runtime/src/js");
+const emittedPolyfills = new Map<string, string>();
+
+/**
+ * Emits every TypeScript runtime polyfill with one batched transpiler process and caches the result
+ * for the whole test process. Call it from `beforeAll` with `SOURCE_BUILD_HANG_CAP_MS` so the build
+ * does not count against a single test's time limit.
+ */
+export function prepareSourceRuntime(scratch: string) {
+  if (emittedPolyfills.size > 0) return;
+  const names = readdirSync(polyfillDirectory)
+    .filter(file => file.endsWith(".ts") && !file.endsWith(".d.ts"))
+    .map(file => file.slice(0, -3));
+  const pairs = names.flatMap(name => [join(polyfillDirectory, `${name}.ts`), join(scratch, `${name}.js`)]);
+  const script: string[] = [join(sourceRoot, "scripts/transpile-runtime.ts"), "--batch"];
+  const result = runOwned("node", script.concat(pairs), SOURCE_BUILD_HANG_CAP_MS);
+  if (result.status !== 0) throw new Error(`Emit runtime polyfills: ${result.stderr}`, { cause: result.error });
+  for (const name of names) emittedPolyfills.set(name, readFileSync(join(scratch, `${name}.js`), "utf8"));
+}
+
+export function sourceRuntime(scratch: string, options: {
+  processIdentity?(): [number, number];
+  hostSignal?(signal: number, mode: number): number;
+} = {}) {
+  prepareSourceRuntime(scratch);
   const emitted = new Map<string, string>();
   const context = createContext({ queueMicrotask, setTimeout, clearTimeout, setInterval, clearInterval, TextEncoder, TextDecoder });
   function loadPolyfill(name: string) {
-    const typed = join(directory, `${name}.ts`);
-    let source = emitted.get(name);
-    if (source === undefined && existsSync(typed)) {
-      const output = join(scratch, `${name}.js`);
-      const result = runOwned("node", [join(root, "scripts/transpile-runtime.ts"), typed, output]);
-      if (result.status !== 0) throw new Error(`Emit ${name}: ${result.stderr}`, { cause: result.error });
-      source = readFileSync(output, "utf8");
-    }
-    source ??= readFileSync(join(directory, `${name}.js`), "utf8");
+    const source = emittedPolyfills.get(name) ?? readFileSync(join(polyfillDirectory, `${name}.js`), "utf8");
     emitted.set(name, source);
     return runInContext(source, context, { filename: `bun-wasm:${name}` });
   }
-  const resolver = readFileSync(join(root, "crates/bunwasm-runtime/src/resolve.rs"), "utf8");
+  const resolver = readFileSync(join(sourceRoot, "crates/bunwasm-runtime/src/resolve.rs"), "utf8");
   const list = resolver.match(/pub const NODE_BUILTINS: &\[&str\] = &\[([^\]]+)\]/)?.[1];
   if (!list) throw new Error("Missing production builtin resolver table");
   const builtins = new Set(Array.from(list.matchAll(/"([^"]+)"/g), match => match[1]));
@@ -111,9 +128,9 @@ export function sourceRuntime(scratch: string) {
     cwd: () => "/",
     env: () => ({}),
     argv: () => ["bun", "/entry.ts"],
-    execArgv: () => [],
+    execArgv: () => [], processIdentity: options.processIdentity ?? (() => [42, 7]),
     execPath: () => "/bun",
-    hostSignal: () => 0,
+    hostSignal: options.hostSignal ?? (() => 0),
     hostCaps: {},
     setAsyncContext: (_value: unknown) => {},
     isatty,

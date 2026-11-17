@@ -27,7 +27,7 @@ const { signals } = state;
 wake = state.wake;
 const descriptors = new DescriptorTable();
 const unused = (): never => { throw new Error("unexpected service operation"); };
-const abi = new ProcessABI({ memory: new WebAssembly.Memory({ initial: 1 }), descriptors, fs: new MemFS(), pid: 1, signals, wake,
+const abi = new ProcessABI({ memory: new WebAssembly.Memory({ initial: 1 }), descriptors, fs: new MemFS(), pid: 1, processIdentity: state.processIdentity, signals, wake,
   service: { waitJob: unused, jobEmpty: unused, childExited: unused, startStatus: unused, spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused, cwd: unused, jobCleanupReady: unused } });
 try {
   abi.imports.poll!(0, 0, -1, 0);

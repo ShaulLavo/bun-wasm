@@ -97,7 +97,11 @@
     return internal.displayName ? internal.displayName(file, typeof site.isEval === "function" && site.isEval()) : file;
   }
 
-  function formatCallSite(site, keepIdentity = false) {
+  function syntaxCallSite(site, name, file) {
+    return !isV8 && site.getFunction() === undefined && !name && file;
+  }
+
+  function formatCallSite(site, keepIdentity = false, anonymousFunction = false) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
     const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
     const generated = native.engine === "host" && native.preparedSourceName(rawFile) !== undefined;
@@ -107,7 +111,7 @@
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
     // A syntax error's location: no function, just file and any known position.
-    if (!isV8 && site.getFunction() === undefined && !name && file) return formatPosition(file, line, col);
+    if (!anonymousFunction && syntaxCallSite(site, name, file)) return formatPosition(file, line, col);
     const hasCompletePosition = typeof line === "number" && typeof col === "number";
     if (hasCompletePosition && file && !internal.mappedCallSites?.has(site)) {
       const mapped = native.mapPosition(generated ? rawFile : file, line, col);
@@ -117,7 +121,7 @@
     const shown = !keepIdentity && hotName ? internal.hotDisplayName?.(file) || file : file;
     // Module and script top-level code prints bare, like JSC.
     const topLevel = isV8 ? !name && v8TopLevel(site) : isTopLevel(site.getFunction());
-    if ((!name || name === "__bunwasm_cjs__") && file && typeof line === "number" && (topLevel || name === "__bunwasm_cjs__")) return formatPosition(shown, line, col);
+    if (!anonymousFunction && (!name || name === "__bunwasm_cjs__") && file && typeof line === "number" && (topLevel || name === "__bunwasm_cjs__")) return formatPosition(shown, line, col);
     const label = name || "<anonymous>";
     if (site.isNative()) return `${label} (native)`;
     if (file === null || file === undefined) {
@@ -243,7 +247,14 @@
   let timerSeq = 1;
   // Pending timers sorted by (when, seq).
   let timerQueue = [];
-  const immediates = [];
+  let immediates = null;
+  function immediateQueue() {
+    if (!immediates) {
+      const ImmediateQueue = internal.require("immediate_queue");
+      immediates = new ImmediateQueue();
+    }
+    return immediates;
+  }
   let immediateBatchRemaining = null;
   let refedTimers = 0;
 
@@ -403,9 +414,27 @@
   function realSetImmediate(callback, ...args) {
     checkCallback(callback);
     const immediate = new Immediate(callback, args);
-    immediates.push(immediate);
+    immediateQueue().push(immediate);
     if (native.wake) native.wake(0);
     return immediate;
+  }
+
+  function queueSelectedTask(callback) {
+    checkCallback(callback);
+    const immediate = new Immediate(callback, []);
+    const queue = immediateQueue();
+    const previousLength = queue.length;
+    let reserved = false;
+    try {
+      queue.pushFront(immediate);
+      if (immediateBatchRemaining !== null) { immediateBatchRemaining++; reserved = true; }
+      if (native.wake) native.wake(0);
+      return immediate;
+    } catch (error) {
+      immediate._active = false;
+      if (!reserved && immediateBatchRemaining !== null && queue.length > previousLength) immediateBatchRemaining++;
+      throw error;
+    }
   }
 
   function clearImmediate(immediate) {
@@ -438,8 +467,8 @@
     const workerProgress = internal.workerPump && internal.workerPump();
     // Immediates first: like Bun, setImmediate callbacks queued by the
     // main script run before even a due setTimeout(0).
-    if (immediateBatchRemaining === null) immediateBatchRemaining = immediates.length;
-    while (immediateBatchRemaining > 0 && immediates.length > 0) {
+    if (immediateBatchRemaining === null) immediateBatchRemaining = immediates?.length || 0;
+    while (immediateBatchRemaining > 0 && immediates && immediates.length > 0) {
       immediateBatchRemaining--;
       const immediate = immediates.shift();
       if (!immediate._active) continue;
@@ -453,7 +482,7 @@
       runOneTimer(now);
       return 0;
     }
-    if (immediates.length > 0 || workerProgress || internal.pendingIo > 0) return 0;
+    if (immediates?.length || workerProgress || internal.pendingIo > 0) return 0;
     if (refedTimers <= 0 && !internal.messagePortRefs.size) return -1;
     // Unref'd timers at the front don't keep us alive but still fire if a
     // ref'd one is pending later.
@@ -463,7 +492,7 @@
   internal.messagePortRefs = new Set();
   internal.loopState = () => ({
     refedTimers,
-    immediates: immediates.length,
+    immediates: immediates?.length || 0,
     ticks: tickQueue.length,
     pendingIo: internal.pendingIo,
     messagePortRefs: internal.messagePortRefs.size,
@@ -521,6 +550,7 @@
     setTimeout: realSetTimeout,
     clearTimeout: realClearTimeout,
     setImmediate: realSetImmediate,
+    queueSelectedTask,
     clearImmediate: realClearImmediate,
   };
   internal.timers = { setTimeout, setInterval, clearTimeout, clearInterval: clearTimeout, setImmediate, clearImmediate, Timeout, Immediate };
@@ -924,7 +954,7 @@
     if (listenerCount("beforeExit") === 0) return false;
     const process = globalThis.process;
     process.emit("beforeExit", process.exitCode || 0);
-    return refedTimers > 0 || immediates.length > 0 || tickQueue.length > 0 || internal.ioPending() > 0;
+    return refedTimers > 0 || Boolean(immediates?.length) || tickQueue.length > 0 || internal.ioPending() > 0;
   };
 
   internal.beforeExit = function beforeExit() {

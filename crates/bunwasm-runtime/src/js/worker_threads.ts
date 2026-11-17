@@ -470,6 +470,7 @@
     /** `backlog`: the last drain stopped at its quota. `terminal`: the writing end is gone and drained. */
     group: { io: BunWasm.GroupSharedLane; backlog: boolean; terminal: boolean } | null;
     phase: "open" | "closing" | "closed";
+    /** Owns selected messages across failed scheduling, including after local close replaces queue. */
     batch: DeliveryBatch | null;
     started: boolean;
     /**
@@ -494,10 +495,11 @@
    * - `gathering`: the codec is walking the message. The only phase that runs user code.
    * - `staged`: the frame and its ports are being staged. No user code from here on.
    * - `committing`: the next thing is the native call, or it has been made.
+   * - `rolling-back`: an active rollback owns this post's recovery obligation.
    * - `abandoned`: given up; an interrupted `rollBack` is finished later.
    */
   type GroupPost = {
-    phase: "gathering" | "staged" | "committing" | "abandoned";
+    phase: "gathering" | "staged" | "committing" | "rolling-back" | "abandoned";
     readonly state: PortState; readonly io: BunWasm.GroupSharedLane; readonly peer: string;
     /** The sequence this post took, once it advanced `state.sent`; -1 before. */
     sequence: number;
@@ -520,12 +522,17 @@
   // the post leaves the registry last.
   /** Undoes a post that did not commit: nothing of it had moved. */
   function rollBack(post: GroupPost) {
-    post.phase = "abandoned";
-    post.io.abort();
-    for (const port of post.ports) port.restore();
-    if (post.sequence >= 0) post.state.sent = post.sequence;
-    post.plan?.settle(false);
-    internal.native.transferSettled?.();
+    if (post.phase === "rolling-back") return;
+    post.phase = "rolling-back";
+    try {
+      post.io.abort();
+      for (const port of post.ports) port.restore();
+      if (post.sequence >= 0) post.state.sent = post.sequence;
+      post.plan?.settle(false);
+      internal.native.transferSettled?.();
+    } finally {
+      post.phase = "abandoned";
+    }
     posts.delete(post);
   }
   /** What a committed post still owes others. A record or hint sent twice changes nothing. */
@@ -604,7 +611,13 @@
   }
   class MessagePort extends EventTarget {
     #state: PortState | null;
-    #webListeners = new Map<EventListenerOrEventListenerObject, Set<boolean>>();
+    #refMode: "automatic" | "explicit-ref" | "explicit-unref" = "automatic";
+    #refReconciling = false;
+    #refDirty = false;
+    #forwarder: EventListener | null = null;
+    #messageBridge: EventListener = event => {
+      if (event instanceof MessageEvent) this.emit("message", messagePayloads.has(event) ? messagePayloads.get(event) : event.data);
+    };
     #onmessage: ((event: MessageEvent) => unknown) | null = null;
     #attachmentWait: (() => void) | null = null;
     onmessageerror: ((event: MessageEvent) => unknown) | null = null;
@@ -620,9 +633,8 @@
       if (value.groupLane && !value.closed) this.#adoptGroupLane(value.groupLane, value.version);
       localPorts.set(value.id, this);
       EventEmitter.call(this);
-      super.addEventListener("message", event => {
-        if (event instanceof MessageEvent) this.emit("message", messagePayloads.has(event) ? messagePayloads.get(event) : event.data);
-      });
+      internal.eventTargets.observe(this, type => { if (type === "message") this.#messageChanged(); });
+      super.addEventListener("message", this.#messageBridge);
       super.addEventListener("messageerror", event => { if (event instanceof MessageEvent) this.emit("messageerror", event.data); });
       super.addEventListener("close", () => this.emit("close"));
     }
@@ -844,7 +856,7 @@
         // before that call and undone by `restore` when it refuses. The ledger is not touched
         // here; the native moves the end.
         stage() {
-          const held = state.group, referenced = internal.messagePortRefs.has(state);
+          const held = state.group;
           return {
             detach() {
               internal.messagePortRefs.delete(state);
@@ -854,7 +866,7 @@
             // queued, and the wait for an attachment that staging cancelled.
             restore() {
               value.#state = state; state.group = held; localPorts.set(state.id, value);
-              if (referenced) internal.messagePortRefs.add(state);
+              value.#reconcileRef();
               if (state.phase === "open") value.#accept();
               else value.#schedule();
             },
@@ -871,7 +883,10 @@
         // The head frame cannot decode in this synchronous turn. It stays pending, whole, and delivers once this thread's event loop runs.
         throw Object.assign(new Error("receiveMessageOnPort: the next message needs a shared backing that is not attached in this thread; it will be delivered once this thread's event loop runs"), { code: "ERR_WORKER_MESSAGE_BACKING_NOT_ATTACHED" });
       }
-      const message = messagePacket(state.queue.shift()).data;
+      const queue = state.queue, batch = state.batch;
+      const packet = queue.shift();
+      if (batch && batch.queue === queue && batch.remaining > 0) batch.remaining--;
+      const message = messagePacket(packet).data;
       port.#maybeClose();
       return { message };
     }
@@ -962,12 +977,16 @@
      */
     static #retry(port: MessagePort): boolean {
       const state = port.#state;
-      if (state?.phase !== "open") return false;
-      try {
-        if (state.pending.size && !port.#attachmentWait) port.#accept();
-        else port.#schedule();
-      } catch { /* still owed */ }
-      return state.started && !state.scheduled && !state.batch && state.queue.length > 0;
+      if (!state || state.phase === "closed") return false;
+      try { port.#retryDelivery(state); } catch { /* still owed */ }
+      return !state.scheduled && Boolean(state.batch || state.phase === "closing" || state.started && state.queue.length);
+    }
+    #retryDelivery(state: PortState) {
+      if (state.phase === "open" && state.pending.size && !this.#attachmentWait) this.#accept();
+      if (state.scheduled) return;
+      if (state.batch) { this.#continueBatch(state, state.batch); return; }
+      if (state.phase === "closing") { this.#scheduleLocalClose(state); return; }
+      this.#schedule();
     }
     #maybeClose() {
       const state = this.#state;
@@ -984,25 +1003,69 @@
     get onmessage() { return this.#onmessage; }
     set onmessage(listener: ((event: MessageEvent) => unknown) | null) {
       this.#onmessage = typeof listener === "function" ? listener : null;
-      if (this.#onmessage) { this.start(); this.ref(); }
-      else if (!this.#hasMessageListeners()) this.unref();
+      if (this.#onmessage) this.start();
+      else settlePosts();
+      this.#refMode = this.#onmessage ? "explicit-ref" : "explicit-unref";
+      this.#reconcileRef();
     }
     addEventListener(type: string, listener: EventListenerOrEventListenerObject | null, options?: AddEventListenerOptions | boolean) {
       super.addEventListener(type, listener, options);
-      if (type !== "message" || !listener) return;
-      const captures = this.#webListeners.get(listener) || new Set<boolean>();
-      captures.add(typeof options === "boolean" ? options : Boolean(options?.capture));
-      this.#webListeners.set(listener, captures); this.start(); this.ref();
     }
     removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null, options?: EventListenerOptions | boolean) {
       super.removeEventListener(type, listener, options);
-      if (type !== "message" || !listener) return;
-      const captures = this.#webListeners.get(listener);
-      captures?.delete(typeof options === "boolean" ? options : Boolean(options?.capture));
-      if (!captures?.size) this.#webListeners.delete(listener);
-      if (!this.#hasMessageListeners()) this.unref();
     }
-    #hasMessageListeners() { return this.#onmessage !== null || this.#webListeners.size > 0 || this.listenerCount("message") > 0; }
+    #hasMessageListeners() {
+      if (this.#onmessage !== null || EventEmitter.prototype.listenerCount.call(this, "message") > 0) return true;
+      return internal.eventTargets.listeners(this, "message").some(listener => listener !== this.#messageBridge && listener !== this.#forwarder);
+    }
+    #messageChanged() {
+      const state = this.#state;
+      if (!state || state.phase !== "open") return;
+      if (this.#hasMessageListeners()) { state.started = true; this.#schedule(); }
+      this.#reconcileRef();
+    }
+    #wantsRef(state: PortState) {
+      if (this.#state !== state || state.phase !== "open") return false;
+      return this.#refMode === "explicit-ref" || this.#refMode === "automatic" && this.#hasMessageListeners();
+    }
+    #reconcileRef() {
+      if (this.#refReconciling) { this.#refDirty = true; return; }
+      this.#refReconciling = true;
+      try { this.#writeRef(); }
+      finally { this.#refReconciling = false; }
+    }
+    #writeRef() {
+      do {
+        this.#refDirty = false;
+        const state = this.#state;
+        if (!state) return;
+        const wanted = this.#wantsRef(state);
+        if (wanted) internal.messagePortRefs.add(state);
+        else internal.messagePortRefs.delete(state);
+        if (this.#state !== state) internal.messagePortRefs.delete(state);
+        this.#refDirty = this.#state !== state || wanted !== this.#wantsRef(state);
+      } while (this.#refDirty);
+    }
+    #registerForwarder(type: "message" | "messageerror", listener: EventListener) {
+      if (type === "messageerror") { super.addEventListener(type, listener); return; }
+      const list = internal.eventTargets.listeners(this, "message");
+      if (this.#forwarder && list.includes(this.#forwarder)) throw new TypeError("MessagePort already has a worker forwarder");
+      this.#forwarder = listener;
+      try { super.addEventListener(type, listener); }
+      catch (error) {
+        if (!internal.eventTargets.listeners(this, type).includes(listener)) this.#forwarder = null;
+        throw error;
+      }
+    }
+    #mutateListeners(event: string | symbol | undefined, mutate: () => unknown) {
+      try { mutate(); }
+      catch (error) {
+        try { if (event === undefined || event === "message") this.#messageChanged(); }
+        catch { /* Preserve the emitter's original failure after a committed mutation. */ }
+        throw error;
+      }
+      if (event === undefined || event === "message") this.#messageChanged();
+    }
     postMessage(value: unknown, transfer?: unknown) {
       if (!arguments.length) throw Object.assign(new TypeError("Not enough arguments to MessagePort.postMessage"), { code: "ERR_MISSING_ARGS" });
       settlePosts();
@@ -1049,9 +1112,7 @@
     #schedule() {
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.started || state.scheduled || state.batch || !state.queue.length) return;
-      const turn = ++state.turn;
-      internal.realTimers.setImmediate(() => { if (state.turn === turn) this.#deliver(state); });
-      state.scheduled = turn;
+      this.#scheduleStep(state, () => this.#deliver(state));
     }
     #deliver(state: PortState) {
       state.scheduled = 0;
@@ -1080,25 +1141,36 @@
       if (this.#state !== state) { this.#stopBatch(state); return; }
       if (!batch.remaining || !batch.queue.length) {
         state.batch = null;
-        if (state.phase === "closing") { internal.realTimers.setImmediate(() => this.#finishLocalClose(state)); return; }
+        if (state.phase === "closing") { this.#scheduleLocalClose(state); return; }
         this.#schedule(); this.#maybeClose(); return;
       }
+      this.#scheduleStep(state, () => this.#deliverBatch(state, batch), internal.realTimers.queueSelectedTask);
+    }
+    #scheduleStep(state: PortState, callback: () => void, enqueue: (callback: () => void) => unknown = internal.realTimers.setImmediate) {
       const turn = ++state.turn;
-      try { queueMicrotask(() => { if (state.turn === turn) this.#deliverBatch(state, batch); }); }
+      const deliver = () => {
+        if (this.#state !== state || state.turn !== turn) return;
+        state.scheduled = 0;
+        callback();
+      };
+      try { enqueue(deliver); }
       catch (error) {
-        // A batch with no continuation would hold the queue for ever. It ends here, a callback
-        // the failed call may still have queued is overtaken, and the rest is owed as above.
-        state.turn++; state.batch = null;
+        // Keep the selected batch or local close owed. A failed call may have queued its
+        // callback: invalidate that turn so only the pump's next attempt can advance it.
+        state.turn++; state.scheduled = 0;
         throw error;
       }
       state.scheduled = turn;
+    }
+    #scheduleLocalClose(state: PortState) {
+      this.#scheduleStep(state, () => this.#finishLocalClose(state));
     }
     // Each of these first settles earlier posts: a post that was refused beyond its own cleanup
     // has left this port detached or counted, and is rolled back before the port is used.
     start() { settlePosts(); if (this.#state) { this.#state.started = true; this.#schedule(); } }
     // A port's state is in the keepalive set exactly while the port is referenced.
-    ref() { settlePosts(); if (this.#state?.phase === "open") internal.messagePortRefs.add(this.#state); }
-    unref() { settlePosts(); if (this.#state) internal.messagePortRefs.delete(this.#state); }
+    ref() { settlePosts(); this.#refMode = "explicit-ref"; this.#reconcileRef(); }
+    unref() { settlePosts(); this.#refMode = "explicit-unref"; this.#reconcileRef(); }
     hasRef() { settlePosts(); return this.#state ? internal.messagePortRefs.has(this.#state) : false; }
     close(callback?: () => void) {
       settlePosts();
@@ -1117,7 +1189,7 @@
       for (const graph of state.pending.values()) discardPendingTransfers(graph);
       MessagePort.#closeQueuedPorts(state.queue);
       state.queue = []; state.pending.clear(); this.unref();
-      if (!state.batch) internal.realTimers.setImmediate(() => this.#finishLocalClose(state));
+      if (!state.batch) this.#scheduleLocalClose(state);
     }
     static #closeQueuedPorts(queue: unknown[]) {
       for (const value of queue) {
@@ -1148,25 +1220,22 @@
       this.dispatchEvent(new Event("close"));
     }
     on(event: string | symbol, listener: BunWasm.EventListener) {
-      EventEmitter.prototype.on.call(this, event, listener);
-      if (event === "message") { this.start(); this.ref(); }
+      this.#mutateListeners(event, () => EventEmitter.prototype.on.call(this, event, listener));
       return this;
     }
     addListener(event: string | symbol, listener: BunWasm.EventListener) { return this.on(event, listener); }
     once(event: string | symbol, listener: BunWasm.EventListener) {
-      EventEmitter.prototype.once.call(this, event, listener);
+      this.#mutateListeners(event, () => EventEmitter.prototype.once.call(this, event, listener));
       return this;
     }
     off(event: string | symbol, listener: BunWasm.EventListener) { return this.removeListener(event, listener); }
     removeListener(event: string | symbol, listener: BunWasm.EventListener) {
-      EventEmitter.prototype.removeListener.call(this, event, listener);
-      if (event === "message" && !this.#hasMessageListeners()) this.unref();
+      this.#mutateListeners(event, () => EventEmitter.prototype.removeListener.call(this, event, listener));
       return this;
     }
     removeAllListeners(event?: string | symbol) {
-      if (arguments.length) EventEmitter.prototype.removeAllListeners.call(this, event);
-      else EventEmitter.prototype.removeAllListeners.call(this);
-      if (!this.#hasMessageListeners()) this.unref();
+      const supplied = arguments.length > 0;
+      this.#mutateListeners(event, () => supplied ? EventEmitter.prototype.removeAllListeners.call(this, event) : EventEmitter.prototype.removeAllListeners.call(this));
       return this;
     }
     emit(event: string | symbol, ...args: unknown[]) { return EventEmitter.prototype.emit.call(this, event, ...args); }
@@ -1177,18 +1246,18 @@
     getMaxListeners() { return EventEmitter.prototype.getMaxListeners.call(this); }
     setMaxListeners(count: number) { EventEmitter.prototype.setMaxListeners.call(this, count); return this; }
     prependListener(event: string | symbol, listener: BunWasm.EventListener) {
-      EventEmitter.prototype.prependListener.call(this, event, listener);
-      if (event === "message") { this.start(); this.ref(); }
+      this.#mutateListeners(event, () => EventEmitter.prototype.prependListener.call(this, event, listener));
       return this;
     }
     prependOnceListener(event: string | symbol, listener: BunWasm.EventListener) {
-      EventEmitter.prototype.prependOnceListener.call(this, event, listener);
+      this.#mutateListeners(event, () => EventEmitter.prototype.prependOnceListener.call(this, event, listener));
       return this;
     }
     static get internals() {
       return { pair: MessagePort.#pair, restore: MessagePort.#restore, activate: MessagePort.#activate,
         prepare: MessagePort.#prepare, retry: MessagePort.#retry, discard: MessagePort.#discard, discardRestored: MessagePort.#discardRestored, resume: MessagePort.#resume, receive: MessagePort.#receive, drainLane: (port: MessagePort) => MessagePort.#drainLane(port), receivePacket: MessagePort.#receivePacket,
-        isClosed: MessagePort.#isClosed, drained: MessagePort.#drained, sent: MessagePort.#sent, received: MessagePort.#received };
+        isClosed: MessagePort.#isClosed, drained: MessagePort.#drained, sent: MessagePort.#sent, received: MessagePort.#received,
+        forward: (port: MessagePort, type: "message" | "messageerror", listener: EventListener) => port.#registerForwarder(type, listener) };
     }
     get [Symbol.toStringTag]() { return "MessagePort"; }
   }
@@ -1556,7 +1625,8 @@
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "error", child: route[route.length - 1], graph, code } });
     };
     if (config.web) {
-      internal.require("web_worker").initialize(parentPort, config.web, webMessageEvent);
+      const port = parentPort;
+      internal.require("web_worker").initialize(port, config.web, webMessageEvent, (type, listener) => portOps.forward(port, type, listener));
       parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
     }
     const requirePreload = internal.builtin("node:module").createRequire(process.cwd() + "/__worker_preload__.cjs");

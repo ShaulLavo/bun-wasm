@@ -408,12 +408,13 @@ bool provenance_subsumes(JSPrincipals* first, JSPrincipals* second) {
 void provenance_destroy(JSPrincipals*) { ++principalsDestroyed; }
 
 // Callers root the result before anything can collect.
-JSObject* principal_frame(JS::HandleObject realmGlobal, bool muted, bool filename) {
+JSObject* principal_frame(JS::HandleObject realmGlobal, bool muted, bool filename, bool function = false) {
   JSAutoRealm realm(context, realmGlobal);
-  const char* source = filename ? "globalThis.principalError = new Error('principal');"
-                                : "globalThis.principalError = new Error('principal');\n//# sourceURL=/literal%00%25.ts";
+  std::string source = "globalThis.principalError = new Error('principal');";
+  if (function) source = "(function(){ " + source + " })();";
+  if (!filename) source += "\n//# sourceURL=/literal%00%25.ts";
   JS::SourceText<mozilla::Utf8Unit> text;
-  check(text.init(context, source, strlen(source), JS::SourceOwnership::Borrowed), "principal source");
+  check(text.init(context, source.data(), source.size(), JS::SourceOwnership::Borrowed), "principal source");
   JS::CompileOptions options(context);
   const bunsm::DiagnosticFilename label(filename ? provenanceNul : provenanceOrdinary);
   options.setFileAndLine(label.c_str(), 1).setMutedErrors(muted);
@@ -427,8 +428,8 @@ JSObject* principal_frame(JS::HandleObject realmGlobal, bool muted, bool filenam
 }
 
 // Both flag bits share the principals word: the pointer, mutedErrors and kind stay exact.
-void principal_combo(JS::HandleObject realmGlobal, bool muted, bool filename) {
-  JS::RootedObject frame(context, principal_frame(realmGlobal, muted, filename));
+void principal_combo(JS::HandleObject realmGlobal, bool muted, bool filename, bool function = false) {
+  JS::RootedObject frame(context, principal_frame(realmGlobal, muted, filename, function));
   check(frame != nullptr, "principal frame");
   JSAutoRealm realm(context, realmGlobal);
   lastSubsumed = nullptr;
@@ -436,6 +437,12 @@ void principal_combo(JS::HandleObject realmGlobal, bool muted, bool filename) {
   check(JS::GetSavedFrameSourceKind(context, nullptr, frame, &kind) == JS::SavedFrameResult::Ok, "principal kind");
   check(kind == (filename ? filenameKind : displayKind), "principal frame keeps its kind");
   check(lastSubsumed == &framePrincipals, "masked principals pointer is exact");
+  JS::SavedFrameKind frameKind = JS::SavedFrameKind::Unknown;
+  check(JS::GetSavedFrameKind(context, nullptr, frame, &frameKind) == JS::SavedFrameResult::Ok &&
+        frameKind == (function ? JS::SavedFrameKind::Function : JS::SavedFrameKind::Program), "principal frame kind");
+  check(lastSubsumed == &framePrincipals, "kind accessor uses exact principal pointer");
+  check(JS::GetSavedFrameKind(context, &deniedPrincipals, frame, &frameKind) == JS::SavedFrameResult::AccessDenied &&
+        frameKind == JS::SavedFrameKind::Unknown, "denied kind has Unknown default");
   const FrameView view = read_frame(frame);
   check(view.file == (filename ? provenanceNul : provenanceLiteral), "principal frame reader file");
   JS::RootedValue thrown(context, JS::Int32Value(42));
@@ -470,6 +477,8 @@ void provenance_principals() {
   for (bool muted : {false, true}) {
     principal_combo(realmGlobal, muted, false);
     principal_combo(realmGlobal, muted, true);
+    principal_combo(realmGlobal, muted, false, true);
+    principal_combo(realmGlobal, muted, true, true);
   }
   const int32_t held = framePrincipals.refcount;
   {

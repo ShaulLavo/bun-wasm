@@ -947,13 +947,24 @@
     return true;
   }
 
+  const emptyArrayIndex = Symbol("empty array index");
+
+  function arrayIndex(array: unknown[], index: number): unknown {
+    const descriptor = Object.getOwnPropertyDescriptor(array, index);
+    return descriptor && "value" in descriptor ? array[index] : emptyArrayIndex;
+  }
+
   function bunCompareArrays(a: unknown[], b: unknown, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
     if (!Array.isArray(b)) return false;
+    const proxy = isProxy(a) || isProxy(b);
     if (strict && a.length !== b.length) return false;
     const len = Math.max(a.length, b.length);
     for (let i = 0; i < len; i++) {
-      if (strict && hasOwn(a, i) !== hasOwn(b, i)) return false;
-      if (!bunEq(a[i], b[i], strict, memo)) return false;
+      if (proxy && strict && hasOwn(a, i) !== hasOwn(b, i)) return false;
+      const left = proxy ? a[i] : arrayIndex(a, i), right = proxy ? b[i] : arrayIndex(b, i);
+      if (left === emptyArrayIndex && right === emptyArrayIndex) continue;
+      if (strict && (left === emptyArrayIndex || right === emptyArrayIndex)) return false;
+      if (!bunEq(left === emptyArrayIndex ? undefined : left, right === emptyArrayIndex ? undefined : right, strict, memo)) return false;
     }
     return true;
   }
@@ -970,6 +981,7 @@
 
   // Type-specific comparison; returns true/false, or undefined to continue with properties.
   function bunCompareSpecial(a: object, b: object, strict: boolean, memo: BunWasm.EqualityMemo): boolean | undefined {
+    if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && bunCompareArrays(a, b, strict, memo);
     if (isSet(a) || isSet(b)) return isSet(a) && bunCompareSets(a, b, strict, memo);
     if (isMap(a) || isMap(b)) return isMap(a) && bunCompareMaps(a, b, strict, memo);
     if (isAnyArrayBuffer(a) || isAnyArrayBuffer(b)) {
@@ -982,13 +994,74 @@
       if (!isTypedArray(a) || !isTypedArray(b) || !bunCompareTypedArrays(a, b, strict)) return false;
       return strict ? undefined : true;
     }
-    if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && bunCompareArrays(a, b, strict, memo);
+    const web = bunCompareWebObjects(a, b, strict);
+    if (web === false) return false;
     if (isBoxedPrimitive(a) || isBoxedPrimitive(b)) {
       if (!equalBoxed(a, b)) return false;
+      if (isStringObject(a) && constructorName(a) !== constructorName(b)) return false;
       return strict ? undefined : true;
     }
     if (isNativeError(a) || isNativeError(b)) return isNativeError(a) && bunCompareErrors(a, b, strict, memo) ? undefined : false;
     return undefined;
+  }
+
+  const urlHref = typeof URL === "function" ? getterOf(URL.prototype, "href") : undefined;
+  const searchParamsSize = typeof URLSearchParams === "function" ? getterOf(URLSearchParams.prototype, "size") : undefined;
+
+  // instanceof only screens the prototype; the brand check rejects Object.create(URL.prototype) and similar,
+  // which native Bun compares as plain objects.
+  function isUrl(value: object): boolean {
+    return typeof URL === "function" && value instanceof URL && brandCheck(urlHref, value);
+  }
+
+  function isSearchParams(value: object): boolean {
+    return typeof URLSearchParams === "function" && value instanceof URLSearchParams && brandCheck(searchParamsSize, value);
+  }
+
+  function isHeaders(value: object): boolean {
+    return typeof Headers === "function" && value instanceof Headers && brandCheck(Headers.prototype.has, value, ["a"]);
+  }
+
+  type WebKind = "url" | "params" | "headers" | undefined;
+
+  function webKind(value: object): WebKind {
+    if (isUrl(value)) return "url";
+    if (isSearchParams(value)) return "params";
+    return isHeaders(value) ? "headers" : undefined;
+  }
+
+  // Native Bun applies these rules only when both values are platform wrappers. A plain object,
+  // including one built from a web prototype, falls through to the ordinary property comparison.
+  function bunCompareWebObjects(a: object, b: object, strict: boolean): false | undefined {
+    const kindA = webKind(a), kindB = webKind(b);
+    if (kindA === undefined || kindB === undefined) return undefined;
+    if (kindA !== kindB) return strict ? false : undefined;
+    if (kindA === "url") return urlHref?.call(a) === urlHref?.call(b) ? undefined : false;
+    if (kindA === "params") return equalSearchParams(a, b) ? undefined : false;
+    return equalHeaders(a, b) ? undefined : false;
+  }
+
+  // Prototype methods take brand-checked receivers, so instance shadows cannot hide differences.
+  function equalSearchParams(a: object, b: object): boolean {
+    if (searchParamsSize?.call(a) !== searchParamsSize?.call(b)) return false;
+    for (const [key, value] of URLSearchParams.prototype.entries.call(a)) {
+      if (URLSearchParams.prototype.get.call(b, key) !== value) return false;
+    }
+    return true;
+  }
+
+  function headerCount(headers: object): number {
+    let size = 0;
+    for (const _key of Headers.prototype.keys.call(headers)) size++;
+    return size;
+  }
+
+  function equalHeaders(a: object, b: object): boolean {
+    if (headerCount(a) !== headerCount(b)) return false;
+    for (const [key, value] of Headers.prototype.entries.call(a)) {
+      if (Headers.prototype.get.call(b, key) !== value) return false;
+    }
+    return true;
   }
 
   function ownEnumerableKeys(obj: object): (string | symbol)[] {
@@ -1481,6 +1554,167 @@
     return internal.require("buffer").Buffer.isBuffer(value);
   }
 
+  // Expect owns this context. Public Bun and Node equality never invoke it.
+  function expectEquals(a: unknown, b: unknown, strict: boolean, asymmetric: BunWasm.AsymmetricComparison, isAsymmetric: (value: unknown) => boolean): BunWasm.EqualityResult {
+    return expectEq(a, b, strict, { asymmetric, isAsymmetric });
+  }
+
+  function expectSettle<T>(value: T | Promise<T>, consume: (value: T) => BunWasm.EqualityResult): BunWasm.EqualityResult {
+    if (isPromise(value)) return internal.promiseThen(value, consume);
+    return consume(value);
+  }
+
+  function expectEvery<T>(values: readonly T[], compare: (value: T) => BunWasm.EqualityResult, index = 0): BunWasm.EqualityResult {
+    for (let i = index; i < values.length; i++) {
+      const result = compare(values[i]);
+      if (isPromise(result)) return expectSettle(result, pass => pass && expectEvery(values, compare, i + 1));
+      if (!result) return false;
+    }
+    return true;
+  }
+
+  function expectSome<T>(values: readonly T[], compare: (value: T) => BunWasm.EqualityResult, index = 0): BunWasm.EqualityResult {
+    for (let i = index; i < values.length; i++) {
+      const result = compare(values[i]);
+      if (isPromise(result)) return expectSettle(result, pass => pass || expectSome(values, compare, i + 1));
+      if (result) return true;
+    }
+    return false;
+  }
+
+  function expectEq(a: unknown, b: unknown, strict: boolean, context: BunWasm.ExpectComparison): BunWasm.EqualityResult {
+    const asymmetric = context.asymmetric(a, b);
+    if (asymmetric !== undefined) return asymmetric;
+    if (Object.is(a, b)) return true;
+    if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+    const memo = context.memo ??= { val1: new Map(), val2: new Map(), position: 0 };
+    return expectMemo(a, b, memo, () => expectObjects(a, b, strict, context, memo));
+  }
+
+  function expectMemo(a: object, b: object, memo: BunWasm.EqualityMemo, compare: () => BunWasm.EqualityResult): BunWasm.EqualityResult {
+    const previousA = memo.val1.get(a);
+    const previousB = memo.val2.get(b);
+    if (previousA !== undefined && previousB !== undefined) return previousA === previousB;
+    const position = ++memo.position;
+    memo.val1.set(a, position);
+    memo.val2.set(b, position);
+    const release = () => {
+      if (previousA === undefined) memo.val1.delete(a); else memo.val1.set(a, previousA);
+      if (previousB === undefined) memo.val2.delete(b); else memo.val2.set(b, previousB);
+    };
+    try {
+      const result = compare();
+      if (!isPromise(result)) {
+        release();
+        return result;
+      }
+      return internal.promiseThen(result, pass => { release(); return pass; }, error => { release(); throw error; });
+    } catch (error) {
+      release();
+      throw error;
+    }
+  }
+
+  function expectArrays(a: unknown[], b: unknown[], strict: boolean, context: BunWasm.ExpectComparison, index = 0): BunWasm.EqualityResult {
+    const proxy = isProxy(a) || isProxy(b);
+    if (strict && a.length !== b.length) return false;
+    const length = Math.max(a.length, b.length);
+    for (let i = index; i < length; i++) {
+      if (proxy && strict && hasOwn(a, i) !== hasOwn(b, i)) return false;
+      let left = proxy ? a[i] : arrayIndex(a, i), right = proxy ? b[i] : arrayIndex(b, i);
+      if (left === emptyArrayIndex && right === emptyArrayIndex) continue;
+      if (strict && (left === emptyArrayIndex || right === emptyArrayIndex)) return false;
+      if (left === emptyArrayIndex) left = context.isAsymmetric(right) ? a[i] : undefined;
+      if (right === emptyArrayIndex) right = context.isAsymmetric(left) ? b[i] : undefined;
+      const result = expectEq(left, right, strict, context);
+      if (isPromise(result)) return expectSettle(result, pass => pass && expectArrays(a, b, strict, context, i + 1));
+      if (!result) return false;
+    }
+    return true;
+  }
+
+  function expectSets(a: Set<unknown>, b: Set<unknown>, strict: boolean, context: BunWasm.ExpectComparison): BunWasm.EqualityResult {
+    if (a.size !== b.size) return false;
+    const candidates = Array.from(b);
+    return expectEvery(Array.from(a), value => b.has(value) || expectSome(candidates, candidate => expectEq(value, candidate, strict, context)));
+  }
+
+  function expectMapEntry(key: unknown, value: unknown, b: Map<unknown, unknown>, strict: boolean, context: BunWasm.ExpectComparison): BunWasm.EqualityResult {
+    if (b.has(key)) return expectEq(value, b.get(key), strict, context);
+    let selected: [unknown, unknown] | undefined;
+    const found = expectSome(Array.from(b), entry => expectSettle(expectEq(key, entry[0], strict, context), pass => {
+      if (pass) selected = entry;
+      return pass;
+    }));
+    // Native Bun selects the first key. A mismatched value never restarts search.
+    return expectSettle(found, pass => pass && selected !== undefined && expectEq(value, selected[1], strict, context));
+  }
+
+  function expectMaps(a: Map<unknown, unknown>, b: Map<unknown, unknown>, strict: boolean, context: BunWasm.ExpectComparison): BunWasm.EqualityResult {
+    if (a.size !== b.size) return false;
+    return expectEvery(Array.from(a), ([key, value]) => expectMapEntry(key, value, b, strict, context));
+  }
+
+  function expectErrors(a: Error, b: object, strict: boolean, context: BunWasm.ExpectComparison): BunWasm.EqualityResult {
+    if (!(isNativeError(b) || b instanceof Error)) return false;
+    if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+    const compared = new Map<PropertyKey, { a: unknown; b: unknown }>();
+    for (const key of ["name", "message"]) {
+      const left = Reflect.get(a, key), right = Reflect.get(b, key);
+      if (left !== right) return false;
+      compared.set(key, { a: left, b: right });
+    }
+    let cause: BunWasm.EqualityResult = true;
+    if (hasOwn(a, "cause") || hasOwn(b, "cause")) {
+      const left = a.cause, right = b.cause;
+      compared.set("cause", { a: left, b: right });
+      cause = expectEq(left, right, strict, context);
+    }
+    return expectSettle(cause, pass => pass && expectProperties(a, b, strict, context, undefined, compared));
+  }
+
+  function expectObjects(a: object, b: object, strict: boolean, context: BunWasm.ExpectComparison, memo: BunWasm.EqualityMemo): BunWasm.EqualityResult {
+    if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && expectArrays(a, b, strict, context);
+    if (isSet(a) || isSet(b)) return isSet(a) && isSet(b) && expectSets(a, b, strict, context);
+    if (isMap(a) || isMap(b)) return isMap(a) && isMap(b) && expectMaps(a, b, strict, context);
+    if (isNativeError(a) || isNativeError(b)) return isNativeError(a) && expectErrors(a, b, strict, context);
+    const special = bunCompareSpecial(a, b, strict, memo);
+    if (special !== undefined) return special;
+    if (isTypedArray(a) || isBoxedPrimitive(a)) return expectProperties(a, b, true, context, nonIndexKeys(a, true));
+    if (strict && (tagOf(a) !== tagOf(b) || constructorName(a) !== constructorName(b))) return false;
+    return expectProperties(a, b, strict, context);
+  }
+
+  function expectProperties(a: object, b: object, strict: boolean, context: BunWasm.ExpectComparison, provided?: (string | symbol)[], compared?: Map<PropertyKey, { a: unknown; b: unknown }>): BunWasm.EqualityResult {
+    const fast = provided !== undefined || isPlainLayout(a) && isPlainLayout(b);
+    const keysA = provided || (fast ? ownEnumerableKeys(a) : forInKeys(a));
+    const keysB = provided ? nonIndexKeys(b, true) : fast ? ownEnumerableKeys(b) : forInKeys(b);
+    if (strict && keysA.length !== keysB.length) return false;
+    const readB = new Map<PropertyKey, unknown>();
+    if (compared) for (const [key, value] of compared) readB.set(key, value.b);
+    const compare = (key: PropertyKey) => {
+      const present = fast ? strict ? isEnumerable(b, key) : hasOwn(b, key) : key in b;
+      const known = compared?.get(key);
+      const value = known ? known.a : Reflect.get(a, key);
+      if (!present) return !strict && value === undefined;
+      if (known) return true;
+      const other = Reflect.get(b, key);
+      readB.set(key, other);
+      return expectEq(value, other, strict, context);
+    };
+    return expectSettle(expectEvery(keysA, compare), pass => pass && expectExtraProperties(a, b, strict, fast, keysA, keysB, readB));
+  }
+
+  function expectExtraProperties(a: object, b: object, strict: boolean, fast: boolean, keysA: readonly PropertyKey[], keysB: readonly PropertyKey[], readB: Map<PropertyKey, unknown>): boolean {
+    const extra = fast ? keysB : keysB.slice(keysA.length);
+    for (const key of extra) {
+      const value = strict ? undefined : readB.has(key) ? readB.get(key) : Reflect.get(b, key);
+      if (!strict && value === undefined) continue;
+      if (!fast || !hasOwn(a, key)) return false;
+    }
+    return true;
+  }
+
   return {
     _extend: extend,
     callbackify,
@@ -1520,5 +1754,6 @@
     TextEncoder: typeof TextEncoder === "function" ? TextEncoder : undefined,
     _deepEqual: nodeDeepEqual,
     bunDeepEquals,
+    expectEquals,
   };
 });

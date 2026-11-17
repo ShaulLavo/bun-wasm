@@ -120,14 +120,16 @@ const transcriptCallers = [
   "web/tests/shell-stop-check.ts",
 ];
 const nonTranscriptCallers = [
+  // The coverage selector declares input paths; it never reads a playground transcript.
+  "scripts/browser-guest-selection.ts",
   // The unit-test module hook substitutes helpers without reading a real browser transcript.
   "scripts/fixtures/stack-measurement-provider.ts", "scripts/fixtures/quickjs-stack-policy.ts",
   "sandbox/tests/startup-cache.mjs", "sandbox/tests/next-dev.ts", "scripts/app-matrix/isolation.test.mjs", "scripts/verify-engine-memory-browser.ts",
   "web/tests/browser-child-process-ipc.ts", "web/tests/browser-editor.ts", "web/tests/browser-next-sockets.ts",
   "web/tests/browser-type.ts", "web/tests/browser-native-readable-iteration.ts", "web/tests/playground.mjs", "web/tests/shell-prompt-check.test.ts",
   "scripts/app-matrix/next-acceptance-observer-control.ts",
-  // The stack navigation helper reads runtime publication, not a terminal transcript.
-  "web/tests/quickjs-stack-navigation.ts",
+  // Navigation diagnostics and controls read public state, not terminal transcripts.
+  "web/tests/playground-navigation.ts", "scripts/navigation-server-browser.test.ts",
   // Storage checks use lifecycle and public shell state, never a terminal transcript.
   "scripts/sandbox-storage-browser.test.ts", "scripts/sandbox-fs-observation-browser.test.ts",
 ];

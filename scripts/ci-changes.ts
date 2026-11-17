@@ -3,11 +3,16 @@ import { discoverChecks } from "./test-checks";
 import { checkInputPaths, matchesCheckInput, nativeCheckInputsAt } from "./ci-check-inputs";
 import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 
+const nativePreparationFiles = new Set([
+  ".github/actions/native-setup/action.yml", ".github/actions/native-seed/action.yml", ".github/actions/native-production/action.yml",
+]);
+
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "scripts/fixtures/magic-string/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/wasm-validation/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "scripts/ci-program-delivery.ts",
   "scripts/ci-browser-program.ts", "scripts/build-bun-browser.sh",
   "scripts/ci-ordinary-jsc-program.ts",
+  "scripts/ci-ordinary-web-inputs.ts",
   "scripts/ci-jsc-artifact.ts",
   "scripts/ci-main-coverage.ts",
   "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js",
@@ -45,7 +50,7 @@ const sharedSysrootFiles = new Set([
 ]);
 
 export function needsSharedSysroot(paths: readonly string[]): boolean {
-  return paths.some(path => sharedSysrootFiles.has(path));
+  return paths.some(path => (nativePreparationFiles.has(path) || sharedSysrootFiles.has(path)));
 }
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
@@ -85,7 +90,7 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "scripts/stage-program-profiles.ts", "web/tests/explicit-profile-browser.ts", "web/build.ts", "sandbox/build.ts",
   "web/src/fs-worker.ts", "web/src/notification-worker.ts", "src/assets.ts", "src/program-memory.ts",
   "src/bun-adapter.ts", "src/process-runtime.ts", "src/executable-paths.ts", "src/guest-asset.generated.ts", "src/shared-objects.ts",
-  "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "web/package.json", "web/bun.lock",
+  "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "scripts/bash-web-release-inputs.json", "web/package.json", "web/bun.lock",
   "web/tests/shared-wasm-memory-browser.ts", "web/tests/shared-wasm-memory-browser-main.ts", "web/tests/shared-wasm-agent/worker.ts", "web/tests/shared-wasm-agent/lock.ts", "web/tests/shared-wasm-agent/observer.ts",
   // The parent-and-Worker parser reserve ownership case that consumer runs in each group.
   "web/tests/parser-reserve-ownership.ts", "web/src/engine-stack-budget.ts", "tests/stack-depth.js", "scripts/stack-measurement.ts",
@@ -94,7 +99,7 @@ const sharedNativeRoots = ["crates/", "third_party/", "patches/", "vendor/", ".c
   ".github/actions/setup-tools/", ".github/actions/release-downloads/", ".github/actions/spidermonkey-", "scripts/ci-spidermonkey-"];
 export function needsSharedNative(paths: readonly string[], inputs: readonly string[] = sharedNativeCheckInputs): boolean {
   if (inputs.length === 0) return false;
-  return paths.some(path => !excludedNativeInput(path) && (sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
+  return paths.some(path => !excludedNativeInput(path) && (nativePreparationFiles.has(path) || sharedNativeFiles.has(path) || sharedNativeRoots.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs) || path.startsWith("checks/native-")));
 }
 
 const nativeChecks = discoverChecks();
@@ -107,6 +112,7 @@ const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
 const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/strings-above-512mib/", "tests/fixtures/stdout-busy-loop/", "tests/fixtures/stack-getter-headroom/", "tests/fixtures/getter-dispatch/", "tests/fixtures/proxy-get-forwarding/", "tests/fixtures/parser-chain-stack/", "tests/fixtures/assignment-chain-depth/", "tests/fixtures/statement-record-cap/", "tests/fixtures/statement-records-async-using/", "tests/fixtures/parser-literal-overflow/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
+  "scripts/ci-ordinary-web-inputs.ts",
   "scripts/runtime-file-checks.ts", "scripts/run-with-timeout.mts", "scripts/process-owner.mts", "scripts/linux-subreaper.mts",
   ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml",
   "scripts/ci-program-delivery.ts",
@@ -174,7 +180,7 @@ function excludedNativeInput(path: string): boolean {
 function nativeInput(path: string, checkInputs: readonly string[]): boolean {
   if (excludedNativeInput(path)) return false;
   return ordinarySpiderMonkeyInput(path) || path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || matchesCheckInput(path, checkInputs)
-    || path.startsWith("web/tests/bun-runtime-proc-") || nativeFiles.has(path) || nativeScripts.test(path)
+    || path.startsWith("web/tests/bun-runtime-proc-") || nativePreparationFiles.has(path) || nativeFiles.has(path) || nativeScripts.test(path)
     || nativeDirectories.some(root => path.startsWith(root));
 }
 
@@ -187,7 +193,7 @@ function ordinarySpiderMonkeyInput(path: string): boolean {
 }
 
 export function needsJsc(paths: readonly string[], inputs: readonly string[] = jscNativeCheckInputs): boolean {
-  return paths.some(path => path !== "jsc/README.md" && (sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs)));
+  return paths.some(path => path !== "jsc/README.md" && (sharedWebGuestInput(path) || nativePreparationFiles.has(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)) || matchesCheckInput(path, inputs)));
 }
 
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
@@ -221,9 +227,10 @@ export interface CheckSelection {
   jsc: boolean;
   shared: boolean;
   shared_native: boolean;
+  browser_guest: boolean;
 }
 
-function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[], jscInputs: readonly string[]): CheckSelection {
+function classifyChanges(paths: readonly string[], native: readonly string[], profileInputs: readonly string[], jscInputs: readonly string[]) {
   return { rust: native.length > 0, jsc: needsJsc(paths, jscInputs), shared: needsSharedSysroot(paths), shared_native: needsSharedNative(native, profileInputs) };
 }
 
@@ -232,11 +239,16 @@ export function selectChanges(base: string, head: string, pullRequest = false, i
   const ancestor = pullRequest && !/^0+$/.test(base)
     ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8", timeout: 5_000 }).trim() : base;
   const refs = Array.from(new Set([base, head, ancestor]));
-  const native = nativeChanges(paths, base, head, refs.flatMap(ref => inputsAt(ref)));
-  console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
+  const correctnessInputs = refs.flatMap(ref => inputsAt(ref, { family: "native-correctness" }));
+  const browserInputs = refs.flatMap(ref => inputsAt(ref, { family: "ordinary-browser" }));
   const profileInputs = refs.flatMap(ref => inputsAt(ref, { profile: "shared-group" }));
   const jscInputs = refs.flatMap(ref => inputsAt(ref, { profile: "split", engine: "jsc" }));
-  return classifyChanges(paths, native, profileInputs, jscInputs);
+  const native = nativeChanges(paths, base, head, correctnessInputs);
+  console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
+  const selection = classifyChanges(paths, native, profileInputs, jscInputs);
+  const browser = paths.some(path => matchesCheckInput(path, browserInputs));
+  const full = selection.rust;
+  return { rust: full, jsc: selection.jsc, shared: selection.shared, shared_native: selection.shared_native, browser_guest: full || browser };
 }
 
 export function selectionOutput(selection: CheckSelection): string {

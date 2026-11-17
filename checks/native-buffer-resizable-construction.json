@@ -1,5 +1,9 @@
 {
   "owner": "native",
   "path": "tests/fixtures/buffer-resizable-construction",
-  "engines": ["quickjs", "browser"]
+  "engines": [
+    "quickjs",
+    "browser",
+    "jsc"
+  ]
 }

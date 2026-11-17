@@ -7,13 +7,17 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const argument = name => { const at = process.argv.indexOf(name); return at < 0 ? undefined : process.argv[at + 1]; };
 function inputs() {
   const sourceRoot = join(root, "crates/bunwasm-runtime/src/js");
-  const names = ["buffer", "node_stream_core", "node_stream_web", "native_stream_state"];
+  const names = ["buffer", "node_stream_core", "node_stream_web", "native_stream_state", "web"];
   const sources = Object.fromEntries(names.filter(name => existsSync(join(sourceRoot, name + ".js"))).map(name => [name, readFileSync(join(sourceRoot, name + ".js"), "utf8")]));
   sources.node_stream_bindings = stripTypeScriptTypes(readFileSync(join(sourceRoot, "node_stream_bindings.ts"), "utf8"), { mode: "strip" });
   sources.buffer_encoding_bindings = stripTypeScriptTypes(readFileSync(join(sourceRoot, "buffer_encoding_bindings.ts"), "utf8"), { mode: "strip" });
+  sources.buffer_transcode = stripTypeScriptTypes(readFileSync(join(sourceRoot, "buffer_transcode.ts"), "utf8"), { mode: "strip" });
   sources.events = stripTypeScriptTypes(readFileSync(join(sourceRoot, "events.ts"), "utf8"));
   sources.streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "streams.ts"), "utf8"));
   sources.compression_streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "compression_streams.ts"), "utf8"));
+  for (const name of ["buffer_concat_length", "text_decoder", "url_search_params", "body_streams", "web_brand"]) {
+    sources[name] = stripTypeScriptTypes(readFileSync(join(sourceRoot, name + ".ts"), "utf8"));
+  }
   const builtins = readFileSync(join(sourceRoot, "builtins.js"), "utf8");
   sources.asyncHooks = builtins.slice(builtins.indexOf("  function asyncHooksModule()"), builtins.indexOf("  function diagnosticsChannelModule()"));
   sources.directHelper = stripTypeScriptTypes(readFileSync(join(root, "web/src/native-direct-stream.ts"), "utf8"));
@@ -63,7 +67,12 @@ for (const name of ["chromium", "webkit"]) {
       let frame;
       const proc = { env: {}, nextTick: (fn, ...args) => queueMicrotask(() => fn(...args)), versions: { node: "26.7.0" }, stderr: { write() {} }, emitWarning() {} };
       const internal = {
-        native: { engine: "host", getAsyncContext: () => frame, setAsyncContext: value => { frame = value; } },
+        native: {
+          engine: "host", getAsyncContext: () => frame, setAsyncContext: value => { frame = value; },
+          timeOrigin: () => performance.timeOrigin, now: () => performance.now(),
+          platformInfo: { version: "test", arch: "wasm32" },
+        },
+        nextTick: proc.nextTick,
         runInContext(context, fn, self, args) { return Reflect.apply(fn, self, args); },
         builtin(name) {
           if (name === "node:process") return proc;
@@ -84,6 +93,7 @@ for (const name of ["chromium", "webkit"]) {
         },
       };
       globalThis.process = proc;
+      internal.require("web");
       internal.require("streams");
       const bundle = internal.require("node_stream_core");
       internal.require("node_stream_web")(bundle);

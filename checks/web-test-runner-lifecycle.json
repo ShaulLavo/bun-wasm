@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/test-runner-lifecycle.test.ts",
+  "localRuntime": true
+}

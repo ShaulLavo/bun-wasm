@@ -2,13 +2,7 @@ import { boxId, type Box } from "../goals-matrix/catalog";
 import type { Attempt, PhaseResult } from "../goals-matrix/model";
 import { object, observed } from "../goals-matrix/evidence";
 import { deviceUDID } from "./options";
-
-export const smokeCases: readonly Box[] = [
-  { framework: "vite-react", browser: "iphone-safari", engine: "browser" },
-  { framework: "hono", browser: "iphone-safari", engine: "browser" },
-  { framework: "vite-react", browser: "iphone-safari", engine: "quickjs" },
-];
-export const smokePhases = ["startup", "install", "dev", "render", "click", "cleanup"] as const;
+import { smokePhases } from "./cases";
 type Failure = { phase: string; error: string };
 type SmokeSource = { commit: string; dirty: boolean | null; assets: unknown };
 export interface SmokeCase {
@@ -34,6 +28,12 @@ export interface SmokeReport {
   cases: SmokeCase[];
   failures: Failure[];
   resources: { owned: string[]; external: string[] };
+  /** Live mode: the run's live requests repeated against the real origin. */
+  liveOrigin?: { checked: number; mismatches: string[] };
+}
+/** A failure that belongs to a named smoke step rather than to a prerequisite. */
+export class StepFailure extends Error {
+  constructor(readonly phase: string, message: string) { super(message); }
 }
 export function pendingCase(box: Box, source: SmokeCase["source"]): SmokeCase {
   return { id: boxId(box), box, source, status: "pending", phases: [], cleanup: null, failures: [], attempt: null };

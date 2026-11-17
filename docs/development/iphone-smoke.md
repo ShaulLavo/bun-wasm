@@ -70,6 +70,68 @@ Startup, dev, render, and click each have a five-minute hang cap. Install has a
 ten-minute hang cap. The maintained cleanup phase has a twenty-second hang cap.
 Every phase records its actual duration. A slow successful outcome passes.
 
+## Check the deployed site
+
+For a deploy check, run the same three cases against the public site instead of a
+local build. Replace `--root` and `--source-file` with `--base-url`, the site root:
+
+```sh
+bun scripts/iphone-smoke.ts --base-url=https://bun.sprockt.dev/ \
+	--output=/absolute/results/new-iphone-smoke \
+	--iphone-control-url=http://127.0.0.1:FORWARDED_PORT/__goals_iphone/TOKEN \
+	--iphone-agent-command=/exact/device_open/path/agent-device \
+	--device-udid=C4D2FFD4-A0D2-4608-B180-35854521B830 \
+	--mac-thread=FIFO_HOLDER_THREAD
+```
+
+No PC build and no staged site are needed. The runner reads the commit from the
+site's `deployment.json` and records it, with the Waffle version, as the result's
+source. It downloads the deployed playground's host page, manifest and selected
+engine files and runs the same fingerprint preflight before the first case and after
+the last. A deployment that changes during the run makes the result red.
+
+The page still needs the observer script, which the deployed site cannot carry.
+Start the same Mac wrapper with `LIVE_URL=https://bun.sprockt.dev/` in place of
+`ROOT` and `PREVIEW_ORIGINS`, and stage only the two controller bundles. The
+observer server then forwards every request to the live site with Safari's own
+headers, including `Accept-Encoding`, and serves the response on Mac loopback.
+Safari opens `/playground/` at that loopback origin. Forward its control port as
+in local mode. FIFO admission, device binding, phases, hang caps, result file and
+the ordinary-tab finish are unchanged. Live mode cannot serve root-preview
+templates, so it refuses them.
+
+Only two kinds of response differ from what the live site sends. For HTML
+navigations and `sw.js`, the proxy asks the site for identity encoding, and the
+observer adds its script and replaces their `cache-control` (with `no-store`),
+`etag`, `last-modified` and `content-length`. Every other response reaches Safari
+with its status, headers, content encoding and bytes unchanged. The observer never
+adds isolation headers in live mode. Before any device work, the runner requires the
+deployed playground page to send `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` (or `credentialless`). If either is
+missing, the result is red at the `isolation` step.
+
+After the cases, the runner checks the edge. The proxy records each whole,
+unconditional request it made and what came back. The PC repeats each request
+against `https://bun.sprockt.dev/` with the same headers. It compares status,
+`Content-Type`, `Content-Encoding`, COOP, COEP, CORP, `Cache-Control`,
+`Service-Worker-Allowed` and the decoded bytes. Any difference makes the result
+red at the `live-origin` step, and `liveOrigin` in the result lists them. The PC
+and the Mac may reach different Cloudflare locations; the commit check before and
+after the run catches a deployment that changes partway through.
+
+This mode can't prove:
+
+- Safari's own connection to the Cloudflare edge: TLS, HTTP/2 or HTTP/3, and edge
+  caching keyed on Safari's request. Bun's fetch on the Mac makes those requests.
+- Behavior tied to the real origin `https://bun.sprockt.dev`: per-origin storage
+  and service-worker state, and absolute URLs to that host. Under the proxy, those
+  URLs become cross-origin loads.
+- The deployed caching of the injected HTML and `sw.js`, including how the service
+  worker updates. Both are served with `no-store`.
+
+Follow-up: load the real origin in Safari without injection for one case, with a
+success signal that doesn't need the observer.
+
 ## Read the result and finish cleanup
 
 Read `<output>/result.json`. `status` is `green` only when all three cases pass,
@@ -90,8 +152,25 @@ URL. Startup must report that same running profile, and final verification check
 the same selected assets after cleanup. Profile policy stays in the shared
 frontend helper; the smoke command has no separate template/profile map.
 
-The runner closes only its owned Safari tabs and guest processes. After it exits,
-stop the wrapper and owned forward, collect the wrapper's cleanup receipt, verify
+The runner selects the ordinary numbered group before counting tabs. It closes
+only the unique recorded task title through that card's own Close child. If the
+owned card is in Private, cleanup proves its removal and preserves the other
+visible private cards without treating the ordinary number as a Private count.
+It also proves the ordinary count and contents unchanged. Cleanup finishes by
+selecting ordinary tabs, pressing Done with settling, and proving overview exit.
+Missing ownership or failed proof remains red.
+
+Install the PC controller's finalizer before opening Safari. On success, failure
+or cancellation, while the same device binding and FIFO admission are still
+owned, finish owned-tab cleanup and ordinary restoration before `device_close`,
+stopping the wrapper or releasing FIFO. Use the same bounded cleanup helpers as
+the runner. A manual deploy check must follow this finish procedure too. Never
+close unrelated private tabs. After a failed native command, expired deadline or
+lost ownership, issue no further UI input and record that restoration is unproved.
+Preserve the original failure. The Mac server wrapper has no PC device binding
+and must not drive Safari through SSH or simctl.
+
+After the PC finalizer exits, stop the wrapper and owned forward, collect the wrapper's cleanup receipt, verify
 that its server and listeners stopped, and check that its FIFO ticket is gone.
 Remove task staging only after its consumers stop. Close your T3 device session
 without shutting down the retained simulator. Keep the results. Remove disposable

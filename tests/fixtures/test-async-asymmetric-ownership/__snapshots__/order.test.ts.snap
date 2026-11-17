@@ -1,0 +1,13 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`snapshot call order 1`] = `
+{
+  "value": ordered(1),
+}
+`;
+
+exports[`snapshot call order 2`] = `
+{
+  "value": ordered(2),
+}
+`;

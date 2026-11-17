@@ -67,3 +67,12 @@ test infrastructure, with no upstream source or revision.
 | [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+The original browser harness now accepts an explicit QuickJS/JSC subset through
+its driver option, page query and controller. Its local default remains both
+pairs, with 32 named checks per browser and 96 checks over the three browsers.
+Every subset retains the two Browser fatal checks and both Preview1 clock
+controls. Artifact preflight requires the selected pairs and Browser core;
+result admission checks the exact selected names and routes, including both
+sleepSync SIGUSR1 outcomes. This changes test selection only, with no upstream
+patch, runtime, engine or functional assertion changes.

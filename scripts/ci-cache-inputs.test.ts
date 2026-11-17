@@ -53,8 +53,8 @@ test("native-only selections provision the tools JSC prerequisite without enabli
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
   }
-  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true') }}");
-  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'true') }}");
+  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true')) }}");
+  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true'))) }}");
   for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps)]) {
     expect(prerequisite).not.toHaveProperty("if");
   }
@@ -220,10 +220,11 @@ const checkpointBoundaries = [
   ["Build native fixtures after the cache checkpoint", ""],
   ["Build the JSC Cargo guest", ""],
   ["Save the JSC Cargo cache once per input revision", "jsc-cargo"],
-  ["Blocking JSC embedding and allocation checks", ""],
+  ["Verify JSC embedding source and native backing", ""],
   ["Blocking native fixture checks", ""],
   ["Build the single tools fixture in the existing native target", ""],
   ["Save the refined native Cargo cache once per input revision", "native-final"],
+  ["Blocking JSC embedding and allocation checks", ""],
   ["Blocking Web guest cases (QuickJS and host engine)", ""],
 ] satisfies [string, string][];
 
@@ -258,7 +259,8 @@ for (const [failure, expected] of [
   ["Blocking native quality checks", []],
   ["Build native fixtures after the cache checkpoint", ["native"]],
   ["Build the JSC Cargo guest", ["native"]],
-  ["Blocking JSC embedding and allocation checks", ["native", "jsc-cargo"]],
+  ["Verify JSC embedding source and native backing", ["native", "jsc-cargo"]],
+  ["Blocking JSC embedding and allocation checks", ["native", "jsc-cargo", "native-final"]],
   ["Blocking native fixture checks", ["native", "jsc-cargo"]],
   ["Build the single tools fixture in the existing native target", ["native", "jsc-cargo"]],
   ["Blocking Web guest cases (QuickJS and host engine)", ["native", "jsc-cargo", "native-final"]],

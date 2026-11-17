@@ -32,7 +32,7 @@ test("Web host and every Processes leg use one browser dependency cache owner", 
   for (const id of ["web", "web-browser", "browser-process", "browser-guest"]) {
     const job = record(jobs[id]);
     expect(job["runs-on"]).toBe("ubuntu-latest");
-    expect(job["timeout-minutes"]).toBe(10);
+    expect(job["timeout-minutes"]).toBe(id === "browser-guest" ? "${{ startsWith(matrix.batch, '2') && 60 || 10 }}" : 10);
     expect(JSON.stringify(job)).not.toContain("browser-apt-v2");
     const steps = job.steps;
     if (!Array.isArray(steps)) throw new Error("Expected job steps");
@@ -45,6 +45,22 @@ test("Web host and every Processes leg use one browser dependency cache owner", 
     const expected = id === "web" || id === "web-browser" ? "chromium firefox webkit" : "${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}";
     expect(record(setup[0]?.with).browsers).toBe(expected);
   }
+});
+
+test("every browser dependency install goes through the HTTPS-selecting action", () => {
+  const jobs = record(record(Bun.YAML.parse(workflow)).jobs);
+  for (const [id, value] of Object.entries(jobs)) {
+    const steps = record(value).steps;
+    if (!Array.isArray(steps)) continue;
+    const direct = steps.map(record).filter(step => String(step.run ?? "").includes("ci-browser-deps.ts"));
+    expect({ id, direct }).toEqual({ id, direct: [] });
+  }
+  const steps = record(jobs["shared-browser"]).steps;
+  if (!Array.isArray(steps)) throw new Error("Expected shared Browser steps");
+  const entries = steps.map(record);
+  const setup = entries.findIndex(step => step.uses === "./.github/actions/browser-deps");
+  expect(record(entries[setup]?.with).browsers).toBe("chromium");
+  expect(entries.findIndex(step => String(step.run).startsWith("bunx playwright install chromium"))).toBeGreaterThan(setup);
 });
 
 test("cache identity is browser-set independent and refreshed for runner and Playwright updates", () => {

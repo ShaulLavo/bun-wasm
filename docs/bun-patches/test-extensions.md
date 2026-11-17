@@ -28,8 +28,10 @@ is read once, and the message is read only for a failing result.
 The native oracle does not register a uniquely named inherited class method.
 The pinned upstream class test reuses the preceding prototype test's matcher
 name, hiding this difference. Our fixture uses separate names and requires
-class registration explicitly. Async asymmetric equality remains outside this
-adapter; its recursive equality path is synchronous.
+class registration explicitly. Asymmetric result validation shares the defined
+pass check but never evaluates a mismatch message. Its actual Promise rejection
+boundary and the bounded recursive contract are documented in
+[awaited asymmetric assertions](test-awaited-asymmetric.md).
 
 The build's existing TypeScript erasure flow embeds this factory. No generated
 JavaScript is checked in.

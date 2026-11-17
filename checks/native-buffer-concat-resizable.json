@@ -1,0 +1,10 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/buffer-concat-resizable",
+  "engines": [
+    "quickjs",
+    "browser",
+    "spidermonkey",
+    "jsc"
+  ]
+}

@@ -424,7 +424,7 @@ for (const kind of ["exited", "signaled"] as const) test(`every process import c
   // Keep this list explicit, so silently dropping an import cannot reduce coverage.
   expect(Object.keys(imports).sort()).toEqual([
     "access_cancel", "access_start", "access_take", "default_signal", "dup", "getpid",
-    "interrupted", "job_of", "kill", "kill_job", "pipe", "poll", "read", "signal", "spawn",
+    "interrupted", "job_of", "kill", "kill_job", "parent_process_id", "pipe", "poll", "process_id", "read", "signal", "spawn",
     "wait", "wait_job", "write",
   ]);
   expect(Array.from(refused.keys()).sort()).toEqual(Object.keys(imports).sort());
@@ -941,6 +941,13 @@ function stackEnvironment(host: Pick<typeof stackHosts[number], "agent" | "stack
     connection.client.port.close(); connection.server.port.close();
   }
 }
+
+test("executor selects the iPhone native tool bound without changing grouped or desktop engines", controlled(() => {
+  const iphone = { agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 Version/26.5 Mobile/15E148 Safari/604.1", stack: geckoStack };
+  expect(stackEnvironment(iphone, "browser")?.BUN_WASM_IPHONE_NATIVE_MEMORY).toBe("1");
+  expect(stackEnvironment(iphone, "quickjs")?.BUN_WASM_IPHONE_NATIVE_MEMORY).toBeUndefined();
+  expect(stackEnvironment({ agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.4 Safari/605.1.15", stack: geckoStack }, "browser")?.BUN_WASM_IPHONE_NATIVE_MEMORY).toBeUndefined();
+}));
 
 for (const host of stackHosts) {
   test(`${host.name} selects measured engine stack budgets without changing explicit overrides`, controlled(() => withQualifiedReserves({}, () => {

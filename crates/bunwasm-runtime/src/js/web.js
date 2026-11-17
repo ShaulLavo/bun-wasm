@@ -382,6 +382,7 @@
 
   const kStop = Symbol("stop");
   const kImmediateStop = Symbol("immediateStop");
+  let beginEvent, endEvent, passiveEvent;
 
   class Event {
     #type;
@@ -390,6 +391,25 @@
     #composed;
     #defaultPrevented = false;
     #timeStamp;
+    #dispatching = false;
+    #passive = false;
+    static {
+      beginEvent = event => {
+        if (event.#dispatching) {
+          const error = new Error(`The event "${event.#type}" is already being dispatched`);
+          error.code = "ERR_EVENT_RECURSION";
+          throw error;
+        }
+        event.#dispatching = true;
+      };
+      endEvent = event => {
+        event.#dispatching = false;
+        event.#passive = false;
+        event[kStop] = false;
+        event[kImmediateStop] = false;
+      };
+      passiveEvent = (event, value) => { event.#passive = value; };
+    }
     target = null;
     currentTarget = null;
     eventPhase = 0;
@@ -437,7 +457,7 @@
       return this.currentTarget ? [this.currentTarget] : [];
     }
     preventDefault() {
-      if (this.#cancelable) this.#defaultPrevented = true;
+      if (this.#cancelable && !this.#passive) this.#defaultPrevented = true;
     }
     stopPropagation() {
       this[kStop] = true;
@@ -496,53 +516,154 @@
     }
   }
 
+  let targetListeners, targetObserver, observeTarget, isTarget, isSignal, signalAborted, signalReason, addAbortAlgorithm, abortSignal;
+  const callListener = Function.prototype.call.bind(Function.prototype.call);
+  const protectedListeners = new WeakMap();
+  const protectedListener = protectedListeners.get.bind(protectedListeners);
+  const protectListener = protectedListeners.set.bind(protectedListeners);
+
+  function eventName(type) {
+    return `${type}`;
+  }
+  function checkEventListener(listener) {
+    if (listener == null || typeof listener === "object" || typeof listener === "function") return;
+    throw new TypeError("Event listener must be a function or an object");
+  }
+  function notifyTarget(target, type) {
+    const record = targetObserver(target);
+    if (!record || !record.callback) return;
+    try { callListener(record.callback, undefined, type); }
+    catch (error) { internal.nextTick(() => { throw error; }); }
+  }
+  function removeTargetEntry(target, table, type, entry, notify = true) {
+    if (entry.removed) return;
+    entry.removed = true;
+    const list = table.get(type);
+    const index = list ? list.indexOf(entry) : -1;
+    if (index >= 0) removeListenerIndex(list, index);
+    if (list && list.length === 0) table.delete(type);
+    const cleanup = entry.signalCleanup;
+    entry.signalCleanup = null;
+    if (cleanup) cleanup();
+    if (notify) notifyTarget(target, type);
+  }
+  function removeListenerIndex(list, index) {
+    for (let i = index; i + 1 < list.length; i++) list[i] = list[i + 1];
+    list.length--;
+  }
+  function addTargetEntry(table, type, listener, options, protect = false) {
+    const list = table.get(type) || [];
+    const existing = list.find(entry => entry.kind === "listener" && entry.listener === listener && entry.capture === options.capture);
+    if (existing) return existing;
+    const entry = { kind: "listener", listener, capture: options.capture, once: options.once, passive: options.passive, removed: false, signalCleanup: null };
+    if (protect) protectListener(entry, listener);
+    list.push(entry);
+    table.set(type, list);
+    return entry;
+  }
+  function setAbortAttribute(target, entry, value) {
+    const table = targetListeners(target);
+    if (value === null || typeof value !== "object" && typeof value !== "function") {
+      if (entry) removeTargetEntry(target, table, "abort", entry, false);
+      return null;
+    }
+    if (entry) { entry.listener = value; return entry; }
+    const list = table.get("abort") || [];
+    const attribute = { kind: "attribute", listener: value, capture: false, once: false, passive: false, removed: false, signalCleanup: null };
+    list.push(attribute);
+    table.set("abort", list);
+    return attribute;
+  }
+  function deliverTargetEntry(target, entry, event, listener) {
+    if (entry.kind === "attribute" && typeof listener !== "function") return;
+    passiveEvent(event, entry.passive);
+    try {
+      const callback = typeof listener === "function" ? listener : listener.handleEvent;
+      if (typeof callback !== "function") throw new TypeError("Event listener handleEvent is not a function");
+      callListener(callback, typeof listener === "function" ? target : listener, event);
+    } catch (error) {
+      internal.nextTick(() => { throw error; });
+    } finally {
+      passiveEvent(event, false);
+    }
+  }
+  function dispatchTargetEntries(target, table, type, entries, event) {
+    for (const entry of entries) {
+      const protectedCallback = protectedListener(entry);
+      if (entry.removed || event[kImmediateStop] && !protectedCallback) continue;
+      if (entry.once) removeTargetEntry(target, table, type, entry);
+      deliverTargetEntry(target, entry, event, protectedCallback || entry.listener);
+    }
+  }
+  function dispatchTargetEvent(target, table, event) {
+    const type = event.type;
+    const entries = (table.get(type) || []).slice();
+    if (!(type === "abort" && isSignal(target))) appendDynamicHandler(target, type, entries);
+    dispatchTargetEntries(target, table, type, entries, event);
+    return !event.defaultPrevented;
+  }
+  function appendDynamicHandler(target, type, entries) {
+    const listener = target["on" + type];
+    if (typeof listener === "function") entries.push({ kind: "attribute", listener, once: false, passive: false, removed: false });
+  }
+
   class EventTarget {
     #listeners = new Map();
+    #observer = null;
+    static {
+      targetListeners = target => target.#listeners;
+      targetObserver = target => target.#observer;
+      observeTarget = (target, callback) => {
+        if (!isTarget(target)) throw new TypeError("target must be an EventTarget");
+        if (typeof callback !== "function") throw new TypeError("observer must be a function");
+        if (target.#observer) throw new TypeError("EventTarget already has an observer");
+        const record = { callback };
+        target.#observer = record;
+        return () => {
+          if (target.#observer === record) target.#observer = null;
+          record.callback = null;
+        };
+      };
+      isTarget = value => value !== null && (typeof value === "object" || typeof value === "function") && #listeners in value;
+    }
     addEventListener(type, listener, options) {
-      if (!listener) return;
+      const table = this.#listeners;
+      const name = eventName(type);
+      checkEventListener(listener);
       const opts = typeof options === "boolean" ? { capture: options } : options || {};
-      const list = this.#listeners.get(type) || [];
-      if (list.some((l) => l.listener === listener && l.capture === Boolean(opts.capture))) return;
-      const entry = { listener, capture: Boolean(opts.capture), once: Boolean(opts.once) };
-      list.push(entry);
-      this.#listeners.set(type, list);
-      if (opts.signal) opts.signal.addEventListener("abort", () => this.removeEventListener(type, listener, opts));
+      const capture = Boolean(opts.capture), once = Boolean(opts.once), passive = Boolean(opts.passive), signal = opts.signal;
+      if (signal !== undefined && !isSignal(signal)) throw new TypeError("signal must be an AbortSignal");
+      if (listener == null || signal && signalAborted(signal)) return;
+      const list = table.get(name);
+      if (list && list.some(entry => entry.kind === "listener" && entry.listener === listener && entry.capture === capture)) return;
+      const entry = addTargetEntry(table, name, listener, { capture, once, passive });
+      if (signal) entry.signalCleanup = addAbortAlgorithm(signal, () => removeTargetEntry(this, table, name, entry));
+      notifyTarget(this, name);
     }
     removeEventListener(type, listener, options) {
+      const table = this.#listeners;
+      const name = eventName(type);
+      checkEventListener(listener);
       const capture = typeof options === "boolean" ? options : Boolean(options && options.capture);
-      const list = this.#listeners.get(type);
+      const list = table.get(name);
       if (!list) return;
-      const i = list.findIndex((l) => l.listener === listener && l.capture === capture);
-      if (i >= 0) list.splice(i, 1);
+      const entry = list.find(item => item.kind === "listener" && item.listener === listener && item.capture === capture);
+      if (entry) removeTargetEntry(this, table, name, entry);
     }
     dispatchEvent(event) {
       if (!(event instanceof Event)) throw new TypeError("Argument 1 ('event') to EventTarget.dispatchEvent must be an instance of Event");
-      event.target = this;
-      event.currentTarget = this;
-      event.eventPhase = 2;
-      const handlerName = "on" + event.type;
-      const list = (this.#listeners.get(event.type) || []).slice();
-      if (typeof this[handlerName] === "function") list.push({ listener: this[handlerName], once: false, capture: false });
-      for (const entry of list) {
-        if (entry.once) this.removeEventListener(event.type, entry.listener, entry);
-        invokeListener(this, entry.listener, event);
-        if (event[kImmediateStop]) break;
+      const table = this.#listeners;
+      beginEvent(event);
+      try {
+        event.target = this;
+        event.currentTarget = this;
+        event.eventPhase = 2;
+        return dispatchTargetEvent(this, table, event);
+      } finally {
+        endEvent(event);
+        event.currentTarget = null;
+        event.eventPhase = 0;
       }
-      event.currentTarget = null;
-      event.eventPhase = 0;
-      return !event.defaultPrevented;
-    }
-  }
-
-  function invokeListener(target, listener, event) {
-    try {
-      if (typeof listener === "function") listener.call(target, event);
-      else if (listener && typeof listener.handleEvent === "function") listener.handleEvent(event);
-    } catch (err) {
-      // Listener errors are reported, not propagated, like in browsers.
-      internal.nextTick(() => {
-        throw err;
-      });
     }
   }
 
@@ -551,7 +672,28 @@
   class AbortSignal extends EventTarget {
     #aborted = false;
     #reason = undefined;
-    onabort = null;
+    #algorithms = new Set();
+    #onabort = null;
+    static {
+      isSignal = value => value !== null && (typeof value === "object" || typeof value === "function") && #aborted in value;
+      signalAborted = signal => signal.#aborted;
+      signalReason = signal => signal.#reason;
+      addAbortAlgorithm = (signal, callback) => {
+        const entry = { callback, active: true };
+        if (signal.#aborted) { callback(); return () => {}; }
+        signal.#algorithms.add(entry);
+        return () => { entry.active = false; signal.#algorithms.delete(entry); };
+      };
+      abortSignal = (signal, reason) => {
+        if (signal.#aborted) return;
+        signal.#aborted = true;
+        signal.#reason = reason === undefined ? new DOMException("This operation was aborted", "AbortError") : reason;
+        const algorithms = Array.from(signal.#algorithms);
+        signal.#algorithms.clear();
+        runAbortAlgorithms(algorithms);
+        dispatchAbortEvent(signal, new Event("abort"));
+      };
+    }
     constructor(key) {
       super();
       if (key !== internal) throw new TypeError("Illegal constructor");
@@ -562,14 +704,19 @@
     get reason() {
       return this.#reason;
     }
+    get onabort() {
+      return this.#onabort ? this.#onabort.listener : null;
+    }
+    set onabort(value) {
+      const previous = this.#onabort ? this.#onabort.listener : null;
+      this.#onabort = setAbortAttribute(this, this.#onabort, value);
+      if (previous !== (this.#onabort ? this.#onabort.listener : null)) notifyTarget(this, "abort");
+    }
     throwIfAborted() {
       if (this.#aborted) throw this.#reason;
     }
     static _abort(signal, reason) {
-      if (signal.#aborted) return;
-      signal.#aborted = true;
-      signal.#reason = reason === undefined ? new DOMException("This operation was aborted", "AbortError") : reason;
-      signal.dispatchEvent(new Event("abort"));
+      abortSignal(signal, reason);
     }
     static abort(reason) {
       const signal = new AbortSignal(internal);
@@ -586,16 +733,41 @@
       return signal;
     }
     static any(signals) {
-      const signal = new AbortSignal(internal);
+      const sources = new Set();
       for (const source of signals) {
-        if (source.aborted) {
-          AbortSignal._abort(signal, source.reason);
-          return signal;
-        }
-        source.addEventListener("abort", () => AbortSignal._abort(signal, source.reason), { once: true });
+        if (!isSignal(source)) throw new TypeError("Expected an AbortSignal");
+        sources.add(source);
+      }
+      const signal = new AbortSignal(internal);
+      const removers = new Set();
+      addAbortAlgorithm(signal, () => clearAbortAlgorithms(removers));
+      try {
+        for (const source of sources) attachAbortSource(signal, source, removers);
+      } catch (error) {
+        clearAbortAlgorithms(removers);
+        throw error;
       }
       return signal;
     }
+  }
+  Object.defineProperty(AbortSignal.prototype, "onabort", { ...Object.getOwnPropertyDescriptor(AbortSignal.prototype, "onabort"), enumerable: true });
+
+  const dispatchAbortEvent = Function.prototype.call.bind(EventTarget.prototype.dispatchEvent);
+  function runAbortAlgorithms(entries) {
+    for (const entry of entries) {
+      if (!entry.active) continue;
+      entry.active = false;
+      entry.callback();
+    }
+  }
+  function clearAbortAlgorithms(removers) {
+    for (const remove of removers) remove();
+    removers.clear();
+  }
+  function attachAbortSource(signal, source, removers) {
+    if (signalAborted(signal)) return;
+    if (signalAborted(source)) { abortSignal(signal, signalReason(source)); return; }
+    removers.add(addAbortAlgorithm(source, () => abortSignal(signal, signalReason(source))));
   }
 
   class AbortController {
@@ -607,6 +779,28 @@
       AbortSignal._abort(this.#signal, reason);
     }
   }
+
+  internal.eventTargets = {
+    isTarget,
+    isSignal,
+    listeners(target, type) {
+      const name = eventName(type);
+      return (targetListeners(target).get(name) || []).map(entry => entry.listener);
+    },
+    count(target, type) {
+      const name = eventName(type);
+      const list = targetListeners(target).get(name);
+      return list ? list.length : 0;
+    },
+    addAbortListener(signal, listener) {
+      const table = targetListeners(signal);
+      const before = table.get("abort")?.length || 0;
+      addTargetEntry(table, "abort", listener, { capture: false, once: true, passive: false }, true);
+      if (table.get("abort").length !== before) notifyTarget(signal, "abort");
+      return () => signal.removeEventListener("abort", listener);
+    },
+    observe: observeTarget,
+  };
 
   // --- Blob / File ------------------------------------------------------------
 

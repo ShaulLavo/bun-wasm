@@ -35,3 +35,6 @@ unchanged. Real serial runtime lifecycle controls and a Node-entered numeric
 supervisor regression cover reaping while the command remains alive.
 The failure/drain fixture compares completed and started filenames in canonical
 order because filesystem directory enumeration does not imply execution order.
+
+The native production composite carries the Linux two-worker setting on its
+full-route fixture step. Browser-only production does not run native correctness.

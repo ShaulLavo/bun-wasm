@@ -4,7 +4,7 @@ Pushes to main share one workflow concurrency group. GitHub preserves its runnin
 member and replaces its pending member. PR cancellation and isolated manual runs
 keep their existing behavior. Old uniquely grouped runs are unaffected.
 
-The main-only `Resolve cumulative main coverage v1` step in the successful
+The main-only `Resolve cumulative main coverage v3` step in the successful
 `CI selection` job is the baseline marker.
 Only a successful whole CI workflow with a successful Code quality job and that
 successful marker qualifies. The helper verifies workflow ID and path, push/main,
@@ -17,14 +17,14 @@ The helper walks the immutable head's first-parent chain nearest first and queri
 successful runs for each exact ancestor SHA. API ordering and rerun ordering do
 not choose the baseline. It ORs the existing classifier across every intervening
 parent/child edge, with no rename detection and check manifests from both ends.
-Immutable manifest reads are cached across edges. Package version exclusions
+Immutable manifest reads are shared by native and browser selection and cached across edges. Browser owner/engine subsets are unioned on every edge and passed directly to batch selection, including reverted inputs and removed intermediate declarations. Package version exclusions
 remain per edge, including the existing shared-sysroot package input rule.
 
 Lookup is limited to 64 edges, 80 total API requests, 24 candidate job inspections
 and a 30-second budget checked between reads. Network requests share a 30-second
 abort signal. Every Git subprocess has a five-second deadline, so in-flight Git
 reads can finish after the budget before the next check. Missing or malformed
-history, API errors, bounds or absent proof select all four conditional families.
+history, API errors, bounds or absent proof select all five conditional families and every browser coverage owner.
 A successful bootstrap establishes the baseline; later docs-only ranges can skip
 native work again. Immutable comparison validation still runs first for all events.
 

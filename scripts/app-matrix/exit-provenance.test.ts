@@ -17,7 +17,7 @@ function runtimeExitFixture(settings: { writeFails?: boolean; loopFails?: boolea
     native: {
       platformInfo: {},
       env: () => ({ BUN_WASM_TRACE_EXIT: settings.enabled === false ? "0" : "1" }),
-      argv: () => [], execArgv: () => [],
+      argv: () => [], execArgv: () => [], processIdentity: () => [1, 0],
       execPath: () => "/bin/bun",
       hostSignal: () => 0,
       writeStderr(text: string) {

@@ -195,7 +195,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     "@xterm/addon-fit": ["FitAddon"], "@xterm/xterm": ["Terminal"],
     waffle: ["createRuntime", "declareModuleMemory", "pages", "storedWorkspaces", "openIdleWorkspace"], "browser-programs": ["BrowserPrograms"],
     "workspace-storage": ["WorkspaceStorage"],
-    "engine-loader": ["ENGINES", "WasmMissing", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
+    "engine-loader": ["ENGINES", "WasmMissing", "createToolsLoader", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
     "preview-links": ["installPreviewLinks"],

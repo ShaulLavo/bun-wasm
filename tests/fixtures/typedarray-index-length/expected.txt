@@ -1,0 +1,18 @@
+pass Uint8Array
+pass Int8Array
+pass Uint8ClampedArray
+pass Uint16Array
+pass Int16Array
+pass Uint32Array
+pass Int32Array
+pass Float16Array
+pass Float32Array
+pass Float64Array
+pass BigInt64Array
+pass BigUint64Array
+pass Buffer allocation length
+pass typed array buffer offset and length
+pass DataView offset and length
+pass array-like length
+pass set from array-like length
+pass ArrayBuffer transfer length
