@@ -1,21 +1,8 @@
 
 index.test.ts:
+(pass) registered before the error
+(pass) registered after the error
 
-# Unhandled error between tests
--------------------------------
-1 | import { describe, expect, test } from "bun:test";
-2 | 
-3 | test("registered before the error", () => {});
-4 | 
-5 | // An anonymous arrow function cannot name a block.
-6 | describe(() => {}, () => {
-    ^
-error: describe() expects first argument to be a named class, named function, number, or string
-      at /index.test.ts:6:1
--------------------------------
-
-
- 0 pass
- 1 fail
- 1 error
-Ran 1 test across 1 file. [TIME]
+ 2 pass
+ 0 fail
+Ran 2 tests across 1 file. [TIME]
