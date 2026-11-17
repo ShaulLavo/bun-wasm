@@ -24,14 +24,14 @@ export function heartbeatBusyGuest(): string {
     try { fs.writeSync(2,'ready\\n'); for (;;) Atomics.add(beat,0,1); } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
 }
 
-// A guest that spends its time inside the engine's native regexp matcher: each call backtracks
-// about 2^24 times. The inner catch must not swallow a stop, and the reported duration of one
-// call shows whether an engine polls inside native work (unwind far shorter than one call).
+// A guest that spends its time inside one native regexp call that backtracks about 2^32 times,
+// far longer than any proof waits, on any machine. A stop can land only inside that call, so
+// the engine must poll inside its native matcher. If the call ever returned, the finally block
+// and the code after it would write their markers; the inner catch must not swallow the stop.
 export function nativeRegexpGuest(): string {
   return `const fs=require('node:fs');
-    const input='a'.repeat(24)+'!', pattern=/^(a+)+$/;
-    const started=Date.now(); pattern.test(input); fs.writeSync(2,'regexp-ms '+(Date.now()-started)+'\\n');
-    try { fs.writeSync(2,'ready\\n'); for (;;) { try { pattern.test(input); } catch {} } } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
+    const input='a'.repeat(32)+'!', pattern=/^(a+)+$/;
+    try { fs.writeSync(2,'ready\\n'); try { pattern.test(input); } catch {} } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
 }
 
 export function handledSignalGuest(nested = false, cpuMs = 1_000): string {

@@ -64,47 +64,19 @@ function callbackGrowth(): void {
   equal(fixed[3], 51);
 }
 
-// SpiderMonkey allocates a resizable buffer's whole maximum up front (upstream
-// ResizableArrayBufferObject::createBufferAndData). QuickJS, JSC and Browser keep the
-// maximum as metadata. process.versions does not name the engine, so read its parser message.
-function reservesMaximum(): boolean {
-  try { new Function("let let = 1"); } catch (error) {
-    if (!(error instanceof SyntaxError)) throw error;
-    return error.message === "a lexical declaration can't define a 'let' binding";
-  }
-  throw new Error("Invalid lexical declaration was accepted");
-}
-
 function maximumMetadata(): void {
   const empty = new ArrayBuffer(0, { maxByteLength: 0 });
   equal([empty.byteLength, empty.maxByteLength, empty.resizable], [0, 0, true]);
   empty.resize(0);
-  const eager = reservesMaximum();
-  // Eight 256 MiB maxima are twice the 1 GiB guest memory: only metadata maxima fit.
-  const buffers = Array.from({ length: eager ? 1 : 8 }, () => new ArrayBuffer(0, { maxByteLength: 268435456 }));
+  // Eight 256 MiB maxima are twice the 1 GiB guest memory: only lazily backed maxima fit.
+  const buffers = Array.from({ length: 8 }, () => new ArrayBuffer(0, { maxByteLength: 268435456 }));
   for (const buffer of buffers) {
     equal([buffer.byteLength, buffer.maxByteLength, buffer.resizable], [0, 268435456, true]);
     buffer.resize(1);
     equal(new Uint8Array(buffer)[0], 0);
   }
-  if (eager) eagerMaximumFailure();
   throws(() => new ArrayBuffer(1, { maxByteLength: 2 ** 53 }), RangeError);
   throws(() => new ArrayBuffer(2, { maxByteLength: 1 }), RangeError);
-}
-
-// An engine that reserves maxima eagerly must refuse more than memory holds with a catchable
-// error, then keep allocating.
-function eagerMaximumFailure(): void {
-  let failure: unknown;
-  try {
-    Array.from({ length: 8 }, () => new ArrayBuffer(0, { maxByteLength: 268435456 }));
-  } catch (error) {
-    failure = error;
-  }
-  equal(String(failure), "out of memory");
-  const after = new ArrayBuffer(4, { maxByteLength: 16 });
-  after.resize(16);
-  equal([after.byteLength, new Uint8Array(after)[15]], [16, 0]);
 }
 
 function transferAndLifetime(): void {

@@ -1,0 +1,1 @@
+Resizable allocation failures throw RangeError and keep the buffer

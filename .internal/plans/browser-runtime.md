@@ -783,6 +783,9 @@ bun-wasm PR 898 (the same numbers as its description). Times are from the page S
 | `while (true) {}` | 5.0 ms Chromium, 8.0 ms WebKit | 5.3 ms, 8.3 ms | 6.8 ms, 20 ms | heartbeat ran 2,005 ms on Chromium, stopped at once on WebKit |
 | `/^(a+)+$/` on 24 `a`s plus `!`, looped | 9.0 ms, 8.4 ms (one call takes 398 and 473 ms) | no stop within 15 s (one call takes 1,677 ms) | no stop within 15 s, zero checkpoints (one call takes 1,366 ms) | not run |
 
+The regexp row was measured with a looped 2^24 call. The merged proof uses one 2^32 call
+instead, so it no longer depends on machine speed.
+
 Open items:
 
 - **JSC Yarr does not poll.** The C-loop countdown polls the host every 1,024 trap points, and a
@@ -795,11 +798,11 @@ Open items:
   (`crates/bunwasm-spidermonkey/cpp/engine.cpp`) asks the host every 10,000 interpreter polls,
   and a loop around a long regexp call reaches only a few per call. The same worker covers it
   (coordinator, 2026-11-17). When it lands, add `spidermonkey` to `nativePollingEngines`.
-- **Group pages after the stop.** Waffle PR 548 (per-incarnation exit lock) returns a stopped
-  member's pages only after its worker exits. The shared-memory browser fixture
-  `busy-member-stop.ts` terminates a group member spinning in JavaScript and requires its agent to
-  end and the owner's `exiting` and `quarantinedBytes` to drain to 0. It lands with the pin bump to
-  the first Waffle release that contains 548.
+- **Group pages after the stop: done with the Waffle 0.0.141 pin (PR 900).** Waffle PR 548's
+  per-incarnation exit lock returns a stopped member's pages only after its worker exits. The
+  shared-memory browser fixture `busy-member-stop.ts` terminates a group member spinning in
+  JavaScript and requires its agent to end and the owner's `exiting` and `quarantinedBytes` to
+  drain to 0.
 - **Browser engine on Chromium.** Its guest JavaScript is the browser's own and cannot poll, so it
   stops only when Chromium forces termination, 2 s after `terminate()`. This matters only if a
   Browser-engine guest ever shares group pages.
