@@ -780,16 +780,17 @@ page SIGKILL to the `_start` unwind:
 | Guest workload | QuickJS | JSC | SpiderMonkey | Browser engine (real terminate) |
 | --- | --- | --- | --- | --- |
 | `while (true) {}` | 5.1 ms Chromium, 9.6 ms WebKit | 4.8 ms, 8.0 ms | SM_LOOP | heartbeat ran 2,007 ms on Chromium, stopped at once on WebKit |
-| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 5.3 ms (one call takes 342 ms) | no stop within 15 s (one call takes 1,677 ms); with Yarr polling 11.2 ms, 16.0 ms | SM_REGEXP | not run |
+| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 5.3 ms (one call takes 342 ms) | no stop within 15 s (one call takes 1,677 ms); with Yarr polling 5.0 to 11.2 ms, 8.0 to 16.0 ms | SM_REGEXP | not run |
 
 Open items:
 
 - **Done: native regexp stops (2026-11-17).** JSC's Yarr interpreter now asks the host every
   16,384 backtracks and SpiderMonkey's irregexp interpreter every 8,192, and a stop becomes each
   engine's uncatchable termination. With JSC and SpiderMonkey in `nativePollingEngines`, the
-  native-regexp proof stops a JSC guest in 11.2 ms on Chromium and 16.0 ms on WebKit (one call
-  takes 1,352 ms and 2,011 ms), and a SpiderMonkey guest in 4.9 ms and 8.0 ms (one call takes
-  899 ms and 1,245 ms). Record: `docs/bun-patches/engine-interruption.md` and
+  native-regexp proof stops a JSC guest in 5.0 to 11.2 ms on Chromium and 8.0 to 16.0 ms on
+  WebKit (one call takes 986 to 2,011 ms), and a SpiderMonkey guest in 4.8 to 5.4 ms and 6.4 to
+  8.0 ms (one call takes 866 to 1,245 ms), over three runs. Against controls built from the same
+  tree without the poll, regex benchmarks ran within run-to-run noise. Record: `docs/bun-patches/engine-interruption.md` and
   `docs/bun-patches/spidermonkey-g2.md`.
 - SM_GAP
 - **Group pages after the stop.** Waffle's per-incarnation exit lock (Waffle `fix/gap1-exit-lock`)
