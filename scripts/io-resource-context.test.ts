@@ -1,6 +1,6 @@
 // Host-only checks of the live driver: argument boundary, row evaluation and the stdin gate with
 // cleanup. Nothing here runs a guest engine, so no result counts as an engine pass.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -184,7 +184,13 @@ test("review R6: missing and non-executable launcher controls settle and save fa
     const result = await runGroup(control, [], out, out, 200);
     expect(result.error).toContain("EACCES");
     expect(result.groupGone).toBe(true);
-    expect(await main(["--surface", "native", "--engine", "quickjs", "--guest", control, "--launcher", control, "--shell", control, "--env-utility", control, "--out", out, "watch.abort"])).toBe(1);
+    // The control's own report says the row never ran; keep it out of the preflight log,
+    // where a FAIL line reads like a failing check.
+    const report = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await main(["--surface", "native", "--engine", "quickjs", "--guest", control, "--launcher", control, "--shell", control, "--env-utility", control, "--out", out, "watch.abort"])).toBe(1);
+      expect(report.mock.calls.map(call => String(call[0]))).toEqual(["MISSING watch.abort row never ran", "FAIL io-resource-context native: 0/1 exact rows"]);
+    } finally { report.mockRestore(); }
     expect(JSON.parse(readFileSync(join(out, "result.json"), "utf8"))).toMatchObject({ status: "fail", qualification: false, cleanup: { workRemoved: true, processGroupGone: true } });
   } finally { rmSync(out, { recursive: true, force: true }); }
 });
