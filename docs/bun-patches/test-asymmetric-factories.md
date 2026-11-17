@@ -41,6 +41,11 @@ Printed forms add `NotAny<...>`, `NotAnything`, `NumberNotCloseTo` and the
 intentional: Bun prints `closeTo`'s number truncated to an integer and omits the
 space after `NumberNotCloseTo`; this adapter prints the full number with a space.
 
+`toThrow` (`throwOutcome` in `crates/bunwasm-runtime/src/js/test_matchers.ts`)
+marks a thrown promise handled through an intrinsic reaction, as Bun's
+`getValueAsToThrow` does, so its rejection is not reported against a later test.
+The `test-throw-handled-promise` fixture covers it.
+
 Matching a promise makes the assertion return a Promise, as other asynchronous
 asymmetric matches do under the [awaited comparison
 contract](test-awaited-asymmetric.md); native Bun instead drains the event loop

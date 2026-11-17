@@ -82,12 +82,18 @@
     }
   }
 
+  function ignore(): undefined {
+    return undefined;
+  }
+
   function throwOutcome(ctx: Context, received: unknown): Outcome | Promise<Outcome> {
     if (typeof received !== "function") return ctx.promise ? { threw: true, value: received } : { invalid: true };
     let result: unknown;
     try {
       result = received();
     } catch (value) {
+      // Bun marks a thrown promise handled; its rejection is the thrown value's, not the test's.
+      if (isPromise(value)) react(value, ignore, ignore);
       return { threw: true, value };
     }
     if (!isPromise(result)) return { threw: false, value: result };
