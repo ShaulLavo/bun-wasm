@@ -123,7 +123,7 @@
       }
       const ipv6 = authority.startsWith("[") && authority.endsWith("]");
       const hostname = authority.toLowerCase();
-      const asciiHostname = /[^\x00-\x7f]/.test(hostname) ? native.domainToASCII(hostname) : hostname;
+      const asciiHostname = /[\u0080-￿]/.test(hostname) ? native.domainToASCII(hostname) : hostname;
       result.hostname = ipv6 ? hostname.slice(1, -1) : asciiHostname;
       result.host = (ipv6 ? hostname : asciiHostname) + (result.port ? ":" + result.port : "");
     }
