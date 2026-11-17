@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { runInContext } from "node:vm";
-import { runOwned, sourceRuntime } from "./fixtures/stream-consumers-runtime";
+import { prepareSourceRuntime, runOwned, SOURCE_BUILD_HANG_CAP_MS, sourceRuntime } from "./fixtures/stream-consumers-runtime";
 import { selectChecks } from "./test-checks";
 import { bindingControls, expectedBinding } from "../tests/fixtures/process-constants-binding/controls";
 
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-process-binding-"));
+beforeAll(() => prepareSourceRuntime(scratch), SOURCE_BUILD_HANG_CAP_MS);
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 test("Prisma's bundled tmp module can read process binding constants", () => {

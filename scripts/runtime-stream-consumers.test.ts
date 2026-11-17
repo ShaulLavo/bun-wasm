@@ -1,13 +1,18 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInContext } from "node:vm";
-import { runOwned, sourceModuleTools, sourceRuntime } from "./fixtures/stream-consumers-runtime";
+import { prepareSourceRuntime, runOwned, SOURCE_BUILD_HANG_CAP_MS, sourceModuleTools, sourceRuntime } from "./fixtures/stream-consumers-runtime";
 import { consumptionControls } from "./fixtures/stream-consumers-control";
 import { selectChecks } from "./test-checks";
 
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-stream-consumers-"));
+let tools: ReturnType<typeof sourceModuleTools>;
+beforeAll(() => {
+  prepareSourceRuntime(scratch);
+  tools = sourceModuleTools(scratch);
+}, SOURCE_BUILD_HANG_CAP_MS);
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 test("stream consumers resolves through public require and import metadata with emitted callable exports", async () => {
@@ -27,7 +32,6 @@ test("stream consumers resolves through public require and import metadata with 
   expect(Object.keys(consumers).sort()).toEqual(["arrayBuffer", "blob", "buffer", "bytes", "json", "text"]);
   for (const value of Object.values(consumers)) expect(typeof value).toBe("function");
   expect(source.emitted.get("stream_consumers")).toContain("async function text(");
-  const tools = sourceModuleTools(scratch);
   expect(tools("builtin", ["stream/consumers", "node:stream/consumers"]).trim().split("\n"))
     .toEqual(["node:stream/consumers", "node:stream/consumers"]);
   const key = `stream-consumers-${process.pid}`;
