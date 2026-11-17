@@ -5,6 +5,7 @@ import { preflight, preparationInput, preparationOptions, withStagedAssets } fro
 import { engines } from "./catalog";
 import { engineFiles } from "./engines";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
+import { memoryGroupPolicy } from "../../web/src/host-memory-policy";
 import { writePreparedSiteInventory } from "./prepared-site";
 const { delivery, spidermonkey, shell: selectedShell, profile: requestedProfile, localSource } = preparationOptions(process.argv.slice(2));
 const profile = requestedProfile;
@@ -52,5 +53,6 @@ if (await source.exited !== 0) throw new Error("Cannot identify built host sourc
 const status = Bun.spawn(["git", "status", "--porcelain"], { stdout: "pipe" });
 const dirty = Boolean((await new Response(status.stdout).text()).trim());
 if (await status.exited !== 0) throw new Error("Cannot identify built host state");
-await writeFile(resolve("web/dist/goals-host-source.json"), JSON.stringify({ commit, dirty, profile: profile ?? "template-default", guestSource: manifest.guestSource, shellSource: pinnedBashWeb(resolve("web")), memoryGroups: BUN_MEMORY_GROUP_POLICY, build: "bun web/build.ts" }));
+await writeFile(resolve("web/dist/goals-host-source.json"), JSON.stringify({ commit, dirty, profile: profile ?? "template-default", guestSource: manifest.guestSource, shellSource: pinnedBashWeb(resolve("web")), memoryGroups: BUN_MEMORY_GROUP_POLICY,
+  iphoneMemoryGroups: Object.fromEntries((["quickjs", "jsc", "spidermonkey"] as const).map(engine => [engine, memoryGroupPolicy(engine, "iPhone")])), build: "bun web/build.ts" }));
 await writePreparedSiteInventory(resolve("web/dist"));

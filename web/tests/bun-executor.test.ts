@@ -942,6 +942,13 @@ function stackEnvironment(host: Pick<typeof stackHosts[number], "agent" | "stack
   }
 }
 
+test("executor selects the iPhone native tool bound without changing grouped or desktop engines", controlled(() => {
+  const iphone = { agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 Version/26.5 Mobile/15E148 Safari/604.1", stack: geckoStack };
+  expect(stackEnvironment(iphone, "browser")?.BUN_WASM_IPHONE_NATIVE_MEMORY).toBe("1");
+  expect(stackEnvironment(iphone, "quickjs")?.BUN_WASM_IPHONE_NATIVE_MEMORY).toBeUndefined();
+  expect(stackEnvironment({ agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.4 Safari/605.1.15", stack: geckoStack }, "browser")?.BUN_WASM_IPHONE_NATIVE_MEMORY).toBeUndefined();
+}));
+
 for (const host of stackHosts) {
   test(`${host.name} selects measured engine stack budgets without changing explicit overrides`, controlled(() => withQualifiedReserves({}, () => {
     expect(stackEnvironment(host, "quickjs")?.BUN_WASM_STACK_KIB).toBe(host.quickjs);

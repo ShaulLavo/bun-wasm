@@ -85,6 +85,7 @@
     "web/src/tool-command.ts",
     "web/src/bun-executor.ts",
     "web/src/engine-stack-budget.ts",
+    "web/src/host-memory-policy.ts",
     "web/src/memory-telemetry.ts",
     "web/src/launch-failure.ts",
     "web/src/jsc-allocation-boundary.ts",

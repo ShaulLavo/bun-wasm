@@ -64,6 +64,7 @@
     "web/src/engine-stack-budget.ts",
     "web/src/fs-worker.ts",
     "web/src/fs.ts",
+    "web/src/host-memory-policy.ts",
     "web/src/jsc-allocation-boundary.ts",
     "web/src/launch-failure.ts",
     "web/src/memory-channel.ts",
