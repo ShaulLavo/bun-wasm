@@ -1,11 +1,16 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInContext } from "node:vm";
-import { runOwned, sourceModuleTools, sourceRuntime } from "./fixtures/stream-consumers-runtime";
+import { prepareSourceRuntime, runOwned, SOURCE_BUILD_HANG_CAP_MS, sourceModuleTools, sourceRuntime } from "./fixtures/stream-consumers-runtime";
 
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-http2-request-"));
+let tools: ReturnType<typeof sourceModuleTools>;
+beforeAll(() => {
+  prepareSourceRuntime(scratch);
+  tools = sourceModuleTools(scratch);
+}, SOURCE_BUILD_HANG_CAP_MS);
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const fixture = join(import.meta.dirname, "../tests/fixtures/http2-request/index.ts");
 
@@ -32,7 +37,6 @@ test("@hono/node-server 2.1.1 import links through production builtin export gen
   const source = sourceRuntime(scratch);
   const value: unknown = runInContext('require("node:http2")', Object.assign(source.context, { require: source.runtime.makeRequire("/entry.ts") }));
   if (!value || typeof value !== "object") throw new Error("Missing http2 builtin");
-  const tools = sourceModuleTools(scratch);
   const key = `http2-${process.pid}`;
   const path = join(scratch, "http2.mjs");
   const consumer = join(scratch, "hono-import.mjs");

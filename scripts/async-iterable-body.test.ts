@@ -1,11 +1,12 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { runInContext } from "node:vm";
-import { runOwned, sourceRuntime } from "./fixtures/stream-consumers-runtime";
+import { prepareSourceRuntime, runOwned, SOURCE_BUILD_HANG_CAP_MS, sourceRuntime } from "./fixtures/stream-consumers-runtime";
 import { comparableLifecycle } from "../tests/fixtures/async-iterable-body/lifecycle-comparison";
 
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-iterable-body-"));
+beforeAll(() => prepareSourceRuntime(scratch), SOURCE_BUILD_HANG_CAP_MS);
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const fixture = join(import.meta.dirname, "../tests/fixtures/async-iterable-body");
 const lifecycleExpected = JSON.parse(readFileSync(join(fixture, "lifecycle-expected.json"), "utf8"));
