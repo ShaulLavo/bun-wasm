@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-bun-deep-match",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

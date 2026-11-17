@@ -1,0 +1,12 @@
+
+index.test.ts:
+(pass) the object must contain the subset
+(pass) values compare with Object.is
+(pass) arrays must match exactly
+(pass) symbols and inherited keys
+(pass) cycles and arguments
+
+ 5 pass
+ 0 fail
+ 23 expect() calls
+Ran 5 tests across 1 file. [TIME]
