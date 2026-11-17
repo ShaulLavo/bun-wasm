@@ -58,6 +58,39 @@ event or altering the guest evidence. Signal delivery, synchronous sleep, guest
 assertions and the terminal FIFO barrier are unchanged. This adapter is original
 test infrastructure, with no upstream source or revision.
 
+The original `runtimeProcess-page-SIGKILL-stops-busy-guest` proof stops a guest
+spinning in `while (true) {}` the way Waffle stops any process: a page `kill(pid, 9)`
+publishes the signaled outcome, then the broker calls `Worker.terminate()`. Real iOS
+Safari does not stop a worker running Wasm on `terminate()` (a terminated busy group
+member kept running for at least 60 seconds), so for QuickJS, JSC and SpiderMonkey the
+proof keeps native terminate disabled: the engine's own mode 4 checkpoint must unwind
+`_start` with the typed SIGKILL, run no catch, finally or later code, and make no
+further checkpoint calls afterwards, and the page must observe exit status 137. The
+Browser engine's guest JavaScript is the browser's own, so its terminate is real; the
+guest posts a `SharedArrayBuffer` heartbeat to the page once with the worker's native
+`postMessage` (Bun's runtime replaces `BroadcastChannel`), the page's observed worker
+consumes that test-only message before the broker sees it, and the proof requires the
+heartbeat to stop after `terminate()`. Returning a stopped member's group
+pages depends on Waffle's per-incarnation exit lock, which is not in the pinned Waffle
+release yet; this proof covers the stop and the exit, not page reuse.
+
+The original `runtimeProcess-page-SIGKILL-stops-guest-in-native-regexp` proof repeats that
+stop while the guest is inside one catastrophically backtracking regexp call (about 2^32
+backtracks, inside an inner `catch {}`), far longer than any proof waits on any machine.
+The stop can only land inside that call; if the call ever returned, the finally block and
+the code after it would write their markers. The guest writes its readiness before the
+call, so the proof does not depend on machine speed. It runs only for engines that poll
+inside their native matcher, listed in `nativePollingEngines`: QuickJS's regexp engine
+calls the interrupt handler. JSC's Yarr interpreter and SpiderMonkey's irregexp do not poll
+yet, so both are excluded until their matchers poll.
+
+The stop proofs run last, in a separate page (`?phase=busy`) that the runner opens in a
+fresh browser context after the main matrix's context has closed, and closes right after.
+A busy guest that ever outlived its proof would keep spinning in its page's process and
+starve every later case. A stop proof that fails after its guest started still kills that
+guest and waits for its own poll to unwind it before the next case. The runner merges both
+pages into one result, which is green only if both are.
+
 
 ## Classification
 
@@ -70,7 +103,11 @@ test infrastructure, with no upstream source or revision.
 
 The original browser harness now accepts an explicit QuickJS/JSC subset through
 its driver option, page query and controller. Its local default remains both
-pairs, with 32 named checks per browser and 96 checks over the three browsers.
+pairs; `interruptionProofs` in `web/tests/engine-interruption-cases.ts` is the one list of
+named checks, and the gate and its unit tests count from it.
+SpiderMonkey joins only when selected explicitly (`--engines=quickjs,jsc,spidermonkey`
+with a staged `bun-spidermonkey.wasm` and `spidermonkey-engine.wasm`), because the CI
+interruption job builds no SpiderMonkey pair; it then runs the same paired-engine cases.
 Every subset retains the two Browser fatal checks and both Preview1 clock
 controls. Artifact preflight requires the selected pairs and Browser core;
 result admission checks the exact selected names and routes, including both

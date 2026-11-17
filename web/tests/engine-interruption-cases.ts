@@ -69,21 +69,41 @@ export function assertGuestQuiescence(guests: readonly { evidence: { startEntere
   }
 }
 
-export type InterruptionEngine = "quickjs" | "jsc";
+export type InterruptionEngine = "quickjs" | "jsc" | "spidermonkey";
 export const defaultInterruptionEngines: readonly InterruptionEngine[] = ["quickjs", "jsc"];
+// SpiderMonkey is experimental and has no artifact in the CI interruption job, so it runs only
+// when selected explicitly (--engines=quickjs,jsc,spidermonkey with a staged pair).
+const knownInterruptionEngines: readonly InterruptionEngine[] = ["quickjs", "jsc", "spidermonkey"];
 
 export function selectInterruptionEngines(value?: string): readonly InterruptionEngine[] {
   if (value === undefined) return defaultInterruptionEngines;
   const supplied = value.split(",");
-  const selected = defaultInterruptionEngines.filter(engine => supplied.includes(engine));
-  if (!selected.length || selected.join(",") !== value) throw new Error("Select quickjs, jsc or quickjs,jsc interruption engines");
+  const selected = knownInterruptionEngines.filter(engine => supplied.includes(engine));
+  if (!selected.length || selected.join(",") !== value) throw new Error("Select quickjs, jsc and spidermonkey interruption engines, in that order");
   return selected;
 }
 
+const engineInputs: Record<InterruptionEngine, readonly string[]> = {
+  quickjs: ["bun.wasm", "quickjs.wasm"],
+  jsc: ["bun-jsc.wasm", "jsc-engine.wasm"],
+  spidermonkey: ["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"],
+};
+
+/** The core file each paired engine's page loads; its side is resolved from the core's declaration. */
+export function interruptionCore(engine: InterruptionEngine): string { return engineInputs[engine][0]!; }
+
 export function interruptionInputs(engines: readonly InterruptionEngine[]): string[] {
-  return ["bun-browser.wasm"].concat(engines.flatMap(engine => engine === "quickjs"
-    ? ["bun.wasm", "quickjs.wasm"] : ["bun-jsc.wasm", "jsc-engine.wasm"]));
+  return ["bun-browser.wasm"].concat(engines.flatMap(engine => engineInputs[engine]));
 }
+
+/** Waffle's stop: a page SIGKILL, then Worker.terminate() on a guest spinning in JavaScript. */
+export const stopProofName = "runtimeProcess-page-SIGKILL-stops-busy-guest";
+/** The same stop while the guest spends its time in the engine's native regexp matcher. */
+export const nativeStopProofName = "runtimeProcess-page-SIGKILL-stops-guest-in-native-regexp";
+/** Engines that poll for a stop inside their native regexp matcher. JSC's Yarr and SpiderMonkey's
+ * irregexp do not yet, and their interpreter countdowns are minutes away when each call
+ * backtracks for over a second. */
+export const nativePollingEngines: readonly InterruptionEngine[] = ["quickjs"];
 
 export function interruptionProofs(engines: readonly InterruptionEngine[]) {
   const paired: { engine: string; route: string; name: string }[] = engines.flatMap(engine => [
@@ -101,10 +121,12 @@ export function interruptionProofs(engines: readonly InterruptionEngine[]) {
     { engine, route: "runtimeProcess", name: "runtimeProcess-page-kill-and-killJob-idle-handled-SIGINT-notifies-blocked-generation-and-exits-23" },
     { engine, route: "runtimeProcess", name: "runtimeProcess-page-sleepSync-SIGUSR1-deferred-handler" },
     { engine, route: "runtimeProcess", name: "runtimeProcess-page-sleepSync-default-SIGUSR1-unwinds" },
-  ]);
+    { engine, route: "runtimeProcess", name: stopProofName },
+  ].concat(nativePollingEngines.includes(engine) ? [{ engine, route: "runtimeProcess", name: nativeStopProofName }] : []));
   return paired.concat([
     { engine: "browser", route: "legacy", name: "default-2-status-130" },
     { engine: "browser", route: "legacy", name: "default-15-status-143" },
+    { engine: "browser", route: "runtimeProcess", name: stopProofName },
     { engine: "browser", route: "legacy", name: "legacy-preview1-root-clock-EINTR-dequeue-and-nonsticky-wait" },
     { engine: "browser", route: "legacy", name: "legacy-preview1-child-clock-EINTR-dequeue-and-nonsticky-wait" },
   ]);

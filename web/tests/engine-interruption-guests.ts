@@ -11,6 +11,29 @@ export function defaultSignalGuest(): string {
   return `const fs=require('node:fs'); ${protectedLoop("ready")}`;
 }
 
+export const stopHeartbeatMessage = "engine-interruption-heartbeat";
+
+// Browser-engine guest JavaScript runs natively in the worker, so it can publish a shared
+// heartbeat without any host call: the page sees whether the loop is still running after
+// Worker.terminate(). One native worker message hands over the buffer (Bun's runtime replaces
+// BroadcastChannel and MessageChannel, not the worker's own postMessage); the loop is pure Atomics.
+export function heartbeatBusyGuest(): string {
+  return `const fs=require('node:fs');
+    const beat=new Int32Array(new SharedArrayBuffer(4));
+    postMessage({ type: '${stopHeartbeatMessage}', buffer: beat.buffer });
+    try { fs.writeSync(2,'ready\\n'); for (;;) Atomics.add(beat,0,1); } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
+}
+
+// A guest that spends its time inside one native regexp call that backtracks about 2^32 times,
+// far longer than any proof waits, on any machine. A stop can land only inside that call, so
+// the engine must poll inside its native matcher. If the call ever returned, the finally block
+// and the code after it would write their markers; the inner catch must not swallow the stop.
+export function nativeRegexpGuest(): string {
+  return `const fs=require('node:fs');
+    const input='a'.repeat(32)+'!', pattern=/^(a+)+$/;
+    try { fs.writeSync(2,'ready\\n'); try { pattern.test(input); } catch {} } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
+}
+
 export function handledSignalGuest(nested = false, cpuMs = 1_000): string {
   return `const fs=require('node:fs');
     let count=0,loopFinished=false,turns=0;

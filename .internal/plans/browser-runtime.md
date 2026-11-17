@@ -761,3 +761,42 @@ Status: Approved. Found by the Browser103 (`b978ffda`) smoke triage.
 
 - **Real-provider guest gate.** No maintained gate runs the `net-unix-path` guest fixture with a real provider. The Node test host (`web/scripts/node-host.ts`, `node-net.mjs`) installs no `listen_path` or `connect_path` slot, so it is not a valid host for that fixture; its "no error" failure there is expected. `web/tests/node-net-path-released.test.ts` proves Waffle's `NetHost` path provider, not a guest. Add a browser page harness, like the `browser-wasm-transfer` page, that runs the fixture through `startRun` and Waffle `NetHost`. Run it as a maintained gate on an explicitly selected guest.
 - **Unsupported-slot diagnostic.** When a host lacks the path slots, `net_path.ts` `listen` and `connect` discard the native's negative code and report `hostError(0, …)`, which reads "no error". Report the missing capability instead, for example ENOTSUP. This changes guest runtime source, so it belongs to the next guest source unit. Do not patch it into a frozen guest.
+
+## Stopping busy guests (Waffle gap 1), 2026-11-17
+
+Status: Approved. The loop proof is done; the native-call gaps below are open.
+
+Why: on real iOS Safari, `Worker.terminate()` does not stop a worker running Wasm. A terminated
+busy group member kept writing for at least 60 s, and the tab held 400 to 730% CPU until it closed
+(`/work/reports/waffle-gap1-running-member-20261117/IOS.md`). Waffle's stop path now selects
+SIGKILL before every `terminate()` except exec replacement, so a guest stops only if its engine
+polls `runtime_proc.signal(0, 4)` while it runs.
+
+Measured with `web/tests/browser-engine-interruption.ts` (proof
+`runtimeProcess-page-SIGKILL-stops-busy-guest`, native terminate disabled for the paired engines),
+main 19b89fda1 guests, Playwright Chromium 156 and WebKit on the 28-core PC. Times are from the
+page SIGKILL to the `_start` unwind:
+
+| Guest workload | QuickJS | JSC | SpiderMonkey | Browser engine (real terminate) |
+| --- | --- | --- | --- | --- |
+| `while (true) {}` | 5.1 ms Chromium, 9.6 ms WebKit | 4.8 ms, 8.0 ms | 6.8 ms, 20 ms | heartbeat ran 2,007 ms on Chromium, stopped at once on WebKit |
+| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 5.3 ms (one call takes 342 ms) | no stop within 15 s (one call takes 1,677 ms) | no stop within 15 s, zero checkpoints (one call takes 1,366 ms) | not run |
+
+Open items:
+
+- **JSC Yarr does not poll.** The C-loop countdown polls the host every 1,024 trap points, and a
+  loop around a long regexp call reaches only a few trap points per call, so the next poll is
+  about 340 calls (about 10 minutes) away. Poll the host every N Yarr backtracks and turn a true
+  result into JSC's uncatchable termination. A separate worker owns this (coordinator,
+  2026-11-17). When it lands, add `jsc` to `nativePollingEngines` in
+  `web/tests/engine-interruption-cases.ts`.
+- **SpiderMonkey irregexp does not poll either.** `bunsm_poll_interrupt`
+  (`crates/bunwasm-spidermonkey/cpp/engine.cpp`) asks the host every 10,000 interpreter polls,
+  and a loop around a long regexp call reaches only a few per call. The same worker covers it
+  (coordinator, 2026-11-17). When it lands, add `spidermonkey` to `nativePollingEngines`.
+- **Group pages after the stop.** Waffle's per-incarnation exit lock (Waffle `fix/gap1-exit-lock`)
+  returns a stopped member's pages only after the worker exits. Once it ships in a Waffle release,
+  move the bun-wasm pin and extend the proof to show the stopped guest's pages return.
+- **Browser engine on Chromium.** Its guest JavaScript is the browser's own and cannot poll, so it
+  stops only when Chromium forces termination, 2 s after `terminate()`. This matters only if a
+  Browser-engine guest ever shares group pages.
