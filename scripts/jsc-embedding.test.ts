@@ -11,11 +11,6 @@ import { hash } from "./guest-source-manifest.ts";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
 
-test("WASI resizable allocation returns failure before upstream allocation work", () => {
-  expect(patch).toContain("static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory");
-  expect(patch).toMatch(/tryAllocateResizableMemory[^\n]*\n \{\n\+#if OS\(WASI\)\n(?:\+[^\n]*\n)*?\+    return nullptr;\n\+#else\n/);
-});
-
 test("WASI regexp matching preserves recursion errors instead of returning no match", () => {
   expect(patch.includes("return static_cast<unsigned>(JSRegExpResult::ErrorNoMemory);")).toBe(true);
   const callers = patch.split("diff --git a/Source/JavaScriptCore/runtime/RegExpInlines.h")[1]?.split("diff --git")[0];

@@ -97,7 +97,11 @@
     return internal.displayName ? internal.displayName(file, typeof site.isEval === "function" && site.isEval()) : file;
   }
 
-  function formatCallSite(site, keepIdentity = false) {
+  function syntaxCallSite(site, name, file) {
+    return !isV8 && site.getFunction() === undefined && !name && file;
+  }
+
+  function formatCallSite(site, keepIdentity = false, anonymousFunction = false) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
     const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
     const generated = native.engine === "host" && native.preparedSourceName(rawFile) !== undefined;
@@ -107,7 +111,7 @@
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
     // A syntax error's location: no function, just file and any known position.
-    if (!isV8 && site.getFunction() === undefined && !name && file) return formatPosition(file, line, col);
+    if (!anonymousFunction && syntaxCallSite(site, name, file)) return formatPosition(file, line, col);
     const hasCompletePosition = typeof line === "number" && typeof col === "number";
     if (hasCompletePosition && file && !internal.mappedCallSites?.has(site)) {
       const mapped = native.mapPosition(generated ? rawFile : file, line, col);
@@ -117,7 +121,7 @@
     const shown = !keepIdentity && hotName ? internal.hotDisplayName?.(file) || file : file;
     // Module and script top-level code prints bare, like JSC.
     const topLevel = isV8 ? !name && v8TopLevel(site) : isTopLevel(site.getFunction());
-    if ((!name || name === "__bunwasm_cjs__") && file && typeof line === "number" && (topLevel || name === "__bunwasm_cjs__")) return formatPosition(shown, line, col);
+    if (!anonymousFunction && (!name || name === "__bunwasm_cjs__") && file && typeof line === "number" && (topLevel || name === "__bunwasm_cjs__")) return formatPosition(shown, line, col);
     const label = name || "<anonymous>";
     if (site.isNative()) return `${label} (native)`;
     if (file === null || file === undefined) {

@@ -1,0 +1,12 @@
+import { parentPort } from "node:worker_threads";
+if (!parentPort) throw new Error("missing parent port");
+const port = parentPort;
+const states = [port.hasRef()];
+globalThis.onmessage = () => {};
+states.push(port.hasRef());
+const listener = () => {};
+EventTarget.prototype.addEventListener.call(port, "message", listener);
+states.push(port.hasRef());
+EventTarget.prototype.removeEventListener.call(port, "message", listener);
+states.push(port.hasRef());
+port.postMessage(states);

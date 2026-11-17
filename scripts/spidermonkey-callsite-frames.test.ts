@@ -2,13 +2,13 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-interface Frame { name: string; file: string; line: number; column: number }
+interface Frame { name: string; file: string; line: number; column: number; anonymousFunction?: boolean }
 type Reader = (error: unknown, raw: unknown, excludeSelfHosted: boolean) => unknown;
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/inspect.js", import.meta.url), "utf8");
 const stackTrace = readFileSync(new URL("../crates/bunwasm-runtime/src/js/stack_trace.ts", import.meta.url), "utf8");
 const stackFactory = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.stackFactory = ${stackTrace};`);
 
-interface CallSite { getFileName(): string; getLineNumber(): number; getColumnNumber(): number }
+interface CallSite { getFileName(): string; getLineNumber(): number; getColumnNumber(): number; getFunctionName(): string | null; toString(): string }
 interface RuntimeError { stack: unknown }
 interface StackRuntime {
   Error: {
@@ -35,7 +35,14 @@ function stackRuntime(reader?: Reader, engine = "spidermonkey"): StackRuntime {
       native: { engine, preparedSourceName: () => undefined },
       mappedCallSites: new WeakSet(),
       mapPosition: () => [7, 9],
-      defineHidden: (target, methods) => Object.defineProperties(target, Object.getOwnPropertyDescriptors(methods)),
+      defineHidden: (target, methods) => {
+        for (const [name, value] of Object.entries(methods)) Object.defineProperty(target, name, { value, writable: true, configurable: true });
+      },
+      formatCallSite: (site, _identity, anonymous) => {
+        const location = site.getFileName() + ':' + site.getLineNumber() + ':' + site.getColumnNumber();
+        const name = site.getFunctionName() || (anonymous ? '<anonymous>' : '');
+        return name ? name + ' (' + location + ')' : location;
+      },
       require: () => inspect,
     };
     const inspect = inspectFactory(internal);
@@ -61,7 +68,7 @@ test("SpiderMonkey CallSite frames use decoded native identities without reading
     expect(target).toBe(error);
     expect(text).toBe(raw);
     expect(exclude).toBe(true);
-    return files.map(file => ({ name: "capture", file, line: 1, column: 2 }));
+    return files.map(file => ({ name: "capture", file, line: 1, column: 2, frameKind: 2 }));
   }, { mapPosition: (...args: unknown[]) => { mappings.push(args); return [7, 9]; } });
   expect(stack.errorFrames(error, raw)).toEqual(files.map(file => ({ name: "capture", file, line: 7, column: 9 })));
   expect(mappings).toEqual(files.map(file => [file, 1, 2]));
@@ -100,7 +107,7 @@ test("ordinary SpiderMonkey formatters receive decoded, mapped CallSites lazily 
     expect(target).toBe(error);
     expect(raw).toBe("capture@/encoded%2500.ts:1:2");
     expect(exclude).toBe(true);
-    return files.map(file => ({ name: "capture", file, line: 1, column: 2 }));
+    return files.map(file => ({ name: "capture", file, line: 1, column: 2, frameKind: 2 }));
   });
   const error = new runtime.Error();
   let calls = 0;
@@ -153,3 +160,35 @@ for (const engine of ["spidermonkey", "jsc", "host"]) {
     expect(holder.stack).toEqual([["/encoded%2500.ts", 7, 9]]);
   });
 }
+
+for (const order of [[1, 2], [2, 1]]) {
+  test(`same-position native kinds ${order} preserve names and only label Functions`, () => {
+    const records = order.map(frameKind => ({ name: null, file: "/same.ts", line: 1, column: 2, frameKind }));
+    const runtime = stackRuntime(() => records);
+    let observed: CallSite[] = [];
+    runtime.Error.prepareStackTrace = (_error, sites) => { observed = sites; return sites; };
+    const error = new runtime.Error();
+    expect(error.stack).toBe(observed);
+    expect(observed.map(site => site.getFunctionName())).toEqual([null, null]);
+    expect(observed.map(site => site.toString())).toEqual(order.map(kind => kind === 2 ? "<anonymous> (/same.ts:7:9)" : "/same.ts:7:9"));
+    expect(observed.map(site => String(site))).toEqual(observed.map(site => site.toString()));
+    const prototype = Object.getPrototypeOf(observed[0]);
+    expect(Object.getOwnPropertyDescriptor(prototype, "toString")).toEqual({ value: prototype.toString, enumerable: false, writable: true, configurable: true });
+    expect(Object.getOwnPropertyNames(prototype).sort()).toEqual([
+      "constructor", "getColumnNumber", "getEvalOrigin", "getFileName", "getFunction", "getFunctionName", "getLineNumber",
+      "getMethodName", "getPromiseIndex", "getScriptNameOrSourceURL", "getThis", "getTypeName", "isAsync", "isConstructor",
+      "isEval", "isNative", "isPromiseAll", "isToplevel", "toString",
+    ].sort());
+  });
+}
+
+test("only original null or empty Function names acquire anonymous presentation", () => {
+  const inputs = [
+    { name: null, frameKind: 0 }, { name: null, frameKind: 1 }, { name: null, frameKind: 2 },
+    { name: null, frameKind: 3 }, { name: "", frameKind: 2 }, { name: "__bunwasm_cjs__", frameKind: 2 },
+    { name: "anonymous", frameKind: 2 }, { name: "named", frameKind: 2 },
+  ];
+  const frames = inspector("spidermonkey", () => inputs.map(input => ({ ...input, file: "/same.ts", line: 1, column: 2 }))).errorFrames({}, "raw");
+  expect(frames.map(frame => frame.name)).toEqual(["", "", "", "", "", "", "anonymous", "named"]);
+  expect(frames.map(frame => frame.anonymousFunction === true)).toEqual([false, false, true, false, true, false, false, false]);
+});

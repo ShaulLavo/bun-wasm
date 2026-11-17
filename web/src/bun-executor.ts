@@ -3,6 +3,7 @@ import { programKind } from "../../src/engine-kind.js";
 import { createMemoryPublisher, observeMemoryImports } from "./memory-channel.js";
 import { createMemoryReader, publishBrowserCallTrap, type EngineDiagnostics, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
 import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
+import { nativeSharedMemoryEnvironment } from "./host-memory-policy.ts";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
 import { startEngineHost } from "./engine-host.js";
@@ -89,7 +90,8 @@ function withDefault(env: Record<string, string>, key: string, value: string | u
  * it, independently of the other: an explicit or empty value of one never changes the other's default.
  */
 function stackEnvironment(req: RunRequest, stack: string, userAgent: string): Record<string, string> {
-  const budgeted = withDefault(req.env, engineStackBudgetKey(req.engine), engineStackBudgets(stack, userAgent, req.stackHost)?.[req.engine]);
+  const env = nativeSharedMemoryEnvironment(req.engine, req.env, userAgent);
+  const budgeted = withDefault(env, engineStackBudgetKey(req.engine), engineStackBudgets(stack, userAgent, req.stackHost)?.[req.engine]);
   if (req.engine !== "jsc") return budgeted;
   return withDefault(budgeted, "BUN_WASM_JSC_PARSER_RESERVE", jscParserReserve(stack, userAgent, req.stackHost));
 }

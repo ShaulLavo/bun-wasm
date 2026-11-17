@@ -1,0 +1,9 @@
+{
+  "owner": "native-probe",
+  "path": "scripts/jsc-resizable-native.test.ts",
+  "inputs": [
+    "scripts/jsc-resizable-native.ts",
+    "tests/native/jsc-resizable-backing.cpp",
+    "jsc/webkit-wasi.patch"
+  ]
+}

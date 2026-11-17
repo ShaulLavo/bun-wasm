@@ -5,9 +5,10 @@ Class **Host feature**, **original adapter** in
 `web/tests/fixtures/worker-entry-observation-probe.ts`. No upstream implementation
 is copied. The provider boundary is Waffle's `RootMemoryGroupMember` in
 `packages/waffle/browser/process-broker.ts`, exported through `waffle/runtime`.
-The consumer selects public Waffle 0.0.138 at
-`876be3fa82098f465a6feada013255181342302a`. Earlier source checks used reviewed
-`e01ed9806373376a5249266da8572454a2bab50e`; the production runtime is unchanged
+The consumer selects public Waffle 0.0.139 at
+`8e86a2a0f2398c1485ef16f7bc423961f4e05f94`. Earlier source checks used reviewed
+`e01ed9806373376a5249266da8572454a2bab50e` and 0.0.138 at
+`876be3fa82098f465a6feada013255181342302a`; `RootMemoryGroupMember` is unchanged
 between those commits. This adapter does not promise native backing release.
 
 The runner captures its exact admitted membership and root retention lease before

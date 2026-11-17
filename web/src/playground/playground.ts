@@ -2,7 +2,7 @@ import { TypedEventTarget } from "@remix-run/component";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { createRuntime, type Runtime } from "waffle";
-import { BUN_MEMORY_GROUP_POLICY } from "../../../src/engine-kind";
+import { memoryGroupPolicy } from "../host-memory-policy";
 import { playgroundProfile, registerPlaygroundBun, templateProfile, type PlaygroundProfile } from "./program-profile";
 import { BrowserPrograms } from "../browser-programs";
 import { ENGINES, type Engine, WasmMissing, createToolsLoader, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
@@ -160,7 +160,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
     const runtime = createRuntime({
       filesystem: { mode, name: this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace" },
-      memoryGroups: BUN_MEMORY_GROUP_POLICY,
+      memoryGroups: memoryGroupPolicy(this.engine, navigator.userAgent),
     });
     const browserPrograms = new BrowserPrograms(runtime, {
       worker: new URL("./preview1-worker.js", location.href),

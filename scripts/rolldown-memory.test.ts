@@ -19,13 +19,13 @@ afterAll(() => {
     JSON.stringify({ measurements, removedScratch: scratch }, null, 2) + "\n");
 });
 
-function command(args: string[], cwd = scratch): string {
-  const result = Bun.spawnSync(args, { cwd, stdout: "pipe", stderr: "pipe", timeout: 90_000 });
+function command(args: string[], cwd = scratch, env = process.env): string {
+  const result = Bun.spawnSync(args, { cwd, env, stdout: "pipe", stderr: "pipe", timeout: 90_000 });
   if (result.exitCode !== 0) throw new Error(`${args[0]} failed: ${result.stderr}`);
   return result.stdout.toString();
 }
-function adapt(path = loader): string {
-  command([binary, path, output]);
+function adapt(path = loader, iphone = false): string {
+  command([binary, path, output], scratch, { ...process.env, BUN_WASM_IPHONE_NATIVE_MEMORY: iphone ? "1" : "0" });
   return readFileSync(output, "utf8");
 }
 
@@ -61,6 +61,14 @@ test.each(loaders)("%s uses the binary minimum and supported capacity while pres
   expect(JSON.parse(command([binary, loader, output])).dependsOnBinary).toBe(true);
 });
 
+test.each(loaders)("%s bounds iPhone native memory while preserving source positions", filename => {
+  const path = join(directory, filename);
+  const source = readFileSync(path, "utf8");
+  const adapted = adapt(path, true);
+  expect(adapted).toBe(source.replace("initial: 16384,", "initial: 1001 ,").replace("maximum: 65536,", "maximum: 4096 ,"));
+  expect(adapted.length).toBe(source.length);
+});
+
 test("the supplied shared capacity satisfies the real binary import bounds", () => {
   const bytes = readFileSync(wasm);
   expect(wasmMemoryLimits(bytes)).toEqual([{ initial: 1001, maximum: 65536, shared: true, origin: "imported" }]);
@@ -87,6 +95,8 @@ test("Rolldown real sync, async, bundling, caller errors and disposal survive th
   const packageRoot = join(scratch, "node_modules/rolldown");
   const stock = JSON.parse(command(["node", probe, scratch, "stock", packageRoot]));
   const small = JSON.parse(command(["node", probe, scratch, "small", packageRoot, output]));
+  adapt(loader, true);
+  const iphone = JSON.parse(command(["node", probe, scratch, "iphone", packageRoot, output]));
   expect(stock.loadError).toBeUndefined();
   expect(small.loadError).toBeUndefined();
   expect(small.output).toEqual(stock.output);
@@ -98,7 +108,13 @@ test("Rolldown real sync, async, bundling, caller errors and disposal survive th
   expect(stock.descriptors).toEqual([{ initial: 16384, maximum: 65536, shared: true }]);
   expect(small.descriptors).toEqual([{ initial: 1001, maximum: 32768, shared: true }]);
   expect(small.grownBytes[0]).toBeLessThan(stock.grownBytes[0]);
-  measurements.push({ stock, small });
+  expect(iphone.loadError).toBeUndefined();
+  expect(iphone.output).toEqual(stock.output);
+  expect(iphone.badArgument).toEqual(stock.badArgument);
+  expect(iphone.phases).toEqual(stock.phases);
+  expect(iphone.descriptors).toEqual([{ initial: 1001, maximum: 4096, shared: true }]);
+  expect(iphone.grownBytes[0]).toBeLessThan(256 << 20);
+  measurements.push({ stock, small, iphone });
 }, 90_000);
 
 test.skipIf(!browserResult)("compiled Rolldown browser output preserves real Chromium and WebKit APIs", () => {

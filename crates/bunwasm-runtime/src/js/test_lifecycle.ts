@@ -1,4 +1,42 @@
 (function () {
+  type Completion = { ok: true } | { error: unknown };
+  type Callback = (...args: unknown[]) => unknown;
+  type Finish = (result: Completion) => void;
+
+  function thenable(value: unknown): value is PromiseLike<unknown> {
+    if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
+    return typeof Reflect.get(value, "then") === "function";
+  }
+
+  function doneBody(fn: Callback, args: readonly unknown[], finish: Finish) {
+    let called = false;
+    let bodyComplete = false;
+    const complete = () => {
+      bodyComplete = true;
+      if (called) finish({ ok: true });
+    };
+    const done = (error?: unknown) => {
+      if (called) return;
+      called = true;
+      if (error !== undefined && error !== null) return finish({ error });
+      if (bodyComplete) finish({ ok: true });
+    };
+    const result = fn(...args.concat([done]));
+    if (!thenable(result)) return complete();
+    Promise.resolve(result).then(complete, error => finish({ error }));
+  }
+
+  function body(fn: Callback, args: readonly unknown[], usesDone: boolean, finish: Finish) {
+    try {
+      if (usesDone) return doneBody(fn, args, finish);
+      const result = fn(...args);
+      if (!thenable(result)) return finish({ ok: true });
+      result.then(() => finish({ ok: true }), error => finish({ error }));
+    } catch (error) {
+      finish({ error });
+    }
+  }
+
   function count(value: unknown, key: string, signature: string) {
     if (value === undefined) return 0;
     if (typeof value !== "number") throw new Error(`${signature}() expects ${key} to be a number`);
@@ -44,5 +82,5 @@
     return { ...outcome, elapsed, label };
   }
 
-  return { repeatOptions, attempts };
+  return { repeatOptions, attempts, body };
 })

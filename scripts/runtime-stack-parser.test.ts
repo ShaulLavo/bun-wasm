@@ -217,3 +217,15 @@ test("SpiderMonkey keeps a user-supplied V8 stack when native metadata does not 
   expect(stack.formatError(error)).toContain("at custom (/custom.js:4:7)");
   expect(error.stack).toBe("    at custom (/custom.js:4:7)");
 });
+
+test("native frame kind changes diagnostic labels without changing real names", () => {
+  const inputs = [
+    { name: null, frameKind: 1 }, { name: null, frameKind: 2 }, { name: "__bunwasm_cjs__", frameKind: 2 },
+    { name: "anonymous", frameKind: 2 }, { name: null, frameKind: 0 }, { name: null, frameKind: 3 },
+  ];
+  const stack = inspector("spidermonkey", {}, () => inputs.map(input => ({ ...input, file: "/capture.ts", line: 1, column: 2 })));
+  const output = stack.formatError(new Error("kind"));
+  expect(output.match(/at <anonymous>/g)).toHaveLength(1);
+  expect(output.match(/at \/capture.ts:1:2/g)).toHaveLength(4);
+  expect(output).toContain("at anonymous (/capture.ts:1:2)");
+});

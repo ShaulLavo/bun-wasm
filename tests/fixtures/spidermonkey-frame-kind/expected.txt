@@ -1,0 +1,1 @@
+Capture kind preserves null names and distinguishes same-position Function and Program presentation

@@ -1,17 +1,16 @@
 import { expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
+import { runInContext } from "node:vm";
+import { eventTargetSource } from "./event-target-source";
 
 const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.workerFactory = ${readFileSync(
   new URL("../crates/bunwasm-runtime/src/js/worker_threads.ts", import.meta.url), "utf8")}`);
 
 function workerModule(self: boolean, control: unknown = { input: 12, output: 15 }) {
+  const target = eventTargetSource({ structuredClone });
   const channels: number[][] = [];
   const stop = new Error("channel opened");
-  const factory = runInNewContext(source, {
-    EventTarget, Event, MessageEvent, DOMException, URL, structuredClone,
-  });
+  const factory = runInContext(source, target.context);
   const process = {
     env: self ? {
       BUNWASM_WORKER_INIT: JSON.stringify({ route: [1], envGroup: "worker", argv: ["bun", "[worker eval]"], execArgv: [], graph: {} }),
@@ -20,7 +19,7 @@ function workerModule(self: boolean, control: unknown = { input: 12, output: 15 
     execArgv: [], execPath: "bun", cwd: () => "/",
   };
   const modules: Record<string, unknown> = {
-    process, events: EventEmitter, structured_clone: { structuredClone }, net: {},
+    process, events: target.events, structured_clone: { structuredClone }, net: {},
     worker_codec: { create: () => ({ prepare: () => ({ graph: {}, commit() {}, abort() {} }) }) },
     spawn: { spawnWorker: () => ({ pid: 71, _workerChannel: { input: 21, output: 22 }, _abortWorker() {} }) },
     worker_channel: { open: (read: number, write: number) => {
@@ -28,7 +27,7 @@ function workerModule(self: boolean, control: unknown = { input: 12, output: 15 
       throw stop;
     } },
   };
-  const implementation = factory({
+  const implementation = factory(Object.assign(target.internal, {
     realTimers: { setImmediate() {} },
     native: {},
     require: (name: string) => {
@@ -36,7 +35,7 @@ function workerModule(self: boolean, control: unknown = { input: 12, output: 15 
       return modules[name];
     },
     addIoWaiter() {}, messagePortRefs: new Set<object>(),
-  });
+  }));
   return { implementation, channels, stop };
 }
 

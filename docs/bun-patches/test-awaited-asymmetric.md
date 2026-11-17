@@ -29,6 +29,13 @@ settlement; completed siblings, failed candidates and independent assertions do
 not share memo entries. Maps choose the first matching key and compare that
 entry's value once. Sets retain insertion-order search and candidate reuse.
 
+The private util entry also receives the expectation factory's matcher predicate.
+Array data descriptors distinguish holes and indexed accessors without invoking
+getters. A loose comparison reads an indexed accessor when the other side is a
+matcher, then settles that comparison before visiting the next index. Strict
+presence checks still precede matcher calls. Ordinary proxy-array reads retain
+their order. Public Bun.deepEquals never receives the predicate.
+
 Direct throws preserve their identity. Actual matcher Promises get intrinsic
 fulfillment and rejection reactions immediately, without reading public `then`,
 constructor or species. Rejection prints the original reason once through the
@@ -68,3 +75,12 @@ assertions retain their existing reaction count. No host observation or pump
 changes are involved. Stack-bearing Error rejection checks run inside the owned
 subprocess fixture; the comparison fixture pins the existing two-line primitive
 diagnostic without depending on engine-specific stack columns.
+
+
+The pending observer accepts a done-invocation completion checkpoint. Successful
+done completion yields one microtask before examining its existing pending map,
+so a same-callback throw or returned rejection can retain ownership. Non-done
+completion keeps the previous path. Done-body completion uses direct settlement
+callbacks instead of adding its returned Promise to the matcher pending map,
+so a completed body does not introduce a timer checkpoint. Matcher return values, intrinsic reactions,
+assertion origins and snapshot policy are unchanged by this runner wiring.

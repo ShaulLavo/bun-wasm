@@ -43,10 +43,12 @@
     // Neither engine reports Promise.all/any combinator frames.
     isPromiseAll() { return false; },
     getPromiseIndex() { return null; },
-    toString(this: BunWasm.StackCallSite) { return internal.formatCallSite(this); },
   } satisfies ThisType<BunWasm.StackCallSite>;
 
   class CallSite {
+    declare isToplevel: typeof methods.isToplevel;
+    declare isPromiseAll: typeof methods.isPromiseAll;
+    declare getPromiseIndex: typeof methods.getPromiseIndex;
     #frame: BunWasm.StackFrame;
     constructor(frame: BunWasm.StackFrame) { this.#frame = frame; internal.mappedCallSites.add(this); }
     getFileName() { return this.#frame.file; }
@@ -54,6 +56,7 @@
     getFunction() { return undefined; }
     getLineNumber() { return this.#frame.line; }
     getColumnNumber() { return this.#frame.column; }
+    toString() { return internal.formatCallSite(this, false, this.#frame.anonymousFunction === true); }
     isNative() { return false; }
     isConstructor() { return this.#frame.name.startsWith("new "); }
     // Suspended awaiting callers are named `async <name>` by JavaScriptCore and `async*<name>`
@@ -109,7 +112,10 @@
     internal.defineHidden(prototype, methods);
     // QuickJS walks only live frames, so a suspended awaiting caller never appears: none of the
     // frames it reports is an async frame.
-    internal.defineHidden(prototype, { isAsync() { return false; } });
+    internal.defineHidden(prototype, {
+      isAsync() { return false; },
+      toString(this: BunWasm.StackCallSite) { return internal.formatCallSite(this); },
+    });
     const nativeStack = Object.getOwnPropertyDescriptor(Error.prototype, "stack");
     const nativePrepare = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
     nativePrepare!.set!.call(Error, (_error: object, sites: unknown) => sites);

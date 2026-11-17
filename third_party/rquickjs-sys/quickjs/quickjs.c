@@ -61757,8 +61757,10 @@ static JSValue js_array_buffer_transfer(JSContext *ctx, JSValueConst this_val,
     if (magic == JS_ARRAY_BUFFER_TRANSFER) {
         if (array_buffer_is_resizable(abuf)) { // carry over maxByteLength
             max_len = abuf->max_byte_length;
+            // Spec (ArrayBufferCopyAndDetach): a length above the carried
+            // maxByteLength is a RangeError.
             if (new_len > max_len)
-                return JS_ThrowTypeError(ctx, "invalid array buffer length");
+                return JS_ThrowRangeError(ctx, "invalid array buffer length");
             pmax_len = &max_len;
         }
     }

@@ -30,12 +30,24 @@ function initializes passive data and zeroed storage through byte 65,584,755.
 The imported minimum provides 65,601,536 bytes. A real engine rejects 1,000
 pages before any imported function runs.
 
-The adapter supplies 1,001 initial pages and a 32,768-page maximum, matching
-bun-wasm's supported 2 GiB capacity. The imported maximum is an upper bound on
+The adapter supplies 1,001 initial pages and a 32,768-page maximum on desktop
+and grouped engines. The iPhone Browser executor supplies the internal
+`BUN_WASM_IPHONE_NATIVE_MEMORY` fact, selecting a 4,096-page maximum, 256 MiB,
+for its independent native tool memory. The executor removes that fact when
+selecting another engine. Nested shared tools in grouped engines use regions
+of their existing backing, so they keep their original logical maximum and
+region-allocation behavior. The imported maximum is an upper bound on
 the supplied memory, not a requirement to reserve 4 GiB. The real binary, shared
 flag, stack, worker pools, thread imports, and exports remain unchanged. Equal-width replacement preserves source positions. This saves
 1,008,140,288 bytes of initial logical capacity. It also avoids asking Safari to admit a 4 GiB shared maximum. Neither declared
 capacity measures physical memory.
+
+WebKit reserves a native shared memory's declared maximum on iPhone. The
+256 MiB bound leaves 152,502,272 bytes above the 115,933,184-byte capacity
+reached by the published-package API controls in Chromium and Linux WebKit.
+A separate real Vite 8.3.5 and React production build with the same adapted
+Wasm binding reaches 99,155,968 bytes under Node. These measurements cover
+these workloads; larger projects may exhaust the iPhone limit.
 
 Only the exact loader path and matching loader/binary hashes qualify. Changed
 or missing binaries, changed loaders, swapped loader types, unrelated paths,
