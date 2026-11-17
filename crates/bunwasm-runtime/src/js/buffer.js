@@ -5,6 +5,7 @@
   "use strict";
 
   const kMaxLength = 4294967296;
+  const concatLength = internal.require("buffer_concat_length");
   const kStringMaxLength = 2147483647;
   const INSPECT_MAX_BYTES = 50;
   const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
@@ -603,7 +604,7 @@
       actualLength += item.length;
     }
     let length = totalLength;
-    if (length === undefined) length = actualLength;
+    if (length === undefined) length = concatLength(actualLength, kMaxLength);
     else validateLengthArg(length);
     const out = Buffer.allocUnsafe(length);
     let pos = 0;
@@ -1238,13 +1239,13 @@
     throw makeError(TypeError, "ERR_INVALID_ARG_TYPE", "First argument must be an ArrayBufferView");
   }
 
-  function isAscii(input) {
+  const isAscii = (input) => {
     const bytes = toBytesView(input);
     for (let i = 0; i < bytes.length; i++) {
       if (bytes[i] > 0x7f) return false;
     }
     return true;
-  }
+  };
 
   // Length of a valid UTF-8 sequence starting at `i`, or 0 if invalid.
   function utf8SequenceLength(bytes, i) {
@@ -1272,7 +1273,7 @@
     return need + 1;
   }
 
-  function isUtf8(input) {
+  const isUtf8 = (input) => {
     const bytes = toBytesView(input);
     let i = 0;
     while (i < bytes.length) {
@@ -1281,7 +1282,7 @@
       i += n;
     }
     return true;
-  }
+  };
 
   const globalAtob = typeof atob === "function" ? atob : undefined;
   const globalBtoa = typeof btoa === "function" ? btoa : undefined;

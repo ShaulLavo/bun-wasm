@@ -100,11 +100,32 @@ The maintained small-buffer checks are
 `scripts/buffer-residual-semantics.test.ts`. They require no private hooks or
 large allocations and preserve the existing raw encoding binding tests.
 
+
+`buffer_concat_length.ts` is an original allocation-boundary adapter, using
+Bun `src/jsc/bindings/JSBuffer.cpp` at
+`9510e74152073d850a18758ca41114d8f214ffa6` as its comparison source.
+An inferred concatenation length beyond `constants.MAX_LENGTH` raises Bun's
+typed-array allocation-limit error. Explicit lengths still use the existing
+`length` argument validation, and allocation methods retain their `size`
+validation. Native Bun 1.4.4 confirms those separate errors.
+
+`isAscii` and `isUtf8` are callable without being constructible, and have no
+`prototype`, matching native Bun 1.4.4.
+The unchanged upstream `new isAscii(...)` expectation of primitive `false`
+still fails; the native oracle rejects construction with TypeError. The adapter
+does not alter that upstream expectation or pretend it passes.
+
+`scripts/buffer-allocation-boundaries.test.ts` loads the production factories.
+`tests/fixtures/buffer-allocation-boundaries` checks the public functions across
+QuickJS, JSC, Browser and SpiderMonkey, using one 64 MiB input repeated by
+reference for the oversized concatenation.
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays; preserve omitted-length tracking and empty-copy range ordering, delegate fill overload selection to the original typed adapter, and re-export the shared web `Blob`/`File` constructors without wrapping them. |
+| `crates/bunwasm-runtime/src/js/buffer_concat_length.ts` | Original adapter | Preserve Bun's allocation-limit error for an inferred concatenation length. |
 
 [Parent context](bun-patch-series.md).
 

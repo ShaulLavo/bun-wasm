@@ -429,11 +429,7 @@
     return { success: true, outputs: result.outputs.map((o) => new BuildArtifact(o, entrypoints)), logs };
   }
 
-  function concatArrayBuffers(buffers, maxLength, asUint8Array) {
-    let bytes = internal.concatBytes(buffers.map((b) => internal.toUint8(b)));
-    if (maxLength !== undefined) bytes = bytes.subarray(0, maxLength);
-    return asUint8Array ? bytes : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  }
+  const concatArrayBuffers = internal.require("concat_array_buffers");
 
   async function readableStreamToBytes(stream) {
     const chunks = [];
