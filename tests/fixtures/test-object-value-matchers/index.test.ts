@@ -67,6 +67,8 @@ test("toBeEmptyObject", () => {
   expect(() => {}).toBeEmptyObject();
   expect(new Map()).not.toBeEmptyObject();
   expect(new Set()).not.toBeEmptyObject();
+  expect(new WeakMap()).not.toBeEmptyObject();
+  expect(new WeakSet()).not.toBeEmptyObject();
   expect(/x/).not.toBeEmptyObject();
   expect(new Date()).not.toBeEmptyObject();
   expect({ a: 1 }).not.toBeEmptyObject();
@@ -81,4 +83,6 @@ test("toBeObject counts functions and classes", () => {
   expect([]).toBeObject();
   expect(null).not.toBeObject();
   expect("s").not.toBeObject();
+  expect(message(() => expect("s").toBeObject())).toBe('Error: expect(received).toBeObject()\n\nExpected value to be an object\n\nReceived: "s"\n');
+  expect(message(() => expect({}).not.toBeObject())).toBe("Error: expect(received).not.toBeObject()\n\nExpected value not to be an object\n\nReceived: {}\n");
 });

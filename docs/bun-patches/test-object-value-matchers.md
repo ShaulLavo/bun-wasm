@@ -21,9 +21,13 @@ and throws, `toContainValues` passes for null or undefined, `toContainValue`,
 `toContainAllValues` needs equal counts and fails an empty expectation.
 Failures print Bun's verbs, and `toContainAllKeys` prints the received keys.
 
-`toBeObject` counts functions and classes as objects, like JSC's `isObject`.
-`toBeEmptyObject` accepts objects and functions with no own enumerable string
-keys, except Map, Set, RegExp and Date, as jest-get-type does. The adapter
-checks those kinds with `instanceof` where Bun reads the JSC cell type.
+`toBeObject` counts functions and classes as objects, like JSC's `isObject`,
+and its failure says `Expected value to be an object` (or `not to be`) before
+the received value, as in Bun. `toBeEmptyObject` accepts objects and functions
+with no own enumerable string keys, except Map, Set, WeakMap, WeakSet, RegExp
+and Date. That is Bun's `is_object_empty` rule; JSC's map and set checks include
+the weak kinds, so it is wider than jest-get-type's. The adapter checks those
+kinds with `instanceof` where Bun reads the JSC cell type, so an
+`Object.create(Map.prototype)` object fails here and passes in Bun.
 
 The `test-object-value-matchers` fixture covers these rules on every engine.

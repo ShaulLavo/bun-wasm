@@ -949,9 +949,17 @@
   defineValueMatcher("toBeDate", (v) => v instanceof Date);
   defineValueMatcher("toBeValidDate", (v) => v instanceof Date && !Number.isNaN(v.getTime()));
   // Bun's isObject: functions and classes are objects too.
-  defineValueMatcher("toBeObject", isObjectLike);
-  // jest-get-type treats Map, Set, RegExp and Date as their own kinds, not empty objects.
-  defineValueMatcher("toBeEmptyObject", (v) => isObjectLike(v) && !(v instanceof Map || v instanceof Set || v instanceof RegExp || v instanceof Date) && Object.keys(v).length === 0);
+  defineMatcher("toBeObject", "", (ctx, received) => {
+    if (!failed(ctx, isObjectLike(received))) return null;
+    return { body: `\n\nExpected value ${ctx.not ? "not " : ""}to be an object\n\nReceived: ${inspect(received)}\n` };
+  });
+  // Bun's is_object_empty: Map, Set (weak ones included), RegExp and Date are their own kinds,
+  // not empty objects.
+  defineValueMatcher("toBeEmptyObject", (v) => isObjectLike(v) && !isKeyedKind(v) && Object.keys(v).length === 0);
+
+  function isKeyedKind(value) {
+    return value instanceof Map || value instanceof Set || value instanceof WeakMap || value instanceof WeakSet || value instanceof RegExp || value instanceof Date;
+  }
   defineValueMatcher("toBeSymbol", (v) => typeof v === "symbol");
 
   // ── ordering ──

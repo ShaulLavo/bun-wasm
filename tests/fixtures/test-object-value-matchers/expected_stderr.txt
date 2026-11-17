@@ -10,5 +10,5 @@ index.test.ts:
 
  7 pass
  0 fail
- 60 expect() calls
+ 66 expect() calls
 Ran 7 tests across 1 file. [TIME]
