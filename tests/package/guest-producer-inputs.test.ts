@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect } from "bun:test";
+import { test } from "./hang-cap.ts";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -435,7 +436,7 @@ test("direct common-core producer reuses the same origin once for both engine wr
     expect(await readFile(`${recipe.paths.core}.core.json`, "utf8")).toBe(origin);
     expect(await readdir(recipe.temporary)).toEqual([]);
   });
-}, 15_000);
+});
 
 test("direct common-core producer prepares a changed release identity before strict reuse", async () => {
   await withCliReceiptFixture(async fixture => {
@@ -464,7 +465,7 @@ test("direct common-core producer prepares a changed release identity before str
     expect(await readFile(receiptPath, "utf8")).toBe(JSON.stringify(current, null, 2) + "\n");
     expect(await readdir(recipe.temporary)).toEqual([]);
   });
-}, 20_000);
+});
 
 test("real wrappers retain engines across a core delta and rebuild only each changed engine", async () => {
   await withCliReceiptFixture(async fixture => {
@@ -501,7 +502,7 @@ test("real wrappers retain engines across a core delta and rebuild only each cha
     for (const path of [join(dirname(recipe.paths.core), "core-target"), join(dirname(recipe.paths.quickjs), "target"), join(dirname(recipe.paths.jsc), "target")]) expect(await Bun.file(join(path, "wasm32-wasip1/release/bun.wasm")).exists()).toBe(true);
     expect(await readdir(recipe.temporary)).toEqual([]);
   });
-}, 30_000);
+});
 
 for (const kind of ["quickjs", "jsc"] as const) for (const damage of ["corrupt", "partial", "wrong-scope", "wrong-profile", "input-hash", "command-profile"]) {
   test(`${kind} wrapper preserves ${damage} output plus a source delta without retirement or compilation`, async () => {
@@ -529,7 +530,7 @@ for (const kind of ["quickjs", "jsc"] as const) for (const damage of ["corrupt",
       expect(await finalFiles(recipe.paths)).toEqual(files);
       expect(await recipe.builds()).toEqual(builds);
     });
-  }, 15_000);
+  });
 }
 
 test("wrapper preparation refuses start/end source drift before retiring valid stale outputs", async () => {
@@ -546,7 +547,7 @@ test("wrapper preparation refuses start/end source drift before retiring valid s
     expect(await finalFiles(recipe.paths)).toEqual(files);
     expect(await recipe.builds()).toEqual(builds);
   });
-}, 15_000);
+});
 
 for (const caller of ["core", "quickjs"] as const) for (const damage of ["corrupt", "partial", "profile", "schema", "provenance"]) test(`core ${damage} plus source delta fails closed in ${caller} caller`, async () => {
   await withCliReceiptFixture(async fixture => {
@@ -573,7 +574,7 @@ for (const caller of ["core", "quickjs"] as const) for (const damage of ["corrup
     expect(await finalFiles(recipe.paths)).toEqual(files);
     expect(await recipe.builds()).toEqual(builds);
   });
-}, 15_000);
+});
 
 
 for (const useRunner of [false, true]) test(`transpiler example scratch uses ${useRunner ? "RUNNER_TEMP" : "TMPDIR"} and cleans up before compilation failure`, async () => {
@@ -607,7 +608,7 @@ for (const useRunner of [false, true]) test(`transpiler example scratch uses ${u
 });
 
 
-test.each(["wasmtime", "node"])("transpiler example rejects missing %s before sysroot setup or compilation", async missing => {
+for (const missing of ["wasmtime", "node"]) test(`transpiler example rejects missing ${missing} before sysroot setup or compilation`, async () => {
   await withReceiptFixture(async options => {
     const root = options.repository;
     const bin = join(root, "private/cargo/bin");
