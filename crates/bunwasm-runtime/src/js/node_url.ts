@@ -86,7 +86,7 @@
   const AUTO_ESCAPE = /['{}|\\^`<>" \r\n\t]/g;
   const HOSTNAME_MAX_LENGTH = 255;
 
-  function invalidURL(input: string): TypeError {
+  function invalidURL(input: string) {
     return internal.require("url_errors").invalidURL(input);
   }
 

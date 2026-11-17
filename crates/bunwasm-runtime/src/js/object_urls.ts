@@ -25,10 +25,17 @@
     catch { return undefined; }
   }
 
+  // A view when the bytes already sit in an ArrayBuffer; a shared buffer is copied once.
+  function blobPart(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+    const { buffer } = bytes;
+    if (buffer instanceof ArrayBuffer) return new Uint8Array(buffer, bytes.byteOffset, bytes.byteLength);
+    return new Uint8Array(bytes);
+  }
+
   // The bytes come from the Blob's own brand, never from its public prototype.
   function clone(blob: Blob): Blob {
     const type: string = typeGetter.call(blob);
-    const bytes = bytesOf.call(blob);
+    const bytes = blobPart(bytesOf.call(blob));
     const file = fileMetadata(blob);
     if (file) return new FileCtor([bytes], file.name, { type, lastModified: file.lastModified });
     return new BlobCtor([bytes], { type });
