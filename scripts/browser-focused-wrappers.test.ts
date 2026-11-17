@@ -37,12 +37,11 @@ function stdinCleanup(events: string[], unsafe: boolean) {
 test("interruption engine subsets retain Browser and Preview1, with the default 37 checks and 111 full proofs", () => {
   expect(green().checks).toHaveLength(37);
   expect(3 * green().checks.length).toBe(111);
-  expect(green(selectInterruptionEngines("quickjs,jsc,spidermonkey")).checks).toHaveLength(52);
+  expect(green(selectInterruptionEngines("quickjs,jsc,spidermonkey")).checks).toHaveLength(53);
   for (const engine of ["quickjs", "jsc", "spidermonkey"]) {
     const selected = selectInterruptionEngines(engine);
-    const native = engine === "spidermonkey" ? [] : [engine];
-    expect(green(selected).checks).toHaveLength(20 + native.length);
-    expect(green(selected).checks.filter(check => check.name === nativeStopProofName).map(check => check.engine)).toEqual(native);
+    expect(green(selected).checks).toHaveLength(21);
+    expect(green(selected).checks.filter(check => check.name === nativeStopProofName).map(check => check.engine)).toEqual([engine]);
     expect(() => assertEngineInterruptionResult(green(selected), false, selected)).not.toThrow();
     expect(() => assertEngineInterruptionResult(green(selected), false)).toThrow();
     const names = green(selected).checks.map(check => check.name);

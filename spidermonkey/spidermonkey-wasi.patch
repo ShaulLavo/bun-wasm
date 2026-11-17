@@ -2819,3 +2819,33 @@ index 803b92892..643a1fa86 100644
 +}
 +#  endif
  #endif  // __wasi__
+diff --git i/js/src/irregexp/RegExpShim.h w/js/src/irregexp/RegExpShim.h
+--- i/js/src/irregexp/RegExpShim.h
++++ w/js/src/irregexp/RegExpShim.h
+@@ -38,6 +38,9 @@
+ #include "vm/MutexIDs.h"
+ #include "vm/NativeObject.h"
+ #include "vm/RegExpShared.h"
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++extern "C" void bunsm_poll_interrupt(JSContext*, uint8_t);
++#endif
+
+ // Forward declaration of classes
+ namespace js::jit {
+@@ -1596,6 +1599,16 @@ class StackLimitCheck {
+     if (cx_->isolate->shouldSimulateInterrupt_) {
+       return true;
+     }
++#endif
++#if defined(__wasi__) && defined(BUNWASM_EMBED)
++    // The interpreter asks on every backtrack, but single-threaded WASI has
++    // nobody to request an interrupt. Ask the host every 8,192 backtracks;
++    // a stop requests the urgent callback this check already reads.
++    static uint32_t backtracksUntilHostPoll = 8192;
++    if (!--backtracksUntilHostPoll) {
++      backtracksUntilHostPoll = 8192;
++      bunsm_poll_interrupt(cx_, 2);
++    }
+ #endif
+     return cx_->hasPendingInterrupt(js::InterruptReason::CallbackUrgent);
+   }
