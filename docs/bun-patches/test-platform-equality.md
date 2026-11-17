@@ -64,6 +64,16 @@ Mutation controls still reject changes to Node comparison and argument parsing.
 The raw-operation manifest retains its 47 expressions, views, and classifications;
 only their source line numbers move.
 
+After an array's elements, `toEqual`, `toStrictEqual` and `Bun.deepEquals`
+compare the first array's enumerable own symbol keys, as the array branch of
+`Bun__deepEquals` in `bindings.cpp` does (`arraySymbols`, `bunArraySymbols` and
+`expectArraySymbols`). Other non-index string keys stay ignored. Strict
+comparison needs the same number of symbols on both sides. Loose comparison
+lets an undefined value stand for a missing key. Symbols only on the second
+array are not read. The `test-array-symbol-equality` fixture covers these
+rules, and the utility migration AST guard lists the three new helpers with the
+other Bun-owned functions.
+
 The separate adapters are the Bun equality helpers, expectation file tokens and
 labels, and promise throw outcomes. Diagnostic pretty formatting remains the
 port described in [Bun test diff formatting](bun-test-diff-formatting.md).
