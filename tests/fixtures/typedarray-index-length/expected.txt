@@ -11,3 +11,7 @@ pass Float64Array
 pass BigInt64Array
 pass BigUint64Array
 pass Buffer allocation length
+pass typed array buffer offset and length
+pass DataView offset and length
+pass array-like length
+pass ArrayBuffer transfer length

@@ -1205,7 +1205,18 @@ diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInl
  #include <cstddef>
 +#include <limits>
  #include <optional>
-@@ -296,1 +297,14 @@
+@@ -273,4 +274,9 @@
+             RETURN_IF_EXCEPTION(scope, nullptr);
+-            length = lengthValue.toLength(globalObject);
++            uint64_t wideLength = lengthValue.toLength(globalObject);
+             RETURN_IF_EXCEPTION(scope, nullptr);
++            if (wideLength > std::numeric_limits<size_t>::max()) [[unlikely]] {
++                throwOutOfMemoryError(globalObject, scope);
++                return nullptr;
++            }
++            length = static_cast<size_t>(wideLength);
+         }
+@@ -296,1 +302,29 @@
 +inline size_t typedArrayLengthFromIndex(JSGlobalObject* globalObject, JSValue value)
 +{
 +    VM& vm = globalObject->vm();
@@ -1219,17 +1230,77 @@ diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInl
 +    return static_cast<size_t>(length);
 +}
 +
++// A byteOffset or length that does not fit size_t always lies outside the buffer.
++// Throw the error a 64-bit build reaches for the same arguments.
++template<typename ViewClass>
++inline EncodedJSValue throwUnrepresentableBufferRange(JSGlobalObject* globalObject, ThrowScope& scope, JSArrayBuffer* jsBuffer, uint64_t offset, bool hasLength)
++{
++    ArrayBuffer* buffer = jsBuffer->impl();
++    if (buffer->isDetached())
++        return throwVMTypeError(globalObject, scope, typedArrayErrorMessageBufferIsAlreadyDetached);
++    if (!hasLength && buffer->isResizableOrGrowableShared())
++        return throwVMRangeError(globalObject, scope, typedArrayErrorMessageByteOffsetExceedSourceBufferByteLength);
++    if (!hasLength && (static_cast<uint64_t>(buffer->byteLength()) - offset) % ViewClass::elementSize)
++        return throwVMRangeError(globalObject, scope, "ArrayBuffer length minus the byteOffset is not a multiple of the element size"_s);
++    return throwVMRangeError(globalObject, scope, arrayBufferViewErrorMessageOutOfRangeOfBuffer);
++}
++
  template<typename ViewClass>
-@@ -306,3 +320,3 @@
+@@ -306,3 +340,3 @@
          // the step 9 of https://tc39.es/ecma262/2026/#sec-typedarray
 -        length = firstValue.toIndex(globalObject, "length"_s);
 +        length = typedArrayLengthFromIndex(globalObject, firstValue);
          RETURN_IF_EXCEPTION(scope, { });
-@@ -365,3 +379,3 @@
+@@ -347,6 +381,7 @@
++        uint64_t wideOffset = 0;
+         if (argCount > 1) {
+-            offset = callFrame->uncheckedArgument(1).toIndex(globalObject, "byteOffset"_s);
++            wideOffset = callFrame->uncheckedArgument(1).toIndex(globalObject, "byteOffset"_s);
+             RETURN_IF_EXCEPTION(scope, { });
+
+-            if (offset % ViewClass::elementSize) [[unlikely]]
++            if (wideOffset % ViewClass::elementSize) [[unlikely]]
+                 return throwVMRangeError(globalObject, scope, "byteOffset modulo TypedArray.BYTES_PER_ELEMENT must be 0"_s);
+@@ -355,1 +390,2 @@
++        std::optional<uint64_t> wideLength;
+         if (argCount > 2) {
+@@ -358,3 +394,3 @@
+             if (!lengthValue.isUndefined()) {
+-                length = lengthValue.toIndex(globalObject, "length"_s);
++                wideLength = lengthValue.toIndex(globalObject, "length"_s);
+                 RETURN_IF_EXCEPTION(scope, encodedJSValue());
+@@ -363,1 +399,8 @@
++
++        constexpr uint64_t sizeMax = std::numeric_limits<size_t>::max();
++        if (wideOffset > sizeMax || wideLength.value_or(0) > sizeMax) [[unlikely]]
++            return throwUnrepresentableBufferRange<ViewClass>(globalObject, scope, arrayBuffer, wideOffset, wideLength.has_value());
++        offset = static_cast<size_t>(wideOffset);
++        if (wideLength)
++            length = static_cast<size_t>(*wideLength);
+     } else {
+@@ -365,3 +408,3 @@
              // the step 9 of https://tc39.es/ecma262/2026/#sec-typedarray
 -            length = firstValue.toIndex(globalObject, "length"_s);
 +            length = typedArrayLengthFromIndex(globalObject, firstValue);
              RETURN_IF_EXCEPTION(scope, { });
+@@ -404,2 +447,3 @@
+-    size_t offset = 0;
++    // Compare in 64 bits; both values fit size_t once they are within the buffer.
++    uint64_t offset = 0;
+     if (argCount > 1) {
+@@ -420,3 +465,3 @@
+         if (JSValue lengthValue = callFrame->uncheckedArgument(2); !lengthValue.isUndefined()) [[likely]] {
+-            size_t viewByteLength = lengthValue.toIndex(globalObject, "byteLength"_s);
++            uint64_t viewByteLength = lengthValue.toIndex(globalObject, "byteLength"_s);
+             RETURN_IF_EXCEPTION(scope, { });
+@@ -437,2 +482,2 @@
+-            length = viewByteLength;
++            length = static_cast<size_t>(viewByteLength);
+         }
+@@ -452,2 +497,2 @@
+-    RELEASE_AND_RETURN(scope, JSValue::encode(constructGenericTypedArrayViewWithArrayBuffer<JSDataView>(globalObject, structure, arrayBuffer, offset, length)));
++    RELEASE_AND_RETURN(scope, JSValue::encode(constructGenericTypedArrayViewWithArrayBuffer<JSDataView>(globalObject, structure, arrayBuffer, static_cast<size_t>(offset), length)));
+ }
 diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
 --- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
 +++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
