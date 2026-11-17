@@ -2819,33 +2819,32 @@ index 803b92892..643a1fa86 100644
 +}
 +#  endif
  #endif  // __wasi__
-diff --git i/js/src/irregexp/RegExpShim.h w/js/src/irregexp/RegExpShim.h
---- i/js/src/irregexp/RegExpShim.h
-+++ w/js/src/irregexp/RegExpShim.h
-@@ -38,6 +38,9 @@
- #include "vm/MutexIDs.h"
- #include "vm/NativeObject.h"
- #include "vm/RegExpShared.h"
+diff --git i/js/src/irregexp/imported/regexp-interpreter.cc w/js/src/irregexp/imported/regexp-interpreter.cc
+--- i/js/src/irregexp/imported/regexp-interpreter.cc
++++ w/js/src/irregexp/imported/regexp-interpreter.cc
+@@ -19,6 +19,10 @@
+ #include "unicode/uchar.h"
+ #endif  // V8_INTL_SUPPORT
+
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
 +extern "C" void bunsm_poll_interrupt(JSContext*, uint8_t);
 +#endif
++
+ // Use token threaded dispatch iff the compiler supports computed gotos and the
+ // build argument v8_enable_regexp_interpreter_threaded_dispatch was set.
+ #if V8_HAS_COMPUTED_GOTO && \
+@@ -634,6 +638,14 @@
+         return static_cast<IrregexpInterpreter::Result>(return_code);
+       }
 
- // Forward declaration of classes
- namespace js::jit {
-@@ -1596,6 +1599,16 @@ class StackLimitCheck {
-     if (cx_->isolate->shouldSimulateInterrupt_) {
-       return true;
-     }
-+#endif
 +#if defined(__wasi__) && defined(BUNWASM_EMBED)
-+    // The interpreter asks on every backtrack, but single-threaded WASI has
-+    // nobody to request an interrupt. Ask the host every 8,192 backtracks;
-+    // a stop requests the urgent callback this check already reads.
-+    static uint32_t backtracksUntilHostPoll = 8192;
-+    if (!--backtracksUntilHostPoll) {
-+      backtracksUntilHostPoll = 8192;
-+      bunsm_poll_interrupt(cx_, 2);
-+    }
- #endif
-     return cx_->hasPendingInterrupt(js::InterruptReason::CallbackUrgent);
-   }
++      // Single-threaded WASI has nobody to request an interrupt, so the check
++      // below never fires on its own. Ask the host every 8,192 backtracks; a
++      // stop requests the urgent callback that HandleInterrupts reads next.
++      if (!(backtrack_count & 8191)) [[unlikely]] {
++        bunsm_poll_interrupt(isolate->cx(), 2);
++      }
++#endif
+       IrregexpInterpreter::Result result =
+           HandleInterrupts(isolate, call_origin, code_array, subject_string,
+                            &code_base, &subject, &pc);

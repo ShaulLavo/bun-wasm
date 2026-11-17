@@ -1010,7 +1010,7 @@ extern "C" void bsm_tier_counts(uint32_t* polls, uint64_t* entries) {
   *entries = pblEntries;
 }
 // Tier 2 is irregexp's backtracking, which already batches 8,192 backtracks per
-// call (RegExpShim.h in spidermonkey-wasi.patch), so it asks the host at once.
+// call (regexp-interpreter.cc in spidermonkey-wasi.patch), so it asks the host at once.
 extern "C" void bunsm_poll_interrupt(JSContext* cx, uint8_t tier) {
   if (terminating || !interruptible) return;
   if (tier != 2 && ++checks % 10000 != 0) return;
