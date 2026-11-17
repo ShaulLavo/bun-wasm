@@ -277,9 +277,33 @@ def parse_output(text):
 
 def worker(opts, wasm, source, scratch, preloads, pending, finished):
     with tempfile.TemporaryDirectory(prefix="worker-", dir=scratch) as temporary:
-        work = Path(temporary)
+        # `work` is the guest's root. The lane's output log sits beside it, out of reach.
+        work = Path(temporary) / "root"
+        work.mkdir()
         subprocess.run(["cp", "-a", "--reflink=auto", str(source), str(work / "bun")], check=True)
         worker_loop(opts, wasm, work, preloads, pending, finished)
+
+
+def output_log(work):
+    return work.parent / "output"
+
+
+def reset_root(work):
+    """Return the guest's root to the clean snapshot alone before the next file."""
+    # Reset tracked edits and delete ALL generated files, including ignored
+    # files. The upstream checkout is never opened.
+    git(work / "bun", "reset", "--hard", "-q", "HEAD")
+    git(work / "bun", "clean", "-ffdxq")
+    # Anything a test wrote elsewhere at the root, /tmp included, goes too.
+    for entry in work.iterdir():
+        if entry.name == "bun":
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    if git(work / "bun", "status", "--porcelain"):
+        raise RuntimeError("Worker did not return to its clean snapshot")
 
 
 def worker_loop(opts, wasm, work, preloads, pending, finished):
@@ -290,20 +314,14 @@ def worker_loop(opts, wasm, work, preloads, pending, finished):
             return
         (work / "tmp").mkdir()
         record = invoke(opts, wasm, work, preloads, path)
-        # Reset tracked edits and delete ALL generated files, including ignored
-        # files, before reusing this lane. The upstream checkout is never opened.
-        git(work / "bun", "reset", "--hard", "-q", "HEAD")
-        git(work / "bun", "clean", "-ffdxq")
-        shutil.rmtree(work / "tmp")
-        if git(work / "bun", "status", "--porcelain"):
-            raise RuntimeError("Worker did not return to its clean snapshot")
+        reset_root(work)
         finished.put(record)
 
 
 def invoke(opts, wasm, work, preloads, path):
     started = time.monotonic()
     timed_out = False
-    with (work / "output").open("w+b") as output:
+    with output_log(work).open("w+b") as output:
         argv = command(opts, wasm, work, preloads, path)
         if opts.network == "loopback":
             argv = loopback_command(argv)

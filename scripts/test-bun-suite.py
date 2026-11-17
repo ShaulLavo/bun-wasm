@@ -258,6 +258,36 @@ class ProvenanceTests(unittest.TestCase):
                         self.assertLess(argv.index(flag), argv.index("test"))
 
 
+class WorkerRootTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="bun-wasm-worker-root-", dir="/work/tmp" if Path("/work/tmp").is_dir() else None)
+        self.addCleanup(temporary.cleanup)
+        self.work = Path(temporary.name) / "root"
+        snapshot = self.work / "bun"
+        (snapshot / "test").mkdir(parents=True)
+        (snapshot / "test/kept.txt").write_text("tracked\n")
+        suite.git(snapshot, "init", "-q")
+        suite.git(snapshot, "add", ".")
+        suite.git(snapshot, "-c", "user.name=t", "-c", "user.email=t@localhost", "commit", "-qm", "snapshot")
+
+    def test_output_log_is_outside_the_guest_root(self):
+        log = suite.output_log(self.work)
+        self.assertFalse(log.resolve().is_relative_to(self.work.resolve()))
+
+    def test_reset_leaves_only_the_clean_snapshot_at_the_root(self):
+        (self.work / "bun/test/kept.txt").write_text("edited\n")
+        (self.work / "bun/test/new.txt").write_text("generated\n")
+        (self.work / "tmp/nested").mkdir(parents=True)
+        (self.work / "tmp/nested/file").write_text("scratch\n")
+        (self.work / "stray.txt").write_text("written at /\n")
+        (self.work / "stray-dir/inner").mkdir(parents=True)
+        (self.work / "link").symlink_to(self.work / "bun", target_is_directory=True)
+        suite.reset_root(self.work)
+        self.assertEqual([entry.name for entry in self.work.iterdir()], ["bun"])
+        self.assertEqual((self.work / "bun/test/kept.txt").read_text(), "tracked\n")
+        self.assertFalse((self.work / "bun/test/new.txt").exists())
+
+
 class ReportTests(unittest.TestCase):
     def test_bake_alias_resolves_upstream_client_sources(self):
         with tempfile.TemporaryDirectory(prefix="bun-wasm-bake-alias-", dir="/work/tmp") as directory:
