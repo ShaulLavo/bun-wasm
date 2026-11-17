@@ -263,7 +263,7 @@ class WorkerRootTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="bun-wasm-worker-root-", dir="/work/tmp" if Path("/work/tmp").is_dir() else None)
         self.addCleanup(temporary.cleanup)
         self.work = Path(temporary.name) / "root"
-        snapshot = self.work / "bun"
+        self.snapshot = snapshot = self.work / suite.SNAPSHOT
         (snapshot / "test").mkdir(parents=True)
         (snapshot / "test/kept.txt").write_text("tracked\n")
         suite.git(snapshot, "init", "-q")
@@ -275,17 +275,35 @@ class WorkerRootTests(unittest.TestCase):
         self.assertFalse(log.resolve().is_relative_to(self.work.resolve()))
 
     def test_reset_leaves_only_the_clean_snapshot_at_the_root(self):
-        (self.work / "bun/test/kept.txt").write_text("edited\n")
-        (self.work / "bun/test/new.txt").write_text("generated\n")
+        (self.snapshot / "test/kept.txt").write_text("edited\n")
+        (self.snapshot / "test/new.txt").write_text("generated\n")
         (self.work / "tmp/nested").mkdir(parents=True)
         (self.work / "tmp/nested/file").write_text("scratch\n")
         (self.work / "stray.txt").write_text("written at /\n")
         (self.work / "stray-dir/inner").mkdir(parents=True)
-        (self.work / "link").symlink_to(self.work / "bun", target_is_directory=True)
+        (self.work / "link").symlink_to(self.snapshot, target_is_directory=True)
         suite.reset_root(self.work)
-        self.assertEqual([entry.name for entry in self.work.iterdir()], ["bun"])
-        self.assertEqual((self.work / "bun/test/kept.txt").read_text(), "tracked\n")
-        self.assertFalse((self.work / "bun/test/new.txt").exists())
+        self.assertEqual([entry.name for entry in self.work.iterdir()], [suite.SNAPSHOT])
+        self.assertEqual((self.snapshot / "test/kept.txt").read_text(), "tracked\n")
+        self.assertFalse((self.snapshot / "test/new.txt").exists())
+
+    def test_reset_refuses_a_snapshot_replaced_by_a_symlink(self):
+        moved = self.work.parent / "moved"
+        self.snapshot.rename(moved)
+        self.snapshot.symlink_to(moved, target_is_directory=True)
+        (moved / "test/kept.txt").write_text("edited\n")
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
+            suite.reset_root(self.work)
+        self.assertEqual((moved / "test/kept.txt").read_text(), "edited\n")
+
+    def test_guest_snapshot_path_is_not_a_segment_of_upstream_test_paths(self):
+        # The harness replaces the working directory in printed paths; "/bun" broke test/js/bun/test.
+        self.assertNotEqual(suite.SNAPSHOT, "bun")
+        opts = types.SimpleNamespace(engine="quickjs", launcher=Path("/launcher"), test_timeout=1, node_parallel=False)
+        argv = suite.command(opts, Path("/frozen/engine.wasm"), self.work, ["./preload.ts"], "js/bun/test/a.test.ts")
+        self.assertIn(f"PWD=/{suite.SNAPSHOT}", argv)
+        self.assertEqual(argv[-1], f"/{suite.SNAPSHOT}/test/js/bun/test/a.test.ts")
+        self.assertIn(f"/{suite.SNAPSHOT}/test/preload.ts", argv)
 
 
 class ReportTests(unittest.TestCase):

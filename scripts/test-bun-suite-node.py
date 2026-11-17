@@ -41,23 +41,23 @@ class NodeSelection(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="bun-wasm-suite-discovery-", dir="/work/tmp") as directory:
             root = Path(directory)
             path = "js/node/test/parallel/test-stream.js"
-            source = root / "bun/test" / path
+            source = root / suite.SNAPSHOT / "test" / path
             source.parent.mkdir(parents=True)
             source.write_text("require('../common'); setTimeout(() => {}, 10);")
             options = SimpleNamespace(node_parallel=True, test_timeout=2000, engine="quickjs", launcher=Path("launcher"))
             result = suite.command(options, Path("engine.wasm"), root, ["preload.ts"], path)
-            self.assertEqual(result[-2:], ["run", "/bun/test/" + path])
+            self.assertEqual(result[-2:], ["run", suite.GUEST_TESTS + path])
 
     def test_registered_node_tests_keep_the_test_runner(self):
         with tempfile.TemporaryDirectory(prefix="bun-wasm-suite-discovery-", dir="/work/tmp") as directory:
             root = Path(directory)
             path = "js/node/test/parallel/test-stream.js"
-            source = root / "bun/test" / path
+            source = root / suite.SNAPSHOT / "test" / path
             source.parent.mkdir(parents=True)
             source.write_text("const test = require('node:test'); test('works', () => {});")
             options = SimpleNamespace(node_parallel=True, test_timeout=2000, engine="quickjs", launcher=Path("launcher"))
             result = suite.command(options, Path("engine.wasm"), root, [], path)
-            self.assertEqual(result[-4:], ["test", "--timeout", "2000", "/bun/test/" + path])
+            self.assertEqual(result[-4:], ["test", "--timeout", "2000", suite.GUEST_TESTS + path])
 
 
 if __name__ == "__main__":
