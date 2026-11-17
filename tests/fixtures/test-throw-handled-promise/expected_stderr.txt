@@ -1,8 +1,10 @@
 
 index.test.ts:
+(pass) a promise thrown into toThrow is handled
+(pass) a later timer test sees no stray rejection
 error: later
 Symbol(later)
-(fail) a pending promise that rejects later is still reported [TIME]
+(fail) a pending promise that rejects later is still reported
 
  2 pass
  1 fail
