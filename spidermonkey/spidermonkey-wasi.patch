@@ -2873,3 +2873,265 @@ diff --git i/js/src/irregexp/imported/regexp-interpreter.cc w/js/src/irregexp/im
 
        IrregexpInterpreter::Result result =
            HandleInterrupts(isolate, call_origin, code_array, subject_string,
+diff --git i/js/src/vm/ArrayBufferObject.cpp w/js/src/vm/ArrayBufferObject.cpp
+index 0c2d46683..342413fe3 100644
+--- i/js/src/vm/ArrayBufferObject.cpp
++++ w/js/src/vm/ArrayBufferObject.cpp
+@@ -821,6 +821,10 @@ bool ArrayBufferObject::resizeImpl(JSContext* cx, const CallArgs& args) {
+   }
+
+   // Steps 7-15.
++  if (!ResizableArrayBufferObject::growCapacity(cx, obj,
++                                                size_t(newByteLength))) {
++    return false;
++  }
+   obj->resize(size_t(newByteLength));
+
+   // Step 16.
+@@ -1329,9 +1333,80 @@ void ArrayBufferObject::detach(JSContext* cx,
+   buffer->setIsDetached();
+   if (buffer->isResizable()) {
+     buffer->as<ResizableArrayBufferObject>().setMaxByteLength(0);
++    buffer->as<ResizableArrayBufferObject>().setCapacity(0);
+   }
+ }
+
++void ResizableArrayBufferObject::notifyViewsAfterMove(uint8_t* oldData,
++                                                      uint8_t* newData) {
++  auto& innerViews = ObjectRealm::get(this).innerViews.get();
++  if (InnerViewTable::ViewVector* views =
++          innerViews.maybeViewsUnbarriered(this)) {
++    AutoTouchingGrayThings tgt;
++    for (auto& view : *views) {
++      view->notifyBufferMoved(oldData, newData);
++    }
++  }
++  if (auto* view = firstView()) {
++    view->as<ArrayBufferViewObject>().notifyBufferMoved(oldData, newData);
++  }
++}
++
++/* static */
++bool ResizableArrayBufferObject::growCapacity(
++    JSContext* cx, Handle<ResizableArrayBufferObject*> buffer,
++    size_t newByteLength) {
++  MOZ_ASSERT(!buffer->isDetached());
++  MOZ_ASSERT(newByteLength <= buffer->maxByteLength());
++
++  size_t oldCapacity = buffer->capacity();
++  if (newByteLength <= oldCapacity) {
++    return true;
++  }
++  MOZ_ASSERT(buffer->bufferKind() == MALLOCED_ARRAYBUFFER_CONTENTS_ARENA);
++
++  // Grow by at least half of the old capacity, so stepwise growth reallocates
++  // a logarithmic number of times, but never past the maximum. Compute in 64
++  // bits before narrowing.
++  uint64_t geometric = uint64_t(oldCapacity) + uint64_t(oldCapacity) / 2;
++  uint64_t wanted = std::max(geometric, uint64_t(newByteLength));
++  size_t newCapacity =
++      size_t(std::min(wanted, uint64_t(buffer->maxByteLength())));
++
++  uint8_t* oldData = buffer->dataPointer();
++  uint8_t* newData = cx->maybe_pod_arena_realloc<uint8_t>(
++      js::ArrayBufferContentsArena, oldData, oldCapacity, newCapacity);
++  if (!newData && newCapacity != newByteLength) {
++    newCapacity = newByteLength;
++    newData = cx->maybe_pod_arena_realloc<uint8_t>(
++        js::ArrayBufferContentsArena, oldData, oldCapacity, newCapacity);
++  }
++  if (!newData) {
++    // The large-allocation-failure path may collect. |buffer| is rooted and
++    // still owns |oldData| until a reallocation succeeds.
++    newData = static_cast<uint8_t*>(cx->runtime()->onOutOfMemoryCanGC(
++        js::AllocFunction::Realloc, js::ArrayBufferContentsArena, newCapacity,
++        oldData));
++  }
++  if (!newData) {
++    // CreateByteDataBlock throws a RangeError when it cannot allocate.
++    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
++                              JSMSG_WASM_BAD_GROW, "ArrayBuffer");
++    return false;
++  }
++
++  // Nothing below can run script or collect. Keep bytes past the byte length
++  // zero, then publish the moved data to the buffer and every view.
++  memset(newData + oldCapacity, 0, newCapacity - oldCapacity);
++  buffer->setDataPointer(
++      BufferContents::createMallocedArrayBufferContentsArena(newData));
++  buffer->setCapacity(newCapacity);
++  buffer->notifyViewsAfterMove(oldData, newData);
++  RemoveCellMemory(buffer, oldCapacity, MemoryUse::ArrayBufferContents);
++  AddCellMemory(buffer, newCapacity, MemoryUse::ArrayBufferContents);
++  return true;
++}
++
+ void ResizableArrayBufferObject::notifyViewsAfterResize() {
+   // Update all views of the buffer to account for the buffer having been
+   // resized.
+@@ -1947,6 +2022,9 @@ size_t ArrayBufferObject::byteLength() const {
+
+ inline size_t ArrayBufferObject::associatedBytes() const {
+   if (isMalloced()) {
++    if (isResizable()) {
++      return as<ResizableArrayBufferObject>().capacity();
++    }
+     return maxByteLength();
+   }
+   if (isMapped()) {
+@@ -2501,6 +2579,39 @@ ResizableArrayBufferObject::createBufferAndData(
+   MOZ_ASSERT(maxByteLength <= ArrayBufferObject::ByteLengthLimit,
+              "caller must validate the byte count it passes");
+
++#ifdef __wasi__
++  // bun-wasm: backing too large to be inline holds only the initial length,
++  // and at least one byte so the data pointer is never null. resize() grows it.
++  if (maxByteLength > MaxInlineBytes) {
++    size_t capacity = std::max(byteLength, size_t(1));
++    ArrayBufferContents data =
++        FillType == FillContents::Uninitialized
++            ? AllocateUninitializedArrayBufferContents(cx, capacity)
++            : AllocateArrayBufferContents(cx, capacity);
++    if (!data) {
++      return {nullptr, nullptr};
++    }
++    if (capacity > byteLength) {
++      memset(data.get() + byteLength, 0, capacity - byteLength);
++    }
++
++    auto* buffer = NewArrayBufferObject<ResizableArrayBufferObject>(
++        cx, proto, GetArrayBufferGCObjectKind(RESERVED_SLOTS));
++    if (!buffer) {
++      return {nullptr, nullptr};
++    }
++    MOZ_ASSERT(!gc::IsInsideNursery(buffer));
++
++    uint8_t* toFill = data.release();
++    buffer->initialize(
++        byteLength, maxByteLength,
++        BufferContents::createMallocedArrayBufferContentsArena(toFill));
++    buffer->setCapacity(capacity);
++    AddCellMemory(buffer, capacity, MemoryUse::ArrayBufferContents);
++    return {buffer, toFill};
++  }
++#endif
++
+   // NOTE: The spec proposal for resizable ArrayBuffers suggests to use a
+   // virtual memory based approach to avoid eagerly allocating the maximum byte
+   // length. We don't yet support this and instead are allocating the maximum
+@@ -2754,6 +2865,13 @@ ResizableArrayBufferObject::copyAndDetachSteal(
+   MOZ_ASSERT(maxByteLength > ResizableArrayBufferObject::MaxInlineBytes,
+              "prefer copying small buffers");
+
++  // bun-wasm: grow lazily backed contents before anything is detached, so a
++  // failed allocation leaves |source| attached and unchanged.
++  if (!growCapacity(cx, source, newByteLength)) {
++    return nullptr;
++  }
++  size_t capacity = source->capacity();
++
+   auto* newBuffer = ResizableArrayBufferObject::createEmpty(cx);
+   if (!newBuffer) {
+     return nullptr;
+@@ -2769,12 +2887,13 @@ ResizableArrayBufferObject::copyAndDetachSteal(
+   source->setDataPointer(BufferContents::createNoData());
+
+   // Detach |source| now that doing so won't release |contents|.
+-  RemoveCellMemory(source, maxByteLength, MemoryUse::ArrayBufferContents);
++  RemoveCellMemory(source, capacity, MemoryUse::ArrayBufferContents);
+   ArrayBufferObject::detach(cx, source);
+
+   // Set |newBuffer|'s contents to |source|'s original contents.
+   newBuffer->initialize(newByteLength, maxByteLength, contents);
+-  AddCellMemory(newBuffer, maxByteLength, MemoryUse::ArrayBufferContents);
++  newBuffer->setCapacity(capacity);
++  AddCellMemory(newBuffer, capacity, MemoryUse::ArrayBufferContents);
+
+   // Clear the bytes between `data[newByteLength..sourceByteLength]`.
+   if (newByteLength < sourceByteLength) {
+@@ -3002,7 +3121,8 @@ ArrayBufferObject::createFromWasmObject<ResizableArrayBufferObject>(
+       if (buffer->isResizable()) {
+         auto* resizableBuffer = &buffer->as<ResizableArrayBufferObject>();
+         size_t byteLength = resizableBuffer->byteLength();
+-        size_t maxByteLength = resizableBuffer->maxByteLength();
++        // bun-wasm: the backing holds its capacity, not always the maximum.
++        size_t maxByteLength = resizableBuffer->capacity();
+         MOZ_ASSERT(byteLength <= maxByteLength);
+
+         if (byteLength < maxByteLength) {
+diff --git i/js/src/vm/ArrayBufferObject.h w/js/src/vm/ArrayBufferObject.h
+index b53bb6469..07c2420b0 100644
+--- i/js/src/vm/ArrayBufferObject.h
++++ w/js/src/vm/ArrayBufferObject.h
+@@ -769,11 +769,21 @@ class ResizableArrayBufferObject : public ArrayBufferObject {
+     setFixedSlotTyped(MAX_BYTE_LENGTH_SLOT, PrivateValue(length));
+   }
+
++  void setCapacity(size_t capacity) {
++#ifdef __wasi__
++    MOZ_ASSERT(capacity <= ArrayBufferObject::ByteLengthLimit);
++    setFixedSlotTyped(CAPACITY_SLOT, PrivateValue(capacity));
++#else
++    MOZ_ASSERT(capacity == maxByteLength());
++#endif
++  }
++
+   void initialize(size_t byteLength, size_t maxByteLength,
+                   BufferContents contents) {
+     MOZ_ASSERT(contents.isAligned(byteLength));
+     initByteLength(byteLength);
+     setMaxByteLength(maxByteLength);
++    setCapacity(maxByteLength);
+     initFlags(RESIZABLE);
+     initFirstView();
+     initDataPointer(contents);
+@@ -783,6 +793,13 @@ class ResizableArrayBufferObject : public ArrayBufferObject {
+   void resize(size_t newByteLength);
+   void notifyViewsAfterResize();
+
++  // bun-wasm: make the backing hold at least |newByteLength| bytes. Throws a
++  // RangeError and leaves |buffer| unchanged when the allocation fails.
++  [[nodiscard]] static bool growCapacity(
++      JSContext* cx, JS::Handle<ResizableArrayBufferObject*> buffer,
++      size_t newByteLength);
++  void notifyViewsAfterMove(uint8_t* oldData, uint8_t* newData);
++
+   static ResizableArrayBufferObject* copy(
+       JSContext* cx, size_t newByteLength,
+       JS::Handle<ResizableArrayBufferObject*> source);
+@@ -791,7 +808,18 @@ class ResizableArrayBufferObject : public ArrayBufferObject {
+   JS_DEFINE_TYPED_SLOT(ArrayBufferObject::RESERVED_SLOTS, MAX_BYTE_LENGTH_SLOT,
+                        Private, Undefined);
+
++#ifdef __wasi__
++  // bun-wasm: WASI linear memory has no virtual reservation, so malloced
++  // backing holds only its capacity and grows toward the maximum on demand.
++  // Bytes from the byte length up to the capacity are always zero. Inline
++  // backing keeps the maximum as its capacity.
++  JS_DEFINE_TYPED_SLOT(ArrayBufferObject::RESERVED_SLOTS + 1, CAPACITY_SLOT,
++                       Private, Undefined);
++
++  static const uint8_t RESERVED_SLOTS = ArrayBufferObject::RESERVED_SLOTS + 2;
++#else
+   static const uint8_t RESERVED_SLOTS = ArrayBufferObject::RESERVED_SLOTS + 1;
++#endif
+
+   /** The largest number of bytes that can be stored inline. */
+   static constexpr size_t MaxInlineBytes =
+@@ -803,6 +831,16 @@ class ResizableArrayBufferObject : public ArrayBufferObject {
+     return size_t(getFixedSlotTyped(MAX_BYTE_LENGTH_SLOT).toPrivate());
+   }
+
++  // The number of bytes the backing holds, at least the byte length and at
++  // most the maximum.
++  size_t capacity() const {
++#ifdef __wasi__
++    return size_t(getFixedSlotTyped(CAPACITY_SLOT).toPrivate());
++#else
++    return maxByteLength();
++#endif
++  }
++
+   static ResizableArrayBufferObject* copyAndDetach(
+       JSContext* cx, size_t newByteLength,
+       JS::Handle<ResizableArrayBufferObject*> source);

@@ -1,0 +1,10 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/resizable-growth",
+  "engines": [
+    "quickjs",
+    "jsc",
+    "browser",
+    "spidermonkey"
+  ]
+}
