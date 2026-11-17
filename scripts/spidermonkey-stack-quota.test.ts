@@ -15,6 +15,7 @@ test("installed SpiderMonkey quotas and overflow recovery on both tiers and memb
       expect(stdout).toContain("ok evaluation and second recursion after caught overflow");
       expect(stdout).toContain("ok nested compile limits and recovery");
       expect(stdout).toContain("ok uncatchable interrupt inside finally; catch=0 finally=0");
+      expect(stdout).toContain("ok uncatchable interrupt inside regexp; catch=0 finally=0");
       expect(stdout).toContain("ok counted reentrant recursion");
       expect(stdout).toContain("ok named getter frame storage and recovery");
       expect(stdout).toContain("ok call and apply frame storage and recovery");
