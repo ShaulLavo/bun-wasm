@@ -493,7 +493,8 @@
     nanoseconds: () => Math.floor(native.nanoseconds()),
     inspect,
     deepEquals: (a, b, strict) => internal.require("util").bunDeepEquals(a, b, Boolean(strict)),
-    deepMatch: (subset, object) => internal.require("util").bunDeepEquals(subset, object, false, true),
+    // Named parameters keep Bun's length of 2; the count is passed for its two-value check.
+    deepMatch: function deepMatch(subset, object) { return internal.require("bun_deep_match")(arguments.length, subset, object); },
     escapeHTML,
     stringWidth,
     stripANSI,
