@@ -242,14 +242,20 @@
   }
 
   /** toMatchObject: every property of `expected` is present and matches in `received`. */
+  // Bun__deepMatch matches arrays exactly: the same length and the same number of enumerable
+  // keys (symbols included), then every key of the expected array.
+  function matchesArray(received, expected, seen) {
+    if (!Array.isArray(received) || received.length !== expected.length) return false;
+    const keys = enumerableOwnKeys(expected);
+    if (enumerableOwnKeys(received).length !== keys.length) return false;
+    return matcherSupport.every(keys, key => key in received && matchesObject(received[key], expected[key], seen));
+  }
+
   function matchesObject(received, expected, seen) {
     const asymmetric = compareAsymmetric(received, expected);
     if (asymmetric !== undefined) return asymmetric;
     if (!isObjectLike(expected) || !isObjectLike(received)) return equals(received, expected, false);
-    if (Array.isArray(expected)) {
-      if (!Array.isArray(received) || received.length !== expected.length) return false;
-      return matcherSupport.every(expected, (item, i) => matchesObject(received[i], item, seen));
-    }
+    if (Array.isArray(expected)) return matchesArray(received, expected, seen);
     if (!isPlainObject(expected) && !isPlainObject(received)) {
       if (expected instanceof Date || expected instanceof RegExp || expected instanceof Map || expected instanceof Set) {
         return equals(received, expected, false);

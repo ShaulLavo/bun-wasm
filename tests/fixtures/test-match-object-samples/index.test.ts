@@ -27,6 +27,19 @@ test("string matchers accept String objects as their sample", () => {
   expect(Bun.inspect(expect.stringMatching(new String("Str") as never))).toBe('StringMatching "Str"');
 });
 
+test("arrays match exactly, symbol keys included", () => {
+  const a1 = Object.assign([1], { [f]: 99 });
+  expect(a1).not.toMatchObject([1]);
+  expect([1]).not.toMatchObject(a1);
+  expect({ 1: 1 }).not.toMatchObject(a1);
+  expect(a1).not.toMatchObject({ 1: 1 });
+  expect(a1).toMatchObject(a1);
+  expect(Object.assign([1], { [f]: 99 })).toMatchObject(Object.assign([1], { [f]: 99 }));
+  expect(Object.assign([1], { [f]: 98 })).not.toMatchObject(Object.assign([1], { [f]: 99 }));
+  expect([{ a: 1, b: 2 }]).toMatchObject([{ a: 1 }]);
+  expect([1, 2]).not.toMatchObject([1]);
+});
+
 test("a non-enumerable symbol in the expected object is ignored", () => {
   const pattern = {};
   Object.defineProperty(pattern, f, { value: 9, enumerable: false });

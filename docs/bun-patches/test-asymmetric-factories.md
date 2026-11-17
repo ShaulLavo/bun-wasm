@@ -36,7 +36,9 @@ Matching follows Bun's rules:
   back to `instanceof`, so boxed BigInt and Symbol values match.
 - `objectContaining` compares enumerable own symbol keys as well as string keys.
   `toMatchObject` does the same for the expected object's keys, as
-  `Bun__deepMatch` does; the `test-match-object-samples` fixture covers it.
+  `Bun__deepMatch` does. Arrays match exactly there: the same length and the
+  same number of enumerable keys, symbols included, then every key of the
+  expected array. The `test-match-object-samples` fixture covers both.
 - `stringContaining` and `stringMatching` accept String objects, derived ones
   included, as Bun's `isString` does. `stringContaining` matches with their
   string value; `stringMatching` accepts them but, as in Bun, never matches.
