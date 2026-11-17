@@ -217,7 +217,9 @@ test("failed admission marks nominally green result RED and still closes before 
   f.options.runBrowser = async name => { const result = green(); if (name === "chromium") result.checks.pop(); f.events.push(`run:${name}`); return result; };
   const report = await runBrowserGate(f.options);
   expect(report.ok).toBe(false); expect(report.reports).toHaveLength(4); expect(report.cleanup.safe).toBe(true);
-  expect(report.reports[0]!.ok).toBe(false); expect(report.reports[0]!.error).toContain("32"); expect(report.reports[1]!.ok).toBe(true);
+  // The gate's own expectation: every selected named proof, one of which was dropped.
+  const expected = green().checks.length;
+  expect(report.reports[0]!.ok).toBe(false); expect(report.reports[0]!.error).toContain(`${expected - 1} !== ${expected}`); expect(report.reports[1]!.ok).toBe(true);
   expect(f.events.indexOf("close:chromium")).toBeLessThan(f.events.indexOf("run:firefox"));
 });
 
@@ -326,9 +328,9 @@ test("all strict green admissions and benchmark measurements are preserved", asy
 });
 
 for (const [label, mutate, benchmark] of [
-  ["32 checks", (r: any) => r.checks.pop(), false],
-  ["14 per engine", (r: any) => { r.checks[0].engine = "browser"; }, false],
-  ["14 generic", (r: any) => { r.checks[7].route = "legacy"; }, false],
+  ["missing check", (r: any) => r.checks.pop(), false],
+  ["per-engine checks", (r: any) => { r.checks[0].engine = "browser"; }, false],
+  ["generic-route checks", (r: any) => { r.checks[7].route = "legacy"; }, false],
   ["distinct proofs", (r: any) => { r.checks[1].name = r.checks[0].name; }, false],
   ["page errors", (r: any) => { r.pageErrors.push("uncaught"); }, false],
   ["no workers", (r: any) => { r.cleanup.activeWorkers = 1; }, false],

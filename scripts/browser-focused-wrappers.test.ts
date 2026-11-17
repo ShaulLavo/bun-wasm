@@ -3,7 +3,7 @@ import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { assertEngineInterruptionResult } from "../web/tests/engine-interruption-result";
-import { selectInterruptionEngines, interruptionInputs, interruptionProofs, nativeStopProofName, stopProofName } from "../web/tests/engine-interruption-cases";
+import { selectInterruptionEngines, interruptionInputs, interruptionProofs, nativePollingEngines, nativeStopProofName, stopProofName, type InterruptionEngine } from "../web/tests/engine-interruption-cases";
 import { assertWorkerModuleReport, runWorkerModuleVariants, workerModuleReport } from "../web/tests/browser-worker-modules";
 import { runStdinCases, stdinCaseNames, stdinCaseRecords } from "../web/tests/playground-stdin";
 import { assertStdinReport, stdinBrowser } from "../web/tests/browser-playground-stdin";
@@ -34,14 +34,20 @@ function stdinFailureActions(events: string[]) {
 function stdinCleanup(events: string[], unsafe: boolean) {
   return async () => { events.push("idle"); if (unsafe) throw new Error("foreground alive"); };
 }
-test("interruption engine subsets retain Browser and Preview1, with the default 36 checks and 108 full proofs", () => {
-  expect(green().checks).toHaveLength(36);
-  expect(3 * green().checks.length).toBe(108);
-  expect(green(selectInterruptionEngines("quickjs,jsc,spidermonkey")).checks).toHaveLength(51);
-  for (const engine of ["quickjs", "jsc", "spidermonkey"]) {
+// Each paired engine has 15 named proofs, plus the native-regexp stop where its matcher polls;
+// Browser and Preview1 add 5. Counts derive from nativePollingEngines so enabling an engine there
+// changes the expectation with it.
+const browserProofs = 5;
+function pairedProofs(engine: InterruptionEngine): number { return 15 + (nativePollingEngines.includes(engine) ? 1 : 0); }
+test("interruption engine subsets retain Browser and Preview1, with every selected engine's named proofs", () => {
+  const all = selectInterruptionEngines("quickjs,jsc,spidermonkey");
+  for (const selected of [selectInterruptionEngines(), all]) {
+    expect(green(selected).checks).toHaveLength(selected.reduce((sum, engine) => sum + pairedProofs(engine), browserProofs));
+  }
+  for (const engine of all) {
     const selected = selectInterruptionEngines(engine);
-    const native = engine === "quickjs" ? [engine] : [];
-    expect(green(selected).checks).toHaveLength(20 + native.length);
+    const native = nativePollingEngines.includes(engine) ? [engine] : [];
+    expect(green(selected).checks).toHaveLength(pairedProofs(engine) + browserProofs);
     expect(green(selected).checks.filter(check => check.name === nativeStopProofName).map(check => check.engine)).toEqual(native);
     expect(() => assertEngineInterruptionResult(green(selected), false, selected)).not.toThrow();
     expect(() => assertEngineInterruptionResult(green(selected), false)).toThrow();
@@ -49,7 +55,7 @@ test("interruption engine subsets retain Browser and Preview1, with the default 
     expect(names).toContain("runtimeProcess-page-sleepSync-default-SIGUSR1-unwinds");
     expect(names).toContain("runtimeProcess-page-sleepSync-SIGUSR1-deferred-handler");
     expect(green(selected).checks.filter(check => check.name === stopProofName).map(check => check.engine)).toEqual([engine, "browser"]);
-    expect(green(selected).checks.filter(check => check.engine === "browser")).toHaveLength(5);
+    expect(green(selected).checks.filter(check => check.engine === "browser")).toHaveLength(browserProofs);
   }
   for (const value of ["", "browser", "jsc,quickjs", "spidermonkey,quickjs", "quickjs,quickjs", "quickjs,unknown"]) expect(() => selectInterruptionEngines(value)).toThrow();
   const renamed = green(); renamed.checks[0]!.name = "invented-proof";

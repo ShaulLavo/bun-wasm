@@ -95,7 +95,8 @@ until their matchers poll.
 
 The original browser harness now accepts an explicit QuickJS/JSC subset through
 its driver option, page query and controller. Its local default remains both
-pairs, with 36 named checks per browser and 108 checks over the three browsers.
+pairs; `interruptionProofs` in `web/tests/engine-interruption-cases.ts` is the one list of
+named checks, and the gate and its unit tests count from it.
 SpiderMonkey joins only when selected explicitly (`--engines=quickjs,jsc,spidermonkey`
 with a staged `bun-spidermonkey.wasm` and `spidermonkey-engine.wasm`), because the CI
 interruption job builds no SpiderMonkey pair; it then runs the same paired-engine cases.
