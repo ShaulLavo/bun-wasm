@@ -12,6 +12,24 @@ A true callback result requests JSC's distinguished uncatchable termination
 exception. Fatal polling uses the same mandatory `runtime_proc.signal` import as
 cooperative signal handling. This is a host extension, not an upstream bug.
 
+A regexp match reaches no trap point while it backtracks, and on wasm32 JSC has no
+Yarr JIT, so every match runs in the Yarr bytecode interpreter. A second section of the
+same patch changes `Source/JavaScriptCore/yarr/{Yarr.h,YarrInterpreter.h,YarrInterpreter.cpp}`,
+`Source/JavaScriptCore/runtime/RegExpInlines.h` and `Source/JavaScriptCore/runtime/VMTraps.h`
+at the same revision. The interpreter decrements a per-match countdown at its single
+`backtrack:` label, which every repeated attempt passes through, nested or not, and
+calls an optional poll every 16,384 backtracks. `RegExp::matchInlineOnce` supplies a
+poll only on the VM thread, with a global object, when the host enabled the C-loop
+countdown; the poll returns false while traps or termination are deferred and otherwise
+asks the same `shouldInterruptScriptBeforeTimeout` callback as the trap slow path. A
+true result abandons the match with the WASI-only `JSRegExpResult::ErrorInterrupted`,
+which `matchInlineOnce` turns into `notifyNeedTermination()` and
+`throwTerminationExceptionIfNeeded()`: the same uncatchable termination exception, so no
+guest `catch` or `finally` runs. The alternative, ticking the C-loop trap countdown
+inside Yarr, would hand the interpreter the VM and the trap slow path's frame state for
+no benefit, since the poll needs neither. Hosts that never enable polling, and the
+`jsc` shell, pay one decrement and a never-taken branch per backtrack.
+
 Original adapters in `crates/bunwasm-runtime/src/{engine,engine_quickjs,engine_jsc,lib,host}.rs`,
 `crates/bunwasm-jsc/{cpp/helpers.cpp,src/sys.rs}`,
 `crates/bunwasm-host/src/{slots,process/stdio}.rs`, and `waffle/proc/abi.ts`
@@ -42,8 +60,9 @@ notification mechanism. Cooperative dequeue consumes its wake hint without consu
 another pending signal.
 
 These adapters and the browser proof/benchmark harness are original implementations,
-not copied source. JSC polling covers JS safe points, not a single uninterrupted
-native operation; QuickJS retains its existing native-operation interrupt polls.
+not copied source. JSC polling covers JS safe points and Yarr backtracking, not other
+single uninterrupted native operations; QuickJS retains its existing native-operation
+interrupt polls.
 
 The original `web/tests/engine-interruption-stop.ts` proof adapter holds a requested
 native stop pending until the production bootstrap has returned and its genuine
@@ -78,9 +97,8 @@ The original `runtimeProcess-page-SIGKILL-stops-guest-in-native-regexp` proof re
 stop while the guest loops on a catastrophically backtracking regexp (each call backtracks
 about 2^24 times) inside an inner `catch {}`. It runs only for engines that poll inside their
 native matcher, listed in `nativePollingEngines`: QuickJS's regexp engine calls the interrupt
-handler, so the stop lands in milliseconds although one call takes hundreds. JSC's Yarr
-interpreter does not poll yet (one call takes about 1.7 s, and the 1,024-trap-point
-countdown is hundreds of calls away), so JSC is excluded until Yarr polls.
+handler, and JSC's Yarr interpreter polls every 16,384 backtracks, so the stop lands in
+milliseconds although one call takes hundreds (QuickJS) or about 1.7 s (JSC).
 
 
 ## Classification
@@ -88,13 +106,14 @@ countdown is hundreds of calls away), so JSC is excluded until Yarr polls.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
+| [`jsc/webkit-wasi.patch`, Yarr host interruption](#engine-interruption) | Host feature | Poll the same host callback every 16,384 Yarr interpreter backtracks; a stop becomes the uncatchable termination exception. |
 | [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
 
 [Ledger scope and pinned revisions](scope.md).
 
 The original browser harness now accepts an explicit QuickJS/JSC subset through
 its driver option, page query and controller. Its local default remains both
-pairs, with 36 named checks per browser and 108 checks over the three browsers.
+pairs, with 37 named checks per browser and 111 checks over the three browsers.
 SpiderMonkey joins only when selected explicitly (`--engines=quickjs,jsc,spidermonkey`
 with a staged `bun-spidermonkey.wasm` and `spidermonkey-engine.wasm`), because the CI
 interruption job builds no SpiderMonkey pair; it then runs the same paired-engine cases.
