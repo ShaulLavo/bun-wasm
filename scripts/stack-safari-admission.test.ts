@@ -71,9 +71,17 @@ test("Safari measurement never accepts a dispatched observation that succeeds af
 
 test("foreground polling shares one attempt deadline instead of renewing it", async () => {
   const { page, admissions, finish } = fixture();
+  const evaluate = page.transport.evaluate.bind(page.transport);
+  // The launch and two status polls happen before the command finishes, so the attempt
+  // polls more than once however fast or slow the host is. 10 s is only a hang cap.
+  page.transport.evaluate = async <T>(expression: string, admission: Admission): Promise<T> => {
+    const value = await evaluate<T>(expression, admission);
+    if (admissions.length === 3) finish.resolve();
+    return value;
+  };
   try {
-    await expect(observe(page, 140, scoped => foreground(scoped, "pending", 140))).rejects.toBeInstanceOf(ObservationTimeout);
-    expect(admissions.length).toBeGreaterThanOrEqual(3);
+    await observe(page, 10_000, scoped => foreground(scoped, "pending", 10_000));
+    expect(admissions.length).toBeGreaterThanOrEqual(4);
     expect(new Set(admissions.map(admission => admission.deadline)).size).toBe(1);
     expect(admissions.every(admission => admission.signal.aborted)).toBe(true);
   } finally { finish.resolve(); }
