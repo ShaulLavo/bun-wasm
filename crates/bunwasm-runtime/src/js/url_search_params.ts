@@ -47,5 +47,22 @@
     return Array.from(entries);
   }
 
-  return { toUSVString, initFromObject, convertMethodArgs };
+  type Inspect = (value: unknown, options?: object) => string;
+  type InspectOptions = { depth?: number | null; breakLength?: number };
+
+  // Node's URLSearchParams[util.inspect.custom] (lib/internal/url.js): `Name { 'k' => 'v' }`,
+  // one entry per line once the entries are longer than the break length.
+  function inspectParams(name: string, pairs: readonly Pair[], depth: number | null, options: InspectOptions | undefined, inspect: Inspect): string {
+    if (typeof depth === "number" && depth < 0) return "[Object]";
+    const inner = Object.assign({}, options, { depth: depth === null ? null : depth - 1 });
+    const output = pairs.map(([key, value]) => `${inspect(key, inner)} => ${inspect(value, inner)}`);
+    if (output.length === 0) return `${name} {}`;
+    // oxlint-disable-next-line no-control-regex -- Colors are measured without their escape sequences.
+    const length = output.reduce((total, item) => total + item.replace(/\u001b\[[0-9;]*m/g, "").length + 2, -2);
+    const breakLength = typeof options?.breakLength === "number" ? options.breakLength : 80;
+    if (length > breakLength) return `${name} {\n  ${output.join(",\n  ")} }`;
+    return `${name} { ${output.join(", ")} }`;
+  }
+
+  return { toUSVString, initFromObject, convertMethodArgs, inspectParams };
 })

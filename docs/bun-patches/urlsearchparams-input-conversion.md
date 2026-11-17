@@ -8,6 +8,8 @@ The adjacent `node_url.ts` file-URL validator calls the intrinsic URL href gette
 
 The receiver-order correction lives in the TypeScript `convertMethodArgs` bridge. It calls the class's private-list accessor before any name or value coercion and does not catch or replace the engine's receiver TypeError. The five existing `web.js` methods supply that accessor because private fields can only be read inside their declaring class. Their remaining list operations stay in place and read the current list after coercion, so a valid receiver's reentrant mutation is not replaced by an earlier list snapshot. This is minimal JavaScript wiring into live TypeScript logic, not a class rewrite or an unused helper. Existing valid conversions remain once-only and user-thrown values leave unchanged.
 
+`util.inspect` output follows Node 26.12.1's `URLSearchParams.prototype[inspect.custom]` in `lib/internal/url.js`, which Bun 1.4.4's `node:util` matches: `URLSearchParams { 'k' => 'v' }`, one entry per line once the entries exceed the break length, `[Object]` past the depth limit, and the subclass name for subclasses. `inspectParams` in `url_search_params.ts` reimplements that format; no Node code is copied. The class's `nodejs.util.inspect.custom` method in `web.js` calls it with the list from its private field, so a URL's `searchParams` field prints its entries too. Before this, the class had no inspect hook and printed `{}`. One difference remains: native `Bun.inspect` on a URLSearchParams uses Bun's own grouped format (`"a": [ "1", "3" ]`), while here it uses the same Node format through the custom hook. The `url-search-params-inspect` fixture covers the `util.inspect` output.
+
 ## Classification
 
 | Patch or source | Class | Change |
@@ -15,5 +17,7 @@ The receiver-order correction lives in the TypeScript `convertMethodArgs` bridge
 | `crates/bunwasm-runtime/src/js/url_search_params.ts` | Host feature | Original scalar-string, record, sequence and receiver-first method conversion adapters. |
 | `crates/bunwasm-runtime/src/js/web.js`, URLSearchParams wiring | Host feature | Call the TypeScript conversion adapter from the existing class's private-field scope. |
 | `crates/bunwasm-runtime/src/js/node_url.ts`, file-URL brand check | Host feature | Validate URL internal state through the intrinsic href getter before reading public fields. |
+| `crates/bunwasm-runtime/src/js/url_search_params.ts`, `inspectParams` | Adapted implementation | Node 26.12.1 `lib/internal/url.js` `URLSearchParams[inspect.custom]` format, reimplemented. |
+| `crates/bunwasm-runtime/src/js/web.js`, URLSearchParams inspect hook | Host feature | Call `inspectParams` with the private pair list. |
 
 [Ledger scope and pinned revisions](scope.md).
