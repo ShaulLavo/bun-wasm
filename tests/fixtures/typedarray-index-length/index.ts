@@ -44,6 +44,17 @@ assert.throws(() => new Float64Array({ length: 2 ** 32 }), outOfMemory);
 assert.equal(new Uint8Array({ length: 2, 0: 7, 1: 9 })[1], 9);
 console.log("pass array-like length");
 
+const outOfBounds = { name: "RangeError", message: "Range consisting of offset and length are out of bounds" };
+for (const length of [2 ** 32, 2 ** 32 + 1]) {
+  const target = new Uint8Array(1);
+  assert.throws(() => target.set({ length, 0: 5 }), outOfBounds);
+  assert.equal(target[0], 0);
+}
+const target = new Uint8Array(1);
+target.set({ length: 1, 0: 5 });
+assert.equal(target[0], 5);
+console.log("pass set from array-like length");
+
 assert.throws(() => fixed().transfer(2 ** 32 + 1), outOfMemory);
 assert.throws(() => fixed().transferToFixedLength(2 ** 32 + 1), outOfMemory);
 assert.equal(fixed().transfer(3).byteLength, 3);

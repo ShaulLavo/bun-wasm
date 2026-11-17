@@ -1304,6 +1304,24 @@ diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInl
 diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
 --- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
 +++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
+@@ -499,10 +499,12 @@
+     RETURN_IF_EXCEPTION(scope, { });
+-    size_t sourceLength = sourceLengthValue.toLength(globalObject);
++    uint64_t wideSourceLength = sourceLengthValue.toLength(globalObject);
+     RETURN_IF_EXCEPTION(scope, { });
+
+-    if (offset > MAX_ARRAY_BUFFER_SIZE || !isSumSmallerThanOrEqual(sourceLength, offset, targetLength)) {
++    // A source longer than the target is out of bounds; check before narrowing to a 32-bit size_t.
++    if (offset > MAX_ARRAY_BUFFER_SIZE || wideSourceLength > targetLength || !isSumSmallerThanOrEqual(static_cast<size_t>(wideSourceLength), offset, targetLength)) {
+         throwRangeError(globalObject, scope, "Range consisting of offset and length are out of bounds"_s);
+         return false;
+     }
++    size_t sourceLength = static_cast<size_t>(wideSourceLength);
+
+     // It is not valid to ever call source->get() with an index of more than MAX_ARRAY_INDEX.
+diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
+--- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
++++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
 @@ -42,2 +42,5 @@
  #include <wtf/text/MakeString.h>
 +#if OS(WASI)

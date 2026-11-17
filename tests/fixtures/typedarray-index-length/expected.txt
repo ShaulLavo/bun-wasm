@@ -14,4 +14,5 @@ pass Buffer allocation length
 pass typed array buffer offset and length
 pass DataView offset and length
 pass array-like length
+pass set from array-like length
 pass ArrayBuffer transfer length
