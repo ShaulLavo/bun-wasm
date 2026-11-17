@@ -12,7 +12,9 @@ a one-element view. The local helper preserves the wide result, propagates
 ToIndex exceptions, checks representability in size_t, and only then narrows.
 An unrepresentable length raises the engine's existing Out of memory RangeError.
 Small lengths and engine memory maxima keep their existing behavior. The
-resizable ArrayBuffer allocator is a separate patch section.
+resizable ArrayBuffer allocator is a separate patch section, recorded in
+[jsc-resizable-backing.md](jsc-resizable-backing.md), and this change leaves it
+untouched.
 
 The standalone JSC shell control first reproduces truncation on current main.
 `tests/fixtures/typedarray-index-length` then checks the production JSC guest
