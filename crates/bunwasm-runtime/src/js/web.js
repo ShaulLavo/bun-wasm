@@ -835,16 +835,24 @@
   class Blob {
     #bytes;
     #type;
+    #read;
     constructor(parts = [], options = {}) {
       if (parts !== null && typeof parts === "object" && typeof parts[Symbol.iterator] !== "function") {
         throw new TypeError("new Blob() expects an Array");
       }
       this.#bytes = concatBytes(Array.from(parts || [], partBytes));
       this.#type = normalizeBlobType(options.type);
+      // The constructing class's reader, fixed now so a replaced prototype cannot change the bytes.
+      this.#read = new.target.prototype._bytes;
     }
     // Subclasses (BunFile) read lazily.
     _bytes() {
       return this.#bytes;
+    }
+    // Brand-checked bytes that ignore the public prototype; throws TypeError for a non-Blob.
+    _intrinsicBytes() {
+      const read = this.#read;
+      return read === blobBytes ? this.#bytes : Reflect.apply(read, this, []);
     }
     get size() {
       return this._bytes().length;
@@ -886,6 +894,8 @@
       return `Blob (${formatBytes(this.size)})`;
     }
   }
+
+  const blobBytes = Blob.prototype._bytes;
 
   function formatBytes(n) {
     if (n < 1024) return `${n} bytes`;

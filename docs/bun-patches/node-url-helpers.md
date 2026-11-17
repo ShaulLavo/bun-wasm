@@ -16,6 +16,21 @@ corrections are checked against Bun 1.4.4 and unchanged
 `test/js/node/url/url.test.ts` at Bun
 `9510e74152073d850a18758ca41114d8f214ffa6`.
 
+The legacy authority scan is ported from the same pinned `src/js/node/url.ts`
+(`Url.prototype.parse` host section, `getHostname`, `parseHost`, `autoEscape`).
+It keeps Bun's rules: the last `@` before a host-ending `/`, `?` or `#` ends the
+auth, the first RFC 2396 non-host character ends the host, a `:` left in the
+hostname moves the rest into the path, and tabs and newlines in the authority are
+dropped. Hostnames over 255 characters become empty. A host that is empty after
+IDNA or contains a forbidden character throws `ERR_INVALID_URL`, as do bracketed
+hosts with forbidden IPv6 characters. The remaining path, search, query and hash
+escape Bun's `autoEscape` characters, except for `javascript:` URLs. Local
+changes: character sets are code-point sets instead of regular expressions, IDNA
+runs through the existing `domainToASCII` native only for non-ASCII hosts, the
+DEP0170 warning for an invalid port is not emitted, and the hash and query are
+split before the host instead of after it, which gives the same fields. Format
+keeps `//` whenever `slashes` is set, so `http:///x` round-trips.
+
 
 ## Classification
 

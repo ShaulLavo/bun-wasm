@@ -34,7 +34,12 @@ append test retains its own hang guard; no speed assertion is added.
 URL methods before user code runs, and `buffer.js` exports its resolver through the
 existing module factory. The registry validates Blob state through the captured
 intrinsic type getter. It snapshots the bytes at creation and returns a fresh Blob
-on each resolution. File snapshots preserve name and lastModified. Revocation
+on each resolution. The bytes come from `Blob.prototype._intrinsicBytes`, captured
+at setup: `web.js` fixes each Blob's reader to its constructing class, so a Blob
+whose prototype was replaced still resolves to its own bytes and a lazy `Bun.file`
+still reads its file. Unlike native Bun, which keeps a file-backed Blob lazy, an
+object URL for `Bun.file` holds the file's bytes from the moment it was created.
+`URL.revokeObjectURL()` with no argument throws `ERR_MISSING_ARGS`. File snapshots preserve name and lastModified. Revocation
 removes the registry entry while already resolved Blobs remain usable. Invalid or
 revoked keys return undefined; the fixed UUID length rejects huge strings before
 a map lookup. Boxed String revocation preserves throwing string conversions.

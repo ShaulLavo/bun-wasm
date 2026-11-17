@@ -14,6 +14,7 @@ async function main() {
     assert.equal(result.host, host);
     assert.equal(parse(result.href!).hostname, hostname);
   }
+  verifyLegacyHosts();
   const options = urlToHttpOptions(new URL("http://u%20n:p%40ss@[::1]:81/a?q#h"));
   assert.equal(Object.getPrototypeOf(options), null);
   assert.equal(options.hostname, "::1");
@@ -75,7 +76,34 @@ async function main() {
   assert.equal(await resolveObjectURL(second)!.text(), "hello");
   URL.revokeObjectURL(second);
   URL.revokeObjectURL(fileURL);
+  const swapped = new Blob(["hello"]);
+  Object.setPrototypeOf(swapped, {});
+  const swappedURL = URL.createObjectURL(swapped);
+  assert.equal(await resolveObjectURL(swappedURL)!.text(), "hello");
+  URL.revokeObjectURL(swappedURL);
+  assert.throws(() => Reflect.apply(URL.revokeObjectURL, URL, []), {
+    code: "ERR_MISSING_ARGS", message: "Not enough arguments to 'revokeObjectURL'. Expected 1, got 0.",
+  });
   console.log("URL compatibility ok");
+}
+
+function verifyLegacyHosts() {
+  for (const input of ["http://‍.com/a", "http://\ud800/a", "http://[::1/x", "http://[::1]x/p"]) {
+    assert.throws(() => parse(input), { code: "ERR_INVALID_URL", message: "Invalid URL" }, input);
+  }
+  for (const [input, host, pathname, href] of [
+    ["http://é%41.com/a", "xn--9ca", "%41.com/a", "http://xn--9ca/%41.com/a"],
+    ["http://a b.com/x", "a", "%20b.com/x", "http://a/%20b.com/x"],
+    ["http://exa<mple.com/", "exa", "%3Cmple.com/", "http://exa/%3Cmple.com/"],
+    ["http:///x", "", "/x", "http:///x"],
+    ["http://a@b?@c", "b", "/", "http://a@b/?@c"],
+    ["http://a@b@c/", "c", "/", "http://a%40b@c/"],
+    ["http://\tex\nample.com/", "example.com", "/", "http://example.com/"],
+    ["http://a:b@ÉX.com:8080/p?q#h", "xn--x-9fa.com:8080", "/p", "http://a:b@xn--x-9fa.com:8080/p?q#h"],
+  ]) {
+    const result = parse(input);
+    assert.deepEqual([result.host, result.pathname, result.href], [host, pathname, href], input);
+  }
 }
 
 function verifyQueryMutations() {

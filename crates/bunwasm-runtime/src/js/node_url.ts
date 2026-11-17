@@ -74,6 +74,98 @@
   }
 
   const SLASHED_PROTOCOLS = new Set<string | null>(["http:", "https:", "ftp:", "gopher:", "file:", "ws:", "wss:"]);
+  const UNSAFE_PROTOCOLS = new Set<string | null>(["javascript:"]);
+  const codes = (text: string) => new Set(Array.from(text, (char) => char.charCodeAt(0)));
+  // Bun's legacy parser (vendor/bun/src/js/node/url.ts): characters never allowed in a host
+  // end it, as do the host-ending /, ? and #. Forbidden sets apply after IDNA.
+  const NON_HOST = codes(" \"%';<>\\^`{|}");
+  const HOST_END = codes("#/?");
+  const FORBIDDEN_HOST = codes("\0\t\n\r #%/:<>?@[\\]^|");
+  const FORBIDDEN_IPV6_HOST = codes("\0\t\n\r #%/<>?@\\^|");
+  const HOSTNAME_END = codes("/\\#?:");
+  const AUTO_ESCAPE = /['{}|\\^`<>" \r\n\t]/g;
+  const HOSTNAME_MAX_LENGTH = 255;
+
+  function invalidURL(input: string): TypeError {
+    return internal.require("url_errors").invalidURL(input);
+  }
+
+  function hasCode(text: string, set: Set<number>) {
+    for (let i = 0; i < text.length; i++) if (set.has(text.charCodeAt(i))) return true;
+    return false;
+  }
+
+  function hasNonAscii(text: string) {
+    for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) > 0x7f) return true;
+    return false;
+  }
+
+  /** The last @ before a host-ending character ends the auth; the first non-host character ends the host. */
+  function splitAuthority(text: string) {
+    let atSign = -1;
+    let nonHost = -1;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if (code === 64) {
+        atSign = i;
+        nonHost = -1;
+        continue;
+      }
+      if (nonHost === -1 && (NON_HOST.has(code) || HOST_END.has(code))) nonHost = i;
+      if (HOST_END.has(code)) break;
+    }
+    const end = nonHost === -1 ? text.length : nonHost;
+    return { auth: atSign === -1 ? null : text.slice(0, atSign), host: text.slice(atSign + 1, end), rest: text.slice(end) };
+  }
+
+  /** Bun's getHostname: a hostname character that cannot appear there moves the remainder into the path. */
+  function cutHostname(hostname: string, rest: string) {
+    for (let i = 0; i < hostname.length; i++) {
+      if (HOSTNAME_END.has(hostname.charCodeAt(i))) return { hostname: hostname.slice(0, i), rest: `/${hostname.slice(i)}${rest}` };
+    }
+    return { hostname, rest };
+  }
+
+  function asciiHostname(hostname: string, input: string) {
+    const ascii = hasNonAscii(hostname) ? native.domainToASCII(hostname) : hostname;
+    if (ascii === "" || hasCode(ascii, FORBIDDEN_HOST)) throw invalidURL(input);
+    return ascii;
+  }
+
+  function autoEscape(text: string) {
+    return text.replace(AUTO_ESCAPE, (char) => "%" + char.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0"));
+  }
+
+  /** Bun escapes these characters before splitting the hash and query, so each part gets the same escape. */
+  function escapeParts(result: Url) {
+    if (result.hash) result.hash = autoEscape(result.hash);
+    if (result.search) result.search = autoEscape(result.search);
+    if (typeof result.query === "string") result.query = autoEscape(result.query);
+  }
+
+  /** Parses the authority after `//` into result and returns the post-host remainder. */
+  function parseAuthority(result: Url, text: string, input: string) {
+    const lineEnd = text.search(/[#/?]/);
+    const head = lineEnd < 0 ? text : text.slice(0, lineEnd);
+    const split = splitAuthority(head.replace(/[\t\n\r]/g, "") + (lineEnd < 0 ? "" : text.slice(lineEnd)));
+    if (split.auth !== null) result.auth = decodeURIComponent(split.auth);
+    let host = split.host;
+    const portMatch = /:\d*$/.exec(host);
+    if (portMatch) {
+      if (portMatch[0] !== ":") result.port = portMatch[0].slice(1);
+      host = host.slice(0, portMatch.index);
+    }
+    const ipv6 = host.startsWith("[") && host.endsWith("]");
+    const cut = ipv6 ? { hostname: host, rest: split.rest } : cutHostname(host, split.rest);
+    let rest = cut.rest;
+    let hostname = cut.hostname.length > HOSTNAME_MAX_LENGTH ? "" : cut.hostname.toLowerCase();
+    if (hostname !== "" && ipv6 && hasCode(hostname, FORBIDDEN_IPV6_HOST)) throw invalidURL(input);
+    if (hostname !== "" && !ipv6) hostname = asciiHostname(hostname, input);
+    result.host = hostname + (result.port ? ":" + result.port : "");
+    result.hostname = ipv6 ? hostname.slice(1, -1) : hostname;
+    if (ipv6 && !rest.startsWith("/")) rest = "/" + rest;
+    return rest;
+  }
 
   function parse(input: unknown, parseQueryString = false, slashesDenoteHost = false): Url {
     if (input instanceof Url) return input;
@@ -107,25 +199,11 @@
     const hasSlashes = rest.startsWith("//");
     if (hasSlashes && (result.protocol === null ? slashesDenoteHost : true)) {
       result.slashes = true;
-      rest = rest.slice(2);
-      const end = rest.search(/[/]/);
-      let authority = end < 0 ? rest : rest.slice(0, end);
-      rest = end < 0 ? "" : rest.slice(end);
-      const at = authority.lastIndexOf("@");
-      if (at >= 0) {
-        result.auth = decodeURIComponent(authority.slice(0, at));
-        authority = authority.slice(at + 1);
-      }
-      const portMatch = /:(\d*)$/.exec(authority);
-      if (portMatch) {
-        if (portMatch[1]) result.port = portMatch[1];
-        authority = authority.slice(0, portMatch.index);
-      }
-      const ipv6 = authority.startsWith("[") && authority.endsWith("]");
-      const hostname = authority.toLowerCase();
-      const asciiHostname = /[\u0080-￿]/.test(hostname) ? native.domainToASCII(hostname) : hostname;
-      result.hostname = ipv6 ? hostname.slice(1, -1) : asciiHostname;
-      result.host = (ipv6 ? hostname : asciiHostname) + (result.port ? ":" + result.port : "");
+      rest = parseAuthority(result, rest.slice(2), input);
+    }
+    if (!UNSAFE_PROTOCOLS.has(result.protocol)) {
+      rest = autoEscape(rest);
+      escapeParts(result);
     }
     if (rest || result.host) {
       result.pathname = rest || (SLASHED_PROTOCOLS.has(result.protocol) ? "/" : rest);
@@ -168,7 +246,7 @@
     let hash = obj.hash || "";
     if (hash && !hash.startsWith("#")) hash = "#" + hash;
     const slashes = obj.slashes || SLASHED_PROTOCOLS.has(protocol);
-    if (slashes && (host || protocol === "file:")) {
+    if (slashes && (obj.slashes || host || protocol === "file:")) {
       host = "//" + host;
       if (pathname && !pathname.startsWith("/")) pathname = "/" + pathname;
     }

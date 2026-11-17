@@ -5,6 +5,7 @@
   const typeGetter = getter(BlobCtor.prototype, "type");
   const nameGetter = getter(FileCtor.prototype, "name");
   const modifiedGetter = getter(FileCtor.prototype, "lastModified");
+  const bytesOf = intrinsicBytes(BlobCtor.prototype);
   const stringValue = String.prototype.valueOf;
 
   function getter(prototype: object, name: string) {
@@ -13,16 +14,24 @@
     return get;
   }
 
+  function intrinsicBytes(prototype: object): (this: Blob) => Uint8Array {
+    const read: unknown = Object.getOwnPropertyDescriptor(prototype, "_intrinsicBytes")?.value;
+    if (typeof read !== "function") throw new Error("Missing intrinsic Blob bytes reader");
+    return read as (this: Blob) => Uint8Array;
+  }
+
   function fileMetadata(blob: Blob): { name: string; lastModified: number } | undefined {
     try { return { name: nameGetter.call(blob), lastModified: modifiedGetter.call(blob) }; }
     catch { return undefined; }
   }
 
+  // The bytes come from the Blob's own brand, never from its public prototype.
   function clone(blob: Blob): Blob {
     const type: string = typeGetter.call(blob);
+    const bytes = bytesOf.call(blob);
     const file = fileMetadata(blob);
-    if (file) return new FileCtor([blob], file.name, { type, lastModified: file.lastModified });
-    return new BlobCtor([blob], { type });
+    if (file) return new FileCtor([bytes], file.name, { type, lastModified: file.lastModified });
+    return new BlobCtor([bytes], { type });
   }
 
   function invalidArgument(message: string) {
@@ -51,6 +60,9 @@
   }
 
   function revokeObjectURL(input: unknown) {
+    if (arguments.length === 0) {
+      throw Object.assign(new TypeError("Not enough arguments to 'revokeObjectURL'. Expected 1, got 0."), { code: "ERR_MISSING_ARGS" });
+    }
     try { stringValue.call(input); }
     catch { throw invalidArgument("revokeObjectURL expects a string"); }
     const url = key(input);
