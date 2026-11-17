@@ -16,6 +16,17 @@ test("toMatchObject compares the expected object's enumerable symbol keys", () =
   expect({ nested: { [f]: 1 } }).not.toMatchObject({ nested: { [f]: 2 } });
 });
 
+test("string matchers accept String objects as their sample", () => {
+  class DString extends String {}
+  expect({ a: "hello String" }).toMatchObject({ a: expect.stringContaining(new String("Str") as never) });
+  expect({ a: "hello String" }).not.toMatchObject({ a: expect.stringContaining(new String("Strs") as never) });
+  expect({ a: "hello derived String" }).toMatchObject({ a: expect.stringContaining(new DString("riv") as never) });
+  expect(Bun.inspect(expect.stringContaining(new String("Str") as never))).toBe('StringContaining "Str"');
+  // stringMatching accepts a String object but, in Bun, never matches with it.
+  expect("a Str").not.toEqual(expect.stringMatching(new String("Str") as never));
+  expect(Bun.inspect(expect.stringMatching(new String("Str") as never))).toBe('StringMatching "Str"');
+});
+
 test("a non-enumerable symbol in the expected object is ignored", () => {
   const pattern = {};
   Object.defineProperty(pattern, f, { value: 9, enumerable: false });

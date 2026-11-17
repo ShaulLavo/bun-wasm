@@ -141,13 +141,14 @@
 
   class StringMatchingMatcher extends AsymmetricMatcher {
     matches(other) {
-      if (typeof other !== "string") return false;
+      // A String object sample is accepted but, as in Bun, matches nothing.
+      if (typeof other !== "string" || !(typeof this.sample === "string" || this.sample instanceof RegExp)) return false;
       const re = typeof this.sample === "string" ? new RegExp(this.sample) : this.sample;
       re.lastIndex = 0;
       return re.test(other);
     }
     describe(format) {
-      return `${this.inverse ? "StringNotMatching" : "StringMatching"} ${format(this.sample)}`;
+      return `${this.inverse ? "StringNotMatching" : "StringMatching"} ${format(this.sample instanceof String ? String(this.sample) : this.sample)}`;
     }
   }
 
@@ -876,6 +877,11 @@
     return value;
   }
 
+  // Bun's isString also accepts String objects, derived ones included; they match by value.
+  function isStringSample(value) {
+    return typeof value === "string" || value instanceof String;
+  }
+
   function factoryError(signature, problem) {
     return new Error(`expect.${signature}\n\n${problem}`);
   }
@@ -912,12 +918,12 @@
       return flagged(this, new AnyMatcher(args[0]));
     }
     stringContaining(sample) {
-      if (typeof sample !== "string") throw factoryError("stringContaining(string)", "Expected a string\n");
-      return flagged(this, new StringContainingMatcher(sample));
+      if (!isStringSample(sample)) throw factoryError("stringContaining(string)", "Expected a string\n");
+      return flagged(this, new StringContainingMatcher(String(sample)));
     }
     stringMatching(sample) {
       // Bun names stringContaining in this message too.
-      if (typeof sample !== "string" && !(sample instanceof RegExp)) throw factoryError("stringContaining(string)", "Expected a string or regular expression\n");
+      if (!isStringSample(sample) && !(sample instanceof RegExp)) throw factoryError("stringContaining(string)", "Expected a string or regular expression\n");
       return flagged(this, new StringMatchingMatcher(sample));
     }
     objectContaining(sample) {
