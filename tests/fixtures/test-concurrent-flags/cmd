@@ -1,0 +1,4 @@
+test
+--concurrent
+--max-concurrency
+3

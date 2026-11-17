@@ -1,0 +1,16 @@
+
+index.test.ts:
+(pass) limited > default concurrent 0
+(pass) limited > default concurrent 1
+(pass) limited > default concurrent 2
+(pass) limited > default concurrent 3
+(pass) limited > default concurrent 4
+(pass) limited > default concurrent 5
+(pass) serial runs alone
+(pass) a
+(pass) b
+
+ 9 pass
+ 0 fail
+ 1 expect() calls
+Ran 9 tests across 1 file. [TIME]

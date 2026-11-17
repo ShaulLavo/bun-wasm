@@ -1,0 +1,24 @@
+bun test vVERSION
+start serial 1
+end serial 1
+start concurrent 2
+start concurrent 3
+end concurrent 2
+end concurrent 3
+serial 4 runs alone
+start concurrent 5
+start beforeEach
+end beforeEach
+start concurrent 6
+end concurrent 5
+end concurrent 6
+start beforeEach
+end beforeEach
+serial 7 runs alone
+beforeAll runs alone
+start concurrent 8
+start concurrent 9
+end concurrent 8
+end concurrent 9
+afterAll runs alone
+peaks [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,20,20,20,20,20]
