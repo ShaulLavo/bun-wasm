@@ -54,7 +54,7 @@ async function exercise(options: { engine?: RunRequest["engine"]; stackBytes?: n
   const req: RunRequest = { controlGrant: control.grant, engine: options.engine ?? "spidermonkey", module, linkPlan: plan.shared, args: ["bun"], env: {}, trace: false, net: null, slots: "off", filesystem: connection.client,
     memoryGroup: { memory, control: new SharedArrayBuffer(32), reply: new SharedArrayBuffer(36), port: channel.port1, index: 0, watches: 1, parallelism: 1, stackBytes: options.stackBytes ?? STACK } };
   const executor = createBunExecutor(req);
-  const context = { request: req, fs: new FilesystemClient(connection.client), isolated: true, outcome: null, runtimeState: null, identity: null, signal: AbortSignal.timeout(1000), defaultSignal() {}, post() { return true; }, finish() {}, wasi, checkActive() {}, bindMemory(memory: WebAssembly.Memory) { wasi.bindMemory(memory); } };
+  const context = { request: req, fs: new FilesystemClient(connection.client), isolated: true, outcome: null, runtimeState: null, identity: null, processIdentity: null, signal: AbortSignal.timeout(1000), defaultSignal() {}, post() { return true; }, finish() {}, wasi, checkActive() {}, bindMemory(memory: WebAssembly.Memory) { wasi.bindMemory(memory); } };
   try {
     if (!executor.instantiate) throw new Error("missing paired instantiator");
     const instance = await executor.instantiate(imports, context);
