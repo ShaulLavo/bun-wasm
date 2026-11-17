@@ -5249,3 +5249,212 @@ index 0000000000..aeaf24d9e2
 +extern WASIResizableBufferTestHooks* wasiResizableBufferTestHooks;
 +}
 +#endif
+diff --git i/Source/JavaScriptCore/runtime/RegExpInlines.h w/Source/JavaScriptCore/runtime/RegExpInlines.h
+--- i/Source/JavaScriptCore/runtime/RegExpInlines.h
++++ w/Source/JavaScriptCore/runtime/RegExpInlines.h
+@@ -37,10 +37,41 @@
+ #include <string.h>
+ #endif
+
++#if OS(WASI) && ENABLE(C_LOOP)
++#include "GlobalObjectMethodTable.h"
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
+ namespace JSC {
+
++#if OS(WASI) && ENABLE(C_LOOP)
++// A backtracking match reaches no interpreter trap point, so it asks the host
++// the same fatal-cancellation question the C-loop trap slow path asks.
++ALWAYS_INLINE Yarr::InterruptPoll regExpHostInterruptPoll(JSGlobalObject* nullOrGlobalObject, Yarr::MatchFrom matchFrom)
++{
++    if (matchFrom != Yarr::MatchFrom::VMThread || !nullOrGlobalObject || !nullOrGlobalObject->vm().traps().hostInterruptEnabled())
++        return { };
++    auto poll = [](void* context) -> bool {
++        auto* globalObject = static_cast<JSGlobalObject*>(context);
++        if (!globalObject->vm().traps().canPollHostInterrupt())
++            return false;
++        return globalObject->globalObjectMethodTable()->shouldInterruptScriptBeforeTimeout(globalObject);
++    };
++    return { poll, nullOrGlobalObject };
++}
++
++// An interrupted match becomes JSC's uncatchable termination, as at a trap point.
++ALWAYS_INLINE bool terminateInterruptedRegExp(VM& vm, int result)
++{
++    if (result != static_cast<int>(Yarr::JSRegExpResult::ErrorInterrupted)) [[likely]]
++        return false;
++    vm.notifyNeedTermination();
++    vm.throwTerminationExceptionIfNeeded();
++    return true;
++}
++#endif
++
+ #if REGEXP_FUNC_TEST_DATA_GEN
+ class RegExpFunctionalTestCollector {
+     // This class is not thread safe.
+@@ -237,9 +268,17 @@ ALWAYS_INLINE int RegExp::matchInlineOnce(JSGlobalObject* nullOrGlobalObject, VM
+ #endif
+     {
+         Yarr::MatchingContextHolder regExpContext(vm, this, matchFrom);
++#if OS(WASI) && ENABLE(C_LOOP)
++        result = Yarr::interpret(m_regExpBytecode.get(), s, startOffset, reinterpret_cast<unsigned*>(offsetVector), regExpHostInterruptPoll(nullOrGlobalObject, matchFrom));
++#else
+         result = Yarr::interpret(m_regExpBytecode.get(), s, startOffset, reinterpret_cast<unsigned*>(offsetVector));
++#endif
+     }
+
++#if OS(WASI) && ENABLE(C_LOOP)
++    if (terminateInterruptedRegExp(vm, result)) [[unlikely]]
++        return -1;
++#endif
+ #if OS(WASI)
+     if (result == static_cast<int>(Yarr::JSRegExpResult::ErrorNoMemory)) [[unlikely]] {
+         if (nullOrGlobalObject) {
+@@ -398,8 +437,16 @@ ALWAYS_INLINE MatchResult RegExp::matchInlineOnce(JSGlobalObject* nullOrGlobalOb
+     offsetVector = nonReturnedOvector.mutableSpan().data();
+     {
+         Yarr::MatchingContextHolder regExpContext(vm, this, matchFrom);
++#if OS(WASI) && ENABLE(C_LOOP)
++        result = Yarr::interpret(m_regExpBytecode.get(), s, startOffset, reinterpret_cast<unsigned*>(offsetVector), regExpHostInterruptPoll(nullOrGlobalObject, matchFrom));
++#else
+         result = Yarr::interpret(m_regExpBytecode.get(), s, startOffset, reinterpret_cast<unsigned*>(offsetVector));
++#endif
+     }
++#if OS(WASI) && ENABLE(C_LOOP)
++    if (terminateInterruptedRegExp(vm, result)) [[unlikely]]
++        return MatchResult::failed();
++#endif
+ #if OS(WASI)
+     if (result == static_cast<int>(Yarr::JSRegExpResult::ErrorNoMemory)) [[unlikely]] {
+         if (nullOrGlobalObject) {
+diff --git i/Source/JavaScriptCore/runtime/VMTraps.h w/Source/JavaScriptCore/runtime/VMTraps.h
+--- i/Source/JavaScriptCore/runtime/VMTraps.h
++++ w/Source/JavaScriptCore/runtime/VMTraps.h
+@@ -288,6 +288,12 @@ public:
+         m_hostInterruptCountdown = m_hostInterruptInterval;
+         return !m_trapsDeferred && !isDeferringTermination();
+     }
++    bool hostInterruptEnabled() const { return m_hostInterruptInterval; }
++    // Native loops without trap points (Yarr) poll on their own cadence.
++    bool canPollHostInterrupt() const
++    {
++        return m_hostInterruptInterval && !m_trapsDeferred && !isDeferringTermination();
++    }
+ #endif
+
+     ALWAYS_INLINE void* softStackLimit() const { return m_stack.softStackLimit(); };
+diff --git i/Source/JavaScriptCore/yarr/Yarr.h w/Source/JavaScriptCore/yarr/Yarr.h
+--- i/Source/JavaScriptCore/yarr/Yarr.h
++++ w/Source/JavaScriptCore/yarr/Yarr.h
+@@ -71,8 +71,22 @@ enum class JSRegExpResult {
+     ErrorHitLimit = -3,
+     ErrorNoMemory = -4,
+     ErrorInternal = -5,
++#if OS(WASI)
++    ErrorInterrupted = -6,
++#endif
+ };
+
++#if OS(WASI)
++// Single-threaded WASI cannot publish VM traps while a match runs. The bytecode
++// interpreter calls `poll` once every interruptPollInterval backtracks; true
++// abandons the match with ErrorInterrupted. A null poll never fires.
++struct InterruptPoll {
++    bool (*poll)(void*) { nullptr };
++    void* context { nullptr };
++};
++static constexpr unsigned interruptPollInterval = 1 << 14;
++#endif
++
+ enum class CharSize : uint8_t {
+     Char8,
+     Char16
+diff --git i/Source/JavaScriptCore/yarr/YarrInterpreter.cpp w/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+--- i/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
++++ w/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+@@ -2136,6 +2136,14 @@ public:
+         RELEASE_ASSERT_NOT_REACHED();
+
+     backtrack:
++#if OS(WASI)
++        // Every repeated attempt, nested or not, passes here; one decrement per step.
++        if (!--interruptPollCountdown) [[unlikely]] {
++            interruptPollCountdown = interruptPollInterval;
++            if (interruptPoll.poll && interruptPoll.poll(interruptPoll.context))
++                return JSRegExpResult::ErrorInterrupted;
++        }
++#endif
+         ASSERT(context->term < static_cast<int>(disjunction->terms.size()));
+
+         DUMP_TERM();
+@@ -2337,8 +2345,8 @@ public:
+         ASSERT((result == JSRegExpResult::Match) == (output[0] != offsetNoMatch));
+
+ #if OS(WASI)
+-        if (result == JSRegExpResult::ErrorNoMemory)
+-            return static_cast<unsigned>(JSRegExpResult::ErrorNoMemory);
++        if (result == JSRegExpResult::ErrorNoMemory || result == JSRegExpResult::ErrorInterrupted)
++            return static_cast<unsigned>(result);
+ #endif
+
+         return output[0];
+@@ -2355,6 +2363,10 @@ public:
+     {
+     }
+
++#if OS(WASI)
++    void setInterruptPoll(InterruptPoll poll) { interruptPoll = poll; }
++#endif
++
+ private:
+     inline bool NODELETE isLegacyCompilation() const { return compileMode == CompileMode::Legacy; }
+     inline bool NODELETE isUnicodeCompilation() const { return compileMode == CompileMode::Unicode; }
+@@ -2373,6 +2385,10 @@ private:
+     static constexpr unsigned bolUnsatisfiable = std::numeric_limits<unsigned>::max();
+     unsigned noNewlineBefore; // see matchDotStarEnclosure
+     unsigned remainingMatchCount;
++#if OS(WASI)
++    InterruptPoll interruptPoll;
++    unsigned interruptPollCountdown { interruptPollInterval };
++#endif
+ };
+
+ class ByteCompiler {
+@@ -3332,6 +3348,23 @@ unsigned interpret(BytecodePattern* bytecode, StringView input, unsigned start,
+     return Interpreter<char16_t>(bytecode, output, input.span16(), start).interpret();
+ }
+
++#if OS(WASI)
++template<typename CharType>
++static unsigned interpretWithPoll(BytecodePattern* bytecode, std::span<const CharType> input, unsigned start, unsigned* output, InterruptPoll poll)
++{
++    Interpreter<CharType> interpreter(bytecode, output, input, start);
++    interpreter.setInterruptPoll(poll);
++    return interpreter.interpret();
++}
++
++unsigned interpret(BytecodePattern* bytecode, StringView input, unsigned start, unsigned* output, InterruptPoll poll)
++{
++    if (input.is8Bit())
++        return interpretWithPoll(bytecode, input.span8(), start, output, poll);
++    return interpretWithPoll(bytecode, input.span16(), start, output, poll);
++}
++#endif
++
+ // These should be the same for both char16_t & Latin1Character.
+ static_assert(sizeof(BackTrackInfoPatternCharacter) == (YarrStackSpaceForBackTrackInfoPatternCharacter * sizeof(uintptr_t)));
+ static_assert(sizeof(BackTrackInfoCharacterClass) == (YarrStackSpaceForBackTrackInfoCharacterClass * sizeof(uintptr_t)));
+diff --git i/Source/JavaScriptCore/yarr/YarrInterpreter.h w/Source/JavaScriptCore/yarr/YarrInterpreter.h
+--- i/Source/JavaScriptCore/yarr/YarrInterpreter.h
++++ w/Source/JavaScriptCore/yarr/YarrInterpreter.h
+@@ -564,5 +564,8 @@ private:
+
+ JS_EXPORT_PRIVATE std::unique_ptr<BytecodePattern> byteCompile(YarrPattern&, BumpPointerAllocator*, ErrorCode&, ConcurrentJSLock* = nullptr);
+ JS_EXPORT_PRIVATE unsigned interpret(BytecodePattern*, StringView input, unsigned start, unsigned* output);
++#if OS(WASI)
++JS_EXPORT_PRIVATE unsigned interpret(BytecodePattern*, StringView input, unsigned start, unsigned* output, InterruptPoll);
++#endif
+
+ } } // namespace JSC::Yarr
