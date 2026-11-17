@@ -1,0 +1,9 @@
+
+index.test.ts:
+(pass) a cycle must come back to the same pair
+(pass) a detached ArrayBuffer equals no other buffer
+
+ 2 pass
+ 0 fail
+ 12 expect() calls
+Ran 2 tests across 1 file. [TIME]

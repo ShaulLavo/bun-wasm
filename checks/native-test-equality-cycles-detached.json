@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-equality-cycles-detached",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}
