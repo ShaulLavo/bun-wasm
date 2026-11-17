@@ -14,6 +14,7 @@ import { queueTicket } from "./admission";
 import { runSmoke } from "./run";
 import { templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { engineFiles, profileEngineFiles } from "../goals-matrix/engines";
+import { comparedHeaders, decodedSha256, pick, type LiveServed } from "../goals-matrix/iphone-live-proxy";
 
 const source: Report["source"] = { commit: "a".repeat(40), dirty: false, assets: { source: "local-test-build" } };
 const capabilities = { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": deviceUDID, transport: "visible-safari-xctest" };
@@ -307,7 +308,8 @@ async function cliResult(cli: string, args: string[]): Promise<{ code: number; s
 test("a local build and recorded commit need no CI origin or goals inventory metadata", async () => {
   await scratch(async root => {
     const config = smokeOptions(argumentsFor(root));
-    await Bun.write(config.sourceFile, JSON.stringify({ commit: source.commit }));
+    if (config.target.mode !== "local") throw new Error("Expected local mode");
+    await Bun.write(config.target.sourceFile, JSON.stringify({ commit: source.commit }));
     await preparedRoot(config.matrix.root);
     let admitted = false;
     const result = await runSmoke(config, { admission: async () => { admitted = true; throw new Error("stop before native work"); } });
@@ -336,5 +338,141 @@ test("final verification checks the selected shared program after all case clean
     expect(result.status).toBe("red");
     expect(result.failures[0]?.error).toContain("embedded host, manifest, and staged bytes disagree");
     expect(result.failures[0]?.error).toContain(profileEngineFiles("quickjs", "shared-group")[0]!);
+  });
+});
+
+const site = "https://bun.sprockt.dev/";
+function liveArguments(root: string): string[] {
+  return argumentsFor(root).filter(value => !value.startsWith("--root=") && !value.startsWith("--source-file=")).concat([`--base-url=${site}`]);
+}
+test("live mode takes a site root instead of a prepared build and recorded commit", () => {
+  const config = smokeOptions(liveArguments("/unused"));
+  expect(config.target).toEqual({ mode: "live", url: site });
+  expect(config.matrix.assetSource).toBe(site);
+  expect(config.matrix.timeoutMs).toBe(phaseTimeoutMs);
+  expect(config.matrix.installTimeouts).toEqual({ "vite-react": installTimeoutMs, hono: installTimeoutMs });
+  expect(config.matrix.iphoneControlUrl).toBe(config.control);
+  expect(smokeOptions(argumentsFor("/prepared")).target).toEqual({ mode: "local", root: "/prepared/site", sourceFile: "/prepared/source.json" });
+});
+test.each(["root=/prepared/site", "source-file=/prepared/source.json", "asset-source=local"])("live mode rejects the local input --%s", option => {
+  expect(() => smokeOptions(liveArguments("/unused").concat([`--${option}`]))).toThrow("--base-url tests a deployed site");
+});
+test.each(["http://bun.sprockt.dev/", "https://bun.sprockt.dev/playground/", "https://bun.sprockt.dev/?v=1", "https://user:pass@bun.sprockt.dev/", "bun.sprockt.dev"])("live mode rejects the base URL %s", url => {
+  expect(() => smokeOptions(liveArguments("/unused").filter(value => !value.startsWith("--base-url=")).concat([`--base-url=${url}`]))).toThrow("--base-url");
+});
+test("local mode still requires its prepared root and recorded commit", () => {
+  expect(() => smokeOptions(argumentsFor("/prepared").filter(value => !value.startsWith("--root=")))).toThrow("Missing --root");
+  expect(() => smokeOptions(argumentsFor("/prepared").filter(value => !value.startsWith("--source-file=")))).toThrow("Missing --source-file");
+});
+const isolated = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" };
+/** Serves a prepared root as the deployed site would: the sandbox at /, the playground under /playground/. */
+function deployedSite(root: string, commits: string[], requests: string[], pageHeaders: Record<string, string> = isolated): (url: string) => Promise<Response> {
+  return async url => {
+    requests.push(url);
+    const path = new URL(url).pathname;
+    if (!url.startsWith(site)) throw new Error(`Live smoke fetched another origin: ${url}`);
+    if (path === "/deployment.json") return Response.json({ sourceCommit: commits.length > 1 ? commits.shift() : commits[0], waffleVersion: "0.0.0-test" });
+    const name = path === "/playground/" ? "index.html" : path.replace(/^\/playground\//, "");
+    const file = Bun.file(join(root, name));
+    if (!await file.exists()) return new Response(null, { status: 404 });
+    return new Response(file, { headers: path === "/playground/" ? { "content-type": "text/html", "cache-control": "no-store", ...pageHeaders } : { "content-type": "application/octet-stream" } });
+  };
+}
+/** What the Mac proxy would have recorded for these paths, read from the same deployed site. */
+async function servedFrom(get: (url: string) => Promise<Response>, paths: readonly string[]): Promise<LiveServed[]> {
+  return Promise.all(paths.map(async url => {
+    const response = await get(new URL(url, site).href);
+    return { url, request: { "accept-encoding": "gzip, deflate, br" }, status: response.status, headers: pick(response.headers, comparedHeaders), sha256: decodedSha256(await response.bytes(), null) };
+  }));
+}
+const servedPaths = ["/playground/", "/playground/engine-builds.json"];
+test("live mode skips local setup and runs the same cases against the deployed playground", async () => {
+  await scratch(async root => {
+    const config = smokeOptions(liveArguments(root));
+    await preparedRoot(join(root, "deployed"));
+    const requests: string[] = [], urls: string[] = [];
+    const get = deployedSite(join(root, "deployed"), [source.commit], requests);
+    const served = await servedFrom(deployedSite(join(root, "deployed"), [source.commit], []), servedPaths);
+    const result = await withFixtures(config, [], { preflight: true, onNavigate: url => urls.push(url),
+      overrides: { fetch: get, served: async () => served } });
+    expect(result.liveOrigin).toEqual({ checked: 2, mismatches: [] });
+    expect(result.status, JSON.stringify(result.failures)).toBe("green");
+    expect(result.revision).toBe(source.commit);
+    expect(result.source).toEqual({ commit: source.commit, dirty: null, assets: { source: site, deployment: { sourceCommit: source.commit, waffleVersion: "0.0.0-test" } } });
+    expect(result.cases.map(value => value.phases.map(phase => phase.phase))).toEqual(smokeCases.map(() => Array.from(smokePhases)));
+    expect(urls.map(url => new URL(url).pathname)).toEqual(["/playground/", "/playground/", "/playground/"]);
+    expect(urls.map(url => new URL(url).searchParams.get("profile"))).toEqual(["split", "split", "shared-group"]);
+    // Qualification, final verification and the real-origin comparison all read the deployed host page.
+    expect(requests.filter(url => url === site + "playground/")).toHaveLength(3);
+    expect(requests).toContain(site + "playground/" + profileEngineFiles("quickjs", "shared-group")[0]! + ".gz");
+    expect(await Bun.file(join(root, "site")).exists()).toBe(false);
+    expect(await Bun.file(join(root, "source.json")).json()).toEqual(source);
+    expect(result.resources.external[0]).toBe(`deployed site ${site}`);
+  });
+});
+test("live mode fails before native work when the deployed bytes disagree with their fingerprints", async () => {
+  await scratch(async root => {
+    const config = smokeOptions(liveArguments(root));
+    await preparedRoot(join(root, "deployed"));
+    await Bun.write(join(root, "deployed", profileEngineFiles("browser", "split")[0]!), "mixed deploy");
+    let admitted = false;
+    const result = await runSmoke(config, { fetch: deployedSite(join(root, "deployed"), [source.commit], []), admission: async () => { admitted = true; return "ticket"; } });
+    expect(admitted).toBe(false);
+    expect(result).toMatchObject({ status: "red", failedPhase: "prerequisite", revision: source.commit });
+    expect(result.failures[0]?.error).toContain("embedded host, manifest, and staged bytes disagree");
+  });
+});
+test("live mode reports red when the site redeploys during the smoke", async () => {
+  await scratch(async root => {
+    const config = smokeOptions(liveArguments(root));
+    await preparedRoot(join(root, "deployed"));
+    const result = await withFixtures(config, [], { preflight: true,
+      overrides: { fetch: deployedSite(join(root, "deployed"), [source.commit, "b".repeat(40)], []), served: async () => [] } });
+    expect(result.cases.every(value => value.status === "pass")).toBe(true);
+    expect(result.status).toBe("red");
+    expect(result.failures[0]?.error).toContain(`Live site changed deployment during smoke: ${source.commit} became ${"b".repeat(40)}`);
+  });
+});
+test("a deployed playground without COEP fails the isolation check before native work", async () => {
+  await scratch(async root => {
+    await preparedRoot(join(root, "deployed"));
+    let admitted = false;
+    const result = await runSmoke(smokeOptions(liveArguments(root)), {
+      fetch: deployedSite(join(root, "deployed"), [source.commit], [], { "cross-origin-opener-policy": "same-origin" }),
+      admission: async () => { admitted = true; return "ticket"; } });
+    expect(admitted).toBe(false);
+    expect(result).toMatchObject({ status: "red", failedPhase: "isolation" });
+    expect(result.failures[0]?.error).toContain("not cross-origin isolated (COOP same-origin, COEP null)");
+  });
+});
+test("any difference between the run and the real origin makes the live smoke red", async () => {
+  await scratch(async root => {
+    await preparedRoot(join(root, "deployed"));
+    const get = deployedSite(join(root, "deployed"), [source.commit], []);
+    const served = await servedFrom(get, servedPaths);
+    served[0]!.headers["cache-control"] = "public, max-age=600";
+    served[1]!.sha256 = "0".repeat(64);
+    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => served } });
+    expect(result.cases.every(value => value.status === "pass")).toBe(true);
+    expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 2 } });
+    expect(result.liveOrigin?.mismatches).toEqual([
+      "/playground/: cache-control \"public, max-age=600\" in the run, \"no-store\" from the real origin",
+      "/playground/engine-builds.json: decoded bytes differ from the real origin"]);
+  });
+});
+test("a run whose proxy recorded no playground page cannot pass the origin check", async () => {
+  await scratch(async root => {
+    await preparedRoot(join(root, "deployed"));
+    const get = deployedSite(join(root, "deployed"), [source.commit], []);
+    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => [] } });
+    expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 0, mismatches: ["the run served no /playground/ page"] } });
+  });
+});
+test("live mode needs the site's recorded source commit", async () => {
+  await scratch(async root => {
+    let admitted = false;
+    const result = await runSmoke(smokeOptions(liveArguments(root)), { fetch: async () => Response.json({ waffleVersion: "0.0.0" }), admission: async () => { admitted = true; return "ticket"; } });
+    expect(admitted).toBe(false);
+    expect(result).toMatchObject({ status: "red", revision: null, failures: [{ phase: "prerequisite", error: "Error: Live site deployment.json has no 40-character sourceCommit" }] });
   });
 });

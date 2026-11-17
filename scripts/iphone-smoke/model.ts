@@ -28,6 +28,12 @@ export interface SmokeReport {
   cases: SmokeCase[];
   failures: Failure[];
   resources: { owned: string[]; external: string[] };
+  /** Live mode: the run's live requests repeated against the real origin. */
+  liveOrigin?: { checked: number; mismatches: string[] };
+}
+/** A failure that belongs to a named smoke step rather than to a prerequisite. */
+export class StepFailure extends Error {
+  constructor(readonly phase: string, message: string) { super(message); }
 }
 export function pendingCase(box: Box, source: SmokeCase["source"]): SmokeCase {
   return { id: boxId(box), box, source, status: "pending", phases: [], cleanup: null, failures: [], attempt: null };
