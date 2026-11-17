@@ -60,6 +60,8 @@ class ProvenanceTests(unittest.TestCase):
             path.write_text("host fixture\n")
         self.wasm = self.root / "fixture.wasm"
         self.wasm.write_bytes(b"wasm fixture")
+        for name in ("quickjs.wasm", "jsc-engine.wasm", suite.SHELL_RECEIPT) + tuple(suite.SHELL_GUESTS.values()):
+            self.wasm.with_name(name).write_bytes(name.encode())
         self.opts = types.SimpleNamespace(engine="browser", suite=self.root, dependencies=None,
                                           network="host", timeout=1, test_timeout=1, node_parallel=False)
         self.addCleanup(patch.stopall)
@@ -216,6 +218,44 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(meta["host_sources"], {})
         self.assertEqual(meta["runtime_package"], {})
         self.assertEqual(meta["launcher_sha256"], suite.digest(self.wasm))
+
+    def test_resume_rejects_changed_paired_engine_or_shell_guest(self):
+        self.opts.engine = "quickjs"
+        self.opts.launcher = self.wasm
+        original = self.provenance()
+        self.assertEqual(set(original["companions_sha256"]), {"quickjs.wasm", "bash-web-shell.wasm", "bash-web-env.wasm", "bash-web-guests.json"})
+        output = self.root / "results.json"
+        output.write_text(json.dumps({"provenance": original, "results": []}))
+        opts = types.SimpleNamespace(output=output, resume=True)
+        for name in original["companions_sha256"]:
+            with self.subTest(guest=name):
+                path = self.wasm.with_name(name)
+                data = path.read_bytes()
+                path.write_bytes(data + b"\n")
+                try:
+                    with self.assertRaisesRegex(SystemExit, "Resume refused"):
+                        suite.load_results(opts, self.provenance())
+                finally:
+                    path.write_bytes(data)
+
+    def test_missing_shell_guest_refuses_provenance(self):
+        self.wasm.with_name("bash-web-shell.wasm").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.provenance()
+
+    def test_commands_register_the_shell_guests_on_every_engine(self):
+        for engine in ("quickjs", "jsc", "browser"):
+            with self.subTest(engine=engine):
+                opts = types.SimpleNamespace(engine=engine, launcher=self.wasm, test_timeout=1, node_parallel=False)
+                argv = suite.command(opts, self.wasm, self.root, [], "js/example.test.ts")
+                # The shell guest needs a root preopen; /bun and /tmp sit inside it.
+                self.assertEqual([argv[i + 1] for i, part in enumerate(argv) if part == "--dir"], [f"{self.root}::/"])
+                for flag, name in suite.SHELL_GUESTS.items():
+                    self.assertEqual(argv[argv.index(flag) + 1], str(self.wasm.with_name(name)))
+                    if engine == "browser":
+                        self.assertLess(argv.index(flag), argv.index("--"))
+                    else:
+                        self.assertLess(argv.index(flag), argv.index("test"))
 
 
 class ReportTests(unittest.TestCase):
