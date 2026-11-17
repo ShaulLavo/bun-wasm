@@ -75,13 +75,21 @@ pages depends on Waffle's per-incarnation exit lock, which is not in the pinned 
 release yet; this proof covers the stop and the exit, not page reuse.
 
 The original `runtimeProcess-page-SIGKILL-stops-guest-in-native-regexp` proof repeats that
-stop while the guest loops on a catastrophically backtracking regexp (each call backtracks
-about 2^24 times) inside an inner `catch {}`. It runs only for engines that poll inside their
-native matcher, listed in `nativePollingEngines`: QuickJS's regexp engine calls the interrupt
-handler, so the stop lands in milliseconds although one call takes hundreds. JSC's Yarr
-interpreter and SpiderMonkey's irregexp do not poll yet (one call takes about 1.7 s and
-1.4 s, and their interpreter countdowns are hundreds of calls away), so both are excluded
-until their matchers poll.
+stop while the guest is inside one catastrophically backtracking regexp call (about 2^32
+backtracks, inside an inner `catch {}`), far longer than any proof waits on any machine.
+The stop can only land inside that call; if the call ever returned, the finally block and
+the code after it would write their markers. The guest writes its readiness before the
+call, so the proof does not depend on machine speed. It runs only for engines that poll
+inside their native matcher, listed in `nativePollingEngines`: QuickJS's regexp engine
+calls the interrupt handler. JSC's Yarr interpreter and SpiderMonkey's irregexp do not poll
+yet, so both are excluded until their matchers poll.
+
+The stop proofs run last, in a separate page (`?phase=busy`) that the runner opens in a
+fresh browser context after the main matrix's context has closed, and closes right after.
+A busy guest that ever outlived its proof would keep spinning in its page's process and
+starve every later case. A stop proof that fails after its guest started still kills that
+guest and waits for its own poll to unwind it before the next case. The runner merges both
+pages into one result, which is green only if both are.
 
 
 ## Classification
