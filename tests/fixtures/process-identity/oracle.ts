@@ -4,6 +4,24 @@ export interface Identity { pid: number; ppid: number }
 export interface ChildIdentity { handle: number; identity: Identity }
 export interface ThreadIdentity { identity: Identity; child: ChildIdentity; nested: Identity }
 export interface IdentityTree { root: Identity; siblings: ChildIdentity[]; thread: ThreadIdentity }
+type ExitObservation = { kind: "creator"; identity: Identity; child: number } | { kind: "survivor"; before: Identity; after: Identity };
+
+export function decodeExitObservation(value: unknown): ExitObservation {
+  if (!value || typeof value !== "object" || !("kind" in value)) throw new Error("Missing exit observation");
+  if (value.kind === "creator" && "identity" in value && "child" in value && typeof value.child === "number") {
+    return { kind: "creator", identity: decodeIdentity(value.identity), child: value.child };
+  }
+  if (value.kind === "survivor" && "before" in value && "after" in value) {
+    return { kind: "survivor", before: decodeIdentity(value.before), after: decodeIdentity(value.after) };
+  }
+  throw new Error("Invalid exit observation");
+}
+
+export function assertParentExit(creator: Identity, handle: number, before: Identity, after: Identity): void {
+  assert.equal(before.pid, handle, "survivor must report its subprocess handle");
+  assert.equal(before.ppid, creator.pid, "survivor must name its creation parent");
+  assert.deepEqual(after, before, "parent collection must preserve immutable process ancestry");
+}
 
 export function decodeIdentity(value: unknown): Identity {
   if (!value || typeof value !== "object" || !("pid" in value) || !("ppid" in value)) throw new Error("Missing identity");
@@ -22,6 +40,19 @@ function decodeChild(value: unknown): ChildIdentity {
 export function decodeThread(value: unknown): ThreadIdentity {
   if (!value || typeof value !== "object" || !("identity" in value) || !("child" in value) || !("nested" in value)) throw new Error("Missing thread identity");
   return { identity: decodeIdentity(value.identity), child: decodeChild(value.child), nested: decodeIdentity(value.nested) };
+}
+
+export function decodeTree(value: unknown): IdentityTree {
+  if (!value || typeof value !== "object" || !("root" in value) || !("siblings" in value) || !("thread" in value)) throw new Error("Missing process tree");
+  if (!Array.isArray(value.siblings)) throw new Error("Invalid sibling observations");
+  return { root: decodeIdentity(value.root), siblings: value.siblings.map(decodeChild), thread: decodeThread(value.thread) };
+}
+
+export function assertNonrootTree(handle: number, creator: Identity, tree: IdentityTree): void {
+  assert.equal(tree.root.pid, handle, "nonroot leader must report its own subprocess handle");
+  assert.equal(tree.root.ppid, creator.pid, "nonroot leader must name its creating process");
+  assert.notEqual(tree.root.pid, creator.pid, "nonroot leader cannot reuse the root identity");
+  assertIdentityTree(tree);
 }
 
 function assertIdentity(identity: Identity): void {

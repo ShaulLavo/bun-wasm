@@ -13,6 +13,26 @@ class GuestExit extends Error {
   constructor(readonly code: number) { super(`guest exit ${code}`); }
 }
 
+test("shared public identity keeps zero, ignored, handled and fatal self signals on the calling member", () => {
+  const current = fixture();
+  const sibling = fixture();
+  expect(current.process.pid).toBe(sibling.process.pid);
+  expect(current.process.pid).not.toBe(1);
+  expect(current.process.kill(current.process.pid, 0)).toBe(true);
+  expect(current.process.kill(current.process.pid, "SIGPIPE")).toBe(true);
+  expect(current.selected()).toBeUndefined();
+  const calls: string[] = [];
+  current.process.on("SIGUSR1", () => calls.push("current"));
+  sibling.process.on("SIGUSR1", () => calls.push("sibling"));
+  current.process.kill(current.process.pid, "SIGUSR1");
+  current.internal.pumpSignals!();
+  sibling.internal.pumpSignals!();
+  expect(calls).toEqual(["current"]);
+  expect(() => current.process.kill(current.process.pid, "SIGTERM")).toThrow(GuestExit);
+  expect(current.selected()).toEqual({ status: 143, signal: 15 });
+  expect(sibling.selected()).toBeUndefined();
+});
+
 function fixture() {
   const dispositions = new Map<number, number>();
   const pending = new Set<number>();
@@ -26,7 +46,7 @@ function fixture() {
   const internal = {
     native: {
       platformInfo: { version: "test", revision: "test", arch: "wasm32" },
-      env: () => ({}), argv: () => ["bun"], execArgv: () => [], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
+      env: () => ({}), argv: () => ["bun"], execArgv: () => [], processIdentity: () => [50, 7], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
       writeStdout(...args: unknown[]) { writes.push(args); if (writeError) throw writeError; }, writeStderr() {},
       tlsDispose() {}, closeAllDirs() {},
       exit(code: number): never { throw new GuestExit(code); },

@@ -79,7 +79,7 @@ export async function runProcessCases(databaseName?: string, diagnostics: { capt
         };
       },
     });
-    const abi = new ProcessABI({ memory, descriptors, fs, pid: client.pid, service: client, signals: client.signals,
+    const abi = new ProcessABI({ memory, descriptors, fs, pid: client.pid, processIdentity: client.processIdentity, service: client, signals: client.signals,
       wake: client.wake, createPipe: () => client.createPipe() });
     const owned = { client, abi, memory, descriptors, transport, dispose() { descriptors.dispose(); fs.dispose(); } };
     return owned;

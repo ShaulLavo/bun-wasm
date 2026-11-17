@@ -424,7 +424,7 @@ for (const kind of ["exited", "signaled"] as const) test(`every process import c
   // Keep this list explicit, so silently dropping an import cannot reduce coverage.
   expect(Object.keys(imports).sort()).toEqual([
     "access_cancel", "access_start", "access_take", "default_signal", "dup", "getpid",
-    "interrupted", "job_of", "kill", "kill_job", "pipe", "poll", "read", "signal", "spawn",
+    "interrupted", "job_of", "kill", "kill_job", "parent_process_id", "pipe", "poll", "process_id", "read", "signal", "spawn",
     "wait", "wait_job", "write",
   ]);
   expect(Array.from(refused.keys()).sort()).toEqual(Object.keys(imports).sort());

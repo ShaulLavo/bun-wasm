@@ -16,7 +16,7 @@ function decoder() {
   const memory = new WebAssembly.Memory({ initial: 1 });
   const decoded: SpawnRequest[] = [];
   const unused = (): never => { throw new Error("unexpected service operation"); };
-  const abi = new ProcessABI({ memory, descriptors: new DescriptorTable(), fs: new MemFS(), pid: 1,
+  const abi = new ProcessABI({ memory, descriptors: new DescriptorTable(), fs: new MemFS(), pid: 1, processIdentity: { pid: 1, parentPid: 0 },
     signals: { signalState: createSignalState(), interrupt: new Int32Array(new SharedArrayBuffer(4)),
       requestedSignal: new Int32Array(new SharedArrayBuffer(4)), outcome: outcomeWord() },
     service: { childExited: unused, startStatus: unused, spawn(_parent, request) { decoded.push(request); return 77; }, wait: unused, waitJob: unused, jobEmpty: unused,
@@ -48,6 +48,7 @@ for (const entry of fixture) test(`spawn JSON ${entry.valid ? "accepts" : "rejec
   expect(host.decoded).toHaveLength(1);
   const request = JSON.parse(text) as SpawnRequest;
   const got = host.decoded[0]!;
+  expect(got.processKind ?? "process").toBe(request.processKind ?? "process");
   expect({ executable: got.executable, argv: got.argv, env: got.env, cwd: got.cwd, job: got.job, fds: got.fds })
     .toEqual({ executable: request.executable, argv: request.argv, env: request.env, cwd: request.cwd, job: request.job, fds: request.fds });
 });
