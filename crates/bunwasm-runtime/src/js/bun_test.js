@@ -1971,9 +1971,15 @@
   const VARIANTS = { skip: { mode: "skip" }, todo: { mode: "todo" }, only: { only: true }, failing: { failing: true }, concurrent: { concurrent: true }, serial: { concurrent: false } };
 
   // Modifiers chain in any order, as in Bun: test.concurrent.each, test.concurrent.failing, ...
+  // Each variant is made on first use and then kept, so test.failing === test.failing.
   function addVariants(fn, modifiers, make, names) {
     for (const name of names) {
-      Object.defineProperty(fn, name, { configurable: true, enumerable: true, get: () => make(Object.assign({}, modifiers, VARIANTS[name])) });
+      const get = () => {
+        const variant = make(Object.assign({}, modifiers, VARIANTS[name]));
+        Object.defineProperty(fn, name, { configurable: true, enumerable: true, writable: true, value: variant });
+        return variant;
+      };
+      Object.defineProperty(fn, name, { configurable: true, enumerable: true, get });
     }
   }
 
@@ -2062,8 +2068,14 @@
         timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
       };
       startTimer();
-      internal.require("test_lifecycle").body(fn, args, usesDone, finish);
+      const returned = internal.require("test_lifecycle").body(fn, args, usesDone, finish);
+      // In a concurrent group, the next test starts only once this one really waits, as in Bun.
+      if (slot.blocked && !invocation.settled && !alreadySettled(returned)) slot.blocked();
     });
+  }
+
+  function alreadySettled(value) {
+    return internal.isPromise(value) && internal.promiseState(value) !== "pending";
   }
 
   function invokeHook(hook) {
@@ -2154,23 +2166,34 @@
     return step.kind === "beforeAll" ? step.skipTo : index + 1;
   }
 
-  // Up to --max-concurrency tests of the group run at once, each in its own slot; the next
-  // test starts as soon as one finishes, in order.
-  async function runConcurrentGroup(tests, file) {
+  // Bun's Execution.rs steps each test of a group until a hook or body really waits, then
+  // starts the next one. Here a lane takes tests in order; whenever a lane's callback is still
+  // pending after it returns, another lane starts, up to --max-concurrency lanes. Tests that
+  // never wait therefore run one after another, in order.
+  function runConcurrentGroup(tests, file) {
     const limit = options.maxConcurrency > 0 ? Math.min(options.maxConcurrency, tests.length) : tests.length;
     let next = 0;
-    const lane = async () => {
-      while (next < tests.length) {
-        const test = tests[next++];
-        await runInSlot({ test: null, invocation: null }, () => runTestNode(test, file));
-      }
+    let lanes = 0;
+    let active = 0;
+    const lane = async (slot) => {
+      while (next < tests.length) await runTestNode(tests[next++], file);
+      slot.blocked = null;
     };
     concurrentGroups++;
-    try {
-      await Promise.all(Array.from({ length: limit }, lane));
-    } finally {
+    return new Promise((resolve, reject) => {
+      const startLane = () => {
+        if (lanes >= limit || next >= tests.length) return;
+        lanes++;
+        active++;
+        const slot = { test: null, invocation: null, blocked: startLane };
+        runInSlot(slot, () => lane(slot)).then(() => {
+          if (--active === 0) resolve();
+        }, reject);
+      };
+      startLane();
+    }).finally(() => {
       concurrentGroups--;
-    }
+    });
   }
 
   // A failing beforeAll/afterAll is reported as an unnamed test of its scope.

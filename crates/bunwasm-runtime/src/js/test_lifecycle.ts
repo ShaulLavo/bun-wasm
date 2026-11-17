@@ -26,15 +26,18 @@
     Promise.resolve(result).then(complete, error => finish({ error }));
   }
 
-  function body(fn: Callback, args: readonly unknown[], usesDone: boolean, finish: Finish) {
+  /** Runs a hook or test callback. Returns the callback's thenable, so callers can see whether it already settled. */
+  function body(fn: Callback, args: readonly unknown[], usesDone: boolean, finish: Finish): unknown {
     try {
       if (usesDone) return doneBody(fn, args, finish);
       const result = fn(...args);
       if (!thenable(result)) return finish({ ok: true });
       result.then(() => finish({ ok: true }), error => finish({ error }));
+      return result;
     } catch (error) {
       finish({ error });
     }
+    return undefined;
   }
 
   function count(value: unknown, key: string, signature: string) {
