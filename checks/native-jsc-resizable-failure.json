@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/jsc-resizable-failure",
+  "engines": ["jsc"]
+}

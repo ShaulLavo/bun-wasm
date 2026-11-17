@@ -1,3 +1,5 @@
-ArrayBuffer unsupported growth caught; fixed allocation works
-SharedArrayBuffer unsupported growth caught; fixed allocation works
+ArrayBuffer resizable construction and resize work
+SharedArrayBuffer unsupported growth caught
+ArrayBuffer fixed allocation works
+SharedArrayBuffer fixed allocation works
 guest survived
