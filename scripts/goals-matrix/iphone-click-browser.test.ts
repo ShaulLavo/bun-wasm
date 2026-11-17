@@ -2,21 +2,18 @@ import { expect, test } from "bun:test";
 import { chromium, webkit, type Browser, type BrowserType } from "playwright";
 import { runFixturePhases } from "./fixture-phases";
 import { armIphoneClick } from "./iphone-browser";
-import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates } from "./iphone-click";
+import { iphoneClickExpression, iphoneClickPredicates, recordIphoneClickTrace } from "./iphone-click";
 
 async function clickControl(engine: BrowserType): Promise<void> {
-  const rows: Record<string, unknown>[] = [];
-  const passedRow = Promise.withResolvers<void>();
   const lifetime = new AbortController();
-  const trace = new IphoneClickTrace(async text => {
-    const row = JSON.parse(text) as Record<string, unknown>;
-    rows.push(row);
-    if (row.stage === "passed") passedRow.resolve();
-  }, 5000, lifetime.signal);
   let browser: Browser | undefined;
+  let recorded: ReturnType<typeof recordIphoneClickTrace> | undefined;
   await runFixturePhases(`click ${engine.name()}`, async enter => {
     enter("launch");
     browser = await engine.launch({ headless: true });
+    // The trace's 5 s click deadline covers the page work, not browser launch.
+    recorded = recordIphoneClickTrace(5000, lifetime.signal);
+    const { trace, rows, final } = recorded;
     enter("new-page");
     const page = await browser.newPage();
     enter("set-content");
@@ -42,12 +39,12 @@ async function clickControl(engine: BrowserType): Promise<void> {
     expect(iphoneClickPredicates(before, replaced, "1")).toEqual({ ...predicates, sameTarget: false });
     enter("trace-delivery");
     trace.finish("passed");
-    // Evidence rows are saved asynchronously; wait for the passed row itself rather than a fixed delay.
-    await passedRow.promise;
+    // Evidence rows are saved asynchronously; wait for the final row, whatever stage the trace ended in.
+    expect(await final).toMatchObject({ stage: "passed" });
     expect(rows).toContainEqual(expect.objectContaining({ stage: "observed", predicates }));
     expect(rows.at(-1)?.stage).toBe("passed");
   }, async enter => {
-    trace.finish("failed");
+    recorded?.trace.finish("failed");
     lifetime.abort();
     enter("browser-close");
     await browser?.close();
