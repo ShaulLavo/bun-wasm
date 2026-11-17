@@ -26,6 +26,11 @@ STOP = threading.Event()
 PROCESSES = set()
 LOCK = threading.Lock()
 PAIRED_ENGINES = {"quickjs": "quickjs.wasm", "jsc": "jsc-engine.wasm"}
+# bash-web's guests behind /bin/sh, /bin/bash and /bin/env. Bun.$, package scripts
+# and spawned shells fail with ENOENT without them, as scripts/test.sh registers.
+SHELL_GUESTS = {"--shell": "bash-web-shell.wasm", "--env-utility": "bash-web-env.wasm"}
+# The Node host refuses shell guests without their build receipt beside them.
+SHELL_RECEIPT = "bash-web-guests.json"
 
 # The installed Waffle tree is fingerprinted separately. Include the local Node host and
 # its runtime imports so resume cannot reuse results after an adapter or slot change.
@@ -186,9 +191,16 @@ def runtime_package_provenance():
             "consumer": {"pin": pin, "package_sha256": digest(manifest), "lock_sha256": digest(consumer / "bun.lock")}}
 
 
+def companions(opts):
+    """Guests the launcher loads from beside the engine wasm."""
+    paired = [PAIRED_ENGINES[opts.engine]] if opts.engine in PAIRED_ENGINES else []
+    return paired + list(SHELL_GUESTS.values()) + [SHELL_RECEIPT]
+
+
 def provenance(opts, wasm):
     return {"schema": 1, "engine": opts.engine, "suite_commit": git(opts.suite, "rev-parse", "HEAD"),
             "wasm_sha256": digest(wasm),
+            "companions_sha256": {name: digest(wasm.with_name(name)) for name in companions(opts)},
             "tools_sha256": digest(wasm.with_name("bun-tools.wasm")) if wasm.with_name("bun-tools.wasm").is_file() else None,
             "runner_sha256": digest(Path(__file__)),
             "launcher_sha256": digest(opts.launcher) if opts.engine != "browser" else digest(ROOT / "web/scripts/node-host.mjs"),
@@ -233,9 +245,12 @@ def runs_as_script(opts, source, path):
 
 
 def command(opts, wasm, work, preloads, path):
-    dirs = ["--dir", f"{work}/bun::/bun", "--dir", f"{work}/tmp::/tmp"]
+    # One root preopen, as scripts/test.sh uses: the shell guest needs "/", and
+    # /bun and /tmp still map to this lane's snapshot and scratch.
+    dirs = ["--dir", f"{work}::/"]
     env = {"PWD": "/bun", "HOME": "/tmp", "TMPDIR": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin", "CI": "1", "AGENT": "0", "NO_COLOR": "1", "BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING": "1", "BUNWASM_TEST": "1"}
     flags = [part for key, value in env.items() for part in ["--env", f"{key}={value}"]]
+    flags += [part for flag, name in SHELL_GUESTS.items() for part in [flag, str(wasm.with_name(name))]]
     script = runs_as_script(opts, work / "bun/test" / path, path)
     tests = ["run", "/bun/test/" + path] if script else ["test", "--timeout", str(opts.test_timeout)]
     if tests[0] == "test":
@@ -262,9 +277,33 @@ def parse_output(text):
 
 def worker(opts, wasm, source, scratch, preloads, pending, finished):
     with tempfile.TemporaryDirectory(prefix="worker-", dir=scratch) as temporary:
-        work = Path(temporary)
+        # `work` is the guest's root. The lane's output log sits beside it, out of reach.
+        work = Path(temporary) / "root"
+        work.mkdir()
         subprocess.run(["cp", "-a", "--reflink=auto", str(source), str(work / "bun")], check=True)
         worker_loop(opts, wasm, work, preloads, pending, finished)
+
+
+def output_log(work):
+    return work.parent / "output"
+
+
+def reset_root(work):
+    """Return the guest's root to the clean snapshot alone before the next file."""
+    # Reset tracked edits and delete ALL generated files, including ignored
+    # files. The upstream checkout is never opened.
+    git(work / "bun", "reset", "--hard", "-q", "HEAD")
+    git(work / "bun", "clean", "-ffdxq")
+    # Anything a test wrote elsewhere at the root, /tmp included, goes too.
+    for entry in work.iterdir():
+        if entry.name == "bun":
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    if git(work / "bun", "status", "--porcelain"):
+        raise RuntimeError("Worker did not return to its clean snapshot")
 
 
 def worker_loop(opts, wasm, work, preloads, pending, finished):
@@ -275,20 +314,14 @@ def worker_loop(opts, wasm, work, preloads, pending, finished):
             return
         (work / "tmp").mkdir()
         record = invoke(opts, wasm, work, preloads, path)
-        # Reset tracked edits and delete ALL generated files, including ignored
-        # files, before reusing this lane. The upstream checkout is never opened.
-        git(work / "bun", "reset", "--hard", "-q", "HEAD")
-        git(work / "bun", "clean", "-ffdxq")
-        shutil.rmtree(work / "tmp")
-        if git(work / "bun", "status", "--porcelain"):
-            raise RuntimeError("Worker did not return to its clean snapshot")
+        reset_root(work)
         finished.put(record)
 
 
 def invoke(opts, wasm, work, preloads, path):
     started = time.monotonic()
     timed_out = False
-    with (work / "output").open("w+b") as output:
+    with output_log(work).open("w+b") as output:
         argv = command(opts, wasm, work, preloads, path)
         if opts.network == "loopback":
             argv = loopback_command(argv)
@@ -403,10 +436,12 @@ def main():
             shutil.copyfile(wasm, frozen_wasm)
             if digest(frozen_wasm) != meta["wasm_sha256"]:
                 raise RuntimeError("Wasm changed during suite setup; rerun with a stable artifact")
-            # A split guest loads its paired engine from its own directory.
-            paired = PAIRED_ENGINES.get(opts.engine)
-            if paired:
-                shutil.copyfile(wasm.with_name(paired), scratch / paired)
+            # A split guest loads its paired engine from its own directory; the shell
+            # guests are passed by their frozen paths.
+            for name, expected in meta["companions_sha256"].items():
+                shutil.copyfile(wasm.with_name(name), scratch / name)
+                if digest(scratch / name) != expected:
+                    raise RuntimeError(f"{name} changed during suite setup; rerun with stable artifacts")
             if meta["tools_sha256"] is not None:
                 frozen_tools = scratch / "bun-tools.wasm"
                 shutil.copyfile(wasm.with_name("bun-tools.wasm"), frozen_tools)

@@ -60,6 +60,8 @@ class ProvenanceTests(unittest.TestCase):
             path.write_text("host fixture\n")
         self.wasm = self.root / "fixture.wasm"
         self.wasm.write_bytes(b"wasm fixture")
+        for name in ("quickjs.wasm", "jsc-engine.wasm", suite.SHELL_RECEIPT) + tuple(suite.SHELL_GUESTS.values()):
+            self.wasm.with_name(name).write_bytes(name.encode())
         self.opts = types.SimpleNamespace(engine="browser", suite=self.root, dependencies=None,
                                           network="host", timeout=1, test_timeout=1, node_parallel=False)
         self.addCleanup(patch.stopall)
@@ -216,6 +218,74 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(meta["host_sources"], {})
         self.assertEqual(meta["runtime_package"], {})
         self.assertEqual(meta["launcher_sha256"], suite.digest(self.wasm))
+
+    def test_resume_rejects_changed_paired_engine_or_shell_guest(self):
+        self.opts.engine = "quickjs"
+        self.opts.launcher = self.wasm
+        original = self.provenance()
+        self.assertEqual(set(original["companions_sha256"]), {"quickjs.wasm", "bash-web-shell.wasm", "bash-web-env.wasm", "bash-web-guests.json"})
+        output = self.root / "results.json"
+        output.write_text(json.dumps({"provenance": original, "results": []}))
+        opts = types.SimpleNamespace(output=output, resume=True)
+        for name in original["companions_sha256"]:
+            with self.subTest(guest=name):
+                path = self.wasm.with_name(name)
+                data = path.read_bytes()
+                path.write_bytes(data + b"\n")
+                try:
+                    with self.assertRaisesRegex(SystemExit, "Resume refused"):
+                        suite.load_results(opts, self.provenance())
+                finally:
+                    path.write_bytes(data)
+
+    def test_missing_shell_guest_refuses_provenance(self):
+        self.wasm.with_name("bash-web-shell.wasm").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.provenance()
+
+    def test_commands_register_the_shell_guests_on_every_engine(self):
+        for engine in ("quickjs", "jsc", "browser"):
+            with self.subTest(engine=engine):
+                opts = types.SimpleNamespace(engine=engine, launcher=self.wasm, test_timeout=1, node_parallel=False)
+                argv = suite.command(opts, self.wasm, self.root, [], "js/example.test.ts")
+                # The shell guest needs a root preopen; /bun and /tmp sit inside it.
+                self.assertEqual([argv[i + 1] for i, part in enumerate(argv) if part == "--dir"], [f"{self.root}::/"])
+                for flag, name in suite.SHELL_GUESTS.items():
+                    self.assertEqual(argv[argv.index(flag) + 1], str(self.wasm.with_name(name)))
+                    if engine == "browser":
+                        self.assertLess(argv.index(flag), argv.index("--"))
+                    else:
+                        self.assertLess(argv.index(flag), argv.index("test"))
+
+
+class WorkerRootTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="bun-wasm-worker-root-", dir="/work/tmp" if Path("/work/tmp").is_dir() else None)
+        self.addCleanup(temporary.cleanup)
+        self.work = Path(temporary.name) / "root"
+        snapshot = self.work / "bun"
+        (snapshot / "test").mkdir(parents=True)
+        (snapshot / "test/kept.txt").write_text("tracked\n")
+        suite.git(snapshot, "init", "-q")
+        suite.git(snapshot, "add", ".")
+        suite.git(snapshot, "-c", "user.name=t", "-c", "user.email=t@localhost", "commit", "-qm", "snapshot")
+
+    def test_output_log_is_outside_the_guest_root(self):
+        log = suite.output_log(self.work)
+        self.assertFalse(log.resolve().is_relative_to(self.work.resolve()))
+
+    def test_reset_leaves_only_the_clean_snapshot_at_the_root(self):
+        (self.work / "bun/test/kept.txt").write_text("edited\n")
+        (self.work / "bun/test/new.txt").write_text("generated\n")
+        (self.work / "tmp/nested").mkdir(parents=True)
+        (self.work / "tmp/nested/file").write_text("scratch\n")
+        (self.work / "stray.txt").write_text("written at /\n")
+        (self.work / "stray-dir/inner").mkdir(parents=True)
+        (self.work / "link").symlink_to(self.work / "bun", target_is_directory=True)
+        suite.reset_root(self.work)
+        self.assertEqual([entry.name for entry in self.work.iterdir()], ["bun"])
+        self.assertEqual((self.work / "bun/test/kept.txt").read_text(), "tracked\n")
+        self.assertFalse((self.work / "bun/test/new.txt").exists())
 
 
 class ReportTests(unittest.TestCase):
