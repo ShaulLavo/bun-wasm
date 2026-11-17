@@ -20,8 +20,8 @@ are original adapter corrections against unchanged Bun tests at
 `9510e74152073d850a18758ca41114d8f214ffa6` and native Bun 1.4.4 and Node 26.12.1.
 The new transcoding adapter has its own [record](buffer-transcode.md).
 `tests/fixtures/buffer-concat-resizable` keeps the shrink assertions mandatory
-on QuickJS, Browser and SpiderMonkey. Its manifest excludes JSC's unsupported
-native resizable allocation; it uses no capability probe or caught OOM to pass.
+on QuickJS, Browser, SpiderMonkey and JSC, which has a [malloc resizable
+backing](jsc-resizable-backing.md). It uses no capability probe or caught OOM to pass.
 `web.js` creates the shared constructors in `internal.web` and installs those same
 references as globals; the Buffer factory now re-exports those exact references. This
 preserves constructor identity across global, CommonJS, and named/default ESM access, so
@@ -51,11 +51,12 @@ programs at Bun `9510e74152073d850a18758ca41114d8f214ffa6`,
 `test/js/node/buffer.test.js` lines 4415 and 4691, in the factory directly.
 The encoding and ordinary ArrayBuffer constructor fixtures select QuickJS, JSC
 and Browser. Every resizable ArrayBuffer assertion remains in the RAB fixture,
-which selects QuickJS and Browser. The JSC WASI patch explicitly returns null
-from `tryAllocateResizableMemory`, so RAB and GSAB construction fail before
-Buffer is used. The full shared-growth assertion remains in the blocking
-host/source controls. Those unavailable guest capabilities are not passing
-coverage. No constructor probe, error catch or OOM suppression selects tests.
+which selects QuickJS, Browser and JSC; JSC backs resizable ArrayBuffers with
+[malloc memory](jsc-resizable-backing.md). JSC on WASI still refuses growable
+SharedArrayBuffers ([record](wasi-resizable-buffer-allocation.md)), so GSAB
+construction fails there before Buffer is used. The full shared-growth assertion
+remains in the blocking host/source controls. That unavailable guest capability
+is not passing coverage. No constructor probe, error catch or OOM suppression selects tests.
 
 
 `buffer_fill_args.ts` is an original adapter, not copied upstream code. It selects

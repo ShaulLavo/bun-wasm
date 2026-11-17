@@ -57,6 +57,7 @@
         "scripts/fixtures/quickjs-parser-stack.ts",
         "scripts/fixtures/quickjs-regexp-test.ts",
         "scripts/fixtures/runtime-js-child.ts",
+        "scripts/fixtures/legacy-cli-consumer.ts",
         "scripts/fixtures/runtime-file-cancel.ts",
         "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",

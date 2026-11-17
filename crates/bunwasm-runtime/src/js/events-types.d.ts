@@ -88,8 +88,10 @@ declare namespace BunWasm.Events {
     defaultMaxListeners: number;
     captureRejections: boolean;
     readonly EventEmitterAsyncResource: AsyncConstructor;
-    listenerCount(emitter: Emitter, type: Name): number;
-    getEventListeners(target: Emitter | EventTarget, type: Name): Listener[];
+    listenerCount(emitter: Emitter | EventTarget, type: Name): number;
+    getEventListeners(target: Emitter, type: Name): Listener[];
+    getEventListeners(target: EventTarget, type: Name): object[];
+    getEventListeners(target: Emitter | EventTarget, type: Name): object[];
     getMaxListeners(target: Emitter | EventTarget): number;
     setMaxListeners(n?: number, ...targets: (Emitter | EventTarget)[]): void;
     once(emitter: Emitter | EventTarget, name: Name, options?: { signal?: AbortSignal }): Promise<unknown[]>;
@@ -100,6 +102,14 @@ declare namespace BunWasm.Events {
 
 declare namespace BunWasm {
   interface Internal {
+    eventTargets: {
+      isTarget(value: unknown): value is EventTarget;
+      isSignal(value: unknown): value is AbortSignal;
+      listeners(target: EventTarget, type: Events.Name): object[];
+      count(target: EventTarget, type: Events.Name): number;
+      addAbortListener(signal: AbortSignal, listener: EventListener): () => void;
+      observe(target: EventTarget, changed: (type: string) => void): () => void;
+    };
     listenerChanged?: (target: object, name?: string | symbol) => void;
     require(name: "inspect"): ConsoleInspector;
     require(name: "event_emitter_async_resource"): Events.AsyncConstructor;

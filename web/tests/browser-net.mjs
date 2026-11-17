@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { stopForeground } from "./foreground.ts";
+import { stopForeground, navigatePreview } from "./foreground.ts";
 import { fixtureOutputPattern } from "./fixture-output.ts";
 
 const here = new URL(".", import.meta.url).pathname;
@@ -398,7 +398,7 @@ async function runEngine(browserName, engine, type, options, appUrl, fixtureBase
 
   // Explicit test teardown completes before checking that the preview is no longer listening.
   await stopForeground(page);
-  const after = await preview.goto(previewUrl);
+  const after = await navigatePreview(preview, previewUrl, 502);
   check(`${name}: preview gone after foreground teardown`, after?.status() === 502, `status ${after?.status()}`);
 
   check(`${name}: no page errors`, errors.length === 0, errors.join("\n"));

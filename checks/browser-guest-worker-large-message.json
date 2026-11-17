@@ -11,6 +11,9 @@
     "web/src/shared-objects/protocol.ts",
     "web/src/shared-objects/realm.ts",
     "web/src/shared-objects/runtime.ts",
-    "web/src/shared-objects/service.ts"
+    "web/src/shared-objects/service.ts",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml"
   ]
 }

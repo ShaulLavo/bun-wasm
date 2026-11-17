@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/runtime-event-target-listeners.test.ts",
+  "localRuntime": true
+}

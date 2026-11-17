@@ -1,13 +1,10 @@
 import { expect, test } from "bun:test";
 import * as nativeEvents from "node:events";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
+import { eventTargetSource } from "./event-target-source";
 
-const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/events.ts", import.meta.url), "utf8");
-const emitted = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`);
-const guestEvents = runInNewContext(emitted, { EventTarget, Event, AbortController })({ require() { throw new Error("unexpected module"); } });
+const guest = eventTargetSource();
 
-for (const [name, events] of [["native", nativeEvents], ["guest", guestEvents]] as const) {
+for (const [name, events, Controller] of [["native", nativeEvents, AbortController], ["guest", guest.events, guest.web.AbortController]] as const) {
   test(`${name}: Tinypool-style worker teardown resolves without a wrapper removal method`, async () => {
     const worker = new events.EventEmitter();
     const wrapper = {
@@ -41,7 +38,7 @@ for (const [name, events] of [["native", nativeEvents], ["guest", guestEvents]] 
 
   test(`${name}: abort still removes both worker listeners`, async () => {
     const worker = new events.EventEmitter();
-    const controller = new AbortController();
+    const controller = new Controller();
     const exited = events.once(worker, "exit", { signal: controller.signal });
     controller.abort();
     await expect(exited).rejects.toMatchObject({ name: "AbortError" });

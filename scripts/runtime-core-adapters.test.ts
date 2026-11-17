@@ -57,7 +57,22 @@ function withoutBuiltinLoaderDeltas(source: string) {
     .replace(builtinEvaluation, 'native.evalScript(source, `bun-builtin:${name}`)');
 }
 
+function withoutFrameKindPresentationDeltas(source: string) {
+  const parsed = "    toString() { return internal.formatCallSite(this, false, this.#frame.anonymousFunction === true); }\n";
+  const sharedTail = "    getPromiseIndex() { return null; },\n  }";
+  const quickjs = /    internal\.defineHidden\(prototype, \{\n      isAsync\(\) \{ return false; \},\n      toString\(\s*\) \{ return internal\.formatCallSite\(this\); \},\n    \}\);/g;
+  expect(source.split(parsed)).toHaveLength(2);
+  expect(source.split(sharedTail)).toHaveLength(2);
+  expect(source.match(quickjs)).toHaveLength(1);
+  // Invert only the reviewed move: parsed sites own the flag-aware method,
+  // while QuickJS still receives the original generic method explicitly.
+  return source.replace(parsed, "")
+    .replace(sharedTail, "    getPromiseIndex() { return null; },\n    toString() { return internal.formatCallSite(this); },\n  }")
+    .replace(quickjs, "    internal.defineHidden(prototype, { isAsync() { return false; } });");
+}
+
 function withoutStackCapabilityDeltas(source: string) {
+  source = withoutFrameKindPresentationDeltas(source);
   const declaration = '  const parseCapturedStack = native.engine === "jsc" || native.engine === "spidermonkey" || native.engine === "host" && !internal.hasNativeStackTrace;\n';
   const awaitingCaller = "/^async[ *]/.test(this.#frame.name)";
   expect(source.split(declaration)).toHaveLength(2);
@@ -129,7 +144,7 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
   return target;
 }
 
-// Hashes pin original syntax; stack capability selection, SpiderMonkey's structured frames, awaiting-caller name, descriptors and builtin changes have explicit deltas.
+// Hashes pin original syntax; capability selection, structured frames, anonymous presentation, awaiting-caller names, descriptors and builtin changes have explicit deltas.
 // The stack_trace hash also covers the call-site predicates React's stack collector calls.
 const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
@@ -137,6 +152,56 @@ const originalTokens = {
 };
 // Allow the JSC formatter registration and host adapter dispatch.
 const originalEmbeddedBytes = { stack_trace: 5000, bun_builtins: 4092 };
+
+for (const [label, before, after] of [
+  ["true names", "return this.#frame.name || null;", 'return this.#frame.name || "";'],
+  ["top-level predicate", "return !this.getFunctionName();", "return !!this.getFunctionName();"],
+  ["cached formatter result", "return store(target, value);", "return store(target, raw);"],
+] satisfies [string, string, string][]) {
+  test(`frame-kind normalization still rejects an unrelated change to ${label}`, () => {
+    const source = emit("stack_trace");
+    expect(source.split(before)).toHaveLength(2);
+    expect(syntaxHash(withoutStackCapabilityDeltas(source.replace(before, after)))).not.toBe(originalTokens.stack_trace);
+  });
+}
+
+for (const [label, before, after] of [
+  ["parsed anonymous flag", "this.#frame.anonymousFunction === true", "this.#frame.anonymousFunction !== true"],
+  ["QuickJS generic receiver", "return internal.formatCallSite(this);", "return internal.formatCallSite(undefined);"],
+] satisfies [string, string, string][]) {
+  test(`frame-kind normalization requires the reviewed ${label}`, () => {
+    const source = emit("stack_trace");
+    expect(source.split(before)).toHaveLength(2);
+    expect(() => withoutFrameKindPresentationDeltas(source.replace(before, after))).toThrow();
+  });
+}
+
+test("emitted parsed CallSites keep true names and pass only the anonymous presentation flag", () => {
+  const result = runInNewContext(`
+    class RuntimeError {}
+    Object.defineProperty(RuntimeError.prototype, "stack", { configurable: true, get() { return "raw"; } });
+    RuntimeError.captureStackTrace = target => Object.defineProperty(target, "stack", { value: "raw", configurable: true });
+    globalThis.Error = RuntimeError;
+    const records = [
+      { name: "", file: "/same.ts", line: 1, column: 2, anonymousFunction: true },
+      { name: "", file: "/same.ts", line: 1, column: 2 },
+      { name: "anonymous", file: "/same.ts", line: 1, column: 2 },
+    ];
+    (${emit("stack_trace")})({
+      native: { engine: "spidermonkey" }, mappedCallSites: new WeakSet(), defineHidden: Object.assign,
+      require: () => ({ errorFrames: () => records }),
+      formatCallSite: (site, identity, anonymous) => JSON.stringify([site.getFunctionName(), identity, anonymous]),
+    });
+    Error.prepareStackTrace = (_error, sites) => sites.map(site => [site.getFunctionName(), String(site)]);
+    const holder = {};
+    Error.captureStackTrace(holder);
+    holder.stack;
+  `);
+  expect(result).toEqual([
+    [null, "[null,false,true]"], [null, "[null,false,false]"], ["anonymous", '["anonymous",false,false]'],
+  ]);
+});
+
 test("stack descriptor records are the only executable delta", () => {
   const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/stack_trace.ts"), "utf8");
   const records = stackDescriptorRecords(source);

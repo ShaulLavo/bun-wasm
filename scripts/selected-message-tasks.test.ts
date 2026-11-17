@@ -190,7 +190,7 @@ async function channelOrder(syncReceive: boolean, appendFromPromise: boolean) {
   let gateDone: () => void = () => {};
   const gated = new Promise<void>(resolve => { gateDone = resolve; });
   const postNew = () => port1.postMessage("new");
-  Reflect.apply(EventTarget.prototype.addEventListener, gate, ["message", () => { order.push("gate"); gateDone(); }]);
+  Reflect.apply(runtime.internal.web.EventTarget.prototype.addEventListener, gate, ["message", () => { order.push("gate"); gateDone(); }]);
   port2.on("message", value => {
     order.push(String(value));
     if (value !== 0) return;
@@ -219,7 +219,7 @@ test("started handlerless delivery drops the selected batch before the broadcast
   const order: string[] = [];
   let installed = false, release: () => void = () => {};
   const gated = new Promise<void>(resolve => { release = resolve; });
-  Reflect.apply(EventTarget.prototype.addEventListener, gate, ["message", () => { installed = true; order.push("gate"); release(); }]);
+  Reflect.apply(runtime.internal.web.EventTarget.prototype.addEventListener, gate, ["message", () => { installed = true; order.push("gate"); release(); }]);
   port2.on("message", value => order.push(`${String(value)}:${installed ? "handled" : "dropped"}`));
   try {
     port1.postMessage(0); port1.postMessage(1); port1.postMessage(2); sender.postMessage("continue");

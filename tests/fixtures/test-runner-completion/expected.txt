@@ -1,0 +1,4 @@
+done completion: 5 pass, 0 fail
+done failures: 1 pass, 8 fail
+preload hooks: 2 pass, 0 fail
+registration guards: pass

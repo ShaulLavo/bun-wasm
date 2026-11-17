@@ -29,13 +29,17 @@ export async function installFixture(directory: string, base: string, args: stri
   let output = "";
   child.stdout.on("data", bytes => { output += bytes; });
   child.stderr.on("data", bytes => { output += bytes; });
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 30000);
+  let timerFired = false;
+  const started = performance.now();
+  // Hang cap only. A cold JSC guest compile after a host change can take about 30 s on CI runners.
+  const timeout = setTimeout(() => { timerFired = true; child.kill("SIGKILL"); }, 100000);
   try {
-    const code = await new Promise<number | null>((accept, reject) => {
+    const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((accept, reject) => {
       child.once("error", reject);
-      child.once("close", accept);
+      child.once("close", (code, signal) => accept({ code, signal }));
     });
-    assert.equal(code, expected, output);
+    const diagnostic = `engine=${engine} code=${result.code} expected=${expected} signal=${result.signal} timerFired=${timerFired} elapsedMs=${Math.round(performance.now() - started)}\n${output}`;
+    assert.equal(result.code, expected, diagnostic);
     return output;
   } finally {
     clearTimeout(timeout);

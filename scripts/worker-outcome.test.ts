@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
+import { runInContext } from "node:vm";
+import { eventTargetSource } from "./event-target-source";
 
 const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.workerFactory = ${readFileSync(
   new URL("../crates/bunwasm-runtime/src/js/worker_threads.ts", import.meta.url), "utf8")}`);
 
 function receiver(execArgv: string[] | undefined = undefined) {
+  const target = eventTargetSource({ structuredClone });
   const immediate: (() => void)[] = [];
   const frames: unknown[] = [];
   let ended = false;
@@ -18,12 +20,10 @@ function receiver(execArgv: string[] | undefined = undefined) {
     exited: new Promise<number>(resolve => { resolveExit = resolve; }),
     kill() {}, ref() {}, unref() {}, _finishWorker() { closed++; }, _abortWorker() {},
   };
-  const factory = runInNewContext(source, {
-    EventTarget, Event, MessageEvent, DOMException, URL, structuredClone,
-  });
+  const factory = runInContext(source, target.context);
   const modules: Record<string, unknown> = {
     process: { env: {}, execArgv: [], execPath: "bun", cwd: () => "/" },
-    events: EventEmitter, structured_clone: { structuredClone }, net: {},
+    events: target.events, structured_clone: { structuredClone }, net: {},
     worker_codec: { create: () => ({
       prepare: () => ({ graph: { nodes: [] }, commit() {} }), decode: (value: unknown) => value,
     }) },
@@ -34,7 +34,7 @@ function receiver(execArgv: string[] | undefined = undefined) {
     }) },
     worker_stdio: { readable: () => ({ stream: new EventEmitter(), drained: Promise.resolve() }) },
   };
-  const implementation = factory({
+  const implementation = factory(Object.assign(target.internal, {
     realTimers: { setImmediate(callback: () => void) { immediate.push(callback); } },
     native: {},
     require(name: string) {
@@ -42,7 +42,7 @@ function receiver(execArgv: string[] | undefined = undefined) {
       return modules[name];
     },
     addIoWaiter() {}, messagePortRefs: new Set<object>(),
-  });
+  }));
   const worker = new implementation.Worker("", { eval: true, stdout: true, stderr: true, execArgv });
   const errors: Error[] = [];
   const exits: number[] = [];

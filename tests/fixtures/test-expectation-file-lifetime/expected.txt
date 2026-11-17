@@ -1,0 +1,2 @@
+same-file snapshot lifetime
+cross-file snapshot lifetime

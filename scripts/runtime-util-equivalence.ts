@@ -55,6 +55,26 @@ function constructorReceiver(node: ts.NewExpression): ts.Identifier {
 
 interface Edit { start: number; end: number; text: string }
 
+function omitBunComparisonChanges(text: string): string {
+  const source = parseRuntime(text);
+  const functions = new Set(["bunCompareArrays", "bunCompareSpecial", "arrayIndex", "bunCompareWebObjects", "equalSearchParams", "headerCount", "equalHeaders", "isUrl", "isSearchParams", "isHeaders", "webKind"]);
+  const constants = new Set(["emptyArrayIndex", "urlHref", "searchParamsSize"]);
+  const matches: ts.Node[] = [];
+  function approved(node: ts.Node): boolean {
+    if (ts.isFunctionDeclaration(node)) return functions.has(node.name?.text ?? "");
+    if (!ts.isVariableStatement(node) || node.declarationList.declarations.length !== 1) return false;
+    return constants.has(node.declarationList.declarations[0]!.name.getText(source));
+  }
+  function visit(node: ts.Node): void {
+    if (approved(node)) { matches.push(node); return; }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  matches.sort((left, right) => right.getStart(source) - left.getStart(source));
+  for (const node of matches) text = text.slice(0, node.getStart(source)) + text.slice(node.end);
+  return text;
+}
+
 function restoreAdditions(text: string): string {
   const source = parseRuntime(text);
   const names = new Set(["parseEnv", "expectEquals", "expectSettle", "expectEvery", "expectSome", "expectEq", "expectMemo", "expectArrays", "expectSets", "expectMapEntry", "expectMaps", "expectErrors", "expectObjects", "expectProperties", "expectExtraProperties"]);
@@ -76,9 +96,10 @@ function restoreAdditions(text: string): string {
   return text;
 }
 
-// Restore the two reviewed extractions and the separately tested parseEnv addition.
+// Restore the Node migration after excluding separately tested Bun additions.
 export function restoreDestinations(text: string): string {
   text = restoreAdditions(text);
+  text = omitBunComparisonChanges(text);
   const source = parseRuntime(text);
   const capture = declarations(source, "ConstructorSet");
   const array = declarations(source, "constructors");

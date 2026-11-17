@@ -19,7 +19,7 @@ type Position = {
 type CallSite = ReturnType<typeof callSite>;
 type Mapping = [string, number, number];
 type BootstrapRuntime = {
-  formatCallSite(site: CallSite): string;
+  formatCallSite(site: CallSite, keepIdentity?: boolean, anonymousFunction?: boolean): string;
   defaultPrepareStackTrace(error: unknown, callsites: readonly CallSite[]): string;
   mappedCallSites: WeakSet<object>;
   displayName?: (file: string | null, isEval: boolean) => string | null;
@@ -274,4 +274,14 @@ test("real V8 builtin callback frames preserve the calling module origin", () =>
   const result = Bun.spawnSync(["node", "--input-type=module", "-e", code], { stdout: "pipe", stderr: "pipe" });
   expect(result.stderr.toString()).toBe("");
   expect(result.exitCode).toBe(0);
+});
+
+test("authoritative anonymous presentation bypasses bare syntax and program shortcuts", () => {
+  const state = bootstrap("spidermonkey");
+  const site = callSite({ name: null, functionValue: undefined });
+  state.runtime.mappedCallSites.add(site);
+  expect(state.runtime.formatCallSite(site)).toBe("/source.ts:12:7");
+  expect(state.runtime.formatCallSite(site, false, true)).toBe("<anonymous> (/source.ts:12:7)");
+  expect(site.getFunctionName()).toBeNull();
+  expect(state.mappings).toEqual([]);
 });

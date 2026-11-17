@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import release from "./waffle-release-inputs.json";
+import bashRelease from "./bash-web-release-inputs.json";
 import { browserBuildConfig, resolveRuntimePackage } from "./browser-build";
 import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests";
 import { PreparationFlow } from "../tests/shell-product/prepare-flow";
@@ -15,14 +16,29 @@ test("the ordinary Shell producer, public product selection and both apps pin th
   const root = resolve(import.meta.dir, "..");
   const producer = await readFile(join(root, "scripts/build-bash-web-shell.sh"), "utf8");
   const commit = pinnedBashWeb(join(root, "web"));
+  expect(commit).toBe(bashRelease.sourceCommit);
   expect(/^commit=([a-f0-9]{40})$/m.exec(producer)?.[1]).toBe(commit);
   expect(pinnedBashWeb(join(root, "sandbox"))).toBe(commit);
   expect(waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: commit }, release.url).shellCommit).toBe(commit);
   for (const consumer of ["web", "sandbox"]) {
     const lock = await readFile(join(root, consumer, "bun.lock"), "utf8");
-    expect(lock).toContain(`"bash-web": "git+https://github.com/ShaulLavo/bash-web.git#${commit}"`);
-    expect(lock).toContain(`"bash-web": ["bash-web@github:ShaulLavo/bash-web#${commit.slice(0, 7)}"`);
+    expect(lock).toContain(`"bash-web": "${bashRelease.url}"`);
+    expect(lock).toContain(`"bash-web": ["bash-web@${bashRelease.url}"`);
   }
+});
+
+test("Bash source identity accepts only the selected archive or a full explicit source pin", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "bw-shell-pin-"));
+  try {
+    for (const pin of [bashRelease.url, `git+https://github.com/ShaulLavo/bash-web.git#${bashRelease.sourceCommit}`]) {
+      await Bun.write(join(scratch, "package.json"), JSON.stringify({ dependencies: { "bash-web": pin } }));
+      expect(pinnedBashWeb(scratch)).toBe(bashRelease.sourceCommit);
+    }
+    for (const pin of [bashRelease.url + "#ignored", bashRelease.url.replace("112", "111"), `https://example.com/#${bashRelease.sourceCommit}`, "^0.0.112"]) {
+      await Bun.write(join(scratch, "package.json"), JSON.stringify({ dependencies: { "bash-web": pin } }));
+      expect(() => pinnedBashWeb(scratch)).toThrow("does not pin bash-web");
+    }
+  } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
 test("an explicit Bash source is preserved when its revision differs from the pin", async () => {
