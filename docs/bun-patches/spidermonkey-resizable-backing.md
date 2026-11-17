@@ -17,7 +17,9 @@ buffer publishes the new data pointer, then updates every view, including views 
 are out of bounds at that moment, before anything else can run. Native code must not
 hold a resizable buffer's data pointer across user JavaScript (coercion, getters,
 callbacks) or async work: take the pointer after the last point where user code can
-run, or copy the input first. A length pin does not stop `resize()`.
+run, copy the input first, or pin the length. `resize()` and `transfer()` refuse a
+buffer whose length is pinned (`JS::PinArrayBufferOrViewLength`) with
+`JSMSG_ARRAYBUFFER_LENGTH_PINNED`, so its pointer stays valid until it is unpinned.
 
 Growable `SharedArrayBuffer` keeps upstream behavior, because other threads may hold
 its data pointer and it can never move: `SharedArrayRawBuffer::Allocate` allocates the
