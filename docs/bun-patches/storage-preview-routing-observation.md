@@ -6,8 +6,11 @@ The private build transforms in `scripts/storage-routing-build-source.ts` adapt
 Waffle's `browser/service-worker.ts`, `browser/preview.ts`,
 `browser/net/helper.ts`, and `browser/net/runtime.ts` from release `0.0.136`,
 revision `022d711d78ffbe6c9c6a45fe1bcbd2d970d09ce7`. These four source
-files are byte-identical in selected release `0.0.137`, revision
-`27b03a8c519b4d48d00d3723b4ee2993d735f27d`.
+files are byte-identical in release `0.0.137`, revision
+`27b03a8c519b4d48d00d3723b4ee2993d735f27d`, and in `0.0.138`. In selected release
+`0.0.139`, revision `8e86a2a0f2398c1485ef16f7bc423961f4e05f94`, only
+`browser/net/helper.ts` changes: its preview finish sink ignores a second
+`end` or `error`. The helper adapter's anchor and insertion are unchanged.
 The exact installed source hashes and unique insertion anchors reject drift or
 incomplete installations. No provider source is edited.
 
