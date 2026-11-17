@@ -780,16 +780,17 @@ page SIGKILL to the `_start` unwind:
 | Guest workload | QuickJS | JSC | SpiderMonkey | Browser engine (real terminate) |
 | --- | --- | --- | --- | --- |
 | `while (true) {}` | 5.1 ms Chromium, 9.6 ms WebKit | 4.8 ms, 8.0 ms | SM_LOOP | heartbeat ran 2,007 ms on Chromium, stopped at once on WebKit |
-| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 5.3 ms (one call takes 342 ms) | no stop within 15 s (one call takes 1,677 ms) | SM_REGEXP | not run |
+| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 5.3 ms (one call takes 342 ms) | no stop within 15 s (one call takes 1,677 ms); with Yarr polling 11.2 ms, 16.0 ms | SM_REGEXP | not run |
 
 Open items:
 
-- **JSC Yarr does not poll.** The C-loop countdown polls the host every 1,024 trap points, and a
-  loop around a long regexp call reaches only a few trap points per call, so the next poll is
-  about 340 calls (about 10 minutes) away. Poll the host every N Yarr backtracks and turn a true
-  result into JSC's uncatchable termination. A separate worker owns this (coordinator,
-  2026-11-17). When it lands, add `jsc` to `nativePollingEngines` in
-  `web/tests/engine-interruption-cases.ts`.
+- **Done: native regexp stops (2026-11-17).** JSC's Yarr interpreter now asks the host every
+  16,384 backtracks and SpiderMonkey's irregexp interpreter every 8,192, and a stop becomes each
+  engine's uncatchable termination. With JSC and SpiderMonkey in `nativePollingEngines`, the
+  native-regexp proof stops a JSC guest in 11.2 ms on Chromium and 16.0 ms on WebKit (one call
+  takes 1,352 ms and 2,011 ms), and a SpiderMonkey guest in 4.9 ms and 8.0 ms (one call takes
+  899 ms and 1,245 ms). Record: `docs/bun-patches/engine-interruption.md` and
+  `docs/bun-patches/spidermonkey-g2.md`.
 - SM_GAP
 - **Group pages after the stop.** Waffle's per-incarnation exit lock (Waffle `fix/gap1-exit-lock`)
   returns a stopped member's pages only after the worker exits. Once it ships in a Waffle release,
