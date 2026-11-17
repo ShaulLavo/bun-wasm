@@ -2213,7 +2213,10 @@
     const slot = running();
     slot.test = record;
     const start = now();
-    let result = await runHooks(chain.flatMap((s) => s.beforeEach));
+    // Without beforeEach hooks the body starts synchronously, as in Bun: a concurrent group's
+    // tests each reach their first callback in order before the next one starts.
+    const beforeEach = chain.flatMap((s) => s.beforeEach);
+    let result = beforeEach.length ? await runHooks(beforeEach) : { ok: true };
     if (result.ok) {
       const timeout = test.timeout === undefined ? options.timeout : test.timeout;
       result = await invoke(test.fn, [], test.usesDone, timeout);
