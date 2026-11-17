@@ -202,7 +202,7 @@ Categories are mutually exclusive first-blocker assignments. Passing, empty and 
 <!-- partial:start -->
 ## Focused suite replay
 
-These 37 files were measured at runtime commit `fa5087dde7f035b547204ab6fdfe1a47addbefb6`. Only their failure-index rows were refreshed. Full-census tables and summaries below retain the previous census; a full refresh is deferred to a separate run.
+These 37 files were measured at runtime commit `19b89fda111f1a9de6c821fddca74213b2f7159c`. Only their failure-index rows were refreshed. Full-census tables and summaries below retain the previous census; a full refresh is deferred to a separate run.
 
 | Engine | Files | Fully passing | Observed passes | Failures | File timeouts |
 | --- | --- | --- | --- | --- | --- |

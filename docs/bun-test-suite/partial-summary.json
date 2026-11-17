@@ -1,5 +1,5 @@
 {
-  "runtime_source_commit": "fa5087dde7f035b547204ab6fdfe1a47addbefb6",
+  "runtime_source_commit": "19b89fda111f1a9de6c821fddca74213b2f7159c",
   "files": [
     "js/bun/test/bun-test.test.ts",
     "js/bun/test/bun_test.test.ts",
@@ -54,7 +54,7 @@
           "bash-web-guests.json": "6fc027e75057b8e32854b858938b9ca9297d2c8f40998493ed9cef8b4b057bc4"
         },
         "tools_sha256": "0b03eae5d84c6dec3bbbdf36eb43593b2337fba3b0e51b0a8600ede0842f736c",
-        "runner_sha256": "ac9c5c812ff4e764562ad487ba2687c6e7cd4a15ca25a637cadfe6a63017c176",
+        "runner_sha256": "0a8cd6aa51f5d08c172c8c01425839d802b40ea3f7be1372917ed1fa7085a966",
         "launcher_sha256": "afe68b2a88cb9004cad9d348420b791d163f7bfa269a8d3ff14affe4b72f1e03",
         "host_sources": {},
         "runtime_package": {},
@@ -98,7 +98,7 @@
           "bash-web-guests.json": "6fc027e75057b8e32854b858938b9ca9297d2c8f40998493ed9cef8b4b057bc4"
         },
         "tools_sha256": "0b03eae5d84c6dec3bbbdf36eb43593b2337fba3b0e51b0a8600ede0842f736c",
-        "runner_sha256": "ac9c5c812ff4e764562ad487ba2687c6e7cd4a15ca25a637cadfe6a63017c176",
+        "runner_sha256": "0a8cd6aa51f5d08c172c8c01425839d802b40ea3f7be1372917ed1fa7085a966",
         "launcher_sha256": "afe68b2a88cb9004cad9d348420b791d163f7bfa269a8d3ff14affe4b72f1e03",
         "host_sources": {},
         "runtime_package": {},
@@ -141,7 +141,7 @@
           "bash-web-guests.json": "6fc027e75057b8e32854b858938b9ca9297d2c8f40998493ed9cef8b4b057bc4"
         },
         "tools_sha256": "0b03eae5d84c6dec3bbbdf36eb43593b2337fba3b0e51b0a8600ede0842f736c",
-        "runner_sha256": "ac9c5c812ff4e764562ad487ba2687c6e7cd4a15ca25a637cadfe6a63017c176",
+        "runner_sha256": "0a8cd6aa51f5d08c172c8c01425839d802b40ea3f7be1372917ed1fa7085a966",
         "launcher_sha256": "2d1f1b269b6f7b702418bca92786fc1f381215bc7d7d0d676e0388e5374bed87",
         "host_sources": {
           "web/scripts/node-host.ts": "20c433b79cee9b78fc6023c4fa202c9e1e5ecb550c32d86cc241d774e1d9750e",
