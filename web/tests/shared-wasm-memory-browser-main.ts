@@ -184,8 +184,8 @@ function watchMembers(runtime: ReturnType<typeof createRuntime>, processes: Awai
     const owner = pid === undefined ? undefined : owners.get(groupOf.get(pid) ?? "");
     if (!owner || answered.has(request)) return;
     answered.add(request);
-    const { pins, regions, holds, published, members } = owner.snapshot();
-    publish(`${CONTROL}/snapshot/${request}`, JSON.stringify({ pins, regions, holds, published, members }));
+    const { pins, regions, holds, published, members, exiting, quarantinedBytes } = owner.snapshot();
+    publish(`${CONTROL}/snapshot/${request}`, JSON.stringify({ pins, regions, holds, published, members, exiting, quarantinedBytes }));
   };
   const answerSnapshots = async () => {
     answering = true;

@@ -26,3 +26,4 @@ shared-wasm-memory group lanes: pass
 shared-wasm-memory group lane lifetime: pass
 shared-wasm-memory membership: pass
 shared-wasm-memory membership forgery: pass
+shared-wasm-memory busy member stop: pass

@@ -774,13 +774,14 @@ polls `runtime_proc.signal(0, 4)` while it runs.
 
 Measured with `web/tests/browser-engine-interruption.ts` (proof
 `runtimeProcess-page-SIGKILL-stops-busy-guest`, native terminate disabled for the paired engines),
-main 19b89fda1 guests, Playwright Chromium 156 and WebKit on the 28-core PC. Times are from the
-page SIGKILL to the `_start` unwind:
+main 19b89fda1 guests, Playwright Chromium 156 and WebKit on the 28-core PC, the final run of
+bun-wasm PR 898 (the same numbers as its description). Times are from the page SIGKILL to the
+`_start` unwind:
 
 | Guest workload | QuickJS | JSC | SpiderMonkey | Browser engine (real terminate) |
 | --- | --- | --- | --- | --- |
-| `while (true) {}` | 5.1 ms Chromium, 9.6 ms WebKit | 4.8 ms, 8.0 ms | 6.8 ms, 20 ms | heartbeat ran 2,007 ms on Chromium, stopped at once on WebKit |
-| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 5.3 ms (one call takes 342 ms) | no stop within 15 s (one call takes 1,677 ms) | no stop within 15 s, zero checkpoints (one call takes 1,366 ms) | not run |
+| `while (true) {}` | 5.0 ms Chromium, 8.0 ms WebKit | 5.3 ms, 8.3 ms | 6.8 ms, 20 ms | heartbeat ran 2,005 ms on Chromium, stopped at once on WebKit |
+| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 9.0 ms, 8.4 ms (one call takes 398 and 473 ms) | no stop within 15 s (one call takes 1,677 ms) | no stop within 15 s, zero checkpoints (one call takes 1,366 ms) | not run |
 
 Open items:
 
@@ -794,9 +795,20 @@ Open items:
   (`crates/bunwasm-spidermonkey/cpp/engine.cpp`) asks the host every 10,000 interpreter polls,
   and a loop around a long regexp call reaches only a few per call. The same worker covers it
   (coordinator, 2026-11-17). When it lands, add `spidermonkey` to `nativePollingEngines`.
-- **Group pages after the stop.** Waffle's per-incarnation exit lock (Waffle `fix/gap1-exit-lock`)
-  returns a stopped member's pages only after the worker exits. Once it ships in a Waffle release,
-  move the bun-wasm pin and extend the proof to show the stopped guest's pages return.
+- **Group pages after the stop.** Waffle PR 548 (per-incarnation exit lock) returns a stopped
+  member's pages only after its worker exits. The shared-memory browser fixture
+  `busy-member-stop.ts` terminates a group member spinning in JavaScript and requires its agent to
+  end and the owner's `exiting` and `quarantinedBytes` to drain to 0. It lands with the pin bump to
+  the first Waffle release that contains 548.
 - **Browser engine on Chromium.** Its guest JavaScript is the browser's own and cannot poll, so it
   stops only when Chromium forces termination, 2 s after `terminate()`. This matters only if a
   Browser-engine guest ever shares group pages.
+- **Browser engine on real iPhone Safari is unmeasured.** Linux WebKit stops a terminated
+  Browser-engine guest at once, but Playwright WebKit also differed from iOS for parked sleepers
+  (the Waffle gap 1 report). Run the heartbeat proof on the C4D2 simulator or a real iPhone before
+  relying on it there.
+- **The paired-engine proof does not check that Waffle called `terminate()`.** It proves the
+  engine's own checkpoint stopped the guest with native terminate disabled, but never asserts the
+  disabled `terminate()` was requested (`probeCell.terminateRequests`), so a broker that skipped
+  terminate would still pass. Add that assertion to `assertPairedStop` in
+  `web/tests/engine-interruption-main.ts` (review of PR 898, 2026-11-17, non-blocking).
