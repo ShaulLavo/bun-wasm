@@ -313,6 +313,8 @@ pub fn connect_path(path: &str) -> i32 {
 mod runtime_proc {
     #[link(wasm_import_module = "runtime_proc")]
     unsafe extern "C" {
+        pub fn process_id() -> i32;
+        pub fn parent_process_id() -> i32;
         pub fn access_start(path: i32, path_len: i32, cwd: i32, cwd_len: i32, mode: i32) -> i32;
         pub fn access_take(request: i32) -> i32;
         pub fn access_cancel(request: i32) -> i32;
@@ -342,6 +344,12 @@ mod runtime_proc {
 #[cfg(not(target_arch = "wasm32"))]
 mod runtime_proc {
     use super::UNSUPPORTED;
+    pub unsafe fn process_id() -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn parent_process_id() -> i32 {
+        UNSUPPORTED
+    }
     pub unsafe fn access_start(_: i32, _: i32, _: i32, _: i32, _: i32) -> i32 {
         UNSUPPORTED
     }
@@ -517,6 +525,21 @@ pub fn proc_spawn_error(pid: i32) -> Result<Vec<u8>, i32> {
 
 pub fn proc_job_of(pid: i32) -> i32 {
     proc_call!(runtime_proc::job_of(pid))
+}
+
+fn checked_process_identity(pid: i32, parent_pid: i32) -> Result<[i32; 2], &'static str> {
+    if pid <= 0 || parent_pid < 0 || pid == parent_pid {
+        return Err("Host provided an invalid logical process identity");
+    }
+    Ok([pid, parent_pid])
+}
+
+/// Immutable logical process ancestry, independent of execution/member handles.
+pub fn proc_identity() -> Result<[i32; 2], &'static str> {
+    checked_process_identity(
+        proc_call!(runtime_proc::process_id()),
+        proc_call!(runtime_proc::parent_process_id()),
+    )
 }
 
 /// Returns `(read, write)` descriptors, or the negative code.
@@ -775,6 +798,16 @@ pub(crate) fn sleep_with(
 
 #[cfg(test)]
 mod signal_tests {
+    #[test]
+    fn logical_identity_rejects_missing_or_invalid_host_values() {
+        for pair in [(0, 0), (-4, 0), (7, -4), (7, 7)] {
+            assert!(super::checked_process_identity(pair.0, pair.1).is_err());
+        }
+        assert_eq!(super::checked_process_identity(37, 11), Ok([37, 11]));
+        assert_eq!(super::checked_process_identity(1, 0), Ok([1, 0]));
+        #[cfg(not(target_arch = "wasm32"))]
+        assert!(super::proc_identity().is_err());
+    }
     use super::*;
 
     #[test]

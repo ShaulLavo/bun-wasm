@@ -84,11 +84,10 @@ fn run(bytes: Vec<u8>, cancel: Arc<Cancellation>) -> (FinalOutcome, String, Opti
     let module = Module::new(&engine, bytes).unwrap();
     let runtime = process::Runtime::new(engine, module, Vec::new()).unwrap();
     let result = run_instance(
-        runtime.clone(),
+        runtime.admit_root(cancel.clone()).unwrap(),
         Vec::new(),
         Vec::new(),
         process::Stdio::inherited(),
-        cancel.clone(),
     );
     let mut diagnostics = Vec::new();
     let outcome = match &result {

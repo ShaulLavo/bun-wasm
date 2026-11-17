@@ -48,3 +48,27 @@ release its frame in a `finally`; a destroyed stream's retained waiter holds non
 | `scripts/fixtures/process-reader-before.txt` | Host feature | Frozen bun-wasm reader from `114b84c3` used only to preserve the AST guard for unrelated behavior. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+## Logical process identity
+
+Class **Host feature**. The process identity bridge, native admission module and scalar linker
+bindings are original bun-wasm adapters. No Bun, Node or Waffle implementation was copied.
+They implement Waffle's logical identity contract at development source
+`f17c1e72d41fc6a732e4f01e9b9c6a7eae7f1dc3`, with `runtime_proc.process_id` and
+`parent_process_id`. This source reference records the contract being adapted; it is not a
+released-family pin or guest acceptance claim. Reference public APIs are Node v26.12.1 and
+Bun v1.4.4 `process.pid`/`process.ppid` and worker process identity.
+
+`host.rs` validates the pair; `natives.rs`, `worker_protocol.d.ts` and `process.ts` expose it
+through the common data-native table. Native `process/identity.rs` reserves root logical PID 1
+from the existing allocator, keeps root execution 0, and carries private admission separately
+from stdio and memory admission. Ordinary children use their returned execution handle as PID;
+thread members copy their creating process's pair. Existing execution ownership and signal
+policy stay unchanged. The native and Node host adapters supply the corresponding scalar calls
+and required provider metadata. No environment or physical host identity participates.
+
+`spawn.ts` selects explicit process/thread operations in its internal helper and leaves its
+worker payload as channel/memory policy. The TypeScript and Rust protocol readers compare kind,
+including omitted-process semantics and rejection of explicit null. Original source, native and
+guest controls cover these adapters; synthetic source/ABI controls do not establish full guest
+or released-provider acceptance.

@@ -191,7 +191,8 @@ test("the updater binds relay bytes and source to its exact-interface release", 
 
 
 for (const component of ["runtime", "relay", "programs", "base"] as const) {
-  for (const value of [undefined, null, 1, 3, "2"]) test(`${component} rejects nonmatching interface ${JSON.stringify(value)} without rewriting the record`, async () => {
+  const current = record.hostInterface;
+  for (const value of [undefined, null, current - 1, current + 1, String(current)]) test(`${component} rejects nonmatching interface ${JSON.stringify(value)} without rewriting the record`, async () => {
     const f = await fixture(published, { ...matchingInterfaces, [component]: value });
     try {
       const result = runUpdater(f.root, f.repository);

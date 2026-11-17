@@ -253,6 +253,7 @@
   dispositions.set(13, 1);
   internal.pumpSignals = internal.require("process_signals")(processBase, signalNames);
 
+  const [pid, ppid] = native.processIdentity();
   const props = {
     title: "bun",
     version: `v${NODE_VERSION}`,
@@ -272,8 +273,8 @@
     execArgv: native.execArgv(),
     execPath: native.execPath(),
     env,
-    pid: 1,
-    ppid: 0,
+    pid,
+    ppid,
     exitCode: undefined,
     noDeprecation: false,
     isBun: true,

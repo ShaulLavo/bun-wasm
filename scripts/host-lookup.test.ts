@@ -48,7 +48,7 @@ function bootstrapFixture(caps: Record<string, boolean> = completeCaps, provider
     mainPath: () => "/startup.ts",
     env: () => ({}),
     argv: () => ["bun", "/startup.ts"],
-    execArgv: () => [],
+    execArgv: () => [], processIdentity: () => [44, 7],
     execPath: () => "/bun",
     isatty: () => false,
     now: () => 0,

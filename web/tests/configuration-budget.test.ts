@@ -36,7 +36,7 @@ function fixture() {
   const descriptors = new DescriptorTable();
   const pid = supervisor.createRoot({ descriptors });
   const memory = new WebAssembly.Memory({ initial: 1 });
-  const abi = new ProcessABI({ memory, descriptors, fs: new MemFS(), pid, service: supervisor,
+  const abi = new ProcessABI({ memory, descriptors, fs: new MemFS(), pid, processIdentity: supervisor.get(pid)!.processIdentity, service: supervisor,
     signals: supervisor.get(pid)!, wait() { throw new Error("nonblocking operation slept"); } });
   const view = new DataView(memory.buffer);
   const bytes = new Uint8Array(memory.buffer);

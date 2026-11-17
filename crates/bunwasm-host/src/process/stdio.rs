@@ -307,7 +307,6 @@ impl Cancellation {
 
 pub struct Stdio {
     pub fds: super::descriptors::Descriptors,
-    pub pid: i32,
     pub memory_limit: usize,
 }
 
@@ -331,7 +330,6 @@ impl Stdio {
             ]
             .into_iter()
             .collect(),
-            pid: 0,
             memory_limit: DEFAULT_MEMORY_LIMIT,
         }
     }

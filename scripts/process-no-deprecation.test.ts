@@ -17,7 +17,7 @@ function loadCurrent(): GuestProcess {
     platformInfo: { version: "test", revision: "test", arch: "wasm32" },
     env: () => ({}),
     argv: () => ["bun", "fixture.ts"],
-    execArgv: () => [],
+    execArgv: () => [], processIdentity: () => [46, 7],
     execPath: () => "/bin/bun",
     writeStderr(text: string) { stderr.push(text); },
     hostSignal() { return 0; },

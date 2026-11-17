@@ -21,10 +21,9 @@ impl Control {
         let net = crate::net::Net::new();
         let cancel = Arc::new(Cancellation::default());
         let processes = crate::process::Processes::new(
-            runtime.clone(),
+            runtime.clone().admit_root(cancel.clone()).unwrap(),
             Stdio::inherited(),
             net.notify(),
-            cancel.clone(),
         );
         let watches = crate::fs_watch::Watches::new(net.notify());
         let mut store = Store::new(

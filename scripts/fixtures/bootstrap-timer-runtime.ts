@@ -27,7 +27,7 @@ export function bootstrapTimers() {
   }
   const native = {
     engine: "test", platformInfo: { version: Bun.version, arch: "wasm32" },
-    env: () => ({}), argv: () => ["bun"], execArgv: () => [], execPath: () => "/bun",
+    env: () => ({}), argv: () => ["bun"], execArgv: () => [], processIdentity: () => [43, 7], execPath: () => "/bun",
     cwd: () => "/", hostSignal: () => 0,
     now: () => now,
     getAsyncContext: () => context,

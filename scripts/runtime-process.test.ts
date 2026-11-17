@@ -20,6 +20,8 @@ const emitted = readFileSync(output, "utf8");
 // Invert only the approved executable deltas. The pinned original AST hash guards the remainder.
 function originalSyntax(text: string): string {
   const replacements: [RegExp, string, number][] = [
+    [/  const \[pid, ppid\] = native\.processIdentity\(\);\n/g, "", 1],
+    [/    pid,\n    ppid,/g, "    pid: 1,\n    ppid: 0,", 1],
     [/resourceUsage: \(\) => \{\n      const rss = native\.memoryUsage\(\)\.rss;\n      return \{ userCPUTime: 0, systemCPUTime: 0, maxRSS: rss === null \? null : rss \/ 1024 \};\n    \}/g, "resourceUsage: () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: native.memoryUsage().rss / 1024 })", 1],
     [/availableMemory: \(\) => \{\n      const rss = native\.memoryUsage\(\)\.rss;\n      return rss === null \? null : 4294967296 - rss;\n    \}/g, "availableMemory: () => 4294967296 - native.memoryUsage().rss", 1],
     [/execArgv: native\.execArgv\(\)/g, "execArgv: []", 1],
@@ -113,7 +115,7 @@ function setupSnapshot(source: string): ProcessSnapshot {
   const internal = {
     native: {
       platformInfo: { version: "test", revision: "test", arch: "wasm32" },
-      env: () => ({}), argv: () => ["bun", "fixture.ts"], execArgv: () => [], execPath: () => "/bin/bun",
+      env: () => ({}), argv: () => ["bun", "fixture.ts"], execArgv: () => [], processIdentity: () => [49, 7], execPath: () => "/bin/bun",
       hostSignal(number: number, mode: number) { assert.deepEqual([number, mode], [13, 1]); return 0; },
     },
     nextTick() { throw new Error("setup must not schedule lifecycle work"); },
@@ -234,6 +236,7 @@ const raw: unknown = n.env()[Symbol()]; i.workerEnvChange?.("accessor", raw);
 const main: boolean = i.require("worker_threads").isMainThread;
 n.writeStdout("x", true); n.writeStderr(new Uint8Array()); n.chdir("/");
 const rss: number | null = n.memoryUsage().rss; const bytes: Uint8Array = n.readStdin();
+const identity: [number, number] = n.processIdentity();
 i.require("process_signals")(i.require("events").prototype, new Map());`);
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
@@ -282,7 +285,7 @@ for (const rss of [null, 2048]) test(`derived process memory preserves ${rss ===
   const internal = {
     native: {
       platformInfo: { version: "test", revision: "test", arch: "wasm32" },
-      env: () => ({}), argv: () => ["bun"], execArgv: () => [], execPath: () => "/bin/bun",
+      env: () => ({}), argv: () => ["bun"], execArgv: () => [], processIdentity: () => [49, 7], execPath: () => "/bin/bun",
       hostSignal() { return 0; }, memoryUsage: () => ({ rss }),
     },
     require(name: string) {

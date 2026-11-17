@@ -77,7 +77,10 @@ export function sourceModuleTools(scratch: string) {
   };
 }
 
-export function sourceRuntime(scratch: string) {
+export function sourceRuntime(scratch: string, options: {
+  processIdentity?(): [number, number];
+  hostSignal?(signal: number, mode: number): number;
+} = {}) {
   const root = resolve(import.meta.dirname, "../..");
   const directory = join(root, "crates/bunwasm-runtime/src/js");
   const emitted = new Map<string, string>();
@@ -111,9 +114,9 @@ export function sourceRuntime(scratch: string) {
     cwd: () => "/",
     env: () => ({}),
     argv: () => ["bun", "/entry.ts"],
-    execArgv: () => [],
+    execArgv: () => [], processIdentity: options.processIdentity ?? (() => [42, 7]),
     execPath: () => "/bun",
-    hostSignal: () => 0,
+    hostSignal: options.hostSignal ?? (() => 0),
     hostCaps: {},
     setAsyncContext: (_value: unknown) => {},
     isatty,

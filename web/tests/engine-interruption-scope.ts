@@ -112,7 +112,7 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
     });
     fs = new FilesystemClient(filesystem.connect(identity));
     const memory = new WebAssembly.Memory({ initial: 1 });
-    const abi = new ProcessABI({ memory, descriptors, fs, pid: client.pid, service: client, signals: client.signals, wake: client.wake });
+    const abi = new ProcessABI({ memory, descriptors, fs, pid: client.pid, processIdentity: client.processIdentity, service: client, signals: client.signals, wake: client.wake });
     return {
       service: pageService, children,
       spawn(source: string) {
