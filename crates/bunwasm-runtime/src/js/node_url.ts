@@ -187,6 +187,8 @@
       result.search = "";
       result.query = {};
     }
+    // Bun turns backslashes into slashes before the first ? or #, which is all that is left here.
+    rest = rest.replaceAll("\\", "/");
     if (parseQueryString && typeof result.query === "string") {
       result.query = internal.builtin("node:querystring").parse(result.query);
     }

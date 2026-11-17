@@ -100,6 +100,10 @@ function verifyLegacyHosts() {
     ["http://a@b@c/", "c", "/", "http://a%40b@c/"],
     ["http://\tex\nample.com/", "example.com", "/", "http://example.com/"],
     ["http://a:b@ÉX.com:8080/p?q#h", "xn--x-9fa.com:8080", "/p", "http://a:b@xn--x-9fa.com:8080/p?q#h"],
+    ["http://evil.com\\@good.com/", "evil.com", "/@good.com/", "http://evil.com/@good.com/"],
+    ["http://x.com\\y\\z", "x.com", "/y/z", "http://x.com/y/z"],
+    ["http://x.com/a?b\\c#d\\e", "x.com", "/a", "http://x.com/a?b%5Cc#d%5Ce"],
+    ["http://x.com/a#b\\c?d", "x.com", "/a", "http://x.com/a#b%5Cc?d"],
   ]) {
     const result = parse(input);
     assert.deepEqual([result.host, result.pathname, result.href], [host, pathname, href], input);

@@ -18,7 +18,7 @@ corrections are checked against Bun 1.4.4 and unchanged
 
 The legacy authority scan is ported from the same pinned `src/js/node/url.ts`
 (`Url.prototype.parse` host section, `getHostname`, `parseHost`, `autoEscape`).
-It keeps Bun's rules: the last `@` before a host-ending `/`, `?` or `#` ends the
+It keeps Bun's rules: backslashes before the first `?` or `#` become `/`, the last `@` before a host-ending `/`, `?` or `#` ends the
 auth, the first RFC 2396 non-host character ends the host, a `:` left in the
 hostname moves the rest into the path, and tabs and newlines in the authority are
 dropped. Hostnames over 255 characters become empty. A host that is empty after
