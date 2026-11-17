@@ -11,9 +11,9 @@ import { profileEngineFiles } from "../goals-matrix/engines";
 import { templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { verifyMacAdmission } from "./admission";
 import { deviceUDID, phaseTimeoutMs, installTimeoutMs, type SmokeOptions } from "./options";
-import { completedCase, pendingCase, unsafeToContinue, type SmokeCase, type SmokeReport } from "./model";
+import { StepFailure, completedCase, pendingCase, unsafeToContinue, type SmokeCase, type SmokeReport } from "./model";
 import { smokeCases } from "./cases";
-import { liveFetch, liveSource, withLiveRoot, type LiveFetch } from "./live";
+import { compareLiveOrigin, liveFetch, liveSource, withLiveRoot, type LiveFetch } from "./live";
 import { livePlaygroundPath } from "../goals-matrix/iphone-live-proxy";
 
 type Selection = { box: Box; framework: Framework; profile: PlaygroundProfile };
@@ -25,6 +25,8 @@ interface SmokeIO {
   admission: typeof verifyMacAdmission;
   transport(config: SmokeOptions, box: Box): ReturnType<Execution["createTransport"]>;
   verify(config: SmokeOptions, programs: readonly Selection[], source: Source, get: LiveFetch): Promise<void>;
+  /** Live mode: what the Mac proxy received from the live origin during the run. */
+  served(config: SmokeOptions): Promise<unknown>;
 }
 function select(box: Box): Selection {
   const framework = frameworks.find(item => item.id === box.framework);
@@ -81,6 +83,11 @@ const defaultIO: SmokeIO = {
   qualify,
   admission: verifyMacAdmission,
   verify,
+  served: async config => {
+    const response = await fetch(config.control + "/live/served", { signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new StepFailure("live-origin", `Live origin check: the observer answered ${response.status} for its served responses`);
+    return response.json();
+  },
   transport: async (config, box) => createIphoneTransport({ control: config.control, agent: config.agent, deviceUDID,
     timeoutMs: phaseTimeoutMs, cleanupTimeoutMs: 20_000,
     saveNative: text => appendFile(join(config.matrix.output, "logs", `${box.framework}-${box.engine}.native.jsonl`), text) }),
@@ -107,20 +114,33 @@ export async function runSmoke(config: SmokeOptions, overrides: Partial<SmokeIO>
     report.cases = smokeCases.map(box => pendingCase(box, source));
     const selections = smokeCases.map(select);
     const programs = uniquePrograms(selections);
+    if (config.target.mode === "live") requireLiveCases(selections);
     await io.qualify(config, programs, io.fetch);
     const ticket = await io.admission(config.thread, undefined, signal);
     await cases(config, report, io, ticket, selections, signal);
     signal?.throwIfAborted();
     await io.verify(config, programs, source, io.fetch);
     signal?.throwIfAborted();
+    if (config.target.mode === "live") await checkLiveOrigin(config, config.target.url, report, io);
   } catch (error) {
-    report.failures.push({ phase: signal?.aborted ? "interruption" : "prerequisite", error: String(error) });
-    report.cases = report.cases.map(result => result.status === "pending" ? blocked(result, String(error)) : result);
+    const phase = signal?.aborted ? "interruption" : error instanceof StepFailure ? error.phase : "prerequisite";
+    report.failures.push({ phase, error: String(error) });
+    report.cases = report.cases.map(result => result.status === "pending" ? blocked(result, String(error), phase === "interruption" ? "prerequisite" : phase) : result);
   } finally {
     report.finishedAt = new Date().toISOString();
     await save(report);
   }
   return report;
+}
+/** Root previews need the local server's preview-origin host, which the live proxy does not have. */
+function requireLiveCases(selections: readonly Selection[]): void {
+  const rooted = selections.filter(({ framework }) => framework.rootPreview).map(({ box }) => box.framework);
+  if (rooted.length) throw new Error(`Live mode cannot serve root previews: ${rooted.join(", ")}`);
+}
+/** Repeats the run's live requests against the real origin; any difference makes the smoke red. */
+async function checkLiveOrigin(config: SmokeOptions, site: string, report: SmokeReport, io: SmokeIO): Promise<void> {
+  const check = report.liveOrigin = await compareLiveOrigin(site, await io.served(config), io.fetch);
+  if (check.mismatches.length) throw new StepFailure("live-origin", `Live origin check: ${check.mismatches.length} difference(s) from the real origin: ${check.mismatches.slice(0, 5).join("; ")}`);
 }
 async function cases(config: SmokeOptions, report: SmokeReport, io: SmokeIO, ticket: string, selections: readonly Selection[], signal?: AbortSignal): Promise<void> {
   let stopped: string | undefined;
@@ -135,8 +155,8 @@ async function cases(config: SmokeOptions, report: SmokeReport, io: SmokeIO, tic
     await save(report);
   }
 }
-function blocked(result: SmokeCase, error: string): SmokeCase {
-  return { ...result, status: "blocked", failures: [{ phase: "prerequisite", error }] };
+function blocked(result: SmokeCase, error: string, phase = "prerequisite"): SmokeCase {
+  return { ...result, status: "blocked", failures: [{ phase, error }] };
 }
 async function runCase(config: SmokeOptions, selection: Selection, source: SmokeCase["source"], io: SmokeIO, ticket: string, signal?: AbortSignal): Promise<SmokeCase> {
   const { box, framework, profile } = selection;

@@ -14,7 +14,7 @@ import { queueTicket } from "./admission";
 import { runSmoke } from "./run";
 import { templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { engineFiles, profileEngineFiles } from "../goals-matrix/engines";
-import { liveSiteURL, proxyLiveRequest } from "../goals-matrix/iphone-live-proxy";
+import { comparedHeaders, decodedSha256, pick, type LiveServed } from "../goals-matrix/iphone-live-proxy";
 
 const source: Report["source"] = { commit: "a".repeat(40), dirty: false, assets: { source: "local-test-build" } };
 const capabilities = { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": deviceUDID, transport: "visible-safari-xctest" };
@@ -364,8 +364,9 @@ test("local mode still requires its prepared root and recorded commit", () => {
   expect(() => smokeOptions(argumentsFor("/prepared").filter(value => !value.startsWith("--root=")))).toThrow("Missing --root");
   expect(() => smokeOptions(argumentsFor("/prepared").filter(value => !value.startsWith("--source-file=")))).toThrow("Missing --source-file");
 });
+const isolated = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" };
 /** Serves a prepared root as the deployed site would: the sandbox at /, the playground under /playground/. */
-function deployedSite(root: string, commits: string[], requests: string[]): (url: string) => Promise<Response> {
+function deployedSite(root: string, commits: string[], requests: string[], pageHeaders: Record<string, string> = isolated): (url: string) => Promise<Response> {
   return async url => {
     requests.push(url);
     const path = new URL(url).pathname;
@@ -373,24 +374,36 @@ function deployedSite(root: string, commits: string[], requests: string[]): (url
     if (path === "/deployment.json") return Response.json({ sourceCommit: commits.length > 1 ? commits.shift() : commits[0], waffleVersion: "0.0.0-test" });
     const name = path === "/playground/" ? "index.html" : path.replace(/^\/playground\//, "");
     const file = Bun.file(join(root, name));
-    return await file.exists() ? new Response(file) : new Response(null, { status: 404 });
+    if (!await file.exists()) return new Response(null, { status: 404 });
+    return new Response(file, { headers: path === "/playground/" ? { "content-type": "text/html", "cache-control": "no-store", ...pageHeaders } : { "content-type": "application/octet-stream" } });
   };
 }
+/** What the Mac proxy would have recorded for these paths, read from the same deployed site. */
+async function servedFrom(get: (url: string) => Promise<Response>, paths: readonly string[]): Promise<LiveServed[]> {
+  return Promise.all(paths.map(async url => {
+    const response = await get(new URL(url, site).href);
+    return { url, request: { "accept-encoding": "gzip, deflate, br" }, status: response.status, headers: pick(response.headers, comparedHeaders), sha256: decodedSha256(await response.bytes(), null) };
+  }));
+}
+const servedPaths = ["/playground/", "/playground/engine-builds.json"];
 test("live mode skips local setup and runs the same cases against the deployed playground", async () => {
   await scratch(async root => {
     const config = smokeOptions(liveArguments(root));
     await preparedRoot(join(root, "deployed"));
     const requests: string[] = [], urls: string[] = [];
+    const get = deployedSite(join(root, "deployed"), [source.commit], requests);
+    const served = await servedFrom(deployedSite(join(root, "deployed"), [source.commit], []), servedPaths);
     const result = await withFixtures(config, [], { preflight: true, onNavigate: url => urls.push(url),
-      overrides: { fetch: deployedSite(join(root, "deployed"), [source.commit], requests) } });
+      overrides: { fetch: get, served: async () => served } });
+    expect(result.liveOrigin).toEqual({ checked: 2, mismatches: [] });
     expect(result.status, JSON.stringify(result.failures)).toBe("green");
     expect(result.revision).toBe(source.commit);
     expect(result.source).toEqual({ commit: source.commit, dirty: null, assets: { source: site, deployment: { sourceCommit: source.commit, waffleVersion: "0.0.0-test" } } });
     expect(result.cases.map(value => value.phases.map(phase => phase.phase))).toEqual(smokeCases.map(() => Array.from(smokePhases)));
     expect(urls.map(url => new URL(url).pathname)).toEqual(["/playground/", "/playground/", "/playground/"]);
     expect(urls.map(url => new URL(url).searchParams.get("profile"))).toEqual(["split", "split", "shared-group"]);
-    // Qualification and final verification both read the deployed host, manifest and selected engine files.
-    expect(requests.filter(url => url === site + "playground/")).toHaveLength(2);
+    // Qualification, final verification and the real-origin comparison all read the deployed host page.
+    expect(requests.filter(url => url === site + "playground/")).toHaveLength(3);
     expect(requests).toContain(site + "playground/" + profileEngineFiles("quickjs", "shared-group")[0]! + ".gz");
     expect(await Bun.file(join(root, "site")).exists()).toBe(false);
     expect(await Bun.file(join(root, "source.json")).json()).toEqual(source);
@@ -414,10 +427,45 @@ test("live mode reports red when the site redeploys during the smoke", async () 
     const config = smokeOptions(liveArguments(root));
     await preparedRoot(join(root, "deployed"));
     const result = await withFixtures(config, [], { preflight: true,
-      overrides: { fetch: deployedSite(join(root, "deployed"), [source.commit, "b".repeat(40)], []) } });
+      overrides: { fetch: deployedSite(join(root, "deployed"), [source.commit, "b".repeat(40)], []), served: async () => [] } });
     expect(result.cases.every(value => value.status === "pass")).toBe(true);
     expect(result.status).toBe("red");
     expect(result.failures[0]?.error).toContain(`Live site changed deployment during smoke: ${source.commit} became ${"b".repeat(40)}`);
+  });
+});
+test("a deployed playground without COEP fails the isolation check before native work", async () => {
+  await scratch(async root => {
+    await preparedRoot(join(root, "deployed"));
+    let admitted = false;
+    const result = await runSmoke(smokeOptions(liveArguments(root)), {
+      fetch: deployedSite(join(root, "deployed"), [source.commit], [], { "cross-origin-opener-policy": "same-origin" }),
+      admission: async () => { admitted = true; return "ticket"; } });
+    expect(admitted).toBe(false);
+    expect(result).toMatchObject({ status: "red", failedPhase: "isolation" });
+    expect(result.failures[0]?.error).toContain("not cross-origin isolated (COOP same-origin, COEP null)");
+  });
+});
+test("any difference between the run and the real origin makes the live smoke red", async () => {
+  await scratch(async root => {
+    await preparedRoot(join(root, "deployed"));
+    const get = deployedSite(join(root, "deployed"), [source.commit], []);
+    const served = await servedFrom(get, servedPaths);
+    served[0]!.headers["cache-control"] = "public, max-age=600";
+    served[1]!.sha256 = "0".repeat(64);
+    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => served } });
+    expect(result.cases.every(value => value.status === "pass")).toBe(true);
+    expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 2 } });
+    expect(result.liveOrigin?.mismatches).toEqual([
+      "/playground/: cache-control \"public, max-age=600\" in the run, \"no-store\" from the real origin",
+      "/playground/engine-builds.json: decoded bytes differ from the real origin"]);
+  });
+});
+test("a run whose proxy recorded no playground page cannot pass the origin check", async () => {
+  await scratch(async root => {
+    await preparedRoot(join(root, "deployed"));
+    const get = deployedSite(join(root, "deployed"), [source.commit], []);
+    const result = await withFixtures(smokeOptions(liveArguments(root)), [], { preflight: true, overrides: { fetch: get, served: async () => [] } });
+    expect(result).toMatchObject({ status: "red", failedPhase: "live-origin", liveOrigin: { checked: 0, mismatches: ["the run served no /playground/ page"] } });
   });
 });
 test("live mode needs the site's recorded source commit", async () => {
@@ -427,25 +475,4 @@ test("live mode needs the site's recorded source commit", async () => {
     expect(admitted).toBe(false);
     expect(result).toMatchObject({ status: "red", revision: null, failures: [{ phase: "prerequisite", error: "Error: Live site deployment.json has no 40-character sourceCommit" }] });
   });
-});
-test("the live proxy forwards the deployed bytes and keeps redirects on loopback", async () => {
-  const seen: { url: string; headers: Headers; method: string }[] = [];
-  const upstream = (async (input: string | URL | Request, init?: RequestInit) => {
-    seen.push({ url: String(input), headers: new Headers(init?.headers), method: init?.method ?? "GET" });
-    if (String(input).endsWith("/playground")) return new Response(null, { status: 307, headers: { location: "/playground/?a=1" } });
-    return new Response("<html><body>deployed</body></html>", { headers: { "content-type": "text/html", "content-encoding": "br", "content-length": "9", "cross-origin-embedder-policy": "require-corp" } });
-  }) as typeof fetch;
-  const page = await proxyLiveRequest(new Request("http://127.0.0.1:4000/playground/main.js?x=1", { headers: { "accept-encoding": "br", "if-none-match": "\"tag\"", origin: "http://127.0.0.1:4000" } }), site, upstream);
-  expect(seen[0]?.url).toBe(site + "playground/main.js?x=1");
-  expect(seen[0]?.headers.get("if-none-match")).toBe("\"tag\"");
-  expect(seen[0]?.headers.has("origin")).toBe(false);
-  expect(seen[0]?.headers.has("accept-encoding")).toBe(false);
-  expect(page.headers.has("content-encoding")).toBe(false);
-  expect(page.headers.has("content-length")).toBe(false);
-  expect(page.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
-  expect(await page.text()).toBe("<html><body>deployed</body></html>");
-  const moved = await proxyLiveRequest(new Request("http://127.0.0.1:4000/playground"), site, upstream);
-  expect(moved.status).toBe(307);
-  expect(moved.headers.get("location")).toBe("http://127.0.0.1:4000/playground/?a=1");
-  expect(() => liveSiteURL("https://bun.sprockt.dev/playground/")).toThrow();
 });

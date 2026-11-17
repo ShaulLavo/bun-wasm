@@ -1,10 +1,15 @@
 import { LoopbackPreviewOrigins } from "../../web/preview-origin-host";
 import { IphoneBus } from "./iphone-bus";
 import { observeIphoneServiceWorker } from "./iphone-service-worker";
-import { liveSiteURL, proxyLiveRequest } from "./iphone-live-proxy";
+import { liveSiteURL, proxyLiveRequest, type LiveServed } from "./iphone-live-proxy";
 
-export async function observeIphoneResponse(response: Response, request: Request, bus: IphoneBus, endpoint: string): Promise<Response> {
+/**
+ * Adds the observer to a page or service worker. `addIsolation` fills in missing COEP and CORP for
+ * local servers; live mode turns it off so a deploy that drops them fails instead of being repaired.
+ */
+export async function observeIphoneResponse(response: Response, request: Request, bus: IphoneBus, endpoint: string, { addIsolation = true } = {}): Promise<Response> {
   if (response.status === 200 && new URL(request.url).pathname.endsWith("/sw.js")) {
+    if (response.headers.has("content-encoding")) throw new Error("iPhone observer requires an uncompressed service worker");
     const source = `(${observeIphoneServiceWorker.toString()})(${JSON.stringify(endpoint + bus.path)});\n`;
     const headers = new Headers(response.headers);
     headers.delete("content-length"); headers.delete("etag"); headers.set("cache-control", "no-store");
@@ -20,6 +25,7 @@ export async function observeIphoneResponse(response: Response, request: Request
   const headers = new Headers(response.headers);
   for (const key of ["content-length", "etag", "last-modified"]) headers.delete(key);
   headers.set("cache-control", "no-store");
+  if (!addIsolation) return new Response(html, { status: response.status, headers });
   if (!headers.has("cross-origin-embedder-policy")) headers.set("cross-origin-embedder-policy", "require-corp");
   if (!headers.has("cross-origin-resource-policy")) headers.set("cross-origin-resource-policy", "cross-origin");
   return new Response(html, { status: response.status, headers });
@@ -63,14 +69,38 @@ async function serveLocal(bus: IphoneBus, endpoint: string): Promise<string> {
   return productOrigin;
 }
 
+/** At most this many distinct live responses are kept for the PC's real-origin comparison. */
+const servedLimit = 1000;
+/** Records each distinct request once: same URL and the same encodings asked for. */
+export function recordServed(served: LiveServed[]): (row: LiveServed) => void {
+  const seen = new Set<string>();
+  return row => {
+    const key = row.url + "\n" + (row.request["accept-encoding"] ?? "");
+    if (seen.has(key) || served.length >= servedLimit) return;
+    seen.add(key);
+    served.push(row);
+  };
+}
+
 /** Serves the deployed site at LIVE_URL on loopback, observing every response. Stops on the same signals as the local server. */
-function serveLive(site: string, bus: IphoneBus, endpoint: string): string {
+function serveLive(site: string, bus: IphoneBus, endpoint: string, served: LiveServed[]): string {
+  const record = recordServed(served);
   const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT ?? 0), idleTimeout: 0,
-    fetch: async request => observeIphoneResponse(await proxyLiveRequest(request, site), request, bus, endpoint),
+    fetch: async request => observeIphoneResponse(await proxyLiveRequest(request, site, fetch, record), request, bus, endpoint, { addIsolation: false }),
   });
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => { void server.stop(true).finally(() => process.exit()); });
   console.log(`proxying ${site} at ${server.url.origin}/`);
   return server.url.origin;
+}
+
+/** The control port: the observer bus, plus in live mode the controller-only list of live responses. */
+export function controlResponse(request: Request, bus: IphoneBus, productOrigin: string, served?: readonly LiveServed[]): Promise<Response> | Response {
+  const { pathname } = new URL(request.url);
+  if (served && pathname === bus.path + "/live/served") {
+    if (request.method !== "GET" || request.headers.has("origin") || request.headers.has("sec-fetch-site")) return new Response(null, { status: 403 });
+    return Response.json(served, { headers: { "cache-control": "no-store" } });
+  }
+  return pathname.startsWith(bus.path + "/") ? bus.handle(request, productOrigin) : new Response(null, { status: 404 });
 }
 
 if (import.meta.main) {
@@ -79,10 +109,11 @@ if (import.meta.main) {
   if (!token || !/^[a-f0-9]{64}$/.test(token) || process.env.HOST !== "127.0.0.1" || (!live && process.env.PREVIEW_ORIGINS !== "1")) throw new Error("Require loopback host, GOALS_IPHONE_TOKEN, and preview origins or LIVE_URL");
   const bus = new IphoneBus("/__goals_iphone/" + token, row => console.log(JSON.stringify({ iphoneResponse: row })));
   let productOrigin = "";
+  const served: LiveServed[] = [];
   const control = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.GOALS_IPHONE_PORT ?? 0), idleTimeout: 0, maxRequestBodySize: 512 * 1024,
-    fetch: request => new URL(request.url).pathname.startsWith(bus.path + "/") ? bus.handle(request, productOrigin) : new Response(null, { status: 404 }),
+    fetch: request => controlResponse(request, bus, productOrigin, live ? served : undefined),
   });
-  productOrigin = live ? serveLive(live, bus, control.url.origin) : await serveLocal(bus, control.url.origin);
+  productOrigin = live ? serveLive(live, bus, control.url.origin, served) : await serveLocal(bus, control.url.origin);
   console.log(JSON.stringify({ iphoneControl: control.url.origin + bus.path, productOrigin }));
   process.once("SIGTERM", () => { bus.close(); void control.stop(true); });
 }

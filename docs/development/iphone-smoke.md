@@ -93,11 +93,44 @@ the last. A deployment that changes during the run makes the result red.
 The page still needs the observer script, which the deployed site cannot carry.
 Start the same Mac wrapper with `LIVE_URL=https://bun.sprockt.dev/` in place of
 `ROOT` and `PREVIEW_ORIGINS`, and stage only the two controller bundles. The
-observer server then fetches every request from the live site and serves those
-bytes on Mac loopback, adding only the observer script. Safari opens
-`/playground/` at that loopback origin. Forward its control port as in local mode.
-FIFO admission, device binding, phases, hang caps, result file and the ordinary-tab
-finish are unchanged.
+observer server then forwards every request to the live site with Safari's own
+headers, including `Accept-Encoding`, and serves the response on Mac loopback.
+Safari opens `/playground/` at that loopback origin. Forward its control port as
+in local mode. FIFO admission, device binding, phases, hang caps, result file and
+the ordinary-tab finish are unchanged. Live mode cannot serve root-preview
+templates, so it refuses them.
+
+Only two kinds of response differ from what the live site sends. For HTML
+navigations and `sw.js`, the proxy asks the site for identity encoding, and the
+observer adds its script and replaces their `cache-control` (with `no-store`),
+`etag`, `last-modified` and `content-length`. Every other response reaches Safari
+with its status, headers, content encoding and bytes unchanged. The observer never
+adds isolation headers in live mode. Before any device work, the runner requires the
+deployed playground page to send `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` (or `credentialless`). If either is
+missing, the result is red at the `isolation` step.
+
+After the cases, the runner checks the edge. The proxy records each whole,
+unconditional request it made and what came back. The PC repeats each request
+against `https://bun.sprockt.dev/` with the same headers. It compares status,
+`Content-Type`, `Content-Encoding`, COOP, COEP, CORP, `Cache-Control`,
+`Service-Worker-Allowed` and the decoded bytes. Any difference makes the result
+red at the `live-origin` step, and `liveOrigin` in the result lists them. The PC
+and the Mac may reach different Cloudflare locations; the commit check before and
+after the run catches a deployment that changes partway through.
+
+This mode can't prove:
+
+- Safari's own connection to the Cloudflare edge: TLS, HTTP/2 or HTTP/3, and edge
+  caching keyed on Safari's request. Bun's fetch on the Mac makes those requests.
+- Behavior tied to the real origin `https://bun.sprockt.dev`: per-origin storage
+  and service-worker state, and absolute URLs to that host. Under the proxy, those
+  URLs become cross-origin loads.
+- The deployed caching of the injected HTML and `sw.js`, including how the service
+  worker updates. Both are served with `no-store`.
+
+Follow-up: load the real origin in Safari without injection for one case, with a
+success signal that doesn't need the observer.
 
 ## Read the result and finish cleanup
 
