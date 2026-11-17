@@ -54,12 +54,12 @@ export function boundaryChecks(factory: typeof Buffer, validators: Validators, c
     { name: "Bun concat reads array elements once by index", run() {
       const calls = { species: 0, iterator: 0 };
       class Chunks extends Array<Uint8Array> {
-        static get [Symbol.species]() { calls.species++; return Chunks; }
-        *[Symbol.iterator]() { calls.iterator++; yield new Uint8Array(calls.iterator === 1 ? [1] : [9, 9, 9, 9]); }
+        [Symbol.iterator]() { calls.iterator++; return [new Uint8Array(calls.iterator === 1 ? [1] : [9, 9, 9, 9])].values(); }
       }
+      Object.defineProperty(Chunks, Symbol.species, { get() { calls.species++; return Chunks; } });
       const chunks = new Chunks();
       chunks.push(new Uint8Array([1, 2]), new Uint8Array([3]));
-      assert.deepEqual(Array.from(concat(chunks, undefined, true) as Uint8Array), [1, 2, 3]);
+      assert.deepEqual(Array.from(concat(chunks, 16, true)), [1, 2, 3]);
       assert.deepEqual(calls, { species: 0, iterator: 0 });
     } },
     { name: "Bun concat preserves errors from input getters", run() {
