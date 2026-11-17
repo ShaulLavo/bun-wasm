@@ -21,7 +21,10 @@ directly avoids a second full allocation.
 
 The existing `internal.toUint8` conversion remains the input adapter. Numeric
 maximums retain Bun's UInt32 conversion; NaN and negative maximums throw, and
-Infinity leaves the result uncapped. No engine memory limit changes.
+Infinity leaves the result uncapped. No engine memory limit changes. A total
+above native Bun's 2^32-byte typed-array limit fails before allocation: a 64-bit
+host engine such as Browser's V8 would otherwise reserve it lazily and copy
+every byte.
 
 The source controls and all-engine public fixture are
 `scripts/buffer-allocation-boundaries.test.ts` and

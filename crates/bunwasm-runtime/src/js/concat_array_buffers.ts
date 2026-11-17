@@ -22,7 +22,12 @@
     return value >>> 0;
   }
 
+  // Native Bun's JSC typed arrays stop at 2^32 bytes. A 64-bit host engine
+  // (Browser's V8) would otherwise reserve the full size and copy every byte.
+  const kMaxLength = 4294967296;
+
   function allocate(length: number): Uint8Array<ArrayBuffer> {
+    if (length > kMaxLength) throw new TypeError("Failed to allocate ArrayBuffer");
     try { return new Bytes(length); }
     catch (error) {
       if (!(error instanceof RangeError)) throw error;
