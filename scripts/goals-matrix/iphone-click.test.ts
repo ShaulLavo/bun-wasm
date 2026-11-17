@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bounded } from "./execute";
 import { createIphoneTransport } from "./iphone-transport";
-import { IphoneClickTrace } from "./iphone-click";
+import { IphoneClickTrace, recordIphoneClickTrace } from "./iphone-click";
 import { tabAgentScript } from "./iphone-tab-fixture";
 import { object } from "./evidence";
 import { Scope } from "./scope";
@@ -201,4 +201,23 @@ test("the diagnostic deadline snapshots only retained progress and stops later l
     await Bun.sleep(5);
     expect(rows).toHaveLength(3);
   } finally { trace.finish("failed"); }
+});
+
+test("a recorded trace resolves its final row on deadline, so a later pass cannot be awaited forever", async () => {
+  const { trace, rows, final } = recordIphoneClickTrace(1, new AbortController().signal);
+  trace.observing();
+  expect(await final).toMatchObject({ stage: "deadline", progress: "observation-pending", polls: 1 });
+  trace.finish("passed");
+  await Bun.sleep(5);
+  expect(rows.at(-1)?.stage).toBe("deadline");
+});
+
+test("a recorded trace resolves its final row on cancellation and failure", async () => {
+  const lifetime = new AbortController();
+  const cancelled = recordIphoneClickTrace(5000, lifetime.signal);
+  lifetime.abort();
+  expect(await cancelled.final).toMatchObject({ stage: "cancelled" });
+  const failed = recordIphoneClickTrace(5000, new AbortController().signal);
+  failed.trace.finish("failed");
+  expect(await failed.final).toMatchObject({ stage: "failed", progress: "arm-pending" });
 });
