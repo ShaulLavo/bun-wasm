@@ -44,7 +44,8 @@ async function navigate(url: string, options: { waitUntil: string; timeout: numb
   assert.ok(!navigations.has(id), "each fresh page needs its own request identity");
   navigations.add(id);
   const [matches] = activeRoutes;
-  assert.ok(matches?.(new URL(url)), "the WebKit pass-through route must match the navigation");
+  assert.ok(matches, "the WebKit pass-through route must be registered before goto");
+  assert.ok(matches(new URL(url)), "the WebKit pass-through route must match the navigation");
   assert.equal(matches(new URL("/bun.wasm", url)), false);
   target.searchParams.delete(navigationParameter);
   assert.equal(target.href, "https://stack.test/?engine=quickjs&prompt=off&mode=memory");

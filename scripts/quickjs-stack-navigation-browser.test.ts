@@ -88,17 +88,19 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
     const page = await browser.newPage();
     const target = `${server.url}?engine=${consumer.name}&prompt=off&mode=memory`;
     const timeout = new errors.TimeoutError("fixture navigation timeout");
+    const realGoto = page.goto.bind(page);
     if (mode === "timeout") page.goto = async () => { navigations++; throw timeout; };
     if (mode === "connection") await page.route("**/*", route => route.abort());
     if (mode === "sink") await page.close();
     if (mode === "publication") await page.route("**/*", route => serveFixture(route, held, false));
-    const routes = mode === "sink" ? [] : spyRoutes(page);
+    const routes = mode === "sink" ? undefined : spyRoutes(page);
     let failure: unknown;
     try { await consumer.open(page, String(server.url)); }
     catch (error) { failure = error; }
     expect(failure).toBeInstanceOf(Error);
     // The WebKit route is removed even when goto fails before it fires (timeout) or the request is aborted.
-    if (mode !== "sink") expect(routes).toEqual(engine.name() === "webkit" ? ["route", "unroute"] : []);
+    if (routes) expect(routes.calls).toEqual(engine.name() === "webkit" ? ["route", "unroute"] : []);
+    const handledBefore = routes?.handled() ?? 0;
     expect(documents).toBe(1);
     expect(readFileSync(occupied, "utf8")).toBe("occupied");
     if (mode === "sink") {
@@ -133,6 +135,9 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
       expect(navigations).toBe(1);
       expect(report).toMatchObject({ pageState: { outcome: "ok", value: { readyState: "complete", status: null, published: false } } });
     }
+    // The route is really gone: navigating to the same URL again runs none of the recorded handlers.
+    await realGoto(target).catch(() => {});
+    expect(routes?.handled()).toBe(handledBefore);
   } finally {
     release();
     const stopped = await Promise.allSettled([browser?.close(), server.stop(true)]);
@@ -143,14 +148,29 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
   }
 }
 
-/** Records route registrations and removals made after this call. */
-function spyRoutes(page: Page): string[] {
+type RouteHandler = Parameters<Page["route"]>[1];
+
+/**
+ * Records route registrations and removals made after this call, and counts how often their handlers run,
+ * so a later navigation can show that no registered route is still intercepting.
+ */
+function spyRoutes(page: Page): { calls: string[]; handled: () => number } {
   const route = page.route.bind(page);
   const unroute = page.unroute.bind(page);
   const calls: string[] = [];
-  page.route = async (...args: Parameters<Page["route"]>) => { calls.push(args[2]?.times === undefined ? "route" : `route times=${args[2].times}`); return route(...args); };
-  page.unroute = async (...args: Parameters<Page["unroute"]>) => { calls.push("unroute"); return unroute(...args); };
-  return calls;
+  const wrappers = new Map<RouteHandler, RouteHandler>();
+  let handled = 0;
+  page.route = async (url, handler, options) => {
+    calls.push(options?.times === undefined ? "route" : `route times=${options.times}`);
+    const counted: RouteHandler = (...args) => { handled++; return handler(...args); };
+    wrappers.set(handler, counted);
+    return route(url, counted, options);
+  };
+  page.unroute = async (url, handler) => {
+    calls.push("unroute");
+    return unroute(url, handler && (wrappers.get(handler) ?? handler));
+  };
+  return { calls, handled: () => handled };
 }
 
 // WebKit bug 325840 workaround: a cross-origin-isolated document from a real server is admitted through a
@@ -178,16 +198,23 @@ async function isolatedDocument(engine: BrowserType, consumer: Consumer, withCon
       (error: unknown) => { rejected.push(String(error)); },
     ));
     const page = await context.newPage();
-    const calls = spyRoutes(page);
+    const routes = spyRoutes(page);
     await consumer.open(page, String(server.url));
     expect(await page.textContent("#status")).toBe("ready");
-    expect(calls).toEqual(engine.name() === "webkit" ? ["route", "unroute"] : []);
+    expect(routes.calls).toEqual(engine.name() === "webkit" ? ["route", "unroute"] : []);
+    // On WebKit the pass-through saw the document once; on other engines nothing was routed.
+    expect(routes.handled()).toBe(engine.name() === "webkit" ? 1 : 0);
     expect(rejected).toEqual([]);
     expect(continued).toEqual(withContextRoute ? ["/"] : []);
     expect(documents).toBe(1);
     expect(page.url()).toBe(`${server.url}?engine=${consumer.name}&prompt=off&mode=memory`);
     expect(await page.evaluate(() => crossOriginIsolated)).toBe(true);
     expect(await page.evaluate(() => fetch("/later").then(response => response.text()))).toBe("later");
+    // The route is really gone: a second navigation to the same URL runs no recorded handler.
+    const handled = routes.handled();
+    await page.goto(page.url());
+    expect(documents).toBe(2);
+    expect(routes.handled()).toBe(handled);
   } finally {
     await Promise.allSettled([browser.close(), server.stop(true)]);
   }
