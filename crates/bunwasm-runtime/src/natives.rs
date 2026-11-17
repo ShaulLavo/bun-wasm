@@ -1619,6 +1619,10 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
         text_or_code(host::proc_spawn_error(a.i32(0)?))
     });
     t.add("procJobOf", |a| Ok(host::proc_job_of(a.i32(0)?).into()));
+    t.add("processIdentity", |_| {
+        let pair = host::proc_identity().map_err(NativeError::error)?;
+        Ok(Val::Array(pair.into_iter().map(Val::from).collect()))
+    });
     t.add("procPipe", |_| {
         Ok(match host::proc_pipe() {
             Ok((read, write)) => Val::Array(vec![Val::Num(read as f64), Val::Num(write as f64)]),

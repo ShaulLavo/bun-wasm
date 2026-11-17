@@ -191,6 +191,7 @@ test("worker children get two bound control pipes announced through the environm
   expect(extra.map((binding: any) => binding.child)).toEqual([control.input, control.output]);
   expect(extra.every((binding: any) => binding.child === binding.parent)).toBe(true);
   expect(request.worker).toEqual({ memoryLimitMb: 64 });
+  expect(request.processKind).toBe("thread");
   expect(request.env.K).toBe("v");
   // The parent keeps the other ends: it reads what the worker writes and writes what it reads.
   const { input, output } = child._workerChannel;
@@ -201,12 +202,13 @@ test("worker children get two bound control pipes announced through the environm
   expect(new TextDecoder().decode(fake.native.procRead(input, 16) as Uint8Array)).toBe("ok");
 });
 
-test("a forged public _worker option does not make a worker child", () => {
+test("forged public worker and processKind options cannot select thread membership", () => {
   const fake = service();
   const { module } = load(fake);
-  const child = module.spawn(["bun", "w"], { stdout: "pipe", stderr: "pipe", _worker: { memoryLimitMb: 64 } });
+  const child = module.spawn(["bun", "w"], { stdout: "pipe", stderr: "pipe", _worker: { memoryLimitMb: 64 }, processKind: "thread" });
   const request = fake.children.get(child.pid)!.request;
   expect(request.worker).toBeUndefined();
+  expect(request.processKind).toBe("process");
   expect(request.env.BUNWASM_WORKER_CONTROL).toBeUndefined();
   expect(request.fds.map((binding: any) => binding.child)).toEqual([0, 1, 2]);
   expect(child._workerChannel).toBeUndefined();

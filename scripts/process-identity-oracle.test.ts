@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { assertIdentityTree, decodeIdentity, decodeThread, type IdentityTree } from "../.internal/reproducers/process-identity-199-oracle.ts";
+import { assertIdentityTree, assertNonrootTree, assertParentExit, decodeIdentity, decodeThread, type IdentityTree } from "../tests/fixtures/process-identity/oracle.ts";
 
 function snapshot(): IdentityTree {
   return { root: { pid: 1, ppid: 0 },
@@ -15,6 +15,24 @@ test("oracle rejects execution IDs presented as thread process IDs", () => {
   const tree = snapshot();
   tree.thread.identity.pid = 4;
   expect(() => assertIdentityTree(tree)).toThrow("worker threads must retain");
+});
+
+test("nonroot tree cannot pass with the root's constant identity", () => {
+  expect(() => assertNonrootTree(9, { pid: 1, ppid: 0 }, snapshot())).toThrow("nonroot leader");
+});
+
+test("parent-exit oracle rejects reparenting or changed survivor identity", () => {
+  expect(() => assertParentExit({ pid: 9, ppid: 1 }, 10, { pid: 10, ppid: 9 }, { pid: 10, ppid: 9 })).not.toThrow();
+  expect(() => assertParentExit({ pid: 9, ppid: 1 }, 10, { pid: 10, ppid: 9 }, { pid: 10, ppid: 1 })).toThrow("parent collection");
+});
+
+test("nonroot worker and nested worker keep the leader's nonconstant process pair", () => {
+  const tree: IdentityTree = { root: { pid: 9, ppid: 1 },
+    siblings: [{ handle: 10, identity: { pid: 10, ppid: 9 } }, { handle: 11, identity: { pid: 11, ppid: 9 } }],
+    thread: { identity: { pid: 9, ppid: 1 }, child: { handle: 13, identity: { pid: 13, ppid: 9 } }, nested: { pid: 9, ppid: 1 } } };
+  expect(() => assertNonrootTree(9, { pid: 1, ppid: 0 }, tree)).not.toThrow();
+  tree.thread.nested = { pid: 1, ppid: 0 };
+  expect(() => assertNonrootTree(9, { pid: 1, ppid: 0 }, tree)).toThrow("nested workers");
 });
 
 test("oracle rejects a nested thread with a caller process as its parent", () => {

@@ -197,6 +197,7 @@ declare namespace BunWasm {
     on(event: string, callback: EventListener): unknown;
   }
   interface Native {
+    processIdentity(): [pid: number, parentPid: number];
     sharedObjects?: SharedObjects;
     gc(): void;
     hostCaps: Record<string, boolean>;
