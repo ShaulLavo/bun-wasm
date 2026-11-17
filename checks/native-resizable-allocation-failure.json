@@ -1,0 +1,8 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/resizable-allocation-failure",
+  "engines": [
+    "jsc",
+    "spidermonkey"
+  ]
+}
