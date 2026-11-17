@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect } from "bun:test";
+import { test } from "./hang-cap.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, verifyGuestCompanions, writeGuestBuildReceipt, artifactIdentity } from "../../scripts/guest-build-receipt.ts";
