@@ -11,8 +11,8 @@ files are byte-identical in release `0.0.137`, revision
 `0.0.139`, revision `8e86a2a0f2398c1485ef16f7bc423961f4e05f94`, only
 `browser/net/helper.ts` changes: its preview finish sink ignores a second
 `end` or `error`. The helper adapter's anchor and insertion are unchanged.
-Selected release `0.0.140`, revision `1a2e4b3d5b4c8ae77863f60b88b33c9e9af2082b`,
-keeps all four files byte-identical to `0.0.139`.
+Selected release `0.0.141`, revision `dab59163173364806583770f4dbb55f30052c781`,
+keeps all four files byte-identical to `0.0.140` and `0.0.139`.
 The exact installed source hashes and unique insertion anchors reject drift or
 incomplete installations. No provider source is edited.
 
