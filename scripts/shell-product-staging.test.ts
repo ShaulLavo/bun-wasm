@@ -34,7 +34,7 @@ test("Bash source identity accepts only the selected archive or a full explicit 
       await Bun.write(join(scratch, "package.json"), JSON.stringify({ dependencies: { "bash-web": pin } }));
       expect(pinnedBashWeb(scratch)).toBe(bashRelease.sourceCommit);
     }
-    for (const pin of [bashRelease.url + "#ignored", bashRelease.url.replace("112", "111"), `https://example.com/#${bashRelease.sourceCommit}`, "^0.0.112"]) {
+    for (const pin of [bashRelease.url + "#ignored", bashRelease.url.replaceAll(bashRelease.version, "0.0.1"), `https://example.com/#${bashRelease.sourceCommit}`, `^${bashRelease.version}`]) {
       await Bun.write(join(scratch, "package.json"), JSON.stringify({ dependencies: { "bash-web": pin } }));
       expect(() => pinnedBashWeb(scratch)).toThrow("does not pin bash-web");
     }

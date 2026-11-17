@@ -1,6 +1,6 @@
 # Process identity, issue 199
 
-Status: Approved implementation under `CONSUMER-EXECUTION.md`, after the parent applied the independent consumer review. Actual Waffle development source `f17c1e72d41fc6a732e4f01e9b9c6a7eae7f1dc3` has been inspected and supports the specified exports. It remains unreviewed development input. PR 884 stays draft until matching released families, real guest acceptance and independent code review. Base is `bbf3165767cea786c920ca98c83dabda2588e36c`.
+Status: Implemented in PR 884 against released Waffle 0.0.140 (interface 3, PR 542) and programs-v0.0.23. The `process-identity` guest fixture passes on QuickJS, JSC and Browser with local builds. Remaining before review: pin bash-web 0.0.113 (interface 3) so the Web suite's one-interface check passes.
 
 ## Contract and caller types
 
