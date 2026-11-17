@@ -42,9 +42,21 @@ intentional: Bun prints `closeTo`'s number truncated to an integer and omits the
 space after `NumberNotCloseTo`; this adapter prints the full number with a space.
 
 `toThrow` (`throwOutcome` in `crates/bunwasm-runtime/src/js/test_matchers.ts`)
-marks a thrown promise handled through an intrinsic reaction, as Bun's
-`getValueAsToThrow` does, so its rejection is not reported against a later test.
-The `test-throw-handled-promise` fixture covers it.
+marks a thrown promise handled through an intrinsic reaction only when it has
+already rejected by the time the function returns. Bun's `get_value_as_to_throw`
+captures rejections that become unhandled while the function runs, so its
+rejection is not reported against a later test. A pending promise that rejects
+after `toThrow` returns stays unhandled and is reported, as in Bun. The
+`test-throw-handled-promise` fixture covers both cases.
+
+One gap remains: a promise that was already rejected before the function was
+called, then thrown, is also marked handled here. Bun drains such rejections
+before the call and reports them. Telling the two apart would need each engine's
+rejection tracker to say whether the promise is already queued, which the
+`Engine` interface does not expose.
+
+Each flag pair has one cached holder, so `expect.not === expect.not` is true
+here and false on Bun.
 
 Matching a promise makes the assertion return a Promise, as other asynchronous
 asymmetric matches do under the [awaited comparison

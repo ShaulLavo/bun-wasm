@@ -92,8 +92,9 @@
     try {
       result = received();
     } catch (value) {
-      // Bun marks a thrown promise handled; its rejection is the thrown value's, not the test's.
-      if (isPromise(value)) react(value, ignore, ignore);
+      // Bun captures a rejection that happens while `received` runs as the thrown value and
+      // marks that promise handled. A pending promise that rejects later is still reported.
+      if (isPromise(value) && internal.promiseState(value) === "rejected") react(value, ignore, ignore);
       return { threw: true, value };
     }
     if (!isPromise(result)) return { threw: false, value: result };
