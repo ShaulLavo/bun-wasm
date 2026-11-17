@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { playwright, ready, run, session, writeFile } from "./playground.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const base = process.argv[2];
 assert.ok(base, "usage: node web/tests/bench-memory.mjs <site URL> [output.json]");
@@ -52,7 +53,7 @@ async function sample(browser, item) {
     await context.addInitScript(countRootCommits);
     const page = await context.newPage();
     const start = performance.now();
-    await page.goto(new URL("playground/?engine=browser&prompt=off", base).href);
+    await navigateTestPage(page, new URL("playground/?engine=browser&prompt=off", base).href);
     const status = await ready(page);
     const readyMs = performance.now() - start;
     assert.match(status, /ready/);
@@ -72,7 +73,7 @@ async function sample(browser, item) {
     const writeResult = await timedRun(page, writes, "WRITE_MS");
     const sandbox = await context.newPage();
     const renderStart = performance.now();
-    await sandbox.goto(new URL("?engine=browser", base).href);
+    await navigateTestPage(sandbox, new URL("?engine=browser", base).href);
     await sandbox.frameLocator("#preview").locator("button.counter").waitFor({ timeout: 180000 });
     const firstRenderMs = performance.now() - renderStart;
     const renderCommits = await sandbox.frameLocator("#preview").locator("button.counter").evaluate(() => globalThis.__memoryRenderCommits);

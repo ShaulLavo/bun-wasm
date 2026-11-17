@@ -1,4 +1,5 @@
 import { selectInterruptionEngines, interruptionInputs, type InterruptionEngine } from "./engine-interruption-cases";
+import { navigateTestPage } from "./navigate-test-page.ts";
 // Real-worker step 7a gate. Never builds WASM. Run after the matching fresh builds:
 // BUN_WASM_INTERRUPTION_DIST=/absolute/dist bun tests/browser-engine-interruption.ts chromium firefox webkit
 // BUN_WASM_INTERRUPTION_DIST=/absolute/dist bun tests/browser-engine-interruption.ts --benchmark safari
@@ -361,7 +362,7 @@ async function main(): Promise<boolean> {
           const page = await browser.newPage();
           const pageErrors: string[] = []; report.pageErrors = pageErrors;
           page.on("pageerror", error => pageErrors.push(error.message));
-          await page.goto(url);
+          await navigateTestPage(page, url);
           await page.waitForFunction(() => (globalThis as any).engineInterruptionResult, undefined, { timeout: benchmark ? 530_000 : functionalPageTimeoutMs });
           result = await page.evaluate(() => (globalThis as any).engineInterruptionResult);
           result.pageErrors = pageErrors;

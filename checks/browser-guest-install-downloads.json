@@ -3,6 +3,7 @@
   "path": "scripts/install-download-browser.test.ts",
   "inputs": [
     "web/tests/playground-navigation.ts",
+    "web/tests/navigate-test-page.ts",
     ".github/actions/native-setup/action.yml",
     ".github/actions/native-seed/action.yml",
     ".github/actions/native-production/action.yml"

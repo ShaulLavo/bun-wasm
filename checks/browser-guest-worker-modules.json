@@ -148,6 +148,7 @@
     "web/tests/browser-type.ts",
     "web/tests/browser-worker-modules.ts",
     "web/tests/foreground.ts",
+    "web/tests/navigate-test-page.ts",
     "web/tests/playground-cleanup.ts",
     "web/tests/playground.mjs"
   ]

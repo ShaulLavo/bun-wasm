@@ -5,6 +5,7 @@ import { chromium, webkit } from "playwright";
 import { verifySite } from "./browser-guest-site";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
 import { overflowBudget } from "../web/src/shared-objects/lane-overflow";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 const worker = String.raw`
 const { parentPort, receiveMessageOnPort } = require("node:worker_threads");
@@ -76,7 +77,7 @@ async function exercise(name: "chromium" | "webkit", inlineOnly: boolean, site: 
       } });
     }, overflowBudget);
     const page = await context.newPage(), url = await task.serve();
-    await page.goto(`${url}?engine=browser&prompt=off&mode=memory`);
+    await navigateTestPage(page, `${url}?engine=browser&prompt=off&mode=memory`);
     assert.match(await ready(page), /ready/);
     const capable = await page.evaluate(maximum => {
       try { return new SharedArrayBuffer(0, { maxByteLength: maximum }).growable === true; } catch { return false; }

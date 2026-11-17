@@ -3,6 +3,7 @@ import { test } from "bun:test";
 import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
 import { LoopbackPreviewOrigins } from "../web/preview-origin-host";
 import { fixture } from "../web/tests/fixtures/preview-origin-native";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 const registry = new LoopbackPreviewOrigins();
 // Stands in for the cross-origin isolated playground page that embeds previews on Safari.
@@ -37,15 +38,15 @@ async function verify(name: keyof typeof engines, first: string, sibling: string
     const context = await browser.newContext();
     context.setDefaultTimeout(10_000);
     const page = await context.newPage();
-    await page.goto(`${first}/cookies`);
+    await navigateTestPage(page, `${first}/cookies`);
     assert.equal(await page.evaluate(() => document.cookie), "scoped=first", `${name}: reject parent localhost cookie`);
-    await page.goto(sibling);
+    await navigateTestPage(page, sibling);
     assert.equal(await page.evaluate(() => document.cookie), "", `${name}: sibling virtual port has a separate cookie host`);
     assert.equal(observations.at(-1)?.cookie, null);
-    await page.goto(foreign);
+    await navigateTestPage(page, foreign);
     assert.equal(await page.evaluate(() => document.cookie), "", `${name}: foreign owner has a separate cookie host`);
     assert.equal(observations.at(-1)?.cookie, null);
-    await page.goto(first);
+    await navigateTestPage(page, first);
     assert.equal(observations.at(-1)?.cookie, "scoped=first");
     await page.evaluate(async url => { await fetch(url, { method: "POST", mode: "no-cors", body: "site-check" }); }, `${sibling}/site-check`);
     assert.equal(observations.findLast(row => row.path === "/site-check")?.site, "cross-site", `${name}: distinct roots must remain cross-site`);
@@ -74,9 +75,9 @@ function loadPreviewFrame(source: string): Promise<boolean> {
 // Safari keeps previews in an iframe of the cross-origin isolated owner. The root-origin document must load
 // there, while a top-level preview tab keeps the app's own embedder policy.
 async function verifyIsolatedFrame(name: keyof typeof engines, page: Page, first: string): Promise<void> {
-  const topLevel = await page.goto(`${first}/top-level`);
+  const topLevel = await navigateTestPage(page, `${first}/top-level`);
   assert.equal(topLevel?.headers()["cross-origin-embedder-policy"], undefined, `${name}: top-level preview keeps the app's embedder policy`);
-  await page.goto(isolatedOwner.url.href);
+  await navigateTestPage(page, isolatedOwner.url.href);
   assert.equal(await page.evaluate(() => crossOriginIsolated), true, `${name}: owner is cross-origin isolated`);
   const url = `${first}/framed`;
   const loaded = await page.evaluate(loadPreviewFrame, url);

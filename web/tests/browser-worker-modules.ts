@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { writeFileSync } from "node:fs";
 import type { BrowserContext } from "playwright";
 import { workerReviewCases } from "../../tests/fixtures/worker-review/cases.ts";
@@ -132,7 +133,7 @@ async function checkWorkerBrowser(report: WorkerModuleReport, task: ReturnType<P
     observeModules(active, report);
     if (variant === "uncontrolled") await active.addInitScript(uncontrolledChildren);
     const page = await active.newPage();
-    await page.goto(`${url}?engine=browser&prompt=off`);
+    await navigateTestPage(page, `${url}?engine=browser&prompt=off`);
     assert.match(await helpers.ready(page), /ready/);
     await helpers.writeFile(page, "/home/user/worker-atomic.ts", atomic.code);
     let iteration = 0;

@@ -4,6 +4,7 @@ import { observeIphoneResponse } from "./iphone-server";
 import { createIphoneTransport } from "./iphone-transport";
 import type { Transport } from "./transport";
 import { object } from "./evidence";
+import { navigateTestPage } from "../../web/tests/navigate-test-page.ts";
 
 /** `document` holds the preview navigation itself; `resource` holds a load-blocking image after the observer attached. */
 export type Hold = "document" | "resource";
@@ -68,7 +69,7 @@ export async function withHeldPreview(engine: BrowserType, hold: Hold, timeoutMs
     const page = await browser.newPage();
     // Native iPhone Safari reports false here with the frame focused; it must never become a readiness predicate.
     await page.addInitScript(() => { Document.prototype.hasFocus = () => false; });
-    await page.goto(owner.url.href);
+    await navigateTestPage(page, owner.url.href);
     await page.waitForFunction(() => document.title.startsWith("Goals "));
     await page.locator("#editor").focus();
     const transport = await createIphoneTransport({ control: control.url.origin + bus.path, agent: "/unused/agent-device", deviceUDID: "load-test", timeoutMs,

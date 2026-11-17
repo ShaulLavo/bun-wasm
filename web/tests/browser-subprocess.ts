@@ -2,6 +2,7 @@ import { browserType } from "./browser-type.ts";
 // Fresh subprocess workers on the real browser worker bootstrap, across all wasm engines.
 // cd web && bun run build && bun tests/browser-subprocess.ts [chromium|firefox|webkit] [--api-only] [--engine=browser] [--repeat=20]
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { readFileSync } from "node:fs";
 import { session, ready, writeFile, run } from "./playground.mjs";
 import { checkWorkers } from "./browser-workers.ts";
@@ -172,10 +173,10 @@ try {
     const checkSubprocessCase = async () => {
     const browser = await s.launch(browserType(browserName));
     const page = await browser.newPage();
-    await page.goto(url);
+    await navigateTestPage(page, url);
     await ready(page);
     for (const engine of engines) {
-      await page.goto(`${url}?engine=${engine}&prompt=off`);
+      await navigateTestPage(page, `${url}?engine=${engine}&prompt=off`);
       await ready(page);
       await writeFile(page, "/home/user/cycle/a.js", 'import { b } from "./b.js"; export function a() { return "a"; } console.log(b());');
       await writeFile(page, "/home/user/cycle/b.js", 'import { a } from "./a.js"; export function b() { return a() + "b"; }');

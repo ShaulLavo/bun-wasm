@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { chromium, webkit, type BrowserType, type Page } from "playwright";
 import { assertPreviewDocumentPreserved } from "../sandbox/tests/storage-document";
 import { StorageLifetime, storageEvidence } from "./storage-browser-evidence";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 const lifetimes: StorageLifetime[] = [];
 afterEach(async () => {
@@ -24,7 +25,7 @@ async function fixture(engine: BrowserType): Promise<Page> {
   const context = await browser.newContext();
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
-  await page.goto(server.url.href);
+  await navigateTestPage(page, server.url.href);
   await page.frameLocator("#preview").getByRole("heading").waitFor();
   expect(lifetime.observation).toBeUndefined();
   return page;

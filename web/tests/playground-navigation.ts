@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Frame, Page, Request, Response, Route } from "playwright";
+import type { Frame, Page, Request, Response } from "playwright";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { ready } from "./playground.mjs";
 import { navigationParameter, readNavigationServerLog } from "../navigation-server-log.ts";
 
@@ -86,28 +87,6 @@ async function reportFailure(page: Page, url: string, error: unknown, requests: 
   await writeFile(join(directory, `${diagnostic.prefix}-${browser}-${process.pid}-${Date.now()}.json`), `${json}\n`);
 }
 
-// WebKit bug 325840: the playground's COOP response can overtake the old web process's load-start IPC, and
-// WebKit then cancels its own process-swapped navigation; Playwright misses that cancellation, so goto waits
-// on about:blank until its timeout. A one-use pass-through route makes Playwright intercept the document
-// request, which admits that IPC before the real request continues. Same workaround as Waffle's
-// tests/browser-navigation.ts. Remove when Playwright ships https://github.com/WebKit/WebKit/pull/75569.
-async function navigate(page: Page, target: string, waitUntil: WaitUntil): Promise<void> {
-  if (page.context().browser()?.browserType().name() !== "webkit") {
-    await page.goto(target, { waitUntil, timeout: 30_000 });
-    return;
-  }
-  const url = new URL(target);
-  url.hash = "";
-  const matches = (candidate: URL) => candidate.href === url.href;
-  const resume = (route: Route) => route.fallback();
-  await page.route(matches, resume, { times: 1 });
-  try {
-    await page.goto(target, { waitUntil, timeout: 30_000 });
-  } finally {
-    await page.unroute(matches, resume).catch(() => {});
-  }
-}
-
 export async function openPlaygroundPage(page: Page, target: string, options: { readyTimeout?: number; diagnostic?: Diagnostic; waitUntil?: WaitUntil } = {}): Promise<string> {
   if (process.env.BUN_WASM_NAVIGATION_LOG) {
     const correlated = new URL(target);
@@ -120,7 +99,7 @@ export async function openPlaygroundPage(page: Page, target: string, options: { 
   let stage: Stage = "navigation";
   // Runtime publication below decides readiness; unrelated resources need not finish loading.
   try {
-    await navigate(page, target, waitUntil);
+    await navigateTestPage(page, target, { waitUntil, timeout: 30_000 });
     stage = "runtime-publication";
     return await ready(page, options.readyTimeout);
   } catch (error) {

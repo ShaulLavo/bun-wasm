@@ -2,6 +2,7 @@
 // Browser host. No mock: Chromium instantiates the group core and side through Waffle's worker.
 // source env.sh && BUN_WASM_PROFILE_PROGRAM=<group>/bun.wasm bun web/tests/shared-wasm-memory-browser.ts chromium
 import { strict as assert } from "node:assert";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { sharedBrowserClocks, verifySpiderMonkeyStackWitness } from "../../scripts/spidermonkey-native-qualification";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
@@ -146,7 +147,7 @@ async function runEntry(name: string, port: number, entry: string): Promise<Entr
   const page = await browser!.newPage();
   const pageErrors: string[] = [];
   page.on("pageerror", error => pageErrors.push(error.message));
-  await page.goto(`http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}${oxcTree === undefined ? "" : "&oxc=1"}`);
+  await navigateTestPage(page, `http://127.0.0.1:${port}/?entry=${encodeURIComponent(entry)}${oxcTree === undefined ? "" : "&oxc=1"}`);
   const checkpoint = await blockedControl(page, entry);
   const value = await result(page, entry, checkpoint);
   const host = await pageHost(page, name);

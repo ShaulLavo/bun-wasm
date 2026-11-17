@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { createRegistry } from "../../tests/install/registry.mjs";
 import { playwright, ready, run, session, writeFile } from "./playground.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const task = session("bun-wasm-browser-install-");
 let registry;
@@ -30,7 +31,7 @@ async function checkBrowser(browserName, runtime, url) {
     return route.abort();
   });
   try {
-    await page.goto(`${url}?engine=${runtime}&prompt=off`);
+    await navigateTestPage(page, `${url}?engine=${runtime}&prompt=off`);
     assert.match(await ready(page), /ready/);
     await writeFile(page, "/home/user/package.json", '{"name":"browser-install-fixture"}\n');
     await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);

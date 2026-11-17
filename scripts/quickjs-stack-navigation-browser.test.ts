@@ -92,10 +92,13 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
     if (mode === "connection") await page.route("**/*", route => route.abort());
     if (mode === "sink") await page.close();
     if (mode === "publication") await page.route("**/*", route => serveFixture(route, held, false));
+    const routes = mode === "sink" ? [] : spyRoutes(page);
     let failure: unknown;
     try { await consumer.open(page, String(server.url)); }
     catch (error) { failure = error; }
     expect(failure).toBeInstanceOf(Error);
+    // The WebKit route is removed even when goto fails before it fires (timeout) or the request is aborted.
+    if (mode !== "sink") expect(routes).toEqual(engine.name() === "webkit" ? ["route", "unroute"] : []);
     expect(documents).toBe(1);
     expect(readFileSync(occupied, "utf8")).toBe("occupied");
     if (mode === "sink") {
@@ -140,9 +143,20 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
   }
 }
 
+/** Records route registrations and removals made after this call. */
+function spyRoutes(page: Page): string[] {
+  const route = page.route.bind(page);
+  const unroute = page.unroute.bind(page);
+  const calls: string[] = [];
+  page.route = async (...args: Parameters<Page["route"]>) => { calls.push(args[2]?.times === undefined ? "route" : `route times=${args[2].times}`); return route(...args); };
+  page.unroute = async (...args: Parameters<Page["unroute"]>) => { calls.push("unroute"); return unroute(...args); };
+  return calls;
+}
+
 // WebKit bug 325840 workaround: a cross-origin-isolated document from a real server is admitted through a
-// one-use pass-through route on WebKit only, and no route is left behind for the page's later requests.
-async function isolatedDocument(engine: BrowserType, consumer: Consumer): Promise<void> {
+// pass-through route on WebKit only, removed after the navigation. With a context route, the pass-through
+// must hand the document to it, and that handler's own continue() must still succeed.
+async function isolatedDocument(engine: BrowserType, consumer: Consumer, withContextRoute = false): Promise<void> {
   const isolation = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" };
   const body = `<span id="status">loading</span><script>globalThis.playground = {}; document.querySelector('#status').textContent = 'ready';</script>`;
   let documents = 0;
@@ -156,15 +170,20 @@ async function isolatedDocument(engine: BrowserType, consumer: Consumer): Promis
   });
   const browser = await engine.launch();
   try {
-    const page = await browser.newPage();
-    const route = page.route.bind(page);
-    const unroute = page.unroute.bind(page);
-    const calls: string[] = [];
-    page.route = async (...args: Parameters<Page["route"]>) => { calls.push(`route times=${args[2]?.times}`); return route(...args); };
-    page.unroute = async (...args: Parameters<Page["unroute"]>) => { calls.push("unroute"); return unroute(...args); };
+    const context = await browser.newContext();
+    const continued: string[] = [];
+    const rejected: string[] = [];
+    if (withContextRoute) await context.route("**/*", route => route.continue().then(
+      () => { continued.push(new URL(route.request().url()).pathname); },
+      (error: unknown) => { rejected.push(String(error)); },
+    ));
+    const page = await context.newPage();
+    const calls = spyRoutes(page);
     await consumer.open(page, String(server.url));
     expect(await page.textContent("#status")).toBe("ready");
-    expect(calls).toEqual(engine.name() === "webkit" ? ["route times=1", "unroute"] : []);
+    expect(calls).toEqual(engine.name() === "webkit" ? ["route", "unroute"] : []);
+    expect(rejected).toEqual([]);
+    expect(continued).toEqual(withContextRoute ? ["/"] : []);
     expect(documents).toBe(1);
     expect(page.url()).toBe(`${server.url}?engine=${consumer.name}&prompt=off&mode=memory`);
     expect(await page.evaluate(() => crossOriginIsolated)).toBe(true);
@@ -180,6 +199,7 @@ function registerControls(engine: BrowserType, consumer: Consumer) {
   test(`${label}: runtime publication failure retains document and held-resource stages`, () => navigationFailure(engine, consumer, "publication"), 30_000);
   test(`${label}: a navigation timeout records page and independent server state without retrying`, () => navigationFailure(engine, consumer, "timeout"), 30_000);
   test(`${label}: a cross-origin-isolated document opens without a lingering route`, () => isolatedDocument(engine, consumer), 30_000);
+  test(`${label}: a context route still continues the cross-origin-isolated document`, () => isolatedDocument(engine, consumer, true), 30_000);
   test(`${label}: a navigation failure records browser requests`, () => navigationFailure(engine, consumer, "connection"), 30_000);
   test(`${label}: a diagnostic write failure preserves the navigation error`, () => navigationFailure(engine, consumer, "sink"), 30_000);
 }

@@ -1,5 +1,6 @@
 // Artifact-free request regression for the demos' independent module/preview scopes.
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -34,7 +35,7 @@ async function exercise(prefix: string) {
   const scopes = () => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map(value => new URL(value.scope).pathname).sort());
   try {
     const start = requests.length;
-    await page.goto(`http://127.0.0.1:${port}${prefix}`);
+    await navigateTestPage(page, `http://127.0.0.1:${port}${prefix}`);
     assert.equal(await page.evaluate(() => Reflect.get(globalThis, "previewLoading").moduleReady), true);
     assert.deepEqual(await scopes(), [`${prefix}__bunwasm/`], "no eager preview registration");
     assert.deepEqual(requests.slice(start).filter(path => path.endsWith("/sw.js")), [`${prefix}sw.js`]);
