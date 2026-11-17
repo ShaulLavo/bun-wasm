@@ -672,7 +672,11 @@ fn admitted_import_cancellation_interrupts_only_its_member_before_stop_release()
     let stdio = Stdio::inherited();
     let mut wasi = wasmtime_wasi::WasiCtxBuilder::new();
     stdio.install(&mut wasi, cancel.clone());
-    let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
+    let processes = process::Processes::new(
+        runtime.clone().admit_root(cancel.clone()).unwrap(),
+        stdio,
+        net.notify(),
+    );
     let watches = crate::fs_watch::Watches::new(net.notify());
     let host = Host {
         nested: crate::nested::State::default(),

@@ -1,6 +1,6 @@
 # Process identity, issue 199
 
-Status: Approved task. The accepted Waffle contract is fixed; Bun ABI implementation awaits the parent's independent caller-plan review. PR 884 stays draft until real guest acceptance. Base is `bbf3165767cea786c920ca98c83dabda2588e36c`.
+Status: Approved implementation under `CONSUMER-EXECUTION.md`, after the parent applied the independent consumer review. Actual Waffle development source `f17c1e72d41fc6a732e4f01e9b9c6a7eae7f1dc3` has been inspected and supports the specified exports. It remains unreviewed development input. PR 884 stays draft until matching released families, real guest acceptance and independent code review. Base is `bbf3165767cea786c920ca98c83dabda2588e36c`.
 
 ## Contract and caller types
 
@@ -32,7 +32,7 @@ The process factory's existing isolated native mocks also need the new data-nati
 
 Retain native root E0. Before any child can reserve, explicitly consume P1 from the existing authoritative `Supervisor.next` allocator under its lock and publish root identity 1/0. Thus the first child or member gets E2; an ordinary child reports 2/1, a thread reports 1/0. This is an allocation, not `getpid + 1`. Keep current E0 sentinel behavior instead of changing unrelated ownership policy.
 
-Use private Rust `ExecutionId`, `LogicalPid`, `LogicalProcessIdentity { pid, parent_pid: Option<LogicalPid> }`, `ProcessKind` and non-cloneable `AdmittedProcess { execution_id, process_identity, kind }`. A defaulted typed enum field accepts omission as Process and rejects explicit null or malformed kinds. `Runtime::admit_root(cancel)` reserves once and inserts the authoritative root record/job under the supervisor lock. `admit_child(caller, kind)` checks the live actual caller and chooses the pair before the native child thread starts. Thread creation failure may burn an ID but must roll back unpublished admission/resources.
+Private Rust `ExecutionId`, `LogicalPid` and `ProcessIdentity` distinguish the two ID meanings. Typed process/thread membership carries the pair and kind together; non-cloneable `AdmittedProcess` owns that membership, runtime and cancellation binding. A defaulted typed enum field accepts omission as Process and rejects explicit null or malformed kinds. `Runtime::admit_root(cancel)` reserves once and inserts the authoritative root record under the supervisor lock. Child admission checks the live actual caller and chooses the pair before the native child thread starts. Thread creation failure may burn an ID but must roll back unpublished admission/resources.
 
 Store P/Q/kind in `Child` and carry `AdmittedProcess` separately from stdio into `run_instance`, `run_module_instance` and `Processes::new`, for ordinary and linked programs. Remove the ability of `Stdio.pid` alone to fabricate identity; use admission E for linked member selection. Existing optional `linked::Admission` is memory admission and remains separate. `Processes::new` neither allocates nor silently admits roots. Scalar getters read the stored pair under existing cancellation guards, with no leader lookup.
 

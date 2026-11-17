@@ -341,7 +341,11 @@ fn route_group_import_has_the_exact_signature_and_unsupported_boundary() {
     let stdio = Stdio::inherited();
     let mut wasi = wasmtime_wasi::WasiCtxBuilder::new();
     stdio.install(&mut wasi, cancel.clone());
-    let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
+    let processes = process::Processes::new(
+        runtime.clone().admit_root(cancel.clone()).unwrap(),
+        stdio,
+        net.notify(),
+    );
     let host = Host {
         nested: crate::nested::State::default(),
         wasi: wasi.build_p1(),
