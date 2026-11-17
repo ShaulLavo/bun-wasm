@@ -31,8 +31,9 @@ PAIRED_ENGINES = {"quickjs": "quickjs.wasm", "jsc": "jsc-engine.wasm"}
 SHELL_GUESTS = {"--shell": "bash-web-shell.wasm", "--env-utility": "bash-web-env.wasm"}
 # The upstream snapshot's directory in each lane, which is also its guest path. Not "bun": the
 # suite's harness replaces the working directory in printed paths, and "/bun" occurs inside
-# upstream paths such as test/js/bun/test.
-SNAPSHOT = "upstream"
+# upstream paths such as test/js/bun/test. The name also avoids the failure classifier's
+# keywords in scripts/bun-suite-report.py ("upstream" would match its "stream/").
+SNAPSHOT = "workdir"
 GUEST_TESTS = f"/{SNAPSHOT}/test/"
 # The Node host refuses shell guests without their build receipt beside them.
 SHELL_RECEIPT = "bash-web-guests.json"
@@ -251,7 +252,7 @@ def runs_as_script(opts, source, path):
 
 def command(opts, wasm, work, preloads, path):
     # One root preopen, as scripts/test.sh uses: the shell guest needs "/", and
-    # /upstream and /tmp still map to this lane's snapshot and scratch.
+    # /workdir and /tmp still map to this lane's snapshot and scratch.
     dirs = ["--dir", f"{work}::/"]
     env = {"PWD": f"/{SNAPSHOT}", "HOME": "/tmp", "TMPDIR": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin", "CI": "1", "AGENT": "0", "NO_COLOR": "1", "BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING": "1", "BUNWASM_TEST": "1"}
     flags = [part for key, value in env.items() for part in ["--env", f"{key}={value}"]]
