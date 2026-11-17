@@ -114,7 +114,7 @@
   "peerDependencies": {
     "waffle": "*",
     "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz",
-    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.140/waffle-relay-0.0.140.tgz"
+    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.141/waffle-relay-0.0.141.tgz"
   },
   "devDependencies": {
     "@builder.io/qwik": "1.17.2",
@@ -123,7 +123,7 @@
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.140/waffle-0.0.140.tgz",
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.141/waffle-0.0.141.tgz",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "miniflare": "5.20261012.0-beta",
