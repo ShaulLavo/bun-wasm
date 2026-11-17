@@ -110,3 +110,25 @@ describe("default limit", () => {
 test("peaks", () => {
   console.log(`peaks ${JSON.stringify(peaks)}`);
 });
+
+// Concurrent tests that never wait run one after another, each with its hooks.
+describe("immediate", () => {
+  beforeEach(() => {
+    console.log("immediate beforeEach");
+  });
+  afterEach(async () => {
+    console.log("immediate afterEach");
+  });
+  test.concurrent("immediate 1", () => {
+    console.log("immediate 1");
+  });
+  test.concurrent("immediate 2", async () => {
+    console.log("immediate 2");
+  });
+});
+
+test("modifier variants are the same function on every access", () => {
+  expect(test.concurrent).toBe(test.concurrent);
+  expect(test.failing).toBe(test.failing);
+  expect(describe.serial).toBe(describe.serial);
+});

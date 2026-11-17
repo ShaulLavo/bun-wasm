@@ -52,11 +52,14 @@ Received: 1
 (pass) default limit > limited 23
 (pass) default limit > limited 24
 (pass) peaks
+(pass) immediate > immediate 1
+(pass) immediate > immediate 2
+(pass) modifier variants are the same function on every access
 
 1 tests failed:
 (fail) attribution > a failing assertion fails its own test
 
- 38 pass
+ 41 pass
  1 fail
- 1 snapshots, 2 expect() calls
-Ran 39 tests across 1 file. [TIME]
+ 1 snapshots, 5 expect() calls
+Ran 42 tests across 1 file. [TIME]
