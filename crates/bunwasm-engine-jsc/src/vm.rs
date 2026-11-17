@@ -575,6 +575,11 @@ impl Engine for Jsc {
         "jsc"
     }
 
+    fn version(&self) -> (&'static str, &'static str) {
+        // Native Bun reports its JSC as the WebKit commit it builds; build.rs reads ours.
+        ("webkit", env!("BUN_WASM_WEBKIT_COMMIT"))
+    }
+
     fn undefined(&self) -> JsVal {
         JsVal::new(unsafe { JSValueMakeUndefined(ctx()) })
     }

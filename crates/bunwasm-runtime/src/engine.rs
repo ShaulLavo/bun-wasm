@@ -105,8 +105,11 @@ pub trait Engine: Sized + 'static {
 
     /// Create the engine. Module loading calls back into `host`.
     fn new(host: Rc<dyn ModuleHost<Self>>) -> Self;
-    /// Short engine name for `process.versions` ("quickjs", "jsc").
+    /// Short engine name the runtime's JS sees as `native.engine` ("quickjs", "jsc").
     fn name(&self) -> &'static str;
+    /// The `process.versions` entry naming this engine: key and version, such as
+    /// `("quickjs", "0.16.2")` or `("webkit", "<commit>")`, the key native Bun uses for JSC.
+    fn version(&self) -> (&'static str, &'static str);
 
     // --- values ---
     fn undefined(&self) -> Self::Value;
