@@ -6,6 +6,7 @@ import { observeIphoneResponse, observeIphoneOrigins } from "./iphone-server";
 import { LoopbackPreviewOrigins } from "../../web/preview-origin-host";
 import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
 import type { IphoneResponseObservation } from "./iphone-responses";
+import { runFixturePhases, type EnterPhase } from "./fixture-phases";
 
 function counterResponse(request: Request, encodings: { asset: string | null; navigations: (string | null)[] }): Response {
   const encoding = request.headers.get("accept-encoding");
@@ -177,7 +178,7 @@ setInterval(async () => { if (await (await fetch('/revision')).text() !== String
 </script></body></html>`, { headers: { "content-type": "text/html" } });
 }
 
-async function reloadAfterDelivery(bus: IphoneBus, read: string, reload: () => void): Promise<unknown> {
+async function reloadAfterDelivery(bus: IphoneBus, read: string, reload: () => void, enter: EnterPhase = () => {}): Promise<unknown> {
   const delivered = Promise.withResolvers<void>();
   const poll = bus.poll.bind(bus);
   const observedPoll = spyOn(bus, "poll").mockImplementation((...args) => {
@@ -186,10 +187,14 @@ async function reloadAfterDelivery(bus: IphoneBus, read: string, reload: () => v
     return value;
   });
   try {
+    enter("read-delivery");
     const pending = bus.execute("preview", read, 3000, true, Date.now() + 3000);
     await Promise.race([delivered.promise, pending.then(() => { throw new Error("Preview observation settled before delivery"); })]);
+    enter("document-reload");
     reload();
-    return await pending;
+    const value = await pending;
+    enter("read-settled");
+    return value;
   } finally {
     observedPoll.mockRestore();
     bus.cancel("preview");
@@ -209,28 +214,40 @@ async function previewReload(engine: BrowserType): Promise<void> {
   const revision = { value: 1 };
   const read = "new Promise(resolve => { const text = document.querySelector('h1').textContent; if (text === 'revision 2') resolve(text); })";
   let browser: Browser | undefined;
-  try {
+  await runFixturePhases(`preview reload ${engine.name()}`, async enter => {
+    enter("launch");
     browser = await engine.launch({ headless: true });
+    enter("bind-preview-origin");
     const binding = await origins.bind({}, 5173, { fetch: request => reloadingHtml(request, revision), upgrade: (_request, socket) => { socket.destroy(); }, close() {} });
     bus.configure("host", owner.url.href);
+    enter("new-page");
     const page = await browser.newPage();
+    enter("owner-goto");
     await page.goto(owner.url.href);
+    enter("owner-ready");
     await waitReady(bus, "host");
     bus.configure("preview", binding.origin + "/");
+    enter("present-preview");
     await bus.execute("host", `(${presentIphonePreview.toString()})(${JSON.stringify(binding.origin + "/")})`, 3000, false, Date.now() + 3000);
+    enter("preview-ready");
     await waitReady(bus, "preview");
     const before = bus.state("preview");
     if (!before?.timeOrigin) throw new Error("Missing initial preview identity");
-    expect(await reloadAfterDelivery(bus, read, () => { revision.value = 2; })).toBe("revision 2");
+    expect(await reloadAfterDelivery(bus, read, () => { revision.value = 2; }, enter)).toBe("revision 2");
     expect(bus.state("preview")?.nonce).not.toBe(before.nonce);
     expect(bus.state("preview")?.timeOrigin).not.toBe(before.timeOrigin);
-  } finally {
-    await browser?.close(); bus.close(); restore(); await origins.close(); await owner.stop(true); await control.stop(true);
-  }
+  }, async enter => {
+    enter("browser-close");
+    try { await browser?.close(); } finally {
+      enter("server-close");
+      bus.close(); restore(); await origins.close(); await owner.stop(true); await control.stop(true);
+    }
+  });
 }
 
 for (const engine of [chromium, webkit]) {
-  test(`read-only preview observation follows a real automatic document reload in ${engine.name()}`, () => previewReload(engine), 15000);
+  // Generous hang cap only; the phase log names the native step that was still pending.
+  test(`read-only preview observation follows a real automatic document reload in ${engine.name()}`, () => previewReload(engine), 120_000);
 }
 
 function attachedPreview() {

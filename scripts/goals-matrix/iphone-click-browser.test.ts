@@ -1,38 +1,60 @@
 import { expect, test } from "bun:test";
-import { chromium, webkit, type BrowserType } from "playwright";
+import { chromium, webkit, type Browser, type BrowserType } from "playwright";
+import { runFixturePhases } from "./fixture-phases";
 import { armIphoneClick } from "./iphone-browser";
 import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates } from "./iphone-click";
 
 async function clickControl(engine: BrowserType): Promise<void> {
-  const browser = await engine.launch({ headless: true });
   const rows: Record<string, unknown>[] = [];
+  const passedRow = Promise.withResolvers<void>();
   const lifetime = new AbortController();
-  const trace = new IphoneClickTrace(async text => { rows.push(JSON.parse(text)); }, 5000, lifetime.signal);
-  try {
+  const trace = new IphoneClickTrace(async text => {
+    const row = JSON.parse(text) as Record<string, unknown>;
+    rows.push(row);
+    if (row.stage === "passed") passedRow.resolve();
+  }, 5000, lifetime.signal);
+  let browser: Browser | undefined;
+  await runFixturePhases(`click ${engine.name()}`, async enter => {
+    enter("launch");
+    browser = await engine.launch({ headless: true });
+    enter("new-page");
     const page = await browser.newPage();
+    enter("set-content");
     await page.setContent('<button onclick="document.querySelector(\'output\').textContent=\'1\'">Increment</button><output>0</output>');
+    enter("arm");
     await page.evaluate(() => { globalThis.__goalsIphoneDocument = { nonce: "task", timeOrigin: performance.timeOrigin, url: location.href }; });
     const before = await page.evaluate<ReturnType<typeof armIphoneClick>>(`(${armIphoneClick.toString()})("button","output")`);
     if (!before.ready) throw new Error("Fixture counter did not hydrate");
     trace.armed(before, "1");
+    enter("trusted-click");
     await page.getByRole("button", { name: "Increment" }).click();
     trace.observing();
+    enter("observe-click");
     const after = await page.evaluate<Record<string, unknown>>(iphoneClickExpression("button", "output"));
     const predicates = iphoneClickPredicates(before, after, "1");
     trace.observed(predicates);
     expect(Object.values(predicates).every(Boolean)).toBe(true);
     expect(after.trusted).toBe(true);
     // A same-document target replacement must still reject the old armed action.
+    enter("replace-target");
     await page.evaluate(() => { const button = document.querySelector("button")!; button.replaceWith(button.cloneNode(true)); });
     const replaced = await page.evaluate<Record<string, unknown>>(iphoneClickExpression("button", "output"));
     expect(iphoneClickPredicates(before, replaced, "1")).toEqual({ ...predicates, sameTarget: false });
+    enter("trace-delivery");
     trace.finish("passed");
-    await Bun.sleep(5);
+    // Evidence rows are saved asynchronously; wait for the passed row itself rather than a fixed delay.
+    await passedRow.promise;
     expect(rows).toContainEqual(expect.objectContaining({ stage: "observed", predicates }));
     expect(rows.at(-1)?.stage).toBe("passed");
-  } finally { trace.finish("failed"); lifetime.abort(); await browser.close(); }
+  }, async enter => {
+    trace.finish("failed");
+    lifetime.abort();
+    enter("browser-close");
+    await browser?.close();
+  });
 }
 
 for (const engine of [chromium, webkit]) {
-  test(`real trusted input and same-document target rejection retain click evidence in ${engine.name()}`, () => clickControl(engine), 15000);
+  // Generous hang cap only; the phase log names the native step that was still pending.
+  test(`real trusted input and same-document target rejection retain click evidence in ${engine.name()}`, () => clickControl(engine), 120_000);
 }
