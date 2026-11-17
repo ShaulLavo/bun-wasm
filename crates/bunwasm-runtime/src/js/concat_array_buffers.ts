@@ -3,6 +3,7 @@
 
   const { toUint8 } = internal;
   const Bytes = Uint8Array;
+  const isArray = Array.isArray;
   const typedArrayPrototype = Object.getPrototypeOf(Bytes.prototype);
   const byteLength = accessor("byteLength");
   const buffer = accessor("buffer");
@@ -35,8 +36,11 @@
     }
   }
 
-  return function concatArrayBuffers(buffers: readonly unknown[], maximum?: unknown, asUint8Array?: unknown): ArrayBuffer | Uint8Array<ArrayBuffer> {
+  return function concatArrayBuffers(buffers: readonly unknown[] | null | undefined, maximum?: unknown, asUint8Array?: unknown): ArrayBuffer | Uint8Array<ArrayBuffer> {
     const limit = maximumLength(maximum);
+    // Native Bun returns an empty ArrayBuffer for a missing list, even with asUint8Array.
+    if (buffers == null) return new ArrayBuffer(0);
+    if (!isArray(buffers)) throw new TypeError("Argument must be an array");
     // Read each element once by index, as native Bun does: no species, no user iterator.
     const count = buffers.length;
     const chunks = new Array<Uint8Array>(count);

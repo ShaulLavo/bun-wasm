@@ -62,6 +62,18 @@ export function boundaryChecks(factory: typeof Buffer, validators: Validators, c
       assert.deepEqual(Array.from(concat(chunks, 16, true)), [1, 2, 3]);
       assert.deepEqual(calls, { species: 0, iterator: 0 });
     } },
+    { name: "Bun concat accepts only arrays and treats a missing list as empty", run() {
+      const loose = concat as (buffers: unknown, maxLength?: number, asUint8Array?: boolean) => ArrayBuffer | Uint8Array;
+      for (const input of [{ length: 1, 0: new Uint8Array([1]) }, "ab", 1, new Uint8Array([1])]) {
+        assert.throws(() => loose(input), { name: "TypeError", message: "Argument must be an array" });
+      }
+      for (const input of [null, undefined]) {
+        const empty = loose(input, 16, true);
+        assert.equal(Object.prototype.toString.call(empty), "[object ArrayBuffer]");
+        assert.equal(empty.byteLength, 0);
+      }
+      assert.throws(() => loose("ab", NaN), { name: "RangeError" });
+    } },
     { name: "Bun concat preserves errors from input getters", run() {
       const failure = new RangeError("input getter");
       const chunks = [factory.from([1])];

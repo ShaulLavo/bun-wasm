@@ -11,7 +11,10 @@ boundary previously embedded in `bun.js`. Comparison sources are Bun
 (`38afee6c84fcf48c0edb2466aa4b27d287a59c30`). No upstream implementation is
 copied.
 
-The adapter reads each input element once, by index, into a plain array, as
+After validating the maximum, the adapter returns an empty ArrayBuffer for a
+`null` or `undefined` list, and throws `TypeError: Argument must be an array` for
+any other non-array, including array-likes and typed arrays, as native Bun
+1.4.4 does. It then reads each input element once, by index, into a plain array, as
 native Bun's `forEachInArrayLike` does. An Array subclass's species constructor
 and iterator are never called, so all input getters run before it measures the
 resulting byte views.
