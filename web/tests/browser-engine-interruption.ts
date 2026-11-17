@@ -5,7 +5,7 @@ import { selectInterruptionEngines, interruptionInputs, type InterruptionEngine 
 // Safari is actual desktop Safari via its existing WebDriver permission, not Playwright WebKit.
 // The same page/worker harness runs on the Mac fleet host; do not enable automation settings here.
 import assert from "node:assert/strict";
-import { assertEngineInterruptionResult } from "./engine-interruption-result";
+import { assertEngineInterruptionResult, busyPhaseUrl, mergePhaseResults } from "./engine-interruption-result";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { tmpdir, availableParallelism, loadavg } from "node:os";
@@ -345,8 +345,14 @@ async function main(): Promise<boolean> {
           session = opened.sessionId; report.version = opened.capabilities.browserVersion;
           assertRunning();
           await webdriver(`/session/${session}/timeouts`, "POST", { script: benchmark ? 530_000 : functionalDriverTimeoutMs, pageLoad: 30_000, implicit: 0 });
-          await webdriver(`/session/${session}/url`, "POST", { url });
-          result = await safariScript(`const end=Date.now()+${benchmark ? 525_000 : functionalPageTimeoutMs}; while(!globalThis.engineInterruptionResult){if(Date.now()>end)throw Error('engine interruption page timed out');await new Promise(r=>setTimeout(r,25));} return globalThis.engineInterruptionResult;`);
+          const runSafariPage = async (target: string) => {
+            await webdriver(`/session/${session}/url`, "POST", { url: target });
+            return safariScript(`const end=Date.now()+${benchmark ? 525_000 : functionalPageTimeoutMs}; while(!globalThis.engineInterruptionResult){if(Date.now()>end)throw Error('engine interruption page timed out');await new Promise(r=>setTimeout(r,25));} return globalThis.engineInterruptionResult;`);
+          };
+          // Navigating away ends the main page before the busy-guest stops load.
+          const main = await runSafariPage(url);
+          assertRunning();
+          result = mergePhaseResults(main, await runSafariPage(busyPhaseUrl(url)));
 
           return String(opened.capabilities.browserVersion);
           };
@@ -358,12 +364,22 @@ async function main(): Promise<boolean> {
             downloadsPath: join(scratch!, "downloads"), tracesDir: join(scratch!, "traces") });
           browser = await launching;
           assertRunning(); version = browser.version(); report.version = version;
-          const page = await browser.newPage();
           const pageErrors: string[] = []; report.pageErrors = pageErrors;
-          page.on("pageerror", error => pageErrors.push(error.message));
-          await page.goto(url);
-          await page.waitForFunction(() => (globalThis as any).engineInterruptionResult, undefined, { timeout: benchmark ? 530_000 : functionalPageTimeoutMs });
-          result = await page.evaluate(() => (globalThis as any).engineInterruptionResult);
+          // Each phase gets its own context, closed before the next starts, so no worker of
+          // the main matrix shares a page with the busy-guest stops.
+          const runPage = async (target: string) => {
+            const context = await browser!.newContext();
+            try {
+              const page = await context.newPage();
+              page.on("pageerror", error => pageErrors.push(error.message));
+              await page.goto(target);
+              await page.waitForFunction(() => (globalThis as any).engineInterruptionResult, undefined, { timeout: benchmark ? 530_000 : functionalPageTimeoutMs });
+              return await page.evaluate(() => (globalThis as any).engineInterruptionResult);
+            } finally { await context.close(); }
+          };
+          const main = await runPage(url);
+          assertRunning();
+          result = mergePhaseResults(main, await runPage(busyPhaseUrl(url)));
           result.pageErrors = pageErrors;
         }
         return { version, ...result };
