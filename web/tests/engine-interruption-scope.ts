@@ -13,7 +13,7 @@ import type { Engine } from "../src/bun-executor";
 
 // The case families retain their names/counters; both now use the generic transport.
 export type EngineInterruptionRoute = "legacy" | "runtimeProcess";
-export type EngineSignal = 2 | 10 | 15;
+export type EngineSignal = 2 | 9 | 10 | 15;
 export type EngineSignalDelivery = "host" | "page-kill" | "page-killJob";
 export interface EngineInterruptionChild {
   pid: number;

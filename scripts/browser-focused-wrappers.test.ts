@@ -3,7 +3,7 @@ import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { assertEngineInterruptionResult } from "../web/tests/engine-interruption-result";
-import { selectInterruptionEngines, interruptionInputs, interruptionProofs } from "../web/tests/engine-interruption-cases";
+import { selectInterruptionEngines, interruptionInputs, interruptionProofs, stopProofName } from "../web/tests/engine-interruption-cases";
 import { assertWorkerModuleReport, runWorkerModuleVariants, workerModuleReport } from "../web/tests/browser-worker-modules";
 import { runStdinCases, stdinCaseNames, stdinCaseRecords } from "../web/tests/playground-stdin";
 import { assertStdinReport, stdinBrowser } from "../web/tests/browser-playground-stdin";
@@ -34,26 +34,29 @@ function stdinFailureActions(events: string[]) {
 function stdinCleanup(events: string[], unsafe: boolean) {
   return async () => { events.push("idle"); if (unsafe) throw new Error("foreground alive"); };
 }
-test("interruption engine subsets retain Browser and Preview1, with the default 32 checks and 96 full proofs", () => {
-  expect(green().checks).toHaveLength(32);
-  expect(3 * green().checks.length).toBe(96);
-  for (const engine of ["quickjs", "jsc"]) {
+test("interruption engine subsets retain Browser and Preview1, with the default 35 checks and 105 full proofs", () => {
+  expect(green().checks).toHaveLength(35);
+  expect(3 * green().checks.length).toBe(105);
+  expect(green(selectInterruptionEngines("quickjs,jsc,spidermonkey")).checks).toHaveLength(50);
+  for (const engine of ["quickjs", "jsc", "spidermonkey"]) {
     const selected = selectInterruptionEngines(engine);
-    expect(green(selected).checks).toHaveLength(18);
+    expect(green(selected).checks).toHaveLength(20);
     expect(() => assertEngineInterruptionResult(green(selected), false, selected)).not.toThrow();
     expect(() => assertEngineInterruptionResult(green(selected), false)).toThrow();
     const names = green(selected).checks.map(check => check.name);
     expect(names).toContain("runtimeProcess-page-sleepSync-default-SIGUSR1-unwinds");
     expect(names).toContain("runtimeProcess-page-sleepSync-SIGUSR1-deferred-handler");
-    expect(green(selected).checks.filter(check => check.engine === "browser")).toHaveLength(4);
+    expect(green(selected).checks.filter(check => check.name === stopProofName).map(check => check.engine)).toEqual([engine, "browser"]);
+    expect(green(selected).checks.filter(check => check.engine === "browser")).toHaveLength(5);
   }
-  for (const value of ["", "browser", "jsc,quickjs", "quickjs,quickjs", "quickjs,unknown"]) expect(() => selectInterruptionEngines(value)).toThrow();
+  for (const value of ["", "browser", "jsc,quickjs", "spidermonkey,quickjs", "quickjs,quickjs", "quickjs,unknown"]) expect(() => selectInterruptionEngines(value)).toThrow();
   const renamed = green(); renamed.checks[0]!.name = "invented-proof";
   expect(() => assertEngineInterruptionResult(renamed, false)).toThrow("named proofs");
 });
 test("interruption artifact inputs require each selected pair and unchanged Browser controls", () => {
   expect(interruptionInputs(["quickjs"])).toEqual(["bun-browser.wasm", "bun.wasm", "quickjs.wasm"]);
   expect(interruptionInputs(["jsc"])).toEqual(["bun-browser.wasm", "bun-jsc.wasm", "jsc-engine.wasm"]);
+  expect(interruptionInputs(["spidermonkey"])).toEqual(["bun-browser.wasm", "bun-spidermonkey.wasm", "spidermonkey-engine.wasm"]);
   expect(interruptionInputs(selectInterruptionEngines())).toHaveLength(5);
 });
 test("missing explicitly selected side fails before browser launch or bundle build", () => {

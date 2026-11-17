@@ -12,11 +12,11 @@ import { startRun, type Run } from "../src/runner";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 import { assertCausalIdleWake, assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 import { measureInterruptionOverhead } from "./engine-interruption-benchmark";
-import { defaultSignalGuest, handledSignalGuest, idleSignalGuest } from "./engine-interruption-guests";
+import { defaultSignalGuest, handledSignalGuest, heartbeatBusyGuest, idleSignalGuest, stopHeartbeatChannel } from "./engine-interruption-guests";
 import { assertFatalSleepSync, assertHandledSleepSync, sleepSyncSignalGuest } from "./engine-interruption-sleep";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignal, type EngineSignalDelivery } from "./engine-interruption-scope";
-import { FunctionalCases, selectInterruptionEngines, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
+import { FunctionalCases, selectInterruptionEngines, interruptionCore, stopProofName, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
 import { CooperativeWorkerStop } from "./engine-interruption-stop";
 
 interface CaseResources {
@@ -300,6 +300,75 @@ async function testDefault(module: WebAssembly.Module, engine: Engine, signal: 2
   } catch (error) {
     throw engineInterruptionFailure(`${engine}/${route} ${nestedHandler ? "nested-handler " : ""}default signal ${signal} proof failed`, error, diagnostics);
   } finally { await owned.dispose(); }
+}
+/** Resolves once `read()` has kept one value for `quietMs`; a still-changing value times out. */
+async function settled(read: () => number, label: string, quietMs = 250): Promise<{ value: number; settledMs: number }> {
+  const started = performance.now();
+  let last = read(), since = started;
+  await until(() => {
+    const value = read();
+    if (value !== last) { last = value; since = performance.now(); }
+    return performance.now() - since >= quietMs;
+  }, label);
+  return { value: last, settledMs: since - started };
+}
+function heartbeatReceiver(): { read: () => Int32Array | undefined; close: () => void } {
+  const channel = new BroadcastChannel(stopHeartbeatChannel);
+  let beat: Int32Array | undefined;
+  channel.onmessage = event => { if (event.data instanceof SharedArrayBuffer) beat = new Int32Array(event.data); };
+  return { read: () => beat, close: () => channel.close() };
+}
+// Paired engines: the browser may never stop a worker spinning in Wasm (iOS Safari kept such a
+// worker running for minutes after terminate()), so native terminate stays disabled and only
+// the engine's own runtime_proc.signal(0, 4) checkpoint may stop the guest.
+async function assertPairedStop(worker: ObservedWorker, engine: Engine, started: number): Promise<object> {
+  await until(() => controlLoad(worker.probe, probeCell.runReturned) === 1,
+    () => `${engine} _start unwind after SIGKILL; evidence=${JSON.stringify(snapshotProbe(worker.probe))}`);
+  const unwoundMs = performance.now() - started;
+  const evidence = snapshotProbe(worker.probe);
+  assertFatalEngineCompletion(evidence, 9);
+  equal(evidence.startEntered, 1, "real _start called once"); equal(evidence.startLeft, 1, "real _start unwound");
+  equal(evidence.catchWrites, 0, "catch cannot run after SIGKILL");
+  equal(evidence.finallyWrites, 0, "finally cannot run after SIGKILL");
+  equal(evidence.afterWrites, 0, "code after the loop cannot run after SIGKILL");
+  truth(activeWorkers.has(worker), "the engine stopped while native terminate remained disabled");
+  const quiet = await settled(() => controlLoad(worker.probe, probeCell.checkpoints), "no engine checkpoint runs after the unwind");
+  equal(quiet.value, evidence.checkpoints, "no engine checkpoint ran after _start unwound");
+  return { unwoundMs, evidence };
+}
+// Browser engine: guest JavaScript is the browser's own, so Worker.terminate() is the stop and
+// the shared heartbeat shows whether the loop really ended.
+async function assertBrowserStop(worker: ObservedWorker, beat: Int32Array, started: number): Promise<object> {
+  await until(() => !activeWorkers.has(worker), "Waffle called native Worker.terminate()");
+  truth(controlLoad(worker.probe, probeCell.terminateRequests) > 0, "terminate request observed");
+  const terminatedMs = performance.now() - started;
+  const quiet = await settled(() => controlLoad(beat, 0), "Browser-engine guest heartbeat stopped after Worker.terminate()");
+  return { terminatedMs, heartbeatSettledMs: quiet.settledMs, heartbeats: quiet.value };
+}
+/** Waffle's own stop for a busy guest: a page SIGKILL publishes the signaled outcome, then the
+ * broker calls Worker.terminate(). The guest must stop running, and its exit must be observed. */
+async function testKillStop(module: WebAssembly.Module, engine: Engine): Promise<void> {
+  const owned = await scope(module, engine, "runtimeProcess");
+  const heartbeat = heartbeatReceiver();
+  let diagnostics: () => unknown = () => ({ phase: "before guest spawn" });
+  try {
+    const child = owned.spawn(engine === "browser" ? heartbeatBusyGuest() : defaultSignalGuest());
+    diagnostics = () => ({ stdout: child.stdout, stderr: child.stderr, status: owned.wait(child),
+      heartbeat: heartbeat.read()?.[0], evidence: guestWorkers.has(child.pid) ? snapshotProbe(guestWorkers.get(child.pid)!.probe) : null });
+    const worker = await owned.ready(child);
+    if (engine === "browser") await until(() => (heartbeat.read()?.[0] ?? 0) > 0, "Browser-engine guest heartbeat is running");
+    else await new Promise<void>(resolve => setTimeout(resolve, 20));
+    if (engine !== "browser") equal(controlLoad(worker.probe, probeCell.startLeft), 0, "guest is still executing before the stop");
+    const started = performance.now();
+    equal(await owned.kill(child, 9), 0, "SIGKILL accepted");
+    await owned.exit(child, 137);
+    const result = await owned.outcome(child);
+    equal(result.kind, "signaled", "typed signal outcome"); equal(result.code, 9, "SIGKILL outcome");
+    const stop = engine === "browser" ? await assertBrowserStop(worker, heartbeat.read()!, started) : await assertPairedStop(worker, engine, started);
+    checks.push({ engine, route: "runtimeProcess", delivery: "page-kill", name: stopProofName, evidence: stop, elapsedMs: performance.now() - started });
+  } catch (error) {
+    throw engineInterruptionFailure(`${engine} SIGKILL stop of a busy guest failed`, error, diagnostics);
+  } finally { heartbeat.close(); await owned.dispose(); }
 }
 async function testNativeInterrupt(module: WebAssembly.Module, engine: Engine): Promise<void> {
   const owned = await scope(module, engine);
@@ -612,7 +681,7 @@ async function loadCandidate(engine: Engine, name: string, prefix = "/") {
   const artifacts = [{ engine, name, sha256: hash, bytes: bytes.byteLength }];
   const candidate = await WebAssembly.compile(bytes);
   const kind = programKind(candidate);
-  const expected = engine === "quickjs" || engine === "jsc" ? engine : "single";
+  const expected = engine === "browser" ? "single" : engine;
   truth(kind === expected, `${engine} core declaration mismatch`);
   if (kind === "single") { recordProgramMemory(candidate, bytes); return { module: candidate, hash, artifacts }; }
   const sideName = programProfile(kind).side;
@@ -632,7 +701,7 @@ void (async () => {
     const runEngineMatrix = async () => {
       truth(crossOriginIsolated, "engine interruption requires cross-origin isolation");
     const selected = selectInterruptionEngines(new URLSearchParams(location.search).get("engines") ?? undefined);
-    const candidates: { engine: Engine; name: string }[] = selected.map(engine => ({ engine, name: engine === "quickjs" ? "bun.wasm" : "bun-jsc.wasm" }));
+    const candidates: { engine: Engine; name: string }[] = selected.map(engine => ({ engine, name: interruptionCore(engine) }));
     for (const { engine, name } of candidates.concat([{ engine: "browser", name: "bun-browser.wasm" }])) {
       let module: WebAssembly.Module | undefined, hash = "";
       await runCase({ engine, route: "artifact", name: "load-candidate" }, async () => {
@@ -653,6 +722,7 @@ void (async () => {
         } finally { await boot.dispose(); }
       });
       for (const signal of [2, 15] as const) await runCase({ engine, route: "legacy", name: `default-${signal}` }, () => testDefault(loaded, engine, signal));
+      await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-busy-stop" }, () => testKillStop(loaded, engine));
       if (engine !== "browser") {
         await runCase({ engine, route: "legacy", name: "native-true-return" }, () => testNativeInterrupt(loaded, engine));
         await runCase({ engine, route: "legacy", name: "handled-SIGINT" }, () => testHandled(loaded, engine));

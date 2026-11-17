@@ -12,7 +12,7 @@ export function assertEngineInterruptionResult(result: Record<string, any>, benc
   const expected = interruptionProofs(engines);
   const identity = (check: { engine: string; route: string; name: string }) => JSON.stringify([check.engine, check.route, check.name]);
   assert.equal(result.checks.length, expected.length, "all selected paired and Browser/Preview1 proofs");
-  assert.equal(result.checks.filter((check: { route: string }) => check.route === "runtimeProcess").length, 7 * engines.length, "selected new-route proofs");
+  assert.equal(result.checks.filter((check: { route: string }) => check.route === "runtimeProcess").length, 8 * engines.length + 1, "selected new-route proofs");
   assert.deepEqual(result.checks.map(identity).sort(), expected.map(identity).sort(), "exact selected named proofs");
   assert.equal(new Set(result.checks.map(identity)).size, expected.length, "all named proofs are distinct");
   assert.equal(result.cleanup.activeWorkers, 0, "worker cleanup");

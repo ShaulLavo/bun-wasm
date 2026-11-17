@@ -58,6 +58,20 @@ event or altering the guest evidence. Signal delivery, synchronous sleep, guest
 assertions and the terminal FIFO barrier are unchanged. This adapter is original
 test infrastructure, with no upstream source or revision.
 
+The original `runtimeProcess-page-SIGKILL-stops-busy-guest` proof stops a guest
+spinning in `while (true) {}` the way Waffle stops any process: a page `kill(pid, 9)`
+publishes the signaled outcome, then the broker calls `Worker.terminate()`. Real iOS
+Safari does not stop a worker running Wasm on `terminate()` (a terminated busy group
+member kept running for at least 60 seconds), so for QuickJS, JSC and SpiderMonkey the
+proof keeps native terminate disabled: the engine's own mode 4 checkpoint must unwind
+`_start` with the typed SIGKILL, run no catch, finally or later code, and make no
+further checkpoint calls afterwards, and the page must observe exit status 137. The
+Browser engine's guest JavaScript is the browser's own, so its terminate is real; the
+guest publishes a `SharedArrayBuffer` heartbeat over a `BroadcastChannel` and the proof
+requires the heartbeat to stop after `terminate()`. Returning a stopped member's group
+pages depends on Waffle's per-incarnation exit lock, which is not in the pinned Waffle
+release yet; this proof covers the stop and the exit, not page reuse.
+
 
 ## Classification
 
@@ -70,7 +84,10 @@ test infrastructure, with no upstream source or revision.
 
 The original browser harness now accepts an explicit QuickJS/JSC subset through
 its driver option, page query and controller. Its local default remains both
-pairs, with 32 named checks per browser and 96 checks over the three browsers.
+pairs, with 35 named checks per browser and 105 checks over the three browsers.
+SpiderMonkey joins only when selected explicitly (`--engines=quickjs,jsc,spidermonkey`
+with a staged `bun-spidermonkey.wasm` and `spidermonkey-engine.wasm`), because the CI
+interruption job builds no SpiderMonkey pair; it then runs the same paired-engine cases.
 Every subset retains the two Browser fatal checks and both Preview1 clock
 controls. Artifact preflight requires the selected pairs and Browser core;
 result admission checks the exact selected names and routes, including both

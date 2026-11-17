@@ -11,6 +11,18 @@ export function defaultSignalGuest(): string {
   return `const fs=require('node:fs'); ${protectedLoop("ready")}`;
 }
 
+export const stopHeartbeatChannel = "bun-wasm-engine-interruption-heartbeat";
+
+// Browser-engine guest JavaScript runs natively in the worker, so it can publish a shared
+// heartbeat without any host call: the page sees whether the loop is still running after
+// Worker.terminate(). One message hands over the buffer; the loop itself is pure Atomics.
+export function heartbeatBusyGuest(): string {
+  return `const fs=require('node:fs');
+    const beat=new Int32Array(new SharedArrayBuffer(4));
+    const channel=new BroadcastChannel('${stopHeartbeatChannel}'); channel.postMessage(beat.buffer);
+    try { fs.writeSync(2,'ready\\n'); for (;;) Atomics.add(beat,0,1); } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
+}
+
 export function handledSignalGuest(nested = false, cpuMs = 1_000): string {
   return `const fs=require('node:fs');
     let count=0,loopFinished=false,turns=0;
