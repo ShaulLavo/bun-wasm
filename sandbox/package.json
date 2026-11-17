@@ -20,8 +20,8 @@
     "@xterm/xterm": "^6.0.0",
     "bash-web": "https://github.com/ShaulLavo/bash-web/releases/download/bash-web-v0.0.112/bash-web-0.0.112.tgz",
     "codemirror": "^6.0.2",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.138/waffle-0.0.138.tgz",
-    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-base-0.0.16.tgz"
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.140/waffle-0.0.140.tgz",
+    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
