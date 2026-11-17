@@ -966,7 +966,7 @@
       if (strict && (left === emptyArrayIndex || right === emptyArrayIndex)) return false;
       if (!bunEq(left === emptyArrayIndex ? undefined : left, right === emptyArrayIndex ? undefined : right, strict, memo)) return false;
     }
-    return true;
+    return bunArraySymbols(a, b, strict, memo);
   }
 
   function bunCompareErrors(a: Error, b: unknown, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
@@ -1649,7 +1649,40 @@
       if (isPromise(result)) return expectSettle(result, pass => pass && expectArrays(a, b, strict, context, i + 1));
       if (!result) return false;
     }
+    return expectArraySymbols(a, b, strict, context);
+  }
+
+  // After the elements, Bun's deepEquals compares the first array's enumerable own symbol keys,
+  // not its other string keys. Strict comparison needs the same number on both sides; loose
+  // comparison lets an undefined value stand for a missing key. Null means unequal.
+  function arraySymbols(a: object, b: object, strict: boolean): symbol[] | null {
+    const symbols = enumerableSymbols(a);
+    if (strict && symbols.length !== enumerableSymbols(b).length) return null;
+    return symbols;
+  }
+
+  function bunArraySymbols(a: unknown[], b: unknown[], strict: boolean, memo: BunWasm.EqualityMemo): boolean {
+    const symbols = arraySymbols(a, b, strict);
+    if (!symbols) return false;
+    for (const key of symbols) {
+      const left = Reflect.get(a, key);
+      if (!(key in b)) {
+        if (!strict && left === undefined) continue;
+        return false;
+      }
+      if (!bunEq(left, Reflect.get(b, key), strict, memo)) return false;
+    }
     return true;
+  }
+
+  function expectArraySymbols(a: unknown[], b: unknown[], strict: boolean, context: BunWasm.ExpectComparison): BunWasm.EqualityResult {
+    const symbols = arraySymbols(a, b, strict);
+    if (!symbols) return false;
+    return expectEvery(symbols, key => {
+      const left = Reflect.get(a, key);
+      if (!(key in b)) return !strict && left === undefined;
+      return expectEq(left, Reflect.get(b, key), strict, context);
+    });
   }
 
   function expectSets(a: Set<unknown>, b: Set<unknown>, strict: boolean, context: BunWasm.ExpectComparison): BunWasm.EqualityResult {

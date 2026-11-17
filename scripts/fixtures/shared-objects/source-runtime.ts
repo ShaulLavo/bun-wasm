@@ -60,6 +60,8 @@ function sourceWeb() {
       if (name === "text_decoder") return TextDecoder;
       if (name === "web_brand") return factory(name);
       if (name === "url_search_params") return factory(name)(internal);
+      if (name === "url_pairs" || name === "url_errors") return factory(name)();
+      if (name === "object_urls") return factory(name)({ ...internal, web: { Blob: globals.Blob, File: globals.File } });
       if (name === "inspect") return { nodeInspect: inspect };
       if (name === "streams" || name === "body_streams") return {};
       throw new Error(`Unexpected web module ${name}`);
