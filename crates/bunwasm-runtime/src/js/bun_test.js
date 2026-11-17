@@ -1055,7 +1055,18 @@
   defineValueMatcher("toBeOdd", matcherSupport.odd);
   defineValueMatcher("toBeDate", (v) => v instanceof Date);
   defineValueMatcher("toBeValidDate", (v) => v instanceof Date && !Number.isNaN(v.getTime()));
-  defineValueMatcher("toBeObject", (v) => typeof v === "object" && v !== null);
+  // Bun's isObject: functions and classes are objects too.
+  defineMatcher("toBeObject", "", (ctx, received) => {
+    if (!failed(ctx, isObjectLike(received))) return null;
+    return { body: `\n\nExpected value ${ctx.not ? "not " : ""}to be an object\n\nReceived: ${inspect(received)}\n` };
+  });
+  // Bun's is_object_empty: Map, Set (weak ones included), RegExp and Date are their own kinds,
+  // not empty objects.
+  defineValueMatcher("toBeEmptyObject", (v) => isObjectLike(v) && !isKeyedKind(v) && Object.keys(v).length === 0);
+
+  function isKeyedKind(value) {
+    return value instanceof Map || value instanceof Set || value instanceof WeakMap || value instanceof WeakSet || value instanceof RegExp || value instanceof Date;
+  }
   defineValueMatcher("toBeSymbol", (v) => typeof v === "symbol");
 
   // ── ordering ──
@@ -1107,12 +1118,14 @@
     return Array.from(value);
   }
 
-  function defineContainMatcher(name, test) {
+  // Bun's contain_matcher. `test` settles to a pass boolean, or to { pass, received } when the
+  // failure prints another value in place of the received one.
+  function defineContainMatcher(name, test, verb = "contain") {
     defineMatcher(name, "expected", (ctx, received, expected) => {
-      return matcherSupport.settle(test(received, expected), pass => {
-        if (!failed(ctx, pass)) return null;
-        if (ctx.not) return { body: `\n\nExpected to not contain: ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
-        return { body: `\n\nExpected to contain: ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
+      return matcherSupport.settle(test(received, expected), outcome => {
+        const shown = typeof outcome === "object" && outcome !== null ? outcome : { pass: outcome, received };
+        if (!failed(ctx, shown.pass)) return null;
+        return { body: `\n\nExpected to ${ctx.not ? "not " : ""}${verb}: ${inspect(expected)}\nReceived: ${inspect(shown.received)}\n` };
       });
     });
   }
@@ -1133,8 +1146,12 @@
     return Object.prototype.hasOwnProperty.call(received, key);
   });
 
+  function requireArray(expected, name) {
+    if (!Array.isArray(expected)) throw new TypeError(`Expected expected to be a array for '${name}'.`);
+  }
+
   function containsKeys(received, keys, any, name) {
-    if (!Array.isArray(keys)) throw new TypeError(`Expected expected to be a array for '${name}'.`);
+    requireArray(keys, name);
     if (!isObjectLike(received)) return !any && keys.length === 0;
     for (const key of keys) {
       const own = Object.prototype.hasOwnProperty.call(received, key);
@@ -1145,6 +1162,48 @@
 
   defineContainMatcher("toContainKeys", (received, keys) => containsKeys(received, keys, false, "toContainKeys"));
   defineContainMatcher("toContainAnyKeys", (received, keys) => containsKeys(received, keys, true, "toContainAnyKeys"));
+
+  // The object matchers below follow Bun's expect/toContain*.rs: own enumerable string keys or
+  // Object.values, each entry compared with toEqual's equality.
+  function containsEvery(values, expected) {
+    return matcherSupport.every(expected, item => matcherSupport.some(values, value => equals(value, item, false)));
+  }
+
+  defineContainMatcher("toContainAllKeys", (received, expected) => {
+    requireArray(expected, "toContainAllKeys");
+    // Object.keys throws for null and undefined, as Bun's toObject does.
+    const keys = Object.keys(received);
+    if (keys.length !== expected.length) return { pass: false, received: keys };
+    const pass = matcherSupport.every(keys, key => matcherSupport.some(expected, item => equals(key, item, false)));
+    return matcherSupport.settle(pass, matched => ({ pass: matched, received: keys }));
+  }, "contain all keys");
+
+  defineContainMatcher("toContainValue", (received, expected) => {
+    if (received === null || received === undefined) return false;
+    return matcherSupport.some(Object.values(received), value => equals(value, expected, false));
+  });
+
+  defineContainMatcher("toContainValues", (received, expected) => {
+    requireArray(expected, "toContainValues");
+    if (received === null || received === undefined) return true;
+    return containsEvery(Object.values(received), expected);
+  });
+
+  defineContainMatcher("toContainAllValues", (received, expected) => {
+    requireArray(expected, "toContainAllValues");
+    if (received === null || received === undefined) return false;
+    const values = Object.values(received);
+    // Bun requires equal counts and at least one value: an empty expectation never passes.
+    if (values.length !== expected.length || expected.length === 0) return false;
+    return containsEvery(values, expected);
+  }, "contain all values");
+
+  defineContainMatcher("toContainAnyValues", (received, expected) => {
+    requireArray(expected, "toContainAnyValues");
+    if (received === null || received === undefined) return false;
+    const values = Object.values(received);
+    return matcherSupport.some(expected, item => matcherSupport.some(values, value => equals(value, item, false)));
+  }, "contain any of the following values");
 
   defineMatcher("toIncludeRepeated", "expected", (ctx, received, ...args) => {
     if (args.length < 2) throw new TypeError("toIncludeRepeated() requires 2 arguments");
