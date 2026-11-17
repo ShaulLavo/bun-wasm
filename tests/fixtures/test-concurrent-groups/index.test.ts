@@ -74,7 +74,12 @@ describe("attribution", () => {
   test.concurrent("a failing assertion fails its own test", async () => {
     await tick();
     await tick();
-    expect(1).toBe(2);
+    // Rethrown as its first line only: engines print different source columns for the frame.
+    try {
+      expect(1).toBe(2);
+    } catch (error) {
+      throw (error as Error).message.split("\n")[0];
+    }
   });
   test.concurrent("an inline snapshot after an await", async () => {
     await tick();

@@ -11,19 +11,8 @@ index.test.ts:
 (pass) with beforeAll > concurrent 9
 (pass) attribution > an inline snapshot after an await
 (pass) attribution > concurrent failing
-72 | // Assertions after an await still belong to their own test.
-73 | describe("attribution", () => {
-74 |   test.concurrent("a failing assertion fails its own test", async () => {
-75 |     await tick();
-76 |     await tick();
-77 |     expect(1).toBe(2);
-                   ^
 error: expect(received).toBe(expected)
-
-Expected: 2
-Received: 1
-
-      at <anonymous> (/index.test.ts:77:15)
+expect(received).toBe(expected)
 (fail) attribution > a failing assertion fails its own test
 (pass) a serial test ends the attribution group
 (pass) default limit > limited 0
