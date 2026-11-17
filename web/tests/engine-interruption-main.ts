@@ -12,7 +12,7 @@ import { startRun, type Run } from "../src/runner";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 import { assertCausalIdleWake, assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 import { measureInterruptionOverhead } from "./engine-interruption-benchmark";
-import { defaultSignalGuest, handledSignalGuest, heartbeatBusyGuest, idleSignalGuest, stopHeartbeatChannel } from "./engine-interruption-guests";
+import { defaultSignalGuest, handledSignalGuest, heartbeatBusyGuest, idleSignalGuest, stopHeartbeatMessage } from "./engine-interruption-guests";
 import { assertFatalSleepSync, assertHandledSleepSync, sleepSyncSignalGuest } from "./engine-interruption-sleep";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignal, type EngineSignalDelivery } from "./engine-interruption-scope";
@@ -56,12 +56,20 @@ class ObservedWorker extends NativeWorker {
   exitObserved = false;
   transport?: ReturnType<typeof engineInterruptionTransport>;
   readonly diagnostics: unknown[] = [];
+  /** A Browser-engine guest's own loop counter; see heartbeatBusyGuest. */
+  heartbeat?: Int32Array;
   constructor(url: string | URL, options?: WorkerOptions) {
     const target = new URL(url, location.href);
     super((instrumentPreview1Root && target.pathname.endsWith("/worker.js") || target.pathname.endsWith("/preview1-worker.js"))
       ? new URL("./engine-interruption-worker.js", target).href : url, options);
     activeWorkers.add(this);
     this.addEventListener("error", event => this.diagnostics.push({ error: event.message }));
+    // Registered before the broker's onmessage handler, so the test-only heartbeat never reaches it.
+    this.addEventListener("message", event => {
+      if (event.data?.type !== stopHeartbeatMessage || !(event.data.buffer instanceof SharedArrayBuffer)) return;
+      this.heartbeat = new Int32Array(event.data.buffer);
+      event.stopImmediatePropagation();
+    });
     this.addEventListener("message", event => {
       if (event.data?.type === "exit") { this.exitObserved = true; this.stop.observeExit(); }
       if (event.data?.type === "engine-interruption-run-returned") this.stop.observeReturn();
@@ -312,12 +320,6 @@ async function settled(read: () => number, label: string, quietMs = 250): Promis
   }, label);
   return { value: last, settledMs: since - started };
 }
-function heartbeatReceiver(): { read: () => Int32Array | undefined; close: () => void } {
-  const channel = new BroadcastChannel(stopHeartbeatChannel);
-  let beat: Int32Array | undefined;
-  channel.onmessage = event => { if (event.data instanceof SharedArrayBuffer) beat = new Int32Array(event.data); };
-  return { read: () => beat, close: () => channel.close() };
-}
 // Paired engines: the browser may never stop a worker spinning in Wasm (iOS Safari kept such a
 // worker running for minutes after terminate()), so native terminate stays disabled and only
 // the engine's own runtime_proc.signal(0, 4) checkpoint may stop the guest.
@@ -349,14 +351,14 @@ async function assertBrowserStop(worker: ObservedWorker, beat: Int32Array, start
  * broker calls Worker.terminate(). The guest must stop running, and its exit must be observed. */
 async function testKillStop(module: WebAssembly.Module, engine: Engine): Promise<void> {
   const owned = await scope(module, engine, "runtimeProcess");
-  const heartbeat = heartbeatReceiver();
   let diagnostics: () => unknown = () => ({ phase: "before guest spawn" });
   try {
     const child = owned.spawn(engine === "browser" ? heartbeatBusyGuest() : defaultSignalGuest());
+    const beat = () => guestWorkers.get(child.pid)?.heartbeat;
     diagnostics = () => ({ stdout: child.stdout, stderr: child.stderr, status: owned.wait(child),
-      heartbeat: heartbeat.read()?.[0], evidence: guestWorkers.has(child.pid) ? snapshotProbe(guestWorkers.get(child.pid)!.probe) : null });
+      heartbeat: beat()?.[0], evidence: guestWorkers.has(child.pid) ? snapshotProbe(guestWorkers.get(child.pid)!.probe) : null });
     const worker = await owned.ready(child);
-    if (engine === "browser") await until(() => (heartbeat.read()?.[0] ?? 0) > 0, "Browser-engine guest heartbeat is running");
+    if (engine === "browser") await until(() => (beat()?.[0] ?? 0) > 0, "Browser-engine guest heartbeat is running");
     else await new Promise<void>(resolve => setTimeout(resolve, 20));
     if (engine !== "browser") equal(controlLoad(worker.probe, probeCell.startLeft), 0, "guest is still executing before the stop");
     const started = performance.now();
@@ -364,11 +366,11 @@ async function testKillStop(module: WebAssembly.Module, engine: Engine): Promise
     await owned.exit(child, 137);
     const result = await owned.outcome(child);
     equal(result.kind, "signaled", "typed signal outcome"); equal(result.code, 9, "SIGKILL outcome");
-    const stop = engine === "browser" ? await assertBrowserStop(worker, heartbeat.read()!, started) : await assertPairedStop(worker, engine, started);
+    const stop = engine === "browser" ? await assertBrowserStop(worker, beat()!, started) : await assertPairedStop(worker, engine, started);
     checks.push({ engine, route: "runtimeProcess", delivery: "page-kill", name: stopProofName, evidence: stop, elapsedMs: performance.now() - started });
   } catch (error) {
     throw engineInterruptionFailure(`${engine} SIGKILL stop of a busy guest failed`, error, diagnostics);
-  } finally { heartbeat.close(); await owned.dispose(); }
+  } finally { await owned.dispose(); }
 }
 async function testNativeInterrupt(module: WebAssembly.Module, engine: Engine): Promise<void> {
   const owned = await scope(module, engine);

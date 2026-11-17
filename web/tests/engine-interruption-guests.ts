@@ -11,16 +11,27 @@ export function defaultSignalGuest(): string {
   return `const fs=require('node:fs'); ${protectedLoop("ready")}`;
 }
 
-export const stopHeartbeatChannel = "bun-wasm-engine-interruption-heartbeat";
+export const stopHeartbeatMessage = "engine-interruption-heartbeat";
 
 // Browser-engine guest JavaScript runs natively in the worker, so it can publish a shared
 // heartbeat without any host call: the page sees whether the loop is still running after
-// Worker.terminate(). One message hands over the buffer; the loop itself is pure Atomics.
+// Worker.terminate(). One native worker message hands over the buffer (Bun's runtime replaces
+// BroadcastChannel and MessageChannel, not the worker's own postMessage); the loop is pure Atomics.
 export function heartbeatBusyGuest(): string {
   return `const fs=require('node:fs');
     const beat=new Int32Array(new SharedArrayBuffer(4));
-    const channel=new BroadcastChannel('${stopHeartbeatChannel}'); channel.postMessage(beat.buffer);
+    postMessage({ type: '${stopHeartbeatMessage}', buffer: beat.buffer });
     try { fs.writeSync(2,'ready\\n'); for (;;) Atomics.add(beat,0,1); } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
+}
+
+// A guest that spends its time inside the engine's native regexp matcher: each call backtracks
+// about 2^24 times. The inner catch must not swallow a stop, and the reported duration of one
+// call shows whether an engine polls inside native work (unwind far shorter than one call).
+export function nativeRegexpGuest(): string {
+  return `const fs=require('node:fs');
+    const input='a'.repeat(24)+'!', pattern=/^(a+)+$/;
+    const started=Date.now(); pattern.test(input); fs.writeSync(2,'regexp-ms '+(Date.now()-started)+'\\n');
+    try { fs.writeSync(2,'ready\\n'); for (;;) { try { pattern.test(input); } catch {} } } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
 }
 
 export function handledSignalGuest(nested = false, cpuMs = 1_000): string {

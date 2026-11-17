@@ -67,8 +67,10 @@ proof keeps native terminate disabled: the engine's own mode 4 checkpoint must u
 `_start` with the typed SIGKILL, run no catch, finally or later code, and make no
 further checkpoint calls afterwards, and the page must observe exit status 137. The
 Browser engine's guest JavaScript is the browser's own, so its terminate is real; the
-guest publishes a `SharedArrayBuffer` heartbeat over a `BroadcastChannel` and the proof
-requires the heartbeat to stop after `terminate()`. Returning a stopped member's group
+guest posts a `SharedArrayBuffer` heartbeat to the page once with the worker's native
+`postMessage` (Bun's runtime replaces `BroadcastChannel`), the page's observed worker
+consumes that test-only message before the broker sees it, and the proof requires the
+heartbeat to stop after `terminate()`. Returning a stopped member's group
 pages depends on Waffle's per-incarnation exit lock, which is not in the pinned Waffle
 release yet; this proof covers the stop and the exit, not page reuse.
 
