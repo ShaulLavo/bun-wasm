@@ -25,6 +25,7 @@ COUNTER = re.compile(r"^ (\d+) (pass|fail|skip|todo|errors?)$", re.M)
 STOP = threading.Event()
 PROCESSES = set()
 LOCK = threading.Lock()
+PAIRED_ENGINES = {"quickjs": "quickjs.wasm", "jsc": "jsc-engine.wasm"}
 
 # The installed Waffle tree is fingerprinted separately. Include the local Node host and
 # its runtime imports so resume cannot reuse results after an adapter or slot change.
@@ -402,6 +403,10 @@ def main():
             shutil.copyfile(wasm, frozen_wasm)
             if digest(frozen_wasm) != meta["wasm_sha256"]:
                 raise RuntimeError("Wasm changed during suite setup; rerun with a stable artifact")
+            # A split guest loads its paired engine from its own directory.
+            paired = PAIRED_ENGINES.get(opts.engine)
+            if paired:
+                shutil.copyfile(wasm.with_name(paired), scratch / paired)
             if meta["tools_sha256"] is not None:
                 frozen_tools = scratch / "bun-tools.wasm"
                 shutil.copyfile(wasm.with_name("bun-tools.wasm"), frozen_tools)
