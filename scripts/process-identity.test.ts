@@ -1,10 +1,11 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInContext } from "node:vm";
 import { sourceRuntime } from "./fixtures/stream-consumers-runtime.ts";
 
-const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-process-identity-"));
+const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-process-identity-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 test("actual process factory reads its bound nonconstant identity once and preserves public property behavior", () => {

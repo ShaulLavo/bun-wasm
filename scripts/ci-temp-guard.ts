@@ -14,28 +14,32 @@ function methodName(node: ts.Expression): string | undefined {
   return undefined;
 }
 
-function literalPrefix(node: ts.Expression): string | undefined {
+const fallbackOperators = new Set([ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken]);
+
+// With `fallback`, `TMPDIR ?? "/work/tmp"` counts as its literal right side: jobs without TMPDIR use it.
+function literalPrefix(node: ts.Expression, fallback = false): string | undefined {
   if (ts.isStringLiteralLike(node)) return node.text;
   if (ts.isTemplateExpression(node)) return node.head.text;
-  if (ts.isParenthesizedExpression(node)) return literalPrefix(node.expression);
-  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) return literalPrefix(node.left);
+  if (ts.isParenthesizedExpression(node)) return literalPrefix(node.expression, fallback);
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) return literalPrefix(node.left, fallback);
+  if (fallback && ts.isBinaryExpression(node) && fallbackOperators.has(node.operatorToken.kind)) return literalPrefix(node.right, fallback);
   if (!ts.isCallExpression(node)) return undefined;
-  if (methodName(node.expression) === "resolve") return resolvedPrefix(node.arguments);
-  if (methodName(node.expression) === "join" && node.arguments[0]) return literalPrefix(node.arguments[0]);
+  if (methodName(node.expression) === "resolve") return resolvedPrefix(node.arguments, fallback);
+  if (methodName(node.expression) === "join" && node.arguments[0]) return literalPrefix(node.arguments[0], fallback);
   return undefined;
 }
 
-function resolvedPrefix(arguments_: readonly ts.Expression[]): string | undefined {
+function resolvedPrefix(arguments_: readonly ts.Expression[], fallback: boolean): string | undefined {
   for (let index = arguments_.length - 1; index >= 0; index--) {
     const argument = arguments_[index]!;
-    const prefix = literalPrefix(argument);
+    const prefix = literalPrefix(argument, fallback);
     if (prefix === undefined || (prefix === "" && !ts.isStringLiteralLike(argument))) return undefined;
     if (posix.isAbsolute(prefix) || win32.isAbsolute(prefix)) return prefix;
   }
   return undefined;
 }
 
-export function temporaryPathFailures(file: string, text: string): string[] {
+export function temporaryPathFailures(file: string, text: string, rejectFallback = false): string[] {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const methods = new Set(temporaryMethods);
   const failures: string[] = [];
@@ -47,7 +51,7 @@ export function temporaryPathFailures(file: string, text: string): string[] {
   }
   function checkCall(node: ts.CallExpression): void {
     const argument = node.arguments[0];
-    const prefix = argument && literalPrefix(argument);
+    const prefix = argument && literalPrefix(argument, rejectFallback);
     if (!prefix || (!posix.isAbsolute(prefix) && !win32.isAbsolute(prefix))) return;
     const { line, character } = source.getLineAndCharacterOfPosition(argument.getStart(source));
     failures.push(`${file}:${line + 1}:${character + 1}: hard-coded temporary directory ${JSON.stringify(prefix)}; use join(tmpdir(), prefix) or a configured temporary root`);
@@ -68,6 +72,15 @@ function localSource(from: string, specifier: string): string | undefined {
 export function ciTemporarySources(directory = root): string[] {
   const selected = discoverChecks(directory).filter(check => check.owner !== "native").map(check => check.path)
     .concat(automaticChecks(directory).map(check => check.path));
+  return withLocalImports(directory, selected);
+}
+
+/** Sources run by the Web unit job, which sets no TMPDIR, so an environment fallback is the path used. */
+export function webTemporarySources(directory = root): string[] {
+  return withLocalImports(directory, discoverChecks(directory).filter(check => check.owner === "web").map(check => check.path));
+}
+
+function withLocalImports(directory: string, selected: readonly string[]): string[] {
   const paths = new Set(selected);
   for (const path of paths) {
     const source = readFileSync(join(directory, path), "utf8");
@@ -85,7 +98,8 @@ export function ciTemporarySources(directory = root): string[] {
 }
 
 export function auditTemporaryPaths(directory = root): string[] {
-  return ciTemporarySources(directory).flatMap(path => temporaryPathFailures(path, readFileSync(join(directory, path), "utf8")));
+  const web = new Set(webTemporarySources(directory));
+  return ciTemporarySources(directory).flatMap(path => temporaryPathFailures(path, readFileSync(join(directory, path), "utf8"), web.has(path)));
 }
 
 if (import.meta.main) {

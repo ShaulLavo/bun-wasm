@@ -1,6 +1,8 @@
 # Process identity, issue 199
 
-Status: Implemented in PR 884 against released Waffle 0.0.140 (interface 3, PR 542) and programs-v0.0.23. The `process-identity` guest fixture passes on QuickJS, JSC and Browser with local builds. Remaining before review: pin bash-web 0.0.113 (interface 3) so the Web suite's one-interface check passes.
+Status: Implemented in PR 884 against released Waffle 0.0.140 (interface 3, PR 542) and programs-v0.0.23. bash-web is pinned to 0.0.113 (interface 3). The `process-identity` guest fixture passes on QuickJS, JSC and Browser with local builds.
+
+Follow-up (scoped out here): C-level PIDs still disagree with `process.pid`. `bunwasm-posix` `getpid()` returns 42 and `getppid()` returns 1 in the JSC guest, and wasi-libc's emulated `getpid` serves the QuickJS guest, so C/C++ code in the guest (JSC, linked tools) reports a different PID than JS. Route both through `runtime_proc.process_id` and `parent_process_id`.
 
 ## Contract and caller types
 
