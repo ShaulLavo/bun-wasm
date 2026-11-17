@@ -31,6 +31,10 @@ before web initialization. This is a browser-target Port change motivated by the
 Node/Bun-compatible export contract, with no new Blob or File implementation copied
 from upstream.
 
+The `resolveObjectURL` export delegates to the shared original registry described
+in [URL errors and object URLs](url-errors-object-urls.md). This export is the
+only Buffer implementation change for that adapter.
+
 Raw encoding helper installation delegates to the original TypeScript adapter
 documented in [Buffer encoding bindings](buffer-encoding-bindings.md). It keeps
 the raw binding range and coercion policies separate from public `write` and

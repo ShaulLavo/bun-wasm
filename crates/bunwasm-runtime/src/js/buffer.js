@@ -1309,6 +1309,7 @@
     SlowBuffer,
     Blob: internal.web && internal.web.Blob,
     File: internal.web && internal.web.File,
+    resolveObjectURL: input => internal.require("object_urls").resolveObjectURL(input),
     INSPECT_MAX_BYTES,
     kMaxLength,
     kStringMaxLength,

@@ -9,7 +9,7 @@ export function bodyConsumerSources() {
 ${source}
 );`;
   };
-  return { body: load("body_streams"), web: load("web", "js"), url: load("url_search_params"), brand: load("web_brand"), consumers: load("stream_consumers") };
+  return { body: load("body_streams"), web: load("web", "js"), url: load("url_search_params"), urlErrors: load("url_errors"), urlPairs: load("url_pairs"), brand: load("web_brand"), consumers: load("stream_consumers") };
 }
 
 export function bodyConsumerFactory(sources: ReturnType<typeof bodyConsumerSources>) {
@@ -19,6 +19,8 @@ export function bodyConsumerFactory(sources: ReturnType<typeof bodyConsumerSourc
     ["text_decoder", TextDecoder],
     ["streams", { ReadableStream, TransformStream, WritableStream }],
     ["url_search_params", new Function(sources.url)()()],
+    ["url_errors", new Function(sources.urlErrors)()()],
+    ["url_pairs", new Function(sources.urlPairs)()()],
     ["web_brand", new Function(sources.brand)()()],
     ["buffer", { Buffer: { from: (bytes: ArrayBuffer) => new Uint8Array(bytes) } }],
   ]);
