@@ -4,8 +4,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { assertSafariCaseRows, selectSafariCaseNames } from "./browser-safari";
-import { interruptionProofs } from "./engine-interruption-cases";
-import { assertEngineInterruptionResult } from "./engine-interruption-result";
+import { interruptionProofs, nativeStopProofName, stopProofName } from "./engine-interruption-cases";
+import { assertEngineInterruptionResult, busyPhaseUrl, mergePhaseResults } from "./engine-interruption-result";
 import { collectRunnerCleanup, finishRunnerCleanup, runBrowserGate, type RunnerCleanup } from "./browser-engine-interruption";
 
 function green() {
@@ -210,6 +210,27 @@ test("a hanging final cleanup still produces an unsafe output report", async () 
   const report = await runBrowserGate(f.options);
   expect(report.ok).toBe(false); expect(report.cleanup.safe).toBe(false);
   expect(report.unsafeCleanup).toContain("timed out"); expect(f.written).toEqual([report]);
+});
+
+function phases() {
+  const whole = green(), busyNames = new Set([stopProofName, nativeStopProofName]);
+  const main = { ...whole, checks: whole.checks.filter(check => !busyNames.has(check.name)) };
+  const busy = { ...whole, checks: whole.checks.filter(check => busyNames.has(check.name)), benchmarks: [] };
+  return { main, busy };
+}
+test("the main page and the fresh busy-stop page merge into one strict gate result", () => {
+  const { main, busy } = phases();
+  expect(busy.checks.length).toBeGreaterThan(0);
+  expect(() => assertEngineInterruptionResult(mergePhaseResults(main, busy), false, ["quickjs", "jsc"])).not.toThrow();
+  expect(() => assertEngineInterruptionResult(main, false, ["quickjs", "jsc"])).toThrow();
+  expect(busyPhaseUrl("http://127.0.0.1:1/?engines=quickjs")).toBe("http://127.0.0.1:1/?engines=quickjs&phase=busy");
+});
+test("a red or unsafe busy-stop page makes the merged result red or unsafe", () => {
+  const { main, busy } = phases();
+  expect(mergePhaseResults(main, { ...busy, ok: false }).ok).toBe(false);
+  const unsafe = mergePhaseResults(main, { ...busy, cleanup: { safe: false, activeWorkers: 1 }, unsafeCleanup: "busy guest still running" });
+  expect(unsafe.cleanup.safe).toBe(false); expect(unsafe.cleanup.activeWorkers).toBe(1);
+  expect(unsafe.unsafeCleanup).toBe("busy guest still running");
 });
 
 test("failed admission marks nominally green result RED and still closes before continuing", async () => {
