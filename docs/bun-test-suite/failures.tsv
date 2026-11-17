@@ -705,7 +705,7 @@ js/bun/test/expect-type-doctest.test.ts	d	test runner/assertion or runtime seman
 js/bun/test/expect-type-global.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	1	False	types	ReferenceError: expectTypeOf is not defined
 js/bun/test/expect-type.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	1	False	<collection/hook/exit; no named failure>	SyntaxError: Could not find export 'expectTypeOf' in module 'bun:test'
 js/bun/test/expect-unreaachable.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	2	False	expect.unreachable()	error: expect(received).toThrow(expected)
-js/bun/test/expect.test.js	d	test runner/assertion or runtime semantics	needs reproduction	370	52	False	expect() > toEqual objects and arrays	error: expect(received).not.toEqual(expected)
+js/bun/test/expect.test.js	d	test runner/assertion or runtime semantics	needs reproduction	414	8	False	expect() > toEqual detached ArrayBuffer is not equal to a zero-length ArrayBuffer	TypeError: ArrayBuffer is detached
 js/bun/test/failure-skip.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	9	2	False	failure-skip > beforeall1	error: expect(received).toMatchInlineSnapshot(expected)
 js/bun/test/fake-timers/fake-timers.test.ts	d	database, Redis or S3 clients	needs reproduction	0	1	False	<collection/hook/exit; no named failure>	SyntaxError: Could not find export 'RedisClient' in module 'bun'
 js/bun/test/fake-timers/sinonjs/issue-187.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	2	False	#187 - Support timeout.refresh in node environments > calls the stub again after refreshing the timeout	TypeError: not a function
@@ -1051,7 +1051,6 @@ js/node/url/url-parse-invalid-input.test.js	d	test runner/assertion or runtime s
 js/node/url/url-parse-ipv6.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	17	17	False	Invalid IPv6 addresses > Invalid hostnames - parsing 'https://[::1' fails	error: expect(received).toThrowError(expected)
 js/node/url/url-parse-query.test.js	d	test runner/assertion or runtime semantics	needs reproduction	0	2	False	url.parse > parseQueryString returns a null-prototype query object	AssertionError: Expected values to be strictly equal:
 js/node/url/url-relative.test.js	d	test runner/assertion or runtime semantics	needs reproduction	0	5	False	url.resolveObject > source is false	AssertionError: Expected values to be strictly equal:
-js/node/url/url.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	3	4	False	Url.prototype.parse > accepts ipv6 host	error: expect(received).toEqual(expected)
 js/node/util/bun-inspect.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	12	5	False	Bun.inspect > supports colors: true	error: expect(received).not.toBe(expected)
 js/node/util/custom-inspect.test.js	d	test runner/assertion or runtime semantics	needs reproduction	22	22	False	util.inspect calls inspect.custom with valid options	error: expect(received).toBe(expected)
 js/node/util/mime-api.test.ts	d	unresolved runtime/module semantics, inspect the recorded failure first	needs reproduction	0	1	False	<collection/hook/exit; no named failure>	SyntaxError: Could not find export 'MIMEParams' in module 'node:util'
@@ -1362,7 +1361,7 @@ js/web/timers/setTimeout.test.js	e	private native-engine/compiler instrumentatio
 js/web/timers/timer-gc-roots.test.ts	d	database, Redis or S3 clients	needs reproduction	6	4	False	Strong handles are backed by StrongRootBlock > blocks emptied from sweep-time finalizers are released	error: expect(received).toBe(expected)
 js/web/timers/timer-heap-race.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	1	False	timer heap survives cross-thread Atomics.waitAsync timeout cancellation	error: expect(received).toEqual(expected)
 js/web/url/url-wpt-constructor.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	96	15	False	WPT url-constructor > section 0: See ../README.md for a description of the format. (110 entries)	error: expect(received).toEqual(expected)
-js/web/url/url.test.ts	d	unresolved runtime/module semantics, inspect the recorded failure first	needs reproduction	0	1	False	<collection/hook/exit; no named failure>	SyntaxError: Could not find export 'resolveObjectURL' in module 'node:buffer'
+js/web/url/url.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	25	2	False	url > prints	error: expect(received).toBe(expected)
 js/web/urlpattern/urlpattern.test.ts	f	passes on browser	measured	0	408	False	"URLPattern > WPT tests > Pattern: [{""pathname"":""/foo/bar""}] Inputs: [{""pathname"":""/foo/bar""}]"	ReferenceError: URLPattern is not defined
 js/web/web-globals.test.js	d	test runner/assertion or runtime semantics	needs reproduction	0	1	False	<collection/hook/exit; no named failure>	ReferenceError: PerformanceMark is not defined
 js/web/websocket/autobahn.test.ts	d	test runner/assertion or runtime semantics	needs reproduction	0	1	False	<collection/hook/exit; no named failure>	error: A functional `docker` is required in CI for some tests.
