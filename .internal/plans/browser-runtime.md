@@ -779,8 +779,8 @@ page SIGKILL to the `_start` unwind:
 
 | Guest workload | QuickJS | JSC | SpiderMonkey | Browser engine (real terminate) |
 | --- | --- | --- | --- | --- |
-| `while (true) {}` | 5.1 ms Chromium, 9.6 ms WebKit | 4.8 ms, 8.0 ms | SM_LOOP | heartbeat ran 2,007 ms on Chromium, stopped at once on WebKit |
-| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 5.3 ms (one call takes 342 ms) | no stop within 15 s (one call takes 1,677 ms) | SM_REGEXP | not run |
+| `while (true) {}` | 5.1 ms Chromium, 9.6 ms WebKit | 4.8 ms, 8.0 ms | 6.8 ms, 20 ms | heartbeat ran 2,007 ms on Chromium, stopped at once on WebKit |
+| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 5.3 ms (one call takes 342 ms) | no stop within 15 s (one call takes 1,677 ms) | no stop within 15 s, zero checkpoints (one call takes 1,366 ms) | not run |
 
 Open items:
 
@@ -790,7 +790,10 @@ Open items:
   result into JSC's uncatchable termination. A separate worker owns this (coordinator,
   2026-11-17). When it lands, add `jsc` to `nativePollingEngines` in
   `web/tests/engine-interruption-cases.ts`.
-- SM_GAP
+- **SpiderMonkey irregexp does not poll either.** `bunsm_poll_interrupt`
+  (`crates/bunwasm-spidermonkey/cpp/engine.cpp`) asks the host every 10,000 interpreter polls,
+  and a loop around a long regexp call reaches only a few per call. The same worker covers it
+  (coordinator, 2026-11-17). When it lands, add `spidermonkey` to `nativePollingEngines`.
 - **Group pages after the stop.** Waffle's per-incarnation exit lock (Waffle `fix/gap1-exit-lock`)
   returns a stopped member's pages only after the worker exits. Once it ships in a Waffle release,
   move the bun-wasm pin and extend the proof to show the stopped guest's pages return.

@@ -79,8 +79,9 @@ stop while the guest loops on a catastrophically backtracking regexp (each call 
 about 2^24 times) inside an inner `catch {}`. It runs only for engines that poll inside their
 native matcher, listed in `nativePollingEngines`: QuickJS's regexp engine calls the interrupt
 handler, so the stop lands in milliseconds although one call takes hundreds. JSC's Yarr
-interpreter does not poll yet (one call takes about 1.7 s, and the 1,024-trap-point
-countdown is hundreds of calls away), so JSC is excluded until Yarr polls.
+interpreter and SpiderMonkey's irregexp do not poll yet (one call takes about 1.7 s and
+1.4 s, and their interpreter countdowns are hundreds of calls away), so both are excluded
+until their matchers poll.
 
 
 ## Classification
