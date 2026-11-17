@@ -70,6 +70,35 @@ Startup, dev, render, and click each have a five-minute hang cap. Install has a
 ten-minute hang cap. The maintained cleanup phase has a twenty-second hang cap.
 Every phase records its actual duration. A slow successful outcome passes.
 
+## Check the deployed site
+
+For a deploy check, run the same three cases against the public site instead of a
+local build. Replace `--root` and `--source-file` with `--base-url`, the site root:
+
+```sh
+bun scripts/iphone-smoke.ts --base-url=https://bun.sprockt.dev/ \
+	--output=/absolute/results/new-iphone-smoke \
+	--iphone-control-url=http://127.0.0.1:FORWARDED_PORT/__goals_iphone/TOKEN \
+	--iphone-agent-command=/exact/device_open/path/agent-device \
+	--device-udid=C4D2FFD4-A0D2-4608-B180-35854521B830 \
+	--mac-thread=FIFO_HOLDER_THREAD
+```
+
+No PC build and no staged site are needed. The runner reads the commit from the
+site's `deployment.json` and records it, with the Waffle version, as the result's
+source. It downloads the deployed playground's host page, manifest and selected
+engine files and runs the same fingerprint preflight before the first case and after
+the last. A deployment that changes during the run makes the result red.
+
+The page still needs the observer script, which the deployed site cannot carry.
+Start the same Mac wrapper with `LIVE_URL=https://bun.sprockt.dev/` in place of
+`ROOT` and `PREVIEW_ORIGINS`, and stage only the two controller bundles. The
+observer server then fetches every request from the live site and serves those
+bytes on Mac loopback, adding only the observer script. Safari opens
+`/playground/` at that loopback origin. Forward its control port as in local mode.
+FIFO admission, device binding, phases, hang caps, result file and the ordinary-tab
+finish are unchanged.
+
 ## Read the result and finish cleanup
 
 Read `<output>/result.json`. `status` is `green` only when all three cases pass,

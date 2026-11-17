@@ -1,6 +1,7 @@
 import { LoopbackPreviewOrigins } from "../../web/preview-origin-host";
 import { IphoneBus } from "./iphone-bus";
 import { observeIphoneServiceWorker } from "./iphone-service-worker";
+import { liveSiteURL, proxyLiveRequest } from "./iphone-live-proxy";
 
 export async function observeIphoneResponse(response: Response, request: Request, bus: IphoneBus, endpoint: string): Promise<Response> {
   if (response.status === 200 && new URL(request.url).pathname.endsWith("/sw.js")) {
@@ -42,28 +43,46 @@ export function observeIphoneOrigins(bus: IphoneBus, endpoint: string): () => vo
   return () => { LoopbackPreviewOrigins.prototype.bind = original; };
 }
 
-if (import.meta.main) {
-  const token = process.env.GOALS_IPHONE_TOKEN;
-  if (!token || !/^[a-f0-9]{64}$/.test(token) || process.env.HOST !== "127.0.0.1" || process.env.PREVIEW_ORIGINS !== "1") throw new Error("Require loopback host, preview origins and GOALS_IPHONE_TOKEN");
-  const bus = new IphoneBus("/__goals_iphone/" + token, row => console.log(JSON.stringify({ iphoneResponse: row })));
+/** Serves the prepared ROOT through the playground's own server, observing every response. */
+async function serveLocal(bus: IphoneBus, endpoint: string): Promise<string> {
   let productOrigin = "";
-  const control = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.GOALS_IPHONE_PORT ?? 0), idleTimeout: 0, maxRequestBodySize: 512 * 1024,
-    fetch: request => new URL(request.url).pathname.startsWith(bus.path + "/") ? bus.handle(request, productOrigin) : new Response(null, { status: 404 }),
-  });
-  observeIphoneOrigins(bus, control.url.origin);
+  observeIphoneOrigins(bus, endpoint);
   const serve = Bun.serve;
   Object.defineProperty(Bun, "serve", { value(options: unknown) {
     if (!options || typeof options !== "object" || !("fetch" in options) || typeof options.fetch !== "function") throw new Error("Expected playground server options");
     const fetch = options.fetch;
     const server = Reflect.apply(serve, Bun, [{ ...options, async fetch(request: Request, server: unknown) {
       const response: unknown = await Reflect.apply(fetch, this, [request, server]);
-      return response instanceof Response ? observeIphoneResponse(response, request, bus, control.url.origin) : response;
+      return response instanceof Response ? observeIphoneResponse(response, request, bus, endpoint) : response;
     } }]);
     productOrigin = String(server.url.origin);
     return server;
   } });
-  await import("../../web/serve");
-  Bun.serve = serve;
+  try { await import("../../web/serve"); }
+  finally { Bun.serve = serve; }
+  return productOrigin;
+}
+
+/** Serves the deployed site at LIVE_URL on loopback, observing every response. Stops on the same signals as the local server. */
+function serveLive(site: string, bus: IphoneBus, endpoint: string): string {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT ?? 0), idleTimeout: 0,
+    fetch: async request => observeIphoneResponse(await proxyLiveRequest(request, site), request, bus, endpoint),
+  });
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => { void server.stop(true).finally(() => process.exit()); });
+  console.log(`proxying ${site} at ${server.url.origin}/`);
+  return server.url.origin;
+}
+
+if (import.meta.main) {
+  const token = process.env.GOALS_IPHONE_TOKEN;
+  const live = process.env.LIVE_URL ? liveSiteURL(process.env.LIVE_URL) : undefined;
+  if (!token || !/^[a-f0-9]{64}$/.test(token) || process.env.HOST !== "127.0.0.1" || (!live && process.env.PREVIEW_ORIGINS !== "1")) throw new Error("Require loopback host, GOALS_IPHONE_TOKEN, and preview origins or LIVE_URL");
+  const bus = new IphoneBus("/__goals_iphone/" + token, row => console.log(JSON.stringify({ iphoneResponse: row })));
+  let productOrigin = "";
+  const control = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.GOALS_IPHONE_PORT ?? 0), idleTimeout: 0, maxRequestBodySize: 512 * 1024,
+    fetch: request => new URL(request.url).pathname.startsWith(bus.path + "/") ? bus.handle(request, productOrigin) : new Response(null, { status: 404 }),
+  });
+  productOrigin = live ? serveLive(live, bus, control.url.origin) : await serveLocal(bus, control.url.origin);
   console.log(JSON.stringify({ iphoneControl: control.url.origin + bus.path, productOrigin }));
   process.once("SIGTERM", () => { bus.close(); void control.stop(true); });
 }
