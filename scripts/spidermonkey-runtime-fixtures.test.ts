@@ -338,7 +338,8 @@ test("ordinary default invocation retains preflight, guest, launcher, and shell 
 
 async function waitForLaunch(box: Sandbox) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (existsSync(box.env.RECORD)) return records(box)[0]!;
+    // The launcher's append creates the file before writing its line; wait for a complete record.
+    if (existsSync(box.env.RECORD) && readFileSync(box.env.RECORD, "utf8").includes("\n")) return records(box)[0]!;
     await Bun.sleep(10);
   }
   throw new Error("Synthetic launcher never started");

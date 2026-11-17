@@ -2,7 +2,7 @@ import { TypedEventTarget } from "@remix-run/component";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { createRuntime, openIdleWorkspace, storedWorkspaces, type Runtime } from "waffle";
-import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind";
+import { memoryGroupPolicy } from "../../web/src/host-memory-policy";
 import { parseMemoryProfile, type ProgramMemoryProfile } from "../../web/src/program-profile";
 import { templateProfile } from "../../web/src/playground/program-profile";
 import { installBunSharedObjects } from "../../src/shared-objects";
@@ -308,7 +308,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   private construct(): Workspace {
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
-    const runtime = createRuntime({ filesystem: { mode, name: workspaceName(this.template) }, memoryGroups: BUN_MEMORY_GROUP_POLICY });
+    const runtime = createRuntime({ filesystem: { mode, name: workspaceName(this.template) }, memoryGroups: memoryGroupPolicy(this.engine, navigator.userAgent) });
     const sharedObjects = installBunSharedObjects(runtime);
     addEventListener("pagehide", (event: PageTransitionEvent) => { if (!event.persisted) sharedObjects.close(); });
     const fs = runtime.filesystem;

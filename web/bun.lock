@@ -14,9 +14,9 @@
         "@xterm/xterm": "^6.0.0",
         "bash-web": "https://github.com/ShaulLavo/bash-web/releases/download/bash-web-v0.0.112/bash-web-0.0.112.tgz",
         "codemirror": "^6.0.2",
-        "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.138/waffle-0.0.138.tgz",
+        "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.139/waffle-0.0.139.tgz",
         "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-base-0.0.16.tgz",
-        "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.138/waffle-relay-0.0.138.tgz",
+        "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.139/waffle-relay-0.0.139.tgz",
       },
       "devDependencies": {
         "@types/bun": "^1.4.3",
@@ -241,7 +241,7 @@
 
     "w3c-keyname": ["w3c-keyname@2.2.8", "", {}, "sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ=="],
 
-    "waffle": ["waffle@https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.138/waffle-0.0.138.tgz", { "hasInstallScript": true }, "sha512-xJ0o18VdpHHQUVWoRuBFn2lppJu3X34jJ24DkfBwcNA/7RbS4r6hvliCEgPuxYV1+CW1gZXYoGvAE2zLJadD7w=="],
+    "waffle": ["waffle@https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.139/waffle-0.0.139.tgz", { "hasInstallScript": true }, "sha512-dEvpCe9g/IcoP1CTwWv5W16f/2dy+Cj8uFR76JqEjJEVkj4Ss1cn2lJe9/KVmT7iBEk5MFwMx5EtAcRO12TPFA=="],
 
     "waffle-base": ["waffle-base@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-base-0.0.16.tgz", { "dependencies": { "waffle-coreutils": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-coreutils-0.0.16.tgz", "waffle-findutils": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-findutils-0.0.16.tgz", "waffle-grep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-grep-0.0.16.tgz", "waffle-ripgrep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-ripgrep-0.0.16.tgz", "waffle-sed": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-sed-0.0.16.tgz" }, "peerDependencies": { "waffle": "*" } }, "sha512-zdsz4wsgkfUa21gw3SsioFboJdUofN1Ci1yias8gx4rpKbwmf8k0L+eXpr2TmzTVtDk/7bwZ6w07oUx6b+f/RQ=="],
 
@@ -253,7 +253,7 @@
 
     "waffle-grep": ["waffle-grep@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.16/waffle-grep-0.0.16.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-o2GNYiPvgwtmZ7Mte34XDsVgzbcVt+EXkkjHuqe5JKDZ+K2RHn003GubMI/07F2E2CldsoEYT7iiiovtRtRFaQ=="],
 
-    "waffle-relay": ["waffle-relay@https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.138/waffle-relay-0.0.138.tgz", { "dependencies": { "ws": "8.22.1" }, "peerDependencies": { "@fails-components/webtransport": "1.6.11", "@fails-components/webtransport-transport-http3-quiche": "1.6.11", "waffle": "*" }, "optionalPeers": ["@fails-components/webtransport", "@fails-components/webtransport-transport-http3-quiche"], "bin": { "waffle-relay": "./dist/cli.js" } }, "sha512-WT+U4UBflObVlkeFh+UYoHF5xO8KOM8g21gBl/djwU7v5NuP2t9TUBcYzh/1Rw1wNjxeHP6oNZ7DuXCsAF5Q7A=="],
+    "waffle-relay": ["waffle-relay@https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.139/waffle-relay-0.0.139.tgz", { "dependencies": { "ws": "8.22.1" }, "peerDependencies": { "@fails-components/webtransport": "1.6.11", "@fails-components/webtransport-transport-http3-quiche": "1.6.11", "waffle": "*" }, "optionalPeers": ["@fails-components/webtransport", "@fails-components/webtransport-transport-http3-quiche"], "bin": { "waffle-relay": "./dist/cli.js" } }, "sha512-Je8d/if8KJOHrTaa0FucRSsn5650DfxWhafFKpmdP/ELLRe2h1hQkpIOTijZ6nBbdpOXO9KSLlYIpkoqIzoiqw=="],
 
     "waffle-ripgrep": ["waffle-ripgrep@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.22/waffle-ripgrep-0.0.22.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-qcvn9pB9xP9Z22+Cz4+SHbW7o3dOBYjINCt6AyI2aiHMNq1mmW8jPWtl0jYynFsrAaOEe2rVlLI6qBBZWYLmPA=="],
 
