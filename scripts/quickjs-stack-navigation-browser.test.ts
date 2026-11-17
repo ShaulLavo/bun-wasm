@@ -136,7 +136,8 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
       expect(report).toMatchObject({ pageState: { outcome: "ok", value: { readyState: "complete", status: null, published: false } } });
     }
     // The route is really gone: navigating to the same URL again runs none of the recorded handlers.
-    await realGoto(target).catch(() => {});
+    // Commit is enough: the publication fixture holds a resource, so load never fires.
+    await realGoto(target, { waitUntil: "commit" }).catch(() => {});
     expect(routes?.handled()).toBe(handledBefore);
   } finally {
     release();
