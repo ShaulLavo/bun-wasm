@@ -1080,28 +1080,76 @@
     });
   });
 
-  function propertyPath(path) {
-    if (Array.isArray(path)) return path;
-    return String(path)
-      .replace(/\[(\w+)\]/g, ".$1")
-      .split(".")
-      .filter((part) => part !== "");
+  const MISSING = { found: false };
+
+  // One step of Bun's path lookup: the value converts to an object (null and undefined throw,
+  // as JSC's toObject does) and the key may be inherited.
+  function lookupKey(value, key) {
+    if (value === null || value === undefined) throw new TypeError(`${value} is not an object`);
+    const object = Object(value);
+    return key in object ? { found: true, value: object[key] } : MISSING;
   }
 
+  function isPathSeparator(char) {
+    return char === "[" || char === "]" || char === ".";
+  }
+
+  // Bun's getIfPropertyExistsFromPath (bindings.cpp). As in Jest, brackets are skipped, and a
+  // "." at the start or end of the path, or doubled, looks up the empty-string key. An array
+  // path names each key: strings and numbers only.
   function lookupPath(object, path) {
-    let value = object;
-    for (const key of propertyPath(path)) {
-      if (value === null || value === undefined || !(key in Object(value))) return { found: false };
-      value = value[key];
+    if (Array.isArray(path)) return lookupKeys(object, path);
+    const text = String(path);
+    if (text === "") return lookupKey(object, "");
+    let current = { found: true, value: object };
+    if (text[0] === ".") current = lookupKey(object, "");
+    let start = 0;
+    let named = false;
+    while (current.found && start < text.length) {
+      const skipped = skipSeparators(text, start, current.value, named);
+      if (skipped.done) return skipped.result;
+      let end = skipped.next;
+      while (end < text.length && !isPathSeparator(text[end])) end++;
+      current = lookupKey(skipped.current.value, text.slice(skipped.next, end));
+      named = true;
+      start = end;
     }
-    return { found: true, value };
+    return current;
+  }
+
+  // Skips a run of separators from `start`. Two dots in a row look up the empty-string key;
+  // a path that ends in separators ends the lookup, with the empty-string key after a final ".".
+  function skipSeparators(text, start, value, named) {
+    let index = start;
+    let current = { found: true, value };
+    while (isPathSeparator(text[index])) {
+      const char = text[index++];
+      if (index === text.length) {
+        if (char === ".") return { done: true, result: lookupKey(current.value, "") };
+        return { done: true, result: named ? current : MISSING };
+      }
+      if (char === "." && text[index] === ".") current = lookupKey(current.value, "");
+      if (!current.found) return { done: true, result: current };
+    }
+    return { done: false, current, next: index };
+  }
+
+  function lookupKeys(object, keys) {
+    let current = { found: true, value: object };
+    for (const key of keys) {
+      if (typeof key !== "string" && typeof key !== "number") return MISSING;
+      current = lookupKey(current.value, String(key));
+      if (!current.found) return current;
+    }
+    return current;
   }
 
   defineMatcher("toHaveProperty", "path", (ctx, received, path, ...rest) => {
     const hasValue = rest.length > 0;
     const expectedValue = rest[0];
     const params = hasValue ? "path, value" : "path";
-    const lookup = lookupPath(received, path);
+    if (typeof path !== "string" && !Array.isArray(path)) throw new Error("Expected path must be a string or an array");
+    const lookup = received === null || received === undefined ? MISSING : lookupPath(received, path);
     const pass = lookup.found && (!hasValue || equals(lookup.value, expectedValue, false));
     return matcherSupport.settle(pass, matched => {
       if (!failed(ctx, matched)) return null;
@@ -1906,9 +1954,13 @@
   function formatVariable(rest, row) {
     const match = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$\d][\w$]*)*/.exec(rest);
     if (!match) return null;
-    const lookup = lookupPath(row, match[0]);
-    if (!lookup.found || lookup.value === undefined || lookup.value === null) return null;
-    const text = typeof lookup.value === "string" ? lookup.value : inspect(lookup.value);
+    let value = row;
+    for (const key of match[0].split(".")) {
+      if (value === null || value === undefined || !(key in Object(value))) return null;
+      value = value[key];
+    }
+    if (value === undefined || value === null) return null;
+    const text = typeof value === "string" ? value : inspect(value);
     return { text, length: match[0].length };
   }
 

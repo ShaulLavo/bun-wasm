@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-to-have-property-path",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}
