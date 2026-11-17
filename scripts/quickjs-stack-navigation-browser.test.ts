@@ -82,12 +82,13 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
   let release = () => {};
   const held = new Promise<void>(resolve => { release = resolve; });
   let browser;
+  let navigations = 0;
   try {
     browser = await engine.launch();
     const page = await browser.newPage();
     const target = `${server.url}?engine=${consumer.name}&prompt=off&mode=memory`;
     const timeout = new errors.TimeoutError("fixture navigation timeout");
-    if (mode === "timeout") page.goto = async () => { throw timeout; };
+    if (mode === "timeout") page.goto = async () => { navigations++; throw timeout; };
     if (mode === "connection") await page.route("**/*", route => route.abort());
     if (mode === "sink") await page.close();
     if (mode === "publication") await page.route("**/*", route => serveFixture(route, held, false));
@@ -126,6 +127,7 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
     ]) } });
     if (mode === "timeout") {
       expect(failure).toBe(timeout);
+      expect(navigations).toBe(1);
       expect(report).toMatchObject({ pageState: { outcome: "ok", value: { readyState: "complete", status: null, published: false } } });
     }
   } finally {
@@ -138,11 +140,46 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
   }
 }
 
+// WebKit bug 325840 workaround: a cross-origin-isolated document from a real server is admitted through a
+// one-use pass-through route on WebKit only, and no route is left behind for the page's later requests.
+async function isolatedDocument(engine: BrowserType, consumer: Consumer): Promise<void> {
+  const isolation = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" };
+  const body = `<span id="status">loading</span><script>globalThis.playground = {}; document.querySelector('#status').textContent = 'ready';</script>`;
+  let documents = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname === "/later") return new Response("later", { headers: isolation });
+      documents++;
+      return new Response(body, { headers: { ...isolation, "content-type": "text/html" } });
+    },
+  });
+  const browser = await engine.launch();
+  try {
+    const page = await browser.newPage();
+    const route = page.route.bind(page);
+    const unroute = page.unroute.bind(page);
+    const calls: string[] = [];
+    page.route = async (...args: Parameters<Page["route"]>) => { calls.push(`route times=${args[2]?.times}`); return route(...args); };
+    page.unroute = async (...args: Parameters<Page["unroute"]>) => { calls.push("unroute"); return unroute(...args); };
+    await consumer.open(page, String(server.url));
+    expect(await page.textContent("#status")).toBe("ready");
+    expect(calls).toEqual(engine.name() === "webkit" ? ["route times=1", "unroute"] : []);
+    expect(documents).toBe(1);
+    expect(page.url()).toBe(`${server.url}?engine=${consumer.name}&prompt=off&mode=memory`);
+    expect(await page.evaluate(() => crossOriginIsolated)).toBe(true);
+    expect(await page.evaluate(() => fetch("/later").then(response => response.text()))).toBe("later");
+  } finally {
+    await Promise.allSettled([browser.close(), server.stop(true)]);
+  }
+}
+
 function registerControls(engine: BrowserType, consumer: Consumer) {
   const label = `${engine.name()} ${consumer.name}`;
   test(`${label}: readiness does not wait for an unrelated load resource`, () => heldResource(engine, consumer), 10_000);
   test(`${label}: runtime publication failure retains document and held-resource stages`, () => navigationFailure(engine, consumer, "publication"), 30_000);
   test(`${label}: a navigation timeout records page and independent server state without retrying`, () => navigationFailure(engine, consumer, "timeout"), 30_000);
+  test(`${label}: a cross-origin-isolated document opens without a lingering route`, () => isolatedDocument(engine, consumer), 30_000);
   test(`${label}: a navigation failure records browser requests`, () => navigationFailure(engine, consumer, "connection"), 30_000);
   test(`${label}: a diagnostic write failure preserves the navigation error`, () => navigationFailure(engine, consumer, "sink"), 30_000);
 }
