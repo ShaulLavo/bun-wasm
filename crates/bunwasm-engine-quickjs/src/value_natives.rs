@@ -260,6 +260,9 @@ pub(crate) fn bootstrap<E: Engine>(
         e.set(&native, name, e.new_function(name, function))?;
     }
     e.set(&native, "engine", e.value_from(e.name().into()))?;
+    let (key, version) = e.version();
+    let entry = Val::Array(vec![key.into(), version.into()]);
+    e.set(&native, "engineVersion", e.value_from(entry))?;
     let factory = load_polyfill(e, core, "bootstrap")?;
     measurement::measure(e.name(), "bootstrap-execute", "bootstrap", 0, || {
         e.call(&factory, &e.undefined(), &[native])

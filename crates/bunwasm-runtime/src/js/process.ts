@@ -260,7 +260,9 @@
     versions: {
       node: NODE_VERSION,
       bun: info.version,
-      quickjs: "ng",
+      // Only the running engine names itself (quickjs, webkit, spidermonkey, hermes, or the
+      // Node host's v8), so `process.versions.quickjs` detects QuickJS and nothing else.
+      ...(native.engineVersion ? { [native.engineVersion[0]]: native.engineVersion[1] } : {}),
       modules: "147",
       wasi: "preview1",
     },

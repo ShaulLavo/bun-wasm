@@ -73,6 +73,8 @@ declare namespace BunWasm {
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host" | "hermes" | "spidermonkey";
+    /** The running engine's `process.versions` entry; absent when the host reports none. */
+    readonly engineVersion?: readonly [key: string, version: string];
     /** Optional slot 18: 0/0 dequeues; modes 0/1/2 publish DEFAULT/IGNORE/HANDLE, 3 raises. */
     hostSignal(signal: number, disposition: number): number;
     globMatch(pattern: string, path: string): boolean;

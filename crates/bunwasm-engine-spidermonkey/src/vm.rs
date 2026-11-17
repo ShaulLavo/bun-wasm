@@ -553,6 +553,10 @@ impl Engine for SpiderMonkey {
     fn name(&self) -> &'static str {
         "spidermonkey"
     }
+    fn version(&self) -> (&'static str, &'static str) {
+        // Mozilla's milestone at the pinned commit; build.rs fails when the pin moves.
+        ("spidermonkey", env!("BUN_WASM_SPIDERMONKEY_VERSION"))
+    }
     fn undefined(&self) -> SmVal {
         undefined()
     }
