@@ -688,6 +688,10 @@ impl Engine for Hermes {
         "hermes"
     }
 
+    fn version(&self) -> (&'static str, &'static str) {
+        ("hermes", env!("BUN_WASM_HERMES_COMMIT"))
+    }
+
     fn undefined(&self) -> HVal {
         undefined()
     }

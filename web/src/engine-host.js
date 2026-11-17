@@ -539,6 +539,10 @@ class EngineHost {
     }
     if (this.o.terminal) native.terminalSetRawMode = raw => this.o.terminal.setRawMode(raw);
     native.engine = "host";
+    // Name the host's engine only where the host reports it: Node's real V8 version.
+    // Browser workers expose no engine version, so they add no key.
+    const hostV8 = globalThis.process?.versions?.v8;
+    if (typeof hostV8 === "string") native.engineVersion = ["v8", hostV8];
     this.installSubtleCrypto();
     native.subtleCrypto = nativeSubtleCrypto;
     native.DOMException = NativeDOMException;
