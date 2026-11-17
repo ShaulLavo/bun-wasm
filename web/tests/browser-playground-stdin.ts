@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { writeFileSync } from "node:fs";
 import { checkPlaygroundStdin, stdinCaseRecords, stdinCaseNames, type StdinCaseRecord } from "./playground-stdin";
 
@@ -29,7 +30,7 @@ async function main(): Promise<void> {
     const browser = await task.launch(playwright[name]);
     const context = await browser.newContext(name === "webkit" ? playwright.devices["iPhone 15"] : {});
     const page = await context.newPage();
-    await page.goto(`${url}?prompt=off&engine=browser`);
+    await navigateTestPage(page, `${url}?prompt=off&engine=browser`);
     assert.match(await ready(page), /ready/);
     await checkPlaygroundStdin(page, rows => { report.cases = rows; persist(); });
     console.log("PASS terminal stdin survives env and shebangs, accepts input, and ends only on EOF; pipes retain EOF");

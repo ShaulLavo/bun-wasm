@@ -8,6 +8,7 @@ import { gunzipSync } from "node:zlib";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { clickRun, playwright, ready, run, session, web, writeFile } from "./playground.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const browserName = process.argv[2] ?? "chromium";
 const engines = (process.env.ENGINES ?? "quickjs,jsc,browser").split(",");
@@ -53,7 +54,7 @@ async function measure(type, engine, appUrl) {
   const browser = await s.launch(type);
   const page = await (await browser.newContext({ viewport: { width: 1200, height: 900 } })).newPage();
   const t0 = Date.now();
-  await page.goto(`${appUrl}?engine=${engine}&prompt=off`);
+  await navigateTestPage(page, `${appUrl}?engine=${engine}&prompt=off`);
   const status = await ready(page);
   out.ready = Date.now() - t0;
   out.status = status;

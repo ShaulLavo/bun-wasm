@@ -170,6 +170,7 @@
     "web/tests/browser-net.mjs",
     "web/tests/fixture-output.ts",
     "web/tests/foreground.ts",
+    "web/tests/navigate-test-page.ts",
     "scripts/browser-existing-drivers.ts"
   ]
 }

@@ -1,6 +1,7 @@
 import { browserType } from "./browser-type.ts";
 import { firstVisit } from "./first-visit.mjs";
 import { ready, session } from "./playground.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { checkWebWorkers } from "./browser-workers.ts";
 
 const s = session("bun-wasm-global-web-workers-");
@@ -10,7 +11,7 @@ async function checkEngine(browser: Browser, url: string, engine: string, label:
   const visit = await firstVisit(context, `${url}?engine=${engine}&prompt=off`);
   try {
     const page = await context.newPage();
-    await page.goto(visit.url);
+    await navigateTestPage(page, visit.url);
     await ready(page);
     await checkWebWorkers(page, label);
   } finally {

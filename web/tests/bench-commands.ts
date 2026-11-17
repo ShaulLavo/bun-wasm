@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 interface Case { readonly command: string; readonly code: number; readonly output: RegExp }
 
@@ -97,7 +98,7 @@ async function openPlayground(url: string, page?: Page): Promise<{ page: Page; r
   const visit = new URL(url);
   if (options.prompt === "off") visit.searchParams.set("prompt", "off");
   else visit.searchParams.delete("prompt");
-  await page.goto(visit.href);
+  await navigateTestPage(page, visit.href);
   await page.waitForFunction(() => "playground" in globalThis && document.querySelector<HTMLElement>("#status")?.dataset.kind === "ok", null, { timeout: 180_000 });
   return { page, readyMs: performance.now() - start };
 }

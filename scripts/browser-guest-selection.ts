@@ -153,6 +153,7 @@ const ownerInputs = {
     "web/tests/browser-installer-links.ts",
     "web/tests/browser-type.ts",
     "web/tests/foreground.ts",
+    "web/tests/navigate-test-page.ts",
     "web/tests/playground-cleanup.ts",
     "web/tests/playground.mjs"
   ],
@@ -178,6 +179,7 @@ const ownerInputs = {
     "web/tests/browser-type.ts",
     "web/tests/browser-workers.ts",
     "web/tests/foreground.ts",
+    "web/tests/navigate-test-page.ts",
     "web/tests/playground-cleanup.ts",
     "web/tests/playground.mjs"
   ],
@@ -207,10 +209,12 @@ const ownerInputs = {
     "tests/fixtures/net-ws-builtin/index.js",
     "web/tests/browser-net.mjs",
     "web/tests/fixture-output.ts",
-    "web/tests/foreground.ts"
+    "web/tests/foreground.ts",
+    "web/tests/navigate-test-page.ts"
   ],
   "engine-interruption": [
     "web/tests/browser-engine-interruption.ts",
+    "web/tests/navigate-test-page.ts",
     "web/tests/engine-interruption-atomics.ts",
     "web/tests/engine-interruption-benchmark.ts",
     "web/tests/engine-interruption-cases.ts",
@@ -233,12 +237,14 @@ const ownerInputs = {
     "web/tests/browser-type.ts",
     "web/tests/browser-worker-modules.ts",
     "web/tests/foreground.ts",
+    "web/tests/navigate-test-page.ts",
     "web/tests/playground-cleanup.ts",
     "web/tests/playground.mjs"
   ],
   "terminal-stdin": [
     "web/tests/browser-playground-stdin.ts",
     "web/tests/foreground.ts",
+    "web/tests/navigate-test-page.ts",
     "web/tests/playground-cleanup.ts",
     "web/tests/playground-stdin.ts",
     "web/tests/playground.mjs"
@@ -250,6 +256,7 @@ const ownerInputs = {
     "web/tests/playground-navigation.ts",
     "web/tests/browser-type.ts",
     "web/tests/foreground.ts",
+    "web/tests/navigate-test-page.ts",
     "web/tests/playground-cleanup.ts",
     "web/tests/playground.mjs"
   ]

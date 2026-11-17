@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { chromium, webkit, type Browser, type Page } from "playwright";
 import { isSafari } from "../web/src/playground/preview-links";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 // Captured from the genuine Safari 26.4 in-page lifecycle pass on November 12.
 const safari = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Safari/605.1.15";
@@ -43,7 +44,7 @@ async function fixture(browser: Browser, userAgent: string): Promise<Page> {
     Reflect.set(globalThis, "previewOpens", opened);
     window.open = (url) => { opened.push(String(url)); return null; };
   });
-  await page.goto(origin);
+  await navigateTestPage(page, origin);
   await page.waitForSelector('body[data-ready="true"]');
   return page;
 }

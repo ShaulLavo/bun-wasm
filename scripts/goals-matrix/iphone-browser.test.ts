@@ -7,6 +7,7 @@ import { LoopbackPreviewOrigins } from "../../web/preview-origin-host";
 import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
 import type { IphoneResponseObservation } from "./iphone-responses";
 import { runFixturePhases, type EnterPhase } from "./fixture-phases";
+import { navigateTestPage } from "../../web/tests/navigate-test-page.ts";
 
 function counterResponse(request: Request, encodings: { asset: string | null; navigations: (string | null)[] }): Response {
   const encoding = request.headers.get("accept-encoding");
@@ -36,7 +37,7 @@ test("ordinary visible page keeps its owner alive and observes trusted iframe in
     });
     bus.configure("host", owner.url.href);
     const page = await browser.newPage();
-    await page.goto(owner.url.href);
+    await navigateTestPage(page, owner.url.href);
     await page.waitForFunction(() => document.title.startsWith("Goals "));
     await waitReady(bus, "host");
     bus.configure("preview", binding.origin + "/");
@@ -127,7 +128,7 @@ test("real product service worker injects the configured preview even when HTTP 
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
     bus.configure("host", owner.url.href);
-    await page.goto(owner.url.href);
+    await navigateTestPage(page, owner.url.href);
     await waitReady(bus, "host");
     await page.evaluate(async () => {
       const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/__preview/" });
@@ -223,7 +224,7 @@ async function previewReload(engine: BrowserType): Promise<void> {
     enter("new-page");
     const page = await browser.newPage();
     enter("owner-goto");
-    await page.goto(owner.url.href);
+    await navigateTestPage(page, owner.url.href);
     enter("owner-ready");
     await waitReady(bus, "host");
     bus.configure("preview", binding.origin + "/");

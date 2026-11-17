@@ -34,6 +34,7 @@ import { dirname, join, relative } from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { browserType } from "./browser-type.ts";
 import { ready, run, session, web, writeFile } from "./playground.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const root = process.env.MODULE_RECORDS_ROOT ?? join(web, "dist");
 const expectOld = process.env.MODULE_RECORDS_EXPECT === "old";
@@ -259,7 +260,7 @@ async function checkVariant(browser: Browser, { name, context: policy, url, orig
   const context = await browser.newContext({ serviceWorkers: policy === "blocked" ? "block" : "allow" });
   const requests = watchRequests(context, origin);
   const page = await context.newPage();
-  await page.goto(`${url}?engine=browser&prompt=off`);
+  await navigateTestPage(page, `${url}?engine=browser&prompt=off`);
   assert.match(await ready(page), /ready/);
   const removed = policy === "unregistered" ? await unregister(page) : 0;
   const registered = await registrations(page);

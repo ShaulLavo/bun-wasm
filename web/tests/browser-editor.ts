@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { chromium, firefox, webkit, type Page } from "playwright";
 import { terminalText } from "./playground.mjs";
 import { browserBuildConfig } from "../../scripts/browser-build";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const engine = process.argv[2] ?? "chromium";
@@ -42,7 +43,7 @@ async function filesystemInfoCheck(base: string, mode: "memory" | "fast" | null)
   const context = await browser!.newContext();
   const page = await context.newPage();
   try {
-    await page.goto(`${base}/playground/${mode ? `?mode=${mode}` : ""}`);
+    await navigateTestPage(page, `${base}/playground/${mode ? `?mode=${mode}` : ""}`);
     await page.waitForFunction(() => !!window.playground);
     assert.deepEqual(await page.evaluate(() => {
       const fs = window.playground!.fs;
@@ -78,7 +79,7 @@ async function fastWaitCheck(base: string) {
   context.on("page", page => page.on("pageerror", error => errors.push(error.message)));
   try {
     const owner = await context.newPage();
-    await owner.goto(`${base}/playground/?mode=fast&wait-startup=1`);
+    await navigateTestPage(owner, `${base}/playground/?mode=fast&wait-startup=1`);
     await owner.waitForFunction(() => !!(globalThis as any).playground?.editor || document.querySelector<HTMLElement>("#status")?.dataset.kind === "error");
     assert.equal(await owner.evaluate(() => !!(globalThis as any).playground?.editor), true, await owner.locator("#status").innerText());
     await owner.evaluate(async () => {
@@ -87,7 +88,7 @@ async function fastWaitCheck(base: string) {
       await fs.flush();
     });
     const waiting = await context.newPage();
-    await waiting.goto(`${base}/playground/?mode=fast&wait-startup=1`);
+    await navigateTestPage(waiting, `${base}/playground/?mode=fast&wait-startup=1`);
     await waiting.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("Waiting for this workspace to close in another tab."));
     assert.deepEqual(await owner.evaluate(() => {
       const fs = window.playground?.fs;
@@ -122,7 +123,7 @@ async function unsupportedModeCheck(base: string, app: string, mode: string): Pr
   const context = await browser!.newContext();
   const page = await context.newPage();
   try {
-    await page.goto(`${base}/${app}/?mode=${mode}&wait-startup=1`);
+    await navigateTestPage(page, `${base}/${app}/?mode=${mode}&wait-startup=1`);
     await page.waitForFunction(() => document.querySelector<HTMLElement>("#status")?.dataset.kind === "error");
     assert.match(await page.locator("#status").innerText(), /UNSUPPORTED_VFS/);
     assert.match(await page.locator("#status").innerText(), new RegExp(mode));
@@ -139,7 +140,7 @@ async function startupFailureCheck(base: string) {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   try {
-    await page.goto(`${base}/playground/?fail-startup=1`);
+    await navigateTestPage(page, `${base}/playground/?fail-startup=1`);
     await page.waitForFunction(() => document.querySelector<HTMLElement>("#status")?.dataset.kind === "error");
     assert.match(await page.locator("#status").innerText(), /injected filesystem startup failure/);
     assert.doesNotMatch(await page.locator("#status").innerText(), /opened in another tab/);
@@ -169,10 +170,10 @@ async function startupSteal(base: string, app: string, rejectPending: boolean) {
   const errors: string[] = [];
   owner.on("pageerror", error => errors.push(error.message));
   try {
-    await owner.goto(`${base}/${app}/?pause-startup=1`);
+    await navigateTestPage(owner, `${base}/${app}/?pause-startup=1`);
     await owner.waitForFunction(() => (globalThis as any).startupFilesystem?.paused);
     const contender = await context.newPage();
-    await contender.goto(`${base}/${app}/`);
+    await navigateTestPage(contender, `${base}/${app}/`);
     await contender.waitForFunction(app => !!(globalThis as any)[app]?.editor, app);
     await contender.evaluate(async app => {
       const fs = (globalThis as any)[app].fs;
@@ -214,7 +215,7 @@ async function languageChecks(base: string, languageAssets: ReadonlySet<string>,
   const page = await context.newPage();
   try {
     const start = requests.length;
-    await page.goto(`${base}/sandbox/`);
+    await navigateTestPage(page, `${base}/sandbox/`);
     await page.waitForFunction(() => document.querySelector("#file-name")?.textContent === "src/App.tsx");
     assert.deepEqual(requests.slice(start).filter(path => languageAssets.has(path)), []);
     await openEditorFile(page, "src/App.css");
@@ -319,7 +320,7 @@ try {
   await startupStealChecks(base);
   await fastWaitCheck(base);
   if (process.env.STARTUP_STEAL_ONLY !== "1") {
-  await page.goto(`${base}/sandbox/`);
+  await navigateTestPage(page, `${base}/sandbox/`);
   await page.waitForFunction(() => (globalThis as any).sandbox?.editor.path === "src/App.tsx");
   await page.evaluate(async () => {
     const { editor, fs } = (globalThis as any).sandbox;
@@ -376,7 +377,7 @@ try {
   assert.equal(await page.locator("#reset").isVisible(), true);
   if (process.env.EDITOR_SCREENSHOT) await page.screenshot({ path: process.env.EDITOR_SCREENSHOT });
 
-  await page.goto(`${base}/playground/`);
+  await navigateTestPage(page, `${base}/playground/`);
   await page.waitForFunction(() => (globalThis as any).playground?.editor.path === "/home/user/index.ts");
   // Simulate the durable image left if background persistence ran halfway through seed.
   await page.evaluate(async () => {
@@ -410,7 +411,7 @@ try {
   const contender = await context.newPage();
   const startupErrors: string[] = [];
   contender.on("pageerror", error => startupErrors.push(error.message));
-  await contender.goto(`${base}/playground/`);
+  await navigateTestPage(contender, `${base}/playground/`);
   await contender.waitForFunction(() => (globalThis as any).playground?.editor.path === "/home/user/index.ts");
   assert.equal(await contender.evaluate(async () => new TextDecoder().decode(await (globalThis as any).playground.fs.readFile("/home/user/index.ts"))), "console.log('saved playground');");
   await page.bringToFront();

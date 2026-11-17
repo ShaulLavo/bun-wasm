@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import { chromium, firefox, webkit } from "playwright";
 import { verifySite } from "./browser-guest-site";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 async function checkRejections(page: Page, extension: string): Promise<void> {
   await writeFile(page, `/home/user/entry.${extension}`, 'import("./failure.mjs");');
@@ -57,7 +58,7 @@ for (const name of selected) {
       const [, origin] = await task.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { ROOT: root, PORT: "0" });
       const browser = await task.launch(type);
       const page = await browser.newPage({ serviceWorkers: "block" });
-      await page.goto(`${origin}?engine=browser&prompt=off&mode=memory`);
+      await navigateTestPage(page, `${origin}?engine=browser&prompt=off&mode=memory`);
       expect(await ready(page)).toContain("ready · Browser");
       await writeFile(page, "/home/user/failure.mjs", 'throw new Error("dynamic-import-startup-marker");');
       await checkRejections(page, "mjs");
