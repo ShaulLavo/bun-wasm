@@ -3,7 +3,7 @@ import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { assertEngineInterruptionResult } from "../web/tests/engine-interruption-result";
-import { selectInterruptionEngines, interruptionInputs, interruptionProofs, stopProofName } from "../web/tests/engine-interruption-cases";
+import { selectInterruptionEngines, interruptionInputs, interruptionProofs, nativeStopProofName, stopProofName } from "../web/tests/engine-interruption-cases";
 import { assertWorkerModuleReport, runWorkerModuleVariants, workerModuleReport } from "../web/tests/browser-worker-modules";
 import { runStdinCases, stdinCaseNames, stdinCaseRecords } from "../web/tests/playground-stdin";
 import { assertStdinReport, stdinBrowser } from "../web/tests/browser-playground-stdin";
@@ -34,13 +34,15 @@ function stdinFailureActions(events: string[]) {
 function stdinCleanup(events: string[], unsafe: boolean) {
   return async () => { events.push("idle"); if (unsafe) throw new Error("foreground alive"); };
 }
-test("interruption engine subsets retain Browser and Preview1, with the default 35 checks and 105 full proofs", () => {
-  expect(green().checks).toHaveLength(35);
-  expect(3 * green().checks.length).toBe(105);
-  expect(green(selectInterruptionEngines("quickjs,jsc,spidermonkey")).checks).toHaveLength(50);
+test("interruption engine subsets retain Browser and Preview1, with the default 36 checks and 108 full proofs", () => {
+  expect(green().checks).toHaveLength(36);
+  expect(3 * green().checks.length).toBe(108);
+  expect(green(selectInterruptionEngines("quickjs,jsc,spidermonkey")).checks).toHaveLength(51);
   for (const engine of ["quickjs", "jsc", "spidermonkey"]) {
     const selected = selectInterruptionEngines(engine);
-    expect(green(selected).checks).toHaveLength(20);
+    const native = engine === "quickjs" ? [engine] : [];
+    expect(green(selected).checks).toHaveLength(20 + native.length);
+    expect(green(selected).checks.filter(check => check.name === nativeStopProofName).map(check => check.engine)).toEqual(native);
     expect(() => assertEngineInterruptionResult(green(selected), false, selected)).not.toThrow();
     expect(() => assertEngineInterruptionResult(green(selected), false)).toThrow();
     const names = green(selected).checks.map(check => check.name);

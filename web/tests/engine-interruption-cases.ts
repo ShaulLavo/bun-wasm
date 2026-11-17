@@ -98,6 +98,11 @@ export function interruptionInputs(engines: readonly InterruptionEngine[]): stri
 
 /** Waffle's stop: a page SIGKILL, then Worker.terminate() on a guest spinning in JavaScript. */
 export const stopProofName = "runtimeProcess-page-SIGKILL-stops-busy-guest";
+/** The same stop while the guest spends its time in the engine's native regexp matcher. */
+export const nativeStopProofName = "runtimeProcess-page-SIGKILL-stops-guest-in-native-regexp";
+/** Engines that poll for a stop inside their native regexp matcher. JSC does not yet: Yarr never
+ * polls, and its 1,024-trap-point countdown is minutes away when each call backtracks for seconds. */
+export const nativePollingEngines: readonly InterruptionEngine[] = ["quickjs"];
 
 export function interruptionProofs(engines: readonly InterruptionEngine[]) {
   const paired: { engine: string; route: string; name: string }[] = engines.flatMap(engine => [
@@ -116,7 +121,7 @@ export function interruptionProofs(engines: readonly InterruptionEngine[]) {
     { engine, route: "runtimeProcess", name: "runtimeProcess-page-sleepSync-SIGUSR1-deferred-handler" },
     { engine, route: "runtimeProcess", name: "runtimeProcess-page-sleepSync-default-SIGUSR1-unwinds" },
     { engine, route: "runtimeProcess", name: stopProofName },
-  ]);
+  ].concat(nativePollingEngines.includes(engine) ? [{ engine, route: "runtimeProcess", name: nativeStopProofName }] : []));
   return paired.concat([
     { engine: "browser", route: "legacy", name: "default-2-status-130" },
     { engine: "browser", route: "legacy", name: "default-15-status-143" },

@@ -12,11 +12,11 @@ import { startRun, type Run } from "../src/runner";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 import { assertCausalIdleWake, assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 import { measureInterruptionOverhead } from "./engine-interruption-benchmark";
-import { defaultSignalGuest, handledSignalGuest, heartbeatBusyGuest, idleSignalGuest, stopHeartbeatMessage } from "./engine-interruption-guests";
+import { defaultSignalGuest, handledSignalGuest, heartbeatBusyGuest, idleSignalGuest, nativeRegexpGuest, stopHeartbeatMessage } from "./engine-interruption-guests";
 import { assertFatalSleepSync, assertHandledSleepSync, sleepSyncSignalGuest } from "./engine-interruption-sleep";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignal, type EngineSignalDelivery } from "./engine-interruption-scope";
-import { FunctionalCases, selectInterruptionEngines, interruptionCore, stopProofName, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
+import { FunctionalCases, selectInterruptionEngines, interruptionCore, nativePollingEngines, nativeStopProofName, stopProofName, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
 import { CooperativeWorkerStop } from "./engine-interruption-stop";
 
 interface CaseResources {
@@ -347,18 +347,28 @@ async function assertBrowserStop(worker: ObservedWorker, beat: Int32Array, start
   const quiet = await settled(() => controlLoad(beat, 0), "Browser-engine guest heartbeat stopped after Worker.terminate()");
   return { terminatedMs, heartbeatSettledMs: quiet.settledMs, heartbeats: quiet.value };
 }
+type StopWorkload = "loop" | "regexp";
+function stopGuest(engine: Engine, workload: StopWorkload): string {
+  if (workload === "regexp") return nativeRegexpGuest();
+  return engine === "browser" ? heartbeatBusyGuest() : defaultSignalGuest();
+}
+/** Milliseconds one native regexp call took before readiness, as the guest reported it. */
+function regexpCallMs(stderr: string): number | undefined {
+  const match = /regexp-ms (\d+)\n/.exec(stderr);
+  return match ? Number(match[1]) : undefined;
+}
 /** Waffle's own stop for a busy guest: a page SIGKILL publishes the signaled outcome, then the
  * broker calls Worker.terminate(). The guest must stop running, and its exit must be observed. */
-async function testKillStop(module: WebAssembly.Module, engine: Engine): Promise<void> {
+async function testKillStop(module: WebAssembly.Module, engine: Engine, workload: StopWorkload = "loop"): Promise<void> {
   const owned = await scope(module, engine, "runtimeProcess");
   let diagnostics: () => unknown = () => ({ phase: "before guest spawn" });
   try {
-    const child = owned.spawn(engine === "browser" ? heartbeatBusyGuest() : defaultSignalGuest());
+    const child = owned.spawn(stopGuest(engine, workload));
     const beat = () => guestWorkers.get(child.pid)?.heartbeat;
     diagnostics = () => ({ stdout: child.stdout, stderr: child.stderr, status: owned.wait(child),
       heartbeat: beat()?.[0], evidence: guestWorkers.has(child.pid) ? snapshotProbe(guestWorkers.get(child.pid)!.probe) : null });
     const worker = await owned.ready(child);
-    if (engine === "browser") await until(() => (beat()?.[0] ?? 0) > 0, "Browser-engine guest heartbeat is running");
+    if (engine === "browser" && workload === "loop") await until(() => (beat()?.[0] ?? 0) > 0, "Browser-engine guest heartbeat is running");
     else await new Promise<void>(resolve => setTimeout(resolve, 20));
     if (engine !== "browser") equal(controlLoad(worker.probe, probeCell.startLeft), 0, "guest is still executing before the stop");
     const started = performance.now();
@@ -367,9 +377,10 @@ async function testKillStop(module: WebAssembly.Module, engine: Engine): Promise
     const result = await owned.outcome(child);
     equal(result.kind, "signaled", "typed signal outcome"); equal(result.code, 9, "SIGKILL outcome");
     const stop = engine === "browser" ? await assertBrowserStop(worker, beat()!, started) : await assertPairedStop(worker, engine, started);
-    checks.push({ engine, route: "runtimeProcess", delivery: "page-kill", name: stopProofName, evidence: stop, elapsedMs: performance.now() - started });
+    const name = workload === "loop" ? stopProofName : nativeStopProofName;
+    checks.push({ engine, route: "runtimeProcess", delivery: "page-kill", name, evidence: { ...stop, regexpCallMs: regexpCallMs(child.stderr) }, elapsedMs: performance.now() - started });
   } catch (error) {
-    throw engineInterruptionFailure(`${engine} SIGKILL stop of a busy guest failed`, error, diagnostics);
+    throw engineInterruptionFailure(`${engine} SIGKILL stop of a busy ${workload} guest failed`, error, diagnostics);
   } finally { await owned.dispose(); }
 }
 async function testNativeInterrupt(module: WebAssembly.Module, engine: Engine): Promise<void> {
@@ -726,6 +737,7 @@ void (async () => {
       for (const signal of [2, 15] as const) await runCase({ engine, route: "legacy", name: `default-${signal}` }, () => testDefault(loaded, engine, signal));
       await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-busy-stop" }, () => testKillStop(loaded, engine));
       if (engine !== "browser") {
+        if (nativePollingEngines.includes(engine)) await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-native-regexp-stop" }, () => testKillStop(loaded, engine, "regexp"));
         await runCase({ engine, route: "legacy", name: "native-true-return" }, () => testNativeInterrupt(loaded, engine));
         await runCase({ engine, route: "legacy", name: "handled-SIGINT" }, () => testHandled(loaded, engine));
         await runCase({ engine, route: "legacy", name: "nested-SIGINT-default-15" }, () => testDefault(loaded, engine, 15, true));

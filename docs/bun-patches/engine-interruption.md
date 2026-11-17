@@ -74,6 +74,14 @@ heartbeat to stop after `terminate()`. Returning a stopped member's group
 pages depends on Waffle's per-incarnation exit lock, which is not in the pinned Waffle
 release yet; this proof covers the stop and the exit, not page reuse.
 
+The original `runtimeProcess-page-SIGKILL-stops-guest-in-native-regexp` proof repeats that
+stop while the guest loops on a catastrophically backtracking regexp (each call backtracks
+about 2^24 times) inside an inner `catch {}`. It runs only for engines that poll inside their
+native matcher, listed in `nativePollingEngines`: QuickJS's regexp engine calls the interrupt
+handler, so the stop lands in milliseconds although one call takes hundreds. JSC's Yarr
+interpreter does not poll yet (one call takes about 1.7 s, and the 1,024-trap-point
+countdown is hundreds of calls away), so JSC is excluded until Yarr polls.
+
 
 ## Classification
 
@@ -86,7 +94,7 @@ release yet; this proof covers the stop and the exit, not page reuse.
 
 The original browser harness now accepts an explicit QuickJS/JSC subset through
 its driver option, page query and controller. Its local default remains both
-pairs, with 35 named checks per browser and 105 checks over the three browsers.
+pairs, with 36 named checks per browser and 108 checks over the three browsers.
 SpiderMonkey joins only when selected explicitly (`--engines=quickjs,jsc,spidermonkey`
 with a staged `bun-spidermonkey.wasm` and `spidermonkey-engine.wasm`), because the CI
 interruption job builds no SpiderMonkey pair; it then runs the same paired-engine cases.
