@@ -7,9 +7,11 @@ RegExp support.
 
 ## Classification
 
-The generator records the full Cargo lockfile. Regenerate its input record after
-lockfile changes, even when the selected ICU dependencies and generated C++ stay
-unchanged. Refreshing this source record does not qualify an old native archive.
+The generator records each ICU crate it uses by exact version, registry checksum and
+source hash, not the whole workspace Cargo lockfile, so unrelated Rust dependency
+changes leave its input record alone. Regenerate the record when one of those crates,
+the generator or the upstream templates change. Refreshing this source record does
+not qualify an old native archive.
 
 The Mozilla pin is `a5df22d986d4b626f771b4f8885241941601c35c`.
 ICU4X dependencies and Unicode data are pinned to 2.4.0 and Unicode 18.0.0.
@@ -23,7 +25,7 @@ SpiderMonkey's own tables remain Unicode 17.0.0.
 | `spidermonkey/irregexp-icu/{icu_subset.cpp,allocator.cpp,property_data.h,ucd.h,include/unicode/{uniset,unistr,usetiter,locid}.h}` | Original adapter | ICU4C API shape only, as consumed by `js/src/irregexp`. Sorted ranges and separately owned UTF-16 strings use checked SpiderMonkey allocation. The fatal path calls `AutoEnterOOMUnsafeRegion::crash`, not a bogus or silently empty set. Strict property names live in one sorted table. |
 | `crates/bunwasm-spidermonkey/src/glue/special_case.rs` | Adapted generator algorithm | `PrintSpecial`, `Canonicalize`, and `RemoveSupplementary` from `js/src/irregexp/imported/gen-regexp-special-case.cc` at the Mozilla pin. Use full-domain inverse simple-fold groups and ICU4X ROOT uppercase data instead of ICU4C. Preserve the special-add invariant check and exclude surrogates from BMP classification. Host-only, not linked into the Wasm side. |
 | `spidermonkey/irregexp-icu/templates/{gen-regexp-special-case.cc,special-case.cc,irregexp/imported/special-case.h,LICENSE.v8}` | Copied | Exact pinned generator, original generated support, predicate header, and `js/src/irregexp/LICENSE.v8`. Preserve original bytes. The generator and template hashes are checked before generation. |
-| `spidermonkey/irregexp-icu/generated/{special-case.cc,special-case.inputs.json}` | Generated, adapted from the pinned V8 template | `spidermonkey/generate-special-case.ts` renders the two computed sets into the pinned template. ROOT uppercase and simple folding use ICU4X 2.4.0. The receipt binds both generator implementations, the upstream files, Cargo.lock, exact crate checksums, source/data manifests, and the output hash. `--check` rejects stale output or custody. |
+| `spidermonkey/irregexp-icu/generated/{special-case.cc,special-case.inputs.json}` | Generated, adapted from the pinned V8 template | `spidermonkey/generate-special-case.ts` renders the two computed sets into the pinned template. ROOT uppercase and simple folding use ICU4X 2.4.0. The receipt binds both generator implementations, the upstream files, exact crate versions and checksums, source/data manifests, and the output hash. `--check` rejects stale output or custody. |
 | `spidermonkey/generate-special-case.ts`, `crates/bunwasm-spidermonkey/examples/unicode-special-case.rs` | Original generator driver | Run the host-only adapted algorithm and render its computed sets. No character exceptions are embedded in the generator. |
 | `spidermonkey/irregexp-icu/tests/`, `src/glue/ucd_tests.rs` | Original controls with adapted reference algorithm | Execute the unchanged pinned C++ predicate header against both original and generated support. The host `RegExpShim.h` substitutes only types, assertions, and static initialization. The allocator substitutes only `js/Utility.h`; it proves the allocator-to-fatal entry and exit 134, not a new native engine's fatal route. |
 | `crates/bunwasm-spidermonkey/src/glue/emoji_sequences.{rs,inputs.json}` | Generated from Unicode data | `emoji-sequences.txt` and `emoji-zwj-sequences.txt` from `https://www.unicode.org/Public/18.0.0/emoji/`, emoji version 18.0, SHA-256 `1823dce71f3dd9cb0ad1976797baee4ffbdc1909756f43af8ce4c57f732843a4` and `f61b5213bdf85a57741a9f903cb38d0f39a3d13be6ff4aca3b39857e859a9191`. Keycap bases, flag letter pairs and modifier bases are stored compactly; tag and ZWJ sequences are stored one per line. The receipt binds inputs, generator files, output hash, per-property counts and checksums, and the remaining gap list. |

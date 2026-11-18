@@ -1,0 +1,6 @@
+function openAsBlob true
+true
+true true "text/plain;charset=utf-8"
+hello blob
+"text/plain;charset=utf-8" blob
+10

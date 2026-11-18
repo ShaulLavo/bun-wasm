@@ -542,6 +542,7 @@
     readableStreamToText: async (s) => new TextDecoder().decode(await readableStreamToBytes(s)),
     readableStreamToJSON: async (s) => JSON.parse(new TextDecoder().decode(await readableStreamToBytes(s))),
     readableStreamToBlob: async (s) => new Blob([await readableStreamToBytes(s)]),
+    readableStreamToArray: (stream) => internal.require("readable_stream_methods").readableStreamToArray(stream),
     isMainThread: true,
     enableANSIColors,
     get stdout() {

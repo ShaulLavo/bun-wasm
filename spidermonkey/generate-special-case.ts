@@ -71,7 +71,9 @@ function main() {
     unicodeVersion: "18.0.0", mozillaRevision: "a5df22d986d4b626f771b4f8885241941601c35c",
     generator: [identity("spidermonkey/generate-special-case.ts"), identity("crates/bunwasm-spidermonkey/examples/unicode-special-case.rs"), identity("crates/bunwasm-spidermonkey/src/glue/special_case.rs")],
     upstream: [identity(upstreamGenerator), identity(template), identity(join(adapter, "templates/irregexp/imported/special-case.h"))],
-    lock: identity("Cargo.lock"), crates: resolvedCrates(),
+    // Each ICU crate is pinned by version, registry checksum and source hash; the whole
+    // workspace Cargo.lock is not an input to this output.
+    crates: resolvedCrates(),
     output: { path: output, sha256: hash(generated) }, ignoreCount: ignore.length, supplementary,
   };
   const receiptBytes = JSON.stringify(receipt, null, 2) + "\n";
