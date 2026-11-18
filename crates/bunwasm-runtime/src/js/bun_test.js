@@ -2083,10 +2083,31 @@
     scope.children.push(test);
   }
 
-  function registerDescribe(modifiers, name, fn) {
+  // Bun's ScopeFunctions.rs parse_arguments: a sole function is the callback, a function
+  // followed by a non-function is the callback and its options, and otherwise the first
+  // argument is the description and a function second or third is the callback.
+  function describeArguments([first, second, third]) {
+    const present = (value) => value !== undefined && value !== null;
+    if (present(third)) return { description: first, callback: typeof second === "function" ? second : third };
+    if (present(second)) return typeof first === "function" && typeof second !== "function" ? { callback: first } : { description: first, callback: second };
+    if (present(first)) return typeof first === "function" ? { callback: first } : { description: first };
+    return {};
+  }
+
+  // Bun's get_description: a class's name (empty for an anonymous class), a named function's
+  // name, or a number or string. Anything else, such as an anonymous arrow function, throws.
+  function describeLabel(description) {
+    if (description === undefined || description === null) return "";
+    if (typeof description === "function" && (description.name || /^class\b/.test(Function.prototype.toString.call(description)))) return description.name;
+    if (typeof description === "number" || typeof description === "string") return String(description);
+    throw new Error("describe() expects first argument to be a named class, named function, number, or string");
+  }
+
+  function registerDescribe(modifiers, ...args) {
     guardRegistration("describe");
     const parent = currentScope("describe");
-    const label = typeof name === "function" ? name.name : String(name);
+    const { description, callback: fn } = describeArguments(args);
+    const label = describeLabel(description);
     const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
     if (scope.only) collecting.hasOnly = true;
     parent.children.push(scope);
@@ -2188,7 +2209,7 @@
   }
 
   function makeDescribe(modifiers) {
-    const fn = (name, callback) => registerDescribe(modifiers, name, callback);
+    const fn = (...args) => registerDescribe(modifiers, ...args);
     fn.concurrent = fn;
     fn.serial = fn;
     fn.each = (table) => (name, callback) => {

@@ -1,0 +1,8 @@
+
+index.test.ts:
+(pass) registered before the error
+(pass) registered after the error
+
+ 2 pass
+ 0 fail
+Ran 2 tests across 1 file. [TIME]
