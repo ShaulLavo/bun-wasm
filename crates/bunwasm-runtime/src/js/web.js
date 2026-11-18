@@ -1052,20 +1052,20 @@
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
     if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: new Uint8Array(toUint8(body)), type: null };
-    if (body instanceof ReadableStream) return { stream: body, bytes: bodyStreams.bytes(body) || null, type: null };
+    if (body instanceof ReadableStream) return { stream: bodyStreams.adoptable(body), bytes: bodyStreams.bytes(body) || null, type: null };
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
     return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
   }
 
   async function streamBytes(stream) {
     const chunks = [];
-    await bodyStreams.consume(stream, chunk => chunks.push(typeof chunk === "string" ? native.utf8Encode(chunk) : toUint8(chunk)));
+    await bodyStreams.drain(stream, chunk => chunks.push(typeof chunk === "string" ? native.utf8Encode(chunk) : toUint8(chunk)));
     return concatBytes(chunks);
   }
 
   const BodyMixin = {
     async _consume() {
-      if (this.bodyUsed) throw new TypeError("Body already used");
+      if (this.bodyUsed || (this._stream && this._stream.locked)) throw new TypeError("Body already used");
       this._bodyUsed = true;
       if (this._stream) return streamBytes(this._stream);
       return this._body || new Uint8Array(0);
@@ -1170,7 +1170,7 @@
     get body() {
       if (this._stream) return this._stream;
       if (this._body === null) return null;
-      this._stream = internal.makeByteStream(this._body);
+      this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
       return this._stream;
     }
     clone() {
@@ -1235,7 +1235,7 @@
     get body() {
       if (this._stream) return this._stream;
       if (this._body === null) return null;
-      this._stream = internal.makeByteStream(this._body);
+      this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
       return this._stream;
     }
     clone() {

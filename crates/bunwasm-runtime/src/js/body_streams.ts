@@ -64,6 +64,23 @@
       }
     } finally { reader.releaseLock(); }
   }
+  // Fetch's "fully read" for a body: the reader is never released, so the stream stays
+  // locked, disturbed and closed (or errored) once the body is consumed.
+  async function drain<T>(stream: ReadableStream<T>, visit: (chunk: T) => void): Promise<void> {
+    const reader = stream.getReader();
+    for (let next = await reader.read(); !next.done; next = await reader.read()) await visitChunk(reader, next.value, visit);
+  }
+  // The stream a body read without one would have had: closed, disturbed and locked.
+  function consumedStream(): ReadableStream<Uint8Array> {
+    const stream = new ReadableStream<Uint8Array>({ start: controller => controller.close() });
+    void stream.getReader().read();
+    return stream;
+  }
+  // A ReadableStream body init that something already read or holds cannot become a body.
+  function adoptable(stream: ReadableStream<unknown>): ReadableStream<unknown> {
+    if (stream.locked || Reflect.get(stream, "_disturbed") === true) throw new TypeError("Body object should not be disturbed or locked");
+    return stream;
+  }
   type IterableBody = { iterator: AsyncIterator<unknown>; closed: boolean };
   async function closeIterable(body: IterableBody): Promise<void> {
     if (body.closed) return;
@@ -93,5 +110,5 @@
       cancel: () => closeIterable(body),
     }, { highWaterMark: 0 });
   }
-  return { remember, tee, clone, transfer, fromAsyncIterable, consume, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  return { remember, tee, clone, transfer, fromAsyncIterable, consume, drain, consumedStream, adoptable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })
