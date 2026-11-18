@@ -86,7 +86,7 @@
 
   // --- URLSearchParams / URL --------------------------------------------------
 
-  const { toUSVString, initFromObject, convertMethodArgs } = internal.require("url_search_params");
+  const { toUSVString, initFromObject, convertMethodArgs, inspectParams } = internal.require("url_search_params");
   const removeQueryPairs = internal.require("url_pairs");
 
   // application/x-www-form-urlencoded byte serializer.
@@ -206,6 +206,10 @@
     }
     get [Symbol.toStringTag]() {
       return "URLSearchParams";
+    }
+    [Symbol.for("nodejs.util.inspect.custom")](depth, options, inspect) {
+      const fn = typeof inspect === "function" ? inspect : internal.require("inspect").nodeInspect;
+      return inspectParams(this.constructor?.name || "URLSearchParams", this.#list, depth ?? null, options, fn);
     }
   }
 
