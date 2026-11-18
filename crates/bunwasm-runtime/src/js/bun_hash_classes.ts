@@ -3,9 +3,15 @@
 // Bun 1.4.4. Each instance digests once.
 (function (internal: BunWasm.Internal) {
   "use strict";
-  type Input = (data: unknown) => Uint8Array;
   type State = { chunks: Uint8Array[]; done: boolean };
   const CLASSES = [["MD4", "md4", 16], ["MD5", "md5", 16], ["SHA1", "sha1", 20], ["SHA224", "sha224", 28], ["SHA256", "sha256", 32], ["SHA384", "sha384", 48], ["SHA512", "sha512", 64], ["SHA512_256", "sha512-256", 32]] as const;
+
+  // Strings hash as UTF-8 and views as their bytes; anything else as its string form.
+  function input(data: unknown): Uint8Array {
+    if (typeof data === "string") return internal.native.utf8Encode(data);
+    if (ArrayBuffer.isView(data) || data instanceof ArrayBuffer) return internal.toUint8(data);
+    return internal.native.utf8Encode(String(data));
+  }
 
   function output(bytes: Uint8Array, target: unknown, byteLength: number): unknown {
     if (target === undefined) return bytes;
@@ -18,7 +24,7 @@
     return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(String(target));
   }
 
-  function define(name: string, algorithm: string, byteLength: number, input: Input) {
+  function define(name: string, algorithm: string, byteLength: number) {
     const states = new WeakMap<object, State>();
     const digestBytes = (chunks: Uint8Array[]): Uint8Array => internal.native.nodeDigest(algorithm, internal.concatBytes(chunks));
     const live = (self: object, action: string): State => {
@@ -58,5 +64,5 @@
     return Hasher;
   }
 
-  return (input: Input) => Object.fromEntries(CLASSES.map(([name, algorithm, byteLength]) => [name, define(name, algorithm, byteLength, input)]));
+  return Object.fromEntries(CLASSES.map(([name, algorithm, byteLength]) => [name, define(name, algorithm, byteLength)]));
 })

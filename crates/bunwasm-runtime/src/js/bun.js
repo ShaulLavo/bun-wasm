@@ -321,11 +321,8 @@
       return new CryptoHasher(algorithm).update(data).digest(encoding);
     }
   }
-  CryptoHasher.algorithms = digests.hasherAlgorithms.slice();
-  const hashClasses = internal.require("bun_hash_classes")((data) => {
-    const value = hashInput(data);
-    return typeof value === "string" ? native.utf8Encode(value) : value;
-  });
+  // A fresh array per read, as in Bun.
+  Object.defineProperty(CryptoHasher, "algorithms", { get: () => digests.hasherAlgorithms.slice(), enumerable: true });
 
   function randomUUIDv7(encoding, timestamp) {
     const ms = BigInt(timestamp === undefined ? Date.now() : Number(timestamp));
@@ -512,7 +509,15 @@
     which: (command, options) => internal.require("spawn").which(command, options),
     hash,
     CryptoHasher,
-    ...hashClasses,
+    // Loaded on first use; the module is cached, so each class keeps one identity.
+    get MD4() { return internal.require("bun_hash_classes").MD4; },
+    get MD5() { return internal.require("bun_hash_classes").MD5; },
+    get SHA1() { return internal.require("bun_hash_classes").SHA1; },
+    get SHA224() { return internal.require("bun_hash_classes").SHA224; },
+    get SHA256() { return internal.require("bun_hash_classes").SHA256; },
+    get SHA384() { return internal.require("bun_hash_classes").SHA384; },
+    get SHA512() { return internal.require("bun_hash_classes").SHA512; },
+    get SHA512_256() { return internal.require("bun_hash_classes").SHA512_256; },
     randomUUIDv7,
     peek,
     gc: () => native.gc(),
