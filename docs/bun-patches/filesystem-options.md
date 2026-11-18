@@ -59,4 +59,11 @@ callback. `fs_options.ts` takes the inspector from `node_fs.js`, which loads it 
 when an error message needs it. The `fs-flag-mode-validation` fixture covers these
 cases.
 
+`writeSync`, `fs.write` and `writevSync` treat only a non-negative safe integer as a
+file position, as Node's `GetOffset` in `src/node_file.cc` does; NaN, ±Infinity,
+fractions, numbers past `Number.MAX_SAFE_INTEGER`, negative numbers and BigInts
+write at the current file offset instead of being truncated to a position. The
+`fs-write-position` fixture compares buffer, string, vector and callback writes
+with native Bun 1.4.4.
+
 Waffle at `b20fad173ebaa225cb87c51776f35edaaafd4a40` already supplies create, exclusive, truncate and append semantics. NONBLOCK support remains Waffle #111; unsupported open bits fail explicitly here. Link-count accuracy remains Waffle #115. Cold persistent-file hydration remains Waffle #112. Bigint representation does not repair incorrect underlying metadata. This change does not implement those capabilities in the consumer.
