@@ -44,6 +44,24 @@ module on first use.
 one digest per instance, and Bun's errors for a second digest, a short target and
 a call without `new`.
 
+`crypto.pbkdf2` and `pbkdf2Sync` come from the original adapter
+`crates/bunwasm-runtime/src/js/node_pbkdf2.ts`, following the argument checks of
+Node's `lib/internal/crypto/pbkdf2.js` with native Bun 1.4.4's messages: digest
+first, then password and salt (string or buffer), then iterations (1 to 2^31 - 1)
+and keylen (0 to 2^31 - 1), and for the callback form the callback last, all thrown
+synchronously. The digest is any `Bun.CryptoHasher` algorithm that supports HMAC,
+as in Bun, so `SHA256`, `sha3-256` and `blake2b512` work while `rsa-sha256`,
+`md5-sha1`, SHAKE and BLAKE2s-256 report `Invalid digest`. A zero keylen fails
+with `PBKDF2 derivation failed`, thrown by `pbkdf2Sync` and passed to the callback
+by `pbkdf2`. The callback runs from the immediate queue in the caller's async
+context with exactly `(null, key)`. `node_digest.rs` derives the key through the
+`pbkdf2` crate for MD5, SHA-1 and SHA-2 and through an RFC 8018 loop over the
+generic HMAC for the rest, and fails a key length the guest cannot allocate with
+`RangeError: Out of memory`. `crypto_keys.ts` keeps its earlier WebCrypto-based
+`pbkdf2Sync`, which `builtins.js` now shadows: that file is pinned by a syntax
+guard in `scripts/crypto-keys.test.ts`. The `node-crypto-pbkdf2` fixture compares
+vectors, every digest name and each argument error with native Bun.
+
 `Hash` and `Hmac` objects are Transform streams through the original adapter
 `crates/bunwasm-runtime/src/js/crypto_hash_stream.ts`, which follows Node's
 `lib/internal/streams/lazy_transform.js`: the prototype chain gains

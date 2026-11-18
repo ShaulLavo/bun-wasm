@@ -66,4 +66,14 @@ write at the current file offset instead of being truncated to a position. The
 `fs-write-position` fixture compares buffer, string, vector and callback writes
 with native Bun 1.4.4.
 
+The `encoding` option of `readFile`, `writeFile`, `appendFile`, `readdir`,
+`readlink`, `realpath` and `mkdtemp` (sync, callback and promise forms) is checked
+by `encodingOf`: anything `Buffer.isEncoding` rejects, other than `"buffer"`,
+throws `ERR_INVALID_ARG_VALUE` with native Bun 1.4.4's message
+(`encoding 'test' is an invalid encoding`), synchronously for the callback forms.
+`fs.ReadStream` and `fs.WriteStream` use Node's wording
+(`The argument 'encoding' is invalid encoding. Received 'test'`). `"buffer"` reads
+return a Buffer, and a string written with it becomes Latin-1 bytes, as in Bun.
+The `fs-encoding-validation` fixture compares these with native Bun.
+
 Waffle at `b20fad173ebaa225cb87c51776f35edaaafd4a40` already supplies create, exclusive, truncate and append semantics. NONBLOCK support remains Waffle #111; unsupported open bits fail explicitly here. Link-count accuracy remains Waffle #115. Cold persistent-file hydration remains Waffle #112. Bigint representation does not repair incorrect underlying metadata. This change does not implement those capabilities in the consumer.

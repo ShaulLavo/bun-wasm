@@ -62,13 +62,16 @@
     }
   }
 
+  // The encoding option of an fs call, rejected the way Bun does when it is not one Buffer knows.
   function encodingOf(options) {
-    if (typeof options === "string") return options;
-    if (options && typeof options === "object") return options.encoding || null;
-    return null;
+    const encoding = typeof options === "string" ? options : options && typeof options === "object" ? options.encoding || null : null;
+    if (encoding === null || encoding === "buffer" || Buffer.isEncoding(encoding)) return encoding;
+    throw Object.assign(new TypeError(`encoding '${String(encoding)}' is an invalid encoding`), { code: "ERR_INVALID_ARG_VALUE" });
   }
 
   function toBytes(data, encoding) {
+    // Bun writes a string given the "buffer" encoding as Latin-1 bytes.
+    if (typeof data === "string" && encoding === "buffer") return Buffer.from(data, "latin1");
     if (typeof data === "string") return encoding && encoding !== "utf8" && encoding !== "utf-8" ? Buffer.from(data, encoding) : data;
     if (ArrayBuffer.isView(data)) return internal.toUint8(data);
     if (data instanceof ArrayBuffer) return new Uint8Array(data);
@@ -283,7 +286,7 @@
     flagsNumber((options && typeof options === "object" ? options.flag : undefined) ?? "r");
     const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => native.readFile(abs));
     const buf = asBuffer(bytes);
-    return encoding ? buf.toString(encoding) : buf;
+    return encoding && encoding !== "buffer" ? buf.toString(encoding) : buf;
   }
 
   function readAllFd(fd) {
@@ -397,7 +400,8 @@
     promises.cp(from, to, options).then(() => later(() => callback(null)), error => later(() => callback(error)));
   }
 
-  function realpathSync(path) {
+  function realpathSync(path, options) {
+    encodingOf(options);
     return withPath(path, (abs) => native.realpath(abs === "" ? absolute(".") : abs));
   }
   realpathSync.native = realpathSync;
@@ -407,7 +411,8 @@
     withPath(path, (abs) => native.stat(abs, false));
   }
 
-  function mkdtempSync(prefix) {
+  function mkdtempSync(prefix, options) {
+    encodingOf(options);
     const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     for (;;) {
       const bytes = native.randomBytes(6);
@@ -702,7 +707,10 @@
     fstatSync: (fd, options) => new Stats(native.fstat(fd, Boolean(options && options.bigint)), Boolean(options && options.bigint)),
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
-    readlinkSync: (path) => withPath(path, (abs) => native.readlink(abs)),
+    readlinkSync: (path, options) => {
+      encodingOf(options);
+      return withPath(path, (abs) => native.readlink(abs));
+    },
     symlinkSync: (target, path) => withPath(path, (abs) => native.symlink(toPath(target, "target"), abs)),
     linkSync: (from, to) => withPath(from, (abs) => native.link(abs, absolute(toPath(to, "newPath")))),
     chmodSync: (path) => void statSync(path),
@@ -878,6 +886,7 @@
   function fileStreams() {
     fileStreamAdapter ??= internal.require("fs_stream_constructors")({
       read: native.read, asBuffer, openSync, closeSync, writeSync, toPath, validateFd, readRange, invalidArg,
+      isEncoding: (encoding) => Buffer.isEncoding(encoding), inspect: (value) => internal.require("inspect").nodeInspect(value),
       readPieceSize: kReadPiece, isRegularReadFd,
       loadStreams: () => internal.builtin("node:stream"),
     });

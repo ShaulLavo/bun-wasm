@@ -211,6 +211,7 @@ declare namespace BunWasm {
     /** node:crypto and Bun hashers (node_digest.rs): (canonical name, data, output length). */
     nodeDigest(algorithm: string, data: Uint8Array, outputLength?: number): Uint8Array;
     nodeHmac(algorithm: string, key: Uint8Array, data: Uint8Array): Uint8Array;
+    nodePbkdf2(algorithm: string, password: Uint8Array, salt: Uint8Array, iterations: number, keylen: number): Uint8Array;
     streams: {
       /** A node:zlib native handle: (mode, options JSON, dictionary). */
       codec(mode: string, options?: string, dictionary?: Uint8Array): number;
