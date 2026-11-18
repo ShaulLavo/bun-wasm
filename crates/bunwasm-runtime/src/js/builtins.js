@@ -39,7 +39,7 @@
     const env = globalThis.process.env;
     const signals = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15 };
     const cpu = { model: "wasm32", speed: 0, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } };
-    return {
+    return internal.require("node_os_values")({
       EOL: "\n",
       devNull: "/dev/null",
       arch: () => globalThis.process.arch,
@@ -63,7 +63,7 @@
       getPriority: () => 0,
       setPriority() {},
       constants: { signals, errno: {}, priority: {}, dlopen: {}, UV_UDP_REUSEADDR: 4 },
-    };
+    });
   }
 
   // --- crypto ---------------------------------------------------------------
