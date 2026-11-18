@@ -101,24 +101,93 @@ fn block_size(alg: &str) -> Option<usize> {
     })
 }
 
+/// An RFC 2104 HMAC key: the inner and outer padded keys for one digest.
+struct HmacKey<'a> {
+    alg: &'a str,
+    ipad: Vec<u8>,
+    opad: Vec<u8>,
+}
+
+impl<'a> HmacKey<'a> {
+    fn new(alg: &'a str, key: &[u8]) -> Option<Self> {
+        let block = block_size(alg)?;
+        let hashed;
+        let key = if key.len() > block {
+            hashed = fixed_digest(alg, &[key])?;
+            hashed.as_slice()
+        } else {
+            key
+        };
+        let mut ipad = vec![0x36u8; block];
+        let mut opad = vec![0x5cu8; block];
+        for (i, byte) in key.iter().enumerate() {
+            ipad[i] ^= byte;
+            opad[i] ^= byte;
+        }
+        Some(HmacKey { alg, ipad, opad })
+    }
+
+    fn mac(&self, parts: &[&[u8]]) -> Option<Vec<u8>> {
+        let mut inner_parts = Vec::with_capacity(parts.len() + 1);
+        inner_parts.push(self.ipad.as_slice());
+        inner_parts.extend_from_slice(parts);
+        let inner = fixed_digest(self.alg, &inner_parts)?;
+        fixed_digest(self.alg, &[&self.opad, &inner])
+    }
+}
+
 /// RFC 2104 HMAC over any fixed-size digest above; `None` for SHAKE and unknown names.
 pub fn hmac(alg: &str, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
-    let block = block_size(alg)?;
-    let hashed;
-    let key = if key.len() > block {
-        hashed = fixed_digest(alg, &[key])?;
-        hashed.as_slice()
-    } else {
-        key
-    };
-    let mut ipad = vec![0x36u8; block];
-    let mut opad = vec![0x5cu8; block];
-    for (i, byte) in key.iter().enumerate() {
-        ipad[i] ^= byte;
-        opad[i] ^= byte;
+    HmacKey::new(alg, key)?.mac(&[data])
+}
+
+/// RFC 8018 PBKDF2 with HMAC over `alg`. The common digests use the `pbkdf2` crate;
+/// the others iterate the generic HMAC above.
+pub fn pbkdf2(
+    alg: &str,
+    password: &[u8],
+    salt: &[u8],
+    iterations: u32,
+    keylen: usize,
+) -> Result<Vec<u8>, DigestError> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(keylen)
+        .map_err(|_| DigestError::OutOfMemory)?;
+    out.resize(keylen, 0);
+    macro_rules! fast {
+        ($d:ty) => {{
+            pbkdf2::pbkdf2_hmac::<$d>(password, salt, iterations, &mut out);
+            return Ok(out);
+        }};
     }
-    let inner = fixed_digest(alg, &[&ipad, data])?;
-    fixed_digest(alg, &[&opad, &inner])
+    match alg {
+        "md5" => fast!(md5::Md5),
+        "sha1" => fast!(sha1::Sha1),
+        "sha256" => fast!(sha2::Sha256),
+        "sha384" => fast!(sha2::Sha384),
+        "sha512" => fast!(sha2::Sha512),
+        _ => {}
+    }
+    let key = HmacKey::new(alg, password).ok_or(DigestError::Unsupported)?;
+    let mut written = 0;
+    let mut index: u32 = 1;
+    while written < keylen {
+        let mut block = key
+            .mac(&[salt, &index.to_be_bytes()])
+            .ok_or(DigestError::Unsupported)?;
+        let mut sum = block.clone();
+        for _ in 1..iterations {
+            block = key.mac(&[&block]).ok_or(DigestError::Unsupported)?;
+            for (total, byte) in sum.iter_mut().zip(&block) {
+                *total ^= byte;
+            }
+        }
+        let take = (keylen - written).min(sum.len());
+        out[written..written + take].copy_from_slice(&sum[..take]);
+        written += take;
+        index += 1;
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -181,5 +250,29 @@ mod tests {
             "28bc0433ef684ea9877c2f2437aa0ccfc2e8eb3a9b4c731606877b4f",
         );
         assert_eq!(hmac("shake128", b"key", b"abc"), None);
+    }
+
+    #[test]
+    fn known_pbkdf2() {
+        let check = |alg: &str, expected: &str| {
+            let out = pbkdf2(alg, b"p", b"s", 2, 8).ok().expect("supported");
+            assert_eq!(hex(&out), expected, "{alg}");
+        };
+        // Native Bun 1.4.4 output; the first uses the crate, the rest the generic loop.
+        check("md5", "c9641e374bfab772");
+        check("sha3-256", "d15fbbb4c04a81cc");
+        check("blake2b256", "ab46b45423284e1e");
+        check("md4", "fb666dd1e5c3a7d9");
+        check("sha512-224", "cc69191b8129012e");
+        check("ripemd160", "332c478ecdc03e9f");
+        // RFC 6070 test vector 2 (SHA-1, two iterations).
+        let rfc = pbkdf2("sha1", b"password", b"salt", 2, 20)
+            .ok()
+            .expect("sha1");
+        assert_eq!(hex(&rfc), "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957");
+        assert!(matches!(
+            pbkdf2("shake128", b"p", b"s", 1, 8),
+            Err(DigestError::Unsupported)
+        ));
     }
 }

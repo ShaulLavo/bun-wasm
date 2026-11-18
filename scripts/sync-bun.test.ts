@@ -34,7 +34,9 @@ function fixture(run: (f: { root: string; repository: string; vendor: string; ba
     git(repository, "worktree", "add", "--detach", vendor, first);
     // The fixture pins its tiny upstream rather than downloading Bun. All sync
     // logic, including linked-worktree handling and patch verification, is unchanged.
-    const script = readFileSync(new URL("./sync-bun.sh", import.meta.url), "utf8").replace(/^BUN_COMMIT=.*$/m, `BUN_COMMIT=${base}`);
+    const script = readFileSync(new URL("./sync-bun.sh", import.meta.url), "utf8")
+      .replace(/^BUN_COMMIT=.*$/m, `BUN_COMMIT=${base}`)
+      .replace("https://github.com/oven-sh/bun.git", `file://${repository}`);
     writeFileSync(join(root, "scripts", "sync-bun.sh"), script);
     writeFileSync(join(root, "env.sh"), 'export TMPDIR="$BUN_WASM_TEST_TMP"\n');
     const sync = (args: string[] = []) => Bun.spawnSync(["bash", join(root, "scripts", "sync-bun.sh"), "--source-only"].concat(args), {
@@ -100,5 +102,39 @@ test("source check never creates a missing checkout", () => {
     const result = sync(["--check"]);
     expect(result.exitCode).toBe(1);
     expect((result.stderr ?? "").toString()).toContain("missing vendor/bun checkout");
+  });
+});
+
+test("cold source sync fetches only the pinned revision and verifies every patch", () => {
+  fixture(({ repository, vendor, base, git, sync }) => {
+    git(repository, "worktree", "remove", vendor);
+    git(repository, "config", "uploadpack.allowFilter", "true");
+    const tree = git(repository, "rev-parse", "HEAD^{tree}");
+    writeFileSync(join(repository, "default-only.txt"), "not part of the pinned source\n");
+    git(repository, "add", "default-only.txt");
+    git(repository, "commit", "-m", "unrelated upstream default branch");
+    git(repository, "tag", "default-only");
+    const result = sync();
+    expect(result.exitCode).toBe(0);
+    expect(git(vendor, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(readFileSync(join(vendor, ".git", "shallow"), "utf8").trim()).toBe(base);
+    expect(git(vendor, "rev-list", "--count", "HEAD")).toBe("3");
+    expect(git(vendor, "rev-parse", "HEAD^{tree}")).toBe(tree);
+    expect(() => readFileSync(join(vendor, "default-only.txt"))).toThrow();
+    expect(git(vendor, "branch", "--show-current")).toBe("wasm");
+    expect(git(vendor, "tag", "--list")).toBe("");
+    expect(sync(["--check"]).exitCode).toBe(0);
+    expect(sync().exitCode).toBe(0);
+  });
+});
+
+test("cold source sync refuses a broken checked-in patch", () => {
+  fixture(({ root, repository, vendor, git, sync }) => {
+    git(repository, "worktree", "remove", vendor);
+    git(repository, "config", "uploadpack.allowFilter", "true");
+    writeFileSync(join(root, "patches/bun/0000-broken.patch"), "invalid patch\n");
+    expect(sync().exitCode).not.toBe(0);
+    expect(git(vendor, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(sync(["--check"]).exitCode).not.toBe(0);
   });
 });
