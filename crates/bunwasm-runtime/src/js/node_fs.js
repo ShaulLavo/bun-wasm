@@ -882,7 +882,7 @@
     fileStreamAdapter ??= internal.require("fs_stream_constructors")({
       read: native.read, asBuffer, openSync, closeSync, writeSync, toPath, validateFd, readRange, invalidArg,
       isEncoding: (encoding) => Buffer.isEncoding(encoding), inspect: (value) => internal.require("inspect").nodeInspect(value),
-      readPieceSize: kReadPiece, isRegularReadFd,
+      readPieceSize: kReadPiece, isRegularReadFd, later,
       loadStreams: () => internal.builtin("node:stream"),
     });
     return fileStreamAdapter;

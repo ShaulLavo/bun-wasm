@@ -35,10 +35,16 @@
     validators: object;
     utils: object;
     eos: { kEosNodeSynchronousCallback: unknown };
-    util: { normalizeEncoding: unknown };
   };
   const streams = internal.require("streams");
   const { Buffer } = internal.require("buffer");
+  // Node's internal/util normalizeEncoding. readable-stream's util has none, so the Node
+  // adapters' write() called undefined for a string chunk in any encoding but UTF-8.
+  const encodings = new Map([["utf8", "utf8"], ["utf-8", "utf8"], ["ucs2", "utf16le"], ["ucs-2", "utf16le"], ["utf16le", "utf16le"], ["utf-16le", "utf16le"], ["latin1", "latin1"], ["binary", "latin1"], ["base64", "base64"], ["base64url", "base64url"], ["hex", "hex"], ["ascii", "ascii"]]);
+  function normalizeEncoding(encoding: unknown): string | undefined {
+    if (encoding === undefined || encoding === null || encoding === "") return "utf8";
+    return typeof encoding === "string" ? encodings.get(encoding.toLowerCase()) : undefined;
+  }
   const pipelineBuffers = Symbol.for("bun-wasm.pipeline.buffers");
   const closedKey = Symbol.for("nodejs.webstream.isClosedPromise");
   const errorKey = Symbol.for("nodejs.webstream.controllerErrorFunction");
@@ -109,7 +115,7 @@
     eos: Bundle["eos"];
     kEosNodeSynchronousCallback: Bundle["eos"]["kEosNodeSynchronousCallback"];
     kEmptyObject: object;
-    normalizeEncoding: Bundle["util"]["normalizeEncoding"];
+    normalizeEncoding: typeof normalizeEncoding;
     isAnyArrayBuffer(value: unknown): boolean;
     isReadableStream(value: unknown): boolean;
     isWritableStream(value: unknown): boolean;
@@ -146,7 +152,7 @@
         eos: bundle.eos,
         kEosNodeSynchronousCallback: bundle.eos.kEosNodeSynchronousCallback,
         kEmptyObject: Object.freeze({ __proto__: null }),
-        normalizeEncoding: bundle.util.normalizeEncoding,
+        normalizeEncoding,
         isAnyArrayBuffer: types.isAnyArrayBuffer,
         isReadableStream: brand(streams.ReadableStream),
         isWritableStream: brand(streams.WritableStream),
