@@ -29,6 +29,12 @@ PAIRED_ENGINES = {"quickjs": "quickjs.wasm", "jsc": "jsc-engine.wasm"}
 # bash-web's guests behind /bin/sh, /bin/bash and /bin/env. Bun.$, package scripts
 # and spawned shells fail with ENOENT without them, as scripts/test.sh registers.
 SHELL_GUESTS = {"--shell": "bash-web-shell.wasm", "--env-utility": "bash-web-env.wasm"}
+# The upstream snapshot's directory in each lane, which is also its guest path. Not "bun": the
+# suite's harness replaces the working directory in printed paths, and "/bun" occurs inside
+# upstream paths such as test/js/bun/test. The name also avoids the failure classifier's
+# keywords in scripts/bun-suite-report.py ("upstream" would match its "stream/").
+SNAPSHOT = "workdir"
+GUEST_TESTS = f"/{SNAPSHOT}/test/"
 # The Node host refuses shell guests without their build receipt beside them.
 SHELL_RECEIPT = "bash-web-guests.json"
 
@@ -246,16 +252,16 @@ def runs_as_script(opts, source, path):
 
 def command(opts, wasm, work, preloads, path):
     # One root preopen, as scripts/test.sh uses: the shell guest needs "/", and
-    # /bun and /tmp still map to this lane's snapshot and scratch.
+    # /workdir and /tmp still map to this lane's snapshot and scratch.
     dirs = ["--dir", f"{work}::/"]
-    env = {"PWD": "/bun", "HOME": "/tmp", "TMPDIR": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin", "CI": "1", "AGENT": "0", "NO_COLOR": "1", "BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING": "1", "BUNWASM_TEST": "1"}
+    env = {"PWD": f"/{SNAPSHOT}", "HOME": "/tmp", "TMPDIR": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin", "CI": "1", "AGENT": "0", "NO_COLOR": "1", "BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING": "1", "BUNWASM_TEST": "1"}
     flags = [part for key, value in env.items() for part in ["--env", f"{key}={value}"]]
     flags += [part for flag, name in SHELL_GUESTS.items() for part in [flag, str(wasm.with_name(name))]]
-    script = runs_as_script(opts, work / "bun/test" / path, path)
-    tests = ["run", "/bun/test/" + path] if script else ["test", "--timeout", str(opts.test_timeout)]
+    script = runs_as_script(opts, work / SNAPSHOT / "test" / path, path)
+    tests = ["run", GUEST_TESTS + path] if script else ["test", "--timeout", str(opts.test_timeout)]
     if tests[0] == "test":
-        tests += [part for preload in preloads for part in ["--preload", "/bun/test/" + preload.removeprefix("./")]]
-        tests += ["/bun/test/" + path]
+        tests += [part for preload in preloads for part in ["--preload", GUEST_TESTS + preload.removeprefix("./")]]
+        tests += [GUEST_TESTS + path]
     if opts.engine == "browser":
         return ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--net"] + dirs + flags + ["--"] + tests
     return [str(opts.launcher), "--wasm", str(wasm)] + dirs + flags + tests
@@ -280,7 +286,7 @@ def worker(opts, wasm, source, scratch, preloads, pending, finished):
         # `work` is the guest's root. The lane's output log sits beside it, out of reach.
         work = Path(temporary) / "root"
         work.mkdir()
-        subprocess.run(["cp", "-a", "--reflink=auto", str(source), str(work / "bun")], check=True)
+        subprocess.run(["cp", "-a", "--reflink=auto", str(source), str(work / SNAPSHOT)], check=True)
         worker_loop(opts, wasm, work, preloads, pending, finished)
 
 
@@ -290,19 +296,23 @@ def output_log(work):
 
 def reset_root(work):
     """Return the guest's root to the clean snapshot alone before the next file."""
+    snapshot = work / SNAPSHOT
+    # A test that replaced the snapshot with a symlink would point the reset at the link target.
+    if snapshot.is_symlink():
+        raise RuntimeError("A test replaced the lane's snapshot with a symlink")
     # Reset tracked edits and delete ALL generated files, including ignored
     # files. The upstream checkout is never opened.
-    git(work / "bun", "reset", "--hard", "-q", "HEAD")
-    git(work / "bun", "clean", "-ffdxq")
+    git(snapshot, "reset", "--hard", "-q", "HEAD")
+    git(snapshot, "clean", "-ffdxq")
     # Anything a test wrote elsewhere at the root, /tmp included, goes too.
     for entry in work.iterdir():
-        if entry.name == "bun":
+        if entry.name == SNAPSHOT:
             continue
         if entry.is_dir() and not entry.is_symlink():
             shutil.rmtree(entry)
         else:
             entry.unlink()
-    if git(work / "bun", "status", "--porcelain"):
+    if git(snapshot, "status", "--porcelain"):
         raise RuntimeError("Worker did not return to its clean snapshot")
 
 
@@ -325,7 +335,7 @@ def invoke(opts, wasm, work, preloads, path):
         argv = command(opts, wasm, work, preloads, path)
         if opts.network == "loopback":
             argv = loopback_command(argv)
-        proc = subprocess.Popen(argv, cwd=work / "bun/test", stdin=subprocess.DEVNULL, stdout=output, stderr=output, start_new_session=True)
+        proc = subprocess.Popen(argv, cwd=work / SNAPSHOT / "test", stdin=subprocess.DEVNULL, stdout=output, stderr=output, start_new_session=True)
         with LOCK:
             PROCESSES.add(proc)
         try:
@@ -348,9 +358,9 @@ def invoke(opts, wasm, work, preloads, path):
         log.write_text(text)
     result = parse_output(text)
     result.update(file=path, exit=proc.returncode, duration_seconds=round(time.monotonic() - started, 3), timed_out=timed_out, output_bytes=size, interrupted=STOP.is_set())
-    result["assertion_script"] = is_assertion_script(opts, work / "bun/test" / path, path)
+    result["assertion_script"] = is_assertion_script(opts, work / SNAPSHOT / "test" / path, path)
     result["skipped_script"] = result["assertion_script"] and bool(re.search(r"^1\.\.0 # Skipped:", text, re.M))
-    result["kind"] = "script" if runs_as_script(opts, work / "bun/test" / path, path) else "test"
+    result["kind"] = "script" if runs_as_script(opts, work / SNAPSHOT / "test" / path, path) else "test"
     if result["skipped_script"]: result["counts"]["skip"] += 1
     if result["kind"] == "script": result["complete"] = not timed_out and not STOP.is_set()
     result["fully_passing"] = proc.returncode == 0 and result["complete"] and not result["skipped_script"] and result["counts"]["fail"] == 0 and result["counts"]["errors"] == 0 and (result["counts"]["pass"] > 0 or result["kind"] == "script")

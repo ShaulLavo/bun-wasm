@@ -74,6 +74,14 @@ array are not read. The `test-array-symbol-equality` fixture covers these
 rules, and the utility migration AST guard lists the three new helpers with the
 other Bun-owned functions.
 
+`toEqual`'s ancestor memo (`expectMemo`) follows the stack check in
+`Bun__deepEquals`: a value already being compared must meet the same partner
+again, so a cycle on only one side, or through another property, is unequal.
+A detached ArrayBuffer equals no other buffer, not even a zero-length or
+another detached one (`arrayBuffersEqual`, `isDetachedBuffer`, which
+`bunCompareSpecial` also uses). Node's `isDeepStrictEqual` memo is unchanged.
+The `test-equality-cycles-detached` fixture covers both.
+
 The separate adapters are the Bun equality helpers, expectation file tokens and
 labels, and promise throw outcomes. Diagnostic pretty formatting remains the
 port described in [Bun test diff formatting](bun-test-diff-formatting.md).

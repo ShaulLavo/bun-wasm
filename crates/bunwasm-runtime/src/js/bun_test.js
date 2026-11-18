@@ -141,13 +141,14 @@
 
   class StringMatchingMatcher extends AsymmetricMatcher {
     matches(other) {
-      if (typeof other !== "string") return false;
+      // A String object sample is accepted but, as in Bun, matches nothing.
+      if (typeof other !== "string" || !(typeof this.sample === "string" || this.sample instanceof RegExp)) return false;
       const re = typeof this.sample === "string" ? new RegExp(this.sample) : this.sample;
       re.lastIndex = 0;
       return re.test(other);
     }
     describe(format) {
-      return `${this.inverse ? "StringNotMatching" : "StringMatching"} ${format(this.sample)}`;
+      return `${this.inverse ? "StringNotMatching" : "StringMatching"} ${format(this.sample instanceof String ? String(this.sample) : this.sample)}`;
     }
   }
 
@@ -241,21 +242,28 @@
   }
 
   /** toMatchObject: every property of `expected` is present and matches in `received`. */
+  // Bun__deepMatch matches arrays exactly: the same length and the same number of enumerable
+  // keys (symbols included), then every key of the expected array.
+  function matchesArray(received, expected, seen) {
+    if (!Array.isArray(received) || received.length !== expected.length) return false;
+    const keys = enumerableOwnKeys(expected);
+    if (enumerableOwnKeys(received).length !== keys.length) return false;
+    return matcherSupport.every(keys, key => key in received && matchesObject(received[key], expected[key], seen));
+  }
+
   function matchesObject(received, expected, seen) {
     const asymmetric = compareAsymmetric(received, expected);
     if (asymmetric !== undefined) return asymmetric;
     if (!isObjectLike(expected) || !isObjectLike(received)) return equals(received, expected, false);
-    if (Array.isArray(expected)) {
-      if (!Array.isArray(received) || received.length !== expected.length) return false;
-      return matcherSupport.every(expected, (item, i) => matchesObject(received[i], item, seen));
-    }
+    if (Array.isArray(expected)) return matchesArray(received, expected, seen);
     if (!isPlainObject(expected) && !isPlainObject(received)) {
       if (expected instanceof Date || expected instanceof RegExp || expected instanceof Map || expected instanceof Set) {
         return equals(received, expected, false);
       }
     }
     const visited = seen || new Set();
-    return matcherSupport.ancestors(visited, expected, () => matcherSupport.every(Object.keys(expected), key => {
+    // Bun__deepMatch reads the expected object's enumerable symbol keys as well as its strings.
+    return matcherSupport.ancestors(visited, expected, () => matcherSupport.every(enumerableOwnKeys(expected), key => {
       if (!(key in received)) return false;
       return matchesObject(received[key], expected[key], visited);
     }));
@@ -875,6 +883,11 @@
     return value;
   }
 
+  // Bun's isString also accepts String objects, derived ones included; they match by value.
+  function isStringSample(value) {
+    return typeof value === "string" || value instanceof String;
+  }
+
   function factoryError(signature, problem) {
     return new Error(`expect.${signature}\n\n${problem}`);
   }
@@ -911,12 +924,12 @@
       return flagged(this, new AnyMatcher(args[0]));
     }
     stringContaining(sample) {
-      if (typeof sample !== "string") throw factoryError("stringContaining(string)", "Expected a string\n");
-      return flagged(this, new StringContainingMatcher(sample));
+      if (!isStringSample(sample)) throw factoryError("stringContaining(string)", "Expected a string\n");
+      return flagged(this, new StringContainingMatcher(String(sample)));
     }
     stringMatching(sample) {
       // Bun names stringContaining in this message too.
-      if (typeof sample !== "string" && !(sample instanceof RegExp)) throw factoryError("stringContaining(string)", "Expected a string or regular expression\n");
+      if (!isStringSample(sample) && !(sample instanceof RegExp)) throw factoryError("stringContaining(string)", "Expected a string or regular expression\n");
       return flagged(this, new StringMatchingMatcher(sample));
     }
     objectContaining(sample) {
@@ -2070,10 +2083,31 @@
     scope.children.push(test);
   }
 
-  function registerDescribe(modifiers, name, fn) {
+  // Bun's ScopeFunctions.rs parse_arguments: a sole function is the callback, a function
+  // followed by a non-function is the callback and its options, and otherwise the first
+  // argument is the description and a function second or third is the callback.
+  function describeArguments([first, second, third]) {
+    const present = (value) => value !== undefined && value !== null;
+    if (present(third)) return { description: first, callback: typeof second === "function" ? second : third };
+    if (present(second)) return typeof first === "function" && typeof second !== "function" ? { callback: first } : { description: first, callback: second };
+    if (present(first)) return typeof first === "function" ? { callback: first } : { description: first };
+    return {};
+  }
+
+  // Bun's get_description: a class's name (empty for an anonymous class), a named function's
+  // name, or a number or string. Anything else, such as an anonymous arrow function, throws.
+  function describeLabel(description) {
+    if (description === undefined || description === null) return "";
+    if (typeof description === "function" && (description.name || /^class\b/.test(Function.prototype.toString.call(description)))) return description.name;
+    if (typeof description === "number" || typeof description === "string") return String(description);
+    throw new Error("describe() expects first argument to be a named class, named function, number, or string");
+  }
+
+  function registerDescribe(modifiers, ...args) {
     guardRegistration("describe");
     const parent = currentScope("describe");
-    const label = typeof name === "function" ? name.name : String(name);
+    const { description, callback: fn } = describeArguments(args);
+    const label = describeLabel(description);
     const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
     if (scope.only) collecting.hasOnly = true;
     parent.children.push(scope);
@@ -2175,7 +2209,7 @@
   }
 
   function makeDescribe(modifiers) {
-    const fn = (name, callback) => registerDescribe(modifiers, name, callback);
+    const fn = (...args) => registerDescribe(modifiers, ...args);
     fn.concurrent = fn;
     fn.serial = fn;
     fn.each = (table) => (name, callback) => {
