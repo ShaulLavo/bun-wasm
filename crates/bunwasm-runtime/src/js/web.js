@@ -888,7 +888,10 @@
       return this._bytes().slice();
     }
     async formData() {
-      throw new TypeError("Blob.formData() is not supported in bun-wasm");
+      const forms = formBody();
+      const encoding = forms.api.encoding(this.type);
+      if (!encoding) throw new Error("Invalid encoding");
+      return forms.api.parse(this._bytes(), encoding, forms.deps, reason => new Error(`FormData encoding failed: ${reason}`));
     }
     slice(start = 0, end = undefined, type = "") {
       const bytes = this._bytes();
@@ -1058,7 +1061,10 @@
       return { bytes: native.utf8Encode(body.toString()), type: "application/x-www-form-urlencoded;charset=UTF-8" };
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
-    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: new Uint8Array(toUint8(body)), type: null };
+    if (body instanceof FormData) return formBody().api.serialize(body, formBody().deps);
+    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && body instanceof SharedArrayBuffer)) {
+      return { bytes: new Uint8Array(toUint8(body)), type: null };
+    }
     if (body instanceof ReadableStream) return { stream: body, bytes: bodyStreams.bytes(body) || null, type: null };
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
     return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
@@ -1098,7 +1104,12 @@
       return blob;
     },
     async formData() {
-      throw new TypeError("formData() is not supported in bun-wasm");
+      const forms = formBody();
+      const encoding = forms.api.encoding(this.headers.get("content-type"));
+      // Bun rejects an undecodable type without using the body; a used body reports that first.
+      if (!encoding && !this.bodyUsed) throw formParseError("Can't decode form data from body because of incorrect MIME type/boundary");
+      const bytes = await this._consume();
+      return forms.api.parse(bytes, encoding, forms.deps, reason => formParseError(`FormData parse error ${reason}`));
     },
     textStream() {
       return bodyStreams.textStream(this);
@@ -1296,7 +1307,7 @@
     toml: "application/toml", xml: "application/xml", svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg",
     jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", ico: "image/x-icon", wasm: "application/wasm",
     pdf: "application/pdf", zip: "application/zip", gz: "application/gzip", csv: "text/csv;charset=utf-8",
-    mp3: "audio/mpeg", mp4: "video/mp4", woff: "font/woff", woff2: "font/woff2",
+    mp3: "audio/mpeg", mp4: "video/mp4", woff: "font/woff", woff2: "font/woff2", bin: "application/octet-stream",
   };
   internal.mimeType = function mimeType(path) {
     const dot = path.lastIndexOf(".");
@@ -1375,9 +1386,7 @@
     if (!ArrayBuffer.isView(array) || array instanceof Float32Array || array instanceof Float64Array || array instanceof DataView) {
       throw new DOMException("The data argument must be an integer-type TypedArray", "TypeMismatchError");
     }
-    if (array.byteLength > 65536) {
-      throw new DOMException(`The ArrayBufferView's byte length (${array.byteLength}) exceeds the number of bytes of entropy available via this API (65536)`, "QuotaExceededError");
-    }
+    // Bun has no 65536-byte quota; the Browser host's random_get fills in chunks.
     toUint8(array).set(native.randomBytes(array.byteLength));
     return array;
   }
@@ -1451,6 +1460,24 @@
       return new File([value._bytes()], filename === undefined ? "blob" : String(filename), { type: value.type });
     }
     return String(value);
+  }
+
+  // Multipart and urlencoded bodies (form_data_body.ts), loaded on first use.
+  let formBodies;
+  function formBody() {
+    formBodies ??= {
+      api: internal.require("form_data_body"),
+      deps: {
+        FormData, File, URLSearchParams,
+        mimeByExtension: extension => (Object.hasOwn(MIME, extension) ? MIME[extension] : undefined),
+        blobBytes: blob => blob._intrinsicBytes(),
+      },
+    };
+    return formBodies;
+  }
+
+  function formParseError(message) {
+    return Object.assign(new TypeError(message), { code: "ERR_FORMDATA_PARSE_ERROR" });
   }
 
   const navigator = {
