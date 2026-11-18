@@ -430,6 +430,7 @@
   }
 
   const concatArrayBuffers = internal.require("concat_array_buffers");
+  const streamMethods = internal.require("readable_stream_methods")(internal.web.ReadableStream);
 
   async function readableStreamToBytes(stream) {
     const chunks = [];
@@ -519,11 +520,11 @@
     zstdCompress: (data, options) => Promise.resolve(internal.require("zlib").bunCompress(data, options)),
     zstdDecompress: (data) => new Promise(resolve => resolve(internal.require("zlib").bunDecompress(data))),
     readableStreamToBytes,
-    readableStreamToArray: (stream) => internal.readableStreamToArray(stream),
     readableStreamToArrayBuffer: async (s) => (await readableStreamToBytes(s)).buffer,
     readableStreamToText: async (s) => new TextDecoder().decode(await readableStreamToBytes(s)),
     readableStreamToJSON: async (s) => JSON.parse(new TextDecoder().decode(await readableStreamToBytes(s))),
     readableStreamToBlob: async (s) => new Blob([await readableStreamToBytes(s)]),
+    readableStreamToArray: streamMethods.readableStreamToArray,
     isMainThread: true,
     enableANSIColors,
     get stdout() {

@@ -10,14 +10,16 @@ Response also have `textStream()`, from `Body.rs` `to_text_readable_stream`. All
 at revision `9510e74152073d850a18758ca41114d8f214ffa6`, checked against native
 Bun 1.4.4. No upstream code is copied.
 
-`crates/bunwasm-runtime/src/js/streams.ts` installs the four methods on the
-stream class it returns: the polyfill's on QuickJS, JSC and SpiderMonkey, and the
-host's own `ReadableStream` on the Browser engine. Each reads every chunk, joins
+`crates/bunwasm-runtime/src/js/readable_stream_methods.ts` defines the four
+methods, and `bun.js` installs them on the runtime's `ReadableStream` when it
+builds the Bun object: the polyfill's class on QuickJS, JSC and SpiderMonkey, and
+the host's own `ReadableStream` on the Browser engine. `streams.ts` is unchanged,
+so its pinned-syntax guard in `web/tests/runtime-streams.test.ts` still holds. Each reads every chunk, joins
 string and byte chunks as UTF-8 bytes, then decodes, parses or wraps them. A
 receiver that is not a ReadableStream throws `ERR_INVALID_THIS` synchronously; a
 locked stream returns a promise rejected with `ERR_INVALID_STATE`, as in Bun.
-The same reader backs `Bun.readableStreamToArray`, which `bun.js` reaches through
-`internal.readableStreamToArray` and which returns the chunks unchanged. Bun's
+The same reader backs `Bun.readableStreamToArray`, which returns the chunks
+unchanged. Bun's
 buffered and direct-stream fast paths are not reproduced; every stream is read
 through its reader.
 

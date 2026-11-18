@@ -2,51 +2,8 @@
   "use strict";
   const names: (keyof BunWasm.StreamGlobals)[] = ["ReadableStream", "ReadableStreamDefaultReader", "ReadableStreamBYOBReader", "ReadableStreamBYOBRequest", "ReadableByteStreamController", "ReadableStreamDefaultController", "WritableStream", "WritableStreamDefaultWriter", "WritableStreamDefaultController", "TransformStream", "TransformStreamDefaultController", "ByteLengthQueuingStrategy", "CountQueuingStrategy", "TextEncoderStream", "TextDecoderStream", "CompressionStream", "DecompressionStream"];
   if (internal.native.engine === "host") {
-    return withConsumers(globalThis.ReadableStream, Object.assign(Object.fromEntries(names.map(name => [name, globalThis[name]])),
-      internal.require("compression_streams").create(globalThis.TransformStream, globalThis.ReadableStream, globalThis.WritableStream)));
-  }
-
-  // Bun's ReadableStream.prototype text/json/bytes/blob (JSReadableStream.cpp) and
-  // Bun.readableStreamToArray (BunStreamConsumers.cpp): read every chunk, then convert.
-  function lockedError(): TypeError {
-    return Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });
-  }
-
-  async function readChunks(stream: ReadableStream<unknown>): Promise<unknown[]> {
-    const reader = stream.getReader();
-    const chunks: unknown[] = [];
-    try {
-      for (let next = await reader.read(); !next.done; next = await reader.read()) chunks.push(next.value);
-      return chunks;
-    } finally { reader.releaseLock(); }
-  }
-
-  function readableStreamToArray(stream: ReadableStream<unknown>): Promise<unknown[]> {
-    if (stream.locked) return Promise.reject(lockedError());
-    return readChunks(stream);
-  }
-
-  async function streamBytes(stream: ReadableStream<unknown>): Promise<Uint8Array<ArrayBuffer>> {
-    const chunks = await readableStreamToArray(stream);
-    return internal.concatBytes(chunks.map(chunk => typeof chunk === "string" ? internal.native.utf8Encode(chunk) : internal.toUint8(chunk)));
-  }
-
-  function withConsumers<T extends object>(Stream: typeof ReadableStream, result: T): T {
-    const receiver = (value: unknown): ReadableStream<unknown> => {
-      if (value instanceof Stream) return value;
-      throw Object.assign(new TypeError('Value of "this" must be of type ReadableStream'), { code: "ERR_INVALID_THIS" });
-    };
-    const methods = {
-      text(this: unknown) { return streamBytes(receiver(this)).then(bytes => new TextDecoder().decode(bytes)); },
-      json(this: unknown) { return streamBytes(receiver(this)).then(bytes => JSON.parse(new TextDecoder().decode(bytes))); },
-      bytes(this: unknown) { return streamBytes(receiver(this)); },
-      blob(this: unknown) { return streamBytes(receiver(this)).then(bytes => new Blob([bytes])); },
-    };
-    for (const [name, value] of Object.entries(methods)) {
-      Object.defineProperty(Stream.prototype, name, { value, writable: true, enumerable: true, configurable: true });
-    }
-    internal.readableStreamToArray = readableStreamToArray;
-    return result;
+    return Object.assign(Object.fromEntries(names.map(name => [name, globalThis[name]])),
+      internal.require("compression_streams").create(globalThis.TransformStream, globalThis.ReadableStream, globalThis.WritableStream));
   }
   const streams = internal.require("streams_polyfill");
   const native = internal.native.streams;
@@ -152,5 +109,5 @@
     }
     Object.defineProperty(constructor.prototype, Symbol.toStringTag, { value: name, configurable: true });
   }
-  return withConsumers(streams.ReadableStream, Object.assign(streams, adapters));
+  return Object.assign(streams, adapters);
 })
