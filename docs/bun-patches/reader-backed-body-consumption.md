@@ -17,7 +17,18 @@ or errored, and a read rejection leaves no cancellation. A body read before its
 the stream's state does not depend on what backed the body. A ReadableStream that is
 locked or disturbed cannot become a body: construction throws `TypeError: Body
 object should not be disturbed or locked`, Bun's message (`adoptable`), and a body
-whose stream someone else locked refuses to be read without becoming used.
+whose stream someone else locked rejects a read with `ERR_INVALID_STATE`
+(`Invalid state: ReadableStream is locked`) without becoming used. A keepalive
+Request with a stream body throws `TypeError: keepalive` first, as Fetch requires
+and Bun checks before the lock.
+
+The polyfill streams keep a `_disturbed` flag, but a host's native streams on the
+Browser engine do not expose theirs. On the host engine `body_streams.ts` therefore
+wraps the host's `getReader`, the readers' `read` and `cancel`, and the stream's
+`cancel`, `pipeTo`, `pipeThrough`, `values` and async iterator once per realm to set
+the same flag, so `bodyUsed`, the adoption check and `node:stream`'s `isDisturbed`
+see a stream that another party read. The wrappers keep each method's name and
+property attributes and only add the flag.
 `Bun.write()` reads a Request as well as a Response through the same path.
 `node:stream/consumers` keeps `consume`, which releases the lock when done. A synchronous
 chunk visitor handles each value. Visitor failure awaits cancellation before

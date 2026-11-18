@@ -34,9 +34,10 @@ Request Uint8Array(0) .body then bytes(): readable=false errored=false disturbed
 Request Uint8Array(0) .body then blob(): readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
 Request Uint8Array(0) text() then .body: readable=false errored=false disturbed=true locked=true used=true getReader=TypeError
 Request erroring stream: Error locked=true used=true getReader=TypeError
-Request locked by a reader: TypeError used=false
+Request locked by a reader: TypeError ERR_INVALID_STATE Invalid state: ReadableStream is locked used=false
 Request after releasing it: x used=true
 Request adopts an unread stream: same=true locked=false fromUsed=false toUsed=false payload locked=true fromUsed=true again=TypeError
+Request piping an empty .body: TypeError used=true ""
 Request Bun.write(): written used=true
 Response string .body then text(): readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
 Response string .body then arrayBuffer(): readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
@@ -74,7 +75,11 @@ Response Uint8Array(0) .body then bytes(): readable=false errored=false disturbe
 Response Uint8Array(0) .body then blob(): readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
 Response Uint8Array(0) text() then .body: readable=false errored=false disturbed=true locked=true used=true getReader=TypeError
 Response erroring stream: Error locked=true used=true getReader=TypeError
-Response locked by a reader: TypeError used=false
+Response locked by a reader: TypeError ERR_INVALID_STATE Invalid state: ReadableStream is locked used=false
 Response after releasing it: x used=true
 Response adopts an unread stream: same=true locked=false fromUsed=false toUsed=false payload locked=true fromUsed=true again=TypeError
+Response piping an empty .body: TypeError used=true ""
 Response Bun.write(): written used=true
+keepalive stream TypeError
+keepalive locked stream TypeError
+keepalive string ok

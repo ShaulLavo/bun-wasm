@@ -56,7 +56,8 @@ for (const [ownerName, make] of owners) {
   const held = jsStream("x");
   const holder = make(held);
   const reader = held.getReader();
-  console.log(`${ownerName} locked by a reader:`, await settled(holder.text()), `used=${holder.bodyUsed}`);
+  const lockedRead = await holder.text().then(() => "ok", error => `${(error as Error).constructor.name} ${(error as { code?: string }).code} ${(error as Error).message}`);
+  console.log(`${ownerName} locked by a reader:`, lockedRead, `used=${holder.bodyUsed}`);
   reader.releaseLock();
   console.log(`${ownerName} after releasing it:`, await holder.text(), `used=${holder.bodyUsed}`);
 
@@ -65,8 +66,19 @@ for (const [ownerName, make] of owners) {
   const to = make(adopted);
   console.log(`${ownerName} adopts an unread stream:`, `same=${to.body === adopted} locked=${adopted.locked} fromUsed=${from.bodyUsed} toUsed=${to.bodyUsed}`, await to.text(), `locked=${adopted.locked} fromUsed=${from.bodyUsed} again=${await settled(from.text())}`);
 
+  const piped = make("");
+  const pipedOut = piped.body!.pipeThrough(new TransformStream());
+  console.log(`${ownerName} piping an empty .body:`, await settled(piped.text()), `used=${piped.bodyUsed}`, JSON.stringify(await new Response(pipedOut).text()));
+
   const written = make("written");
   const target = `bookkeeping-${ownerName}.txt`;
   await Bun.write(target, written);
   console.log(`${ownerName} Bun.write():`, readFileSync(target, "utf8"), `used=${written.bodyUsed}`);
+}
+
+// Fetch forbids keepalive with a stream body; Bun checks it before the stream's lock.
+const lockedStream = new ReadableStream();
+lockedStream.getReader();
+for (const [label, body] of [["stream", new ReadableStream()], ["locked stream", lockedStream], ["string", "x"]] as const) {
+  console.log("keepalive", label, errorName(() => new Request("http://a/", { method: "PUT", body, keepalive: true, duplex: "half" } as RequestInit)));
 }

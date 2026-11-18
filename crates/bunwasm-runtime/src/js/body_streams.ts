@@ -1,5 +1,42 @@
 (function (internal: Pick<BunWasm.Internal, "native" | "toUint8">) {
   const PlatformRequest = internal.native.engine === "host" ? globalThis.Request : null;
+  // The polyfill streams keep a `_disturbed` flag; a host's native streams do not expose
+  // theirs. On the host engine, set the same flag when a reader reads or the stream is
+  // cancelled, piped or iterated, so bodyUsed and node:stream's isDisturbed see it.
+  function markDisturbed(stream: unknown): void {
+    if (stream && typeof stream === "object") Object.defineProperty(stream, "_disturbed", { value: true, configurable: true });
+  }
+  function wrapMethod(target: object, name: string | symbol, before: (self: object, args: unknown[]) => void): void {
+    const descriptor = Object.getOwnPropertyDescriptor(target, name);
+    const original: unknown = descriptor?.value;
+    if (!descriptor || typeof original !== "function") return;
+    const wrapped = { [name](this: object, ...args: unknown[]) { before(this, args); return Reflect.apply(original, this, args); } }[name as string];
+    Object.defineProperty(target, name, Object.assign(descriptor, { value: wrapped }));
+  }
+  function trackHostDisturbance(): void {
+    const Stream = globalThis.ReadableStream;
+    const marker = Symbol.for("bun-wasm.disturbance-tracked");
+    if (typeof Stream !== "function" || Reflect.get(Stream.prototype, marker)) return;
+    Object.defineProperty(Stream.prototype, marker, { value: true });
+    const owners = new WeakMap<object, object>();
+    const originalGetReader: unknown = Object.getOwnPropertyDescriptor(Stream.prototype, "getReader")?.value;
+    if (typeof originalGetReader === "function") {
+      const wrapped = function getReader(this: object, ...args: unknown[]) {
+        const reader: unknown = Reflect.apply(originalGetReader, this, args);
+        if (reader && typeof reader === "object") owners.set(reader, this);
+        return reader;
+      };
+      Object.defineProperty(Stream.prototype, "getReader", { value: wrapped, writable: true, configurable: true });
+    }
+    for (const Reader of [globalThis.ReadableStreamDefaultReader, globalThis.ReadableStreamBYOBReader]) {
+      if (typeof Reader !== "function") continue;
+      for (const name of ["read", "cancel"]) wrapMethod(Reader.prototype, name, self => markDisturbed(owners.get(self)));
+    }
+    for (const name of ["cancel", "pipeTo", "pipeThrough", "values", Symbol.asyncIterator]) {
+      wrapMethod(Stream.prototype, name, self => { if (Reflect.get(self, "locked") !== true) markDisturbed(self); });
+    }
+  }
+  if (internal.native.engine === "host") trackHostDisturbance();
   const bodies = new WeakMap<ReadableStream<unknown>, Uint8Array>();
   function remember<T>(stream: ReadableStream<T>, bytes: Uint8Array): ReadableStream<T> {
     bodies.set(stream, bytes);

@@ -1065,7 +1065,9 @@
 
   const BodyMixin = {
     async _consume() {
-      if (this.bodyUsed || (this._stream && this._stream.locked)) throw new TypeError("Body already used");
+      if (this.bodyUsed) throw new TypeError("Body already used");
+      // Someone else holds the stream's reader: refuse without using the body, as Bun does.
+      if (this._stream && this._stream.locked) throw Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });
       this._bodyUsed = true;
       if (this._stream) return streamBytes(this._stream);
       return this._body || new Uint8Array(0);
@@ -1212,6 +1214,8 @@
       if (body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
+      // Fetch forbids keepalive with a stream body; Bun reports it before any lock check.
+      if (init.keepalive && body instanceof ReadableStream) throw new TypeError("keepalive");
       initBody(this, source && replacementBody === undefined ? bodyStreams.transfer(source) : body, this.#headers);
     }
     get url() {
