@@ -63,15 +63,20 @@ try {
 const bound = a.run("bound", () => AsyncLocalStorage.bind((x: string) => `${x}:${a.getStore()}`));
 console.log("bound call", bound("arg"), a.getStore());
 
+// Log only after the iterator is back: a host console may spread its arguments.
 const iterator = Array.prototype[Symbol.iterator];
+let noIterator: unknown;
 try {
   a.enterWith("v");
   delete (Array.prototype as { [Symbol.iterator]?: unknown })[Symbol.iterator];
-  console.log("no iterator", a.run("v", (x: string, y: string) => `${x}/${y}`, "x", "y"));
+  noIterator = a.run("v", (x: string, y: string) => `${x}/${y}`, "x", "y");
+} catch (error) {
+  noIterator = error;
 } finally {
   Array.prototype[Symbol.iterator] = iterator;
   a.disable();
 }
+console.log("no iterator", String(noIterator));
 
 const timer = new AsyncLocalStorage();
 timer.run("t", () => setTimeout(() => console.log("timer", timer.getStore()), 1));
