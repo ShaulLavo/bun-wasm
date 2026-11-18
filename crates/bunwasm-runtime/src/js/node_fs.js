@@ -688,6 +688,7 @@
     readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, mkdirSync, readdirSync,
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
     openSync, closeSync, readSync, readvSync, writeSync, writevSync, globSync, opendirSync,
+    statfsSync: (path) => internal.require("fs_statfs")(statSync, toPath)(path),
     fstatSync: (fd, options) => new Stats(native.fstat(fd, Boolean(options && options.bigint)), Boolean(options && options.bigint)),
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
@@ -908,6 +909,10 @@
     FSWatcher,
     watchFile: watchUnsupported,
     unwatchFile: () => {},
+    // Bun's src/js/node/fs.ts: a lazily read Bun.file Blob.
+    openAsBlob: function openAsBlob(path, options) {
+      return Promise.resolve(internal.builtin("bun").file(path, options));
+    },
     F_OK: 0,
     R_OK: 4,
     W_OK: 2,
