@@ -4,8 +4,13 @@ import { chromium, webkit, type BrowserType } from "playwright";
 import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
 import { withHeldPreview } from "./iphone-load-fixture";
 
+// These tests check focus outcomes. Launching a browser takes seconds in CI, most in
+// WebKit, so the only limit is a hang cap, and waits inside run until it.
+const HANG_CAP_MS = 60_000;
+const COMMAND_CAP_MS = 30_000;
+
 async function pendingLoadFocus(engine: BrowserType): Promise<void> {
-  await withHeldPreview(engine, "resource", 1000, async ({ page, transport, preview, requested, release }) => {
+  await withHeldPreview(engine, "resource", COMMAND_CAP_MS, async ({ page, transport, preview, requested, release }) => {
     let presented = false;
     const opening = withScoped(transport, page => page.openPreview(preview)).then(() => { presented = true; });
     void opening.catch(() => {});
@@ -17,7 +22,7 @@ async function pendingLoadFocus(engine: BrowserType): Promise<void> {
     expect(await page.evaluate(() => document.activeElement?.id)).toBe("editor");
     release();
     await opening;
-    await page.waitForFunction(() => document.activeElement?.id === "__goalsIphonePreview", undefined, { timeout: 1000 });
+    await page.waitForFunction(() => document.activeElement?.id === "__goalsIphonePreview", undefined, { timeout: COMMAND_CAP_MS });
     expect(await withScoped(transport, page => page.evaluate(arm))).toMatchObject({ ready: true, before: "Count 0" });
     expect(await withScoped(transport, page => page.evaluate("document.hasFocus()"))).toBe(false);
     await withScoped(transport, page => page.closePreview());
@@ -25,7 +30,7 @@ async function pendingLoadFocus(engine: BrowserType): Promise<void> {
 }
 
 for (const engine of [chromium, webkit]) {
-  test(`enabled native counter waits for pending load focus in ${engine.name()}`, () => pendingLoadFocus(engine), 10000);
+  test(`enabled native counter waits for pending load focus in ${engine.name()}`, () => pendingLoadFocus(engine), HANG_CAP_MS);
   test(`new native preview takes focus from the owner editor in ${engine.name()}`, async () => {
     const browser = await engine.launch({ headless: true });
     try {
@@ -34,10 +39,10 @@ for (const engine of [chromium, webkit]) {
       await page.locator("input").focus();
       const preview = "data:text/html," + encodeURIComponent('<button>Increment</button>');
       await page.evaluate(`(${presentIphonePreview.toString()})(${JSON.stringify(preview)})`);
-      await page.waitForFunction(() => document.activeElement === document.getElementById("__goalsIphonePreview"), undefined, { timeout: 1000 });
+      await page.waitForFunction(() => document.activeElement === document.getElementById("__goalsIphonePreview"), undefined, { timeout: COMMAND_CAP_MS });
       expect(await page.locator("iframe").count()).toBe(1);
       await page.evaluate(`(${presentIphonePreview.toString()})(null)`);
       expect(await page.locator("iframe").count()).toBe(0);
     } finally { await browser.close(); }
-  }, 10000);
+  }, HANG_CAP_MS);
 }
