@@ -276,17 +276,24 @@
     hash[name] = unsupported(`Bun.hash.${name}`, "only wyhash, crc32 and adler32 are implemented");
   }
 
+  const digests = internal.require("node_digest");
+
   class CryptoHasher {
     #algorithm;
     #chunks = [];
     #key;
     constructor(algorithm, hmacKey) {
-      this.#algorithm = String(algorithm).toLowerCase();
+      const name = digests.hasherName(String(algorithm));
+      if (name === undefined) throw Object.assign(new TypeError(`Unsupported algorithm ${algorithm}`), { code: "ERR_INVALID_ARG_TYPE" });
+      if (hmacKey !== undefined && !digests.hasherHmac(name)) throw Object.assign(new Error("HMAC is not supported for this algorithm yet"), { name: "TODOError" });
+      this.#algorithm = name;
       this.#key = hmacKey === undefined ? null : hmacKey;
-      if (native.hash(this.#algorithm, "") === undefined) throw new TypeError(`Unsupported algorithm ${algorithm}`);
     }
     get algorithm() {
       return this.#algorithm;
+    }
+    get byteLength() {
+      return digests.byteLength(this.#algorithm);
     }
     update(data, encoding) {
       const B = internal.require("buffer").Buffer;
@@ -295,7 +302,9 @@
     }
     digest(encoding) {
       const input = internal.concatBytes(this.#chunks);
-      const bytes = this.#key === null ? native.hash(this.#algorithm, input) : native.hmac(this.#algorithm, hashInput(this.#key), input);
+      // Digesting resets the hasher, as in Bun.
+      this.#chunks = [];
+      const bytes = this.#key === null ? native.nodeDigest(this.#algorithm, input) : native.nodeHmac(this.#algorithm, hashInput(this.#key), input);
       const B = internal.require("buffer").Buffer;
       const buf = B.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       if (encoding === undefined) return buf;
@@ -314,7 +323,8 @@
       return new CryptoHasher(algorithm).update(data).digest(encoding);
     }
   }
-  CryptoHasher.algorithms = ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"];
+  // A fresh array per read, as in Bun.
+  Object.defineProperty(CryptoHasher, "algorithms", { get: () => digests.hasherAlgorithms.slice(), enumerable: true });
 
   function randomUUIDv7(encoding, timestamp) {
     const ms = BigInt(timestamp === undefined ? Date.now() : Number(timestamp));
@@ -501,6 +511,15 @@
     which: (command, options) => internal.require("spawn").which(command, options),
     hash,
     CryptoHasher,
+    // Loaded on first use; the module is cached, so each class keeps one identity.
+    get MD4() { return internal.require("bun_hash_classes").MD4; },
+    get MD5() { return internal.require("bun_hash_classes").MD5; },
+    get SHA1() { return internal.require("bun_hash_classes").SHA1; },
+    get SHA224() { return internal.require("bun_hash_classes").SHA224; },
+    get SHA256() { return internal.require("bun_hash_classes").SHA256; },
+    get SHA384() { return internal.require("bun_hash_classes").SHA384; },
+    get SHA512() { return internal.require("bun_hash_classes").SHA512; },
+    get SHA512_256() { return internal.require("bun_hash_classes").SHA512_256; },
     randomUUIDv7,
     peek,
     gc: () => native.gc(),
