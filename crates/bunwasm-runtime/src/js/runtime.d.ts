@@ -208,6 +208,9 @@ declare namespace BunWasm {
     zstdCompress(data: Uint8Array, level: number): Uint8Array;
     zstdDecompress(data: Uint8Array): Uint8Array;
     crc32(data: Uint8Array, initial?: number): number;
+    /** node:crypto and Bun hashers (node_digest.rs): (canonical name, data, output length). */
+    nodeDigest(algorithm: string, data: Uint8Array, outputLength?: number): Uint8Array;
+    nodeHmac(algorithm: string, key: Uint8Array, data: Uint8Array): Uint8Array;
     streams: {
       /** A node:zlib native handle: (mode, options JSON, dictionary). */
       codec(mode: string, options?: string, dictionary?: Uint8Array): number;

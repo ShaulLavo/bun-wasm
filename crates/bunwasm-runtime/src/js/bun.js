@@ -276,17 +276,24 @@
     hash[name] = unsupported(`Bun.hash.${name}`, "only wyhash, crc32 and adler32 are implemented");
   }
 
+  const digests = internal.require("node_digest");
+
   class CryptoHasher {
     #algorithm;
     #chunks = [];
     #key;
     constructor(algorithm, hmacKey) {
-      this.#algorithm = String(algorithm).toLowerCase();
+      const name = digests.hasherName(String(algorithm));
+      if (name === undefined) throw Object.assign(new TypeError(`Unsupported algorithm ${algorithm}`), { code: "ERR_INVALID_ARG_TYPE" });
+      if (hmacKey !== undefined && !digests.hasherHmac(name)) throw Object.assign(new Error("HMAC is not supported for this algorithm yet"), { name: "TODOError" });
+      this.#algorithm = name;
       this.#key = hmacKey === undefined ? null : hmacKey;
-      if (native.hash(this.#algorithm, "") === undefined) throw new TypeError(`Unsupported algorithm ${algorithm}`);
     }
     get algorithm() {
       return this.#algorithm;
+    }
+    get byteLength() {
+      return digests.byteLength(this.#algorithm);
     }
     update(data, encoding) {
       const B = internal.require("buffer").Buffer;
@@ -295,7 +302,7 @@
     }
     digest(encoding) {
       const input = internal.concatBytes(this.#chunks);
-      const bytes = this.#key === null ? native.hash(this.#algorithm, input) : native.hmac(this.#algorithm, hashInput(this.#key), input);
+      const bytes = this.#key === null ? native.nodeDigest(this.#algorithm, input) : native.nodeHmac(this.#algorithm, hashInput(this.#key), input);
       const B = internal.require("buffer").Buffer;
       const buf = B.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       if (encoding === undefined) return buf;
@@ -314,7 +321,11 @@
       return new CryptoHasher(algorithm).update(data).digest(encoding);
     }
   }
-  CryptoHasher.algorithms = ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"];
+  CryptoHasher.algorithms = digests.hasherAlgorithms.slice();
+  const hashClasses = internal.require("bun_hash_classes")((data) => {
+    const value = hashInput(data);
+    return typeof value === "string" ? native.utf8Encode(value) : value;
+  });
 
   function randomUUIDv7(encoding, timestamp) {
     const ms = BigInt(timestamp === undefined ? Date.now() : Number(timestamp));
@@ -501,6 +512,7 @@
     which: (command, options) => internal.require("spawn").which(command, options),
     hash,
     CryptoHasher,
+    ...hashClasses,
     randomUUIDv7,
     peek,
     gc: () => native.gc(),
