@@ -39,7 +39,8 @@ class Sub extends StringDecoder {
 }
 const sub = new Sub("utf16le", "wide");
 console.log("class subclass", sub instanceof Sub, Object.getPrototypeOf(sub) === Sub.prototype, sub.encoding, sub.write(Buffer.from("hi", "utf16le")), sub.label, sub.chunks);
-console.log("class keys", Reflect.ownKeys(Sub).map(String).join(","));
+// Sorted: engines order a class constructor's own keys differently.
+console.log("class keys", Reflect.ownKeys(Sub).map(String).sort().join(","));
 
 function Unrelated() {}
 const other = Reflect.construct(StringDecoder, ["latin1"], Unrelated) as StringDecoder;
