@@ -241,7 +241,7 @@ declare namespace BunWasm {
       Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: (error?: unknown) => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
     };
   }
-  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams } }
+  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams; ReadableStream: typeof ReadableStream } }
   type HTMLHandlerKind = "element" | "comments" | "text" | "doctype" | "end" | "endTag";
   interface HTMLStepEvent { handler: number; kind: HTMLHandlerKind }
   interface HTMLStep { output: Uint8Array; event?: HTMLStepEvent }

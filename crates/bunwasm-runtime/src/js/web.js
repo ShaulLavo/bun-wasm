@@ -86,7 +86,7 @@
 
   // --- URLSearchParams / URL --------------------------------------------------
 
-  const { toUSVString, initFromObject, convertMethodArgs, inspectParams } = internal.require("url_search_params");
+  const { toUSVString, initFromObject, convertMethodArgs, inspectParams, urlContext } = internal.require("url_search_params");
   const removeQueryPairs = internal.require("url_pairs");
 
   // application/x-www-form-urlencoded byte serializer.
@@ -372,6 +372,7 @@
       for (const field of ["href", "origin", "protocol", "username", "password", "host", "hostname", "port", "pathname", "search", "searchParams", "hash"]) {
         view[field] = this[field];
       }
+      if (options?.showHidden) view[Symbol("context")] = urlContext(this);
       const fn = typeof inspect === "function" ? inspect : internal.require("inspect").bunInspect;
       return "URL " + fn(view, options);
     }
@@ -1091,6 +1092,9 @@
     },
     async formData() {
       throw new TypeError("formData() is not supported in bun-wasm");
+    },
+    textStream() {
+      return bodyStreams.textStream(this);
     },
   };
 
