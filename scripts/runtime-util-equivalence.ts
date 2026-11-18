@@ -57,7 +57,7 @@ interface Edit { start: number; end: number; text: string }
 
 function omitBunComparisonChanges(text: string): string {
   const source = parseRuntime(text);
-  const functions = new Set(["bunCompareArrays", "arraySymbols", "bunArraySymbols", "bunCompareSpecial", "arrayIndex", "bunCompareWebObjects", "equalSearchParams", "headerCount", "equalHeaders", "isUrl", "isSearchParams", "isHeaders", "webKind"]);
+  const functions = new Set(["bunCompareArrays", "arraySymbols", "bunArraySymbols", "arrayBuffersEqual", "isDetachedBuffer", "bunCompareSpecial", "arrayIndex", "bunCompareWebObjects", "equalSearchParams", "headerCount", "equalHeaders", "isUrl", "isSearchParams", "isHeaders", "webKind"]);
   const constants = new Set(["emptyArrayIndex", "urlHref", "searchParamsSize"]);
   const matches: ts.Node[] = [];
   function approved(node: ts.Node): boolean {

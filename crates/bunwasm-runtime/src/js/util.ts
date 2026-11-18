@@ -986,7 +986,7 @@
     if (isMap(a) || isMap(b)) return isMap(a) && bunCompareMaps(a, b, strict, memo);
     if (isAnyArrayBuffer(a) || isAnyArrayBuffer(b)) {
       if (isArrayBuffer(a) !== isArrayBuffer(b) || isSharedArrayBuffer(a) !== isSharedArrayBuffer(b)) return false;
-      return equalBytes(new Uint8Array(a as ArrayBuffer | SharedArrayBuffer), new Uint8Array(b as ArrayBuffer | SharedArrayBuffer));
+      return arrayBuffersEqual(a as ArrayBuffer | SharedArrayBuffer, b as ArrayBuffer | SharedArrayBuffer);
     }
     if (isDate(a) || isDate(b)) return isDate(a) && isDate(b) && a.getTime() === b.getTime();
     if (isRegExp(a) || isRegExp(b)) return isRegExp(a) && isRegExp(b) && a.source === b.source && a.flags === b.flags;
@@ -1594,7 +1594,9 @@
   function expectMemo(a: object, b: object, memo: BunWasm.EqualityMemo, compare: () => BunWasm.EqualityResult): BunWasm.EqualityResult {
     const previousA = memo.val1.get(a);
     const previousB = memo.val2.get(b);
-    if (previousA !== undefined && previousB !== undefined) return previousA === previousB;
+    // Bun__deepEquals' ancestor stack: a value already being compared must be paired with the
+    // same partner again, so a cycle on only one side, or through another property, is unequal.
+    if (previousA !== undefined || previousB !== undefined) return previousA === previousB;
     const position = ++memo.position;
     memo.val1.set(a, position);
     memo.val2.set(b, position);
@@ -1612,6 +1614,23 @@
     } catch (error) {
       release();
       throw error;
+    }
+  }
+
+  // A detached ArrayBuffer equals no other buffer, not even a zero-length or another detached
+  // one, as in Bun; reading its bytes would throw.
+  function arrayBuffersEqual(a: ArrayBuffer | SharedArrayBuffer, b: ArrayBuffer | SharedArrayBuffer): boolean {
+    if (isDetachedBuffer(a) || isDetachedBuffer(b)) return false;
+    return equalBytes(new Uint8Array(a), new Uint8Array(b));
+  }
+
+  function isDetachedBuffer(buffer: ArrayBuffer | SharedArrayBuffer): boolean {
+    if (!isArrayBuffer(buffer) || buffer.byteLength !== 0) return false;
+    try {
+      new Uint8Array(buffer);
+      return false;
+    } catch {
+      return true;
     }
   }
 
