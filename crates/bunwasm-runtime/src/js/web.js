@@ -1086,6 +1086,9 @@
     async formData() {
       throw new TypeError("formData() is not supported in bun-wasm");
     },
+    textStream() {
+      return bodyStreams.textStream(this);
+    },
   };
 
   function initBody(target, body, headers) {

@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/stream-consumer-methods",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

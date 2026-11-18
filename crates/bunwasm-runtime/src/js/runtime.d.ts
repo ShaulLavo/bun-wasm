@@ -233,6 +233,8 @@ declare namespace BunWasm {
     nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]): void;
     toUint8(value: ArrayBuffer | ArrayBufferView): Uint8Array;
     concatBytes(chunks: readonly Uint8Array[]): Uint8Array<ArrayBuffer>;
+    /** Bun.readableStreamToArray, installed by the streams module. */
+    readableStreamToArray?: (stream: ReadableStream<unknown>) => Promise<unknown[]>;
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
     builtin(name: "node:stream"): {

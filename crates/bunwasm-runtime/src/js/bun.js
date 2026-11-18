@@ -519,6 +519,7 @@
     zstdCompress: (data, options) => Promise.resolve(internal.require("zlib").bunCompress(data, options)),
     zstdDecompress: (data) => new Promise(resolve => resolve(internal.require("zlib").bunDecompress(data))),
     readableStreamToBytes,
+    readableStreamToArray: (stream) => internal.readableStreamToArray(stream),
     readableStreamToArrayBuffer: async (s) => (await readableStreamToBytes(s)).buffer,
     readableStreamToText: async (s) => new TextDecoder().decode(await readableStreamToBytes(s)),
     readableStreamToJSON: async (s) => JSON.parse(new TextDecoder().decode(await readableStreamToBytes(s))),
