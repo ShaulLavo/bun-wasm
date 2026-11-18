@@ -1061,10 +1061,10 @@
       return { bytes: native.utf8Encode(body.toString()), type: "application/x-www-form-urlencoded;charset=UTF-8" };
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
-    if (body instanceof FormData) return formBody().api.serialize(body, formBody().deps);
     if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && body instanceof SharedArrayBuffer)) {
       return { bytes: new Uint8Array(toUint8(body)), type: null };
     }
+    if (body instanceof FormData) return formBody().api.serialize(body, formBody().deps);
     if (body instanceof ReadableStream) return { stream: body, bytes: bodyStreams.bytes(body) || null, type: null };
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
     return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
