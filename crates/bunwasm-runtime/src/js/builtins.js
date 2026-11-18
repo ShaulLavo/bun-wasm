@@ -114,9 +114,12 @@
         const bytes = this.#key === undefined ? native.nodeDigest(this.#algorithm, input, this.#outputLength) : native.nodeHmac(this.#algorithm, this.#key, input);
         return encodeOut(bytes, encoding);
       }
-      copy() {
+      copy(options) {
         if (this.#done) throw Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
-        const copy = new Hash(this.#algorithm, this.#key, this.#outputLength);
+        // A copy takes its own output length; without one it uses the default, as in Bun.
+        const requested = digests.outputLength(options);
+        if (requested !== undefined && !digests.isXof(this.#algorithm) && requested !== digests.byteLength(this.#algorithm)) throw digests.notXofError();
+        const copy = new Hash(this.#algorithm, this.#key, requested);
         for (const c of this.#chunks) copy.update(c);
         return copy;
       }

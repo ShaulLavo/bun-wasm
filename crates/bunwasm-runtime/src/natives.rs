@@ -1460,6 +1460,7 @@ fn install_crypto(t: &mut Table) {
             Err(DigestError::NotXof) => {
                 Err(NativeError::error("NOT_XOF_OR_INVALID_LENGTH".to_string()))
             }
+            Err(DigestError::OutOfMemory) => Err(NativeError::range_error("Out of memory")),
         }
     });
     t.add("nodeHmac", |a| {

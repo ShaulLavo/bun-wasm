@@ -302,6 +302,8 @@
     }
     digest(encoding) {
       const input = internal.concatBytes(this.#chunks);
+      // Digesting resets the hasher, as in Bun.
+      this.#chunks = [];
       const bytes = this.#key === null ? native.nodeDigest(this.#algorithm, input) : native.nodeHmac(this.#algorithm, hashInput(this.#key), input);
       const B = internal.require("buffer").Buffer;
       const buf = B.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);

@@ -28,8 +28,15 @@ the installer keep using `encoding::digest`, so this adds no WebCrypto algorithm
 `node:crypto`'s `Hash` in `builtins.js` now takes canonical names, refuses
 `copy()` after `digest()` with `ERR_CRYPTO_HASH_FINALIZED`, and rejects a fixed
 digest asked for another output length with BoringSSL's
-`NOT_XOF_OR_INVALID_LENGTH`. `Bun.CryptoHasher` in `bun.js` reports the canonical
-name and its `byteLength`, and refuses HMAC for SHAKE and BLAKE2s-256 as Bun does.
+`NOT_XOF_OR_INVALID_LENGTH`. `copy({ outputLength })` takes its own SHAKE length,
+and `copy()` without one goes back to the default, as in Bun. A SHAKE length the
+guest's memory cannot hold throws `RangeError: Out of memory` instead of trapping.
+An unsupported `createHash` name throws `Digest method not supported` without a
+`code`, like Bun's BoringSSL error. `Bun.CryptoHasher` in `bun.js` reports the
+canonical name and its `byteLength`, resets after each `digest()`, exposes
+`algorithms` as a getter returning a fresh array, and refuses HMAC for SHAKE and
+BLAKE2s-256 as Bun does. `Bun.MD4` to `Bun.SHA512_256` are getters that load their
+module on first use.
 
 `crates/bunwasm-runtime/src/js/bun_hash_classes.ts` adds `Bun.MD4`, `MD5`, `SHA1`,
 `SHA224`, `SHA256`, `SHA384`, `SHA512` and `SHA512_256`: a static `byteLength` and

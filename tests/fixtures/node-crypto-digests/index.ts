@@ -46,6 +46,14 @@ const copy = original.copy();
 original.update("b");
 console.log("copy", original.digest("hex"), copy.digest("hex"));
 console.log("copy after digest", attempt(() => original.copy()));
+const shake = crypto.createHash("shake128", { outputLength: 8 }).update("abc");
+console.log("copy outputLength", shake.copy({ outputLength: 4 }).digest("hex"), shake.copy().digest("hex"), attempt(() => crypto.createHash("sha256").copy({ outputLength: 4 })));
+
+const resetting = new Bun.CryptoHasher("sha256");
+resetting.update("hello");
+const first = resetting.digest("hex");
+resetting.update("world");
+console.log("hasher resets", first, resetting.digest("hex"), resetting.digest("hex"));
 
 for (const name of ["MD4", "MD5", "SHA1", "SHA224", "SHA256", "SHA384", "SHA512", "SHA512_256"] as const) {
   const Hash = Bun[name];

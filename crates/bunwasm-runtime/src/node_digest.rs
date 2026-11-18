@@ -8,6 +8,8 @@ pub enum DigestError {
     Unsupported,
     /// A fixed-size digest asked for a different output length.
     NotXof,
+    /// A SHAKE output length the linear memory cannot hold.
+    OutOfMemory,
 }
 
 fn fixed<D: Digest>(parts: &[&[u8]]) -> Vec<u8> {
@@ -18,14 +20,21 @@ fn fixed<D: Digest>(parts: &[&[u8]]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-fn xof<D: Default + Update + ExtendableOutput>(parts: &[&[u8]], len: usize) -> Vec<u8> {
+fn xof<D: Default + Update + ExtendableOutput>(
+    parts: &[&[u8]],
+    len: usize,
+) -> Result<Vec<u8>, DigestError> {
     let mut hasher = D::default();
     for part in parts {
         hasher.update(part);
     }
-    let mut out = vec![0; len];
+    // A caller may ask for up to 2^32 - 1 bytes; fail instead of trapping on allocation.
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)
+        .map_err(|_| DigestError::OutOfMemory)?;
+    out.resize(len, 0);
     hasher.finalize_xof().read(&mut out);
-    out
+    Ok(out)
 }
 
 fn fixed_digest(alg: &str, parts: &[&[u8]]) -> Option<Vec<u8>> {
@@ -67,8 +76,8 @@ pub fn digest(
     output_len: Option<usize>,
 ) -> Result<Vec<u8>, DigestError> {
     match alg {
-        "shake128" => return Ok(xof::<sha3::Shake128>(parts, output_len.unwrap_or(16))),
-        "shake256" => return Ok(xof::<sha3::Shake256>(parts, output_len.unwrap_or(32))),
+        "shake128" => return xof::<sha3::Shake128>(parts, output_len.unwrap_or(16)),
+        "shake256" => return xof::<sha3::Shake256>(parts, output_len.unwrap_or(32)),
         _ => {}
     }
     let out = fixed_digest(alg, parts).ok_or(DigestError::Unsupported)?;
