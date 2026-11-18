@@ -1463,6 +1463,22 @@ fn install_crypto(t: &mut Table) {
             Err(DigestError::OutOfMemory) => Err(NativeError::range_error("Out of memory")),
         }
     });
+    // node:crypto pbkdf2: (canonical name, password, salt, iterations, keylen).
+    t.add("nodePbkdf2", |a| {
+        use crate::node_digest::{DigestError, pbkdf2};
+        let alg = a.str(0)?;
+        match pbkdf2(
+            alg,
+            a.bytes(1)?,
+            a.bytes(2)?,
+            a.num(3)? as u32,
+            a.num(4)? as usize,
+        ) {
+            Ok(out) => Ok(Val::Bytes(out)),
+            Err(DigestError::OutOfMemory) => Err(NativeError::range_error("Out of memory")),
+            Err(_) => Err(NativeError::type_error(format!("Invalid digest: {alg}"))),
+        }
+    });
     t.add("nodeHmac", |a| {
         let alg = a.str(0)?;
         let digest = crate::node_digest::hmac(alg, a.bytes(1)?, a.bytes(2)?)
