@@ -8,7 +8,7 @@
     const stringFlags: Record<string, number> = {
       r: 0, "r+": 2, rs: 1052672, sr: 1052672, "rs+": 1052674, "sr+": 1052674,
       w: 577, wx: 705, xw: 705, "w+": 578, "wx+": 706, "xw+": 706,
-      a: 1089, ax: 1217, xa: 1217, as: 1053761, "a+": 1090, "ax+": 1218, "xa+": 1218, "as+": 1053762,
+      a: 1089, ax: 1217, xa: 1217, as: 1053761, sa: 1053761, "a+": 1090, "ax+": 1218, "xa+": 1218, "as+": 1053762, "sa+": 1053762,
     };
     function flagsNumber(flags: unknown = "r"): number {
       if (typeof flags === "string" && Object.hasOwn(stringFlags, flags)) return stringFlags[flags]!;

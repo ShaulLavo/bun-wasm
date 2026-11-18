@@ -278,6 +278,8 @@
 
   function readFileSync(path, options) {
     const encoding = encodingOf(options);
+    // Node validates the flag before opening; the read itself does not use it here.
+    flagsNumber(options && typeof options === "object" && options.flag !== undefined ? options.flag : "r");
     const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => native.readFile(abs));
     const buf = asBuffer(bytes);
     return encoding ? buf.toString(encoding) : buf;
