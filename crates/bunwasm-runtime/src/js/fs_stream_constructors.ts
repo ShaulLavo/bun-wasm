@@ -83,6 +83,8 @@
     validateFd(fd: unknown): void;
     readRange(name: string, value: unknown): Error;
     invalidArg(name: string, expected: string, value: unknown): Error;
+    isEncoding(encoding: string): boolean;
+    inspect(value: unknown): string;
     loadStreams(): StreamModule;
   }
 
@@ -98,11 +100,18 @@
       return fileStreams;
     }
 
+    // Node's assertEncoding for stream options; "buffer" and a missing encoding are fine.
+    function checkedEncoding(options: Options): Options {
+      const { encoding } = options;
+      if (encoding == null || encoding === "buffer" || deps.isEncoding(encoding)) return options;
+      throw Object.assign(new TypeError(`The argument 'encoding' is invalid encoding. Received ${deps.inspect(encoding)}`), { code: "ERR_INVALID_ARG_VALUE" });
+    }
+
     function fileStreamOptions(options: string | Options | null | undefined): Options {
-      if (typeof options === "string") return { encoding: options };
+      if (typeof options === "string") return checkedEncoding({ encoding: options });
       if (options == null) return {};
       if (typeof options !== "object") throw invalidArg("options", "an object or string", options);
-      return options;
+      return checkedEncoding(options);
     }
 
     function fileStreamPosition(name: string, value: number) {
