@@ -25,14 +25,15 @@ The full-run comparisons, timeout index and ranked investigations below retain t
 | b | test runner output, hooks, assertions and exit status | 5 | bake/dev/react-spa.test.ts |  DEV:react-spa-1: react in html | error: Unknown install option: --linker=hoisted |
 | c | boxed String paths from harness.tempDir | 1 | js/bun/resolve/png/test-png-import.test.js | png import | TypeError: The "paths[0]" property must be of type string, got object |
 | c | test runner helpers or matcher methods | 3 | js/bun/module-graph/module-graph-isolation.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'setSystemTime' in module 'bun:test' |
+| c | uninstalled suite dependency, setup work before API triage | 1 | js/web/fetch/blob.test.ts | blob: imports have sourcemapped stacktraces | ResolveMessage: Cannot find package 'blob:3689b380-eefa-40ad-ade1-3ba47728d26b' from '/workdir/test/js/web/fetch/blob.test.ts' |
 | d | Bun shell parser and execution | 61 | bake/dev/production.test.ts | production > works with sourcemaps - error thrown in React component | error: Bun.$ is not supported in bun-wasm: WASI has no processes |
 | d | CLI option or command implementation | 47 | bundler/bundler_bun.test.ts | bundler > bun/bytecode-depth-cli | error: Bundle Failed |
 | d | ES module mocking and loader invalidation | 7 | js/bun/test/mock/6874/A.test.ts | <collection/hook/exit; no named failure> | error: mock.module() is not supported in bun-wasm yet |
-| d | HTTP/server/fetch/WebSocket semantics | 186 | bake/dev/ecosystem.test.ts |  DEV:ecosystem-1: svelte component islands example | <see JSON excerpt; no error line> |
+| d | HTTP/server/fetch/WebSocket semantics | 185 | bake/dev/ecosystem.test.ts |  DEV:ecosystem-1: svelte component islands example | <see JSON excerpt; no error line> |
 | d | Module._resolveFilename options.paths lookup | 1 | js/node/module/module-resolve-filename-paths.test.js | Module._resolveFilename respects options.paths for package resolution | ResolveMessage: Cannot find package 'test-package' from '/some/other/directory/file.js' |
 | d | Node builtin aliases and stub modules | 1 | js/node/stubs.test.js | stubbed CJS import.meta.require _http_agent | ResolveMessage: Cannot find package '_http_agent' from '/bun/test/js/node/stubs.test.js' |
-| d | Node's test API adapter | 3 | internal/runner-junit.test.ts | parseJunitFileSuites reads the report bun test --parallel --reporter=junit writes | error: expect(received).toContain(expected) |
-| d | Node/Web stream semantics | 29 | cli/install/symlink-path-traversal.test.ts | symlink path traversal protection > rejects symlink targets that climb above the package root before | error: expect(received).toContain(expected) |
+| d | Node's test API adapter | 2 | internal/runner-junit.test.ts | parseJunitFileSuites reads the report bun test --parallel --reporter=junit writes | error: expect(received).toContain(expected) |
+| d | Node/Web stream semantics | 28 | cli/install/symlink-path-traversal.test.ts | symlink path traversal protection > rejects symlink targets that climb above the package root before | error: expect(received).toContain(expected) |
 | d | SQLite API compatibility | 4 | js/bun/sqlite/column-types.test.js | SQLite Statement column types > reports correct column types for a variety of data types | TypeError: cannot read property 'columns' of undefined |
 | d | TLS or HTTP/2 | 85 | cli/install/bun-install-stalled-tls.test.ts | each retry after a timeout is announced > package manifest | error: expect(received).toEqual(expected) |
 | d | bundler options, plugins or compiler output | 73 | bake/app-options.test.ts | Bun.serve({ app }) rejects wrong-typed framework options | error: expect(received).toMatchInlineSnapshot(expected) |
@@ -40,13 +41,13 @@ The full-run comparisons, timeout index and ranked investigations below retain t
 | d | data URL module loading | 1 | js/node/string-module.test.js | should import and execute ES module from string | ResolveMessage: Cannot find module 'data:text/javascript,export default function test(arg) { return arg + arg };' from '/bun/test/js/node/string-module.test.js' |
 | d | data parser/serializer semantics | 14 | cli/format/toml-layout.test.ts | TOML layout > formats every case without errors, and --check passes afterwards | error: expect(received).toEqual(expected) |
 | d | database, Redis or S3 clients | 130 | js/bun/image/image.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'S3Client' in module 'bun' |
-| d | filesystem API semantics | 2 | js/bun/util/filesystem_router.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'FileSystemRouter' in module 'bun' |
-| d | test runner/assertion or runtime semantics | 705 | cli/bunfig-test-options.test.ts | bunfig.toml test options > randomize with seed produces consistent order | error: expect(received).not.toEqual(expected) |
+| d | filesystem API semantics | 3 | js/bun/util/filesystem_router.test.ts | <collection/hook/exit; no named failure> | SyntaxError: Could not find export 'FileSystemRouter' in module 'bun' |
+| d | test runner/assertion or runtime semantics | 704 | cli/bunfig-test-options.test.ts | bunfig.toml test options > randomize with seed produces consistent order | error: expect(received).not.toEqual(expected) |
 | d | timeout, first unblock and rerun without reducing it to an API verdict | 5 | js/node/buffer-indexof-worstcase.test.ts | <collection/hook/exit; no named failure> | <see JSON excerpt; no error line> |
 | d | tsconfig JSX runtime selection and jsxImportSource | 1 | bundler/transpiler/jsx-tsconfig-react-jsx.test.ts | tsconfig compilerOptions.jsx > "react-jsx" selects the matching automatic runtime | error: Cannot find module 'react/jsx-dev-runtime' from '/tmp/jsx-tsconfig_Q3qJ7t/m.jsx' |
 | d | unresolved runtime/module semantics, inspect the recorded failure first | 70 | bake/hmr-socket-protocol.test.ts | a duplicate testing-batch frame (H) during an in-flight bundle closes the socket instead of aborting |   ^ this test timed out after 2000ms. |
 | e | private native-engine/compiler instrumentation has no portable equivalent | 93 | bake/deinitialization.test.ts | dev server deinitializes itself | SyntaxError: Could not find export 'getDevServerDeinitCount' in module 'bun:internal-for-testing' |
-| f | passes on browser | 18 | js/bun/crypto/wpt-webcrypto.generateKey.test.ts | <collection/hook/exit; no named failure> | <see JSON excerpt; no error line> |
+| f | passes on browser | 17 | js/bun/crypto/wpt-webcrypto.generateKey.test.ts | <collection/hook/exit; no named failure> | <see JSON excerpt; no error line> |
 | f | passes on browser, jsc | 3 | js/bun/jsc/webkit-upgrade-ccdcb8a026.test.ts | WebKit ccdcb8a026 upgrade > Atomics.isLockFree uses ToIntegerOrInfinity instead of wrapping to int32 | ReferenceError: Atomics is not defined |
 | f | passes on jsc | 4 | js/bun/jsc/webkit-upgrade-8c4fd56347.test.ts | WebKit 8c4fd56347 upgrade > Promise.try returns a native promise as-is (7f38ebbabf) | error: expect(received).toBe(expected) |
 <!-- failure-groups:end -->
