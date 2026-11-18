@@ -1,8 +1,7 @@
 import fs, { openAsBlob, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 
-const path = join(tmpdir(), "fs-open-as-blob.txt");
+const path = "open-as-blob.txt";
 writeFileSync(path, "hello blob");
 
 console.log(typeof openAsBlob, openAsBlob.name, fs.openAsBlob === openAsBlob);
@@ -15,5 +14,5 @@ console.log(await blob.text());
 const typed = await openAsBlob(path, { type: "text/plain" });
 console.log(JSON.stringify(typed.type), await typed.slice(6).text());
 
-const fromUrl = await openAsBlob(new URL(`file://${path}`));
+const fromUrl = await openAsBlob(new URL(`file://${resolve(path)}`));
 console.log(fromUrl.size);
