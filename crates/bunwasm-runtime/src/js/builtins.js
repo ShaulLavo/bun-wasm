@@ -209,6 +209,7 @@
       webcrypto,
       subtle: webcrypto.subtle,
       ...keyApi,
+      ...internal.require("node_pbkdf2")(digests, Buffer),
       ...internal.require("x509")(Buffer, keyApi),
       Hash,
       Hmac: Hash,
