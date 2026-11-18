@@ -32,8 +32,7 @@ runs:
         if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
            command -v ruby && command -v gperf && command -v bison &&
            ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
-        if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
-        if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
+        sudo bash "$GITHUB_WORKSPACE/.github/scripts/apt-main-archive.sh"
         sudo apt-get update
         sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
     # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can

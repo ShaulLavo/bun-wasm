@@ -62,7 +62,7 @@ function localActions(root: string, value: unknown, paths = new Set<string>()): 
 
 function commandRecipes(root: string, producer: unknown, actions: Set<string>): string[] {
   const commands = canonical(producer) + Array.from(actions, path => readFileSync(join(root, path, 'action.yml'), 'utf8')).join('\n');
-  return Array.from(commands.matchAll(/(?:scripts|spidermonkey)\/[\w/.-]+\.(?:ts|mts|sh|json)\b/g), match => match[0]);
+  return Array.from(commands.matchAll(/(?:\.github\/scripts|scripts|spidermonkey)\/[\w/.-]+\.(?:ts|mts|sh|json)\b/g), match => match[0]);
 }
 
 /** Follow local tool/verification imports too, so extracting a helper cannot hide later edits. */
