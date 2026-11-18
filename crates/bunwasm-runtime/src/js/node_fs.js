@@ -908,6 +908,10 @@
     FSWatcher,
     watchFile: watchUnsupported,
     unwatchFile: () => {},
+    // Bun's src/js/node/fs.ts: a lazily read Bun.file Blob.
+    openAsBlob: function openAsBlob(path, options) {
+      return Promise.resolve(internal.builtin("bun").file(path, options));
+    },
     F_OK: 0,
     R_OK: 4,
     W_OK: 2,
