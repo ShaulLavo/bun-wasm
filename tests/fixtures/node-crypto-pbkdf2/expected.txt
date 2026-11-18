@@ -33,6 +33,7 @@ digest dss1 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: dss1
 digest md55 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: md55
 dataview salt Buffer 9b95ba636460a901
 string object password Buffer 120fb6cffcf8b32c
+salt detached while the password is coerced 0 true
 sync iterations 0 throws RangeError ERR_OUT_OF_RANGE The value of "iterations" is out of range. It must be >= 1 and <= 2147483647. Received 0
 sync iterations -1 throws RangeError ERR_OUT_OF_RANGE The value of "iterations" is out of range. It must be >= 1 and <= 2147483647. Received -1
 sync iterations 1.5 throws RangeError ERR_OUT_OF_RANGE The value of "iterations" is out of range. It must be an integer. Received 1.5

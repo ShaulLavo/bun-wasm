@@ -25,6 +25,17 @@ for (const digest of ["SHA256", "sha-256", "sha128", "md5", "md4", "sha224", "sh
 }
 show("dataview salt", () => crypto.pbkdf2Sync(new Uint8Array([1, 2]), new DataView(new ArrayBuffer(3)), 1, 8, "sha1"));
 show("string object password", () => crypto.pbkdf2Sync(new String("password") as never, "salt", 1, 8, "sha256"));
+show("salt detached while the password is coerced", () => {
+  const salt = new Uint8Array(64).fill(3);
+  const password = Object.assign(new String("password"), {
+    toString() {
+      structuredClone(salt.buffer, { transfer: [salt.buffer] });
+      return "password";
+    },
+  });
+  const key = crypto.pbkdf2Sync(password as never, salt, 1, 32, "sha256");
+  return `${salt.byteLength} ${key.equals(crypto.pbkdf2Sync("password", new Uint8Array(0), 1, 32, "sha256"))}`;
+});
 
 for (const [label, args] of [
   ["iterations 0", ["p", "s", 0, 8, "sha256"]],

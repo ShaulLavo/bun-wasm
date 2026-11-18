@@ -22,6 +22,8 @@
   return function create(digests: Digests, Buffer: BunWasm.BufferConstructor) {
     function bytes(value: unknown, name: string): Bytes {
       if (typeof value === "string" || value instanceof String) return internal.native.utf8Encode(String(value));
+      // A typed array whose buffer was detached reads as empty, as in Bun.
+      if (ArrayBuffer.isView(value) && !(value instanceof DataView) && value.byteLength === 0) return new Uint8Array(0);
       if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return internal.toUint8(value).slice();
       throw argType(name, "string or buffer", value);
     }
