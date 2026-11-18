@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fs-flag-mode-validation",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}
