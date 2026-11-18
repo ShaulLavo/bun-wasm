@@ -1,5 +1,5 @@
 {
-  "runtime_source_commit": "1bf81283084fe7e1a7f91d68dab21cfccd63bd4d",
+  "runtime_source_commit": "5d5d7f8bd5257f8c1fa5986c4c1096b8fb22f2ea",
   "files": [
     "js/bun/test/bun-test.test.ts",
     "js/bun/test/bun_test.test.ts",
@@ -26,17 +26,67 @@
     "js/bun/test/test-failing.test.ts",
     "js/bun/test/test-retry-repeats-basic.test.ts",
     "js/bun/test/test-timers.test.ts",
+    "js/node/async_hooks/AsyncLocalStorage.test.ts",
     "js/node/buffer-concat.test.ts",
+    "js/node/buffer-copy-fill-detach.test.ts",
     "js/node/buffer-from-symbol-to-primitive.test.ts",
+    "js/node/buffer-indexOf-detach.test.ts",
     "js/node/buffer.test.js",
+    "js/node/crypto/crypto-oneshot.test.ts",
+    "js/node/crypto/crypto.hmac.test.ts",
+    "js/node/crypto/crypto.key-objects.test.ts",
+    "js/node/crypto/crypto.test.ts",
+    "js/node/crypto/node-crypto.test.js",
+    "js/node/crypto/pbkdf2.test.ts",
     "js/node/events/event-emitter.test.ts",
+    "js/node/fs/cp.test.ts",
+    "js/node/fs/dir.test.ts",
+    "js/node/fs/fs-mkdir.test.ts",
+    "js/node/fs/fs-read-buffer-before-offset.test.ts",
+    "js/node/fs/fs-stats-constructor.test.ts",
+    "js/node/fs/fs-write-offset-bound.test.ts",
+    "js/node/fs/fs.test.ts",
+    "js/node/fs/promises.test.js",
+    "js/node/http/node-fetch.test.js",
+    "js/node/os/os.test.js",
+    "js/node/path/join.test.js",
+    "js/node/path/normalize.test.js",
+    "js/node/path/parse-format.test.js",
+    "js/node/path/path.test.js",
+    "js/node/path/relative.test.js",
+    "js/node/path/resolve.test.js",
+    "js/node/process/process-nexttick.test.js",
+    "js/node/process/process.test.js",
+    "js/node/stream/node-stream-uint8array.test.ts",
+    "js/node/stream/node-stream.test.js",
+    "js/node/string_decoder/string-decoder.test.js",
+    "js/node/timers.promises/timers.promises.test.ts",
+    "js/node/timers/node-timers.test.ts",
+    "js/node/url/url-parse-format.test.js",
     "js/node/url/url-pathtofileurl.test.js",
     "js/node/url/url.test.ts",
+    "js/node/util/bun-inspect.test.ts",
+    "js/node/util/custom-inspect.test.js",
+    "js/node/util/test-util-types.test.js",
     "js/third_party/hono/hello-world.test.ts",
     "js/third_party/jsonwebtoken/issue_147.test.js",
+    "js/web/abort/abort.test.ts",
+    "js/web/console/console-log.test.ts",
+    "js/web/crypto/web-crypto.test.ts",
     "js/web/encoding/text-decoder-single-byte.test.ts",
+    "js/web/encoding/text-decoder-stream.test.ts",
     "js/web/encoding/text-decoder.test.js",
     "js/web/encoding/text-encoder.test.js",
+    "js/web/fetch/blob.test.ts",
+    "js/web/fetch/body-clone.test.ts",
+    "js/web/fetch/body.test.ts",
+    "js/web/fetch/client-fetch.test.ts",
+    "js/web/fetch/fetch-args.test.ts",
+    "js/web/fetch/fetch-redirect.test.ts",
+    "js/web/fetch/fetch.test.ts",
+    "js/web/fetch/fetch_headers.test.js",
+    "js/web/timers/microtask.test.js",
+    "js/web/timers/performance.test.js",
     "js/web/url/url.test.ts"
   ],
   "engines": [
@@ -46,7 +96,7 @@
         "schema": 1,
         "engine": "quickjs",
         "suite_commit": "9510e74152073d850a18758ca41114d8f214ffa6",
-        "wasm_sha256": "47ed63f60cae3b0c1bfd4c8dcc8cbcd9c4750b501a3c46422dfb165aaa492e2e",
+        "wasm_sha256": "e436be9b7744a335138d806ef44a31bc1f323becc177bafe4209913821ed728a",
         "companions_sha256": {
           "quickjs.wasm": "7753e6541f40c46bf885542514c837df8482c505bcdde44d6c6119aa27a41010",
           "bash-web-shell.wasm": "4241fa7a6d2c85ac4924a654bdb4f2b65338307f53c7205d0cfa194e7757aede",
@@ -72,15 +122,15 @@
         "test_timeout_ms": 10000
       },
       "summary": {
-        "files": 37,
-        "fully_passing": 30,
+        "files": 87,
+        "fully_passing": 39,
         "timeouts": 0,
         "counts": {
-          "pass": 1928,
-          "fail": 30,
-          "skip": 3,
-          "todo": 8,
-          "errors": 0
+          "pass": 3282,
+          "fail": 1326,
+          "skip": 58,
+          "todo": 12,
+          "errors": 5
         }
       }
     },
@@ -90,9 +140,9 @@
         "schema": 1,
         "engine": "jsc",
         "suite_commit": "9510e74152073d850a18758ca41114d8f214ffa6",
-        "wasm_sha256": "9e992475f9e3096b2607968ac63be4f8be5e043e02f6a46da5db71542b5f9ab5",
+        "wasm_sha256": "bc45efc124452c7f2cb48a341eb29d5a5f108907f08d9c22d483cb66be5427ad",
         "companions_sha256": {
-          "jsc-engine.wasm": "accfefc71a8d2aa261b24d1db42159c5f36654139f9e636e579615aab42e9374",
+          "jsc-engine.wasm": "79af0fb017adf3ebfe57dabb09c0833e06abd7e888e90b1208bb67bf9ddbba87",
           "bash-web-shell.wasm": "4241fa7a6d2c85ac4924a654bdb4f2b65338307f53c7205d0cfa194e7757aede",
           "bash-web-env.wasm": "190da917392cfb6ae7264fec05b1cfdb05b053f3938d76ceb66dd6175c63169e",
           "bash-web-guests.json": "6fc027e75057b8e32854b858938b9ca9297d2c8f40998493ed9cef8b4b057bc4"
@@ -116,15 +166,15 @@
         "test_timeout_ms": 10000
       },
       "summary": {
-        "files": 37,
-        "fully_passing": 30,
+        "files": 87,
+        "fully_passing": 39,
         "timeouts": 0,
         "counts": {
-          "pass": 1930,
-          "fail": 28,
-          "skip": 3,
-          "todo": 8,
-          "errors": 0
+          "pass": 3282,
+          "fail": 1326,
+          "skip": 58,
+          "todo": 12,
+          "errors": 5
         }
       }
     },
@@ -134,7 +184,7 @@
         "schema": 1,
         "engine": "browser",
         "suite_commit": "9510e74152073d850a18758ca41114d8f214ffa6",
-        "wasm_sha256": "b886a1f665779a1fde2967ef4a9feb8c4776edb38b9636ba8947cc3ab079b731",
+        "wasm_sha256": "bb84273f5be2017f6aaf5dbd5689fa6b4287a2e788b5308bb864e8e79241ee5e",
         "companions_sha256": {
           "bash-web-shell.wasm": "4241fa7a6d2c85ac4924a654bdb4f2b65338307f53c7205d0cfa194e7757aede",
           "bash-web-env.wasm": "190da917392cfb6ae7264fec05b1cfdb05b053f3938d76ceb66dd6175c63169e",
@@ -754,15 +804,15 @@
         "test_timeout_ms": 10000
       },
       "summary": {
-        "files": 37,
-        "fully_passing": 29,
+        "files": 87,
+        "fully_passing": 38,
         "timeouts": 0,
         "counts": {
-          "pass": 1428,
-          "fail": 24,
-          "skip": 0,
-          "todo": 8,
-          "errors": 0
+          "pass": 2807,
+          "fail": 1295,
+          "skip": 55,
+          "todo": 12,
+          "errors": 7
         }
       }
     }
