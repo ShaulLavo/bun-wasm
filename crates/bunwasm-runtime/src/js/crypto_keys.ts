@@ -773,23 +773,6 @@ declare namespace CryptoKeys {
         );
       }
     }
-    function pbkdf2Sync(password: CryptoKeys.Input, salt: CryptoKeys.Input, iterations: number, keylen: number, digest: string): CryptoKeys.Buffer {
-      const key = c.importKey("raw", inputBytes(password), "PBKDF2", false, [
-        "deriveBits",
-      ]);
-      return Buffer.from(
-        c.deriveBits(
-          {
-            name: "PBKDF2",
-            hash: hash(digest),
-            salt: inputBytes(salt),
-            iterations,
-          },
-          key,
-          keylen * 8,
-        ),
-      );
-    }
     function hkdfSync(digest: string, ikm: CryptoKeys.Input | KeyObject, salt: CryptoKeys.Input, info: CryptoKeys.Input, keylen: number): ArrayBuffer {
       const key = c.importKey(
         "raw",
@@ -847,8 +830,6 @@ declare namespace CryptoKeys {
       createSign: (a: string, o?: unknown) => new Sign(a, o),
       createVerify: (a: string, o?: unknown) => new Verify(a, o),
       constants,
-      pbkdf2Sync,
-      pbkdf2: callbackVersion(pbkdf2Sync),
       hkdfSync,
       hkdf: callbackVersion(hkdfSync),
       getCurves: () => ["prime256v1", "secp384r1"],
