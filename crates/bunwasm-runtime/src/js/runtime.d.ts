@@ -81,6 +81,7 @@ declare namespace BunWasm {
     globScan(pattern: string, cwd: string, dot: boolean, absolute: boolean, followSymlinks: boolean,
       throwErrorOnBrokenSymlink: boolean, onlyFiles: boolean, followMatchedSymlinks?: boolean): string[];
     getAsyncContext(): unknown;
+    setAsyncContext(context: unknown): void;
     runMicrotasks(): void;
     exit(code?: number): never;
   }

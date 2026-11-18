@@ -1,6 +1,7 @@
 import { installNativeWasmLifetime } from "../../src/native-wasm-lifetime.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 
 // Sources for running engine-host.js's async-context hooks inside a node:vm context:
 // its own module text without imports, and bootstrap.js's runInContext.
@@ -20,6 +21,17 @@ export function runInContextSource(): string {
   return `${bootstrap.slice(start, end)}\n  internal.runInContext = runInContext;\n`;
 }
 
+// builtins.js, run on `internal`, with the AsyncLocalStorage module node:async_hooks requires
+// served over whatever stub require the harness gave it.
 export function builtinsSource(): string {
-  return readFileSync(new URL("../../../crates/bunwasm-runtime/src/js/builtins.js", import.meta.url), "utf8") + "(internal);";
+  const js = new URL("../../../crates/bunwasm-runtime/src/js/", import.meta.url);
+  const storage = stripTypeScriptTypes(readFileSync(new URL("async_local_storage.ts", js), "utf8"));
+  const builtins = readFileSync(new URL("builtins.js", js), "utf8");
+  return `{
+    const asyncLocalStorage = ${storage}
+    const stubRequire = internal.require;
+    let loaded;
+    internal.require = name => name === "async_local_storage" ? (loaded ??= asyncLocalStorage(internal)) : stubRequire(name);
+  }
+  ${builtins}(internal);`;
 }
