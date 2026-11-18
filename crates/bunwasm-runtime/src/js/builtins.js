@@ -124,7 +124,8 @@
 
     function createHash(algorithm, options) {
       const name = digests.hashName(String(algorithm));
-      if (name === undefined) throw Object.assign(new Error("Digest method not supported"), { code: "ERR_CRYPTO_INVALID_DIGEST" });
+      // Bun's BoringSSL error here carries no `code`.
+      if (name === undefined) throw new Error("Digest method not supported");
       const outputLength = digests.outputLength(options);
       if (outputLength !== undefined && !digests.isXof(name) && outputLength !== digests.byteLength(name)) throw digests.notXofError();
       return new Hash(name, undefined, outputLength);
