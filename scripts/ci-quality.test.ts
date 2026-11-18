@@ -746,6 +746,21 @@ for (const job of ["jsc-prebuild", "native-quality", "rust"]) {
       expect(failure.stdout).toBe(expected);
     }
   });
+
+  test(`${job} host version reports ignore Ubuntu glibc package revisions`, () => {
+    const jobs = workflowField(Bun.YAML.parse(workflow), "jobs");
+    const steps = workflowField(workflowField(jobs, job), "steps");
+    if (!Array.isArray(steps)) throw new Error("Missing workflow steps");
+    const step = steps.find((step: unknown) => typeof step === "object" && step !== null && "id" in step && step.id === "host-tools");
+    const pipeline = workflowString(workflowField(step, "run")).split("\n").find(line => line.trim().startsWith("ldd --version |"));
+    if (!pipeline) throw new Error("Missing glibc version pipeline");
+    // Runner image rollouts put jobs of one run on different revisions of the same glibc.
+    const reports = ["2.43-2ubuntu2.4", "2.43-2ubuntu2.7"].map(revision => {
+      const setup = `ldd() { printf 'ldd (Ubuntu GLIBC ${revision}) 2.43\\nCopyright (C) 2026 Free Software Foundation, Inc.\\n'; }; `;
+      return spawnSync("bash", ["-euo", "pipefail", "-c", setup + pipeline], { encoding: "utf8" }).stdout;
+    });
+    expect(reports).toEqual(["2.43\n", "2.43\n"]);
+  });
 }
 
 test("Rust build caches follow host tool versions, not the runner image", () => {

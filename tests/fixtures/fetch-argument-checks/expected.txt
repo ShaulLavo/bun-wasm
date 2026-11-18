@@ -1,0 +1,77 @@
+fetch.length 1
+init body getter: promise rejected Error: body-boom; requests 0
+first-argument body getter: promise rejected Error: body-boom; requests 0
+Request and init body getter: promise rejected Error: body-boom; requests 0
+init decompress getter: promise rejected Error: decompress-boom; requests 0
+first-argument decompress getter: promise rejected Error: decompress-boom; requests 0
+Request and init decompress getter: promise rejected Error: decompress-boom; requests 0
+init headers getter: promise rejected Error: headers-boom; requests 0
+first-argument headers getter: promise rejected Error: headers-boom; requests 0
+Request and init headers getter: promise rejected Error: headers-boom; requests 0
+init keepalive getter: promise rejected Error: keepalive-boom; requests 0
+first-argument keepalive getter: promise rejected Error: keepalive-boom; requests 0
+Request and init keepalive getter: promise rejected Error: keepalive-boom; requests 0
+init method getter: promise rejected Error: method-boom; requests 0
+first-argument method getter: promise rejected Error: method-boom; requests 0
+Request and init method getter: promise rejected Error: method-boom; requests 0
+init proxy getter: promise rejected Error: proxy-boom; requests 0
+first-argument proxy getter: promise rejected Error: proxy-boom; requests 0
+Request and init proxy getter: promise rejected Error: proxy-boom; requests 0
+init redirect getter: promise rejected Error: redirect-boom; requests 0
+first-argument redirect getter: promise rejected Error: redirect-boom; requests 0
+Request and init redirect getter: promise rejected Error: redirect-boom; requests 0
+init signal getter: promise rejected Error: signal-boom; requests 0
+first-argument signal getter: promise rejected Error: signal-boom; requests 0
+Request and init signal getter: promise rejected Error: signal-boom; requests 0
+init timeout getter: promise rejected Error: timeout-boom; requests 0
+first-argument timeout getter: promise rejected Error: timeout-boom; requests 0
+Request and init timeout getter: promise rejected Error: timeout-boom; requests 0
+init tls getter: promise rejected Error: tls-boom; requests 0
+first-argument tls getter: promise rejected Error: tls-boom; requests 0
+Request and init tls getter: promise rejected Error: tls-boom; requests 0
+init unix getter: promise rejected Error: unix-boom; requests 0
+first-argument unix getter: promise rejected Error: unix-boom; requests 0
+Request and init unix getter: promise rejected Error: unix-boom; requests 0
+init verbose getter: promise rejected Error: verbose-boom; requests 0
+first-argument verbose getter: promise rejected Error: verbose-boom; requests 0
+Request and init verbose getter: promise rejected Error: verbose-boom; requests 0
+no arguments: promise rejected TypeError: fetch() expects a string but received no arguments. [ERR_MISSING_ARGS]; requests 0
+blank url: promise rejected TypeError: fetch() URL must not be a blank string. [ERR_INVALID_URL]; requests 0
+invalid url: promise rejected TypeError: fetch() URL is invalid [ERR_INVALID_URL]; requests 0
+relative url: promise rejected TypeError: fetch() URL is invalid [ERR_INVALID_URL]; requests 0
+url toString throws: promise rejected Error: UBOOM; requests 0
+object without url: promise rejected TypeError: fetch() URL must not be a blank string. [ERR_INVALID_URL]; requests 0
+object with url toString: promise resolved "from-to-string"; requests 0
+first-argument data url: promise resolved "from-object"; requests 0
+data url skips option getters: promise resolved "skipped"; requests 0
+data url without a comma: promise rejected Error: failed to fetch the data URL; requests 0
+data url with invalid base64: promise rejected Error: failed to fetch the data URL; requests 0
+data url with base64: promise resolved "hi"; requests 0
+GET with a body: promise rejected TypeError: fetch() request with GET/HEAD method cannot have body. [ERR_INVALID_ARG_VALUE]; requests 0
+HEAD with a body: promise rejected TypeError: fetch() request with GET/HEAD method cannot have body. [ERR_INVALID_ARG_VALUE]; requests 0
+first-argument GET with a body: promise rejected TypeError: fetch() request with GET/HEAD method cannot have body. [ERR_INVALID_ARG_VALUE]; requests 0
+redirect not an option: promise rejected TypeError: redirect must be one of 'follow', 'manual' or 'error' [ERR_INVALID_ARG_TYPE]; requests 0
+Request and bad redirect: promise rejected TypeError: redirect must be one of 'follow', 'manual' or 'error' [ERR_INVALID_ARG_TYPE]; requests 0
+proxy with unix: promise rejected TypeError: fetch() cannot use a proxy with a unix socket. [ERR_INVALID_ARG_VALUE]; requests 0
+invalid proxy: promise rejected TypeError: fetch() proxy URL is invalid [ERR_INVALID_ARG_VALUE]; requests 0
+invalid proxy.url: promise rejected TypeError: fetch() proxy URL is invalid [ERR_INVALID_ARG_VALUE]; requests 0
+tls ca number: promise rejected TypeError: TLSOptions.ca must be of type string, ArrayBuffer, Blob, array of <string, ArrayBuffer, or Blob>, or null [ERR_INVALID_ARG_TYPE]; requests 0
+tls cert number: promise rejected TypeError: TLSOptions.cert must be of type string, ArrayBuffer, Blob, array of <string, ArrayBuffer, or Blob>, or null [ERR_INVALID_ARG_TYPE]; requests 0
+tls key number: promise rejected TypeError: TLSOptions.key must be of type string, ArrayBuffer, Blob, array of <string, ArrayBuffer, or Blob>, or null [ERR_INVALID_ARG_TYPE]; requests 0
+tls ca array element: promise rejected TypeError: element of TLSOptions.ca must be of type string, ArrayBuffer, or Blob [ERR_INVALID_ARG_TYPE]; requests 0
+tls ca and cert both bad: promise rejected TypeError: TLSOptions.ca must be of type string, ArrayBuffer, Blob, array of <string, ArrayBuffer, or Blob>, or null [ERR_INVALID_ARG_TYPE]; requests 0
+tls rejectUnauthorized number: promise rejected TypeError: TLSOptions.rejectUnauthorized must be a boolean [ERR_INVALID_ARG_TYPE]; requests 0
+tls serverName number: promise rejected TypeError: TLSOptions.serverName must be a string [ERR_INVALID_ARG_TYPE]; requests 0
+tls passphrase number: promise rejected TypeError: TLSOptions.passphrase must be a string [ERR_INVALID_ARG_TYPE]; requests 0
+maxRedirects negative: promise rejected TypeError: fetch: 'maxRedirects' must be a non-negative integer [ERR_INVALID_ARG_TYPE]; requests 0
+protocol unknown: promise rejected TypeError: fetch: 'protocol' must be "http2", "h2", "http3", "h3", "http1.1", or "h1" [ERR_INVALID_ARG_TYPE]; requests 0
+compress unknown: promise rejected TypeError: fetch: 'compress' must be "gzip", "deflate", "br", or "zstd" [ERR_INVALID_ARG_TYPE]; requests 0
+compress number: promise rejected TypeError: The "compress" argument must be of type boolean, string, or object. Received type number (5) [ERR_INVALID_ARG_TYPE]; requests 0
+compress encoding unknown: promise rejected TypeError: fetch: 'compress.encoding' must be "gzip", "deflate", "br", or "zstd" [ERR_INVALID_ARG_TYPE]; requests 0
+init signal not a signal: promise rejected TypeError: signal is not of type AbortSignal. [ERR_INVALID_ARG_TYPE]; requests 0
+first-argument signal not a signal: promise rejected TypeError: signal is not of type AbortSignal. [ERR_INVALID_ARG_TYPE]; requests 0
+aborted signal: promise rejected AbortError: The operation was aborted. [20]; requests 0
+aborted signal with a reason: promise rejected string why; requests 0
+Request with a used body: promise rejected TypeError: Request body already used [ERR_BODY_ALREADY_USED]; requests 0
+headers iterable throws: promise rejected Error: HBOOM; requests 0
+default abort reason: AbortError: The operation was aborted. [20]
