@@ -115,10 +115,6 @@ streamVerifier.on("error", () => {});
 const signer = streamSigner.sign(pair.privateKey, undefined);
 const validStream: boolean = streamVerifier.verify(pair.publicKey, signer, undefined);
 const derived: ArrayBuffer = keys.hkdfSync("sha256", secret, typed, view, 32);
-keys.pbkdf2("password", "salt", 1, 32, "sha256", (error, value) => {
-  void error;
-  value.toString("hex");
-});
 keys.hkdf("sha256", typed, "salt", "info", 32, (error, value) => {
   void error;
   void value;

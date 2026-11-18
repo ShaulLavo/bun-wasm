@@ -58,6 +58,8 @@ runs:
         key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
     # Image updates change many unrelated packages. Build caches follow the host
     # tools these builds run; each layer's own input hash covers its toolchain.
+    # glibc is recorded by upstream version only: Ubuntu's package revisions are ABI-stable
+    # security updates that roll out unevenly, so jobs of one run can see two of them.
     - name: Identify host build tools
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       id: host-tools
@@ -68,7 +70,7 @@ runs:
             command -v "$tool"
             "$tool" --version | sed -n '1,2p'
           done
-          ldd --version | sed -n '1p'
+          ldd --version | sed -n '1s/.* //;1p'
           ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' | sort
         } > "$report"
         cat "$report"
