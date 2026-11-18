@@ -430,7 +430,6 @@
   }
 
   const concatArrayBuffers = internal.require("concat_array_buffers");
-  const streamMethods = internal.require("readable_stream_methods")(internal.web.ReadableStream);
 
   async function readableStreamToBytes(stream) {
     const chunks = [];
@@ -524,7 +523,7 @@
     readableStreamToText: async (s) => new TextDecoder().decode(await readableStreamToBytes(s)),
     readableStreamToJSON: async (s) => JSON.parse(new TextDecoder().decode(await readableStreamToBytes(s))),
     readableStreamToBlob: async (s) => new Blob([await readableStreamToBytes(s)]),
-    readableStreamToArray: streamMethods.readableStreamToArray,
+    readableStreamToArray: (stream) => internal.require("readable_stream_methods").readableStreamToArray(stream),
     isMainThread: true,
     enableANSIColors,
     get stdout() {

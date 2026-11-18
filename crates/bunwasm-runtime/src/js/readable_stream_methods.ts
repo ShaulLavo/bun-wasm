@@ -1,7 +1,7 @@
 // Bun's ReadableStream.prototype text/json/bytes/blob (JSReadableStream.cpp) and
 // Bun.readableStreamToArray (BunStreamConsumers.cpp): read every chunk, then convert.
-// bun.js installs them on the runtime's ReadableStream, which on the Browser engine
-// is the host's own class.
+// Loading this module installs them on the runtime's ReadableStream, which on the
+// Browser engine is the host's own class; bootstrap.js loads it with the globals.
 (function (internal: BunWasm.Internal) {
   "use strict";
 
@@ -28,20 +28,19 @@
     return internal.concatBytes(chunks.map(chunk => typeof chunk === "string" ? internal.native.utf8Encode(chunk) : internal.toUint8(chunk as Uint8Array)));
   }
 
-  return function install(Stream: typeof ReadableStream) {
-    const receiver = (value: unknown): ReadableStream<unknown> => {
-      if (value instanceof Stream) return value;
-      throw Object.assign(new TypeError('Value of "this" must be of type ReadableStream'), { code: "ERR_INVALID_THIS" });
-    };
-    const methods = {
-      text(this: unknown) { return streamBytes(receiver(this)).then(bytes => new TextDecoder().decode(bytes)); },
-      json(this: unknown) { return streamBytes(receiver(this)).then(bytes => JSON.parse(new TextDecoder().decode(bytes))); },
-      bytes(this: unknown) { return streamBytes(receiver(this)); },
-      blob(this: unknown) { return streamBytes(receiver(this)).then(bytes => new Blob([bytes])); },
-    };
-    for (const [name, value] of Object.entries(methods)) {
-      Object.defineProperty(Stream.prototype, name, { value, writable: true, enumerable: true, configurable: true });
-    }
-    return { readableStreamToArray };
+  const Stream = internal.web.ReadableStream;
+  const receiver = (value: unknown): ReadableStream<unknown> => {
+    if (value instanceof Stream) return value;
+    throw Object.assign(new TypeError('Value of "this" must be of type ReadableStream'), { code: "ERR_INVALID_THIS" });
   };
+  const methods = {
+    text(this: unknown) { return streamBytes(receiver(this)).then(bytes => new TextDecoder().decode(bytes)); },
+    json(this: unknown) { return streamBytes(receiver(this)).then(bytes => JSON.parse(new TextDecoder().decode(bytes))); },
+    bytes(this: unknown) { return streamBytes(receiver(this)); },
+    blob(this: unknown) { return streamBytes(receiver(this)).then(bytes => new Blob([bytes])); },
+  };
+  for (const [name, value] of Object.entries(methods)) {
+    Object.defineProperty(Stream.prototype, name, { value, writable: true, enumerable: true, configurable: true });
+  }
+  return { readableStreamToArray };
 })
