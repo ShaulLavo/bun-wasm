@@ -93,5 +93,33 @@
       cancel: () => closeIterable(body),
     }, { highWaterMark: 0 });
   }
-  return { remember, tee, clone, transfer, fromAsyncIterable, consume, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  // Body.textStream() (Bun's Body.rs to_text_readable_stream): the body as decoded
+  // UTF-8 strings. A character split across chunks is held until it is complete.
+  async function pullText(reader: ReadableStreamDefaultReader<unknown>, decoder: TextDecoder, controller: ReadableStreamDefaultController<string>): Promise<void> {
+    for (let next = await reader.read(); ; next = await reader.read()) {
+      if (next.done) {
+        const tail = decoder.decode();
+        if (tail) controller.enqueue(tail);
+        controller.close();
+        return;
+      }
+      const text = typeof next.value === "string" ? next.value : decoder.decode(internal.toUint8(next.value as Uint8Array), { stream: true });
+      if (text) { controller.enqueue(text); return; }
+    }
+  }
+  function textStream(body: Body): ReadableStream<string> {
+    if (body.bodyUsed || body._stream?.locked) {
+      throw Object.assign(new TypeError("Body is disturbed or locked"), { code: "ERR_BODY_ALREADY_USED" });
+    }
+    const stream = body.body;
+    if (stream === null) return new ReadableStream<string>({ start: controller => controller.close() });
+    const reader = stream.getReader();
+    body._bodyUsed = true;
+    const decoder = new TextDecoder();
+    return new ReadableStream<string>({
+      pull: controller => pullText(reader, decoder, controller),
+      cancel: reason => reader.cancel(reason),
+    });
+  }
+  return { remember, tee, clone, transfer, textStream, fromAsyncIterable, consume, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })

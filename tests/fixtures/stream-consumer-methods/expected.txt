@@ -1,0 +1,29 @@
+methods text:function:0 json:function:0 bytes:function:0 blob:function:0
+text "hello world"
+text split "🫠"
+text strings "ab"
+json {"a":[1,2]}
+bytes Uint8Array 97,98,99
+blob true 3 "" xyz
+locked rejects TypeError ERR_INVALID_STATE Invalid state: ReadableStream is locked
+non-stream throws TypeError ERR_INVALID_THIS Value of "this" must be of type ReadableStream
+bad json rejects SyntaxError
+toArray true ["p","q"]
+toArray bytes 2 Uint8Array,Uint8Array
+toArray empty []
+Response typeof function
+Response undefined true ""
+Response null true ""
+Response string true "héllo"
+Response buffer true "bytes ✓"
+Response stream true "🫠"
+Response used true true
+Response second throws TypeError ERR_BODY_ALREADY_USED Body is disturbed or locked
+Request typeof function
+Request undefined true ""
+Request null true ""
+Request string true "héllo"
+Request buffer true "bytes ✓"
+Request stream true "🫠"
+Request used true true
+Request second throws TypeError ERR_BODY_ALREADY_USED Body is disturbed or locked

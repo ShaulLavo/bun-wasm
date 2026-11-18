@@ -47,7 +47,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     subscriptions: () => new Uint8Array(), close() { closes++; }, pending: false, ended: false };
   const modules: Record<string, unknown> = {
     process, structured_clone: { structuredClone }, net: {},
-    text_decoder: TextDecoder, streams: {}, body_streams: {},
+    text_decoder: TextDecoder, streams: {}, body_streams: {}, readable_stream_methods: {},
     crypto: () => {}, console: {}, bun: {},
     worker_channel: { open: () => channel },
   };

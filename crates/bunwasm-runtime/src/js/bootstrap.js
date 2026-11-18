@@ -973,6 +973,7 @@
 
   internal.mainPath = native.mainPath();
   internal.require("web")(defineGlobal, defineLazyGlobal);
+  internal.require("readable_stream_methods"); // Bun's ReadableStream text/json/bytes/blob
   internal.require("crypto")(defineGlobal);
   defineGlobal("process", internal.require("process"));
   if (typeof globalThis.Temporal === "undefined") defineLazyGlobal("Temporal", () => internal.require("temporal").Temporal);
