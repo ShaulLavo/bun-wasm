@@ -279,7 +279,8 @@
   function readFileSync(path, options) {
     const encoding = encodingOf(options);
     // Node validates the flag before opening; the read itself does not use it here.
-    flagsNumber(options && typeof options === "object" && options.flag !== undefined ? options.flag : "r");
+    // A null or undefined flag means the default, as in Bun.
+    flagsNumber((options && typeof options === "object" ? options.flag : undefined) ?? "r");
     const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => native.readFile(abs));
     const buf = asBuffer(bytes);
     return encoding ? buf.toString(encoding) : buf;
@@ -298,7 +299,7 @@
 
   function writeFileSync(path, data, options) {
     const encoding = encodingOf(options);
-    const flag = options && typeof options === "object" && options.flag !== undefined ? options.flag : "w";
+    const flag = (options && typeof options === "object" ? options.flag : undefined) ?? "w";
     const bytes = toBytes(data, encoding);
     if (typeof path === "number") {
       native.write(path, bytes, -1);

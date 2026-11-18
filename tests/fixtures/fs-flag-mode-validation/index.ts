@@ -34,6 +34,9 @@ console.log("mkdir mode", failure(() => mkdirSync("sub", { mode: "7a5" as never 
 console.log("mkdir mode number argument", failure(() => mkdirSync("sub2", -1 as never)), existsSync("sub2"));
 console.log("writeFile mode", failure(() => writeFileSync("written.txt", "x", { mode: "0o644" as never })), existsSync("written.txt"));
 console.log("readFile flag", failure(() => fs.readFileSync("written.txt", { flag: "R" })));
+writeFileSync("default-flag.txt", "b", { flag: undefined });
+writeFileSync("null-flag.txt", "c", { flag: null as never });
+console.log("null flag means default", fs.readFileSync("default-flag.txt", { encoding: "utf8", flag: null as never }), fs.readFileSync("null-flag.txt", "utf8"));
 
 console.log("callback open throws", failure(() => fs.open("cb.txt", "W", () => console.log("callback ran"))), existsSync("cb.txt"));
 console.log("callback mkdir throws", failure(() => fs.mkdir("cb-dir", { mode: "x" as never }, () => console.log("callback ran"))));
