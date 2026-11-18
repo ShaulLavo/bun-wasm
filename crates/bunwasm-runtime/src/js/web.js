@@ -829,12 +829,18 @@
     return native.utf8Encode(String(part));
   }
 
-  // Bun adds the charset to text types: "text/plain" -> "text/plain;charset=utf-8".
+  // Bun's MimeType.rs by_name_static: an exact, case-sensitive match of a few known
+  // types gives Bun's canonical value; any other type is only lowercased.
+  const canonicalBlobTypes = new Map([
+    ["text/plain", "text/plain;charset=utf-8"], ["text/html", "text/html;charset=utf-8"], ["text/css", "text/css;charset=utf-8"],
+    ["text/javascript", "text/javascript;charset=utf-8"], ["text/jsx", "text/javascript;charset=utf-8"],
+    ["application/javascript", "text/javascript;charset=utf-8"], ["application/json", "application/json;charset=utf-8"],
+    ["application/x-www-form-urlencoded", "application/x-www-form-urlencoded;charset=UTF-8"], ["application/webassembly", "application/wasm"],
+  ]);
   function normalizeBlobType(type) {
     if (!type) return "";
-    const lower = String(type).toLowerCase();
-    if (lower.startsWith("text/") && !lower.includes("charset")) return lower + ";charset=utf-8";
-    return lower;
+    const given = String(type);
+    return canonicalBlobTypes.get(given) ?? given.toLowerCase();
   }
 
   class Blob {
@@ -1086,7 +1092,10 @@
     },
     async blob() {
       const type = this.headers.get("content-type") || "";
-      return new Blob([await this._consume()], { type });
+      const blob = new Blob([await this._consume()]);
+      // Bun keeps the Content-Type as written, canonicalizing only its known types.
+      blob._setType(canonicalBlobTypes.get(type) ?? type);
+      return blob;
     },
     async formData() {
       throw new TypeError("formData() is not supported in bun-wasm");

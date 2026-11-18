@@ -81,7 +81,7 @@
 
   // --- Stats / Dirent ---------------------------------------------------------
 
-  const { Stats, flagsNumber, cpSync: copySync, cp: copyAsync } = internal.require("fs_options")(native, absolute);
+  const { Stats, flagsNumber, parseFileMode, cpSync: copySync, cp: copyAsync } = internal.require("fs_options")(native, absolute, (value) => internal.require("inspect").nodeInspect(value));
 
   class Dirent {
     constructor(name, kind, parentPath) {
@@ -278,6 +278,9 @@
 
   function readFileSync(path, options) {
     const encoding = encodingOf(options);
+    // Node validates the flag before opening; the read itself does not use it here.
+    // A null or undefined flag means the default, as in Bun.
+    flagsNumber((options && typeof options === "object" ? options.flag : undefined) ?? "r");
     const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => native.readFile(abs));
     const buf = asBuffer(bytes);
     return encoding ? buf.toString(encoding) : buf;
@@ -296,13 +299,13 @@
 
   function writeFileSync(path, data, options) {
     const encoding = encodingOf(options);
-    const flag = options && typeof options === "object" && options.flag !== undefined ? options.flag : "w";
+    const flag = (options && typeof options === "object" ? options.flag : undefined) ?? "w";
     const bytes = toBytes(data, encoding);
     if (typeof path === "number") {
       native.write(path, bytes, -1);
       return;
     }
-    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), options && options.mode !== undefined ? options.mode : 0o666));
+    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), parseFileMode(options && typeof options === "object" ? options.mode : undefined, "mode", 0o666)));
   }
 
   function appendFileSync(path, data, options) {
@@ -338,6 +341,8 @@
 
   function mkdirSync(path, options) {
     const recursive = Boolean(options && typeof options === "object" && options.recursive);
+    // Node validates the mode (a number or string argument, or options.mode); WASI applies none.
+    parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
     const created = withPath(path, (abs) => native.mkdir(abs, recursive));
     return recursive ? (created === null ? undefined : created) : undefined;
   }
@@ -414,8 +419,8 @@
     }
   }
 
-  function openSync(path, flags, mode = 0o666) {
-    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), mode));
+  function openSync(path, flags, mode) {
+    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), parseFileMode(mode, "mode", 0o666)));
   }
 
   function closeSync(fd) {
@@ -715,6 +720,7 @@
     internal.realTimers.setImmediate(fn);
   }
 
+  const argumentErrors = new Set(["ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_VALUE", "ERR_OUT_OF_RANGE"]);
   function callbackify(name, fn, shape) {
     return function (...args) {
       const callback = args.pop();
@@ -724,6 +730,8 @@
       try {
         result = fn.apply(undefined, args);
       } catch (err) {
+        // Node validates arguments before queuing the operation, so those errors throw now.
+        if (err && argumentErrors.has(err.code)) throw err;
         error = err;
       }
       later(() => (shape ? shape(callback, error, result, args) : callback(error, result)));

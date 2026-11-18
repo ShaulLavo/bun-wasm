@@ -122,6 +122,8 @@
     if (!r) throw new TypeError("Expected a CryptoKey");
     return r;
   }
+  // WebCrypto's KeyUsage enum order; a key lists its usages in this order, as in Bun.
+  const usageOrder = ["encrypt", "decrypt", "sign", "verify", "deriveKey", "deriveBits", "wrapKey", "unwrapKey"];
   function makeKey(a, type, extractable, usages, key) {
     checkUsages(a, type, usages);
     const out = Object.create(CryptoKey.prototype);
@@ -130,7 +132,7 @@
       displayAlgorithm: copy(a),
       type,
       extractable: !!extractable,
-      usages: usages.slice(),
+      usages: usageOrder.filter((usage) => usages.includes(usage)),
       key,
     });
     return out;

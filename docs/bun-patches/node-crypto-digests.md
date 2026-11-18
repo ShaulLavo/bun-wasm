@@ -62,6 +62,17 @@ generic HMAC for the rest, and fails a key length the guest cannot allocate with
 guard in `scripts/crypto-keys.test.ts`. The `node-crypto-pbkdf2` fixture compares
 vectors, every digest name and each argument error with native Bun.
 
+`Hash` and `Hmac` objects are Transform streams through the original adapter
+`crates/bunwasm-runtime/src/js/crypto_hash_stream.ts`, which follows Node's
+`lib/internal/streams/lazy_transform.js`: the prototype chain gains
+`stream.Transform.prototype`, and getters for `_readableState`, `_writableState` and
+`_transformState` build the stream state from the `createHash`/`createHmac` options
+the first time a stream member reads them, with `decodeStrings` off. Writing data
+updates the hash, and ending the stream pushes the digest, so `write`/`end`/`read`,
+`pipe`, `setEncoding` and the `data` and `readable` events work as in Node and Bun.
+`node:stream` is already loaded when `node:crypto` loads, so this adds no startup
+work. The `node-crypto-hash-stream` fixture compares these uses with native Bun.
+
 The `node-crypto-digests` fixture compares about 150 names across the three
 lookups, long HMAC keys, every hasher HMAC, output lengths, `copy()`, and the eight
 classes with native Bun.

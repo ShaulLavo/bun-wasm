@@ -97,10 +97,12 @@
       #outputLength;
       #chunks = [];
       #done = false;
-      constructor(algorithm, key, outputLength) {
+      constructor(algorithm, key, outputLength, options) {
         this.#algorithm = algorithm;
         this.#key = key;
         this.#outputLength = outputLength;
+        // Stream options, applied when crypto_hash_stream.ts first builds the Transform state.
+        this._options = options;
       }
       update(data, encoding) {
         if (this.#done) throw Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
@@ -125,20 +127,22 @@
       }
     }
 
+    internal.require("crypto_hash_stream")(Hash);
+
     function createHash(algorithm, options) {
       const name = digests.hashName(String(algorithm));
       // Bun's BoringSSL error here carries no `code`.
       if (name === undefined) throw new Error("Digest method not supported");
       const outputLength = digests.outputLength(options);
       if (outputLength !== undefined && !digests.isXof(name) && outputLength !== digests.byteLength(name)) throw digests.notXofError();
-      return new Hash(name, undefined, outputLength);
+      return new Hash(name, undefined, outputLength, options);
     }
 
-    function createHmac(algorithm, key) {
+    function createHmac(algorithm, key, options) {
       const keyBytes = internal.crypto.isKey(key) ? internal.crypto.decode(internal.crypto.record(key).key.k) : typeof key === "string" ? Buffer.from(key) : internal.toUint8(key && key.export ? key.export() : key).slice();
       const name = digests.hmacName(String(algorithm));
       if (name === undefined) throw Object.assign(new TypeError(`Invalid digest: ${algorithm}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
-      return new Hash(name, keyBytes);
+      return new Hash(name, keyBytes, undefined, options);
     }
 
     function randomBytes(size, callback) {
