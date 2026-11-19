@@ -1,0 +1,113 @@
+== generateKey usages
+AES-CBC sign -> SyntaxError SyntaxError: Unsupported key usage for an AES key
+AES-KW encrypt -> SyntaxError SyntaxError: Unsupported key usage for an AES key
+HMAC encrypt -> SyntaxError SyntaxError: Unsupported key usage for an HMAC key
+RSA-OAEP sign -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSA-PSS encrypt -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSASSA-PKCS1-v1_5 encapsulateKey -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSASSA-PKCS1-v1_5 encapsulateBits -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSASSA-PKCS1-v1_5 decapsulateKey -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSASSA-PKCS1-v1_5 decapsulateBits -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSA-OAEP encapsulateKey -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSA-OAEP encapsulateBits -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSA-OAEP decapsulateKey -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSA-OAEP decapsulateBits -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSA-PSS encapsulateKey -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSA-PSS encapsulateBits -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSA-PSS decapsulateKey -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+RSA-PSS decapsulateBits -> SyntaxError SyntaxError: Unsupported key usage for a RSA key
+ECDSA encrypt -> SyntaxError SyntaxError: A required parameter was missing or out-of-range
+ECDH sign -> SyntaxError SyntaxError: A required parameter was missing or out-of-range
+Ed25519 encrypt -> SyntaxError SyntaxError: A required parameter was missing or out-of-range
+X25519 sign -> SyntaxError SyntaxError: A required parameter was missing or out-of-range
+== empty usages
+generate AES-GCM -> SyntaxError SyntaxError: Usages cannot be empty when creating a key.
+generate HMAC -> SyntaxError SyntaxError: Usages cannot be empty when creating a key.
+generate ECDSA -> SyntaxError SyntaxError: Usages cannot be empty when creating a key.
+generate Ed25519 -> SyntaxError SyntaxError: Usages cannot be empty when creating a key.
+import raw AES-GCM -> SyntaxError SyntaxError: Usages cannot be empty when importing a secret key.
+import raw HMAC -> SyntaxError SyntaxError: Usages cannot be empty when importing a secret key.
+import raw PBKDF2 -> SyntaxError SyntaxError: Usages cannot be empty when importing a secret key.
+deriveKey AES-GCM -> SyntaxError SyntaxError: Usages cannot be empty when importing a secret key.
+unwrapKey HMAC -> SyntaxError SyntaxError: Usages cannot be empty when importing a secret key.
+== importKey usages
+RSA-PSS spki encrypt -> SyntaxError SyntaxError: Unsupported key usage for an RSA-PSS key
+RSASSA spki encrypt -> SyntaxError SyntaxError: Unsupported key usage for an RSASSA-PKCS1-v1_5 key
+RSA-OAEP spki sign -> SyntaxError SyntaxError: Unsupported key usage for an RSA-OAEP key
+RSA-PSS spki sign -> SyntaxError SyntaxError: Unsupported key usage for an RSA-PSS key
+RSA-PSS pkcs8 verify -> SyntaxError SyntaxError: Unsupported key usage for an RSA-PSS key
+RSA-PSS pkcs8 empty -> SyntaxError SyntaxError: Usages cannot be empty when importing a private key.
+AES-GCM raw sign -> SyntaxError SyntaxError: Unsupported key usage for an AES key
+HMAC raw encrypt -> SyntaxError SyntaxError: Unsupported key usage for HMAC key
+PBKDF2 raw encrypt -> SyntaxError SyntaxError: Unsupported key usage for a PBKDF2 key
+ECDSA spki sign -> SyntaxError SyntaxError: Unsupported key usage for an ECDSA key
+ECDH spki deriveBits -> SyntaxError SyntaxError: Unsupported key usage for an ECDH key
+Ed25519 raw sign -> SyntaxError SyntaxError: Unsupported key usage for an Ed25519 key
+X25519 raw deriveBits -> SyntaxError SyntaxError: Unsupported key usage for an X25519 key
+== deriveBits
+X25519 with ECDH public -> DOMException InvalidAccessError 15: key algorithm mismatch
+ECDH with X25519 public -> DOMException InvalidAccessError 15: key algorithm mismatch
+ECDH with P-384 public -> DOMException InvalidAccessError 15: Named curve mismatch
+ECDH with private as public -> DOMException InvalidAccessError 15: The requested operation is not valid for the provided key
+lengths {"decrypt":3,"deriveBits":2,"deriveKey":5,"digest":2,"encrypt":3,"exportKey":2,"generateKey":3,"importKey":5,"sign":3,"unwrapKey":7,"verify":4,"wrapKey":4}
+ECDH 1 bits: 1 bytes, leading bits kept true
+ECDH 9 bits: 2 bytes, leading bits kept true
+ECDH 255 bits: 32 bytes, leading bits kept true
+ECDH 257 bits -> DOMException OperationError: derived bit length is too small
+HKDF 7 bits -> DOMException OperationError: length must be a multiple of 8
+== export and wrap
+exportKey pkcs8 non-extractable -> DOMException InvalidAccessError 15: key is not extractable
+wrapKey pkcs8 non-extractable -> DOMException InvalidAccessError 15: key is not extractable
+== HMAC JWK members
+use enc -> DOMException DataError: Invalid JWK "use" Parameter
+key_ops verify -> DOMException DataError: Key operations and usage mismatch
+ext false -> DOMException DataError: JWK "ext" Parameter and extractable mismatch
+empty k -> DOMException DataError: Zero-length key is not supported
+use and alg -> DOMException DataError: Invalid JWK "use" Parameter
+use and empty k -> DOMException DataError: Invalid JWK "use" Parameter
+alg HS384 -> DOMException DataError: JWK "alg" does not match the requested algorithm
+duplicate key_ops -> DOMException DataError: Duplicate key operation
+duplicate key_ops with use -> DOMException DataError: Invalid JWK "use" Parameter
+kty RSA -> DOMException DataError: Invalid JWK "kty" Parameter
+AES use sig -> DOMException DataError: Data provided to an operation does not meet requirements
+AES key_ops mismatch -> DOMException DataError: Data provided to an operation does not meet requirements
+AES alg mismatch -> DOMException DataError: Data provided to an operation does not meet requirements
+AES ext false -> DOMException DataError: Data provided to an operation does not meet requirements
+== argument checks
+raw plain object -> TypeError TypeError ERR_INVALID_ARG_TYPE: Failed to execute 'importKey' on 'SubtleCrypto': 2nd argument is not instance of ArrayBuffer, Buffer, TypedArray, or DataView.
+raw string -> TypeError TypeError ERR_INVALID_ARG_TYPE: Failed to execute 'importKey' on 'SubtleCrypto': 2nd argument is not instance of ArrayBuffer, Buffer, TypedArray, or DataView.
+bogus format -> TypeError TypeError ERR_INVALID_ARG_VALUE: Failed to execute 'importKey' on 'SubtleCrypto': 1st argument 'bogus' is not a valid enum value of type KeyFormat.
+format coerced 1
+bogus algorithm -> DOMException NotSupportedError 9: Unrecognized algorithm name
+bogus digest -> DOMException NotSupportedError 9: Unrecognized algorithm name
+RSAES-PKCS1-v1_5 -> DOMException NotSupportedError 9: RSAES-PKCS1-v1_5 support is deprecated
+== operation failures
+AES-GCM undersized -> DOMException OperationError: The operation failed for an operation-specific reason
+AES-GCM bad tag -> DOMException OperationError: The operation failed for an operation-specific reason
+sign without usage -> DOMException InvalidAccessError 15: Key algorithm mismatch
+encrypt with wrong algorithm -> DOMException InvalidAccessError 15: Key algorithm mismatch
+sign with a verify-only key -> DOMException InvalidAccessError 15: Unable to use this key to sign
+exportKey raw non-extractable -> DOMException InvalidAccessError 15: key is not extractable
+exportKey jwk non-extractable -> DOMException InvalidAccessError 15: key is not extractable
+exportKey spki of a private key -> DOMException InvalidAccessError 15: The requested operation is not valid for the provided key
+importKey pkcs8 from spki bytes -> DOMException DataError: Invalid keyData
+== formats and key types
+raw-public RSA-OAEP -> DOMException NotSupportedError 9: Unable to import RSA-OAEP using raw format
+raw-public HKDF -> resolved secret
+raw-secret AES-GCM -> resolved secret
+raw-public Ed25519 -> resolved public
+spki AES-GCM -> DOMException NotSupportedError 9: The algorithm is not supported
+HKDF extractable -> SyntaxError SyntaxError: HKDF keys are not extractable
+HKDF encrypt -> SyntaxError SyntaxError: Unsupported key usage for a HKDF key
+bogus usage -> TypeError TypeError: value must be enumeration (string)
+jwk bogus key_ops -> TypeError TypeError: value must be enumeration (string)
+deriveKey ECDSA -> DOMException NotSupportedError 9: Unrecognized algorithm name
+Ed25519 spki as X25519 -> DOMException DataError: Invalid key type
+Ed25519 pkcs8 as X25519 -> DOMException DataError: Invalid key type
+Ed25519 spki as ECDSA -> DOMException DataError: Invalid key type
+Ed25519 spki as RSA-PSS -> DOMException DataError: Invalid key type
+RSA spki as Ed25519 -> DOMException DataError: Invalid key type
+P-256 spki as P-384 -> DOMException DataError: Named curve mismatch
+Ed25519 64-byte d -> resolved private
+Ed25519 64-byte d, wrong half -> DOMException DataError: Invalid keyData
+Ed25519 jwk with another x -> resolved private
