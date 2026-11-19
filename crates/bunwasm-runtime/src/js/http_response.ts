@@ -95,10 +95,12 @@
     const bodyless = response.status === 204 || response.status === 304;
     const source = response._body === null ? response._stream : null;
     if (source && method !== "HEAD" && !bodyless) return await stream(connection, response, source, pairs, serialize, reportError) && keepAlive;
-    const body = method === "HEAD" || bodyless ? new Uint8Array(0) : new Uint8Array(await response.arrayBuffer());
-    if (!bodyless) pairs.push(["content-length", String(method === "HEAD" ? Number(response.headers.get("content-length") || 0) : body.length)]);
+    // An in-memory body is consumed even for HEAD, as in Bun: a stream its .body made
+    // ends locked and disturbed, bodyUsed turns true, and its size is the Content-Length.
+    const body = bodyless || source ? new Uint8Array(0) : new Uint8Array(await response.arrayBuffer());
+    if (!bodyless) pairs.push(["content-length", String(method === "HEAD" ? Number(response.headers.get("content-length") || body.length) : body.length)]);
     connection.write(serialize(response.status, response.statusText, pairs));
-    if (!bodyless && body.length) connection.write(body);
+    if (method !== "HEAD" && !bodyless && body.length) connection.write(body);
     if (source && !source.locked) void source.cancel().catch(reportError);
     return keepAlive;
   }

@@ -1,0 +1,17 @@
+POST with no body: body=null text=ok "" used=false again=ok "" used=false
+POST with Content-Length: 0: body=null text=ok "" used=false again=ok "" used=false
+PUT with Content-Length: 0: body=null text=ok "" used=false again=ok "" used=false
+DELETE with no body: body=null text=ok "" used=false again=ok "" used=false
+PATCH with no body: body=null text=ok "" used=false again=ok "" used=false
+POST chunked with no chunks: body=stream text=ok "" used=true again=TypeError used=true
+POST chunked with one chunk: body=stream text=ok "hi" used=true again=TypeError used=true
+POST with Content-Length: 2: body=stream text=ok "hi" used=true again=TypeError used=true
+fetch POST with no body: body=null text=ok "" used=false again=ok "" used=false
+fetch POST with body "": body=null text=ok "" used=false again=ok "" used=false
+fetch POST with an empty Uint8Array: body=null text=ok "" used=false again=ok "" used=false
+fetch DELETE with no body: body=null text=ok "" used=false again=ok "" used=false
+fetch POST with body "hi": body=stream text=ok "hi" used=true again=TypeError used=true
+HEAD answered by a string Response with .body read: status=200 length=7 text="" locked=true disturbed=true used=true
+HEAD answered by a Uint8Array Response with .body read: status=200 length=7 text="" locked=true disturbed=true used=true
+HEAD answered by an unread string Response: length=7 text="" used=true
+HEAD answered by a ReadableStream Response: locked=false disturbed=true used=true cancelled=true
