@@ -1,8 +1,8 @@
 response data and bodyUsed
 request data
-read errors retain identity and release locks
-conversion errors cancel and release locks
+read errors retain identity and keep locks
+conversion errors cancel and keep locks
 generic async iterable body
 reader-only stream consumers
 generic stream consumers
-cancellation settles before original rejection and lock release
+cancellation settles before original rejection

@@ -1065,20 +1065,22 @@
       return { bytes: new Uint8Array(toUint8(body)), type: null };
     }
     if (body instanceof FormData) return formBody().api.serialize(body, formBody().deps);
-    if (body instanceof ReadableStream) return { stream: body, bytes: bodyStreams.bytes(body) || null, type: null };
+    if (body instanceof ReadableStream) return { stream: bodyStreams.adoptable(body), bytes: bodyStreams.bytes(body) || null, type: null };
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
     return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
   }
 
   async function streamBytes(stream) {
     const chunks = [];
-    await bodyStreams.consume(stream, chunk => chunks.push(typeof chunk === "string" ? native.utf8Encode(chunk) : toUint8(chunk)));
+    await bodyStreams.drain(stream, chunk => chunks.push(typeof chunk === "string" ? native.utf8Encode(chunk) : toUint8(chunk)));
     return concatBytes(chunks);
   }
 
   const BodyMixin = {
     async _consume() {
       if (this.bodyUsed) throw new TypeError("Body already used");
+      // Someone else holds the stream's reader: refuse without using the body, as Bun does.
+      if (this._stream && this._stream.locked) throw Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });
       this._bodyUsed = true;
       if (this._stream) return streamBytes(this._stream);
       return this._body || new Uint8Array(0);
@@ -1194,7 +1196,7 @@
     get body() {
       if (this._stream) return this._stream;
       if (this._body === null) return null;
-      this._stream = internal.makeByteStream(this._body);
+      this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
       return this._stream;
     }
     clone() {
@@ -1236,6 +1238,9 @@
       if (body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
+      // Fetch forbids keepalive with a stream init.body (a source request's body is fine);
+      // Bun reports it before any lock check.
+      if (init.keepalive && replacementBody instanceof ReadableStream) throw new TypeError("keepalive");
       initBody(this, source && replacementBody === undefined ? bodyStreams.transfer(source) : body, this.#headers);
     }
     get url() {
@@ -1259,7 +1264,7 @@
     get body() {
       if (this._stream) return this._stream;
       if (this._body === null) return null;
-      this._stream = internal.makeByteStream(this._body);
+      this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
       return this._stream;
     }
     clone() {

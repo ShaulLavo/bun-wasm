@@ -11,7 +11,8 @@ const stream = readerOnly({ start(c) { c.enqueue(encode('{"value":')); c.enqueue
 const response = new Response(stream);
 assert(!response.bodyUsed, "body used before read");
 assert((await response.json()).value === "ssr", "response data");
-assert(response.bodyUsed && !stream.locked, "response cleanup");
+// Fetch's "fully read" keeps the body's reader, as in Bun and undici.
+assert(response.bodyUsed && stream.locked, "response cleanup");
 console.log("response data and bodyUsed");
 const request = new Request("http://localhost/", { method: "POST", body: readerOnly({ start(c) { c.enqueue(encode("request")); c.close(); } }) });
 assert(await request.text() === "request", "request data");
@@ -22,15 +23,15 @@ for (const reason of [undefined, null, { marker: "read" }]) {
   const response = new Response(stream);
   const result = await response.text().then(() => ({ ok: true, error: undefined }), error => ({ ok: false, error }));
   assert(!result.ok && result.error === reason, "read rejection identity");
-  assert(response.bodyUsed && !stream.locked && !cancelled, "read cleanup");
+  assert(response.bodyUsed && stream.locked && !cancelled, "read cleanup");
 }
-console.log("read errors retain identity and release locks");
+console.log("read errors retain identity and keep locks");
 let cancellations = 0;
 const invalid = readerOnly<unknown>({ pull(c) { c.enqueue({ invalid: true }); }, cancel() { cancellations++; throw new Error("cancel"); } });
 try { await new Response(invalid).text(); throw new Error("invalid chunk accepted"); }
 catch (error) { assert(error instanceof TypeError, "conversion error masked"); }
-assert(cancellations === 1 && !invalid.locked, "cancel cleanup");
-console.log("conversion errors cancel and release locks");
+assert(cancellations === 1 && invalid.locked, "cancel cleanup");
+console.log("conversion errors cancel and keep locks");
 async function* chunks() { yield encode("generic"); }
 assert(await new Response(chunks()).text() === "generic", "async iterable changed");
 console.log("generic async iterable body");
@@ -53,5 +54,5 @@ await cancelStarted.promise;
 assert(!observed && pending.locked, "consumer rejected before cancellation settled");
 cancelFinished.reject(null);
 const failure = await failed;
-assert(failure.error instanceof TypeError && !failure.locked, "consumer error or final lock state changed");
-console.log("cancellation settles before original rejection and lock release");
+assert(failure.error instanceof TypeError && failure.locked, "consumer error or final lock state changed");
+console.log("cancellation settles before original rejection");
