@@ -67,7 +67,8 @@
   }
   function checkPlatform(stream: ReadableStream<unknown>): void {
     if (!PlatformRequest) return;
-    new PlatformRequest("http://localhost/", { method: "POST", body: stream, duplex: "half" });
+    const init = { method: "POST", body: stream, duplex: "half" };
+    new PlatformRequest("http://localhost/", init);
   }
   // Read a stream to its end and keep its reader: the stream ends closed, disturbed and locked.
   // A stream over bytes already in memory closes on the first read, before this returns.
