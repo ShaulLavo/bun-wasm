@@ -117,5 +117,7 @@ export function redMessage(job: Job, result: Completed): string {
   const previous = result.lastGreen ?? "none recorded";
   const range = result.lastGreen ? `${result.lastGreen}...${job.revision}` : `unavailable...${job.revision}`;
   if (result.outcome.status === "red" && result.outcome.operational === "safari-tab-count") return `iPhone smoke OPERATIONAL ALERT. Executed functional phases passed; Safari tab-count cleanup is unproved. The raw result remains red and the tested-green baseline is unchanged. Last tested green: ${previous}. Tested main: ${job.revision}. Compare range: ${range}. Failed phase: ${result.outcome.failedPhase}. Report: ${result.outcome.reportPath}. CI run: https://github.com/ShaulLavo/bun-wasm/actions/runs/${job.id}. Attempt: ${result.attempt}.`;
-  return `iPhone smoke RED. Last tested green: ${previous}. Failing green main: ${job.revision}. Compare range: ${range}. Failed phase: ${result.outcome.failedPhase}. Report: ${result.outcome.reportPath}. CI run: https://github.com/ShaulLavo/bun-wasm/actions/runs/${job.id}. Attempt: ${result.attempt}.`;
+  const earlier = job.history.findLast(entry => entry.outcome.status === "red");
+  const twice = earlier ? ` Failed twice: attempt ${earlier.attempt} failed at ${earlier.outcome.failedPhase} (report ${earlier.outcome.reportPath}), then attempt ${result.attempt}.` : "";
+  return `iPhone smoke RED.${twice} Last tested green: ${previous}. Failing green main: ${job.revision}. Compare range: ${range}. Failed phase: ${result.outcome.failedPhase}. Report: ${result.outcome.reportPath}. CI run: https://github.com/ShaulLavo/bun-wasm/actions/runs/${job.id}. Attempt: ${result.attempt}.`;
 }
