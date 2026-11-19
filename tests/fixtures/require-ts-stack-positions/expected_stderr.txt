@@ -1,0 +1,12 @@
+4 | interface Server {
+5 |   port: Port;
+6 | }
+7 | 
+8 | export function listen(server: Server): Port {
+9 |   if (server.port > 65535) throw new RangeError(`port out of range: ${server.port}`);
+                                         ^
+RangeError: port out of range: 70000
+      at listen (/uncaught.ts:9:38)
+      at /index.ts:41:26
+
+Bun vVERSION (PLATFORM)
