@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { loadFileHandleModule } from "./fs-file-handle-source";
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/node_fs.js", import.meta.url), "utf8");
 
@@ -36,6 +37,7 @@ function fixture(bytes = "abcdefgh", limit = Infinity, mode: number | null = 0o1
       if (name === "fs_options") return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL("../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url), "utf8")}`))({});
       if (name === "buffer") return { Buffer };
       if (name === "fs_watch") return () => ({});
+      if (name === "fs_file_handle") return loadFileHandleModule();
       throw new Error(`Unexpected readv dependency ${name}`);
     },
     realTimers: { setImmediate: (fn: () => void) => immediate.push(fn) },

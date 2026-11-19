@@ -409,6 +409,7 @@
     },
     binding(name: unknown) {
       if (name === "constants") return constantsBinding();
+      if (name === "uv") return internal.require("uv_errors").binding();
       throw new Error(`No such module: ${name}`);
     },
     dlopen() {

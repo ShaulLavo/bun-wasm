@@ -1,0 +1,23 @@
+sync empty {"name":"Error","code":"EINVAL","errno":-22,"syscall":"mkdtemp","message":"EINVAL: invalid argument, mkdtemp 'XXXXX'","keys":["code","path","syscall","errno"]}
+sync missing parent {"name":"Error","code":"ENOENT","errno":-2,"syscall":"mkdtemp","message":"ENOENT: no such file or directory, mkdtemp 'base/no/such/dir-XXXXXX'","keys":["code","path","syscall","errno"]}
+sync empty buffer TypeError Invalid path buffer: can't be empty
+buffer true true 6 true
+buffer shorthand true
+hex string true 6 true
+base64 string true 6 true
+base64url string true 6 true
+latin1 string true 6 true
+utf8 string true 6 true
+buffer prefix string
+uv true -2 -22 -4095 -4094 87 errname getErrorMap
+uv errname ENOENT Unknown system error -9999 Unknown system error 1 Unknown system error
+uv map 85 [ "EACCES", "permission denied" ] [ "EOF", "end of file" ] false
+callback empty {"name":"Error","code":"EINVAL","errno":-22,"syscall":"mkdtemp","message":"EINVAL: invalid argument, mkdtemp 'XXXXX'","keys":["code","path","syscall","errno"]}
+callback folder undefined
+callback missing parent {"name":"Error","code":"ENOENT","errno":-2,"syscall":"mkdtemp","message":"ENOENT: no such file or directory, mkdtemp 'base/no/dir-XXXXXX'","keys":["code","path","syscall","errno"]}
+callback errno is UV_ENOENT true undefined
+callback buffer null true
+promise empty {"name":"Error","code":"EINVAL","errno":-22,"syscall":"mkdtemp","message":"EINVAL: invalid argument, mkdtemp 'XXXXX'","keys":["code","path","syscall","errno"]}
+promise hex true
+promise buffer true
+created 11
