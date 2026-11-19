@@ -204,7 +204,7 @@ function environment(root: string, temp: string): Record<string, string> {
   const runnerTemp = join(root, temp);
   return {
     PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root, RUNNER_TEMP: runnerTemp, TMPDIR: runnerTemp,
-    WASM_TOOLS: join(runnerTemp, "wasm-tools"), JSC_BUILD_DIR: join(runnerTemp, "jsc/prebuild"),
+    WASM_TOOLS: join(runnerTemp, "wasm-tools"), BUN_WASM_SYSROOT: join(runnerTemp, "wasm-tools/bun-wasm-sysroot-patched"), JSC_BUILD_DIR: join(runnerTemp, "jsc/prebuild"),
     GITHUB_RUN_ID: "4100", GITHUB_SHA: "433aca4ea0d761c23fc1661aa8c636e75dfdd6b3",
     GITHUB_OUTPUT: join(root, "outputs"), STAMP_CALLS: join(root, "stamp-calls"),
   };
