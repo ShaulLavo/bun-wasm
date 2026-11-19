@@ -1,0 +1,11 @@
+ERR_INVALID_ARG_TYPE The "code" argument must be of type number. Received type string ('potato')
+ERR_OUT_OF_RANGE The value of "code" is out of range. It must be an integer. Received 1.2
+ERR_OUT_OF_RANGE The value of "code" is out of range. It must be an integer. Received NaN
+ERR_OUT_OF_RANGE The value of "code" is out of range. It must be an integer. Received Infinity
+ERR_OUT_OF_RANGE The value of "code" is out of range. It must be >= -9007199254740991 && <= 9007199254740991. Received 1_152_921_504_606_847_000
+string code 5 number
+wrapped code 44
+after undefined 44
+_exiting false
+listener code=7 exitCode=7
+_exiting=true code=42 this=true

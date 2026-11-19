@@ -1174,7 +1174,10 @@ class EngineHost {
     if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync} io=${io}`);
     this.flush();
     if (this.exited) return;
-    if (next >= 0 || this.pendingAsync > 0 || io > 0) this.idleWait = false;
+    if (next >= 0 || this.pendingAsync > 0 || io > 0) {
+      this.idleWait = false;
+      this.beforeExitRan = false;
+    }
     if (next === 0) return this.schedule(0);
     if (io > 0) this.wakeOnProcessChange(observedWake);
     // A sender may be another worker, so shared pending signals do not necessarily post a
@@ -1222,8 +1225,13 @@ class EngineHost {
       return undefined;
     }
     this.idleWait = false;
-    const more = !this.testComplete && this.guard(() => this.internal.emitBeforeExit(), false);
-    if (more) return this.schedule(0);
+    // Bun's on_before_exit: the microtasks and ticks that 'beforeExit' listeners queue run
+    // first (the next turn), and the event comes again only after loop work they left alive.
+    if (!this.beforeExitRan) {
+      this.beforeExitRan = !this.testComplete && this.guard(() => this.internal.emitBeforeExit(), false);
+      if (this.beforeExitRan) return this.schedule(0);
+    }
+    this.beforeExitRan = false;
     const code = this.guard(() => this.internal.beforeExit(), 1);
     this.exit(typeof code === "number" ? code : 0);
     return undefined;

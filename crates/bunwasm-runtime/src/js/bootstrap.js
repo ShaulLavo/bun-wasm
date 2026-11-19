@@ -863,7 +863,9 @@
     if (!process || process._exiting) return;
     process._exiting = true;
     function reportExitError(err) {
-      // An exception inside an exit handler is itself fatal.
+      // An exception inside an exit handler goes to the uncaught exception handlers, and is
+      // fatal when none claims it.
+      if (dispatchUncaught(err, false)) return;
       if (internal.workerError) internal.workerError(err);
       process.exitCode = 1;
       if (!internal.workerError) printError(err);
@@ -924,16 +926,61 @@
 
   internal.reportHotError = printFatal;
 
-  internal.handleUncaught = function handleUncaught(err) {
-    if (listenerCount("uncaughtException") > 0) {
-      globalThis.process.emit("uncaughtException", err, "uncaughtException");
+  // A fatal error ends the run, a worker's included: report the error (when there is one),
+  // emit 'exit' with the code, and exit with the code the listeners left.
+  function fatalExit(reason, code, err, report = true) {
+    const process = globalThis.process;
+    if (report && internal.workerError) internal.workerError(err);
+    internal.traceExit(reason, code, err);
+    if (report && !internal.workerError) printFatal(err);
+    process.exitCode = code;
+    emitExit(code);
+    native.exit((process.exitCode | 0) || 0);
+  }
+
+  // Runs one uncaught exception handler. A throw from it is fatal with `code`.
+  function runUncaughtHandler(handler, reason, code) {
+    try {
+      handler();
+      return true;
+    } catch (inner) {
+      fatalExit(reason, code, inner);
+      return false;
+    }
+  }
+
+  // Bun__handleUncaughtException (BunProcess.cpp) and VirtualMachine::uncaught_exception: a
+  // process._fatalException that is not callable exits 6, uncaughtExceptionMonitor sees the
+  // error first, then the capture callback or else the 'uncaughtException' listeners claim it.
+  // A throw from the capture callback exits 1, one from a listener 7 (1 in a worker).
+  function dispatchUncaught(err, isRejection) {
+    const process = globalThis.process;
+    if (!process) return false;
+    let fatalException = dispatchUncaught;
+    try { fatalException = process._fatalException; }
+    catch { /* Bun clears a throwing getter and goes on. */ }
+    if (typeof fatalException !== "function") {
+      fatalExit("uncaught-exception", 6, err, false);
       return true;
     }
-    if (internal.workerError) internal.workerError(err);
-    internal.traceExit("uncaught-exception", 1, err);
-    if (!internal.workerError) printFatal(err);
-    globalThis.process.exitCode = 1;
-    emitExit(1);
+    const origin = isRejection ? "unhandledRejection" : "uncaughtException";
+    const listenerThrew = internal.workerError ? 1 : 7;
+    if (listenerCount("uncaughtExceptionMonitor") > 0
+      && !runUncaughtHandler(() => process.emit("uncaughtExceptionMonitor", err, origin), "uncaught-exception-handler", listenerThrew)) return true;
+    const capture = internal.uncaughtCapture;
+    if (capture) {
+      runUncaughtHandler(() => capture(err, origin), "uncaught-exception-capture", 1);
+      return true;
+    }
+    if (listenerCount("uncaughtException") === 0) return false;
+    runUncaughtHandler(() => process.emit("uncaughtException", err, origin), "uncaught-exception-handler", listenerThrew);
+    return true;
+  }
+  internal.dispatchUncaught = dispatchUncaught;
+
+  internal.handleUncaught = function handleUncaught(err) {
+    if (dispatchUncaught(err, false)) return true;
+    fatalExit("uncaught-exception", 1, err);
     return false;
   };
 
@@ -950,12 +997,20 @@
     return false;
   };
 
+  // Bun's dispatch_on_before_exit: a throw goes to the uncaught exception handlers. Returns
+  // whether listeners ran. The engine then runs the microtasks and ticks they queued, and
+  // emits again only after loop work that this left alive (`loopAlive`).
   internal.emitBeforeExit = function emitBeforeExit() {
     if (listenerCount("beforeExit") === 0) return false;
     const process = globalThis.process;
-    process.emit("beforeExit", process.exitCode || 0);
-    return refedTimers > 0 || Boolean(immediates?.length) || tickQueue.length > 0 || internal.ioPending() > 0;
+    try {
+      process.emit("beforeExit", (process.exitCode | 0) || 0);
+    } catch (err) {
+      if (!internal.handleUncaught(err)) native.exit(1);
+    }
+    return true;
   };
+  internal.loopAlive = () => refedTimers > 0 || Boolean(immediates?.length) || tickQueue.length > 0 || internal.ioPending() > 0;
 
   internal.beforeExit = function beforeExit() {
     const process = globalThis.process;
