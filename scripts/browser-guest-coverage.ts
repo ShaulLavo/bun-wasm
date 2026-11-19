@@ -7,7 +7,7 @@ import { buildBrowserEntries } from "./browser-build";
 import { hash, guestBuilds } from "./guest-source-manifest";
 import { importedMemory, programKind, programKindForBuild, verifyProgramSide } from "../src/engine-kind";
 import { validateSelection, type BrowserGuestSelection } from "./browser-guest-catalogue";
-import { parseInputs, verifyPairReceipt } from "./spidermonkey-side-core-receipt";
+import { parseInputs, verifyPairBytes } from "./spidermonkey-side-core-receipt";
 
 const repository = resolve(import.meta.dir, "..");
 const coreBuilds = ["browser", "quickjs", "jsc", "tools"] as const;
@@ -16,26 +16,39 @@ export interface VerifiedBrowserGuestCoverage {
   readonly site: string;
   readonly selection: BrowserGuestSelection;
   readonly interruptionBundle: string | undefined;
-  /** The verified ordinary SpiderMonkey pair inside the interruption bundle, when the producer had one. */
-  readonly interruptionSpiderMonkey: string | undefined;
+  /** True when the interruption bundle carries the ordinary SpiderMonkey pair's receipts; the pair's
+   * verified programs are then in `programs`. */
+  readonly interruptionSpiderMonkey: boolean;
   readonly programs: ReadonlyMap<string, Uint8Array>;
 }
-// The pair and its receipts as scripts/build-bun-spidermonkey.sh writes them to SPIDERMONKEY_PAIR_DIR.
-const spiderMonkeyPrograms: readonly string[] = ["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"];
-const spiderMonkeyPairFiles = spiderMonkeyPrograms.concat(["bun-spidermonkey.wasm.spidermonkey.json", "inputs.json"]);
-function verifySpiderMonkeyPair(directory: string): ReturnType<typeof parseInputs> {
-  for (const name of spiderMonkeyPairFiles) requiredFile(join(directory, name));
-  const inputs = parseInputs(JSON.parse(readFileSync(join(directory, "inputs.json"), "utf8")));
-  verifyPairReceipt(join(directory, "bun-spidermonkey.wasm"), join(directory, "spidermonkey-engine.wasm"), join(directory, "bun-spidermonkey.wasm.spidermonkey.json"), inputs);
+// The site serves the ordinary SpiderMonkey pair gzipped like every other program (web/build.ts,
+// SPIDERMONKEY_WASM). The interruption bundle carries only the pair's receipts, as
+// scripts/build-bun-spidermonkey.sh writes them to SPIDERMONKEY_PAIR_DIR.
+const spiderMonkeyPrograms = ["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"] as const;
+const spiderMonkeyReceipts = ["bun-spidermonkey.wasm.spidermonkey.json", "inputs.json"];
+function readJson(path: string): unknown {
+  requiredFile(path);
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+function verifySpiderMonkeyPair(receipts: string, core: Uint8Array, side: Uint8Array): ReturnType<typeof parseInputs> {
+  const inputs = parseInputs(readJson(join(receipts, "inputs.json")));
+  verifyPairBytes(core, side, readJson(join(receipts, "bun-spidermonkey.wasm.spidermonkey.json")), inputs);
   return inputs;
 }
-/** Producer only: CI's native producer builds the ordinary pair before the site, from this checkout. */
-function bundleSpiderMonkeyPair(pair: string, out: string): void {
-  const inputs = verifySpiderMonkeyPair(pair);
+function servedSpiderMonkeyPair(site: string): [Uint8Array, Uint8Array] {
+  const maps = engineMaps(site);
+  const [core, side] = spiderMonkeyPrograms.map(name => servedProgram(site, maps, name));
+  return [core!, side!];
+}
+/** Producer only: CI's native producer builds the ordinary pair from this checkout and the site
+ * serves it; the served bytes must be exactly the pair its receipt names. */
+function bundleSpiderMonkeyReceipts(pair: string, site: string, out: string): void {
+  const [core, side] = servedSpiderMonkeyPair(site);
+  const inputs = verifySpiderMonkeyPair(pair, core, side);
   const [head, tree] = execFileSync("git", ["rev-parse", "HEAD", "HEAD^{tree}"], { cwd: repository, encoding: "utf8" }).trim().split("\n");
   if (inputs.source.head !== head || inputs.source.tree !== tree) throw new Error(`SpiderMonkey pair was built from ${inputs.source.head}, not this checkout ${head}`);
   mkdirSync(out);
-  for (const name of spiderMonkeyPairFiles) copyFileSync(join(pair, name), join(out, name));
+  for (const name of spiderMonkeyReceipts) copyFileSync(join(pair, name), join(out, name));
 }
 
 function requiredFile(path: string): void {
@@ -78,7 +91,7 @@ export async function prepareBrowserGuestInterruptionBundle(request: { out: stri
   await buildBrowserEntries(["web/tests/engine-interruption-page.ts", "web/tests/engine-interruption-worker.ts", "web/src/worker.ts", "web/src/fs-worker.ts", "web/src/notification-worker.ts"].map(path => join(repository, path)), out, { runtimeWorker: true });
   writeFileSync(join(out, "index.html"), '<!doctype html><script type="module" src="./engine-interruption-page.js"></script>');
   const pair = process.env.SPIDERMONKEY_PAIR_DIR;
-  if (pair) bundleSpiderMonkeyPair(resolve(pair), join(out, "spidermonkey"));
+  if (pair) bundleSpiderMonkeyReceipts(resolve(pair), join(request.out, "site"), join(out, "spidermonkey"));
   requireBundle(request.out);
   return out;
 }
@@ -108,14 +121,18 @@ function verifySelectedProgram(name: string, bytes: Uint8Array<ArrayBuffer>): vo
   const build = coreBuilds.find(build => guestBuilds[build].artifact === name);
   if (build === undefined || programKind(module) !== programKindForBuild(build)) throw new Error(`Wrong coverage core kind: ${name}`);
 }
+function servedProgram(site: string, maps: ReturnType<typeof engineMaps>, name: string) {
+  requiredFile(join(site, name + ".gz"));
+  const bytes = gunzipSync(readFileSync(join(site, name + ".gz"))), identity = hash(bytes);
+  if (identity !== maps.manifest[name] || identity !== maps.embedded[name]) throw new Error(`Served program identity mismatch: ${name}`);
+  verifyRepresentations(site, name, identity);
+  return bytes;
+}
 function decodePrograms(site: string, selection: BrowserGuestSelection): Map<string, Uint8Array> {
   const maps = engineMaps(site);
   return new Map(requiredPrograms(selection).map(name => {
-    requiredFile(join(site, name + ".gz"));
-    const bytes = gunzipSync(readFileSync(join(site, name + ".gz"))), identity = hash(bytes);
-    if (identity !== maps.manifest[name] || identity !== maps.embedded[name]) throw new Error(`Served program identity mismatch: ${name}`);
+    const bytes = servedProgram(site, maps, name);
     verifySelectedProgram(name, bytes);
-    verifyRepresentations(site, name, identity);
     return [name, bytes];
   }));
 }
@@ -151,9 +168,13 @@ export async function verifyBrowserGuestCoverage(request: { out: string; selecti
   const sandboxMaps = object(JSON.parse(readFileSync(join(site, "sandbox/engine-builds.json"), "utf8")));
   if (hash(sandbox) !== hash(browser) || sandboxMaps["bun-browser.wasm"] !== hash(browser)) throw new Error("Sandbox guest differs from served Browser program");
   const interruptionBundle = selectedInterruption(request.selection) ? join(request.out, "interruption") : undefined;
-  const pair = interruptionBundle && join(interruptionBundle, "spidermonkey");
-  const interruptionSpiderMonkey = pair && lstatSync(pair, { throwIfNoEntry: false }) ? pair : undefined;
-  if (interruptionSpiderMonkey) verifySpiderMonkeyPair(interruptionSpiderMonkey);
+  const receipts = interruptionBundle === undefined ? undefined : join(interruptionBundle, "spidermonkey");
+  const interruptionSpiderMonkey = receipts !== undefined && lstatSync(receipts, { throwIfNoEntry: false }) !== undefined;
+  if (interruptionSpiderMonkey) {
+    const [core, side] = servedSpiderMonkeyPair(site);
+    verifySpiderMonkeyPair(receipts, core, side);
+    programs.set(spiderMonkeyPrograms[0], core).set(spiderMonkeyPrograms[1], side);
+  }
   return { site, selection: request.selection, programs, interruptionBundle, interruptionSpiderMonkey };
 }
 
@@ -163,8 +184,8 @@ export function stageBrowserGuestInterruption(verified: VerifiedBrowserGuestCove
   mkdirSync(directory);
   const selection = verified.selection.filter(item => item.owner === "engine-interruption");
   for (const name of requiredPrograms(selection)) writeFileSync(join(directory, name), programBytes(verified.programs, name), { flag: "wx", mode: 0o400 });
-  const pair = verified.interruptionSpiderMonkey;
-  if (pair) for (const name of spiderMonkeyPrograms) writeFileSync(join(directory, name), readFileSync(join(pair, name)), { flag: "wx", mode: 0o400 });
+  if (!verified.interruptionSpiderMonkey) return;
+  for (const name of spiderMonkeyPrograms) writeFileSync(join(directory, name), programBytes(verified.programs, name), { flag: "wx", mode: 0o400 });
 }
 
 if (import.meta.main) {

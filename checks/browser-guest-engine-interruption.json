@@ -135,6 +135,8 @@
     "web/tests/engine-interruption-stop.ts",
     "web/tests/engine-interruption-transport.ts",
     "web/tests/engine-interruption-worker.ts",
-    "web/tests/process-module-fixture.ts"
+    "web/tests/process-module-fixture.ts",
+    "scripts/spidermonkey-side-core-receipt.ts",
+    "scripts/spidermonkey-side-inputs.ts"
   ]
 }

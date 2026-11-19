@@ -131,14 +131,17 @@ test("interruption staging contains only selected engine closure", async () => {
   expect(existsSync(join(stage, "bun-jsc.wasm"))).toBe(false);
   expect((await verifyBrowserGuestCoverage({ out: fixture.out, selection })).interruptionBundle).toBe(join(fixture.out, "interruption"));
 });
-test("a bundled SpiderMonkey pair is optional, verified, and fails closed when incomplete or corrupt", async () => {
+test("bundled SpiderMonkey receipts are optional and verify the site's served pair, failing closed", async () => {
   const selection: BrowserGuestSelection = [{ owner: "engine-interruption", engines: ["quickjs"] }];
   const fixture = await coverageFixture(cleanup, selection);
-  expect((await fixture.prepare()).interruptionSpiderMonkey).toBeUndefined();
-  fixtureFile(fixture.out, "interruption/spidermonkey/bun-spidermonkey.wasm", quickjsPair().core);
-  await expect(fixture.prepare()).rejects.toThrow("spidermonkey-engine.wasm");
-  for (const name of ["spidermonkey-engine.wasm", "bun-spidermonkey.wasm.spidermonkey.json", "inputs.json"]) fixtureFile(fixture.out, `interruption/spidermonkey/${name}`, "{}");
+  expect((await fixture.prepare()).interruptionSpiderMonkey).toBe(false);
+  fixtureFile(fixture.out, "interruption/spidermonkey/inputs.json", "{}");
+  await expect(fixture.prepare()).rejects.toThrow("bun-spidermonkey.wasm.gz");
+  replaceProgram(fixture.site, "bun-spidermonkey.wasm", quickjsPair().core);
+  replaceProgram(fixture.site, "spidermonkey-engine.wasm", quickjsPair().side);
   await expect(fixture.prepare()).rejects.toThrow("Invalid SpiderMonkey side/core inputs");
+  fixtureFile(fixture.site, "spidermonkey-engine.wasm.gz", Bun.gzipSync(new Uint8Array(8)));
+  await expect(fixture.prepare()).rejects.toThrow("Served program identity mismatch: spidermonkey-engine.wasm");
 });
 test("unselected interruption performs no build; selected output is exclusively created once", async () => {
   const fixture = await coverageFixture(cleanup, browserOnly);

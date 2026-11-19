@@ -148,13 +148,17 @@ named checks, and the gate and its unit tests count from it.
 SpiderMonkey is outside the coverage catalogue, so a local driver run includes it only when
 selected explicitly (`--engines=quickjs,jsc,spidermonkey` with a staged `bun-spidermonkey.wasm`
 and `spidermonkey-engine.wasm`); it then runs the same paired-engine cases. In CI, both native
-producers already build the ordinary SpiderMonkey pair before the browser-guest site, and
-`scripts/browser-guest-coverage.ts` copies it, after checking its pair receipt and that it was
-built from the same checkout, into the interruption bundle (`interruption/spidermonkey/`). The
-browser-guest consumer verifies the receipt again, stages the pair with the other guests and adds
-SpiderMonkey to the selected engines. The job sets `BUN_WASM_INTERRUPTION_SPIDERMONKEY=required`,
-so a bundle without the pair fails the interruption batch rather than silently dropping
-SpiderMonkey. No new SpiderMonkey build runs for this.
+producers already build the ordinary SpiderMonkey pair before the browser-guest site, and the
+site serves it gzipped like every other program. `scripts/browser-guest-coverage.ts` checks the
+served pair against the producer's pair receipt and that the pair was built from the same
+checkout, then copies only the receipt and its inputs into the interruption bundle
+(`interruption/spidermonkey/`), so the artifact carries the programs once. The browser-guest
+consumer decodes the site's copies, checks them against the served identity maps and the receipt
+again, stages them with the other guests and adds SpiderMonkey to the selected engines. The job
+sets `BUN_WASM_INTERRUPTION_SPIDERMONKEY=required`, so a bundle without the receipts fails the
+interruption batch rather than silently dropping SpiderMonkey. Changes under `spidermonkey/`, the
+SpiderMonkey build scripts and the pair receipt select this batch on pull requests;
+`crates/` already selects every batch. No new SpiderMonkey build runs for this.
 Every subset retains the two Browser fatal checks and both Preview1 clock
 controls. Artifact preflight requires the selected pairs and Browser core;
 result admission checks the exact selected names and routes, including both
