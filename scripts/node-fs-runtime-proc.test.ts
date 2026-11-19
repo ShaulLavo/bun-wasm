@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { loadFileHandleModule } from "./fs-file-handle-source";
 
 type Completion = [error: unknown, count: number, buffer: Uint8Array];
 
@@ -65,6 +66,7 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
       if (name === "websocket") return { clientClass: () => class {} };
       if (name === "io_pump") return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL("../crates/bunwasm-runtime/src/js/io_pump.ts", import.meta.url), "utf8")}`))(internal);
       if (name === "net") return net ??= load("net")(internal);
+      if (name === "fs_file_handle") return loadFileHandleModule();
       throw new Error(`Unexpected module ${name}`);
     },
   };

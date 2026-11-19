@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fs-file-handle-streams",
+  "engines": ["quickjs", "jsc", "browser"]
+}

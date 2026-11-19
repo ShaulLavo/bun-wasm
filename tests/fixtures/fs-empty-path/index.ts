@@ -72,9 +72,8 @@ export async function checkEmptyPaths(api: typeof fs): Promise<void> {
     try { assert.equal(value, api.realpathSync(".")); resolve(); }
     catch (failure) { reject(failure); }
   }));
-  const temporary = api.mkdtempSync("");
-  try { assert(api.statSync(temporary).isDirectory()); }
-  finally { api.rmdirSync(temporary); }
+  // An empty mkdtemp prefix is EINVAL, as in Node and Bun 1.4.4; it creates nothing.
+  assert.throws(() => api.mkdtempSync(""), { code: "EINVAL", syscall: "mkdtemp" });
 }
 
 if (import.meta.main) {

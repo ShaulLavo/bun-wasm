@@ -959,6 +959,24 @@
     return n.toLowerCase();
   }
 
+  // WebCore's HTTPHeaderNames.in (Bun's copy), which FetchHeaders stores apart from other names.
+  const commonHeaderNames = new Set(("accept accept-charset accept-language accept-encoding accept-ranges " +
+    "access-control-allow-credentials access-control-allow-headers access-control-allow-methods " +
+    "access-control-allow-origin access-control-expose-headers access-control-max-age " +
+    "access-control-request-headers access-control-request-method age authorization cache-control connection " +
+    "content-disposition content-encoding content-language content-length content-location " +
+    "content-security-policy content-security-policy-report-only content-type content-range cookie cookie2 " +
+    "cross-origin-embedder-policy cross-origin-embedder-policy-report-only cross-origin-opener-policy " +
+    "cross-origin-opener-policy-report-only cross-origin-resource-policy date dnt default-style etag expect " +
+    "expires host if-match if-modified-since if-none-match if-range if-unmodified-since keep-alive last-event-id " +
+    "last-modified link location origin ping-from ping-to purpose pragma proxy-authorization proxy-connection " +
+    "range referer referrer-policy refresh report-to sec-fetch-dest sec-fetch-mode sec-websocket-accept " +
+    "sec-websocket-extensions sec-websocket-key sec-websocket-protocol sec-websocket-version server-timing " +
+    "service-worker service-worker-allowed service-worker-navigation-preload set-cookie2 sourcemap te " +
+    "timing-allow-origin trailer transfer-encoding upgrade upgrade-insecure-requests user-agent vary via " +
+    "x-content-type-options x-dns-prefetch-control x-frame-options x-sourcemap x-xss-protection x-temp-tablet " +
+    "icy-metaint icy-metadata").split(" "));
+
   class Headers {
     #map = new Map();
     #cookies = [];
@@ -1023,15 +1041,10 @@
     forEach(callback, thisArg) {
       for (const [k, v] of this) callback.call(thisArg, v, k, this);
     }
+    // Sorted names, then every Set-Cookie line last, as Bun iterates.
     *entries() {
-      const names = Array.from(this.#map.keys()).concat(this.#cookies.length ? ["set-cookie"] : []).sort();
-      for (const name of names) {
-        if (name === "set-cookie") {
-          for (const c of this.#cookies) yield [name, c];
-          continue;
-        }
-        yield [name, this.#map.get(name)];
-      }
+      for (const name of Array.from(this.#map.keys()).sort()) yield [name, this.#map.get(name)];
+      for (const c of this.#cookies) yield ["set-cookie", c];
     }
     *keys() {
       for (const [k] of this.entries()) yield k;
@@ -1042,10 +1055,13 @@
     [Symbol.iterator]() {
       return this.entries();
     }
-    // Bun keeps every Set-Cookie line, as an array.
+    // Bun lists its well-known header names first and the others after Set-Cookie,
+    // each group in insertion order, and keeps every Set-Cookie line as an array.
     toJSON() {
       const out = {};
-      for (const [k, v] of this) out[k] = k === "set-cookie" ? this.#cookies.slice() : v;
+      for (const [k, v] of this.#map) if (commonHeaderNames.has(k)) out[k] = v;
+      if (this.#cookies.length) out["set-cookie"] = this.#cookies.slice();
+      for (const [k, v] of this.#map) if (!commonHeaderNames.has(k)) out[k] = v;
       return out;
     }
     get [Symbol.toStringTag]() {
@@ -1054,20 +1070,22 @@
   }
 
   // Body helpers shared by Request and Response.
+  // Like Bun, a string or byte body adds no Content-Type header; `served` is the type
+  // Bun.serve sends for it when the response sets none.
   function extractBody(body) {
     if (body === undefined || body === null) return { bytes: null, type: null };
-    if (typeof body === "string") return { bytes: native.utf8Encode(body), type: "text/plain;charset=utf-8" };
+    if (typeof body === "string") return { bytes: native.utf8Encode(body), type: null, served: "text/plain;charset=utf-8" };
     if (body instanceof URLSearchParams) {
       return { bytes: native.utf8Encode(body.toString()), type: "application/x-www-form-urlencoded;charset=UTF-8" };
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
     if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && body instanceof SharedArrayBuffer)) {
-      return { bytes: new Uint8Array(toUint8(body)), type: null };
+      return { bytes: new Uint8Array(toUint8(body)), type: null, served: "application/octet-stream" };
     }
     if (body instanceof FormData) return formBody().api.serialize(body, formBody().deps);
     if (body instanceof ReadableStream) return { stream: bodyStreams.adoptable(body), bytes: bodyStreams.bytes(body) || null, type: null };
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
-    return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
+    return { bytes: native.utf8Encode(String(body)), type: null, served: "text/plain;charset=utf-8" };
   }
 
   async function streamBytes(stream) {
@@ -1078,6 +1096,8 @@
 
   const BodyMixin = {
     async _consume() {
+      // A null body is not a zero-length body: every read gives nothing and nothing uses it up.
+      if (this._body === null && !this._stream) return new Uint8Array(0);
       if (this.bodyUsed) throw new TypeError("Body already used");
       // Someone else holds the stream's reader: refuse without using the body, as Bun does.
       if (this._stream && this._stream.locked) throw Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });
@@ -1099,7 +1119,9 @@
       return (await this._consume()).slice();
     },
     async blob() {
-      const type = this.headers.get("content-type") || "";
+      // A typed body (Blob, FormData, URLSearchParams) keeps its own type over the header;
+      // without either, Bun types a non-empty buffered body as text.
+      const type = this._bodyType || this.headers.get("content-type") || (this._body && this._body.length ? "text/plain;charset=utf-8" : "");
       const blob = new Blob([await this._consume()]);
       // Bun keeps the Content-Type as written, canonicalizing only its known types.
       blob._setType(canonicalBlobTypes.get(type) ?? type);
@@ -1123,6 +1145,8 @@
     target._body = extracted.bytes;
     target._stream = extracted.stream || null;
     target._bodyUsed = false;
+    target._servedType = extracted.served || null;
+    target._bodyType = extracted.type || null;
     if (extracted.type && !headers.has("content-type")) headers.set("content-type", extracted.type);
   }
 
@@ -1190,19 +1214,17 @@
     get redirected() {
       return this.#redirected;
     }
-    get bodyUsed() {
-      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
-    }
-    get body() {
-      if (this._stream) return this._stream;
-      if (this._body === null) return null;
-      this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
-      return this._stream;
-    }
     clone() {
       const body = bodyStreams.clone(this);
-      const copy = new Response(body, { status: this.#status, statusText: this.#statusText, headers: this.#headers });
+      // Response.error()'s status 0 is out of the constructor's range; copy it after.
+      const copy = new Response(body, { statusText: this.#statusText, headers: this.#headers });
+      copy.#status = this.#status;
+      copy.#type = this.#type;
       copy.#url = this.#url;
+      copy.#redirected = this.#redirected;
+      copy._servedType = this._servedType;
+      // A clone made from the bytes keeps the type of the Blob behind them, as in Bun.
+      copy._bodyType = this._bodyType;
       return copy;
     }
     get [Symbol.toStringTag]() {
@@ -1210,9 +1232,28 @@
     }
   }
   Object.assign(Response.prototype, BodyMixin);
+  // The bodyUsed and body getters Request and Response share, with class getter attributes.
+  const bodyAccessors = {
+    bodyUsed: {
+      get() {
+        return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
+      },
+      configurable: true,
+    },
+    body: {
+      get() {
+        if (this._stream) return this._stream;
+        if (this._body === null) return null;
+        this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
+        return this._stream;
+      },
+      configurable: true,
+    },
+  };
+  Object.defineProperties(Response.prototype, bodyAccessors);
 
   function defineInternalBody(target) {
-    for (const key of ["_body", "_stream", "_bodyUsed"]) {
+    for (const key of ["_body", "_stream", "_bodyUsed", "_servedType", "_bodyType"]) {
       Object.defineProperty(target, key, { value: null, writable: true, enumerable: false, configurable: true });
     }
   }
@@ -1258,24 +1299,18 @@
     get redirect() {
       return this.#redirect;
     }
-    get bodyUsed() {
-      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
-    }
-    get body() {
-      if (this._stream) return this._stream;
-      if (this._body === null) return null;
-      this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
-      return this._stream;
-    }
     clone() {
       const body = bodyStreams.clone(this);
-      return new Request(this, { body });
+      const copy = new Request(this, { body });
+      copy._bodyType = this._bodyType;
+      return copy;
     }
     get [Symbol.toStringTag]() {
       return "Request";
     }
   }
   Object.assign(Request.prototype, BodyMixin);
+  Object.defineProperties(Request.prototype, bodyAccessors);
 
   // No sockets under WASI. file: URLs still work, like in Bun.
   // Arguments are read and checked as Bun does (fetch_args.ts); errors reject.

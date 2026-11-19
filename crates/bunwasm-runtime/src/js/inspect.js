@@ -2671,7 +2671,19 @@ function createNodeInspect(internal) {
     return `${constructor}${size} `;
   }
 
+  // Web stream instances keep their state in own fields that Bun's native classes do not
+  // have; stream_inspect.ts marks their prototypes so those fields stay out of the output.
+  const noOwnKeys = Symbol.for("bunwasm.inspect.noOwnKeys");
+  function hidesOwnKeys(value) {
+    try {
+      return value[noOwnKeys] === true && !Object.prototype.hasOwnProperty.call(value, noOwnKeys);
+    } catch {
+      return false;
+    }
+  }
+
   function getKeys(value, showHidden) {
+    if (hidesOwnKeys(value)) return [];
     const symbols = Object.getOwnPropertySymbols(value);
     if (showHidden) return Object.getOwnPropertyNames(value).concat(symbols);
     let keys;

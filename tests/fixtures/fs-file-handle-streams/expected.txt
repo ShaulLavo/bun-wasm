@@ -1,0 +1,48 @@
+emitter true number []
+read SystemError EBADF read Bad file descriptor
+write SystemError EBADF write Bad file descriptor
+stat SystemError EBADF fstat Bad file descriptor
+readFile SystemError EBADF readFile Bad file descriptor
+writeFile SystemError EBADF writeFile Bad file descriptor
+appendFile SystemError EBADF writeFile Bad file descriptor
+truncate SystemError EBADF ftruncate Bad file descriptor
+readv SystemError EBADF readv Bad file descriptor
+writev SystemError EBADF writev Bad file descriptor
+sync SystemError EBADF fsync Bad file descriptor
+datasync SystemError EBADF fdatasync Bad file descriptor
+createReadStream SystemError EBADF createReadStream Bad file descriptor
+createWriteStream SystemError EBADF createWriteStream Bad file descriptor
+readableWebStream Error ERR_INVALID_STATE - Invalid state: The FileHandle is closed
+writer Error ERR_INVALID_STATE - Invalid state: The FileHandle is closed
+pull Error ERR_INVALID_STATE - Invalid state: The FileHandle is closed
+pullSync Error ERR_INVALID_STATE - Invalid state: The FileHandle is closed
+close again undefined -1
+createReadStream "hello world\n" -1
+createWriteStream "written through a handle" -1 finish,handle close
+deferred fd still open true
+deferred "deferred close" -1 true
+readableWebStream ["true:hello world\n"]
+readableWebStream again Error ERR_INVALID_STATE - Invalid state: The FileHandle is locked
+readableWebStream closed -1
+pull ["hello"," worl","d\n"]
+pullSync ["hello"," worl","d\n","wor"]
+writer TypeError ERR_INVALID_ARG_TYPE - The "options.autoClose" property must be of type boolean. Received type number (1)
+writer RangeError ERR_OUT_OF_RANGE - The value of "options.start" is out of range. It must be an integer. Received 1.5
+writer TypeError ERR_INVALID_ARG_TYPE - The "options.start" property must be of type number. Received type string ('1')
+writer TypeError ERR_INVALID_ARG_TYPE - The "options" argument must be of type object. Received type number (5)
+writer RangeError ERR_OUT_OF_RANGE - The value of "options.limit" is out of range. It must be >= 1 && <= 9007199254740991. Received 0
+writer RangeError ERR_OUT_OF_RANGE - The value of "options.chunkSize" is out of range. It must be >= 1 && <= 9007199254740991. Received 0
+limit RangeError ERR_OUT_OF_RANGE - The value of "write" is out of range. It must be <= 2 bytes. Received 3
+limit writes undefined false
+after fail Error ERR_INVALID_STATE - Invalid state: Failed
+writeSync(5) TypeError ERR_INVALID_ARG_TYPE - The "chunk" argument must be of type string or an instance of Uint8Array. Received type number (5)
+write(5) TypeError ERR_INVALID_ARG_TYPE - The "chunk" argument must be of type string or an instance of Uint8Array. Received type number (5)
+writer undefined true 3 3 3
+writer file "qAr"
+open after fail true
+after write -1 1048576
+end 3 undefined -1
+stale write Error ERR_INVALID_STATE - Invalid state: The FileHandle is closed
+stale writeSync Error ERR_INVALID_STATE - Invalid state: The FileHandle is closed
+promises.readFile(handle) data
+handles data+more written

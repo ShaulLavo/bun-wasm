@@ -577,6 +577,12 @@ for (const caller of ["core", "quickjs"] as const) for (const damage of ["corrup
 });
 
 
+/** env.sh names its default sysroot from the Waffle pins beside it. */
+async function copyEnvironment(root: string) {
+  await copyFile(new URL("../../env.sh", import.meta.url), join(root, "env.sh"));
+  await copyFile(new URL("../../scripts/waffle-release-inputs.json", import.meta.url), join(root, "scripts/waffle-release-inputs.json"));
+}
+
 for (const useRunner of [false, true]) test(`transpiler example scratch uses ${useRunner ? "RUNNER_TEMP" : "TMPDIR"} and cleans up before compilation failure`, async () => {
   await withReceiptFixture(async options => {
     const root = options.repository;
@@ -586,7 +592,7 @@ for (const useRunner of [false, true]) test(`transpiler example scratch uses ${u
     const bin = join(cargoHome, "bin");
     const trace = join(root, "private/allocation");
     await Promise.all([runner, temporary, bin].map(path => mkdir(path, { recursive: true })));
-    await copyFile(new URL("../../env.sh", import.meta.url), join(root, "env.sh"));
+    await copyEnvironment(root);
     await copyFile(new URL("../../scripts/test-transpiler-example.sh", import.meta.url), join(root, "scripts/test-transpiler-example.sh"));
     await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), "export {};\n");
     await writeFile(join(bin, "cargo"), '#!/usr/bin/env bash\nprintf "stopped before compilation\\n"\nexit 42\n', { mode: 0o755 });
@@ -615,7 +621,7 @@ for (const missing of ["wasmtime", "node"]) test(`transpiler example rejects mis
     const setupTrace = join(root, "private/sysroot-called");
     const compileTrace = join(root, "private/compiler-called");
     await mkdir(bin, { recursive: true });
-    await copyFile(new URL("../../env.sh", import.meta.url), join(root, "env.sh"));
+    await copyEnvironment(root);
     await copyFile(new URL("../../scripts/test-transpiler-example.sh", import.meta.url), join(root, "scripts/test-transpiler-example.sh"));
     await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), 'await Bun.write(process.env.SETUP_TRACE!, "called");\n');
     await writeFile(join(bin, "cargo"), '#!/bin/sh\nprintf called > "$COMPILE_TRACE"\nexit 42\n', { mode: 0o755 });

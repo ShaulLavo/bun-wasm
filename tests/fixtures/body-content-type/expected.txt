@@ -1,0 +1,51 @@
+== constructed
+string response: null request: null
+empty string response: null request: null
+number response: null request: null
+URLSearchParams response: "application/x-www-form-urlencoded;charset=UTF-8" request: "application/x-www-form-urlencoded;charset=UTF-8"
+typed Blob response: "text/foo" request: "text/foo"
+ArrayBuffer response: null request: null
+Uint8Array response: null request: null
+empty Uint8Array response: null request: null
+FormData response: "multipart/form-data; boundary=<b>" request: "multipart/form-data; boundary=<b>"
+ReadableStream response: null request: null
+null response: null request: null
+== blob() type
+string {"request":"\"text/plain;charset=utf-8\"","response":"\"text/plain;charset=utf-8\"","cloned":"\"text/plain;charset=utf-8\"","typed":"\"a/b\""}
+empty string {"request":"\"\"","response":"\"\"","cloned":"\"\"","typed":"\"a/b\""}
+number {"request":"\"text/plain;charset=utf-8\"","response":"\"text/plain;charset=utf-8\"","cloned":"\"text/plain;charset=utf-8\"","typed":"\"a/b\""}
+URLSearchParams {"request":"\"application/x-www-form-urlencoded;charset=UTF-8\"","response":"\"application/x-www-form-urlencoded;charset=UTF-8\"","cloned":"\"application/x-www-form-urlencoded;charset=UTF-8\"","typed":"\"application/x-www-form-urlencoded;charset=UTF-8\""}
+typed Blob {"request":"\"text/foo\"","response":"\"text/foo\"","cloned":"\"text/foo\"","typed":"\"text/foo\""}
+ArrayBuffer {"request":"\"text/plain;charset=utf-8\"","response":"\"text/plain;charset=utf-8\"","cloned":"\"text/plain;charset=utf-8\"","typed":"\"a/b\""}
+Uint8Array {"request":"\"text/plain;charset=utf-8\"","response":"\"text/plain;charset=utf-8\"","cloned":"\"text/plain;charset=utf-8\"","typed":"\"a/b\""}
+empty Uint8Array {"request":"\"\"","response":"\"\"","cloned":"\"\"","typed":"\"a/b\""}
+FormData {"request":"\"multipart/form-data; boundary=<b>\"","response":"\"multipart/form-data; boundary=<b>\"","cloned":"\"multipart/form-data; boundary=<b>\"","typed":"\"multipart/form-data; boundary=<b>\""}
+ReadableStream {"request":"\"\"","response":"\"\"","cloned":"\"\""}
+null {"request":"\"\"","response":"\"\"","cloned":"\"\"","typed":"\"a/b\""}
+== Bun.serve and fetch
+served string "text/plain;charset=utf-8"
+served empty string null
+served cloned string "text/plain;charset=utf-8"
+served number "text/plain;charset=utf-8"
+served bytes "application/octet-stream"
+served typed Blob "text/foo"
+served explicit type "text/html"
+served json "application/json;charset=utf-8"
+served null null
+served stream null
+sent string null
+sent empty string null
+sent number null
+sent URLSearchParams "application/x-www-form-urlencoded;charset=UTF-8"
+sent typed Blob "text/foo"
+sent ArrayBuffer null
+sent Uint8Array null
+sent empty Uint8Array null
+sent FormData "multipart/form-data; boundary=<b>"
+sent ReadableStream null
+sent Request null
+== Headers toJSON
+{"52782":"n","x-temp-tablet":"3","set-cookie2":"5","dnt":"11","vary":"8","referer":"9","icy-metaint":"10","set-cookie":["c"],"zz":"1, 12","aa":"4","x-custom":"7"}
+["52782","aa","dnt","icy-metaint","referer","set-cookie2","vary","x-custom","x-temp-tablet","zz","set-cookie"]
+{"content-type":"t","accept":"a","user-agent":"u","x-b":"1"}
+{}
