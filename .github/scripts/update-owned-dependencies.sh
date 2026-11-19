@@ -28,9 +28,10 @@ update_release_pins() {
         "$file"
       continue
     fi
+    # The runtime and its relay ship in the same waffle-v release, so they move together.
     if [[ "$release_prefix" == 'waffle-v' ]]; then
       sed -E -i \
-        "s|waffle-v[0-9]+\.[0-9]+\.[0-9]+/waffle-[0-9]+\.[0-9]+\.[0-9]+\.tgz|${tag}/waffle-${version}.tgz|g" \
+        "s|waffle-v[0-9]+\.[0-9]+\.[0-9]+/waffle-(relay-)?[0-9]+\.[0-9]+\.[0-9]+\.tgz|${tag}/waffle-\1${version}.tgz|g" \
         "$file"
       continue
     fi
