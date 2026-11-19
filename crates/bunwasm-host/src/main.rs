@@ -516,6 +516,8 @@ fn report_instance_trap(error: &anyhow::Error) {
 }
 
 fn main() -> ExitCode {
+    // Threads that still hold the runtime at exit keep it from dropping; this removes its folder.
+    let _executables = process::ProcessRoots;
     let options = match parse_args(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(error) => {
