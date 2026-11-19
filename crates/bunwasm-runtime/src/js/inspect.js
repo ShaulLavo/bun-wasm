@@ -1451,11 +1451,8 @@
 
   // The frames after the error's "Name: message" header, so no message line reads as a frame.
   function withoutHeader(error, stack) {
-    if (typeof stack !== "string" || typeof internal.stackHeader !== "function") return stack;
-    let header;
-    try { header = internal.stackHeader(error); } catch { return stack; }
-    if (stack === header) return "";
-    return stack.startsWith(header + "\n") ? stack.slice(header.length + 1) : stack;
+    if (typeof stack !== "string" || typeof internal.stackWithoutHeader !== "function") return stack;
+    return internal.stackWithoutHeader(error, stack);
   }
 
   function errorFrames(error, stack) {

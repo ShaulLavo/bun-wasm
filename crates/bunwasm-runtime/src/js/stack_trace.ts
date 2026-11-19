@@ -68,24 +68,49 @@
   const topLevelCode = new Set(["", "global code", "module code", "eval code", "__bunwasm_cjs__"]);
 
   // One line of JavaScriptCore's text as QuickJS's formatter prints it: application frames
-  // mapped back to their source, the runtime's own and native frames as they are.
+  // mapped back to their source, the runtime's own and native frames as they are. Like Bun,
+  // eval code prints as `eval (unknown)` and other frames without a source are left out.
   function jscFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
     const runtime = /^(.*?)@(bun-wasm:.*:\d+:\d+)$/.exec(line);
-    if (runtime) return topLevelCode.has(runtime[1]!) ? runtime[2] : `${runtime[1]} (${runtime[2]})`;
+    if (runtime) return topLevelCode.has(runtime[1]!) ? runtime[2]! : `${runtime[1]} (${runtime[2]})`;
     const nativeCode = /^(.*)@\[native code\]$/.exec(line);
     if (nativeCode) return `${nativeCode[1] || "<anonymous>"} (native)`;
+    if (line.endsWith("@")) return line === "eval code@" ? "eval (unknown)" : "";
     const frame = inspect.parseStack(line)[0];
-    return frame && inspect.frameText(frame);
+    return frame ? inspect.frameText(frame) : "";
+  }
+
+  // Formatted frames by their raw text. Mapping a frame asks the host for its source map and
+  // source line, which dominates a stack read, and the answer changes only when a loaded
+  // source or position map does, so the cache empties when native.sourceGeneration() moves.
+  const frameTexts = new Map<string, string>();
+  const frameCacheLimit = 4096;
+  let frameGeneration = -1;
+
+  function cachedFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
+    let text = frameTexts.get(line);
+    if (text !== undefined) return text;
+    text = jscFrameText(inspect, line);
+    if (frameTexts.size >= frameCacheLimit) frameTexts.clear();
+    frameTexts.set(line, text);
+    return text;
   }
 
   // JavaScriptCore's own text (`name@file:line:column` lines, no header) in Bun's form: the
-  // header, then one `    at` line per frame.
+  // header, then one `    at` line per frame. A hot run maps through changing revisions, so it
+  // formats every frame afresh.
   function jscStack(target: object, raw: string) {
-    if (internal.hotRun) internal.hotErrorStacks.set(target, raw);
     const inspect = internal.require("inspect");
+    const hot = Boolean(internal.hotRun);
+    if (hot) internal.hotErrorStacks.set(target, raw);
+    const generation = native.sourceGeneration();
+    if (generation !== frameGeneration) {
+      frameTexts.clear();
+      frameGeneration = generation;
+    }
     const lines = [internal.stackHeader(target)];
     for (const line of raw.split("\n")) {
-      const text = jscFrameText(inspect, line);
+      const text = hot ? jscFrameText(inspect, line) : cachedFrameText(inspect, line);
       if (text) lines.push(`    at ${text}`);
     }
     return lines.join("\n");

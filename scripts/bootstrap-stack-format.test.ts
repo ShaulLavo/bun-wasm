@@ -172,6 +172,10 @@ test("the default formatter starts with Bun's sanitized name and message", () =>
   Object.defineProperty(getters, "message", { get: () => "getter" });
   Object.defineProperty(getters, "name", { get: () => "Getter" });
   class Unnamed extends TypeError {}
+  const proxied = Object.setPrototypeOf(new Error("proxied"), new Proxy(Error.prototype, {
+    getOwnPropertyDescriptor() { throw new Error("trap ran"); },
+  }));
+  expect(header(proxied)).toBe("Error: proxied");
   expect([
     header(new RangeError("out")), header(new Error("")), header(renamed), header(getters),
     header(new Unnamed("deep")), header(Object.assign(new Error("n"), { name: 42 })),

@@ -373,6 +373,7 @@ declare namespace BunWasm {
     isProxy(value: unknown): boolean;
     isModuleNamespaceObject?(value: unknown): boolean | undefined;
     isError(value: unknown): boolean;
+    sourceGeneration(): number;
   }
   interface Internal {
     bunBuiltinGlobals: Record<string, unknown> & {

@@ -12,12 +12,15 @@ Bun, WebKit or V8 source.
 | `crates/bunwasm-runtime/src/js/stack_trace.ts`, `jscStack` and `jscFrameText` | Host feature | Rewrite JavaScriptCore's default text, at first access and after `Error.captureStackTrace`, as the header plus `    at` frames. |
 | `crates/bunwasm-runtime/src/js/inspect.js`, `withoutHeader` and `frameText` | Host feature | Skip the header before parsing frames, and share the frame text of Bun's error printer. |
 | `crates/bunwasm-runtime/src/js/console.ts`, `trace` | Host feature | Drop the header before the frames `console.trace` prints. |
+| `crates/bunwasm-runtime/src/js/bootstrap.js`, `fallbackErrorText` | Host feature | Print the frames once under the fallback's label line. |
+| `crates/bunwasm-runtime/src/modules.rs` and `natives.rs`, `sourceGeneration` | Host feature | Count changes to loaded sources and position maps, for the JSC frame cache. |
 
 ## The header
 
 The header follows `ErrorInstance::sanitizedToString` in Bun's WebKit fork at
 `3d3257150c40a1aabdc5f8b48d5b33d0413674cb` (`Source/JavaScriptCore/runtime/ErrorInstance.cpp`),
-which Bun uses for its own stacks. It reads data properties only, so no getter runs:
+which Bun uses for its own stacks. It reads data properties only, so no getter or Proxy
+trap runs: a Proxy prototype is skipped, as JavaScriptCore's inquiry skips it.
 
 - The name is the error's own `name` or its prototype's, looking no further. A missing,
   `undefined` or object name reads `Error`, so `class X extends TypeError {}` prints
@@ -37,7 +40,14 @@ changed before the first read appears, one changed after does not, as in Bun.
 maps positions back through source maps and moves a call's column to its callee, and
 prints it as Bun's error printer does. The runtime's own `bun-wasm:` frames and native
 frames stay, printed as the QuickJS formatter prints them; Bun's error printer still
-leaves them out.
+leaves them out. As in Bun, eval code prints as `eval (unknown)`, and a frame with no
+source, such as a `new Function` body, is left out.
+
+Mapping a frame asks the host for its source map and source line, which made a 52-frame
+read about 40 times slower than the native text. Formatted frames are cached by their raw
+text. The cache empties when `sourceGeneration` moves: `crates/bunwasm-runtime/src/modules.rs`
+bumps it whenever a loaded source or position map changes, including a file reloaded after
+`delete require.cache[path]`. A hot run maps through changing revisions and skips the cache.
 A hot run keeps the native text for the inspector, as QuickJS does. Custom
 `Error.prepareStackTrace` formatters still receive CallSites parsed from the native
 text. An empty trace stays without a stack property.

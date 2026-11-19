@@ -142,10 +142,12 @@
   }
 
   // The first line of Bun's error.stack: JavaScriptCore's sanitized "name: message", which
-  // reads data properties only and never runs a getter. The name is the error's own or its
-  // prototype's, the message the error's own. Any other capture target reads "Error".
+  // reads data properties only, so no getter or Proxy trap runs. The name is the error's own or
+  // its prototype's, the message the error's own. Any other capture target reads "Error".
   function dataSlot(holder, key) {
-    const descriptor = holder === null ? undefined : Reflect.getOwnPropertyDescriptor(holder, key);
+    if (holder === null || native.isProxy?.(holder)) return undefined;
+    let descriptor;
+    try { descriptor = Reflect.getOwnPropertyDescriptor(holder, key); } catch { return undefined; }
     return descriptor !== undefined && "value" in descriptor ? descriptor : undefined;
   }
 
@@ -164,6 +166,14 @@
     return name + (name && message ? ": " : "") + message;
   }
   internal.stackHeader = stackHeader;
+
+  // The frame lines of `stack`, after the error's header when it begins with one.
+  function stackWithoutHeader(error, stack) {
+    const header = stackHeader(error);
+    if (stack === header) return "";
+    return stack.startsWith(header + "\n") ? stack.slice(header.length + 1) : stack;
+  }
+  internal.stackWithoutHeader = stackWithoutHeader;
 
   Error.prepareStackTrace = function prepareStackTrace(error, callsites) {
     let start = 0;
@@ -878,8 +888,10 @@
   internal.printError = printError;
 
   function fallbackErrorText(err) {
-    if (err instanceof Error) return `${err.name === "Error" ? "error" : err.name}: ${err.message}\n${err.stack || ""}\n`;
-    return `error: ${String(err)}\n`;
+    if (!(err instanceof Error)) return `error: ${String(err)}\n`;
+    // The label line below replaces the stack's own "Name: message" header.
+    const frames = stackWithoutHeader(err, typeof err.stack === "string" ? err.stack : "");
+    return `${err.name === "Error" ? "error" : err.name}: ${err.message}\n${frames}\n`;
   }
 
   function emitExit(code) {
