@@ -1256,7 +1256,9 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         }))
     });
     let st = state.clone();
-    t.add("sourceGeneration", move |_| Ok(st.source_generation().into()));
+    t.add("sourceGeneration", move |_| {
+        Ok(st.source_generation().into())
+    });
     let st = state.clone();
     t.add("getSourceLine", move |a| {
         Ok(st.source_line(a.str(0)?, a.num(1)? as usize).into())
