@@ -131,6 +131,7 @@ await show("bogus format", () => subtle.importKey(format, new Uint8Array(16), "A
 console.log("format coerced", coerced);
 await show("bogus algorithm", () => subtle.generateKey({ name: "bogus" }, true, ["sign"]));
 await show("bogus digest", () => subtle.digest("bogus", new Uint8Array(1)));
+await show("unwrapKey bogus unwrapped type", () => subtle.unwrapKey("raw", new Uint8Array(40), kw, "AES-KW", { name: "bogus" }, false, ["sign"]));
 await show("RSAES-PKCS1-v1_5", () => subtle.generateKey(rsa("RSAES-PKCS1-v1_5"), true, ["encrypt"]));
 
 console.log("== operation failures");

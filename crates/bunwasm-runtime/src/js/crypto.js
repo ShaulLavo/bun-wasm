@@ -618,6 +618,8 @@
     }
     async unwrapKey(format, wrapped, key, a, unwrapped, extractable, usages) {
       format = keyFormat(format, "unwrapKey");
+      // Bun normalizes the unwrapped key's algorithm before it decrypts.
+      unwrapped = algorithm(unwrapped);
       const bytes = crypt("decrypt", a, key, wrapped, "unwrapKey");
       if (format !== "jwk")
         return importKey(format, bytes, unwrapped, extractable, usages);

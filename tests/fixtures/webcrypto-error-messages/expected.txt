@@ -80,6 +80,7 @@ bogus format -> TypeError TypeError ERR_INVALID_ARG_VALUE: Failed to execute 'im
 format coerced 1
 bogus algorithm -> DOMException NotSupportedError 9: Unrecognized algorithm name
 bogus digest -> DOMException NotSupportedError 9: Unrecognized algorithm name
+unwrapKey bogus unwrapped type -> DOMException NotSupportedError 9: Unrecognized algorithm name
 RSAES-PKCS1-v1_5 -> DOMException NotSupportedError 9: RSAES-PKCS1-v1_5 support is deprecated
 == operation failures
 AES-GCM undersized -> DOMException OperationError: The operation failed for an operation-specific reason
