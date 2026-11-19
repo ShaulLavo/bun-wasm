@@ -12,11 +12,11 @@ import { startRun, type Run } from "../src/runner";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 import { assertCausalIdleWake, assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 import { measureInterruptionOverhead } from "./engine-interruption-benchmark";
-import { defaultSignalGuest, handledSignalGuest, heartbeatBusyGuest, idleSignalGuest, nativeRegexpGuest, stopHeartbeatMessage } from "./engine-interruption-guests";
+import { defaultSignalGuest, handledSignalGuest, heartbeatBusyGuest, idleSignalGuest, nativeRegexpGuest, nativeRegexpMatchesGuest, stopHeartbeatMessage } from "./engine-interruption-guests";
 import { assertFatalSleepSync, assertHandledSleepSync, sleepSyncSignalGuest } from "./engine-interruption-sleep";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignal, type EngineSignalDelivery } from "./engine-interruption-scope";
-import { FunctionalCases, selectInterruptionEngines, interruptionCore, nativePollingEngines, nativeStopProofName, stopProofName, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
+import { FunctionalCases, selectInterruptionEngines, interruptionCore, nativePollingEngines, nativeMatchesStopProofName, nativeStopProofName, stopProofName, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
 import { CooperativeWorkerStop } from "./engine-interruption-stop";
 
 interface CaseResources {
@@ -347,16 +347,19 @@ async function assertBrowserStop(worker: ObservedWorker, beat: Int32Array, start
   const quiet = await settled(() => controlLoad(beat, 0), "Browser-engine guest heartbeat stopped after Worker.terminate()");
   return { terminatedMs, heartbeatSettledMs: quiet.settledMs, heartbeats: quiet.value };
 }
-type StopWorkload = "loop" | "regexp";
+type StopWorkload = "loop" | "regexp" | "regexp-matches";
 function stopGuest(engine: Engine, workload: StopWorkload): string {
   if (workload === "regexp") return nativeRegexpGuest();
+  if (workload === "regexp-matches") return nativeRegexpMatchesGuest();
   return engine === "browser" ? heartbeatBusyGuest() : defaultSignalGuest();
 }
+const stopProofNames: Record<StopWorkload, string> = { loop: stopProofName, regexp: nativeStopProofName, "regexp-matches": nativeMatchesStopProofName };
 /** The busy-page phase: only the stop proofs, each guest stopped before the next starts. */
 async function runBusyStops(module: WebAssembly.Module, engine: Engine): Promise<void> {
   await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-busy-stop" }, () => testKillStop(module, engine));
   if (engine === "browser" || !nativePollingEngines.includes(engine)) return;
   await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-native-regexp-stop" }, () => testKillStop(module, engine, "regexp"));
+  await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-global-regexp-replace-stop" }, () => testKillStop(module, engine, "regexp-matches"));
 }
 /** A failed proof may leave its paired guest spinning with native terminate disabled. Stop it
  * the same way, by SIGKILL and its own poll, before the case's cleanup and the next case. */
@@ -388,7 +391,7 @@ async function testKillStop(module: WebAssembly.Module, engine: Engine, workload
     const result = await owned.outcome(spawned);
     equal(result.kind, "signaled", "typed signal outcome"); equal(result.code, 9, "SIGKILL outcome");
     const stop = engine === "browser" ? await assertBrowserStop(worker, beat()!, started) : await assertPairedStop(worker, engine, started);
-    const name = workload === "loop" ? stopProofName : nativeStopProofName;
+    const name = stopProofNames[workload];
     checks.push({ engine, route: "runtimeProcess", delivery: "page-kill", name, evidence: stop, elapsedMs: performance.now() - started });
   } catch (error) {
     throw engineInterruptionFailure(`${engine} SIGKILL stop of a busy ${workload} guest failed`, error, diagnostics);

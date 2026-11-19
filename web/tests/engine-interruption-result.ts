@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { defaultInterruptionEngines, interruptionProofs, nativePollingEngines, type InterruptionEngine } from "./engine-interruption-cases";
+import { defaultInterruptionEngines, interruptionProofs, nativePollingEngines, nativeStopProofNames, type InterruptionEngine } from "./engine-interruption-cases";
 
 type PageResult = Record<string, any>;
 const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
@@ -36,7 +36,7 @@ export function assertEngineInterruptionResult(result: Record<string, any>, benc
   const expected = interruptionProofs(engines);
   const identity = (check: { engine: string; route: string; name: string }) => JSON.stringify([check.engine, check.route, check.name]);
   assert.equal(result.checks.length, expected.length, "all selected paired and Browser/Preview1 proofs");
-  const nativeStops = engines.filter(engine => nativePollingEngines.includes(engine)).length;
+  const nativeStops = engines.filter(engine => nativePollingEngines.includes(engine)).length * nativeStopProofNames.length;
   assert.equal(result.checks.filter((check: { route: string }) => check.route === "runtimeProcess").length, 8 * engines.length + nativeStops + 1, "selected new-route proofs");
   assert.deepEqual(result.checks.map(identity).sort(), expected.map(identity).sort(), "exact selected named proofs");
   assert.equal(new Set(result.checks.map(identity)).size, expected.length, "all named proofs are distinct");

@@ -127,9 +127,16 @@ The original browser harness now accepts an explicit QuickJS/JSC subset through
 its driver option, page query and controller. Its local default remains both
 pairs; `interruptionProofs` in `web/tests/engine-interruption-cases.ts` is the one list of
 named checks, and the gate and its unit tests count from it.
-SpiderMonkey joins only when selected explicitly (`--engines=quickjs,jsc,spidermonkey`
-with a staged `bun-spidermonkey.wasm` and `spidermonkey-engine.wasm`), because the CI
-interruption job builds no SpiderMonkey pair; it then runs the same paired-engine cases.
+SpiderMonkey is outside the coverage catalogue, so a local driver run includes it only when
+selected explicitly (`--engines=quickjs,jsc,spidermonkey` with a staged `bun-spidermonkey.wasm`
+and `spidermonkey-engine.wasm`); it then runs the same paired-engine cases. In CI, both native
+producers already build the ordinary SpiderMonkey pair before the browser-guest site, and
+`scripts/browser-guest-coverage.ts` copies it, after checking its pair receipt and that it was
+built from the same checkout, into the interruption bundle (`interruption/spidermonkey/`). The
+browser-guest consumer verifies the receipt again, stages the pair with the other guests and adds
+SpiderMonkey to the selected engines. The job sets `BUN_WASM_INTERRUPTION_SPIDERMONKEY=required`,
+so a bundle without the pair fails the interruption batch rather than silently dropping
+SpiderMonkey. No new SpiderMonkey build runs for this.
 Every subset retains the two Browser fatal checks and both Preview1 clock
 controls. Artifact preflight requires the selected pairs and Browser core;
 result admission checks the exact selected names and routes, including both
