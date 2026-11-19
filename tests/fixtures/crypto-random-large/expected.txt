@@ -1,0 +1,15 @@
+0 0 true
+1 1 true
+65536 65536 true
+65537 65537 true
+1000000 1000000 true
+same view true true
+offset view 100 true true
+TypeMismatchError The data argument must be an integer-type TypedArray
+TypeMismatchError The data argument must be an integer-type TypedArray
+TypeMismatchError The data argument must be an integer-type TypedArray
+response body 1000000 true
+request body 1000000 true
+shared body 0 true 0 null
+shared body 3 true 3 null
+shared body 1000000 true 1000000 null
