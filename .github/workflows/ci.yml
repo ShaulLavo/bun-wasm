@@ -1834,6 +1834,8 @@ jobs:
           BUN_WASM_BROWSER_REPORT_DIR: ${{ runner.temp }}/browser-guest-diagnostics
           BUN_WASM_TEST_BROWSERS: ${{ matrix.browser }}
           BUN_WASM_JSC_PRODUCER: ${{ needs.selection.outputs.jsc == 'true' && 'selected' || 'unselected' }}
+          # Both producers bundle their ordinary SpiderMonkey pair with the interruption entries.
+          BUN_WASM_INTERRUPTION_SPIDERMONKEY: required
           TMPDIR: ${{ runner.temp }}
         run: |
           mkdir -p "$BUN_WASM_BROWSER_REPORT_DIR"

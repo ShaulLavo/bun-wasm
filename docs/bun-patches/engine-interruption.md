@@ -16,9 +16,18 @@ A regexp match reaches no trap point while it backtracks, and on wasm32 JSC has 
 Yarr JIT, so every match runs in the Yarr bytecode interpreter. A second section of the
 same patch changes `Source/JavaScriptCore/yarr/{Yarr.h,YarrInterpreter.h,YarrInterpreter.cpp}`,
 `Source/JavaScriptCore/runtime/RegExpInlines.h` and `Source/JavaScriptCore/runtime/VMTraps.h`
-at the same revision. The interpreter decrements a per-match countdown at its single
+at the same revision. The interpreter decrements a countdown at its single
 `backtrack:` label, which every repeated attempt passes through, nested or not, and
-calls an optional poll every 16,384 backtracks. `RegExp::matchInlineOnce` supplies a
+calls an optional poll every 16,384 steps. The countdown lives on the compiled
+`BytecodePattern`, not on one match: a polled match first counts its own start as a step,
+loads the pattern's countdown and stores what is left when it returns. A global
+`String.prototype.replace`, `split` or `match` loops over matches in C++ without reaching a
+trap point, so a per-match countdown that restarted every time let millions of cheap
+matches (each under 16,384 backtracks, or with none at all) run without ever polling. A
+`BytecodePattern` belongs to one `RegExp` of one VM, and only the VM thread passes a poll, so
+the field needs no synchronization; matches without a poll leave it untouched. Literal
+patterns that JSC replaces with a plain string search never enter Yarr and stay one bounded
+linear pass, like other single native operations. `RegExp::matchInlineOnce` supplies a
 poll only on the VM thread, with a global object, when the host enabled the C-loop
 countdown; the poll returns false while traps or termination are deferred and otherwise
 asks the same `shouldInterruptScriptBeforeTimeout` callback as the trap slow path. A
@@ -105,6 +114,15 @@ inside their native matcher, listed in `nativePollingEngines`: QuickJS's regexp 
 calls the interrupt handler, JSC's Yarr interpreter polls every 16,384 backtracks and
 SpiderMonkey's irregexp every 8,192, so all three paired engines run it.
 
+The original `runtimeProcess-page-SIGKILL-stops-guest-in-global-regexp-replace` proof makes the
+same stop inside one `'a'.repeat(1<<22).replace(/(?:a|a){0,10}b|a/g, '')`. Every match costs a
+few thousand backtracks, under any per-match interval, and the call runs for about 500 seconds
+under the native launcher, so only a countdown that persists across matches can stop it. Against
+main's JSC this proof fails (the guest never unwinds) while every other proof passes. It runs for
+`nativeMatchesPollingEngines`: JSC, whose countdown now lives on the pattern, and SpiderMonkey,
+whose global replace loop is self-hosted JavaScript with ordinary interrupt checks. QuickJS has
+the same per-match restart in `lre_exec` and does not stop in this proof yet.
+
 The stop proofs run last, in a separate page (`?phase=busy`) that the runner opens in a
 fresh browser context after the main matrix's context has closed, and closes right after.
 A busy guest that ever outlived its proof would keep spinning in its page's process and
@@ -118,7 +136,7 @@ pages into one result, which is green only if both are.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
-| [`jsc/webkit-wasi.patch`, Yarr host interruption](#engine-interruption) | Host feature | Poll the same host callback every 16,384 Yarr interpreter backtracks; a stop becomes the uncatchable termination exception. |
+| [`jsc/webkit-wasi.patch`, Yarr host interruption](#engine-interruption) | Host feature | Poll the same host callback every 16,384 Yarr interpreter backtracks or match starts, counted per compiled pattern across matches; a stop becomes the uncatchable termination exception. |
 | [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
 
 [Ledger scope and pinned revisions](scope.md).
@@ -127,9 +145,16 @@ The original browser harness now accepts an explicit QuickJS/JSC subset through
 its driver option, page query and controller. Its local default remains both
 pairs; `interruptionProofs` in `web/tests/engine-interruption-cases.ts` is the one list of
 named checks, and the gate and its unit tests count from it.
-SpiderMonkey joins only when selected explicitly (`--engines=quickjs,jsc,spidermonkey`
-with a staged `bun-spidermonkey.wasm` and `spidermonkey-engine.wasm`), because the CI
-interruption job builds no SpiderMonkey pair; it then runs the same paired-engine cases.
+SpiderMonkey is outside the coverage catalogue, so a local driver run includes it only when
+selected explicitly (`--engines=quickjs,jsc,spidermonkey` with a staged `bun-spidermonkey.wasm`
+and `spidermonkey-engine.wasm`); it then runs the same paired-engine cases. In CI, both native
+producers already build the ordinary SpiderMonkey pair before the browser-guest site, and
+`scripts/browser-guest-coverage.ts` copies it, after checking its pair receipt and that it was
+built from the same checkout, into the interruption bundle (`interruption/spidermonkey/`). The
+browser-guest consumer verifies the receipt again, stages the pair with the other guests and adds
+SpiderMonkey to the selected engines. The job sets `BUN_WASM_INTERRUPTION_SPIDERMONKEY=required`,
+so a bundle without the pair fails the interruption batch rather than silently dropping
+SpiderMonkey. No new SpiderMonkey build runs for this.
 Every subset retains the two Browser fatal checks and both Preview1 clock
 controls. Artifact preflight requires the selected pairs and Browser core;
 result admission checks the exact selected names and routes, including both

@@ -1,4 +1,5 @@
-import { lstatSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, lstatSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, brotliDecompressSync } from "node:zlib";
@@ -6,6 +7,7 @@ import { buildBrowserEntries } from "./browser-build";
 import { hash, guestBuilds } from "./guest-source-manifest";
 import { importedMemory, programKind, programKindForBuild, verifyProgramSide } from "../src/engine-kind";
 import { validateSelection, type BrowserGuestSelection } from "./browser-guest-catalogue";
+import { parseInputs, verifyPairReceipt } from "./spidermonkey-side-core-receipt";
 
 const repository = resolve(import.meta.dir, "..");
 const coreBuilds = ["browser", "quickjs", "jsc", "tools"] as const;
@@ -14,7 +16,26 @@ export interface VerifiedBrowserGuestCoverage {
   readonly site: string;
   readonly selection: BrowserGuestSelection;
   readonly interruptionBundle: string | undefined;
+  /** The verified ordinary SpiderMonkey pair inside the interruption bundle, when the producer had one. */
+  readonly interruptionSpiderMonkey: string | undefined;
   readonly programs: ReadonlyMap<string, Uint8Array>;
+}
+// The pair and its receipts as scripts/build-bun-spidermonkey.sh writes them to SPIDERMONKEY_PAIR_DIR.
+const spiderMonkeyPrograms: readonly string[] = ["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"];
+const spiderMonkeyPairFiles = spiderMonkeyPrograms.concat(["bun-spidermonkey.wasm.spidermonkey.json", "inputs.json"]);
+function verifySpiderMonkeyPair(directory: string): ReturnType<typeof parseInputs> {
+  for (const name of spiderMonkeyPairFiles) requiredFile(join(directory, name));
+  const inputs = parseInputs(JSON.parse(readFileSync(join(directory, "inputs.json"), "utf8")));
+  verifyPairReceipt(join(directory, "bun-spidermonkey.wasm"), join(directory, "spidermonkey-engine.wasm"), join(directory, "bun-spidermonkey.wasm.spidermonkey.json"), inputs);
+  return inputs;
+}
+/** Producer only: CI's native producer builds the ordinary pair before the site, from this checkout. */
+function bundleSpiderMonkeyPair(pair: string, out: string): void {
+  const inputs = verifySpiderMonkeyPair(pair);
+  const [head, tree] = execFileSync("git", ["rev-parse", "HEAD", "HEAD^{tree}"], { cwd: repository, encoding: "utf8" }).trim().split("\n");
+  if (inputs.source.head !== head || inputs.source.tree !== tree) throw new Error(`SpiderMonkey pair was built from ${inputs.source.head}, not this checkout ${head}`);
+  mkdirSync(out);
+  for (const name of spiderMonkeyPairFiles) copyFileSync(join(pair, name), join(out, name));
 }
 
 function requiredFile(path: string): void {
@@ -56,6 +77,8 @@ export async function prepareBrowserGuestInterruptionBundle(request: { out: stri
   mkdirSync(out); // Exclusive creation also prevents accidental repeated builds.
   await buildBrowserEntries(["web/tests/engine-interruption-page.ts", "web/tests/engine-interruption-worker.ts", "web/src/worker.ts", "web/src/fs-worker.ts", "web/src/notification-worker.ts"].map(path => join(repository, path)), out, { runtimeWorker: true });
   writeFileSync(join(out, "index.html"), '<!doctype html><script type="module" src="./engine-interruption-page.js"></script>');
+  const pair = process.env.SPIDERMONKEY_PAIR_DIR;
+  if (pair) bundleSpiderMonkeyPair(resolve(pair), join(out, "spidermonkey"));
   requireBundle(request.out);
   return out;
 }
@@ -127,8 +150,11 @@ export async function verifyBrowserGuestCoverage(request: { out: string; selecti
   const sandbox = gunzipSync(readFileSync(join(site, "sandbox/bun-browser.wasm.gz")));
   const sandboxMaps = object(JSON.parse(readFileSync(join(site, "sandbox/engine-builds.json"), "utf8")));
   if (hash(sandbox) !== hash(browser) || sandboxMaps["bun-browser.wasm"] !== hash(browser)) throw new Error("Sandbox guest differs from served Browser program");
-  return { site, selection: request.selection, programs,
-    interruptionBundle: selectedInterruption(request.selection) ? join(request.out, "interruption") : undefined };
+  const interruptionBundle = selectedInterruption(request.selection) ? join(request.out, "interruption") : undefined;
+  const pair = interruptionBundle && join(interruptionBundle, "spidermonkey");
+  const interruptionSpiderMonkey = pair && lstatSync(pair, { throwIfNoEntry: false }) ? pair : undefined;
+  if (interruptionSpiderMonkey) verifySpiderMonkeyPair(interruptionSpiderMonkey);
+  return { site, selection: request.selection, programs, interruptionBundle, interruptionSpiderMonkey };
 }
 
 /** Caller removes private raw staging after its supervised child drains. */
@@ -137,6 +163,8 @@ export function stageBrowserGuestInterruption(verified: VerifiedBrowserGuestCove
   mkdirSync(directory);
   const selection = verified.selection.filter(item => item.owner === "engine-interruption");
   for (const name of requiredPrograms(selection)) writeFileSync(join(directory, name), programBytes(verified.programs, name), { flag: "wx", mode: 0o400 });
+  const pair = verified.interruptionSpiderMonkey;
+  if (pair) for (const name of spiderMonkeyPrograms) writeFileSync(join(directory, name), readFileSync(join(pair, name)), { flag: "wx", mode: 0o400 });
 }
 
 if (import.meta.main) {

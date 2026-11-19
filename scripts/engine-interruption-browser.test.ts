@@ -4,12 +4,16 @@ import { join } from "node:path";
 import { withBrowserGuestRegression, type BrowserGuestContext } from "./browser-guest-wrapper";
 import { stageBrowserGuestInterruption } from "./browser-guest-coverage";
 import { rowIdentity } from "./browser-guest-catalogue";
-import { interruptionProofs, selectInterruptionEngines } from "../web/tests/engine-interruption-cases";
+import { interruptionProofs, selectBundledInterruptionEngines, type InterruptionEngine } from "../web/tests/engine-interruption-cases";
 import { assertEngineInterruptionResult } from "../web/tests/engine-interruption-result";
 
 function browsers(leg: "chromium" | "webkit"): string[] { return leg === "chromium" ? ["chromium", "firefox"] : ["webkit"]; }
 
-function recordProofs(report: Record<string, unknown>, selected: ReturnType<typeof selectInterruptionEngines>, regression: BrowserGuestContext["regression"]): boolean {
+function selectedInterruptionEngines({ engines, artifact }: Pick<BrowserGuestContext, "engines" | "artifact">, env: NodeJS.ProcessEnv = process.env) {
+  return selectBundledInterruptionEngines(engines, artifact.interruptionSpiderMonkey !== undefined, env.BUN_WASM_INTERRUPTION_SPIDERMONKEY === "required");
+}
+
+function recordProofs(report: Record<string, unknown>, selected: readonly InterruptionEngine[], regression: BrowserGuestContext["regression"]): boolean {
   let error: string | undefined;
   try { assertEngineInterruptionResult(report, false, selected); }
   catch (failure) { error = String(failure); }
@@ -17,8 +21,9 @@ function recordProofs(report: Record<string, unknown>, selected: ReturnType<type
   return error === undefined;
 }
 
-async function execute({ leg, engines, artifact, regression, repository, directory, scratch, env, signal }: BrowserGuestContext): Promise<void> {
-  const selected = selectInterruptionEngines(engines.join(","));
+async function execute(context: BrowserGuestContext): Promise<void> {
+  const { leg, artifact, regression, repository, directory, scratch, env, signal } = context;
+  const selected = selectedInterruptionEngines(context, env);
   const dist = join(scratch, "interruption-guests");
   stageBrowserGuestInterruption(artifact, dist);
   const output = join(directory, "interruption.json");
@@ -40,7 +45,7 @@ async function execute({ leg, engines, artifact, regression, repository, directo
 
 test("selected browser engine interruption proofs", async () => {
   await withBrowserGuestRegression({ owner: "engine-interruption",
-    controls: ({ leg, engines }) => browsers(leg).flatMap(browser => interruptionProofs(selectInterruptionEngines(engines.join(",")))
+    controls: selection => browsers(selection.leg).flatMap(browser => interruptionProofs(selectedInterruptionEngines(selection))
       .map(proof => JSON.stringify([browser, proof.engine, proof.route, proof.name]))),
     execute,
   });
