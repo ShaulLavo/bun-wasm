@@ -51,14 +51,15 @@ async function dispatch(directory: string, checkout: string, thread: string, job
   send(thread, message);
 }
 
-async function finish(directory: string, state: State, config: Options): Promise<void> {
+async function finish(directory: string, state: State, config: Options): Promise<Job> {
   const job = selected(state, config);
   const contents = await readFile(required(config, "result-file"), "utf8");
   const result = outcome(JSON.parse(contents), job.revision);
-  complete(job, result, new Date().toISOString());
   const output = attemptDirectory(directory, job);
+  complete(job, result, new Date().toISOString());
   await mkdir(output, { recursive: true });
   await atomic(join(output, "result.json"), contents);
+  return job;
 }
 
 async function restart(directory: string, state: State, config: Options): Promise<void> {
@@ -95,16 +96,15 @@ async function run(config: Options, directory: string): Promise<void> {
   const state = await load(directory, activation ? timestamp(activation) : undefined);
   if (config.command === "status") { process.stdout.write(status(state)); return; }
   if (config.command === "claim") claim(selected(state, config), integer(Number(required(config, "attempt"))), new Date().toISOString());
-  if (config.command === "complete") await finish(directory, state, config);
+  const completed = config.command === "complete" ? await finish(directory, state, config) : null;
   if (config.command === "retry") await restart(directory, state, config);
   await save(directory, state);
   if (config.command === "tick") await poll(directory, state, config);
-  if (config.command === "complete") await deliver(directory, state, config);
+  if (completed) await deliver(directory, state, config, completed);
   process.stdout.write(status(state));
 }
 
-async function deliver(directory: string, state: State, config: Options): Promise<void> {
-  const job = selected(state, config);
+async function deliver(directory: string, state: State, config: Options, job: Job): Promise<void> {
   if (job.state.kind !== "complete" || job.state.notified) return;
   send(config.values.get("notify-thread") ?? managing, redMessage(job, job.state));
   job.state.notified = true;
