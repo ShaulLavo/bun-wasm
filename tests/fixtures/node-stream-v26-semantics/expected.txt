@@ -1,0 +1,21 @@
+default highWaterMark 65536 65536 65536
+read() per chunk abc de null
+read() with a decoder abcde
+pause() after destroy true true false
+reads while one is in flight 1
+write(string, 'buffer') ERR_UNKNOWN_ENCODING: Unknown encoding: buffer
+write(string, 'buffer') ERR_UNKNOWN_ENCODING: Unknown encoding: buffer
+Writable asyncDispose AbortError ABORT_ERR The operation was aborted
+compose result true true
+compose non-writable ERR_INVALID_ARG_VALUE true
+map(123) ERR_INVALID_ARG_TYPE: The "fn" argument must be of type function. Received type number (123)
+reduce(123) The "reducer" argument must be of type function. Received type number (123)
+Duplex.from readable error true true true
+autoDestroyed piped source true false true
+toWeb source after EOF false true
+fromWeb hex chunk Uint8Array hello
+fromWeb bytes after destroy 16484
+createReadStream readable 16 null 1
+createReadStream readable 65535 null 1
+createReadStream readable 65536 null 1
+createReadStream readable 131088 null 1

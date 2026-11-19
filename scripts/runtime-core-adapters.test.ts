@@ -41,19 +41,29 @@ function syntaxHash(source: string) {
 function withoutBuiltinLoaderDeltas(source: string) {
   const file = ts.createSourceFile("runtime.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const properties: ts.PropertyAssignment[] = [];
+  const provided: ts.VariableStatement[] = [];
   function visit(node: ts.Node) {
     if (ts.isPropertyAssignment(node) && node.name.getText(file) === "processBindingConstants") properties.push(node);
+    if (ts.isVariableStatement(node) && node.declarationList.declarations[0]?.name.getText(file) === "runtimeProvided") provided.push(node);
     ts.forEachChild(node, visit);
   }
   visit(file);
   expect(properties).toHaveLength(1);
+  expect(provided).toHaveLength(1);
   const property = properties[0];
-  if (!property) throw new Error("Missing WASI filesystem constants hook");
+  const providedMap = provided[0];
+  if (!property || !providedMap) throw new Error("Missing WASI filesystem constants hook or runtime-provided module map");
   expect(property.getText(file).replace(/\s/g, "")).toBe('processBindingConstants:{getfs(){returninternal.require("node_fs").fs.constants;},}');
   expect(source[property.end]).toBe(",");
+  // Internal modules the runtime serves itself (scripts/bun-builtins.json runtimeProvided).
+  expect(providedMap.getText(file).replace(/\s/g, "")).toBe('construntimeProvided={"internal:streams/duplex":()=>internal.builtin("node:stream").Duplex,"internal:tls":fetchInternal("internal:tls"),"internal:webstreams_adapters":fetchInternal("internal:webstreams_adapters"),};');
+  expect(providedMap.end).toBeLessThan(property.pos);
+  const providedLookup = "      const provided = runtimeProvided[name];\n      if (provided) return provided();\n";
+  expect(source.split(providedLookup)).toHaveLength(2);
   const builtinEvaluation = 'native.evalBuiltin(source, `bun-builtin:${name}`)';
   expect(source.split(builtinEvaluation)).toHaveLength(2);
-  return (source.slice(0, property.pos) + source.slice(property.end + 1))
+  return (source.slice(0, providedMap.pos) + source.slice(providedMap.end, property.pos) + source.slice(property.end + 1))
+    .replace(providedLookup, "")
     .replace(builtinEvaluation, 'native.evalScript(source, `bun-builtin:${name}`)');
 }
 
@@ -148,11 +158,11 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 // The stack_trace hash also covers the call-site predicates React's stack collector calls.
 const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
-  // Re-pinned for the provided internal modules and thirdparty binding hooks (node-fetch, undici).
-  bun_builtins: "a4dfca9cfb8d8ded14f041e47a76e6b51dcee67d9e6a91ee35201e8a73967b18",
+  // Re-pinned for the thirdparty fetch modules' internal loader and binding hooks (node-fetch, undici).
+  bun_builtins: "acf769db3668622edc5f3d2ba41b86d593371cbdf7537d86e53f9ed8cc0b23f3",
 };
 // Allow the JSC formatter registration and host adapter dispatch.
-const originalEmbeddedBytes = { stack_trace: 5000, bun_builtins: 4240 };
+const originalEmbeddedBytes = { stack_trace: 5000, bun_builtins: 4372 };
 
 for (const [label, before, after] of [
   ["true names", "return this.#frame.name || null;", 'return this.#frame.name || "";'],

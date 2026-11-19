@@ -35,6 +35,7 @@
     once(event: string, listener: () => void): unknown;
     push(chunk: Uint8Array | null): unknown;
     destroy(error?: unknown): unknown;
+    destroyed: boolean;
     _read(size: number): void;
     close(callback?: () => void): void;
   }
@@ -86,6 +87,7 @@
     isEncoding(encoding: string): boolean;
     inspect(value: unknown): string;
     loadStreams(): StreamModule;
+    later(callback: () => void): void;
   }
 
   return function createFileStreams(deps: Dependencies) {
@@ -197,7 +199,11 @@
       const count = chunk.length;
       this.bytesRead += count;
       if (this.pos !== undefined) this.pos += count;
-      this.push(count === 0 ? null : chunk);
+      // Deliver like fs.read's callback, on a later turn. A synchronous push(null) right
+      // after a short read lands while the previous 'readable' is still being emitted,
+      // which drops the end-of-file 'readable' Node and Bun emit.
+      const result = count === 0 ? null : chunk;
+      deps.later(() => { if (!this.destroyed) this.push(result); });
     };
 
     function writeFileStreamStep(stream: WriteFileStream, chunk: Uint8Array, offset: number) {

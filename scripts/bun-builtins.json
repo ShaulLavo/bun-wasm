@@ -1,6 +1,8 @@
 {
   "modules": [
+    "internal:fixed_queue",
     "internal:freelist",
+    "internal:streams/duplexpair",
     "node:querystring",
     "node:punycode",
     "node:wasi",
@@ -9,7 +11,8 @@
     "isomorphic-fetch",
     "vercel_fetch"
   ],
-  "provided": [
+  "runtimeProvided": [
+    "internal:streams/duplex",
     "internal:tls",
     "internal:webstreams_adapters"
   ]
