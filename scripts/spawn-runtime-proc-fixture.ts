@@ -263,6 +263,8 @@ export function loadExit(fake: ReturnType<typeof service>, options: { workerErro
     process: loaded.process, internal: loaded.internal,
     native: { tlsDispose() {}, closeAllDirs() { cleanup.push("closeAllDirs"); } },
     printError(error: unknown) { errors.push(error); },
+    // No uncaught exception handler claims an exit listener's error here.
+    dispatchUncaught: () => false,
   });
   return { ...loaded, emitExit, errors, cleanup };
 }
