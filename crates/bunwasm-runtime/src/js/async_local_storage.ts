@@ -128,7 +128,7 @@
 
     constructor(options?: { defaultValue?: unknown; name?: unknown }) {
       if (options === undefined) return;
-      if (options === null || typeof options !== "object") throw invalidArgType("options", "object", options);
+      if (options === null || typeof options !== "object" || Array.isArray(options)) throw invalidArgType("options", "object", options);
       this.#defaultValue = options.defaultValue;
       if (options.name !== undefined) this.#name = `${options.name}`;
     }

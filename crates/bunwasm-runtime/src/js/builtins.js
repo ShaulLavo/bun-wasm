@@ -317,19 +317,39 @@
     // owns what it holds.
     const currentFrame = () => native.getAsyncContext();
     const { AsyncLocalStorage } = internal.require("async_local_storage");
+    const invalidArgType = (name, type, value) => Object.assign(
+      new TypeError(`The "${name}" argument must be of type ${type}. Received ${internal.describe(value)}`),
+      { code: "ERR_INVALID_ARG_TYPE" },
+    );
+    // bind, static bind and runInAsyncScope follow Bun's src/js/node/async_hooks.ts (see
+    // docs/bun-patches/async-local-storage.md): the bound function runs in the context the
+    // resource was created in.
     class AsyncResource {
+      #frame;
       constructor(type) {
+        if (typeof type !== "string") throw invalidArgType("type", "string", type);
         this.type = type;
-        this._frame = currentFrame();
+        this.#frame = currentFrame();
       }
       runInAsyncScope(fn, thisArg, ...args) {
-        return internal.runInContext(this._frame, fn, thisArg, args);
+        return internal.runInContext(this.#frame, fn, thisArg, args);
       }
       emitDestroy() {
         return this;
       }
-      bind(fn) {
-        return fn.bind(this);
+      bind(fn, thisArg) {
+        if (typeof fn !== "function") throw invalidArgType("fn", "function", fn);
+        let bound;
+        if (thisArg === undefined) {
+          const resource = this;
+          bound = function (...args) {
+            return Reflect.apply(resource.runInAsyncScope, resource, [fn, this].concat(args));
+          };
+        } else {
+          bound = this.runInAsyncScope.bind(this, fn, thisArg);
+        }
+        Object.defineProperty(bound, "length", { configurable: true, enumerable: false, value: fn.length, writable: false });
+        return bound;
       }
       asyncId() {
         return 1;
@@ -337,8 +357,9 @@
       triggerAsyncId() {
         return 0;
       }
-      static bind(fn) {
-        return fn;
+      static bind(fn, type, thisArg) {
+        type = type || fn.name;
+        return new AsyncResource(type || "bound-anonymous-fn").bind(fn, thisArg);
       }
     }
     return {
