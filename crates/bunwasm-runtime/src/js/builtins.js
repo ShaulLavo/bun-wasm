@@ -408,6 +408,10 @@
   function streamModule() {
     const bundle = internal.require("node_stream_core");
     internal.require("node_stream_web")(bundle);
+    // Bun's internal/streams/duplexpair, built on this module's Duplex, so it loads on first use.
+    bundle.Stream.duplexPair = function duplexPair(options) {
+      return internal.require("bun_builtins").require("internal:streams/duplexpair")(options);
+    };
     return bundle.Stream;
   }
 
@@ -572,6 +576,12 @@
       directoryCount: () => native.directoryCount(),
       bunStringRoundTrip: (bytes, encoding) => native.bunStringRoundTrip(bytes, encoding),
       linearMemoryBytes: () => native.linearMemoryBytes(),
+      // Node-internal modules for vendored Node tests, under the names they import them by.
+      // Bun's map holds more; these are the ones bun-wasm serves from Bun's own sources.
+      exposedInternals: {
+        "internal/freelist": internal.require("bun_builtins").require("internal:freelist"),
+        "internal/fixed_queue": internal.require("bun_builtins").require("internal:fixed_queue").FixedQueue,
+      },
     }),
     "node:test": () => internal.require("node_test"),
     "bun:test": () => internal.require("bun_test").exports,
