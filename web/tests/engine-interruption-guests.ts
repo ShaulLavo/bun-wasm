@@ -36,6 +36,16 @@ export function nativeRegexpGuest(): string {
     try { fs.writeSync(2,'ready\\n'); try { pattern.test(input); } catch {} } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
 }
 
+/** One global replace over 4 Mi characters. Every match costs a few thousand backtracks (the
+ * bounded `(a|a){0,10}b` branch fails before `a` matches one character), well under any per-match
+ * poll interval, so only a poll countdown that persists across matches can stop it. The call runs
+ * for minutes; the stop can only land inside it, or the finally and after markers would appear. */
+export function nativeRegexpMatchesGuest(): string {
+  return `const fs=require('node:fs');
+    const input='a'.repeat(1<<22), pattern=/(?:a|a){0,10}b|a/g;
+    try { fs.writeSync(2,'ready\\n'); try { input.replace(pattern,''); } catch {} } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
+}
+
 export function handledSignalGuest(nested = false, cpuMs = 1_000): string {
   return `const fs=require('node:fs');
     let count=0,loopFinished=false,turns=0;

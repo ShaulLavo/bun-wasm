@@ -47,17 +47,36 @@
 
   // ───────────────────────────── run state ─────────────────────────────
 
-  const options = { timeout: 5000, namePattern: null, only: false, bail: 0, runTodo: false, agent: false, updateSnapshots: false };
+  // maxConcurrency 0 means no limit, as in Bun.
+  const options = { timeout: 5000, namePattern: null, only: false, bail: 0, runTodo: false, agent: false, updateSnapshots: false, concurrent: false, maxConcurrency: 20 };
   const preloads = [];
 
   const summary = { pass: 0, fail: 0, skip: 0, todo: 0, filtered: 0, files: 0, expectations: 0, errors: 0 };
 
   // The file whose module is being evaluated (tests register into it).
   let collecting = null;
-  // The test whose body or hooks are running: { expectCount, assertions }.
-  let currentTest = null;
-  // The pending invocation, so uncaught errors can fail it.
-  let activeInvocation = null;
+  // The running test ({ expectCount, assertions }) and its pending invocation, so uncaught
+  // errors can fail it. One test runs at a time outside concurrent groups; inside one, each
+  // test's slot is the store of a private AsyncLocalStorage, so it travels with the async
+  // context its hooks and body run in, alongside the user's own stores.
+  const serialSlot = { test: null, invocation: null };
+  let concurrentGroups = 0;
+  let slotStorage = null;
+
+  function slots() {
+    slotStorage ??= new (internal.builtin("node:async_hooks").AsyncLocalStorage)();
+    return slotStorage;
+  }
+
+  function running() {
+    if (concurrentGroups === 0) return serialSlot;
+    // Code outside every test of the group, such as a timer the group did not start.
+    return slots().getStore() || { test: null, invocation: null };
+  }
+
+  function runInSlot(slot, fn) {
+    return slots().run(slot, fn);
+  }
   // Opaque token for the file being loaded or run; expectations keep it for snapshot guards.
   let activeFile = null;
   let preloadScope = null;
@@ -786,7 +805,7 @@
     return `expect(received).${modifiers}${name}(${params})`;
   }
 
-  function countExpectation(test = currentTest) {
+  function countExpectation(test = running().test) {
     if (test) test.expectCount++;
     else summary.expectations++;
   }
@@ -807,7 +826,8 @@
     const fileSnapshot = name === "toMatchSnapshot" || name === "toThrowErrorMatchingSnapshot";
     expectProto[name] = function (...args) {
       const error = new Error();
-      const origin = { invocation: activeInvocation, test: currentTest };
+      const slot = running();
+      const origin = { invocation: slot.invocation, test: slot.test };
       const context = { not: this.flags.not, promise: this.flags.promise, error, origin, label: this.label };
       if (snapshot && this.flags.not) {
         countExpectation(origin.test);
@@ -970,10 +990,12 @@
     Object.defineProperty(expect, name, { get: () => rootStatic[name], configurable: true });
   }
   expect.assertions = (count) => {
-    if (currentTest) currentTest.assertions = { exact: count };
+    const test = running().test;
+    if (test) test.assertions = { exact: count };
   };
   expect.hasAssertions = () => {
-    if (currentTest) currentTest.assertions = { atLeastOne: true };
+    const test = running().test;
+    if (test) test.assertions = { atLeastOne: true };
   };
   expect.unreachable = (message) => {
     throw new Error(message === undefined ? "reached unreachable code" : String(message));
@@ -2032,8 +2054,14 @@
 
   // ───────────────────────────── collection ─────────────────────────────
 
-  function createScope(name, parent, mode, only) {
-    return { kind: "scope", name, parent, mode, only, children: [], beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
+  function createScope(name, parent, mode, only, concurrent = false) {
+    return { kind: "scope", name, parent, mode, only, concurrent, children: [], beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
+  }
+
+  // test.concurrent and describe.concurrent opt in, test.serial and describe.serial opt out,
+  // and everything else inherits from its describe block (the file root follows --concurrent).
+  function effectiveConcurrent(scope, modifiers) {
+    return modifiers.concurrent === undefined ? scope.concurrent : modifiers.concurrent;
   }
 
   function currentScope(kind) {
@@ -2074,10 +2102,13 @@
       mode: effectiveMode(scope, mode),
       only: !!modifiers.only,
       failing: !!modifiers.failing,
+      concurrent: effectiveConcurrent(scope, modifiers),
       timeout,
       retry: repeat.retry,
       repeats: repeat.repeats,
       usesDone: modifiers.usesDone !== undefined ? modifiers.usesDone : hasFn && fn.length > 0,
+      // Bun calls a test in the async context it was registered in.
+      context: native.getAsyncContext(),
     };
     if (test.only) collecting.hasOnly = true;
     scope.children.push(test);
@@ -2108,13 +2139,15 @@
     const parent = currentScope("describe");
     const { description, callback: fn } = describeArguments(args);
     const label = describeLabel(description);
-    const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
+    const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only, effectiveConcurrent(parent, modifiers));
     if (scope.only) collecting.hasOnly = true;
     parent.children.push(scope);
     if (typeof fn !== "function") return;
     collecting.scope = scope;
     try {
-      fn();
+      // In the caller's context, so an enterWith() inside the callback stays inside it: Bun runs
+      // describe callbacks after the file loads, and later registrations must not see it.
+      internal.runInContext(native.getAsyncContext(), fn, undefined, []);
     } finally {
       collecting.scope = parent;
     }
@@ -2192,10 +2225,34 @@
     return Array.from(table, (row) => (Array.isArray(row) ? row : [row]));
   }
 
+  const VARIANTS = { skip: { mode: "skip" }, todo: { mode: "todo" }, only: { only: true }, failing: { failing: true }, concurrent: { concurrent: true }, serial: { concurrent: false } };
+
+  // Modifiers chain in any order, as in Bun: test.concurrent.each, test.concurrent.failing, ...
+  // Each variant is made on first use and then kept, so test.failing === test.failing.
+  function addVariants(fn, modifiers, make, names) {
+    for (const name of names) {
+      const get = () => {
+        const variant = make(Object.assign({}, modifiers, VARIANTS[name]));
+        Object.defineProperty(fn, name, { configurable: true, enumerable: true, writable: true, value: variant });
+        return variant;
+      };
+      Object.defineProperty(fn, name, { configurable: true, enumerable: true, get });
+    }
+  }
+
+  // Every variant has its own if, skipIf, todoIf and failingIf, as in Bun:
+  // test.concurrent.skipIf(c) picks test.concurrent.skip or test.concurrent.
+  function addConditionals(fn, failingIf) {
+    fn.if = (condition) => (condition ? fn : fn.skip);
+    fn.skipIf = (condition) => (condition ? fn.skip : fn);
+    fn.todoIf = (condition) => (condition ? fn.todo : fn);
+    fn.failingIf = failingIf;
+  }
+
   function makeTest(modifiers) {
     const fn = (name, callback, timeout) => registerTest(modifiers, name, callback, timeout);
-    fn.concurrent = fn;
-    fn.serial = fn;
+    addVariants(fn, modifiers, makeTest, ["skip", "todo", "only", "failing", "concurrent", "serial"]);
+    addConditionals(fn, (condition) => (condition ? fn.failing : fn));
     fn.each = (table) => (name, callback, timeout) => {
       guardRegistration("test");
       eachRows(table).forEach((args, index) => {
@@ -2210,8 +2267,11 @@
 
   function makeDescribe(modifiers) {
     const fn = (...args) => registerDescribe(modifiers, ...args);
-    fn.concurrent = fn;
-    fn.serial = fn;
+    addVariants(fn, modifiers, makeDescribe, ["skip", "todo", "only", "concurrent", "serial"]);
+    addConditionals(fn, (condition) => {
+      if (condition) throw new Error("Cannot call .failingIf() on describe");
+      return fn;
+    });
     fn.each = (table) => (name, callback) => {
       guardRegistration("describe");
       eachRows(table).forEach((args, index) => {
@@ -2222,35 +2282,22 @@
   }
 
   const test = makeTest({});
-  test.skip = makeTest({ mode: "skip" });
-  test.todo = makeTest({ mode: "todo" });
-  test.only = makeTest({ only: true });
-  test.failing = makeTest({ failing: true });
-  test.if = (condition) => (condition ? test : test.skip);
-  test.skipIf = (condition) => (condition ? test.skip : test);
-  test.todoIf = (condition) => (condition ? test.todo : test);
-  test.failingIf = (condition) => (condition ? test.failing : test);
-
   const describe = makeDescribe({});
-  describe.skip = makeDescribe({ mode: "skip" });
-  describe.todo = makeDescribe({ mode: "todo" });
-  describe.only = makeDescribe({ only: true });
-  describe.if = (condition) => (condition ? describe : describe.skip);
-  describe.skipIf = (condition) => (condition ? describe.skip : describe);
-  describe.todoIf = (condition) => (condition ? describe.todo : describe);
 
   function hookRegistrar(kind) {
     return (fn, timeout) => {
       if (typeof fn !== "function") throw new TypeError(`${kind}() expects a function as the first argument`);
-      const hooks = kind === "afterAll" && currentTest ? currentTest.afterAll : currentScope(`${kind}()`)[kind];
-      hooks.push({ fn, timeout: readTimeout(timeout) });
+      const test = running().test;
+      const hooks = kind === "afterAll" && test ? test.afterAll : currentScope(`${kind}()`)[kind];
+      hooks.push({ fn, timeout: readTimeout(timeout), context: native.getAsyncContext() });
     };
   }
 
   function onTestFinished(fn, timeout) {
     if (typeof fn !== "function") throw new Error("onTestFinished() expects a function as the first argument");
-    if (!currentTest) throw new Error("Cannot call onTestFinished() outside of a test. It can only be called inside a test.");
-    currentTest.finished.push({ fn, timeout: readTimeout(timeout) });
+    const test = running().test;
+    if (!test) throw new Error("Cannot call onTestFinished() outside of a test. It can only be called inside a test.");
+    test.finished.push({ fn, timeout: readTimeout(timeout), context: native.getAsyncContext() });
   }
 
   function setDefaultTimeout(ms) {
@@ -2265,7 +2312,7 @@
    * { timeout, done }, never rejects. Uses a done callback when the function
    * declares one.
    */
-  function invoke(fn, args, usesDone, timeout) {
+  function invoke(fn, args, usesDone, timeout, slot = running(), context = undefined) {
     return new Promise((resolve) => {
       let timer = null;
       const invocation = matcherSupport.pending();
@@ -2274,27 +2321,57 @@
         if (invocation.settled) return;
         invocation.settled = true;
         if (timer !== null) internal.realTimers.clearTimeout(timer);
-        if (activeInvocation === invocation) activeInvocation = null;
+        if (slot.invocation === invocation) slot.invocation = null;
         resolve(result);
       };
       invocation.fail = (error) => finish({ error });
-      activeInvocation = invocation;
+      slot.invocation = invocation;
       const startTimer = () => {
         timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
       };
       startTimer();
-      internal.require("test_lifecycle").body(fn, args, usesDone, finish);
+      const body = () => internal.require("test_lifecycle").body(fn, args, usesDone, finish);
+      // The callback runs in the async context it was registered in, as in Bun, so stores
+      // entered before it are visible. A lane's slot goes on top, entered again for each call:
+      // runtime JS awaits between a test's hooks and body, and a Browser host does not carry
+      // the frame across those.
+      const call = "blocked" in slot ? () => runInSlot(slot, body) : body;
+      internal.runInContext(context, call, undefined, []);
+      // In a concurrent group, the next test starts only once this one really waits, as in Bun.
+      if (slot.blocked && !invocation.settled) whenStillPending(invocation, slot.blocked);
     });
   }
 
-  function invokeHook(hook) {
-    const timeout = hook.timeout === undefined ? options.timeout : hook.timeout;
-    return invoke(hook.fn, [], hook.fn.length > 0, timeout);
+  // Bun drains the microtask queue after calling a callback and only then reads its promise:
+  // one that awaited only settled values has finished by then. QuickJS, JSC and the other
+  // in-guest engines own their job queue, so they drain it here the same way. The Browser
+  // host cannot run its native jobs synchronously or see an async function's promise state,
+  // so there a callback still unsettled after three microtask turns counts as waiting: a
+  // finished one settles within two (its promise reaction, then completion), and no timer
+  // can have run yet.
+  function whenStillPending(invocation, blocked) {
+    if (native.engine !== "host") {
+      native.runMicrotasks();
+      if (!invocation.settled) blocked();
+      return;
+    }
+    let turns = 3;
+    const check = () => {
+      if (invocation.settled) return;
+      if (turns-- === 0) return blocked();
+      internal.promiseThen(Promise.resolve(), check);
+    };
+    check();
   }
 
-  async function runHooks(hooks) {
+  function invokeHook(hook, slot) {
+    const timeout = hook.timeout === undefined ? options.timeout : hook.timeout;
+    return invoke(hook.fn, [], hook.fn.length > 0, timeout, slot, hook.context);
+  }
+
+  async function runHooks(hooks, slot) {
     for (const hook of hooks) {
-      const result = await invokeHook(hook);
+      const result = await invokeHook(hook, slot);
       if (!result.ok) return result;
     }
     return { ok: true };
@@ -2330,22 +2407,80 @@
     return node.children.some((child) => willRun(child, file));
   }
 
-  async function runScope(scope, file) {
+  // Bun's Order.rs: a file runs as a flat list of steps. Consecutive concurrent tests form one
+  // group, even across describe blocks; beforeAll and afterAll hooks always run on their own,
+  // so they end a group. A failed beforeAll skips its scope's tests and, as before this runner
+  // had groups, its afterAll too; Bun's set_failure_skip_to still runs that afterAll.
+  function planScope(scope, file, steps) {
     const active = willRun(scope, file);
-    if (active) {
-      const before = await runHooks(scope.beforeAll);
-      if (!before.ok) {
-        reportHookFailure(scope, before);
-        return;
-      }
-    }
+    const before = active && scope.beforeAll.length ? { kind: "beforeAll", scope, skipTo: 0 } : null;
+    if (before) steps.push(before);
     for (const child of scope.children) {
-      if (child.kind === "scope") await runScope(child, file);
-      else await runTestNode(child, file);
+      if (child.kind === "scope") planScope(child, file, steps);
+      else steps.push({ kind: "test", test: child });
     }
-    if (!active) return;
-    const after = await runHooks(scope.afterAll);
-    if (!after.ok) reportHookFailure(scope, after);
+    if (active && scope.afterAll.length) steps.push({ kind: "afterAll", scope });
+    if (before) before.skipTo = steps.length;
+    return steps;
+  }
+
+  function concurrentAt(steps, index) {
+    const step = steps[index];
+    return step !== undefined && step.kind === "test" && step.test.concurrent;
+  }
+
+  async function runScope(scope, file) {
+    const steps = planScope(scope, file, []);
+    let index = 0;
+    while (index < steps.length) {
+      const step = steps[index];
+      if (step.kind !== "test") {
+        index = await runScopeHooks(step, index);
+        continue;
+      }
+      let end = index + 1;
+      while (step.test.concurrent && concurrentAt(steps, end)) end++;
+      if (end - index === 1) await runTestNode(step.test, file);
+      else await runConcurrentGroup(steps.slice(index, end).map(entry => entry.test), file);
+      index = end;
+    }
+  }
+
+  async function runScopeHooks(step, index) {
+    const result = await runHooks(step.scope[step.kind]);
+    if (result.ok) return index + 1;
+    reportHookFailure(step.scope, result);
+    return step.kind === "beforeAll" ? step.skipTo : index + 1;
+  }
+
+  // Bun's Execution.rs steps each test of a group until a hook or body really waits, then
+  // starts the next one. Here a lane takes tests in order; whenever a lane's callback is still
+  // pending after it returns, another lane starts, up to --max-concurrency lanes. Tests that
+  // never wait therefore run one after another, in order.
+  function runConcurrentGroup(tests, file) {
+    const limit = options.maxConcurrency > 0 ? Math.min(options.maxConcurrency, tests.length) : tests.length;
+    let next = 0;
+    let lanes = 0;
+    let active = 0;
+    const lane = async (slot) => {
+      while (next < tests.length) await runTestNode(tests[next++], file);
+      slot.blocked = null;
+    };
+    concurrentGroups++;
+    return new Promise((resolve, reject) => {
+      const startLane = () => {
+        if (lanes >= limit || next >= tests.length) return;
+        lanes++;
+        active++;
+        const slot = { test: null, invocation: null, blocked: startLane };
+        runInSlot(slot, () => lane(slot)).then(() => {
+          if (--active === 0) resolve();
+        }, reject);
+      };
+      startLane();
+    }).finally(() => {
+      concurrentGroups--;
+    });
   }
 
   // A failing beforeAll/afterAll is reported as an unnamed test of its scope.
@@ -2385,15 +2520,19 @@
   async function executeTest(test, file) {
     const chain = scopeChain(test.parent);
     const record = { expectCount: 0, assertions: null, test, file, afterAll: [], finished: [] };
-    currentTest = record;
+    const slot = running();
+    slot.test = record;
     const start = now();
-    let result = await runHooks(chain.flatMap((s) => s.beforeEach));
+    // Without beforeEach hooks the body starts synchronously, so a concurrent group's tests
+    // each reach their first callback in order before the next one starts.
+    const beforeEach = chain.flatMap((s) => s.beforeEach);
+    let result = beforeEach.length ? await runHooks(beforeEach, slot) : { ok: true };
     if (result.ok) {
       const timeout = test.timeout === undefined ? options.timeout : test.timeout;
-      result = await invoke(test.fn, [], test.usesDone, timeout);
+      result = await invoke(test.fn, [], test.usesDone, timeout, slot, test.context);
       if (result.timeout) result.timeoutMs = timeout;
     }
-    const after = await runHooks(cleanupHooks(record, chain.reverse().flatMap((s) => s.afterEach)));
+    const after = await runHooks(cleanupHooks(record, chain.reverse().flatMap((s) => s.afterEach)), slot);
     if (!result.ok && !after.ok) {
       printFileHeaderIfNeeded();
       const failure = failureFromResult(test.failing ? after : result, test);
@@ -2402,7 +2541,7 @@
     }
     if (!after.ok && !test.failing) result = after;
     const elapsed = now() - start;
-    currentTest = null;
+    slot.test = null;
     const classified = test.failing && !after.ok && result.ok ? failureFromResult(after, test) : classify(test, result, record);
     return { result: classified, elapsed, expectCount: record.expectCount };
   }
@@ -2723,6 +2862,8 @@
       else if (flag === "-t" || flag === "--test-name-pattern") setNamePattern(value());
       else if (flag === "--bail") options.bail = inline === undefined ? 1 : Number(inline);
       else if (flag === "--only") options.only = true;
+      else if (flag === "--concurrent") options.concurrent = true;
+      else if (flag === "--max-concurrency") options.maxConcurrency = Number(value());
       else if (flag === "--todo") options.runTodo = true;
       else if (flag === "--update-snapshots" || flag === "-u") options.updateSnapshots = true;
       else if (arg.startsWith("-")) continue;
@@ -2746,12 +2887,14 @@
   function installErrorHandlers() {
     const process = globalThis.process;
     const onError = (error) => {
-      if (activeInvocation) activeInvocation.fail(error);
+      const invocation = running().invocation;
+      if (invocation) invocation.fail(error);
       else reportUnhandledError(error);
     };
     process.on("uncaughtException", onError);
     process.on("unhandledRejection", (error, promise) => {
-      if (activeInvocation) activeInvocation.unhandled(error, promise);
+      const invocation = running().invocation;
+      if (invocation) invocation.unhandled(error, promise);
       onError(error);
     });
   }
@@ -2841,7 +2984,7 @@
 
   async function runActiveFile(abs, cwd, last) {
     summary.files++;
-    const file = { root: createScope("", null, "run", false), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
+    const file = { root: createScope("", null, "run", false, options.concurrent), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
     file.scope = file.root;
     startFileHeader(relativePath(cwd, abs));
     const collected = await collectFile(file, cwd);

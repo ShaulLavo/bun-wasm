@@ -16,6 +16,8 @@
 #                               TEST_SERVER=http://127.0.0.1:<port> points at
 #                               tests/servers/http.ts, which this script starts
 #   skip-browser                 optional one-line reason to skip this fixture on Browser
+#   skip-browser-native          optional one-line reason to skip it on Browser only without
+#                               --context hooks
 #   show                        optional list of files (one per line) the run creates; their
 #                               contents are appended to stdout as `--- <path>` sections
 #   manual                      optional marker: expected.txt is hand-written because native
@@ -256,6 +258,12 @@ for name in "${names[@]}"; do
   if [[ "$engine" == browser && -f "$root/tests/fixtures/$name/skip-browser" ]]; then
     IFS= read -r reason < "$root/tests/fixtures/$name/skip-browser"
     printf 'SKIP %s (browser: %s)\n' "$name" "$reason"
+    skipped=$((skipped + 1))
+    continue
+  fi
+  if [[ "$engine" == browser && "$context" == native && -f "$root/tests/fixtures/$name/skip-browser-native" ]]; then
+    IFS= read -r reason < "$root/tests/fixtures/$name/skip-browser-native"
+    printf 'SKIP %s (browser without --context hooks: %s)\n' "$name" "$reason"
     skipped=$((skipped + 1))
     continue
   fi

@@ -1,0 +1,40 @@
+bun test vVERSION
+test.concurrent if=function skipIf=function todoIf=function failingIf=function
+test.serial if=function skipIf=function todoIf=function failingIf=function
+test.failing if=function skipIf=function todoIf=function failingIf=function
+test.skip if=function skipIf=function todoIf=function failingIf=function
+test.todo if=function skipIf=function todoIf=function failingIf=function
+test.concurrent.failing if=function skipIf=function todoIf=function failingIf=function
+describe.concurrent if=function skipIf=function todoIf=function failingIf=function
+describe.serial if=function skipIf=function todoIf=function failingIf=function
+describe.skip if=function skipIf=function todoIf=function failingIf=function
+start serial 1
+end serial 1
+start concurrent 2
+start concurrent 3
+end concurrent 2
+end concurrent 3
+serial 4 runs alone
+start concurrent 5
+start beforeEach
+end beforeEach
+start concurrent 6
+end concurrent 5
+end concurrent 6
+start beforeEach
+end beforeEach
+serial 7 runs alone
+beforeAll runs alone
+start concurrent 8
+start concurrent 9
+end concurrent 8
+end concurrent 9
+afterAll runs alone
+peaks [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,20,20,20,20,20]
+immediate beforeEach
+immediate 1
+immediate afterEach
+immediate beforeEach
+immediate 2
+immediate afterEach
+test.concurrent.if ran

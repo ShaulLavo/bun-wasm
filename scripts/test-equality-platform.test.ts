@@ -24,7 +24,10 @@ function runtime(isProxy = types.isProxy) {
     promiseState: (value: Promise<unknown>) => Bun.peek.status(value),
     promiseThen: (value: Promise<unknown>, pass: (value: unknown) => unknown, fail?: (error: unknown) => unknown) => Promise.prototype.then.call(value, pass, fail),
     realTimers: { setTimeout, clearTimeout }, fakeTimers: { api: {} },
+    // No async context in this harness: every frame is empty and runs its callback directly.
+    runInContext: (_context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) => Reflect.apply(fn, receiver, args),
     native: { now: () => performance.now(), cwd: () => "/", stat: () => ({ mode: 0o100644 }),
+      getAsyncContext: () => undefined,
       writeStdout() {}, writeStderr: (value: string) => { stderr += value; } },
     require: (name: string) => modules[name], importModule: async (file: string) => load(file),
   };

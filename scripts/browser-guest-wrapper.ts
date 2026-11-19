@@ -18,7 +18,7 @@ export interface BrowserGuestContext {
 }
 interface WrapperRequest {
   readonly owner: CoverageOwner;
-  readonly controls: (selection: Pick<BrowserGuestContext, "leg" | "engines">) => readonly string[];
+  readonly controls: (selection: Pick<BrowserGuestContext, "leg" | "engines" | "artifact">) => readonly string[];
   readonly execute: (context: BrowserGuestContext) => Promise<void>;
 }
 const repository = resolve(import.meta.dir, "..");
@@ -49,7 +49,7 @@ export async function withBrowserGuestRegression(request: WrapperRequest, env: N
   mkdirSync(reports, { recursive: true });
   const directory = mkdtempSync(join(reports, `${request.owner}-${leg}-`));
   const regression = new BrowserGuestRegression({ owner: request.owner, leg, engines: selected.engines, directory,
-    controls: request.controls({ leg, engines: selected.engines }) });
+    controls: request.controls({ leg, engines: selected.engines, artifact }) });
   const controller = new AbortController(), stop = () => controller.abort();
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   for (const signal of signals) process.on(signal, stop);
