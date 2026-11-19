@@ -1572,6 +1572,13 @@ jobs:
         run: |
           source env.sh
           bun scripts/run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }} bun scripts/test-checks.ts browser-guest --profile shared-group
+      # Chromium's renderer has crashed here with only "Target crashed" in the log. The kernel
+      # log tells a memory kill from a renderer fault.
+      - name: Show kernel memory kills and faults after a failure
+        if: failure()
+        run: |
+          free -m
+          sudo dmesg --ctime | grep -iE 'out of memory|oom|killed process|segfault|traps:' | tail -n 50 || true
 
   shared-proof:
     name: Shared PIC sysroot proof

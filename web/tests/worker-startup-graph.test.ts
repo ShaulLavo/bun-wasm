@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { buildBrowserEntries, resolveRuntimePackage } from "../../scripts/browser-build";
 import { initialJavaScript } from "../../scripts/runtime-size";
 
+// A full browser bundle; the cap only catches a hung build, not a slow machine.
+const BUILD_HANG_CAP_MS = 120_000;
+
 test("ordinary Bun worker and page startup do not eagerly load generic ownership adapters", async () => {
   const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? tmpdir();
   const scratch = await mkdtemp(join(base, "bun-wasm-runtime-ownership-"));
@@ -35,4 +38,4 @@ test("ordinary Bun worker and page startup do not eagerly load generic ownership
       expect(await Bun.file(join(scratch, "dist", "__bunwasm", path)).text()).toBe(await Bun.file(join(scratch, "dist", path)).text());
     }
   } finally { await rm(scratch, { recursive: true, force: true }); }
-});
+}, BUILD_HANG_CAP_MS);
