@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/process-before-exit-fatal",
+  "engines": ["quickjs", "jsc", "browser"]
+}
