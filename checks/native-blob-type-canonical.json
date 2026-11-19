@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/blob-type-canonical",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

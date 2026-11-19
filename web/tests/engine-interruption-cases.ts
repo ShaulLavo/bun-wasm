@@ -100,10 +100,9 @@ export function interruptionInputs(engines: readonly InterruptionEngine[]): stri
 export const stopProofName = "runtimeProcess-page-SIGKILL-stops-busy-guest";
 /** The same stop while the guest spends its time in the engine's native regexp matcher. */
 export const nativeStopProofName = "runtimeProcess-page-SIGKILL-stops-guest-in-native-regexp";
-/** Engines that poll for a stop inside their native regexp matcher. JSC's Yarr and SpiderMonkey's
- * irregexp do not yet, and their interpreter countdowns are minutes away when each call
- * backtracks for over a second. */
-export const nativePollingEngines: readonly InterruptionEngine[] = ["quickjs"];
+/** Engines that poll for a stop inside their native regexp matcher: QuickJS's lre interrupt check,
+ * JSC's Yarr interpreter (every 16,384 backtracks) and SpiderMonkey's irregexp (every 8,192). */
+export const nativePollingEngines: readonly InterruptionEngine[] = ["quickjs", "jsc", "spidermonkey"];
 
 export function interruptionProofs(engines: readonly InterruptionEngine[]) {
   const paired: { engine: string; route: string; name: string }[] = engines.flatMap(engine => [

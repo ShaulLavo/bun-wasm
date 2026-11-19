@@ -57,7 +57,7 @@ interface Edit { start: number; end: number; text: string }
 
 function omitBunComparisonChanges(text: string): string {
   const source = parseRuntime(text);
-  const functions = new Set(["bunCompareArrays", "bunCompareSpecial", "arrayIndex", "bunCompareWebObjects", "equalSearchParams", "headerCount", "equalHeaders", "isUrl", "isSearchParams", "isHeaders", "webKind"]);
+  const functions = new Set(["bunCompareArrays", "arraySymbols", "bunArraySymbols", "arrayBuffersEqual", "isDetachedBuffer", "bunCompareSpecial", "arrayIndex", "bunCompareWebObjects", "equalSearchParams", "headerCount", "equalHeaders", "isUrl", "isSearchParams", "isHeaders", "webKind"]);
   const constants = new Set(["emptyArrayIndex", "urlHref", "searchParamsSize"]);
   const matches: ts.Node[] = [];
   function approved(node: ts.Node): boolean {
@@ -77,7 +77,7 @@ function omitBunComparisonChanges(text: string): string {
 
 function restoreAdditions(text: string): string {
   const source = parseRuntime(text);
-  const names = new Set(["parseEnv", "expectEquals", "expectSettle", "expectEvery", "expectSome", "expectEq", "expectMemo", "expectArrays", "expectSets", "expectMapEntry", "expectMaps", "expectErrors", "expectObjects", "expectProperties", "expectExtraProperties"]);
+  const names = new Set(["parseEnv", "expectEquals", "expectSettle", "expectEvery", "expectSome", "expectEq", "expectMemo", "expectArrays", "expectArraySymbols", "expectSets", "expectMapEntry", "expectMaps", "expectErrors", "expectObjects", "expectProperties", "expectExtraProperties"]);
   const exports = new Set(["parseEnv", "expectEquals"]);
   const matches: ts.Node[] = [];
   function visit(node: ts.Node): void {

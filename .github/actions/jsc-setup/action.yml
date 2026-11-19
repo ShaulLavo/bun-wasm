@@ -32,8 +32,7 @@ runs:
         if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
            command -v ruby && command -v gperf && command -v bison &&
            ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
-        if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
-        if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
+        sudo bash "$GITHUB_WORKSPACE/.github/scripts/apt-main-archive.sh"
         sudo apt-get update
         sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
     # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
@@ -58,6 +57,8 @@ runs:
         key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
     # Image updates change many unrelated packages. Build caches follow the host
     # tools these builds run; each layer's own input hash covers its toolchain.
+    # glibc is recorded by upstream version only: Ubuntu's package revisions are ABI-stable
+    # security updates that roll out unevenly, so jobs of one run can see two of them.
     - name: Identify host build tools
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       id: host-tools
@@ -68,7 +69,7 @@ runs:
             command -v "$tool"
             "$tool" --version | sed -n '1,2p'
           done
-          ldd --version | sed -n '1p'
+          ldd --version | sed -n '1s/.* //;1p'
           ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' | sort
         } > "$report"
         cat "$report"

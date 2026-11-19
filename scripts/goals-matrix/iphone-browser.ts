@@ -68,9 +68,16 @@ export function iphonePreviewLoad(): { loaded: boolean; readyState: DocumentRead
 }
 
 // Read in the owner document: true only after the current frame's load listener focused it.
-export function iphonePreviewFocus(): { presented: boolean; focused: boolean; presentation: string | null } {
+// `committed` is false while the frame still shows its initial about:blank document, so a
+// navigation Safari never started is told apart from a slow page; a cross-origin frame has committed.
+export function iphonePreviewFocus(): { presented: boolean; focused: boolean; presentation: string | null; committed: boolean | null } {
   const frame = document.getElementById("__goalsIphonePreview");
-  return { presented: frame !== null, focused: frame?.dataset.goalsFocused === "true", presentation: frame?.dataset.goalsPresentation ?? null };
+  let committed: boolean | null = null;
+  try {
+    const href = frame instanceof HTMLIFrameElement ? frame.contentWindow?.location.href : undefined;
+    if (href !== undefined) committed = href !== "about:blank";
+  } catch { committed = true; }
+  return { presented: frame !== null, focused: frame?.dataset.goalsFocused === "true", presentation: frame?.dataset.goalsPresentation ?? null, committed };
 }
 
 type IphoneClickArm = { ready: false; before: string } | { ready: true; before: string; label: string; url: string; timeOrigin: number; nonce: string };

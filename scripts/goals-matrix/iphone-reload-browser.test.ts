@@ -3,6 +3,7 @@ import { chromium, webkit, type Browser, type BrowserType, type Frame, type Page
 import { IphoneBus } from "./iphone-bus";
 import { observeIphoneResponse } from "./iphone-server";
 import { presentIphonePreview } from "./iphone-browser";
+import { navigateTestPage } from "../../web/tests/navigate-test-page.ts";
 
 async function ready(bus: IphoneBus, role: "host" | "preview"): Promise<void> {
   const deadline = Date.now() + 3000;
@@ -38,7 +39,7 @@ async function reviewControl(engine: BrowserType, scenario: Scenario): Promise<v
     browser = await engine.launch({ headless: true });
     const page = await browser.newPage();
     bus.configure("host", owner.url.href);
-    await page.goto(owner.url.href);
+    await navigateTestPage(page, owner.url.href);
     await ready(bus, "host");
     const preview = owner.url.origin + "/preview";
     bus.configure("preview", preview);
@@ -144,7 +145,7 @@ async function heldPreviewNavigation(engine: BrowserType): Promise<void> {
   try {
     browser = await engine.launch({ headless: true });
     const page = await browser.newPage();
-    await page.goto(owner.url.href);
+    await navigateTestPage(page, owner.url.href);
     const url = owner.url.origin + "/preview";
     const requested = page.waitForRequest(url, { timeout: 3000 });
     await page.evaluate(presentIphonePreview, url);

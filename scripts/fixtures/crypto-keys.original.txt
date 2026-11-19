@@ -674,23 +674,6 @@
         );
       }
     }
-    function pbkdf2Sync(password, salt, iterations, keylen, digest) {
-      const key = c.importKey("raw", inputBytes(password), "PBKDF2", false, [
-        "deriveBits",
-      ]);
-      return Buffer.from(
-        c.deriveBits(
-          {
-            name: "PBKDF2",
-            hash: hash(digest),
-            salt: inputBytes(salt),
-            iterations,
-          },
-          key,
-          keylen * 8,
-        ),
-      );
-    }
     function hkdfSync(digest, ikm, salt, info, keylen) {
       const key = c.importKey(
         "raw",
@@ -747,8 +730,6 @@
       createSign: (a, o) => new Sign(a, o),
       createVerify: (a, o) => new Verify(a, o),
       constants,
-      pbkdf2Sync,
-      pbkdf2: callbackVersion(pbkdf2Sync),
       hkdfSync,
       hkdf: callbackVersion(hkdfSync),
       getCurves: () => ["prime256v1", "secp384r1"],

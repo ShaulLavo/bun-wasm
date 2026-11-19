@@ -31,6 +31,8 @@ test("host crypto errors retain the DOMException brand", async () => {
       ["web_brand", () => webBrand],
       ["body_streams", () => bodyStreams],
       ["url_search_params", () => compile("url_search_params")()],
+      ["url_pairs", () => compile("url_pairs")()],
+      ["url_errors", () => compile("url_errors")()],
     ]);
     const streamExports = streams({ native, require(name: string) {
       expect(name).toBe("compression_streams");

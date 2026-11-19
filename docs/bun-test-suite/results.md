@@ -202,13 +202,13 @@ Categories are mutually exclusive first-blocker assignments. Passing, empty and 
 <!-- partial:start -->
 ## Focused suite replay
 
-These 37 files were measured at runtime commit `19b89fda111f1a9de6c821fddca74213b2f7159c`. Only their failure-index rows were refreshed. Full-census tables and summaries below retain the previous census; a full refresh is deferred to a separate run.
+These 87 files were measured at runtime commit `5d5d7f8bd5257f8c1fa5986c4c1096b8fb22f2ea`. Only their failure-index rows were refreshed. Full-census tables and summaries below retain the previous census; a full refresh is deferred to a separate run.
 
 | Engine | Files | Fully passing | Observed passes | Failures | File timeouts |
 | --- | --- | --- | --- | --- | --- |
-| quickjs | 37 | 29 | 1855 | 77 | 0 |
-| jsc | 37 | 29 | 1857 | 75 | 0 |
-| browser | 37 | 28 | 1355 | 71 | 0 |
+| quickjs | 87 | 39 | 3282 | 1326 | 0 |
+| jsc | 87 | 39 | 3282 | 1326 | 0 |
+| browser | 87 | 38 | 2807 | 1295 | 0 |
 
 See [the matched path comparison and earlier regression controls](category-d-runtime.md#measurements). Raw input hashes and selected paths are in [partial-summary.json](partial-summary.json).
 <!-- partial:end -->

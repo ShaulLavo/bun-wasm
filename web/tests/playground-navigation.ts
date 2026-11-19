@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Frame, Page, Request, Response } from "playwright";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { ready } from "./playground.mjs";
 import { navigationParameter, readNavigationServerLog } from "../navigation-server-log.ts";
 
@@ -98,7 +99,7 @@ export async function openPlaygroundPage(page: Page, target: string, options: { 
   let stage: Stage = "navigation";
   // Runtime publication below decides readiness; unrelated resources need not finish loading.
   try {
-    await page.goto(target, { waitUntil, timeout: 30_000 });
+    await navigateTestPage(page, target, { waitUntil, timeout: 30_000 });
     stage = "runtime-publication";
     return await ready(page, options.readyTimeout);
   } catch (error) {

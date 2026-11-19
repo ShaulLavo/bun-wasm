@@ -39,8 +39,8 @@ function runtime(capabilities = new WeakSet<object>()) {
       if (name === "body_streams") return { remember: (stream: unknown) => stream };
       if (name === "web_brand") return () => {};
       if (name === "process") return { env: {} };
-      assert.equal(name, "url_search_params");
-      return runInContext(source("url_search_params.ts"), context)();
+      assert.ok(["url_search_params", "url_errors", "url_pairs", "object_urls"].includes(name), `Unexpected module ${name}`);
+      return runInContext(source(`${name}.ts`), context)(internal);
     },
   };
   const install = runInContext(source("web.js"), context)(internal);

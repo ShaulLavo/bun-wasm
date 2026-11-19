@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-match-object-samples",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

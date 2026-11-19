@@ -966,7 +966,7 @@
       if (strict && (left === emptyArrayIndex || right === emptyArrayIndex)) return false;
       if (!bunEq(left === emptyArrayIndex ? undefined : left, right === emptyArrayIndex ? undefined : right, strict, memo)) return false;
     }
-    return true;
+    return bunArraySymbols(a, b, strict, memo);
   }
 
   function bunCompareErrors(a: Error, b: unknown, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
@@ -986,7 +986,7 @@
     if (isMap(a) || isMap(b)) return isMap(a) && bunCompareMaps(a, b, strict, memo);
     if (isAnyArrayBuffer(a) || isAnyArrayBuffer(b)) {
       if (isArrayBuffer(a) !== isArrayBuffer(b) || isSharedArrayBuffer(a) !== isSharedArrayBuffer(b)) return false;
-      return equalBytes(new Uint8Array(a as ArrayBuffer | SharedArrayBuffer), new Uint8Array(b as ArrayBuffer | SharedArrayBuffer));
+      return arrayBuffersEqual(a as ArrayBuffer | SharedArrayBuffer, b as ArrayBuffer | SharedArrayBuffer);
     }
     if (isDate(a) || isDate(b)) return isDate(a) && isDate(b) && a.getTime() === b.getTime();
     if (isRegExp(a) || isRegExp(b)) return isRegExp(a) && isRegExp(b) && a.source === b.source && a.flags === b.flags;
@@ -1594,7 +1594,9 @@
   function expectMemo(a: object, b: object, memo: BunWasm.EqualityMemo, compare: () => BunWasm.EqualityResult): BunWasm.EqualityResult {
     const previousA = memo.val1.get(a);
     const previousB = memo.val2.get(b);
-    if (previousA !== undefined && previousB !== undefined) return previousA === previousB;
+    // Bun__deepEquals' ancestor stack: a value already being compared must be paired with the
+    // same partner again, so a cycle on only one side, or through another property, is unequal.
+    if (previousA !== undefined || previousB !== undefined) return previousA === previousB;
     const position = ++memo.position;
     memo.val1.set(a, position);
     memo.val2.set(b, position);
@@ -1615,6 +1617,23 @@
     }
   }
 
+  // A detached ArrayBuffer equals no other buffer, not even a zero-length or another detached
+  // one, as in Bun; reading its bytes would throw.
+  function arrayBuffersEqual(a: ArrayBuffer | SharedArrayBuffer, b: ArrayBuffer | SharedArrayBuffer): boolean {
+    if (isDetachedBuffer(a) || isDetachedBuffer(b)) return false;
+    return equalBytes(new Uint8Array(a), new Uint8Array(b));
+  }
+
+  function isDetachedBuffer(buffer: ArrayBuffer | SharedArrayBuffer): boolean {
+    if (!isArrayBuffer(buffer) || buffer.byteLength !== 0) return false;
+    try {
+      new Uint8Array(buffer);
+      return false;
+    } catch {
+      return true;
+    }
+  }
+
   function expectArrays(a: unknown[], b: unknown[], strict: boolean, context: BunWasm.ExpectComparison, index = 0): BunWasm.EqualityResult {
     const proxy = isProxy(a) || isProxy(b);
     if (strict && a.length !== b.length) return false;
@@ -1630,7 +1649,40 @@
       if (isPromise(result)) return expectSettle(result, pass => pass && expectArrays(a, b, strict, context, i + 1));
       if (!result) return false;
     }
+    return expectArraySymbols(a, b, strict, context);
+  }
+
+  // After the elements, Bun's deepEquals compares the first array's enumerable own symbol keys,
+  // not its other string keys. Strict comparison needs the same number on both sides; loose
+  // comparison lets an undefined value stand for a missing key. Null means unequal.
+  function arraySymbols(a: object, b: object, strict: boolean): symbol[] | null {
+    const symbols = enumerableSymbols(a);
+    if (strict && symbols.length !== enumerableSymbols(b).length) return null;
+    return symbols;
+  }
+
+  function bunArraySymbols(a: unknown[], b: unknown[], strict: boolean, memo: BunWasm.EqualityMemo): boolean {
+    const symbols = arraySymbols(a, b, strict);
+    if (!symbols) return false;
+    for (const key of symbols) {
+      const left = Reflect.get(a, key);
+      if (!(key in b)) {
+        if (!strict && left === undefined) continue;
+        return false;
+      }
+      if (!bunEq(left, Reflect.get(b, key), strict, memo)) return false;
+    }
     return true;
+  }
+
+  function expectArraySymbols(a: unknown[], b: unknown[], strict: boolean, context: BunWasm.ExpectComparison): BunWasm.EqualityResult {
+    const symbols = arraySymbols(a, b, strict);
+    if (!symbols) return false;
+    return expectEvery(symbols, key => {
+      const left = Reflect.get(a, key);
+      if (!(key in b)) return !strict && left === undefined;
+      return expectEq(left, Reflect.get(b, key), strict, context);
+    });
   }
 
   function expectSets(a: Set<unknown>, b: Set<unknown>, strict: boolean, context: BunWasm.ExpectComparison): BunWasm.EqualityResult {

@@ -1,0 +1,486 @@
+md4
+  hash a448017aaf21d8525fc10ae87aa6729d
+  hmac 32c43d6d6eda7f1e464711473b956b68
+  hasher md4 16 a448017aaf21d8525fc10ae87aa6729d
+MD4
+  hash a448017aaf21d8525fc10ae87aa6729d
+  hmac 32c43d6d6eda7f1e464711473b956b68
+  hasher md4 16 a448017aaf21d8525fc10ae87aa6729d
+md5
+  hash 900150983cd24fb0d6963f7d28e17f72
+  hmac d2fe98063f876b03193afb49b4979591
+  hasher md5 16 900150983cd24fb0d6963f7d28e17f72
+MD5
+  hash 900150983cd24fb0d6963f7d28e17f72
+  hmac d2fe98063f876b03193afb49b4979591
+  hasher md5 16 900150983cd24fb0d6963f7d28e17f72
+md5-sha1
+  hash 900150983cd24fb0d6963f7d28e17f72a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac a76e5cc4bdaa99b87cc7de69e0606e7d74fd2771909f120bb3b9a4649bb99bea2b4cec32
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm md5-sha1
+MD5-SHA1
+  hash 900150983cd24fb0d6963f7d28e17f72a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac a76e5cc4bdaa99b87cc7de69e0606e7d74fd2771909f120bb3b9a4649bb99bea2b4cec32
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm MD5-SHA1
+sha1
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher sha1 20 a9993e364706816aba3e25717850c26c9cd0d89d
+SHA1
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher sha1 20 a9993e364706816aba3e25717850c26c9cd0d89d
+sha224
+  hash 23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7
+  hmac f524670b7e34f31467de0aa96593861cf65117d414fb2d86158d760e
+  hasher sha224 28 23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7
+SHA224
+  hash 23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7
+  hmac f524670b7e34f31467de0aa96593861cf65117d414fb2d86158d760e
+  hasher sha224 28 23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7
+sha256
+  hash ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+  hmac 9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab
+  hasher sha256 32 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+SHA256
+  hash ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+  hmac 9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab
+  hasher sha256 32 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+sha384
+  hash cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7
+  hmac 30ddb9c8f347cffbfb44e519d814f074cf4047a55d6f563324f1c6a33920e5edfb2a34bac60bdc96cd33a95623d7d638
+  hasher sha384 48 cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7
+SHA384
+  hash cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7
+  hmac 30ddb9c8f347cffbfb44e519d814f074cf4047a55d6f563324f1c6a33920e5edfb2a34bac60bdc96cd33a95623d7d638
+  hasher sha384 48 cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7
+sha512
+  hash ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f
+  hmac 3926a207c8c42b0c41792cbd3e1a1aaaf5f7a25704f62dfc939c4987dd7ce060009c5bb1c2447355b3216f10b537e9afa7b64a4e5391b0d631172d07939e087a
+  hasher sha512 64 ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f
+SHA512
+  hash ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f
+  hmac 3926a207c8c42b0c41792cbd3e1a1aaaf5f7a25704f62dfc939c4987dd7ce060009c5bb1c2447355b3216f10b537e9afa7b64a4e5391b0d631172d07939e087a
+  hasher sha512 64 ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f
+sha512-224
+  hash 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+  hmac 28bc0433ef684ea9877c2f2437aa0ccfc2e8eb3a9b4c731606877b4f
+  hasher sha512-224 28 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+SHA512-224
+  hash 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+  hmac 28bc0433ef684ea9877c2f2437aa0ccfc2e8eb3a9b4c731606877b4f
+  hasher sha512-224 28 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+sha512-256
+  hash 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+  hmac f367b7ca80ab2cf85c23e58b73a8fd525a6fa2c66ff105804a2d4cf4df06e129
+  hasher sha512-256 32 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+SHA512-256
+  hash 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+  hmac f367b7ca80ab2cf85c23e58b73a8fd525a6fa2c66ff105804a2d4cf4df06e129
+  hasher sha512-256 32 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+sha3-224
+  hash e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf
+  hmac 09d9d74e7d761c8f27f07d8d35f95b9d160b6b4d8175329db68eea6d
+  hasher sha3-224 28 e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf
+SHA3-224
+  hash e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf
+  hmac 09d9d74e7d761c8f27f07d8d35f95b9d160b6b4d8175329db68eea6d
+  hasher sha3-224 28 e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf
+sha3-256
+  hash 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+  hmac 09b6dbab8d11795ca7c8d82f1cf91682013c7cb980abbb25473be4ae7f7b5683
+  hasher sha3-256 32 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+SHA3-256
+  hash 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+  hmac 09b6dbab8d11795ca7c8d82f1cf91682013c7cb980abbb25473be4ae7f7b5683
+  hasher sha3-256 32 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+sha3-384
+  hash ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88cea927ac7f539f1edf228376d25
+  hmac 94f2aa7ae7c4b7b8fa4c612fdb422b3343811b13c8888257904f543995cdbcba5e49f10f8ed6f7b9ddc1b30b3828815c
+  hasher sha3-384 48 ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88cea927ac7f539f1edf228376d25
+SHA3-384
+  hash ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88cea927ac7f539f1edf228376d25
+  hmac 94f2aa7ae7c4b7b8fa4c612fdb422b3343811b13c8888257904f543995cdbcba5e49f10f8ed6f7b9ddc1b30b3828815c
+  hasher sha3-384 48 ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88cea927ac7f539f1edf228376d25
+sha3-512
+  hash b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0
+  hmac 085e4e83503f40b82fef38438bc4905a55dbaa8c8878097a899db0b57ce7da57a368251c34474f60b3ebacb39b2edaca4b290456411c76ec7ab61944cfe2288e
+  hasher sha3-512 64 b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0
+SHA3-512
+  hash b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0
+  hmac 085e4e83503f40b82fef38438bc4905a55dbaa8c8878097a899db0b57ce7da57a368251c34474f60b3ebacb39b2edaca4b290456411c76ec7ab61944cfe2288e
+  hasher sha3-512 64 b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0
+shake128
+  hash 5881092dd818bf5cf8a3ddb793fbcba7
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: shake128
+  hasher shake128 16 5881092dd818bf5cf8a3ddb793fbcba7
+SHAKE128
+  hash 5881092dd818bf5cf8a3ddb793fbcba7
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SHAKE128
+  hasher shake128 16 5881092dd818bf5cf8a3ddb793fbcba7
+shake256
+  hash 483366601360a8771c6863080cc4114d8db44530f8f1e1ee4f94ea37e78b5739
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: shake256
+  hasher shake256 32 483366601360a8771c6863080cc4114d8db44530f8f1e1ee4f94ea37e78b5739
+SHAKE256
+  hash 483366601360a8771c6863080cc4114d8db44530f8f1e1ee4f94ea37e78b5739
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SHAKE256
+  hasher shake256 32 483366601360a8771c6863080cc4114d8db44530f8f1e1ee4f94ea37e78b5739
+blake2b256
+  hash bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: blake2b256
+  hasher blake2b256 32 bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319
+BLAKE2B256
+  hash bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: BLAKE2B256
+  hasher blake2b256 32 bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319
+blake2b512
+  hash ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: blake2b512
+  hasher blake2b512 64 ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923
+BLAKE2B512
+  hash ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: BLAKE2B512
+  hasher blake2b512 64 ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923
+blake2s256
+  hash 508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: blake2s256
+  hasher blake2s256 32 508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982
+BLAKE2S256
+  hash 508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: BLAKE2S256
+  hasher blake2s256 32 508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982
+ripemd160
+  hash 8eb208f7e05d987a9b044a8e98c6b087f15a0bfc
+  hmac 67fdce738ebfc7372bcd38f03c023b5746724d18
+  hasher ripemd160 20 8eb208f7e05d987a9b044a8e98c6b087f15a0bfc
+RIPEMD160
+  hash 8eb208f7e05d987a9b044a8e98c6b087f15a0bfc
+  hmac 67fdce738ebfc7372bcd38f03c023b5746724d18
+  hasher ripemd160 20 8eb208f7e05d987a9b044a8e98c6b087f15a0bfc
+rmd160
+  hash 8eb208f7e05d987a9b044a8e98c6b087f15a0bfc
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: rmd160
+  hasher ripemd160 20 8eb208f7e05d987a9b044a8e98c6b087f15a0bfc
+RMD160
+  hash 8eb208f7e05d987a9b044a8e98c6b087f15a0bfc
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: RMD160
+  hasher ripemd160 20 8eb208f7e05d987a9b044a8e98c6b087f15a0bfc
+ripemd
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: ripemd
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm ripemd
+RIPEMD
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: RIPEMD
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm RIPEMD
+sm3
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: sm3
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm sm3
+SM3
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SM3
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm SM3
+dss1
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm dss1
+DSS1
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm DSS1
+sha128
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher sha1 20 a9993e364706816aba3e25717850c26c9cd0d89d
+SHA128
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher sha1 20 a9993e364706816aba3e25717850c26c9cd0d89d
+sha-1
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher sha1 20 a9993e364706816aba3e25717850c26c9cd0d89d
+SHA-1
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher sha1 20 a9993e364706816aba3e25717850c26c9cd0d89d
+sha-512/224
+  hash 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+  hmac 28bc0433ef684ea9877c2f2437aa0ccfc2e8eb3a9b4c731606877b4f
+  hasher sha512-224 28 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+SHA-512/224
+  hash 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+  hmac 28bc0433ef684ea9877c2f2437aa0ccfc2e8eb3a9b4c731606877b4f
+  hasher sha512-224 28 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+sha-512/256
+  hash 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+  hmac f367b7ca80ab2cf85c23e58b73a8fd525a6fa2c66ff105804a2d4cf4df06e129
+  hasher sha512-256 32 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+SHA-512/256
+  hash 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+  hmac f367b7ca80ab2cf85c23e58b73a8fd525a6fa2c66ff105804a2d4cf4df06e129
+  hasher sha512-256 32 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+sha-512224
+  hash 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: sha-512224
+  hasher sha512-224 28 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+SHA-512224
+  hash 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SHA-512224
+  hasher sha512-224 28 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+sha-512256
+  hash 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+  hmac f367b7ca80ab2cf85c23e58b73a8fd525a6fa2c66ff105804a2d4cf4df06e129
+  hasher sha512-256 32 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+SHA-512256
+  hash 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+  hmac f367b7ca80ab2cf85c23e58b73a8fd525a6fa2c66ff105804a2d4cf4df06e129
+  hasher sha512-256 32 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+sha-512_224
+  hash 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: sha-512_224
+  hasher sha512-224 28 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+SHA-512_224
+  hash 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SHA-512_224
+  hasher sha512-224 28 4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa
+sha-512_256
+  hash 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+  hmac f367b7ca80ab2cf85c23e58b73a8fd525a6fa2c66ff105804a2d4cf4df06e129
+  hasher sha512-256 32 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+SHA-512_256
+  hash 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+  hmac f367b7ca80ab2cf85c23e58b73a8fd525a6fa2c66ff105804a2d4cf4df06e129
+  hasher sha512-256 32 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23
+sha512/224
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: sha512/224
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm sha512/224
+SHA512/224
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SHA512/224
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm SHA512/224
+shake-128
+  hash 5881092dd818bf5cf8a3ddb793fbcba7
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: shake-128
+  hasher shake128 16 5881092dd818bf5cf8a3ddb793fbcba7
+SHAKE-128
+  hash 5881092dd818bf5cf8a3ddb793fbcba7
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SHAKE-128
+  hasher shake128 16 5881092dd818bf5cf8a3ddb793fbcba7
+rsa-md5
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: rsa-md5
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm rsa-md5
+RSA-MD5
+  hash 900150983cd24fb0d6963f7d28e17f72
+  hmac d2fe98063f876b03193afb49b4979591
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm RSA-MD5
+rsa-sha1
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm rsa-sha1
+RSA-SHA1
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm RSA-SHA1
+rsa-sha256
+  hash ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+  hmac 9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm rsa-sha256
+RSA-SHA256
+  hash ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+  hmac 9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm RSA-SHA256
+rsa-sha512/224
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: rsa-sha512/224
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm rsa-sha512/224
+RSA-SHA512/224
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: RSA-SHA512/224
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm RSA-SHA512/224
+rsa-sha3-256
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: rsa-sha3-256
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm rsa-sha3-256
+RSA-SHA3-256
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: RSA-SHA3-256
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm RSA-SHA3-256
+rsa-ripemd160
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: rsa-ripemd160
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm rsa-ripemd160
+RSA-RIPEMD160
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: RSA-RIPEMD160
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm RSA-RIPEMD160
+md4WithRSAEncryption
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: md4WithRSAEncryption
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm md4WithRSAEncryption
+md4withrsaencryption
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: md4withrsaencryption
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm md4withrsaencryption
+MD4WITHRSAENCRYPTION
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: MD4WITHRSAENCRYPTION
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm MD4WITHRSAENCRYPTION
+md5WithRSAEncryption
+  hash 900150983cd24fb0d6963f7d28e17f72
+  hmac d2fe98063f876b03193afb49b4979591
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm md5WithRSAEncryption
+md5withrsaencryption
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: md5withrsaencryption
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm md5withrsaencryption
+MD5WITHRSAENCRYPTION
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: MD5WITHRSAENCRYPTION
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm MD5WITHRSAENCRYPTION
+sha256WithRSAEncryption
+  hash ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+  hmac 9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm sha256WithRSAEncryption
+sha256withrsaencryption
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: sha256withrsaencryption
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm sha256withrsaencryption
+SHA256WITHRSAENCRYPTION
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SHA256WITHRSAENCRYPTION
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm SHA256WITHRSAENCRYPTION
+sha512-224WithRSAEncryption
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: sha512-224WithRSAEncryption
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm sha512-224WithRSAEncryption
+sha512-224withrsaencryption
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: sha512-224withrsaencryption
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm sha512-224withrsaencryption
+SHA512-224WITHRSAENCRYPTION
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SHA512-224WITHRSAENCRYPTION
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm SHA512-224WITHRSAENCRYPTION
+ripemd160WithRSA
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: ripemd160WithRSA
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm ripemd160WithRSA
+ripemd160withrsa
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: ripemd160withrsa
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm ripemd160withrsa
+RIPEMD160WITHRSA
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: RIPEMD160WITHRSA
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm RIPEMD160WITHRSA
+ssl3-md5
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: ssl3-md5
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm ssl3-md5
+SSL3-MD5
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SSL3-MD5
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm SSL3-MD5
+DSA-SHA
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm DSA-SHA
+dsa-sha
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: dsa-sha
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm dsa-sha
+dsaWithSHA1
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm dsaWithSHA1
+dsawithsha1
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: dsawithsha1
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm dsawithsha1
+DSAWITHSHA1
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: DSAWITHSHA1
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm DSAWITHSHA1
+ecdsa-with-SHA1
+  hash a9993e364706816aba3e25717850c26c9cd0d89d
+  hmac 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm ecdsa-with-SHA1
+ecdsa-with-sha1
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: ecdsa-with-sha1
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm ecdsa-with-sha1
+ECDSA-WITH-SHA1
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: ECDSA-WITH-SHA1
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm ECDSA-WITH-SHA1
+id-rsassa-pkcs1-v1_5-with-sha3-256
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: id-rsassa-pkcs1-v1_5-with-sha3-256
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm id-rsassa-pkcs1-v1_5-with-sha3-256
+ID-RSASSA-PKCS1-V1_5-WITH-SHA3-256
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: ID-RSASSA-PKCS1-V1_5-WITH-SHA3-256
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm ID-RSASSA-PKCS1-V1_5-WITH-SHA3-256
+nope
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: nope
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm nope
+NOPE
+  hash throws Error undefined Digest method not supported
+  hmac throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: NOPE
+  hasher throws TypeError ERR_INVALID_ARG_TYPE Unsupported algorithm NOPE
+long hmac keys c548f808c8e0520f52340ecb4c103f3ae6c88df9aec486e1b2b780df183e243cfb53aaa3c98082ffff63f2e06afa0d3b 600057e6cba9ce3e078c0ae32f0ba3a786002d1da4853945c899aa7678f932f03c77200044e668ac0ae89029a08cae59b9ed7f93ffed3b39371e4d4f08c3c376 94dab4aaae17b71a79c36266a16147488772c04d34c4115ccea4e5f44a279b5a8164740b 0dc81cb8bb93b577792a4268a94c037211fc7e55
+hasher hmac blake2b256 e0bbaaa9d13d3b8d2a423448915eb5a2285dc49145d1978f8284e7c32a0f04a2
+hasher hmac blake2b512 05cc4815438d5cfe68fff446b8df57828cc96189de4b4e928e3f06d815d64e5bc15124a02ffd39859b3e2476da03bc0235ca86df623af2a5631779809e9fd04a
+hasher hmac blake2s256 throws TODOError undefined HMAC is not supported for this algorithm yet
+hasher hmac md4 32c43d6d6eda7f1e464711473b956b68
+hasher hmac md5 d2fe98063f876b03193afb49b4979591
+hasher hmac ripemd160 67fdce738ebfc7372bcd38f03c023b5746724d18
+hasher hmac sha1 4fd0b215276ef12f2b3e4c8ecac2811498b656fc
+hasher hmac sha224 f524670b7e34f31467de0aa96593861cf65117d414fb2d86158d760e
+hasher hmac sha256 9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab
+hasher hmac sha384 30ddb9c8f347cffbfb44e519d814f074cf4047a55d6f563324f1c6a33920e5edfb2a34bac60bdc96cd33a95623d7d638
+hasher hmac sha512 3926a207c8c42b0c41792cbd3e1a1aaaf5f7a25704f62dfc939c4987dd7ce060009c5bb1c2447355b3216f10b537e9afa7b64a4e5391b0d631172d07939e087a
+hasher hmac sha512-224 28bc0433ef684ea9877c2f2437aa0ccfc2e8eb3a9b4c731606877b4f
+hasher hmac sha512-256 f367b7ca80ab2cf85c23e58b73a8fd525a6fa2c66ff105804a2d4cf4df06e129
+hasher hmac sha3-224 09d9d74e7d761c8f27f07d8d35f95b9d160b6b4d8175329db68eea6d
+hasher hmac sha3-256 09b6dbab8d11795ca7c8d82f1cf91682013c7cb980abbb25473be4ae7f7b5683
+hasher hmac sha3-384 94f2aa7ae7c4b7b8fa4c612fdb422b3343811b13c8888257904f543995cdbcba5e49f10f8ed6f7b9ddc1b30b3828815c
+hasher hmac sha3-512 085e4e83503f40b82fef38438bc4905a55dbaa8c8878097a899db0b57ce7da57a368251c34474f60b3ebacb39b2edaca4b290456411c76ec7ab61944cfe2288e
+hasher hmac shake128 throws TODOError undefined HMAC is not supported for this algorithm yet
+hasher hmac shake256 throws TODOError undefined HMAC is not supported for this algorithm yet
+algorithms ["blake2b256","blake2b512","blake2s256","md4","md5","ripemd160","sha1","sha224","sha256","sha384","sha512","sha512-224","sha512-256","sha3-224","sha3-256","sha3-384","sha3-512","shake128","shake256"]
+getHashes ["md4","md5","ripemd160","sha1","sha224","sha256","sha384","sha512","sha512-224","sha512-256","sha3-224","sha3-256","sha3-384","sha3-512"]
+outputLength sha256 {"outputLength":32} ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+outputLength sha256 {"outputLength":16} throws Error ERR_OSSL_EVP_NOT_XOF_OR_INVALID_LENGTH error:06000087:public key routines:OPENSSL_internal:NOT_XOF_OR_INVALID_LENGTH
+outputLength shake128 {"outputLength":0} 
+outputLength shake128 {"outputLength":40} 5881092dd818bf5cf8a3ddb793fbcba74097d5c526a6d35f97b83351940f2cc844c50af32acd3f2c
+outputLength shake256 {"outputLength":5} 4833666013
+outputLength shake256 {"outputLength":-1} throws RangeError ERR_OUT_OF_RANGE The value of "options.outputLength" is out of range. It must be >= 0 && <= 4294967295. Received -1
+outputLength shake256 {"outputLength":1.5} throws RangeError ERR_OUT_OF_RANGE The value of "options.outputLength" is out of range. It must be an integer. Received 1.5
+outputLength shake256 {"outputLength":"8"} throws TypeError ERR_INVALID_ARG_TYPE The "options.outputLength" property must be of type number. Received type string ('8')
+outputLength sha3-256 {} 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+crypto.hash 483366601360a8771c6863080cc4114d8db44530f8f1e1ee4f94ea37e78b5739 Ophdp0/iJbIEXBcta9OQvYVfCG4+nVJbRr/iRRFDFTI=
+copy 5c828b33397f4762922e39a60c35699d2550466a52dd15ed44da37eb0bdc61e6 80084bf2fba02475726feb2cab2d8215eab14bc6bdd8bfb2c8151257032ecd8b
+copy after digest throws Error ERR_CRYPTO_HASH_FINALIZED Digest already called
+copy outputLength 5881092d 5881092dd818bf5cf8a3ddb793fbcba7 throws Error ERR_OSSL_EVP_NOT_XOF_OR_INVALID_LENGTH error:06000087:public key routines:OPENSSL_internal:NOT_XOF_OR_INVALID_LENGTH
+hasher resets 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824 486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+MD4 MD4 16 a448017aaf21d8525fc10ae87aa6729d Uint8Array(16) a448017aaf21d8525fc10ae87aa6729d true a448017aaf21d8525fc10ae87aa6729da5a5a5a5
+MD5 MD5 16 900150983cd24fb0d6963f7d28e17f72 Uint8Array(16) 900150983cd24fb0d6963f7d28e17f72 true 900150983cd24fb0d6963f7d28e17f72a5a5a5a5
+SHA1 SHA1 20 a9993e364706816aba3e25717850c26c9cd0d89d Uint8Array(20) a9993e364706816aba3e25717850c26c9cd0d89d true a9993e364706816aba3e25717850c26c9cd0d89da5a5a5a5
+SHA224 SHA224 28 23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7 Uint8Array(28) 23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7 true 23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7a5a5a5a5
+SHA256 SHA256 32 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad Uint8Array(32) ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad true ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ada5a5a5a5
+SHA384 SHA384 48 cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7 Uint8Array(48) cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7 true cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7a5a5a5a5
+SHA512 SHA512 64 ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f Uint8Array(64) ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f true ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49fa5a5a5a5
+SHA512_256 SHA512_256 32 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23 Uint8Array(32) 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23 true 53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23a5a5a5a5
+MD5 instance true 16 byteLength,hash,length,name,prototype byteLength,constructor,digest,update
+MD5 digest Uint8Array(16) 900150983cd24fb0d6963f7d28e17f72
+MD5 twice throws Error ERR_INVALID_STATE MD5 hasher already digested, create a new instance to digest again
+MD5 update after throws Error ERR_INVALID_STATE MD5 hasher already digested, create a new instance to update
+MD5 small target throws TypeError ERR_INVALID_ARG_TYPE TypedArray must be at least 16 bytes
+MD5 call throws TypeError ERR_ILLEGAL_CONSTRUCTOR MD5 constructor cannot be invoked without 'new'

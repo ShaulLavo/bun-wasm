@@ -7,6 +7,7 @@ import { gunzipSync } from "node:zlib";
 import { chromium, webkit, type Browser } from "playwright";
 import { buildSite, verifySite } from "./browser-guest-site";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 const root = resolve(import.meta.dir, "..");
 const fixture = join(root, "tests/fixtures/cli-hot-run");
@@ -65,7 +66,7 @@ async function scenario(browser: Browser, url: string): Promise<void> {
   const context = await browser.newContext();
   try {
         const page = await context.newPage();
-        await page.goto(`${url}?engine=browser&prompt=off&mode=memory`);
+        await navigateTestPage(page, `${url}?engine=browser&prompt=off&mode=memory`);
         expect(await ready(page)).toContain("ready");
         for (const file of readdirSync(fixture)) {
           if (!/\.(ts|cjs|html|json)$/.test(file)) continue;

@@ -1,0 +1,11 @@
+
+index.test.ts:
+(pass) toEqual compares an array's enumerable symbol keys
+(pass) other array keys are still ignored
+(pass) toStrictEqual needs the same symbols on both sides
+(pass) Bun.deepEquals uses the same rule
+
+ 4 pass
+ 0 fail
+ 23 expect() calls
+Ran 4 tests across 1 file. [TIME]

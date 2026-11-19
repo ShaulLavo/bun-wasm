@@ -36,9 +36,12 @@ extern "C" void bunsm_vm_fatal(const char* text) {
   bunsm_host_fatal(text, strlen(text));
 }
 extern "C" void* bunsm_stack_base() { return reinterpret_cast<void*>(stackBase); }
+// Tiers 0 and 1 are the interpreter and PBL safe points. Tier 2 is irregexp's backtracking,
+// already batched 8,192 backtracks per call (spidermonkey-wasi.patch), so it is not counted
+// and asks the host at once, as in engine.cpp.
 extern "C" void bunsm_poll_interrupt(JSContext* cx, uint8_t tier) {
   if (!interruptible) return;
-  if (++checks[tier] % 10000 != 0) return;
+  if (tier < 2 && ++checks[tier] % 10000 != 0) return;
   if (!bunsm_host_interrupt()) return;
   terminating = true;
   JS_RequestInterruptCallback(cx);
@@ -121,7 +124,7 @@ extern "C" double bsm_answer(bsm_handle handle) {
   return answer.toNumber();
 }
 extern "C" void bsm_gc() { JS_GC(context); }
-extern "C" uint32_t bsm_poll_count(uint8_t tier) { return checks[tier]; }
+extern "C" uint32_t bsm_poll_count(uint8_t tier) { return tier < 2 ? checks[tier] : 0; }
 extern "C" uint32_t bsm_pbl_entries() { return pblEntries; }
 extern "C" void bsm_force_oom() { void* p = moz_xmalloc(SIZE_MAX - 65535); free(p); }
 extern "C" void bsm_shutdown() {

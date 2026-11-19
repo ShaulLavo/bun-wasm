@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { chromium, firefox, webkit } from "playwright";
 import { indexTransactions, quotaTransaction, refusedQuotaTransaction } from "../sandbox/tests/workspace-index";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 declare global {
   var sandboxIndexChecks: {
@@ -25,7 +26,7 @@ async function nativeTransactions(engine: typeof chromium, origin: string): Prom
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
-    await page.goto(origin);
+    await navigateTestPage(page, origin);
     await page.waitForFunction(() => !!globalThis.sandboxIndexChecks);
     expect(await page.evaluate(() => sandboxIndexChecks.indexTransactions())).toHaveLength(6);
     if (engine !== chromium) return;
@@ -37,7 +38,7 @@ async function quotaControl(browser: Awaited<ReturnType<typeof chromium.launch>>
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
-    await page.goto(origin);
+    await navigateTestPage(page, origin);
     await page.waitForFunction(() => !!globalThis.sandboxIndexChecks);
     const cdp = await context.newCDPSession(page);
     // Cap before the first IndexedDB write so Chromium never caches a large space grant.

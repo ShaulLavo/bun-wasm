@@ -11,6 +11,7 @@ import { existsSync } from "node:fs";
 import type { Browser, Page } from "playwright";
 import { cleanupInterruptResources, finishInterruptCleanup } from "waffle/testing/interrupt-browser-runner-control";
 import { processBundle } from "../scripts/ci-process-bundles";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const root = resolve(import.meta.dir, "../..");
 const args = process.argv.slice(2), benchmark = args.includes("--benchmark");
@@ -151,7 +152,7 @@ try {
       launching = engine.launch({ headless: true, downloadsPath: join(scratch!, "downloads"), tracesDir: join(scratch!, "traces") }); browser = await launching;
       page = await browser.newPage(); const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
-      await page.goto(url);
+      await navigateTestPage(page, url);
       await page.waitForFunction(() => !!(globalThis as any).interruptHarness);
       const result = await page.evaluate(async options => await (globalThis as any).interruptHarness.run(options), { benchmark, repetitions });
       assert.equal(result.ok, true); assert.equal(result.rescues.length, 5); assert.equal(result.cancellations.length, repetitions * 10); assert.deepEqual(errors, []);

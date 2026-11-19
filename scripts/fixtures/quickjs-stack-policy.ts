@@ -24,6 +24,18 @@ const navigations = new Set<string>();
 let opened = 0;
 let closed = 0;
 let cleanups = 0;
+// The WebKit navigation helper's pass-through route: one per fresh page, matching only that page's URL.
+const activeRoutes = new Set<(url: URL) => boolean>();
+let routed = 0;
+async function route(matches: (url: URL) => boolean, _handler: unknown, options?: unknown): Promise<void> {
+  assert.equal(options, undefined);
+  assert.equal(activeRoutes.size, 0, "the previous navigation's route must be removed");
+  activeRoutes.add(matches);
+  routed++;
+}
+async function unroute(matches: (url: URL) => boolean): Promise<void> {
+  assert.ok(activeRoutes.delete(matches), "unroute must remove the route it registered");
+}
 async function navigate(url: string, options: { waitUntil: string; timeout: number }): Promise<void> {
   const target = new URL(url);
   const id = target.searchParams.get(navigationParameter);
@@ -31,6 +43,10 @@ async function navigate(url: string, options: { waitUntil: string; timeout: numb
   assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.ok(!navigations.has(id), "each fresh page needs its own request identity");
   navigations.add(id);
+  const [matches] = activeRoutes;
+  assert.ok(matches, "the WebKit pass-through route must be registered before goto");
+  assert.ok(matches(new URL(url)), "the WebKit pass-through route must match the navigation");
+  assert.equal(matches(new URL("/bun.wasm", url)), false);
   target.searchParams.delete(navigationParameter);
   assert.equal(target.href, "https://stack.test/?engine=quickjs&prompt=off&mode=memory");
   assert.deepEqual(options, { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -51,7 +67,7 @@ const browser = {
       },
       async newPage() {
         files.clear();
-        return Object.assign(events, { goto: navigate });
+        return Object.assign(events, { goto: navigate, route, unroute, context: () => ({ browser: () => browser }) });
       },
       async close() { closed++; assert.deepEqual(events.eventNames(), []); },
     };
@@ -102,6 +118,8 @@ assert.deepEqual(visitedFixtures, fixtures.map(fixture => fixture.name));
 assert.equal(opened, expectedCases + (budget ? 0 : 1));
 assert.equal(closed, opened);
 assert.equal(navigations.size, opened);
+assert.equal(routed, opened);
+assert.equal(activeRoutes.size, 0);
 assert.equal(cleanups, 1);
 assert.equal(process.env.BUN_WASM_NAVIGATION_LOG, join(scratch, "navigation.jsonl"));
 assert.deepEqual(inputs, originalModes.map(mode => ({ mode, depth: mode === "bound" ? 2000 : 200000 })));

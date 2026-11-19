@@ -2,7 +2,6 @@
   "use strict";
   const threads = internal.require("worker_threads");
   const process = internal.require("process");
-  const blobs = new Map<string, Blob>();
   type Phase = "running" | "terminating" | "closed";
   type Handler = ((event: MessageEvent) => unknown) | null;
   type GlobalHandler = { call(receiver: unknown, event: Event): unknown };
@@ -71,7 +70,7 @@
     const specifier = String(value);
     if (specifier.startsWith("data:")) return { filename: new URL(specifier), eval: false };
     if (specifier.startsWith("blob:")) {
-      const blob = blobs.get(specifier);
+      const blob = internal.require("object_urls").resolveObjectURL(specifier);
       if (!blob) return entryFailure(`ModuleNotFound resolving "${specifier}" (entry point)`);
       const path = blob instanceof File ? blob.name : /typescript/.test(blob.type) ? "worker.ts" : "worker.js";
       try { return { filename: internal.native.workerSource(new TextDecoder().decode(blob._bytes()), path), eval: true }; }
@@ -224,11 +223,5 @@
   }
   return {
     Worker, initialize,
-    createObjectURL(blob: Blob) {
-      if (!(blob instanceof Blob)) throw new TypeError("Expected a Blob");
-      const url = "blob:bun-wasm:" + internal.randomUUID();
-      blobs.set(url, blob); return url;
-    },
-    revokeObjectURL(url: string) { blobs.delete(String(url)); },
   };
 })

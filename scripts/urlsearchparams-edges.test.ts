@@ -23,7 +23,7 @@ test("shared URLSearchParams and node:url match the native edge fixture", () => 
       if (name === "text_decoder") return TextDecoder;
       if (name === "web_brand") return () => {};
       const source = join(root, `crates/bunwasm-runtime/src/js/${name}.ts`);
-      if (name === "url_search_params") return runInNewContext(emitted(source), context)();
+      if (name === "url_search_params" || name === "url_pairs" || name === "url_errors") return runInNewContext(emitted(source), context)();
       return {};
     },
     describe: (input: object) => `an instance of ${input.constructor.name}`,

@@ -1,0 +1,2 @@
+bun test vVERSION
+Error: describe() expects first argument to be a named class, named function, number, or string

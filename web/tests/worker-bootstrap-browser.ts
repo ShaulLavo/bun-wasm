@@ -1,6 +1,7 @@
 // source env.sh && bun /work/platform-production/heavy/current/run.js --class browser \
 //   bun-worker-bootstrap -- bun web/tests/worker-bootstrap-browser.ts chromium firefox webkit
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
@@ -46,7 +47,7 @@ try {
     const page = await browser.newPage(), errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     try {
-      await page.goto(`http://127.0.0.1:${port}/`);
+      await navigateTestPage(page, `http://127.0.0.1:${port}/`);
       await page.waitForFunction(() => Reflect.get(globalThis, "workerBootstrapResult"), undefined, { timeout: 30_000 });
       const result = await page.evaluate(() => Reflect.get(globalThis, "workerBootstrapResult"));
       console.log(JSON.stringify({ browser: name, version: browser.version(), result, pageErrors: errors }));

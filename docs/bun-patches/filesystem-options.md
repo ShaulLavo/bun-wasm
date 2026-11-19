@@ -46,4 +46,34 @@ and promise delivery. The direct split error writer is documented separately
 in [Native error reply encoding](native-error-encoding.md); it changes no stat
 option handling or JavaScript Error construction.
 
+Open flags and file modes are validated as Node's `stringToFlags`, `validateInt32`
+and `parseFileMode` (`lib/internal/fs/utils.js`, `lib/internal/validators.js`) do,
+checked against native Bun 1.4.4: an unknown flag string reports the value through
+`util.inspect` (`Received 'W'`), a numeric flag must be an int32 (`ERR_OUT_OF_RANGE`
+otherwise), and a mode is an octal digit string or a uint32, with
+`ERR_INVALID_ARG_VALUE`, `ERR_INVALID_ARG_TYPE` or `ERR_OUT_OF_RANGE`. `openSync`,
+`mkdirSync` and `writeFileSync` validate their mode; WASI still applies none. The
+callback forms throw these three argument-validation codes synchronously, as Node
+validates before it queues the operation, while system errors still reach the
+callback. `fs_options.ts` takes the inspector from `node_fs.js`, which loads it only
+when an error message needs it. The `fs-flag-mode-validation` fixture covers these
+cases.
+
+`writeSync`, `fs.write` and `writevSync` treat only a non-negative safe integer as a
+file position, as Node's `GetOffset` in `src/node_file.cc` does; NaN, ±Infinity,
+fractions, numbers past `Number.MAX_SAFE_INTEGER`, negative numbers and BigInts
+write at the current file offset instead of being truncated to a position. The
+`fs-write-position` fixture compares buffer, string, vector and callback writes
+with native Bun 1.4.4.
+
+The `encoding` option of `readFile`, `writeFile`, `appendFile`, `readdir`,
+`readlink`, `realpath` and `mkdtemp` (sync, callback and promise forms) is checked
+by `encodingOf`: anything `Buffer.isEncoding` rejects, other than `"buffer"`,
+throws `ERR_INVALID_ARG_VALUE` with native Bun 1.4.4's message
+(`encoding 'test' is an invalid encoding`), synchronously for the callback forms.
+`fs.ReadStream` and `fs.WriteStream` use Node's wording
+(`The argument 'encoding' is invalid encoding. Received 'test'`). `"buffer"` reads
+return a Buffer, and a string written with it becomes Latin-1 bytes, as in Bun.
+The `fs-encoding-validation` fixture compares these with native Bun.
+
 Waffle at `b20fad173ebaa225cb87c51776f35edaaafd4a40` already supplies create, exclusive, truncate and append semantics. NONBLOCK support remains Waffle #111; unsupported open bits fail explicitly here. Link-count accuracy remains Waffle #115. Cold persistent-file hydration remains Waffle #112. Bigint representation does not repair incorrect underlying metadata. This change does not implement those capabilities in the consumer.

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { readFile } from "node:fs/promises";
 import { playwright, ready, run, session, writeFile } from "./playground.mjs";
 const fixtures = new URL("../../tests/async-context-runtime/", import.meta.url);
@@ -16,7 +17,7 @@ async function exercise(name: string, appUrl: string): Promise<void> {
   const context = await browser.newContext();
   const page = await context.newPage();
   try {
-    await page.goto(`${appUrl}?engine=browser&prompt=off`);
+    await navigateTestPage(page, `${appUrl}?engine=browser&prompt=off`);
     assert.match(await ready(page), /ready · Browser \(native\)/);
     for (const [file, source] of sources) await writeFile(page, `/home/user/prepare/${file}`, source);
     for (const [fixture, expected] of cases) {

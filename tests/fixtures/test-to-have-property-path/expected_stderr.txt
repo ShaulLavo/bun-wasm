@@ -1,0 +1,9 @@
+
+index.test.ts:
+(pass) string paths follow Bun's lookup
+(pass) array paths and argument checks
+
+ 2 pass
+ 0 fail
+ 52 expect() calls
+Ran 2 tests across 1 file. [TIME]

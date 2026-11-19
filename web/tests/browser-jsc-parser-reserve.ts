@@ -12,6 +12,7 @@ import { chainCapacities, chainMaximum, guestStackSettings, stackOutcome, type G
 import { jscStackBudgets } from "../src/engine-stack-budget.ts";
 import { deeper, pageHost, type PageHost } from "./parser-reserve-ownership.ts";
 import { playwright, ready, run, session, web, writeFile } from "./playground.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const task = session("bun-wasm-jsc-parser-reserve-");
 const probe = readFileSync(new URL("../../tests/stack-depth.js", import.meta.url), "utf8");
@@ -121,7 +122,7 @@ async function opened(browser: Browser, url: string, engine: string, check: (pag
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
-    await page.goto(`${url}?engine=${engine}&prompt=off&mode=memory`);
+    await navigateTestPage(page, `${url}?engine=${engine}&prompt=off&mode=memory`);
     await ready(page, 120_000);
     await writeFile(page, "/home/user/depth.js", probe);
     await check(page);

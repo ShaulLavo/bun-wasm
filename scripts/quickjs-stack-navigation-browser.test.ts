@@ -82,19 +82,25 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
   let release = () => {};
   const held = new Promise<void>(resolve => { release = resolve; });
   let browser;
+  let navigations = 0;
   try {
     browser = await engine.launch();
     const page = await browser.newPage();
     const target = `${server.url}?engine=${consumer.name}&prompt=off&mode=memory`;
     const timeout = new errors.TimeoutError("fixture navigation timeout");
-    if (mode === "timeout") page.goto = async () => { throw timeout; };
+    const realGoto = page.goto.bind(page);
+    if (mode === "timeout") page.goto = async () => { navigations++; throw timeout; };
     if (mode === "connection") await page.route("**/*", route => route.abort());
     if (mode === "sink") await page.close();
     if (mode === "publication") await page.route("**/*", route => serveFixture(route, held, false));
+    const routes = mode === "sink" ? undefined : spyRoutes(page);
     let failure: unknown;
     try { await consumer.open(page, String(server.url)); }
     catch (error) { failure = error; }
     expect(failure).toBeInstanceOf(Error);
+    // The WebKit route is removed even when goto fails before it fires (timeout) or the request is aborted.
+    if (routes) expect(routes.calls).toEqual(engine.name() === "webkit" ? ["route", "unroute"] : []);
+    const handledBefore = routes?.handled() ?? 0;
     expect(documents).toBe(1);
     expect(readFileSync(occupied, "utf8")).toBe("occupied");
     if (mode === "sink") {
@@ -126,8 +132,13 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
     ]) } });
     if (mode === "timeout") {
       expect(failure).toBe(timeout);
+      expect(navigations).toBe(1);
       expect(report).toMatchObject({ pageState: { outcome: "ok", value: { readyState: "complete", status: null, published: false } } });
     }
+    // The route is really gone: navigating to the same URL again runs none of the recorded handlers.
+    // Commit is enough: the publication fixture holds a resource, so load never fires.
+    await realGoto(target, { waitUntil: "commit" }).catch(() => {});
+    expect(routes?.handled()).toBe(handledBefore);
   } finally {
     release();
     const stopped = await Promise.allSettled([browser?.close(), server.stop(true)]);
@@ -138,11 +149,85 @@ async function navigationFailure(engine: BrowserType, consumer: Consumer, mode: 
   }
 }
 
+type RouteHandler = Parameters<Page["route"]>[1];
+
+/**
+ * Records route registrations and removals made after this call, and counts how often their handlers run,
+ * so a later navigation can show that no registered route is still intercepting.
+ */
+function spyRoutes(page: Page): { calls: string[]; handled: () => number } {
+  const route = page.route.bind(page);
+  const unroute = page.unroute.bind(page);
+  const calls: string[] = [];
+  const wrappers = new Map<RouteHandler, RouteHandler>();
+  let handled = 0;
+  page.route = async (url, handler, options) => {
+    calls.push(options?.times === undefined ? "route" : `route times=${options.times}`);
+    const counted: RouteHandler = (...args) => { handled++; return handler(...args); };
+    wrappers.set(handler, counted);
+    return route(url, counted, options);
+  };
+  page.unroute = async (url, handler) => {
+    calls.push("unroute");
+    return unroute(url, handler && (wrappers.get(handler) ?? handler));
+  };
+  return { calls, handled: () => handled };
+}
+
+// WebKit bug 325840 workaround: a cross-origin-isolated document from a real server is admitted through a
+// pass-through route on WebKit only, removed after the navigation. With a context route, the pass-through
+// must hand the document to it, and that handler's own continue() must still succeed.
+async function isolatedDocument(engine: BrowserType, consumer: Consumer, withContextRoute = false): Promise<void> {
+  const isolation = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" };
+  const body = `<span id="status">loading</span><script>globalThis.playground = {}; document.querySelector('#status').textContent = 'ready';</script>`;
+  let documents = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname === "/later") return new Response("later", { headers: isolation });
+      documents++;
+      return new Response(body, { headers: { ...isolation, "content-type": "text/html" } });
+    },
+  });
+  const browser = await engine.launch();
+  try {
+    const context = await browser.newContext();
+    const continued: string[] = [];
+    const rejected: string[] = [];
+    if (withContextRoute) await context.route("**/*", route => route.continue().then(
+      () => { continued.push(new URL(route.request().url()).pathname); },
+      (error: unknown) => { rejected.push(String(error)); },
+    ));
+    const page = await context.newPage();
+    const routes = spyRoutes(page);
+    await consumer.open(page, String(server.url));
+    expect(await page.textContent("#status")).toBe("ready");
+    expect(routes.calls).toEqual(engine.name() === "webkit" ? ["route", "unroute"] : []);
+    // On WebKit the pass-through saw the document once; on other engines nothing was routed.
+    expect(routes.handled()).toBe(engine.name() === "webkit" ? 1 : 0);
+    expect(rejected).toEqual([]);
+    expect(continued).toEqual(withContextRoute ? ["/"] : []);
+    expect(documents).toBe(1);
+    expect(page.url()).toBe(`${server.url}?engine=${consumer.name}&prompt=off&mode=memory`);
+    expect(await page.evaluate(() => crossOriginIsolated)).toBe(true);
+    expect(await page.evaluate(() => fetch("/later").then(response => response.text()))).toBe("later");
+    // The route is really gone: a second navigation to the same URL runs no recorded handler.
+    const handled = routes.handled();
+    await page.goto(page.url());
+    expect(documents).toBe(2);
+    expect(routes.handled()).toBe(handled);
+  } finally {
+    await Promise.allSettled([browser.close(), server.stop(true)]);
+  }
+}
+
 function registerControls(engine: BrowserType, consumer: Consumer) {
   const label = `${engine.name()} ${consumer.name}`;
   test(`${label}: readiness does not wait for an unrelated load resource`, () => heldResource(engine, consumer), 10_000);
   test(`${label}: runtime publication failure retains document and held-resource stages`, () => navigationFailure(engine, consumer, "publication"), 30_000);
   test(`${label}: a navigation timeout records page and independent server state without retrying`, () => navigationFailure(engine, consumer, "timeout"), 30_000);
+  test(`${label}: a cross-origin-isolated document opens without a lingering route`, () => isolatedDocument(engine, consumer), 30_000);
+  test(`${label}: a context route still continues the cross-origin-isolated document`, () => isolatedDocument(engine, consumer, true), 30_000);
   test(`${label}: a navigation failure records browser requests`, () => navigationFailure(engine, consumer, "connection"), 30_000);
   test(`${label}: a diagnostic write failure preserves the navigation error`, () => navigationFailure(engine, consumer, "sink"), 30_000);
 }

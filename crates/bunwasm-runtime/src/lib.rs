@@ -36,6 +36,7 @@ pub mod install;
 mod intl;
 mod modules;
 mod natives;
+mod node_digest;
 mod node_path;
 #[cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 pub(crate) mod ops;

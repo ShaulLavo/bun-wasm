@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
 import { gzipSync } from "node:zlib";
 import { installToolsRoute } from "../web/tests/tools-route.ts";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 const rejected = gzipSync("intentionally different guest");
 const verified = gzipSync("verified tools fixture");
@@ -23,11 +24,11 @@ test.each(["chromium", "firefox", "webkit"] as const)("%s tools route keeps exac
     const context = await browser.newContext();
     const page = await context.newPage();
     const useVerifiedTools = await installToolsRoute(page, rejected);
-    await page.goto(server.url.href);
+    await navigateTestPage(page, server.url.href);
     expect((await response(page, "/other.wasm.gz")).bytes).toEqual(Array.from(verified));
     expect((await response(page, "/bun-tools.wasm")).bytes).toEqual(Array.from(verified));
     const peer = await page.context().newPage();
-    await peer.goto(server.url.href);
+    await navigateTestPage(peer, server.url.href);
     expect((await response(peer, "/bun-tools.wasm.gz?v=peer")).bytes).toEqual(Array.from(verified));
     for (const path of ["/bun-tools.wasm.gz", "/bun-tools.wasm.gz?v=expected"]) {
       expect(await response(page, path)).toEqual({ status: 200, type: "application/wasm", bytes: Array.from(rejected) });
@@ -89,7 +90,7 @@ test("early tools routing switches payloads while an ordinary worker terminates 
     browser = await chromium.launch();
     const page = await browser.newPage();
     const useVerifiedTools = await installToolsRoute(page, rejected);
-    await page.goto(server.url.href);
+    await navigateTestPage(page, server.url.href);
     const { closed } = await terminateWorker(page);
     expect((await response(page, "/bun-tools.wasm.gz?v=negative")).bytes).toEqual(Array.from(rejected));
     useVerifiedTools();
