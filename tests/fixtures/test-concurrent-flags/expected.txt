@@ -1,0 +1,6 @@
+bun test vVERSION
+peaks [1,2,3,3,3,3]
+start a
+start b
+end a
+end b

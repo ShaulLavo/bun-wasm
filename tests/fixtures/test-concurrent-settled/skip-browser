@@ -1,0 +1,1 @@
+The Browser host cannot drain its native promise jobs, so it counts a callback still unsettled after three microtask turns as waiting (see docs/bun-patches/test-concurrent-execution.md).

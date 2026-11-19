@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-concurrent-stores",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

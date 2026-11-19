@@ -34,7 +34,7 @@ const runnerReturn = "return { exports, run };";
 function exposeOrigin(source: string): string {
   if (source.split(runnerReturn).length !== 2) throw new Error(`bun_test.js must contain exactly one \`${runnerReturn}\``);
   return source.replace(runnerReturn,
-    "return { exports, run, getExpectationOrigin: () => Object.freeze({ test: currentTest, invocation: activeInvocation, file: activeFile }) };");
+    "return { exports, run, getExpectationOrigin: () => Object.freeze({ test: running().test, invocation: running().invocation, file: activeFile }) };");
 }
 
 async function runner(load: (api: API, file: string, uncaught: (error: unknown) => void, origin: () => Origin) => unknown, files = ["/control.test.ts"], preloads: string[] = [], args: readonly string[] = [], onWrite?: (name: string, origin: Origin) => void) {
@@ -60,7 +60,10 @@ async function runner(load: (api: API, file: string, uncaught: (error: unknown) 
   };
   const internal = {
     native: { now: () => performance.now(), cwd: () => "/", stat: () => ({ mode: 0o100644 }),
+      getAsyncContext: () => undefined,
       writeStdout() {}, writeStderr: (value: string) => { stderr += value; } },
+    // No async context in this harness: every frame is empty and runs its callback directly.
+    runInContext: (_context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) => Reflect.apply(fn, receiver, args),
     require: (name: string) => modules[name],
     realTimers: { setTimeout, clearTimeout },
     fakeTimers: { api: {} },
