@@ -73,7 +73,8 @@ another pending signal.
 These adapters and the browser proof/benchmark harness are original implementations,
 not copied source. JSC polling covers JS safe points and Yarr backtracking, not other
 single uninterrupted native operations; QuickJS retains its existing native-operation
-interrupt polls.
+interrupt polls, and its regexp matcher now shares the interpreter's countdown across matches
+(recorded in [QuickJS](quickjs.md)), for the same global replace and split loops.
 
 The original `web/tests/engine-interruption-stop.ts` proof adapter holds a requested
 native stop pending until the production bootstrap has returned and its genuine

@@ -3400,7 +3400,7 @@ int lre_exec(uint8_t **capture,
              int cbuf_type, void *opaque)
 {
     REExecContext s_s, *s = &s_s;
-    int re_flags, i, ret;
+    int re_flags, i, ret, *counter;
     const uint8_t *cptr;
 
     re_flags = lre_get_flags(bc_buf);
@@ -3411,7 +3411,6 @@ int lre_exec(uint8_t **capture,
     s->cbuf_type = cbuf_type;
     if (s->cbuf_type == 1 && s->is_unicode)
         s->cbuf_type = 2;
-    s->interrupt_counter = INTERRUPT_COUNTER_INIT;
     s->opaque = opaque;
 
     s->stack_buf = s->static_stack_buf;
@@ -3428,7 +3427,15 @@ int lre_exec(uint8_t **capture,
         }
     }
 
-    ret = lre_exec_backtrack(s, capture, bc_buf + RE_HEADER_LEN, cptr);
+    /* bun-wasm: the countdown is the caller's and persists across matches, so a
+       native loop of many cheap matches (a global replace or split) still polls;
+       each match start counts as one step. */
+    counter = lre_interrupt_counter(opaque);
+    s->interrupt_counter = *counter;
+    ret = lre_poll_timeout(s);
+    if (!ret)
+        ret = lre_exec_backtrack(s, capture, bc_buf + RE_HEADER_LEN, cptr);
+    *counter = s->interrupt_counter;
 
     if (s->stack_buf != s->static_stack_buf)
         lre_realloc(s->opaque, s->stack_buf, 0);

@@ -69,6 +69,8 @@ int lre_parse_escape(const uint8_t **pp, int allow_utf16);
 bool lre_check_stack_overflow(void *opaque, size_t alloca_size);
 /* must be provided by the user, return non zero if time out */
 int lre_check_timeout(void *opaque);
+/* bun-wasm: must be provided by the user, the poll countdown that persists across matches */
+int *lre_interrupt_counter(void *opaque);
 void *lre_realloc(void *opaque, void *ptr, size_t size);
 
 /* JS identifier test */
