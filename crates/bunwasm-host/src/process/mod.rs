@@ -8,6 +8,7 @@ mod stdio;
 mod tests;
 pub mod wasi;
 
+pub use executables::ProcessRoots;
 use identity::Membership;
 pub use identity::{AdmittedProcess, ProcessKind};
 pub use stdio::{Cancellation, FinalOutcome, Stdio};

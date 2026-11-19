@@ -1,6 +1,6 @@
 import { pairedEngineKinds } from "../../src/engine-kind.ts";
 import { isToolCommand } from "../src/tool-command.ts";
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, readSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
@@ -108,11 +108,62 @@ function nodeShellFiles(root: string, shell?: NodeShellModules) {
   for (const path of shellPaths.concat(envPaths)) writeFileSync(join(root, path), new Uint8Array());
 }
 
+/** Roots are `<prefix><pid>-<random>`, so a later host can tell whether their owner still runs. */
+const executableRootPrefix = "bun-wasm-node-executables-";
+/** Roots this process created and has not removed. The exit hook covers hosts that exit undisposed. */
+const liveExecutableRoots = new Set<string>();
+const sweptExecutableParents = new Set<string>();
+let exitHookInstalled = false;
+
+function removeExecutableRoot(root: string) {
+  liveExecutableRoots.delete(root);
+  rmSync(root, { recursive: true, force: true });
+}
+
+function removeLiveExecutableRoots() {
+  for (const root of liveExecutableRoots) removeExecutableRoot(root);
+}
+
+function processExists(pid: number) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+}
+
+/** Remove roots of hosts that died without cleanup (killed by a signal). Roots of running
+ * processes, and roots another user owns, stay. */
+function sweepDeadExecutableRoots(parent: string) {
+  if (sweptExecutableParents.has(parent)) return;
+  sweptExecutableParents.add(parent);
+  let names: string[];
+  try { names = readdirSync(parent); } catch { return; }
+  const user = process.getuid?.();
+  for (const name of names) {
+    if (!name.startsWith(executableRootPrefix)) continue;
+    const pid = Number(/^(\d+)-./.exec(name.slice(executableRootPrefix.length))?.[1] ?? 0);
+    if (!pid || processExists(pid)) continue;
+    const root = join(parent, name);
+    try {
+      const stat = lstatSync(root);
+      if (stat.isDirectory() && stat.uid === user) rmSync(root, { recursive: true, force: true });
+    } catch { /* Another host removed it first. */ }
+  }
+}
+
+function createExecutableRoot() {
+  const parent = process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir();
+  sweepDeadExecutableRoots(parent);
+  const root = mkdtempSync(join(parent, `${executableRootPrefix}${process.pid}-`));
+  if (!exitHookInstalled) process.once("exit", removeLiveExecutableRoots);
+  exitHookInstalled = true;
+  liveExecutableRoots.add(root);
+  return root;
+}
+
 function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngineModules, shell?: NodeShellModules) {
   for (const guest of Object.keys(preopens)) if (guest === "/bin" || guest.startsWith("/bin/") || guest === "/opt/bun" || guest.startsWith("/opt/bun/") || (shell && (guest === "/usr/bin" || guest.startsWith("/usr/bin/")))) {
     throw new Error(`reserved executable mount: ${guest}`);
   }
-  const root = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-node-executables-"));
+  const root = createExecutableRoot();
   try {
     mkdirSync(join(root, "bin")); mkdirSync(join(root, "opt/bun"), { recursive: true });
     for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(root, "bin", name), new Uint8Array());
@@ -125,8 +176,8 @@ function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngi
     const mounted: Record<string, string> = { "/": preopens["/"] ?? root, "/bin": join(root, "bin"), "/opt/bun": join(root, "opt/bun") };
     if (shell) mounted["/usr/bin"] = join(root, "usr/bin");
     for (const [guest, host] of Object.entries(preopens)) if (guest !== "/") mounted[guest] = host;
-    return { preopens: mounted, dispose() { rmSync(root, { recursive: true, force: true }); } };
-  } catch (error) { rmSync(root, { recursive: true, force: true }); throw error; }
+    return { preopens: mounted, dispose() { removeExecutableRoot(root); } };
+  } catch (error) { removeExecutableRoot(root); throw error; }
 }
 
 export function validateNodeCwd(preopens: Record<string, string>, cwd: string): void {
@@ -303,10 +354,11 @@ export class NodeProcessBroker {
     const stops = Array.from(this.workers.values(), worker => Promise.resolve().then(() => worker.terminate()));
     this.workers.clear();
     void Promise.allSettled(stops).then(results => {
+      // Every stop has settled, so no worker of this broker still reads the executable files.
+      this.files.dispose();
       const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
       if (failures.length === 1) throw failures[0];
       if (failures.length) throw new AggregateError(failures, "Node process stops failed");
-      this.files.dispose();
     }).then(completion.resolve, completion.reject);
     return this.disposal;
   }
