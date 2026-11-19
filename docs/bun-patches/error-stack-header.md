@@ -40,11 +40,12 @@ changed before the first read appears, one changed after does not, as in Bun.
 maps positions back through source maps and moves a call's column to its callee, and
 prints it as Bun's error printer does. The runtime's own `bun-wasm:` frames and native
 frames stay, printed as the QuickJS formatter prints them; Bun's error printer still
-leaves them out. As in Bun, eval code prints as `eval (unknown)`, and a frame with no
-source, such as a `new Function` body, is left out.
+leaves them out. A frame with no source prints without a position: eval code as Bun's
+`eval (unknown)`, a `new Function` body as `anonymous (unknown)`. Bun leaves the latter
+out; it stays here because `callerSourceOrigin` reads it as an opaque caller.
 
-Mapping a frame asks the host for its source map and source line, which made a 52-frame
-read about 40 times slower than the native text. Formatted frames are cached by their raw
+Mapping a frame asks the host for its source map and source line, which made a 54-frame
+read about 50 times slower than the native text. Formatted frames are cached by their raw
 text. The cache empties when `sourceGeneration` moves: `crates/bunwasm-runtime/src/modules.rs`
 bumps it whenever a loaded source or position map changes, including a file reloaded after
 `delete require.cache[path]`. A hot run maps through changing revisions and skips the cache.

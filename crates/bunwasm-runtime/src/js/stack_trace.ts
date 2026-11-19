@@ -68,14 +68,16 @@
   const topLevelCode = new Set(["", "global code", "module code", "eval code", "__bunwasm_cjs__"]);
 
   // One line of JavaScriptCore's text as QuickJS's formatter prints it: application frames
-  // mapped back to their source, the runtime's own and native frames as they are. Like Bun,
-  // eval code prints as `eval (unknown)` and other frames without a source are left out.
+  // mapped back to their source, the runtime's own and native frames as they are. A frame with
+  // no source (eval code, a `new Function` body) has no position: eval code prints as Bun's
+  // `eval (unknown)`. Caller-origin checks read these frames as opaque, so none is left out.
   function jscFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
     const runtime = /^(.*?)@(bun-wasm:.*:\d+:\d+)$/.exec(line);
     if (runtime) return topLevelCode.has(runtime[1]!) ? runtime[2]! : `${runtime[1]} (${runtime[2]})`;
     const nativeCode = /^(.*)@\[native code\]$/.exec(line);
     if (nativeCode) return `${nativeCode[1] || "<anonymous>"} (native)`;
-    if (line.endsWith("@")) return line === "eval code@" ? "eval (unknown)" : "";
+    const unlocated = /^(.*)@$/.exec(line);
+    if (unlocated) return `${topLevelCode.has(unlocated[1]!) ? "eval" : unlocated[1]} (unknown)`;
     const frame = inspect.parseStack(line)[0];
     return frame ? inspect.frameText(frame) : "";
   }

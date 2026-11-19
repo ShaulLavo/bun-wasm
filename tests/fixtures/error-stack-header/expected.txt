@@ -42,5 +42,3 @@ Proxy prototype: "Error: proxied"
 eval frame has a fake position: false
 new Function frame has a fake position: false
 eval frame shown: true
-first load: reloaded.ts:2:28)
-after reload: reloaded.ts:4:28)

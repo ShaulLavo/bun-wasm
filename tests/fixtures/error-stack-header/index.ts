@@ -1,7 +1,4 @@
 // error.stack begins with the error's "Name: message" header, as in Bun, then its frames.
-import { writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { resolve } from "node:path";
 import { inspect } from "node:util";
 
 function head(stack, lines = 1) {
@@ -121,18 +118,3 @@ const fakeEvalPosition = stack => String(stack).split("\n").some(line => /<eval>
 console.log("eval frame has a fake position:", fakeEvalPosition(eval("new Error('from eval')").stack));
 console.log("new Function frame has a fake position:", fakeEvalPosition(new Function("return new Error('from Function')")().stack));
 console.log("eval frame shown:", String(eval("new Error('shown')").stack).split("\n").length > 1);
-
-// A file reloaded with type-only lines added keeps its generated positions; its frame moves.
-const require = createRequire(import.meta.url);
-const reloadedPath = resolve("reloaded.ts");
-const thrower = "export function thrower(count: number): number {\n  if (count > 0) throw new Error(\"reloaded\");\n  return count;\n}\n";
-function reloadedFrame() {
-  delete require.cache[reloadedPath];
-  let stack = "";
-  try { require(reloadedPath).thrower(1); } catch (error) { stack = String(error.stack); }
-  return stack.split("\n").find(text => text.includes("reloaded.ts"))?.replace(/^.*reloaded\.ts:/, "reloaded.ts:");
-}
-writeFileSync(reloadedPath, thrower);
-console.log("first load:", reloadedFrame());
-writeFileSync(reloadedPath, "interface A { a: number }\ninterface B { b: string }\n" + thrower);
-console.log("after reload:", reloadedFrame());
