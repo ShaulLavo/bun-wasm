@@ -23,6 +23,12 @@
     return privateNames.get(name)!;
   }
 
+  // Internal modules served by bun-wasm's own implementation, listed under "runtimeProvided"
+  // in scripts/bun-builtins.json so the generator does not bundle Bun's copy.
+  const runtimeProvided: Record<string, () => unknown> = {
+    "internal:streams/duplex": () => internal.builtin("node:stream").Duplex,
+  };
+
   function requireBuiltin(id: string | number): unknown {
     if (typeof id === "string") id = names.indexOf(id);
     if (cache.has(id)) return cache.get(id);
@@ -32,6 +38,8 @@
     const source = native.bunBuiltinSource(id);
     if (source === undefined) {
       if (name === "bun" || name.startsWith("node:") || name.startsWith("bun:")) return internal.builtin(name);
+      const provided = runtimeProvided[name];
+      if (provided) return provided();
       throw unsupported(`module ${name}`);
     }
     const factory = native.evalBuiltin(source, `bun-builtin:${name}`);

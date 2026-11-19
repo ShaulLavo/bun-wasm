@@ -34,7 +34,6 @@ const bundle = {
   validators: { validateBoolean(value: unknown) { return typeof value === "boolean"; } },
   utils: { isDestroyed(node: { destroyed: boolean }) { return node.destroyed; } },
   eos,
-  util: { normalizeEncoding: (value: string) => value },
 };
 const bindings = bindingsFactory(bindingsInternal).create(bundle);
 const callback = (error: Error | null | undefined) => { void error; };
@@ -57,7 +56,7 @@ promisify(bindings.eos);
 bindings.eos(new Writable(), () => undefined);
 const ReadableConstructor: typeof Readable = bindings.Readable;
 const ErrorConstructor: typeof TypeError = bindings.ERR_INVALID_ARG_TYPE;
-const encoding: string = bindings.normalizeEncoding("utf8");
+const encoding: string | undefined = bindings.normalizeEncoding("utf8");
 bindings.validateBoolean(true);
 bindings.isDestroyed(new Writable());
 const resolvers = bindings.PromiseWithResolvers<string>();
@@ -143,7 +142,7 @@ test("stream bindings preserve portable state, brands, and promise helpers", asy
   const closedKey = Symbol.for("nodejs.webstream.isClosedPromise");
   for (const Ctor of [Readable, Writable]) Object.defineProperty(Ctor.prototype, closedKey, { get() { return Promise.resolve(); } });
   const eos = Object.assign(() => {}, { kEosNodeSynchronousCallback: Symbol("sync") });
-  const bundle = { Stream: {}, errors: { codes: {} }, validators: {}, utils: {}, eos, util: { normalizeEncoding: (value: string) => value } };
+  const bundle = { Stream: {}, errors: { codes: {} }, validators: {}, utils: {}, eos };
   const factory = runInNewContext(emit("node_stream_bindings"), { process, TextEncoder });
   const bindings = factory({
     require: (name: string) => name === "streams" ? { ReadableStream: Readable, WritableStream: Writable } : { Buffer },
@@ -157,6 +156,9 @@ test("stream bindings preserve portable state, brands, and promise helpers", asy
   expect(bindings.isReadableStream(null)).toBe(false);
   expect(bindings.isWritableStream(undefined)).toBe(false);
   expect(bindings.TypedArrayPrototypeGetByteLength(Uint8Array.of(1, 2))).toBe(2);
+  // Node's internal/util names: readable-stream's util has no normalizeEncoding for the adapters.
+  expect([undefined, "", "UTF-8", "ucs2", "Binary", "hex", "base64url", "nope", 7].map(bindings.normalizeEncoding))
+    .toEqual(["utf8", "utf8", "utf8", "utf16le", "latin1", "hex", "base64url", undefined, undefined]);
   expect(bindings.ArrayPrototypeFilter([1, 2, 3], (value: number) => value > 1)).toEqual([2, 3]);
   expect(await bindings.PromisePrototypeThen(Promise.resolve("ok"), null, undefined)).toBe("ok");
   expect(await bindings.SafePromisePrototypeFinally(Promise.resolve("done"), null)).toBe("done");
@@ -172,7 +174,7 @@ test("destroy hooks and terminal writable cleanup keep their callback behavior",
   const closedKey = Symbol.for("nodejs.webstream.isClosedPromise");
   for (const Ctor of [Readable, Writable]) Object.defineProperty(Ctor.prototype, closedKey, { value: true });
   const eos = Object.assign(() => {}, { kEosNodeSynchronousCallback: Symbol("sync") });
-  const bundle = { Stream: {}, errors: { codes: {} }, validators: {}, utils: {}, eos, util: { normalizeEncoding: String } };
+  const bundle = { Stream: {}, errors: { codes: {} }, validators: {}, utils: {}, eos };
   const factory = runInNewContext(emit("node_stream_bindings"), { process, TextEncoder });
   const bindings = factory({
     require: (name: string) => name === "streams" ? { ReadableStream: Readable, WritableStream: Writable } : { Buffer },

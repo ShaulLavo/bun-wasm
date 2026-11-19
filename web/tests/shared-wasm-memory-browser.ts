@@ -279,6 +279,9 @@ try {
   }
   const program = process.env.BUN_WASM_PROFILE_PROGRAM;
   if (!program) throw new Error("Set BUN_WASM_PROFILE_PROGRAM to a matching shared-group core; a missing guest is a failure");
+  // Playwright reports a renderer crash only as "Target crashed"; its browser log keeps Chromium's stderr,
+  // which names the cause (for example "V8 javascript OOM"). The debug module reads DEBUG when it loads.
+  process.env.DEBUG ??= "pw:browser";
   const playwright = await import("playwright");
   const types = { chromium: playwright.chromium, firefox: playwright.firefox, webkit: playwright.webkit };
   const names = process.argv.slice(2).length ? process.argv.slice(2) : ["chromium"];

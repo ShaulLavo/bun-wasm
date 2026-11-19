@@ -91,10 +91,13 @@ function collectErrors(node) {
 collectErrors(errorsTree);
 const selected = new Set();
 const explicitlySelected = new Set(selection.modules);
+// Internal modules the runtime supplies itself (bun_builtins.ts maps them), such as Bun's
+// stream classes, which bun-wasm serves from its own node:stream.
+const runtimeProvided = new Set(selection.runtimeProvided ?? []);
 function include(name) {
   const id = names.indexOf(name);
   if (id < 0) throw new Error(`Unknown builtin ${name}`);
-  if (id >= count || selected.has(id)) return;
+  if (id >= count || selected.has(id) || runtimeProvided.has(name)) return;
   const publicModule = name === "bun" || name.startsWith("node:") || name.startsWith("bun:");
   if (publicModule && !explicitlySelected.has(name)) return;
   const original = readFileSync(join(bun, "src/js", upstream(id)), "utf8");
