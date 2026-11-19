@@ -1,5 +1,5 @@
 {
   "owner": "native",
   "path": "tests/fixtures/error-stack-reload",
-  "engines": ["quickjs", "jsc"]
+  "engines": ["quickjs", "jsc", "browser"]
 }
