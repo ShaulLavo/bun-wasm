@@ -287,7 +287,7 @@ function errorFixture() {
 
   // Execute the actual bootstrap error-policy section against the actual process/EventEmitter.
   const start = bootstrapSource.indexOf("  internal.handleUncaught =");
-  const end = bootstrapSource.indexOf("  internal.emitBeforeExit", start);
+  const end = bootstrapSource.indexOf("  internal.beforeExit = function", start);
   if (start < 0 || end < 0) throw new Error("bootstrap error section missing");
   f.context.internal = f.internal;
   runInContext(`(() => {
@@ -300,8 +300,29 @@ function errorFixture() {
   return f as typeof f & { context: typeof f.context & { printed: unknown[]; forwarded: unknown[] }; internal: typeof f.internal & {
     handleUncaught(error: unknown): boolean;
     handleRejection(error: unknown, promise: unknown): boolean;
+    emitBeforeExit(): boolean;
   }};
 }
+
+// The browser engine's native.exit throws to unwind, as GuestExit does here. A handler that
+// calls process.exit() must exit with its code, not have the unwind treated as its error.
+test("process.exit() inside an uncaughtException listener exits with its code", () => {
+  const f = errorFixture();
+  f.process.on("uncaughtException", () => f.process.exit(3));
+  expect(handled(f, "handleUncaught", new Error("first"))).toBe("exit 3");
+  expect(f.context.forwarded).toEqual([]);
+  expect(f.context.printed).toEqual([]);
+});
+
+test("process.exit() inside a beforeExit listener does not reach uncaughtException", () => {
+  const f = errorFixture();
+  const caught: unknown[] = [];
+  f.process.on("uncaughtException", (error: unknown) => caught.push(error));
+  f.process.on("beforeExit", () => f.process.exit(4));
+  expect(() => f.internal.emitBeforeExit()).toThrow("guest exit 4");
+  expect(caught).toEqual([]);
+  expect(f.context.forwarded).toEqual([]);
+});
 
 // An unclaimed uncaught error ends the guest itself, with the code the exit listeners leave.
 function handled(f: ReturnType<typeof errorFixture>, method: "handleUncaught" | "handleRejection", error: unknown) {

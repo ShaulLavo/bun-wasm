@@ -511,6 +511,11 @@ declare namespace BunWasm {
     emitExit(code: number): void;
     /** The uncaught exception handlers of bootstrap.js; true when one claimed the error. */
     dispatchUncaught(error: unknown, isRejection: boolean): boolean;
+    /**
+     * Set just before the guest exits. Where native.exit unwinds with a throw (the browser
+     * engine's ExitSignal), handlers that catch errors rethrow what they catch from then on.
+     */
+    exitStarted?: boolean;
     /** process.setUncaughtExceptionCaptureCallback's callback, while one is set. */
     uncaughtCapture?: UncaughtCapture;
     finalizeWorkerChildren?: () => void;

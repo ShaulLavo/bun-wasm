@@ -362,9 +362,10 @@
     reallyExit(code: unknown) {
       const byte = Number.isInteger(code) ? ((code as number) % 256) & 0xff : 0;
       internal.traceExit(exitReason, byte);
+      internal.exitStarted = true;
       native.exit(byte);
     },
-    abort: () => { internal.traceExit("process.abort", 134); native.exit(134); },
+    abort: () => { internal.traceExit("process.abort", 134); internal.exitStarted = true; native.exit(134); },
     // Bun's contract where the process image cannot be replaced (its Windows build):
     // workers are rejected first, then the main thread warns once and throws.
     execve() {

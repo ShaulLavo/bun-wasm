@@ -23,6 +23,24 @@ does. Native Bun also exits 1 after an unhandled throw from a timer even when an
 assigns another code; bun-wasm exits with the assigned code in every case, as the upstream
 `changeCodeInExitWithUncaught` test and Node expect. The fixtures avoid both cases.
 
+## Exits that unwind
+
+On the browser engine `native.exit` ends the run and then throws to unwind the guest's stack.
+`process.reallyExit`, `process.abort` and the fatal paths set `internal.exitStarted` first, and the
+handlers that catch errors (the uncaught exception handlers, `beforeExit` dispatch and the `exit`
+emit) rethrow what they catch once it is set. So `process.exit(3)` inside an `uncaughtException`
+or `beforeExit` listener exits 3 instead of being reported as that listener's error.
+`web/tests/process-signals.test.ts` covers both with a `native.exit` that throws.
+
+## Known differences in workers (not changed here)
+
+These predate this change and behave the same on all three engines:
+
+- `process.exit(13)` inside a worker's `exit` listener gives the parent an error event before exit
+  13, because `native.exit` does not publish `internal.workerExit` first.
+- A throwing `exit` listener in a worker gives the parent an error and then exit 1. Bun gives exit
+  0 and no error.
+
 ## What the host sees
 
 The exit code of these paths now matches Bun: 6, 7 and listener-assigned codes reach the host

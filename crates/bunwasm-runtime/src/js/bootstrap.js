@@ -876,6 +876,9 @@
       catch (err) { reportExitError(err); }
       process.emit("exit", code);
     } catch (err) {
+      // An exit an 'exit' listener started (process.exit() on the browser engine) unwinds on,
+      // after the cleanup below.
+      if (internal.exitStarted) throw err;
       reportExitError(err);
     } finally {
       try {
@@ -941,15 +944,18 @@
     if (report && !internal.workerError) printFatal(err);
     process.exitCode = code;
     emitExit(code);
+    internal.exitStarted = true;
     native.exit((process.exitCode | 0) || 0);
   }
 
-  // Runs one uncaught exception handler. A throw from it is fatal with `code`.
+  // Runs one uncaught exception handler. A throw from it is fatal with `code`, unless it is
+  // the unwind of an exit the handler started (process.exit() on the browser engine).
   function runUncaughtHandler(handler, reason, code) {
     try {
       handler();
       return true;
     } catch (inner) {
+      if (internal.exitStarted) throw inner;
       fatalExit(reason, code, inner);
       return false;
     }
@@ -1006,7 +1012,11 @@
     try {
       process.emit("beforeExit", (process.exitCode | 0) || 0);
     } catch (err) {
-      if (!internal.handleUncaught(err)) native.exit(1);
+      if (internal.exitStarted) throw err;
+      if (!internal.handleUncaught(err)) {
+        internal.exitStarted = true;
+        native.exit(1);
+      }
     }
     return true;
   };
