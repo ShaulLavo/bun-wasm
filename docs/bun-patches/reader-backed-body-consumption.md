@@ -65,6 +65,17 @@ Response (`http_response.ts`) no longer release it, even after an abort or a
 disconnect, so the body's stream stays locked, disturbed and closed, as native Bun
 1.4.4 leaves it.
 
+`Bun.serve()` gives a handler `req.body === null` for a request that carries no bytes:
+no body, `Content-Length: 0` (which is what `fetch()` sends for `""` and an empty
+`Uint8Array`), whatever the method. As a null body it is never used up, so `req.text()`
+can be called again. A chunked request with no chunks still has a stream body, as in
+Bun (`net.js` `runRequest`). Answering HEAD with a string or byte Response consumes
+the in-memory body like a GET does: a stream its `.body` made ends locked and
+disturbed, `bodyUsed` turns true, and its size becomes the Content-Length when no
+header sets one (`http_response.ts` `writeResponse`). A ReadableStream body is still
+only cancelled for HEAD, as in Bun. The `serve-empty-request-body` fixture carries
+native Bun 1.4.4's output.
+
 `clone()` of a used or locked body throws Bun's `TypeError: Body is disturbed or
 locked` with code `ERR_BODY_ALREADY_USED`. An unread stream over bytes already in
 memory (a string, Blob or typed array body's `.body`, or `Blob.stream()`) is not

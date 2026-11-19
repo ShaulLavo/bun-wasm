@@ -388,6 +388,7 @@ impl State {
             .mappings
             .filter(|m| !m.is_empty())
             .map(crate::sourcemap::SourceMap::new);
+        self.sources_changed();
         Ok(out.code)
     }
 
@@ -492,7 +493,19 @@ impl State {
         self.sources
             .borrow_mut()
             .insert(path.to_owned(), entry.clone());
+        self.sources_changed();
         Ok(entry)
+    }
+
+    /// Records that a loaded source or a position map changed.
+    fn sources_changed(&self) {
+        self.source_generation
+            .set(self.source_generation.get().wrapping_add(1));
+    }
+
+    /// Moves whenever a loaded source or a position map changes (`sourceGeneration`).
+    pub fn source_generation(&self) -> u32 {
+        self.source_generation.get()
     }
 
     pub(crate) fn prepare_javascript(
@@ -589,6 +602,7 @@ impl State {
             .entry(path.to_owned())
             .or_default()
             .line_offset = lines;
+        self.sources_changed();
     }
 
     /// [`crate::Transpiler::esm_to_cjs`] for `path`, with its source map
@@ -617,6 +631,7 @@ impl State {
                         ..Default::default()
                     },
                 );
+                self.sources_changed();
             }
         }
         self.cjs_sources
@@ -666,6 +681,7 @@ impl State {
         self.sources.borrow_mut().remove(path);
         self.positions.borrow_mut().remove(path);
         self.last_original.borrow_mut().take();
+        self.sources_changed();
         #[cfg(feature = "engine-host")]
         {
             self.source_imports.borrow_mut().remove(path);
@@ -683,6 +699,7 @@ impl State {
             .entry(path.to_owned())
             .or_default()
             .line1_shift = len as u32;
+        self.sources_changed();
     }
 }
 
@@ -763,6 +780,7 @@ pub fn eval_entry(state: &State, code: &str) -> (String, String) {
         .sources
         .borrow_mut()
         .insert(name.clone(), (Rc::from(code), Format::Esm));
+    state.sources_changed();
     let source = esm_source(state, &name, code);
     (name, source)
 }
@@ -977,9 +995,14 @@ mod tests {
         state.record_prologue(path, 3);
         assert_eq!(load(&state), "module.exports = 1;");
         assert!(state.positions.borrow().contains_key(path));
+        // A cached source leaves the generation alone; a rewritten file moves it.
+        let cached = state.source_generation();
+        assert_eq!(load(&state), "module.exports = 1;");
+        assert_eq!(state.source_generation(), cached);
         std::fs::write(&file, "module.exports = 2;").unwrap();
         assert_eq!(load(&state), "module.exports = 2;");
         assert!(!state.positions.borrow().contains_key(path));
+        assert_ne!(state.source_generation(), cached);
         std::fs::remove_dir_all(&dir).unwrap();
         let (name, _) = eval_entry(&state, "console.log(1)");
         assert_eq!(&*state.load_source(&name).unwrap().0, "console.log(1)");

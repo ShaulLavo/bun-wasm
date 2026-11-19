@@ -238,7 +238,7 @@
     if (transferEncoding.includes("chunked")) {
       const chunked = parseChunked(bytes, head.headLength);
       if (!chunked) return null;
-      return Object.assign(head, { body: chunked.body, length: head.headLength + chunked.length, trailers: chunked.trailers });
+      return Object.assign(head, { body: chunked.body, chunked: true, length: head.headLength + chunked.length, trailers: chunked.trailers });
     }
     const contentLength = Number(header(head.headers, "content-length") || 0);
     if (bytes.length < head.headLength + contentLength) return null;
@@ -723,7 +723,9 @@
     async function runRequest(request, conn, keepAlive, snapshot, releaseOnAbort) {
       const host = header(request.headers, "host") || `${displayHost}:${port}`;
       const url = `http://${host}${request.target.startsWith("/") ? request.target : "/" + request.target}`;
-      const hasBody = request.method !== "GET" && request.method !== "HEAD";
+      // As in Bun, a request without bytes (no body, Content-Length: 0) has a null body;
+      // a chunked body has a stream even with no chunks.
+      const hasBody = request.method !== "GET" && request.method !== "HEAD" && (request.chunked || request.body.length > 0);
       const result = await internal.require("serve_request_lifetime").run(conn, (signal) => {
         releaseOnAbort?.(signal);
         const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined, signal });
