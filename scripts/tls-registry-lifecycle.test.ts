@@ -91,6 +91,8 @@ function terminalFixture() {
   const end = fieldIndex(bootstrap, "internal.emitExit = emitExit");
   const run: unknown = runInNewContext(bootstrap.slice(start, end).concat("\nemitExit;"), {
     process, internal, native, printError(error: unknown) { errors.push(error); },
+    // No uncaught exception handler claims a terminal error here.
+    dispatchUncaught: () => false,
   });
   if (typeof run !== "function") throw new Error("Expected the actual bootstrap terminal function");
   return { order, errors, process, internal, native, exit(code: number) { Reflect.apply(run, undefined, [code]); } };
