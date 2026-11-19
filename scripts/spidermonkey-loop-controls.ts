@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { interpreterFrames } from "./spidermonkey-interpreter-frames.ts";
+import { stableScratch } from "./stable-scratch.ts";
 
 // The C++ interpreter and PBL carry the control hooks; each is its own archive member.
 const controlledSources = ["Interpreter", "PortableBaselineInterpret"];
@@ -38,7 +38,7 @@ export function runLoopControls(): void {
   const side = process.env.SPIDERMONKEY_ENGINE_BUILD_DIR;
   assert(build && native && sdk && sysroot && side, "source env.sh and set ordinary SpiderMonkey producer directories");
   console.log(JSON.stringify({ frames: interpreterFrames(readFileSync(join(side, "engine.wasm"))) }));
-  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-sm-loop-controls-"));
+  const scratch = stableScratch("sm-loop-controls");
   try {
     const objects = controlledSources.map(source => compileControlled(build, source, scratch));
     const library = join(scratch, "libspidermonkey_g2.a");
