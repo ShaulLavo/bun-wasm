@@ -82,6 +82,14 @@ try {
     console.log(`${ownerName} ReadableStream clone():`, state(stream), `new body=${owner.body !== stream}`, JSON.stringify([await owner.text(), await clone.text()]));
   }
 
+  // A clone keeps the type of the Blob behind its bytes over the header, read or not.
+  for (const [ownerName, make] of [["Request", (body: BodyInit) => new Request("http://a/", { method: "POST", body, headers: { "content-type": "other" } })], ["Response", (body: BodyInit) => new Response(body, { headers: { "content-type": "other" } })]] as const) {
+    const unread = make(new Blob(["x"], { type: "text/x-bun" }));
+    const touched = make(new Blob(["x"], { type: "text/x-bun" }));
+    touched.body;
+    console.log(`${ownerName} Blob clone() type:`, (await unread.clone().blob()).type, (await touched.clone().blob()).type);
+  }
+
   // clone() and new Request(request) of a used or locked body.
   const usedString = request("hello");
   await usedString.text();

@@ -27,6 +27,8 @@ Response string clone(): readable=false errored=false disturbed=true locked=true
 Response Blob clone(): readable=false errored=false disturbed=true locked=true new body=true used=false ["payload","payload"]
 Response Blob.stream() clone(): readable=false errored=false disturbed=true locked=true new body=true used=false ["payload","payload"]
 Response ReadableStream clone(): readable=true errored=false disturbed=false locked=true new body=true ["payload","payload"]
+Request Blob clone() type: text/x-bun text/x-bun
+Response Blob clone() type: text/x-bun text/x-bun
 clone() of a used string body: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked
 clone() of a used stream body: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked
 clone() of a used Blob body: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked

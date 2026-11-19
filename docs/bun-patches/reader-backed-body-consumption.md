@@ -73,7 +73,9 @@ locked, as Bun lifts the payload out of its native stream. `new Request(request)
 over a locked stream reports the tee's `TypeError: Invalid state: ReadableStream is
 locked` (`ERR_INVALID_STATE`). `Response.clone()` keeps the source's status, type,
 URL and redirect flag, so `Response.error().clone()` is an error Response with status
-0 instead of a RangeError. The `null-body-reads` and `body-native-consumers`
+0 instead of a RangeError. A Request or Response clone also keeps the type of the
+Blob behind its body (`_bodyType` from `body-content-type-and-header-order.md`), so
+`blob()` on the clone answers what it answers on the source. The `null-body-reads` and `body-native-consumers`
 fixtures carry native Bun 1.4.4's output for these cases; the reference is the same
 `body.test.ts` and `body-clone.test.ts` revision.
 
