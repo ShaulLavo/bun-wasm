@@ -62,7 +62,7 @@ class IphonePreviewEvidence {
   }
 }
 function previewObservation(stage: PreviewStage, row: Row, presentation: string): object {
-  if (stage === "document") return { attached: attached(row), visible: row.visible === true, hasTimeOrigin: typeof row.timeOrigin === "number" };
+  if (stage === "document") return { attached: attached(row), visible: row.visible === true, hasTimeOrigin: typeof row.timeOrigin === "number", ...(row.navigation ? { navigation: row.navigation } : {}) };
   if (stage === "load") return { loaded: row.loaded === true, readyState: row.readyState === "loading" || row.readyState === "interactive" || row.readyState === "complete" ? row.readyState : "unknown" };
   const focus = row.previewFocus;
   if (!focus || typeof focus !== "object") return { presented: false, focused: false, matchesPresentation: false };
@@ -122,7 +122,24 @@ function presentedFocus(row: Row, presentation: string): boolean {
   const focus = row.previewFocus;
   return focus !== null && typeof focus === "object" && "presentation" in focus && focus.presentation === presentation && "focused" in focus && focus.focused === true;
 }
-type PreviewWait = (signal: AbortSignal, stage: string, read: (timeoutMs: number) => Promise<Row>, accept: (row: Row) => boolean) => Promise<void>;
+type PreviewWait = (signal: AbortSignal, stage: string, read: (timeoutMs: number) => Promise<Row>, accept: (row: Row) => boolean, describe?: (last: Row | null) => string) => Promise<void>;
+/** A frame still waiting this long gets its navigation evidence read about once a second. */
+export const previewStallMs = 5000;
+type Navigation = { committed: boolean | null; loaded: boolean; serviceWorkerRequests: number };
+/** Reads, without touching either page, how far the presented frame's navigation got. */
+export function navigationEvidence(host: Row, responses: unknown, nonce: unknown, presentation: string): Navigation {
+  const focus = host.previewFocus && typeof host.previewFocus === "object" ? host.previewFocus as Row : {};
+  const current = focus.presentation === presentation;
+  const rows = Array.isArray(responses) ? responses : [];
+  const serviceWorkerRequests = rows.filter(row => row && typeof row === "object" && row.event === "request" && row.currentNonce === nonce).length;
+  return { committed: current && typeof focus.committed === "boolean" ? focus.committed : null, loaded: current && focus.focused === true, serviceWorkerRequests };
+}
+/** Names a navigation Safari never started; any later stage is left to the generic expiry text. */
+export function describeStalledDocument(last: Row | null): string {
+  const navigation = last?.navigation as Navigation | undefined;
+  if (!navigation || navigation.committed !== false || navigation.loaded || navigation.serviceWorkerRequests !== 0) return "";
+  return "Safari never started the preview navigation: the frame kept its initial about:blank document, fired no load event, and the observed service worker received no request for it. ";
+}
 /**
  * One deadline for opening a preview. Each stage polls short reads, and starts none after the
  * deadline or after `signal` aborts, so a preview that never loads leaves no controller command
@@ -130,12 +147,12 @@ type PreviewWait = (signal: AbortSignal, stage: string, read: (timeoutMs: number
  */
 function previewDeadline(timeoutMs: number, admission: Admission, observed: (row: Row) => void): PreviewWait {
   const deadline = Math.min(Date.now() + timeoutMs, admission.deadline);
-  return (signal, stage, read, accept) => waitPreview({ timeoutMs, deadline, admission, signal, stage, read, accept, observed });
+  return (signal, stage, read, accept, describe) => waitPreview({ timeoutMs, deadline, admission, signal, stage, read, accept, describe, observed });
 }
-async function waitPreview(options: { timeoutMs: number; deadline: number; admission: Admission; signal: AbortSignal; stage: string; read: Parameters<PreviewWait>[2]; accept: Parameters<PreviewWait>[3]; observed(row: Row): void }): Promise<void> {
+async function waitPreview(options: { timeoutMs: number; deadline: number; admission: Admission; signal: AbortSignal; stage: string; read: Parameters<PreviewWait>[2]; accept: Parameters<PreviewWait>[3]; describe?: Parameters<PreviewWait>[4]; observed(row: Row): void }): Promise<void> {
   const { timeoutMs, deadline, admission, signal, stage, read, accept } = options;
   let last: Row | null = null;
-  const expired = (cause?: unknown) => new Error(`iPhone preview ${stage} did not finish within ${timeoutMs} ms; last observation: ${JSON.stringify(last)}`, { cause });
+  const expired = (cause?: unknown) => new Error(`${options.describe?.(last) ?? ""}iPhone preview ${stage} did not finish within ${timeoutMs} ms; last observation: ${JSON.stringify(last)}`, { cause });
   const fail = (error: unknown): never => { throw Date.now() >= deadline ? expired(error) : error; };
   while (true) {
     signal.throwIfAborted();
@@ -286,6 +303,21 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       if (typeof state.nonce !== "string") throw new Error("Missing task tab identity");
       title = "Goals " + state.nonce;
   }
+  // After `previewStallMs` without a preview document, also reads the owner's frame record and the
+  // service worker's response rows, at most once a second. Both are controller state; no page runs anything.
+  function stalledNavigation(presentation: string): (row: Row, left: number) => Promise<{ navigation?: Navigation }> {
+    const presentedAt = Date.now();
+    let checkedAt = 0;
+    let navigation: Navigation | undefined;
+    return async (row, left) => {
+      const now = Date.now();
+      if (now - presentedAt < previewStallMs || now - checkedAt < 1000) return navigation ? { navigation } : {};
+      checkedAt = now;
+      const [host, responses] = await Promise.all([request("host/state", undefined, left), request("preview/response/state", undefined, left)]);
+      navigation = navigationEvidence(object(host ?? {}), responses, row.nonce, presentation);
+      return { navigation };
+    };
+  }
   async function openPreview(url: string, admission: Admission): Promise<void> {
       const trace = new IphonePreviewEvidence(config.saveNative, AbortSignal.any([admission.signal, lifetime.signal, cleaning.signal]));
       try { await openingPreview(url, admission, trace); trace.finish("returned"); }
@@ -301,7 +333,12 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       if (presentation === null) throw new Error("Missing iPhone presentation identity");
       identity = presentation;
       trace.stage("document");
-      await wait(signal, "document", async left => { admit(admission); return object(await request("preview/state", undefined, left) ?? {}); }, attached);
+      const stalled = stalledNavigation(presentation);
+      await wait(signal, "document", async left => {
+        admit(admission);
+        const row = object(await request("preview/state", undefined, left) ?? {});
+        return attached(row) ? row : { ...row, ...await stalled(row, left) };
+      }, attached, describeStalledDocument);
       trace.stage("load");
       await wait(signal, "load", async left => object(await execute("preview", `(${iphonePreviewLoad.toString()})()`, left, admission, true)), row => row.loaded === true);
       trace.stage("focus");

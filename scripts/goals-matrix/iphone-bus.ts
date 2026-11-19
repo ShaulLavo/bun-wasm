@@ -1,7 +1,9 @@
 import { installIphoneObserver, iphonePreviewFocus } from "./iphone-browser";
 import { IphoneResponses, type IphoneResponseObservation } from "./iphone-responses";
 
-type Page = { url: string; nonce: string; timeOrigin?: number; visible: boolean; userAgent?: string; previewFocus?: ReturnType<typeof iphonePreviewFocus> | null };
+/** The owner page always reports `committed`; controller fixtures that don't test it may omit it. */
+type FocusRecord = Omit<ReturnType<typeof iphonePreviewFocus>, "committed"> & { committed?: boolean | null };
+type Page = { url: string; nonce: string; timeOrigin?: number; visible: boolean; userAgent?: string; previewFocus?: FocusRecord | null };
 type Pending = { id: number; source: string; deadline: number; deliverByMs: number; delivered: boolean; observation: boolean; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>; deliveryTimer: ReturnType<typeof setTimeout> };
 export type IphoneSettlement = { settled: true; ok: true; value: unknown } | { settled: true; ok: false; error: string };
 type Role = "host" | "preview";
@@ -9,11 +11,13 @@ function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected iPhone observer object");
   return value as Record<string, unknown>;
 }
-function focusRecord(value: unknown): ReturnType<typeof iphonePreviewFocus> | null {
+function focusRecord(value: unknown): FocusRecord | null {
   if (value === undefined || value === null) return null;
   const row = object(value);
   if (typeof row.presented !== "boolean" || typeof row.focused !== "boolean" || (row.presentation !== null && typeof row.presentation !== "string")) throw new Error("Invalid iPhone focus record");
-  return { presented: row.presented, focused: row.focused, presentation: row.presentation };
+  if (row.committed !== undefined && row.committed !== null && typeof row.committed !== "boolean") throw new Error("Invalid iPhone focus record");
+  const record = { presented: row.presented, focused: row.focused, presentation: row.presentation };
+  return row.committed === undefined ? record : { ...record, committed: row.committed };
 }
 export class IphoneBus {
   private readonly pages = new Map<Role, Page>();
