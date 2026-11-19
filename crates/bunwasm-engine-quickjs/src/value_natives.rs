@@ -201,7 +201,9 @@ pub(crate) fn value_natives<E: Engine>(
     ));
     list.push((
         "objectTypeCounts",
-        Rc::new(|e: &E, _: &[E::Value]| Ok(e.object_type_counts().unwrap_or_else(|| e.undefined()))),
+        Rc::new(|e: &E, _: &[E::Value]| {
+            Ok(e.object_type_counts().unwrap_or_else(|| e.undefined()))
+        }),
     ));
     list
 }
