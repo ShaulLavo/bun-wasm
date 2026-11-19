@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/web-stream-inspect",
+  "engines": ["quickjs", "jsc", "browser"]
+}

@@ -41,9 +41,71 @@
     ECDH: ["deriveKey", "deriveBits"],
     X25519: ["deriveKey", "deriveBits"],
   };
-  const fail = (name, message) => {
-    throw new DOMException(message || name, name);
+  // WebCore's messages for an exception that names no reason of its own.
+  const defaultMessages = {
+    OperationError: "The operation failed for an operation-specific reason",
+    DataError: "Data provided to an operation does not meet requirements",
+    InvalidAccessError: "The requested operation is not valid for the provided key",
+    NotSupportedError: "The algorithm is not supported",
   };
+  const fail = (name, message) => {
+    throw new DOMException(message || defaultMessages[name] || name, name);
+  };
+  // Bun reports usage problems as plain SyntaxErrors, not DOMExceptions.
+  const syntax = (message) => {
+    throw new SyntaxError(message);
+  };
+  const typeError = (message, code) => {
+    const error = new TypeError(message);
+    if (code) error.code = code;
+    throw error;
+  };
+  // WebCrypto's KeyUsage enum order; a key lists its usages in this order, as in Bun.
+  const usageOrder = ["encrypt", "decrypt", "sign", "verify", "deriveKey", "deriveBits", "wrapKey", "unwrapKey"];
+  // Bun's KeyUsage enum also spells the KEM usages, which no algorithm here accepts.
+  const keyUsages = usageOrder.concat(["encapsulateKey", "encapsulateBits", "decapsulateKey", "decapsulateBits"]);
+  const keyFormats = ["raw", "raw-public", "raw-secret", "raw-seed", "spki", "pkcs8", "jwk"];
+  const rsaNames = ["RSASSA-PKCS1-v1_5", "RSA-PSS", "RSA-OAEP"];
+  const enumeration = (value) => {
+    const text = String(value);
+    if (!keyUsages.includes(text)) typeError("value must be enumeration (string)");
+    return text;
+  };
+  // A sequence<KeyUsage>, duplicates kept.
+  function usageSequence(value) {
+    if (value === null || typeof value !== "object" || typeof value[Symbol.iterator] !== "function")
+      typeError("Value is not a sequence", "ERR_INVALID_ARG_TYPE");
+    return Array.from(value, enumeration);
+  }
+  const usageList = (value) => Array.from(new Set(usageSequence(value)));
+  // Converts a KeyFormat argument once, as WebIDL does.
+  function keyFormat(value, method) {
+    const text = String(value);
+    if (!keyFormats.includes(text))
+      typeError(`Failed to execute '${method}' on 'SubtleCrypto': 1st argument '${text}' is not a valid enum value of type KeyFormat.`, "ERR_INVALID_ARG_VALUE");
+    return text;
+  }
+  function bufferSource(data, method, position) {
+    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) return data;
+    if (typeof SharedArrayBuffer !== "undefined" && data instanceof SharedArrayBuffer) return data;
+    typeError(`Failed to execute '${method}' on 'SubtleCrypto': ${position} argument is not instance of ArrayBuffer, Buffer, TypedArray, or DataView.`, "ERR_INVALID_ARG_TYPE");
+  }
+  // The JsonWebKey dictionary: each member is read once, in WebIDL's sorted order.
+  const jwkMembers = ["alg", "crv", "d", "dp", "dq", "e", "ext", "k", "key_ops", "kty", "n", "oth", "p", "q", "qi", "use", "x", "y"];
+  function jwkDictionary(value) {
+    if (value === null || value === undefined) return {};
+    if (typeof value !== "object" && typeof value !== "function") typeError("Type error");
+    const out = {};
+    for (const member of jwkMembers) {
+      const item = value[member];
+      if (item === undefined) continue;
+      if (member === "ext") out.ext = Boolean(item);
+      else if (member === "key_ops") out.key_ops = usageSequence(item);
+      else if (member === "oth") out.oth = item;
+      else out[member] = String(item);
+    }
+    return out;
+  }
   const copy = (a) => {
     const out = { ...a };
     if (a.hash) out.hash = { ...a.hash };
@@ -60,13 +122,16 @@
   const encode = (data) => native.base64Encode(buffer(data), true);
   const decode = (data) => native.base64Decode(data);
   function algorithm(value, digest = false) {
-    const a = typeof value === "string" ? { name: value } : { ...value };
-    if (typeof a.name !== "string")
-      throw new TypeError("Algorithm name is required");
+    const object = value !== null && (typeof value === "object" || typeof value === "function");
+    const a = object ? { ...value } : { name: String(value) };
+    if (object && value.name === undefined)
+      typeError("Member CryptoAlgorithmParameters.name is required and must be an instance of DOMString", "ERR_MISSING_OPTION");
+    a.name = String(a.name);
+    if (!digest && a.name.toUpperCase() === "RSAES-PKCS1-V1_5") fail("NotSupportedError", "RSAES-PKCS1-v1_5 support is deprecated");
     const name = (digest ? hashes : names).find(
       (n) => n.toUpperCase() === a.name.toUpperCase(),
     );
-    if (!name) fail("NotSupportedError", `Unrecognized algorithm ${a.name}`);
+    if (!name) fail("NotSupportedError", "Unrecognized algorithm name");
     a.name = name;
     if (a.hash !== undefined) a.hash = algorithm(a.hash, true);
     return a;
@@ -90,12 +155,21 @@
       ["verify", "encrypt", "wrapKey"].includes(u),
     );
   }
-  function checkUsages(a, type, usages) {
+  // Bun's wording differs between generateKey (creating) and importKey.
+  function usageMessage(a, creating) {
+    if (a.name.startsWith("AES-")) return "Unsupported key usage for an AES key";
+    if (a.name === "HMAC") return creating ? "Unsupported key usage for an HMAC key" : "Unsupported key usage for HMAC key";
+    if (creating) return rsaNames.includes(a.name) ? "Unsupported key usage for a RSA key" : "A required parameter was missing or out-of-range";
+    if (a.name === "PBKDF2" || a.name === "HKDF") return `Unsupported key usage for a ${a.name} key`;
+    return `Unsupported key usage for an ${a.name} key`;
+  }
+  function emptyUsages(type, creating) {
+    syntax(creating ? "Usages cannot be empty when creating a key." : `Usages cannot be empty when importing a ${type} key.`);
+  }
+  function checkUsages(a, type, usages, creating = false) {
     const legal = usagesFor(a, type);
-    if (usages.some((u) => !legal.includes(u)))
-      fail("SyntaxError", "Unsupported key usage");
-    if (type !== "public" && usages.length === 0)
-      fail("SyntaxError", "Key usages must not be empty");
+    if (usages.some((u) => !legal.includes(u))) syntax(usageMessage(a, creating));
+    if (type !== "public" && usages.length === 0) emptyUsages(type, creating);
   }
   class CryptoKey {
     constructor() {
@@ -122,10 +196,8 @@
     if (!r) throw new TypeError("Expected a CryptoKey");
     return r;
   }
-  // WebCrypto's KeyUsage enum order; a key lists its usages in this order, as in Bun.
-  const usageOrder = ["encrypt", "decrypt", "sign", "verify", "deriveKey", "deriveBits", "wrapKey", "unwrapKey"];
-  function makeKey(a, type, extractable, usages, key) {
-    checkUsages(a, type, usages);
+  function makeKey(a, type, extractable, usages, key, creating = false) {
+    checkUsages(a, type, usages, creating);
     const out = Object.create(CryptoKey.prototype);
     material.set(out, {
       algorithm: copy(a),
@@ -141,18 +213,22 @@
     if (!allowed[a.name].includes(usage))
       fail("NotSupportedError", "Algorithm does not support this operation");
     const r = record(key);
-    if (r.algorithm.name !== a.name || !r.usages.includes(usage))
-      fail("InvalidAccessError", "Key does not support this operation");
+    if (r.algorithm.name !== a.name) fail("InvalidAccessError", "Key algorithm mismatch");
+    if (!r.usages.includes(usage)) fail("InvalidAccessError", `Unable to use this key to ${usage}`);
     return r;
   }
+  // The native side answers an error name, or "Name: message" when Bun names a reason.
+  const backendMessages = { import: { DataError: "Invalid keyData" } };
   function backend(op, a, extra = {}) {
     const flat = { ...a };
     if (flat.hash) flat.hash = flat.hash.name;
     const result = JSON.parse(
       native.cryptoOp(JSON.stringify({ op, algorithm: flat, ...extra })),
     );
-    if (result.error) fail(result.error, `Crypto ${op} failed`);
-    return result;
+    if (!result.error) return result;
+    const at = result.error.indexOf(": ");
+    if (at >= 0) fail(result.error.slice(0, at), result.error.slice(at + 2));
+    fail(result.error, backendMessages[op]?.[result.error]);
   }
   function keyAlgorithm(a, k) {
     if (k.kty === "oct") return { ...a, length: decode(k.k).length * 8 };
@@ -173,7 +249,7 @@
   }
   function generate(a, extractable, usages) {
     a = algorithm(a);
-    usages = Array.from(new Set(usages));
+    usages = usageList(usages);
     if (a.name === "HMAC") requiredHash(a);
     if (a.name.startsWith("AES-") || a.name === "HMAC") {
       const length =
@@ -191,11 +267,12 @@
       return makeKey({ ...a, length }, "secret", extractable, usages, {
         kty: "oct",
         k: native.base64Encode(raw, true),
-      });
+      }, true);
     }
-    if (["PBKDF2", "HKDF"].includes(a.name)) fail("NotSupportedError");
-    if (usages.some((u) => !allowed[a.name].includes(u)))
-      fail("SyntaxError", "Unsupported key usage");
+    if (["PBKDF2", "HKDF"].includes(a.name)) fail("NotSupportedError", "Unrecognized algorithm name");
+    if (usages.some((u) => !allowed[a.name].includes(u))) syntax(usageMessage(a, true));
+    // Checked before the (slow) key generation, as in Bun.
+    if (publicUsages(a, usages, "private").length === 0) emptyUsages("private", true);
     if (a.name.startsWith("RSA") || a.name === "RSASSA-PKCS1-v1_5") {
       requiredHash(a);
       a.publicExponent = encode(a.publicExponent);
@@ -232,7 +309,7 @@
     if (a.name === "Ed25519") return "EdDSA";
     return undefined;
   }
-  function validateJwkOctets(k) {
+  function validateJwkOctets(k, reject) {
     for (const field of [
       "k",
       "n",
@@ -252,22 +329,39 @@
           !/^[A-Za-z0-9_-]*$/.test(k[field]) ||
           k[field].length % 4 === 1)
       )
-        fail("DataError", "Invalid JWK octets");
+        reject("Invalid keyData");
     }
   }
+  function jwkKeyType(a) {
+    if (["HMAC", "PBKDF2", "HKDF"].includes(a.name) || a.name.startsWith("AES-")) return "oct";
+    if (a.name.startsWith("RSA")) return "RSA";
+    return ["ECDSA", "ECDH"].includes(a.name) ? "EC" : "OKP";
+  }
+  // HMAC reports Node's member messages; AES and the KDFs only WebCore's generic DataError.
+  // The others name "use", "crv" and "alg" problems and call the rest "Invalid keyData".
   function validateJwk(k, a, extractable, usages) {
-    if (!k || typeof k !== "object" || Array.isArray(k))
-      fail("DataError", "Invalid JWK");
-    const secret =
-      ["HMAC", "PBKDF2", "HKDF"].includes(a.name) || a.name.startsWith("AES-");
-    const kty = secret
-      ? "oct"
-      : a.name.startsWith("RSA")
-        ? "RSA"
-        : ["ECDSA", "ECDH"].includes(a.name)
-          ? "EC"
-          : "OKP";
-    validateJwkOctets(k);
+    const kty = jwkKeyType(a);
+    const hmac = a.name === "HMAC";
+    const generic = kty === "oct" && !hmac;
+    const reject = (message) => fail("DataError", generic ? undefined : message);
+    if (hmac && k.kty !== undefined && k.kty !== "oct") reject('Invalid JWK "kty" Parameter');
+    if (k.kty !== kty) reject("Invalid keyData");
+    if (kty === "EC" && k.crv !== a.namedCurve) reject('JWK "crv" does not match the requested algorithm');
+    if (kty === "OKP" && k.crv !== a.name) reject('JWK "crv" Parameter and algorithm name mismatch');
+    if (k.use !== undefined && usages.length && k.use !== (["sign", "verify"].includes(usages[0]) ? "sig" : "enc"))
+      reject('Invalid JWK "use" Parameter');
+    if (k.key_ops !== undefined && new Set(k.key_ops).size !== k.key_ops.length)
+      reject(hmac ? "Duplicate key operation" : "Invalid keyData");
+    if (k.key_ops !== undefined && usages.some((u) => !k.key_ops.includes(u)))
+      reject(hmac ? "Key operations and usage mismatch" : "Invalid keyData");
+    if (k.ext !== undefined && !k.ext && extractable)
+      reject(hmac ? 'JWK "ext" Parameter and extractable mismatch' : "Invalid keyData");
+    // Node decodes an HMAC "k" leniently, so a bad one is an empty key.
+    if (hmac && !decodeLenient(k.k ?? "").length) reject("Zero-length key is not supported");
+    if (!hmac) validateJwkOctets(k, reject);
+    validateJwkMaterial(k, a, kty, reject);
+  }
+  function validateJwkMaterial(k, a, kty, reject) {
     const fields =
       kty === "oct"
         ? ["k"]
@@ -278,56 +372,43 @@
           : (kty === "EC" ? ["x", "y"] : ["x"]).concat(
               k.d !== undefined ? ["d"] : [],
             );
-    if (fields.some((field) => typeof k[field] !== "string"))
-      fail("DataError", "Missing JWK key material");
+    if (fields.some((field) => typeof k[field] !== "string")) reject("Invalid keyData");
     if (k.oth !== undefined)
       fail("NotSupportedError", "Multi-prime RSA keys are not supported");
-    if (k.kty !== kty || (kty === "EC" && k.crv !== a.namedCurve))
-      fail("DataError", "JWK key type or curve does not match");
-    if (k.ext !== undefined && !k.ext && extractable)
-      fail("DataError", "JWK key is not extractable");
-    if (
-      k.key_ops !== undefined &&
-      (!Array.isArray(k.key_ops) ||
-        new Set(k.key_ops).size !== k.key_ops.length ||
-        usages.some((u) => !k.key_ops.includes(u)))
-    )
-      fail("DataError", "Invalid JWK key_ops");
-    if (
-      k.use !== undefined &&
-      usages.length &&
-      k.use !== (["sign", "verify"].includes(usages[0]) ? "sig" : "enc")
-    )
-      fail("DataError", "Invalid JWK use");
     const expected =
       a.name === "ECDSA"
         ? { "P-256": "ES256", "P-384": "ES384" }[a.namedCurve]
         : jwkAlg(
-            secret
+            kty === "oct"
               ? {
                   ...a,
-                  length: typeof k.k === "string" ? decode(k.k).length * 8 : 0,
+                  length: typeof k.k === "string" ? decodeLenient(k.k).length * 8 : 0,
                 }
               : a,
           );
     const matchesAlgorithm =
       k.alg === expected || (a.name === "Ed25519" && k.alg === "Ed25519");
     if (k.alg !== undefined && expected !== undefined && !matchesAlgorithm)
-      fail("DataError", "JWK algorithm does not match");
+      reject('JWK "alg" does not match the requested algorithm');
   }
+  // Base64 or base64url, ignoring the characters neither alphabet has, as Node's Buffer does.
+  function decodeLenient(text) {
+    const clean = String(text).replace(/[^A-Za-z0-9+/_-]/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+    return decode(clean.length % 4 === 1 ? clean.slice(0, -1) : clean);
+  }
+  // Arguments convert in WebIDL order: the format once, then the key data by format,
+  // then the algorithm and usages. Bun treats raw-public and raw-secret as raw.
   function importKey(format, data, a, extractable, usages) {
+    format = keyFormat(format, "importKey");
+    data = format === "jwk" ? jwkDictionary(data) : bufferSource(data, "importKey", "2nd");
     a = algorithm(a);
-    format = String(format);
-    usages = Array.from(new Set(usages));
-    if (!["raw", "jwk", "spki", "pkcs8"].includes(format))
-      throw new TypeError("Invalid key format");
+    usages = usageList(usages);
+    if (format === "raw-seed") fail("NotSupportedError", `Unable to import ${a.name} using raw-seed format`);
+    if (format === "raw-public" || format === "raw-secret") format = "raw";
     if (a.name === "HMAC" || a.name.startsWith("RSA")) requiredHash(a);
+    if (jwkKeyType(a) === "oct") return importSecret(format, data, a, extractable, usages);
+    if (format === "raw" && rsaNames.includes(a.name)) fail("NotSupportedError", `Unable to import ${a.name} using raw format`);
     if (format === "jwk") validateJwk(data, a, extractable, usages);
-    const secret =
-      a.name === "HMAC" ||
-      a.name.startsWith("AES-") ||
-      ["PBKDF2", "HKDF"].includes(a.name);
-    if (secret) return importSecret(format, data, a, extractable, usages);
     const input =
       format === "jwk" ? native.utf8Encode(JSON.stringify(data)) : buffer(data);
     const k = backend("import", a, {
@@ -339,27 +420,23 @@
       (format === "pkcs8" && type !== "private") ||
       (format === "spki" && type !== "public")
     )
-      fail("DataError");
+      fail("DataError", "Invalid keyData");
     return makeKey(keyAlgorithm(a, k), type, extractable, usages, k);
   }
   function importSecret(format, data, a, extractable, usages) {
-    if (!["jwk", "raw"].includes(format)) fail("NotSupportedError");
-    if (
-      ["PBKDF2", "HKDF"].includes(a.name) &&
-      (format !== "raw" || extractable)
-    )
-      fail("SyntaxError", "Derivation keys cannot be extractable");
-    if (format === "jwk" && typeof data.k !== "string")
-      fail("DataError", "Missing JWK k");
-    const raw = format === "jwk" ? decode(data.k) : buffer(data);
+    const derivation = ["PBKDF2", "HKDF"].includes(a.name);
+    if (!["jwk", "raw"].includes(format) || (derivation && format !== "raw")) fail("NotSupportedError");
+    if (derivation && extractable) syntax(`${a.name} keys are not extractable`);
+    if (format === "jwk") validateJwk(data, a, extractable, usages);
+    const raw = format === "jwk" ? (a.name === "HMAC" ? decodeLenient(data.k) : decode(data.k)) : buffer(data);
     let length = raw.length * 8;
     if (a.name.startsWith("AES-") && ![128, 192, 256].includes(length))
-      fail("DataError", "Invalid AES key length");
+      fail("DataError");
     if (a.name === "HMAC") {
+      if (!length) fail("DataError", "Zero-length key is not supported");
       if (
-        !length ||
-        (a.length !== undefined &&
-          (a.length <= length - 8 || a.length > length || a.length <= 0))
+        a.length !== undefined &&
+        (a.length <= length - 8 || a.length > length || a.length <= 0)
       )
         fail("DataError", "Invalid HMAC key length");
       length = a.length ?? length;
@@ -374,10 +451,12 @@
       { kty: "oct", k: native.base64Encode(raw, true) },
     );
   }
-  function exportKey(format, key) {
-    format = String(format);
+  function exportKey(format, key, method = "exportKey") {
+    format = keyFormat(format, method);
     const r = record(key);
-    if (!r.extractable) fail("InvalidAccessError", "Key is not extractable");
+    if (!r.extractable) fail("InvalidAccessError", "key is not extractable");
+    if (format === "raw-seed") fail("NotSupportedError");
+    if (format === "raw-public" || format === "raw-secret") format = "raw";
     if (format === "jwk") {
       const k = { ...r.key, key_ops: r.usages.slice(), ext: r.extractable };
       const alg = jwkAlg(r.algorithm);
@@ -449,17 +528,16 @@
           : 256;
     if (length == null && agreement) length = max;
     integer(length, 0, 0x7fffffff, "derived length");
-    if (length % 8)
-      fail("OperationError", "Derived length must be a multiple of eight");
-    const extra = { key: r.key, length: length / 8 };
+    // A key agreement keeps the leading bits of a length that is not a multiple of 8.
+    if (!agreement && length % 8)
+      fail("OperationError", "length must be a multiple of 8");
+    if (agreement && length > max) fail("OperationError", "derived bit length is too small");
+    const extra = { key: r.key, length: Math.ceil(length / 8) };
     if (agreement) {
       const p = record(a.public);
-      if (
-        p.type !== "public" ||
-        p.algorithm.name !== a.name ||
-        p.algorithm.namedCurve !== r.algorithm.namedCurve
-      )
-        fail("InvalidAccessError");
+      if (p.type !== "public") fail("InvalidAccessError");
+      if (p.algorithm.name !== a.name) fail("InvalidAccessError", "key algorithm mismatch");
+      if (p.algorithm.namedCurve !== r.algorithm.namedCurve) fail("InvalidAccessError", "Named curve mismatch");
       extra.public = p.key;
       delete out.public;
     } else {
@@ -469,7 +547,9 @@
       if (a.name === "HKDF") out.info = encode(a.info);
       else out.iterations = integer(a.iterations, 1, 0xffffffff, "iterations");
     }
-    return decode(backend("derive", out, extra).data).buffer;
+    const bits = decode(backend("derive", out, extra).data);
+    if (length % 8) bits[bits.length - 1] &= 0xff << (8 - (length % 8));
+    return bits.buffer;
   }
   class SubtleCrypto {
     constructor() {
@@ -499,11 +579,14 @@
     async decrypt(a, key, data) {
       return crypt("decrypt", a, key, data);
     }
-    async deriveBits(a, key, length) {
+    // length is optional in WebIDL, so the method's length is 2.
+    async deriveBits(a, key, length = undefined) {
       return deriveBits(a, key, length);
     }
     async deriveKey(a, key, derived, extractable, usages) {
       derived = algorithm(derived);
+      // Only key types with a key length can be derived; Bun's normalization rejects the rest.
+      if (jwkKeyType(derived) !== "oct") fail("NotSupportedError", "Unrecognized algorithm name");
       if (derived.name === "HMAC") requiredHash(derived);
       const length =
         derived.length ??
@@ -522,7 +605,8 @@
       );
     }
     async wrapKey(format, key, wrappingKey, a) {
-      const data = exportKey(format, key);
+      format = keyFormat(format, "wrapKey");
+      const data = exportKey(format, key, "wrapKey");
       let bytes =
         format === "jwk" ? native.utf8Encode(JSON.stringify(data)) : data;
       if (format === "jwk" && algorithm(a).name === "AES-KW") {
@@ -533,6 +617,9 @@
       return crypt("encrypt", a, wrappingKey, bytes, "wrapKey");
     }
     async unwrapKey(format, wrapped, key, a, unwrapped, extractable, usages) {
+      format = keyFormat(format, "unwrapKey");
+      // Bun normalizes the unwrapped key's algorithm before it decrypts.
+      unwrapped = algorithm(unwrapped);
       const bytes = crypt("decrypt", a, key, wrapped, "unwrapKey");
       if (format !== "jwk")
         return importKey(format, bytes, unwrapped, extractable, usages);
@@ -540,7 +627,7 @@
       try {
         jwk = JSON.parse(native.utf8Decode(new Uint8Array(bytes), true));
       } catch {
-        fail("DataError", "Invalid wrapped JWK");
+        fail("DataError", "WrappedKey cannot be converted to a JSON object");
       }
       return importKey(format, jwk, unwrapped, extractable, usages);
     }

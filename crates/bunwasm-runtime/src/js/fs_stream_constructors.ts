@@ -3,7 +3,7 @@
 
   type Flags = string | number;
   type Options = {
-    fd?: number;
+    fd?: number | object;
     flags?: Flags;
     mode?: number;
     autoClose?: boolean;
@@ -88,6 +88,13 @@
     inspect(value: unknown): string;
     loadStreams(): StreamModule;
     later(callback: () => void): void;
+    /** A FileHandle passed as options.fd: the stream holds a reference and closes with the handle. */
+    linkHandle(value: unknown, onClose: () => void): HandleLink | undefined;
+  }
+
+  interface HandleLink {
+    fd: number;
+    close(): Promise<void>;
   }
 
   return function createFileStreams(deps: Dependencies) {
@@ -121,9 +128,21 @@
       return value;
     }
 
-    function initializeFileStream(stream: BaseFileStream, path: unknown, options: Options, flags: Flags) {
-      stream.fd = options.fd === undefined ? null : options.fd;
-      if (stream.fd !== null) validateFd(stream.fd);
+    const handleLinks = new WeakMap<BaseFileStream, HandleLink>();
+
+    function streamFd(stream: BaseFileStream, fd: Options["fd"], onHandleClose: () => void) {
+      if (fd === undefined) return null;
+      const link = typeof fd === "object" ? deps.linkHandle(fd, onHandleClose) : undefined;
+      if (!link) {
+        validateFd(fd);
+        return fd as number;
+      }
+      handleLinks.set(stream, link);
+      return link.fd;
+    }
+
+    function initializeFileStream(stream: BaseFileStream & { close(): void }, path: unknown, options: Options, flags: Flags) {
+      stream.fd = streamFd(stream, options.fd, () => stream.close());
       stream.path = stream.fd === null ? toPath(path) : path;
       stream.flags = options.flags === undefined ? flags : options.flags;
       stream.mode = options.mode === undefined ? 0o666 : options.mode;
@@ -175,6 +194,12 @@
       const fd = this.fd;
       this.fd = null;
       this.pending = false;
+      const link = handleLinks.get(this);
+      if (link) {
+        handleLinks.delete(this);
+        link.close().then(() => callback(error), (closeError: unknown) => callback(error || closeError));
+        return;
+      }
       if (fd === null) { callback(error); return; }
       try { closeSync(fd); }
       catch (closeError) { callback(error || closeError); return; }

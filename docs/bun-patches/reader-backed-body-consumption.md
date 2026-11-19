@@ -51,6 +51,34 @@ constructors. iOS Safari 26.5 page and worker measurements show missing iterator
 failing stream consumers in a secure, nonisolated context. The original Nuxt
 throwing site is still unmeasured; this is not an SSR acceptance claim.
 
+## Null bodies, native consumers and clone()
+
+A null body is not a zero-length body. A Request or Response made without a body,
+`Response.redirect()`, `Response.error()` and a `fetch()` Response to HEAD or with a
+null body status (204, 205, 304) return an empty result from every mixin method and
+never become used, so `bodyUsed` stays false and `clone()` keeps working. A
+zero-length body (`""`, `new Uint8Array(0)`) is still a body and is used up by a read.
+
+The consumers outside the mixin keep their reader the same way: `fetch()` uploading a
+Request body (`fetch_lifetime.ts` `requestBody`) and `Bun.serve()` sending a stream
+Response (`http_response.ts`) no longer release it, even after an abort or a
+disconnect, so the body's stream stays locked, disturbed and closed, as native Bun
+1.4.4 leaves it.
+
+`clone()` of a used or locked body throws Bun's `TypeError: Body is disturbed or
+locked` with code `ERR_BODY_ALREADY_USED`. An unread stream over bytes already in
+memory (a string, Blob or typed array body's `.body`, or `Blob.stream()`) is not
+teed: both bodies take the bytes, and the old stream is read to its end and stays
+locked, as Bun lifts the payload out of its native stream. `new Request(request)`
+over a locked stream reports the tee's `TypeError: Invalid state: ReadableStream is
+locked` (`ERR_INVALID_STATE`). `Response.clone()` keeps the source's status, type,
+URL and redirect flag, so `Response.error().clone()` is an error Response with status
+0 instead of a RangeError. A Request or Response clone also keeps the type of the
+Blob behind its body (`_bodyType` from `body-content-type-and-header-order.md`), so
+`blob()` on the clone answers what it answers on the source. The `null-body-reads` and `body-native-consumers`
+fixtures carry native Bun 1.4.4's output for these cases; the reference is the same
+`body.test.ts` and `body-clone.test.ts` revision.
+
 The `body-stream-bookkeeping` fixture compares the stream state after each mixin
 method for string, Blob, typed array, URLSearchParams, stream and empty bodies on
 Request and Response, plus erroring, externally locked and adopted streams and

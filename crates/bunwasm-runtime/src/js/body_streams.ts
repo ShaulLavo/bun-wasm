@@ -59,16 +59,36 @@
     _body: Uint8Array | null;
     _stream: ReadableStream<unknown> | null;
   };
-  function validate(body: Body): void {
-    if (body.bodyUsed || body._stream?.locked) throw new TypeError("Body already used");
-    if (!PlatformRequest || !body._stream) return;
-    const init = { method: "POST", body: body._stream, duplex: "half" };
+  function unusable(): TypeError {
+    return Object.assign(new TypeError("Body is disturbed or locked"), { code: "ERR_BODY_ALREADY_USED" });
+  }
+  function lockedStream(): TypeError {
+    return Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });
+  }
+  function checkPlatform(stream: ReadableStream<unknown>): void {
+    if (!PlatformRequest) return;
+    const init = { method: "POST", body: stream, duplex: "half" };
     new PlatformRequest("http://localhost/", init);
   }
+  // Read a stream to its end and keep its reader: the stream ends closed, disturbed and locked.
+  // A stream over bytes already in memory closes on the first read, before this returns.
+  function finish(stream: ReadableStream<unknown>): void {
+    void drain(stream, () => {}).catch(() => {});
+  }
+  // Fetch's clone() (Bun's "Body is disturbed or locked" when this is unusable). An unread
+  // stream over bytes in memory is not teed: both bodies take the bytes, as Bun lifts them
+  // out of a native stream, and the old stream ends consumed.
   function clone(body: Body): Uint8Array | ReadableStream<unknown> | null {
-    validate(body);
-    if (!body._stream) return body._body;
-    const [source, copy] = tee(body._stream);
+    if (body.bodyUsed || body._stream?.locked) throw unusable();
+    const stream = body._stream;
+    if (!stream) return body._body;
+    if (body._body && bodies.get(stream) === body._body) {
+      finish(stream);
+      body._stream = null;
+      return body._body;
+    }
+    checkPlatform(stream);
+    const [source, copy] = tee(stream);
     body._stream = source;
     return copy;
   }
@@ -80,7 +100,10 @@
   function transfer(body: Body): ReadableStream<unknown> | null {
     const stream = body.body;
     if (stream === null) return null;
-    validate(body);
+    if (body.bodyUsed) throw new TypeError("Body already used");
+    // Bun tees the source's stream here, and the tee reports the lock.
+    if (stream.locked) throw lockedStream();
+    checkPlatform(stream);
     const reader = stream.getReader();
     body._bodyUsed = true;
     return new ReadableStream({

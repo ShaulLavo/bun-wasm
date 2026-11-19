@@ -35,6 +35,8 @@ test("source sync imports patches without a configured committer and preserves t
     const tree = git(origin, ["rev-parse", "HEAD^{tree}"]);
     writeFileSync(join(root, "patches/bun/0001.patch"), git(origin, ["format-patch", "-1", "--stdout"]) + "\n");
     copyFileSync(new URL("../env.sh", import.meta.url), join(root, "env.sh"));
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    copyFileSync(new URL("./waffle-release-inputs.json", import.meta.url), join(root, "scripts/waffle-release-inputs.json"));
     const recipe = readFileSync(new URL("./sync-bun.sh", import.meta.url), "utf8")
       .replace(/^BUN_COMMIT=[0-9a-f]+$/m, `BUN_COMMIT=${base}`)
       .replace("https://github.com/oven-sh/bun.git", pathToFileURL(origin).href);

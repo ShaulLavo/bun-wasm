@@ -22,6 +22,8 @@ runs:
         echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
         echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
         echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
+        # Runners start empty, so CI's sysroot keeps one fixed name across Waffle pins.
+        echo "BUN_WASM_SYSROOT=$RUNNER_TEMP/wasm-tools/bun-wasm-sysroot-patched" >> "$GITHUB_ENV"
     - uses: ./.github/actions/release-downloads
     - uses: ./.github/actions/setup-tools
       with:

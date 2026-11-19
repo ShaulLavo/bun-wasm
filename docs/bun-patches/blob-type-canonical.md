@@ -15,7 +15,8 @@ charset. Before this, every `text/*` type without a charset gained
 value differs from its key; the rest of that list maps to itself.
 
 Request and Response `blob()` keep the Content-Type header as written and apply only
-the exact-match table, as Bun does, so `TEXT/PLAIN` stays uppercase there.
+the exact-match table, as Bun does, so `TEXT/PLAIN` stays uppercase there. Which type
+`blob()` starts from is in `body-content-type-and-header-order.md`.
 `Blob.slice()` and `File` go through the constructor's rule. The
 `blob-type-canonical` fixture compares Blob, File, slice and body `blob()` types
 with native Bun.

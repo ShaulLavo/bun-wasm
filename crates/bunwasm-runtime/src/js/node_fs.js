@@ -23,10 +23,6 @@
     return err;
   }
 
-  function badFd(syscall) {
-    return Object.assign(new Error(`${syscall} EBADF`), { code: "EBADF", errno: -9, syscall });
-  }
-
   // Paths may be strings, Buffers or file: URLs. Relative paths resolve
   // against process.cwd() (WASI has no kernel cwd of its own).
   function toPath(path, name = "path") {
@@ -411,16 +407,38 @@
     withPath(path, (abs) => native.stat(abs, false));
   }
 
+  // Bun's mkdtemp errors carry syscall "mkdtemp" and the generated path, in Bun's key
+  // order. An empty prefix is EINVAL and names Bun's template, "XXXXX".
+  function mkdtempError(code, errno, path, description) {
+    const message = description === undefined ? `${code}, mkdtemp '${path}'` : `${code}: ${description}, mkdtemp '${path}'`;
+    return Object.assign(new Error(message), { code, path, syscall: "mkdtemp", errno });
+  }
+
+  function mkdtempPath(path, encoding) {
+    if (encoding === "buffer") return Buffer.from(path);
+    if (encoding && encoding !== "utf8" && encoding !== "utf-8") return Buffer.from(path).toString(encoding);
+    return path;
+  }
+
   function mkdtempSync(prefix, options) {
-    encodingOf(options);
+    const encoding = encodingOf(options);
+    if (prefix instanceof Uint8Array && prefix.byteLength === 0) {
+      throw Object.assign(new TypeError("Invalid path buffer: can't be empty"), { code: "ERR_INVALID_ARG_TYPE" });
+    }
+    const given = toPath(prefix, "prefix");
+    if (given === "") throw mkdtempError("EINVAL", -22, "XXXXX", "invalid argument");
     const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     for (;;) {
-      const bytes = native.randomBytes(6);
-      const suffix = Array.from(bytes, (b) => chars[b % chars.length]).join("");
-      const path = toPath(prefix, "prefix") + suffix;
-      if (native.exists(absolute(path))) continue;
-      native.mkdir(absolute(path), false);
-      return path;
+      const suffix = Array.from(native.randomBytes(6), (b) => chars[b % chars.length]).join("");
+      const path = given + suffix;
+      try {
+        native.mkdir(absolute(path), false);
+      } catch (err) {
+        if (err && err.code === "EEXIST") continue;
+        if (!err || typeof err.code !== "string") throw err;
+        throw mkdtempError(err.code, err.errno, path, internal.require("uv_errors").message(err.code));
+      }
+      return mkdtempPath(path, encoding);
     }
   }
 
@@ -819,60 +837,26 @@
     };
   }
 
-  class FileHandle {
-    constructor(fd) {
-      this.fd = fd;
-    }
-    async readFile(options) {
-      return readFileSync(this.fd, options);
-    }
-    async writeFile(data, options) {
-      return writeFileSync(this.fd, data, options);
-    }
-    async appendFile(data, options) {
-      return appendFileSync(this.fd, data, options);
-    }
-    async read(buffer, offset, length, position) {
-      if (this.fd < 0) throw badFd("read");
-      const target = buffer || Buffer.alloc(16384);
-      const bytesRead = readSync(this.fd, target, offset, length, position);
-      return { bytesRead, buffer: target };
-    }
-    async readv(buffers, position) {
-      if (this.fd < 0) throw badFd("readv");
-      return { bytesRead: readvSync(this.fd, buffers, position), buffers };
-    }
-    async write(data, offset, length, position) {
-      const bytesWritten = writeSync(this.fd, data, offset, length, position);
-      return { bytesWritten, buffer: data };
-    }
-    async writev(buffers, position) {
-      return { bytesWritten: writevSync(this.fd, buffers, position), buffers };
-    }
-    async stat(options) {
-      return sync.fstatSync(this.fd, options);
-    }
-    async truncate(len) {
-      native.ftruncate(this.fd, len || 0);
-    }
-    async sync() {}
-    async datasync() {}
-    async close() {
-      if (this.fd < 0) return;
-      native.close(this.fd);
-      this.fd = -1;
-    }
-    async [Symbol.asyncDispose]() {
-      return this.close();
-    }
+  let fileHandleModule;
+  function fileHandles() {
+    fileHandleModule ??= internal.require("fs_file_handle")({
+      Buffer, closeSync, readFileSync, writeFileSync, appendFileSync, readSync, readvSync, writeSync, writevSync,
+      fstatSync: sync.fstatSync, ftruncateSync: sync.ftruncateSync, later, createReadStream, createWriteStream,
+    });
+    return fileHandleModule;
   }
 
   const promises = {};
   for (const name of Object.keys(sync)) {
     promises[name.slice(0, -4)] = promisifySync(sync[name]);
   }
+  // The whole-file operations also take a FileHandle, which reads or writes at its position.
+  for (const name of ["readFile", "writeFile", "appendFile"]) {
+    const byPath = promises[name];
+    promises[name] = (path, ...args) => fileHandleModule?.isFileHandle(path) ? path[name](...args) : byPath(path, ...args);
+  }
   promises.glob = async function* glob(pattern, options) { yield* globSync(pattern, options); };
-  promises.open = async (path, flags, mode) => new FileHandle(openSync(path, flags, mode));
+  promises.open = async (path, flags, mode) => new (fileHandles().FileHandle)(openSync(path, flags, mode));
   promises.cp = async (from, to, options) => copyAsync(toPath(from, "src"), toPath(to, "dest"), options);
   promises.constants = constants;
   delete promises.close;
@@ -887,7 +871,7 @@
     fileStreamAdapter ??= internal.require("fs_stream_constructors")({
       read: native.read, asBuffer, openSync, closeSync, writeSync, toPath, validateFd, readRange, invalidArg,
       isEncoding: (encoding) => Buffer.isEncoding(encoding), inspect: (value) => internal.require("inspect").nodeInspect(value),
-      readPieceSize: kReadPiece, isRegularReadFd, later,
+      readPieceSize: kReadPiece, isRegularReadFd, later, linkHandle: (value, onClose) => fileHandleModule?.linkStream(value, onClose),
       loadStreams: () => internal.builtin("node:stream"),
     });
     return fileStreamAdapter;

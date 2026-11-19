@@ -923,7 +923,7 @@ class EngineHost {
         const options = { method: req.method, headers: Array.from(req.headers), body, redirect: init.redirect || "follow", signal: controller.signal };
         const res = await host.track(hostFetch(req.url, options));
         const bytes = new Uint8Array(await host.track(res.arrayBuffer()));
-        const nullBody = req.method === "HEAD" || res.status === 204 || res.status === 304;
+        const nullBody = req.method === "HEAD" || res.status === 204 || res.status === 205 || res.status === 304;
         const out = new web.Response(nullBody ? null : bytes, {
           status: res.status >= 200 && res.status <= 599 ? res.status : 200,
           statusText: res.statusText,

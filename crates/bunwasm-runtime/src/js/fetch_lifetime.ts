@@ -51,8 +51,8 @@
       if (!signal?.aborted) cancel(error);
       throw error;
     } finally {
+      // The reader is kept: like any consumer, the upload leaves the stream locked and used.
       if (onAbort) signal?.removeEventListener("abort", onAbort);
-      reader.releaseLock();
     }
   }
 
