@@ -1,0 +1,103 @@
+readable: ReadableStream { locked: false, state: 'readable', supportsBYOB: false }
+bytes: ReadableStream { locked: false, state: 'readable', supportsBYOB: true }
+closed: ReadableStream { locked: false, state: 'closed', supportsBYOB: false }
+errored: ReadableStream { locked: false, state: 'errored', supportsBYOB: false }
+locked: ReadableStream { locked: true, state: 'readable', supportsBYOB: false }
+reader with a pending read: ReadableStreamDefaultReader {
+  stream: ReadableStream { locked: true, state: 'readable', supportsBYOB: false },
+  readRequests: 1,
+  close: Promise { <pending> }
+}
+byob reader: ReadableStreamBYOBReader {
+  stream: ReadableStream { locked: true, state: 'readable', supportsBYOB: true },
+  readIntoRequests: 0,
+  close: Promise { <pending> }
+}
+default controller: ReadableStreamDefaultController {}
+byte controller: ReadableByteStreamController {}
+writable: WritableStream { locked: false, state: 'writable' }
+errored writable: WritableStream { locked: false, state: 'erroring' }
+writer: WritableStreamDefaultWriter {
+  stream: WritableStream { locked: true, state: 'writable' },
+  close: Promise { <pending> },
+  ready: Promise { <pending> },
+  desiredSize: 0
+}
+released writer: true true
+writable controller: WritableStreamDefaultController { stream: WritableStream { locked: false, state: 'writable' } }
+transform: TransformStream {
+  readable: ReadableStream { locked: false, state: 'readable', supportsBYOB: false },
+  writable: WritableStream { locked: false, state: 'writable' },
+  backpressure: true
+}
+transform controller: TransformStreamDefaultController {
+  stream: TransformStream {
+    readable: ReadableStream {},
+    writable: WritableStream {},
+    backpressure: true
+  }
+}
+byte length strategy: ByteLengthQueuingStrategy { highWaterMark: 16 }
+count strategy: CountQueuingStrategy { highWaterMark: 8 }
+text encoder stream: TextEncoderStream {
+  encoding: 'utf-8',
+  readable: ReadableStream { locked: false, state: 'readable', supportsBYOB: false },
+  writable: WritableStream { locked: false, state: 'writable' }
+}
+text decoder stream: TextDecoderStream {
+  encoding: 'utf-8',
+  fatal: true,
+  ignoreBOM: true,
+  readable: ReadableStream { locked: false, state: 'readable', supportsBYOB: false },
+  writable: WritableStream { locked: false, state: 'writable' }
+}
+compression stream: CompressionStream {
+  readable: ReadableStream { locked: false, state: 'readable', supportsBYOB: false },
+  writable: WritableStream { locked: false, state: 'writable' }
+}
+decompression stream: DecompressionStream {
+  readable: ReadableStream { locked: false, state: 'readable', supportsBYOB: false },
+  writable: WritableStream { locked: false, state: 'writable' }
+}
+subclass: ReadableStream { locked: false, state: 'readable', supportsBYOB: false }
+nested: {
+  a: {
+    b: ReadableStream { locked: false, state: 'readable', supportsBYOB: false }
+  },
+  list: [ WritableStream { locked: false, state: 'writable' } ]
+}
+too deep: { a: { b: { c: ReadableStream {} } } }
+transform in an array: [
+  TransformStream {
+    readable: ReadableStream { locked: false, state: 'readable', supportsBYOB: false },
+    writable: WritableStream { locked: false, state: 'writable' },
+    backpressure: true
+  }
+]
+depth 0: TransformStream [Object]
+depth 1: TransformStream {
+  readable: ReadableStream {},
+  writable: WritableStream {},
+  backpressure: true
+}
+without the custom method: TransformStream {}
+class names: ReadableStream ReadableStreamDefaultReader WritableStream WritableStreamDefaultWriter TransformStream CountQueuingStrategy
+colors: "ReadableStream { locked: \u001b[33mfalse\u001b[39m, state: \u001b[32m'readable'\u001b[39m, supportsBYOB: \u001b[33mfalse\u001b[39m }"
+Bun.inspect: ReadableStream { locked: false, state: 'readable', supportsBYOB: true }
+WritableStream { locked: false, state: 'writable' }
+[
+  ReadableStream { locked: false, state: 'readable', supportsBYOB: false }
+]
+depth -1 returns the stream: true
+another receiver returns it: true
+called directly: ReadableStream { locked: false, state: 'readable', supportsBYOB: false }
+descriptor: {"value":"function","writable":true,"enumerable":false,"configurable":true}
+prototype keeps default formatting: true
+TextEncoderStream: TypeError ERR_INVALID_THIS Value of "this" must be of type TextEncoderStream
+TextDecoderStream: TypeError ERR_INVALID_THIS Value of "this" must be of type TextDecoderStream
+CompressionStream: TypeError ERR_INVALID_THIS Value of "this" must be of type CompressionStream
+DecompressionStream: TypeError ERR_INVALID_THIS Value of "this" must be of type DecompressionStream
+byob request: ReadableStreamBYOBRequest {
+  view: Uint8Array(4) [ 0, 0, 0, 0 ],
+  controller: ReadableByteStreamController {}
+}
