@@ -253,6 +253,69 @@
   dispositions.set(13, 1);
   internal.pumpSignals = internal.require("process_signals")(processBase, signalNames);
 
+  // process.exitCode is Bun's exit byte (BunProcess.cpp setProcessExitCodeInner): Node's
+  // validateInteger after numeric strings convert, undefined and null leave it alone, and it
+  // reads undefined until something sets it.
+  let exitByte: number | undefined;
+  function exitCodeRangeError(range: string, value: number) {
+    const shown = Number.isInteger(value) && Math.abs(value) > 2 ** 32 ? String(value).replace(/\B(?=(\d{3})+$)/g, "_") : String(value);
+    return Object.assign(new RangeError(`The value of "code" is out of range. It must be ${range}. Received ${shown}`), { code: "ERR_OUT_OF_RANGE" });
+  }
+  function setExitCode(code: unknown) {
+    if (code === undefined || code === null) return;
+    const value = typeof code === "string" && code !== "" && !Number.isNaN(Number(code)) ? Number(code) : code;
+    if (typeof value !== "number") {
+      throw Object.assign(new TypeError(`The "code" argument must be of type number. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_TYPE" });
+    }
+    if (!Number.isInteger(value)) throw exitCodeRangeError("an integer", value);
+    if (!Number.isSafeInteger(value)) throw exitCodeRangeError(`>= ${Number.MIN_SAFE_INTEGER} && <= ${Number.MAX_SAFE_INTEGER}`, value);
+    exitByte = (value % 256) & 0xff;
+  }
+  // Which call started the exit, for BUN_WASM_TRACE_EXIT: process.exit() reaches the guest's
+  // exit through process.reallyExit, which a program may replace.
+  let exitReason = "process.reallyExit";
+  // Node's createProcessFinalization (lib/internal/process/finalization.js) as Bun ports it
+  // in src/js/builtins/ProcessObjectInternals.ts.
+  function createFinalization() {
+    type Entry = { ref: WeakRef<object>; fn: unknown; event: string };
+    let entries: Entry[] = [];
+    let installed = false;
+    function validateRef(obj: unknown): asserts obj is object {
+      if (obj === null || (typeof obj !== "object" && typeof obj !== "function")) {
+        throw Object.assign(new TypeError(`The "obj" argument must be of type object. Received ${internal.describe(obj)}`), { code: "ERR_INVALID_ARG_TYPE" });
+      }
+    }
+    function run(event: string) {
+      const due = entries.filter(entry => entry.event === event);
+      entries = entries.filter(entry => entry.event !== event);
+      for (const entry of due) {
+        const target = entry.ref.deref();
+        if (target !== undefined) (entry.fn as (target: object, event: string) => void)(target, event);
+      }
+    }
+    function register(ref: unknown, fn: unknown, event: string) {
+      validateRef(ref);
+      if (!installed) {
+        installed = true;
+        process.on("exit", () => run("exit"));
+        process.on("beforeExit", () => run("beforeExit"));
+      }
+      entries.push({ ref: new WeakRef(ref), fn, event });
+    }
+    return {
+      register(ref: unknown, fn: unknown) { register(ref, fn, "exit"); },
+      registerBeforeExit(ref: unknown, fn: unknown) { register(ref, fn, "beforeExit"); },
+      unregister(ref: unknown) {
+        validateRef(ref);
+        entries = entries.filter(entry => {
+          const target = entry.ref.deref();
+          return target !== undefined && target !== ref;
+        });
+      },
+    };
+  }
+  let finalization: ReturnType<typeof createFinalization> | undefined;
+
   const [pid, ppid] = native.processIdentity();
   const props = {
     title: "bun",
@@ -277,7 +340,6 @@
     env,
     pid,
     ppid,
-    exitCode: undefined,
     noDeprecation: false,
     isBun: true,
     browser: false,
@@ -286,17 +348,24 @@
     allowedNodeEnvironmentFlags: new Set(),
     cwd: () => native.cwd(),
     chdir: (dir: unknown) => native.chdir(internal.require("path").resolve(String(dir))),
-    // Erased operand bridges only: the original | operator must coerce unknown input,
-    // reread accessors, and throw for Symbols/BigInts without a pre-conversion.
+    // Bun's Process_functionExit: set the code, emit 'exit' (which sets _exiting), then call
+    // process.reallyExit as a method with the code the listeners left.
     exit(code?: unknown) {
-      if (code !== undefined) process.exitCode = code;
-      const exitCode = ((process.exitCode as number) | 0) || 0;
-      internal.emitExit(exitCode);
-      internal.traceExit("process.exit", ((process.exitCode as number) | 0) || exitCode);
-      native.exit(((process.exitCode as number) | 0) || exitCode);
+      setExitCode(code);
+      internal.emitExit(exitByte ?? 0);
+      const reallyExit = process.reallyExit;
+      if (typeof reallyExit !== "function") throw new TypeError("process.reallyExit is not a function");
+      exitReason = "process.exit";
+      reallyExit.call(process, exitByte ?? 0);
     },
-    reallyExit: (code: unknown) => { internal.traceExit("process.reallyExit", (code as number) | 0); native.exit((code as number) | 0); },
-    abort: () => { internal.traceExit("process.abort", 134); native.exit(134); },
+    // The raw exit: no 'exit' listeners. An integer keeps its low byte, anything else exits 0.
+    reallyExit(code: unknown) {
+      const byte = Number.isInteger(code) ? ((code as number) % 256) & 0xff : 0;
+      internal.traceExit(exitReason, byte);
+      internal.exitStarted = true;
+      native.exit(byte);
+    },
+    abort: () => { internal.traceExit("process.abort", 134); internal.exitStarted = true; native.exit(134); },
     // Bun's contract where the process image cannot be replaced (its Windows build):
     // workers are rejected first, then the main thread warns once and throws.
     execve() {
@@ -346,8 +415,22 @@
       throw new Error("process.dlopen is not supported in bun-wasm");
     },
     setSourceMapsEnabled() {},
-    hasUncaughtExceptionCaptureCallback: () => false,
-    setUncaughtExceptionCaptureCallback() {},
+    hasUncaughtExceptionCaptureCallback: () => internal.uncaughtCapture !== undefined,
+    setUncaughtExceptionCaptureCallback(fn: unknown) {
+      if (fn === null) {
+        internal.uncaughtCapture = undefined;
+        return;
+      }
+      if (typeof fn !== "function") {
+        throw Object.assign(new TypeError(`The "fn" argument must be of type function or null. Received ${internal.describe(fn)}`), { code: "ERR_INVALID_ARG_TYPE" });
+      }
+      if (internal.uncaughtCapture !== undefined) {
+        throw Object.assign(new Error("`process.setupUncaughtExceptionCapture()` was called while a capture callback was already active"), { code: "ERR_UNCAUGHT_EXCEPTION_CAPTURE_ALREADY_SET" });
+      }
+      internal.uncaughtCapture = fn as BunWasm.UncaughtCapture;
+    },
+    // Runs the uncaught exception handlers and reports whether one claimed the error.
+    _fatalException: (error: unknown, fromPromise?: unknown) => internal.dispatchUncaught(error, Boolean(fromPromise)),
     getActiveResourcesInfo: () => [],
     constrainedMemory: () => 0,
     availableMemory: () => {
@@ -357,7 +440,7 @@
     report: { getReport: () => ({ header: {} }) },
     stdin: undefined,
   };
-  const process: BunWasm.NodeEmitter & { noDeprecation: boolean; exitCode: unknown; pid: number; env: Record<PropertyKey, unknown>; execArgv: string[]; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
+  const process: BunWasm.NodeEmitter & { noDeprecation: boolean; exitCode?: unknown; reallyExit: unknown; pid: number; env: Record<PropertyKey, unknown>; execArgv: string[]; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
   delete process.stdin;
 
   Object.defineProperties(process, {
@@ -365,6 +448,8 @@
     stderr: { get: () => stderr || (stderr = makeWriter(2)), configurable: true, enumerable: true },
     stdin: { get: () => stdin || (stdin = makeReader()), configurable: true, enumerable: true },
     mainModule: { get: () => internal.getMainModule(), configurable: true, enumerable: false },
+    exitCode: { get: () => exitByte, set: setExitCode, configurable: true, enumerable: true },
+    finalization: { get: () => finalization ??= createFinalization(), configurable: true, enumerable: false },
     _exiting: { value: false, writable: true, configurable: true, enumerable: false },
     [Symbol.toStringTag]: { value: "process", configurable: true },
   });

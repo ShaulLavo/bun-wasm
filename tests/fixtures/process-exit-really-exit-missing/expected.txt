@@ -1,0 +1,4 @@
+exit 0 true
+true process.reallyExit is not a function
+true process.reallyExit is not a function
+true process.reallyExit is not a function

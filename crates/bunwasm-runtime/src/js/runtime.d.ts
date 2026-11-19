@@ -121,6 +121,7 @@ declare namespace BunWasm {
     builtin(name: "node:async_hooks"): AsyncHooks;
   }
   type EventListener = (...args: unknown[]) => void;
+  type UncaughtCapture = (error: unknown, origin: "uncaughtException" | "unhandledRejection") => void;
   interface NodeEmitter {
     on(this: object, event: string | symbol, listener: EventListener): unknown;
     once(this: object, event: string | symbol, listener: EventListener): unknown;
@@ -508,6 +509,15 @@ declare namespace BunWasm {
     nextTick(callback: Function, ...args: unknown[]): void;
     fakeTimers?: { elapsedNanoseconds: number; installIntl(intl: Pick<typeof Intl, "DateTimeFormat">): void };
     emitExit(code: number): void;
+    /** The uncaught exception handlers of bootstrap.js; true when one claimed the error. */
+    dispatchUncaught(error: unknown, isRejection: boolean): boolean;
+    /**
+     * Set just before the guest exits. Where native.exit unwinds with a throw (the browser
+     * engine's ExitSignal), handlers that catch errors rethrow what they catch from then on.
+     */
+    exitStarted?: boolean;
+    /** process.setUncaughtExceptionCaptureCallback's callback, while one is set. */
+    uncaughtCapture?: UncaughtCapture;
     finalizeWorkerChildren?: () => void;
     traceExit(reason: string, code: number): void;
     getMainModule(): unknown;

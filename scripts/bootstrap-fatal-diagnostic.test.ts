@@ -27,13 +27,14 @@ function fixture() {
     writeStderr(text: string) { output.push(text); order.push("stderr"); },
     tlsDispose() { order.push("tls-dispose"); },
     closeAllDirs() { order.push("close-dirs"); },
+    exit(code: number) { order.push(`exit ${code}`); },
   };
   const inspector = inspectFactory({ native });
   const internal = {
     native, require: () => inspector, cancelIoWaiters() {}, traceExit() {},
   };
-  const process: { env: Record<string, string>; exitCode: number | undefined; listenerCount(): number; emit(): void } = {
-    env: {}, exitCode: undefined, listenerCount: () => 0, emit: () => { order.push("exit-event"); },
+  const process: { env: Record<string, string>; exitCode: number | undefined; listenerCount(): number; emit(): void; _fatalException(): void } = {
+    env: {}, exitCode: undefined, listenerCount: () => 0, emit: () => { order.push("exit-event"); }, _fatalException() {},
   };
   context.internal = internal;
   context.process = process;
@@ -56,7 +57,8 @@ for (const method of ["handleUncaught", "handleRejection"] as const) {
       expect(output).toContain("AggregateError: bundle-startup-cause");
       expect(output).toContain("at start (/home/user/start.ts:7:3)");
       expect(output.indexOf("bundle-startup-cause")).toBeLessThan(output.indexOf("Bun vtest"));
-      expect(f.order).toEqual(["stderr", "stderr", "exit-event", "tls-dispose", "close-dirs"]);
+      // An unclaimed uncaught error ends the guest itself, after process disposal.
+      expect(f.order).toEqual(["stderr", "stderr", "exit-event", "tls-dispose", "close-dirs"].concat(method === "handleUncaught" ? ["exit 1"] : []));
       expect(f.process.exitCode).toBe(method === "handleUncaught" ? 1 : undefined);
       expect(error.message).toBe("bundle-startup-cause");
       expect(error.stack).toBe("start@/home/user/start.ts:7:3");

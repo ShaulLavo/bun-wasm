@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/process-exit-really-exit-missing",
+  "engines": ["quickjs", "jsc", "browser"]
+}

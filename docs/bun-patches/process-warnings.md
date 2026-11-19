@@ -15,4 +15,4 @@ Bun registers a native `onWarning` listener when it creates `process`, unless `N
 
 `process.ts` keeps its own `noDeprecation: false` property, so an unflagged `process.noDeprecation` stays an ordinary writable property, as in [process no-deprecation](process-no-deprecation.md).
 
-`tests/fixtures/process-warnings` compares every case above with native Bun 1.4.4 output, through child `bun -e` runs, on QuickJS, JavaScriptCore and the browser engine (`checks/native-process-warnings.json`). `scripts/runtime-process.test.ts` admits the delegating `emitWarning` as an approved delta that maps back to the original body in `scripts/fixtures/process-emit-warning-before.txt`, keeping the pinned process AST hash.
+`tests/fixtures/process-warnings` compares every case above with native Bun 1.4.4 output, through child `bun -e` runs, on QuickJS, JavaScriptCore and the browser engine (`checks/native-process-warnings.json`).

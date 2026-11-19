@@ -28,6 +28,5 @@ regression exercises the exact flag expression against the actual runtime
 bootstrap and builtin factories, and checks object identity and unknown names.
 The shared native fixture covers prototype, data descriptors, assignment,
 deletion, redefinition and cached identity under Node, Bun and the source runtime.
-The process AST receipt matches this exact delta before checking the original
-pinned hash, and mutation controls reject changed lookups, guards and unrelated
-process syntax.
+The process AST pin that once admitted this delta was removed with the
+[exit lifecycle](process-exit-lifecycle.md) change.

@@ -252,9 +252,12 @@ fn resume_idle<E: Engine>(e: &E, core: &Core<E>, main: &mut Option<E::Value>) ->
     }
     // A top-level await with no remaining work exits quietly.
     core.check_main(e, main);
-    // `beforeExit` listeners may schedule work through promise jobs or I/O waiters.
-    if core.call_internal_num(e, "emitBeforeExit").unwrap_or(0.0) != 0.0 {
-        return true;
+    // Bun's on_before_exit: the microtasks and ticks that `beforeExit` listeners queue run
+    // now, and the event is emitted again only after loop work they left alive.
+    if core.turn_number(e, "emitBeforeExit") != 0.0 {
+        core.drain_jobs(e);
+        core.check_rejections(e);
+        return core.turn_number(e, "loopAlive") != 0.0;
     }
     if core.drain_jobs(e) {
         return true;
