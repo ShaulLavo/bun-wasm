@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import * as host from "node:fs";
 import * as path from "node:path";
 import { Buffer } from "node:buffer";
+import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import { inspect } from "node:util";
 import { execFileSync } from "node:child_process";
@@ -48,6 +49,11 @@ function fixture() {
   const factory = runInNewContext(source, { Uint8Array, ArrayBuffer, URL, Date, FinalizationRegistry });
   const fsOptionsPath = new URL("../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url);
   const helpers = host.existsSync(fsOptionsPath) ? runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${host.readFileSync(fsOptionsPath, "utf8")}`), { Date })({}) : null;
+  const fileHandlePath = new URL("../crates/bunwasm-runtime/src/js/fs_file_handle.ts", import.meta.url);
+  const fileHandles = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${host.readFileSync(fileHandlePath, "utf8")}`), { TextEncoder, DOMException })({
+    describe: String,
+    require: (name: string) => name === "events" ? EventEmitter : undefined,
+  });
   const { fs } = factory({ native, describe: String,
     toUint8: (view: ArrayBufferView) => new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
     require(name: string) {
@@ -55,6 +61,7 @@ function fixture() {
       if (name === "path") return path;
       if (name === "fs_watch") return () => ({});
       if (name === "fs_options") return helpers;
+      if (name === "fs_file_handle") return fileHandles;
       if (name === "inspect") return { nodeInspect: inspect };
       throw new Error(`Unexpected dependency ${name}`);
     },

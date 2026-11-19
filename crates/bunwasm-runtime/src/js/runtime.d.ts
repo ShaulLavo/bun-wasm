@@ -530,6 +530,10 @@ declare namespace BunWasm {
       emitWarning(process: WarningProcess, warning: unknown, type?: unknown, code?: unknown, ctor?: unknown): void;
     };
     pumpSignals?: () => boolean;
+    require(name: "uv_errors"): {
+      binding(): Record<string, unknown>;
+      message(name: string): string | undefined;
+    };
     /** The byte helper accepts arbitrary input and throws for unsupported shapes. */
     toUint8(value: unknown): Uint8Array;
   }
