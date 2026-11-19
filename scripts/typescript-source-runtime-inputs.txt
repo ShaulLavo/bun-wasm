@@ -265,6 +265,8 @@ tests/fixtures/node-console/index.js
 tests/fixtures/node-crypto-keys/index.js
 tests/fixtures/node-duplex-web-terminal/index.js
 tests/fixtures/node-events/index.js
+tests/fixtures/node-fetch-builtin/node_modules/node-fetch/lib/index.js
+tests/fixtures/node-fetch-builtin/node_modules/undici/index.js
 tests/fixtures/node-from-web-async-destroy/index.js
 tests/fixtures/node-from-web-destroy-hooks/index.js
 tests/fixtures/node-from-web-terminal/index.js
