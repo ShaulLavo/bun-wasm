@@ -1039,6 +1039,7 @@
   internal.mainPath = native.mainPath();
   internal.require("web")(defineGlobal, defineLazyGlobal);
   internal.require("readable_stream_methods"); // Bun's ReadableStream text/json/bytes/blob
+  internal.require("stream_inspect"); // Bun's util.inspect.custom for the web stream classes
   internal.require("crypto")(defineGlobal);
   defineGlobal("process", internal.require("process"));
   // Node's setupWarningHandler: the default 'warning' listener and the warning flags.
