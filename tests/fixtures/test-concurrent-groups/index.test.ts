@@ -132,6 +132,39 @@ describe("immediate", () => {
   });
 });
 
+// A callback that awaits only settled promises never really waits, so the next test starts
+// after it finishes.
+describe("settled awaits", () => {
+  for (const name of ["e", "f"]) {
+    test.concurrent(name, async () => {
+      console.log(`${name}1`);
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      console.log(`${name}2`);
+    });
+  }
+});
+
+// Every chained variant keeps the conditional helpers.
+const variants = {
+  "test.concurrent": test.concurrent, "test.serial": test.serial, "test.failing": test.failing, "test.skip": test.skip,
+  "test.todo": test.todo, "test.concurrent.failing": test.concurrent.failing,
+  "describe.concurrent": describe.concurrent, "describe.serial": describe.serial, "describe.skip": describe.skip,
+} as Record<string, Record<string, unknown>>;
+for (const [label, variant] of Object.entries(variants)) {
+  console.log(label, ["if", "skipIf", "todoIf", "failingIf"].map(helper => `${helper}=${typeof variant[helper]}`).join(" "));
+}
+test.concurrent.skipIf(true)("skipped by test.concurrent.skipIf", () => {
+  console.log("must not run");
+});
+test.concurrent.if(true)("run by test.concurrent.if", () => {
+  console.log("test.concurrent.if ran");
+});
+describe.concurrent.skipIf(true)("skipped by describe.concurrent.skipIf", () => {
+  test("inside a skipped describe", () => {
+    console.log("must not run");
+  });
+});
+
 test("modifier variants are the same function on every access", () => {
   expect(test.concurrent).toBe(test.concurrent);
   expect(test.failing).toBe(test.failing);

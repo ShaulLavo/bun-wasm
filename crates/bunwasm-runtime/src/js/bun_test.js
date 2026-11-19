@@ -2235,9 +2235,19 @@
     }
   }
 
+  // Every variant has its own if, skipIf, todoIf and failingIf, as in Bun:
+  // test.concurrent.skipIf(c) picks test.concurrent.skip or test.concurrent.
+  function addConditionals(fn, failingIf) {
+    fn.if = (condition) => (condition ? fn : fn.skip);
+    fn.skipIf = (condition) => (condition ? fn.skip : fn);
+    fn.todoIf = (condition) => (condition ? fn.todo : fn);
+    fn.failingIf = failingIf;
+  }
+
   function makeTest(modifiers) {
     const fn = (name, callback, timeout) => registerTest(modifiers, name, callback, timeout);
     addVariants(fn, modifiers, makeTest, ["skip", "todo", "only", "failing", "concurrent", "serial"]);
+    addConditionals(fn, (condition) => (condition ? fn.failing : fn));
     fn.each = (table) => (name, callback, timeout) => {
       guardRegistration("test");
       eachRows(table).forEach((args, index) => {
@@ -2253,6 +2263,10 @@
   function makeDescribe(modifiers) {
     const fn = (...args) => registerDescribe(modifiers, ...args);
     addVariants(fn, modifiers, makeDescribe, ["skip", "todo", "only", "concurrent", "serial"]);
+    addConditionals(fn, (condition) => {
+      if (condition) throw new Error("Cannot call .failingIf() on describe");
+      return fn;
+    });
     fn.each = (table) => (name, callback) => {
       guardRegistration("describe");
       eachRows(table).forEach((args, index) => {
@@ -2263,15 +2277,7 @@
   }
 
   const test = makeTest({});
-  test.if = (condition) => (condition ? test : test.skip);
-  test.skipIf = (condition) => (condition ? test.skip : test);
-  test.todoIf = (condition) => (condition ? test.todo : test);
-  test.failingIf = (condition) => (condition ? test.failing : test);
-
   const describe = makeDescribe({});
-  describe.if = (condition) => (condition ? describe : describe.skip);
-  describe.skipIf = (condition) => (condition ? describe.skip : describe);
-  describe.todoIf = (condition) => (condition ? describe.todo : describe);
 
   function hookRegistrar(kind) {
     return (fn, timeout) => {
@@ -2301,10 +2307,9 @@
    * { timeout, done }, never rejects. Uses a done callback when the function
    * declares one.
    */
-  function invoke(fn, args, usesDone, timeout) {
+  function invoke(fn, args, usesDone, timeout, slot = running()) {
     return new Promise((resolve) => {
       let timer = null;
-      const slot = running();
       const invocation = matcherSupport.pending();
       const finish = (result) => invocation.complete(result, finalize, usesDone);
       const finalize = (result) => {
@@ -2320,17 +2325,29 @@
         timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
       };
       startTimer();
-      internal.require("test_lifecycle").body(fn, args, usesDone, finish);
+      const body = () => internal.require("test_lifecycle").body(fn, args, usesDone, finish);
+      // A lane's slot is entered again for each call: runtime JS awaits between a test's
+      // hooks and body, and a Browser host does not carry the frame across those.
+      if ("blocked" in slot) runInSlot(slot, body);
+      else body();
       // In a concurrent group, the next test starts only once this one really waits, as in Bun.
       if (slot.blocked && !invocation.settled) whenStillPending(invocation, slot.blocked);
     });
   }
 
-  // A callback that already finished, an async one included, settles its invocation within
-  // two microtask turns: its promise reaction, then completion. One still pending after
-  // three turns really waits; no timer can have run yet. This does not read promise state,
-  // which the Browser host cannot see for async functions.
+  // Bun drains the microtask queue after calling a callback and only then reads its promise:
+  // one that awaited only settled values has finished by then. QuickJS, JSC and the other
+  // in-guest engines own their job queue, so they drain it here the same way. The Browser
+  // host cannot run its native jobs synchronously or see an async function's promise state,
+  // so there a callback still unsettled after three microtask turns counts as waiting: a
+  // finished one settles within two (its promise reaction, then completion), and no timer
+  // can have run yet.
   function whenStillPending(invocation, blocked) {
+    if (native.engine !== "host") {
+      native.runMicrotasks();
+      if (!invocation.settled) blocked();
+      return;
+    }
     let turns = 3;
     const check = () => {
       if (invocation.settled) return;
@@ -2340,14 +2357,14 @@
     check();
   }
 
-  function invokeHook(hook) {
+  function invokeHook(hook, slot) {
     const timeout = hook.timeout === undefined ? options.timeout : hook.timeout;
-    return invoke(hook.fn, [], hook.fn.length > 0, timeout);
+    return invoke(hook.fn, [], hook.fn.length > 0, timeout, slot);
   }
 
-  async function runHooks(hooks) {
+  async function runHooks(hooks, slot) {
     for (const hook of hooks) {
-      const result = await invokeHook(hook);
+      const result = await invokeHook(hook, slot);
       if (!result.ok) return result;
     }
     return { ok: true };
@@ -2385,7 +2402,8 @@
 
   // Bun's Order.rs: a file runs as a flat list of steps. Consecutive concurrent tests form one
   // group, even across describe blocks; beforeAll and afterAll hooks always run on their own,
-  // so they end a group. A failed beforeAll skips its scope's tests and afterAll.
+  // so they end a group. A failed beforeAll skips its scope's tests and, as before this runner
+  // had groups, its afterAll too; Bun's set_failure_skip_to still runs that afterAll.
   function planScope(scope, file, steps) {
     const active = willRun(scope, file);
     const before = active && scope.beforeAll.length ? { kind: "beforeAll", scope, skipTo: 0 } : null;
@@ -2498,16 +2516,16 @@
     const slot = running();
     slot.test = record;
     const start = now();
-    // Without beforeEach hooks the body starts synchronously, as in Bun: a concurrent group's
-    // tests each reach their first callback in order before the next one starts.
+    // Without beforeEach hooks the body starts synchronously, so a concurrent group's tests
+    // each reach their first callback in order before the next one starts.
     const beforeEach = chain.flatMap((s) => s.beforeEach);
-    let result = beforeEach.length ? await runHooks(beforeEach) : { ok: true };
+    let result = beforeEach.length ? await runHooks(beforeEach, slot) : { ok: true };
     if (result.ok) {
       const timeout = test.timeout === undefined ? options.timeout : test.timeout;
-      result = await invoke(test.fn, [], test.usesDone, timeout);
+      result = await invoke(test.fn, [], test.usesDone, timeout, slot);
       if (result.timeout) result.timeoutMs = timeout;
     }
-    const after = await runHooks(cleanupHooks(record, chain.reverse().flatMap((s) => s.afterEach)));
+    const after = await runHooks(cleanupHooks(record, chain.reverse().flatMap((s) => s.afterEach)), slot);
     if (!result.ok && !after.ok) {
       printFileHeaderIfNeeded();
       const failure = failureFromResult(test.failing ? after : result, test);

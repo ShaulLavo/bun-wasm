@@ -17,25 +17,39 @@ Modifiers chain in any order (`test.concurrent.each`, `test.concurrent.failing`,
 A file runs as a flat list of steps. Consecutive concurrent tests form one
 group, even across describe blocks. `beforeAll` and `afterAll` hooks are steps
 of their own, so they end a group. A failed `beforeAll` skips its scope's tests
-and `afterAll`, as before. Within a group, each test runs its own `beforeEach`
-hooks, body and cleanup. Bun steps a test until one of its callbacks really
-waits, then starts the next test. Here tests run in lanes that take tests in
-order, and a new lane starts whenever a running callback is still unsettled
-three microtask turns after it returns. A callback that already finished,
-async or not, settles before then, and no timer can have run yet. So tests that
-never wait run one after another, and tests that wait overlap. At most
-`--max-concurrency` lanes run at once (default 20; 0 removes the limit).
-Results are reported as tests finish. The turn count stands in for Bun's direct
-promise-state check because the Browser host cannot see an async function's
-promise state. A test that awaits several already-resolved promises before its
-first real wait can therefore print a line earlier than in Bun.
+and also its `afterAll`, as this runner did before groups existed. That differs
+from Bun, whose `set_failure_skip_to` in `Order.rs` still runs the scope's
+`afterAll`. Within a group, each test runs its own `beforeEach` hooks, body and
+cleanup.
+
+Bun steps a test until one of its callbacks really waits, then starts the next
+test. It decides by draining the microtask queue after the call and then
+reading the callback's promise, so a callback that awaited only settled values
+has finished and never counts as waiting. Here tests run in lanes that take
+tests in order, and a new lane starts whenever a running callback really waits,
+up to `--max-concurrency` lanes at once (default 20; 0 removes the limit). So
+tests that never wait run one after another, and tests that wait overlap.
+Results are reported as tests finish.
+- QuickJS, JSC and the other in-guest engines own their job queue. They drain it
+  fully after the call and then check whether the callback settled, as Bun
+  does.
+- The Browser host can neither run its native promise jobs synchronously nor
+  see an async function's promise state. There, a callback still unsettled
+  three microtask turns after it returns counts as waiting. A finished callback
+  settles within two turns, and no timer can have run yet. A test that awaits
+  several already-resolved promises before its first real wait can therefore
+  print a line earlier than in Bun on that engine.
 
 `test.concurrent`, `test.failing` and the other modifier variants are each made
-on first use and then kept, so `it.failing === test.failing` as in Bun.
+on first use and then kept, so `it.failing === test.failing` as in Bun. Every
+variant has its own `if`, `skipIf`, `todoIf` and `failingIf`, as in Bun.
+`test.concurrent.skipIf(true)` gives `test.concurrent.skip`, and
+`describe.failingIf(true)` throws as Bun's does.
 
 Outside a group one test runs at a time, and the running test and its
 invocation are module state, as before. Inside a group each test runs in its
-own async context frame (`internal.runInContext`), so an assertion, inline
+own async context frame (`internal.runInContext`), entered again around each
+hook and body call because runtime JS awaits between them. So an assertion, inline
 snapshot, `onTestFinished` or uncaught error after an `await` reaches the test
 it came from. Bun instead treats the current test as unknown inside a group, so
 there it counts expectations only in the summary and rejects snapshot matchers.
@@ -44,5 +58,13 @@ without an async-context provider), the adapter falls back to that same
 unknown-test behavior. Code outside every test of a group, such as a timer the
 group did not start, reports errors between tests.
 
+Two known differences remain:
+- An uncaught error inside a concurrent group differs by engine. QuickJS and
+  JSC print "Unhandled error between tests" and the test passes, as in Bun. On
+  the Browser engine the error fails the test.
+- `expect.assertions`, `expect.hasAssertions` and `onTestFinished` work inside
+  concurrent tests here. Bun throws for them there.
+
 The `test-concurrent-groups` and `test-concurrent-flags` fixtures cover these
-rules on every engine.
+rules on every engine. On the Browser engine they also run with
+`--context hooks`.

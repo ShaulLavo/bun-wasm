@@ -1,4 +1,13 @@
 bun test vVERSION
+test.concurrent if=function skipIf=function todoIf=function failingIf=function
+test.serial if=function skipIf=function todoIf=function failingIf=function
+test.failing if=function skipIf=function todoIf=function failingIf=function
+test.skip if=function skipIf=function todoIf=function failingIf=function
+test.todo if=function skipIf=function todoIf=function failingIf=function
+test.concurrent.failing if=function skipIf=function todoIf=function failingIf=function
+describe.concurrent if=function skipIf=function todoIf=function failingIf=function
+describe.serial if=function skipIf=function todoIf=function failingIf=function
+describe.skip if=function skipIf=function todoIf=function failingIf=function
 start serial 1
 end serial 1
 start concurrent 2
@@ -28,3 +37,8 @@ immediate afterEach
 immediate beforeEach
 immediate 2
 immediate afterEach
+e1
+e2
+f1
+f2
+test.concurrent.if ran

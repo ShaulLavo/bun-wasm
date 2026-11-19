@@ -43,12 +43,23 @@ expect(received).toBe(expected)
 (pass) peaks
 (pass) immediate > immediate 1
 (pass) immediate > immediate 2
+(pass) settled awaits > e
+(pass) settled awaits > f
+(skip) skipped by test.concurrent.skipIf
+(pass) run by test.concurrent.if
+(skip) skipped by describe.concurrent.skipIf > inside a skipped describe
 (pass) modifier variants are the same function on every access
+
+2 tests skipped:
+(skip) skipped by test.concurrent.skipIf
+(skip) skipped by describe.concurrent.skipIf > inside a skipped describe
+
 
 1 tests failed:
 (fail) attribution > a failing assertion fails its own test
 
- 41 pass
+ 44 pass
+ 2 skip
  1 fail
  1 snapshots, 5 expect() calls
-Ran 42 tests across 1 file. [TIME]
+Ran 47 tests across 1 file. [TIME]
