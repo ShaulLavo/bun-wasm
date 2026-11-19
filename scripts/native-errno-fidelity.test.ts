@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stableScratch } from "./stable-scratch.ts";
 
 test("native filesystem errors retain errno identity, Node messages, and ErrorKind fallbacks", () => {
-  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-native-errno-"));
+  const scratch = stableScratch("native-errno");
   try {
     const root = resolve(import.meta.dir, "..");
     const source = readFileSync(join(root, "crates/bunwasm-runtime/src/natives.rs"), "utf8");

@@ -1,9 +1,9 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { stableScratch } from "./stable-scratch.ts";
 
 test("native module evaluation query preserves state and error classification on both tiers", () => {
   const build = process.env.SPIDERMONKEY_BUILD_DIR;
@@ -11,7 +11,7 @@ test("native module evaluation query preserves state and error classification on
   const sdk = process.env.WASI_SDK_PATH;
   assert(build && isAbsolute(build), "Set SPIDERMONKEY_BUILD_DIR to the ordinary native build");
   assert(sysroot && sdk, "Source env.sh before native query controls");
-  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-sm-module-info-"));
+  const scratch = stableScratch("sm-module-info");
   try {
     symlinkSync(join(build, "libspidermonkey_bunwasm.a"), join(scratch, "libspidermonkey_g2.a"));
     const env = {
