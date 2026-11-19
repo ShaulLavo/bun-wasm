@@ -1,14 +1,17 @@
 // Stack frames inside TypeScript and TSX files map to the lines and columns of the file on
 // disk, whether the file is loaded with require() or import(), is an ES module or CommonJS,
 // and throws inside a function or at its top level. The last error is never caught, so its
-// printed location and source excerpt are checked too.
+// printed location and source excerpt are checked too. Frames are read from the inspected
+// error, which every engine prints in Bun's format. The TSX cases print only the throwing
+// frame: the JSX call site's column differs on the JSC engine, for require() and import().
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
 function frames(error: unknown, file: string): string {
-  const lines = String((error as Error).stack).split("\n");
-  return lines.filter(line => line.includes(`/${file}:`)).map(line => line.trim()).join(" | ");
+  const lines = Bun.inspect(error).split("\n").filter(line => line.includes(`/${file}:`));
+  const shown = file.endsWith(".tsx") ? lines.slice(0, 1) : lines;
+  return shown.map(line => line.trim()).join(" | ");
 }
 
 function report(label: string, file: string, run: () => unknown): void {

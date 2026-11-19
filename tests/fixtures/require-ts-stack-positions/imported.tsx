@@ -1,16 +1,11 @@
 /** @jsxRuntime classic */
 /** @jsx h */
-// An ES module in TSX, loaded with import().
+// An ES module in TSX, loaded with import(). The JSX below compiles to calls, so the
+// lines of h after it move when the file is compiled.
 interface Props {
   label: string;
 }
 
-function h(tag: string, props: Props | null, ...children: unknown[]) {
-  if (children.length > 1) throw new Error(`too many children for <${tag}>`);
-  return { tag, props, children };
-}
-
-// Not a tail call: JavaScriptCore drops the frames of strict-mode tail calls.
 export function render(label: string) {
   const tree = (
     <section label={label}>
@@ -19,4 +14,9 @@ export function render(label: string) {
     </section>
   );
   return { tree, label };
+}
+
+function h(tag: string, props: Props | null, ...children: unknown[]) {
+  if (children.length > 1) throw new Error(`too many children for <${tag}>`);
+  return { tag, props, children };
 }

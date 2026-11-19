@@ -7,6 +7,6 @@
                                          ^
 RangeError: port out of range: 70000
       at listen (/uncaught.ts:9:38)
-      at /index.ts:41:26
+      at /index.ts:44:26
 
 Bun vVERSION (PLATFORM)

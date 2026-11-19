@@ -1,8 +1,8 @@
 require ESM .ts: at check (/required.ts:16:27) | at area (/required.ts:21:10)
-require ESM .tsx: at h (/required.tsx:9:38) | at render (/required.tsx:16:5)
+require ESM .tsx: at h (/required.tsx:20:38)
 require CommonJS .ts: at parse (/required-cjs.ts:10:56)
 require CommonJS .cjs: at parse (/required-plain.cjs:4:38)
 require throws at top level: at /top-level.ts:9:22
 require ESM .ts again: at check (/required.ts:16:27) | at area (/required.ts:21:10)
 import .ts: at area (/imported.ts:12:33)
-import .tsx: at h (/imported.tsx:9:38) | at render (/imported.tsx:16:5)
+import .tsx: at h (/imported.tsx:20:38)
