@@ -1214,15 +1214,6 @@
     get redirected() {
       return this.#redirected;
     }
-    get bodyUsed() {
-      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
-    }
-    get body() {
-      if (this._stream) return this._stream;
-      if (this._body === null) return null;
-      this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
-      return this._stream;
-    }
     clone() {
       const body = bodyStreams.clone(this);
       // Response.error()'s status 0 is out of the constructor's range; copy it after.
@@ -1241,6 +1232,25 @@
     }
   }
   Object.assign(Response.prototype, BodyMixin);
+  // The bodyUsed and body getters Request and Response share, with class getter attributes.
+  const bodyAccessors = {
+    bodyUsed: {
+      get() {
+        return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
+      },
+      configurable: true,
+    },
+    body: {
+      get() {
+        if (this._stream) return this._stream;
+        if (this._body === null) return null;
+        this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
+        return this._stream;
+      },
+      configurable: true,
+    },
+  };
+  Object.defineProperties(Response.prototype, bodyAccessors);
 
   function defineInternalBody(target) {
     for (const key of ["_body", "_stream", "_bodyUsed", "_servedType", "_bodyType"]) {
@@ -1289,15 +1299,6 @@
     get redirect() {
       return this.#redirect;
     }
-    get bodyUsed() {
-      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
-    }
-    get body() {
-      if (this._stream) return this._stream;
-      if (this._body === null) return null;
-      this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
-      return this._stream;
-    }
     clone() {
       const body = bodyStreams.clone(this);
       const copy = new Request(this, { body });
@@ -1309,6 +1310,7 @@
     }
   }
   Object.assign(Request.prototype, BodyMixin);
+  Object.defineProperties(Request.prototype, bodyAccessors);
 
   // No sockets under WASI. file: URLs still work, like in Bun.
   // Arguments are read and checked as Bun does (fetch_args.ts); errors reject.
