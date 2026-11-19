@@ -1043,9 +1043,10 @@
     [Symbol.iterator]() {
       return this.entries();
     }
+    // Bun keeps every Set-Cookie line, as an array.
     toJSON() {
       const out = {};
-      for (const [k, v] of this) out[k] = v;
+      for (const [k, v] of this) out[k] = k === "set-cookie" ? this.#cookies.slice() : v;
       return out;
     }
     get [Symbol.toStringTag]() {

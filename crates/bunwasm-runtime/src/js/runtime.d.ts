@@ -240,6 +240,7 @@ declare namespace BunWasm {
     concatBytes(chunks: readonly Uint8Array[]): Uint8Array<ArrayBuffer>;
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
+    require(name: "bun_provided_internals"): Record<string, unknown>;
     builtin(name: "node:stream"): {
       Transform: CompressionConstructor;
       Readable: new(options: { read(): void; highWaterMark?: number; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => NodeReadable;

@@ -3,6 +3,14 @@
     "internal:freelist",
     "node:querystring",
     "node:punycode",
-    "node:wasi"
+    "node:wasi",
+    "node-fetch",
+    "undici",
+    "isomorphic-fetch",
+    "vercel_fetch"
+  ],
+  "provided": [
+    "internal:tls",
+    "internal:webstreams_adapters"
   ]
 }

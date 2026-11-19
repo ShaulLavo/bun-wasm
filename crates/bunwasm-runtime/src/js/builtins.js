@@ -513,6 +513,11 @@
     "node:child_process": () => internal.require("spawn").nodeChildProcess(),
     "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
     "ws": () => internal.require("ws_builtin"),
+    // npm packages Bun replaces with its own src/js/thirdparty modules, even when installed.
+    "node-fetch": () => internal.require("bun_builtins").require("node-fetch"),
+    "undici": () => internal.require("bun_builtins").require("undici"),
+    "isomorphic-fetch": () => internal.require("bun_builtins").require("isomorphic-fetch"),
+    "@vercel/fetch": () => internal.require("bun_builtins").require("vercel_fetch"),
     "node:net": () => Object.assign(internal.require("net").nodeNet(), internal.require("net_address")),
     "node:tls": lazy("node_tls"),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
