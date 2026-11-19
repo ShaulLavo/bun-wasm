@@ -312,49 +312,11 @@
   // --- async_hooks / diagnostics_channel ------------------------------------
 
   function asyncHooksModule() {
-    // The current async context is a frozen Map from storage to store,
-    // carried across await/then, timers and ticks by the engine (see
-    // runInContext in bootstrap.js).
+    // The current async context is carried across await/then, timers and ticks
+    // by the engine (see runInContext in bootstrap.js); async_local_storage.ts
+    // owns what it holds.
     const currentFrame = () => native.getAsyncContext();
-    function frameWith(storage, store) {
-      const next = new Map(currentFrame() || []);
-      next.set(storage, store);
-      return Object.freeze(next);
-    }
-    function frameWithout(storage) {
-      const next = new Map(currentFrame() || []);
-      next.delete(storage);
-      return Object.freeze(next);
-    }
-
-    class AsyncLocalStorage {
-      getStore() {
-        const frame = currentFrame();
-        return frame ? frame.get(this) : undefined;
-      }
-      run(store, callback, ...args) {
-        return internal.runInContext(frameWith(this, store), callback, undefined, args);
-      }
-      exit(callback, ...args) {
-        return internal.runInContext(frameWithout(this), callback, undefined, args);
-      }
-      enterWith(store) {
-        native.setAsyncContext(frameWith(this, store));
-      }
-      disable() {
-        native.setAsyncContext(frameWithout(this));
-      }
-      static bind(fn) {
-        const frame = currentFrame();
-        return function bound(...args) {
-          return internal.runInContext(frame, fn, this, args);
-        };
-      }
-      static snapshot() {
-        const frame = currentFrame();
-        return (fn, ...args) => internal.runInContext(frame, fn, undefined, args);
-      }
-    }
+    const { AsyncLocalStorage } = internal.require("async_local_storage");
     class AsyncResource {
       constructor(type) {
         this.type = type;
