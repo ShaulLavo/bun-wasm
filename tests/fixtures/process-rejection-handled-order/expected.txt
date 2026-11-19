@@ -1,0 +1,1 @@
+unhandledRejection first, rejectionHandled first, unhandledRejection second

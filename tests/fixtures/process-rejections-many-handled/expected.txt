@@ -1,0 +1,2 @@
+while waiting {"unhandledRejection":0,"rejectionHandled":0}
+while reporting {"unhandledRejection":1,"rejectionHandled":0}
