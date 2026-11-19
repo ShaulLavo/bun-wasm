@@ -5,8 +5,8 @@ Class **Original adapter**. `web/scripts/node-shell.ts`, `node-host.ts`,
 the pinned Bash and env guests. No upstream implementation is copied.
 
 The consumer pins the prepared public bash-web 0.0.113 archive at
-`7c458c22b5490ac8c30419378ac9447466139fcc` and Waffle 0.0.141 at
-`dab59163173364806583770f4dbb55f30052c781` (host interface 3). The adapter originally used Waffle
+`7c458c22b5490ac8c30419378ac9447466139fcc` and Waffle 0.0.142 at
+`38c0b979ae958fd5acb1b1819135096df0832d9b` (host interface 3). The adapter originally used Waffle
 0.0.130 at `b6ce9c22e4032637814a3985fab934915be02bcc`; its inherited-descriptor
 contract remains unchanged. Self INT and TERM retain signaled outcomes 2 and 15;
 ordinary exits 130 and 143 remain exited outcomes. The existing
