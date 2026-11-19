@@ -186,9 +186,16 @@ pub trait Engine: Sized + 'static {
         fulfilled: &Self::Value,
         rejected: &Self::Value,
     ) -> Result<Self::Value, Self::Value>;
-    /// Rejections that had no handler when the job queue drained:
-    /// (promise, reason) pairs, in order. Drains the list.
-    fn take_unhandled_rejections(&self) -> Vec<(Self::Value, Self::Value)>;
+    /// The oldest rejection that still has no handler, as (promise, reason), removed from the
+    /// engine's list. The event loop takes them one at a time, so a handler attached while an
+    /// earlier one is being reported keeps the later one from being reported.
+    fn next_unhandled_rejection(&self) -> Option<(Self::Value, Self::Value)>;
+    /// Rejected promises that got their first handler after they left the list above (taken
+    /// for reporting), since the last call. The runtime emits 'rejectionHandled' for the ones
+    /// it reported. Engines that cannot tell return none.
+    fn take_late_handled_rejections(&self) -> Vec<Self::Value> {
+        Vec::new()
+    }
     fn same_value(&self, a: &Self::Value, b: &Self::Value) -> bool;
 
     // --- introspection for console.log / util.types ---
@@ -244,6 +251,11 @@ pub trait Engine: Sized + 'static {
 
     fn gc(&self);
     fn memory_usage(&self) -> Val;
+    /// Live heap cells per type name (bun:jsc `heapStats().objectTypeCounts`), when the engine
+    /// can count them.
+    fn object_type_counts(&self) -> Option<Self::Value> {
+        None
+    }
 }
 
 #[cfg(test)]

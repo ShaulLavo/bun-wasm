@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::c_char;
 use std::io::Write;
 use std::rc::Rc;
@@ -13,7 +13,7 @@ thread_local! {
     static NEXT_NATIVE: Cell<u32> = const { Cell::new(1) };
     static DEAD: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static HOST: RefCell<Option<Rc<dyn ModuleHost<SpiderMonkey>>>> = const { RefCell::new(None) };
-    static REJECTIONS: RefCell<Vec<(SmVal, SmVal)>> = const { RefCell::new(Vec::new()) };
+    static REJECTIONS: RefCell<VecDeque<(SmVal, SmVal)>> = const { RefCell::new(VecDeque::new()) };
 }
 
 #[cfg(not(bun_wasm_shared_group))]
@@ -473,7 +473,7 @@ pub unsafe extern "C" fn bunsm_host_rejection(
                 .retain(|(current, _)| !same_value(current, &promise))
         });
     } else {
-        REJECTIONS.with(|rejections| rejections.borrow_mut().push((promise, reason)));
+        REJECTIONS.with(|rejections| rejections.borrow_mut().push_back((promise, reason)));
     }
 }
 
@@ -712,8 +712,8 @@ impl Engine for SpiderMonkey {
         };
         checked(ok, out)
     }
-    fn take_unhandled_rejections(&self) -> Vec<(SmVal, SmVal)> {
-        REJECTIONS.with(|rejections| rejections.borrow_mut().drain(..).collect())
+    fn next_unhandled_rejection(&self) -> Option<(SmVal, SmVal)> {
+        REJECTIONS.with(|rejections| rejections.borrow_mut().pop_front())
     }
     fn same_value(&self, a: &SmVal, b: &SmVal) -> bool {
         same_value(a, b)

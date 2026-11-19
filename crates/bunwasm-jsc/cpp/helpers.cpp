@@ -71,6 +71,9 @@ char* bunjsc_host_fetch(const char* key, JSValueRef* exception);
 void bunjsc_host_init_meta(JSValueRef meta, const char* key, JSValueRef* exception);
 void bunjsc_host_free(char*);
 void bunjsc_host_uncaught(JSContextRef, JSValueRef);
+// A promise was rejected with no handler (handled = false), or such a promise got its first
+// handler (handled = true). Runs no JavaScript.
+void bunjsc_host_rejection(JSValueRef promise, JSValueRef reason, bool handled);
 // Polls fatal host cancellation without entering JS or consuming handled signals.
 // True requests native, uncatchable termination after the callback has returned.
 bool bunjsc_host_interrupt();
@@ -85,6 +88,14 @@ extern "C" void Bun__reportUnhandledError(JSGlobalObject* globalObject, EncodedJ
     JSLockHolder lock(globalObject->vm());
     JSValue value = JSValue::decode(encoded);
     bunjsc_host_uncaught(toRef(globalObject), toRef(globalObject, value));
+}
+
+// Bun's Zig::GlobalObject::promiseRejectionTracker: the host keeps the queue, so it sees each
+// rejection and each first handler at once instead of JSC's batch at microtask exhaustion.
+static void trackPromiseRejection(JSGlobalObject* globalObject, JSPromise* promise, JSPromiseRejectionOperation operation)
+{
+    bool handled = operation == JSPromiseRejectionOperation::Handle;
+    bunjsc_host_rejection(toRef(globalObject, promise), toRef(globalObject, promise->result()), handled);
 }
 
 static std::string utf8(const String& s)
@@ -356,6 +367,7 @@ JSGlobalContextRef bunjsc_create_context()
         t.moduleLoaderResolve = resolveModule;
         t.moduleLoaderFetch = fetchModule;
         t.moduleLoaderCreateImportMetaProperties = createImportMeta;
+        t.promiseRejectionTracker = trackPromiseRejection;
         return t;
     }();
     JSGlobalObject* globalObject = JSGlobalObject::createWithCustomMethodTable(vm.get(), JSGlobalObject::createStructure(vm.get(), jsNull()), &table);
@@ -558,6 +570,19 @@ void bunjsc_collect_garbage(JSContextRef ctx)
     thread.setCurrentAtomStringTable(previousTable);
 }
 
+// bun:jsc heapStats().objectTypeCounts, as Bun's BunJSCModule builds it: live cells per class
+// name, as of the last collection.
+JSValueRef bunjsc_object_type_counts(JSContextRef ctx)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    VM& vm = globalObject->vm();
+    JSLockHolder lock(vm);
+    JSObject* counts = constructEmptyObject(globalObject);
+    for (auto& entry : vm.heap.objectTypeCounts())
+        counts->putDirect(vm, Identifier::fromString(vm, entry.key), jsNumber(entry.value));
+    return toRef(globalObject, counts);
+}
+
 // -1: not a promise, 0: pending, 1: fulfilled, 2: rejected.
 int bunjsc_promise_state(JSContextRef ctx, JSValueRef value)
 {
@@ -596,7 +621,19 @@ void bunjsc_promise_mark_handled(JSContextRef ctx, JSValueRef value, JSValueRef*
         *exception = toRef(global, createTypeError(global, "Expected a promise"_s));
         return;
     }
+    // As a first handler would: the rejection tracker drops a queued rejection now.
+    if (promise->status() == JSPromise::Status::Rejected && !promise->isHandled())
+        trackPromiseRejection(global, promise, JSPromiseRejectionOperation::Handle);
     promise->markAsHandled();
+}
+
+// JSC marks some promises handled without telling the tracker; the event loop skips those.
+bool bunjsc_promise_is_handled(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    auto* promise = dynamicDowncast<JSPromise>(toJS(global, value));
+    return !promise || promise->isHandled();
 }
 
 JSValueRef bunjsc_promise_then(JSContextRef ctx, JSValueRef value, JSValueRef fulfilled, JSValueRef rejected, JSValueRef* exception)

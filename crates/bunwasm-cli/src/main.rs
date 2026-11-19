@@ -319,9 +319,13 @@ mod bun_transpiler {
             if code.is_empty() {
                 return Err(format!("bun build produced no output for {path}"));
             }
+            // Named like the runtime's own CommonJS wrapper, so a frame of the module's top
+            // level prints as a bare location (bootstrap.js `formatCallSite`).
             let code = code.replacen(
                 "(function(exports, require, module, __filename, __dirname) {",
-                &format!("(function(exports, require, module, __filename, __dirname, {meta}) {{"),
+                &format!(
+                    "(function __bunwasm_cjs__(exports, require, module, __filename, __dirname, {meta}) {{"
+                ),
                 1,
             );
             const MARK: &str = "\n//# sourceMappingURL=data:application/json;base64,";

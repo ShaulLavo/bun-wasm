@@ -18,8 +18,15 @@ use rquickjs::{
 };
 
 use crate::engine::{Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Val, ValueFn};
+use crate::rejection_queue::RejectionQueue;
 
 type V = Value<'static>;
+
+/// A promise's identity for the rejection queue: its object address.
+fn promise_key(promise: &Value<'_>) -> usize {
+    // SAFETY: reads the pointer bits of a live value; promises are objects.
+    unsafe { qjs::JS_VALUE_GET_PTR(promise.as_raw()) as usize }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -133,7 +140,9 @@ struct Inner {
     ctx: Ctx<'static>,
     host: Rc<dyn ModuleHost<QuickJs>>,
     /// Rejected promises without a handler yet: (promise, reason).
-    rejections: RefCell<Vec<(V, V)>>,
+    rejections: RefCell<RejectionQueue<(V, V)>>,
+    /// Promises that got their first handler after they left `rejections`.
+    late_handled: RefCell<Vec<V>>,
 }
 
 impl Drop for Inner {
@@ -321,7 +330,8 @@ impl Engine for QuickJs {
             _context: context,
             ctx,
             host,
-            rejections: RefCell::new(Vec::new()),
+            rejections: RefCell::new(RejectionQueue::new()),
+            late_handled: RefCell::new(Vec::new()),
         }));
         if has_interrupt_handler {
             let weak = Rc::downgrade(&engine.0);
@@ -342,12 +352,16 @@ impl Engine for QuickJs {
         runtime.set_host_promise_rejection_tracker(Some(Box::new(
             move |_ctx, promise, reason, is_handled| {
                 let Some(inner) = weak.upgrade() else { return };
-                let mut list = inner.rejections.borrow_mut();
-                let promise = erase(promise);
-                if is_handled {
-                    list.retain(|(p, _)| *p != promise);
-                } else {
-                    list.push((promise, erase(reason)));
+                let key = promise_key(&promise);
+                if !is_handled {
+                    let entry = (erase(promise), erase(reason));
+                    inner.rejections.borrow_mut().push(key, entry);
+                    return;
+                }
+                // The removed entry drops after the borrow ends.
+                let queued = inner.rejections.borrow_mut().remove(key);
+                if queued.is_none() {
+                    inner.late_handled.borrow_mut().push(erase(promise));
                 }
             },
         )));
@@ -489,11 +503,8 @@ impl Engine for QuickJs {
             )));
         }
         // SAFETY: the promise and context are live; the mark runs no JavaScript.
+        // The tracker hears about the mark and takes the promise out of the rejection queue.
         unsafe { qjs::JS_PromiseMarkAsHandled(self.raw(), promise.as_raw()) };
-        self.0
-            .rejections
-            .borrow_mut()
-            .retain(|(current, _)| *current != promise);
         Ok(promise)
     }
 
@@ -545,8 +556,12 @@ impl Engine for QuickJs {
         })
     }
 
-    fn take_unhandled_rejections(&self) -> Vec<(V, V)> {
-        self.0.rejections.borrow_mut().drain(..).collect()
+    fn next_unhandled_rejection(&self) -> Option<(V, V)> {
+        self.0.rejections.borrow_mut().pop()
+    }
+
+    fn take_late_handled_rejections(&self) -> Vec<V> {
+        std::mem::take(&mut *self.0.late_handled.borrow_mut())
     }
 
     fn same_value(&self, a: &V, b: &V) -> bool {
