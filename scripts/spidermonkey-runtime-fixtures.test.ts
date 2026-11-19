@@ -33,6 +33,7 @@ function sandbox() {
   mkdirSync(join(root, "scripts"));
   copyFileSync(join(source, "scripts/test.sh"), join(root, "scripts/test.sh"));
   copyFileSync(join(source, "env.sh"), join(root, "env.sh"));
+  copyFileSync(join(source, "scripts/waffle-release-inputs.json"), join(root, "scripts/waffle-release-inputs.json"));
   mkdirSync(join(root, "tmp"));
   const launcher = join(root, "inputs with spaces", "launcher");
   const core = join(root, "inputs with spaces", "core.wasm");
