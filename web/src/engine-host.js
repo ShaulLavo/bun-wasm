@@ -1048,10 +1048,31 @@ class EngineHost {
 
 
   watchRejections() {
+    // Chromium, like Bun, re-checks each rejection right before reporting it. Node reports all
+    // of a turn's rejections, even ones an earlier report's listener gave a handler. On Node,
+    // V8's init promise hook names each promise that gets a handler (then or await) while the
+    // listeners run, and those are skipped. A Bun host behaves like Chromium (and has no hooks).
+    const promiseHooks = nativeProcess && !nativeProcess.versions.bun
+      ? nativeProcess.getBuiltinModule?.("node:v8")?.promiseHooks
+      : undefined;
+    const handledWhileReporting = new WeakSet();
+    const noteHandled = (_promise, parent) => {
+      if (parent) handledWhileReporting.add(parent);
+    };
+    const report = (reason, promise) => {
+      if (!promiseHooks) return this.internal.handleRejection(reason, promise);
+      const stop = promiseHooks.onInit(noteHandled);
+      try {
+        return this.internal.handleRejection(reason, promise);
+      } finally {
+        stop();
+      }
+    };
     const onRejection = (reason, promise) => {
       if (this.exited || reason instanceof ExitSignal) return;
+      if (handledWhileReporting.has(promise)) return;
       if (this.transfer(reason)) return;
-      if (!this.guard(() => this.internal.handleRejection(reason, promise))) this.exit(1);
+      if (!this.guard(() => report(reason, promise))) this.exit(1);
     };
     // The host reports a late handler on a promise it reported; the runtime emits
     // 'rejectionHandled' when that report reached an 'unhandledRejection' listener.
