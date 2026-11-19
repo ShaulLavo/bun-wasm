@@ -154,8 +154,9 @@
     return String(value);
   }
 
+  const isErrorValue = typeof Error.isError === "function" ? Error.isError : native.isError;
   function stackHeader(error) {
-    if (!internal.isError(error)) return "Error";
+    if (!isErrorValue(error)) return "Error";
     const nameSlot = dataSlot(error, "name") ?? dataSlot(Object.getPrototypeOf(error), "name");
     const name = nameSlot === undefined || nameSlot.value === undefined ? "Error" : primitiveText(nameSlot.value) ?? "Error";
     const messageSlot = dataSlot(error, "message");

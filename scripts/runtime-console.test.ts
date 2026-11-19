@@ -10,7 +10,8 @@ const root = resolve(import.meta.dir, "..");
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-console-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const originals: Record<string, string> = {
-  console: "ebeea9ed77c8d2a5b8bc6edb94536023c2e329a74b6b84a7500075b4582fc325",
+  // Re-pinned for console.trace dropping the stack header (docs/bun-patches/error-stack-header.md).
+  console: "ea264a567b6ee497161763587e50074dad401878cedecfe3f54601fdf94f5c6c",
   console_constructor: "d70e5d7de10633d8dc36e2a623d3f6253c9bcc7f785db581152bcf345beebbbf",
 };
 

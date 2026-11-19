@@ -72,7 +72,6 @@ function bootstrap(engine = "hermes", generated = false, mapped: [number, number
     },
     getSourceLine(file: string, line: number) { lookups.push([file, line]); return "      new Error()"; },
     preparedSourceName: () => generated ? "/source.ts" : undefined,
-    isError: (value: unknown) => Object.prototype.toString.call(value) === "[object Error]",
     mainPath: () => "/main.ts",
     // Only builtins and inspect participate in these tests; unrelated bootstrap factories stay inert.
     loadPolyfill(name: string) {
