@@ -82,7 +82,7 @@
     } finally {
       if (connection.onClose === closed) connection.onClose = previousClose;
       if (connection.onEnd === ended) connection.onEnd = previousEnd;
-      reader.releaseLock();
+      // The reader is kept, so the sent body's stream stays locked and used, as in Bun.
     }
   }
 

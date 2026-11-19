@@ -1,0 +1,17 @@
+new Response(): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+new Response(null): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+new Response(undefined): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+new Request(url): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+new Request(url, { method: "POST" }): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+new Request(url, { method: "POST", body: null }): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+Response.redirect(): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+Response.error(): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+null body formData(): [] used=false
+null body textStream(): "" used=false
+new Response(""): used=true again=TypeError clone=TypeError: Body is disturbed or locked
+fetch 204: status=204 content-length=null body=null text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+fetch 205: status=205 content-length=0 body=null text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+fetch 205 with content: status=205 content-length=5 body=null text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+fetch 304: status=304 content-length=null body=null text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+fetch 200 to HEAD: status=200 content-length=5 body=null text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+fetch 200 with empty content: status=200 content-length=0 body=stream text=ok "" used=true arrayBuffer=TypeError used=true bytes=TypeError used=true blob=TypeError used=true json=TypeError used=true text=TypeError used=true body=[object ReadableStream] clone=TypeError: Body is disturbed or locked

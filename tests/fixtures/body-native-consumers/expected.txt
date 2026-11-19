@@ -1,0 +1,39 @@
+Request string .body then fetch(url, request): "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Request Blob .body then fetch(url, request): "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Request Uint8Array .body then fetch(url, request): "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Request URLSearchParams .body then fetch(url, request): "a=1" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Request ReadableStream .body then fetch(url, request): "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Request "" .body then fetch(url, request): "" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Request Uint8Array(0) .body then fetch(url, request): "" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Request Blob([]) .body then fetch(url, request): "" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Request async generator .body then fetch(url, request): "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Request node:stream Readable .body then fetch(url, request): "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Response string .body then Bun.serve() sends it: "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Response Blob .body then Bun.serve() sends it: "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Response Uint8Array .body then Bun.serve() sends it: "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Response URLSearchParams .body then Bun.serve() sends it: "a=1" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Response ReadableStream .body then Bun.serve() sends it: "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Response "" .body then Bun.serve() sends it: "" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Response Uint8Array(0) .body then Bun.serve() sends it: "" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Response Blob([]) .body then Bun.serve() sends it: "" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Response async generator .body then Bun.serve() sends it: "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+Response node:stream Readable .body then Bun.serve() sends it: "payload" readable=false errored=false disturbed=true locked=true same=true used=true getReader=TypeError rewrap=TypeError again=TypeError clone=TypeError
+fetch() uploading Blob.stream(): "payload" readable=false errored=false disturbed=true locked=true
+Request string clone(): readable=false errored=false disturbed=true locked=true new body=true used=false ["payload","payload"]
+Request Blob clone(): readable=false errored=false disturbed=true locked=true new body=true used=false ["payload","payload"]
+Request Blob.stream() clone(): readable=false errored=false disturbed=true locked=true new body=true used=false ["payload","payload"]
+Request ReadableStream clone(): readable=true errored=false disturbed=false locked=true new body=true ["payload","payload"]
+Response string clone(): readable=false errored=false disturbed=true locked=true new body=true used=false ["payload","payload"]
+Response Blob clone(): readable=false errored=false disturbed=true locked=true new body=true used=false ["payload","payload"]
+Response Blob.stream() clone(): readable=false errored=false disturbed=true locked=true new body=true used=false ["payload","payload"]
+Response ReadableStream clone(): readable=true errored=false disturbed=false locked=true new body=true ["payload","payload"]
+clone() of a used string body: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked
+clone() of a used stream body: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked
+clone() of a used Blob body: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked
+clone() of a locked body: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked
+clone() of a locked stream body: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked
+clone() during a read: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked
+the read still completes: hello
+new Request(request) with a locked stream body: TypeError ERR_INVALID_STATE: Invalid state: ReadableStream is locked
+clone() of a fetch() response a reader read: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked
+Bun.serve: clone() of a read incoming request: TypeError ERR_BODY_ALREADY_USED: Body is disturbed or locked

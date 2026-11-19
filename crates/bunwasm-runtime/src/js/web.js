@@ -1078,6 +1078,8 @@
 
   const BodyMixin = {
     async _consume() {
+      // A null body is not a zero-length body: every read gives nothing and nothing uses it up.
+      if (this._body === null && !this._stream) return new Uint8Array(0);
       if (this.bodyUsed) throw new TypeError("Body already used");
       // Someone else holds the stream's reader: refuse without using the body, as Bun does.
       if (this._stream && this._stream.locked) throw Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });

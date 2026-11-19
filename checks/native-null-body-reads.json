@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/null-body-reads",
+  "engines": ["quickjs", "jsc", "browser"]
+}

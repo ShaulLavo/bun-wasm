@@ -139,7 +139,8 @@
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
     const head = await waitHead(handle, signal, closeHandle);
     if (signal && signal.aborted) throw signal.reason;
-    const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 304;
+    // A final response with a null body status (204, 205, 304) or to a HEAD request has no body, whatever followed the head.
+    const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 205 || head.status === 304;
     const body = nullBody ? null : internal.require("compression_streams").decode(handleStream(handle, closeHandle, signal), head.bodyEncoding);
     if (nullBody) closeHandle();
     const res = new Response(body, {
