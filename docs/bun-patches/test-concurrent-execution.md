@@ -47,10 +47,19 @@ variant has its own `if`, `skipIf`, `todoIf` and `failingIf`, as in Bun.
 `describe.failingIf(true)` throws as Bun's does.
 
 Outside a group one test runs at a time, and the running test and its
-invocation are module state, as before. Inside a group each test runs in its
-own async context frame (`internal.runInContext`), entered again around each
-hook and body call because runtime JS awaits between them. So an assertion, inline
-snapshot, `onTestFinished` or uncaught error after an `await` reaches the test
+invocation are module state, as before.
+
+Every test and hook is called in the async context it was registered in, as
+Bun does, so a store entered at the top of the file or around the registration
+is visible inside it. Native Bun 1.4.4 then times such a test out even though
+it finished; that's an upstream bug, and here the test passes.
+
+Inside a group, each test's slot is the store of a private `AsyncLocalStorage`.
+It's pushed on top of that registration context, and entered again around each
+hook and body call, because runtime JS awaits between them. User stores and
+the slot therefore live side by side: `als.run()` or `enterWith()` inside a
+concurrent test keeps the test, and stores set before it stay visible. So an
+assertion, inline snapshot or `onTestFinished` after an `await` reaches the test
 it came from. Bun instead treats the current test as unknown inside a group, so
 there it counts expectations only in the summary and rejects snapshot matchers.
 Where an engine does not carry the frame across a continuation (a Browser host
@@ -59,12 +68,15 @@ unknown-test behavior. Code outside every test of a group, such as a timer the
 group did not start, reports errors between tests.
 
 Two known differences remain:
-- An uncaught error inside a concurrent group differs by engine. QuickJS and
-  JSC print "Unhandled error between tests" and the test passes, as in Bun. On
-  the Browser engine the error fails the test.
+- An uncaught error inside a concurrent group differs by engine. QuickJS, JSC
+  and Browser with `--context hooks` print "Unhandled error between tests", and
+  the test passes, as in Bun. On Browser without an async-context provider, the
+  error fails the test.
 - `expect.assertions`, `expect.hasAssertions` and `onTestFinished` work inside
   concurrent tests here. Bun throws for them there.
 
-The `test-concurrent-groups` and `test-concurrent-flags` fixtures cover these
-rules on every engine. On the Browser engine they also run with
-`--context hooks`.
+The `test-concurrent-groups`, `test-concurrent-flags` and
+`test-concurrent-stores` fixtures cover these rules on every engine, and on the
+Browser engine also with `--context hooks`. `test-concurrent-stores` has
+hand-written expectations because of the Bun timeout bug above.
+`test-concurrent-uncaught` covers the uncaught error on QuickJS and JSC.

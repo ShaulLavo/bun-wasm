@@ -2107,6 +2107,8 @@
       retry: repeat.retry,
       repeats: repeat.repeats,
       usesDone: modifiers.usesDone !== undefined ? modifiers.usesDone : hasFn && fn.length > 0,
+      // Bun calls a test in the async context it was registered in.
+      context: native.getAsyncContext(),
     };
     if (test.only) collecting.hasOnly = true;
     scope.children.push(test);
@@ -2285,7 +2287,7 @@
       if (typeof fn !== "function") throw new TypeError(`${kind}() expects a function as the first argument`);
       const test = running().test;
       const hooks = kind === "afterAll" && test ? test.afterAll : currentScope(`${kind}()`)[kind];
-      hooks.push({ fn, timeout: readTimeout(timeout) });
+      hooks.push({ fn, timeout: readTimeout(timeout), context: native.getAsyncContext() });
     };
   }
 
@@ -2293,7 +2295,7 @@
     if (typeof fn !== "function") throw new Error("onTestFinished() expects a function as the first argument");
     const test = running().test;
     if (!test) throw new Error("Cannot call onTestFinished() outside of a test. It can only be called inside a test.");
-    test.finished.push({ fn, timeout: readTimeout(timeout) });
+    test.finished.push({ fn, timeout: readTimeout(timeout), context: native.getAsyncContext() });
   }
 
   function setDefaultTimeout(ms) {
@@ -2308,7 +2310,7 @@
    * { timeout, done }, never rejects. Uses a done callback when the function
    * declares one.
    */
-  function invoke(fn, args, usesDone, timeout, slot = running()) {
+  function invoke(fn, args, usesDone, timeout, slot = running(), context = undefined) {
     return new Promise((resolve) => {
       let timer = null;
       const invocation = matcherSupport.pending();
@@ -2327,10 +2329,12 @@
       };
       startTimer();
       const body = () => internal.require("test_lifecycle").body(fn, args, usesDone, finish);
-      // A lane's slot is entered again for each call: runtime JS awaits between a test's
-      // hooks and body, and a Browser host does not carry the frame across those.
-      if ("blocked" in slot) runInSlot(slot, body);
-      else body();
+      // The callback runs in the async context it was registered in, as in Bun, so stores
+      // entered before it are visible. A lane's slot goes on top, entered again for each call:
+      // runtime JS awaits between a test's hooks and body, and a Browser host does not carry
+      // the frame across those.
+      const call = "blocked" in slot ? () => runInSlot(slot, body) : body;
+      internal.runInContext(context, call, undefined, []);
       // In a concurrent group, the next test starts only once this one really waits, as in Bun.
       if (slot.blocked && !invocation.settled) whenStillPending(invocation, slot.blocked);
     });
@@ -2360,7 +2364,7 @@
 
   function invokeHook(hook, slot) {
     const timeout = hook.timeout === undefined ? options.timeout : hook.timeout;
-    return invoke(hook.fn, [], hook.fn.length > 0, timeout, slot);
+    return invoke(hook.fn, [], hook.fn.length > 0, timeout, slot, hook.context);
   }
 
   async function runHooks(hooks, slot) {
@@ -2523,7 +2527,7 @@
     let result = beforeEach.length ? await runHooks(beforeEach, slot) : { ok: true };
     if (result.ok) {
       const timeout = test.timeout === undefined ? options.timeout : test.timeout;
-      result = await invoke(test.fn, [], test.usesDone, timeout, slot);
+      result = await invoke(test.fn, [], test.usesDone, timeout, slot, test.context);
       if (result.timeout) result.timeoutMs = timeout;
     }
     const after = await runHooks(cleanupHooks(record, chain.reverse().flatMap((s) => s.afterEach)), slot);

@@ -1,0 +1,23 @@
+
+index.test.ts:
+(pass) uncaught > beside the uncaught one
+
+# Unhandled error between tests
+-------------------------------
+ 9 | describe("uncaught", () => {
+10 |   test.concurrent("uncaught inside run", async () => {
+11 |     await als.run("uncaught-store", async () => {
+12 |       await tick();
+13 |       setTimeout(() => {
+14 |         throw new Error("boom inside run");
+                                              ^
+error: boom inside run
+      at <anonymous> (/index.test.ts:14:42)
+-------------------------------
+
+(pass) uncaught > uncaught inside run
+
+ 2 pass
+ 0 fail
+ 1 error
+Ran 2 tests across 1 file. [TIME]
