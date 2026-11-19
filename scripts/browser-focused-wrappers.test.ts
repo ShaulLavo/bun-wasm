@@ -3,7 +3,7 @@ import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { assertEngineInterruptionResult } from "../web/tests/engine-interruption-result";
-import { selectBundledInterruptionEngines, selectInterruptionEngines, interruptionInputs, interruptionProofs, nativePollingEngines, nativeStopProofNames, stopProofName, type InterruptionEngine } from "../web/tests/engine-interruption-cases";
+import { selectBundledInterruptionEngines, selectInterruptionEngines, interruptionInputs, interruptionProofs, nativeMatchesPollingEngines, nativeMatchesStopProofName, nativePollingEngines, nativeStopProofName, stopProofName, type InterruptionEngine } from "../web/tests/engine-interruption-cases";
 import { assertWorkerModuleReport, runWorkerModuleVariants, workerModuleReport } from "../web/tests/browser-worker-modules";
 import { runStdinCases, stdinCaseNames, stdinCaseRecords } from "../web/tests/playground-stdin";
 import { assertStdinReport, stdinBrowser } from "../web/tests/browser-playground-stdin";
@@ -34,11 +34,13 @@ function stdinFailureActions(events: string[]) {
 function stdinCleanup(events: string[], unsafe: boolean) {
   return async () => { events.push("idle"); if (unsafe) throw new Error("foreground alive"); };
 }
-// Each paired engine has 15 named proofs, plus the two native-regexp stops where its matcher polls;
-// Browser and Preview1 add 5. Counts derive from nativePollingEngines so enabling an engine there
-// changes the expectation with it.
+// Each paired engine has 15 named proofs, plus the native-regexp stop where its matcher polls and
+// the global-replace stop where it polls across matches; Browser and Preview1 add 5. Counts derive
+// from the engine lists so enabling an engine there changes the expectation with it.
 const browserProofs = 5;
-function pairedProofs(engine: InterruptionEngine): number { return 15 + (nativePollingEngines.includes(engine) ? 2 : 0); }
+function pairedProofs(engine: InterruptionEngine): number {
+  return 15 + (nativePollingEngines.includes(engine) ? 1 : 0) + (nativeMatchesPollingEngines.includes(engine) ? 1 : 0);
+}
 test("interruption engine subsets retain Browser and Preview1, with every selected engine's named proofs", () => {
   const all = selectInterruptionEngines("quickjs,jsc,spidermonkey");
   for (const selected of [selectInterruptionEngines(), all]) {
@@ -48,7 +50,9 @@ test("interruption engine subsets retain Browser and Preview1, with every select
     const selected = selectInterruptionEngines(engine);
     const native = nativePollingEngines.includes(engine) ? [engine] : [];
     expect(green(selected).checks).toHaveLength(pairedProofs(engine) + browserProofs);
-    for (const name of nativeStopProofNames) expect(green(selected).checks.filter(check => check.name === name).map(check => check.engine)).toEqual(native);
+    expect(green(selected).checks.filter(check => check.name === nativeStopProofName).map(check => check.engine)).toEqual(native);
+    const matches = nativeMatchesPollingEngines.includes(engine) ? [engine] : [];
+    expect(green(selected).checks.filter(check => check.name === nativeMatchesStopProofName).map(check => check.engine)).toEqual(matches);
     expect(() => assertEngineInterruptionResult(green(selected), false, selected)).not.toThrow();
     expect(() => assertEngineInterruptionResult(green(selected), false)).toThrow();
     const names = green(selected).checks.map(check => check.name);

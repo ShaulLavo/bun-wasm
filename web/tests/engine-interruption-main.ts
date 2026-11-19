@@ -16,7 +16,7 @@ import { defaultSignalGuest, handledSignalGuest, heartbeatBusyGuest, idleSignalG
 import { assertFatalSleepSync, assertHandledSleepSync, sleepSyncSignalGuest } from "./engine-interruption-sleep";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignal, type EngineSignalDelivery } from "./engine-interruption-scope";
-import { FunctionalCases, selectInterruptionEngines, interruptionCore, nativePollingEngines, nativeMatchesStopProofName, nativeStopProofName, stopProofName, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
+import { FunctionalCases, selectInterruptionEngines, interruptionCore, nativePollingEngines, nativeMatchesPollingEngines, nativeMatchesStopProofName, nativeStopProofName, stopProofName, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
 import { CooperativeWorkerStop } from "./engine-interruption-stop";
 
 interface CaseResources {
@@ -359,6 +359,7 @@ async function runBusyStops(module: WebAssembly.Module, engine: Engine): Promise
   await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-busy-stop" }, () => testKillStop(module, engine));
   if (engine === "browser" || !nativePollingEngines.includes(engine)) return;
   await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-native-regexp-stop" }, () => testKillStop(module, engine, "regexp"));
+  if (!nativeMatchesPollingEngines.includes(engine)) return;
   await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-global-regexp-replace-stop" }, () => testKillStop(module, engine, "regexp-matches"));
 }
 /** A failed proof may leave its paired guest spinning with native terminate disabled. Stop it

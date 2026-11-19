@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { assertSafariCaseRows, selectSafariCaseNames } from "./browser-safari";
-import { interruptionProofs, nativeStopProofNames, stopProofName } from "./engine-interruption-cases";
+import { interruptionProofs, nativeMatchesStopProofName, nativeStopProofName, stopProofName } from "./engine-interruption-cases";
 import { assertEngineInterruptionResult, busyPhaseUrl, mergePhaseResults } from "./engine-interruption-result";
 import { collectRunnerCleanup, finishRunnerCleanup, runBrowserGate, type RunnerCleanup } from "./browser-engine-interruption";
 
@@ -213,7 +213,7 @@ test("a hanging final cleanup still produces an unsafe output report", async () 
 });
 
 function phases() {
-  const whole = green(), busyNames = new Set([stopProofName].concat(nativeStopProofNames));
+  const whole = green(), busyNames = new Set([stopProofName, nativeStopProofName, nativeMatchesStopProofName]);
   const main = { ...whole, checks: whole.checks.filter(check => !busyNames.has(check.name)) };
   const busy = { ...whole, checks: whole.checks.filter(check => busyNames.has(check.name)), benchmarks: [] };
   return { main, busy };

@@ -110,12 +110,19 @@ export const stopProofName = "runtimeProcess-page-SIGKILL-stops-busy-guest";
 export const nativeStopProofName = "runtimeProcess-page-SIGKILL-stops-guest-in-native-regexp";
 /** The same stop inside one global replace that runs millions of cheap matches. */
 export const nativeMatchesStopProofName = "runtimeProcess-page-SIGKILL-stops-guest-in-global-regexp-replace";
-/** Both native regexp stop proofs, in the order the busy page runs them. */
-export const nativeStopProofNames: readonly string[] = [nativeStopProofName, nativeMatchesStopProofName];
 /** Engines that poll for a stop inside their native regexp matcher: QuickJS's lre interrupt check,
  * JSC's Yarr interpreter (every 16,384 backtracks or matches of one pattern) and SpiderMonkey's
- * irregexp (every 8,192 backtracks; its global replace loop is self-hosted JavaScript). */
+ * irregexp (every 8,192 backtracks). */
 export const nativePollingEngines: readonly InterruptionEngine[] = ["quickjs", "jsc", "spidermonkey"];
+/** Engines that also poll across the matches of one global replace or split: JSC's countdown lives
+ * on the compiled pattern and SpiderMonkey's replace loop is self-hosted JavaScript. QuickJS restarts
+ * its countdown on every match (.internal/engines/quickjs-regexp-poll-countdown.md). */
+export const nativeMatchesPollingEngines: readonly InterruptionEngine[] = ["jsc", "spidermonkey"];
+/** The native regexp stop proofs an engine runs, in the order the busy page runs them. */
+export function nativeStopProofNames(engine: string): string[] {
+  return (nativePollingEngines.some(name => name === engine) ? [nativeStopProofName] : [])
+    .concat(nativeMatchesPollingEngines.some(name => name === engine) ? [nativeMatchesStopProofName] : []);
+}
 
 export function interruptionProofs(engines: readonly InterruptionEngine[]) {
   const paired: { engine: string; route: string; name: string }[] = engines.flatMap(engine => [
@@ -134,7 +141,7 @@ export function interruptionProofs(engines: readonly InterruptionEngine[]) {
     { engine, route: "runtimeProcess", name: "runtimeProcess-page-sleepSync-SIGUSR1-deferred-handler" },
     { engine, route: "runtimeProcess", name: "runtimeProcess-page-sleepSync-default-SIGUSR1-unwinds" },
     { engine, route: "runtimeProcess", name: stopProofName },
-  ].concat(nativePollingEngines.includes(engine) ? nativeStopProofNames.map(name => ({ engine, route: "runtimeProcess", name })) : []));
+  ].concat(nativeStopProofNames(engine).map(name => ({ engine, route: "runtimeProcess", name }))));
   return paired.concat([
     { engine: "browser", route: "legacy", name: "default-2-status-130" },
     { engine: "browser", route: "legacy", name: "default-15-status-143" },

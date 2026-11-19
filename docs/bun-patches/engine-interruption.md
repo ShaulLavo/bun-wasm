@@ -114,6 +114,15 @@ inside their native matcher, listed in `nativePollingEngines`: QuickJS's regexp 
 calls the interrupt handler, JSC's Yarr interpreter polls every 16,384 backtracks and
 SpiderMonkey's irregexp every 8,192, so all three paired engines run it.
 
+The original `runtimeProcess-page-SIGKILL-stops-guest-in-global-regexp-replace` proof makes the
+same stop inside one `'a'.repeat(1<<22).replace(/(?:a|a){0,10}b|a/g, '')`. Every match costs a
+few thousand backtracks, under any per-match interval, and the call runs for about 500 seconds
+under the native launcher, so only a countdown that persists across matches can stop it. Against
+main's JSC this proof fails (the guest never unwinds) while every other proof passes. It runs for
+`nativeMatchesPollingEngines`: JSC, whose countdown now lives on the pattern, and SpiderMonkey,
+whose global replace loop is self-hosted JavaScript with ordinary interrupt checks. QuickJS has
+the same per-match restart in `lre_exec` and does not stop in this proof yet.
+
 The stop proofs run last, in a separate page (`?phase=busy`) that the runner opens in a
 fresh browser context after the main matrix's context has closed, and closes right after.
 A busy guest that ever outlived its proof would keep spinning in its page's process and
