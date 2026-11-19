@@ -104,7 +104,7 @@ function fixture(root: string, pinned: boolean): void {
 function job(root: string, image: string, script: string) {
   const env: Record<string, string> = {
     PATH: `${join(root, image)}:${process.env.PATH ?? "/usr/bin:/bin"}`, HOME: root, TMPDIR: join(root, "tmp"),
-    WASM_TOOLS: join(root, "wasm-tools"), CARGO_HOME: join(root, "cargo"), RUSTUP_HOME: join(root, "rustup"),
+    WASM_TOOLS: join(root, "wasm-tools"), BUN_WASM_SYSROOT: join(root, "wasm-tools/bun-wasm-sysroot-patched"), CARGO_HOME: join(root, "cargo"), RUSTUP_HOME: join(root, "rustup"),
     CARGO_TARGET_DIR: join(root, "target"), JSC_BUILD_DIR: join(root, "jsc"), CAGE: "", JOBS: "2", FIXTURE: root,
   };
   mkdirSync(env.TMPDIR!, { recursive: true });
