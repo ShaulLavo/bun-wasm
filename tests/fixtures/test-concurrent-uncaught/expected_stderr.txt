@@ -4,15 +4,19 @@ index.test.ts:
 
 # Unhandled error between tests
 -------------------------------
- 9 | describe("uncaught", () => {
 10 |   test.concurrent("uncaught inside run", async () => {
 11 |     await als.run("uncaught-store", async () => {
 12 |       await tick();
-13 |       setTimeout(() => {
-14 |         throw new Error("boom inside run");
-                                              ^
-error: boom inside run
-      at <anonymous> (/index.test.ts:14:42)
+13 |       // A failed expect, which every engine reports at the same source position.
+14 |       setTimeout(() => {
+15 |         expect("boom inside run").toBe("caught");
+                                       ^
+error: expect(received).toBe(expected)
+
+Expected: "caught"
+Received: "boom inside run"
+
+      at <anonymous> (/index.test.ts:15:35)
 -------------------------------
 
 (pass) uncaught > uncaught inside run
@@ -20,4 +24,5 @@ error: boom inside run
  2 pass
  0 fail
  1 error
+ 1 expect() calls
 Ran 2 tests across 1 file. [TIME]

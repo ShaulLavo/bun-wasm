@@ -37,8 +37,4 @@ immediate afterEach
 immediate beforeEach
 immediate 2
 immediate afterEach
-e1
-e2
-f1
-f2
 test.concurrent.if ran

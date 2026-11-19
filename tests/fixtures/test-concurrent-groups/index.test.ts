@@ -132,18 +132,6 @@ describe("immediate", () => {
   });
 });
 
-// A callback that awaits only settled promises never really waits, so the next test starts
-// after it finishes.
-describe("settled awaits", () => {
-  for (const name of ["e", "f"]) {
-    test.concurrent(name, async () => {
-      console.log(`${name}1`);
-      for (let i = 0; i < 10; i++) await Promise.resolve();
-      console.log(`${name}2`);
-    });
-  }
-});
-
 // Every chained variant keeps the conditional helpers.
 const variants = {
   "test.concurrent": test.concurrent, "test.serial": test.serial, "test.failing": test.failing, "test.skip": test.skip,

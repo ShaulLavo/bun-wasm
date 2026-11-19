@@ -79,4 +79,6 @@ The `test-concurrent-groups`, `test-concurrent-flags` and
 `test-concurrent-stores` fixtures cover these rules on every engine, and on the
 Browser engine also with `--context hooks`. `test-concurrent-stores` has
 hand-written expectations because of the Bun timeout bug above.
-`test-concurrent-uncaught` covers the uncaught error on QuickJS and JSC.
+`test-concurrent-settled` (callbacks that await only settled values) and
+`test-concurrent-uncaught` run on QuickJS, JSC and SpiderMonkey and skip the
+Browser engine, for the two differences described above.
