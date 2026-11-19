@@ -1445,8 +1445,17 @@
 
   function parseErrorStack(error) {
     const formattedStack = safeGet(error, "stack");
-    const stack = internal.hotErrorStacks?.get(error) ?? formattedStack;
+    const stack = internal.hotErrorStacks?.get(error) ?? withoutHeader(error, formattedStack);
     return errorFrames(error, stack);
+  }
+
+  // The frames after the error's "Name: message" header, so no message line reads as a frame.
+  function withoutHeader(error, stack) {
+    if (typeof stack !== "string" || typeof internal.stackHeader !== "function") return stack;
+    let header;
+    try { header = internal.stackHeader(error); } catch { return stack; }
+    if (stack === header) return "";
+    return stack.startsWith(header + "\n") ? stack.slice(header.length + 1) : stack;
   }
 
   function errorFrames(error, stack) {
@@ -1544,11 +1553,16 @@
     }
   }
 
-  function formatFrame(frame) {
+  // A parsed frame as Bun prints it after "at ".
+  function frameText(frame) {
     const file = internal.hotDisplayName?.(frame.file) ?? frame.file;
     const loc = file + ":" + frame.line + ":" + frame.column;
     const label = frame.name || (frame.anonymousFunction === true ? "<anonymous>" : "");
-    return label ? "      at " + label + " (" + loc + ")\n" : "      at " + loc + "\n";
+    return label ? label + " (" + loc + ")" : loc;
+  }
+
+  function formatFrame(frame) {
+    return "      at " + frameText(frame) + "\n";
   }
 
   // VirtualMachine::print_errorlike_object, writing into the formatter.
@@ -3976,6 +3990,7 @@ function createNodeInspect(internal) {
     nodeFormatWithOptions,
     parseStack,
     errorFrames,
+    frameText,
     inspectCustom: INSPECT_CUSTOM,
   };
 })

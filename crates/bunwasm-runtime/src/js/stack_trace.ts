@@ -65,8 +65,17 @@
   }
   internal.defineHidden(CallSite.prototype, methods);
 
+  // JavaScriptCore's own text (`name@file:line:column` lines, no header) in Bun's form: the
+  // header, then `    at` frames with positions mapped back and the runtime's frames left out.
+  function jscStack(target: object, raw: string) {
+    if (internal.hotRun) internal.hotErrorStacks.set(target, raw);
+    const inspect = internal.require("inspect");
+    return [internal.stackHeader(target)].concat(inspect.parseStack(raw).map(frame => `    at ${inspect.frameText(frame)}`)).join("\n");
+  }
+
   function defaultStack(target: object, raw: unknown) {
-    return native.engine === "quickjs" ? Reflect.apply(defaultPrepare!, Error, [target, raw]) : raw;
+    if (native.engine === "quickjs") return Reflect.apply(defaultPrepare!, Error, [target, raw]);
+    return native.engine === "jsc" && typeof raw === "string" ? jscStack(target, raw) : raw;
   }
 
   function capturedFrames(target: object, raw: unknown) {
@@ -82,7 +91,7 @@
     try {
       const prepare = Error.prepareStackTrace;
       const custom = typeof prepare === "function" && prepare !== defaultPrepare;
-      if (!custom && materializing) return raw;
+      if (!custom && materializing) return defaultStack(target, raw);
       const sites = custom && parseCapturedStack
         ? capturedFrames(target, raw).map(frame => new CallSite(frame))
         : raw;

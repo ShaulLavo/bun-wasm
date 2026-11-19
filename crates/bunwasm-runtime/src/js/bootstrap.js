@@ -141,13 +141,36 @@
     return Function.prototype.toString.call(fn).startsWith("function () {\n    [native code]");
   }
 
+  // The first line of Bun's error.stack: JavaScriptCore's sanitized "name: message", which
+  // reads data properties only and never runs a getter. The name is the error's own or its
+  // prototype's, the message the error's own. Any other capture target reads "Error".
+  function dataSlot(holder, key) {
+    const descriptor = holder === null ? undefined : Reflect.getOwnPropertyDescriptor(holder, key);
+    return descriptor !== undefined && "value" in descriptor ? descriptor : undefined;
+  }
+
+  function primitiveText(value) {
+    if (typeof value === "symbol" || typeof value === "function" || typeof value === "object" && value !== null) return undefined;
+    return String(value);
+  }
+
+  function stackHeader(error) {
+    if (!internal.isError(error)) return "Error";
+    const nameSlot = dataSlot(error, "name") ?? dataSlot(Object.getPrototypeOf(error), "name");
+    const name = nameSlot === undefined || nameSlot.value === undefined ? "Error" : primitiveText(nameSlot.value) ?? "Error";
+    const messageSlot = dataSlot(error, "message");
+    const message = messageSlot === undefined ? "" : primitiveText(messageSlot.value) ?? "";
+    return name + (name && message ? ": " : "") + message;
+  }
+  internal.stackHeader = stackHeader;
+
   Error.prepareStackTrace = function prepareStackTrace(error, callsites) {
     let start = 0;
     while (start < callsites.length - 1 && isErrorConstructorFrame(callsites[start])) start++;
-    let out = "";
+    let out = stackHeader(error);
     let raw = "";
     for (let i = start; i < callsites.length; i++) {
-      out += `    at ${formatCallSite(callsites[i])}\n`;
+      out += `\n    at ${formatCallSite(callsites[i])}`;
       if (internal.hotRun) raw += `    at ${formatCallSite(callsites[i], true)}\n`;
     }
     if (internal.hotRun) internal.hotErrorStacks.set(error, raw);

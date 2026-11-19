@@ -347,6 +347,7 @@ declare namespace BunWasm {
     nodeInspect: InspectFunction;
     parseStack(raw: unknown): StackFrame[];
     errorFrames(error: unknown, raw: unknown): StackFrame[];
+    frameText(frame: StackFrame): string;
   }
   interface StackCallSite {
     getFileName(): string;
@@ -391,6 +392,8 @@ declare namespace BunWasm {
     require(name: "caller_origin"): () => string | null;
     mappedCallSites: WeakSet<object>;
     formatCallSite(site: StackCallSite, keepIdentity?: boolean, anonymousFunction?: boolean): string;
+    stackHeader(error: object): string;
+    hotErrorStacks: WeakMap<object, string>;
     require(name: "inspect"): ConsoleInspector;
     require(name: "host_call_sites"): object;
   }
