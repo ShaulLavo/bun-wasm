@@ -302,6 +302,24 @@
   let immediateBatchRemaining = null;
   let refedTimers = 0;
 
+  // Errors thrown by 'unhandledRejection' listeners that no uncaught exception handler claimed
+  // (Bun's unhandled_error_counter; reportListenerError counts them). Bun prints each one and
+  // goes on reporting. Its event loop then skips 'beforeExit' and exits 1 once it finds no
+  // immediate queued at the start of an iteration (VirtualMachine::is_event_loop_alive); an
+  // iteration that ran immediates still waits for and runs the next timer.
+  let unclaimedErrors = 0;
+  // Whether an immediate ran since runTimers last found nothing due.
+  let immediateRan = false;
+  // Set when nothing was due after immediates ran: the loop then waits for the next timer,
+  // through as many bounded waits as that takes. A timer that runs clears it.
+  let timerWait = false;
+  // runTimers asks whenever no callback is due. `idle`: nothing else keeps the loop alive.
+  function loopStopped(idle) {
+    if (immediateRan) timerWait = !idle;
+    immediateRan = false;
+    return unclaimedErrors > 0 && (idle || !timerWait);
+  }
+
   function insertTimer(timer) {
     let lo = 0;
     let hi = timerQueue.length;
@@ -492,6 +510,7 @@
 
   function runOneTimer(now) {
     const timer = timerQueue.shift();
+    timerWait = false;
     if (timer._repeat) {
       timer._when = now + timer._delay;
       timer._seq = timerSeq++;
@@ -506,7 +525,8 @@
 
   // Called by the Rust event loop. Runs at most one callback so microtasks
   // drain between callbacks. Returns 0 when another turn is ready, the delay in ms
-  // until the next timer, or -1 when nothing keeps the process alive.
+  // until the next timer, -1 when nothing keeps the process alive, or -2 (LOOP_STOPPED)
+  // when an unclaimed error stops the loop without 'beforeExit' (loopStopped above).
   internal.runTimers = function runTimers() {
     const workerProgress = internal.workerPump && internal.workerPump();
     // Immediates first: like Bun, setImmediate callbacks queued by the
@@ -517,6 +537,7 @@
       const immediate = immediates.shift();
       if (!immediate._active) continue;
       immediate._active = false;
+      immediateRan = true;
       runInContext(immediate._context, immediate._callback, immediate, immediate._args);
       return 0;
     }
@@ -527,7 +548,9 @@
       return 0;
     }
     if (immediates?.length || workerProgress || internal.pendingIo > 0) return 0;
-    if (refedTimers <= 0 && !internal.messagePortRefs.size) return -1;
+    const idle = refedTimers <= 0 && !internal.messagePortRefs.size;
+    if (loopStopped(idle)) return -2;
+    if (idle) return -1;
     // Unref'd timers at the front don't keep us alive but still fire if a
     // ref'd one is pending later.
     return timerQueue.length ? Math.max(0.01, timerQueue[0]._when - now) : 1000;
@@ -885,7 +908,7 @@
 
   // --- uncaught errors --------------------------------------------------------
 
-  function printError(err) {
+  function printError(err, versionLine = true) {
     let text;
     try {
       text = internal.require("inspect").formatError(err);
@@ -893,6 +916,10 @@
       text = fallbackErrorText(err);
     }
     native.writeStderr(text.endsWith("\n") ? text : text + "\n");
+    if (versionLine) printVersionLine();
+  }
+
+  function printVersionLine() {
     native.writeStderr(`\nBun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})\n`);
   }
   internal.printError = printError;
@@ -1044,7 +1071,13 @@
   internal.handleRejection = function handleRejection(reason, promise) {
     if (listenerCount("unhandledRejection") > 0) {
       if (promise !== null && typeof promise === "object") reportedRejections.add(promise);
-      globalThis.process.emit("unhandledRejection", reason, promise);
+      try {
+        globalThis.process.emit("unhandledRejection", reason, promise);
+      } catch (err) {
+        // An exit a listener started (process.exit() on the browser engine) unwinds on.
+        if (internal.exitStarted) throw err;
+        reportListenerError(err);
+      }
       return true;
     }
     if (internal.workerError) internal.workerError(reason);
@@ -1054,6 +1087,21 @@
     emitExit(0);
     return false;
   };
+
+  // A throw from an 'unhandledRejection' listener is an uncaught exception (origin
+  // 'uncaughtException', as Bun reports it). One that no handler claims is printed and counted;
+  // the remaining rejections are still reported. In a worker it is fatal at once.
+  function reportListenerError(err) {
+    if (dispatchUncaught(err, false)) return;
+    if (internal.workerError) {
+      fatalExit("uncaught-exception", 1, err);
+      return;
+    }
+    unclaimedErrors++;
+    printError(err, false);
+    // The browser engine's loop may be asleep until a later timer: have it look now.
+    if (native.wake) native.wake(0);
+  }
 
   // A promise got its first handler after it left the engine's rejection queue. Bun's
   // Bun__emitHandledPromiseEvent: 'rejectionHandled' with the promise, once, and only for
@@ -1084,12 +1132,23 @@
 
   internal.beforeExit = function beforeExit() {
     const process = globalThis.process;
+    if (unclaimedErrors > 0) return exitUnclaimed(process);
     const code = (process.exitCode | 0) || 0;
     emitExit(code);
     const finalCode = (process.exitCode | 0) || 0;
     internal.traceExit(internal.exitReason || "event-loop-drained", finalCode);
     return finalCode;
   };
+
+  // After unclaimed listener errors Bun's 'exit' listeners see code 1 unless an exit code was
+  // set, and the process exits 1 whatever they leave.
+  function exitUnclaimed(process) {
+    if (!(process.exitCode | 0)) process.exitCode = 1;
+    emitExit((process.exitCode | 0) || 1);
+    printVersionLine();
+    internal.traceExit("uncaught-exception", 1);
+    return 1;
+  }
 
   // --- globals ----------------------------------------------------------------
 

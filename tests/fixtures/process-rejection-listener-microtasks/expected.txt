@@ -1,0 +1,13 @@
+sync end
+rejection r1
+uncaught thrown for r1
+rejection r2
+tick r1
+tick r2
+micro r1
+micro r2
+rejection from micro
+tick from micro
+micro from micro
+immediate
+timer

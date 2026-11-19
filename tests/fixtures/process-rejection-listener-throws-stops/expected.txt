@@ -1,0 +1,4 @@
+rejection r1
+rejection r2
+rejection r3
+exit 1 1

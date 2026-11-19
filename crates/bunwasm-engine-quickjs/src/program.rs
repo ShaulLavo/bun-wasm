@@ -66,22 +66,32 @@ impl<E: Engine> Core<E> {
         self.exit(1)
     }
 
+    /// Report rejections once the microtask queue drained, then run the ticks and microtasks
+    /// the listeners queued, until neither is left. Bun's drainMicrotasks alternates the same
+    /// way, so that work runs before the next timer or immediate.
+    fn check_rejections(&self, e: &E) {
+        while self.report_rejections(e) {
+            self.drain_jobs(e);
+        }
+    }
+
     /// Report promises that are still unhandled once the microtask queue
     /// drained (Bun treats an unhandled rejection as fatal), one at a time as Bun's
     /// handleRejectedPromises does: a listener that handles a later one keeps it from being
     /// reported, and one that rejects another promise has it reported in the same pass.
     /// 'rejectionHandled' for handlers attached since the last pass comes first, as Bun's
     /// HandledPromise task (and Node's processPromiseRejections) runs before the reports; one
-    /// owed by this pass's listeners comes after its reports.
-    fn check_rejections(&self, e: &E) {
-        self.emit_late_handled(e);
+    /// owed by this pass's listeners comes after its reports. Returns whether any listener ran.
+    fn report_rejections(&self, e: &E) -> bool {
+        let mut reported = self.emit_late_handled(e);
         loop {
             if let Some((promise, reason)) = e.next_unhandled_rejection() {
                 self.uncaught_values(e, "handleRejection", &[reason, promise]);
+                reported = true;
                 continue;
             }
             if !self.emit_late_handled(e) {
-                return;
+                return reported;
             }
         }
     }
@@ -227,6 +237,9 @@ pub(crate) fn run_in_engine<E: Engine>(
     }
 }
 
+/// What `runTimers` returns when an unclaimed error stopped the loop.
+const LOOP_STOPPED: f64 = -2.0;
+
 /// The event loop: microtasks and ticks, then one due timer at a time;
 /// sleeps (WASI `poll_oneoff`, or the host's poll while sockets are open)
 /// until the next timer when idle.
@@ -243,13 +256,18 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
             break;
         }
         // runTimers returns: 0 = another turn is ready, >0 = ms until the
-        // next timer, <0 = nothing left keeping the loop alive.
+        // next timer, -1 = nothing left keeping the loop alive, -2 = stopped.
         let next = core.turn_number(e, "runTimers");
         // Publish buffered stdout from a loop that always has more work and so never reaches the
         // idle flushes below. The browser engine's pump flushes every turn.
         core.flush_busy();
         if next == 0.0 {
             continue;
+        }
+        // Bun's is_event_loop_alive: an error an 'unhandledRejection' listener threw and no
+        // handler claimed stops the loop, without 'beforeExit' (bootstrap.js loopStopped).
+        if next == LOOP_STOPPED {
+            break;
         }
         // Network handles (docs/host-abi.md): pump them, then sleep in the
         // host's poll until news or the next timer instead of a plain sleep.
