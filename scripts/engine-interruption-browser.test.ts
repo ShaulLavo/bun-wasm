@@ -10,7 +10,7 @@ import { assertEngineInterruptionResult } from "../web/tests/engine-interruption
 function browsers(leg: "chromium" | "webkit"): string[] { return leg === "chromium" ? ["chromium", "firefox"] : ["webkit"]; }
 
 function selectedInterruptionEngines({ engines, artifact }: Pick<BrowserGuestContext, "engines" | "artifact">, env: NodeJS.ProcessEnv = process.env) {
-  return selectBundledInterruptionEngines(engines, artifact.interruptionSpiderMonkey !== undefined, env.BUN_WASM_INTERRUPTION_SPIDERMONKEY === "required");
+  return selectBundledInterruptionEngines(engines, artifact.interruptionSpiderMonkey, env.BUN_WASM_INTERRUPTION_SPIDERMONKEY === "required");
 }
 
 function recordProofs(report: Record<string, unknown>, selected: readonly InterruptionEngine[], regression: BrowserGuestContext["regression"]): boolean {

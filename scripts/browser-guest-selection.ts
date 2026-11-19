@@ -230,7 +230,9 @@ const ownerInputs = {
     "web/tests/engine-interruption-stop.ts",
     "web/tests/engine-interruption-transport.ts",
     "web/tests/engine-interruption-worker.ts",
-    "web/tests/process-module-fixture.ts"
+    "web/tests/process-module-fixture.ts",
+    "scripts/spidermonkey-side-core-receipt.ts",
+    "scripts/spidermonkey-side-inputs.ts"
   ],
   "worker-modules": [
     "tests/fixtures/worker-review/cases.ts",
@@ -293,6 +295,8 @@ const commonProducerFiles = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", 
   "scripts/src/program-profile.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-direct-stream.ts", "scripts/generate-node-path.ts", "scripts/generate-dev-html-client.ts",
   "web/src/dev-html-client.ts", "scripts/build-bash-web-shell.sh"];
 const commonProducerRoots = ["crates/", "patches/", "vendor/", "third_party/", ".cargo/"];
+const spiderMonkeyRoots = ["spidermonkey/"];
+const spiderMonkeyFiles = ["scripts/build-bun-spidermonkey.sh", "scripts/build-engine-spidermonkey.sh"];
 function touches(path: string, roots: readonly string[], files: readonly string[] = []): boolean {
   return files.includes(path) || roots.some(root => path.startsWith(root));
 }
@@ -343,6 +347,9 @@ function selectPath(path: string, inputs: Map<CoverageOwner, string[]>): Browser
   });
   if (touches(path, commonProducerRoots, commonProducerFiles)) return fullBrowserGuestSelection;
   if (path === "scripts/build-bun-tools.sh" || path === "scripts/optimize-tools.ts") return [{ owner: "tools-integrity", engines: ownerEngines("tools-integrity") }];
+  // SpiderMonkey is outside the catalogue, but the interruption batch runs its bundled pair, so its
+  // engine inputs select that batch (crates/ already selects every batch).
+  if (touches(path, spiderMonkeyRoots, spiderMonkeyFiles) && !path.endsWith(".md")) return [{ owner: "engine-interruption", engines: ownerEngines("engine-interruption") }];
   return coverageOwners.filter(owner => inputs.get(owner)?.includes(path)).map(owner => ({ owner, engines: ownerEngines(owner) }));
 }
 const pairedSideFiles = ["allocator.rs", "client.rs", "driver.rs", "loader.rs", "natives.rs", "program.rs", "transport.rs", "value_natives.rs", "side_modules.rs", "transfer.rs", "nested_bridge.rs", "nested_token.rs", "transfer_fault.rs"]

@@ -245,12 +245,15 @@ export function writePairReceipt(corePath: string, sidePath: string, inputs: Sid
 }
 
 export function verifyPairReceipt(corePath: string, sidePath: string, receiptPath: string, inputs: SideCoreInputs): ExperimentalReceipt {
-  const receipt = parseReceipt(JSON.parse(readFileSync(receiptPath, "utf8")));
+  return verifyPairBytes(readFileSync(corePath), readFileSync(sidePath), JSON.parse(readFileSync(receiptPath, "utf8")), inputs);
+}
+
+/** The same check over bytes already in memory, such as a served site's decompressed copies. */
+export function verifyPairBytes(core: Uint8Array, side: Uint8Array, receiptValue: unknown, inputs: SideCoreInputs): ExperimentalReceipt {
+  const receipt = parseReceipt(receiptValue);
   assert.equal(receipt.sideSourceSha256, inputs.sideSourceSha256, "SpiderMonkey side source identity mismatch");
   assert.deepEqual(receipt.source, inputs.source);
   assert.deepEqual(receipt.native, inputs.native);
-  const core = readFileSync(corePath);
-  const side = readFileSync(sidePath);
   assert.equal(hash(core), receipt.core.sha256);
   assert.equal(core.byteLength, receipt.core.bytes);
   assert.equal(hash(side), receipt.side.sha256);

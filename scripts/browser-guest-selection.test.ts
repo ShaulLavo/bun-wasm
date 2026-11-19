@@ -51,6 +51,14 @@ test("the cooperative stop proof helper selects both interruption engines", () =
   expect(browserGuestManifest("engine-interruption").inputs).toContain(path);
   expect(select([path])).toEqual(fullBrowserGuestSelection.filter(item => item.owner === "engine-interruption"));
 });
+test("SpiderMonkey engine and receipt inputs select only the interruption batch; its crate selects every batch", () => {
+  const interruption = fullBrowserGuestSelection.filter(item => item.owner === "engine-interruption");
+  for (const path of ["spidermonkey/spidermonkey-wasi.patch", "spidermonkey/build.sh", "scripts/build-bun-spidermonkey.sh", "scripts/build-engine-spidermonkey.sh",
+    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts"]) expect(select([path])).toEqual(interruption);
+  expect(browserGuestManifest("engine-interruption").inputs).toContain("scripts/spidermonkey-side-core-receipt.ts");
+  expect(select(["spidermonkey/README.md"])).toEqual([]);
+  for (const path of ["crates/bunwasm-spidermonkey/src/lib.rs", "crates/bunwasm-engine-spidermonkey/src/lib.rs"]) expect(select([path])).toEqual(fullBrowserGuestSelection);
+});
 test("shared runtime selects full rows; serving/startup inputs select their actual page owners", () => {
   expect(select(["crates/bunwasm-runtime/src/host.rs"])).toEqual(fullBrowserGuestSelection);
   for (const input of ["scripts/accept-encoding.ts", "web/src/playground/app.tsx", "web/src/playground/terminal-pane.tsx", "web/src/terminal-mount.ts", "web/src/startup.ts"]) {
