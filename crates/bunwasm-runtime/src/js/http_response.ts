@@ -12,14 +12,18 @@
     _body: Uint8Array | null;
     _stream: ReadableStream<unknown> | null;
     _bodyUsed: boolean;
+    // What Bun.serve sends for a string or byte body without a Content-Type.
+    _servedType: string | null;
   };
   type Serialize = (status: number, message: string, headers: Pair[]) => Uint8Array;
   const encoder = new TextEncoder();
   const crlf = encoder.encode("\r\n");
   const terminal = encoder.encode("0\r\n\r\n");
 
-  function headers(response: Response, keepAlive: boolean): Pair[] {
+  function headers(response: BodyResponse, keepAlive: boolean): Pair[] {
     const pairs = Array.from(response.headers).filter(([name]) => name !== "content-length" && name !== "transfer-encoding");
+    const served = response._servedType;
+    if (served && response._body?.length && !response.headers.has("content-type")) pairs.push(["content-type", served]);
     if (!response.headers.has("date")) pairs.push(["date", new Date().toUTCString()]);
     if (!keepAlive) pairs.push(["connection", "close"]);
     return pairs;
