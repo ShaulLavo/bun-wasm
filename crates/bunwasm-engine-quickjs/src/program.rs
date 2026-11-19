@@ -69,24 +69,34 @@ impl<E: Engine> Core<E> {
     /// Report promises that are still unhandled once the microtask queue
     /// drained (Bun treats an unhandled rejection as fatal), one at a time as Bun's
     /// handleRejectedPromises does: a listener that handles a later one keeps it from being
-    /// reported, and one that rejects another promise has it reported in the same pass. Then
-    /// 'rejectionHandled' for reported promises that got a handler since.
+    /// reported, and one that rejects another promise has it reported in the same pass.
+    /// 'rejectionHandled' for handlers attached since the last pass comes first, as Bun's
+    /// HandledPromise task (and Node's processPromiseRejections) runs before the reports; one
+    /// owed by this pass's listeners comes after its reports.
     fn check_rejections(&self, e: &E) {
+        self.emit_late_handled(e);
         loop {
             if let Some((promise, reason)) = e.next_unhandled_rejection() {
                 self.uncaught_values(e, "handleRejection", &[reason, promise]);
                 continue;
             }
-            let handled = e.take_late_handled_rejections();
-            if handled.is_empty() {
+            if !self.emit_late_handled(e) {
                 return;
             }
-            for promise in handled {
-                if let Err(err) = self.call_internal(e, "handleRejectionHandled", &[promise]) {
-                    self.uncaught(e, err);
-                }
+        }
+    }
+
+    /// 'rejectionHandled' for reported promises that got a handler since the last call.
+    /// Returns whether there were any.
+    fn emit_late_handled(&self, e: &E) -> bool {
+        let handled = e.take_late_handled_rejections();
+        let any = !handled.is_empty();
+        for promise in handled {
+            if let Err(err) = self.call_internal(e, "handleRejectionHandled", &[promise]) {
+                self.uncaught(e, err);
             }
         }
+        any
     }
     fn report_fallback(&self, e: &E, fallback: E::Value) {
         let text = match e.to_val(&fallback) {
