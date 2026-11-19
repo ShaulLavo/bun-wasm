@@ -82,7 +82,8 @@ const recipeBindings = ['env.sh', 'Cargo.lock', 'rust-toolchain.toml', 'package.
   'spidermonkey/spidermonkey-wasi.patch', 'spidermonkey/spidermonkey-shared-group.patch',
   'crates/bunwasm-spidermonkey/build.rs', 'scripts/src/program-profile.ts', 'src/engine-kind.ts',
   'scripts/ci-spidermonkey-prebuild.ts', 'scripts/ci-bootstrap-tools.ts', 'scripts/ci-install.ts',
-  'scripts/ci-stage-release-packages.ts', 'scripts/ci-release-download.ts', 'scripts/ci-build-tools.ts', 'scripts/waffle-release-inputs.json', 'scripts/build-wasi-sysroot.ts'];
+  'scripts/ci-stage-release-packages.ts', 'scripts/ci-release-download.ts', 'scripts/ci-build-tools.ts', 'scripts/waffle-release-inputs.json', 'scripts/build-wasi-sysroot.ts',
+  '.github/scripts/apt-main-archive.sh'];
 
 function recipeFixture(run: (root: string, source: string) => void): void {
   const root = mkdtempSync(join(tmpdir(), 'bun-wasm-sm-recipe-'));

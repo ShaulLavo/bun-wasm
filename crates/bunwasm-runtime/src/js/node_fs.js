@@ -585,15 +585,21 @@
     later(() => callback(error, count, buffers));
   }
 
+  // Node's GetOffset (src/node_file.cc): only a non-negative safe integer is a file
+  // position; NaN, Infinity, fractions, larger numbers and BigInts mean the current offset.
+  function filePosition(value) {
+    return Number.isSafeInteger(value) && value >= 0 ? value : -1;
+  }
+
   function writeSync(fd, data, offsetOrPosition, lengthOrEncoding, position) {
     if (typeof data === "string") {
       const bytes = toBytes(data, typeof lengthOrEncoding === "string" ? lengthOrEncoding : "utf8");
-      return native.write(fd, bytes, typeof offsetOrPosition === "number" ? offsetOrPosition : -1);
+      return native.write(fd, bytes, filePosition(offsetOrPosition));
     }
     const view = internal.toUint8(data);
     const offset = offsetOrPosition || 0;
     const length = typeof lengthOrEncoding === "number" ? lengthOrEncoding : view.byteLength - offset;
-    return native.write(fd, view.slice(offset, offset + length), typeof position === "number" ? position : -1);
+    return native.write(fd, view.slice(offset, offset + length), filePosition(position));
   }
 
   function validateFd(fd) {
@@ -614,8 +620,7 @@
 
   function writeBuffers(fd, buffers, position) {
     if (buffers.length === 0) return 0;
-    const at = typeof position === "number" && position >= 0 ? position : -1;
-    return native.writev(fd, buffers.map(internal.toUint8), at);
+    return native.writev(fd, buffers.map(internal.toUint8), filePosition(position));
   }
 
   function writevSync(fd, buffers, position) {

@@ -692,7 +692,7 @@
       abortSignal = (signal, reason) => {
         if (signal.#aborted) return;
         signal.#aborted = true;
-        signal.#reason = reason === undefined ? new DOMException("This operation was aborted", "AbortError") : reason;
+        signal.#reason = reason === undefined ? new DOMException("The operation was aborted.", "AbortError") : reason;
         const algorithms = Array.from(signal.#algorithms);
         signal.#algorithms.clear();
         runAbortAlgorithms(algorithms);
@@ -1273,15 +1273,18 @@
   Object.assign(Request.prototype, BodyMixin);
 
   // No sockets under WASI. file: URLs still work, like in Bun.
-  async function fetch(input, init = {}) {
-    const url = input instanceof Request ? input.url : String(input instanceof URL ? input.href : input);
+  // Arguments are read and checked as Bun does (fetch_args.ts); errors reject.
+  async function fetch(input) {
+    const parsed = internal.require("fetch_args").parse(arguments, { Request, Headers, AbortSignal, Blob });
+    if (parsed.data !== undefined) return fetchDataUrl(parsed.data);
+    const { url, init } = parsed;
+    input = parsed.request || url;
     if (url.startsWith("file:")) {
       const path = decodeURIComponent(new URL(url).pathname);
       const res = new Response(native.readFile(path), { headers: { "content-type": internal.mimeType(path) } });
       Response._setUrl(res, url);
       return res;
     }
-    if (url.startsWith("data:")) return fetchDataUrl(url);
     // Hosts implementing the bun_wasm ABI (docs/host-abi.md) do real HTTP.
     if (native.hostCaps.fetch) return internal.require("net").fetch(input, init);
     const err = new TypeError(`fetch() is not available in bun-wasm: WASI has no network access (${url})`);
@@ -1290,12 +1293,8 @@
   }
 
   function fetchDataUrl(url) {
-    const comma = url.indexOf(",");
-    const meta = url.slice(5, comma);
-    const data = url.slice(comma + 1);
-    const isBase64 = meta.endsWith(";base64");
-    const type = (isBase64 ? meta.slice(0, -7) : meta) || "text/plain;charset=US-ASCII";
-    const bytes = isBase64 ? native.base64Decode(data) : native.utf8Encode(decodeURIComponent(data));
+    const { type, base64, data } = internal.require("fetch_args").dataUrlParts(url);
+    const bytes = base64 ? native.base64Decode(data) : native.utf8Encode(decodeURIComponent(data));
     return new Response(bytes, { headers: { "content-type": type } });
   }
 
