@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 
 const als = new AsyncLocalStorage<string>();
 const waiting: (() => void)[] = [];
@@ -57,4 +57,19 @@ describe("inside als.run", () => {
     console.log("enterWith inside a test", als.getStore());
     expect(2).toBe(2);
   });
+});
+
+// enterWith() inside a describe callback stays inside it: tests and hooks registered after the
+// describe see the store from before it.
+describe("d1", () => {
+  als.enterWith("describe-d1");
+  test("t1", () => {
+    console.log("t1", als.getStore());
+  });
+});
+test("t2", () => {
+  console.log("t2", als.getStore());
+});
+afterAll(() => {
+  console.log("afterAll", als.getStore());
 });

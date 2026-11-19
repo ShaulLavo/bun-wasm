@@ -7,3 +7,6 @@ registered inside run registered
 fails inside run run-store
 enterWith inside a test entered
 passes beside it before the group
+t1 describe-d1
+t2 before the group
+afterAll before the group

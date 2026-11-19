@@ -1,5 +1,5 @@
 {
   "owner": "native",
   "path": "tests/fixtures/test-concurrent-uncaught",
-  "engines": ["quickjs", "jsc", "spidermonkey"]
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
 }

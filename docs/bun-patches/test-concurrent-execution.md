@@ -51,8 +51,11 @@ invocation are module state, as before.
 
 Every test and hook is called in the async context it was registered in, as
 Bun does, so a store entered at the top of the file or around the registration
-is visible inside it. Native Bun 1.4.4 then times such a test out even though
-it finished; that's an upstream bug, and here the test passes.
+is visible inside it. A `describe` callback runs in its caller's context, so an
+`enterWith()` inside it reaches only what it registers. Bun gets the same
+effect by running describe callbacks after the file loads. Native Bun 1.4.4
+then times such a test or hook out even though it finished; that's an upstream
+bug, and here the test passes.
 
 Inside a group, each test's slot is the store of a private `AsyncLocalStorage`.
 It's pushed on top of that registration context, and entered again around each
@@ -79,6 +82,7 @@ The `test-concurrent-groups`, `test-concurrent-flags` and
 `test-concurrent-stores` fixtures cover these rules on every engine, and on the
 Browser engine also with `--context hooks`. `test-concurrent-stores` has
 hand-written expectations because of the Bun timeout bug above.
-`test-concurrent-settled` (callbacks that await only settled values) and
-`test-concurrent-uncaught` run on QuickJS, JSC and SpiderMonkey and skip the
-Browser engine, for the two differences described above.
+`test-concurrent-settled` covers callbacks that await only settled values. It
+runs on QuickJS, JSC and SpiderMonkey and skips the Browser engine.
+`test-concurrent-uncaught` skips Browser only without `--context hooks`. Both
+skips are for the differences described above.

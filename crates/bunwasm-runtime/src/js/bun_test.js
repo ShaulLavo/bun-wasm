@@ -2145,7 +2145,9 @@
     if (typeof fn !== "function") return;
     collecting.scope = scope;
     try {
-      fn();
+      // In the caller's context, so an enterWith() inside the callback stays inside it: Bun runs
+      // describe callbacks after the file loads, and later registrations must not see it.
+      internal.runInContext(native.getAsyncContext(), fn, undefined, []);
     } finally {
       collecting.scope = parent;
     }
