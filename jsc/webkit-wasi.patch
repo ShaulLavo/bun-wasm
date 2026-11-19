@@ -5359,8 +5359,8 @@ diff --git i/Source/JavaScriptCore/yarr/Yarr.h w/Source/JavaScriptCore/yarr/Yarr
 
 +#if OS(WASI)
 +// Single-threaded WASI cannot publish VM traps while a match runs. The bytecode
-+// interpreter calls `poll` once every interruptPollInterval backtracks; true
-+// abandons the match with ErrorInterrupted. A null poll never fires.
++// interpreter calls `poll` once every interruptPollInterval backtracks or match starts
++// of one pattern; true abandons the match with ErrorInterrupted. A null poll never fires.
 +struct InterruptPoll {
 +    bool (*poll)(void*) { nullptr };
 +    void* context { nullptr };
@@ -5400,18 +5400,23 @@ diff --git i/Source/JavaScriptCore/yarr/YarrInterpreter.cpp w/Source/JavaScriptC
  #endif
 
          return output[0];
-@@ -2355,6 +2363,10 @@ public:
+@@ -2355,6 +2363,15 @@ public:
      {
      }
 
 +#if OS(WASI)
-+    void setInterruptPoll(InterruptPoll poll) { interruptPoll = poll; }
++    void setInterruptPoll(InterruptPoll poll, unsigned countdown)
++    {
++        interruptPoll = poll;
++        interruptPollCountdown = countdown;
++    }
++    unsigned interruptPollCountdownLeft() const { return interruptPollCountdown; }
 +#endif
 +
  private:
      inline bool NODELETE isLegacyCompilation() const { return compileMode == CompileMode::Legacy; }
      inline bool NODELETE isUnicodeCompilation() const { return compileMode == CompileMode::Unicode; }
-@@ -2373,6 +2385,10 @@ private:
+@@ -2373,6 +2390,10 @@ private:
      static constexpr unsigned bolUnsatisfiable = std::numeric_limits<unsigned>::max();
      unsigned noNewlineBefore; // see matchDotStarEnclosure
      unsigned remainingMatchCount;
@@ -5422,7 +5427,7 @@ diff --git i/Source/JavaScriptCore/yarr/YarrInterpreter.cpp w/Source/JavaScriptC
  };
 
  class ByteCompiler {
-@@ -3332,6 +3348,23 @@ unsigned interpret(BytecodePattern* bytecode, StringView input, unsigned start,
+@@ -3332,6 +3353,35 @@ unsigned interpret(BytecodePattern* bytecode, StringView input, unsigned start,
      return Interpreter<char16_t>(bytecode, output, input.span16(), start).interpret();
  }
 
@@ -5430,9 +5435,21 @@ diff --git i/Source/JavaScriptCore/yarr/YarrInterpreter.cpp w/Source/JavaScriptC
 +template<typename CharType>
 +static unsigned interpretWithPoll(BytecodePattern* bytecode, std::span<const CharType> input, unsigned start, unsigned* output, InterruptPoll poll)
 +{
++    if (!poll.poll)
++        return Interpreter<CharType>(bytecode, output, input, start).interpret();
++    // The countdown belongs to the pattern, so a native loop of many cheap matches (a global
++    // replace or split) keeps counting across them; each match start is one more step.
++    unsigned& countdown = bytecode->m_interruptPollCountdown;
++    if (!--countdown) [[unlikely]] {
++        countdown = interruptPollInterval;
++        if (poll.poll(poll.context))
++            return static_cast<unsigned>(JSRegExpResult::ErrorInterrupted);
++    }
 +    Interpreter<CharType> interpreter(bytecode, output, input, start);
-+    interpreter.setInterruptPoll(poll);
-+    return interpreter.interpret();
++    interpreter.setInterruptPoll(poll, countdown);
++    unsigned result = interpreter.interpret();
++    countdown = interpreter.interruptPollCountdownLeft();
++    return result;
 +}
 +
 +unsigned interpret(BytecodePattern* bytecode, StringView input, unsigned start, unsigned* output, InterruptPoll poll)
@@ -5449,7 +5466,18 @@ diff --git i/Source/JavaScriptCore/yarr/YarrInterpreter.cpp w/Source/JavaScriptC
 diff --git i/Source/JavaScriptCore/yarr/YarrInterpreter.h w/Source/JavaScriptCore/yarr/YarrInterpreter.h
 --- i/Source/JavaScriptCore/yarr/YarrInterpreter.h
 +++ w/Source/JavaScriptCore/yarr/YarrInterpreter.h
-@@ -564,5 +564,8 @@ private:
+@@ -552,6 +552,10 @@ public:
+     unsigned m_offsetVectorBaseForNamedCaptures;
+     unsigned m_offsetsSize;
+     Vector<unsigned> m_duplicateNamedGroupForSubpatternId;
++#if OS(WASI)
++    // Host-poll countdown carried across this pattern's matches (see interpret's InterruptPoll).
++    unsigned m_interruptPollCountdown { interruptPollInterval };
++#endif
+
+     CharacterClass* newlineCharacterClass;
+     CharacterClass* wordcharCharacterClass;
+@@ -564,5 +568,8 @@ private:
 
  JS_EXPORT_PRIVATE std::unique_ptr<BytecodePattern> byteCompile(YarrPattern&, BumpPointerAllocator*, ErrorCode&, ConcurrentJSLock* = nullptr);
  JS_EXPORT_PRIVATE unsigned interpret(BytecodePattern*, StringView input, unsigned start, unsigned* output);

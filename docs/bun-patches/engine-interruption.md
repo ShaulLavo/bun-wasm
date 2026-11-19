@@ -16,9 +16,18 @@ A regexp match reaches no trap point while it backtracks, and on wasm32 JSC has 
 Yarr JIT, so every match runs in the Yarr bytecode interpreter. A second section of the
 same patch changes `Source/JavaScriptCore/yarr/{Yarr.h,YarrInterpreter.h,YarrInterpreter.cpp}`,
 `Source/JavaScriptCore/runtime/RegExpInlines.h` and `Source/JavaScriptCore/runtime/VMTraps.h`
-at the same revision. The interpreter decrements a per-match countdown at its single
+at the same revision. The interpreter decrements a countdown at its single
 `backtrack:` label, which every repeated attempt passes through, nested or not, and
-calls an optional poll every 16,384 backtracks. `RegExp::matchInlineOnce` supplies a
+calls an optional poll every 16,384 steps. The countdown lives on the compiled
+`BytecodePattern`, not on one match: a polled match first counts its own start as a step,
+loads the pattern's countdown and stores what is left when it returns. A global
+`String.prototype.replace`, `split` or `match` loops over matches in C++ without reaching a
+trap point, so a per-match countdown that restarted every time let millions of cheap
+matches (each under 16,384 backtracks, or with none at all) run without ever polling. A
+`BytecodePattern` belongs to one `RegExp` of one VM, and only the VM thread passes a poll, so
+the field needs no synchronization; matches without a poll leave it untouched. Literal
+patterns that JSC replaces with a plain string search never enter Yarr and stay one bounded
+linear pass, like other single native operations. `RegExp::matchInlineOnce` supplies a
 poll only on the VM thread, with a global object, when the host enabled the C-loop
 countdown; the poll returns false while traps or termination are deferred and otherwise
 asks the same `shouldInterruptScriptBeforeTimeout` callback as the trap slow path. A
@@ -118,7 +127,7 @@ pages into one result, which is green only if both are.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
-| [`jsc/webkit-wasi.patch`, Yarr host interruption](#engine-interruption) | Host feature | Poll the same host callback every 16,384 Yarr interpreter backtracks; a stop becomes the uncatchable termination exception. |
+| [`jsc/webkit-wasi.patch`, Yarr host interruption](#engine-interruption) | Host feature | Poll the same host callback every 16,384 Yarr interpreter backtracks or match starts, counted per compiled pattern across matches; a stop becomes the uncatchable termination exception. |
 | [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
 
 [Ledger scope and pinned revisions](scope.md).
