@@ -2,10 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import * as host from "node:fs";
 import * as path from "node:path";
 import { Buffer } from "node:buffer";
-import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
 import { inspect } from "node:util";
 import { execFileSync } from "node:child_process";
+import { loadFileHandleModule } from "./fs-file-handle-source";
 import { checkFsOptions, checkBigintStats, checkCopyOptions, checkCopyTypeErrors } from "../tests/fixtures/fs-options/index";
 
 const source = host.readFileSync(new URL("../crates/bunwasm-runtime/src/js/node_fs.js", import.meta.url), "utf8");
@@ -49,11 +49,7 @@ function fixture() {
   const factory = runInNewContext(source, { Uint8Array, ArrayBuffer, URL, Date, FinalizationRegistry });
   const fsOptionsPath = new URL("../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url);
   const helpers = host.existsSync(fsOptionsPath) ? runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${host.readFileSync(fsOptionsPath, "utf8")}`), { Date })({}) : null;
-  const fileHandlePath = new URL("../crates/bunwasm-runtime/src/js/fs_file_handle.ts", import.meta.url);
-  const fileHandles = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${host.readFileSync(fileHandlePath, "utf8")}`), { TextEncoder, DOMException })({
-    describe: String,
-    require: (name: string) => name === "events" ? EventEmitter : undefined,
-  });
+  const fileHandles = loadFileHandleModule();
   const { fs } = factory({ native, describe: String,
     toUint8: (view: ArrayBufferView) => new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
     require(name: string) {
