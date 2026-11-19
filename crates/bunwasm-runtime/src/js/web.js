@@ -1203,8 +1203,12 @@
     }
     clone() {
       const body = bodyStreams.clone(this);
-      const copy = new Response(body, { status: this.#status, statusText: this.#statusText, headers: this.#headers });
+      // Response.error()'s status 0 is out of the constructor's range; copy it after.
+      const copy = new Response(body, { statusText: this.#statusText, headers: this.#headers });
+      copy.#status = this.#status;
+      copy.#type = this.#type;
       copy.#url = this.#url;
+      copy.#redirected = this.#redirected;
       return copy;
     }
     get [Symbol.toStringTag]() {

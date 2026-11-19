@@ -6,6 +6,8 @@ new Request(url, { method: "POST" }): text=ok "" used=false arrayBuffer=ok Array
 new Request(url, { method: "POST", body: null }): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
 Response.redirect(): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
 Response.error(): text=ok "" used=false arrayBuffer=ok ArrayBuffer(0) used=false bytes=ok bytes(0) used=false blob=ok Blob(0) used=false json=SyntaxError used=false text=ok "" used=false body=null clone=ok
+error clone(): type=error status=0 ok=false location=null body=null
+default clone(): type=default status=307 ok=false location=http://a/ body=null
 null body formData(): [] used=false
 null body textStream(): "" used=false
 new Response(""): used=true again=TypeError clone=TypeError: Body is disturbed or locked

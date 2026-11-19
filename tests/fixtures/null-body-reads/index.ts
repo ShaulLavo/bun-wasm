@@ -32,6 +32,10 @@ const made: [string, () => Request | Response][] = [
   ["Response.error()", () => Response.error()],
 ];
 for (const [name, make] of made) console.log(`${name}: ${await reads(make())}`);
+for (const response of [Response.error(), Response.redirect("http://a/", 307)]) {
+  const copy = response.clone();
+  console.log(`${response.type} clone(): type=${copy.type} status=${copy.status} ok=${copy.ok} location=${copy.headers.get("location")} body=${copy.body}`);
+}
 
 const form = new Response(null, { headers: { "content-type": "application/x-www-form-urlencoded" } });
 console.log("null body formData():", JSON.stringify(Array.from(await form.formData())), `used=${form.bodyUsed}`);
