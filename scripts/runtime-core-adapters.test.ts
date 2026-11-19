@@ -56,7 +56,7 @@ function withoutBuiltinLoaderDeltas(source: string) {
   expect(property.getText(file).replace(/\s/g, "")).toBe('processBindingConstants:{getfs(){returninternal.require("node_fs").fs.constants;},}');
   expect(source[property.end]).toBe(",");
   // Internal modules the runtime serves itself (scripts/bun-builtins.json runtimeProvided).
-  expect(providedMap.getText(file).replace(/\s/g, "")).toBe('construntimeProvided={"internal:streams/duplex":()=>internal.builtin("node:stream").Duplex,};');
+  expect(providedMap.getText(file).replace(/\s/g, "")).toBe('construntimeProvided={"internal:streams/duplex":()=>internal.builtin("node:stream").Duplex,"internal:tls":fetchInternal("internal:tls"),"internal:webstreams_adapters":fetchInternal("internal:webstreams_adapters"),};');
   expect(providedMap.end).toBeLessThan(property.pos);
   const providedLookup = "      const provided = runtimeProvided[name];\n      if (provided) return provided();\n";
   expect(source.split(providedLookup)).toHaveLength(2);
@@ -158,10 +158,11 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 // The stack_trace hash also covers the call-site predicates React's stack collector calls.
 const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
-  bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
+  // Re-pinned for the thirdparty fetch modules' internal loader and binding hooks (node-fetch, undici).
+  bun_builtins: "acf769db3668622edc5f3d2ba41b86d593371cbdf7537d86e53f9ed8cc0b23f3",
 };
 // Allow the JSC formatter registration and host adapter dispatch.
-const originalEmbeddedBytes = { stack_trace: 5000, bun_builtins: 4092 };
+const originalEmbeddedBytes = { stack_trace: 5000, bun_builtins: 4372 };
 
 for (const [label, before, after] of [
   ["true names", "return this.#frame.name || null;", 'return this.#frame.name || "";'],

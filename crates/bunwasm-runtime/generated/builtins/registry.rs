@@ -219,4 +219,8 @@ pub static BUN_BUILTINS: &[(usize, &str)] = &[
     (167, include_str!("167.js")),
     (168, include_str!("168.js")),
     (188, include_str!("188.js")),
+    (192, include_str!("192.js")),
+    (193, include_str!("193.js")),
+    (194, include_str!("194.js")),
+    (195, include_str!("195.js")),
 ];

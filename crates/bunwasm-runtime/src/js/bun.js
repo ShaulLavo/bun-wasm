@@ -563,6 +563,10 @@
       return internal.require("bun_shell").$;
     },
     build,
+    // Its own function, as in Bun: it stays the original when application code replaces globalThis.fetch.
+    fetch: function fetch(_input) {
+      return Reflect.apply(internal.web.fetch, undefined, arguments);
+    },
     serve: native.hostCaps.listen ? (options) => internal.require("net").serve(options) : unsupported("Bun.serve", noNetwork),
     listen: (options) => internal.require("net").bunTcp().listen(options),
     connect: (options) => internal.require("net").bunTcp().connect(options),

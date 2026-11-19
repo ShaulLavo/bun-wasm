@@ -966,7 +966,6 @@
       if (init === undefined || init === null) return;
       if (init instanceof Headers) {
         for (const [k, v] of init) this.append(k, v);
-        for (const c of init.getSetCookie()) this.#cookies.push(c);
         return;
       }
       if (typeof init[Symbol.iterator] === "function") {
@@ -1043,9 +1042,10 @@
     [Symbol.iterator]() {
       return this.entries();
     }
+    // Bun keeps every Set-Cookie line, as an array.
     toJSON() {
       const out = {};
-      for (const [k, v] of this) out[k] = v;
+      for (const [k, v] of this) out[k] = k === "set-cookie" ? this.#cookies.slice() : v;
       return out;
     }
     get [Symbol.toStringTag]() {

@@ -93,6 +93,12 @@ const BUN_BUILTINS: &[&str] = &[
     "bun:wrap",
     "bun:internal-for-testing",
     "ws",
+    // Bun's thirdparty overrides (HardcodedModule.rs BUN_EXTRA_ALIAS_KVS):
+    // these win over an installed npm package of the same name.
+    "node-fetch",
+    "undici",
+    "isomorphic-fetch",
+    "@vercel/fetch",
 ];
 
 /// Extensions probed for extensionless specifiers, in Bun's order.
