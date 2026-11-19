@@ -1,0 +1,34 @@
+text entry [["metadata","{\"ok\":true}\n"]] used true
+no entries [] used true
+file entry [["file",{"file":"index.html","type":"text/html;charset=utf-8","size":41}]] used true
+rfc5987 filename [["emoji","console.log(\"🚀\");\n"]] used true
+unquoted name [["value","goodbye"]] used true
+non-ascii name [["fiŝo","value1"]] used true
+case and bom [["a","v"]] used true
+quoted boundary and escape [["a\\\"b",{"file":"x.json","type":"application/json;charset=utf-8","size":2}]] used true
+type from extension [["a",{"file":"dir/pic.PNG","type":"image/png","size":2}],["b",{"file":"noext","type":"","size":2}]] used true
+sniffed type [["img",{"file":"blob","type":"image/png","size":10}]] used true
+binary file [["bin",{"file":"x.bin","type":"application/octet-stream","size":5}]] used true
+nameless part [] used true
+preamble [["a","1"]] used true
+urlencoded [["ok","true"],["name","bun"]] used true
+urlencoded empty [] used true
+urlencoded utf-8 [["emoji","🏳️‍🌈"]] used true
+urlencoded details [["a","1"],["b","  x"],["c",""],["","d"]] used true
+no content type rejects TypeError ERR_FORMDATA_PARSE_ERROR "Can't decode form data from body because of incorrect MIME type/boundary" used false
+text/plain rejects TypeError ERR_FORMDATA_PARSE_ERROR "Can't decode form data from body because of incorrect MIME type/boundary" used false
+no boundary rejects TypeError ERR_FORMDATA_PARSE_ERROR "Can't decode form data from body because of incorrect MIME type/boundary" used false
+empty boundary rejects TypeError ERR_FORMDATA_PARSE_ERROR "Can't decode form data from body because of incorrect MIME type/boundary" used false
+malformed boundary rejects TypeError ERR_FORMDATA_PARSE_ERROR "FormData parse error missing final boundary" used true
+missing header end rejects TypeError ERR_FORMDATA_PARSE_ERROR "FormData parse error is missing header end" used true
+missing colon rejects TypeError ERR_FORMDATA_PARSE_ERROR "FormData parse error is missing header colon separator" used true
+boundary too long rejects TypeError ERR_FORMDATA_PARSE_ERROR "FormData parse error boundary is too long" used true
+used body TypeError
+request urlencoded [["x","1"],["y","two words"]]
+content type multipart/form-data; boundary=<boundary> true
+serialized "--<boundary>\r\nContent-Disposition: form-data; name=\"field1\"\r\n\r\nvalue1\r\nline2\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"na%22m%0D%0Ae\"\r\n\r\nv\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a/b/c/foo.txt\"\r\nContent-Type: text/plain;charset=utf-8\r\n\r\nexample\ntext file\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"json\"; filename=\"second.json\"\r\nContent-Type: application/json;charset=utf-8\r\n\r\n[]\r\n--<boundary>\r\nContent-Disposition: form-data; name=\"untyped\"; filename=\"fi%22le%0D%0A.bin\"\r\nContent-Type: application/octet-stream\r\n\r\nz\r\n--<boundary>--\r\n"
+round trip [["field1","value1\r\nline2"],["na%22m%0D%0Ae","v"],["file",{"file":"a/b/c/foo.txt","type":"text/plain;charset=utf-8","size":17}],["json",{"file":"second.json","type":"application/json;charset=utf-8","size":2}],["untyped",{"file":"fi%22le%0D%0A.bin","type":"application/octet-stream","size":1}]]
+empty form "--<boundary>--\r\n"
+blob urlencoded [["a","1"],["b","2"]]
+blob untyped Error Invalid encoding
+blob malformed Error FormData encoding failed: missing final boundary

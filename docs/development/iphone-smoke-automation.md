@@ -108,7 +108,16 @@ deadline based on its original start time. This conservatively handles an old
 send that may have delivered without acknowledgement. The next state save writes
 the deadline representation.
 
-Every completed red sends the last tested green, failing green main, compare
+The gate itself sometimes flakes, so the first ordinary red of a revision is
+retried once automatically and nobody is notified. Completing a job already
+requires verified cleanup, so the red attempt's result, kept in the job history
+with its report path, is the cleanup basis for the retry. The watcher queues the
+next attempt and dispatches it like any other job. A green retry notifies nobody.
+A red retry sends the red notification, which says the revision failed twice and
+names both report paths. Operational alerts (the Safari tab-count alert and the
+dispatch-failure alert) are never retried automatically.
+
+Every notified red sends the last tested green, failing green main, compare
 range, failed phase and report path to managing thread
 `bd2baec7-7e23-49b0-8d20-31486beeb178`. Override it with `--notify-thread=<thread>`.
 Failed notifications stay pending. A crash after delivery but before saving can
@@ -241,7 +250,8 @@ bun /work/heavy-runner/current/run.js --host local --class light iphone-watch-te
 Tests replace GitHub and T3 with fake adapters and exercise the real CLI in isolated
 directories. They cover adjacent and late greens, pagination, filtered query limits,
 restart, claim deduplication, interrupted persistence, dispatch and notification
-failure, red setup, completion and audited retry. Fake time covers both claim
+failure, red setup, completion, the automatic retry after a first red and audited
+retry. Fake time covers both claim
 windows without waiting ten minutes. A real CLI test holds the send acknowledgement,
 returns a fake T3 timeout after delivery, and lets a waiting claim acquire the
 watcher lock, with no red or duplicate claim. Tests start no Mac workload and

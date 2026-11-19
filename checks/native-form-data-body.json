@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/form-data-body",
+  "engines": ["quickjs", "jsc", "browser"]
+}

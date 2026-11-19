@@ -12,7 +12,17 @@ export function complete(job: Job, result: Outcome, now: string): void {
   if (job.state.kind !== "running") throw new Error("Job is not running");
   if (!job.state.claimedAt) throw new Error("Claim the job before completing it");
   if (result.revision !== job.revision) throw new Error("Wrong result source");
-  job.state = { kind: "complete", attempt: job.state.attempt, lastGreen: job.state.lastGreen, finishedAt: now, outcome: result, notified: result.status === "green" };
+  const finished: Completed = { kind: "complete", attempt: job.state.attempt, lastGreen: job.state.lastGreen, finishedAt: now, outcome: result, notified: result.status === "green" };
+  if (!retriesAutomatically(job, result)) { job.state = finished; return; }
+  // The completing harness proved cleanup before `complete`; the archived result is the retry's cleanup basis.
+  job.history.push({ ...finished, notified: true });
+  job.state = { kind: "pending", attempt: finished.attempt + 1 };
+}
+
+// The gate itself flakes, so the first ordinary red of a revision is retried once before anyone is told.
+function retriesAutomatically(job: Job, result: Outcome): boolean {
+  if (result.status !== "red" || result.operational) return false;
+  return !job.history.some(entry => entry.outcome.status === "red");
 }
 
 export function claim(job: Job, attempt: number, now: string): void {
@@ -109,6 +119,8 @@ export function status(state: State): string {
 
 function label(job: Job): string {
   if (job.state.kind === "running") return `running; dispatch ${job.state.claimedAt ? "claimed" : dispatchLabel(job.state.dispatch)}; claimed ${job.state.claimedAt ?? "no"}`;
+  const earlier = job.history.at(-1);
+  if (job.state.kind === "pending" && earlier?.outcome.status === "red") return `pending retry; attempt ${earlier.attempt} red at ${earlier.outcome.failedPhase}; report ${earlier.outcome.reportPath}`;
   if (job.state.kind !== "complete") return job.state.kind;
   const result: Completed = job.state;
   const classification = result.outcome.status === "red" && result.outcome.operational ? "OPERATIONAL ALERT; raw result red; cleanup unproved" : result.outcome.status;
