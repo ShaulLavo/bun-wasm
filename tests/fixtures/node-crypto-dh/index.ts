@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 
 // node:crypto Diffie-Hellman, ECDH and crypto.diffieHellman: RFC 3526 groups, RFC 5903 and
 // RFC 7748 vectors, and Node's argument checks with native Bun's messages.
+// ecdh.setPublicKey() warns with DEP0031 once; keep stderr empty as the fixture runner expects.
+process.noDeprecation = true;
 const hex = (value: string) => Buffer.from(value.replace(/\s+/g, ""), "hex");
 const describe = (value: unknown) =>
   value instanceof Uint8Array ? `${value.constructor.name} ${Buffer.from(value).toString("hex")}` : typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
