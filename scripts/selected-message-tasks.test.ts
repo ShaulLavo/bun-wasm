@@ -144,11 +144,6 @@ test("selected Immediate preserves context, receiver, empty arguments and cancel
     receiverMatches = this === selected; args = arguments.length; seen = clock.currentContext(); throw failure;
   });
   expect(receiverMatches).toBe(false);
-  clock.context(current);
-  let thrown: unknown;
-  try { runtime.runTimers(); } catch (error) { thrown = error; }
-  expect(thrown).toBe(failure); expect(receiverMatches).toBe(true); expect(args).toBe(0);
-  expect(seen).toBe(captured); expect(clock.currentContext()).toBe(current);
   expect(selected !== null && typeof selected === "object").toBe(true);
   if (selected === null || typeof selected !== "object") throw new Error("Expected Immediate");
   const hasRef = Reflect.get(selected, "hasRef"), unref = Reflect.get(selected, "unref"), ref = Reflect.get(selected, "ref");
@@ -157,6 +152,15 @@ test("selected Immediate preserves context, receiver, empty arguments and cancel
   expect(Reflect.apply(hasRef, selected, [])).toBe(false);
   expect(Reflect.apply(ref, selected, [])).toBe(selected);
   expect(Reflect.apply(hasRef, selected, [])).toBe(true);
+  clock.context(current);
+  let thrown: unknown;
+  try { runtime.runTimers(); } catch (error) { thrown = error; }
+  expect(thrown).toBe(failure); expect(receiverMatches).toBe(true); expect(args).toBe(0);
+  expect(seen).toBe(captured); expect(clock.currentContext()).toBe(current);
+  // Like Bun, an immediate that ran no longer reports or takes a ref.
+  expect(Reflect.apply(hasRef, selected, [])).toBe(false);
+  expect(Reflect.apply(ref, selected, [])).toBe(selected);
+  expect(Reflect.apply(hasRef, selected, [])).toBe(false);
   finish(runtime);
 });
 

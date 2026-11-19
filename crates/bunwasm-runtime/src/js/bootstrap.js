@@ -259,6 +259,7 @@
   let refedTimers = 0;
 
   function insertTimer(timer) {
+    timer._queued = true;
     let lo = 0;
     let hi = timerQueue.length;
     while (lo < hi) {
@@ -274,24 +275,37 @@
   }
 
   function removeTimer(timer) {
+    if (!timer._queued) return;
+    timer._queued = false;
     const i = timerQueue.indexOf(timer);
     if (i >= 0) timerQueue.splice(i, 1);
   }
 
+  function scheduleTimer(timer, start) {
+    timer._idleStartValue = start;
+    timer._when = start + timer._delay;
+    timer._seq = timerSeq++;
+    insertTimer(timer);
+  }
+
+  // A Timeout stays active (not `_destroyed`, and counted as a ref) from
+  // scheduling until it is cleared, or until a one-shot callback returns
+  // without re-arming it through refresh() or an _idleStart write.
   class Timeout {
     constructor(callback, delay, args, repeat) {
-      this._id = timerSeq++;
-      this._seq = this._id;
+      this._id = timerSeq;
       this._callback = callback;
       this._args = args;
       this._delay = delay;
       this._repeat = repeat;
       this._ref = true;
       this._active = true;
+      this._cleared = false;
+      this._queued = false;
       this._context = native.getAsyncContext();
-      this._when = native.now() + delay;
+      timersById.set(this._id, this);
       refedTimers++;
-      insertTimer(this);
+      scheduleTimer(this, native.now());
     }
     ref() {
       if (!this._ref && this._active) refedTimers++;
@@ -304,29 +318,58 @@
       return this;
     }
     hasRef() {
-      return this._ref;
+      return this._ref && this._active;
     }
+    // Like Node and Bun, refresh() re-arms a timer that already fired, but not
+    // one that was cleared.
     refresh() {
-      if (!this._active) return this;
+      if (this._cleared) return this;
+      if (!this._active) {
+        this._active = true;
+        if (this._ref) refedTimers++;
+        timersById.set(this._id, this);
+      }
       removeTimer(this);
-      this._when = native.now() + this._delay;
-      this._seq = timerSeq++;
-      insertTimer(this);
+      scheduleTimer(this, native.now());
       return this;
     }
     close() {
       cancelTimer(this);
       return this;
     }
+    get _destroyed() {
+      return !this._active;
+    }
+    get _idleStart() {
+      return this._idleStartValue;
+    }
+    // Node's deadline is _idleStart + _idleTimeout, so Next.js writes
+    // `t2._idleStart = t1._idleStart` to make two timers fire together.
+    set _idleStart(value) {
+      this._idleStartValue = value;
+      if (!this._queued || typeof value !== "number" || !Number.isFinite(value)) return;
+      const seq = this._seq;
+      removeTimer(this);
+      this._when = Math.max(0, value + this._delay);
+      this._seq = seq;
+      insertTimer(this);
+    }
     [Symbol.toPrimitive]() {
       return this._id;
     }
   }
 
-  function cancelTimer(timer) {
-    if (!timer || !timer._active) return;
+  function retireTimer(timer) {
+    if (!timer._active) return;
     timer._active = false;
     if (timer._ref) refedTimers--;
+    timersById.delete(timer._id);
+  }
+
+  function cancelTimer(timer) {
+    if (!timer) return;
+    timer._cleared = true;
+    retireTimer(timer);
     removeTimer(timer);
   }
 
@@ -353,22 +396,23 @@
 
   function realSetTimeout(callback, delay, ...args) {
     checkCallback(callback);
-    const timer = new Timeout(callback, normalizeDelay(delay), args, false);
-    timersById.set(timer._id, timer);
-    return timer;
+    return new Timeout(callback, normalizeDelay(delay), args, false);
   }
 
   function setInterval(callback, delay, ...args) {
     checkCallback(callback);
     if (internal.fakeTimers?.active) return internal.fakeTimers.schedule(callback, delay, args, "interval");
-    const timer = new Timeout(callback, normalizeDelay(delay), args, true);
-    timersById.set(timer._id, timer);
-    return timer;
+    return new Timeout(callback, normalizeDelay(delay), args, true);
   }
+
+  // Node and Bun accept a timer's primitive id as a string, written exactly as
+  // String(id) prints it: no sign, spaces or leading zeros.
+  const timerIdString = /^[1-9][0-9]{0,15}$/;
 
   function lookupTimer(handle) {
     if (handle instanceof Timeout) return handle;
-    if (typeof handle === "number" || typeof handle === "string") return timersById.get(Number(handle));
+    if (typeof handle === "number") return timersById.get(handle);
+    if (typeof handle === "string" && timerIdString.test(handle)) return timersById.get(Number(handle));
     return undefined;
   }
 
@@ -378,10 +422,7 @@
   }
 
   function realClearTimeout(handle) {
-    const timer = lookupTimer(handle);
-    if (!timer) return;
-    cancelTimer(timer);
-    timersById.delete(timer._id);
+    cancelTimer(lookupTimer(handle));
   }
 
   class Immediate {
@@ -390,6 +431,7 @@
       this._args = args;
       this._ref = true;
       this._active = true;
+      this._running = false;
       this._context = native.getAsyncContext();
     }
     ref() {
@@ -401,7 +443,12 @@
       return this;
     }
     hasRef() {
-      return this._ref;
+      return this._ref && this._active;
+    }
+    // Node and Bun report a running immediate as not destroyed until its
+    // callback returns or clears it, though it no longer holds a ref.
+    get _destroyed() {
+      return !this._active && !this._running;
     }
   }
 
@@ -443,21 +490,33 @@
   }
 
   function realClearImmediate(immediate) {
-    if (immediate instanceof Immediate) immediate._active = false;
+    if (!(immediate instanceof Immediate)) return;
+    immediate._active = false;
+    immediate._running = false;
   }
 
   function runOneTimer(now) {
     const timer = timerQueue.shift();
-    if (timer._repeat) {
-      timer._when = now + timer._delay;
-      timer._seq = timerSeq++;
-      insertTimer(timer);
-    } else {
-      timer._active = false;
-      if (timer._ref) refedTimers--;
-      timersById.delete(timer._id);
+    timer._queued = false;
+    if (timer._repeat) scheduleTimer(timer, now);
+    try {
+      runInContext(timer._context, timer._callback, timer, timer._args);
+    } finally {
+      if (!timer._queued) retireTimer(timer);
     }
-    runInContext(timer._context, timer._callback, timer, timer._args);
+  }
+
+  // Node's timers phase: every timer due when the phase starts runs before the
+  // next immediate, even one an earlier timer in the phase queued.
+  let timerPhaseEnd = null;
+
+  function runDueTimer() {
+    if (timerQueue.length === 0 || timerQueue[0]._when > timerPhaseEnd) {
+      timerPhaseEnd = null;
+      return false;
+    }
+    runOneTimer(native.now());
+    return true;
   }
 
   // Called by the Rust event loop. Runs at most one callback so microtasks
@@ -465,6 +524,7 @@
   // until the next timer, or -1 when nothing keeps the process alive.
   internal.runTimers = function runTimers() {
     const workerProgress = internal.workerPump && internal.workerPump();
+    if (timerPhaseEnd !== null && runDueTimer()) return 0;
     // Immediates first: like Bun, setImmediate callbacks queued by the
     // main script run before even a due setTimeout(0).
     if (immediateBatchRemaining === null) immediateBatchRemaining = immediates?.length || 0;
@@ -473,12 +533,18 @@
       const immediate = immediates.shift();
       if (!immediate._active) continue;
       immediate._active = false;
-      runInContext(immediate._context, immediate._callback, immediate, immediate._args);
+      immediate._running = true;
+      try {
+        runInContext(immediate._context, immediate._callback, immediate, immediate._args);
+      } finally {
+        immediate._running = false;
+      }
       return 0;
     }
     immediateBatchRemaining = null;
     const now = native.now();
     if (timerQueue.length > 0 && timerQueue[0]._when <= now) {
+      timerPhaseEnd = now;
       runOneTimer(now);
       return 0;
     }
@@ -546,6 +612,18 @@
   defineGlobal("setImmediate", setImmediate);
   defineGlobal("clearImmediate", clearImmediate);
   defineGlobal("queueMicrotask", queueMicrotask);
+  // Node's lib/timers.js: a getter-only, non-configurable accessor that
+  // util.promisify uses, without loading node:util or the promises module.
+  const promisifyCustom = Symbol.for("nodejs.util.promisify.custom");
+  for (const [fn, name] of [[setTimeout, "setTimeout"], [setInterval, "setInterval"], [setImmediate, "setImmediate"]]) {
+    Object.defineProperty(fn, promisifyCustom, {
+      enumerable: true,
+      configurable: false,
+      get() {
+        return internal.builtin("node:timers/promises")[name];
+      },
+    });
+  }
   internal.realTimers = {
     setTimeout: realSetTimeout,
     clearTimeout: realClearTimeout,
