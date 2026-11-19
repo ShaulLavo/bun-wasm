@@ -188,7 +188,7 @@
       return buffer;
     }
 
-    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createECDH", "createDiffieHellman", "scrypt", "scryptSync", "privateEncrypt", "publicDecrypt"];
+    const unsupportedCrypto = ["scrypt", "scryptSync", "privateEncrypt", "publicDecrypt"];
     return unsupportedModule("crypto", "this Node crypto operation is not implemented", unsupportedCrypto, {
       createHash,
       createHmac,
@@ -208,11 +208,11 @@
       getRandomValues: (array) => webcrypto.getRandomValues(array),
       timingSafeEqual,
       getHashes: () => digests.nodeHashes.slice(),
-      getCiphers: () => [],
-      getCurves: () => [],
       webcrypto,
       subtle: webcrypto.subtle,
       ...keyApi,
+      ...internal.require("node_cipher")(),
+      ...internal.require("node_dh")(),
       ...internal.require("node_pbkdf2")(digests, Buffer),
       ...internal.require("x509")(Buffer, keyApi),
       Hash,

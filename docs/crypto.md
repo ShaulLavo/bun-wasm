@@ -145,3 +145,22 @@ signature padding accepts the default, PKCS#1 v1.5 and PSS modes. Other values t
 the backend runs. Native Bun also throws on streamed verification; Node 26 returns false
 there, while its one-shot verification throws. The runtime follows the requested throwing
 behavior on both paths.
+
+## Node ciphers, Diffie-Hellman, ECDH and primes
+
+`node:crypto` provides createCipheriv and createDecipheriv (Cipheriv and Decipheriv
+streams), getCiphers, getCipherInfo, createDiffieHellman, getDiffieHellman and
+createDiffieHellmanGroup, createECDH and `ECDH.convertKey`, `crypto.diffieHellman`,
+generatePrime, generatePrimeSync, checkPrime and checkPrimeSync. They run on the
+BoringSSL already linked for WebCrypto and TLS, on every engine, so the cipher list,
+curves and failures are Bun's: AES in CBC, CTR, ECB, CFB, OFB and GCM, DES, 3DES,
+Blowfish, RC2 and RC4; no ChaCha20-Poly1305 and no secp256k1, as in Bun 1.4.4. The
+browser engine uses the same wasm implementation; SubtleCrypto has no streaming
+ciphers or classic Diffie-Hellman to delegate to. `crypto.diffieHellman` takes EC
+P-256, P-384 and X25519 KeyObjects. [The source ledger](bun-patches/node-crypto-ciphers-dh-primes.md)
+lists the Bun sources the argument checks follow and the deliberate differences.
+
+The `node-crypto-ciphers`, `node-crypto-dh` and `node-crypto-primes` fixtures compare
+NIST SP 800-38A, GCM, RFC 5903 and RFC 7748 vectors and each argument error with
+native Bun. Construction checks a DH group's prime as Bun does, which takes about a
+second for the 1536-bit group in the guest.
