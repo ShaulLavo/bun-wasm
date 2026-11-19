@@ -92,7 +92,8 @@ test("application streams pass before locking or EOF, and the real writer cancel
     try { await firstChunk; }
     finally { connection.destroy(); await output; }
     expect(new TextDecoder().decode(Buffer.concat(chunks))).toContain("<html>first");
-    expect(stream.locked).toBe(false);
+    // Like native Bun, the writer keeps the sent stream locked after the client goes away.
+    expect(stream.locked).toBe(true);
     expect(canceled).toBe(1);
   } finally { f.adapter.dispose(); f.source.close(); await stream.cancel().catch(() => {}); }
 });

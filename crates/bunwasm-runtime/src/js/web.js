@@ -1096,6 +1096,8 @@
 
   const BodyMixin = {
     async _consume() {
+      // A null body is not a zero-length body: every read gives nothing and nothing uses it up.
+      if (this._body === null && !this._stream) return new Uint8Array(0);
       if (this.bodyUsed) throw new TypeError("Body already used");
       // Someone else holds the stream's reader: refuse without using the body, as Bun does.
       if (this._stream && this._stream.locked) throw Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });
@@ -1212,20 +1214,17 @@
     get redirected() {
       return this.#redirected;
     }
-    get bodyUsed() {
-      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
-    }
-    get body() {
-      if (this._stream) return this._stream;
-      if (this._body === null) return null;
-      this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
-      return this._stream;
-    }
     clone() {
       const body = bodyStreams.clone(this);
-      const copy = new Response(body, { status: this.#status, statusText: this.#statusText, headers: this.#headers });
+      // Response.error()'s status 0 is out of the constructor's range; copy it after.
+      const copy = new Response(body, { statusText: this.#statusText, headers: this.#headers });
+      copy.#status = this.#status;
+      copy.#type = this.#type;
       copy.#url = this.#url;
+      copy.#redirected = this.#redirected;
       copy._servedType = this._servedType;
+      // A clone made from the bytes keeps the type of the Blob behind them, as in Bun.
+      copy._bodyType = this._bodyType;
       return copy;
     }
     get [Symbol.toStringTag]() {
@@ -1233,6 +1232,25 @@
     }
   }
   Object.assign(Response.prototype, BodyMixin);
+  // The bodyUsed and body getters Request and Response share, with class getter attributes.
+  const bodyAccessors = {
+    bodyUsed: {
+      get() {
+        return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
+      },
+      configurable: true,
+    },
+    body: {
+      get() {
+        if (this._stream) return this._stream;
+        if (this._body === null) return null;
+        this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
+        return this._stream;
+      },
+      configurable: true,
+    },
+  };
+  Object.defineProperties(Response.prototype, bodyAccessors);
 
   function defineInternalBody(target) {
     for (const key of ["_body", "_stream", "_bodyUsed", "_servedType", "_bodyType"]) {
@@ -1281,24 +1299,18 @@
     get redirect() {
       return this.#redirect;
     }
-    get bodyUsed() {
-      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
-    }
-    get body() {
-      if (this._stream) return this._stream;
-      if (this._body === null) return null;
-      this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
-      return this._stream;
-    }
     clone() {
       const body = bodyStreams.clone(this);
-      return new Request(this, { body });
+      const copy = new Request(this, { body });
+      copy._bodyType = this._bodyType;
+      return copy;
     }
     get [Symbol.toStringTag]() {
       return "Request";
     }
   }
   Object.assign(Request.prototype, BodyMixin);
+  Object.defineProperties(Request.prototype, bodyAccessors);
 
   // No sockets under WASI. file: URLs still work, like in Bun.
   // Arguments are read and checked as Bun does (fetch_args.ts); errors reject.
