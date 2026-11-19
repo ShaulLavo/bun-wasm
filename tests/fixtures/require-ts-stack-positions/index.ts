@@ -4,9 +4,22 @@
 // printed location and source excerpt are checked too. Frames are read from the inspected
 // error, which every engine prints in Bun's format. The TSX cases print only the throwing
 // frame: the JSX call site's column differs on the JSC engine, for require() and import().
+import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
+// Plain CommonJS runs without compiling, inside the runtime's own module wrapper.
+writeFileSync("required-plain.cjs", [
+  "// A plain CommonJS module, loaded with require() without compiling it.",
+  "function parse(text) {",
+  "  const value = Number(text);",
+  "  if (Number.isNaN(value)) throw new TypeError(`not a number: ${text}`);",
+  "  return value;",
+  "}",
+  "",
+  "module.exports = { parse };",
+  "",
+].join("\n"));
 
 function frames(error: unknown, file: string): string {
   const lines = Bun.inspect(error).split("\n").filter(line => line.includes(`/${file}:`));
