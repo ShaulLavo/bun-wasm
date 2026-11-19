@@ -1,5 +1,46 @@
 (function (internal: Pick<BunWasm.Internal, "native" | "toUint8">) {
   const PlatformRequest = internal.native.engine === "host" ? globalThis.Request : null;
+  // The polyfill streams keep a `_disturbed` flag; a host's native streams do not expose
+  // theirs. On the host engine, set the same flag when a reader reads or the stream is
+  // cancelled, piped or iterated, so bodyUsed and node:stream's isDisturbed see it.
+  function markDisturbed(stream: unknown): void {
+    if (!stream || typeof stream !== "object" || Reflect.get(stream, "_disturbed") === true) return;
+    Object.defineProperty(stream, "_disturbed", { value: true, configurable: true });
+  }
+  function wrapMethod(target: object, name: string | symbol, before: (self: object, args: unknown[]) => void): void {
+    const descriptor = Object.getOwnPropertyDescriptor(target, name);
+    const original: unknown = descriptor?.value;
+    if (!descriptor || typeof original !== "function") return;
+    const wrapped = { [name](this: object, ...args: unknown[]) { before(this, args); return Reflect.apply(original, this, args); } }[name as string];
+    Object.defineProperty(target, name, Object.assign(descriptor, { value: wrapped }));
+  }
+  function trackHostDisturbance(): void {
+    const Stream = globalThis.ReadableStream;
+    const marker = Symbol.for("bun-wasm.disturbance-tracked");
+    if (typeof Stream !== "function" || Reflect.get(Stream.prototype, marker)) return;
+    Object.defineProperty(Stream.prototype, marker, { value: true });
+    const owners = new WeakMap<object, object>();
+    const originalGetReader: unknown = Object.getOwnPropertyDescriptor(Stream.prototype, "getReader")?.value;
+    if (typeof originalGetReader === "function") {
+      const wrapped = function getReader(this: object, ...args: unknown[]) {
+        const reader: unknown = Reflect.apply(originalGetReader, this, args);
+        if (reader && typeof reader === "object") owners.set(reader, this);
+        return reader;
+      };
+      Object.defineProperty(Stream.prototype, "getReader", { value: wrapped, writable: true, configurable: true });
+    }
+    for (const Reader of [globalThis.ReadableStreamDefaultReader, globalThis.ReadableStreamBYOBReader]) {
+      if (typeof Reader !== "function") continue;
+      for (const name of ["read", "cancel"]) wrapMethod(Reader.prototype, name, self => markDisturbed(owners.get(self)));
+    }
+    const disturbUnlocked = (self: object) => { if (Reflect.get(self, "locked") !== true) markDisturbed(self); };
+    // values and [Symbol.asyncIterator] are one function in the platform; keep them one.
+    const sharedIterator = Reflect.get(Stream.prototype, "values") === Reflect.get(Stream.prototype, Symbol.asyncIterator);
+    for (const name of ["cancel", "pipeTo", "pipeThrough", Symbol.asyncIterator]) wrapMethod(Stream.prototype, name, disturbUnlocked);
+    if (sharedIterator) Object.defineProperty(Stream.prototype, "values", { value: Reflect.get(Stream.prototype, Symbol.asyncIterator) });
+    else wrapMethod(Stream.prototype, "values", disturbUnlocked);
+  }
+  if (internal.native.engine === "host") trackHostDisturbance();
   const bodies = new WeakMap<ReadableStream<unknown>, Uint8Array>();
   function remember<T>(stream: ReadableStream<T>, bytes: Uint8Array): ReadableStream<T> {
     bodies.set(stream, bytes);
@@ -64,6 +105,23 @@
       }
     } finally { reader.releaseLock(); }
   }
+  // Fetch's "fully read" for a body: the reader is never released, so the stream stays
+  // locked, disturbed and closed (or errored) once the body is consumed.
+  async function drain<T>(stream: ReadableStream<T>, visit: (chunk: T) => void): Promise<void> {
+    const reader = stream.getReader();
+    for (let next = await reader.read(); !next.done; next = await reader.read()) await visitChunk(reader, next.value, visit);
+  }
+  // The stream a body read without one would have had: closed, disturbed and locked.
+  function consumedStream(): ReadableStream<Uint8Array> {
+    const stream = new ReadableStream<Uint8Array>({ start: controller => controller.close() });
+    void stream.getReader().read();
+    return stream;
+  }
+  // A ReadableStream body init that something already read or holds cannot become a body.
+  function adoptable(stream: ReadableStream<unknown>): ReadableStream<unknown> {
+    if (stream.locked || Reflect.get(stream, "_disturbed") === true) throw new TypeError("Body object should not be disturbed or locked");
+    return stream;
+  }
   type IterableBody = { iterator: AsyncIterator<unknown>; closed: boolean };
   async function closeIterable(body: IterableBody): Promise<void> {
     if (body.closed) return;
@@ -121,5 +179,5 @@
       cancel: reason => reader.cancel(reason),
     });
   }
-  return { remember, tee, clone, transfer, textStream, fromAsyncIterable, consume, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  return { remember, tee, clone, transfer, textStream, fromAsyncIterable, consume, drain, consumedStream, adoptable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })

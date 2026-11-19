@@ -17,40 +17,41 @@ test("actual Response and Request consume reader-only native bodies", async () =
     expect(body.bodyUsed).toBe(false);
     expect(await body.json()).toEqual({ value: "ssr" });
     expect(body.bodyUsed).toBe(true);
-    expect(stream.locked).toBe(false);
+    // Fetch's "fully read" never releases the reader, as in Bun and undici.
+    expect(stream.locked).toBe(true);
     await expect(body.text()).rejects.toThrow("Body already used");
   }
 });
 
-test("reader-only body preserves read rejection identity and releases its lock", async () => {
+test("reader-only body preserves read rejection identity and keeps its lock", async () => {
   for (const reason of [undefined, null, new Error("read failed"), { marker: "read" }]) {
     let cancelled = false;
     const stream = readerOnly({ pull(c) { c.error(reason); }, cancel() { cancelled = true; } });
     const body = new web.Response(stream);
     await expect(body.text()).rejects.toBe(reason);
     expect(body.bodyUsed).toBe(true);
-    expect(stream.locked).toBe(false);
+    expect(stream.locked).toBe(true);
     expect(cancelled).toBe(false);
   }
 });
 
-test("reader-only body rejects a locked stream without disturbing its reader", async () => {
+test("a locked stream cannot become a body, and its reader is left alone", async () => {
   const stream = readerOnly({ start(c) { c.enqueue(bytes("owned")); c.close(); } });
   const reader = stream.getReader();
   try {
-    await expect(new web.Response(stream).text()).rejects.toBeInstanceOf(TypeError);
+    expect(() => new web.Response(stream)).toThrow("Body object should not be disturbed or locked");
     expect(stream.locked).toBe(true);
     expect((await reader.read()).value).toEqual(bytes("owned"));
   } finally { reader.releaseLock(); }
 });
 
-test("invalid body chunks cancel once, release the lock, and retain conversion errors", async () => {
+test("invalid body chunks cancel once, keep the lock, and retain conversion errors", async () => {
   let cancellations = 0;
   const cancellation = new Error("cancel failed");
   const stream = readerOnly<unknown>({ pull(c) { c.enqueue({ invalid: true }); }, cancel(reason) { expect(reason).toBeUndefined(); cancellations++; throw cancellation; } });
   await expect(new web.Response(stream).text()).rejects.toThrow("Expected an ArrayBuffer or ArrayBufferView");
   expect(cancellations).toBe(1);
-  expect(stream.locked).toBe(false);
+  expect(stream.locked).toBe(true);
 });
 
 test("body chunks keep string encoding and view boundaries", async () => {

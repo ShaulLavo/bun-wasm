@@ -2,7 +2,7 @@
 (function (internal) {
   "use strict";
   const native = internal.native;
-  const { Blob, Response, TextDecoder } = internal.web;
+  const { Blob, Response, Request, TextDecoder } = internal.web;
   const info = native.platformInfo;
 
   function unsupported(name, why) {
@@ -136,7 +136,7 @@
 
   async function dataBytes(data) {
     if (data instanceof internal.require("archive").Archive) return data.bytes();
-    if (data instanceof Response) return new Uint8Array(await data.arrayBuffer());
+    if (data instanceof Response || data instanceof Request) return new Uint8Array(await data.arrayBuffer());
     if (data instanceof Blob) return data._bytes();
     if (typeof data === "string") return native.utf8Encode(data);
     if (ArrayBuffer.isView(data) || data instanceof ArrayBuffer) return internal.toUint8(data);
