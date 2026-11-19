@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/async-resource-bind",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}
