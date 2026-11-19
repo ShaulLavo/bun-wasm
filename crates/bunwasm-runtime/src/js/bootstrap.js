@@ -926,6 +926,12 @@
 
   internal.reportHotError = printFatal;
 
+  internal.handleUncaught = function handleUncaught(err) {
+    if (dispatchUncaught(err, false)) return true;
+    fatalExit("uncaught-exception", 1, err);
+    return false;
+  };
+
   // A fatal error ends the run, a worker's included: report the error (when there is one),
   // emit 'exit' with the code, and exit with the code the listeners left.
   function fatalExit(reason, code, err, report = true) {
@@ -977,12 +983,6 @@
     return true;
   }
   internal.dispatchUncaught = dispatchUncaught;
-
-  internal.handleUncaught = function handleUncaught(err) {
-    if (dispatchUncaught(err, false)) return true;
-    fatalExit("uncaught-exception", 1, err);
-    return false;
-  };
 
   internal.handleRejection = function handleRejection(reason, promise) {
     if (listenerCount("unhandledRejection") > 0) {
