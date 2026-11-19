@@ -82,3 +82,11 @@ lockedStream.getReader();
 for (const [label, body] of [["stream", new ReadableStream()], ["locked stream", lockedStream], ["string", "x"]] as const) {
   console.log("keepalive", label, errorName(() => new Request("http://a/", { method: "PUT", body, keepalive: true, duplex: "half" } as RequestInit)));
 }
+// The rule covers only init.body: a source request whose body is a stream, or whose
+// .body was read, is fine.
+const streamSource = new Request("http://a/", { method: "PUT", body: new ReadableStream(), duplex: "half" } as RequestInit);
+const touchedSource = new Request("http://a/", { method: "PUT", body: "x" });
+void touchedSource.body;
+for (const [label, source] of [["stream source", streamSource], ["touched source", touchedSource]] as const) {
+  console.log("keepalive", label, errorName(() => new Request(source, { keepalive: true })));
+}

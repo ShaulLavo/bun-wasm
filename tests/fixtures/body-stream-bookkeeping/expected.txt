@@ -83,3 +83,5 @@ Response Bun.write(): written used=true
 keepalive stream TypeError
 keepalive locked stream TypeError
 keepalive string ok
+keepalive stream source ok
+keepalive touched source ok

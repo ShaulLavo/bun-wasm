@@ -1238,8 +1238,9 @@
       if (body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
-      // Fetch forbids keepalive with a stream body; Bun reports it before any lock check.
-      if (init.keepalive && body instanceof ReadableStream) throw new TypeError("keepalive");
+      // Fetch forbids keepalive with a stream init.body (a source request's body is fine);
+      // Bun reports it before any lock check.
+      if (init.keepalive && replacementBody instanceof ReadableStream) throw new TypeError("keepalive");
       initBody(this, source && replacementBody === undefined ? bodyStreams.transfer(source) : body, this.#headers);
     }
     get url() {

@@ -4,7 +4,8 @@
   // theirs. On the host engine, set the same flag when a reader reads or the stream is
   // cancelled, piped or iterated, so bodyUsed and node:stream's isDisturbed see it.
   function markDisturbed(stream: unknown): void {
-    if (stream && typeof stream === "object") Object.defineProperty(stream, "_disturbed", { value: true, configurable: true });
+    if (!stream || typeof stream !== "object" || Reflect.get(stream, "_disturbed") === true) return;
+    Object.defineProperty(stream, "_disturbed", { value: true, configurable: true });
   }
   function wrapMethod(target: object, name: string | symbol, before: (self: object, args: unknown[]) => void): void {
     const descriptor = Object.getOwnPropertyDescriptor(target, name);
@@ -32,9 +33,12 @@
       if (typeof Reader !== "function") continue;
       for (const name of ["read", "cancel"]) wrapMethod(Reader.prototype, name, self => markDisturbed(owners.get(self)));
     }
-    for (const name of ["cancel", "pipeTo", "pipeThrough", "values", Symbol.asyncIterator]) {
-      wrapMethod(Stream.prototype, name, self => { if (Reflect.get(self, "locked") !== true) markDisturbed(self); });
-    }
+    const disturbUnlocked = (self: object) => { if (Reflect.get(self, "locked") !== true) markDisturbed(self); };
+    // values and [Symbol.asyncIterator] are one function in the platform; keep them one.
+    const sharedIterator = Reflect.get(Stream.prototype, "values") === Reflect.get(Stream.prototype, Symbol.asyncIterator);
+    for (const name of ["cancel", "pipeTo", "pipeThrough", Symbol.asyncIterator]) wrapMethod(Stream.prototype, name, disturbUnlocked);
+    if (sharedIterator) Object.defineProperty(Stream.prototype, "values", { value: Reflect.get(Stream.prototype, Symbol.asyncIterator) });
+    else wrapMethod(Stream.prototype, "values", disturbUnlocked);
   }
   if (internal.native.engine === "host") trackHostDisturbance();
   const bodies = new WeakMap<ReadableStream<unknown>, Uint8Array>();
