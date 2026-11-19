@@ -16,6 +16,10 @@ non-number kept not a number
 infinity kept Infinity
 cleared write kept 0
 shared deadline order t1,t2,immediate
+interval minus10 immediate after 1 runs
+interval zero immediate after 1 runs
+interval refresh immediate after 1 runs
+interval write kept in callback true
 due timers a,b,c
 setTimeout function undefined true false TypeError
 setInterval function undefined true false TypeError

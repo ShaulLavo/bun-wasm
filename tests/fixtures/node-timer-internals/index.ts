@@ -122,6 +122,43 @@ async function idleStart() {
   console.log("shared deadline order t1,t2,immediate");
 }
 
+// An interval is re-armed after its callback from the time it fired, so a
+// refresh() or _idleStart write inside the callback cannot keep the timers
+// phase running ahead of a queued immediate.
+async function intervalWritesInCallback() {
+  for (const mode of ["minus10", "zero", "refresh"]) {
+    await new Promise<void>(resolve => {
+      let runs = 0;
+      const iv = internals(setInterval(() => {
+        runs++;
+        if (mode === "minus10") iv._idleStart = (iv._idleStart as number) - 10;
+        else if (mode === "zero") iv._idleStart = 0;
+        else iv.refresh();
+        if (runs === 1) setImmediate(() => {
+          console.log("interval", mode, "immediate after", runs, "runs");
+          clearInterval(iv as never);
+          resolve();
+        });
+        if (runs > 1000) {
+          console.log("interval", mode, "runaway");
+          clearInterval(iv as never);
+          resolve();
+        }
+      }, 5));
+    });
+  }
+  await new Promise<void>(resolve => {
+    const iv = internals(setInterval(() => {
+      iv._idleStart = 0;
+      console.log("interval write kept in callback", iv._idleStart === 0);
+      setImmediate(() => {
+        clearInterval(iv as never);
+        resolve();
+      });
+    }, 5));
+  });
+}
+
 async function dueTimersBeforeImmediates() {
   const order: string[] = [];
   await new Promise<void>(resolve => {
@@ -186,6 +223,7 @@ await destroyed();
 await refresh();
 await stringIds();
 await idleStart();
+await intervalWritesInCallback();
 await dueTimersBeforeImmediates();
 await promisified();
 await abortResistsStopPropagation();

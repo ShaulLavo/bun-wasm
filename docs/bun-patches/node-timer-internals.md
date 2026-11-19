@@ -21,7 +21,11 @@ so the guest exposes them the way Node and Bun do:
   deadline to `_idleStart + delay` and keeps the timer's order among timers with
   the same deadline (the Next.js `t2._idleStart = t1._idleStart` pattern). Other
   values, and writes to timers that are not scheduled, are stored and change
-  nothing.
+  nothing. An interval is re-armed after its callback from the time it
+  fired, so a write inside its own callback is stored but does not move the
+  next run. After that re-arm `_idleStart` reads the new start time, as in Node;
+  Bun 1.4.4 keeps showing the value last written, which the fixture does not
+  check.
 - `clearTimeout` and `clearInterval` accept a timer id as a string only in the
   form `String(id)` prints: no sign, spaces or leading zeros.
 - `setTimeout`, `setInterval` and `setImmediate` carry Node's
@@ -33,6 +37,11 @@ so the guest exposes them the way Node and Bun do:
 
 The timers phase change that the `_idleStart` pattern needs is recorded in
 [fair loop scheduling](fair-loop-scheduling.md).
+
+Known gap, older than this change: on the Browser engine an unreferenced
+`setInterval(fn, 1)`, or an unreferenced timer that refreshes itself, fires a
+few extra times before the process exits. The host probably keeps the loop
+alive while stdout is still being written.
 
 ## Classification
 

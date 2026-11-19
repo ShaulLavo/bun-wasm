@@ -539,15 +539,26 @@
     immediate._running = false;
   }
 
+  // Like Node's listOnTimeout, a repeating timer is re-armed after its
+  // callback from the time it fired, overriding refresh() or _idleStart writes
+  // made inside the callback, so it can never become due again in this phase.
   function runOneTimer(now) {
     const timer = timerQueue.shift();
     timer._queued = false;
-    if (timer._repeat) scheduleTimer(timer, now);
     try {
       runInContext(timer._context, timer._callback, timer, timer._args);
     } finally {
-      if (!timer._queued) retireTimer(timer);
+      finishTimer(timer, now);
     }
+  }
+
+  function finishTimer(timer, start) {
+    if (!timer._repeat || !timer._active) {
+      if (!timer._queued) retireTimer(timer);
+      return;
+    }
+    removeTimer(timer);
+    scheduleTimer(timer, start);
   }
 
   // Node's timers phase: every timer due when the phase starts runs before the
