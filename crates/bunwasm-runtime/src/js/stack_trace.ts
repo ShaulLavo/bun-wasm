@@ -65,12 +65,30 @@
   }
   internal.defineHidden(CallSite.prototype, methods);
 
+  const topLevelCode = new Set(["", "global code", "module code", "eval code", "__bunwasm_cjs__"]);
+
+  // One line of JavaScriptCore's text as QuickJS's formatter prints it: application frames
+  // mapped back to their source, the runtime's own and native frames as they are.
+  function jscFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
+    const runtime = /^(.*?)@(bun-wasm:.*:\d+:\d+)$/.exec(line);
+    if (runtime) return topLevelCode.has(runtime[1]!) ? runtime[2] : `${runtime[1]} (${runtime[2]})`;
+    const nativeCode = /^(.*)@\[native code\]$/.exec(line);
+    if (nativeCode) return `${nativeCode[1] || "<anonymous>"} (native)`;
+    const frame = inspect.parseStack(line)[0];
+    return frame && inspect.frameText(frame);
+  }
+
   // JavaScriptCore's own text (`name@file:line:column` lines, no header) in Bun's form: the
-  // header, then `    at` frames with positions mapped back and the runtime's frames left out.
+  // header, then one `    at` line per frame.
   function jscStack(target: object, raw: string) {
     if (internal.hotRun) internal.hotErrorStacks.set(target, raw);
     const inspect = internal.require("inspect");
-    return [internal.stackHeader(target)].concat(inspect.parseStack(raw).map(frame => `    at ${inspect.frameText(frame)}`)).join("\n");
+    const lines = [internal.stackHeader(target)];
+    for (const line of raw.split("\n")) {
+      const text = jscFrameText(inspect, line);
+      if (text) lines.push(`    at ${text}`);
+    }
+    return lines.join("\n");
   }
 
   function defaultStack(target: object, raw: unknown) {

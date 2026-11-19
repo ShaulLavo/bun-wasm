@@ -9,7 +9,7 @@ Bun, WebKit or V8 source.
 | Source | Class | Change |
 | --- | --- | --- |
 | `crates/bunwasm-runtime/src/js/bootstrap.js`, `stackHeader` and `prepareStackTrace` | Host feature | Begin the default stack with the header and end it without a trailing newline. |
-| `crates/bunwasm-runtime/src/js/stack_trace.ts`, `jscStack` | Host feature | Rewrite JavaScriptCore's default text, at first access and after `Error.captureStackTrace`, as the header plus `    at` frames. |
+| `crates/bunwasm-runtime/src/js/stack_trace.ts`, `jscStack` and `jscFrameText` | Host feature | Rewrite JavaScriptCore's default text, at first access and after `Error.captureStackTrace`, as the header plus `    at` frames. |
 | `crates/bunwasm-runtime/src/js/inspect.js`, `withoutHeader` and `frameText` | Host feature | Skip the header before parsing frames, and share the frame text of Bun's error printer. |
 | `crates/bunwasm-runtime/src/js/console.ts`, `trace` | Host feature | Drop the header before the frames `console.trace` prints. |
 
@@ -33,9 +33,11 @@ changed before the first read appears, one changed after does not, as in Bun.
 
 ## JavaScriptCore frames
 
-`jscStack` parses the native text with the inspector's existing parser, which maps
-positions back through source maps, moves a call's column to its callee and drops the
-runtime's own `bun-wasm:` frames. It prints each frame as Bun's error printer does.
+`jscStack` parses each application frame with the inspector's existing parser, which
+maps positions back through source maps and moves a call's column to its callee, and
+prints it as Bun's error printer does. The runtime's own `bun-wasm:` frames and native
+frames stay, printed as the QuickJS formatter prints them; Bun's error printer still
+leaves them out.
 A hot run keeps the native text for the inspector, as QuickJS does. Custom
 `Error.prepareStackTrace` formatters still receive CallSites parsed from the native
 text. An empty trace stays without a stack property.
