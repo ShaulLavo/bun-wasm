@@ -51495,14 +51495,6 @@ int lre_check_timeout(void *opaque)
             rt->interrupt_handler(rt, rt->interrupt_opaque));
 }
 
-/* bun-wasm: regexp matching shares the bytecode interpreter's countdown, so a
-   native loop of many matches reaches the interrupt handler at the same cadence. */
-int *lre_interrupt_counter(void *opaque)
-{
-    JSContext *ctx = opaque;
-    return &ctx->interrupt_counter;
-}
-
 void *lre_realloc(void *opaque, void *ptr, size_t size)
 {
     JSContext *ctx = opaque;
