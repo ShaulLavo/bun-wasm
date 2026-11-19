@@ -31,6 +31,7 @@ export function eventTargetPortSource() {
       if (name === 'structured_clone') return { structuredClone() { throw new Error('Unused clone'); } };
       if (name === 'worker_codec') return worker_codecFactory(internal);
       if (name === 'worker_threads') return ports;
+      if (name === 'process_warning') return { configure() {} };
       throw new Error('Unexpected module ' + name);
     };
     const ports = worker_threadsFactory(internal);

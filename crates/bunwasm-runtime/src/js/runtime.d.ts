@@ -396,6 +396,7 @@ declare namespace BunWasm {
   }
   interface ShellFs {
     readonly constants: object;
+    appendFileSync(path: string, data: string): void;
   }
 }
 
@@ -472,6 +473,23 @@ declare namespace BunWasm {
     [Symbol.asyncIterator](): AsyncGenerator<string | BufferBytes>;
   }
   interface ProcessWarningOptions { type?: unknown; code?: unknown }
+  /** What process_warning.ts reads and writes on the process object. stderr is an accessor
+   * defined after the process object is assembled. */
+  interface WarningProcess {
+    readonly pid: number;
+    argv0?: string;
+    execArgv: string[];
+    env: Record<string, unknown>;
+    readonly stderr?: { write(text: string): unknown };
+    noDeprecation?: unknown;
+    throwDeprecation?: unknown;
+    traceDeprecation?: unknown;
+    traceProcessWarnings?: unknown;
+    emitWarning?: Function;
+    on(event: string, listener: EventListener): unknown;
+    removeListener(event: string, listener: EventListener): unknown;
+    emit(event: string, value: unknown): boolean;
+  }
   interface Native {
     readonly platformInfo: { version: string; revision: string; arch: string };
     /** Starts as strings; the process Proxy permits raw Symbol values and accessor results. */
@@ -501,6 +519,11 @@ declare namespace BunWasm {
     listenerChanged?: (target: object, name?: string | symbol) => void;
     require(name: "process_stdin"): () => ProcessReader;
     require(name: "process_signals"): (process: NodeEmitter, names: ReadonlyMap<number, readonly string[]>) => () => boolean;
+    /** Loading it installs the default 'warning' listener on the process global. */
+    require(name: "process_warning"): {
+      configure(process: WarningProcess, argv: readonly string[]): void;
+      emitWarning(process: WarningProcess, warning: unknown, type?: unknown, code?: unknown, ctor?: unknown): void;
+    };
     pumpSignals?: () => boolean;
     /** The byte helper accepts arbitrary input and throws for unsupported shapes. */
     toUint8(value: unknown): Uint8Array;

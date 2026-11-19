@@ -16,7 +16,7 @@ const nativeFiles = new Set([
   "scripts/ci-jsc-artifact.ts",
   "scripts/ci-main-coverage.ts",
   "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js",
-  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml", ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
+  "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", "scripts/stable-scratch.ts", ".github/actions/rust-build-cache/action.yml", ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/engine-producer.ts", "scripts/producer-closure.ts", "src/bun-adapter.ts", "src/executable-paths.ts", "web/src/bun-executor.ts", "web/src/bun-launcher.ts",
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",

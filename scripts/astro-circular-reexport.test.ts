@@ -1,12 +1,12 @@
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stableScratch } from "./stable-scratch.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-astro-reexport-"));
+const scratch = stableScratch("astro-reexport");
 const probe = join(scratch, "target/debug/astro-circular-reexport");
 function cleanup() { rmSync(scratch, { recursive: true, force: true }); }
 process.once("SIGTERM", () => { cleanup(); process.exit(143); });

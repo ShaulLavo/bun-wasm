@@ -203,7 +203,7 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects | BunWasm.S
   const modules = new Map<string, unknown>([
     ["process", { env, execArgv: [], execPath: "bun", cwd: () => "/" }],
     ["events", source.events], ["structured_clone", { structuredClone }], ["net", {}],
-    ["worker_channel", { open: () => options.channel }],
+    ["worker_channel", { open: () => options.channel }], ["process_warning", { configure() {} }],
     ["worker_codec", { create(hooks: CodecHooks) { codec = factory("worker_codec")({ native: runtimeNative, sharedObjects: options.sharedObjects }).create(hooks); return codec; } }],
   ]);
   const lifecycle: Pick<BunWasm.Internal, "workerStartup" | "workerErrorData" | "clonePorts" | "workerExit"> = {};

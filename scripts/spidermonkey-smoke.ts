@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, symlinkSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { stableScratch } from "./stable-scratch.ts";
 
 export type StandaloneSmoke = { smoke: string; env: NodeJS.ProcessEnv; remove: () => void };
 
@@ -13,7 +13,7 @@ export function buildStandaloneSmoke(): StandaloneSmoke {
   const sysroot = process.env.BUN_WASM_SYSROOT;
   assert(build && isAbsolute(build), "Set SPIDERMONKEY_BUILD_DIR to the ordinary native build");
   assert(sysroot && isAbsolute(sysroot), "Source env.sh before the SpiderMonkey smoke checks");
-  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-sm-smoke-"));
+  const scratch = stableScratch("sm-smoke");
   const remove = () => rmSync(scratch, { recursive: true, force: true });
   try {
     symlinkSync(join(build, "libspidermonkey_bunwasm.a"), join(scratch, "libspidermonkey_g2.a"));
