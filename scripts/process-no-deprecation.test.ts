@@ -24,20 +24,29 @@ function loadCurrent(): GuestProcess {
     memoryUsage: () => ({ rss: 0 }),
     now: () => 0,
   };
+  let warnings: unknown;
   const internal = {
     native,
+    describe: String,
     nextTick(callback: () => void) { queueMicrotask(callback); },
     require(name: string) {
       if (name === "events") return EventEmitter;
       if (name === "process_signals") return () => () => false;
+      if (name === "process_warning") return warnings ??= load("process_warning.ts");
+      // Loading process_warning installs the default printer on the process global; keep it
+      // off the guest under test, whose own listener observes every warning.
+      if (name === "process") return Object.assign(new EventEmitter(), { env: {}, execArgv: [] });
       throw new Error(`Unexpected dependency: ${name}`);
     },
   };
-  const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/process.ts", import.meta.url), "utf8");
-  const emitted = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`);
-  const context: { factory?: (internal: unknown) => unknown; process: typeof process } = { process };
-  runInNewContext(emitted, context);
-  const guest = context.factory?.(internal);
+  function load(file: string) {
+    const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${file}`, import.meta.url), "utf8");
+    const emitted = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`);
+    const context: { factory?: (internal: unknown) => unknown; process: typeof process } = { process };
+    runInNewContext(emitted, context);
+    return context.factory?.(internal);
+  }
+  const guest = load("process.ts");
   if (!guest) throw new Error("Missing process factory result");
   Object.assign(guest, { observedStderr: stderr });
   return guest as GuestProcess & { observedStderr: string[] };

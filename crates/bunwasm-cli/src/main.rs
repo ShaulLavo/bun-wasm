@@ -944,6 +944,87 @@ static KEEP_HOST_CALL: (
 static KEEP_HOST_SLOTS: extern "C" fn() -> *mut bunwasm_runtime::host::HostSlots =
     bunwasm_runtime::host::bun_wasm_host_slots;
 
+/// Splits `BUN_OPTIONS` into arguments the way Bun's `append_options_env`
+/// (src/bun_core/util.rs) does: `--flag=value`, `--flag "quoted"` and `--flag='quoted'`
+/// stay one argument with their quotes, and bare words lose quotes and backslashes.
+/// docs/bun-patches/bun-options-env.md records the port.
+fn bun_options(env: &str) -> Vec<String> {
+    let env = env.as_bytes();
+    let mut args = Vec::new();
+    let mut i = 0;
+    while i < env.len() {
+        if env[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let (arg, end) = if env[i..].starts_with(b"--") {
+            option_argument(env, i)
+        } else {
+            plain_argument(env, i)
+        };
+        args.push(arg);
+        i = end;
+    }
+    args
+}
+
+fn option_argument(env: &[u8], start: usize) -> (String, usize) {
+    let mut j = start;
+    while j < env.len() && !env[j].is_ascii_whitespace() && env[j] != b'=' {
+        j += 1;
+    }
+    let end_of_flag = j;
+    let found_equals = j < env.len() && env[j] == b'=';
+    if found_equals {
+        j += 1;
+    }
+    while !found_equals && j < env.len() && env[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    if j < env.len() && (env[j] == b'\'' || env[j] == b'"') {
+        let quote = env[j];
+        j += 1;
+        while j < env.len() && env[j] != quote {
+            j += 1;
+        }
+        j = (j + 1).min(env.len());
+    } else if found_equals {
+        while j < env.len() && !env[j].is_ascii_whitespace() {
+            j += 1;
+        }
+    } else {
+        // `--flag value`: the value becomes an argument of its own.
+        j = end_of_flag;
+    }
+    (String::from_utf8_lossy(&env[start..j]).into_owned(), j)
+}
+
+fn plain_argument(env: &[u8], start: usize) -> (String, usize) {
+    let mut buf = Vec::new();
+    let mut quote: Option<u8> = None;
+    let mut escape = false;
+    let mut i = start;
+    while let Some(&ch) = env.get(i) {
+        if !escape && quote.is_none() && ch.is_ascii_whitespace() {
+            break;
+        }
+        i += 1;
+        if escape {
+            buf.push(ch);
+            escape = false;
+        } else if ch == b'\\' {
+            escape = true;
+        } else if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() && (ch == b'\'' || ch == b'"') {
+            quote = Some(ch);
+        } else {
+            buf.push(ch);
+        }
+    }
+    (String::from_utf8_lossy(&buf).into_owned(), i)
+}
+
 fn main() {
     // Sets the parser's stack limit and keeps Bun's C/POSIX shims linked.
     #[cfg(all(
@@ -960,6 +1041,13 @@ fn main() {
 
     let mut argv = std::env::args();
     let executable = argv.next().unwrap_or_default();
+    // Like Bun, BUN_OPTIONS arguments come right after argv[0], before what was typed.
+    let argv: Vec<String> = std::env::var("BUN_OPTIONS")
+        .map(|options| bun_options(&options))
+        .unwrap_or_default()
+        .into_iter()
+        .chain(argv)
+        .collect();
     let args = if executable
         .rsplit('/')
         .next()
@@ -969,7 +1057,7 @@ fn main() {
     {
         std::iter::once("x".to_owned()).chain(argv).collect()
     } else {
-        argv.collect()
+        argv
     };
     let command = parse(args, &executable);
     let (entry, args, conditions, exec_argv, mode) = match command {
@@ -1024,6 +1112,27 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bun_options_split_like_bun() {
+        let cases: [(&str, &[&str]); 6] = [
+            ("--disable-warning=DEP2", &["--disable-warning=DEP2"]),
+            ("  --a --b=c  bare ", &["--a", "--b=c", "bare"]),
+            ("--flag value", &["--flag", "value"]),
+            (
+                "--title \"two words\" --x='y z'",
+                &["--title \"two words\"", "--x='y z'"],
+            ),
+            (
+                "'single quoted' \"double\\\" quote\" a\\ b",
+                &["single quoted", "double\" quote", "a b"],
+            ),
+            ("", &[]),
+        ];
+        for (env, expected) in cases {
+            assert_eq!(bun_options(env), expected, "{env:?}");
+        }
+    }
 
     #[test]
     fn conditions_reach_every_runtime_entry_mode() {

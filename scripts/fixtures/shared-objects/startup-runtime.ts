@@ -49,7 +49,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     process, structured_clone: { structuredClone }, net: {},
     text_decoder: TextDecoder, streams: {}, body_streams: {}, readable_stream_methods: {},
     crypto: () => {}, console: {}, bun: {},
-    worker_channel: { open: () => channel },
+    worker_channel: { open: () => channel }, process_warning: { configure() {} },
   };
   const empty = new Set(["stack_trace", "exit_provenance", "loop_scheduler", "builtins", "bun_builtin_globals", "function", "fake_timers"]);
   const native = {
