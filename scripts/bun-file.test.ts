@@ -59,7 +59,7 @@ function adapter(Stream = ReadableStream) {
     write(fd: number, bytes: Uint8Array) { return writeSync(fd, bytes); },
     writeFile(path: string, bytes: Uint8Array) { writeFileSync(path, bytes); return bytes.length; },
   };
-  const globals = { Uint8Array, ArrayBuffer, URL, TextDecoder, Response, ReadableStream: Stream, RangeError };
+  const globals = { Uint8Array, ArrayBuffer, URL, TextDecoder, Response, Request, ReadableStream: Stream, RangeError };
   function requireModule(name: string): unknown {
     if (name === "archive") return { Archive: class Archive {} };
     if (name === "streams") return { ReadableStream: Stream };

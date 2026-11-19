@@ -79,7 +79,11 @@ export function stopFailed(name: string): void {
 }
 
 /** The group owner's own counters, from Waffle's GroupOwner.snapshot() on the page. */
-export interface OwnerSnapshot { readonly pins: number; readonly regions: number; readonly holds: number; readonly published: number; readonly members: number; }
+export interface OwnerSnapshot {
+  readonly pins: number; readonly regions: number; readonly holds: number; readonly published: number; readonly members: number;
+  /** Released members whose thread exit Waffle has not proven yet, and the pages they keep. */
+  readonly exiting: number; readonly quarantinedBytes: number;
+}
 let snapshotRequests = 0;
 
 /**

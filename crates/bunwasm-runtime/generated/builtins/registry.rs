@@ -213,7 +213,9 @@ pub static BUN_BUILTIN_NAMES: &[&str] = &[
     "bun",
 ];
 pub static BUN_BUILTINS: &[(usize, &str)] = &[
+    (21, include_str!("21.js")),
     (22, include_str!("22.js")),
+    (82, include_str!("82.js")),
     (167, include_str!("167.js")),
     (168, include_str!("168.js")),
     (188, include_str!("188.js")),

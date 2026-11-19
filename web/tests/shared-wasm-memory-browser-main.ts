@@ -184,8 +184,8 @@ function watchMembers(runtime: ReturnType<typeof createRuntime>, processes: Awai
     const owner = pid === undefined ? undefined : owners.get(groupOf.get(pid) ?? "");
     if (!owner || answered.has(request)) return;
     answered.add(request);
-    const { pins, regions, holds, published, members } = owner.snapshot();
-    publish(`${CONTROL}/snapshot/${request}`, JSON.stringify({ pins, regions, holds, published, members }));
+    const { pins, regions, holds, published, members, exiting, quarantinedBytes } = owner.snapshot();
+    publish(`${CONTROL}/snapshot/${request}`, JSON.stringify({ pins, regions, holds, published, members, exiting, quarantinedBytes }));
   };
   const answerSnapshots = async () => {
     answering = true;
@@ -282,9 +282,11 @@ async function run() {
   const wallMs = performance.now() - started;
   // The broker releases a member only after its supported stop, which trails run.done. A failed
   // stop is debt that never settles here, so that run does not wait on the member it retains.
+  // An ended group stays listed until its last member's exit is proven and its backing retired.
   const debt = entry === DEBT_ENTRY;
   const deadline = performance.now() + 10_000;
-  while (performance.now() < deadline && processes.memoryGroups().some(group => group.members > 0 || (!debt && group.retained > 0))) {
+  const settling = (group: MemoryGroupSnapshot) => group.members > 0 || (!debt && (group.retained > 0 || group.ended));
+  while (performance.now() < deadline && processes.memoryGroups().some(settling)) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   members.sample();

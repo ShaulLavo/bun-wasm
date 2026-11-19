@@ -312,62 +312,44 @@
   // --- async_hooks / diagnostics_channel ------------------------------------
 
   function asyncHooksModule() {
-    // The current async context is a frozen Map from storage to store,
-    // carried across await/then, timers and ticks by the engine (see
-    // runInContext in bootstrap.js).
+    // The current async context is carried across await/then, timers and ticks
+    // by the engine (see runInContext in bootstrap.js); async_local_storage.ts
+    // owns what it holds.
     const currentFrame = () => native.getAsyncContext();
-    function frameWith(storage, store) {
-      const next = new Map(currentFrame() || []);
-      next.set(storage, store);
-      return Object.freeze(next);
-    }
-    function frameWithout(storage) {
-      const next = new Map(currentFrame() || []);
-      next.delete(storage);
-      return Object.freeze(next);
-    }
-
-    class AsyncLocalStorage {
-      getStore() {
-        const frame = currentFrame();
-        return frame ? frame.get(this) : undefined;
-      }
-      run(store, callback, ...args) {
-        return internal.runInContext(frameWith(this, store), callback, undefined, args);
-      }
-      exit(callback, ...args) {
-        return internal.runInContext(frameWithout(this), callback, undefined, args);
-      }
-      enterWith(store) {
-        native.setAsyncContext(frameWith(this, store));
-      }
-      disable() {
-        native.setAsyncContext(frameWithout(this));
-      }
-      static bind(fn) {
-        const frame = currentFrame();
-        return function bound(...args) {
-          return internal.runInContext(frame, fn, this, args);
-        };
-      }
-      static snapshot() {
-        const frame = currentFrame();
-        return (fn, ...args) => internal.runInContext(frame, fn, undefined, args);
-      }
-    }
+    const { AsyncLocalStorage } = internal.require("async_local_storage");
+    const invalidArgType = (name, type, value) => Object.assign(
+      new TypeError(`The "${name}" argument must be of type ${type}. Received ${internal.describe(value)}`),
+      { code: "ERR_INVALID_ARG_TYPE" },
+    );
+    // bind, static bind and runInAsyncScope follow Bun's src/js/node/async_hooks.ts (see
+    // docs/bun-patches/async-local-storage.md): the bound function runs in the context the
+    // resource was created in.
     class AsyncResource {
+      #frame;
       constructor(type) {
+        if (typeof type !== "string") throw invalidArgType("type", "string", type);
         this.type = type;
-        this._frame = currentFrame();
+        this.#frame = currentFrame();
       }
       runInAsyncScope(fn, thisArg, ...args) {
-        return internal.runInContext(this._frame, fn, thisArg, args);
+        return internal.runInContext(this.#frame, fn, thisArg, args);
       }
       emitDestroy() {
         return this;
       }
-      bind(fn) {
-        return fn.bind(this);
+      bind(fn, thisArg) {
+        if (typeof fn !== "function") throw invalidArgType("fn", "function", fn);
+        let bound;
+        if (thisArg === undefined) {
+          const resource = this;
+          bound = function (...args) {
+            return Reflect.apply(resource.runInAsyncScope, resource, [fn, this].concat(args));
+          };
+        } else {
+          bound = this.runInAsyncScope.bind(this, fn, thisArg);
+        }
+        Object.defineProperty(bound, "length", { configurable: true, enumerable: false, value: fn.length, writable: false });
+        return bound;
       }
       asyncId() {
         return 1;
@@ -375,8 +357,9 @@
       triggerAsyncId() {
         return 0;
       }
-      static bind(fn) {
-        return fn;
+      static bind(fn, type, thisArg) {
+        type = type || fn.name;
+        return new AsyncResource(type || "bound-anonymous-fn").bind(fn, thisArg);
       }
     }
     return {
@@ -446,6 +429,10 @@
   function streamModule() {
     const bundle = internal.require("node_stream_core");
     internal.require("node_stream_web")(bundle);
+    // Bun's internal/streams/duplexpair, built on this module's Duplex, so it loads on first use.
+    bundle.Stream.duplexPair = function duplexPair(options) {
+      return internal.require("bun_builtins").require("internal:streams/duplexpair")(options);
+    };
     return bundle.Stream;
   }
 
@@ -610,6 +597,12 @@
       directoryCount: () => native.directoryCount(),
       bunStringRoundTrip: (bytes, encoding) => native.bunStringRoundTrip(bytes, encoding),
       linearMemoryBytes: () => native.linearMemoryBytes(),
+      // Node-internal modules for vendored Node tests, under the names they import them by.
+      // Bun's map holds more; these are the ones bun-wasm serves from Bun's own sources.
+      exposedInternals: {
+        "internal/freelist": internal.require("bun_builtins").require("internal:freelist"),
+        "internal/fixed_queue": internal.require("bun_builtins").require("internal:fixed_queue").FixedQueue,
+      },
     }),
     "node:test": () => internal.require("node_test"),
     "bun:test": () => internal.require("bun_test").exports,

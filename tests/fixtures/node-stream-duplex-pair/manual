@@ -1,0 +1,1 @@
+Native Bun serves bun:internal-for-testing only with --expose-internals. expected.txt is `bun --expose-internals run ./index.ts` from Bun 1.4.4.

@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/node-stream-duplex-pair",
+  "engines": ["quickjs", "jsc", "browser"]
+}

@@ -81,6 +81,7 @@ declare namespace BunWasm {
     globScan(pattern: string, cwd: string, dot: boolean, absolute: boolean, followSymlinks: boolean,
       throwErrorOnBrokenSymlink: boolean, onlyFiles: boolean, followMatchedSymlinks?: boolean): string[];
     getAsyncContext(): unknown;
+    setAsyncContext(context: unknown): void;
     runMicrotasks(): void;
     exit(code?: number): never;
   }
@@ -240,6 +241,7 @@ declare namespace BunWasm {
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
     builtin(name: "node:stream"): {
+      Duplex: unknown;
       Transform: CompressionConstructor;
       Readable: new(options: { read(): void; highWaterMark?: number; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => NodeReadable;
       Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: (error?: unknown) => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
