@@ -141,8 +141,7 @@ jobs:
       - name: Install lightweight CMake preflight tools
         run: |
           if command -v cmake && command -v ninja && command -v g++; then exit 0; fi
-          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
-          test -s /etc/apt/apt-mirrors.txt
+          sudo bash .github/scripts/apt-main-archive.sh
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++
       - name: Test CMake cache toolchain preflight
@@ -976,6 +975,7 @@ jobs:
       - name: Install the SpiderMonkey producer tools
         if: needs.selection.outputs.shared-native == 'true'
         run: |
+          sudo bash .github/scripts/apt-main-archive.sh
           sudo apt-get update
           sudo apt-get install -y clang llvm autoconf2.13 pkg-config python3-dev python3-venv python3-packaging python3-setuptools libffi-dev zlib1g-dev
       - uses: actions/cache/restore@v4
@@ -1151,6 +1151,7 @@ jobs:
       - name: Install sysroot build tools
         run: |
           if command -v cmake && command -v ninja; then exit 0; fi
+          sudo bash .github/scripts/apt-main-archive.sh
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build
       - name: Install pinned shared build tools
