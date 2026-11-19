@@ -16,6 +16,11 @@ use spki::{DecodePublicKey, EncodePublicKey};
 use subtle::ConstantTimeEq;
 
 type Result<T> = std::result::Result<T, &'static str>;
+// An error is a DOMException name, or "Name: message" where Bun gives a specific message.
+const KEY_TYPE: &str = "DataError: Invalid key type";
+const CURVE_MISMATCH: &str = "DataError: Named curve mismatch";
+const RSA_OID: &str = "1.2.840.113549.1.1.1";
+const EC_OID: &str = "1.2.840.10045.2.1";
 fn data<T, E>(r: std::result::Result<T, E>) -> Result<T> {
     r.map_err(|_| "DataError")
 }
@@ -158,15 +163,15 @@ fn rsa_format(format: &str, bytes: &[u8]) -> Result<(RsaKey, bool)> {
         "pkcs1-public" => (bytes, false),
         "pkcs8" => {
             let info = data(pkcs8::PrivateKeyInfo::try_from(bytes))?;
-            if info.algorithm.oid.to_string() != "1.2.840.113549.1.1.1" {
-                return Err("DataError");
+            if info.algorithm.oid.to_string() != RSA_OID {
+                return Err(KEY_TYPE);
             }
             (info.private_key, true)
         }
         "spki" => {
             let info = data(spki::SubjectPublicKeyInfoRef::try_from(bytes))?;
-            if info.algorithm.oid.to_string() != "1.2.840.113549.1.1.1" {
-                return Err("DataError");
+            if info.algorithm.oid.to_string() != RSA_OID {
+                return Err(KEY_TYPE);
             }
             (
                 info.subject_public_key.as_bytes().ok_or("DataError")?,
@@ -314,9 +319,31 @@ fn ec_import(a: &J, format: &str, b: &[u8]) -> Result<J> {
         };
     }
     match text(a, "namedCurve")? {
-        "P-256" => curve!(p256),
-        "P-384" => curve!(p384),
+        "P-256" => {
+            ec_identifier(format, b, "1.2.840.10045.3.1.7")?;
+            curve!(p256)
+        }
+        "P-384" => {
+            ec_identifier(format, b, "1.3.132.0.34")?;
+            curve!(p384)
+        }
         _ => Err("NotSupportedError"),
+    }
+}
+
+/// Bun names a DER key of another key type or of another curve before parsing it.
+fn ec_identifier(format: &str, b: &[u8], curve: &str) -> Result<()> {
+    let algorithm = match format {
+        "spki" => data(spki::SubjectPublicKeyInfoRef::try_from(b))?.algorithm,
+        "pkcs8" => data(pkcs8::PrivateKeyInfo::try_from(b))?.algorithm,
+        _ => return Ok(()),
+    };
+    if algorithm.oid.to_string() != EC_OID {
+        return Err(KEY_TYPE);
+    }
+    match algorithm.parameters_oid() {
+        Ok(named) if named.to_string() != curve => Err(CURVE_MISMATCH),
+        _ => Ok(()),
     }
 }
 
@@ -358,7 +385,10 @@ fn okp_import(name: &str, format: &str, b: &[u8]) -> Result<J> {
         "raw" => (vec![], b.to_vec()),
         "spki" => {
             let info = data(spki::SubjectPublicKeyInfoRef::try_from(b))?;
-            if info.algorithm.oid.to_string() != oid || info.algorithm.parameters.is_some() {
+            if info.algorithm.oid.to_string() != oid {
+                return Err(KEY_TYPE);
+            }
+            if info.algorithm.parameters.is_some() {
                 return Err("DataError");
             }
             (
@@ -368,7 +398,10 @@ fn okp_import(name: &str, format: &str, b: &[u8]) -> Result<J> {
         }
         "pkcs8" => {
             let info = data(pkcs8::PrivateKeyInfo::try_from(b))?;
-            if info.algorithm.oid.to_string() != oid || info.algorithm.parameters.is_some() {
+            if info.algorithm.oid.to_string() != oid {
+                return Err(KEY_TYPE);
+            }
+            if info.algorithm.parameters.is_some() {
                 return Err("DataError");
             }
             use pkcs8::der::Decode;
@@ -391,7 +424,13 @@ fn okp_import(name: &str, format: &str, b: &[u8]) -> Result<J> {
         }
         return Ok(okp_jwk(name, &[], &public));
     }
-    let raw: [u8; 32] = data(secret.as_slice().try_into())?;
+    // A 64-byte Ed25519 JWK "d" is the seed followed by its public key.
+    let (seed, trailing) = if name == "Ed25519" && format == "jwk" && secret.len() == 64 {
+        secret.split_at(32)
+    } else {
+        (secret.as_slice(), &[][..])
+    };
+    let raw: [u8; 32] = data(seed.try_into())?;
     let derived = if name == "Ed25519" {
         ed25519_dalek::SigningKey::from_bytes(&raw)
             .verifying_key()
@@ -399,10 +438,14 @@ fn okp_import(name: &str, format: &str, b: &[u8]) -> Result<J> {
     } else {
         *x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(raw)).as_bytes()
     };
-    if !public.is_empty() && public != derived {
+    if !trailing.is_empty() && trailing != derived.as_slice() {
         return Err("DataError");
     }
-    Ok(okp_jwk(name, &secret, &derived))
+    // Bun derives a private JWK's public key from "d" and ignores its "x".
+    if format != "jwk" && !public.is_empty() && public != derived {
+        return Err("DataError");
+    }
+    Ok(okp_jwk(name, &raw, &derived))
 }
 
 fn export(a: &J, format: &str, k: &J) -> Result<J> {
