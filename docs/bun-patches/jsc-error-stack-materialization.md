@@ -19,8 +19,9 @@ adapter below are original bun-wasm code, with no upstream implementation copied
 
 - `crates/bunwasm-jsc/cpp/helpers.cpp` forwards the raw value to the existing
   runtime formatter. It no longer computes text from live frames.
-- `crates/bunwasm-runtime/src/js/stack_trace.ts` leaves native values untouched
-  when no custom hook is installed. This includes the absent stack property for
+- `crates/bunwasm-runtime/src/js/stack_trace.ts` rewrites native text in Bun's
+  form when no custom hook is installed ([error stack header](error-stack-header.md)).
+  A missing value stays missing, including the absent stack property for
   an empty trace. Custom hooks still receive an array, including an empty array,
   and successful results use the existing memoization and reentrancy guard.
 

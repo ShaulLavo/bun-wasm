@@ -39,7 +39,11 @@
     error: (...args: unknown[]) => err(args),
     trace(...args: unknown[]) {
       const holder = new Error();
-      const stack = (holder.stack || "").split("\n").slice(1).join("\n");
+      // Drop the "Error" header and this frame, where the engine shows the runtime's frames.
+      const lines = (holder.stack || "").split("\n");
+      if (lines[0] === "Error") lines.shift();
+      if (lines[0]?.includes("bun-wasm:")) lines.shift();
+      const stack = lines.join("\n");
       const message = args.length ? inspector().formatArgs(args) : "";
       emit(native.writeStderr, `Trace${message ? ": " + message : ""}\n${stack.replace(/\n$/, "")}`);
     },
