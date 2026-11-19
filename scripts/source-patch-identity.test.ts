@@ -9,6 +9,10 @@ function git(root: string, args: readonly string[]): string {
   return execFileSync("git", ["-C", root, "-c", "user.name=Patch Author", "-c", "user.email=author@example.invalid"].concat(args), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+// Hang caps only: each sync clones and applies patches with git, which slows down a lot on a loaded runner.
+const SYNC_HANG_CAP_MS = 60_000;
+const TEST_HANG_CAP_MS = 240_000;
+
 function unconfiguredEnvironment(home: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "0" };
   for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"]) delete env[key];
@@ -37,7 +41,7 @@ test("source sync imports patches without a configured committer and preserves t
     const script = join(root, "scripts/sync-bun.sh");
     writeFileSync(script, recipe);
     const sync = () => {
-      const result = spawnSync("bash", [script, "--source-only"], { encoding: "utf8", env: unconfiguredEnvironment(home), timeout: 3000 });
+      const result = spawnSync("bash", [script, "--source-only"], { encoding: "utf8", env: unconfiguredEnvironment(home), timeout: SYNC_HANG_CAP_MS });
       expect(result.status, result.stderr).toBe(0);
       expect(git(join(root, "vendor/bun"), ["rev-parse", "HEAD^{tree}"])).toBe(tree);
       expect(git(join(root, "vendor/bun"), ["show", "-s", "--format=%an:%ae"])).toBe("Patch Author:author@example.invalid");
@@ -46,9 +50,9 @@ test("source sync imports patches without a configured committer and preserves t
     sync();
     git(join(root, "vendor/bun"), ["reset", "--hard", base]);
     sync();
-    const checked = spawnSync("bash", [script, "--check"], { encoding: "utf8", env: unconfiguredEnvironment(home), timeout: 3000 });
+    const checked = spawnSync("bash", [script, "--check"], { encoding: "utf8", env: unconfiguredEnvironment(home), timeout: SYNC_HANG_CAP_MS });
     expect(checked.status, checked.stderr).toBe(0);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
-});
+}, TEST_HANG_CAP_MS);

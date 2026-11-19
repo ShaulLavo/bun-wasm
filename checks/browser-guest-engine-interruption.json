@@ -119,6 +119,7 @@
     "web/src/wasm-call-trap.ts",
     "web/src/worker.ts",
     "web/tests/browser-engine-interruption.ts",
+    "web/tests/navigate-test-page.ts",
     "web/tests/engine-interruption-atomics.ts",
     "web/tests/engine-interruption-benchmark.ts",
     "web/tests/engine-interruption-cases.ts",

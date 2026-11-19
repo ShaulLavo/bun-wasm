@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-array-symbol-equality",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

@@ -41,6 +41,11 @@ WebKit on every engine. Cross-guest shared memory remains unsupported by the
 existing transport. Object URLs are local to their creating guest and their
 contents are captured when constructing a worker.
 
+The registry now belongs to the original
+[object URL adapter](url-errors-object-urls.md), shared with the standard
+`node:buffer` resolver. Worker entry resolution uses that registry; the worker
+module no longer owns duplicate object URL creation or revocation methods.
+
 
 ## Classification
 

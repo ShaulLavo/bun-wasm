@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import { chromium, webkit } from "playwright";
 import { buildSite, verifySite } from "./browser-guest-site";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 const notAttached = "ERR_WORKER_MESSAGE_BACKING_NOT_ATTACHED";
 type Pool = { created: boolean; classes: number[]; lanes: number };
@@ -217,7 +218,7 @@ function poolOf(page: Awaited<ReturnType<typeof newPage>>) {
 }
 async function newPage(browser: Awaited<ReturnType<typeof chromium.launch>>, url: string) {
   const page = await (await browser.newContext()).newPage();
-  await page.goto(`${url}?engine=browser&prompt=off&mode=memory`);
+  await navigateTestPage(page, `${url}?engine=browser&prompt=off&mode=memory`);
   assert.match(await ready(page), /ready/);
   return page;
 }

@@ -1,7 +1,7 @@
 import { withScoped, withAdmission } from "./scope-fixture";
 import { expect, test } from "bun:test";
 import { object } from "./evidence";
-import { createIphoneTransport } from "./iphone-transport";
+import { createIphoneTransport, describeStalledDocument, navigationEvidence, previewStallMs } from "./iphone-transport";
 import { IphoneBus } from "./iphone-bus";
 import { render } from "./playground";
 import { frameworks } from "./catalog";
@@ -30,6 +30,9 @@ test("observer polls validate focus records and configuration clears cached stat
     bus.poll("host", { ...observation, previewFocus: focusedFrame }, new URL(url).origin);
     expect(bus.state("host")?.previewFocus).toEqual(focusedFrame);
     expect(() => bus.poll("host", { ...observation, previewFocus: { ...focusedFrame, presentation: 1 } }, new URL(url).origin)).toThrow("Invalid iPhone focus record");
+    bus.poll("host", { ...observation, previewFocus: { ...unfocused, committed: false } }, new URL(url).origin);
+    expect(bus.state("host")?.previewFocus).toEqual({ ...unfocused, committed: false });
+    expect(() => bus.poll("host", { ...observation, previewFocus: { ...unfocused, committed: "no" } }, new URL(url).origin)).toThrow("Invalid iPhone focus record");
     bus.configure("host", url);
     expect(bus.state("host")?.previewFocus).toBeUndefined();
   } finally { bus.close(); }
@@ -176,6 +179,40 @@ test("a preview document that never attaches expires without holding any observe
     expect(evidence.at(-1)).toMatchObject({ stage: "document", outcome: "failed", observation: { attached: false, visible: false, hasTimeOrigin: false } });
     expect(evidence.filter(row => row.observation !== undefined && row.outcome === undefined)).toHaveLength(1);
   });
+});
+
+// The 52d2a408 iPhone smoke red: the frame never left about:blank, never fired load, and the
+// service worker never saw its request. The result stays red and now says so.
+test("a stalled preview frame that never committed is reported as a navigation Safari never started", async () => {
+  const blank = { ...unfocused, committed: false };
+  await withControl({ states: [configured], loads: [complete], focuses: [blank] }, previewStallMs + 1500, async (transport, log, evidence) => {
+    const failure = withScoped(transport, page => page.openPreview(url));
+    await expect(failure).rejects.toThrow("Safari never started the preview navigation");
+    await expect(failure).rejects.toThrow(`iPhone preview document did not finish within ${previewStallMs + 1500} ms`);
+    expect(log.filter(entry => entry.includes("/execute"))).toEqual(["host/execute presentIphonePreview"]);
+    expect(log).toContain("preview/response/state");
+    expect(evidence.at(-1)).toMatchObject({ stage: "document", outcome: "failed",
+      observation: { attached: false, navigation: { committed: false, loaded: false, serviceWorkerRequests: 0 } } });
+    expect(JSON.stringify(evidence)).not.toContain("preview-nonce");
+  });
+}, 30000);
+
+test("a committed preview frame whose document never attaches keeps the generic expiry", async () => {
+  await withControl({ states: [configured], loads: [complete], focuses: [{ ...focusedFrame, committed: true }] }, previewStallMs + 1500, async (transport, _log, evidence) => {
+    const failure = withScoped(transport, page => page.openPreview(url));
+    await expect(failure).rejects.toThrow(/^iPhone preview document did not finish/);
+    expect(evidence.at(-1)).toMatchObject({ observation: { navigation: { committed: true, loaded: true, serviceWorkerRequests: 0 } } });
+  });
+}, 30000);
+
+test("navigation evidence counts only service-worker requests of the configured preview document", () => {
+  const host = { previewFocus: { ...unfocused, committed: false } };
+  const rows = [{ event: "request", currentNonce: "preview-nonce" }, { event: "head", currentNonce: "preview-nonce" }, { event: "request", currentNonce: "earlier" }];
+  const navigation = navigationEvidence(host, rows, "preview-nonce", "frame-id");
+  expect(navigation).toEqual({ committed: false, loaded: false, serviceWorkerRequests: 1 });
+  expect(describeStalledDocument({ navigation })).toBe("");
+  expect(navigationEvidence(host, rows, "preview-nonce", "other-frame")).toEqual({ committed: null, loaded: false, serviceWorkerRequests: 1 });
+  expect(describeStalledDocument({ navigation: { committed: false, loaded: false, serviceWorkerRequests: 0 } })).toContain("Safari never started");
 });
 
 test("a preview that attaches but never completes loading never reads owner focus", async () => {

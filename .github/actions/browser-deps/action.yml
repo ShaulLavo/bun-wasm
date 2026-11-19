@@ -9,13 +9,7 @@ runs:
   steps:
     - name: Use Ubuntu HTTPS archives for browser dependencies
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-      run: |
-        if [[ -f /etc/apt/apt-mirrors.txt ]]; then sudo sed -i '\|^http://[^/]*\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt; fi
-        if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
-          sudo sed -i 's|http://archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
-        fi
-        if [[ -f /etc/apt/apt-mirrors.txt ]]; then test -s /etc/apt/apt-mirrors.txt; fi
-        if [[ -f /etc/apt/apt-mirrors.txt ]]; then cat /etc/apt/apt-mirrors.txt; fi
+      run: sudo bash "$GITHUB_WORKSPACE/.github/scripts/apt-main-archive.sh"
     - name: Identify browser setup cache inputs
       id: browser-image
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}

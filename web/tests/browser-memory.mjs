@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { playwright, ready, run, session, writeFile } from "./playground.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const s = session("bun-wasm-browser-memory-");
 const source = readFileSync(new URL(import.meta.resolve("waffle/core/memory-views")), "utf8");
@@ -49,7 +50,7 @@ async function checkBrowser(name, base) {
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
-    await page.goto(base);
+    await navigateTestPage(page, base);
     console.log(name, JSON.stringify(await checkViews(page)));
     for (const engine of ["quickjs", "jsc", "browser"]) await checkGuest(page, base, name, engine);
   } finally {
@@ -58,7 +59,7 @@ async function checkBrowser(name, base) {
 }
 
 async function checkGuest(page, base, name, engine) {
-  await page.goto(`${base}?engine=${engine}&prompt=off`);
+  await navigateTestPage(page, `${base}?engine=${engine}&prompt=off`);
   assert.match(await ready(page), /ready/);
   await writeFile(page, "/home/user/grow.js", guest);
   const result = await run(page, "bun run grow.js", 120000);

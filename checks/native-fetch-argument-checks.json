@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fetch-argument-checks",
+  "engines": ["quickjs", "jsc", "browser"]
+}

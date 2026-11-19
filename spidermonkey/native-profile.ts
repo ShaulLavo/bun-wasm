@@ -47,8 +47,8 @@ function checkGeneratedCustody(): Record<string, unknown> {
   assert.equal(custody.ignoreCount, 67);
   assert.deepEqual(custody.supplementary, [0xdf, 0x1e9e]);
   assert.deepEqual(custody.profile, { intlApi: false, irregexpUnicode: "icu4x-subset", specialCase: "selected-data-generated" });
-  assert(Array.isArray(custody.generator) && Array.isArray(custody.upstream) && record(custody.output) && record(custody.lock));
-  const inputs = custody.generator.concat(custody.upstream, [custody.output, custody.lock]);
+  assert(Array.isArray(custody.generator) && Array.isArray(custody.upstream) && record(custody.output));
+  const inputs = custody.generator.concat(custody.upstream, [custody.output]);
   for (const input of inputs) {
     assert(record(input) && typeof input.path === "string" && !input.path.split("/").includes(".."));
     assert.equal(fileHash(join(repo, input.path)), input.sha256, `stale generated custody: ${input.path}`);
@@ -110,11 +110,9 @@ function verifyProfileSources(profile: Record<string, unknown>, sourceRoot: stri
       assert.equal(fileHash(join(sourceRoot, entry.path)), entry.sha256, `original generated custody: ${entry.path}`);
     }
   }
-  for (const key of ["output", "lock"]) {
-    const entry: unknown = custody[key];
-    assert(record(entry) && typeof entry.path === "string" && typeof entry.sha256 === "string");
-    assert.equal(fileHash(join(sourceRoot, entry.path)), entry.sha256, `original generated custody: ${entry.path}`);
-  }
+  const output: unknown = custody.output;
+  assert(record(output) && typeof output.path === "string" && typeof output.sha256 === "string");
+  assert.equal(fileHash(join(sourceRoot, output.path)), output.sha256, `original generated custody: ${output.path}`);
 }
 
 export function verifyOriginalProfile(root: string, sourceRoot: string): Record<string, unknown> {

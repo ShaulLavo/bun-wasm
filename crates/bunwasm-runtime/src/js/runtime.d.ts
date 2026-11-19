@@ -73,12 +73,15 @@ declare namespace BunWasm {
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host" | "hermes" | "spidermonkey";
+    /** The running engine's `process.versions` entry; absent when the host reports none. */
+    readonly engineVersion?: readonly [key: string, version: string];
     /** Optional slot 18: 0/0 dequeues; modes 0/1/2 publish DEFAULT/IGNORE/HANDLE, 3 raises. */
     hostSignal(signal: number, disposition: number): number;
     globMatch(pattern: string, path: string): boolean;
     globScan(pattern: string, cwd: string, dot: boolean, absolute: boolean, followSymlinks: boolean,
       throwErrorOnBrokenSymlink: boolean, onlyFiles: boolean, followMatchedSymlinks?: boolean): string[];
     getAsyncContext(): unknown;
+    setAsyncContext(context: unknown): void;
     runMicrotasks(): void;
     exit(code?: number): never;
   }
@@ -206,6 +209,10 @@ declare namespace BunWasm {
     zstdCompress(data: Uint8Array, level: number): Uint8Array;
     zstdDecompress(data: Uint8Array): Uint8Array;
     crc32(data: Uint8Array, initial?: number): number;
+    /** node:crypto and Bun hashers (node_digest.rs): (canonical name, data, output length). */
+    nodeDigest(algorithm: string, data: Uint8Array, outputLength?: number): Uint8Array;
+    nodeHmac(algorithm: string, key: Uint8Array, data: Uint8Array): Uint8Array;
+    nodePbkdf2(algorithm: string, password: Uint8Array, salt: Uint8Array, iterations: number, keylen: number): Uint8Array;
     streams: {
       /** A node:zlib native handle: (mode, options JSON, dictionary). */
       codec(mode: string, options?: string, dictionary?: Uint8Array): number;
@@ -234,12 +241,13 @@ declare namespace BunWasm {
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
     builtin(name: "node:stream"): {
+      Duplex: unknown;
       Transform: CompressionConstructor;
       Readable: new(options: { read(): void; highWaterMark?: number; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => NodeReadable;
       Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: (error?: unknown) => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
     };
   }
-  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams } }
+  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams; ReadableStream: typeof ReadableStream } }
   type HTMLHandlerKind = "element" | "comments" | "text" | "doctype" | "end" | "endTag";
   interface HTMLStepEvent { handler: number; kind: HTMLHandlerKind }
   interface HTMLStep { output: Uint8Array; event?: HTMLStepEvent }

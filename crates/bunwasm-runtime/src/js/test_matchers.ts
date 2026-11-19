@@ -82,12 +82,19 @@
     }
   }
 
+  function ignore(): undefined {
+    return undefined;
+  }
+
   function throwOutcome(ctx: Context, received: unknown): Outcome | Promise<Outcome> {
     if (typeof received !== "function") return ctx.promise ? { threw: true, value: received } : { invalid: true };
     let result: unknown;
     try {
       result = received();
     } catch (value) {
+      // Bun captures a rejection that happens while `received` runs as the thrown value and
+      // marks that promise handled. A pending promise that rejects later is still reported.
+      if (isPromise(value) && internal.promiseState(value) === "rejected") react(value, ignore, ignore);
       return { threw: true, value };
     }
     if (!isPromise(result)) return { threw: false, value: result };

@@ -1,0 +1,17 @@
+
+index.test.ts:
+(pass) an arrow callback alone
+(pass) a named function callback alone
+(pass) callback then options
+(pass) string > string name
+(pass) options before the callback > three arguments
+(pass) 42 > number name
+(pass) Rectangle > named class
+(pass) anonymous class
+(pass) add > named function
+(pass) after the blocks
+
+ 10 pass
+ 0 fail
+ 1 expect() calls
+Ran 10 tests across 1 file. [TIME]

@@ -47,7 +47,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     subscriptions: () => new Uint8Array(), close() { closes++; }, pending: false, ended: false };
   const modules: Record<string, unknown> = {
     process, structured_clone: { structuredClone }, net: {},
-    text_decoder: TextDecoder, streams: {}, body_streams: {},
+    text_decoder: TextDecoder, streams: {}, body_streams: {}, readable_stream_methods: {},
     crypto: () => {}, console: {}, bun: {},
     worker_channel: { open: () => channel },
   };
@@ -64,7 +64,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     loadPolyfill(name: string) {
       if (name in modules) return () => modules[name];
       if (empty.has(name)) return () => ({});
-      const sources = ["web", "events", "web_brand", "url_search_params", "stack_capability", "immediate_queue", "worker_threads", "worker_codec", "module_compile", "source_prepare", "import_requests"];
+      const sources = ["web", "events", "web_brand", "url_search_params", "url_pairs", "url_errors", "object_urls", "stack_capability", "immediate_queue", "worker_threads", "worker_codec", "module_compile", "source_prepare", "import_requests"];
       if (!sources.includes(name)) throw new Error(`Unexpected startup module ${name}`);
       const source = readFileSync(new URL(`${name}.${name === "web" ? "js" : "ts"}`, runtimeRoot), "utf8");
       return runInContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), context);

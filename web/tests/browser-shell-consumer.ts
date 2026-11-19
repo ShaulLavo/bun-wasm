@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
@@ -74,7 +75,7 @@ async function exercise(browserName: string, type: BrowserType, installation: st
   page.on("pageerror", error => errors.push(error.message));
   let failed = false;
   try {
-    await page.goto(`http://127.0.0.1:${port}/`);
+    await navigateTestPage(page, `http://127.0.0.1:${port}/`);
     await page.waitForFunction(() => Reflect.has(globalThis, "shellConsumer"));
     const result: unknown = await page.evaluate(() => Reflect.get(globalThis, "shellConsumer").exercise());
     console.log(JSON.stringify({ browser: browserName, installation, result, errors }));
@@ -84,7 +85,7 @@ async function exercise(browserName: string, type: BrowserType, installation: st
     const previewCase = cases.find(item => item.name === "preview");
     if (previewCase?.ok) {
       const preview = await context.newPage();
-      const response = await preview.goto(`http://127.0.0.1:${port}/__preview/31976/`);
+      const response = await navigateTestPage(preview, `http://127.0.0.1:${port}/__preview/31976/`);
       assert.ok(response, "preview response");
       assert.ok(response.fromServiceWorker(), "preview delivered by actual shared network service worker");
       assert.equal(response.status(), 200);

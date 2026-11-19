@@ -6,6 +6,7 @@
 //   ENGINES=quickjs node tests/browser-stack.mjs --measure webkit
 //   ENGINES=jsc STACK_KIB=260 JSC_PARSER_RESERVE=1024 node tests/browser-stack.mjs --measure --cold firefox
 import { readFileSync } from 'node:fs';
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { firstVisit } from './first-visit.mjs';
 import { measureStackPaths, observeStackOutcome, stackEnvironmentPrefix } from '../../scripts/stack-measurement.ts';
 import { stackSelection, reportStackSelection, reportStackCompletion } from '../../scripts/stack-parts.ts';
@@ -62,7 +63,7 @@ async function openPage(browser, name, url, engine) {
   const context = await browser.newContext(name === 'webkit' ? playwright.devices['iPhone 13'] : {});
   const visit = await firstVisit(context, `${url}?engine=${engine}&prompt=off`);
   const page = await context.newPage();
-  await page.goto(visit.url);
+  await navigateTestPage(page, visit.url);
   await ready(page);
   return { page, close: async () => { await visit.close(); await context.close(); } };
 }

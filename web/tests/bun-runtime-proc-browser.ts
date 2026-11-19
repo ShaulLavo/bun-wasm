@@ -4,6 +4,7 @@
 // No artifact fallback, build, installation or download is hidden inside this acceptance gate.
 // BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT=1 explicitly enables public immutable guest downloads.
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -105,7 +106,7 @@ async function runScenario(browser: Browser, name: string, scenario: string) {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
   try {
-    await page.goto(`http://127.0.0.1:${ownedPort}/?engine=${engine}&scenario=${encodeURIComponent(scenario)}${publishedDefault ? "&published-default" : ""}`);
+    await navigateTestPage(page, `http://127.0.0.1:${ownedPort}/?engine=${engine}&scenario=${encodeURIComponent(scenario)}${publishedDefault ? "&published-default" : ""}`);
     await page.waitForFunction(() => Reflect.get(globalThis, "bunRuntimeProcResult"), undefined, { timeout: 90_000 });
     const result = await page.evaluate(() => Reflect.get(globalThis, "bunRuntimeProcResult"));
     console.log(JSON.stringify({ browser: name, version: browser.version(), scenario, artifact: artifactReceipt, fixture: scenario === "source-cache" ? fixtureReceipt : undefined, publishedDefault, guestRequests, result, pageErrors, consoleErrors, consoleMessages }));

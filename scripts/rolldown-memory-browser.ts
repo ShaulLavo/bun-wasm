@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 const [treeArgument, adapter, result] = process.argv.slice(2);
 assert(treeArgument && adapter && result, "Usage: bun rolldown-memory-browser.ts TREE COMPILED_ADAPTER RESULT_JSON");
@@ -63,7 +64,7 @@ async function browserControl() {
 async function runMode(browser: import("playwright").Browser, mode: string) {
   const page = await browser.newPage();
   try {
-    await page.goto(server.url.href);
+    await navigateTestPage(page, server.url.href);
     return await page.evaluate((mode: string) => new Promise(resolve => {
       const worker = new Worker(`/${mode}/control.js`, { type: "module" });
       const timeout = setTimeout(() => { worker.terminate(); resolve({ ok: false, error: "Control timed out" }); }, 45_000);

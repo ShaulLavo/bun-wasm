@@ -1,0 +1,8 @@
+exported function true
+sides are Duplex true true
+right read "hello pair"
+encoded chunk string ping
+error teardown true true ["a: boom"]
+plain teardown true
+FixedQueue function 2048 0 4498500
+FreeList function

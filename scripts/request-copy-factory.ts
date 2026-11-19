@@ -19,6 +19,7 @@ export function requestCopyFactory(kind: "polyfill" | "native" = "polyfill") {
     ["text_decoder", TextDecoder],
     ["streams", streams], ["body_streams", factory("body_streams")({ native: { engine } })],
     ["url_search_params", factory("url_search_params")()], ["web_brand", () => {}],
+    ["url_errors", factory("url_errors")()], ["url_pairs", factory("url_pairs")()],
     ["websocket", { clientClass: () => class {} }],
     ["compression_streams", { decode: (value: unknown) => value }],
     ["http_common", factory("http_common")()],

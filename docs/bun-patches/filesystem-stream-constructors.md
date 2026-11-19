@@ -11,6 +11,11 @@ file cursor when no explicit stream start was supplied. Stream ranges, byte
 counters and read-error destruction retain their existing contracts.
 Large regular-file stream requests reuse the existing 1 MiB native piece limit,
 emitting the pieces directly instead of assembling another destination first.
+The read itself stays synchronous, but its chunk or end of file reaches `push()`
+on a later turn through the callback API's `setImmediate` delivery, as Node's
+`fs.read` callback does. Pushing end of file inside `_read` landed while the
+previous `'readable'` was still being emitted, so the final `'readable'` (where
+`read()` returns null) never fired for a file whose last read was short.
 
 The missing exports broke destroy 1.2.0 `index.js` when compression 1.8.2 `index.js` closed a response before creating a compression stream. The cached packages and native controls remain diagnosis inputs only. `scripts/node-fs-stream-constructors.test.ts` runs the production factories with real native descriptors and deliberately short writes. It checks construction, inherited receivers, prototype identity, creation modes, string decoding with `decodeStrings: false`, explicit close with `autoClose: false`, ranges, encoding, backpressure, errors, and descriptor cleanup. This source-factory evidence does not claim React Router application acceptance.
 

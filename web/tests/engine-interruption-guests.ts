@@ -24,10 +24,12 @@ export function heartbeatBusyGuest(): string {
     try { fs.writeSync(2,'ready\\n'); for (;;) Atomics.add(beat,0,1); } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
 }
 
-// A guest that spends its time inside one native regexp call that backtracks about 2^32 times,
-// far longer than any proof waits, on any machine. A stop can land only inside that call, so
-// the engine must poll inside its native matcher. If the call ever returned, the finally block
-// and the code after it would write their markers; the inner catch must not swallow the stop.
+// A guest that spends its time inside one native regexp call with about 2^32 possible
+// backtracks. A stop must land inside that call, so the engine must poll inside its native
+// matcher. Not every engine runs the call to its end: JSC's Yarr gives up after 10^8
+// disjunction entries and returns a silent no-match. Either way, if the call ever returned,
+// the finally block and the code after it would write their markers, which fails the proof;
+// the inner catch must not swallow the stop.
 export function nativeRegexpGuest(): string {
   return `const fs=require('node:fs');
     const input='a'.repeat(32)+'!', pattern=/^(a+)+$/;

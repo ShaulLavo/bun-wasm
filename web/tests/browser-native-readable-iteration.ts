@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { playwright, session } from "./playground.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 declare const nativeReadableIterationResult: { done: boolean; error: string | null; checks: string[] };
 const task = session("bun-wasm-native-iteration-");
@@ -24,7 +25,7 @@ try {
     const page = await browser.newPage();
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(String(error)));
-    await page.goto(server.url.href);
+    await navigateTestPage(page, server.url.href);
     await page.waitForFunction(() => typeof nativeReadableIterationResult !== "undefined" && nativeReadableIterationResult.done, undefined, { timeout: 15_000 });
     const result = await page.evaluate(() => nativeReadableIterationResult);
     assert.equal(result.error, null, JSON.stringify(result));

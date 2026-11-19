@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { instrumentWorker } from "./storage-routing-build-source";
 import { StorageLifetime } from "./storage-browser-evidence";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 const lifetimes: StorageLifetime[] = [];
 afterEach(async () => { await Promise.all(lifetimes.splice(0).map(lifetime => lifetime.cleanup())); });
@@ -36,7 +37,7 @@ for (const engine of [chromium, webkit]) test(`${engine.name()}: SW transport an
     const context = acquired.value;
     await lifetime.observeContext(context);
     const page = await context.newPage();
-    await page.goto(server.url.href);
+    await navigateTestPage(page, server.url.href);
     await page.evaluate(async () => {
       const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/__preview/" });
       const worker = registration.installing ?? registration.waiting ?? registration.active;

@@ -3,6 +3,7 @@
 // Defaults to cached Chromium; pass firefox/webkit explicitly to extend the matrix.
 // Bounded stress: RUNTIME_PROC_ITERATIONS=300 RUNTIME_PROC_SCENARIO=job-wait RUNTIME_PROC_MODE=automatic
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -95,7 +96,7 @@ try {
       try {
         // slots=off also lets the pre-wiring baseline fail on missing ABI imports, rather than
         // on unrelated Bun slot setup; the production preview1 adapter independently skips slots.
-        await page.goto(`http://127.0.0.1:${server.port}/?slots=off${mode === "explicit" ? "&explicit=1" : ""}${scenario === "job-wait" ? "&job-wait=1" : ""}`);
+        await navigateTestPage(page, `http://127.0.0.1:${server.port}/?slots=off${mode === "explicit" ? "&explicit=1" : ""}${scenario === "job-wait" ? "&job-wait=1" : ""}`);
         await page.waitForFunction(() => (globalThis as any).runtimeProcResult, undefined, { timeout: 40_000 });
         const completed: RuntimeProcResult = await page.evaluate(() => (globalThis as any).runtimeProcResult);
         result = completed;

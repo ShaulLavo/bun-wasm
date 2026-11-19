@@ -74,13 +74,28 @@
     constructor(sample, inverse) {
       this.sample = sample;
       this.inverse = !!inverse;
+      /** @type {"resolves" | "rejects" | undefined} set by expect.resolvesTo and expect.rejectsTo */
+      this.promise = undefined;
     }
+    // A resolvesTo/rejectsTo matcher compares a real promise's settled value through an
+    // intrinsic reaction; thenables never match. A non-promise or the other settlement
+    // fails before `not` inverts, as in Bun.
     asymmetricMatch(other) {
+      if (this.promise === undefined) return this.matchValue(other);
+      if (!internal.isPromise(other)) return this.inverse;
+      const resolves = this.promise === "resolves";
+      return internal.promiseThen(other, value => resolves ? this.matchValue(value) : this.inverse, error => resolves ? this.inverse : this.matchValue(error));
+    }
+    matchValue(other) {
       return matcherSupport.settle(this.matches(other), result => this.inverse ? !result : result);
+    }
+    label(format) {
+      if (this.promise === undefined) return this.describe(format);
+      return `promise ${this.promise === "resolves" ? "resolved" : "rejected"} to ${this.describe(format)}`;
     }
     // Bun.inspect shows matchers by their pretty description.
     [INSPECT_CUSTOM]() {
-      return this.describe(inspect);
+      return this.label(inspect);
     }
   }
 
@@ -89,18 +104,20 @@
       return matchesConstructor(this.sample, other);
     }
     describe() {
-      return `Any<${this.sample.name}>`;
+      return `${this.inverse ? "NotAny" : "Any"}<${this.sample.name}>`;
     }
   }
 
+  // Bun's expect.any: primitives by type, boxed values and everything else by instanceof,
+  // and Object as Jest's `typeof other === "object"`, so null matches and functions do not.
   function matchesConstructor(ctor, value) {
-    if (ctor === String) return typeof value === "string" || value instanceof String;
-    if (ctor === Number) return typeof value === "number" || value instanceof Number;
-    if (ctor === Boolean) return typeof value === "boolean" || value instanceof Boolean;
-    if (ctor === BigInt) return typeof value === "bigint";
-    if (ctor === Symbol) return typeof value === "symbol";
-    if (ctor === Function) return typeof value === "function";
-    if (ctor === Object) return typeof value === "object" && value !== null;
+    if (ctor === String && typeof value === "string") return true;
+    if (ctor === Number && typeof value === "number") return true;
+    if (ctor === Boolean && typeof value === "boolean") return true;
+    if (ctor === BigInt && typeof value === "bigint") return true;
+    if (ctor === Symbol && typeof value === "symbol") return true;
+    if (ctor === Function && typeof value === "function") return true;
+    if (ctor === Object) return typeof value === "object";
     return isObjectLike(value) && value instanceof ctor;
   }
 
@@ -109,7 +126,7 @@
       return other !== null && other !== undefined;
     }
     describe() {
-      return "Anything";
+      return this.inverse ? "NotAnything" : "Anything";
     }
   }
 
@@ -124,20 +141,21 @@
 
   class StringMatchingMatcher extends AsymmetricMatcher {
     matches(other) {
-      if (typeof other !== "string") return false;
+      // A String object sample is accepted but, as in Bun, matches nothing.
+      if (typeof other !== "string" || !(typeof this.sample === "string" || this.sample instanceof RegExp)) return false;
       const re = typeof this.sample === "string" ? new RegExp(this.sample) : this.sample;
       re.lastIndex = 0;
       return re.test(other);
     }
     describe(format) {
-      return `${this.inverse ? "StringNotMatching" : "StringMatching"} ${format(this.sample)}`;
+      return `${this.inverse ? "StringNotMatching" : "StringMatching"} ${format(this.sample instanceof String ? String(this.sample) : this.sample)}`;
     }
   }
 
   class ObjectContainingMatcher extends AsymmetricMatcher {
     matches(other) {
       if (!isObjectLike(other)) return false;
-      return matcherSupport.every(Object.keys(this.sample), key => {
+      return matcherSupport.every(enumerableOwnKeys(this.sample), key => {
         if (!(key in Object(other))) return false;
         return equals(other[key], this.sample[key], false);
       });
@@ -145,6 +163,12 @@
     describe(format) {
       return `${this.inverse ? "ObjectNotContaining" : "ObjectContaining"} ${format(this.sample)}`;
     }
+  }
+
+  // objectContaining compares enumerable own symbol keys as well as string keys.
+  function enumerableOwnKeys(object) {
+    const symbols = Object.getOwnPropertySymbols(object).filter(key => Object.prototype.propertyIsEnumerable.call(object, key));
+    return Object.keys(object).concat(symbols);
   }
 
   class ArrayContainingMatcher extends AsymmetricMatcher {
@@ -162,12 +186,16 @@
       super(sample, inverse);
       this.precision = precision === undefined ? 2 : precision;
     }
-    matches(other) {
+    // A non-number never matches, even negated.
+    matchValue(other) {
       if (typeof other !== "number") return false;
+      return super.matchValue(other);
+    }
+    matches(other) {
       return closeTo(other, this.sample, this.precision).pass;
     }
     describe() {
-      return `NumberCloseTo ${this.sample} (${this.precision} digits)`;
+      return `${this.inverse ? "NumberNotCloseTo" : "NumberCloseTo"} ${this.sample} (${this.precision} digit${this.precision === 1 ? "" : "s"})`;
     }
   }
 
@@ -214,21 +242,28 @@
   }
 
   /** toMatchObject: every property of `expected` is present and matches in `received`. */
+  // Bun__deepMatch matches arrays exactly: the same length and the same number of enumerable
+  // keys (symbols included), then every key of the expected array.
+  function matchesArray(received, expected, seen) {
+    if (!Array.isArray(received) || received.length !== expected.length) return false;
+    const keys = enumerableOwnKeys(expected);
+    if (enumerableOwnKeys(received).length !== keys.length) return false;
+    return matcherSupport.every(keys, key => key in received && matchesObject(received[key], expected[key], seen));
+  }
+
   function matchesObject(received, expected, seen) {
     const asymmetric = compareAsymmetric(received, expected);
     if (asymmetric !== undefined) return asymmetric;
     if (!isObjectLike(expected) || !isObjectLike(received)) return equals(received, expected, false);
-    if (Array.isArray(expected)) {
-      if (!Array.isArray(received) || received.length !== expected.length) return false;
-      return matcherSupport.every(expected, (item, i) => matchesObject(received[i], item, seen));
-    }
+    if (Array.isArray(expected)) return matchesArray(received, expected, seen);
     if (!isPlainObject(expected) && !isPlainObject(received)) {
       if (expected instanceof Date || expected instanceof RegExp || expected instanceof Map || expected instanceof Set) {
         return equals(received, expected, false);
       }
     }
     const visited = seen || new Set();
-    return matcherSupport.ancestors(visited, expected, () => matcherSupport.every(Object.keys(expected), key => {
+    // Bun__deepMatch reads the expected object's enumerable symbol keys as well as its strings.
+    return matcherSupport.ancestors(visited, expected, () => matcherSupport.every(enumerableOwnKeys(expected), key => {
       if (!(key in received)) return false;
       return matchesObject(received[key], expected[key], visited);
     }));
@@ -279,7 +314,7 @@
   function prettyAsymmetric(matcher, indent, seen, snapshot) {
     // Bun prints arrayContaining through its generic object path.
     if (matcher instanceof ArrayContainingMatcher) return "ExpectArrayContaining {}";
-    return matcher.describe((sample) => prettyValue(sample, indent, seen, snapshot));
+    return matcher.label((sample) => prettyValue(sample, indent, seen, snapshot));
   }
 
   function prettyObject(value, indent, seen, snapshot) {
@@ -835,22 +870,105 @@
     return makeExpectation(value, { not: false, promise: undefined }, typeof label === "string" ? label : undefined, activeFile);
   }
 
-  expect.any = (ctor) => {
-    if (typeof ctor !== "function") throw new TypeError("any() expects to be passed a constructor function. Please pass one or use anything() to match any object.");
-    return new AnyMatcher(ctor);
-  };
-  expect.anything = () => new AnythingMatcher();
-  expect.stringContaining = (s) => new StringContainingMatcher(s);
-  expect.stringMatching = (re) => new StringMatchingMatcher(re);
-  expect.objectContaining = (obj) => new ObjectContainingMatcher(obj);
-  expect.arrayContaining = (arr) => new ArrayContainingMatcher(arr);
-  expect.closeTo = (n, precision) => new CloseToMatcher(n, precision);
-  expect.not = {
-    stringContaining: (s) => new StringContainingMatcher(s, true),
-    stringMatching: (re) => new StringMatchingMatcher(re, true),
-    objectContaining: (obj) => new ObjectContainingMatcher(obj, true),
-    arrayContaining: (arr) => new ArrayContainingMatcher(arr, true),
-  };
+  // expect, expect.not, expect.resolvesTo, expect.not.rejectsTo and so on each create
+  // asymmetric matchers with their own flags, like Bun's ExpectStatic. Factories validate
+  // their samples when called, with Bun's messages.
+  const STATIC_FLAGS = Symbol("expect static flags");
+  const statics = new Map();
+
+  function expectStatic(not, promise) {
+    const key = `${not}:${promise}`;
+    let value = statics.get(key);
+    if (!value) statics.set(key, value = new ExpectStatic(not, promise));
+    return value;
+  }
+
+  // Bun's isString also accepts String objects, derived ones included; they match by value.
+  function isStringSample(value) {
+    return typeof value === "string" || value instanceof String;
+  }
+
+  function factoryError(signature, problem) {
+    return new Error(`expect.${signature}\n\n${problem}`);
+  }
+
+  function isConstructor(value) {
+    try {
+      Reflect.construct(String, [], value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  class ExpectStatic {
+    constructor(not, promise) {
+      this[STATIC_FLAGS] = { not, promise };
+    }
+    get not() {
+      const { not, promise } = this[STATIC_FLAGS];
+      return expectStatic(!not, promise);
+    }
+    get resolvesTo() {
+      return settledStatic(this, "resolves");
+    }
+    get rejectsTo() {
+      return settledStatic(this, "rejects");
+    }
+    anything() {
+      return flagged(this, new AnythingMatcher());
+    }
+    any(...args) {
+      if (args.length === 0) throw new TypeError("any() expects to be passed a constructor function. Please pass one or use anything() to match any object.");
+      if (!isConstructor(args[0])) throw factoryError("any(constructor)", "Expected a constructor\n");
+      return flagged(this, new AnyMatcher(args[0]));
+    }
+    stringContaining(sample) {
+      if (!isStringSample(sample)) throw factoryError("stringContaining(string)", "Expected a string\n");
+      return flagged(this, new StringContainingMatcher(String(sample)));
+    }
+    stringMatching(sample) {
+      // Bun names stringContaining in this message too.
+      if (!isStringSample(sample) && !(sample instanceof RegExp)) throw factoryError("stringContaining(string)", "Expected a string or regular expression\n");
+      return flagged(this, new StringMatchingMatcher(sample));
+    }
+    objectContaining(sample) {
+      if (!isObjectLike(sample)) throw factoryError("objectContaining(object)", "Expected an object\n");
+      return flagged(this, new ObjectContainingMatcher(sample));
+    }
+    arrayContaining(sample) {
+      if (!Array.isArray(sample)) throw factoryError("arrayContaining(array)", "Expected a array\n");
+      return flagged(this, new ArrayContainingMatcher(sample));
+    }
+    closeTo(...args) {
+      if (typeof args[0] !== "number") throw factoryError("closeTo(number, precision?)", "Expected a number value");
+      if (args[1] !== undefined && typeof args[1] !== "number") throw factoryError("closeTo(number, precision?)", "Precision must be a number or undefined");
+      return flagged(this, new CloseToMatcher(args[0], args[1]));
+    }
+  }
+
+  const PROMISE_CHAINS = { resolves: "resolvesTo", rejects: "rejectsTo" };
+
+  function settledStatic(chain, promise) {
+    const flags = chain[STATIC_FLAGS];
+    if (flags.promise) throw new Error(`expect.${PROMISE_CHAINS[promise]}: already called expect.${PROMISE_CHAINS[flags.promise]} on this chain`);
+    return expectStatic(flags.not, promise);
+  }
+
+  function flagged(chain, matcher) {
+    const { not, promise } = chain[STATIC_FLAGS];
+    matcher.inverse = not;
+    matcher.promise = promise;
+    return matcher;
+  }
+
+  const rootStatic = expectStatic(false, undefined);
+  for (const name of ["anything", "any", "stringContaining", "stringMatching", "objectContaining", "arrayContaining", "closeTo"]) {
+    expect[name] = (...args) => rootStatic[name](...args);
+  }
+  for (const name of ["not", "resolvesTo", "rejectsTo"]) {
+    Object.defineProperty(expect, name, { get: () => rootStatic[name], configurable: true });
+  }
   expect.assertions = (count) => {
     if (currentTest) currentTest.assertions = { exact: count };
   };
@@ -873,8 +991,10 @@
       const result = matcher.call(matcherContext(ctx.not, ctx.promise), received, ...args);
       return extensions.result(name, result, ctx.not);
     });
-    expect[name] = (...args) => new CustomAsymmetricMatcher(name, matcher, args);
-    expect.not[name] = (...args) => new CustomAsymmetricMatcher(name, matcher, args, true);
+    ExpectStatic.prototype[name] = function (...args) {
+      return flagged(this, new CustomAsymmetricMatcher(name, matcher, args));
+    };
+    expect[name] = (...args) => rootStatic[name](...args);
   }
 
   // Whether a matcher with outcome `pass` fails once `.not` is applied.
@@ -948,7 +1068,18 @@
   defineValueMatcher("toBeOdd", matcherSupport.odd);
   defineValueMatcher("toBeDate", (v) => v instanceof Date);
   defineValueMatcher("toBeValidDate", (v) => v instanceof Date && !Number.isNaN(v.getTime()));
-  defineValueMatcher("toBeObject", (v) => typeof v === "object" && v !== null);
+  // Bun's isObject: functions and classes are objects too.
+  defineMatcher("toBeObject", "", (ctx, received) => {
+    if (!failed(ctx, isObjectLike(received))) return null;
+    return { body: `\n\nExpected value ${ctx.not ? "not " : ""}to be an object\n\nReceived: ${inspect(received)}\n` };
+  });
+  // Bun's is_object_empty: Map, Set (weak ones included), RegExp and Date are their own kinds,
+  // not empty objects.
+  defineValueMatcher("toBeEmptyObject", (v) => isObjectLike(v) && !isKeyedKind(v) && Object.keys(v).length === 0);
+
+  function isKeyedKind(value) {
+    return value instanceof Map || value instanceof Set || value instanceof WeakMap || value instanceof WeakSet || value instanceof RegExp || value instanceof Date;
+  }
   defineValueMatcher("toBeSymbol", (v) => typeof v === "symbol");
 
   // ── ordering ──
@@ -1000,12 +1131,14 @@
     return Array.from(value);
   }
 
-  function defineContainMatcher(name, test) {
+  // Bun's contain_matcher. `test` settles to a pass boolean, or to { pass, received } when the
+  // failure prints another value in place of the received one.
+  function defineContainMatcher(name, test, verb = "contain") {
     defineMatcher(name, "expected", (ctx, received, expected) => {
-      return matcherSupport.settle(test(received, expected), pass => {
-        if (!failed(ctx, pass)) return null;
-        if (ctx.not) return { body: `\n\nExpected to not contain: ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
-        return { body: `\n\nExpected to contain: ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
+      return matcherSupport.settle(test(received, expected), outcome => {
+        const shown = typeof outcome === "object" && outcome !== null ? outcome : { pass: outcome, received };
+        if (!failed(ctx, shown.pass)) return null;
+        return { body: `\n\nExpected to ${ctx.not ? "not " : ""}${verb}: ${inspect(expected)}\nReceived: ${inspect(shown.received)}\n` };
       });
     });
   }
@@ -1026,8 +1159,12 @@
     return Object.prototype.hasOwnProperty.call(received, key);
   });
 
+  function requireArray(expected, name) {
+    if (!Array.isArray(expected)) throw new TypeError(`Expected expected to be a array for '${name}'.`);
+  }
+
   function containsKeys(received, keys, any, name) {
-    if (!Array.isArray(keys)) throw new TypeError(`Expected expected to be a array for '${name}'.`);
+    requireArray(keys, name);
     if (!isObjectLike(received)) return !any && keys.length === 0;
     for (const key of keys) {
       const own = Object.prototype.hasOwnProperty.call(received, key);
@@ -1038,6 +1175,48 @@
 
   defineContainMatcher("toContainKeys", (received, keys) => containsKeys(received, keys, false, "toContainKeys"));
   defineContainMatcher("toContainAnyKeys", (received, keys) => containsKeys(received, keys, true, "toContainAnyKeys"));
+
+  // The object matchers below follow Bun's expect/toContain*.rs: own enumerable string keys or
+  // Object.values, each entry compared with toEqual's equality.
+  function containsEvery(values, expected) {
+    return matcherSupport.every(expected, item => matcherSupport.some(values, value => equals(value, item, false)));
+  }
+
+  defineContainMatcher("toContainAllKeys", (received, expected) => {
+    requireArray(expected, "toContainAllKeys");
+    // Object.keys throws for null and undefined, as Bun's toObject does.
+    const keys = Object.keys(received);
+    if (keys.length !== expected.length) return { pass: false, received: keys };
+    const pass = matcherSupport.every(keys, key => matcherSupport.some(expected, item => equals(key, item, false)));
+    return matcherSupport.settle(pass, matched => ({ pass: matched, received: keys }));
+  }, "contain all keys");
+
+  defineContainMatcher("toContainValue", (received, expected) => {
+    if (received === null || received === undefined) return false;
+    return matcherSupport.some(Object.values(received), value => equals(value, expected, false));
+  });
+
+  defineContainMatcher("toContainValues", (received, expected) => {
+    requireArray(expected, "toContainValues");
+    if (received === null || received === undefined) return true;
+    return containsEvery(Object.values(received), expected);
+  });
+
+  defineContainMatcher("toContainAllValues", (received, expected) => {
+    requireArray(expected, "toContainAllValues");
+    if (received === null || received === undefined) return false;
+    const values = Object.values(received);
+    // Bun requires equal counts and at least one value: an empty expectation never passes.
+    if (values.length !== expected.length || expected.length === 0) return false;
+    return containsEvery(values, expected);
+  }, "contain all values");
+
+  defineContainMatcher("toContainAnyValues", (received, expected) => {
+    requireArray(expected, "toContainAnyValues");
+    if (received === null || received === undefined) return false;
+    const values = Object.values(received);
+    return matcherSupport.some(expected, item => matcherSupport.some(values, value => equals(value, item, false)));
+  }, "contain any of the following values");
 
   defineMatcher("toIncludeRepeated", "expected", (ctx, received, ...args) => {
     if (args.length < 2) throw new TypeError("toIncludeRepeated() requires 2 arguments");
@@ -1080,28 +1259,76 @@
     });
   });
 
-  function propertyPath(path) {
-    if (Array.isArray(path)) return path;
-    return String(path)
-      .replace(/\[(\w+)\]/g, ".$1")
-      .split(".")
-      .filter((part) => part !== "");
+  const MISSING = { found: false };
+
+  // One step of Bun's path lookup: the value converts to an object (null and undefined throw,
+  // as JSC's toObject does) and the key may be inherited.
+  function lookupKey(value, key) {
+    if (value === null || value === undefined) throw new TypeError(`${value} is not an object`);
+    const object = Object(value);
+    return key in object ? { found: true, value: object[key] } : MISSING;
   }
 
+  function isPathSeparator(char) {
+    return char === "[" || char === "]" || char === ".";
+  }
+
+  // Bun's getIfPropertyExistsFromPath (bindings.cpp). As in Jest, brackets are skipped, and a
+  // "." at the start or end of the path, or doubled, looks up the empty-string key. An array
+  // path names each key: strings and numbers only.
   function lookupPath(object, path) {
-    let value = object;
-    for (const key of propertyPath(path)) {
-      if (value === null || value === undefined || !(key in Object(value))) return { found: false };
-      value = value[key];
+    if (Array.isArray(path)) return lookupKeys(object, path);
+    const text = String(path);
+    if (text === "") return lookupKey(object, "");
+    let current = { found: true, value: object };
+    if (text[0] === ".") current = lookupKey(object, "");
+    let start = 0;
+    let named = false;
+    while (current.found && start < text.length) {
+      const skipped = skipSeparators(text, start, current.value, named);
+      if (skipped.done) return skipped.result;
+      let end = skipped.next;
+      while (end < text.length && !isPathSeparator(text[end])) end++;
+      current = lookupKey(skipped.current.value, text.slice(skipped.next, end));
+      named = true;
+      start = end;
     }
-    return { found: true, value };
+    return current;
+  }
+
+  // Skips a run of separators from `start`. Two dots in a row look up the empty-string key;
+  // a path that ends in separators ends the lookup, with the empty-string key after a final ".".
+  function skipSeparators(text, start, value, named) {
+    let index = start;
+    let current = { found: true, value };
+    while (isPathSeparator(text[index])) {
+      const char = text[index++];
+      if (index === text.length) {
+        if (char === ".") return { done: true, result: lookupKey(current.value, "") };
+        return { done: true, result: named ? current : MISSING };
+      }
+      if (char === "." && text[index] === ".") current = lookupKey(current.value, "");
+      if (!current.found) return { done: true, result: current };
+    }
+    return { done: false, current, next: index };
+  }
+
+  function lookupKeys(object, keys) {
+    let current = { found: true, value: object };
+    for (const key of keys) {
+      if (typeof key !== "string" && typeof key !== "number") return MISSING;
+      current = lookupKey(current.value, String(key));
+      if (!current.found) return current;
+    }
+    return current;
   }
 
   defineMatcher("toHaveProperty", "path", (ctx, received, path, ...rest) => {
     const hasValue = rest.length > 0;
     const expectedValue = rest[0];
     const params = hasValue ? "path, value" : "path";
-    const lookup = lookupPath(received, path);
+    if (typeof path !== "string" && !Array.isArray(path)) throw new Error("Expected path must be a string or an array");
+    const lookup = received === null || received === undefined ? MISSING : lookupPath(received, path);
     const pass = lookup.found && (!hasValue || equals(lookup.value, expectedValue, false));
     return matcherSupport.settle(pass, matched => {
       if (!failed(ctx, matched)) return null;
@@ -1856,10 +2083,31 @@
     scope.children.push(test);
   }
 
-  function registerDescribe(modifiers, name, fn) {
+  // Bun's ScopeFunctions.rs parse_arguments: a sole function is the callback, a function
+  // followed by a non-function is the callback and its options, and otherwise the first
+  // argument is the description and a function second or third is the callback.
+  function describeArguments([first, second, third]) {
+    const present = (value) => value !== undefined && value !== null;
+    if (present(third)) return { description: first, callback: typeof second === "function" ? second : third };
+    if (present(second)) return typeof first === "function" && typeof second !== "function" ? { callback: first } : { description: first, callback: second };
+    if (present(first)) return typeof first === "function" ? { callback: first } : { description: first };
+    return {};
+  }
+
+  // Bun's get_description: a class's name (empty for an anonymous class), a named function's
+  // name, or a number or string. Anything else, such as an anonymous arrow function, throws.
+  function describeLabel(description) {
+    if (description === undefined || description === null) return "";
+    if (typeof description === "function" && (description.name || /^class\b/.test(Function.prototype.toString.call(description)))) return description.name;
+    if (typeof description === "number" || typeof description === "string") return String(description);
+    throw new Error("describe() expects first argument to be a named class, named function, number, or string");
+  }
+
+  function registerDescribe(modifiers, ...args) {
     guardRegistration("describe");
     const parent = currentScope("describe");
-    const label = typeof name === "function" ? name.name : String(name);
+    const { description, callback: fn } = describeArguments(args);
+    const label = describeLabel(description);
     const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
     if (scope.only) collecting.hasOnly = true;
     parent.children.push(scope);
@@ -1906,9 +2154,13 @@
   function formatVariable(rest, row) {
     const match = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$\d][\w$]*)*/.exec(rest);
     if (!match) return null;
-    const lookup = lookupPath(row, match[0]);
-    if (!lookup.found || lookup.value === undefined || lookup.value === null) return null;
-    const text = typeof lookup.value === "string" ? lookup.value : inspect(lookup.value);
+    let value = row;
+    for (const key of match[0].split(".")) {
+      if (value === null || value === undefined || !(key in Object(value))) return null;
+      value = value[key];
+    }
+    if (value === undefined || value === null) return null;
+    const text = typeof value === "string" ? value : inspect(value);
     return { text, length: match[0].length };
   }
 
@@ -1957,7 +2209,7 @@
   }
 
   function makeDescribe(modifiers) {
-    const fn = (name, callback) => registerDescribe(modifiers, name, callback);
+    const fn = (...args) => registerDescribe(modifiers, ...args);
     fn.concurrent = fn;
     fn.serial = fn;
     fn.each = (table) => (name, callback) => {

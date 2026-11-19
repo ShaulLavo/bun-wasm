@@ -27,7 +27,9 @@ export const firstVisit = async (_context: unknown, url: string) => ({ url, clos
 export const ready = async () => {};
 export const writeFile = async () => {};
 function fakeContext() {
-  return { close: resource("context"), newPage: async () => ({ goto: async () => {} }) };
+  // navigateTestPage reads the engine; these runs drive Chromium, so it uses plain goto.
+  const context = { browser: () => ({ browserType: () => ({ name: () => "chromium" }) }) };
+  return { close: resource("context"), newPage: async () => ({ goto: async () => {}, context: () => context }) };
 }
 function fakeBrowser() {
   return { close: resource("browser"), newContext: async () => fakeContext() };

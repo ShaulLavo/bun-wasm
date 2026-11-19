@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import type { Browser, Page } from "playwright";
 import { runForeground } from "./foreground";
 
@@ -8,7 +9,7 @@ export async function bunRuntimeProcSmoke(browser: Browser, origin: string) {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   try {
-    await page.goto(`${origin}/site/playground/?engine=browser&wasm=/bun-browser.wasm`);
+    await navigateTestPage(page, `${origin}/site/playground/?engine=browser&wasm=/bun-browser.wasm`);
     await page.waitForFunction(() => Reflect.get(globalThis, "playground") && /ready/.test(document.querySelector("#status")?.textContent ?? ""), undefined, { timeout: 120_000 });
     const result = await runForeground(page, `bun -e "const p=Bun.spawn(['bun','-e','console.log(73)'],{stdout:'inherit',stderr:'inherit'});if(await p.exited!==0)throw Error('site child failed')"`, 60_000);
     assert.equal(result.code, 0, "production playground nested Bun process");
@@ -19,7 +20,7 @@ export async function bunRuntimeProcSmoke(browser: Browser, origin: string) {
       return Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? "").join("\n");
     });
     assert.match(terminal, /(?:^|\n)73(?:\r?\n|$)/);
-    await page.goto(`${origin}/site/?engine=browser&template=vanilla&wasm=/bun-browser.wasm`);
+    await navigateTestPage(page, `${origin}/site/?engine=browser&template=vanilla&wasm=/bun-browser.wasm`);
     const app = page.frameLocator("#preview");
     await app.locator("h1", { hasText: "Hello from vanilla TypeScript" }).waitFor({ timeout: 180_000 });
     const counter = app.locator("button.counter");

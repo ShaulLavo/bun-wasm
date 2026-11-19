@@ -3,6 +3,7 @@ import * as host from "node:fs";
 import * as path from "node:path";
 import { Buffer } from "node:buffer";
 import { runInNewContext } from "node:vm";
+import { inspect } from "node:util";
 import { execFileSync } from "node:child_process";
 import { checkFsOptions, checkBigintStats, checkCopyOptions, checkCopyTypeErrors } from "../tests/fixtures/fs-options/index";
 
@@ -54,6 +55,7 @@ function fixture() {
       if (name === "path") return path;
       if (name === "fs_watch") return () => ({});
       if (name === "fs_options") return helpers;
+      if (name === "inspect") return { nodeInspect: inspect };
       throw new Error(`Unexpected dependency ${name}`);
     },
     realTimers: { setImmediate },

@@ -13,6 +13,7 @@ import { engineMemoryLog, readEngineMemory, decodeMemoryObservation } from "./go
 import { memoryControlCommand, memoryControlBoundary, assertMemoryControl } from "./goals-matrix/memory-control";
 import { evaluatePage, type Transport } from "./goals-matrix/transport";
 import { withScoped } from "./goals-matrix/scope-fixture";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 const root = resolve(import.meta.dir, "..");
 const pairFiles = ["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"];
@@ -66,7 +67,7 @@ for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").spl
 }
 
 function pageTransport(page: Page): Transport {
-  return { capabilities: { realPage: true }, async navigate(url) { await page.goto(url); },
+  return { capabilities: { realPage: true }, async navigate(url) { await navigateTestPage(page, url); },
     evaluate: <T>(expression: string, admission: Parameters<Transport["evaluate"]>[1], options?: Parameters<Transport["evaluate"]>[2]) => evaluatePage<T>(page, expression, 120000, admission, options),
     async useHost() {}, async usePreview() {}, async openPreview() {}, async closePreview() {}, async close() { await page.close(); } };
 }

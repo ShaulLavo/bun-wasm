@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -54,7 +55,7 @@ try {
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     page.on("response", response => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}: ${response.url()}`); });
-    await page.goto(`http://127.0.0.1:${port}`);
+    await navigateTestPage(page, `http://127.0.0.1:${port}`);
     await page.waitForFunction(() => Reflect.get(globalThis, "wasmTransferResult"), undefined, { timeout: 90_000 });
     const result = await page.evaluate(() => Reflect.get(globalThis, "wasmTransferResult"));
     console.log(JSON.stringify({ browser: name, version: browser.version(), result, errors }));

@@ -1,0 +1,53 @@
+bun test vVERSION
+0 ".": no match
+1 "]": no match
+2 "[": no match
+3 "[]": no match
+4 "[[]]": no match
+5 ".]": no match
+6 ".[": no match
+7 "[.": match
+8 "[.": no match
+9 "].": no match
+10 "[0]": match
+11 "[0][": match
+12 "[0]]": match
+13 "[][[[0]": match
+14 "[][[[]][[][][.0": match
+15 "......1.............": no match
+16 "......0.............": no match
+17 ".0": no match
+18 "0.": no match
+19 "0.": match
+20 ".": match
+21 "..": match
+22 ".": no match
+23 "...": no match
+24 "0.[[[][][]][[[][[]]]]": match
+25 "[0].": no match
+26 "0": match
+27 "[].0": match
+28 "].0": match
+29 "0.[": match
+30 "0........[": no match
+31 "0..[": no match
+32 "[]..0": no match
+33 "[.][.[[.]]]]].[.[].].]]]]].].].0": match
+34 "[.][.[[.]]]]].[.[].].]]0]]].].].": no match
+35 "0      ": no match
+36 " .[0]": no match
+37 ".": no match
+38 "]": no match
+39 "": match
+40 "a.b": match
+41 "a[b]": match
+42 "a.length": match
+43 "a": match
+44 "a.b": TypeError
+45 "a.b": TypeError
+match
+match
+no match
+Expected path must be a string or an array
+no match
+match

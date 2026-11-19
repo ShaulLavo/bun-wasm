@@ -1,0 +1,28 @@
+arch function true false function arch true
+availableParallelism function true false function availableParallelism true
+endianness function true false function endianness true
+freemem function true false function freemem true
+homedir function true false function homedir true
+hostname function true false function hostname true
+platform function true false function platform true
+release function true false function release true
+tmpdir function true false function tmpdir true
+totalmem function true false function totalmem true
+type function true false function type true
+uptime function true false function uptime true
+version function true false function version true
+machine function true false function machine true
+equal arch true true
+equal endianness true true
+equal homedir true true
+equal hostname true true
+equal platform true true
+equal release true true
+equal tmpdir true true
+equal type true true
+equal version true true
+equal machine true true
+equal availableParallelism true true
+equal totalmem true true
+numeric number true
+non-value exports stay plain undefined

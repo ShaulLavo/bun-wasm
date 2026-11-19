@@ -362,6 +362,12 @@ impl Engine for QuickJs {
         "quickjs"
     }
 
+    fn version(&self) -> (&'static str, &'static str) {
+        // SAFETY: QuickJS-NG returns a pointer to its static, NUL-terminated version string.
+        let version = unsafe { std::ffi::CStr::from_ptr(qjs::JS_GetVersion()) };
+        ("quickjs", version.to_str().unwrap_or("unknown"))
+    }
+
     fn undefined(&self) -> V {
         Value::new_undefined(self.ctx().clone())
     }

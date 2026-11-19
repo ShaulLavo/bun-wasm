@@ -1,0 +1,4 @@
+function function function true
+ENOENT statfs missing-dir/inner ENOENT: no such file or directory, statfs 'missing-dir/inner'
+ENOENT statfs missing-dir ENOENT: no such file or directory, statfs 'missing-dir'
+ENOENT statfs missing-dir ENOENT: no such file or directory, statfs 'missing-dir'

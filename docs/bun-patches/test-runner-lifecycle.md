@@ -32,9 +32,17 @@ types are both validated before checking their mutual exclusion.
 The timeout accessor is read once before the retry/repeats accessors, preserving
 native error precedence and mutations that alter the requested repeat count.
 
-Callable describe and new label validation are deferred. The existing describe
-registration function is unchanged from the original base. This adapter does not
-claim async describe completion or recover the two upstream callable cases.
+`describe` arguments follow `parse_arguments` and `get_description` in Bun's
+`ScopeFunctions.rs`. A sole function, named or not, is the callback and adds no
+name. A function followed by a non-function is the callback and its options.
+Otherwise the first argument names the block: a class's name (empty for an
+anonymous class), a named function's name, a number or a string. Any other
+description, such as an anonymous arrow function, throws
+`describe() expects first argument to be a named class, named function, number,
+or string` during collection, which the runner reports like any other
+collection error. The `test-describe-arguments` and
+`test-describe-argument-error` fixtures cover these. This adapter still does not
+claim async describe completion.
 
 Concurrency remains serial. Concurrent scheduling needs separate asynchronous
 test and invocation ownership before overlapping tests can safely share this

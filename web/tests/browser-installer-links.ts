@@ -2,6 +2,7 @@ import { browserType } from "./browser-type.ts";
 import assert from "node:assert/strict";
 import { createRegistry, packageFixture, tarEntry } from "../../tests/install/registry.mjs";
 import { ready, run, session, writeFile } from "./playground.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const task = session("bun-wasm-installer-links-");
 let registry: Awaited<ReturnType<typeof createRegistry>> | undefined;
@@ -25,7 +26,7 @@ async function check(browserName: string, engine: string, url: string) {
     return result.output;
   }
   try {
-    await page.goto(`${url}?engine=${engine}&prompt=off`);
+    await navigateTestPage(page, `${url}?engine=${engine}&prompt=off`);
     assert.match(await ready(page), /ready/);
     await writeFile(page, "/home/user/package.json", JSON.stringify({ name: "page-bin-fixture", scripts: { dev: 'fixture-tool "two words"', explicit: "./fixture-tool.ts", runtime: "bun fixture-tool" } }));
     await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry!.base)}\n`);

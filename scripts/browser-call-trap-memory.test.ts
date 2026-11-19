@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { execute } from "./goals-matrix/execute.ts";
 import { frameworks } from "./goals-matrix/catalog.ts";
 import type { Transport } from "./goals-matrix/transport.ts";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 async function control(engine: BrowserType, ownedCleanup: boolean, imported: boolean): Promise<void> {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-browser-trap-"));
@@ -26,7 +27,7 @@ async function control(engine: BrowserType, ownedCleanup: boolean, imported: boo
     let savedBeforeClose = 0;
     const transport: Transport = {
       capabilities: { browserName: engine.name(), transport: "real-wasm-worker-control" },
-      async navigate(url) { await page.goto(url); await page.waitForFunction(() => Reflect.get(globalThis, "__browserTrapControlReady") === true); },
+      async navigate(url) { await navigateTestPage(page, url); await page.waitForFunction(() => Reflect.get(globalThis, "__browserTrapControlReady") === true); },
       evaluate: expression => page.evaluate(expression),
       async useHost() {}, async usePreview() {}, async openPreview() {}, async closePreview() {},
       async close() { await page.close(); },

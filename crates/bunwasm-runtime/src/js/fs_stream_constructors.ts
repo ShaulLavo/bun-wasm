@@ -35,6 +35,7 @@
     once(event: string, listener: () => void): unknown;
     push(chunk: Uint8Array | null): unknown;
     destroy(error?: unknown): unknown;
+    destroyed: boolean;
     _read(size: number): void;
     close(callback?: () => void): void;
   }
@@ -83,7 +84,10 @@
     validateFd(fd: unknown): void;
     readRange(name: string, value: unknown): Error;
     invalidArg(name: string, expected: string, value: unknown): Error;
+    isEncoding(encoding: string): boolean;
+    inspect(value: unknown): string;
     loadStreams(): StreamModule;
+    later(callback: () => void): void;
   }
 
   return function createFileStreams(deps: Dependencies) {
@@ -98,11 +102,18 @@
       return fileStreams;
     }
 
+    // Node's assertEncoding for stream options; "buffer" and a missing encoding are fine.
+    function checkedEncoding(options: Options): Options {
+      const { encoding } = options;
+      if (encoding == null || encoding === "buffer" || deps.isEncoding(encoding)) return options;
+      throw Object.assign(new TypeError(`The argument 'encoding' is invalid encoding. Received ${deps.inspect(encoding)}`), { code: "ERR_INVALID_ARG_VALUE" });
+    }
+
     function fileStreamOptions(options: string | Options | null | undefined): Options {
-      if (typeof options === "string") return { encoding: options };
+      if (typeof options === "string") return checkedEncoding({ encoding: options });
       if (options == null) return {};
       if (typeof options !== "object") throw invalidArg("options", "an object or string", options);
-      return options;
+      return checkedEncoding(options);
     }
 
     function fileStreamPosition(name: string, value: number) {
@@ -188,7 +199,11 @@
       const count = chunk.length;
       this.bytesRead += count;
       if (this.pos !== undefined) this.pos += count;
-      this.push(count === 0 ? null : chunk);
+      // Deliver like fs.read's callback, on a later turn. A synchronous push(null) right
+      // after a short read lands while the previous 'readable' is still being emitted,
+      // which drops the end-of-file 'readable' Node and Bun emit.
+      const result = count === 0 ? null : chunk;
+      deps.later(() => { if (!this.destroyed) this.push(result); });
     };
 
     function writeFileStreamStep(stream: WriteFileStream, chunk: Uint8Array, offset: number) {

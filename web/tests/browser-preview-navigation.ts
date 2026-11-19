@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -41,7 +42,7 @@ try {
     const page = await context.newPage();
     page.on("console", message => { if (message.type() === "error") console.error(type.name(), message.text()); });
     page.on("pageerror", error => console.error(type.name(), error.message));
-    await page.goto(server.url.href + "nested/app/");
+    await navigateTestPage(page, server.url.href + "nested/app/");
     assert.equal(await page.evaluate(() => Reflect.get(globalThis, "navigationFixture").ready), "ready");
     for (const status of [201, 404]) {
       const target = `/slow-${status}`;
@@ -81,7 +82,7 @@ try {
     await page.evaluate(() => Reflect.get(globalThis, "navigationFixture").answer("/abandoned", 200, "Closed preview body"));
     const probe = await context.newPage();
     let state: number | undefined;
-    do { state = (await probe.goto(loadingURL + "/status"))?.status(); } while (state === 403);
+    do { state = (await navigateTestPage(probe, loadingURL + "/status"))?.status(); } while (state === 403);
     assert.equal(state, 410);
     await probe.close();
     assert.equal(await page.evaluate(() => Reflect.get(globalThis, "navigationFixture").count("/abandoned")), 1);

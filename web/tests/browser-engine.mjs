@@ -10,6 +10,7 @@ import { playwright, ready, run, session, terminalText, writeFile } from "./play
 import { readFileSync, readdirSync } from "node:fs";
 import { stopForeground } from "./foreground.ts";
 import { checkPlaygroundStdin } from "./playground-stdin.ts";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const { chromium, webkit, devices } = playwright;
 const s = session("bun-wasm-web-engine-");
@@ -49,7 +50,7 @@ async function checkPage(name, page, visit, fixtureBase) {
   const errors = [];
   // WebKit reports the deliberate CORS failure (/nocors) as a page error as well as rejecting.
   page.on("pageerror", (e) => /\/nocors due to access control checks/.test(String(e)) || errors.push(String(e)));
-  await page.goto(visit.url);
+  await navigateTestPage(page, visit.url);
   const status = await ready(page);
   check(`${name}: status names the engine`, status.startsWith(`bun.wasm ready · ${engineName} ·`), status);
   check(`${name}: dropdown shows the engine`, (await page.inputValue("#engine")) === engine);

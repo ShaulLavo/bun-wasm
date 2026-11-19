@@ -40,8 +40,14 @@ try {
   const end = bootstrap.indexOf("  internal.runInContext = runInContext;", start);
   if (start < 0 || end < 0) throw Error("Missing production context runner");
   const fixture = stripTypeScriptTypes(source("scripts/fixtures/quickjs-async-context.ts"));
+  const asyncLocalStorage = stripTypeScriptTypes(source("crates/bunwasm-runtime/src/js/async_local_storage.ts"));
   const script = `const native = { getAsyncContext: nativeGet, setAsyncContext: nativeSet };
-    const internal = { native, builtinFactories: {}, require: name => { if (name === 'dns') return {}; throw Error(name); } };
+    const asyncLocalStorage = ${asyncLocalStorage}
+    const internal = { native, builtinFactories: {}, require: name => {
+      if (name === 'dns') return {};
+      if (name === 'async_local_storage') return asyncLocalStorage(internal);
+      throw Error(name);
+    } };
     ${bootstrap.slice(start, end)}
     internal.runInContext = runInContext;
     (${source("crates/bunwasm-runtime/src/js/builtins.js")})(internal);

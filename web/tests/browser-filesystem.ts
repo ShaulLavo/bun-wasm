@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { chromium, firefox, webkit, type Browser } from "playwright";
 import { buildBrowserEntries } from "../../scripts/browser-build";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 let scratch: string | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -42,7 +43,7 @@ try {
     const page = await browser.newPage();
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await navigateTestPage(page, `http://127.0.0.1:${server.port}/`);
     await page.waitForFunction(() => (globalThis as any).filesystemResult, undefined, { timeout: 60_000 });
     const result = await page.evaluate(() => (globalThis as any).filesystemResult);
     assert.deepEqual(result, { ok: true, checks: 9 });

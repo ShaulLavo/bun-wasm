@@ -86,7 +86,8 @@
 
   // --- URLSearchParams / URL --------------------------------------------------
 
-  const { toUSVString, initFromObject, convertMethodArgs } = internal.require("url_search_params");
+  const { toUSVString, initFromObject, convertMethodArgs, inspectParams, urlContext } = internal.require("url_search_params");
+  const removeQueryPairs = internal.require("url_pairs");
 
   // application/x-www-form-urlencoded byte serializer.
   function formEncode(str) {
@@ -136,21 +137,24 @@
       params.#url = url;
     }
     static _reset(params, search) {
-      params.#list = parseQuery(search.startsWith("?") ? search.slice(1) : search);
+      const list = parseQuery(search.startsWith("?") ? search.slice(1) : search);
+      params.#list.length = 0;
+      for (const pair of list) params.#list.push(pair);
     }
     #update() {
-      if (this.#url) internal.urlSetSearchFromParams(this.#url, this.toString());
+      if (this.#url) internal.urlSetSearchFromParams(this.#url);
     }
     get size() {
       return this.#list.length;
     }
     append(name, value) {
-      this.#list.push([toUSVString(name), toUSVString(value)]);
+      const [n, val] = convertMethodArgs(() => this.#list, name, value, true);
+      this.#list.push([n, val]);
       this.#update();
     }
     delete(name, value) {
       const [n, val] = convertMethodArgs(() => this.#list, name, value);
-      this.#list = this.#list.filter(([k, v]) => k !== n || (val !== undefined && v !== val));
+      removeQueryPairs(this.#list, n, val);
       this.#update();
     }
     get(name) {
@@ -173,7 +177,7 @@
         this.#list.push([n, val]);
       } else {
         this.#list[i][1] = val;
-        this.#list = this.#list.filter(([k], j) => k !== n || j <= i);
+        removeQueryPairs(this.#list, n, undefined, i + 1);
       }
       this.#update();
     }
@@ -203,12 +207,18 @@
     get [Symbol.toStringTag]() {
       return "URLSearchParams";
     }
+    [Symbol.for("nodejs.util.inspect.custom")](depth, options, inspect) {
+      const fn = typeof inspect === "function" ? inspect : internal.require("inspect").nodeInspect;
+      return inspectParams(this.constructor?.name || "URLSearchParams", this.#list, depth ?? null, options, fn);
+    }
   }
 
   // Component array, or undefined when the input doesn't parse.
+  const stringifyParams = URLSearchParams.prototype.toString;
+  const urlErrors = internal.require("url_errors");
   function parseUrl(input, base) {
-    if (base === undefined) return native.urlParse(String(input));
-    return native.urlParse(String(input), String(base));
+    if (base === undefined) return native.urlParse(urlErrors.toString(input));
+    return native.urlParse(urlErrors.toString(input), urlErrors.toString(base));
   }
 
   const URL_FIELDS = ["href", "protocol", "username", "password", "hostname", "port", "pathname", "search", "hash", "origin"];
@@ -216,100 +226,129 @@
   class URL {
     #parts;
     #searchParams = null;
+    #searchDirty = false;
     constructor(input, base) {
-      if (arguments.length === 0) throw new TypeError("URL constructor requires at least 1 argument");
+      if (arguments.length === 0) throw urlErrors.missingArguments();
+      input = urlErrors.toString(input);
+      if (base !== undefined) base = urlErrors.toString(base);
       const parts = parseUrl(input, base);
-      if (!parts) {
-        const err = new TypeError(`"${input}" cannot be parsed as a URL.`);
-        err.code = "ERR_INVALID_URL";
-        err.input = String(input);
-        throw err;
-      }
+      if (!parts) throw urlErrors.invalidURL(input, base);
       this.#parts = parts;
     }
-    static canParse(input, base) {
+    static canParse(input, base = undefined) {
+      if (arguments.length === 0) throw urlErrors.missingArguments();
       return parseUrl(input, base) != null;
     }
-    static parse(input, base) {
+    static parse(input, base = undefined) {
+      if (arguments.length === 0) throw urlErrors.missingArguments();
+      input = urlErrors.toString(input);
+      if (base !== undefined) base = urlErrors.toString(base);
       try {
         return new URL(input, base);
       } catch {
         return null;
       }
     }
-    static _setSearch(url, query) {
-      url.#set("search", query);
+    static _setSearch(url) {
+      url.#searchDirty = true;
     }
-    #set(field, value) {
-      const parts = native.urlSet(this.#parts[0], field, String(value));
+    #syncSearch() {
+      if (!this.#searchDirty) return;
+      const parts = native.urlSet(this.#parts[0], "search", stringifyParams.call(this.#searchParams));
       if (!parts) return;
       this.#parts = parts;
-      if (this.#searchParams && field !== "search-from-params") URLSearchParams._reset(this.#searchParams, this.#parts[7]);
+      this.#searchDirty = false;
+    }
+    #set(field, value) {
+      value = urlErrors.toString(value);
+      if (field !== "search") this.#syncSearch();
+      const parts = native.urlSet(this.#parts[0], field, value);
+      if (!parts) return;
+      this.#parts = parts;
+      this.#searchDirty = false;
+      if (this.#searchParams && field === "search") URLSearchParams._reset(this.#searchParams, this.#parts[7]);
     }
     get href() {
+      this.#syncSearch();
       return this.#parts[0];
     }
     set href(value) {
-      const parts = native.urlParse(String(value));
-      if (!parts) throw new TypeError(`"${value}" cannot be parsed as a URL.`);
+      value = urlErrors.toString(value);
+      const parts = native.urlParse(value);
+      if (!parts) throw urlErrors.invalidURL(value);
       this.#parts = parts;
+      this.#searchDirty = false;
       if (this.#searchParams) URLSearchParams._reset(this.#searchParams, this.#parts[7]);
     }
     get protocol() {
+      this.#syncSearch();
       return this.#parts[1];
     }
     set protocol(v) {
       this.#set("protocol", v);
     }
     get username() {
+      this.#syncSearch();
       return this.#parts[2];
     }
     set username(v) {
       this.#set("username", v);
     }
     get password() {
+      this.#syncSearch();
       return this.#parts[3];
     }
     set password(v) {
       this.#set("password", v);
     }
     get host() {
+      this.#syncSearch();
       return this.#parts[5] ? `${this.#parts[4]}:${this.#parts[5]}` : this.#parts[4];
     }
     set host(v) {
       this.#set("host", v);
     }
     get hostname() {
+      this.#syncSearch();
       return this.#parts[4];
     }
     set hostname(v) {
       this.#set("hostname", v);
     }
     get port() {
+      this.#syncSearch();
       return this.#parts[5];
     }
     set port(v) {
       this.#set("port", v);
     }
     get pathname() {
+      this.#syncSearch();
       return this.#parts[6];
     }
     set pathname(v) {
       this.#set("pathname", v);
     }
     get search() {
+      this.#syncSearch();
       return this.#parts[7];
     }
     set search(v) {
       this.#set("search", v);
     }
     get hash() {
+      this.#syncSearch();
       return this.#parts[8];
     }
     set hash(v) {
       this.#set("hash", v);
     }
     get origin() {
+      this.#syncSearch();
+      if (this.#parts[1] === "blob:") {
+        const inner = native.urlParse(this.#parts[6]);
+        if (inner && inner[1] === "file:") return "file://" + inner[4];
+      }
       return this.#parts[9];
     }
     get searchParams() {
@@ -333,15 +372,15 @@
       for (const field of ["href", "origin", "protocol", "username", "password", "host", "hostname", "port", "pathname", "search", "searchParams", "hash"]) {
         view[field] = this[field];
       }
+      if (options?.showHidden) view[Symbol("context")] = urlContext(this);
       const fn = typeof inspect === "function" ? inspect : internal.require("inspect").bunInspect;
       return "URL " + fn(view, options);
     }
   }
   void URL_FIELDS;
 
-  internal.urlSetSearchFromParams = function (url, query) {
-    const parts = native.urlSet(url.href, "search", query);
-    if (parts) URL._setSearch(url, query);
+  internal.urlSetSearchFromParams = function (url) {
+    URL._setSearch(url);
   };
 
   // --- events -----------------------------------------------------------------
@@ -653,7 +692,7 @@
       abortSignal = (signal, reason) => {
         if (signal.#aborted) return;
         signal.#aborted = true;
-        signal.#reason = reason === undefined ? new DOMException("This operation was aborted", "AbortError") : reason;
+        signal.#reason = reason === undefined ? new DOMException("The operation was aborted.", "AbortError") : reason;
         const algorithms = Array.from(signal.#algorithms);
         signal.#algorithms.clear();
         runAbortAlgorithms(algorithms);
@@ -790,27 +829,41 @@
     return native.utf8Encode(String(part));
   }
 
-  // Bun adds the charset to text types: "text/plain" -> "text/plain;charset=utf-8".
+  // Bun's MimeType.rs by_name_static: an exact, case-sensitive match of a few known
+  // types gives Bun's canonical value; any other type is only lowercased.
+  const canonicalBlobTypes = new Map([
+    ["text/plain", "text/plain;charset=utf-8"], ["text/html", "text/html;charset=utf-8"], ["text/css", "text/css;charset=utf-8"],
+    ["text/javascript", "text/javascript;charset=utf-8"], ["text/jsx", "text/javascript;charset=utf-8"],
+    ["application/javascript", "text/javascript;charset=utf-8"], ["application/json", "application/json;charset=utf-8"],
+    ["application/x-www-form-urlencoded", "application/x-www-form-urlencoded;charset=UTF-8"], ["application/webassembly", "application/wasm"],
+  ]);
   function normalizeBlobType(type) {
     if (!type) return "";
-    const lower = String(type).toLowerCase();
-    if (lower.startsWith("text/") && !lower.includes("charset")) return lower + ";charset=utf-8";
-    return lower;
+    const given = String(type);
+    return canonicalBlobTypes.get(given) ?? given.toLowerCase();
   }
 
   class Blob {
     #bytes;
     #type;
+    #read;
     constructor(parts = [], options = {}) {
       if (parts !== null && typeof parts === "object" && typeof parts[Symbol.iterator] !== "function") {
         throw new TypeError("new Blob() expects an Array");
       }
       this.#bytes = concatBytes(Array.from(parts || [], partBytes));
       this.#type = normalizeBlobType(options.type);
+      // The constructing class's reader, fixed now so a replaced prototype cannot change the bytes.
+      this.#read = new.target.prototype._bytes;
     }
     // Subclasses (BunFile) read lazily.
     _bytes() {
       return this.#bytes;
+    }
+    // Brand-checked bytes that ignore the public prototype; throws TypeError for a non-Blob.
+    _intrinsicBytes() {
+      const read = this.#read;
+      return read === blobBytes ? this.#bytes : Reflect.apply(read, this, []);
     }
     get size() {
       return this._bytes().length;
@@ -835,7 +888,10 @@
       return this._bytes().slice();
     }
     async formData() {
-      throw new TypeError("Blob.formData() is not supported in bun-wasm");
+      const forms = formBody();
+      const encoding = forms.api.encoding(this.type);
+      if (!encoding) throw new Error("Invalid encoding");
+      return forms.api.parse(this._bytes(), encoding, forms.deps, reason => new Error(`FormData encoding failed: ${reason}`));
     }
     slice(start = 0, end = undefined, type = "") {
       const bytes = this._bytes();
@@ -852,6 +908,8 @@
       return `Blob (${formatBytes(this.size)})`;
     }
   }
+
+  const blobBytes = Blob.prototype._bytes;
 
   function formatBytes(n) {
     if (n < 1024) return `${n} bytes`;
@@ -1003,7 +1061,10 @@
       return { bytes: native.utf8Encode(body.toString()), type: "application/x-www-form-urlencoded;charset=UTF-8" };
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
-    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: new Uint8Array(toUint8(body)), type: null };
+    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && body instanceof SharedArrayBuffer)) {
+      return { bytes: new Uint8Array(toUint8(body)), type: null };
+    }
+    if (body instanceof FormData) return formBody().api.serialize(body, formBody().deps);
     if (body instanceof ReadableStream) return { stream: body, bytes: bodyStreams.bytes(body) || null, type: null };
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
     return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
@@ -1037,10 +1098,21 @@
     },
     async blob() {
       const type = this.headers.get("content-type") || "";
-      return new Blob([await this._consume()], { type });
+      const blob = new Blob([await this._consume()]);
+      // Bun keeps the Content-Type as written, canonicalizing only its known types.
+      blob._setType(canonicalBlobTypes.get(type) ?? type);
+      return blob;
     },
     async formData() {
-      throw new TypeError("formData() is not supported in bun-wasm");
+      const forms = formBody();
+      const encoding = forms.api.encoding(this.headers.get("content-type"));
+      // Bun rejects an undecodable type without using the body; a used body reports that first.
+      if (!encoding && !this.bodyUsed) throw formParseError("Can't decode form data from body because of incorrect MIME type/boundary");
+      const bytes = await this._consume();
+      return forms.api.parse(bytes, encoding, forms.deps, reason => formParseError(`FormData parse error ${reason}`));
+    },
+    textStream() {
+      return bodyStreams.textStream(this);
     },
   };
 
@@ -1201,15 +1273,18 @@
   Object.assign(Request.prototype, BodyMixin);
 
   // No sockets under WASI. file: URLs still work, like in Bun.
-  async function fetch(input, init = {}) {
-    const url = input instanceof Request ? input.url : String(input instanceof URL ? input.href : input);
+  // Arguments are read and checked as Bun does (fetch_args.ts); errors reject.
+  async function fetch(input) {
+    const parsed = internal.require("fetch_args").parse(arguments, { Request, Headers, AbortSignal, Blob });
+    if (parsed.data !== undefined) return fetchDataUrl(parsed.data);
+    const { url, init } = parsed;
+    input = parsed.request || url;
     if (url.startsWith("file:")) {
       const path = decodeURIComponent(new URL(url).pathname);
       const res = new Response(native.readFile(path), { headers: { "content-type": internal.mimeType(path) } });
       Response._setUrl(res, url);
       return res;
     }
-    if (url.startsWith("data:")) return fetchDataUrl(url);
     // Hosts implementing the bun_wasm ABI (docs/host-abi.md) do real HTTP.
     if (native.hostCaps.fetch) return internal.require("net").fetch(input, init);
     const err = new TypeError(`fetch() is not available in bun-wasm: WASI has no network access (${url})`);
@@ -1218,12 +1293,8 @@
   }
 
   function fetchDataUrl(url) {
-    const comma = url.indexOf(",");
-    const meta = url.slice(5, comma);
-    const data = url.slice(comma + 1);
-    const isBase64 = meta.endsWith(";base64");
-    const type = (isBase64 ? meta.slice(0, -7) : meta) || "text/plain;charset=US-ASCII";
-    const bytes = isBase64 ? native.base64Decode(data) : native.utf8Encode(decodeURIComponent(data));
+    const { type, base64, data } = internal.require("fetch_args").dataUrlParts(url);
+    const bytes = base64 ? native.base64Decode(data) : native.utf8Encode(decodeURIComponent(data));
     return new Response(bytes, { headers: { "content-type": type } });
   }
 
@@ -1235,7 +1306,7 @@
     toml: "application/toml", xml: "application/xml", svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg",
     jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", ico: "image/x-icon", wasm: "application/wasm",
     pdf: "application/pdf", zip: "application/zip", gz: "application/gzip", csv: "text/csv;charset=utf-8",
-    mp3: "audio/mpeg", mp4: "video/mp4", woff: "font/woff", woff2: "font/woff2",
+    mp3: "audio/mpeg", mp4: "video/mp4", woff: "font/woff", woff2: "font/woff2", bin: "application/octet-stream",
   };
   internal.mimeType = function mimeType(path) {
     const dot = path.lastIndexOf(".");
@@ -1314,9 +1385,7 @@
     if (!ArrayBuffer.isView(array) || array instanceof Float32Array || array instanceof Float64Array || array instanceof DataView) {
       throw new DOMException("The data argument must be an integer-type TypedArray", "TypeMismatchError");
     }
-    if (array.byteLength > 65536) {
-      throw new DOMException(`The ArrayBufferView's byte length (${array.byteLength}) exceeds the number of bytes of entropy available via this API (65536)`, "QuotaExceededError");
-    }
+    // Bun has no 65536-byte quota; the Browser host's random_get fills in chunks.
     toUint8(array).set(native.randomBytes(array.byteLength));
     return array;
   }
@@ -1392,6 +1461,24 @@
     return String(value);
   }
 
+  // Multipart and urlencoded bodies (form_data_body.ts), loaded on first use.
+  let formBodies;
+  function formBody() {
+    formBodies ??= {
+      api: internal.require("form_data_body"),
+      deps: {
+        FormData, File, URLSearchParams,
+        mimeByExtension: extension => (Object.hasOwn(MIME, extension) ? MIME[extension] : undefined),
+        blobBytes: blob => blob._intrinsicBytes(),
+      },
+    };
+    return formBodies;
+  }
+
+  function formParseError(message) {
+    return Object.assign(new TypeError(message), { code: "ERR_FORMDATA_PARSE_ERROR" });
+  }
+
   const navigator = {
     userAgent: `Bun/${native.platformInfo.version}`,
     hardwareConcurrency: 1,
@@ -1419,8 +1506,9 @@
       defineLazyGlobal(name, () => internal.require("worker_threads")[name]);
     }
     defineLazyGlobal("Worker", () => internal.require("web_worker").Worker);
-    URL.createObjectURL = blob => internal.require("web_worker").createObjectURL(blob);
-    URL.revokeObjectURL = url => internal.require("web_worker").revokeObjectURL(url);
+    const objectURLs = internal.require("object_urls");
+    URL.createObjectURL = objectURLs.createObjectURL;
+    URL.revokeObjectURL = objectURLs.revokeObjectURL;
     defineLazyGlobal("WebSocket", () => internal.require("net").WebSocket);
   };
 })

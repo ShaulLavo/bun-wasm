@@ -1,5 +1,5 @@
 {
-  "runtime_source_commit": "19b89fda111f1a9de6c821fddca74213b2f7159c",
+  "runtime_source_commit": "5d5d7f8bd5257f8c1fa5986c4c1096b8fb22f2ea",
   "files": [
     "js/bun/test/bun-test.test.ts",
     "js/bun/test/bun_test.test.ts",
@@ -26,17 +26,67 @@
     "js/bun/test/test-failing.test.ts",
     "js/bun/test/test-retry-repeats-basic.test.ts",
     "js/bun/test/test-timers.test.ts",
+    "js/node/async_hooks/AsyncLocalStorage.test.ts",
     "js/node/buffer-concat.test.ts",
+    "js/node/buffer-copy-fill-detach.test.ts",
     "js/node/buffer-from-symbol-to-primitive.test.ts",
+    "js/node/buffer-indexOf-detach.test.ts",
     "js/node/buffer.test.js",
+    "js/node/crypto/crypto-oneshot.test.ts",
+    "js/node/crypto/crypto.hmac.test.ts",
+    "js/node/crypto/crypto.key-objects.test.ts",
+    "js/node/crypto/crypto.test.ts",
+    "js/node/crypto/node-crypto.test.js",
+    "js/node/crypto/pbkdf2.test.ts",
     "js/node/events/event-emitter.test.ts",
+    "js/node/fs/cp.test.ts",
+    "js/node/fs/dir.test.ts",
+    "js/node/fs/fs-mkdir.test.ts",
+    "js/node/fs/fs-read-buffer-before-offset.test.ts",
+    "js/node/fs/fs-stats-constructor.test.ts",
+    "js/node/fs/fs-write-offset-bound.test.ts",
+    "js/node/fs/fs.test.ts",
+    "js/node/fs/promises.test.js",
+    "js/node/http/node-fetch.test.js",
+    "js/node/os/os.test.js",
+    "js/node/path/join.test.js",
+    "js/node/path/normalize.test.js",
+    "js/node/path/parse-format.test.js",
+    "js/node/path/path.test.js",
+    "js/node/path/relative.test.js",
+    "js/node/path/resolve.test.js",
+    "js/node/process/process-nexttick.test.js",
+    "js/node/process/process.test.js",
+    "js/node/stream/node-stream-uint8array.test.ts",
+    "js/node/stream/node-stream.test.js",
+    "js/node/string_decoder/string-decoder.test.js",
+    "js/node/timers.promises/timers.promises.test.ts",
+    "js/node/timers/node-timers.test.ts",
+    "js/node/url/url-parse-format.test.js",
     "js/node/url/url-pathtofileurl.test.js",
     "js/node/url/url.test.ts",
+    "js/node/util/bun-inspect.test.ts",
+    "js/node/util/custom-inspect.test.js",
+    "js/node/util/test-util-types.test.js",
     "js/third_party/hono/hello-world.test.ts",
     "js/third_party/jsonwebtoken/issue_147.test.js",
+    "js/web/abort/abort.test.ts",
+    "js/web/console/console-log.test.ts",
+    "js/web/crypto/web-crypto.test.ts",
     "js/web/encoding/text-decoder-single-byte.test.ts",
+    "js/web/encoding/text-decoder-stream.test.ts",
     "js/web/encoding/text-decoder.test.js",
     "js/web/encoding/text-encoder.test.js",
+    "js/web/fetch/blob.test.ts",
+    "js/web/fetch/body-clone.test.ts",
+    "js/web/fetch/body.test.ts",
+    "js/web/fetch/client-fetch.test.ts",
+    "js/web/fetch/fetch-args.test.ts",
+    "js/web/fetch/fetch-redirect.test.ts",
+    "js/web/fetch/fetch.test.ts",
+    "js/web/fetch/fetch_headers.test.js",
+    "js/web/timers/microtask.test.js",
+    "js/web/timers/performance.test.js",
     "js/web/url/url.test.ts"
   ],
   "engines": [
@@ -46,15 +96,15 @@
         "schema": 1,
         "engine": "quickjs",
         "suite_commit": "9510e74152073d850a18758ca41114d8f214ffa6",
-        "wasm_sha256": "e70b872fa8ec42ab66fcaca2bd68417c1cdbb5e012cfa735c55a8065f0beaba1",
+        "wasm_sha256": "e436be9b7744a335138d806ef44a31bc1f323becc177bafe4209913821ed728a",
         "companions_sha256": {
-          "quickjs.wasm": "55a56f1ce2f60a0feeff56b615f1717f1dad37342a1116bd6261b397ad251e14",
+          "quickjs.wasm": "7753e6541f40c46bf885542514c837df8482c505bcdde44d6c6119aa27a41010",
           "bash-web-shell.wasm": "4241fa7a6d2c85ac4924a654bdb4f2b65338307f53c7205d0cfa194e7757aede",
           "bash-web-env.wasm": "190da917392cfb6ae7264fec05b1cfdb05b053f3938d76ceb66dd6175c63169e",
           "bash-web-guests.json": "6fc027e75057b8e32854b858938b9ca9297d2c8f40998493ed9cef8b4b057bc4"
         },
         "tools_sha256": "0b03eae5d84c6dec3bbbdf36eb43593b2337fba3b0e51b0a8600ede0842f736c",
-        "runner_sha256": "0a8cd6aa51f5d08c172c8c01425839d802b40ea3f7be1372917ed1fa7085a966",
+        "runner_sha256": "984f0f6422124861e78306aa97f7a2f7c64fb207c46a8d0110872f33306188dc",
         "launcher_sha256": "afe68b2a88cb9004cad9d348420b791d163f7bfa269a8d3ff14affe4b72f1e03",
         "host_sources": {},
         "runtime_package": {},
@@ -72,15 +122,15 @@
         "test_timeout_ms": 10000
       },
       "summary": {
-        "files": 37,
-        "fully_passing": 29,
+        "files": 87,
+        "fully_passing": 39,
         "timeouts": 0,
         "counts": {
-          "pass": 1855,
-          "fail": 77,
-          "skip": 3,
-          "todo": 8,
-          "errors": 2
+          "pass": 3282,
+          "fail": 1326,
+          "skip": 58,
+          "todo": 12,
+          "errors": 5
         }
       }
     },
@@ -90,15 +140,15 @@
         "schema": 1,
         "engine": "jsc",
         "suite_commit": "9510e74152073d850a18758ca41114d8f214ffa6",
-        "wasm_sha256": "b4d31e4804ea1a6c636d79934c61bdfb863d44b71f56ade5c26e76e8e055e674",
+        "wasm_sha256": "bc45efc124452c7f2cb48a341eb29d5a5f108907f08d9c22d483cb66be5427ad",
         "companions_sha256": {
-          "jsc-engine.wasm": "d820baa58a489b35f9415c6cff839e716f31a941be073dcaffa557733107a2b9",
+          "jsc-engine.wasm": "79af0fb017adf3ebfe57dabb09c0833e06abd7e888e90b1208bb67bf9ddbba87",
           "bash-web-shell.wasm": "4241fa7a6d2c85ac4924a654bdb4f2b65338307f53c7205d0cfa194e7757aede",
           "bash-web-env.wasm": "190da917392cfb6ae7264fec05b1cfdb05b053f3938d76ceb66dd6175c63169e",
           "bash-web-guests.json": "6fc027e75057b8e32854b858938b9ca9297d2c8f40998493ed9cef8b4b057bc4"
         },
         "tools_sha256": "0b03eae5d84c6dec3bbbdf36eb43593b2337fba3b0e51b0a8600ede0842f736c",
-        "runner_sha256": "0a8cd6aa51f5d08c172c8c01425839d802b40ea3f7be1372917ed1fa7085a966",
+        "runner_sha256": "984f0f6422124861e78306aa97f7a2f7c64fb207c46a8d0110872f33306188dc",
         "launcher_sha256": "afe68b2a88cb9004cad9d348420b791d163f7bfa269a8d3ff14affe4b72f1e03",
         "host_sources": {},
         "runtime_package": {},
@@ -116,15 +166,15 @@
         "test_timeout_ms": 10000
       },
       "summary": {
-        "files": 37,
-        "fully_passing": 29,
+        "files": 87,
+        "fully_passing": 39,
         "timeouts": 0,
         "counts": {
-          "pass": 1857,
-          "fail": 75,
-          "skip": 3,
-          "todo": 8,
-          "errors": 2
+          "pass": 3282,
+          "fail": 1326,
+          "skip": 58,
+          "todo": 12,
+          "errors": 5
         }
       }
     },
@@ -134,14 +184,14 @@
         "schema": 1,
         "engine": "browser",
         "suite_commit": "9510e74152073d850a18758ca41114d8f214ffa6",
-        "wasm_sha256": "09d2f5f89b53cc65c7f50e395e66f7a8292846a657ad6c3767f41afddee84aac",
+        "wasm_sha256": "bb84273f5be2017f6aaf5dbd5689fa6b4287a2e788b5308bb864e8e79241ee5e",
         "companions_sha256": {
           "bash-web-shell.wasm": "4241fa7a6d2c85ac4924a654bdb4f2b65338307f53c7205d0cfa194e7757aede",
           "bash-web-env.wasm": "190da917392cfb6ae7264fec05b1cfdb05b053f3938d76ceb66dd6175c63169e",
           "bash-web-guests.json": "6fc027e75057b8e32854b858938b9ca9297d2c8f40998493ed9cef8b4b057bc4"
         },
         "tools_sha256": "0b03eae5d84c6dec3bbbdf36eb43593b2337fba3b0e51b0a8600ede0842f736c",
-        "runner_sha256": "0a8cd6aa51f5d08c172c8c01425839d802b40ea3f7be1372917ed1fa7085a966",
+        "runner_sha256": "984f0f6422124861e78306aa97f7a2f7c64fb207c46a8d0110872f33306188dc",
         "launcher_sha256": "2d1f1b269b6f7b702418bca92786fc1f381215bc7d7d0d676e0388e5374bed87",
         "host_sources": {
           "web/scripts/node-host.ts": "20c433b79cee9b78fc6023c4fa202c9e1e5ecb550c32d86cc241d774e1d9750e",
@@ -154,7 +204,7 @@
           "web/scripts/node-install-net.ts": "d88cee8719b66b84d362515de620cf864f7f4219e33b0bc5f3e2c0b398fe5452",
           "web/scripts/node-stdio.ts": "95d41faa574afb31f1b88a7b9fa1b810360872fe313cf9eb75dfbd7660a0cd60",
           "web/src/net/trampoline.ts": "12f716b81994cc497045ddf7663157264f0ab959aba156fb1a8f23a15275ecdd",
-          "web/src/engine-host.js": "2c52f3ec7f5cd8cf94a7e3ca5d2f7ca1b0b5b449d9249cebf374dd38894c87cf",
+          "web/src/engine-host.js": "9350342b930ce07ab2a4f63df78a037ff0751b4468b77f9cb12d73682490dfe6",
           "web/src/promise-reactions.ts": "ad5a347820e2bfbd765b0243a3e6436b9bf48b57e0d6b3c97d9148059ec915b6",
           "web/src/native-stream-state.ts": "780bd7aee1f33baca47d673384c02d4786a37cfca71046d9b61ade77754fb03f",
           "web/src/native-direct-stream.ts": "20cc97ec1ddf58163fbd0ef36857b0a5fdf062e603b8728ffb057839874bb6d8",
@@ -754,15 +804,15 @@
         "test_timeout_ms": 10000
       },
       "summary": {
-        "files": 37,
-        "fully_passing": 28,
+        "files": 87,
+        "fully_passing": 38,
         "timeouts": 0,
         "counts": {
-          "pass": 1355,
-          "fail": 71,
-          "skip": 0,
-          "todo": 8,
-          "errors": 2
+          "pass": 2807,
+          "fail": 1295,
+          "skip": 55,
+          "todo": 12,
+          "errors": 7
         }
       }
     }

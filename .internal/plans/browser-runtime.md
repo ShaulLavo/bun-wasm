@@ -781,25 +781,24 @@ bun-wasm PR 898 (the same numbers as its description). Times are from the page S
 | Guest workload | QuickJS | JSC | SpiderMonkey | Browser engine (real terminate) |
 | --- | --- | --- | --- | --- |
 | `while (true) {}` | 5.0 ms Chromium, 8.0 ms WebKit | 5.3 ms, 8.3 ms | 6.8 ms, 20 ms | heartbeat ran 2,005 ms on Chromium, stopped at once on WebKit |
-| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 9.0 ms, 8.4 ms (one call takes 398 and 473 ms) | no stop within 15 s (one call takes 1,677 ms) | no stop within 15 s, zero checkpoints (one call takes 1,366 ms) | not run |
+| `/^(a+)+$/` on 24 `a`s plus `!`, looped | 9.0 ms, 8.4 ms (one call takes 398 and 473 ms) | no stop within 15 s (one call takes 1,677 ms); with Yarr polling 5.0 to 11.2 ms, 8.0 to 16.0 ms | no stop within 15 s, zero checkpoints (one call takes 1,366 ms); with irregexp polling 4.8 to 5.4 ms, 6.4 to 8.0 ms | not run |
 
-The regexp row was measured with a looped 2^24 call. The merged proof uses one 2^32 call
-instead, so it no longer depends on machine speed.
+The QuickJS regexp cells were measured with a looped 2^24 call. The merged proof uses one 2^32
+call instead, so it no longer depends on machine speed.
 
 Open items:
 
-- **JSC Yarr does not poll.** The C-loop countdown polls the host every 1,024 trap points, and a
-  loop around a long regexp call reaches only a few trap points per call, so the next poll is
-  about 340 calls (about 10 minutes) away. Poll the host every N Yarr backtracks and turn a true
-  result into JSC's uncatchable termination. A separate worker owns this (coordinator,
-  2026-11-17). When it lands, add `jsc` to `nativePollingEngines` in
-  `web/tests/engine-interruption-cases.ts`.
-- **SpiderMonkey irregexp does not poll either.** `bunsm_poll_interrupt`
-  (`crates/bunwasm-spidermonkey/cpp/engine.cpp`) asks the host every 10,000 interpreter polls,
-  and a loop around a long regexp call reaches only a few per call. The same worker covers it
-  (coordinator, 2026-11-17). When it lands, add `spidermonkey` to `nativePollingEngines`.
-- **Group pages after the stop: done with the Waffle 0.0.141 pin (PR 900).** Waffle PR 548's
-  per-incarnation exit lock returns a stopped member's pages only after its worker exits. The
+- **Done: native regexp stops (2026-11-17).** JSC's Yarr interpreter now asks the host every
+  16,384 backtracks and SpiderMonkey's irregexp interpreter every 8,192, and a stop becomes each
+  engine's uncatchable termination. With JSC and SpiderMonkey in `nativePollingEngines`, the
+  native-regexp proof stops a JSC guest in 5.0 to 11.2 ms on Chromium and 8.0 to 16.0 ms on
+  WebKit (one call takes 986 to 2,011 ms), and a SpiderMonkey guest in 4.8 to 5.4 ms and 6.4 to
+  8.0 ms (one call takes 866 to 1,245 ms), over three runs. Against controls built from the same
+  tree without the poll, regex benchmarks ran within run-to-run noise. Record: `docs/bun-patches/engine-interruption.md` and
+  `docs/bun-patches/spidermonkey-g2.md`.
+- **Group pages after the stop: done with the Waffle 0.0.142 pin (PR 900).** Waffle PR 548's
+  per-incarnation exit lock returns a stopped member's pages only after its worker exits, and
+  Waffle PR 552 refuses a new attach of a region whose last holder is such a member. The
   shared-memory browser fixture `busy-member-stop.ts` terminates a group member spinning in
   JavaScript and requires its agent to end and the owner's `exiting` and `quarantinedBytes` to
   drain to 0.

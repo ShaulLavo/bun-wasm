@@ -1,0 +1,11 @@
+
+index.test.ts:
+(pass) toMatchObject compares the expected object's enumerable symbol keys
+(pass) string matchers accept String objects as their sample
+(pass) arrays match exactly, symbol keys included
+(pass) a non-enumerable symbol in the expected object is ignored
+
+ 4 pass
+ 0 fail
+ 26 expect() calls
+Ran 4 tests across 1 file. [TIME]

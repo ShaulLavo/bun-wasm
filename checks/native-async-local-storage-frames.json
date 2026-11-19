@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/async-local-storage-frames",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

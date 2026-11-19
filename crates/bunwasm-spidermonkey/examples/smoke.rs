@@ -150,6 +150,13 @@ pub fn main() {
             "inside finally",
             "var caught=0, finalized=0; try { try {} finally { for(;;){} } } catch(e) { caught++; } finally { finalized++; }",
         ),
+        // irregexp's tier-2 poll: one catastrophic match reaches no interpreter safe point. It
+        // backtracks about 2^20 times, so it ends on its own unless the first host polls (every
+        // 8,192 backtracks, uncounted) stop it; counting them toward 10,000 would let it finish.
+        (
+            "inside regexp",
+            "var caught=0, finalized=0; try { /^(a+)+$/.test('a'.repeat(20) + '!'); } catch(e) { caught++; } finally { finalized++; }",
+        ),
     ] {
         INTERRUPT.store(true, Ordering::Relaxed);
         let (handle, status) = eval(code);
