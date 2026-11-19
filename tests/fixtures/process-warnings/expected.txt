@@ -1,0 +1,68 @@
+--- default listener (exit 0)
+stdout: "1 onWarning 0\n"
+stderr: "(node:PID) Warning: shown\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\nuser-listener\n(node:PID) Warning: second\nuser-listener\n"
+--- removeAllListeners before the first warning (exit 0)
+stderr: ""
+--- removeListener by reference (exit 0)
+stdout: "0\n"
+stderr: ""
+--- bare emit (exit 0)
+stderr: "(node:PID) Error: bare\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\n"
+--- options object (exit 0)
+stdout: "CustomWarning C1 more detail 0 false\n"
+stderr: "(node:PID) [C1] CustomWarning: msg\nmore detail\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\n"
+--- type and code arguments (exit 0)
+stderr: "(node:PID) [C2] OtherWarning: two\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\n(node:PID) Error: error instance\n"
+--- argument errors (exit 0)
+stdout: "ERR_INVALID_ARG_TYPE The \"warning\" argument must be of type string or Error. Received type number (1)\nERR_INVALID_ARG_TYPE The \"type\" argument must be of type string. Received type number (5)\nERR_INVALID_ARG_TYPE The \"code\" argument must be of type string. Received type number (5)\nERR_INVALID_ARG_TYPE The \"type\" argument must be of type string. Received null\n"
+stderr: ""
+--- --no-deprecation alias (exit 0)
+stdout: "{\"d\":{\"value\":true,\"writable\":false,\"enumerable\":true,\"configurable\":true},\"after\":true,\"threw\":true}\n"
+stderr: ""
+--- --throw-deprecation alias (exit 0)
+stdout: "{\"d\":{\"value\":true,\"writable\":false,\"enumerable\":true,\"configurable\":true},\"after\":true,\"threw\":true}\n"
+stderr: ""
+--- --trace-deprecation alias (exit 0)
+stdout: "{\"d\":{\"value\":true,\"writable\":false,\"enumerable\":true,\"configurable\":true},\"after\":true,\"threw\":true}\n"
+stderr: ""
+--- --trace-warnings alias (exit 0)
+stdout: "{\"d\":{\"value\":true,\"writable\":false,\"enumerable\":true,\"configurable\":true},\"after\":true,\"threw\":true}\n"
+stderr: ""
+--- --pending-deprecation alias (exit 0)
+stdout: "{\"d\":{\"value\":true,\"writable\":false,\"enumerable\":true,\"configurable\":true},\"after\":true,\"threw\":true}\n"
+stderr: ""
+--- --no-warnings alias (exit 0)
+stdout: "{\"d\":{\"value\":true,\"writable\":false,\"enumerable\":true,\"configurable\":true},\"after\":true,\"threw\":true}\n"
+stderr: ""
+--- unflagged aliases (exit 0)
+stdout: "false,false,false,false,false\n"
+stderr: ""
+--- --no-deprecation hides deprecations only (exit 0)
+stderr: "(node:PID) Warning: other\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\n"
+--- --no-warnings keeps user listeners (exit 0)
+stdout: "0\nuser:quiet\n"
+stderr: ""
+--- NODE_NO_WARNINGS=1 (exit 0)
+stdout: "0\n"
+stderr: ""
+--- NODE_NO_WARNINGS=true (exit 0)
+stdout: "1\n"
+stderr: "(node:PID) Warning: foo\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\n"
+--- --disable-warning (exit 0)
+stdout: "listener:TESTCODE\nlistener:OtherWarning\nlistener:ThirdWarning\n"
+stderr: "(node:PID) ThirdWarning: shown\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\n"
+--- BUN_OPTIONS --disable-warning (exit 0)
+stderr: "(node:PID) [DEP1] DeprecationWarning: one\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\n"
+--- BUN_OPTIONS --disable-warning in a worker (exit 0)
+stderr: "(node:PID) [DEP1] DeprecationWarning: one\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\n"
+--- worker default listener (exit 0)
+stdout: "1:0\n"
+stderr: ""
+--- stack untouched without tracing (exit 0)
+stdout: "hits:0\n"
+stderr: "(node:PID) Warning: hello\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\n"
+--- --trace-warnings prints the stack (exit 0)
+stdout: "hits:2\n"
+stderr: "(node:PID) Warning: hello\n    at fake\n"
+--- traceDeprecation set at runtime (exit 0)
+stderr: "(node:PID) DeprecationWarning: traced\n    at fixed\n(node:PID) Warning: other type is not traced\n(Use `PROGRAM --trace-warnings ...` to show where the warning was created)\n"

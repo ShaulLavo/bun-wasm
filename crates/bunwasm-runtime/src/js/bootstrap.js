@@ -976,6 +976,8 @@
   internal.require("readable_stream_methods"); // Bun's ReadableStream text/json/bytes/blob
   internal.require("crypto")(defineGlobal);
   defineGlobal("process", internal.require("process"));
+  // Node's setupWarningHandler: the default 'warning' listener and the warning flags.
+  internal.require("process_warning");
   if (typeof globalThis.Temporal === "undefined") defineLazyGlobal("Temporal", () => internal.require("temporal").Temporal);
   defineGlobal("console", internal.require("console"));
   defineGlobal("Bun", internal.require("bun"));

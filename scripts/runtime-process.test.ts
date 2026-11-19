@@ -34,7 +34,9 @@ function originalSyntax(text: string): string {
     [/      if \(name === "constants"\) return constantsBinding\(\);\n/g, "", 1],
     [/\n    execve\(\) \{[\s\S]*?\n    \},/g, "", 1],
     [/    noDeprecation: false,\n/g, "", 1],
-    [/      if \(name === "DeprecationWarning" && process\.noDeprecation\) return;\n/g, "", 1],
+    // process_warning.ts owns emitWarning now (Bun's Process::emitWarning and onWarning).
+    [/    emitWarning\(warning\s*, \.\.\.options\s*\) \{\n      internal\.require\("process_warning"\)\.emitWarning\(process, warning, options\[0\], options\[1\], options\[2\]\);\n    \},\n/g,
+      readFileSync(join(root, "scripts/fixtures/process-emit-warning-before.txt"), "utf8"), 1],
     [/const processBase\s*=/g, "const process =", 1],
     [/\bprocessBase\b/g, "process", 5],
     [/const streamBase\s*=/g, "const stream =", 2],

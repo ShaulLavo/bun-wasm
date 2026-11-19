@@ -1,0 +1,14 @@
+    emitWarning(warning, type, code) {
+      if (internal.workerNoWarnings) return;
+      const opts = type !== null && typeof type === "object" ? type : { type, code };
+      const name = warning instanceof Error ? warning.name : opts.type || "Warning";
+      const message = warning instanceof Error ? warning.message : String(warning);
+      if (process.listenerCount("warning") > 0) {
+        const err = warning instanceof Error ? warning : Object.assign(new Error(message), { name });
+        if (opts.code) err.code = opts.code;
+        internal.nextTick(() => process.emit("warning", err));
+        return;
+      }
+      const prefix = opts.code ? `[${opts.code}] ` : "";
+      native.writeStderr(`${prefix}${name}: ${message}\n`);
+    },

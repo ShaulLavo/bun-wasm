@@ -344,7 +344,6 @@ declare namespace BunWasm {
   }
   interface Internal {
     builtin(name: "node:module"): { createRequire(path: string): (specifier: string) => unknown };
-    workerNoWarnings?: boolean;
     require(name: "spawn"): {
       spawn(argv: string[], options: Record<string, unknown>): WorkerChild;
       spawnWorker(argv: string[], options: Record<string, unknown>, worker: object): WorkerChild;
@@ -386,6 +385,6 @@ declare namespace BunWasm {
     runMain(path: string): unknown;
     importModule(path: string): unknown;
   }
-  interface GuestProcess { emit(event: string, value: unknown): boolean; }
+  interface GuestProcess { emit(event: string, value: unknown): boolean; removeListener(event: string, listener: EventListener): unknown; }
 }
 interface Blob { _bytes(): Uint8Array; }

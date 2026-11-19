@@ -1366,6 +1366,7 @@
     return { argv: ["-e", preloads + "\n;import.meta.__bunwasm_workerEntry?.();\n" + target.argv[1]], name: target.name };
   }
   type ExecOption = { kind: "require"; value: string } | { kind: "flag"; value: string };
+  const workerFlags = ["--no-warnings", "--no-deprecation", "--throw-deprecation", "--trace-deprecation", "--trace-warnings", "--pending-deprecation", "--expose-gc", "--experimental-strip-types"];
   function execArguments(value: unknown) {
     const argv = value === undefined ? process.execArgv.slice() : value;
     if (!Array.isArray(argv) || !argv.every(arg => typeof arg === "string")) throw invalidArgument("execArgv");
@@ -1373,7 +1374,7 @@
     const options: ExecOption[] = [];
     for (let index = 0; index < argv.length; index++) {
       const arg = argv[index];
-      if (["--no-warnings", "--no-deprecation", "--expose-gc", "--experimental-strip-types"].includes(arg)) { options.push({ kind: "flag", value: arg }); continue; }
+      if (workerFlags.includes(arg) || arg.startsWith("--disable-warning=") || arg.startsWith("--redirect-warnings=")) { options.push({ kind: "flag", value: arg }); continue; }
       if (arg.startsWith("--require=")) { options.push({ kind: "require", value: arg.slice(10) }); continue; }
       if (arg.startsWith("--conditions=")) { conditions.push(arg); continue; }
       if (arg === "--conditions" && index + 1 < argv.length) { conditions.push(arg, argv[++index]); continue; }
@@ -1629,13 +1630,14 @@
       internal.require("web_worker").initialize(port, config.web, webMessageEvent, (type, listener) => portOps.forward(port, type, listener));
       parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
     }
+    // The worker's own warning flags (--no-warnings, --no-deprecation, --disable-warning=...),
+    // applied before preloads run, as at process startup.
+    internal.require("process_warning").configure(process, exec.options.flatMap(option => option.kind === "flag" ? [option.value] : []));
     const requirePreload = internal.builtin("node:module").createRequire(process.cwd() + "/__worker_preload__.cjs");
     for (const option of exec.options) {
       if (option.kind === "require") { requirePreload(option.value); continue; }
       const arg = option.value;
       if (arg === "--expose-gc") Object.defineProperty(globalThis, "gc", { configurable: true, writable: true, value: () => native.gc() });
-      if (arg === "--no-warnings") internal.workerNoWarnings = true;
-      if (arg === "--no-deprecation") process.noDeprecation = true;
     }
     if (!config.web) parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
   }
