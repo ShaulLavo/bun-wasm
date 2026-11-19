@@ -45,6 +45,9 @@ mod parse_env;
 #[allow(dead_code)]
 #[path = "../../bunwasm-engine-quickjs/src/vm.rs"]
 mod quickjs_embedding;
+#[cfg(all(test, feature = "engine-split"))]
+#[path = "../../bunwasm-engine-quickjs/src/rejection_queue.rs"]
+mod rejection_queue;
 mod resolve;
 mod semver;
 mod sourcemap;
