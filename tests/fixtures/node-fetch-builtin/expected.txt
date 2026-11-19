@@ -3,6 +3,7 @@ resolve: node-fetch undici
 exports: function true true true
 subclasses: true true true
 raw: [["a",["1"]],["set-cookie",["b=1","c=1"]]]
+copied cookies: ["b=1","c=1"] ["b=1","c=1"]
 relative request url: /path
 node stream body: true true POST null the input text
 204 body: 204 true ""
@@ -10,6 +11,8 @@ constructed null body: null
 headers: [ "yes" ] default
 buffer: true hello world
 json: {"ok":true}
+aborted text() then resume(): AbortError ["end","close"]
+aborted text() then destroy(): AbortError ["close"]
 undici.request: 200 true PUT null via undici
 undici.fetch: true hello world
 isomorphic-fetch: true hello world
