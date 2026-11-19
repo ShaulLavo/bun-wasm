@@ -159,9 +159,28 @@ test("the default formatter preserves the original exception and mixed frame pos
   const error = new TypeError("original application failure");
   const stack = error.stack;
   expect(state.runtime.defaultPrepareStackTrace(error, [callSite(), callSite({ column: null }), callSite({ line: null, column: null })]))
-    .toBe("    at run (/source.ts:30:7)\n    at run (/source.ts:12)\n    at run (/source.ts)\n");
+    .toBe("TypeError: original application failure\n    at run (/source.ts:30:7)\n    at run (/source.ts:12)\n    at run (/source.ts)");
   expect(error.message).toBe("original application failure");
   expect(error.stack).toBe(stack);
+});
+
+test("the default formatter starts with Bun's sanitized name and message", () => {
+  const { runtime } = bootstrap();
+  const header = (target: object) => runtime.defaultPrepareStackTrace(target, []);
+  const renamed = Object.assign(new Error("message"), { name: "" });
+  const getters = new Error("ignored");
+  Object.defineProperty(getters, "message", { get: () => "getter" });
+  Object.defineProperty(getters, "name", { get: () => "Getter" });
+  class Unnamed extends TypeError {}
+  const proxied = Object.setPrototypeOf(new Error("proxied"), new Proxy(Error.prototype, {
+    getOwnPropertyDescriptor() { throw new Error("trap ran"); },
+  }));
+  expect(header(proxied)).toBe("Error: proxied");
+  expect([
+    header(new RangeError("out")), header(new Error("")), header(renamed), header(getters),
+    header(new Unnamed("deep")), header(Object.assign(new Error("n"), { name: 42 })),
+    header(Object.assign(new Error("u"), { name: undefined })), header({ name: "Plain", message: "object" }),
+  ]).toEqual(["RangeError: out", "Error", "message", "Error", "Error: deep", "42: n", "Error: u", "Error"]);
 });
 
 function installFunctionCaller(state: ReturnType<typeof bootstrap>, sites: readonly CallSite[]) {

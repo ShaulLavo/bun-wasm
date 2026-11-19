@@ -141,13 +141,57 @@
     return Function.prototype.toString.call(fn).startsWith("function () {\n    [native code]");
   }
 
+  // The first line of Bun's error.stack: JavaScriptCore's sanitized "name: message", which
+  // reads data properties only, so no getter or Proxy trap runs. The name is the error's own or
+  // its prototype's, the message the error's own. Any other capture target reads "Error".
+  function dataSlot(holder, key) {
+    let descriptor;
+    try { descriptor = Reflect.getOwnPropertyDescriptor(holder, key); } catch { return undefined; }
+    return descriptor !== undefined && "value" in descriptor ? descriptor : undefined;
+  }
+
+  // A Proxy prototype is skipped, as JavaScriptCore's inquiry skips it. Where the host cannot
+  // tell a Proxy (a browser), a throwing trap reads as no name.
+  const builtinErrorPrototypes = new Set([Error, TypeError, RangeError, ReferenceError, SyntaxError, EvalError, URIError]
+    .concat(typeof AggregateError === "function" ? [AggregateError] : [])
+    .map(constructor => constructor.prototype));
+  function prototypeSlot(error, key) {
+    const prototype = Object.getPrototypeOf(error);
+    if (prototype === null || !builtinErrorPrototypes.has(prototype) && native.isProxy?.(prototype)) return undefined;
+    return dataSlot(prototype, key);
+  }
+
+  function primitiveText(value) {
+    if (typeof value === "symbol" || typeof value === "function" || typeof value === "object" && value !== null) return undefined;
+    return String(value);
+  }
+
+  const isErrorValue = typeof Error.isError === "function" ? Error.isError : native.isError;
+  function stackHeader(error) {
+    if (!isErrorValue(error)) return "Error";
+    const nameSlot = dataSlot(error, "name") ?? prototypeSlot(error, "name");
+    const name = nameSlot === undefined || nameSlot.value === undefined ? "Error" : primitiveText(nameSlot.value) ?? "Error";
+    const messageSlot = dataSlot(error, "message");
+    const message = messageSlot === undefined ? "" : primitiveText(messageSlot.value) ?? "";
+    return name + (name && message ? ": " : "") + message;
+  }
+  internal.stackHeader = stackHeader;
+
+  // The frame lines of `stack`, after the error's header when it begins with one.
+  function stackWithoutHeader(error, stack) {
+    const header = stackHeader(error);
+    if (stack === header) return "";
+    return stack.startsWith(header + "\n") ? stack.slice(header.length + 1) : stack;
+  }
+  internal.stackWithoutHeader = stackWithoutHeader;
+
   Error.prepareStackTrace = function prepareStackTrace(error, callsites) {
     let start = 0;
     while (start < callsites.length - 1 && isErrorConstructorFrame(callsites[start])) start++;
-    let out = "";
+    let out = stackHeader(error);
     let raw = "";
     for (let i = start; i < callsites.length; i++) {
-      out += `    at ${formatCallSite(callsites[i])}\n`;
+      out += `\n    at ${formatCallSite(callsites[i])}`;
       if (internal.hotRun) raw += `    at ${formatCallSite(callsites[i], true)}\n`;
     }
     if (internal.hotRun) internal.hotErrorStacks.set(error, raw);
@@ -854,8 +898,10 @@
   internal.printError = printError;
 
   function fallbackErrorText(err) {
-    if (err instanceof Error) return `${err.name === "Error" ? "error" : err.name}: ${err.message}\n${err.stack || ""}\n`;
-    return `error: ${String(err)}\n`;
+    if (!(err instanceof Error)) return `error: ${String(err)}\n`;
+    // The label line below replaces the stack's own "Name: message" header.
+    const frames = stackWithoutHeader(err, typeof err.stack === "string" ? err.stack : "");
+    return `${err.name === "Error" ? "error" : err.name}: ${err.message}\n${frames}\n`;
   }
 
   function emitExit(code) {

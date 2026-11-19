@@ -65,8 +65,74 @@
   }
   internal.defineHidden(CallSite.prototype, methods);
 
+  const topLevelCode = new Set(["", "global code", "module code", "eval code", "__bunwasm_cjs__"]);
+
+  // One line of JavaScriptCore's text as QuickJS's formatter prints it: application frames
+  // mapped back to their source, the runtime's own and native frames as they are. A frame with
+  // no source (eval code, a `new Function` body) has no position: eval code prints as Bun's
+  // `eval (unknown)`. Caller-origin checks read these frames as opaque, so none is left out.
+  function jscFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
+    const runtime = /^(.*?)@(bun-wasm:.*:\d+:\d+)$/.exec(line);
+    if (runtime) return topLevelCode.has(runtime[1]!) ? runtime[2]! : `${runtime[1]} (${runtime[2]})`;
+    const nativeCode = /^(.*)@\[native code\]$/.exec(line);
+    if (nativeCode) return `${nativeCode[1] || "<anonymous>"} (native)`;
+    const unlocated = /^(.*)@$/.exec(line);
+    if (unlocated) return `${topLevelCode.has(unlocated[1]!) ? "eval" : unlocated[1]} (unknown)`;
+    const frame = inspect.parseStack(line)[0];
+    return frame ? inspect.frameText(frame) : "";
+  }
+
+  // Formatted frames by their raw text, and whole formatted stacks by theirs. Mapping a frame
+  // asks the host for its source map and source line, which dominates a stack read, and the
+  // answer changes only when a loaded source or position map does, so both caches empty when
+  // native.sourceGeneration() moves.
+  const frameTexts = new Map<string, string>();
+  const stackTexts = new Map<string, string>();
+  let frameGeneration = -1;
+
+  function remember(cache: Map<string, string>, limit: number, key: string, text: string) {
+    if (cache.size >= limit) cache.clear();
+    cache.set(key, text);
+    return text;
+  }
+
+  function cachedFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
+    return frameTexts.get(line) ?? remember(frameTexts, 4096, line, jscFrameText(inspect, line));
+  }
+
+  // The `\n    at` lines for JavaScriptCore's text. A hot run maps through changing revisions,
+  // so it formats every frame afresh.
+  function jscFrames(raw: string, hot: boolean) {
+    const inspect = internal.require("inspect");
+    let frames = "";
+    for (const line of raw.split("\n")) {
+      const text = hot ? jscFrameText(inspect, line) : cachedFrameText(inspect, line);
+      if (text) frames += `\n    at ${text}`;
+    }
+    return frames;
+  }
+
+  // JavaScriptCore's own text (`name@file:line:column` lines, no header) in Bun's form: the
+  // header, then one `    at` line per frame.
+  function jscStack(target: object, raw: string) {
+    const hot = Boolean(internal.hotRun);
+    if (hot) {
+      internal.hotErrorStacks.set(target, raw);
+      return internal.stackHeader(target) + jscFrames(raw, true);
+    }
+    const generation = native.sourceGeneration();
+    if (generation !== frameGeneration) {
+      frameTexts.clear();
+      stackTexts.clear();
+      frameGeneration = generation;
+    }
+    const frames = stackTexts.get(raw) ?? remember(stackTexts, 256, raw, jscFrames(raw, false));
+    return internal.stackHeader(target) + frames;
+  }
+
   function defaultStack(target: object, raw: unknown) {
-    return native.engine === "quickjs" ? Reflect.apply(defaultPrepare!, Error, [target, raw]) : raw;
+    if (native.engine === "quickjs") return Reflect.apply(defaultPrepare!, Error, [target, raw]);
+    return native.engine === "jsc" && typeof raw === "string" ? jscStack(target, raw) : raw;
   }
 
   function capturedFrames(target: object, raw: unknown) {
@@ -82,7 +148,7 @@
     try {
       const prepare = Error.prepareStackTrace;
       const custom = typeof prepare === "function" && prepare !== defaultPrepare;
-      if (!custom && materializing) return raw;
+      if (!custom && materializing) return defaultStack(target, raw);
       const sites = custom && parseCapturedStack
         ? capturedFrames(target, raw).map(frame => new CallSite(frame))
         : raw;
