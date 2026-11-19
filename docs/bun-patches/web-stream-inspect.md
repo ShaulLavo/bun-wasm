@@ -13,6 +13,10 @@ Each class shows the fields Bun shows: `locked`, `state` and `supportsBYOB` for 
 
 On QuickJS, JSC and the other ponyfill engines the values come from the ponyfill's `_`-prefixed fields, branded by the same own field its `IsReadableStream` and related checks use. On the Browser engine the classes are the host's. Under Node, the values come from each instance's own `kState` symbol, which Node's own inspector reads. A browser exposes no stream state, so there ReadableStream, WritableStream, TransformStream, the readers, the writer, the BYOB request and the writable and transform controllers keep the default formatting. The strategies, the readable controllers and the four transform wrappers use public getters and print Bun's form on every host.
 
+Bun's native instances have no own properties, so a stream nested past the depth limit, or inspected with `customInspect: false`, prints `ReadableStream {}`. The ponyfill's instances and Node's have own fields. `stream_inspect.ts` marks each prototype with the non-enumerable `Symbol.for("bunwasm.inspect.noOwnKeys")`, and `getKeys` in `inspect.js` returns no keys for an instance that inherits the marker. The prototype itself keeps its keys.
+
+`stream_inspect.ts` also restores the ponyfill constructors' names. The bundle is minified, so `ReadableStream.name` was `"A"`, and default formatting printed `A [ReadableStream]`.
+
 One native Bun quirk is not copied: `Bun.inspect` of a multi-line result nested in an array does not re-indent it in native Bun. Here the existing formatter's handling applies. The `web-stream-inspect` fixture compares the output with native Bun 1.4.4 on QuickJS, JSC and Browser.
 
 ## Classification
@@ -21,5 +25,7 @@ One native Bun quirk is not copied: `Bun.inspect` of a multi-line result nested 
 | --- | --- | --- |
 | `crates/bunwasm-runtime/src/js/stream_inspect.ts` | Adapted implementation | Bun `WebStreamsInspectCustom.cpp` and the stream classes' `inspectCustom` functions at `9510e74152073d850a18758ca41114d8f214ffa6`, reimplemented over the ponyfill fields and Node's `kState`. |
 | `crates/bunwasm-runtime/src/js/bootstrap.js`, `stream_inspect` load | Host feature | Install the methods with the globals. |
+| `crates/bunwasm-runtime/src/js/inspect.js`, `hidesOwnKeys` | Host feature | Leave out the own fields of marked stream instances, as native instances have none. |
+| `crates/bunwasm-runtime/src/js/stream_inspect.ts`, constructor names | Host feature | Name the minified ponyfill classes after their exports. |
 
 [Ledger scope and pinned revisions](scope.md).

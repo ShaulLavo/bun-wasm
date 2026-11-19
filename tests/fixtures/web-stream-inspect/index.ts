@@ -29,7 +29,9 @@ show("default controller", defaultController);
 show("byte controller", byteController);
 show("writable", new WritableStream());
 show("errored writable", new WritableStream({ start(controller) { controller.error(new Error("boom")); } }));
-const writer = new WritableStream().getWriter();
+// A zero high-water mark keeps `ready` pending: the Browser engine cannot read the state
+// of a promise the host resolved itself.
+const writer = new WritableStream({}, { highWaterMark: 0 }).getWriter();
 show("writer", writer);
 writer.releaseLock();
 const released = util.inspect(writer);
@@ -52,6 +54,8 @@ show("too deep", { a: { b: { c: new ReadableStream() } } });
 show("transform in an array", [new TransformStream()]);
 console.log("depth 0:", util.inspect(new TransformStream(), { depth: 0 }));
 console.log("depth 1:", util.inspect(new TransformStream(), { depth: 1 }));
+console.log("without the custom method:", util.inspect(new TransformStream(), { customInspect: false }));
+console.log("class names:", [ReadableStream, ReadableStreamDefaultReader, WritableStream, WritableStreamDefaultWriter, TransformStream, CountQueuingStrategy].map(constructor => constructor.name).join(" "));
 console.log("colors:", JSON.stringify(util.inspect(new ReadableStream(), { colors: true })));
 
 // Bun.inspect and console.log go through the same method.

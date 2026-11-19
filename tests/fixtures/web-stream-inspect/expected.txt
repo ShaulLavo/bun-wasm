@@ -20,8 +20,8 @@ errored writable: WritableStream { locked: false, state: 'erroring' }
 writer: WritableStreamDefaultWriter {
   stream: WritableStream { locked: true, state: 'writable' },
   close: Promise { <pending> },
-  ready: Promise { undefined },
-  desiredSize: 1
+  ready: Promise { <pending> },
+  desiredSize: 0
 }
 released writer: true true
 writable controller: WritableStreamDefaultController { stream: WritableStream { locked: false, state: 'writable' } }
@@ -80,6 +80,8 @@ depth 1: TransformStream {
   writable: WritableStream {},
   backpressure: true
 }
+without the custom method: TransformStream {}
+class names: ReadableStream ReadableStreamDefaultReader WritableStream WritableStreamDefaultWriter TransformStream CountQueuingStrategy
 colors: "ReadableStream { locked: \u001b[33mfalse\u001b[39m, state: \u001b[32m'readable'\u001b[39m, supportsBYOB: \u001b[33mfalse\u001b[39m }"
 Bun.inspect: ReadableStream { locked: false, state: 'readable', supportsBYOB: true }
 WritableStream { locked: false, state: 'writable' }

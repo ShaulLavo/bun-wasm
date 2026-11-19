@@ -67,6 +67,11 @@
     return `${name} ${internal.require("inspect").nodeInspect(data, copy)}`;
   }
 
+  // Bun's native instances have no own properties, so the default formatting (past the
+  // depth limit, or with customInspect: false) prints `ReadableStream {}`. inspect.js
+  // leaves out the own fields of an instance whose prototype carries this marker.
+  const noOwnKeys = Symbol.for("bunwasm.inspect.noOwnKeys");
+
   function install({ name, data, strict }: Spec): void {
     const method = {
       [custom](this: unknown, depth: unknown, options: unknown): unknown {
@@ -76,7 +81,12 @@
         return this;
       },
     }[custom];
-    Object.defineProperty(streams[name].prototype, custom, { value: method, writable: true, enumerable: false, configurable: true });
+    const constructor = streams[name];
+    // The ponyfill bundle is minified, so its classes carry mangled names ("A" for ReadableStream).
+    if (constructor.name !== name) Object.defineProperty(constructor, "name", { value: name, configurable: true });
+    const prototype = constructor.prototype;
+    Object.defineProperty(prototype, custom, { value: method, writable: true, enumerable: false, configurable: true });
+    Object.defineProperty(prototype, noOwnKeys, { value: true, configurable: true });
   }
 
   const readableLocked = getter("ReadableStream", "locked");
@@ -98,9 +108,11 @@
     return self => hasOwn(self, brand) && Object.prototype.isPrototypeOf.call(prototype, self) ? read(self) : undefined;
   }
 
+  // The ponyfill's and Node's request queues both expose `length`.
+  const count = (queue: unknown) => isObject(queue) ? field(queue, "length") : 0;
+
   function ponyfillSpecs(): Spec[] {
     const isBytes = (value: unknown) => value instanceof streams.ReadableByteStreamController;
-    const count = (queue: unknown) => isObject(queue) ? field(queue, "length") : 0;
     return [
       { name: "ReadableStream", data: ponyfill("ReadableStream", "_readableStreamController", self => ({
         locked: field(self, "_reader") !== undefined, state: field(self, "_state"), supportsBYOB: isBytes(field(self, "_readableStreamController")) })) },
@@ -144,21 +156,24 @@
   }
 
   function hostSpecs(): Spec[] {
-    const length = (value: unknown) => Array.isArray(value) ? value.length : 0;
-    const promise = (value: unknown) => isObject(value) ? field(value, "promise") : undefined;
+    // Node creates the closed and ready promises on first read, so read them through the getters.
+    const readerClosed = getter("ReadableStreamDefaultReader", "closed");
+    const byobClosed = getter("ReadableStreamBYOBReader", "closed");
+    const writerClosed = getter("WritableStreamDefaultWriter", "closed");
+    const writerReady = getter("WritableStreamDefaultWriter", "ready");
     return [
       { name: "ReadableStream", data: host("ReadableStream", (self, state) => ({
         locked: readableLocked(self), state: state.state, supportsBYOB: state.controller instanceof streams.ReadableByteStreamController })) },
-      { name: "ReadableStreamDefaultReader", data: host("ReadableStreamDefaultReader", (_self, state) => ({
-        stream: state.stream, readRequests: length(state.readRequests), close: promise(state.close) })) },
-      { name: "ReadableStreamBYOBReader", data: host("ReadableStreamBYOBReader", (_self, state) => ({
-        stream: state.stream, readIntoRequests: length(state.readIntoRequests), close: promise(state.close) })) },
+      { name: "ReadableStreamDefaultReader", data: host("ReadableStreamDefaultReader", (self, state) => ({
+        stream: state.stream, readRequests: count(state.readRequests), close: readerClosed(self) })) },
+      { name: "ReadableStreamBYOBReader", data: host("ReadableStreamBYOBReader", (self, state) => ({
+        stream: state.stream, readIntoRequests: count(state.readIntoRequests), close: byobClosed(self) })) },
       { name: "ReadableStreamDefaultController", data: controller("ReadableStreamDefaultController") },
       { name: "ReadableByteStreamController", data: controller("ReadableByteStreamController") },
       { name: "ReadableStreamBYOBRequest", data: host("ReadableStreamBYOBRequest", (_self, state) => ({ view: state.view ?? null, controller: state.controller })) },
       { name: "WritableStream", data: host("WritableStream", (self, state) => ({ locked: writableLocked(self), state: state.state })) },
       { name: "WritableStreamDefaultWriter", data: host("WritableStreamDefaultWriter", (self, state) => ({
-        stream: state.stream, close: promise(state.close), ready: promise(state.ready), desiredSize: writerDesired(self, state.stream) })) },
+        stream: state.stream, close: writerClosed(self), ready: writerReady(self), desiredSize: writerDesired(self, state.stream) })) },
       { name: "WritableStreamDefaultController", data: host("WritableStreamDefaultController", (_self, state) => ({ stream: state.stream })) },
       { name: "TransformStream", data: host("TransformStream", (_self, state) => ({ readable: state.readable, writable: state.writable, backpressure: state.backpressure })) },
       { name: "TransformStreamDefaultController", data: host("TransformStreamDefaultController", (_self, state) => ({ stream: state.stream })) },
