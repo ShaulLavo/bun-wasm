@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/process-rejections-many-handled",
+  "engines": ["quickjs", "jsc", "browser"]
+}

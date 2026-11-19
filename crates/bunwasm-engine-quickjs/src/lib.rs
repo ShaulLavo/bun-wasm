@@ -230,6 +230,7 @@ mod nested_bridge;
 #[path = "../../bunwasm-runtime/src/ops.rs"]
 mod ops;
 mod program;
+mod rejection_queue;
 #[path = "../../bunwasm-runtime/src/split_api.rs"]
 mod split_api;
 mod value_natives;

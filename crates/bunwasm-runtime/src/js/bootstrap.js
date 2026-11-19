@@ -990,8 +990,14 @@
   }
   internal.dispatchUncaught = dispatchUncaught;
 
+  // Promises reported to 'unhandledRejection' listeners. A handler attached to one later owes
+  // it 'rejectionHandled' (Bun's RejectedPromiseQueue::markReported). Weak: a reported promise
+  // that dies leaves it.
+  const reportedRejections = new WeakSet();
+
   internal.handleRejection = function handleRejection(reason, promise) {
     if (listenerCount("unhandledRejection") > 0) {
+      if (promise !== null && typeof promise === "object") reportedRejections.add(promise);
       globalThis.process.emit("unhandledRejection", reason, promise);
       return true;
     }
@@ -1001,6 +1007,14 @@
     // Bun reports exit code 0 to "exit" listeners here (and still exits 1).
     emitExit(0);
     return false;
+  };
+
+  // A promise got its first handler after it left the engine's rejection queue. Bun's
+  // Bun__emitHandledPromiseEvent: 'rejectionHandled' with the promise, once, and only for
+  // promises reported as unhandled. A throw from a listener is an uncaught exception.
+  internal.handleRejectionHandled = function handleRejectionHandled(promise) {
+    if (!reportedRejections.delete(promise) || internal.exitStarted) return;
+    if (listenerCount("rejectionHandled") > 0) globalThis.process.emit("rejectionHandled", promise);
   };
 
   // Bun's dispatch_on_before_exit: a throw goes to the uncaught exception handlers. Returns

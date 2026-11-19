@@ -21,6 +21,9 @@ mod natives;
 mod ops;
 #[path = "program.rs"]
 mod program;
+#[allow(dead_code)]
+#[path = "rejection_queue.rs"]
+mod rejection_queue;
 #[path = "../../bunwasm-runtime/src/split_api.rs"]
 mod split_api;
 #[path = "transport.rs"]

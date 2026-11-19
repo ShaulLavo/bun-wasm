@@ -577,7 +577,7 @@
       fullGC: () => native.gc(),
       edenGC: () => native.gc(),
       heapSize: () => native.memoryUsage().heapUsed,
-      // Per-type cell counts are unavailable through the engine interface.
+      // Per-type cell counts come only from JSC; other engines report none.
       heapStats: () => ({
         heapSize: native.memoryUsage().heapUsed,
         heapCapacity: native.memoryUsage().heapTotal,
@@ -586,7 +586,7 @@
         protectedObjectCount: 0,
         globalObjectCount: 1,
         protectedGlobalObjectCount: 1,
-        objectTypeCounts: {},
+        objectTypeCounts: native.objectTypeCounts?.() ?? {},
         protectedObjectTypeCounts: {},
       }),
       memoryUsage: () => native.memoryUsage(),

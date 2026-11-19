@@ -199,6 +199,10 @@ pub(crate) fn value_natives<E: Engine>(
         "memoryUsage",
         Rc::new(|e: &E, _: &[E::Value]| Ok(e.value_from(e.memory_usage()))),
     ));
+    list.push((
+        "objectTypeCounts",
+        Rc::new(|e: &E, _: &[E::Value]| Ok(e.object_type_counts().unwrap_or_else(|| e.undefined()))),
+    ));
     list
 }
 

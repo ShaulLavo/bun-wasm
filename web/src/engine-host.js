@@ -1053,14 +1053,21 @@ class EngineHost {
       if (this.transfer(reason)) return;
       if (!this.guard(() => this.internal.handleRejection(reason, promise))) this.exit(1);
     };
+    // The host reports a late handler on a promise it reported; the runtime emits
+    // 'rejectionHandled' when that report reached an 'unhandledRejection' listener.
+    const onHandled = (promise) => {
+      if (!this.exited) this.guard(() => this.internal.handleRejectionHandled(promise));
+    };
     if (nativeProcess) {
       nativeProcess.on("unhandledRejection", onRejection);
+      nativeProcess.on("rejectionHandled", onHandled);
       nativeProcess.on("uncaughtException", (err) => this.uncaught(err));
     } else if (nativeAddEventListener) {
       nativeAddEventListener("unhandledrejection", (event) => {
         event.preventDefault();
         onRejection(event.reason, event.promise);
       });
+      nativeAddEventListener("rejectionhandled", (event) => onHandled(event.promise));
       nativeAddEventListener("error", (event) => {
         event.preventDefault();
         this.uncaught(event.error);
