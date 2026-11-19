@@ -57,24 +57,25 @@
   let collecting = null;
   // The running test ({ expectCount, assertions }) and its pending invocation, so uncaught
   // errors can fail it. One test runs at a time outside concurrent groups; inside one, each
-  // test's slot travels in the async context frame its hooks and body run in.
+  // test's slot is the store of a private AsyncLocalStorage, so it travels with the async
+  // context its hooks and body run in, alongside the user's own stores.
   const serialSlot = { test: null, invocation: null };
-  const RUNNING = Symbol("running test");
   let concurrentGroups = 0;
+  let slotStorage = null;
+
+  function slots() {
+    slotStorage ??= new (internal.builtin("node:async_hooks").AsyncLocalStorage)();
+    return slotStorage;
+  }
 
   function running() {
     if (concurrentGroups === 0) return serialSlot;
-    const frame = native.getAsyncContext();
-    const slot = frame instanceof Map ? frame.get(RUNNING) : undefined;
     // Code outside every test of the group, such as a timer the group did not start.
-    return slot || { test: null, invocation: null };
+    return slots().getStore() || { test: null, invocation: null };
   }
 
   function runInSlot(slot, fn) {
-    const current = native.getAsyncContext();
-    const frame = new Map(current instanceof Map ? current : []);
-    frame.set(RUNNING, slot);
-    return internal.runInContext(Object.freeze(frame), fn, undefined, []);
+    return slots().run(slot, fn);
   }
   // Opaque token for the file being loaded or run; expectations keep it for snapshot guards.
   let activeFile = null;
