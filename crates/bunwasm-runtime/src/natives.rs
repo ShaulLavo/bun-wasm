@@ -1447,6 +1447,44 @@ fn install_crypto(t: &mut Table) {
             .ok_or_else(|| NativeError::type_error(format!("Invalid digest: {alg}")))?;
         Ok(Val::Bytes(digest))
     });
+    // node:crypto and Bun.CryptoHasher: (canonical name, data, output length).
+    t.add("nodeDigest", |a| {
+        use crate::node_digest::{DigestError, digest};
+        let alg = a.str(0)?;
+        let output_len = a.opt_num(2).map(|len| len as usize);
+        match digest(alg, &[a.bytes(1)?], output_len) {
+            Ok(out) => Ok(Val::Bytes(out)),
+            Err(DigestError::Unsupported) => Err(NativeError::type_error(format!(
+                "Digest method not supported: {alg}"
+            ))),
+            Err(DigestError::NotXof) => {
+                Err(NativeError::error("NOT_XOF_OR_INVALID_LENGTH".to_string()))
+            }
+            Err(DigestError::OutOfMemory) => Err(NativeError::range_error("Out of memory")),
+        }
+    });
+    // node:crypto pbkdf2: (canonical name, password, salt, iterations, keylen).
+    t.add("nodePbkdf2", |a| {
+        use crate::node_digest::{DigestError, pbkdf2};
+        let alg = a.str(0)?;
+        match pbkdf2(
+            alg,
+            a.bytes(1)?,
+            a.bytes(2)?,
+            a.num(3)? as u32,
+            a.num(4)? as usize,
+        ) {
+            Ok(out) => Ok(Val::Bytes(out)),
+            Err(DigestError::OutOfMemory) => Err(NativeError::range_error("Out of memory")),
+            Err(_) => Err(NativeError::type_error(format!("Invalid digest: {alg}"))),
+        }
+    });
+    t.add("nodeHmac", |a| {
+        let alg = a.str(0)?;
+        let digest = crate::node_digest::hmac(alg, a.bytes(1)?, a.bytes(2)?)
+            .ok_or_else(|| NativeError::type_error(format!("Invalid digest: {alg}")))?;
+        Ok(Val::Bytes(digest))
+    });
     t.add("wyhash", |a| {
         let seed = a.opt_num(1).unwrap_or(0.0) as u64;
         Ok(Val::BigUint(bun_wyhash::hash_with_seed(seed, a.bytes(0)?)))

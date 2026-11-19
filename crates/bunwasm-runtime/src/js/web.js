@@ -692,7 +692,7 @@
       abortSignal = (signal, reason) => {
         if (signal.#aborted) return;
         signal.#aborted = true;
-        signal.#reason = reason === undefined ? new DOMException("This operation was aborted", "AbortError") : reason;
+        signal.#reason = reason === undefined ? new DOMException("The operation was aborted.", "AbortError") : reason;
         const algorithms = Array.from(signal.#algorithms);
         signal.#algorithms.clear();
         runAbortAlgorithms(algorithms);
@@ -829,12 +829,18 @@
     return native.utf8Encode(String(part));
   }
 
-  // Bun adds the charset to text types: "text/plain" -> "text/plain;charset=utf-8".
+  // Bun's MimeType.rs by_name_static: an exact, case-sensitive match of a few known
+  // types gives Bun's canonical value; any other type is only lowercased.
+  const canonicalBlobTypes = new Map([
+    ["text/plain", "text/plain;charset=utf-8"], ["text/html", "text/html;charset=utf-8"], ["text/css", "text/css;charset=utf-8"],
+    ["text/javascript", "text/javascript;charset=utf-8"], ["text/jsx", "text/javascript;charset=utf-8"],
+    ["application/javascript", "text/javascript;charset=utf-8"], ["application/json", "application/json;charset=utf-8"],
+    ["application/x-www-form-urlencoded", "application/x-www-form-urlencoded;charset=UTF-8"], ["application/webassembly", "application/wasm"],
+  ]);
   function normalizeBlobType(type) {
     if (!type) return "";
-    const lower = String(type).toLowerCase();
-    if (lower.startsWith("text/") && !lower.includes("charset")) return lower + ";charset=utf-8";
-    return lower;
+    const given = String(type);
+    return canonicalBlobTypes.get(given) ?? given.toLowerCase();
   }
 
   class Blob {
@@ -882,7 +888,10 @@
       return this._bytes().slice();
     }
     async formData() {
-      throw new TypeError("Blob.formData() is not supported in bun-wasm");
+      const forms = formBody();
+      const encoding = forms.api.encoding(this.type);
+      if (!encoding) throw new Error("Invalid encoding");
+      return forms.api.parse(this._bytes(), encoding, forms.deps, reason => new Error(`FormData encoding failed: ${reason}`));
     }
     slice(start = 0, end = undefined, type = "") {
       const bytes = this._bytes();
@@ -1052,7 +1061,10 @@
       return { bytes: native.utf8Encode(body.toString()), type: "application/x-www-form-urlencoded;charset=UTF-8" };
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
-    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: new Uint8Array(toUint8(body)), type: null };
+    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && body instanceof SharedArrayBuffer)) {
+      return { bytes: new Uint8Array(toUint8(body)), type: null };
+    }
+    if (body instanceof FormData) return formBody().api.serialize(body, formBody().deps);
     if (body instanceof ReadableStream) return { stream: bodyStreams.adoptable(body), bytes: bodyStreams.bytes(body) || null, type: null };
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
     return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
@@ -1088,10 +1100,18 @@
     },
     async blob() {
       const type = this.headers.get("content-type") || "";
-      return new Blob([await this._consume()], { type });
+      const blob = new Blob([await this._consume()]);
+      // Bun keeps the Content-Type as written, canonicalizing only its known types.
+      blob._setType(canonicalBlobTypes.get(type) ?? type);
+      return blob;
     },
     async formData() {
-      throw new TypeError("formData() is not supported in bun-wasm");
+      const forms = formBody();
+      const encoding = forms.api.encoding(this.headers.get("content-type"));
+      // Bun rejects an undecodable type without using the body; a used body reports that first.
+      if (!encoding && !this.bodyUsed) throw formParseError("Can't decode form data from body because of incorrect MIME type/boundary");
+      const bytes = await this._consume();
+      return forms.api.parse(bytes, encoding, forms.deps, reason => formParseError(`FormData parse error ${reason}`));
     },
     textStream() {
       return bodyStreams.textStream(this);
@@ -1257,15 +1277,18 @@
   Object.assign(Request.prototype, BodyMixin);
 
   // No sockets under WASI. file: URLs still work, like in Bun.
-  async function fetch(input, init = {}) {
-    const url = input instanceof Request ? input.url : String(input instanceof URL ? input.href : input);
+  // Arguments are read and checked as Bun does (fetch_args.ts); errors reject.
+  async function fetch(input) {
+    const parsed = internal.require("fetch_args").parse(arguments, { Request, Headers, AbortSignal, Blob });
+    if (parsed.data !== undefined) return fetchDataUrl(parsed.data);
+    const { url, init } = parsed;
+    input = parsed.request || url;
     if (url.startsWith("file:")) {
       const path = decodeURIComponent(new URL(url).pathname);
       const res = new Response(native.readFile(path), { headers: { "content-type": internal.mimeType(path) } });
       Response._setUrl(res, url);
       return res;
     }
-    if (url.startsWith("data:")) return fetchDataUrl(url);
     // Hosts implementing the bun_wasm ABI (docs/host-abi.md) do real HTTP.
     if (native.hostCaps.fetch) return internal.require("net").fetch(input, init);
     const err = new TypeError(`fetch() is not available in bun-wasm: WASI has no network access (${url})`);
@@ -1274,12 +1297,8 @@
   }
 
   function fetchDataUrl(url) {
-    const comma = url.indexOf(",");
-    const meta = url.slice(5, comma);
-    const data = url.slice(comma + 1);
-    const isBase64 = meta.endsWith(";base64");
-    const type = (isBase64 ? meta.slice(0, -7) : meta) || "text/plain;charset=US-ASCII";
-    const bytes = isBase64 ? native.base64Decode(data) : native.utf8Encode(decodeURIComponent(data));
+    const { type, base64, data } = internal.require("fetch_args").dataUrlParts(url);
+    const bytes = base64 ? native.base64Decode(data) : native.utf8Encode(decodeURIComponent(data));
     return new Response(bytes, { headers: { "content-type": type } });
   }
 
@@ -1291,7 +1310,7 @@
     toml: "application/toml", xml: "application/xml", svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg",
     jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", ico: "image/x-icon", wasm: "application/wasm",
     pdf: "application/pdf", zip: "application/zip", gz: "application/gzip", csv: "text/csv;charset=utf-8",
-    mp3: "audio/mpeg", mp4: "video/mp4", woff: "font/woff", woff2: "font/woff2",
+    mp3: "audio/mpeg", mp4: "video/mp4", woff: "font/woff", woff2: "font/woff2", bin: "application/octet-stream",
   };
   internal.mimeType = function mimeType(path) {
     const dot = path.lastIndexOf(".");
@@ -1370,9 +1389,7 @@
     if (!ArrayBuffer.isView(array) || array instanceof Float32Array || array instanceof Float64Array || array instanceof DataView) {
       throw new DOMException("The data argument must be an integer-type TypedArray", "TypeMismatchError");
     }
-    if (array.byteLength > 65536) {
-      throw new DOMException(`The ArrayBufferView's byte length (${array.byteLength}) exceeds the number of bytes of entropy available via this API (65536)`, "QuotaExceededError");
-    }
+    // Bun has no 65536-byte quota; the Browser host's random_get fills in chunks.
     toUint8(array).set(native.randomBytes(array.byteLength));
     return array;
   }
@@ -1446,6 +1463,24 @@
       return new File([value._bytes()], filename === undefined ? "blob" : String(filename), { type: value.type });
     }
     return String(value);
+  }
+
+  // Multipart and urlencoded bodies (form_data_body.ts), loaded on first use.
+  let formBodies;
+  function formBody() {
+    formBodies ??= {
+      api: internal.require("form_data_body"),
+      deps: {
+        FormData, File, URLSearchParams,
+        mimeByExtension: extension => (Object.hasOwn(MIME, extension) ? MIME[extension] : undefined),
+        blobBytes: blob => blob._intrinsicBytes(),
+      },
+    };
+    return formBodies;
+  }
+
+  function formParseError(message) {
+    return Object.assign(new TypeError(message), { code: "ERR_FORMDATA_PARSE_ERROR" });
   }
 
   const navigator = {

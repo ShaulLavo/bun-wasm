@@ -1,0 +1,29 @@
+readFileSync TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+readFile TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+readFileSync object TypeError ERR_INVALID_ARG_VALUE encoding 'nope' is an invalid encoding
+writeFileSync TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+writeFile TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+appendFileSync TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+appendFile TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+readdirSync TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+readdir TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+readlinkSync TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+readlink TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+realpathSync TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+realpath TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+mkdtempSync TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+mkdtemp TypeError ERR_INVALID_ARG_VALUE encoding 'test' is an invalid encoding
+ReadStream TypeError ERR_INVALID_ARG_VALUE The argument 'encoding' is invalid encoding. Received 'test'
+WriteStream TypeError ERR_INVALID_ARG_VALUE The argument 'encoding' is invalid encoding. Received 'test'
+out.txt written false
+valid utf8 héllo
+valid UTF-8 héllo
+valid latin1 hÃ©llo
+valid hex 68c3a96c6c6f
+valid base64 aMOpbGxv
+valid ucs2 써沩潬
+valid buffer Buffer(6)
+valid null Buffer(6)
+valid undefined Buffer(6)
+realpath valid true readdir valid true
+write with buffer encoding wr�te

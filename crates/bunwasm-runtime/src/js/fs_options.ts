@@ -4,16 +4,48 @@
     readdir(path: string): [string, string][];
     mkdir(path: string, recursive: boolean): unknown;
     copyFile(from: string, to: string, mode: number): void;
-  }, absolute: (path: string) => string) {
+  }, absolute: (path: string) => string, inspect: (value: unknown) => string = String) {
     const stringFlags: Record<string, number> = {
       r: 0, "r+": 2, rs: 1052672, sr: 1052672, "rs+": 1052674, "sr+": 1052674,
       w: 577, wx: 705, xw: 705, "w+": 578, "wx+": 706, "xw+": 706,
-      a: 1089, ax: 1217, xa: 1217, as: 1053761, "a+": 1090, "ax+": 1218, "xa+": 1218, "as+": 1053762,
+      a: 1089, ax: 1217, xa: 1217, as: 1053761, sa: 1053761, "a+": 1090, "ax+": 1218, "xa+": 1218, "as+": 1053762, "sa+": 1053762,
     };
     function flagsNumber(flags: unknown = "r"): number {
       if (typeof flags === "string" && Object.hasOwn(stringFlags, flags)) return stringFlags[flags]!;
-      if (typeof flags === "number" && Number.isInteger(flags) && flags >= 0 && flags <= 2147483647) return flags;
-      throw Object.assign(new TypeError(`The argument 'flags' is invalid. Received ${String(flags)}`), { code: "ERR_INVALID_ARG_VALUE" });
+      if (typeof flags === "number") {
+        // Node's validateInt32 for a numeric flag.
+        const rule = !Number.isInteger(flags) ? "an integer" : flags < -2147483648 || flags > 2147483647 ? ">= -2147483648 && <= 2147483647" : null;
+        if (rule) throw Object.assign(new RangeError(`The value of "flags" is out of range. It must be ${rule}. Received ${inspect(flags)}`), { code: "ERR_OUT_OF_RANGE" });
+        return flags;
+      }
+      throw Object.assign(new TypeError(`The argument 'flags' is invalid. Received ${inspect(flags)}`), { code: "ERR_INVALID_ARG_VALUE" });
+    }
+
+    // Node's ERR_INVALID_ARG_TYPE description of the received value.
+    function received(value: unknown): string {
+      if (value === null || value === undefined) return String(value);
+      if (typeof value === "function") return `function ${value.name}`;
+      if (typeof value === "object") return `an instance of ${value.constructor?.name || "Object"}`;
+      return `type ${typeof value} (${inspect(value)})`;
+    }
+
+    // Node's parseFileMode (lib/internal/validators.js): an octal digit string or a uint32.
+    function parseFileMode(value: unknown, name: string, fallback: number): number {
+      let mode = value ?? fallback;
+      if (typeof mode === "string") {
+        if (!/^[0-7]+$/.test(mode)) {
+          throw Object.assign(new TypeError(`The argument '${name}' must be a 32-bit unsigned integer or an octal string. Received ${inspect(mode)}`), { code: "ERR_INVALID_ARG_VALUE" });
+        }
+        mode = Number.parseInt(mode, 8);
+      }
+      if (typeof mode !== "number") {
+        throw Object.assign(new TypeError(`The "${name}" argument must be of type number. Received ${received(mode)}`), { code: "ERR_INVALID_ARG_TYPE" });
+      }
+      if (!Number.isInteger(mode) || mode < 0 || mode > 4294967295) {
+        const rule = Number.isInteger(mode) ? ">= 0 && <= 4294967295" : "an integer";
+        throw Object.assign(new RangeError(`The value of "${name}" is out of range. It must be ${rule}. Received ${inspect(mode)}`), { code: "ERR_OUT_OF_RANGE" });
+      }
+      return mode;
     }
 
     class Stats {
@@ -84,6 +116,6 @@
       if (!accepted || !copyEntry(from, to, options)) return;
       for (const [name] of native.readdir(absolute(from))) await cp(childPath(from, name), childPath(to, name), options);
     }
-    return { flagsNumber, Stats, cpSync, cp };
+    return { flagsNumber, parseFileMode, Stats, cpSync, cp };
   };
 })

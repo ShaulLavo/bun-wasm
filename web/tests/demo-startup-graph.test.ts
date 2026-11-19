@@ -5,6 +5,9 @@ import { dirname, join, posix, resolve } from "node:path";
 import { buildBrowserEntries, resolveRuntimePackage } from "../../scripts/browser-build";
 import { checkLazyProcessService, initialJavaScript } from "../../scripts/runtime-size";
 
+// A full browser bundle; the cap only catches a hung build, not a slow machine.
+const BUILD_HANG_CAP_MS = 120_000;
+
 for (const app of ["web", "sandbox"]) test(`${app} keeps Bun execution lazy alongside its startup shell contract`, async () => {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-demo-startup-"));
   const root = resolve(import.meta.dir, "../..");
@@ -44,7 +47,7 @@ for (const app of ["web", "sandbox"]) test(`${app} keeps Bun execution lazy alon
     expect(filesystemInputs.some(path => /\/(?:engine-loader|runner|bun-launcher|subprocess-broker|bun-executor)\.ts$/.test(path))).toBe(false);
     expect(filesystemInputs.some(path => path.includes("@xterm/") || path.includes("@codemirror/"))).toBe(false);
   } finally { await rm(scratch, { recursive: true, force: true }); }
-});
+}, BUILD_HANG_CAP_MS);
 
 function assertPromptGraph(
   outputs: NonNullable<Awaited<ReturnType<typeof buildBrowserEntries>>["metafile"]>["outputs"],

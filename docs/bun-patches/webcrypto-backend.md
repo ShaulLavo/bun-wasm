@@ -25,6 +25,12 @@ least 96 bits. The adapter uses the same RustCrypto AES, CTR32 and GHASH impleme
 authenticates before decryption, and compares tags with `subtle::ConstantTimeEq`. Its MIT
 license is retained in `third_party/licenses/aes-gcm-MIT`. This is a port, not an upstream bug.
 
+`makeKey` in `crypto.js` stores a key's usages in WebCrypto's `KeyUsage` enum order
+(`encrypt`, `decrypt`, `sign`, `verify`, `deriveKey`, `deriveBits`, `wrapKey`,
+`unwrapKey`) whatever order the caller passed, so `CryptoKey.usages` and JWK `key_ops`
+match native Bun 1.4.4. The `webcrypto-usage-order` fixture compares imported,
+generated and derived keys with native Bun.
+
 `scripts/generate-crypto-vectors.mjs` and both crypto fixture directories are original test
 adapters. Native Node generates signatures, key formats, ciphertext and derived bytes for
 comparison with wasm. No upstream test implementation is copied.

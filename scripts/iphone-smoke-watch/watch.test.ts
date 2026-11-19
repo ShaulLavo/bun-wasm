@@ -223,11 +223,60 @@ test.each([false, true])("claim during grace, after retry = %s, stops dispatch r
   expect(fake.messages).toEqual([]);
   expect(state.jobs[1]?.state.kind).toBe("pending");
   expect(() => claim(first(state), 1, fake.adapters.now())).toThrow("already claimed");
-  complete(first(state), red(first(state)), fake.adapters.now());
+  await failTwice(state, first(state), fake);
   await tick(state, fake.adapters);
   expect(fake.messages).toHaveLength(1);
   expect(fake.messages[0]).toContain("smoke RED");
   expect(fake.messages[0]).toContain("prepare-artifacts");
+});
+
+async function failTwice(state: State, job: Job, fake: ReturnType<typeof harness>): Promise<void> {
+  complete(job, red(job), fake.adapters.now());
+  await tick(state, fake.adapters);
+  claim(job, 2, fake.adapters.now());
+  complete(job, red(job), fake.adapters.now());
+}
+
+const redAt = (job: Job, reportPath: string) => outcome({ revision: job.revision, status: "red", failedPhase: "render", reportPath }, job.revision);
+
+test("a red retried once that turns green notifies nobody", async () => {
+  const state = fresh(), fake = harness([run(1), run(2)]);
+  await tick(state, fake.adapters);
+  const job = first(state);
+  claim(job, 1, now);
+  complete(job, redAt(job, "/reports/attempt-1.json"), now);
+  expect(job.state).toEqual({ kind: "pending", attempt: 2 });
+  expect(job.history).toMatchObject([{ attempt: 1, outcome: { status: "red", reportPath: "/reports/attempt-1.json" } }]);
+  expect(status(state)).toContain("pending retry; attempt 1 red at render; report /reports/attempt-1.json");
+  await tick(state, fake.adapters);
+  expect(fake.dispatches).toEqual([sha(1), sha(1)]);
+  expect(job.state).toMatchObject({ kind: "running", attempt: 2 });
+  claim(job, 2, now);
+  complete(job, green(job), now);
+  await tick(state, fake.adapters);
+  await tick(state, fake.adapters);
+  expect(fake.messages).toEqual([]);
+  expect(job.state).toMatchObject({ kind: "complete", attempt: 2, outcome: { status: "green" } });
+  expect(state.jobs[1]?.state).toMatchObject({ kind: "running", lastGreen: sha(1) });
+});
+
+test("a red retry sends one notification naming both failed attempts", async () => {
+  const state = fresh(), fake = harness([run(1)]);
+  await tick(state, fake.adapters);
+  const job = first(state);
+  claim(job, 1, now);
+  complete(job, redAt(job, "/reports/attempt-1.json"), now);
+  const restored = parseState(JSON.parse(JSON.stringify(state)));
+  await tick(restored, fake.adapters);
+  expect(fake.messages).toEqual([]);
+  claim(first(restored), 2, now);
+  complete(first(restored), redAt(first(restored), "/reports/attempt-2.json"), now);
+  expect(first(restored).state).toMatchObject({ kind: "complete", attempt: 2, notified: false });
+  await tick(restored, fake.adapters);
+  await tick(restored, fake.adapters);
+  expect(fake.messages).toHaveLength(1);
+  for (const text of ["smoke RED", "Failed twice", "attempt 1", "/reports/attempt-1.json", "/reports/attempt-2.json", "Attempt: 2."]) expect(fake.messages[0]).toContain(text);
+  expect(fake.dispatches).toEqual([sha(1), sha(1)]);
 });
 
 test("restart retains both deadlines, the single retry, and a failed operational notification", async () => {
@@ -289,7 +338,7 @@ test("a late durable claim cancels an unsent no-claim alert and preserves real r
   fake.adapters.notify = async () => { throw new Error("offline"); };
   await expect(tick(state, fake.adapters)).rejects.toThrow("offline");
   claim(first(state), 1, fake.adapters.now());
-  complete(first(state), red(first(state)), fake.adapters.now());
+  await failTwice(state, first(state), fake);
   fake.adapters.notify = async message => { fake.messages.push(message); };
   await tick(state, fake.adapters);
   expect(fake.messages).toHaveLength(1);
@@ -357,6 +406,9 @@ test("setup failure is red and reports tested predecessor, range, phase and repo
   finish(state, 1);
   await tick(state, fake.adapters);
   finish(state, 2, false);
+  await tick(state, fake.adapters);
+  expect(fake.messages).toEqual([]);
+  finish(state, 2, false);
   fake.adapters.notify = async () => { throw new Error("notification unavailable"); };
   await expect(tick(state, fake.adapters)).rejects.toThrow("notification unavailable");
   expect(state.jobs[1]?.state).toMatchObject({ notified: false, outcome: { status: "red" } });
@@ -367,6 +419,7 @@ test("setup failure is red and reports tested predecessor, range, phase and repo
   expect(fake.messages[0]).toContain(`${sha(1)}...${sha(2)}`);
   expect(fake.messages[0]).toContain("prepare-artifacts");
   expect(fake.messages[0]).toContain("/reports/failure.md");
+  expect(fake.messages[0]).toContain("Failed twice");
   await tick(state, fake.adapters);
   expect(fake.messages).toHaveLength(1);
 });
@@ -503,6 +556,35 @@ test("CLI fake GitHub/T3 dispatch, claim, red complete and cleanup-confirmed ret
   expect((await cli(path, ["retry"].concat(identity, [`--cleanup-report=${audit}`]), env)).code).toBe(0);
   expect(first(await load(path)).state).toEqual({ kind: "pending", attempt: 2 });
   expect(await readFile(join(path, sha(1), "attempt-1", "result.json"), "utf8")).toContain("manual-iphone-smoke");
+}, 60_000);
+
+test("CLI red complete queues one automatic retry, and a second red notifies once", async () => {
+  const path = await directory(), bin = join(path, "bin");
+  await mkdir(bin);
+  await writeFile(join(bin, "gh"), `#!${process.execPath}\nconsole.log(JSON.stringify(process.argv.at(-1).endsWith('ci.yml') ? {id:42,path:'.github/workflows/ci.yml'} : ${JSON.stringify({ total_count: 1, workflow_runs: [apiRun(1)] })}));\n`);
+  await writeFile(join(bin, "t3"), `#!${process.execPath}\nawait Bun.write(process.env.SEND_LOG, (await Bun.file(process.env.SEND_LOG).exists() ? await Bun.file(process.env.SEND_LOG).text() : '') + JSON.stringify(process.argv.slice(2)) + '\\n');\nconsole.log('{}');\n`);
+  await chmod(join(bin, "gh"), 0o700);
+  await chmod(join(bin, "t3"), 0o700);
+  const env = { PATH: `${bin}:${process.env.PATH}`, T3_CLI: join(bin, "t3"), SEND_LOG: join(path, "messages.jsonl") };
+  const sent = async () => (await readFile(env.SEND_LOG, "utf8")).trim().split("\n");
+  expect((await cli(path, ["tick", `--since=${since}`], env)).code).toBe(0);
+  for (const attempt of [1, 2]) {
+    const identity = [`--revision=${sha(1)}`, `--attempt=${attempt}`];
+    expect((await cli(path, ["claim"].concat(identity), env)).code).toBe(0);
+    const result = join(path, `red-${attempt}.json`);
+    await writeFile(result, JSON.stringify(redAt(first(await load(path)), `/reports/attempt-${attempt}.json`)));
+    expect((await cli(path, ["complete"].concat(identity, [`--result-file=${result}`]), env)).code).toBe(0);
+    expect(await readFile(join(path, sha(1), `attempt-${attempt}`, "result.json"), "utf8")).toContain(`attempt-${attempt}.json`);
+    if (attempt === 2) break;
+    expect(first(await load(path)).state).toEqual({ kind: "pending", attempt: 2 });
+    expect(await sent()).toHaveLength(1);
+    expect((await cli(path, ["tick"], env)).code).toBe(0);
+    expect((await sent()).at(-1)).toContain("attempt 2");
+  }
+  const messages = await sent();
+  expect(messages).toHaveLength(3);
+  for (const text of ["Failed twice", "/reports/attempt-1.json", "/reports/attempt-2.json"]) expect(messages[2]).toContain(text);
+  expect(first(await load(path)).state).toMatchObject({ kind: "complete", attempt: 2, notified: true });
 }, 60_000);
 
 test("CLI timeout after delivery releases the lock for a waiting claim without red or a second claim", async () => {

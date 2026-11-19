@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 
+// Each test spawns Node or `bun pm pack`; the cap only catches a hang, not a slow runner.
+const SPAWN_HANG_CAP_MS = 120_000;
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-stream-inputs-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -34,7 +36,7 @@ test("browser interop inputs include executable typed streams without loading Pl
   `, dump]);
   expect(load.stderr.toString()).toBe("");
   expect(load.exitCode).toBe(0);
-});
+}, SPAWN_HANG_CAP_MS);
 
 test("package archive carries the native stream bridge and its direct helper", () => {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-direct-pack-"));
@@ -49,4 +51,4 @@ test("package archive carries the native stream bridge and its direct helper", (
     expect(files).toContain("package/web/src/native-direct-stream.ts");
     expect(files).toContain("package/web/src/native-readable-iterator.ts");
   } finally { rmSync(scratch, { recursive: true, force: true }); }
-});
+}, SPAWN_HANG_CAP_MS);

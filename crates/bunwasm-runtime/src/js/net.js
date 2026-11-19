@@ -112,7 +112,8 @@
 
   async function fetch(input, init = {}) {
     const req = input instanceof Request && Object.keys(init).length === 0 ? input : new Request(input, init);
-    const signal = init.signal || req.signal;
+    // A null init.signal detaches from the request's signal, as in Bun.
+    const signal = "signal" in init ? init.signal : req.signal;
     if (signal && signal.aborted) throw signal.reason;
     const headers = Array.from(req.headers);
     // Like Bun, identify as Bun unless the caller set a user agent.

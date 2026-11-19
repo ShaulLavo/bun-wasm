@@ -529,40 +529,41 @@ test("CMake preflight has one always-on lightweight owner, independent of native
   expect(rust).not.toContain("scripts/cmake-cache.test.ts");
 });
 
-test("shared browser setup selects HTTPS apt sources with optional mirrors", () => {
+test("apt setup sends every regional Ubuntu mirror to the main HTTPS archive", () => {
+  const script = new URL("../.github/scripts/apt-main-archive.sh", import.meta.url).pathname;
   const action = readFileSync(new URL("../.github/actions/browser-deps/action.yml", import.meta.url), "utf8");
-  const step = action.match(/    - name: Use Ubuntu HTTPS archives for browser dependencies\n      shell: [^\n]+\n      run: \|\n((?:        .*\n)+)/);
-  if (!step?.[1]) throw new Error("Configure apt transport before installing browser dependencies");
-  const command = step[1];
-  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-apt-"));
+  expect(action).toContain('sudo bash "$GITHUB_WORKSPACE/.github/scripts/apt-main-archive.sh"');
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-browser-apt-"));
   try {
-    const mirrors = join(directory, "apt-mirrors.txt");
-    const sources = join(directory, "ubuntu.sources");
+    const apt = join(root, "etc/apt");
+    mkdirSync(join(apt, "sources.list.d"), { recursive: true });
+    const mirrors = join(apt, "apt-mirrors.txt");
+    const sources = join(apt, "sources.list.d/ubuntu.sources");
     const ubuntuSources = "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\n";
+    // Runner images point straight at a regional host too, not only through the mirror list.
+    const regionalSources = "Types: deb\nURIs: http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\nSuites: resolute\n";
+    const unrelated = "http://azureXarchiveXubuntuXcom/ubuntu/\tpriority:5\nhttps://ppa.launchpadcontent.net/x/ubuntu\tpriority:6\n";
+    writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n" + unrelated);
     writeFileSync(sources, ubuntuSources);
-    const fallbacks = "https://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n";
-    const unrelated = "https://azure.archive.ubuntu.com/ubuntu/\tpriority:4\nhttp://azureXarchiveXubuntuXcom/ubuntu/\tpriority:5\n# http://azure.archive.ubuntu.com/ubuntu/\n";
-    const preserved = fallbacks + unrelated;
-    writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:1\n" + preserved);
-    const run = command.replaceAll("sudo ", "").replaceAll("/etc/apt/apt-mirrors.txt", mirrors)
-      .replaceAll("/etc/apt/sources.list.d/ubuntu.sources", sources);
-    const result = spawnSync("bash", ["-euc", run], { encoding: "utf8" });
+    writeFileSync(join(apt, "sources.list.d/regional.sources"), regionalSources);
+    const run = () => spawnSync("bash", [script, root], { encoding: "utf8" });
+    const result = run();
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
-    expect(readFileSync(mirrors, "utf8")).toBe(preserved);
+    expect(result.stdout).toContain("apt archive host: https://archive.ubuntu.com/ubuntu");
+    expect(result.stdout).not.toMatch(/https?:\/\/[a-z0-9.-]+\.archive\.ubuntu\.com/);
+    const rewritten = "https://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n" + unrelated;
+    expect(readFileSync(mirrors, "utf8")).toBe(rewritten);
     expect(readFileSync(sources, "utf8")).toBe(ubuntuSources.replaceAll("http:", "https:"));
-    expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
-    expect(readFileSync(mirrors, "utf8")).toBe(preserved);
-    writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n");
-    expect(spawnSync("bash", ["-euc", run]).status).not.toBe(0);
-    rmSync(mirrors);
-    writeFileSync(sources, ubuntuSources);
-    expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
-    expect(existsSync(mirrors)).toBe(false);
-    expect(readFileSync(sources, "utf8")).toBe(ubuntuSources.replaceAll("http:", "https:"));
-    expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
+    expect(readFileSync(join(apt, "sources.list.d/regional.sources"), "utf8")).toBe(regionalSources.replace("http://us-east-2.ec2.archive", "https://archive"));
+    expect(run().status).toBe(0);
+    expect(readFileSync(mirrors, "utf8")).toBe(rewritten);
+    // Images without a mirror list or a sources directory still pass.
+    rmSync(apt, { recursive: true });
+    mkdirSync(apt, { recursive: true });
+    expect(run().status).toBe(0);
   } finally {
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -745,6 +746,21 @@ for (const job of ["jsc-prebuild", "native-quality", "rust"]) {
       expect(failure.stdout).toBe(expected);
     }
   });
+
+  test(`${job} host version reports ignore Ubuntu glibc package revisions`, () => {
+    const jobs = workflowField(Bun.YAML.parse(workflow), "jobs");
+    const steps = workflowField(workflowField(jobs, job), "steps");
+    if (!Array.isArray(steps)) throw new Error("Missing workflow steps");
+    const step = steps.find((step: unknown) => typeof step === "object" && step !== null && "id" in step && step.id === "host-tools");
+    const pipeline = workflowString(workflowField(step, "run")).split("\n").find(line => line.trim().startsWith("ldd --version |"));
+    if (!pipeline) throw new Error("Missing glibc version pipeline");
+    // Runner image rollouts put jobs of one run on different revisions of the same glibc.
+    const reports = ["2.43-2ubuntu2.4", "2.43-2ubuntu2.7"].map(revision => {
+      const setup = `ldd() { printf 'ldd (Ubuntu GLIBC ${revision}) 2.43\\nCopyright (C) 2026 Free Software Foundation, Inc.\\n'; }; `;
+      return spawnSync("bash", ["-euo", "pipefail", "-c", setup + pipeline], { encoding: "utf8" }).stdout;
+    });
+    expect(reports).toEqual(["2.43\n", "2.43\n"]);
+  });
 }
 
 test("Rust build caches follow host tool versions, not the runner image", () => {
@@ -825,11 +841,23 @@ test("split engine producers reuse one common core and retain both pair receipts
   expect(rust).toContain("dist/*.wasm.engine.json");
 });
 
-test("preinstalled native tools skip apt and fallback removes the known slow mirror", () => {
+test("preinstalled native tools skip apt and fallback leaves the regional mirrors", () => {
   for (const section of [quality, rust]) {
     expect(section).toContain("if command -v cmake");
     expect(section.indexOf("then exit 0; fi")).toBeLessThan(section.indexOf("sudo apt-get update"));
-    expect(section).toContain("/etc/apt/apt-mirrors.txt");
+    expect(section.indexOf("apt-main-archive.sh")).toBeGreaterThan(section.indexOf("then exit 0; fi"));
+    expect(section.indexOf("apt-main-archive.sh")).toBeLessThan(section.indexOf("sudo apt-get update"));
+  }
+});
+
+test("every apt install first leaves the regional Ubuntu mirrors", () => {
+  const files = [".github/workflows/ci.yml"].concat(Array.from(new Bun.Glob(".github/actions/*/action.yml").scanSync(new URL("..", import.meta.url).pathname)));
+  for (const file of files) {
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    for (const [index] of Array.from(text.matchAll(/sudo apt-get update/g), match => [match.index] as const)) {
+      const before = text.slice(Math.max(0, text.lastIndexOf("run: |", index)), index);
+      expect(before, `${file} runs apt-get update without apt-main-archive.sh`).toContain("apt-main-archive.sh");
+    }
   }
 });
 

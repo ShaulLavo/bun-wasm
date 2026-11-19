@@ -1,0 +1,43 @@
+flags "W" TypeError ERR_INVALID_ARG_VALUE The argument 'flags' is invalid. Received 'W' false
+flags "R+" TypeError ERR_INVALID_ARG_VALUE The argument 'flags' is invalid. Received 'R+' false
+flags "A" TypeError ERR_INVALID_ARG_VALUE The argument 'flags' is invalid. Received 'A' false
+flags "577" TypeError ERR_INVALID_ARG_VALUE The argument 'flags' is invalid. Received '577' false
+flags "rw" TypeError ERR_INVALID_ARG_VALUE The argument 'flags' is invalid. Received 'rw' false
+flags "" TypeError ERR_INVALID_ARG_VALUE The argument 'flags' is invalid. Received '' false
+flags [object Object] TypeError ERR_INVALID_ARG_VALUE The argument 'flags' is invalid. Received {} false
+flags 578.5 RangeError ERR_OUT_OF_RANGE The value of "flags" is out of range. It must be an integer. Received 578.5 false
+flags 2147483648 RangeError ERR_OUT_OF_RANGE The value of "flags" is out of range. It must be >= -2147483648 && <= 2147483647. Received 2147483648 false
+flags NaN RangeError ERR_OUT_OF_RANGE The value of "flags" is out of range. It must be an integer. Received NaN false
+valid flags r+ Error ENOENT ENOENT: no such file or directory, open 'valid-flags.txt'
+valid flags w ok
+valid flags wx ok
+valid flags xa+ ok
+valid flags as+ ok
+valid flags sa+ ok
+mode "0o755" TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '0o755' false
+mode "+755" TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '+755' false
+mode "7_5_5" TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '7_5_5' false
+mode "888" TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '888' false
+mode "7a5" TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '7a5' false
+mode "" TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '' false
+mode "7•5" TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '7•5' false
+mode "㜷" TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '㜷' false
+mode "40000000000" RangeError ERR_OUT_OF_RANGE The value of "mode" is out of range. It must be >= 0 && <= 4294967295. Received 4294967296 false
+mode -1 RangeError ERR_OUT_OF_RANGE The value of "mode" is out of range. It must be >= 0 && <= 4294967295. Received -1 false
+mode 1.5 RangeError ERR_OUT_OF_RANGE The value of "mode" is out of range. It must be an integer. Received 1.5 false
+mode true TypeError ERR_INVALID_ARG_TYPE The "mode" argument must be of type number. Received type boolean (true) false
+valid mode "755" ok
+valid mode "0644" ok
+valid mode "0" ok
+valid mode "37777777777" ok
+valid mode 384 ok
+mkdir mode TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '7a5' false
+mkdir mode number argument RangeError ERR_OUT_OF_RANGE The value of "mode" is out of range. It must be >= 0 && <= 4294967295. Received -1 false
+writeFile mode TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received '0o644' false
+readFile flag TypeError ERR_INVALID_ARG_VALUE The argument 'flags' is invalid. Received 'R'
+null flag means default b c
+callback open throws TypeError ERR_INVALID_ARG_VALUE The argument 'flags' is invalid. Received 'W' false
+callback mkdir throws TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received 'x'
+promise rejects ERR_INVALID_ARG_VALUE
+system error goes to callback ENOENT
+string mode applied true

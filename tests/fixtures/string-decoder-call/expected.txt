@@ -1,0 +1,14 @@
+shape function StringDecoder 0 true
+called true:utf8 true:utf8 true:hex
+called write hi ab
+es5 subclass true true utf8
+es5 write "" € ""
+class subclass true true utf16le hi wide 1
+class keys length,name,prototype
+new.target true false é
+Object new.target true false ok
+proxy new.target true
+revoked throws TypeError
+bogus throws TypeError ERR_UNKNOWN_ENCODING Unknown encoding: bogus
+bogus throws TypeError ERR_UNKNOWN_ENCODING Unknown encoding: bogus
+bogus throws TypeError ERR_UNKNOWN_ENCODING Unknown encoding: bogus

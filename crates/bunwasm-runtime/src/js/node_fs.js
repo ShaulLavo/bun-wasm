@@ -62,13 +62,16 @@
     }
   }
 
+  // The encoding option of an fs call, rejected the way Bun does when it is not one Buffer knows.
   function encodingOf(options) {
-    if (typeof options === "string") return options;
-    if (options && typeof options === "object") return options.encoding || null;
-    return null;
+    const encoding = typeof options === "string" ? options : options && typeof options === "object" ? options.encoding || null : null;
+    if (encoding === null || encoding === "buffer" || Buffer.isEncoding(encoding)) return encoding;
+    throw Object.assign(new TypeError(`encoding '${String(encoding)}' is an invalid encoding`), { code: "ERR_INVALID_ARG_VALUE" });
   }
 
   function toBytes(data, encoding) {
+    // Bun writes a string given the "buffer" encoding as Latin-1 bytes.
+    if (typeof data === "string" && encoding === "buffer") return Buffer.from(data, "latin1");
     if (typeof data === "string") return encoding && encoding !== "utf8" && encoding !== "utf-8" ? Buffer.from(data, encoding) : data;
     if (ArrayBuffer.isView(data)) return internal.toUint8(data);
     if (data instanceof ArrayBuffer) return new Uint8Array(data);
@@ -81,7 +84,7 @@
 
   // --- Stats / Dirent ---------------------------------------------------------
 
-  const { Stats, flagsNumber, cpSync: copySync, cp: copyAsync } = internal.require("fs_options")(native, absolute);
+  const { Stats, flagsNumber, parseFileMode, cpSync: copySync, cp: copyAsync } = internal.require("fs_options")(native, absolute, (value) => internal.require("inspect").nodeInspect(value));
 
   class Dirent {
     constructor(name, kind, parentPath) {
@@ -278,9 +281,12 @@
 
   function readFileSync(path, options) {
     const encoding = encodingOf(options);
+    // Node validates the flag before opening; the read itself does not use it here.
+    // A null or undefined flag means the default, as in Bun.
+    flagsNumber((options && typeof options === "object" ? options.flag : undefined) ?? "r");
     const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => native.readFile(abs));
     const buf = asBuffer(bytes);
-    return encoding ? buf.toString(encoding) : buf;
+    return encoding && encoding !== "buffer" ? buf.toString(encoding) : buf;
   }
 
   function readAllFd(fd) {
@@ -296,13 +302,13 @@
 
   function writeFileSync(path, data, options) {
     const encoding = encodingOf(options);
-    const flag = options && typeof options === "object" && options.flag !== undefined ? options.flag : "w";
+    const flag = (options && typeof options === "object" ? options.flag : undefined) ?? "w";
     const bytes = toBytes(data, encoding);
     if (typeof path === "number") {
       native.write(path, bytes, -1);
       return;
     }
-    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), options && options.mode !== undefined ? options.mode : 0o666));
+    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), parseFileMode(options && typeof options === "object" ? options.mode : undefined, "mode", 0o666)));
   }
 
   function appendFileSync(path, data, options) {
@@ -338,6 +344,8 @@
 
   function mkdirSync(path, options) {
     const recursive = Boolean(options && typeof options === "object" && options.recursive);
+    // Node validates the mode (a number or string argument, or options.mode); WASI applies none.
+    parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
     const created = withPath(path, (abs) => native.mkdir(abs, recursive));
     return recursive ? (created === null ? undefined : created) : undefined;
   }
@@ -392,7 +400,8 @@
     promises.cp(from, to, options).then(() => later(() => callback(null)), error => later(() => callback(error)));
   }
 
-  function realpathSync(path) {
+  function realpathSync(path, options) {
+    encodingOf(options);
     return withPath(path, (abs) => native.realpath(abs === "" ? absolute(".") : abs));
   }
   realpathSync.native = realpathSync;
@@ -402,7 +411,8 @@
     withPath(path, (abs) => native.stat(abs, false));
   }
 
-  function mkdtempSync(prefix) {
+  function mkdtempSync(prefix, options) {
+    encodingOf(options);
     const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     for (;;) {
       const bytes = native.randomBytes(6);
@@ -414,8 +424,8 @@
     }
   }
 
-  function openSync(path, flags, mode = 0o666) {
-    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), mode));
+  function openSync(path, flags, mode) {
+    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), parseFileMode(mode, "mode", 0o666)));
   }
 
   function closeSync(fd) {
@@ -575,15 +585,21 @@
     later(() => callback(error, count, buffers));
   }
 
+  // Node's GetOffset (src/node_file.cc): only a non-negative safe integer is a file
+  // position; NaN, Infinity, fractions, larger numbers and BigInts mean the current offset.
+  function filePosition(value) {
+    return Number.isSafeInteger(value) && value >= 0 ? value : -1;
+  }
+
   function writeSync(fd, data, offsetOrPosition, lengthOrEncoding, position) {
     if (typeof data === "string") {
       const bytes = toBytes(data, typeof lengthOrEncoding === "string" ? lengthOrEncoding : "utf8");
-      return native.write(fd, bytes, typeof offsetOrPosition === "number" ? offsetOrPosition : -1);
+      return native.write(fd, bytes, filePosition(offsetOrPosition));
     }
     const view = internal.toUint8(data);
     const offset = offsetOrPosition || 0;
     const length = typeof lengthOrEncoding === "number" ? lengthOrEncoding : view.byteLength - offset;
-    return native.write(fd, view.slice(offset, offset + length), typeof position === "number" ? position : -1);
+    return native.write(fd, view.slice(offset, offset + length), filePosition(position));
   }
 
   function validateFd(fd) {
@@ -604,8 +620,7 @@
 
   function writeBuffers(fd, buffers, position) {
     if (buffers.length === 0) return 0;
-    const at = typeof position === "number" && position >= 0 ? position : -1;
-    return native.writev(fd, buffers.map(internal.toUint8), at);
+    return native.writev(fd, buffers.map(internal.toUint8), filePosition(position));
   }
 
   function writevSync(fd, buffers, position) {
@@ -692,7 +707,10 @@
     fstatSync: (fd, options) => new Stats(native.fstat(fd, Boolean(options && options.bigint)), Boolean(options && options.bigint)),
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
-    readlinkSync: (path) => withPath(path, (abs) => native.readlink(abs)),
+    readlinkSync: (path, options) => {
+      encodingOf(options);
+      return withPath(path, (abs) => native.readlink(abs));
+    },
     symlinkSync: (target, path) => withPath(path, (abs) => native.symlink(toPath(target, "target"), abs)),
     linkSync: (from, to) => withPath(from, (abs) => native.link(abs, absolute(toPath(to, "newPath")))),
     chmodSync: (path) => void statSync(path),
@@ -715,6 +733,7 @@
     internal.realTimers.setImmediate(fn);
   }
 
+  const argumentErrors = new Set(["ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_VALUE", "ERR_OUT_OF_RANGE"]);
   function callbackify(name, fn, shape) {
     return function (...args) {
       const callback = args.pop();
@@ -724,6 +743,8 @@
       try {
         result = fn.apply(undefined, args);
       } catch (err) {
+        // Node validates arguments before queuing the operation, so those errors throw now.
+        if (err && argumentErrors.has(err.code)) throw err;
         error = err;
       }
       later(() => (shape ? shape(callback, error, result, args) : callback(error, result)));
@@ -865,6 +886,7 @@
   function fileStreams() {
     fileStreamAdapter ??= internal.require("fs_stream_constructors")({
       read: native.read, asBuffer, openSync, closeSync, writeSync, toPath, validateFd, readRange, invalidArg,
+      isEncoding: (encoding) => Buffer.isEncoding(encoding), inspect: (value) => internal.require("inspect").nodeInspect(value),
       readPieceSize: kReadPiece, isRegularReadFd,
       loadStreams: () => internal.builtin("node:stream"),
     });

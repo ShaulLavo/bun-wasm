@@ -39,7 +39,7 @@
     const env = globalThis.process.env;
     const signals = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15 };
     const cpu = { model: "wasm32", speed: 0, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } };
-    return {
+    return internal.require("node_os_values")({
       EOL: "\n",
       devNull: "/dev/null",
       arch: () => globalThis.process.arch,
@@ -63,7 +63,7 @@
       getPriority: () => 0,
       setPriority() {},
       constants: { signals, errno: {}, priority: {}, dlopen: {}, UV_UDP_REUSEADDR: 4 },
-    };
+    });
   }
 
   // --- crypto ---------------------------------------------------------------
@@ -88,17 +88,21 @@
     const keyApi = internal.require("crypto_keys")(Buffer, inputBytes, timingSafeEqual);
     const { KeyObject, createSecretKey } = keyApi;
 
+    const digests = internal.require("node_digest");
+
+    // `algorithm` is a canonical name from node_digest.ts, already validated.
     class Hash {
       #algorithm;
       #key;
+      #outputLength;
       #chunks = [];
       #done = false;
-      constructor(algorithm, key) {
-        this.#algorithm = String(algorithm);
+      constructor(algorithm, key, outputLength, options) {
+        this.#algorithm = algorithm;
         this.#key = key;
-        // Validate eagerly, like Node.
-        if (key === undefined) native.hash(this.#algorithm, "");
-        else native.hmac(this.#algorithm, "", "");
+        this.#outputLength = outputLength;
+        // Stream options, applied when crypto_hash_stream.ts first builds the Transform state.
+        this._options = options;
       }
       update(data, encoding) {
         if (this.#done) throw Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
@@ -109,31 +113,36 @@
         if (this.#done) throw Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
         this.#done = true;
         const input = internal.concatBytes(this.#chunks);
-        const bytes = this.#key === undefined ? native.hash(this.#algorithm, input) : native.hmac(this.#algorithm, this.#key, input);
+        const bytes = this.#key === undefined ? native.nodeDigest(this.#algorithm, input, this.#outputLength) : native.nodeHmac(this.#algorithm, this.#key, input);
         return encodeOut(bytes, encoding);
       }
-      copy() {
-        const copy = new Hash(this.#algorithm, this.#key);
+      copy(options) {
+        if (this.#done) throw Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
+        // A copy takes its own output length; without one it uses the default, as in Bun.
+        const requested = digests.outputLength(options);
+        if (requested !== undefined && !digests.isXof(this.#algorithm) && requested !== digests.byteLength(this.#algorithm)) throw digests.notXofError();
+        const copy = new Hash(this.#algorithm, this.#key, requested);
         for (const c of this.#chunks) copy.update(c);
         return copy;
       }
     }
 
-    function createHash(algorithm) {
-      try {
-        return new Hash(algorithm);
-      } catch {
-        throw Object.assign(new Error("Digest method not supported"), { code: "ERR_CRYPTO_INVALID_DIGEST" });
-      }
+    internal.require("crypto_hash_stream")(Hash);
+
+    function createHash(algorithm, options) {
+      const name = digests.hashName(String(algorithm));
+      // Bun's BoringSSL error here carries no `code`.
+      if (name === undefined) throw new Error("Digest method not supported");
+      const outputLength = digests.outputLength(options);
+      if (outputLength !== undefined && !digests.isXof(name) && outputLength !== digests.byteLength(name)) throw digests.notXofError();
+      return new Hash(name, undefined, outputLength, options);
     }
 
-    function createHmac(algorithm, key) {
+    function createHmac(algorithm, key, options) {
       const keyBytes = internal.crypto.isKey(key) ? internal.crypto.decode(internal.crypto.record(key).key.k) : typeof key === "string" ? Buffer.from(key) : internal.toUint8(key && key.export ? key.export() : key).slice();
-      try {
-        return new Hash(algorithm, keyBytes);
-      } catch {
-        throw Object.assign(new TypeError(`Invalid digest: ${algorithm}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
-      }
+      const name = digests.hmacName(String(algorithm));
+      if (name === undefined) throw Object.assign(new TypeError(`Invalid digest: ${algorithm}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
+      return new Hash(name, keyBytes, undefined, options);
     }
 
     function randomBytes(size, callback) {
@@ -198,12 +207,13 @@
       randomUUID: () => webcrypto.randomUUID(),
       getRandomValues: (array) => webcrypto.getRandomValues(array),
       timingSafeEqual,
-      getHashes: () => ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"],
+      getHashes: () => digests.nodeHashes.slice(),
       getCiphers: () => [],
       getCurves: () => [],
       webcrypto,
       subtle: webcrypto.subtle,
       ...keyApi,
+      ...internal.require("node_pbkdf2")(digests, Buffer),
       ...internal.require("x509")(Buffer, keyApi),
       Hash,
       Hmac: Hash,

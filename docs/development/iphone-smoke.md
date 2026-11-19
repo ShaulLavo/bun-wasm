@@ -138,7 +138,11 @@ Read `<output>/result.json`. `status` is `green` only when all three cases pass,
 their cleanup succeeds, and the host and guest fingerprints still match. `failedPhase`
 names the first failure. Each case retains its phases, actual durations, failures,
 source identity, browser identity, and cleanup evidence. Logs and native command
-evidence are under `<output>/logs`. The command exits nonzero for any failure,
+evidence are under `<output>/logs`. A render failure that starts with "Safari never
+started the preview navigation" means the preview frame kept its blank initial page,
+fired no load event and sent the service worker no request: Safari dropped the
+frame's navigation before any product code ran. It stays red. The case's
+`logs/*.native.jsonl` records the frame state behind that diagnosis. The command exits nonzero for any failure,
 blocked case, or interruption. It never writes a canonical matrix table.
 
 An ordinary framework failure skips its later phases and attempts the remaining

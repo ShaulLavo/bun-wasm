@@ -71,7 +71,7 @@
   const kBufferedEncodings = ["utf8", "utf16le", "base64", "base64url"];
 
   // Consumes the start of `data` to finish a character from the previous chunk.
-  function finishPending(self: StringDecoder, data: Uint8Array) {
+  function finishPending(self: Decoder, data: Uint8Array) {
     let offset = 0;
     if (self.encoding === "utf8") {
       for (let i = 0; i < data.length && i < self._missing; i++) {
@@ -96,7 +96,7 @@
   }
 
   // How many trailing UTF-8 bytes to hold back; sets `_missing`.
-  function utf8Tail(self: StringDecoder, data: Uint8Array) {
+  function utf8Tail(self: Decoder, data: Uint8Array) {
     let buffered = 0;
     for (let i = data.length - 1; ; i--) {
       buffered++;
@@ -116,7 +116,7 @@
     }
   }
 
-  function tailLength(self: StringDecoder, data: Uint8Array) {
+  function tailLength(self: Decoder, data: Uint8Array) {
     const last = data[data.length - 1];
     switch (self.encoding) {
       case "utf8":
@@ -142,7 +142,7 @@
     }
   }
 
-  function decodeChunk(self: StringDecoder, input: Uint8Array) {
+  function decodeChunk(self: Decoder, input: Uint8Array) {
     let data = input;
     let prepend = "";
     if (kBufferedEncodings.includes(self.encoding) && self._missing > 0) {
@@ -157,7 +157,7 @@
     return prepend + makeString(data.subarray(0, data.length - tail), self.encoding);
   }
 
-  function flush(self: StringDecoder) {
+  function flush(self: Decoder) {
     if (self.encoding === "utf16le" && self._buffered % 2 === 1) {
       self._missing--;
       self._buffered--;
@@ -168,19 +168,12 @@
     return out;
   }
 
-  class StringDecoder {
+  // The prototype methods. StringDecoder below is the constructor that owns them.
+  class Decoder {
     declare encoding: Encoding;
     declare lastChar: BunWasm.BufferBytes;
     declare _missing: number;
     declare _buffered: number;
-    constructor(encoding?: unknown) {
-      const normalized = normalizeEncoding(encoding);
-      if (normalized === undefined) throw makeError(TypeError, "ERR_UNKNOWN_ENCODING", `Unknown encoding: ${encoding}`);
-      this.encoding = normalized;
-      this.lastChar = getBuffer().alloc(4);
-      this._missing = 0;
-      this._buffered = 0;
-    }
 
     get lastNeed() {
       return this._missing;
@@ -207,6 +200,26 @@
       return this.write(toBytes(input).subarray(offset));
     }
   }
+
+  // Node's StringDecoder is an ES5 constructor, and Bun's native one behaves the same:
+  // `new` and subclasses build an instance of new.target, a call with an object receiver
+  // (`StringDecoder.call(this)` in an ES5 subclass) sets that object up, and any other
+  // call returns a new decoder.
+  // Rest parameters keep `StringDecoder.length` at 0, as in Bun.
+  function StringDecoder(this: unknown, ...args: unknown[]): Decoder {
+    const encoding = args[0];
+    const normalized = normalizeEncoding(encoding);
+    if (normalized === undefined) throw makeError(TypeError, "ERR_UNKNOWN_ENCODING", `Unknown encoding: ${encoding}`);
+    const receiver = new.target !== undefined || (typeof this === "object" && this !== null);
+    const target = (receiver ? this : Object.create(Decoder.prototype)) as Decoder;
+    target.encoding = normalized;
+    target.lastChar = getBuffer().alloc(4);
+    target._missing = 0;
+    target._buffered = 0;
+    return target;
+  }
+  StringDecoder.prototype = Decoder.prototype;
+  Object.defineProperty(Decoder.prototype, "constructor", { value: StringDecoder, writable: true, configurable: true });
 
   return { StringDecoder };
 });
