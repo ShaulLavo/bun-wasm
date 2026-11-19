@@ -158,13 +158,13 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 // The stack_trace hash also covers the call-site predicates React's stack collector calls,
 // and the JSC default text rewritten in Bun's form (docs/bun-patches/error-stack-header.md).
 const originalTokens = {
-  stack_trace: "ebaeed9c4ff10d0556a80e812d864b601afb021c47338c21be9bbf9937470211",
+  stack_trace: "0cc3f756ce08e62e2708f496145c640cbcdebc9a53b9727b04a546861ad45c8c",
   // Re-pinned for the thirdparty fetch modules' internal loader and binding hooks (node-fetch, undici).
   bun_builtins: "acf769db3668622edc5f3d2ba41b86d593371cbdf7537d86e53f9ed8cc0b23f3",
 };
 // Allow the JSC formatter registration, host adapter dispatch and JSC default text rewrite with
-// its frame cache (6286 bytes).
-const originalEmbeddedBytes = { stack_trace: 7100, bun_builtins: 4372 };
+// its frame caches (6481 bytes).
+const originalEmbeddedBytes = { stack_trace: 7300, bun_builtins: 4372 };
 
 for (const [label, before, after] of [
   ["true names", "return this.#frame.name || null;", 'return this.#frame.name || "";'],

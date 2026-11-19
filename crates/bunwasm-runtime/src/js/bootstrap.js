@@ -145,10 +145,20 @@
   // reads data properties only, so no getter or Proxy trap runs. The name is the error's own or
   // its prototype's, the message the error's own. Any other capture target reads "Error".
   function dataSlot(holder, key) {
-    if (holder === null || native.isProxy?.(holder)) return undefined;
     let descriptor;
     try { descriptor = Reflect.getOwnPropertyDescriptor(holder, key); } catch { return undefined; }
     return descriptor !== undefined && "value" in descriptor ? descriptor : undefined;
+  }
+
+  // A Proxy prototype is skipped, as JavaScriptCore's inquiry skips it. Where the host cannot
+  // tell a Proxy (a browser), a throwing trap reads as no name.
+  const builtinErrorPrototypes = new Set([Error, TypeError, RangeError, ReferenceError, SyntaxError, EvalError, URIError]
+    .concat(typeof AggregateError === "function" ? [AggregateError] : [])
+    .map(constructor => constructor.prototype));
+  function prototypeSlot(error, key) {
+    const prototype = Object.getPrototypeOf(error);
+    if (prototype === null || !builtinErrorPrototypes.has(prototype) && native.isProxy?.(prototype)) return undefined;
+    return dataSlot(prototype, key);
   }
 
   function primitiveText(value) {
@@ -159,7 +169,7 @@
   const isErrorValue = typeof Error.isError === "function" ? Error.isError : native.isError;
   function stackHeader(error) {
     if (!isErrorValue(error)) return "Error";
-    const nameSlot = dataSlot(error, "name") ?? dataSlot(Object.getPrototypeOf(error), "name");
+    const nameSlot = dataSlot(error, "name") ?? prototypeSlot(error, "name");
     const name = nameSlot === undefined || nameSlot.value === undefined ? "Error" : primitiveText(nameSlot.value) ?? "Error";
     const messageSlot = dataSlot(error, "message");
     const message = messageSlot === undefined ? "" : primitiveText(messageSlot.value) ?? "";

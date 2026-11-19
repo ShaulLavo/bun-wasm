@@ -80,40 +80,52 @@
     return frame ? inspect.frameText(frame) : "";
   }
 
-  // Formatted frames by their raw text. Mapping a frame asks the host for its source map and
-  // source line, which dominates a stack read, and the answer changes only when a loaded
-  // source or position map does, so the cache empties when native.sourceGeneration() moves.
+  // Formatted frames by their raw text, and whole formatted stacks by theirs. Mapping a frame
+  // asks the host for its source map and source line, which dominates a stack read, and the
+  // answer changes only when a loaded source or position map does, so both caches empty when
+  // native.sourceGeneration() moves.
   const frameTexts = new Map<string, string>();
-  const frameCacheLimit = 4096;
+  const stackTexts = new Map<string, string>();
   let frameGeneration = -1;
 
-  function cachedFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
-    let text = frameTexts.get(line);
-    if (text !== undefined) return text;
-    text = jscFrameText(inspect, line);
-    if (frameTexts.size >= frameCacheLimit) frameTexts.clear();
-    frameTexts.set(line, text);
+  function remember(cache: Map<string, string>, limit: number, key: string, text: string) {
+    if (cache.size >= limit) cache.clear();
+    cache.set(key, text);
     return text;
   }
 
-  // JavaScriptCore's own text (`name@file:line:column` lines, no header) in Bun's form: the
-  // header, then one `    at` line per frame. A hot run maps through changing revisions, so it
-  // formats every frame afresh.
-  function jscStack(target: object, raw: string) {
+  function cachedFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
+    return frameTexts.get(line) ?? remember(frameTexts, 4096, line, jscFrameText(inspect, line));
+  }
+
+  // The `\n    at` lines for JavaScriptCore's text. A hot run maps through changing revisions,
+  // so it formats every frame afresh.
+  function jscFrames(raw: string, hot: boolean) {
     const inspect = internal.require("inspect");
+    let frames = "";
+    for (const line of raw.split("\n")) {
+      const text = hot ? jscFrameText(inspect, line) : cachedFrameText(inspect, line);
+      if (text) frames += `\n    at ${text}`;
+    }
+    return frames;
+  }
+
+  // JavaScriptCore's own text (`name@file:line:column` lines, no header) in Bun's form: the
+  // header, then one `    at` line per frame.
+  function jscStack(target: object, raw: string) {
     const hot = Boolean(internal.hotRun);
-    if (hot) internal.hotErrorStacks.set(target, raw);
+    if (hot) {
+      internal.hotErrorStacks.set(target, raw);
+      return internal.stackHeader(target) + jscFrames(raw, true);
+    }
     const generation = native.sourceGeneration();
     if (generation !== frameGeneration) {
       frameTexts.clear();
+      stackTexts.clear();
       frameGeneration = generation;
     }
-    const lines = [internal.stackHeader(target)];
-    for (const line of raw.split("\n")) {
-      const text = hot ? jscFrameText(inspect, line) : cachedFrameText(inspect, line);
-      if (text) lines.push(`    at ${text}`);
-    }
-    return lines.join("\n");
+    const frames = stackTexts.get(raw) ?? remember(stackTexts, 256, raw, jscFrames(raw, false));
+    return internal.stackHeader(target) + frames;
   }
 
   function defaultStack(target: object, raw: unknown) {
