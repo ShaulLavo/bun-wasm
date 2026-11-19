@@ -71,7 +71,9 @@ memory (a string, Blob or typed array body's `.body`, or `Blob.stream()`) is not
 teed: both bodies take the bytes, and the old stream is read to its end and stays
 locked, as Bun lifts the payload out of its native stream. `new Request(request)`
 over a locked stream reports the tee's `TypeError: Invalid state: ReadableStream is
-locked` (`ERR_INVALID_STATE`). The `null-body-reads` and `body-native-consumers`
+locked` (`ERR_INVALID_STATE`). `Response.clone()` keeps the source's status, type,
+URL and redirect flag, so `Response.error().clone()` is an error Response with status
+0 instead of a RangeError. The `null-body-reads` and `body-native-consumers`
 fixtures carry native Bun 1.4.4's output for these cases; the reference is the same
 `body.test.ts` and `body-clone.test.ts` revision.
 
