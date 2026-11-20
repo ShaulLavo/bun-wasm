@@ -67,8 +67,12 @@
       const ivBytes = iv === null ? null : args.bytes(iv, "iv");
       const authTagLength = options ? nonNegativeInt32((options as { authTagLength?: unknown }).authTagLength, "options.authTagLength") : undefined;
       const handle = native.cipher(name, decrypt, keyBytes, ivBytes, authTagLength);
-      states.set(cipher, { handle, decrypt, gcm: handle.gcm, tagLength: handle.tagLength, tag: undefined });
-      finalizers.register(cipher, handle.id, cipher);
+      const s: State = { handle, decrypt, gcm: handle.gcm, tagLength: handle.tagLength, tag: undefined };
+      states.set(cipher, s);
+      // The state is the unregister token: it is reachable only through the WeakMap and
+      // holds no reference to the cipher. A cipher that is its own token is never
+      // collected on QuickJS, which keeps every dropped cipher and its context alive.
+      finalizers.register(cipher, handle.id, s);
     }
 
     function live(s: State, operation: string): NodeCrypto.CipherHandle {
@@ -90,7 +94,7 @@
       if (s.handle === undefined) throw args.invalidState("Invalid state");
       const { id } = s.handle;
       s.handle = undefined;
-      finalizers.unregister(cipher);
+      finalizers.unregister(s);
       const { output, tag } = native.final(id);
       if (s.tagLength !== undefined && !s.decrypt) s.tag = tag;
       return toBuffer(output);

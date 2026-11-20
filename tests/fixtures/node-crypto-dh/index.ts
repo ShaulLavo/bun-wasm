@@ -18,8 +18,7 @@ const show = (label: string, make: () => unknown) => {
 };
 
 // Classic Diffie-Hellman over the RFC 3526 groups.
-// Larger groups take seconds: construction checks the prime, as in Bun.
-for (const name of ["MODP5", "modp1", "modp2", "modp99"]) {
+for (const name of ["MODP5", "modp14", "modp15", "modp16", "modp17", "modp18", "modp1", "modp2", "modp99"]) {
   show(`group ${name}`, () => {
     const group = crypto.getDiffieHellman(name);
     const prime = group.getPrime();

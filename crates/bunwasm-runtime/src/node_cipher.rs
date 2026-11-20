@@ -566,6 +566,11 @@ fn install_cipher_state(t: &mut Table, ciphers: &Shared) {
         c.borrow_mut().live.remove(&a.u32(0)?);
         Ok(Val::Undefined)
     });
+    // bun:internal-for-testing's liveCipherCount: contexts not yet finished or collected.
+    let c = ciphers.clone();
+    t.add("nodeCrypto.liveCiphers", move |_| {
+        Ok(Val::Num(c.borrow().live.len() as f64))
+    });
 }
 
 /// `native.nodeCrypto.*` for ciphers; `node_dh.rs` adds Diffie-Hellman, ECDH and primes.

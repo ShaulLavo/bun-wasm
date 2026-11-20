@@ -44,12 +44,21 @@
       return state;
     }
 
-    function check(target: object, prime: Bytes, generator: Bytes) {
-      const flags = native.dhCheck(prime, generator);
-      if (flags < 0) throw args.operationFailed("Checking DH parameters failed");
+    function install(target: object, prime: Bytes, generator: Bytes, flags: number) {
       dhStates.set(target, { prime, generator });
       Object.defineProperty(target, "verifyError", { value: flags, enumerable: true, writable: false, configurable: false });
     }
+
+    function check(target: object, prime: Bytes, generator: Bytes) {
+      const flags = native.dhCheck(prime, generator);
+      if (flags < 0) throw args.operationFailed("Checking DH parameters failed");
+      install(target, prime, generator, flags);
+    }
+
+    // DH_check's answer for every RFC 3526 group with generator 2: DH_NOT_SUITABLE_GENERATOR,
+    // which BoringSSL reports for any generator it did not choose itself. The primes are
+    // constants, so the check (seconds for the larger groups in the guest) is skipped.
+    const GROUP_VERIFY_ERROR = 8;
 
     function generatorBytes(generator: unknown, encoding: unknown): Bytes {
       if (isNumber(generator)) {
@@ -140,7 +149,7 @@
       args.validateString(name, "group name");
       const prime = native.dhGroup(name);
       if (prime === null) throw coded(new Error("Unknown DH group"), "ERR_CRYPTO_UNKNOWN_DH_GROUP");
-      check(this, prime, new Uint8Array([2]));
+      install(this, prime, new Uint8Array([2]), GROUP_VERIFY_ERROR);
     }
 
     Object.assign(DiffieHellman.prototype, dhMethods);

@@ -44,6 +44,7 @@ declare namespace BunWasm {
       setAuthTag(id: number, tag: Uint8Array): void;
       setAutoPadding(id: number, padding: boolean): void;
       release(id: number): void;
+      liveCiphers(): number;
       dhGroup(name: string): Uint8Array | null;
       dhParameters(bits: number, generator: number): Uint8Array | null;
       dhCheck(prime: Uint8Array, generator: Uint8Array): number;

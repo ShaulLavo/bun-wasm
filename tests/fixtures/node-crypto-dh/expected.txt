@@ -1,4 +1,9 @@
 group MODP5 192 ffffffff ffffffff 02 8
+group modp14 256 ffffffff ffffffff 02 8
+group modp15 384 ffffffff ffffffff 02 8
+group modp16 512 ffffffff ffffffff 02 8
+group modp17 768 ffffffff ffffffff 02 8
+group modp18 1024 ffffffff ffffffff 02 8
 group modp1 throws Error ERR_CRYPTO_UNKNOWN_DH_GROUP Unknown DH group
 group modp2 throws Error ERR_CRYPTO_UNKNOWN_DH_GROUP Unknown DH group
 group modp99 throws Error ERR_CRYPTO_UNKNOWN_DH_GROUP Unknown DH group

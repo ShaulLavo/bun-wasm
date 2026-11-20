@@ -600,6 +600,7 @@
       prepareSource: (...args) => internal.prepareText(...args),
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
       directoryCount: () => native.directoryCount(),
+      liveCipherCount: () => native.nodeCrypto.liveCiphers(),
       bunStringRoundTrip: (bytes, encoding) => native.bunStringRoundTrip(bytes, encoding),
       linearMemoryBytes: () => native.linearMemoryBytes(),
       // Node-internal modules for vendored Node tests, under the names they import them by.
