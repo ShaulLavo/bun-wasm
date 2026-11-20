@@ -17,8 +17,17 @@
     "X25519",
     "PBKDF2",
     "HKDF",
+    "ChaCha20-Poly1305",
+    "ML-DSA-44",
+    "ML-DSA-65",
+    "ML-DSA-87",
+    "ML-KEM-768",
+    "ML-KEM-1024",
   ];
-  const hashes = ["SHA-1", "SHA-256", "SHA-384", "SHA-512"];
+  const hashes = ["SHA-1", "SHA-256", "SHA-384", "SHA-512", "SHA3-256", "SHA3-384", "SHA3-512"];
+  // An HMAC key's default length is its hash's block size, in bits.
+  const blockBits = { "SHA-1": 512, "SHA-256": 512, "SHA-384": 1024, "SHA-512": 1024, "SHA3-256": 1088, "SHA3-384": 832, "SHA3-512": 576 };
+  const isAkp = (name) => name.startsWith("ML-");
   const sizes = {
     "SHA-1": 160,
     "SHA-256": 256,
@@ -40,6 +49,12 @@
     HKDF: ["deriveKey", "deriveBits"],
     ECDH: ["deriveKey", "deriveBits"],
     X25519: ["deriveKey", "deriveBits"],
+    "ChaCha20-Poly1305": ["encrypt", "decrypt", "wrapKey", "unwrapKey"],
+    "ML-DSA-44": ["sign", "verify"],
+    "ML-DSA-65": ["sign", "verify"],
+    "ML-DSA-87": ["sign", "verify"],
+    "ML-KEM-768": ["encapsulateKey", "encapsulateBits", "decapsulateKey", "decapsulateBits"],
+    "ML-KEM-1024": ["encapsulateKey", "encapsulateBits", "decapsulateKey", "decapsulateBits"],
   };
   // WebCore's messages for an exception that names no reason of its own.
   const defaultMessages = {
@@ -91,7 +106,7 @@
     typeError(`Failed to execute '${method}' on 'SubtleCrypto': ${position} argument is not instance of ArrayBuffer, Buffer, TypedArray, or DataView.`, "ERR_INVALID_ARG_TYPE");
   }
   // The JsonWebKey dictionary: each member is read once, in WebIDL's sorted order.
-  const jwkMembers = ["alg", "crv", "d", "dp", "dq", "e", "ext", "k", "key_ops", "kty", "n", "oth", "p", "q", "qi", "use", "x", "y"];
+  const jwkMembers = ["alg", "crv", "d", "dp", "dq", "e", "ext", "k", "key_ops", "kty", "n", "oth", "p", "priv", "pub", "q", "qi", "use", "x", "y"];
   function jwkDictionary(value) {
     if (value === null || value === undefined) return {};
     if (typeof value !== "object" && typeof value !== "function") typeError("Type error");
@@ -149,15 +164,17 @@
     if (type === "secret") return allowed[a.name];
     if (type === "private")
       return allowed[a.name].filter((u) =>
-        ["sign", "decrypt", "unwrapKey", "deriveKey", "deriveBits"].includes(u),
+        ["sign", "decrypt", "unwrapKey", "deriveKey", "deriveBits", "decapsulateKey", "decapsulateBits"].includes(u),
       );
     return allowed[a.name].filter((u) =>
-      ["verify", "encrypt", "wrapKey"].includes(u),
+      ["verify", "encrypt", "wrapKey", "encapsulateKey", "encapsulateBits"].includes(u),
     );
   }
   // Bun's wording differs between generateKey (creating) and importKey.
   function usageMessage(a, creating) {
     if (a.name.startsWith("AES-")) return "Unsupported key usage for an AES key";
+    if (a.name === "ChaCha20-Poly1305") return "Unsupported key usage for a ChaCha20-Poly1305 key";
+    if (isAkp(a.name)) return `Unsupported key usage for ${creating ? "an" : "a"} ${a.name} key`;
     if (a.name === "HMAC") return creating ? "Unsupported key usage for an HMAC key" : "Unsupported key usage for HMAC key";
     if (creating) return rsaNames.includes(a.name) ? "Unsupported key usage for a RSA key" : "A required parameter was missing or out-of-range";
     if (a.name === "PBKDF2" || a.name === "HKDF") return `Unsupported key usage for a ${a.name} key`;
@@ -204,9 +221,16 @@
       displayAlgorithm: copy(a),
       type,
       extractable: !!extractable,
-      usages: usageOrder.filter((usage) => usages.includes(usage)),
+      usages: keyUsages.filter((usage) => usages.includes(usage)),
       key,
     });
+    return out;
+  }
+  // structuredClone of a CryptoKey: a new key over a copy of the same record.
+  function cloneKey(key) {
+    const r = record(key);
+    const out = Object.create(CryptoKey.prototype);
+    material.set(out, { ...r, algorithm: copy(r.algorithm), displayAlgorithm: copy(r.displayAlgorithm), usages: r.usages.slice(), key: { ...r.key } });
     return out;
   }
   function use(key, a, usage) {
@@ -251,14 +275,11 @@
     a = algorithm(a);
     usages = usageList(usages);
     if (a.name === "HMAC") requiredHash(a);
+    // A ChaCha20-Poly1305 key is always 256 bits; Bun ignores a length member.
+    if (a.name === "ChaCha20-Poly1305")
+      return makeKey({ name: a.name }, "secret", extractable, usages, { kty: "oct", k: native.base64Encode(native.randomBytes(32), true) }, true);
     if (a.name.startsWith("AES-") || a.name === "HMAC") {
-      const length =
-        a.name === "HMAC"
-          ? (a.length ??
-            (requiredHash(a).name === "SHA-384" || a.hash.name === "SHA-512"
-              ? 1024
-              : 512))
-          : a.length;
+      const length = a.name === "HMAC" ? (a.length ?? blockBits[requiredHash(a).name]) : a.length;
       integer(length, 1, 0x7fffffff, "key length");
       if (a.name.startsWith("AES-") && ![128, 192, 256].includes(length))
         fail("OperationError", "AES key length must be 128, 192, or 256");
@@ -297,6 +318,10 @@
     };
   }
   function jwkAlg(a) {
+    if (a.name === "ChaCha20-Poly1305") return "C20P";
+    if (isAkp(a.name)) return a.name;
+    // JOSE names no SHA-3 algorithms, so Bun's JWK has no "alg" for them.
+    if (a.hash?.name?.startsWith("SHA3-")) return undefined;
     const suffix = a.hash?.name === "SHA-1" ? 1 : sizes[a.hash?.name];
     if (a.name === "HMAC") return `HS${suffix}`;
     if (a.name === "RSA-PSS") return `PS${suffix}`;
@@ -333,15 +358,35 @@
     }
   }
   function jwkKeyType(a) {
-    if (["HMAC", "PBKDF2", "HKDF"].includes(a.name) || a.name.startsWith("AES-")) return "oct";
+    if (["HMAC", "PBKDF2", "HKDF", "ChaCha20-Poly1305"].includes(a.name) || a.name.startsWith("AES-")) return "oct";
     if (a.name.startsWith("RSA")) return "RSA";
+    if (isAkp(a.name)) return "AKP";
     return ["ECDSA", "ECDH"].includes(a.name) ? "EC" : "OKP";
   }
-  // HMAC reports Node's member messages; AES and the KDFs only WebCore's generic DataError.
-  // The others name "use", "crv" and "alg" problems and call the rest "Invalid keyData".
+  // An AKP JWK (ML-DSA, ML-KEM), checked in Node's order with Bun's messages; a missing
+  // "alg" and bad key material are "Invalid keyData".
+  function validateAkpJwk(k, a, extractable, usages) {
+    const reject = (message = "Invalid keyData") => fail("DataError", message);
+    if (k.kty !== "AKP") reject('Invalid JWK "kty" Parameter');
+    if (k.use !== undefined && usages.length && k.use !== (a.name.startsWith("ML-DSA") ? "sig" : "enc"))
+      reject('Invalid JWK "use" Parameter');
+    if (k.key_ops !== undefined && new Set(k.key_ops).size !== k.key_ops.length) reject("Duplicate key operation");
+    if (k.key_ops !== undefined && usages.some((u) => !k.key_ops.includes(u))) reject("Key operations and usage mismatch");
+    if (k.ext !== undefined && !k.ext && extractable) reject('JWK "ext" Parameter and extractable mismatch');
+    if (k.alg === undefined) reject();
+    if (k.alg !== a.name) reject('JWK "alg" Parameter and algorithm name mismatch');
+    for (const field of ["pub", "priv"]) {
+      if (k[field] !== undefined && (typeof k[field] !== "string" || !/^[A-Za-z0-9_-]*$/.test(k[field]))) reject();
+    }
+    if (typeof k.pub !== "string") reject();
+  }
+  // HMAC and ChaCha20-Poly1305 report Node's member messages; AES and the KDFs only
+  // WebCore's generic DataError. The others name "use", "crv" and "alg" problems and call
+  // the rest "Invalid keyData".
   function validateJwk(k, a, extractable, usages) {
     const kty = jwkKeyType(a);
-    const hmac = a.name === "HMAC";
+    const isHmac = a.name === "HMAC";
+    const hmac = isHmac || a.name === "ChaCha20-Poly1305";
     const generic = kty === "oct" && !hmac;
     const reject = (message) => fail("DataError", generic ? undefined : message);
     if (hmac && k.kty !== undefined && k.kty !== "oct") reject('Invalid JWK "kty" Parameter');
@@ -357,8 +402,8 @@
     if (k.ext !== undefined && !k.ext && extractable)
       reject(hmac ? 'JWK "ext" Parameter and extractable mismatch' : "Invalid keyData");
     // Node decodes an HMAC "k" leniently, so a bad one is an empty key.
-    if (hmac && !decodeLenient(k.k ?? "").length) reject("Zero-length key is not supported");
-    if (!hmac) validateJwkOctets(k, reject);
+    if (isHmac && !decodeLenient(k.k ?? "").length) reject("Zero-length key is not supported");
+    if (!isHmac) validateJwkOctets(k, reject);
     validateJwkMaterial(k, a, kty, reject);
   }
   function validateJwkMaterial(k, a, kty, reject) {
@@ -403,7 +448,10 @@
     data = format === "jwk" ? jwkDictionary(data) : bufferSource(data, "importKey", "2nd");
     a = algorithm(a);
     usages = usageList(usages);
+    if (isAkp(a.name)) return importAkp(format, data, a, extractable, usages);
     if (format === "raw-seed") fail("NotSupportedError", `Unable to import ${a.name} using raw-seed format`);
+    // ChaCha20-Poly1305 takes raw-secret but not raw, as in Node.
+    if (format === "raw" && a.name === "ChaCha20-Poly1305") fail("NotSupportedError");
     if (format === "raw-public" || format === "raw-secret") format = "raw";
     if (a.name === "HMAC" || a.name.startsWith("RSA")) requiredHash(a);
     if (jwkKeyType(a) === "oct") return importSecret(format, data, a, extractable, usages);
@@ -423,6 +471,16 @@
       fail("DataError", "Invalid keyData");
     return makeKey(keyAlgorithm(a, k), type, extractable, usages, k);
   }
+  // ML-DSA and ML-KEM keys: SPKI, PKCS#8 (the seed form), raw-public, raw-seed and AKP JWK.
+  function importAkp(format, data, a, extractable, usages) {
+    if (!["spki", "pkcs8", "raw-public", "raw-seed", "jwk"].includes(format))
+      fail("NotSupportedError", `Unable to import ${a.name} using ${format} format`);
+    if (format === "jwk") validateAkpJwk(data, a, extractable, usages);
+    const input = format === "jwk" ? native.utf8Encode(JSON.stringify(data)) : buffer(data);
+    const k = backend("import", a, { format, data: native.base64Encode(input, true) }).key;
+    const type = k.priv ? "private" : "public";
+    return makeKey({ name: a.name }, type, extractable, usages, k);
+  }
   function importSecret(format, data, a, extractable, usages) {
     const derivation = ["PBKDF2", "HKDF"].includes(a.name);
     if (!["jwk", "raw"].includes(format) || (derivation && format !== "raw")) fail("NotSupportedError");
@@ -432,6 +490,7 @@
     let length = raw.length * 8;
     if (a.name.startsWith("AES-") && ![128, 192, 256].includes(length))
       fail("DataError");
+    if (a.name === "ChaCha20-Poly1305" && length !== 256) fail("DataError", "Invalid key length");
     if (a.name === "HMAC") {
       if (!length) fail("DataError", "Zero-length key is not supported");
       if (
@@ -455,7 +514,9 @@
     format = keyFormat(format, method);
     const r = record(key);
     if (!r.extractable) fail("InvalidAccessError", "key is not extractable");
+    if (isAkp(r.algorithm.name)) return exportAkp(format, r);
     if (format === "raw-seed") fail("NotSupportedError");
+    if (format === "raw" && r.algorithm.name === "ChaCha20-Poly1305") fail("NotSupportedError");
     if (format === "raw-public" || format === "raw-secret") format = "raw";
     if (format === "jwk") {
       const k = { ...r.key, key_ops: r.usages.slice(), ext: r.extractable };
@@ -473,6 +534,15 @@
     return decode(backend("export", r.algorithm, { format, key: r.key }).data)
       .buffer;
   }
+  function exportAkp(format, r) {
+    const formats = r.type === "private" ? ["pkcs8", "raw-seed", "jwk"] : ["spki", "raw-public", "jwk"];
+    if (!formats.includes(format))
+      fail("NotSupportedError", `Unable to export ${r.algorithm.name} ${r.type} key using ${format} format`);
+    if (format === "jwk") return { ...r.key, key_ops: r.usages.slice(), ext: r.extractable };
+    if (format === "raw-seed") return decode(r.key.priv).buffer;
+    if (format === "raw-public") return decode(r.key.pub).buffer;
+    return decode(backend("export", r.algorithm, { format, key: r.key }).data).buffer;
+  }
   function operationAlgorithm(a, r) {
     const out = { ...a };
     if (r.algorithm.hash) out.hash = r.algorithm.hash;
@@ -485,7 +555,13 @@
   function signVerify(op, a, key, data, signature) {
     a = algorithm(a);
     const r = use(key, a, op);
-    const result = backend(op, operationAlgorithm(a, r), {
+    const out = operationAlgorithm(a, r);
+    if (isAkp(a.name)) {
+      // FIPS 204 caps the context at 255 bytes; Bun fails both sign and verify past it.
+      if (a.context !== undefined && buffer(a.context).length > 255) fail("OperationError");
+      out.context = a.context === undefined ? "" : encode(a.context);
+    }
+    const result = backend(op, out, {
       key: r.key,
       data: encode(data),
       ...(op === "verify" ? { signature: encode(signature) } : {}),
@@ -512,8 +588,35 @@
     }
     if (a.name === "RSA-OAEP")
       out.label = a.label === undefined ? "" : encode(a.label);
+    if (a.name === "ChaCha20-Poly1305") {
+      if (a.iv === undefined)
+        typeError("Member AeadParams.iv is required and must be an instance of (ArrayBufferView or ArrayBuffer)", "ERR_MISSING_OPTION");
+      if (buffer(a.iv).length !== 12) fail("OperationError", "algorithm.iv must contain exactly 12 bytes");
+      if (a.tagLength !== undefined && a.tagLength !== 128)
+        fail("OperationError", `${a.tagLength} is not a valid ChaCha20-Poly1305 tag length`);
+      out.iv = encode(a.iv);
+      out.additionalData = a.additionalData === undefined ? "" : encode(a.additionalData);
+    }
     return decode(backend(op, out, { key: r.key, data: encode(data) }).data)
       .buffer;
+  }
+  // The ML-KEM key for an encapsulation (public) or decapsulation (private) step.
+  function kemKey(a, key, usage, role) {
+    a = algorithm(a);
+    if (!allowed[a.name].includes(usage)) fail("NotSupportedError", "Algorithm does not support this operation");
+    const r = record(key);
+    if (r.algorithm.name !== a.name) fail("InvalidAccessError", "key algorithm mismatch");
+    if (!r.usages.includes(usage)) fail("InvalidAccessError", `${role} does not have ${usage} usage`);
+    return { a, r };
+  }
+  function encapsulate(a, key, usage) {
+    const k = kemKey(a, key, usage, "encapsulationKey");
+    const result = backend("encapsulate", k.a, { key: k.r.key });
+    return { sharedKey: decode(result.sharedKey), ciphertext: decode(result.ciphertext).buffer };
+  }
+  function decapsulate(a, key, ciphertext, usage) {
+    const k = kemKey(a, key, usage, "decapsulationKey");
+    return decode(backend("decapsulate", k.a, { key: k.r.key, ciphertext: encode(ciphertext) }).data);
   }
   function deriveBits(a, key, length, usage = "deriveBits") {
     a = algorithm(a);
@@ -568,7 +671,7 @@
       const r = record(key);
       if (r.type !== "private") fail(r.type === "secret" ? "NotSupportedError" : "InvalidAccessError", "key must be a private key");
       const k = { ...r.key };
-      for (const field of ["d", "p", "q", "dp", "dq", "qi"]) delete k[field];
+      for (const field of ["d", "p", "q", "dp", "dq", "qi", "priv"]) delete k[field];
       return makeKey(r.algorithm, "public", true, usages, k);
     }
     async sign(a, key, data) {
@@ -583,6 +686,25 @@
     async decrypt(a, key, data) {
       return crypt("decrypt", a, key, data);
     }
+    // Node orders encapsulateBits results sharedKey first and encapsulateKey results
+    // ciphertext first; Bun does the same.
+    async encapsulateBits(a, key) {
+      const result = encapsulate(a, key, "encapsulateBits");
+      return { sharedKey: result.sharedKey.buffer, ciphertext: result.ciphertext };
+    }
+    async encapsulateKey(a, key, sharedKeyAlgorithm, extractable, usages) {
+      const result = encapsulate(a, key, "encapsulateKey");
+      return {
+        ciphertext: result.ciphertext,
+        sharedKey: importKey("raw-secret", result.sharedKey, sharedKeyAlgorithm, extractable, usages),
+      };
+    }
+    async decapsulateBits(a, key, ciphertext) {
+      return decapsulate(a, key, ciphertext, "decapsulateBits").buffer;
+    }
+    async decapsulateKey(a, key, ciphertext, sharedKeyAlgorithm, extractable, usages) {
+      return importKey("raw-secret", decapsulate(a, key, ciphertext, "decapsulateKey"), sharedKeyAlgorithm, extractable, usages);
+    }
     // length is optional in WebIDL, so the method's length is 2.
     async deriveBits(a, key, length = undefined) {
       return deriveBits(a, key, length);
@@ -593,15 +715,11 @@
       if (jwkKeyType(derived) !== "oct") fail("NotSupportedError", "Unrecognized algorithm name");
       if (derived.name === "HMAC") requiredHash(derived);
       const length =
-        derived.length ??
-        (derived.name === "HMAC"
-          ? requiredHash(derived).name === "SHA-384" ||
-            derived.hash.name === "SHA-512"
-            ? 1024
-            : 512
-          : undefined);
+        derived.name === "ChaCha20-Poly1305"
+          ? 256
+          : (derived.length ?? (derived.name === "HMAC" ? blockBits[requiredHash(derived).name] : undefined));
       return importKey(
-        "raw",
+        "raw-secret",
         deriveBits(a, key, length, "deriveKey"),
         derived,
         extractable,
@@ -668,6 +786,8 @@
       });
     },
     record,
+    // Keys the wasm provider owns; the browser engine's native keys clone natively.
+    cloneKey: (value) => (material.has(value) && !material.get(value).nativeKey ? cloneKey(value) : undefined),
     makeKey,
     generate,
     importKey,

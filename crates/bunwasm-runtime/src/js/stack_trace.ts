@@ -105,13 +105,21 @@
   // The frames Bun would not show: the runtime's own, and native frames the runtime called, such
   // as the `apply` its event loop runs a callback through. A native frame called by user code,
   // like `forEach`, stays.
+  // The runtime's tick pass is the one runtime frame Bun shows, as its processTicksAndRejections
+  // builtin (bootstrap.js `tickPassFrame`); the native call it runs a callback through stays hidden.
+  const tickPassLine = /^processTicksAndRejections@bun-wasm:/;
   function hiddenJscFrames(lines: readonly string[]) {
-    const hidden = new Array<boolean>(lines.length);
+    const hidden = new Array<boolean | "tick pass">(lines.length);
     let callerHidden = false;
     for (let index = lines.length - 1; index >= 0; index--) {
       const line = lines[index]!;
+      if (tickPassLine.test(line)) {
+        hidden[index] = "tick pass";
+        callerHidden = true;
+        continue;
+      }
       hidden[index] = runtimeFrame.test(line) || callerHidden && nativeFrame.test(line);
-      callerHidden = hidden[index]!;
+      callerHidden = hidden[index] === true;
     }
     return hidden;
   }
@@ -124,7 +132,11 @@
     const hidden = internal.showRuntimeFrames() ? undefined : hiddenJscFrames(lines);
     let frames = "";
     for (let index = 0; index < lines.length; index++) {
-      if (hidden?.[index]) continue;
+      if (hidden?.[index] === true) continue;
+      if (hidden?.[index] === "tick pass") {
+        frames += `\n    at ${internal.tickPassFrame}`;
+        continue;
+      }
       const line = lines[index]!;
       const text = hot ? jscFrameText(inspect, line) : cachedFrameText(inspect, line);
       if (text) frames += `\n    at ${text}`;

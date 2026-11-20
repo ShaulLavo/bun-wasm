@@ -17,6 +17,9 @@ static const EVP_MD *digest(int bits) {
     case 256: return EVP_sha256();
     case 384: return EVP_sha384();
     case 512: return EVP_sha512();
+    case 3256: return EVP_sha3_256();
+    case 3384: return EVP_sha3_384();
+    case 3512: return EVP_sha3_512();
     default: return NULL;
   }
 }

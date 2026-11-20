@@ -59,5 +59,6 @@ unsafe extern "C" {
 
 pub mod ec;
 pub mod node;
+pub mod pqc;
 pub mod tls;
 pub mod x509;

@@ -1,0 +1,15 @@
+digest SHA3-256 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+digest SHA3-384 ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88cea927ac7f539f1edf228376d25
+digest SHA3-512 b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0
+digest sha3-256 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+digest SHA3-1024 throws NotSupportedError 9 Unrecognized algorithm name
+digest large 7c772c3f1ef6bb43
+hmac SHA3-256 {"name":"HMAC","hash":{"name":"SHA3-256"},"length":1088} 136 undefined
+hmac SHA3-384 {"name":"HMAC","hash":{"name":"SHA3-384"},"length":832} 104 undefined
+hmac SHA3-512 {"name":"HMAC","hash":{"name":"SHA3-512"},"length":576} 72 undefined
+hmac vector 4fe8e202c4f058e8dddc23d8c34e467343e23555e24fc2f025d598f558f67205 true
+rsa-pss {"name":"SHA3-256"} 128 true undefined
+rsa-pss reimport true
+ecdsa 64 true
+pbkdf2 53b1bc246a311cbf8e2c907d96bcb209ddf95cd9f0a74fdcbab033b6ea82e30a
+hkdf b86df15f2246ba581da7f614f1b368c8

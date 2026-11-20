@@ -19,6 +19,7 @@ mod archive;
 mod compression;
 mod crypto;
 mod crypto_ec;
+mod crypto_pqc;
 pub(crate) mod data;
 mod directory;
 mod encoding;

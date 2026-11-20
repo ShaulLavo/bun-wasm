@@ -24,8 +24,13 @@ The WASI host also captures its entropy function before globals change.
 | AES-KW | Generate, import, export, wrap, unwrap | raw, JWK |
 | PBKDF2 and HKDF | Import, derive bits, derive keys | raw input, non-extractable |
 | ECDH P-256, P-384 and P-521, X25519 | Generate, import, export, derive bits, derive keys | JWK, SPKI, PKCS#8, raw public |
+| ChaCha20-Poly1305 | Generate, import, export, encrypt, decrypt, wrap, unwrap | raw-secret, JWK |
+| ML-DSA-44, ML-DSA-65 and ML-DSA-87 | Generate, import, export, sign, verify | JWK (AKP), SPKI, PKCS#8, raw-public, raw-seed |
+| ML-KEM-768 and ML-KEM-1024 | Generate, import, export, encapsulate, decapsulate | JWK (AKP), SPKI, PKCS#8, raw-public, raw-seed |
 
-Digest supports SHA-1, SHA-256, SHA-384 and SHA-512. Wrapping uses the selected key format
+Digest supports SHA-1, SHA-256, SHA-384, SHA-512 and SHA3-256, SHA3-384 and SHA3-512,
+which HMAC, RSA, ECDSA, PBKDF2 and HKDF also take ([the source
+ledger](bun-patches/webcrypto-pqc-chacha-sha3.md)). Keys clone with `structuredClone`. Wrapping uses the selected key format
 and encryption algorithm. AES-KW JWK wrapping pads the JSON with spaces to an eight-byte
 boundary. GCM supports every WebCrypto tag size and arbitrary nonempty IV lengths. CTR
 increments only the selected counter bits, including a wrap within that field. RSA-OAEP

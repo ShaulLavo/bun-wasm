@@ -74,6 +74,9 @@ pub fn digest(alg: &str, data: &[u8]) -> Option<Vec<u8>> {
         "sha256" => Sha256::digest(data).to_vec(),
         "sha384" => Sha384::digest(data).to_vec(),
         "sha512" => Sha512::digest(data).to_vec(),
+        "sha3256" => sha3::Sha3_256::digest(data).to_vec(),
+        "sha3384" => sha3::Sha3_384::digest(data).to_vec(),
+        "sha3512" => sha3::Sha3_512::digest(data).to_vec(),
         _ => return None,
     };
     Some(out)
@@ -94,6 +97,9 @@ pub fn hmac(alg: &str, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
         "sha256" => mac::<Hmac<Sha256>>(key, data),
         "sha384" => mac::<Hmac<Sha384>>(key, data),
         "sha512" => mac::<Hmac<Sha512>>(key, data),
+        "sha3256" => mac::<Hmac<sha3::Sha3_256>>(key, data),
+        "sha3384" => mac::<Hmac<sha3::Sha3_384>>(key, data),
+        "sha3512" => mac::<Hmac<sha3::Sha3_512>>(key, data),
         _ => return None,
     };
     Some(out)

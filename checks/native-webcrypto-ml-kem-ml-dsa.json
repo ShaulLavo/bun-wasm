@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/webcrypto-ml-kem-ml-dsa",
+  "engines": ["quickjs", "jsc", "spidermonkey"]
+}

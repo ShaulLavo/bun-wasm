@@ -88,3 +88,15 @@ show("keygen bad type", () => crypto.generateKeyPairSync("ec", { namedCurve: "P-
 show("keygen raw cipher", () => crypto.generateKeyPairSync("ed25519", { privateKeyEncoding: { format: "raw-private", cipher: "aes-128-cbc", passphrase: "secret" } } as never));
 show("keygen raw passphrase", () => crypto.generateKeyPairSync("ed25519", { privateKeyEncoding: { format: "raw-private", passphrase: "secret" } } as never));
 
+// KeyObject.export options (Node's parseKeyEncoding), sign option integers and DER decode errors.
+for (const options of [undefined, null, "foo", 0, [], {}]) show(`export ${JSON.stringify(options)}`, () => rsa.publicKey.export(options as never));
+show("secret export", () => crypto.createSecretKey(Buffer.alloc(4)).export());
+show("secret export null", () => crypto.createSecretKey(Buffer.alloc(4)).export(null as never));
+const pss = crypto.constants.RSA_PKCS1_PSS_PADDING;
+for (const saltLength of [20.5, 2 ** 31, "20", null]) {
+  show(`saltLength ${String(saltLength)}`, () => crypto.sign("sha256", Buffer.from("x"), { key: rsa.privateKey, padding: pss, saltLength } as never));
+}
+for (const padding of [6.5, "6", 2 ** 32]) show(`padding ${String(padding)}`, () => crypto.sign("sha256", Buffer.from("x"), { key: rsa.privateKey, padding } as never));
+show("pkcs1 public as private", () => crypto.createPrivateKey({ key: rsa.publicKey.export({ format: "der", type: "pkcs1" }), format: "der", type: "pkcs1" }));
+show("pkcs8 garbage", () => crypto.createPrivateKey({ key: Buffer.alloc(10), format: "der", type: "pkcs8" }));
+

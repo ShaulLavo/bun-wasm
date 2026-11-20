@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/stack-tick-frame",
+  "engines": ["quickjs", "jsc", "browser"]
+}
