@@ -38,8 +38,11 @@ nanoseconds with Rust's euclidean division. The original
 `AT_SYMLINK_NOFOLLOW` for `lutimes`) or `futimens`, using `UTIME_NOW` for now.
 Errors carry Node's operation names `utime`, `lutime` and `futime`. WASI Preview1
 timestamps are unsigned nanoseconds since the epoch, so a time before 1970 is
-`EINVAL` on both hosts; native Bun stores it. The `fs-utimes` fixture compares
-the rest with native Bun 1.4.4.
+`EINVAL` on both hosts; native Bun stores it. The Browser fixture host (Node's
+WASI) stores only whole seconds when setting times, and Waffle sets only the
+modification time, at millisecond precision. The `fs-utimes` fixture compares
+whole-second times and errors with native Bun 1.4.4 on all three engines;
+`fs-utimes-fractions` compares sub-second times on QuickJS and JSC.
 
 `src/natives/wasi_metadata.rs` is an original metadata adapter. Preview1 reports
 file types without POSIX permission bits. WASI Stats therefore present `0644`

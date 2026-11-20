@@ -1,7 +1,9 @@
 import fs, { closeSync, lstatSync, openSync, promises, statSync, utimesSync, writeFileSync } from "node:fs";
 
 // utimes, lutimes and futimes set the times they are given, as Bun's time_like.rs reads
-// them: seconds (fractions kept), Dates, numeric strings, and a negative number for now.
+// them: seconds, Dates, numeric strings, and a negative number for now. Whole seconds
+// only: the browser fixture host (Node's WASI) drops fractions; fs-utimes-fractions
+// covers them on the other engines.
 writeFileSync("f.txt", "x");
 const times = (path: string) => {
   const stats = statSync(path);
@@ -21,10 +23,9 @@ const attempt = (label: string, run: () => unknown) => {
 };
 
 attempt("whole seconds", () => utimesSync("f.txt", 1_700_000_000, 1_700_000_001));
-attempt("fractional seconds", () => utimesSync("f.txt", 1_700_000_000.25, 1_700_000_001.5));
-attempt("numeric strings", () => utimesSync("f.txt", "1700000002.75", "1700000003"));
-attempt("dates", () => utimesSync("f.txt", new Date(1_700_000_004_321), new Date("2045-04-30T19:32:12.333Z")));
-attempt("after 2038", () => utimesSync("f.txt", new Date("2098-01-01T00:00:00Z"), new Date("2100-06-15T12:00:00.5Z")));
+attempt("numeric strings", () => utimesSync("f.txt", "1700000002", "1700000003"));
+attempt("dates", () => utimesSync("f.txt", new Date(1_700_000_004_000), new Date("2045-04-30T19:32:12Z")));
+attempt("after 2038", () => utimesSync("f.txt", new Date("2098-01-01T00:00:00Z"), new Date("2100-06-15T12:00:00Z")));
 attempt("epoch", () => utimesSync("f.txt", 0, 0));
 
 // A negative number means the current time.
@@ -34,10 +35,10 @@ const now = statSync("f.txt");
 console.log("negative number is now", now.atimeMs >= before, now.mtimeMs >= before);
 
 // lutimes on a regular file and futimes on a descriptor.
-fs.lutimesSync("f.txt", 1_600_000_000.5, 1_600_000_001);
+fs.lutimesSync("f.txt", 1_600_000_000, 1_600_000_001);
 console.log("lutimes", times("f.txt"), lstatSync("f.txt").mtimeMs);
 const fd = openSync("f.txt", "r+");
-fs.futimesSync(fd, new Date(1_500_000_000_123), "1500000001.5");
+fs.futimesSync(fd, new Date(1_500_000_000_000), "1500000001");
 closeSync(fd);
 console.log("futimes", times("f.txt"));
 
@@ -68,5 +69,5 @@ await new Promise<void>((resolve) => fs.lutimes("missing/f.txt", 1, 1, (error) =
 }));
 console.log("promises utimes", await promises.utimes("missing/f.txt", 1, 1).catch(syscallOf));
 console.log("promises lutimes", await promises.lutimes("missing/f.txt", 1, 1).catch(syscallOf));
-await promises.utimes("f.txt", 1_400_000_000.5, new Date(1_400_000_001_250));
+await promises.utimes("f.txt", 1_400_000_000, new Date(1_400_000_001_000));
 console.log("promises", times("f.txt"));
