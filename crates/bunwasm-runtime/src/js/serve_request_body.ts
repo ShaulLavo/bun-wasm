@@ -11,12 +11,16 @@ type ServeBodyDecoder = { push(bytes: Uint8Array): { output: ServeBodyOutput[]; 
   // the handler reads the bytes as they come, and the connection stops reading while
   // HIGH_WATER bytes wait unread. If the client goes away first, or the response is sent
   // first, reads fail with an AbortError and the rest of the body is decoded and dropped.
+  //
+  // Bun.serve's maxRequestBodySize caps the bytes a body may bring: once more arrive, reads fail
+  // with Bun's error and push() throws TooLarge, so the connection answers 413 and closes.
   class RequestUpload {
     readonly stream: ReadableStream<Uint8Array>;
     private controller: ReadableByteStreamController | null = null;
     private finished = false;
+    private received = 0;
     private readonly decoder: Decoder;
-    constructor(chunked: boolean, length: number, onDemand: () => void) {
+    constructor(chunked: boolean, length: number, onDemand: () => void, private readonly limit = Infinity) {
       this.decoder = new (internal.require("http_body").BodyDecoder)(chunked ? { kind: "chunked" } : { kind: "fixed", length });
       this.stream = new ReadableStream({
         type: "bytes",
@@ -36,7 +40,10 @@ type ServeBodyDecoder = { push(bytes: Uint8Array): { output: ServeBodyOutput[]; 
       let complete = false;
       for (const item of output) {
         if (item.kind === "end") complete = true;
-        else if (item.kind === "data" && !this.finished) this.controller?.enqueue(item.bytes);
+        if (item.kind !== "data") continue;
+        this.received += item.bytes.length;
+        if (this.received > this.limit) throw this.overflow();
+        if (!this.finished) this.controller?.enqueue(item.bytes);
       }
       if (!complete) return null;
       if (!this.finished) {
@@ -51,6 +58,21 @@ type ServeBodyDecoder = { push(bytes: Uint8Array): { output: ServeBodyOutput[]; 
       this.finished = true;
       this.controller?.error(new DOMException("The connection was closed.", "AbortError"));
     }
+    private overflow(): TooLarge {
+      if (!this.finished) {
+        this.finished = true;
+        this.controller?.error(tooLargeError());
+      }
+      return new TooLarge();
+    }
   }
-  return { RequestUpload };
+  class TooLarge extends Error {}
+  function tooLargeError(): Error {
+    return new Error("Request body exceeded maxRequestBodySize");
+  }
+  // The body of a request that arrived whole but over the cap: reading it fails as in Bun.
+  function tooLargeBody(): ReadableStream<Uint8Array> {
+    return new ReadableStream({ start(controller) { controller.error(tooLargeError()); } });
+  }
+  return { RequestUpload, TooLarge, tooLargeBody };
 })

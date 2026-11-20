@@ -1436,10 +1436,8 @@
       this.#redirect = init.redirect || (source && source.redirect) || "follow";
       defineInternalBody(this);
       const replacementBody = init.body;
+      // Like Bun, a GET or HEAD Request may carry a body; fetch() refuses to send it.
       const body = replacementBody !== undefined ? replacementBody : source ? source._stream || source._body || source._blob : null;
-      if (!response && body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
-        throw new TypeError("Request with a GET or HEAD method cannot have a body.");
-      }
       // Fetch forbids keepalive with a stream init.body (a source request's body is fine);
       // Bun reports it before any lock check.
       if (init.keepalive && replacementBody instanceof ReadableStream) throw new TypeError("keepalive");

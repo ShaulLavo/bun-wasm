@@ -53,8 +53,31 @@
     const bytes = bodies.get(source);
     return bytes ? remember(stream, bytes, types.get(source)) : stream;
   }
+  // Bun's tee gives both branches the same chunk objects. The streams standard copies each
+  // chunk of a byte stream (a fetch() or Bun.serve body) for the second branch, so a byte
+  // stream is read through a plain stream first, whose tee shares chunks.
+  function isByteStream(stream: ReadableStream<unknown>): boolean {
+    try {
+      stream.getReader({ mode: "byob" }).releaseLock();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function plain<T>(stream: ReadableStream<T>): ReadableStream<T> {
+    if (!isByteStream(stream)) return stream;
+    const reader = stream.getReader();
+    return new ReadableStream<T>({
+      async pull(controller) {
+        const { done, value } = await reader.read();
+        if (done) controller.close();
+        else controller.enqueue(value);
+      },
+      cancel: reason => reader.cancel(reason),
+    }, { highWaterMark: 0 });
+  }
   function tee<T>(stream: ReadableStream<T>): [ReadableStream<T>, ReadableStream<T>] {
-    const branches = stream.tee();
+    const branches = plain(stream).tee();
     for (const branch of branches) rememberAs(branch, stream);
     return branches;
   }

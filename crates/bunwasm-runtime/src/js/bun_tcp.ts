@@ -47,6 +47,7 @@ declare namespace Tcp {
     ref(): Socket<Data>;
     unref(): Socket<Data>;
     reload(options: Pick<Options<Data>, "socket">): void;
+    [Symbol.dispose](): void;
   };
   type OpenableSocket<Data> = Socket<Data> & { _open(): void };
   type Listener<Data = undefined> = {
@@ -148,6 +149,8 @@ declare namespace Tcp {
         ref() { socket.ref(); return this; },
         unref() { socket.unref(); return this; },
         reload(options) { handlers = options.socket; },
+        // Bun's alias for end(), so `using socket = await Bun.connect(...)` closes it.
+        [Symbol.dispose]() { result.end(); },
       };
       sockets.add(result);
       socket.on("data", bytes => {

@@ -479,12 +479,19 @@
 
   // With `streamBodies` (Bun.serve), a request whose body is still arriving starts its handler
   // at once with a body stream (serve_request_body.ts); the next request waits for the body.
-  function serveHttp(conn, handleRequest, startRequest, streamBodies) {
+  // `maxBody` is Bun.serve's maxRequestBodySize: a Content-Length over it is answered with 413
+  // before any handler runs; a chunked body that grows past it fails the handler's reads, and
+  // once the handler has started the connection answers 413 and closes, dropping its response.
+  function serveHttp(conn, handleRequest, startRequest, streamBodies, maxBody = Infinity) {
     let pending = null;
     let buffer = new Uint8Array(0);
     let busy = false;
     let ended = false;
     let upload = null;
+    // The current request's body went over maxBody; `started` once its handler is running.
+    let tooLarge = false;
+    let started = false;
+    const uploads = () => internal.require("serve_request_body");
     function startUpload() {
       const head = parseHead(buffer);
       if (!head) return null;
@@ -492,16 +499,37 @@
       const length = Number(header(head.headers, "content-length") || 0);
       if (!chunked && !(length > 0)) return null;
       const onDemand = () => { if (native.wake) native.wake(0); };
-      const body = new (internal.require("serve_request_body").RequestUpload)(chunked, length, onDemand);
+      const body = new (uploads().RequestUpload)(chunked, length, onDemand, maxBody);
       return Object.assign(head, { body: body.stream, streamed: true, chunked, trailers: [], length: buffer.length, upload: body, initial: buffer.subarray(head.headLength) });
+    }
+    function declaredTooLarge() {
+      if (maxBody === Infinity || !buffer.length) return false;
+      const head = parseHead(buffer);
+      return Boolean(head) && Number(header(head.headers, "content-length") || 0) > maxBody;
+    }
+    // A chunked body that arrived whole but over maxBody reads as Bun's error.
+    function capBuffered(request) {
+      if (!request || !request.chunked || request.body.length <= maxBody) return request;
+      tooLarge = true;
+      return Object.assign(request, { body: uploads().tooLargeBody(), streamed: true });
+    }
+    function answerTooLarge() {
+      if (!tooLarge || !started || conn.closed) return;
+      if (busy) conn.write(encoder.encode("HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n"));
+      conn.end();
     }
     function feedUpload(bytes) {
       let rest;
       try {
         rest = upload.push(bytes);
-      } catch {
-        // A malformed chunked body: Bun answers 400 unless the response already went out.
+      } catch (error) {
         failUpload();
+        if (error instanceof uploads().TooLarge) {
+          tooLarge = true;
+          answerTooLarge();
+          return;
+        }
+        // A malformed chunked body: Bun answers 400 unless the response already went out.
         if (busy) conn.write(encoder.encode("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"));
         conn.end();
         return;
@@ -518,13 +546,19 @@
     }
     function next() {
       if (busy || upload || conn.closed) return;
+      tooLarge = false;
       let request;
       try {
         if (startRequest && !pending && buffer.length) {
           const head = parseHead(buffer);
           if (head && header(head.headers, "expect")?.toLowerCase() === "100-continue") pending = startRequest(head, conn, wantsKeepAlive(head));
         }
-        request = buffer.length ? parseRequest(buffer) : null;
+        if (declaredTooLarge()) {
+          conn.write(encoder.encode("HTTP/1.1 413 Request Entity Too Large\r\nConnection: close\r\n\r\n"));
+          conn.end();
+          return;
+        }
+        request = capBuffered(buffer.length ? parseRequest(buffer) : null);
         if (!request && streamBodies && buffer.length) request = startUpload();
       } catch {
         conn.write(encoder.encode("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
@@ -538,6 +572,7 @@
       buffer = buffer.slice(request.length);
       busy = true;
       conn.busy = true;
+      started = false;
       if (request.upload) {
         upload = request.upload;
         feedUpload(request.initial);
@@ -547,7 +582,13 @@
       pending = null;
       if (active) active.receive(request.body, request.trailers);
       Promise.resolve()
-        .then(() => conn.closed ? false : active ? active.response : handleRequest(request, conn, keepAlive))
+        .then(() => {
+          if (conn.closed) return false;
+          const response = active ? active.response : handleRequest(request, conn, keepAlive);
+          started = true;
+          answerTooLarge();
+          return response;
+        })
         .catch((err) => {
           internal.printError(err);
           conn.write(encoder.encode("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
@@ -648,6 +689,12 @@
     return new Response("Internal Server Error", { status: 500, headers: { "content-type": "text/plain;charset=utf-8" } });
   }
 
+  // Bun.serve's maxRequestBodySize: a truthy number, truncated and at least 0, or 128 MiB.
+  function bodyLimit(value) {
+    if (!value || typeof value !== "number") return 128 * 1024 * 1024;
+    return Math.max(0, Math.trunc(value));
+  }
+
   function serve(options = {}) {
     if (internal.hotServers) return internal.hotServers.serve(options, createServer);
     return createServer(options);
@@ -670,6 +717,7 @@
     const requested = options.port !== undefined ? Number(options.port) : Number(globalThis.process.env.BUN_PORT || globalThis.process.env.PORT || 3000);
     const listener = listenOrThrow(hostname, requested);
     const port = native.hostLocalPort(listener);
+    const maxBody = bodyLimit(options.maxRequestBodySize);
     let fetchHandler = options.fetch;
     let errorHandler = options.error;
     let routes = compileRoutes(options.routes);
@@ -882,7 +930,7 @@
         connections.delete(conn);
         destroy();
       };
-      serveHttp(conn, handleRequest, undefined, true);
+      serveHttp(conn, handleRequest, undefined, true, maxBody);
     });
     // A frame entered at Bun.serve() is where its connections start reading and its requests
     // run, as under Bun. Started outside any frame, it keeps each turn's own frame.
