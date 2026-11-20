@@ -11,7 +11,7 @@ pub fn install(table: &mut Table) {
         let name = args.str(0)?;
         let found = source().and_then(|text| entries(text, name));
         Ok(found.map_or(Val::Undefined, |(zone, entries)| {
-            Val::Array(vec![Val::Str(zone.into()), Val::Str(entries.into())])
+            Val::Array(vec![Val::Str(zone), Val::Str(entries.into())])
         }))
     });
     table.add("timeZoneOffsets", |_| offsets_value());
