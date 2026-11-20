@@ -1,9 +1,11 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { acceptedStackOutcome, chainModes, guestStackSettings, measureStackPaths, stackModeSlice, stackOutcome, type GuestStackSettings } from "./stack-measurement.ts";
 
+// These tests run real Python and browser stack measurements. The limit only catches a hang.
+setDefaultTimeout(120_000);
 let scratchToClean: string | undefined;
 afterAll(() => { if (scratchToClean) rmSync(scratchToClean, { recursive: true, force: true }); });
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-stack-measurement-"));

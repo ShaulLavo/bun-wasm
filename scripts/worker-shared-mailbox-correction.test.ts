@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { createSharedObjectBroker } from "../web/src/shared-objects/broker";
 import { createSharedObjects } from "../web/src/shared-objects/service";
 import { bindSharedObjectHost } from "../web/src/shared-objects/host";
@@ -7,6 +7,8 @@ import { createSharedMailbox } from "../web/src/shared-objects/mailbox";
 import { Worker } from "node:worker_threads";
 import { once } from "node:events";
 
+// These tests start real worker threads; on CI some take over 3 s. The limit only catches a hang.
+setDefaultTimeout(120_000);
 const cleanup: (() => void)[] = [];
 const tick = () => new Promise<void>(resolve => setTimeout(resolve, 8));
 const nextTurn = () => new Promise<void>(resolve => setImmediate(resolve));

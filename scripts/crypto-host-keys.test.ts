@@ -1,10 +1,13 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import ts from "typescript-api";
+
+// These tests run the runtime transpiler and the TypeScript compiler. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = resolve(import.meta.dir, "..");
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-host-keys-"));

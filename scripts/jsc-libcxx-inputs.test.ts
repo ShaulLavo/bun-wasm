@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fixtureGit } from "../tests/package/guest-receipt-fixture";
+
+// These tests run the real libcxx build script and git. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 type Harness = { root: string; source: string; sdk: string; libcxx: string; invoke: (env?: NodeJS.ProcessEnv) => { exitCode: number; stderr: Uint8Array } };
 const recipe = readFileSync(new URL("../jsc/build-libcxx.sh", import.meta.url), "utf8");
