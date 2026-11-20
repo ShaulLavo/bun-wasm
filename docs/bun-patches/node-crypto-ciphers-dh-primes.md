@@ -58,7 +58,9 @@ The FinalizationRegistry that frees unfinished ciphers uses each cipher's state,
 the cipher, as its unregister token: QuickJS never collects an object that is its own
 token. `bun:internal-for-testing` exposes `liveCipherCount()` for the
 `node-crypto-cipher-finalization` fixture, which drops 1000 unfinished ciphers and
-checks that their contexts are released.
+checks that their contexts are released. It runs on QuickJS, JSC and the browser
+engine. The experimental SpiderMonkey embedding does not install SpiderMonkey's
+FinalizationRegistry cleanup hook, so no registry callback runs there for any module.
 
 The `node-crypto-ciphers`, `node-crypto-dh` and `node-crypto-primes` fixtures are
 original test code. They check NIST SP 800-38A, the GCM specification's test cases 2, 4
