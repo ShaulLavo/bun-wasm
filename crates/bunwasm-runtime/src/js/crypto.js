@@ -302,11 +302,13 @@
     if (k.kty === "oct") return { ...a, length: decode(k.k).length * 8 };
     if (k.kty === "RSA") {
       const n = decode(k.n);
+      // Bun's RsaHashedKeyAlgorithm member order.
+      const hash = requiredHash(a);
       return {
         name: a.name,
-        hash: requiredHash(a),
         modulusLength: (n.length - 1) * 8 + 32 - Math.clz32(n[0]),
         publicExponent: decode(k.e),
+        hash,
       };
     }
     if (k.kty === "EC") return { name: a.name, namedCurve: a.namedCurve };
