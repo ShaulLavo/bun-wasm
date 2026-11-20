@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, webkit, type BrowserType, type Page } from "playwright";
 import { withHeldPreview, type HeldPreview } from "./iphone-load-fixture";
 import { withPlayground } from "./test-fixture";
@@ -6,6 +6,9 @@ import { execute } from "./execute";
 import { frameworks, type Framework } from "./catalog";
 import { createPageTransport, type Transport } from "./transport";
 import { Scope } from "./scope";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 type Scenario = "normal" | "undelivered" | "stalled" | "late";
 type Event = { event: "enqueue" | "settled" | "rejected"; operation: string; at: number };

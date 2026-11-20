@@ -1,4 +1,4 @@
-import { test, expect, spyOn } from "bun:test";
+import { test, expect, spyOn, setDefaultTimeout } from "bun:test";
 import { chromium, webkit, type Browser, type BrowserType } from "playwright";
 import { brotliCompressSync } from "node:zlib";
 import { IphoneBus } from "./iphone-bus";
@@ -8,6 +8,9 @@ import { armIphoneClick, presentIphonePreview } from "./iphone-browser";
 import type { IphoneResponseObservation } from "./iphone-responses";
 import { runFixturePhases, type EnterPhase } from "./fixture-phases";
 import { navigateTestPage } from "../../web/tests/navigate-test-page.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function counterResponse(request: Request, encodings: { asset: string | null; navigations: (string | null)[] }): Response {
   const encoding = request.headers.get("accept-encoding");

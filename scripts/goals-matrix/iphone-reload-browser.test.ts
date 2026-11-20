@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, webkit, type Browser, type BrowserType, type Frame, type Page } from "playwright";
 import { IphoneBus } from "./iphone-bus";
 import { observeIphoneResponse } from "./iphone-server";
 import { presentIphonePreview } from "./iphone-browser";
 import { navigateTestPage } from "../../web/tests/navigate-test-page.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 async function ready(bus: IphoneBus, role: "host" | "preview"): Promise<void> {
   const deadline = Date.now() + 3000;

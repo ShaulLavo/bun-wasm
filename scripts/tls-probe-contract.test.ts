@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,9 @@ import { sealTlsHandoff, verifyTlsHandoff } from "./tls-probe-handoff.ts";
 import { fileIdentity, tlsRepositoryIdentity, treeIdentity } from "./tls-probe-inputs.ts";
 import { tlsFixture, fixtureCrypto, fixtureHandoff, fixtureMessages, syntheticArchive, syntheticObject } from "./tls-probe-fixture.ts";
 import { discoverChecks, selectChecks } from "./test-checks.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 for (const abi of ["host", "wasm32-wasip1"] as const) test(`source fixture records exact ${abi} archives from streamed cached Cargo events`, async () => {
   const f = await tlsFixture();

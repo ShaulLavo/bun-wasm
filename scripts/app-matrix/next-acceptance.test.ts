@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +11,9 @@ import { registryReceipt } from "./next-acceptance-registry";
 import { runAcceptancePhase } from "./next-acceptance-phase";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
 import { emptyMemory, memoryGate, parseMemory, resultTable, type MemorySample, type PhaseResult } from "./next-acceptance-model";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const MiB = 1024 * 1024;
 function sample(phase: string, live = 200): MemorySample {

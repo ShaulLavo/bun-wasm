@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { instrumentEsbuildPacketReads } from "./esbuild-packet-diagnostic.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const original = readFileSync(new URL("./fixtures/esbuild-packet/stdio-protocol.txt", import.meta.url), "utf8");
 const diagnostic = instrumentEsbuildPacketReads(original);

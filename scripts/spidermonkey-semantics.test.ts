@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { definition, nativeControls } from "./spidermonkey-native-controls";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const shim = readFileSync("crates/bunwasm-spidermonkey/cpp/engine.cpp", "utf8");
 const adapter = readFileSync("crates/bunwasm-engine-spidermonkey/src/vm.rs", "utf8");

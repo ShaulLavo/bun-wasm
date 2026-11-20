@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { $ as native } from "bun";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { runInNewContext } from "node:vm";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 // The runtime module over host bash, compared with native Bun.$ on the same inputs.
 const source = fs.readFileSync(new URL("../crates/bunwasm-runtime/src/js/bun_shell.ts", import.meta.url), "utf8");

@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 for (const mode of ["synchronous", "delayed", "rejected"]) test(`logical root exit retains ${mode} physical-stop ownership through page disposal`, () => {
   const result = spawnSync(process.execPath, [new URL("../web/tests/fixtures/runner-stop-probe.ts", import.meta.url).pathname, mode], { encoding: "utf8", timeout: 3000 });

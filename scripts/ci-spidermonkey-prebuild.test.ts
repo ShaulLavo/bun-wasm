@@ -1,6 +1,6 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import assert from 'node:assert/strict';
-import { expect, test } from 'bun:test';
+import { expect, setDefaultTimeout, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -9,6 +9,9 @@ import { dirname, join } from 'node:path';
 import { needsRust, needsSharedNative } from './ci-changes.ts';
 import { sharedSpiderMonkeyRecipes, verifyPrebuild, writePrebuild } from './ci-spidermonkey-prebuild.ts';
 import { selectChecks } from './test-checks.ts';
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const hash = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 const workflow = expandedCiWorkflow();

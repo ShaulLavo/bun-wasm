@@ -1,10 +1,13 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getEventListeners } from "node:events";
 import { bounded } from "./bounded";
 import { waitNativeReady } from "./native-ready";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const message = { iphoneControl: "http://127.0.0.1:1234/fixture", productOrigin: "http://127.0.0.1:4321" };
 const record = JSON.stringify(message);

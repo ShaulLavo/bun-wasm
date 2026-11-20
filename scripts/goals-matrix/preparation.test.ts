@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,9 @@ import { frameworks } from "./catalog";
 import { engineFiles, profileEngineFiles } from "./engines";
 import { writePreparedSiteInventory, verifyPreparedSiteInventory } from "./prepared-site";
 import { pinnedBashWeb } from "../bash-web-guests";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("local preparation consumes built assets without a CI delivery manifest", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-local-prepare-"));

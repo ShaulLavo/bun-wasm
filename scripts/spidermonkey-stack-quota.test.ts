@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { engineStackBudgetKey, spiderMonkeyWebKitStackKib } from "../web/src/engine-stack-budget.ts";
 import { buildStandaloneSmoke } from "./spidermonkey-smoke.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("installed SpiderMonkey quotas and overflow recovery on both tiers and member bounds", () => {
   const { smoke, env, remove } = buildStandaloneSmoke();

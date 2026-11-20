@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { recipe, targets } from "../tests/ten-app-finishline/recipes.ts";
 import { fullstackApps } from "./app-matrix/product-fullstack.ts";
 
@@ -306,6 +306,9 @@ test("overall deadline exits despite a hung capture and browser, while attemptin
 
 import { runInNewContext } from "node:vm";
 import { browserRegistryRoute } from "./app-matrix/registry-request.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("actual shell fixture passes only the supported Astro opt-outs beside the existing Next opt-out", async () => {
   const source = await readFile(resolve(import.meta.dir, "../tests/shell-product/main.ts"), "utf8");

@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,9 @@ import { settlementFile, withSafariCausalCapture, type SafariCausalCapture } fro
 import { launchdPredicate, normalizeLaunchdLog, webContentService, type ControlReceipt, type NativePort, type NativeQuery, type ProcessClock } from "./safari-causal-native";
 import type { Transport } from "./transport";
 import { withPlayground } from "./test-fixture";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const servers: { stop(force: boolean): Promise<void> }[] = [];
 const directories: string[] = [];

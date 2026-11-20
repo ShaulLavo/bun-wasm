@@ -1,12 +1,15 @@
 // Shared-group browser-guest check: the explicitly selected group guest on the production Browser host.
 // The shared PIC job passes its one group build in BUN_WASM_PROFILE_PROGRAM. A missing or
 // mismatched program fails this gate; it is never a passing skip.
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { programKind, programProfile, sharedGroupPair } from "../src/engine-kind.ts";
 import { spiderMonkeyTierOptions, spiderMonkeyTiers, type SpiderMonkeyTier } from "./spidermonkey-native-qualification.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = resolve(import.meta.dir, "..");
 

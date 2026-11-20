@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { pathToFileURL } from "node:url";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const erased = Bun.spawnSync(["node", "--input-type=module", "-e",
   'import { stripTypeScriptTypes } from "node:module"; let text = ""; for await (const chunk of process.stdin) text += chunk; process.stdout.write(stripTypeScriptTypes(text));'],

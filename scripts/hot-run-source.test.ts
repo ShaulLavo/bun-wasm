@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const names = ["esm_loader", "hot_serve", "hot_run", "hot_revisions", "import_requests"];
 const sources = new Map(names.map(name => [name, execFileSync("node", ["--disable-warning=ExperimentalWarning", "-e",

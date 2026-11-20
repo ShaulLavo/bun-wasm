@@ -1,10 +1,13 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { firefox, type Page, type BrowserContext } from "playwright";
 import { resolve, join } from "node:path";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 import { storageEvidence, type StorageLifetime } from "./storage-browser-evidence";
 import { waitForEntryRequestTraffic } from "./storage-fs-control";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const lifetimes: StorageLifetime[] = [];
 afterEach(async () => {

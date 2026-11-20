@@ -1,10 +1,13 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { memorySampler } from "./memory";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("memory sampler retains a sampled child peak until take and resets it", async () => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-memory-"));

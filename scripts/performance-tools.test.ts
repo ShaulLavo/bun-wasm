@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -7,6 +7,9 @@ import { capture, checkResult } from "./performance/capture";
 import { array, canonical, identity, json, number, object, parsePlan, sha256, treeInventory } from "./performance/input";
 import { splitProfile } from "./performance/profile";
 import { replay } from "./performance/replay";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = resolve(import.meta.dir, "..");
 const fixtures = join(root, "tests/performance/fixtures");

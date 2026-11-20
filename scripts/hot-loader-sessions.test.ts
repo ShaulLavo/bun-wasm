@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { execFileSync } from "node:child_process";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/esm_loader.ts", import.meta.url), "utf8");
 const code = execFileSync("node", ["--disable-warning=ExperimentalWarning", "-e",

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import { join } from "node:path";
@@ -9,6 +9,9 @@ import { browserRegistryRoute } from "./app-matrix/registry-request";
 import { stoppedPreviewError } from "./app-matrix/server-browser";
 import { browserBuildConfig } from "./browser-build";
 import { PreviewOwnerHost, type OwnerSession } from "../web/scripts/preview-owner-host";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 type PreviewPortReservation = Pick<Server<undefined>, "port" | "stop">;
 

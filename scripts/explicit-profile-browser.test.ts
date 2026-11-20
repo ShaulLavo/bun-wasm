@@ -1,5 +1,8 @@
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("explicit shared profile uses the production playground, shell and workers", () => {
   if (!process.env.BUN_WASM_PROFILE_PROGRAM || !process.env.BUN_WASM_BROWSER_SITE) {

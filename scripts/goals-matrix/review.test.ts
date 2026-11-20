@@ -1,5 +1,5 @@
 import { deadlinePolicy } from "./deadlines";
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
 import { mkdtemp, mkdir, writeFile, chmod, rm, access, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,9 @@ import { initialCells, validateReport, finish, phases, type Report } from "./mod
 import { assetIdentity } from "./assets";
 import { fleet, removeStaging } from "./fleet";
 import { options } from "./run";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function report(): Report { return { schema: 2, run: "regression", createdAt: "now", command: "test", deadlines: deadlinePolicy(180_000), source: { commit: "test", dirty: false, assets: {} }, cells: initialCells() }; }
 test("external reports reject unknown schemas and statuses, malformed attempts and false phase evidence", () => {

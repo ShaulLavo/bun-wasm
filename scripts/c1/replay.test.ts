@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +11,9 @@ import { fileIdentity, sha256 } from "./identity.ts";
 import { replay, requireOriginal } from "./operations.ts";
 import { HARNESS_TARGET_BRANCH, admitProduct, parseReplay, type AdmittedProduct, type HarnessIdentity, type ReplayContract } from "./replay.ts";
 import { TLS_PAGE_ENTRY, TLS_PAGE_WORKERS } from "./tls-page.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 /** Synthetic fixtures only: a fixture Git host, a sealed fixture delivery and recorded GitHub answers. None of it is product evidence. */
 const repository = resolve(import.meta.dir, "../..");

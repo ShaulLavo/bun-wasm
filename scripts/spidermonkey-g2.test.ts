@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { compileArguments, parseCommands } from "../spidermonkey/rebuild-g2.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("G2 compiler replay changes only source, output and the embed macro", () => {
   const entry = { directory: "/obj", file: "/source/vm.cpp", arguments: ["clang++", "--sysroot", "/sysroot", "-fPIC", "-fno-exceptions", "-o", "/dev/null", "-c", "/source/vm.cpp"] };

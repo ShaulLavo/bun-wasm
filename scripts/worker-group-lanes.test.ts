@@ -3,11 +3,14 @@
 // pipes wired as spawn wires them, so the pipe to each child is in relay mode and its relay is
 // never serviced. The lane provider is the topology model in fixtures/shared-objects/group-lanes.ts;
 // lane.rs's own unit tests cover the Rust algorithm.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PipeController, type PipeEndpoint } from "../node_modules/waffle/proc/pipes.ts";
 import { createGroupLaneModel, groupSharedObjects } from "./fixtures/shared-objects/group-lanes";
 import { sourceChannels, sourcePorts, type SourcePort, type TransferHooks } from "./fixtures/shared-objects/source-runtime";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const AGAIN = -6;
 const cleanup = new Set<() => void>();

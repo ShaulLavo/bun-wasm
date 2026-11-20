@@ -1,8 +1,11 @@
 import { withScoped } from "./scope-fixture";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, webkit, type BrowserType } from "playwright";
 import { armIphoneClick, iphonePreviewFocus, presentIphonePreview } from "./iphone-browser";
 import { withHeldPreview } from "./iphone-load-fixture";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 // These tests check focus outcomes. Launching a browser takes seconds in CI, most in
 // WebKit, so the only limit is a hang cap, and waits inside run until it.

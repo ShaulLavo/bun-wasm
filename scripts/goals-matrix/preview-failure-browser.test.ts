@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, firefox, type Page } from "playwright";
 import { createPageTransport } from "./transport";
 import { withAdmission } from "./scope-fixture";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const observedEvents = ["pageerror", "console", "requestfailed", "response"] as const;
 function listenerCount(page: Page, event: string): number {

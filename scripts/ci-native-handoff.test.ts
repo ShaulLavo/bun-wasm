@@ -1,5 +1,5 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 function record(value: unknown): Record<string, unknown> {
@@ -24,6 +24,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
 import { nativeTargetRoots } from "./ci-native-handoff-paths";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function steps(id: string): Record<string, unknown>[] {
   const value = record(jobs[id]).steps;

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -9,6 +9,9 @@ import { fullBrowserGuestSelection } from "./browser-guest-catalogue";
 import { browserGuestManifest } from "./browser-guest-selection";
 import { selectCiBrowserCoverage } from "./ci-browser-coverage";
 import { selectChecks } from "./test-checks";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const all = { rust: true, jsc: true, shared: true, shared_native: true, browser_guest: true };
 const none = { rust: false, jsc: false, shared: false, shared_native: false, browser_guest: false };

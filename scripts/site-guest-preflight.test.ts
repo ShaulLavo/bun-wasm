@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -10,6 +10,9 @@ import { resolveSiteSpiderMonkey, verifySiteGuests } from "./site-guest-prefligh
 import { parseInputs, verifyPairReceipt, writePairReceipt } from "./spidermonkey-side-core-receipt";
 import { sideSourceSha256 } from "./spidermonkey-side-inputs";
 import { appendCustomSection } from "../src/engine-kind";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const cleanup = new Set<string>();
 afterEach(async () => {

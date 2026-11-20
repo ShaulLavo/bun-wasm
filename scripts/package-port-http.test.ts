@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { Readable, Writable, Duplex, getDefaultHighWaterMark } from "node:stream";
 import { runInNewContext } from "node:vm";
 import type { Server } from "node:http";
 import { netAddressSource } from "./net-address-source";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function fixture(refuse = false, protocol: "http" | "tcp" = "http") {
   const ticks: (() => void)[] = [];
