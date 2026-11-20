@@ -1509,36 +1509,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "timing probe, run by hand"]
-    fn shared_token_timing_probe() {
-        let runtime = Runtime::new().unwrap();
-        let context = Context::full(&runtime).unwrap();
-        context.with(|ctx| {
-            ctx.eval::<(), _>(
-                "globalThis.token = {}; globalThis.registry = new FinalizationRegistry(() => {});
-                 globalThis.targets = [];
-                 for (let i = 0; i < 50000; i++) { const t = {}; targets.push(t); registry.register(t, i, token); }",
-            )
-            .unwrap()
-        });
-        let started = std::time::Instant::now();
-        context.with(|ctx| ctx.eval::<(), _>("targets = null").unwrap());
-        runtime.run_gc();
-        let free_targets = started.elapsed();
-        context.with(|ctx| {
-            ctx.eval::<(), _>(
-                "globalThis.targets = [];
-                 for (let i = 0; i < 50000; i++) { const t = {}; targets.push(t); registry.register(t, i, token); }",
-            )
-            .unwrap()
-        });
-        let started = std::time::Instant::now();
-        let removed = context.with(|ctx| ctx.eval::<bool, _>("registry.unregister(token)").unwrap());
-        let unregister = started.elapsed();
-        eprintln!("free 50000 targets: {free_targets:?}; unregister(token) of 50000: {unregister:?} ({removed})");
-    }
-
-    #[test]
     fn parser_lookahead_leaves_no_exception() {
         let runtime = Runtime::new().unwrap();
         let context = Context::full(&runtime).unwrap();
