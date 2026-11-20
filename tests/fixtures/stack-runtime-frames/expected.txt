@@ -7,7 +7,7 @@ Error: call
     at ./index.ts:26:1
 --- CommonJS function
 Error: cjs call
-    at make (./make.cjs:2:21)
+    at make (./make.cts:2:21)
     at ./index.ts:29:49
 --- EventEmitter listener
 Error: emit

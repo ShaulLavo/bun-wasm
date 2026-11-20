@@ -26,7 +26,7 @@ function named() {
 named();
 
 const require = createRequire(import.meta.url);
-show("CommonJS function", require("./make.cjs").make());
+show("CommonJS function", require("./make.cts").make());
 
 const emitter = new EventEmitter();
 emitter.on("go", () => show("EventEmitter listener", new Error("emit")));
