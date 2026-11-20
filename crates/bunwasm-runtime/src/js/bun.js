@@ -576,7 +576,11 @@
     get SHA512_256() { return internal.require("bun_hash_classes").SHA512_256; },
     randomUUIDv7,
     peek,
-    gc: () => native.gc(),
+    // Bun returns the heap size the collection measured, which heapUsed then reports.
+    gc: () => {
+      const measured = native.gc();
+      return typeof measured === "number" ? measured : native.memoryUsage().heapUsed ?? 0;
+    },
     plugin: internal.require("bun_plugin").plugin,
     resolveSync,
     resolve: async (spec, from) => resolveSync(spec, from),

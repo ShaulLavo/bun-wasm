@@ -20,7 +20,8 @@ The shared `ShellFs` declaration retains `constants` alongside the filesystem
 methods used by the shell, so the specialized builtin overload exposes both.
 First-call source controls exercise the actual builtin factories without cycles.
 Existing numeric constant values and native operations remain unchanged.
-Unsupported binding names still throw. Trace constants are not supplied.
+Other binding names follow Bun's list ([Process legacy members](process-legacy-members.md)).
+Trace constants are not supplied.
 
 The real Prisma 6.17.1 CLI reaches this binding before command dispatch. Its
 bundled `tmp` module reads filesystem open flags and OS errno constants. The

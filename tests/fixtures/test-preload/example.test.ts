@@ -3,7 +3,7 @@ setDefaultTimeout(2000);
 test.serial("preload runs before collection and hooks before tests", () => {
   expect(globalThis.preloadLoaded).toBe(true);
   expect(globalThis.preloadHookRan).toBe(true);
-  expect(process.report.getReport().header).toEqual({});
+  expect(process.report.getReport().header).toMatchObject({ event: "JavaScript API", trigger: "GetReport" });
   expect(Bun.unsafe.gcAggressionLevel).toBeUndefined();
 });
 describe.skipIf(true).concurrent("skipped parallel group", () => {
