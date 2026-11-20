@@ -70,11 +70,13 @@
   // One line of JavaScriptCore's text as QuickJS's formatter prints it: application frames
   // mapped back to their source, the runtime's own and native frames as they are. A frame with
   // no source (eval code, a `new Function` body) has no position: eval code prints as Bun's
-  // `eval (unknown)`. Caller-origin checks read these frames as opaque, so none is left out.
+  // `eval (unknown)`. Caller-origin checks read these frames as opaque, so they stay.
+  const runtimeFrame = /^(.*?)@(bun-wasm:.*:\d+:\d+)$/;
+  const nativeFrame = /^(.*)@\[native code\]$/;
   function jscFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
-    const runtime = /^(.*?)@(bun-wasm:.*:\d+:\d+)$/.exec(line);
+    const runtime = runtimeFrame.exec(line);
     if (runtime) return topLevelCode.has(runtime[1]!) ? runtime[2]! : `${runtime[1]} (${runtime[2]})`;
-    const nativeCode = /^(.*)@\[native code\]$/.exec(line);
+    const nativeCode = nativeFrame.exec(line);
     if (nativeCode) return `${nativeCode[1] || "<anonymous>"} (native)`;
     const unlocated = /^(.*)@$/.exec(line);
     if (unlocated) return `${topLevelCode.has(unlocated[1]!) ? "eval" : unlocated[1]} (unknown)`;
@@ -100,12 +102,30 @@
     return frameTexts.get(line) ?? remember(frameTexts, 4096, line, jscFrameText(inspect, line));
   }
 
+  // The frames Bun would not show: the runtime's own, and native frames the runtime called, such
+  // as the `apply` its event loop runs a callback through. A native frame called by user code,
+  // like `forEach`, stays.
+  function hiddenJscFrames(lines: readonly string[]) {
+    const hidden = new Array<boolean>(lines.length);
+    let callerHidden = false;
+    for (let index = lines.length - 1; index >= 0; index--) {
+      const line = lines[index]!;
+      hidden[index] = runtimeFrame.test(line) || callerHidden && nativeFrame.test(line);
+      callerHidden = hidden[index]!;
+    }
+    return hidden;
+  }
+
   // The `\n    at` lines for JavaScriptCore's text. A hot run maps through changing revisions,
   // so it formats every frame afresh.
   function jscFrames(raw: string, hot: boolean) {
     const inspect = internal.require("inspect");
+    const lines = raw.split("\n");
+    const hidden = internal.showRuntimeFrames() ? undefined : hiddenJscFrames(lines);
     let frames = "";
-    for (const line of raw.split("\n")) {
+    for (let index = 0; index < lines.length; index++) {
+      if (hidden?.[index]) continue;
+      const line = lines[index]!;
       const text = hot ? jscFrameText(inspect, line) : cachedFrameText(inspect, line);
       if (text) frames += `\n    at ${text}`;
     }
@@ -140,6 +160,51 @@
     return native.engine === "spidermonkey" ? inspect.errorFrames(target, raw) : inspect.parseStack(raw);
   }
 
+  // QuickJS applies Error.stackTraceLimit while it captures, before the default text drops the
+  // runtime's frames, so a limit the runtime's frames filled printed no frame at all. The engine
+  // captures `stackHeadroom` more frames than the program's limit, each capture records that
+  // limit, and formatting keeps that many frames. A limit below one stays as it is: no stack.
+  const stackHeadroom = 16;
+  const captureLimits = new WeakMap<object, number>();
+  let programLimit: unknown;
+
+  function headroomApplies(value: unknown): value is number {
+    return typeof value === "number" && value >= 1 && Number.isFinite(value);
+  }
+
+  function recordLimit(sites: unknown) {
+    if (Array.isArray(sites) && headroomApplies(programLimit)) captureLimits.set(sites, Math.trunc(programLimit));
+    return sites;
+  }
+
+  // A custom formatter receives as many CallSites as the program's limit allows.
+  function limitedSites(sites: unknown) {
+    if (!Array.isArray(sites)) return sites;
+    const limit = captureLimits.get(sites);
+    return limit === undefined ? sites : sites.slice(0, limit);
+  }
+  internal.capturedStackLimit = (sites: object) => captureLimits.get(sites);
+
+  function installStackHeadroom() {
+    const nativeLimit = Object.getOwnPropertyDescriptor(Error, "stackTraceLimit")!;
+    const engineLimit = (value: unknown) => headroomApplies(value) ? value + stackHeadroom : value;
+    programLimit = nativeLimit.get!.call(Error);
+    nativeLimit.set!.call(Error, engineLimit(programLimit));
+    Object.defineProperty(Error, "stackTraceLimit", nullPrototypeDescriptor({
+      __proto__: null,
+      configurable: nativeLimit.configurable,
+      enumerable: nativeLimit.enumerable,
+      get(this: unknown) {
+        nativeLimit.get!.call(this);
+        return programLimit;
+      },
+      set(this: unknown, value: unknown) {
+        nativeLimit.set!.call(this, engineLimit(value));
+        programLimit = value;
+      },
+    }));
+  }
+
   function formatStack(target: object, raw: unknown, materializing = false) {
     if (formatted.has(target)) return formatted.get(target);
     if (formatting) return store(target, defaultStack(target, raw));
@@ -151,7 +216,7 @@
       if (!custom && materializing) return defaultStack(target, raw);
       const sites = custom && parseCapturedStack
         ? capturedFrames(target, raw).map(frame => new CallSite(frame))
-        : raw;
+        : limitedSites(raw);
       value = custom ? Reflect.apply(prepare, Error, [target, sites]) : defaultStack(target, raw);
     } finally {
       formatting = false;
@@ -184,7 +249,8 @@
     });
     const nativeStack = Object.getOwnPropertyDescriptor(Error.prototype, "stack");
     const nativePrepare = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
-    nativePrepare!.set!.call(Error, (_error: object, sites: unknown) => sites);
+    nativePrepare!.set!.call(Error, (_error: object, sites: unknown) => recordLimit(sites));
+    installStackHeadroom();
     Object.defineProperty(Error, "prepareStackTrace", { value: defaultPrepare, writable: true, configurable: true });
 
     Object.defineProperty(Error.prototype, "stack", {

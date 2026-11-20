@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { Glob } from "bun";
 import locations from "./locations.json";
+
+// error.stack leaves out the runtime's own frames unless BUN_WASM_INTERNAL_FRAMES=1, which this
+// check of the runtime's source positions needs.
+if (process.env.BUN_WASM_INTERNAL_FRAMES !== "1") {
+  const env = { ...process.env, BUN_WASM_INTERNAL_FRAMES: "1" };
+  const child = spawnSync(process.execPath, [import.meta.path], { env, encoding: "utf8" });
+  process.stdout.write(child.stdout);
+  process.stderr.write(child.stderr);
+  process.exit(child.status ?? 1);
+}
 
 const NativeError = Error;
 function capture(trigger: () => unknown) {

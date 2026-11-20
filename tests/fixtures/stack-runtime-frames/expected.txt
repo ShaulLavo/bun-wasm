@@ -1,0 +1,44 @@
+--- top level
+Error: top
+    at ./index.ts:21:23
+--- plain call
+Error: call
+    at named (./index.ts:24:26)
+    at ./index.ts:26:1
+--- CommonJS function
+Error: cjs call
+    at make (./make.cts:2:21)
+    at ./index.ts:29:49
+--- EventEmitter listener
+Error: emit
+    at <anonymous> (./index.ts:32:58)
+    at ./index.ts:33:9
+--- timer
+Error: timer
+    at <anonymous> (./index.ts:36:21)
+--- immediate
+Error: immediate
+    at <anonymous> (./index.ts:41:25)
+--- nextTick
+Error: tick
+    at <anonymous> (./index.ts:46:24)
+--- microtask
+Error: microtask
+    at <anonymous> (./index.ts:51:25)
+--- promise callback
+Error: then
+    at <anonymous> (./index.ts:55:65)
+--- fs callback
+Error: fs
+    at <anonymous> (./index.ts:58:27)
+--- stream pipeline
+Error: transform
+    at transform (./index.ts:65:35)
+--- http handler
+Error: http
+    at <anonymous> (./index.ts:75:30)
+--- bun test (exit 0)
+Error: in test
+    at <anonymous> (./stack.test.ts:10:26)
+Error: in async test
+    at <anonymous> (./stack.test.ts:15:26)

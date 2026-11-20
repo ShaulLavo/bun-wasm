@@ -38,9 +38,9 @@ changed before the first read appears, one changed after does not, as in Bun.
 
 `jscStack` parses each application frame with the inspector's existing parser, which
 maps positions back through source maps and moves a call's column to its callee, and
-prints it as Bun's error printer does. The runtime's own `bun-wasm:` frames and native
-frames stay, printed as the QuickJS formatter prints them; Bun's error printer still
-leaves them out. A frame with no source prints without a position: eval code as Bun's
+prints it as Bun's error printer does. Native frames stay, printed as the QuickJS formatter
+prints them; the runtime's own `bun-wasm:` frames are left out
+([Runtime stack frames](runtime-stack-frames.md)). A frame with no source prints without a position: eval code as Bun's
 `eval (unknown)`, a `new Function` body as `anonymous (unknown)`. Bun leaves the latter
 out; it stays here because `callerSourceOrigin` reads it as an opaque caller.
 

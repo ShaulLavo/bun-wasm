@@ -156,15 +156,16 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 
 // Hashes pin original syntax; capability selection, structured frames, anonymous presentation, awaiting-caller names, descriptors and builtin changes have explicit deltas.
 // The stack_trace hash also covers the call-site predicates React's stack collector calls,
-// and the JSC default text rewritten in Bun's form (docs/bun-patches/error-stack-header.md).
+// and the JSC default text rewritten in Bun's form (docs/bun-patches/error-stack-header.md),
+// without the runtime's own frames (docs/bun-patches/runtime-stack-frames.md).
 const originalTokens = {
-  stack_trace: "66ed37444f7b268817c4bf271abc6e07e076e8ab4d828b4af1b6be5a34714a80",
+  stack_trace: "fbbff28914609883dab58441cd9bc56d22d94148d341a6593d3e7870d94b34c1",
   // Re-pinned for the thirdparty fetch modules' internal loader and binding hooks (node-fetch, undici).
   bun_builtins: "acf769db3668622edc5f3d2ba41b86d593371cbdf7537d86e53f9ed8cc0b23f3",
 };
-// Allow the JSC formatter registration, host adapter dispatch and JSC default text rewrite with
-// its frame caches (6534 bytes).
-const originalEmbeddedBytes = { stack_trace: 7300, bun_builtins: 4372 };
+// Allow the JSC formatter registration, host adapter dispatch, JSC default text rewrite with
+// its frame caches, hidden runtime frames and QuickJS's stack limit headroom (8193 bytes).
+const originalEmbeddedBytes = { stack_trace: 9100, bun_builtins: 4372 };
 
 for (const [label, before, after] of [
   ["true names", "return this.#frame.name || null;", 'return this.#frame.name || "";'],
