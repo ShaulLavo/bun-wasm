@@ -1,0 +1,30 @@
+key {"name":"ChaCha20-Poly1305"} secret true ["encrypt","decrypt","wrapKey","unwrapKey"]
+sealed 130 d31a8d34648e60db7b86afbc53ef7ec2 1ae10b594f09e26a7e902ecbd0600691
+opened Ladies and Gentlemen
+tampered throws OperationError 0 The operation failed for an operation-specific reason
+short throws OperationError 0 The operation failed for an operation-specific reason
+iv 0 throws OperationError 0 algorithm.iv must contain exactly 12 bytes
+iv 11 throws OperationError 0 algorithm.iv must contain exactly 12 bytes
+iv 16 throws OperationError 0 algorithm.iv must contain exactly 12 bytes
+no iv throws TypeError ERR_MISSING_OPTION Member AeadParams.iv is required and must be an instance of (ArrayBufferView or ArrayBuffer)
+tag 64 throws OperationError 0 64 is not a valid ChaCha20-Poly1305 tag length
+export raw-secret 808182838485868788898a8b8c8d8e8f9091929394959697
+export raw throws NotSupportedError 9 The algorithm is not supported
+jwk oct C20P gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8 ["encrypt","decrypt","wrapKey","unwrapKey"] true
+import jwk {"name":"ChaCha20-Poly1305"}
+import raw throws NotSupportedError 9 The algorithm is not supported
+import 16 bytes throws DataError 0 Invalid key length
+import jwk wrong alg throws DataError 0 JWK "alg" does not match the requested algorithm
+import jwk duplicate ops throws DataError 0 Duplicate key operation
+import sign usage throws SyntaxError  Unsupported key usage for a ChaCha20-Poly1305 key
+generate [{"name":"ChaCha20-Poly1305"},32]
+generate sign usage throws SyntaxError  Unsupported key usage for a ChaCha20-Poly1305 key
+generate no usages throws SyntaxError  Usages cannot be empty when creating a key.
+derived df7204546f1bee78b85324a7898ca119b387e01386d1aef037781d4a8a036aee
+wrapped 9c78ea5e02fe43b916e18cf8358209ad52698e1d4a52517edc862ce866d6345c
+unwrapped 03030303030303030303030303030303
+unwrap jwk {"name":"ChaCha20-Poly1305"}
+clone {"name":"ChaCha20-Poly1305"} secret true ["encrypt","decrypt","wrapKey","unwrapKey"] true
+clone encrypts 010203
+clone not extractable throws InvalidAccessError 15 key is not extractable
+hmac clone f8753eb485b2329a46e97fcee3c11b77d380cac805e098e37d3860f924caa332

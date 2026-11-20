@@ -178,7 +178,9 @@ type StructuredCloneInternal = BunWasm.Internal & {
       if (isSharedArrayBuffer(value)) return value;
       if (isTypedArray(value) || isDataView(value)) return this.cloneView(value);
       if (value instanceof Error || objectToString.call(value) === "[object Error]") return this.cloneError(value as ErrorValue);
-      return undefined;
+      // A CryptoKey clones to a key over the same material, as in Bun. The crypto module may
+      // not be installed in every embedding that loads this one.
+      return internal.crypto?.cloneKey?.(value) ?? undefined;
     }
 
     cloneObject(value: object): unknown {
