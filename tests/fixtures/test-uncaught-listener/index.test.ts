@@ -6,7 +6,10 @@ process.on("uncaughtException", e => console.log("user listener", String(e)));
 process.on("uncaughtExceptionMonitor", e => console.log("monitor", String(e)));
 
 test("throws later", async () => {
-  setTimeout(() => { throw new Error("from timer"); }, 1);
+  // A failed expect, which every engine reports at the same source position.
+  setTimeout(() => {
+    expect("from timer").toBe("caught");
+  }, 1);
   await Bun.sleep(20);
 });
 

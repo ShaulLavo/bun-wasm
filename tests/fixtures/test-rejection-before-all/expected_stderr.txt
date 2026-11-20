@@ -1,0 +1,24 @@
+
+index.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+2 | 
+3 | // A rejection a hook leaves unhandled is an error between tests in Bun: the hook still
+4 | // succeeds and its tests run. The hook waits on a timer, so the rejection is reported while it
+5 | // runs on every engine.
+6 | beforeAll(async () => {
+7 |   Promise.reject(new Error("in beforeAll"));
+                         ^
+error: in beforeAll
+      at <anonymous> (/index.test.ts:7:22)
+-------------------------------
+
+(pass) a
+(pass) b
+
+ 2 pass
+ 0 fail
+ 1 error
+ 1 expect() calls
+Ran 2 tests across 1 file. [TIME]
