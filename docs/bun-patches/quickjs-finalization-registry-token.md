@@ -6,12 +6,17 @@ Class **Upstream bug**. This changes `quickjs/quickjs.c` from the QuickJS-ng 0.1
 
 The entry now stores the token without a reference and links itself to the token with a new weak record kind, `JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_TOKEN`, in the same per-object (or per-symbol) weak list that WeakMap, WeakRef and target records use. The registry no longer marks the token. When the token dies, `reset_weak_ref` clears `fre->token` in its first pass and leaves the entry registered; the second pass never touches the entry, because a self token's entry may already have been freed by its own target record. Freeing an entry (target death, `unregister`, registry finalizer) removes the token record unless the token was already cleared. `unregister` compares against the stored token as before, so live tokens, tokens shared by several registrations, and the `TypeError` for tokens that cannot be held weakly are unchanged.
 
+`unregister` also detaches every matching entry before freeing any of them. Upstream freed each match while walking the list; freeing its held value could free the next entry's target, whose weak-list reset unlinked and freed that entry under the iterator. A held value that owns another registered target crashed in `js_finrec_unregister` under AddressSanitizer.
+
+Measured on the native launcher with the QuickJS guest, creating `zlib.createDeflate()` streams and dropping them without `close()`, collecting after every 1,000: before, each dropped stream kept about 330 KiB of native codec state; 2,000 streams peaked at 864 MiB host RSS and 3,000 exhausted the guest's 1 GiB memory. After, 2,000 and 50,000 streams both peak at 528 MiB (a script that creates none peaks at 274 MiB).
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, `js_finrec_*` and `reset_weak_ref`](#quickjs-weak-unregister-tokens) | Upstream bug | Hold the unregister token through a weak record instead of a strong reference. |
-| [`crates/bunwasm-engine-quickjs/src/vm.rs`, tests](#quickjs-weak-unregister-tokens) | Upstream bug | Self tokens are collected, unregister semantics hold, cleanup runs once. |
+| [`third_party/rquickjs-sys/quickjs/quickjs.c`, `js_finrec_unregister`](#quickjs-weak-unregister-tokens) | Upstream bug | Detach matched entries before freeing them. |
+| [`crates/bunwasm-engine-quickjs/src/vm.rs`, tests](#quickjs-weak-unregister-tokens) | Upstream bug | Self tokens are collected, unregister semantics hold (including a held value that owns the next entry's target), cleanup runs once. |
 | [`tests/fixtures/finalization-self-token`](#quickjs-weak-unregister-tokens) | Upstream bug | Counts self, separate and symbol token finalizations on every engine. |
 
 [Existing QuickJS host patches](quickjs.md).
