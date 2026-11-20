@@ -83,7 +83,7 @@
   function applyTimeZone(zone: string | undefined) {
     let resolved = native.setTimeZone?.(zone ?? "");
     // QuickJS has no zones of its own: time_zone.ts gives it one zone's offsets from the Intl
-    // fallback's zone data, read natively without loading that data (about 1 ms).
+    // fallback's zone data, read natively without loading that data (1 to 2 ms).
     if (resolved === undefined && native.setLocalTimeOffsets) resolved = internal.require("time_zone")(zone ?? "");
     if (typeof resolved === "string") internal.setIntlTimeZone?.(resolved);
   }
