@@ -15,7 +15,9 @@ are serialized before entering the generator. QuickJS-ng bundled with
 rquickjs-sys 0.13.0 can leave requests pending behind a completed generator,
 so only one request enters it at a time. The timer is still cancelled
 synchronously when closing, including with multiple queued reads. Scheduling
-remains with the existing runtime timers; event-loop behavior and `Timeout.refresh` are unchanged.
+remains with the existing runtime timers. The abort listener is registered
+through the runtime's protected abort listener, so it still runs after another
+listener calls `stopImmediatePropagation()` ([Node timer internals](node-timer-internals.md)).
 
 Unlike native async generators, an explicit `return` or `throw` during a pending
 wait cancels that wait immediately instead of waiting for one last timer value.
