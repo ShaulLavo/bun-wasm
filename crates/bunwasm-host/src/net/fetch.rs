@@ -339,6 +339,7 @@ impl Job {
         let result = self.clients.get().and_then(|transport| {
             self.send(
                 &transport,
+                &url,
                 request.method,
                 request.url.clone(),
                 request.headers,
@@ -360,10 +361,9 @@ impl Job {
         };
 
         let status = response.status();
-        if self.redirect == Redirect::Error
-            && status.is_redirection()
-            && response.headers().contains_key(http_header::LOCATION)
-        {
+        // Bun rejects a redirect status under "error" even without a Location;
+        // 300, 304, 305 and 306 are not redirects and come back as they are.
+        if self.redirect == Redirect::Error && is_redirect_status(status) {
             let message = format!(
                 "UnexpectedRedirect fetching \"{url}\". For more information, pass `verbose: true` in the second argument to fetch()"
             );
@@ -423,6 +423,7 @@ impl Job {
     fn send(
         &self,
         transport: &Transport,
+        requested: &str,
         mut method: Method,
         mut url: Url,
         mut headers: HeaderMap,
@@ -441,9 +442,7 @@ impl Job {
             let Some(location) = response.headers().get(http_header::LOCATION) else {
                 return Ok(response);
             };
-            if self.redirect != Redirect::Follow
-                || !matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
-            {
+            if self.redirect != Redirect::Follow || !is_redirect_status(status) {
                 return Ok(response);
             }
             if redirects == MAX_REDIRECTS {
@@ -457,11 +456,20 @@ impl Job {
                 .ok()
                 .and_then(|location| url.join(location).ok())
                 .ok_or_else(|| {
-                    SendError::Policy(invalid("Invalid redirect URL", "ERR_INVALID_URL"))
+                    SendError::Policy(invalid(
+                        "RedirectURLInvalid: Redirect URL in Location header is invalid.",
+                        "RedirectURLInvalid",
+                    ))
                 })?;
-            if !matches!(next.scheme(), "http" | "https")
-                || self.package && unsafe_package_redirect(&next)
-            {
+            if !matches!(next.scheme(), "http" | "https") {
+                return Err(SendError::Policy(invalid(
+                    format!(
+                        "UnsupportedRedirectProtocol fetching \"{requested}\". For more information, pass `verbose: true` in the second argument to fetch()"
+                    ),
+                    "UnsupportedRedirectProtocol",
+                )));
+            }
+            if self.package && unsafe_package_redirect(&next) {
                 return Err(SendError::Policy(invalid(
                     "Credential-bearing or unsupported package redirect URL",
                     "ERR_INVALID_URL",
@@ -539,6 +547,11 @@ impl SendError {
             Self::Policy(error) => io::Error::other(error.message),
         }
     }
+}
+
+/// The WHATWG redirect statuses. Other 3xx responses are final.
+fn is_redirect_status(status: StatusCode) -> bool {
+    matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
 }
 
 fn redirect_headers(headers: &mut HeaderMap, current: &Url, next: &Url) {

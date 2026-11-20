@@ -104,6 +104,7 @@ pub fn fetch_error(err: &reqwest::Error, url: &str, host: &str) -> ErrorInfo {
     // reqwest wraps hyper, which wraps the I/O or TLS error that matters.
     let mut io = None;
     let mut tls = None;
+    let mut parse = None;
     let mut text = String::new();
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(error) = source {
@@ -113,12 +114,23 @@ pub fn fetch_error(err: &reqwest::Error, url: &str, host: &str) -> ErrorInfo {
         if let Some(e) = error.downcast_ref::<rustls::Error>() {
             tls.get_or_insert(e);
         }
+        if let Some(e) = error.downcast_ref::<hyper::Error>() {
+            parse = parse.or_else(|| malformed_response_code(e));
+        }
         text.push_str(&error.to_string());
         text.push_str(": ");
         source = error.source();
     }
     if let Some(tls) = tls {
         return tls_error(tls);
+    }
+    if let Some(code) = parse {
+        return type_error(
+            format!(
+                "{code} fetching \"{url}\". For more information, pass `verbose: true` in the second argument to fetch()"
+            ),
+            code,
+        );
     }
     if err.is_redirect() {
         return type_error(
@@ -156,6 +168,23 @@ pub fn fetch_error(err: &reqwest::Error, url: &str, host: &str) -> ErrorInfo {
             "FetchError"
         },
     )
+}
+
+/// Bun's code for a response head that does not parse. hyper exposes the
+/// failing part only through its message. A bad status line or version is left
+/// to the generic path, as Bun reports those as a closed connection.
+fn malformed_response_code(err: &hyper::Error) -> Option<&'static str> {
+    if !err.is_parse() {
+        return None;
+    }
+    let message = err.to_string();
+    if message.contains("content-length") {
+        Some("InvalidContentLength")
+    } else if message.contains("header") || message.contains("transfer-encoding") {
+        Some("Malformed_HTTP_Response")
+    } else {
+        None
+    }
 }
 
 fn io_fetch_error(io: &io::Error, host: &str) -> ErrorInfo {

@@ -1,0 +1,18 @@
+Location with a raw vertical tab: {"name":"TypeError","code":"Malformed_HTTP_Response","message":"Malformed_HTTP_Response fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+Location with a raw SOH: {"name":"TypeError","code":"Malformed_HTTP_Response","message":"Malformed_HTTP_Response fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+Location with a raw DEL: {"name":"TypeError","code":"Malformed_HTTP_Response","message":"Malformed_HTTP_Response fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+obs-fold continuation: {"name":"TypeError","code":"Malformed_HTTP_Response","message":"Malformed_HTTP_Response fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+Content-Length 1_0: {"name":"TypeError","code":"InvalidContentLength","message":"InvalidContentLength fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+redirect "error", 300 with Location: {"status":300,"redirected":false,"body":""}
+redirect "error", 301 with Location: {"name":"TypeError","code":"UnexpectedRedirect","message":"UnexpectedRedirect fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+redirect "error", 302 with Location: {"name":"TypeError","code":"UnexpectedRedirect","message":"UnexpectedRedirect fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+redirect "error", 303 with Location: {"name":"TypeError","code":"UnexpectedRedirect","message":"UnexpectedRedirect fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+redirect "error", 304 with Location: {"status":304,"redirected":false,"body":""}
+redirect "error", 305 with Location: {"status":305,"redirected":false,"body":""}
+redirect "error", 306 with Location: {"status":306,"redirected":false,"body":""}
+redirect "error", 307 with Location: {"name":"TypeError","code":"UnexpectedRedirect","message":"UnexpectedRedirect fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+redirect "error", 308 with Location: {"name":"TypeError","code":"UnexpectedRedirect","message":"UnexpectedRedirect fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+redirect "error", 302 without Location: {"name":"TypeError","code":"UnexpectedRedirect","message":"UnexpectedRedirect fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+follow to file:/etc/hosts: {"name":"TypeError","code":"UnsupportedRedirectProtocol","message":"UnsupportedRedirectProtocol fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+follow to file:hosts: {"name":"TypeError","code":"UnsupportedRedirectProtocol","message":"UnsupportedRedirectProtocol fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
+follow to data:text/plain,hi: {"name":"TypeError","code":"UnsupportedRedirectProtocol","message":"UnsupportedRedirectProtocol fetching \"URL\". For more information, pass `verbose: true` in the second argument to fetch()"}
