@@ -1,4 +1,5 @@
 import { Stats, fstatSync, openSync, closeSync, statSync, writeFileSync } from "node:fs";
+import { inspect } from "node:util";
 
 // fs.Stats as Bun builds it: callable with or without new, Node's argument order, Bun's
 // field order, prototype date accessors that cache a Date built from the *Ms field, and
@@ -16,6 +17,11 @@ console.log("call values", show(called));
 console.log("shared prototype", Object.getPrototypeOf(created) === Stats.prototype, Object.getPrototypeOf(called) === Stats.prototype, created instanceof Stats, called instanceof Stats);
 console.log("name and length", Stats.name, Stats.length);
 console.log("prototype names", Object.getOwnPropertyNames(Stats.prototype).join());
+const prototypeDescriptor = Object.getOwnPropertyDescriptor(Stats, "prototype")!;
+console.log("prototype property", prototypeDescriptor.writable, prototypeDescriptor.enumerable, prototypeDescriptor.configurable);
+const tag = Object.getOwnPropertyDescriptor(Stats.prototype, Symbol.toStringTag)!;
+console.log("tag", tag.value, tag.writable, tag.enumerable, tag.configurable, Object.prototype.toString.call(created));
+console.log("inspect", inspect(new StatsAny(1, 2)).split("\n")[0]);
 const atimeDescriptor = Object.getOwnPropertyDescriptor(Stats.prototype, "atime")!;
 console.log("atime accessor", typeof atimeDescriptor.get, typeof atimeDescriptor.set, atimeDescriptor.enumerable, atimeDescriptor.configurable);
 const isFileDescriptor = Object.getOwnPropertyDescriptor(Stats.prototype, "isFile")!;
@@ -57,6 +63,8 @@ closeSync(fd);
 const big = statSync("f.txt", { bigint: true });
 const BigIntStats = Object.getPrototypeOf(big).constructor as { name: string; prototype: object };
 console.log("bigint keys", Object.keys(big).join());
+const bigTag = Object.getOwnPropertyDescriptor(BigIntStats.prototype, Symbol.toStringTag)!;
+console.log("bigint tag", bigTag.value, Object.prototype.toString.call(big), Object.getOwnPropertyDescriptor(BigIntStats, "prototype")!.writable);
 console.log("bigint prototype", BigIntStats.name, big instanceof Stats, Object.getPrototypeOf(BigIntStats.prototype) === Object.prototype, typeof big.size, big.isFile());
 console.log("bigint dates", big.mtime.getTime() === Number(big.mtimeMs), big.mtimeNs / 1_000_000n === big.mtimeMs);
 const madeBig = new (BigIntStats as unknown as new (...args: bigint[]) => Fields)(1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11_000_000n, -1_500_000n, 13n, 14n);

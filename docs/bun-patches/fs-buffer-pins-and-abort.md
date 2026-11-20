@@ -17,11 +17,22 @@ instead, so `transfer()` and `transferToFixedLength()` return a copy and the
 original stays attached. QuickJS, the JSC guest and the browser host engine have
 no such pins, so `fs_buffer_pins.ts` counts pins per ArrayBuffer in a WeakMap
 and replaces those two prototype methods. A pinned buffer gets a copy; any other
-buffer reaches the original method. The callback and promise forms in
+buffer reaches the original method. JavaScript has no way to make a buffer
+non-detachable, so the methods must be replaced; each replacement is a `Proxy`
+over the engine's own method rather than a new function, so
+`Function.prototype.toString` still prints it as native code, `[native code]`
+feature checks (core-js, the bundled Temporal polyfill) keep their answer, and
+`name`, `length` and the missing `prototype` stay the original's. A reference
+to the original method captured before the first pin is a different object and
+still detaches. A pinned buffer's BigInt length is a `TypeError`, as ToIndex
+makes it. The callback and promise forms in
 `node_fs.js` pin before they run the operation and release before they deliver
 its result, so the buffer is detachable again by the time the callback or
 promise reaction runs. The replacement methods are installed when the module
-first loads, which is the first callback or promise fs call given bytes.
+first loads, which is the first callback or promise fs call given bytes. A call
+whose path and data hold no bytes allocates nothing for pins and runs the same
+delivery closure as before; on QuickJS, 100,000 promise `readFile` and callback
+`write` calls cost the same as on main (see the PR).
 
 Bun reads a byte path when the call starts (`PathLike::from_js` copies a
 resizable buffer at once). `readFileSync`, `writeFileSync` and `mkdirSync` now
@@ -44,9 +55,18 @@ writes each chunk at the current offset (re-encoding strings for encodings
 other than UTF-8, binary and buffer, rejecting `null` and `undefined` chunks),
 truncates to the bytes written only for truncating flags (`w`, `w+`, `wx` and
 their spellings), and closes the file. An abort checked before each chunk
-replaces any other error. Differences from Bun: chunks are written with
-`writeSync` instead of a `FileSink`, a byte path is opened like a string path,
-and a FileHandle target writes through its descriptor.
+replaces any other error. `FileHandle#writeFile` takes the same iterables and
+writes them from the handle's position. Differences from Bun: chunks are written
+with `writeSync` instead of a `FileSink`, a byte path is opened like a string
+path, and a FileHandle target writes through its descriptor. Calls without a
+signal or iterable data return the plain operation's promise; only the others
+go through an async helper.
+
+Known message differences, kept as they are: an `options.signal` that is not an
+AbortSignal is a `TypeError` with code `ERR_INVALID_ARG_TYPE` whose message
+differs from Bun's wording, and an invalid chunk's message names the types
+Bun's `writeFileAsyncIterator` lists. The name, code, message and cause of the
+AbortError itself match Bun.
 
 The `fs-buffer-pins` and `fs-abort-signal` fixtures compare these behaviors with
 native Bun 1.4.4. Run them with

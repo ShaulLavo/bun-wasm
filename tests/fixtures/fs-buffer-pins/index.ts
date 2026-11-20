@@ -70,8 +70,21 @@ const detachedAfterTransfer = (view: Uint8Array) => {
   const longer = view.buffer.transfer(12);
   const shorter = view.buffer.transferToFixedLength(3);
   console.log("pinned copies", view.buffer.detached, longer.byteLength, Array.from(new Uint8Array(longer)).join(), shorter.byteLength, Array.from(new Uint8Array(shorter)).join());
+  try {
+    view.buffer.transfer(2n as unknown as number);
+  } catch (error) {
+    console.log("pinned BigInt length", (error as Error).name);
+  }
   await done;
   closeSync(fd);
+}
+
+// After pins have been used, the methods still look like the engine's own.
+for (const name of ["transfer", "transferToFixedLength"] as const) {
+  const method = ArrayBuffer.prototype[name];
+  const descriptor = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, name)!;
+  console.log(name, method.name, method.length, Function.prototype.toString.call(method).includes("[native code]"),
+    descriptor.writable, descriptor.enumerable, descriptor.configurable, "prototype" in method);
 }
 
 // Paths given as bytes (Uint8Array, DataView, ArrayBuffer) are read before option getters.

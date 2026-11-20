@@ -137,7 +137,9 @@
       const constructor = {
         [name]: function (this: StatsRecord, ...args: unknown[]) { return create(new.target ? this : undefined, args); },
       }[name] as unknown as StatsConstructor;
-      constructor.prototype = prototype;
+      // Native: a fixed prototype, tagged with the class name ("[object Stats]").
+      Object.defineProperty(constructor, "prototype", { value: prototype, writable: false, enumerable: false, configurable: false });
+      Object.defineProperty(prototype, Symbol.toStringTag, { value: name, writable: false, enumerable: false, configurable: true });
       for (const [method, kind] of kModeTests) own(prototype, method, modeTest(method, kind, bigint));
       for (const field of kTimes) {
         Object.defineProperty(prototype, field, {

@@ -11,6 +11,9 @@ writeFile error null true copy 8 70 FFFFFFFF
 path pinned during options false hello
 unpinned transfer detaches true
 pinned copies false 12 71,71,71,71,71,71,71,71,0,0,0,0 3 71,71,71
+pinned BigInt length TypeError
+transfer transfer 0 true true false true false
+transferToFixedLength transferToFixedLength 0 true true false true false
 writeFileSync sync-write
 readFileSync sync-write
 mkdirSync true

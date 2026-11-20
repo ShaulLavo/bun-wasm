@@ -670,12 +670,12 @@
     validateFd(fd);
     validateWritev(buffers);
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
-    const release = pinArguments("writev", [fd, buffers]);
+    const release = pinArguments(1, [fd, buffers]);
     let written = 0;
     let error = null;
     try { written = writeBuffers(fd, buffers, position); } catch (err) { error = err; }
     later(() => {
-      release();
+      if (release !== null) release();
       callback(error, written, buffers);
     });
   }
@@ -782,37 +782,57 @@
   // (fs_buffer_pins.ts). The module loads on the first call that has bytes to pin.
   let bufferPins;
   const dataArguments = { write: 1, writev: 1, writeFile: 1, appendFile: 1 };
-  function pinArguments(name, args) {
-    const values = [args[0], args[dataArguments[name] ?? 0]];
-    if (!values.some((value) => ArrayBuffer.isView(value) || value instanceof ArrayBuffer || Array.isArray(value))) return noop;
+  const holdsBytes = (value) => typeof value === "object" && value !== null && (ArrayBuffer.isView(value) || value instanceof ArrayBuffer || Array.isArray(value));
+  // The release function, or null (allocating nothing) when neither the path nor the
+  // data holds bytes, which is nearly every call.
+  function pinArguments(dataIndex, args) {
+    const path = args[0];
+    const data = args[dataIndex];
+    if (!holdsBytes(path) && !holdsBytes(data)) return null;
     bufferPins ??= internal.require("fs_buffer_pins");
-    return bufferPins.pin(values);
+    return bufferPins.pin([path, data]);
   }
+
+  // The argument that holds readFile's, writeFile's and appendFile's options, path first.
+  const optionsArguments = { readFile: 1, writeFile: 2, appendFile: 2 };
+  const hasSignal = (options) => options !== null && typeof options === "object" && options.signal !== undefined;
 
   const argumentErrors = new Set(["ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_VALUE", "ERR_OUT_OF_RANGE"]);
   function callbackify(name, fn, shape) {
+    const dataIndex = dataArguments[name] ?? 0;
+    const signalIndex = optionsArguments[name] ?? -1;
     return function (...args) {
       const callback = args.pop();
       if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
-      const release = pinArguments(name, args);
-      let result;
-      let error = null;
-      try {
-        result = fn.apply(undefined, args);
-      } catch (err) {
-        // Node validates arguments before queuing the operation, so those errors throw now.
-        if (err && argumentErrors.has(err.code)) {
-          release();
-          throw err;
-        }
-        error = err;
-      }
-      later(() => {
-        release();
-        if (shape) shape(callback, error, result, args);
-        else callback(error, result);
-      });
+      if (signalIndex < 0 || !hasSignal(args[signalIndex])) return runCallback(fn, shape, dataIndex, args, callback);
+      const helpers = abortable();
+      helpers.callback(helpers.signalOf(args[signalIndex]), (done) => runCallback(fn, shape, dataIndex, args, done), callback);
     };
+  }
+
+  function runCallback(fn, shape, dataIndex, args, callback) {
+    const release = pinArguments(dataIndex, args);
+    let result;
+    let error = null;
+    try {
+      result = fn.apply(undefined, args);
+    } catch (err) {
+      // Node validates arguments before queuing the operation, so those errors throw now.
+      if (err && argumentErrors.has(err.code)) {
+        if (release !== null) release();
+        throw err;
+      }
+      error = err;
+    }
+    if (release === null) {
+      later(() => (shape ? shape(callback, error, result, args) : callback(error, result)));
+      return;
+    }
+    later(() => {
+      release();
+      if (shape) shape(callback, error, result, args);
+      else callback(error, result);
+    });
   }
 
   const callbackApi = {};
@@ -869,20 +889,21 @@
   // --- promises ---------------------------------------------------------------
 
   function promisifySync(fn, name) {
+    const dataIndex = dataArguments[name] ?? 0;
     return function (...args) {
       return new Promise((resolve, reject) => {
-        const release = pinArguments(name, args);
+        const release = pinArguments(dataIndex, args);
         let result;
         try {
           result = fn.apply(undefined, args);
         } catch (err) {
-          later(() => {
+          later(release === null ? () => reject(err) : () => {
             release();
             reject(err);
           });
           return;
         }
-        later(() => {
+        later(release === null ? () => resolve(result) : () => {
           release();
           resolve(result);
         });
@@ -900,42 +921,39 @@
     });
     return abortableModule;
   }
-  const hasSignal = (options) => options !== null && typeof options === "object" && options.signal !== undefined;
-  const optionsIndex = { readFile: 1, writeFile: 2, appendFile: 2 };
+  // Only writeFile takes iterable data; strings and views never load the helper module.
+  const mayIterate = (data) => data !== null && typeof data === "object" && !ArrayBuffer.isView(data);
 
   function wholeFilePromise(name, byPath) {
+    const optionsIndex = optionsArguments[name] - 1;
+    const iterates = name === "writeFile";
     const run = (path, args) => fileHandleModule?.isFileHandle(path) ? path[name](...args) : byPath(path, ...args);
-    return async function (path, ...args) {
-      const data = args[0];
-      const options = args[optionsIndex[name] - 1];
-      // Only writeFile takes iterable data; strings and views never need the helper module.
-      const mayIterate = name === "writeFile" && data !== null && typeof data === "object" && !ArrayBuffer.isView(data);
-      if (!mayIterate && !hasSignal(options)) return run(path, args);
-      const helpers = abortable();
-      if (mayIterate && helpers.isIterableData(data)) {
-        return helpers.writeIterable(fileHandleModule?.isFileHandle(path) ? path.fd : path, data, options);
-      }
-      if (!hasSignal(options)) return run(path, args);
-      return helpers.promise(helpers.signalOf(options), () => run(path, args));
+    return function (path, ...args) {
+      if (!(iterates && mayIterate(args[0])) && !hasSignal(args[optionsIndex])) return run(path, args);
+      return wholeFileSlowPath(run, path, args, args[optionsIndex]);
     };
   }
 
-  function wholeFileCallback(name) {
-    const base = callbackApi[name];
-    return function (...args) {
-      const options = args.length > optionsIndex[name] ? args[optionsIndex[name]] : undefined;
-      if (!hasSignal(options)) return base(...args);
-      const done = args.pop();
-      if (typeof done !== "function") throw invalidArg("cb", "of type function", done);
-      const helpers = abortable();
-      helpers.callback(helpers.signalOf(options), (finish) => base(...args, finish), done);
-    };
+  // An async function, so an invalid signal rejects instead of throwing.
+  async function wholeFileSlowPath(run, path, args, options) {
+    const helpers = abortable();
+    if (mayIterate(args[0]) && helpers.isIterableData(args[0])) {
+      return helpers.writeIterable(fileHandleModule?.isFileHandle(path) ? path.fd : path, args[0], options);
+    }
+    if (!hasSignal(options)) return run(path, args);
+    return helpers.promise(helpers.signalOf(options), () => run(path, args));
+  }
+
+  // FileHandle#writeFile takes iterable data too, written from the handle's position.
+  function writeHandleFile(fd, data, options) {
+    if (mayIterate(data) && abortable().isIterableData(data)) return abortable().writeIterable(fd, data, options);
+    return writeFileSync(fd, data, options);
   }
 
   let fileHandleModule;
   function fileHandles() {
     fileHandleModule ??= internal.require("fs_file_handle")({
-      Buffer, closeSync, readFileSync, writeFileSync, appendFileSync, readSync, readvSync, writeSync, writevSync,
+      Buffer, closeSync, readFileSync, writeFileSync: writeHandleFile, appendFileSync, readSync, readvSync, writeSync, writevSync,
       fstatSync: sync.fstatSync, ftruncateSync: sync.ftruncateSync, later, createReadStream, createWriteStream,
     });
     return fileHandleModule;
@@ -949,7 +967,6 @@
   // position, and an AbortSignal.
   for (const name of ["readFile", "writeFile", "appendFile"]) {
     promises[name] = wholeFilePromise(name, promises[name]);
-    callbackApi[name] = wholeFileCallback(name);
   }
   promises.glob = async function* glob(pattern, options) { yield* globSync(pattern, options); };
   promises.open = async (path, flags, mode) => new (fileHandles().FileHandle)(openSync(path, flags, mode));

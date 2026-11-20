@@ -74,6 +74,17 @@ for (const flag of ["r+", "rs+", "w", "w+"]) {
   })(), { flag });
   console.log("iterable flag", flag, readFileSync("flag.txt", "utf8"));
 }
+{
+  writeFileSync("handle.txt", "0123456789");
+  const handle = await fs.promises.open("handle.txt", "r+");
+  await handle.writeFile((async function* () {
+    yield "AB";
+    yield Buffer.from("CD");
+  })());
+  await fs.promises.writeFile(handle, ["EF"]);
+  await handle.close();
+  console.log("FileHandle iterables", readFileSync("handle.txt", "utf8"));
+}
 await outcome("iterable null chunk", () => undefined, () => fs.promises.writeFile("n.txt", [null]).catch((error) => {
   throw new Error(`${error.name} ${error.code}`);
 }));

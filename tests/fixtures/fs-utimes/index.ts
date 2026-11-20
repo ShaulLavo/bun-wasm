@@ -28,6 +28,13 @@ attempt("dates", () => utimesSync("f.txt", new Date(1_700_000_004_000), new Date
 attempt("after 2038", () => utimesSync("f.txt", new Date("2098-01-01T00:00:00Z"), new Date("2100-06-15T12:00:00Z")));
 attempt("epoch", () => utimesSync("f.txt", 0, 0));
 
+// Times past what the filesystem stores are clamped, not rejected.
+for (const value of [1e15, Number.MAX_SAFE_INTEGER, 1e300]) {
+  utimesSync("f.txt", value, value);
+  const { atime, mtime } = statSync("f.txt");
+  console.log("clamped", value, atime.getUTCFullYear() > 2400, mtime.getUTCFullYear() > 2400);
+}
+
 // A negative number means the current time.
 const before = Date.now() - 2000;
 utimesSync("f.txt", -1.5, -1);

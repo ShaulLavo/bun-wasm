@@ -21,7 +21,10 @@ enumerable `is*` methods and `atime`, `mtime`, `ctime` and `birthtime` accessors
 An accessor builds a Date from the matching `*Ms` field and caches it as an own
 property, so a later `*Ms` change does not move it; its setter stores the given
 value. Methods and accessors return undefined for a receiver that is not an
-object. `BigIntStats` has its own prototype (not a Stats subclass); its
+object. As in native, each constructor's `prototype` property is fixed
+(non-writable, non-enumerable, non-configurable) and the prototype carries a
+`Symbol.toStringTag` of `Stats` or `BigIntStats`. `BigIntStats` has its own
+prototype (not a Stats subclass); its
 constructor derives `*Ms` numbers from `*Ns` BigInts, and its date accessors
 refuse number fields, as JSC's `toBigInt64` does. `statSync`, `lstatSync` and
 `fstatSync` build their results through `makeStats` with the same prototypes and
@@ -36,9 +39,13 @@ anything else, or a non-finite value, is a `TypeError` with code
 nanoseconds with Rust's euclidean division. The original
 `src/natives/file_times.rs` sets them with `utimensat` (with
 `AT_SYMLINK_NOFOLLOW` for `lutimes`) or `futimens`, using `UTIME_NOW` for now.
-Errors carry Node's operation names `utime`, `lutime` and `futime`. WASI Preview1
-timestamps are unsigned nanoseconds since the epoch, so a time before 1970 is
-`EINVAL` on both hosts; native Bun stores it. The Browser fixture host (Node's
+Errors carry Node's operation names `utime`, `lutime` and `futime`. The
+argument errors use Bun's messages (`atime is required`, `atime must be a number
+or a Date`), which differ from Node's. WASI Preview1 timestamps are unsigned
+nanoseconds since the epoch, so a time before 1970 is `EINVAL` on both hosts;
+native Bun stores it. A time past that range (from about 2554, such as 1e15 s or
+`Number.MAX_SAFE_INTEGER`) is clamped to its end and the host filesystem clamps
+further (ext4 stops in 2486), as the kernel clamps it for native Bun. The Browser fixture host (Node's
 WASI) stores only whole seconds when setting times, and Waffle sets only the
 modification time, at millisecond precision. The `fs-utimes` fixture compares
 whole-second times and errors with native Bun 1.4.4 on all three engines;

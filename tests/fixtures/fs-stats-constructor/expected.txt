@@ -4,6 +4,9 @@ call values {"dev":0,"ino":7,"mode":1,"nlink":2,"uid":3,"gid":4,"rdev":5,"size":
 shared prototype true true true true
 name and length Stats 0
 prototype names isBlockDevice,isCharacterDevice,isDirectory,isFIFO,isFile,isSocket,isSymbolicLink,atime,mtime,ctime,birthtime,constructor
+prototype property false false false
+tag Stats false false true [object Stats]
+inspect Stats {
 atime accessor function function true true
 isFile method true true true
 dates true 10 13
@@ -18,6 +21,7 @@ subclass true true 7 true
 stat keys dev,ino,mode,nlink,uid,gid,rdev,size,blksize,blocks,atimeMs,mtimeMs,ctimeMs,birthtimeMs true true
 fstat true 5
 bigint keys dev,ino,mode,nlink,uid,gid,rdev,size,blksize,blocks,atimeMs,mtimeMs,ctimeMs,birthtimeMs,atimeNs,mtimeNs,ctimeNs,birthtimeNs
+bigint tag BigIntStats [object BigIntStats] false
 bigint prototype BigIntStats false true bigint true
 bigint dates true true
 bigint constructor {"dev":"1n","ino":"8n","mode":"2n","nlink":"3n","uid":"4n","gid":"5n","rdev":"6n","size":"9n","blksize":"7n","blocks":"10n","atimeMs":11,"mtimeMs":-1.5,"ctimeMs":0.000013,"birthtimeMs":0.000014,"atimeNs":"11000000n","mtimeNs":"-1500000n","ctimeNs":"13n","birthtimeNs":"14n"}

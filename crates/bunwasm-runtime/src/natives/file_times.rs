@@ -17,9 +17,24 @@ fn timespec(args: &Args<'_>, index: usize) -> Result<libc::timespec, NativeError
         time.tv_nsec = libc::UTIME_NOW as _;
         return Ok(time);
     }
+    let (seconds, nanos) = clamp_to_timestamp(seconds as i64, nanos as i64);
     time.tv_sec = seconds as _;
     time.tv_nsec = nanos as _;
     Ok(time)
+}
+
+/// The latest time a WASI Preview1 timestamp (u64 nanoseconds since 1970) holds.
+const LATEST: (i64, i64) = (18_446_744_073, 709_551_615);
+
+/// WASI rejects a time past `LATEST` with EINVAL; native Bun's kernel call clamps it to
+/// the filesystem's latest time instead, so clamp here and let the host clamp the rest
+/// (ext4 stops in 2486). Native hosts clamp below `LATEST` anyway. Times before 1970
+/// stay as they are: WASI cannot store them (EINVAL).
+fn clamp_to_timestamp(seconds: i64, nanos: i64) -> (i64, i64) {
+    if (seconds, nanos) <= LATEST {
+        return (seconds, nanos);
+    }
+    LATEST
 }
 
 /// The access then modification times starting at argument `index`.
@@ -81,6 +96,26 @@ mod tests {
         let since = modified.duration_since(std::time::UNIX_EPOCH).unwrap();
         assert_eq!(since.as_millis(), 4_039_372_800_250);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // timespec fields are i64 here but c_long (i32) nanoseconds on wasm32.
+    #[allow(clippy::unnecessary_cast)]
+    #[test]
+    fn times_past_the_wasi_range_clamp_to_its_end() {
+        for seconds in [1e15, 9_007_199_254_740_991.0, 1e300] {
+            let values = stamp(seconds, 0.0);
+            let [atime, _] = times(&Args(&values), 0).unwrap();
+            assert_eq!((atime.tv_sec as i64, atime.tv_nsec as i64), LATEST);
+        }
+        let values = stamp(18_446_744_073.0, 999_999_999.0);
+        let [atime, _] = times(&Args(&values), 0).unwrap();
+        assert_eq!((atime.tv_sec as i64, atime.tv_nsec as i64), LATEST);
+        let values = stamp(4_039_372_800.0, 5.0);
+        let [atime, _] = times(&Args(&values), 0).unwrap();
+        assert_eq!(
+            (atime.tv_sec as i64, atime.tv_nsec as i64),
+            (4_039_372_800, 5)
+        );
     }
 
     #[test]

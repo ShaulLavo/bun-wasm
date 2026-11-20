@@ -4,7 +4,8 @@
 // attached (ArrayBuffer::transferTo in JavaScriptCore/runtime/ArrayBuffer.cpp). The
 // engines here have no pins, so this module counts them and gives those two methods the
 // same copy-instead-of-detach behavior for a pinned buffer. Loading the module installs
-// the methods; until an fs call pins a buffer the original methods run unchanged.
+// the methods; until an fs call pins a buffer the original methods run unchanged. A
+// reference to an original method captured before the first pin still detaches.
 (function () {
   "use strict";
   type Transfer = (this: ArrayBuffer, newLength?: number) => ArrayBuffer;
@@ -15,15 +16,18 @@
   install("transfer", true);
   install("transferToFixedLength", false);
 
+  // A Proxy over the original method, not a new function: Function.prototype.toString
+  // still prints it as native code ("[native code]" checks such as core-js's keep their
+  // answer), and its name, length and non-constructor behavior are the original's.
   function install(name: string, preserveResizability: boolean) {
     const original = prototype[name];
     if (typeof original !== "function") return;
-    const replacement = {
-      [name](this: ArrayBuffer, ...args: [number?]) {
-        if (!pins.has(this)) return Reflect.apply(original, this, args);
-        return copyOf(this, args[0], preserveResizability);
+    const replacement = new Proxy(original, {
+      apply(target, receiver: ArrayBuffer, args: [number?]) {
+        if (!pins.has(receiver)) return Reflect.apply(target, receiver, args);
+        return copyOf(receiver, args[0], preserveResizability);
       },
-    }[name];
+    });
     Object.defineProperty(prototype, name, { value: replacement, writable: true, enumerable: false, configurable: true });
   }
 
@@ -36,7 +40,8 @@
   }
 
   function toIndex(value: unknown): number {
-    const index = Math.trunc(Number(value)) || 0;
+    // Unary plus, as ToIndex does: a BigInt length is a TypeError, not a number.
+    const index = Math.trunc(+(value as number)) || 0;
     if (index < 0 || index > Number.MAX_SAFE_INTEGER) throw new RangeError("Invalid array buffer length");
     return index;
   }

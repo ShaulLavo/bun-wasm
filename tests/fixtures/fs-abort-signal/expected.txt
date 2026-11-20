@@ -17,6 +17,7 @@ iterable flag r+ ZZ23456789
 iterable flag rs+ ZZ23456789
 iterable flag w ZZ
 iterable flag w+ ZZ
+FileHandle iterables ABCDEF6789
 iterable null chunk Error undefined "TypeError ERR_INVALID_ARG_TYPE" DOMException=false cause=true
 callback readFile AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
 callback writeFile AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
