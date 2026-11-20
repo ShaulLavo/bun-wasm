@@ -941,7 +941,9 @@ impl Engine for Jsc {
 
     fn set_time_zone(&self, zone: &JsVal) -> Option<JsVal> {
         // SAFETY: valid context and value; the helper returns a string or null.
-        Some(JsVal::new(unsafe { bunjsc_set_time_zone(ctx(), zone.raw()) }))
+        Some(JsVal::new(unsafe {
+            bunjsc_set_time_zone(ctx(), zone.raw())
+        }))
     }
 }
 
