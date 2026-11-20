@@ -2,9 +2,9 @@
 
 `src/js/crypto_keys.ts` is an original adapter, not copied Bun or Node code. It shares the
 WebCrypto backend while providing synchronous Node operations, Writable signing objects,
-PEM encoding, encrypted PKCS#8/PKCS#1/SEC1 formats and WebCrypto key conversions. BoringSSL's original PEM and PKCS#8 APIs perform key encryption and decryption in `crates/bunwasm-crypto-sys/c/rsa.c`. `src/crypto.rs` adds Node's PKCS#1 and SEC1
-formats through the BoringSSL and RustCrypto parsers and converts ECDSA signatures between DER
-and IEEE P1363. Bun's Node crypto builtin requires a native binding, so loading its generated
+PEM encoding, encrypted PKCS#8/PKCS#1/SEC1 formats and WebCrypto key conversions. BoringSSL's original PEM and PKCS#8 APIs perform key encryption and decryption in `crates/bunwasm-crypto-sys/c/rsa.c`. `src/crypto.rs` adds Node's PKCS#1 format through
+BoringSSL. EC keys, including SEC1, and the ECDSA signature encodings (DER and IEEE P1363)
+are in `src/crypto_ec.rs` over BoringSSL ([its record](node-crypto-ec-raw-keys.md)). Bun's Node crypto builtin requires a native binding, so loading its generated
 JavaScript alone cannot supply this behavior. The new fixture is original test code.
 
 `scripts/generate-node-key-vectors.mjs` generates six native Node encrypted-key and signature

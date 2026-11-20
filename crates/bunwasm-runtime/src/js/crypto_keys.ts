@@ -45,6 +45,7 @@ declare namespace CryptoKeys {
     argType(name: string, expected: string, value: unknown): TypeError;
     invalidArgValue(name: string, value: unknown, reason?: string): TypeError;
     operationFailed(message: string): Error;
+    opensslError(packed: string, library: string, reason: string, code: string): Error;
   };
   type ExportType = "pkcs8" | "spki" | "pkcs1" | "sec1";
   type ExportOptions = {
@@ -120,38 +121,43 @@ declare namespace CryptoKeys {
         : a.name === "ECDSA"
           ? "ec"
           : a.name.toLowerCase();
-    // OpenSSL's digest names and their signature aliases (RSA-SHA256, sha256WithRSAEncryption).
-    // MD5 only signs; the HKDF and OAEP backends have no MD5.
-    const digestNames: Partial<Record<string, string>> = {
-      sha1: "SHA-1",
-      sha224: "SHA-224",
-      sha256: "SHA-256",
-      sha384: "SHA-384",
-      sha512: "SHA-512",
-      md5: "MD5",
+    // Bun's ncrypto getDigestByName: "md5", "rsa-shaN" and "sha-N" in any case, then
+    // BoringSSL's EVP_get_digestbyname table, whose names are case-sensitive. Only the
+    // digests the backend has are listed. MD5 only signs; HKDF and OAEP have no MD5.
+    const shaBits: Partial<Record<string, string>> = { "1": "SHA-1", "224": "SHA-224", "256": "SHA-256", "384": "SHA-384", "512": "SHA-512" };
+    const digestTable: Partial<Record<string, string>> = { MD5: "MD5", md5: "MD5", "RSA-MD5": "MD5", md5WithRSAEncryption: "MD5" };
+    for (const [bits, name] of Object.entries(shaBits)) {
+      for (const alias of [`SHA${bits}`, `sha${bits}`, `RSA-SHA${bits}`, `sha${bits}WithRSAEncryption`]) digestTable[alias] = name;
+    }
+    for (const alias of ["dss1", "DSS1", "DSA-SHA", "dsaWithSHA", "DSA-SHA1", "dsaWithSHA1", "ecdsa-with-SHA1"]) digestTable[alias] = "SHA-1";
+    const digestName = (name: string): string | undefined => {
+      const lower = name.toLowerCase();
+      if (lower === "md5") return "MD5";
+      if (lower === "sha128") return "SHA-1";
+      const bits = lower.startsWith("rsa-sha") ? lower.slice(7) : lower.startsWith("sha-") ? lower.slice(4) : undefined;
+      return (bits !== undefined ? shaBits[bits] : undefined) ?? digestTable[name];
     };
     const hash = (name: unknown, signing = false): string => {
-      const key = String(name)
-        .toLowerCase()
-        .replace(/^rsa-/, "")
-        .replace(/withrsaencryption$/, "")
-        .replace(/^sha-(\d)/, "sha$1");
-      const normalized = digestNames[key];
+      const normalized = digestName(String(name));
       if (normalized === undefined || (normalized === "MD5" && !signing))
         throw Object.assign(new TypeError(`Invalid digest: ${String(name)}`), {
           code: "ERR_CRYPTO_INVALID_DIGEST",
         });
       return normalized;
     };
-    // Node's curve names for the WebCrypto curves, and the names Node accepts for each.
+    // Node's curve names for the WebCrypto curves. Bun's Ec::GetCurveIdFromName accepts
+    // the NIST name or the OpenSSL short name; it knows P-224 and secp256k1 too, which
+    // BoringSSL here cannot build keys on.
     const curveNames: Partial<Record<string, string>> = { "P-256": "prime256v1", "P-384": "secp384r1", "P-521": "secp521r1" };
     const webCurve = (name: string): string | undefined =>
-      curveNames[name] ? name : ({ prime256v1: "P-256", secp256r1: "P-256", secp384r1: "P-384", secp521r1: "P-521" } as Partial<Record<string, string>>)[name];
+      curveNames[name] ? name : Object.keys(curveNames).find(curve => curveNames[curve] === name);
+    const knownCurve = (name: string): boolean => webCurve(name) !== undefined || ["P-224", "secp224r1", "secp256k1"].includes(name);
     let nodeArgs: CryptoKeys.Args | undefined;
     const args = () => (nodeArgs ??= internal.require("node_crypto_args"));
     const incompatible = (message = "The selected key encoding is incompatible with the key type") =>
       Object.assign(new Error(message), { code: "ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS" });
     const rawFormats = ["raw-public", "raw-private", "raw-seed"];
+    const invalidCurve = () => Object.assign(new TypeError("Invalid EC curve name"), { code: "ERR_CRYPTO_INVALID_CURVE" });
     function nodeRecord(key: unknown): CryptoKeys.Record {
       const r = records.get(key as KeyObject);
       if (!r) throw error("Expected a KeyObject");
@@ -402,10 +408,9 @@ declare namespace CryptoKeys {
       }
       if (format === "raw-seed") throw incompatible();
       const curve = type === "ec" ? webCurve(options.namedCurve as string) : undefined;
-      if (type === "ec" && curve === undefined)
-        throw Object.assign(new TypeError("Invalid EC curve name"), { code: "ERR_CRYPTO_INVALID_CURVE" });
-      // Node's Ed448 and X448 have no BoringSSL implementation.
-      if (!okp && type !== "ec") throw invalid("Invalid key data");
+      if (type === "ec" && !knownCurve(options.namedCurve as string)) throw invalidCurve();
+      // Ed448, X448 and the curves knownCurve names but BoringSSL lacks have no keys here.
+      if (!okp && curve === undefined) throw invalid("Invalid key data");
       const a = curve ? { name: "ECDSA", namedCurve: curve } : { name: okp! };
       let parsed: CryptoKeys.KeyMaterial;
       try {
@@ -675,11 +680,15 @@ declare namespace CryptoKeys {
           ]),
           hash: options.hashAlgorithm || "SHA-256",
         };
-      else if (type === "ec")
-        a = {
-          name: "ECDSA",
-          namedCurve: webCurve(options.namedCurve!) || options.namedCurve,
-        };
+      else if (type === "ec") {
+        const named = options.namedCurve;
+        const curve = typeof named === "string" ? webCurve(named) : undefined;
+        if (typeof named === "string" && curve === undefined)
+          throw knownCurve(named)
+            ? args().opensslError("0f00007b", "elliptic curve routines", "UNKNOWN_GROUP", "ERR_OSSL_EC_UNKNOWN_GROUP")
+            : invalidCurve();
+        a = { name: "ECDSA", namedCurve: curve ?? named };
+      }
       else if (type === "ed25519" || type === "x25519")
         a = { name: type === "ed25519" ? "Ed25519" : "X25519" };
       else
@@ -737,6 +746,9 @@ declare namespace CryptoKeys {
           code: "ERR_OSSL_EVP_COMMAND_NOT_SUPPORTED",
         });
       if (a.name !== "Ed25519") a.hash = { name: hash(digest, true) };
+      // BoringSSL signs MD5 only with RSA keys.
+      if (a.hash?.name === "MD5" && family(a) !== "rsa")
+        throw args().opensslError("0600006f", "public key routines", "INVALID_DIGEST_TYPE", "ERR_OSSL_EVP_INVALID_DIGEST_TYPE");
       if (family(a) === "rsa") {
         const padding = options.padding;
         if (padding !== undefined &&
@@ -881,7 +893,13 @@ declare namespace CryptoKeys {
         );
       }
     }
+    // The digest is checked first, as in Node's hkdf validation.
+    function hkdfDigest(digest: unknown): string {
+      if (typeof digest !== "string") throw args().argType("digest", "string", digest);
+      return hash(digest);
+    }
     function hkdfSync(digest: string, ikm: CryptoKeys.Input | KeyObject, salt: CryptoKeys.Input, info: CryptoKeys.Input, keylen: number): ArrayBuffer {
+      const name = hkdfDigest(digest);
       const key = c.importKey(
         "raw",
         ikm instanceof KeyObject
@@ -894,7 +912,7 @@ declare namespace CryptoKeys {
       return c.deriveBits(
         {
           name: "HKDF",
-          hash: hash(digest),
+          hash: name,
           salt: inputBytes(salt),
           info: inputBytes(info),
         },
@@ -942,7 +960,7 @@ declare namespace CryptoKeys {
       hkdfSync,
       // The digest is checked synchronously, as in Node; derivation errors reach the callback.
       hkdf: (...args: Parameters<typeof hkdfCallback>) => {
-        hash(args[0]);
+        hkdfDigest(args[0]);
         hkdfCallback(...args);
       },
     };

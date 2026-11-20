@@ -18,6 +18,14 @@ import rsa throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key enc
 import banana throws TypeError ERR_INVALID_ARG_VALUE The argument 'key' Invalid asymmetricKeyType: banana. Received undefined
 import ec no curve throws TypeError ERR_INVALID_ARG_TYPE The "key.namedCurve" property must be of type string. Received undefined
 import ec bad curve throws TypeError ERR_CRYPTO_INVALID_CURVE Invalid EC curve name
+import ec secp256r1 throws TypeError ERR_CRYPTO_INVALID_CURVE Invalid EC curve name
+import ec secp256k1 throws TypeError ERR_INVALID_ARG_VALUE The argument 'key' Invalid key data. Received undefined
+import ec secp224r1 throws TypeError ERR_INVALID_ARG_VALUE The argument 'key' Invalid key data. Received undefined
+import ec P-224 throws TypeError ERR_INVALID_ARG_VALUE The argument 'key' Invalid key data. Received undefined
+import ec p-256 throws TypeError ERR_CRYPTO_INVALID_CURVE Invalid EC curve name
+generate ec secp256r1 throws TypeError ERR_CRYPTO_INVALID_CURVE Invalid EC curve name
+generate ec secp256k1 throws Error ERR_OSSL_EC_UNKNOWN_GROUP error:0f00007b:elliptic curve routines:OPENSSL_internal:UNKNOWN_GROUP
+generate ec p-256 throws TypeError ERR_CRYPTO_INVALID_CURVE Invalid EC curve name
 import ec short scalar throws TypeError ERR_INVALID_ARG_VALUE The argument 'key' Invalid key data. Received undefined
 import ec bad point throws TypeError ERR_INVALID_ARG_VALUE The argument 'key' Invalid key data. Received undefined
 import private from raw-public throws TypeError ERR_INVALID_ARG_VALUE The property 'key.format' is invalid. Received 'raw-public'

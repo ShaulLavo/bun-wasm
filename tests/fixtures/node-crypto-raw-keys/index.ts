@@ -63,6 +63,13 @@ show("import rsa", () => crypto.createPrivateKey({ key: Buffer.alloc(32), format
 show("import banana", () => crypto.createPrivateKey({ key: Buffer.alloc(32), format: "raw-private", asymmetricKeyType: "banana" } as never));
 show("import ec no curve", () => crypto.createPublicKey({ key: Buffer.alloc(32), format: "raw-public", asymmetricKeyType: "ec" } as never));
 show("import ec bad curve", () => crypto.createPrivateKey({ key: ecScalar, format: "raw-private", asymmetricKeyType: "ec", namedCurve: "no-such-curve" } as never));
+for (const namedCurve of ["secp256r1", "secp256k1", "secp224r1", "P-224", "p-256"]) {
+  show(`import ec ${namedCurve}`, () => crypto.createPrivateKey({ key: ecScalar, format: "raw-private", asymmetricKeyType: "ec", namedCurve } as never).type);
+}
+// Generation on P-224 differs: Bun generates it, and this backend has no P-224 keys.
+for (const namedCurve of ["secp256r1", "secp256k1", "p-256"]) {
+  show(`generate ec ${namedCurve}`, () => crypto.generateKeyPairSync("ec", { namedCurve }).publicKey.type);
+}
 show("import ec short scalar", () => crypto.createPrivateKey({ key: Buffer.alloc(31, 1), format: "raw-private", asymmetricKeyType: "ec", namedCurve: "P-256" } as never));
 show("import ec bad point", () => crypto.createPublicKey({ key: Buffer.alloc(65, 4), format: "raw-public", asymmetricKeyType: "ec", namedCurve: "P-256" } as never));
 show("import private from raw-public", () => crypto.createPrivateKey({ key: seed, format: "raw-public", asymmetricKeyType: "ed25519" } as never));

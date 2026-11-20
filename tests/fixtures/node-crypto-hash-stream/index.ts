@@ -100,4 +100,6 @@ console.log("detached", crypto.createHash("sha256").update(detached).digest("hex
 process.noDeprecation = true;
 const Hmac = crypto.Hmac as unknown as (algorithm: string, key: string) => object;
 console.log("Hmac without new", Hmac("sha256", "Node") instanceof crypto.Hmac);
+const hmacKey = crypto.createHmac("sha256", "k"), plainHash = crypto.createHash("sha256");
+console.log("Hmac and Hash classes", hmacKey instanceof crypto.Hmac, hmacKey instanceof crypto.Hash, plainHash instanceof crypto.Hmac, typeof (hmacKey as unknown as { copy?: unknown }).copy);
 console.log("createHmac checks", outcome(() => crypto.createHmac(null as never, "k")), outcome(() => crypto.createHmac("sha1", null as never)));

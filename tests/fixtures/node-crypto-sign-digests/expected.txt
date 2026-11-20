@@ -14,18 +14,37 @@ createSign md5 jFB7MmnwZMDiYU7CdJHyOk5+ true
 createSign RSA-MD5 jFB7MmnwZMDiYU7CdJHyOk5+ true
 createSign md5WithRSAEncryption jFB7MmnwZMDiYU7CdJHyOk5+ true
 createSign no-such-digest throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: no-such-digest
+createSign SHA256WITHRSAENCRYPTION throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: SHA256WITHRSAENCRYPTION
+createSign Sha256 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: Sha256
+createSign rsa-sha256 aG8jmNeqNiwLrcdkUdEhfjLq true
+createSign sha-256 aG8jmNeqNiwLrcdkUdEhfjLq true
+createSign SHA-384 NwOuEXnKrFsmZhcaztJ6wCri true
+createSign RSA-SHA-256 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: RSA-SHA-256
+createSign dss1 l7a2Fq0wwnJVo8/YkKOctKRJ true
+createSign sha128 l7a2Fq0wwnJVo8/YkKOctKRJ true
+createSign ecdsa-with-SHA1 l7a2Fq0wwnJVo8/YkKOctKRJ true
 sign RSA-SHA256 one-shot aG8jmNeqNiwLrcdkUdEhfjLq
 verify md5WithRSAEncryption one-shot true
 ecdsa sha256WithRSAEncryption true
+ecdsa md5 throws Error ERR_OSSL_EVP_INVALID_DIGEST_TYPE error:0600006f:public key routines:OPENSSL_internal:INVALID_DIGEST_TYPE
+ecdsa RSA-MD5 throws Error ERR_OSSL_EVP_INVALID_DIGEST_TYPE error:0600006f:public key routines:OPENSSL_internal:INVALID_DIGEST_TYPE
+ecdsa md5WithRSAEncryption throws Error ERR_OSSL_EVP_INVALID_DIGEST_TYPE error:0600006f:public key routines:OPENSSL_internal:INVALID_DIGEST_TYPE
+ecdsa createSign md5 throws Error ERR_OSSL_EVP_INVALID_DIGEST_TYPE error:0600006f:public key routines:OPENSSL_internal:INVALID_DIGEST_TYPE
+ecdsa verify md5 throws Error ERR_OSSL_EVP_INVALID_DIGEST_TYPE error:0600006f:public key routines:OPENSSL_internal:INVALID_DIGEST_TYPE
 sign context throws Error ERR_CRYPTO_OPERATION_FAILED Context parameter is unsupported
 verify context throws Error ERR_CRYPTO_OPERATION_FAILED Context parameter is unsupported
 sign context callback ERR_CRYPTO_OPERATION_FAILED Context parameter is unsupported
 hkdf bad digest throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: nope
+hkdf digest type throws TypeError ERR_INVALID_ARG_TYPE The "digest" argument must be of type string. Received type number (5)
+hkdfSync digest type throws TypeError ERR_INVALID_ARG_TYPE The "digest" argument must be of type string. Received type number (5)
+hkdfSync RSA-SHA256 9ca0d662
 randomInt() throws TypeError ERR_INVALID_ARG_TYPE The "max" argument must be a safe integer. Received undefined
 randomInt(1.5) throws TypeError ERR_INVALID_ARG_TYPE The "max" argument must be a safe integer. Received type number (1.5)
 randomInt(0) throws RangeError ERR_OUT_OF_RANGE The value of "max" is out of range. It must be greater than the value of "min" (0). Received 0
 randomInt(5, 5) throws RangeError ERR_OUT_OF_RANGE The value of "max" is out of range. It must be greater than the value of "min" (5). Received 5
 randomInt(0, 2 ** 48) throws RangeError ERR_OUT_OF_RANGE The value of "max - min" is out of range. It must be <= 281474976710655. Received 281_474_976_710_656
+randomInt(2 ** 34, 2 ** 33) throws RangeError ERR_OUT_OF_RANGE The value of "max" is out of range. It must be greater than the value of "min" (17179869184). Received 8589934592
+randomInt(-(2 ** 48), 2 ** 48) throws RangeError ERR_OUT_OF_RANGE The value of "max - min" is out of range. It must be <= 281474976710655. Received 562_949_953_421_312
 randomInt(1, 2, 3) throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument must be of type function. Received type number (3)
 randomInt(1, 2) 1
 randomInt(-3, -2) -3

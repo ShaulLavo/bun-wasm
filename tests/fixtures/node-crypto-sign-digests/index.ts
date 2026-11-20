@@ -35,7 +35,8 @@ const names = [
   "sha1", "RSA-SHA1", "sha1WithRSAEncryption", "SHA256", "sha224WithRSAEncryption", "RSA-SHA224",
   "sha256WithRSAEncryption", "RSA-SHA256", "sha384WithRSAEncryption", "RSA-SHA384",
   "sha512WithRSAEncryption", "RSA-SHA512", "md5", "RSA-MD5", "md5WithRSAEncryption",
-  "no-such-digest",
+  "no-such-digest", "SHA256WITHRSAENCRYPTION", "Sha256", "rsa-sha256", "sha-256", "SHA-384", "RSA-SHA-256",
+  "dss1", "sha128", "ecdsa-with-SHA1",
 ];
 for (const name of names) {
   show(`createSign ${name}`, () => {
@@ -53,6 +54,11 @@ show("ecdsa sha256WithRSAEncryption", () =>
   crypto.verify("sha256", Buffer.from("ec"), ec.publicKey, crypto.sign("sha256WithRSAEncryption", Buffer.from("ec"), ec.privateKey)),
 );
 
+// MD5 signs only with RSA keys.
+for (const name of ["md5", "RSA-MD5", "md5WithRSAEncryption"]) show(`ecdsa ${name}`, () => crypto.sign(name, Buffer.from("ec"), ec.privateKey).length);
+show("ecdsa createSign md5", () => crypto.createSign("md5").update("ec").sign(ec.privateKey).length);
+show("ecdsa verify md5", () => crypto.verify("md5", Buffer.from("ec"), ec.publicKey, Buffer.alloc(64)));
+
 // Only Ed448 takes a signing context, and BoringSSL has no Ed448.
 show("sign context", () => crypto.sign("sha256", Buffer.from("x"), { key: pem, context: Buffer.alloc(1) } as never));
 show("verify context", () => crypto.verify("sha256", Buffer.from("x"), { key: publicKey, context: Buffer.alloc(1) } as never, Buffer.alloc(128)));
@@ -65,11 +71,16 @@ await new Promise<void>(resolve =>
 
 // hkdf checks its digest before it schedules the callback.
 show("hkdf bad digest", () => crypto.hkdf("nope", "key", "", "", 1, () => console.log("hkdf callback ran")));
+show("hkdf digest type", () => crypto.hkdf(5 as never, "key", "", "", 1, () => console.log("hkdf callback ran")));
+show("hkdfSync digest type", () => crypto.hkdfSync(5 as never, "key", "", "", 1));
+show("hkdfSync RSA-SHA256", () => Buffer.from(crypto.hkdfSync("RSA-SHA256", "key", "salt", "info", 4)).toString("hex"));
 show("randomInt()",() => crypto.randomInt(undefined as never));
 show("randomInt(1.5)", () => crypto.randomInt(1.5));
 show("randomInt(0)", () => crypto.randomInt(0));
 show("randomInt(5, 5)", () => crypto.randomInt(5, 5));
 show("randomInt(0, 2 ** 48)", () => crypto.randomInt(0, 2 ** 48));
+show("randomInt(2 ** 34, 2 ** 33)", () => crypto.randomInt(2 ** 34, 2 ** 33));
+show("randomInt(-(2 ** 48), 2 ** 48)", () => crypto.randomInt(-(2 ** 48), 2 ** 48));
 show("randomInt(1, 2, 3)", () => crypto.randomInt(1, 2, 3 as never));
 show("randomInt(1, 2)", () => crypto.randomInt(1, 2));
 show("randomInt(-3, -2)", () => crypto.randomInt(-3, -2));

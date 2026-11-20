@@ -117,7 +117,12 @@ impl Drop for Pkey {
 }
 
 /// Parses one DER value with a `d2i_*` function and rejects trailing bytes, as Bun does.
-fn d2i<T>(b: &[u8], parse: impl FnOnce(*mut *const u8, c_long) -> *mut T) -> Result<*mut T> {
+/// A value parsed before trailing bytes is released with `free`.
+fn d2i<T>(
+    b: &[u8],
+    parse: impl FnOnce(*mut *const u8, c_long) -> *mut T,
+    free: unsafe extern "C" fn(*mut T),
+) -> Result<*mut T> {
     let len = c_long::try_from(b.len()).map_err(|_| "DataError")?;
     let mut cursor = b.as_ptr();
     let value = parse(&mut cursor, len);
@@ -126,6 +131,8 @@ fn d2i<T>(b: &[u8], parse: impl FnOnce(*mut *const u8, c_long) -> *mut T) -> Res
     }
     // `cursor` advanced within `b` past the parsed value.
     if cursor as usize - b.as_ptr() as usize != b.len() {
+        // SAFETY: the parser returned a value the caller would have owned; freed once.
+        unsafe { free(value) };
         return Err("DataError");
     }
     Ok(value)
@@ -264,9 +271,11 @@ impl Key {
     }
     fn from_sec1(curve: Curve, b: &[u8]) -> Result<Self> {
         // SAFETY: d2i reads at most `len` bytes from the cursor.
-        let key = d2i(b, |cursor, len| unsafe {
-            d2i_ECPrivateKey(ptr::null_mut(), cursor, len)
-        })?;
+        let key = d2i(
+            b,
+            |cursor, len| unsafe { d2i_ECPrivateKey(ptr::null_mut(), cursor, len) },
+            EC_KEY_free,
+        )?;
         Self(key).checked(curve, "DataError")
     }
     fn from_evp(curve: Curve, pkey: Pkey) -> Result<Self> {
@@ -279,9 +288,11 @@ impl Key {
     }
     fn from_pkcs8(curve: Curve, b: &[u8]) -> Result<Self> {
         // SAFETY: d2i reads at most `len` bytes from the cursor.
-        let info = d2i(b, |cursor, len| unsafe {
-            d2i_PKCS8_PRIV_KEY_INFO(ptr::null_mut(), cursor, len)
-        })?;
+        let info = d2i(
+            b,
+            |cursor, len| unsafe { d2i_PKCS8_PRIV_KEY_INFO(ptr::null_mut(), cursor, len) },
+            PKCS8_PRIV_KEY_INFO_free,
+        )?;
         // SAFETY: `info` is live until freed just below.
         let pkey = Pkey(unsafe { EVP_PKCS82PKEY(info) });
         // SAFETY: freed once.
@@ -293,9 +304,11 @@ impl Key {
     }
     fn from_spki(curve: Curve, b: &[u8]) -> Result<Self> {
         // SAFETY: d2i reads at most `len` bytes from the cursor.
-        let pkey = Pkey(d2i(b, |cursor, len| unsafe {
-            d2i_PUBKEY(ptr::null_mut(), cursor, len)
-        })?);
+        let pkey = Pkey(d2i(
+            b,
+            |cursor, len| unsafe { d2i_PUBKEY(ptr::null_mut(), cursor, len) },
+            EVP_PKEY_free,
+        )?);
         Self::from_evp(curve, pkey)
     }
 
@@ -367,6 +380,23 @@ pub(crate) struct JwkParts {
     pub x: Vec<u8>,
     pub y: Vec<u8>,
     pub d: Option<Vec<u8>>,
+}
+
+impl Drop for JwkParts {
+    fn drop(&mut self) {
+        if let Some(d) = self.d.as_mut() {
+            wipe(d);
+        }
+    }
+}
+
+/// Overwrites private key bytes before their buffer is freed.
+pub(crate) fn wipe(bytes: &mut [u8]) {
+    for byte in bytes.iter_mut() {
+        // SAFETY: a valid, exclusively borrowed byte; volatile so the write is kept.
+        unsafe { ptr::write_volatile(byte, 0) };
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
 }
 
 fn key(curve: Curve, k: &JwkParts) -> Result<Key> {
@@ -610,8 +640,8 @@ mod tests {
             c,
             "spki",
             &JwkParts {
-                x: k.x,
-                y: k.y,
+                x: k.x.clone(),
+                y: k.y.clone(),
                 d: None,
             },
         )
@@ -620,5 +650,52 @@ mod tests {
             import(curve("P-256").unwrap(), "spki", &der, None).err(),
             Some(CURVE_MISMATCH)
         );
+    }
+
+    static FREED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    unsafe extern "C" fn count_free(value: *mut u8) {
+        FREED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // SAFETY: the test parser below returns a leaked Box.
+        drop(unsafe { Box::from_raw(value) });
+    }
+
+    #[test]
+    fn d2i_frees_a_value_followed_by_trailing_bytes() {
+        let b = [1u8, 2, 3];
+        // A parser that consumes all but the last byte, as d2i does before trailing data.
+        let parse = |cursor: *mut *const u8, len: c_long| {
+            // SAFETY: the cursor points into `b`, which has `len` bytes.
+            unsafe { *cursor = (*cursor).add(usize::try_from(len).unwrap() - 1) };
+            Box::into_raw(Box::new(0u8))
+        };
+        assert_eq!(d2i(&b, parse, count_free).err(), Some("DataError"));
+        assert_eq!(FREED.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let whole = |cursor: *mut *const u8, len: c_long| {
+            // SAFETY: as above, consuming every byte.
+            unsafe { *cursor = (*cursor).add(usize::try_from(len).unwrap()) };
+            Box::into_raw(Box::new(0u8))
+        };
+        let value = d2i(&b, whole, count_free).unwrap();
+        assert_eq!(FREED.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // SAFETY: the value d2i returned is owned here.
+        unsafe { count_free(value) };
+    }
+
+    #[test]
+    fn every_der_format_rejects_trailing_bytes_on_every_curve() {
+        for name in ["P-256", "P-384", "P-521"] {
+            let c = curve(name).unwrap();
+            let k = parts(&generate(c).unwrap());
+            for format in ["sec1", "pkcs8", "spki"] {
+                let mut der = export(c, format, &k).unwrap();
+                assert!(import(c, format, &der, None).is_ok(), "{name} {format}");
+                der.push(0);
+                assert_eq!(
+                    import(c, format, &der, None).err(),
+                    Some("DataError"),
+                    "{name} {format}"
+                );
+            }
+        }
     }
 }

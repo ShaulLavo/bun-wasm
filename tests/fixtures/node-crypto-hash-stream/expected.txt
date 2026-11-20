@@ -14,4 +14,5 @@ end after digest ba7816bf8f01cfea ERR_CRYPTO_HASH_FINALIZED ERR_CRYPTO_HASH_FINA
 hmac digest twice "104152c5bfdca07b" "" buffer 0 ERR_CRYPTO_HASH_FINALIZED
 detached true true
 Hmac without new true
+Hmac and Hash classes true false false undefined
 createHmac checks ERR_INVALID_ARG_TYPE ERR_INVALID_ARG_TYPE

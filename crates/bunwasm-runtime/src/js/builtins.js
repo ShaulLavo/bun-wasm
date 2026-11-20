@@ -172,14 +172,17 @@
       const keyBytes = ArrayBuffer.isView(key) ? viewBytes(key).slice() : args.secretKey(key).slice();
       const name = digests.hmacName(String(algorithm));
       if (name === undefined) throw Object.assign(new TypeError(`Invalid digest: ${algorithm}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
-      return new Hash(name, keyBytes, undefined, options);
+      return Reflect.construct(Hash, [name, keyBytes, undefined, options], Hmac);
     }
 
-    // crypto.Hmac works with or without `new`, as in Bun; its instances are Hashes.
+    // crypto.Hmac works with or without `new`. As in Bun, Hmac and Hash are unrelated
+    // classes on the same LazyTransform; Hmac shares Hash's methods except copy().
     function Hmac(hmac, key, options) {
       return createHmac(hmac, key, options);
     }
-    Hmac.prototype = Hash.prototype;
+    Hmac.prototype = Object.create(Object.getPrototypeOf(Hash.prototype), Object.getOwnPropertyDescriptors(Hash.prototype));
+    delete Hmac.prototype.copy;
+    Object.defineProperty(Hmac.prototype, "constructor", { value: Hmac, writable: true, configurable: true });
 
     function randomBytes(size, callback) {
       const buf = Buffer.from(native.randomBytes(size).buffer);
@@ -207,11 +210,12 @@
         if (!Number.isSafeInteger(value))
           throw Object.assign(new TypeError(`The "${name}" argument must be a safe integer. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_TYPE" });
       }
-      const outOfRange = (name, rule, value) =>
-        Object.assign(new RangeError(`The value of "${name}" is out of range. It must be ${rule}. Received ${rangeNumber(value)}`), { code: "ERR_OUT_OF_RANGE" });
+      const outOfRange = (name, rule, received) =>
+        Object.assign(new RangeError(`The value of "${name}" is out of range. It must be ${rule}. Received ${received}`), { code: "ERR_OUT_OF_RANGE" });
+      // Bun prints max plainly here and separates the digits of a too-large range.
       if (max <= min) throw outOfRange("max", `greater than the value of "min" (${min})`, max);
       const range = max - min;
-      if (range > RAND_MAX) throw outOfRange(`max${minNotSpecified ? "" : " - min"}`, `<= ${RAND_MAX}`, range);
+      if (range > RAND_MAX) throw outOfRange(`max${minNotSpecified ? "" : " - min"}`, `<= ${RAND_MAX}`, rangeNumber(range));
       const limit = RAND_MAX - (RAND_MAX % range);
       let n;
       do {

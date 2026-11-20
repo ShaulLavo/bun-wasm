@@ -433,7 +433,12 @@ fn ec_export(a: &J, format: &str, k: &J) -> Result<J> {
     if private && parts.d.is_none() {
         return Err("DataError");
     }
-    Ok(output(crypto_ec::export(curve, format, &parts)?))
+    let mut der = crypto_ec::export(curve, format, &parts)?;
+    let encoded = output(&der);
+    if private {
+        crypto_ec::wipe(&mut der);
+    }
+    Ok(encoded)
 }
 fn okp_export(name: &str, format: &str, k: &J) -> Result<J> {
     use pkcs8::der::Encode;

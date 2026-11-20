@@ -45,6 +45,16 @@ Differences from native Bun, all deliberate:
   KeyObjects here, while native Bun's ncrypto reaches its own failure later.
 - ML-DSA and ML-KEM KeyObjects do not exist here, so their raw formats report
   "Unsupported key type".
+- P-224 has no keys here. `generateKeyPair("ec", { namedCurve: "secp224r1" })` reports
+  Bun's `ERR_OSSL_EC_UNKNOWN_GROUP`, as for secp256k1, while native Bun generates the key.
+  Of the other curve names BoringSSL knows, only P-224 and secp256k1 are told apart from an
+  unknown name; any other one reports `ERR_CRYPTO_INVALID_CURVE`.
+- Digest names follow ncrypto's `getDigestByName` and BoringSSL's name table, limited to
+  MD5 and SHA-1 to SHA-512: SHA-512/224, SHA-512/256, SHA-3, MD4 and RIPEMD-160 names
+  report "Invalid digest" when signing, and HKDF has no MD5.
+
+Private EC scalars decoded from a JWK and exported private DER are overwritten before
+their buffers are freed; the JWK strings JavaScript holds are not.
 
 The `node-crypto-p521`, `node-crypto-raw-keys` and `node-crypto-sign-digests` fixtures are
 original test code with native Bun 1.4.4's output. Their keys are synthetic test keys
