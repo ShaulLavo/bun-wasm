@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { BrowserContextOptions, BrowserType } from "playwright";
 import { checkPageReady } from "./async-context-runtime-page.ts";
 import { playwright, ready, run, session, writeFile } from "./playground.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const { chromium, webkit, devices } = playwright;
 const root = new URL("../../tests/async-context-runtime/", import.meta.url);
@@ -24,7 +25,7 @@ async function exercise(name: string, type: BrowserType, options: BrowserContext
   const context = await browser.newContext(options);
   const page = await context.newPage();
   try {
-    await page.goto(`${appUrl}?engine=browser&prompt=off`);
+    await navigateTestPage(page, `${appUrl}?engine=browser&prompt=off`);
     const status = await ready(page);
     assert.match(status, /ready · Browser \(native\)/);
     await writeFile(page, "/home/user/ctx01/index.ts", source.index);

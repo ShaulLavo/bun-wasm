@@ -1,0 +1,631 @@
+extern "C" size_t bunsm_test_interpreter_frames(JSContext* cx);
+// Counts down deferred getters; the one that brings it to zero gets a moving GC.
+unsigned collectBeforeGetter = 0;
+bool failGetterPrologue = false;
+bool failNextPrologue = false;
+size_t deferredGetters = 0;
+size_t getterCollections = 0;
+
+extern "C" void bunsm_test_deferred_getter(JSContext* cx) {
+  deferredGetters++;
+  if (failGetterPrologue) {
+    failGetterPrologue = false;
+    failNextPrologue = true;
+  }
+  if (!collectBeforeGetter || --collectBeforeGetter) return;
+  JS::PrepareForFullGC(cx);
+  JS::NonIncrementalGC(cx, JS::GCOptions::Shrink, JS::GCReason::API);
+  getterCollections++;
+}
+
+// Call and apply routes: counted, and the owned (apply list) route can collect
+// between its eligibility check and frame publication, and fail its prologue.
+unsigned collectBeforeApply = 0;
+bool failLoopCallPrologue = false;
+size_t loopCalls = 0;
+size_t ownedLoopCalls = 0;
+size_t applyCollections = 0;
+
+extern "C" void bunsm_test_loop_call(JSContext* cx, bool owned) {
+  loopCalls++;
+  if (failLoopCallPrologue) {
+    failLoopCallPrologue = false;
+    failNextPrologue = true;
+  }
+  if (!owned) return;
+  ownedLoopCalls++;
+  if (!collectBeforeApply || --collectBeforeApply) return;
+  JS::PrepareForFullGC(cx);
+  JS::NonIncrementalGC(cx, JS::GCOptions::Shrink, JS::GCReason::API);
+  applyCollections++;
+}
+
+extern "C" bool bunsm_test_inline_prologue(JSContext* cx) {
+  if (!failNextPrologue) return true;
+  failNextPrologue = false;
+  JS_ReportOutOfMemory(cx);
+  return false;
+}
+
+struct LoopStack {
+  uint32_t depth;
+  size_t frames;
+};
+LoopStack loop_stack() {
+  return {JS::RootingContext::get(context)->wasiRecursionDepth,
+          bunsm_test_interpreter_frames(context)};
+}
+void balanced(LoopStack entry, const char* label) {
+  auto after = loop_stack();
+  check(after.depth == entry.depth && after.frames == entry.frames, label);
+}
+
+bool stack_stats(JSContext* cx, unsigned argc, JS::Value* vp) {
+  auto args = JS::CallArgsFromVp(argc, vp);
+  auto stack = loop_stack();
+  args.rval().setNumber(stack.depth);
+  return true;
+}
+
+// Prints a failed evaluation's thrown value and stack before the check aborts.
+void report_failure(bsm_handle thrown) {
+  if (!thrown) {
+    fputs("evaluation failed with no exception\n", stderr);
+    return;
+  }
+  install("lastFailure", thrown);
+  bsm_handle text = 0;
+  const char* describe = "String(lastFailure) + '\\n' + (lastFailure && lastFailure.stack)";
+  if (!bsm_eval_script(describe, strlen(describe), "report.js", 9, 1, &text)) return;
+  size_t length = 0;
+  const char* data = bsm_string_data(text, &length);
+  if (data) fprintf(stderr, "thrown: %.*s\n", static_cast<int>(length), data);
+  bsm_release(text);
+}
+
+void loop_success(const char* source) {
+  auto entry = loop_stack();
+  bsm_handle out = 0;
+  bool ok = bsm_eval_script(source, strlen(source), "getter-control.js", 17, 1, &out);
+  if (!ok) report_failure(out);
+  check(ok, source);
+  bsm_release(out);
+  balanced(entry, "stack balanced after successful evaluation");
+}
+
+void loop_failure(const char* source) {
+  auto entry = loop_stack();
+  bsm_handle out = 0;
+  check(!bsm_eval_script(source, strlen(source), "getter-control.js", 17, 1, &out), "expected failure");
+  bsm_release(out);
+  balanced(entry, "stack balanced after failed evaluation");
+}
+
+struct GetterCollection {
+  const char* source;
+  unsigned getter;  // which deferred getter of the evaluation collects
+};
+
+void moving_getter_gc() {
+  for (GetterCollection test : {
+      GetterCollection{"if (({ marker: 42, get value() { return this.marker; } }).value !== 42) throw 1;", 1},
+      GetterCollection{"Object.defineProperty(Number.prototype, 'value', {configurable:true, get:function(){'use strict'; return this;}}); if ((7).value !== 7) throw 2; delete Number.prototype.value;", 1},
+      // The second deferred getter is the inner `super.value`: GetPropSuper with a
+      // lookup object (base) distinct from the receiver (a temporary object).
+      GetterCollection{"var base = {get value(){return this.marker;}}; var derived = {__proto__:base, get result(){return super.value;}}; if (Object.assign(Object.create(derived), {marker:42}).result !== 42) throw 3;", 2}}) {
+    collectBeforeGetter = test.getter;
+    auto before = getterCollections;
+    loop_success(test.source);
+    check(!collectBeforeGetter && getterCollections == before + 1, "shrinking GC between deferral and entry");
+  }
+  puts("ok moving GC before getter frame publication");
+}
+
+// Debugger hook exceptions are recorded and rethrown by the evaluation, so a
+// failing hook reports its message instead of reaching the embed's
+// unconfigured uncaught-exception reporter.
+const char* debuggerPrelude = R"JS(
+  var hookFailure;
+  // Only frames of the debuggee: the harness's own call sites differ per run.
+  var debuggeeFrames = stack => stack.split('\n').filter(line => line && !line.includes('debugger-control.js')).join('\n');
+  function watch(dbg) {
+    dbg.uncaughtExceptionHook = e => { hookFailure = hookFailure || String(e) + '\n' + e.stack; };
+    return dbg;
+  }
+)JS";
+const char* debuggerEpilogue = "\nif (hookFailure) throw new Error('hook: ' + hookFailure);\n";
+
+void debugger_evaluate(const char* body) {
+  auto entry = loop_stack();
+  std::string combined = std::string(debuggerPrelude) + body + debuggerEpilogue;
+  const char* source = combined.c_str();
+  {
+    JS::RealmOptions options;
+    options.creationOptions().setNewCompartmentAndZone();
+    JS::RootedObject debuggerGlobal(context, JS_NewGlobalObject(context, &globalClass, nullptr, JS::FireOnNewGlobalHook, options));
+    check(debuggerGlobal != nullptr, "debugger global");
+    JSAutoRealm realm(context, debuggerGlobal);
+    check(JS::InitRealmStandardClasses(context), "debugger standard classes");
+    check(JS_DefineDebuggerObject(context, debuggerGlobal), "Debugger class");
+    JS::RootedObject debuggee(context, global->get());
+    check(JS_WrapObject(context, &debuggee), "wrapped debuggee");
+    check(JS_DefineProperty(context, debuggerGlobal, "debuggee", debuggee, 0), "debuggee reference");
+    JS::CompileOptions compile(context);
+    compile.setFileAndLine("debugger-control.js", 1);
+    JS::SourceText<mozilla::Utf8Unit> text;
+    check(text.init(context, source, strlen(source), JS::SourceOwnership::Borrowed), "debugger source");
+    JS::RootedValue out(context);
+    bool ok = JS::Evaluate(context, compile, text, &out);
+    if (!ok && JS_IsExceptionPending(context)) {
+      JS::RootedValue error(context);
+      JS_GetPendingException(context, &error);
+      JS_ClearPendingException(context);
+      JS::RootedString message(context, JS::ToString(context, error));
+      JS::UniqueChars bytes = message ? JS_EncodeStringToUTF8(context, message) : nullptr;
+      fprintf(stderr, "Debugger failure: %s\n", bytes ? bytes.get() : "unknown");
+    }
+    check(ok, "Debugger evaluation");
+  }
+  bsm_gc();
+  balanced(entry, "stack balanced after Debugger evaluation");
+}
+
+void debugger_getters() {
+  debugger_evaluate(R"JS(
+    function assert(v, label) { if (!v) throw new Error(label + (hookFailure ? ' after hook failure ' + hookFailure : '')); }
+    var dbg = watch(new Debugger(debuggee));
+    var g = dbg.makeGlobalObjectReference(debuggee);
+    var entered = 0, left = 0, exceptions = 0;
+    dbg.onEnterFrame = frame => {
+      if (frame.callee?.name !== 'getter') return;
+      entered++;
+      frame.onPop = completion => { left++; };
+    };
+    dbg.onExceptionUnwind = (frame, value) => {
+      if (frame.callee?.name === 'getter') exceptions++;
+    };
+    var result = g.executeInGlobal("var obj = {get value(){return 42;}}; Object.defineProperty(obj,'value',{get:function getter(){return 42;}}); obj.value;", {url:'getter-site.js'});
+    assert(result.return === 42 && entered === 1 && left === 1, 'one enter and leave');
+    dbg.onEnterFrame = frame => {
+      if (frame.callee?.name !== 'getter') return;
+      frame.onPop = completion => { left++; };
+      return {return: 73};
+    };
+    result = g.executeInGlobal('obj.value;', {url:'getter-forced.js'});
+    assert(result.return === 73 && left === 2, 'forced getter return');
+    dbg.onEnterFrame = undefined;
+    result = g.executeInGlobal("var token={}; Object.defineProperty(obj,'value',{get:function getter(){throw token;}}); try {obj.value;} catch(e) {e===token;}", {url:'getter-throw.js'});
+    assert(result.return === true && exceptions === 1, 'exception hook and identity');
+    dbg.onExceptionUnwind = undefined;
+    var locations = [], stacks = [];
+    dbg.onEnterFrame = frame => {
+      if (frame.callee?.name !== 'getter') return;
+      var caller = frame.older;
+      var location = caller.script.getOffsetMetadata(caller.offset);
+      locations.push(JSON.stringify([location.lineNumber, location.columnNumber]));
+    };
+    var source = 'function getter(){return new Error().stack;}\nObject.defineProperty(obj,"value",{get:getter});\nfunction caller(){return obj.value;}\ncaller();';
+    var locate = () => stacks.push(g.executeInGlobal(source, {url:'getter-location.js'}).return);
+    locate();
+    dbg.onNativeCall = () => {};
+    locate();
+    assert(locations.length === 2 && locations[0] === locations[1], 'caller line and column ' + locations.join(' '));
+    assert(debuggeeFrames(stacks[0]) === debuggeeFrames(stacks[1]) && stacks[0].includes('caller@getter-location.js:3:'), 'saved getter stack ' + JSON.stringify(stacks));
+    dbg.onNativeCall = undefined;
+    dbg.onEnterFrame = undefined;
+    debuggee.crossGetter = function crossGetter() { return this.marker; };
+    result = g.executeInGlobal("var foreign={marker:42}; Object.defineProperty(foreign,'value',{get:crossGetter}); foreign.value;", {url:'getter-realm.js'});
+    assert(result.return === 42, 'cross-realm getter receiver');
+    dbg.removeAllDebuggees();
+  )JS");
+  puts("ok Debugger hooks, forced return, exception, caller PC, saved stack and realm");
+}
+
+void native_observer_exclusion() {
+  size_t before = deferredGetters;
+  debugger_evaluate(R"JS(
+    var dbg = watch(new Debugger(debuggee));
+    var g = dbg.makeGlobalObjectReference(debuggee);
+    dbg.onNativeCall = () => {};
+    var result = g.executeInGlobal('({get value(){return 42;}}).value;');
+    if (result.return !== 42) throw new Error('observed getter');
+    dbg.removeAllDebuggees();
+  )JS");
+  check(deferredGetters == before, "native observer excludes deferred getters");
+  loop_success("({get value(){return 42;}}).value;");
+  check(deferredGetters > before, "getter defers after native observer removed");
+  puts("ok native-call observer keeps generic lookup");
+}
+
+void async_getter_stacks() {
+  auto entry = loop_stack();
+  {
+    Value parent(script("function asyncParent(){return new Error().stack;} asyncParent();", "async-parent.js"));
+    Value saved(script("new Error()", "async-parent.js"));
+    JS::RootedObject error(context, object(saved.handle));
+    JS::RootedObject stack(context, JS::ExceptionStackOrNull(error));
+    check(stack != nullptr, "async parent saved frame");
+    JS::AutoSetAsyncStackForNewCalls async(context, stack, "getter-parent", JS::AutoSetAsyncStackForNewCalls::AsyncCallKind::EXPLICIT);
+    debugger_evaluate(R"JS(
+      var dbg = watch(new Debugger(debuggee)), g = dbg.makeGlobalObjectReference(debuggee);
+      var source = 'var asyncObject={get value(){return new Error().stack;}}; asyncObject.value;';
+      var run = () => g.executeInGlobal(source, {url:'async-getter.js'}).return;
+      var loop = run();
+      dbg.onNativeCall = () => {};
+      var generic = run();
+      if (debuggeeFrames(loop) !== debuggeeFrames(generic) ||!loop.includes('getter-parent')) throw new Error('async parent stack ' + JSON.stringify([loop, generic]));
+      dbg.removeAllDebuggees();
+    )JS");
+  }
+  balanced(entry, "stack balanced after async parent");
+  puts("ok async getter parent stack");
+}
+
+// PBL hand-over controls (docs/bun-patches/spidermonkey-pbl-handover.md). On a
+// deep stack PBL's cache calls continue through js::Call or the construct route
+// in the C++ interpreter. Refusing PBL's call fast path sends plain calls and
+// constructions through the call cache, so they reach that route too.
+bool refuseCallFastPath = false;
+unsigned collectInHandOver = 0;  // counts down hand-overs; the one reaching zero collects
+size_t handOvers = 0;
+size_t handOverCollections = 0;
+size_t cacheGetters = 0;
+
+extern "C" bool bunsm_test_pbl_call_fast_path() { return !refuseCallFastPath; }
+extern "C" void bunsm_test_pbl_cache_getter() { cacheGetters++; }
+extern "C" void bunsm_test_pbl_hand_over(JSContext* cx) {
+  handOvers++;
+  if (!collectInHandOver || --collectInHandOver) return;
+  JS::PrepareForFullGC(cx);
+  JS::NonIncrementalGC(cx, JS::GCOptions::Shrink, JS::GCReason::API);
+  handOverCollections++;
+}
+
+bool hand_over_count(JSContext*, unsigned argc, JS::Value* vp) {
+  JS::CallArgsFromVp(argc, vp).rval().setNumber(double(handOvers));
+  return true;
+}
+bool cache_getter_count(JSContext*, unsigned argc, JS::Value* vp) {
+  JS::CallArgsFromVp(argc, vp).rval().setNumber(double(cacheGetters));
+  return true;
+}
+// A native returning false with no pending exception is SpiderMonkey's
+// uncatchable error: no catch or finally block runs.
+bool fail_uncatchable(JSContext*, unsigned, JS::Value*) { return false; }
+
+struct HandOverShape {
+  const char* kind;
+  bool viaCallCache;    // refuse the call fast path
+  const char* prelude;  // the recursion; BOTTOM is the deepest level's statement
+  const char* call;     // starts it; DEPTH is the level count
+  const char* depth;    // enough levels to cross the deep-stack threshold
+  const char* success;  // BOTTOM for a call that yields 42
+};
+
+const HandOverShape handOverShapes[] = {
+    {"call", true,
+     "function f(n, pad) { if (pad !== undefined) throw new Error('padding'); if (!n) { BOTTOM } return f(n - 1); }",
+     "f(DEPTH)", "300", "return 42;"},
+    {"construct", true,
+     "function P(n) { this.n = n; if (!n) { BOTTOM } var inner = new P(n - 1); if (!(inner instanceof P) || inner.n !== n - 1) throw new Error('construct ' + n); return 5; }",
+     "(new P(DEPTH).n === DEPTH ? 42 : 0)", "300", "return 5;"},
+    {"derived", true,
+     "var B = class B { constructor(n) { this.b = n; } }; var D = class D extends B { constructor(n) { super(n); if (!n) { BOTTOM } var x = new D(n - 1); if (!(x instanceof D) || x.b !== n - 1) throw new Error('derived ' + n); } };",
+     "(new D(DEPTH).b === DEPTH ? 42 : 0)", "300", "return;"},
+    {"getter", false,
+     "var proto = { get value() { if (this.left-- <= 0) { BOTTOM } return this.value; } };",
+     "Object.assign(Object.create(proto), { left: DEPTH, marker: 42 }).value", "300", "return this.marker;"},
+    {"setter", false,
+     "var last = undefined; var proto = { set value(v) { if (this.left-- <= 0) { BOTTOM } if ((this.value = v + 1) !== v + 1) throw new Error('setter'); return 'ignored'; } };",
+     "((Object.assign(Object.create(proto), { left: DEPTH, marker: 42 }).value = 1) === 1 && last === 42 ? 42 : 0)", "180",
+     "last = v === 181 ? this.marker : -1; return 'ignored';"},
+    {"bound", false,
+     "var tag = { marker: 42 }, bound; function g(a, b, n) { if (this !== tag || a !== 1 || b !== 2) throw new Error('bound ' + n); if (!n) { BOTTOM } return bound(n - 1); } bound = g.bind(tag, 1, 2);",
+     "bound(DEPTH)", "160", "return this.marker;"},
+};
+
+std::string replaced(std::string text, const char* hole, const std::string& with) {
+  for (size_t at = text.find(hole); at != std::string::npos; at = text.find(hole, at + with.size())) {
+    text.replace(at, strlen(hole), with);
+  }
+  return text;
+}
+
+// The shape's recursion with |bottom| at its deepest level, then |body|, in
+// which CALL starts the recursion.
+std::string hand_over_source(const HandOverShape& shape, const char* bottom, const char* depth, const char* body) {
+  std::string call = replaced(shape.call, "DEPTH", depth);
+  return "var token = {};\n" + replaced(shape.prelude, "BOTTOM", bottom) + "\n" + replaced(body, "CALL", call);
+}
+
+void expect_hand_over(const HandOverShape& shape, size_t before, const char* what) {
+  std::string label = std::string(shape.kind) + " " + what + " crossed a hand-over";
+  check(handOvers > before, label.c_str());
+}
+
+void hand_over_run(const HandOverShape& shape, const std::string& source, bool succeeds, const char* what) {
+  size_t before = handOvers;
+  refuseCallFastPath = shape.viaCallCache;
+  if (succeeds) loop_success(source.c_str());
+  else loop_failure(source.c_str());
+  refuseCallFastPath = false;
+  expect_hand_over(shape, before, what);
+}
+
+void hand_over_shape(const HandOverShape& shape) {
+  const char* result = "if (CALL !== 42) throw new Error('result');";
+  hand_over_run(shape, hand_over_source(shape, shape.success, shape.depth, result), true, "success");
+  collectInHandOver = 1;
+  size_t collections = handOverCollections;
+  hand_over_run(shape, hand_over_source(shape, shape.success, shape.depth, result), true, "moving GC");
+  check(!collectInHandOver && handOverCollections == collections + 1, "shrinking GC inside the hand-over");
+  hand_over_run(shape, hand_over_source(shape, "throw 0;", shape.depth, "CALL;"), false, "falsy throw");
+  hand_over_run(shape, hand_over_source(shape, "throw token;", shape.depth,
+                    "var caught; try { CALL; } catch (e) { caught = e; } if (caught !== token) throw new Error('token');"),
+                true, "token throw");
+  hand_over_run(shape, hand_over_source(shape, "failUncatchable();", shape.depth,
+                    "var caught = 0, finalized = 0; try { CALL; } catch (e) { caught = 1; } finally { finalized = 1; }"),
+                false, "uncatchable error");
+  loop_success("if (caught || finalized) throw new Error('uncatchable error was caught');");
+  hand_over_run(shape, hand_over_source(shape, shape.success, "1e9",
+                    "try { CALL; throw new Error('no exhaustion'); } catch (e) { if (!(e instanceof RangeError)) throw e; }"),
+                true, "caught exhaustion");
+}
+
+// A Debugger forces a return from the first frame the hand-over enters. The
+// debugger's own compartment reads the count through the debuggee wrapper, a
+// native call that enters no debuggee frame.
+void hand_over_forced_return(const HandOverShape& shape, const char* expected) {
+  std::string body = std::string(R"JS(
+    var dbg = watch(new Debugger(debuggee)), g = dbg.makeGlobalObjectReference(debuggee);
+    var before = debuggee.pblHandOvers(), forced = 0;
+    dbg.onEnterFrame = frame => {
+      if (forced || debuggee.pblHandOvers() === before) return;
+      forced++;
+      return { return: 73 };
+    };
+    var completion = g.executeInGlobal(SOURCE, { url: 'hand-over-forced.js' });
+    dbg.onEnterFrame = undefined;
+    if (!completion || completion.return !== EXPECTED || forced !== 1) throw new Error('forced return ' + JSON.stringify([completion, forced]));
+    dbg.removeAllDebuggees();
+  )JS");
+  std::string source = hand_over_source(shape, shape.success, shape.depth, "CALL;");
+  std::string quoted;
+  for (char c : source) {
+    if (c == '\\' || c == '\'') quoted += '\\';
+    quoted += c == '\n' ? ' ' : c;
+  }
+  body = replaced(replaced(body, "SOURCE", "'" + quoted + "'"), "EXPECTED", expected);
+  size_t before = handOvers;
+  refuseCallFastPath = shape.viaCallCache;
+  debugger_evaluate(body.c_str());
+  refuseCallFastPath = false;
+  expect_hand_over(shape, before, "forced return");
+}
+
+// A getter site specialised before a deep excursion still calls through its
+// stub afterwards: a hand-over never reports a cache miss.
+void hand_over_keeps_stub() {
+  size_t before = handOvers;
+  loop_success(R"JS(
+    var proto = { get value() { return this.left-- > 0 ? this.value : 42; } };
+    function read(o) { return o.value; }
+    var make = left => Object.assign(Object.create(proto), { left });
+    for (var i = 0; i < 20; i++) read(make(2));
+    if (read(make(400)) !== 42) throw new Error('excursion');
+    var calls = pblCacheGetters();
+    for (var i = 0; i < 10; i++) read(make(2));
+    if (pblCacheGetters() - calls !== 30) throw new Error('getter stub calls ' + (pblCacheGetters() - calls));
+  )JS");
+  check(handOvers > before, "getter excursion crossed a hand-over");
+  puts("ok specialised getter site keeps its stub after a hand-over");
+}
+
+void pbl_hand_over_controls() {
+  {
+    JSAutoRealm realm(context, global->get());
+    JS::RootedObject target(context, global->get());
+    check(JS_DefineFunction(context, target, "pblHandOvers", hand_over_count, 0, 0), "hand-over count");
+    check(JS_DefineFunction(context, target, "pblCacheGetters", cache_getter_count, 0, 0), "cache getter count");
+    check(JS_DefineFunction(context, target, "failUncatchable", fail_uncatchable, 0, 0), "uncatchable error");
+  }
+  for (const HandOverShape& shape : handOverShapes) hand_over_shape(shape);
+  puts("ok hand-over success, moving GC, falsy and token throws, uncatchable error and exhaustion");
+  for (const HandOverShape& shape : handOverShapes) {
+    const char* kind = shape.kind;
+    if (!strcmp(kind, "construct") || !strcmp(kind, "derived")) continue;
+    hand_over_forced_return(shape, strcmp(kind, "setter") ? "73" : "0");
+  }
+  puts("ok Debugger forced return through each hand-over");
+  hand_over_keeps_stub();
+  uint32_t polls = 0;
+  uint64_t entries = 0, later = 0;
+  bsm_tier_counts(&polls, &entries);
+  loop_success("function shallow(n) { return n; } var sum = 0; for (var i = 0; i < 100; i++) sum += shallow(i);");
+  bsm_tier_counts(&polls, &later);
+  check(later > entries, "shallow code enters PBL after hand-overs");
+  puts("ok shallow code still enters PBL");
+}
+
+void moving_apply_gc() {
+  for (const char* source : {
+      // A temporary receiver and list: only the operands keep them alive.
+      "function f(a, b){ return this.marker + a.value + b; } if (f.apply({marker: 40}, [{value: 1}, 1]) !== 42) throw 1;",
+      // An unmapped arguments object as the list.
+      "function f(a, b){ 'use strict'; return this.marker + a.value + b; } function g(){ 'use strict'; return f.apply(this, arguments); } if (g.call({marker: 40}, {value: 1}, 1) !== 42) throw 2;",
+      // A mapped arguments object as the list.
+      "function f(a, b){ return this.marker + a.value + b; } function g(a, b){ return f.apply(this, arguments); } if (g.call({marker: 40}, {value: 1}, 1) !== 42) throw 3;"}) {
+    collectBeforeApply = 1;
+    auto before = applyCollections;
+    loop_success(source);
+    check(!collectBeforeApply && applyCollections == before + 1, "shrinking GC before apply frame publication");
+  }
+  puts("ok moving GC before apply frame publication");
+}
+
+void debugger_calls(bool pbl) {
+  size_t before = loopCalls;
+  debugger_evaluate(R"JS(
+    function assert(v, label) { if (!v) throw new Error(label + (hookFailure ? ' after hook failure ' + hookFailure : '')); }
+    var dbg = watch(new Debugger(debuggee));
+    var g = dbg.makeGlobalObjectReference(debuggee);
+    g.executeInGlobal("function target(a, b) { return [this && this.marker, a, b, arguments.length].join(); }", {url:'call-target.js'});
+    var shapes = ["target.call({marker:1}, 2, 3)", "target.call()", "target.apply({marker:1}, [2, 3])", "target.apply({marker:1}, null, 9)", "(function(){ return target.apply({marker:1}, arguments); })(2, 3)"];
+    var entered = 0, left = 0, exceptions = 0;
+    dbg.onEnterFrame = frame => {
+      if (frame.callee?.name !== 'target') return;
+      entered++;
+      frame.onPop = completion => { left++; };
+    };
+    var expected = ["1,2,3,2", ",,,0", "1,2,3,2", "1,,,0", "1,2,3,2"];
+    shapes.forEach((shape, i) => {
+      var result = g.executeInGlobal(shape, {url:'call-site.js'});
+      assert(result.return === expected[i] && entered === i + 1 && left === i + 1, 'one enter and leave for ' + shape + ': ' + JSON.stringify(result));
+    });
+    dbg.onEnterFrame = frame => {
+      if (frame.callee?.name !== 'target') return;
+      frame.onPop = completion => { left++; };
+      return {return: 73};
+    };
+    left = 0;
+    shapes.forEach(shape => {
+      var result = g.executeInGlobal(shape, {url:'call-forced.js'});
+      assert(result.return === 73, 'forced return through ' + shape);
+    });
+    assert(left === shapes.length, 'forced frames left once each');
+    dbg.onEnterFrame = undefined;
+    dbg.onExceptionUnwind = (frame, value) => {
+      if (frame.callee?.name === 'thrower') exceptions++;
+    };
+    var result = g.executeInGlobal("var token={}; function thrower(){ throw token; } var seen = 0; try { thrower.call(null); } catch (e) { seen += e === token; } try { thrower.apply(null, [1]); } catch (e) { seen += e === token; } seen;", {url:'call-throw.js'});
+    assert(result.return === 2 && exceptions === 2, 'exception hook and identity ' + JSON.stringify(result) + ' ' + exceptions);
+    dbg.onExceptionUnwind = undefined;
+    var locations = [], stacks = [];
+    dbg.onEnterFrame = frame => {
+      if (frame.callee?.name !== 'located') return;
+      var caller = frame.older;
+      var location = caller.script.getOffsetMetadata(caller.offset);
+      locations.push(JSON.stringify([location.lineNumber, location.columnNumber]));
+    };
+    var source = 'function located(){return new Error().stack;}\nfunction viaCall(){return located.call(this, 1);}\nfunction viaApply(){return located.apply(this, [1]);}\n[viaCall(), viaApply()].join("|");';
+    var locate = () => stacks.push(g.executeInGlobal(source, {url:'call-location.js'}).return);
+    locate();
+    dbg.onNativeCall = () => {};
+    locate();
+    assert(locations.length === 4 && locations[0] === locations[2] && locations[1] === locations[3], 'caller line and column ' + locations.join(' '));
+    assert(debuggeeFrames(stacks[0]) === debuggeeFrames(stacks[1]) && stacks[0].includes('viaCall@call-location.js:2:') && stacks[0].includes('viaApply@call-location.js:3:'), 'saved call stack ' + JSON.stringify(stacks));
+    dbg.onNativeCall = undefined;
+    dbg.onEnterFrame = undefined;
+    debuggee.crossTarget = function crossTarget(a) { return this.marker + a; };
+    result = g.executeInGlobal("[crossTarget.call({marker:40}, 2), crossTarget.apply({marker:40}, [2])].join();", {url:'call-realm.js'});
+    assert(result.return === '42,42', 'cross-realm targets');
+    dbg.removeAllDebuggees();
+  )JS");
+  // Five shapes, five forced, two throws and two unobserved locations.
+  check(pbl || loopCalls >= before + 14, "Debugger call cases take the loop route");
+  puts("ok call and apply Debugger hooks, forced return, exception, caller PC, saved stack and realm");
+}
+
+void native_observer_call_exclusion() {
+  size_t before = loopCalls;
+  debugger_evaluate(R"JS(
+    var dbg = watch(new Debugger(debuggee));
+    var g = dbg.makeGlobalObjectReference(debuggee);
+    var natives = 0;
+    dbg.onNativeCall = () => { natives++; };
+    var result = g.executeInGlobal('function f(a){ return a; } f.call(null, 20) + f.apply(null, [22]);');
+    if (result.return !== 42 || natives < 2) throw new Error('observed call and apply ' + JSON.stringify(result) + ' ' + natives);
+    dbg.removeAllDebuggees();
+  )JS");
+  check(loopCalls == before, "native observer excludes call and apply routes");
+  loop_success("function f(a){ return a; } if (f.call(null, 20) + f.apply(null, [22]) !== 42) throw 1;");
+  check(loopCalls == before + 2, "call and apply take the loop after native observer removed");
+  puts("ok native-call observer keeps call and apply native");
+}
+
+void async_call_stacks() {
+  auto entry = loop_stack();
+  {
+    Value saved(script("new Error()", "async-parent.js"));
+    JS::RootedObject error(context, object(saved.handle));
+    JS::RootedObject stack(context, JS::ExceptionStackOrNull(error));
+    check(stack != nullptr, "async parent saved frame");
+    JS::AutoSetAsyncStackForNewCalls async(context, stack, "call-parent", JS::AutoSetAsyncStackForNewCalls::AsyncCallKind::EXPLICIT);
+    debugger_evaluate(R"JS(
+      var dbg = watch(new Debugger(debuggee)), g = dbg.makeGlobalObjectReference(debuggee);
+      var source = 'function stackOf(){return new Error().stack;} stackOf.call(null) + stackOf.apply(null, [1]);';
+      var run = () => g.executeInGlobal(source, {url:'async-call.js'}).return;
+      var loop = run();
+      dbg.onNativeCall = () => {};
+      var generic = run();
+      if (debuggeeFrames(loop) !== debuggeeFrames(generic) || !loop.includes('call-parent')) throw new Error('async parent stack ' + JSON.stringify([loop, generic]));
+      dbg.removeAllDebuggees();
+    )JS");
+  }
+  balanced(entry, "stack balanced after async parent");
+  puts("ok async call and apply parent stack");
+}
+
+void call_balance(bool pbl) {
+  loop_success("var units=stackUnits(); var left=32; function f(){ return left-- ? f.call(this) : stackUnits(); } if (!(f() >= units)) throw 1;");
+  loop_success("var token={}; var left=32; function f(){ try { if (left--) return f.apply(this, arguments); throw token; } finally {} } try { f(1); } catch (e) { if (e !== token) throw 1; }");
+  loop_failure("function f(){ throw 0; } f.call(null);");
+  loop_failure("var token={}; function f(){ throw token; } f.apply(null, [1]);");
+  loop_success("function f(){ return f.call(this); } try { f(); throw 1; } catch (e) { if (!(e instanceof RangeError)) throw e; }");
+  loop_success("function f(){ return f.apply(this, arguments); } try { f(1); throw 1; } catch (e) { if (!(e instanceof RangeError)) throw e; }");
+  if (pbl) return;
+  // On the interpreter tier the routes hold no recursion unit.
+  loop_success("var units=stackUnits(); var left=128; function f(){ return left-- ? f.call(this) : stackUnits(); } if (f() !== units) throw 1;");
+  loop_success("var units=stackUnits(); var left=128; function f(a){ return left-- ? f.apply(this, arguments) : stackUnits(); } if (f(1) !== units) throw 1;");
+  loop_success("var units=stackUnits(); var left=128; function f(a){ return left-- ? f.apply(this, [a]) : stackUnits(); } if (f(1) !== units) throw 1;");
+  moving_apply_gc();
+  for (const char* source : {"function f(){ return 42; } f.call(null, 1);", "function f(){ return 42; } f.apply(null, [1]);", "function f(){ return 42; } f.apply(null, null);"}) {
+    failLoopCallPrologue = true;
+    loop_failure(source);
+    check(!failLoopCallPrologue && !failNextPrologue, "call route prologue failure reached");
+  }
+  native_observer_call_exclusion();
+}
+
+void loop_controls() {
+  setvbuf(stdout, nullptr, _IONBF, 0);
+  bool pbl = getenv("BUN_WASM_SPIDERMONKEY_TIER") && !strcmp(getenv("BUN_WASM_SPIDERMONKEY_TIER"), "pbl");
+  {
+    JSAutoRealm realm(context, global->get());
+    JS::RootedObject target(context, global->get());
+    check(JS_DefineFunction(context, target, "stackUnits", stack_stats, 0, 0), "stack unit accessor");
+  }
+  loop_success("var units=stackUnits(); var left=48; var o={get value(){if(left--)return this.value; return stackUnits();}}; if(!(" 
+               "o.value >= units))throw 1;");
+  loop_success("var token={}; var left=48; var o={get value(){try{if(left--)return this.value;throw token;}finally{}}};try{o.value;}catch(e){if(e!==token)throw 1;}");
+  loop_failure("var o={get value(){throw 0;}};o.value;");
+  loop_failure("var token={};var o={get value(){throw token;}};o.value;");
+  loop_success("var o={get value(){return this.value;}};try{o.value;throw 1;}catch(e){if(!(e instanceof RangeError))throw e;}");
+  if (!pbl) {
+    loop_success("var units=stackUnits();var left=128;var o={get value(){return left--?this.value:stackUnits();}};if(o.value!==units)throw 1;");
+    moving_getter_gc();
+    failGetterPrologue = true;
+    loop_failure("({get value(){return 42;}}).value;");
+    check(!failGetterPrologue && !failNextPrologue, "prologue failure reached");
+    native_observer_exclusion();
+  }
+  call_balance(pbl);
+  check(pbl || (ownedLoopCalls && loopCalls > ownedLoopCalls), "call and apply routes taken on the interpreter tier");
+  debugger_getters();
+  async_getter_stacks();
+  debugger_calls(pbl);
+  async_call_stacks();
+  if (pbl) pbl_hand_over_controls();
+  puts("ok frame and recursion-unit balance on success, throw, exhaustion and prologue failure");
+  size_t before = handOvers;
+  interruptAt = 1;
+  // The host interrupt is polled at loop back-edges and returns, so it lands in
+  // the loop under 48 live getter, call and apply frames, which termination
+  // must unwind. On PBL it lands under 300 getter frames, whose getter cache
+  // hands the chain to the C++ interpreter once the stack is deep.
+  loop_failure(pbl ? "var left=300;var o={get value(){if(left--)return this.value;for(;;){}}};o.value;"
+                   : "var left=48;function f(){if(left--){return left%3==0?f.call(this):left%3==1?f.apply(this,[1]):this.value;}for(;;){}}var o={get value(){return f.call(this);}};f.call(o);");
+  check(bsm_terminated(), "getter interruption terminates");
+  check(!pbl || handOvers > before, "PBL interruption crossed a hand-over");
+  puts("ok frame and recursion-unit balance on interruption");
+}

@@ -1,0 +1,14 @@
+
+index.test.ts:
+(pass) closeTo and not.closeTo
+(pass) any follows typeof and constructors
+(pass) anything and its inverse
+(pass) objectContaining compares enumerable symbol keys
+(pass) factories reject invalid samples
+(pass) resolvesTo and rejectsTo match settled promises
+(pass) printed forms
+
+ 7 pass
+ 0 fail
+ 67 expect() calls
+Ran 7 tests across 1 file. [TIME]

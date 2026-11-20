@@ -21,6 +21,9 @@ mod crypto;
 pub(crate) mod data;
 mod directory;
 mod encoding;
+#[cfg(all(test, feature = "engine-split"))]
+#[allow(dead_code, unused_imports)]
+mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;
 mod glob;
@@ -33,10 +36,18 @@ pub mod install;
 mod intl;
 mod modules;
 mod natives;
+mod node_digest;
 mod node_path;
 #[cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 pub(crate) mod ops;
 mod parse_env;
+#[cfg(all(test, feature = "engine-split"))]
+#[allow(dead_code)]
+#[path = "../../bunwasm-engine-quickjs/src/vm.rs"]
+mod quickjs_embedding;
+#[cfg(all(test, feature = "engine-split"))]
+#[path = "../../bunwasm-engine-quickjs/src/rejection_queue.rs"]
+mod rejection_queue;
 mod resolve;
 mod semver;
 mod sourcemap;
@@ -45,6 +56,12 @@ mod streams;
 mod tls;
 pub mod transpiler;
 mod wasm;
+// Declared here and not in `wasm.rs`: `scripts/wasm-tables.test.ts` builds `wasm.rs` into a
+// crate of its own, and that crate has no `compression` module, whose test allocator this
+// test counts with.
+#[cfg(test)]
+#[path = "wasm/lane_allocation_tests.rs"]
+mod lane_allocation_tests;
 mod x509;
 mod zlib_ffi;
 
@@ -116,6 +133,9 @@ pub(crate) struct State {
     /// Stack-position fixups for files whose evaluated code differs from the
     /// file on disk (transpiled code, injected ESM prologue).
     positions: RefCell<HashMap<String, modules::PositionMap>>,
+    /// Moves whenever `sources` or `positions` change, so a cache of formatted
+    /// stack frames knows when to empty (`sourceGeneration`).
+    source_generation: Cell<u32>,
     /// The original file most recently read for an error excerpt.
     last_original: RefCell<Option<(String, Rc<str>)>>,
     stdout: RefCell<BufWriter<io::Stdout>>,
@@ -157,6 +177,7 @@ impl State {
             #[cfg(feature = "engine-host")]
             cjs_sources: RefCell::new(HashMap::new()),
             positions: RefCell::new(HashMap::new()),
+            source_generation: Cell::new(0),
             last_original: RefCell::new(None),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
             deferred_signals: RefCell::new(host::DeferredSignals::default()),

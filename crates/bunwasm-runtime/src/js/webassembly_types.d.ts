@@ -1,6 +1,8 @@
 declare namespace BunWasm {
   type WasmType = 'v128' | 'i32' | 'i64' | 'f32' | 'f64' | 'funcref' | 'externref';
   type WasmElement = 'funcref' | 'externref';
+  type WasmNumericType = 'i32' | 'i64' | 'f32' | 'f64';
+  interface WasmGlobal { kind: 'global'; backend: 'wasmi'; store: number; id: number; type: WasmType; mutable: boolean; origin: 'constructor' | 'export' }
   type WasmReference = { kind: 'function' | 'externref'; id: number };
   type WasmValue = number | bigint | WasmReference | null;
   interface WasmFunction { backend?: "nested"; id: number; params: WasmType[]; results: WasmType[] }
@@ -22,9 +24,46 @@ declare namespace BunWasm {
     publishSharedModule(id: number): number;
     attachSharedModule(token: number): WasmModule;
     withdrawShared(token: number): number;
+    laneLedger(): number;
+    laneJoin(ledger: number, cell: number, generation: number): boolean;
+    /** These three and `laneCensus` cross the allocating bridge and may throw; a word native settles what they left. */
+    laneReserve(slot: number, generation: number, side: number, text: string): void;
+    laneDrain(slot: number, generation: number, side: number, limit: number): [frames: string[], more: boolean, terminal: boolean];
+    laneRefusal(): string;
+    laneCensus(): GroupLaneCensus | null;
+    /**
+     * Word natives from here on: numbers in, one number out, and the native bridge cannot fail
+     * the call or the return. A flag is 0 or 1; a refusable one returns -1 and `laneRefusal` says why.
+     */
+    /** `slot * 2 ** 28 + generation`, or -1. */
+    laneCreate(): number;
+    /** `index * 2 ** 28 + generation`, or -1. */
+    laneCell(): number;
+    laneTransferEpoch(slot: number, generation: number, side: number): number;
+    laneTransfer(slot: number, generation: number, side: number, kind: number, first: number, second: number, third: number): number;
+    laneAdopt(slot: number, generation: number, side: number, epoch: number, version: number): number;
+    laneCommit(slot: number, generation: number, side: number): number;
+    laneAbort(slot: number, generation: number, side: number): number;
+    /** Names a carried end under the frame staged for the sender end; the epoch it will travel at, or -1. */
+    laneStageEnd(slot: number, generation: number, side: number, carriedSlot: number, carriedGeneration: number, carriedSide: number): number;
+    /** Called by the engine's transfer native, never from JavaScript: the last check, then the commit. */
+    laneCommitCheck(slot: number, generation: number, side: number, nonceHigh: number, nonceLow: number): number;
+    laneCommitStaged(slot: number, generation: number, side: number, nonceHigh: number, nonceLow: number): number;
+    /** The last staged commit's nonce doubled, plus one when its reader was due a wake; 0 before any. */
+    laneCommitted(): number;
+    laneDrained(slot: number, generation: number, side: number): number;
+    laneCloseRead(slot: number, generation: number, side: number): number;
+    laneCloseEnd(slot: number, generation: number, side: number): number;
+    lanePeerClosed(slot: number, generation: number, side: number): number;
+    /** `version * 16 + state`. */
+    laneEnd(slot: number, generation: number, side: number): number;
+    laneSever(slot: number, generation: number, side: number): number;
+    laneExited(cell: number, generation: number): number;
+    laneSweep(full: boolean): number;
+    laneEpochs(): number;
     validate(bytes: Uint8Array): boolean;
     compile(bytes: Uint8Array): WasmModule;
-    instantiate(id: number, bindings: (number | bigint | null | WasmReference | { kind: 'callback'; id: number })[], invocation?: number): number;
+    instantiate(id: number, bindings: WasmBinding[], invocation?: number): number;
     functionIdentity(id: number, name: string): WasmFunction;
     functionInfo(id: number): WasmFunction;
     call(id: number, args: WasmValue[], invocation?: number): WasmCall;
@@ -41,7 +80,12 @@ declare namespace BunWasm {
     memorySpan(id: number): { pointer: number; length: number; generation: bigint; shared?: boolean; maximum?: number };
     growMemory(id: number, count: number): number;
     global(id: number, name: string, value?: WasmValue): WasmValue;
+    createGlobal(type: WasmNumericType, mutable: boolean, value: WasmValue): WasmGlobal;
+    globalIdentity(id: number, name: string): WasmGlobal;
+    globalValue(global: WasmGlobal, value?: WasmValue): WasmValue;
+    globalImport(global: WasmGlobal): WasmValue;
   }
+  type WasmBinding = WasmValue | WasmGlobal | { kind: 'callback'; id: number };
   interface WasmInternal {
     native: { wasm: WasmNative; wasmMemoryBuffer(resource: number, previous: ArrayBuffer | undefined): ArrayBuffer; wasmSharedMemoryBuffer(resource: number, visible?: number): SharedArrayBuffer; sharedBufferResource?(buffer: SharedArrayBuffer): number | undefined; wasmNestedExecute<T>(operation: (token: number) => T, callback: (id: number, args: WasmValue[]) => { type: WasmType; value: WasmValue }[]): T };
     isWasmMemoryBuffer?: (value: unknown) => boolean;

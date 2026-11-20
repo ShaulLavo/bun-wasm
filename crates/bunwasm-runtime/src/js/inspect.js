@@ -1421,11 +1421,15 @@
   // `forEach@[native code]`. Positions are in evaluated code; map them back.
   function parseJscFrameLine(line) {
     const m = /^(.*?)@(.*):(\d+):(\d+)$/.exec(line);
-    return m ? nativeFrame(m[1], m[2], Number(m[3]), Number(m[4])) : null;
+    if (m) return nativeFrame(m[1], m[2], Number(m[3]), Number(m[4]));
+    if (native.engine !== "jsc" && native.engine !== "host") return null;
+    const unlocated = /^(.*?)@$/.exec(line);
+    return unlocated ? nativeFrame(unlocated[1], "<eval>", 0, 0) : null;
   }
 
-  function nativeFrame(name, source, line, col) {
-    if (source.startsWith("bun-wasm:")) return null;
+  function nativeFrame(name, source, line, col, frameKind) {
+    const constructed = native.engine === "spidermonkey" && /^bun-wasm:function line \d+ > (?:Function|AsyncFunction|GeneratorFunction|AsyncGenerator)(?:$| > )/.test(source);
+    if (source.startsWith("bun-wasm:") && !constructed) return null;
     const generated = native.engine === "host" && native.preparedSourceName(source) !== undefined;
     const url = source.startsWith("bunwasm:hot:") ? source : typeof internal.displayName === "function" ? internal.displayName(source) : source;
     let [file, lineNo, column] = [url, line, col];
@@ -1434,18 +1438,30 @@
     const spiderMonkey = native.engine === "spidermonkey";
     if (!generated) column = spiderMonkey ? constructorColumn(file, lineNo, column) : calleeColumn(file, lineNo, column);
     const topLevel = (spiderMonkey && !name) || name === "global code" || name === "module code" || name === "eval code" || name === "__bunwasm_cjs__";
-    return { name: topLevel ? "" : name || "<anonymous>", file, line: lineNo, column };
+    const frame = { name: topLevel ? "" : name || "<anonymous>", file, line: lineNo, column };
+    if (frameKind === 2 && !name) frame.anonymousFunction = true;
+    return frame;
   }
 
   function parseErrorStack(error) {
     const formattedStack = safeGet(error, "stack");
-    const stack = internal.hotErrorStacks?.get(error) ?? formattedStack;
+    const stack = internal.hotErrorStacks?.get(error) ?? withoutHeader(error, formattedStack);
+    return errorFrames(error, stack);
+  }
+
+  // The frames after the error's "Name: message" header, so no message line reads as a frame.
+  function withoutHeader(error, stack) {
+    if (typeof stack !== "string" || typeof internal.stackWithoutHeader !== "function") return stack;
+    return internal.stackWithoutHeader(error, stack);
+  }
+
+  function errorFrames(error, stack) {
     if (native.engine !== "spidermonkey" || typeof savedErrorFrames !== "function") return parseStack(stack);
     let frames;
-    try { frames = savedErrorFrames(error, stack); }
+    try { frames = savedErrorFrames(error, stack, true); }
     catch { return parseStack(stack); }
     if (!Array.isArray(frames)) return parseStack(stack);
-    return frames.map(frame => nativeFrame(frame.name, frame.file, frame.line, frame.column)).filter(frame => frame !== null);
+    return frames.map(frame => nativeFrame(frame.name, frame.file, frame.line, frame.column, frame.frameKind)).filter(frame => frame !== null);
   }
 
   function parseFrameLine(line) {
@@ -1534,16 +1550,22 @@
     }
   }
 
-  function formatFrame(frame) {
+  // A parsed frame as Bun prints it after "at ".
+  function frameText(frame) {
     const file = internal.hotDisplayName?.(frame.file) ?? frame.file;
     const loc = file + ":" + frame.line + ":" + frame.column;
-    return frame.name ? "      at " + frame.name + " (" + loc + ")\n" : "      at " + loc + "\n";
+    const label = frame.name || (frame.anonymousFunction === true ? "<anonymous>" : "");
+    return label ? label + " (" + loc + ")" : loc;
+  }
+
+  function formatFrame(frame) {
+    return "      at " + frameText(frame) + "\n";
   }
 
   // VirtualMachine::print_errorlike_object, writing into the formatter.
   function printErrorLike(f, value) {
     const errors = isAggregateError(value) ? safeGet(value, "errors") : undefined;
-    if (!Array.isArray(errors)) {
+    if (!Array.isArray(errors) || !errors.some(isErrorInstance)) {
       printErrorInstance(f, value);
       return;
     }
@@ -2649,7 +2671,19 @@ function createNodeInspect(internal) {
     return `${constructor}${size} `;
   }
 
+  // Web stream instances keep their state in own fields that Bun's native classes do not
+  // have; stream_inspect.ts marks their prototypes so those fields stay out of the output.
+  const noOwnKeys = Symbol.for("bunwasm.inspect.noOwnKeys");
+  function hidesOwnKeys(value) {
+    try {
+      return value[noOwnKeys] === true && !Object.prototype.hasOwnProperty.call(value, noOwnKeys);
+    } catch {
+      return false;
+    }
+  }
+
   function getKeys(value, showHidden) {
+    if (hidesOwnKeys(value)) return [];
     const symbols = Object.getOwnPropertySymbols(value);
     if (showHidden) return Object.getOwnPropertyNames(value).concat(symbols);
     let keys;
@@ -3964,6 +3998,8 @@ function createNodeInspect(internal) {
     nodeFormat,
     nodeFormatWithOptions,
     parseStack,
+    errorFrames,
+    frameText,
     inspectCustom: INSPECT_CUSTOM,
   };
 })

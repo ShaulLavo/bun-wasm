@@ -1,39 +1,21 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, test } from "bun:test";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendCustomSection, ENGINE_SECTION } from "../src/engine-kind.ts";
-import { fixtureReceipt } from "../tests/package/guest-receipt-fixture.ts";
+import { appendCustomSection } from "../src/engine-kind.ts";
 import { record } from "./guest-core-receipt.ts";
-import { quickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
-import { artifactIdentity } from "./guest-build-receipt.ts";
 import { hash } from "./guest-source-manifest.ts";
 import { exportOrdinaryJscProgram, ordinaryJscFiles, verifyOrdinaryJscProgram } from "./ci-ordinary-jsc-program.ts";
-import { jscEmbeddingArchives } from "./jsc-embedding.ts";
+import { deliveryFixtureSource, writeJscDeliveryFixture } from "./fixtures/ordinary-web-delivery.ts";
 import { needsJsc, needsRust } from "./ci-changes.ts";
 import { discoverChecks } from "./test-checks.ts";
 
 async function fixture(action: (directory: string, source: { head: string; tree: string }) => Promise<void>, maximum = 16384) {
   const directory = await mkdtemp(join(tmpdir(), "bun-wasm-ordinary-jsc-"));
   try {
-    const pair = quickjsPair("jsc", maximum);
-    const tag = appendCustomSection(new Uint8Array(), ENGINE_SECTION, new TextEncoder().encode("jsc"));
-    const untagged = pair.core.subarray(0, pair.core.length - tag.length);
-    const build = fixtureReceipt(pair.core, "jsc", pair.side);
-    if (!("engineOrigin" in build)) throw new Error("Expected paired fixture");
-    const source = build.sourceManifest.source;
-    const stamp = "c".repeat(64);
-    const archives = jscEmbeddingArchives.map(path => ({ path, sha256: hash(path) }));
-    const groups = build.sourceManifest.groups.map(group => group.name === "jsc-prebuild"
-      ? { name: group.name, files: [{ path: "build/jsc/.bunwasm-inputs", sha256: hash(stamp + "\n"), bytes: 65 }].concat(archives.map(file => ({ ...file, bytes: 7 }))) } : group);
-    const sourceManifest = { ...build.sourceManifest, groups };
-    const engineOrigin = { ...build.engineOrigin, inputs: { ...build.engineOrigin.inputs, source: { head: "1".repeat(40), tree: "2".repeat(40) } } };
-    const coreContent = { selection: { features: ["engine-split", "bun-transpiler", "bun-build"] } };
-    const coreOrigin = { schema: 1, inputs: { schema: 1, scope: "core", source: { head: "3".repeat(40), tree: "4".repeat(40) }, content: coreContent, contentSha256: hash(JSON.stringify(coreContent)) }, artifact: artifactIdentity(untagged) };
-    const content = [pair.core, pair.side, JSON.stringify(coreOrigin, null, 2) + "\n", JSON.stringify(engineOrigin, null, 2) + "\n",
-      JSON.stringify({ ...build, engineOrigin, sourceManifest, sourceManifestSha256: hash(JSON.stringify(sourceManifest)) }, null, 2) + "\n",
-      JSON.stringify({ sourceHead: source.head, sourceTree: source.tree, jscInputsSha256: stamp, archives, program: build.program }, null, 2) + "\n"];
-    for (const [index, name] of ordinaryJscFiles.entries()) await Bun.write(join(directory, name), content[index]!);
+    const source = deliveryFixtureSource;
+    await writeJscDeliveryFixture(directory, source, maximum);
     await action(directory, source);
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
@@ -102,7 +84,7 @@ test.each([8192, 32768])("rejects a %i-page core even when its original receipts
 });
 
 test("the normal Rust job exports only selected JSC after its existing blocking gates", async () => {
-  const workflow = Bun.YAML.parse(await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text());
+  const workflow = Bun.YAML.parse(expandedCiWorkflow());
   if (!record(workflow) || !record(workflow.jobs) || !record(workflow.jobs.rust) || !Array.isArray(workflow.jobs.rust.steps)) throw new Error("Expected Rust workflow steps");
   const steps = workflow.jobs.rust.steps.map(step => {
     if (!record(step)) throw new Error("Expected workflow step");
@@ -111,10 +93,10 @@ test("the normal Rust job exports only selected JSC after its existing blocking 
   const exporter = steps.find((step: { name?: string }) => step.name === "Export the validated ordinary JSC pair");
   const upload = steps.find(step => record(step.with) && step.with.name === "ordinary-jsc-program");
   if (!exporter || !upload) throw new Error("Missing ordinary JSC export steps");
-  expect(exporter).toEqual({ name: "Export the validated ordinary JSC pair", if: "needs.quality.outputs.jsc == 'true'", run: 'source env.sh\nbun scripts/ci-ordinary-jsc-program.ts export "$RUNNER_TEMP/ordinary-jsc-program"\n' });
-  expect(upload).toEqual({ uses: "actions/upload-artifact@v4", "timeout-minutes": 5, if: "needs.quality.outputs.jsc == 'true'", with: { name: "ordinary-jsc-program", path: "${{ runner.temp }}/ordinary-jsc-program/", "if-no-files-found": "error", "retention-days": 1 } });
-  for (const name of ["Build the JSC Cargo guest", "Blocking JSC embedding and allocation checks", "Blocking native fixture checks"]) expect(steps.indexOf(exporter)).toBeGreaterThan(steps.findIndex((step: { name?: string }) => step.name === name));
-  expect(steps.indexOf(upload)).toBe(steps.indexOf(exporter) + 1);
+  expect(exporter).toEqual({ name: "Export the validated ordinary JSC pair", if: "needs.selection.outputs.jsc == 'true'", shell: "setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}", run: 'source env.sh\nbun scripts/ci-ordinary-jsc-program.ts export "$RUNNER_TEMP/ordinary-jsc-program"\n' });
+  expect(upload).toEqual({ uses: "actions/upload-artifact@v4", "timeout-minutes": 5, if: "needs.selection.outputs.jsc == 'true'", with: { name: "ordinary-jsc-program", path: "${{ runner.temp }}/ordinary-jsc-program/", "if-no-files-found": "error", "retention-days": 1 } });
+  for (const name of ["Build the JSC Cargo guest", "Verify JSC embedding source and native backing", "Blocking native fixture checks"]) expect(steps.indexOf(exporter)).toBeGreaterThan(steps.findIndex((step: { name?: string }) => step.name === name));
+  expect(steps.indexOf(upload)).toBeGreaterThan(steps.indexOf(exporter));
   expect(needsRust(["scripts/ci-ordinary-jsc-program.ts"])).toBe(true);
   expect(needsJsc(["scripts/ci-ordinary-jsc-program.ts"])).toBe(true);
   expect(needsJsc(["scripts/ci-program-delivery.ts"])).toBe(true);

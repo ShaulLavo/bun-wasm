@@ -1,0 +1,1 @@
+Checks serial preload lifecycle and the documented fail-closed import/setup error policy, which intentionally differs from native Bun continuation.

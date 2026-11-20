@@ -1,0 +1,8 @@
+
+index.test.ts:
+(pass) settled awaits > e
+(pass) settled awaits > f
+
+ 2 pass
+ 0 fail
+Ran 2 tests across 1 file. [TIME]

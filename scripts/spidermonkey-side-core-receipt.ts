@@ -68,6 +68,9 @@ export function parseInputs(value: unknown): SideCoreInputs {
 }
 
 export function captureInputs(repository: string, nativeDirectory: string): SideCoreInputs {
+  if ((process.env.SPIDERMONKEY_TRANSFER_FAULT ?? "0") !== "0" || process.env.BUN_WASM_TRANSFER_FAULT !== undefined) {
+    throw new Error("Qualified SpiderMonkey program receipts require SPIDERMONKEY_TRANSFER_FAULT=0 and no BUN_WASM_TRANSFER_FAULT");
+  }
   verifyEngineInputs(nativeDirectory);
   const receipt = readFileSync(resolve(nativeDirectory, "native-inputs.json"));
   const native: Record<string, unknown> = JSON.parse(receipt.toString("utf8"));
@@ -242,12 +245,15 @@ export function writePairReceipt(corePath: string, sidePath: string, inputs: Sid
 }
 
 export function verifyPairReceipt(corePath: string, sidePath: string, receiptPath: string, inputs: SideCoreInputs): ExperimentalReceipt {
-  const receipt = parseReceipt(JSON.parse(readFileSync(receiptPath, "utf8")));
+  return verifyPairBytes(readFileSync(corePath), readFileSync(sidePath), JSON.parse(readFileSync(receiptPath, "utf8")), inputs);
+}
+
+/** The same check over bytes already in memory, such as a served site's decompressed copies. */
+export function verifyPairBytes(core: Uint8Array, side: Uint8Array, receiptValue: unknown, inputs: SideCoreInputs): ExperimentalReceipt {
+  const receipt = parseReceipt(receiptValue);
   assert.equal(receipt.sideSourceSha256, inputs.sideSourceSha256, "SpiderMonkey side source identity mismatch");
   assert.deepEqual(receipt.source, inputs.source);
   assert.deepEqual(receipt.native, inputs.native);
-  const core = readFileSync(corePath);
-  const side = readFileSync(sidePath);
   assert.equal(hash(core), receipt.core.sha256);
   assert.equal(core.byteLength, receipt.core.bytes);
   assert.equal(hash(side), receipt.side.sha256);

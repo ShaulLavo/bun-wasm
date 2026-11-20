@@ -13,7 +13,7 @@ import type { Engine } from "../src/bun-executor";
 
 // The case families retain their names/counters; both now use the generic transport.
 export type EngineInterruptionRoute = "legacy" | "runtimeProcess";
-export type EngineSignal = 2 | 10 | 15;
+export type EngineSignal = 2 | 9 | 10 | 15;
 export type EngineSignalDelivery = "host" | "page-kill" | "page-killJob";
 export interface EngineInterruptionChild {
   pid: number;
@@ -112,7 +112,7 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
     });
     fs = new FilesystemClient(filesystem.connect(identity));
     const memory = new WebAssembly.Memory({ initial: 1 });
-    const abi = new ProcessABI({ memory, descriptors, fs, pid: client.pid, service: client, signals: client.signals, wake: client.wake });
+    const abi = new ProcessABI({ memory, descriptors, fs, pid: client.pid, processIdentity: client.processIdentity, service: client, signals: client.signals, wake: client.wake });
     return {
       service: pageService, children,
       spawn(source: string) {

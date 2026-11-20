@@ -6,7 +6,7 @@ import { finish, type Attempt, type Cell, type Phase, type PhaseResult } from ".
 import { scoped, type ScopedTransport, type Transport } from "./transport";
 import { admit, awaitWithin, Scope, type Admission } from "./scope";
 import type { PlaygroundProfile } from "../../web/src/playground/program-profile";
-import { checkClick, command, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
+import { checkClick, command, disposePlayground, edit, ready, render, start, openPreview, stopServer, terminal } from "./playground";
 import { bounded } from "./bounded";
 import { NextBuildObserver, closeNextBuildObserver, retainNextBuildObservation, type NextBuildObservation } from "./next-build-observer";
 export { bounded } from "./bounded";
@@ -28,8 +28,8 @@ export interface Execution {
 }
 type TerminalCapture = { status: "observed"; text: string } | { status: "unavailable"; reason: string };
 type LogObservation = { terminal: TerminalCapture; diagnostic: string };
-type FailureLog = LogObservation & { saved: boolean };
-type ObservationTiming = "after server stop" | "before owned transport cleanup";
+type FailureLog = LogObservation & { saved: boolean; preview: string };
+type ObservationTiming = "after server stop" | "after failed server stop" | "before owned transport cleanup";
 async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, operation: (admission: Admission) => Promise<unknown>, signal?: AbortSignal): Promise<void> {
   const startedAt = new Date().toISOString();
   const started = performance.now();
@@ -43,6 +43,9 @@ async function phase(results: PhaseResult[], name: Phase, timeoutMs: number, ope
   } finally { scope.close(new Error(`${name} phase ended`)); }
 }
 export async function execute(options: Execution, earlier: readonly Attempt[] = []): Promise<Cell> {
+  return finish(options.box, await executeAttempt(options), earlier);
+}
+export async function executeAttempt(options: Execution, stopAfter?: "click"): Promise<Attempt> {
   if (options.nextBuildObservation && (options.framework.id !== "next" || options.box.engine !== "quickjs")) throw new Error("Next build observation requires the Next QuickJS cell");
   const results: PhaseResult[] = [];
   const startedAt = new Date().toISOString();
@@ -68,7 +71,7 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
       return evidence;
     }, options.signal);
     if (!transport) throw new Error("Transport not created");
-    await lifecycle(transport, options, results);
+    await lifecycle(transport, options, results, stopAfter);
   } catch {
     if (transport) failureLog = await captureFailure(transport, options, results);
   }
@@ -80,13 +83,13 @@ export async function execute(options: Execution, earlier: readonly Attempt[] = 
       return cleanup(transport, options, results, failureLog, admission);
     }).catch(() => {});
   }
-  return finish(options.box, { startedAt, finishedAt: new Date().toISOString(), phases: results, browser: capabilities }, earlier);
+  return { startedAt, finishedAt: new Date().toISOString(), phases: results, browser: capabilities };
 }
 async function closeLateTransport(owned: Transport): Promise<never> {
   await owned.close();
   throw new Error("Transport created after startup deadline and closed");
 }
-async function lifecycle(transport: Transport, options: Execution, results: PhaseResult[]): Promise<void> {
+async function lifecycle(transport: Transport, options: Execution, results: PhaseResult[], stopAfter?: "click"): Promise<void> {
   const { framework, timeoutMs, port = 5173 } = options;
   const check = (name: Phase, operation: (page: ScopedTransport) => Promise<unknown>) => phase(results, name, timeoutMs, admission => operation(scoped(transport, admission)), options.signal);
   const installTimeoutMs = options.installTimeoutMs ?? timeoutMs;
@@ -95,6 +98,7 @@ async function lifecycle(transport: Transport, options: Execution, results: Phas
   await check("dev", async page => { previewUrl = await start(page, framework.rootPreview?.dev.replaceAll("{port}", String(port)) ?? "bun run dev", timeoutMs, port); return { url: previewUrl, port }; });
   await check("render", async page => { await openPreview(page, timeoutMs, port); return render(page, framework, framework.text, timeoutMs); });
   await check("click", page => checkClick(page, framework, timeoutMs));
+  if (stopAfter === "click") return;
   await check("hot-reload", page => edit(page, framework, timeoutMs));
   const buildTimeoutMs = options.buildTimeoutMs ?? timeoutMs;
   await phase(results, "build", buildTimeoutMs, async admission => {
@@ -117,23 +121,33 @@ async function lifecycle(transport: Transport, options: Execution, results: Phas
 
 async function captureFailure(transport: Transport, options: Execution, results: PhaseResult[]): Promise<FailureLog> {
   const scope = Scope.open(2000);
-  const capture: FailureLog = { terminal: { status: "unavailable", reason: "not completed" }, diagnostic: "", saved: false };
+  const capture: FailureLog = { terminal: { status: "unavailable", reason: "not completed" }, diagnostic: "", saved: false, preview: "" };
   try {
-    await scope.run(admission => observeFailure(transport, options, capture, admission));
+    await scope.run(async admission => {
+      capture.preview = await previewFailureLog(transport, admission);
+      await observeFailure(transport, options, capture, admission);
+    });
   } catch (error) {
     if (capture.terminal.status === "unavailable") capture.terminal = { status: "unavailable", reason: String(error) };
     if (capture.terminal.status === "observed" && !capture.diagnostic) capture.diagnostic = memoryBudgetFallback(options.box.engine, "failure");
   } finally { scope.close(); }
-  if (capture.terminal.status === "unavailable") return capture;
-  const text = capture.terminal.text;
-  const concrete = text.split("\n").find(line => /(?:Error:|error:|panic|Exception|RuntimeError|TypeError)/.test(line));
-  const failed = results.find(result => result.status === "fail");
-  if (concrete && failed?.status === "fail") failed.error += `; terminal: ${concrete.slice(0, 1000)}`;
+  if (capture.terminal.status === "unavailable" && !capture.preview) return capture;
+  if (capture.terminal.status === "observed") {
+    const concrete = capture.terminal.text.split("\n").find(line => /(?:Error:|error:|panic|Exception|RuntimeError|TypeError)/.test(line));
+    const failed = results.find(result => result.status === "fail");
+    if (concrete && failed?.status === "fail") failed.error += `; terminal: ${concrete.slice(0, 1000)}`;
+  }
   try {
     await bounded(() => options.saveLog(failureObservation(capture)), 2000);
     capture.saved = true;
   } catch { /* Final logging retains the observed terminal when a local save fails. */ }
   return capture;
+}
+
+async function previewFailureLog(transport: Transport, admission: Admission): Promise<string> {
+  if (!transport.previewFailure) return "";
+  try { return await awaitWithin(transport.previewFailure(admission), admission); }
+  catch (error) { return `\nPreview failure observation unavailable: ${String(error)}\n`; }
 }
 
 async function observeFailure(transport: Transport, options: Execution, capture: FailureLog, admission: Admission): Promise<void> {
@@ -170,18 +184,24 @@ async function cleanup(transport: Transport | undefined, options: Execution, res
   const ownedCleanup = transport.cleanup?.bind(transport);
   if (ownedCleanup) return cleanupOwned(transport, options, results, failureLog, ownedCleanup, admission);
   const errors: unknown[] = [];
-  const work = Scope.open(8000, admission);
+  const work = Scope.open(Math.max(0, admission.deadline - Date.now() - 15_000), admission);
   try {
     await work.run(async guard => {
       const page = scoped(transport, guard);
       await transport.beginCleanup?.(guard);
       await page.closePreview();
-      await stopServer(page, 5000, options.port);
-      await saveFinalLog(transport, options, results, failureLog, guard, "after server stop");
+      await stopServer(page, admit(guard), options.port);
+      await disposePlayground(page);
     });
-  } catch (error) { errors.push(error); }
-  finally { work.close(); }
-  try { await bounded(() => transport.close(true, 10_000), 10_000); }
+  } catch (error) {
+    errors.push(error);
+  }
+  const observation = Scope.open(4000, work);
+  try { await observation.run(guard => saveFinalLog(transport, options, results, failureLog, guard, errors.length ? "after failed server stop" : "after server stop")); }
+  catch { /* Optional diagnostics cannot replace a stop failure or consume the close reserve. */ }
+  finally { observation.close(); work.close(); }
+  // Teardown still dispatches after expiry; only an in-budget settlement can pass.
+  try { await awaitWithin(transport.close(true, Math.max(1, admission.deadline - Date.now())), admission); }
   catch (error) { errors.push(error); }
   if (errors.length) throw new AggregateError(errors, errors.map(String).join("; "));
   return { browserClosed: true, foregroundStopped: true, previewClosed: true };
@@ -193,10 +213,12 @@ async function cleanupOwned(transport: Transport, options: Execution, results: r
   try {
     await handoff.run(async guard => {
       await transport.beginCleanup?.(guard);
-      await saveFinalLog(transport, options, results, failureLog, guard);
     });
   } catch (error) { errors.push(error); }
-  finally { handoff.close(); }
+  const observation = Scope.open(4000, handoff);
+  try { await observation.run(guard => saveFinalLog(transport, options, results, failureLog, guard)); }
+  catch { /* Optional logging cannot determine the owned cleanup outcome. */ }
+  finally { observation.close(); handoff.close(); }
   let evidence: unknown;
   try { evidence = await awaitWithin(close(admit(admission)), admission); }
   catch (error) { errors.push(error); }
@@ -243,17 +265,17 @@ function finalLogFallback(observation: LogObservation, engine: string, results: 
   if (terminal.status === "observed") return terminal.text + (failureLog?.diagnostic || diagnostic || memoryBudgetFallback(engine, "final"));
   if (failureLog?.terminal.status === "observed") return failureLog.terminal.text + failureLog.diagnostic;
   const capture = failureLog?.terminal.status === "unavailable" ? `\nFailure capture: ${failureLog.terminal.reason}` : "";
-  return `Final terminal observation unavailable: ${String(error)}${capture}\n\n${completedTranscript(results) ?? "No completed command transcript was available."}`;
+  return `Final terminal observation unavailable: ${String(error)}${capture}\n\n${completedTranscript(results) ?? "No completed command transcript was available."}${failureLog?.preview ?? ""}`;
 }
 
 function failureObservation(capture: FailureLog | undefined): string {
   if (!capture) return "--- Failure-time terminal observation unavailable ---\n";
-  if (capture.terminal.status === "unavailable") return `--- Failure-time terminal observation unavailable ---\n${capture.terminal.reason}\n`;
-  return `--- Failure-time terminal observation ---\n${capture.terminal.text}${capture.diagnostic}\n--- End failure-time terminal observation ---\n`;
+  if (capture.terminal.status === "unavailable") return `--- Failure-time terminal observation unavailable ---\n${capture.terminal.reason}\n${capture.preview}`;
+  return `--- Failure-time terminal observation ---\n${capture.terminal.text}${capture.diagnostic}${capture.preview}\n--- End failure-time terminal observation ---\n`;
 }
 
 function finalObservation(text: string, results: readonly PhaseResult[], failureLog: FailureLog | undefined, timing: ObservationTiming): string {
-  if (!results.some(result => result.status === "fail")) return text;
+  if (timing !== "after failed server stop" && !results.some(result => result.status === "fail")) return text;
   return `${failureObservation(failureLog)}\n--- Cleanup-time terminal observation (${timing}) ---\n${text}\n--- End cleanup-time terminal observation ---\n`;
 }
 

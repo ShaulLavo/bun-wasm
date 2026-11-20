@@ -3,6 +3,7 @@
 // BUN_WASM_PROCESS_DIST=/absolute/existing/dist bun tests/browser-process.ts --artifact chromium firefox webkit
 // BUN_WASM_PROCESS_DIST=/absolute/existing/dist bun tests/browser-process.ts --benchmark chromium firefox webkit
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { createServer } from "node:net";
@@ -111,7 +112,7 @@ try {
     const page = await browser.newPage();
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    await page.goto(`http://127.0.0.1:${port}/current/${artifact ? `?artifact=1${benchmark ? "&benchmark=1" : ""}` : ""}`);
+    await navigateTestPage(page, `http://127.0.0.1:${port}/current/${artifact ? `?artifact=1${benchmark ? "&benchmark=1" : ""}` : ""}`);
     await page.waitForFunction(() => (globalThis as any).processResult, undefined, { timeout: 90_000 });
     const result = await page.evaluate(() => (globalThis as any).processResult);
     assert.equal(result.ok, true, JSON.stringify(result));
@@ -119,7 +120,7 @@ try {
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ browser: name, version: browser.version(), revision: "working-tree", ...result }));
     if (benchmark) {
-      await page.goto(`http://127.0.0.1:${port}/baseline/`);
+      await navigateTestPage(page, `http://127.0.0.1:${port}/baseline/`);
       await page.waitForFunction(() => (globalThis as any).processBaselineResult, undefined, { timeout: 90_000 });
       const baseline = await page.evaluate(() => (globalThis as any).processBaselineResult);
       assert.equal(baseline.ok, true, JSON.stringify(baseline));

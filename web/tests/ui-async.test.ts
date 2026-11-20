@@ -4,6 +4,7 @@ import { SharedFilesystem } from "waffle/browser/shared-fs";
 import { FilesystemClient, FilesystemError, FilesystemService, MemoryBackend, createFilesystemConnection } from "waffle/fs";
 import { deferred, filesystem, filesystemFixture as pageFilesystem, method, models, turn } from "./ui-model-helpers";
 import { StorageRecovery } from "../../sandbox/src/workspace-policy";
+import { PACKAGE_CONTINUATION } from "../../src/package-continuation-binding.ts";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -567,6 +568,7 @@ test("playground reports storage waiting, locks after takeover, and offers the s
   method<() => void>(playground, "terminalOpened")();
   await playground.start();
   expect(playground.ready).toBe(true);
+  expect(page.fixture.files.get(PACKAGE_CONTINUATION)).toBe("bun-wasm registered executable\n");
   expect(playground.locked).toBe(false);
   page.fixture.fs.onStateChange?.({ status: "waiting" });
   expect(playground.status.text).toContain("Waiting for this workspace");

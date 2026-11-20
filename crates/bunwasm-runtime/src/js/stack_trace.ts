@@ -43,10 +43,12 @@
     // Neither engine reports Promise.all/any combinator frames.
     isPromiseAll() { return false; },
     getPromiseIndex() { return null; },
-    toString(this: BunWasm.StackCallSite) { return internal.formatCallSite(this); },
   } satisfies ThisType<BunWasm.StackCallSite>;
 
   class CallSite {
+    declare isToplevel: typeof methods.isToplevel;
+    declare isPromiseAll: typeof methods.isPromiseAll;
+    declare getPromiseIndex: typeof methods.getPromiseIndex;
     #frame: BunWasm.StackFrame;
     constructor(frame: BunWasm.StackFrame) { this.#frame = frame; internal.mappedCallSites.add(this); }
     getFileName() { return this.#frame.file; }
@@ -54,6 +56,7 @@
     getFunction() { return undefined; }
     getLineNumber() { return this.#frame.line; }
     getColumnNumber() { return this.#frame.column; }
+    toString() { return internal.formatCallSite(this, false, this.#frame.anonymousFunction === true); }
     isNative() { return false; }
     isConstructor() { return this.#frame.name.startsWith("new "); }
     // Suspended awaiting callers are named `async <name>` by JavaScriptCore and `async*<name>`
@@ -62,11 +65,82 @@
   }
   internal.defineHidden(CallSite.prototype, methods);
 
-  function defaultStack(target: object, raw: unknown) {
-    return native.engine === "quickjs" ? Reflect.apply(defaultPrepare!, Error, [target, raw]) : raw;
+  const topLevelCode = new Set(["", "global code", "module code", "eval code", "__bunwasm_cjs__"]);
+
+  // One line of JavaScriptCore's text as QuickJS's formatter prints it: application frames
+  // mapped back to their source, the runtime's own and native frames as they are. A frame with
+  // no source (eval code, a `new Function` body) has no position: eval code prints as Bun's
+  // `eval (unknown)`. Caller-origin checks read these frames as opaque, so none is left out.
+  function jscFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
+    const runtime = /^(.*?)@(bun-wasm:.*:\d+:\d+)$/.exec(line);
+    if (runtime) return topLevelCode.has(runtime[1]!) ? runtime[2]! : `${runtime[1]} (${runtime[2]})`;
+    const nativeCode = /^(.*)@\[native code\]$/.exec(line);
+    if (nativeCode) return `${nativeCode[1] || "<anonymous>"} (native)`;
+    const unlocated = /^(.*)@$/.exec(line);
+    if (unlocated) return `${topLevelCode.has(unlocated[1]!) ? "eval" : unlocated[1]} (unknown)`;
+    const frame = inspect.parseStack(line)[0];
+    return frame ? inspect.frameText(frame) : "";
   }
 
-  function formatStack(target: object, raw: unknown) {
+  // Formatted frames by their raw text, and whole formatted stacks by theirs. Mapping a frame
+  // asks the host for its source map and source line, which dominates a stack read, and the
+  // answer changes only when a loaded source or position map does, so both caches empty when
+  // native.sourceGeneration() moves.
+  const frameTexts = new Map<string, string>();
+  const stackTexts = new Map<string, string>();
+  let frameGeneration = -1;
+
+  function remember(cache: Map<string, string>, limit: number, key: string, text: string) {
+    if (cache.size >= limit) cache.clear();
+    cache.set(key, text);
+    return text;
+  }
+
+  function cachedFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
+    return frameTexts.get(line) ?? remember(frameTexts, 4096, line, jscFrameText(inspect, line));
+  }
+
+  // The `\n    at` lines for JavaScriptCore's text. A hot run maps through changing revisions,
+  // so it formats every frame afresh.
+  function jscFrames(raw: string, hot: boolean) {
+    const inspect = internal.require("inspect");
+    let frames = "";
+    for (const line of raw.split("\n")) {
+      const text = hot ? jscFrameText(inspect, line) : cachedFrameText(inspect, line);
+      if (text) frames += `\n    at ${text}`;
+    }
+    return frames;
+  }
+
+  // JavaScriptCore's own text (`name@file:line:column` lines, no header) in Bun's form: the
+  // header, then one `    at` line per frame.
+  function jscStack(target: object, raw: string) {
+    const hot = Boolean(internal.hotRun);
+    if (hot) {
+      internal.hotErrorStacks.set(target, raw);
+      return internal.stackHeader(target) + jscFrames(raw, true);
+    }
+    const generation = native.sourceGeneration();
+    if (generation !== frameGeneration) {
+      frameTexts.clear();
+      stackTexts.clear();
+      frameGeneration = generation;
+    }
+    const frames = stackTexts.get(raw) ?? remember(stackTexts, 256, raw, jscFrames(raw, false));
+    return internal.stackHeader(target) + frames;
+  }
+
+  function defaultStack(target: object, raw: unknown) {
+    if (native.engine === "quickjs") return Reflect.apply(defaultPrepare!, Error, [target, raw]);
+    return native.engine === "jsc" && typeof raw === "string" ? jscStack(target, raw) : raw;
+  }
+
+  function capturedFrames(target: object, raw: unknown) {
+    const inspect = internal.require("inspect");
+    return native.engine === "spidermonkey" ? inspect.errorFrames(target, raw) : inspect.parseStack(raw);
+  }
+
+  function formatStack(target: object, raw: unknown, materializing = false) {
     if (formatted.has(target)) return formatted.get(target);
     if (formatting) return store(target, defaultStack(target, raw));
     formatting = true;
@@ -74,14 +148,25 @@
     try {
       const prepare = Error.prepareStackTrace;
       const custom = typeof prepare === "function" && prepare !== defaultPrepare;
+      if (!custom && materializing) return defaultStack(target, raw);
       const sites = custom && parseCapturedStack
-        ? internal.require("inspect").parseStack(raw).map(frame => new CallSite(frame))
+        ? capturedFrames(target, raw).map(frame => new CallSite(frame))
         : raw;
       value = custom ? Reflect.apply(prepare, Error, [target, sites]) : defaultStack(target, raw);
     } finally {
       formatting = false;
     }
     return store(target, value);
+  }
+
+  if (native.engine === "jsc") {
+    Object.defineProperty(globalThis, Symbol.for("bunwasm.internal.jsc.formatStack"), nullPrototypeDescriptor({
+      __proto__: null, value: (target: object, raw: unknown) => formatStack(target, raw, true),
+    }));
+  }
+
+  if (native.engine === "host" && internal.hasNativeStackTrace) {
+    internal.require("host_call_sites");
   }
 
   if (native.engine === "quickjs") {
@@ -93,7 +178,10 @@
     internal.defineHidden(prototype, methods);
     // QuickJS walks only live frames, so a suspended awaiting caller never appears: none of the
     // frames it reports is an async frame.
-    internal.defineHidden(prototype, { isAsync() { return false; } });
+    internal.defineHidden(prototype, {
+      isAsync() { return false; },
+      toString(this: BunWasm.StackCallSite) { return internal.formatCallSite(this); },
+    });
     const nativeStack = Object.getOwnPropertyDescriptor(Error.prototype, "stack");
     const nativePrepare = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
     nativePrepare!.set!.call(Error, (_error: object, sites: unknown) => sites);
@@ -109,6 +197,20 @@
       },
       set(value: unknown) { store(this, value); },
     });
+  }
+
+  if (native.engine === "spidermonkey") {
+    const nativeStack = Object.getOwnPropertyDescriptor(Error.prototype, "stack")!;
+    Object.defineProperty(Error.prototype, "stack", nullPrototypeDescriptor({
+      __proto__: null,
+      configurable: nativeStack.configurable,
+      enumerable: nativeStack.enumerable,
+      get() {
+        const raw = nativeStack.get!.call(this);
+        return raw ? formatStack(this, raw) : raw;
+      },
+      set: nativeStack.set,
+    }));
   }
 
   if (native.engine === "quickjs" || parseCapturedStack) {

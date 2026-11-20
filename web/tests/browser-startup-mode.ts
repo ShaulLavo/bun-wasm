@@ -1,5 +1,6 @@
 // Real product pages and Waffle workers. Run after building web/ and sandbox/.
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { resolve, sep } from "node:path";
 import { chromium, webkit, type Browser, type Page } from "playwright";
 import type { SharedFilesystem } from "../src/shared-fs";
@@ -26,12 +27,12 @@ const deadline = setTimeout(() => { void cleanup().finally(() => process.exit(1)
 const report: unknown[] = [];
 
 async function startup(page: Page, url: string, app: string): Promise<void> {
-  await page.goto(url);
+  await navigateTestPage(page, url);
   await page.waitForFunction(app => !!(app === "web" ? window.playground : window.sandbox), app);
 }
 
 async function checkUnsupportedMode(page: Page, root: string, app: string, selected: string): Promise<void> {
-  await page.goto(`${root}?mode=${selected}${app === "sandbox" ? "&template=vanilla" : ""}`);
+  await navigateTestPage(page, `${root}?mode=${selected}${app === "sandbox" ? "&template=vanilla" : ""}`);
   await page.waitForFunction(() => document.querySelector<HTMLElement>("#status")?.dataset.kind === "error");
   assert.match(await page.locator("#status").innerText(), /UNSUPPORTED_VFS/);
   assert.match(await page.locator("#status").innerText(), new RegExp(selected));
@@ -68,7 +69,7 @@ async function checkModes(app: string): Promise<void> {
       const response = await route.fetch();
       await route.fulfill({ response, body: 'Object.defineProperty(globalThis,"indexedDB",{value:undefined});\n' + await response.text() });
     });
-    await page.goto(`${root}${query}mode=fast`);
+    await navigateTestPage(page, `${root}${query}mode=fast`);
     await page.waitForFunction(() => document.querySelector<HTMLElement>("#status")?.textContent?.includes("UNSUPPORTED_VFS_CAPABILITY"), undefined, { timeout: 10_000 }).catch(async error => { console.error({ app, url: page.url(), status: await page.locator("#status").innerText() }); throw error; });
     report.push({ app, workerFailure: await page.locator("#status").innerText() });
   } finally { await context.close(); }

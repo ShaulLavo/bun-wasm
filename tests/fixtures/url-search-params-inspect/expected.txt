@@ -1,0 +1,16 @@
+URLSearchParams {}
+URLSearchParams { 'a' => '1' }
+URLSearchParams { 'a' => '1', 'b' => 'two words', 'a' => '3' }
+URLSearchParams {
+  'key0' => 'a fairly long value 0',
+  'key1' => 'a fairly long value 1',
+  'key2' => 'a fairly long value 2',
+  'key3' => 'a fairly long value 3',
+  'key4' => 'a fairly long value 4',
+  'key5' => 'a fairly long value 5',
+  'key6' => 'a fairly long value 6',
+  'key7' => 'a fairly long value 7' }
+{ params: URLSearchParams { 'a' => '1' } }
+{ a: { b: [Object] } }
+Params { 'x' => 'y' }
+URLSearchParams { 'q' => 'hello world' }

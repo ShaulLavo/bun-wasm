@@ -1,0 +1,59 @@
+name: Native production seed
+description: Optional compatible Cargo acceleration followed by cold standard-library dependency preparation
+inputs:
+  host-tools:
+    description: Effective pinned host tools
+    required: true
+  native-inputs:
+    description: Effective native toolchain and verified sysroot
+    required: true
+outputs:
+  cargo-hit:
+    description: Original native Cargo exact restore result
+    value: ${{ steps.native-cargo-cache.outputs.cache-hit }}
+  cargo-matched:
+    description: Original native Cargo matched key
+    value: ${{ steps.native-cargo-cache.outputs.cache-matched-key }}
+  legacy-hit:
+    description: Original legacy restore result
+    value: ${{ steps.native-cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Require empty seed destinations
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        test ! -e "$CARGO_TARGET_DIR"
+        test ! -e "$CARGO_HOME/registry"
+        test ! -e "$CARGO_HOME/git"
+    - uses: actions/cache/restore@v4
+      id: native-cargo-cache
+      with:
+        path: |
+          ${{ env.CARGO_HOME }}/registry
+          ${{ env.CARGO_HOME }}/git
+          ${{ env.CARGO_HOME }}/bin/cargo-machete
+          ${{ env.CARGO_TARGET_DIR }}
+        key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp', 'scripts/build-bun-tools.sh', 'scripts/build-bun-browser.sh', 'scripts/build-bun-core.sh', 'scripts/src/program-profile.ts', 'scripts/guest-core-receipt.ts', 'scripts/guest-source-manifest.ts', 'scripts/waffle-release-inputs.*', '.github/workflows/ci.yml', '.github/actions/native-*/action.yml', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
+        restore-keys: |
+          native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'scripts/sync-*.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
+    - uses: actions/cache/restore@v4
+      id: native-cache
+      if: steps.native-cargo-cache.outputs.cache-matched-key == ''
+      with:
+        path: |
+          ${{ env.CARGO_HOME }}/registry
+          ${{ env.CARGO_HOME }}/git
+          ${{ env.CARGO_HOME }}/bin/cargo-machete
+          ${{ env.CARGO_TARGET_DIR }}
+        key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp') }}-${{ hashFiles('scripts/build-bun-tools.sh', 'scripts/build-bun-browser.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml', '.github/actions/native-*/action.yml', 'scripts/build-wasi-sysroot.ts') }}
+        restore-keys: |
+          native-v4-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-
+    - name: Prepare pinned Rust standard-library dependencies
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        guest_environment=$(bun scripts/guest-build-receipt.ts environment)
+        eval "$guest_environment"
+        sysroot=$("$RUSTC" --print sysroot)
+        "$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1

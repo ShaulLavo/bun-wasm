@@ -16,6 +16,7 @@ use bunwasm_jsc::JsString;
 use bunwasm_jsc::sys::*;
 
 use crate::engine::{Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Val, ValueFn};
+use crate::rejection_queue::RejectionQueue;
 
 thread_local! {
     static CTX: Cell<JSContextRef> = const { Cell::new(ptr::null()) };
@@ -24,7 +25,10 @@ thread_local! {
     static HOST: RefCell<Option<Rc<dyn ModuleHost<Jsc>>>> = const { RefCell::new(None) };
     /// Module sources registered by `eval_module` (bun -e), served by fetch.
     static VIRTUAL: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
-    static REJECTIONS: RefCell<Vec<(JsVal, JsVal)>> = const { RefCell::new(Vec::new()) };
+    /// Rejected promises without a handler yet: (promise, reason), fed by helpers.cpp's tracker.
+    static REJECTIONS: RefCell<RejectionQueue<(JsVal, JsVal)>> = RefCell::new(RejectionQueue::new());
+    /// Promises that got their first handler after they left `REJECTIONS`.
+    static LATE_HANDLED: RefCell<Vec<JsVal>> = const { RefCell::new(Vec::new()) };
 }
 
 fn ctx() -> JSContextRef {
@@ -390,6 +394,54 @@ unsafe extern "C" fn dispatch(
     }
 }
 
+/// `__transferFault()` of a validation side (`transfer_fault.rs`). A callback of its own, not
+/// `dispatch`: it looks nothing up and wraps no argument, so entering it asks for no memory.
+#[cfg(bun_wasm_transfer_fault)]
+unsafe extern "C" fn transfer_fault_report(
+    ctx: JSContextRef,
+    _function: JSObjectRef,
+    _this: JSObjectRef,
+    _argc: usize,
+    _argv: *const JSValueRef,
+    _exception: *mut JSValueRef,
+) -> JSValueRef {
+    let requests = crate::transfer_fault::bunwasm_transfer_fault_leave();
+    // SAFETY: a number is an immediate value; nothing is allocated for it.
+    unsafe { JSValueMakeNumber(ctx, f64::from(requests)) }
+}
+
+/// `__transferFaultWatch()`: see [`transfer_fault_report`].
+#[cfg(bun_wasm_transfer_fault)]
+unsafe extern "C" fn transfer_fault_watch(
+    ctx: JSContextRef,
+    _function: JSObjectRef,
+    _this: JSObjectRef,
+    _argc: usize,
+    _argv: *const JSValueRef,
+    _exception: *mut JSValueRef,
+) -> JSValueRef {
+    crate::transfer_fault::bunwasm_transfer_fault_watch();
+    // SAFETY: `undefined` is an immediate value.
+    unsafe { JSValueMakeUndefined(ctx) }
+}
+
+#[cfg(bun_wasm_transfer_fault)]
+fn install_transfer_fault() {
+    let natives: [(&str, JSObjectCallAsFunctionCallback); 2] = [
+        ("__transferFault", transfer_fault_report),
+        ("__transferFaultWatch", transfer_fault_watch),
+    ];
+    for (name, callback) in natives {
+        let name = JsString::new(name);
+        // SAFETY: the context is live, and each callback has the C API callback signature.
+        unsafe {
+            let function = JSObjectMakeFunctionWithCallback(ctx(), name.raw(), callback);
+            let global = JSContextGetGlobalObject(ctx());
+            JSObjectSetProperty(ctx(), global, name.raw(), function, 0, ptr::null_mut());
+        }
+    }
+}
+
 fn with_host<R>(f: impl FnOnce(&Rc<dyn ModuleHost<Jsc>>) -> R) -> R {
     let host = HOST
         .with(|h| h.borrow().clone())
@@ -415,6 +467,22 @@ extern "C" fn bunjsc_host_uncaught(context: JSContextRef, value: JSValueRef) {
     );
     let value = JsVal::new(value);
     with_host(|host| host.uncaught(&Jsc, &value));
+}
+
+/// helpers.cpp's promise rejection tracker. A promise's identity is its cell address.
+#[unsafe(no_mangle)]
+extern "C" fn bunjsc_host_rejection(promise: JSValueRef, reason: JSValueRef, handled: bool) {
+    let key = promise as usize;
+    if !handled {
+        let entry = (JsVal::new(promise), JsVal::new(reason));
+        REJECTIONS.with(|queue| queue.borrow_mut().push(key, entry));
+        return;
+    }
+    // The removed entry drops after the borrow ends.
+    let queued = REJECTIONS.with(|queue| queue.borrow_mut().remove(key));
+    if queued.is_none() {
+        LATE_HANDLED.with(|late| late.borrow_mut().push(JsVal::new(promise)));
+    }
 }
 
 // Called at saved C-loop trap points. This only polls fatal host cancellation;
@@ -492,30 +560,14 @@ impl Engine for Jsc {
         unsafe { bunjsc_enter(c) };
         let has_interrupt_handler = host.has_interrupt_handler();
         HOST.with(|h| *h.borrow_mut() = Some(host));
-        let tracker = Jsc.new_function(
-            "unhandledRejection",
-            Rc::new(|e: &Jsc, args: &[JsVal]| {
-                let promise = args.first().cloned().unwrap_or_else(|| e.undefined());
-                let reason = args.get(1).cloned().unwrap_or_else(|| e.undefined());
-                REJECTIONS.with(|r| r.borrow_mut().push((promise, reason)));
-                Ok(e.undefined())
-            }),
-        );
-        // SAFETY: the context was created by bunjsc_create_context.
-        unsafe {
-            JSGlobalContextSetUnhandledRejectionCallback(
-                c as JSGlobalContextRef,
-                tracker.object(),
-                ptr::null_mut(),
-            )
-        };
-        std::mem::forget(tracker);
         if has_interrupt_handler {
             // SAFETY: the context and its host are fully installed; the C++
             // adapter enables polling only at saved interpreter trap points.
             unsafe { bunjsc_set_interrupt_handler(c, true) };
         }
         qualify_allocation_boundary(c);
+        #[cfg(bun_wasm_transfer_fault)]
+        install_transfer_fault();
         #[cfg(test)]
         install_regression_natives(&Jsc);
         Jsc
@@ -523,6 +575,11 @@ impl Engine for Jsc {
 
     fn name(&self) -> &'static str {
         "jsc"
+    }
+
+    fn version(&self) -> (&'static str, &'static str) {
+        // Native Bun reports its JSC as the WebKit commit it builds; build.rs reads ours.
+        ("webkit", env!("BUN_WASM_WEBKIT_COMMIT"))
     }
 
     fn undefined(&self) -> JsVal {
@@ -669,18 +726,17 @@ impl Engine for Jsc {
     }
 
     fn require_module(&self, name: &str) -> Result<JsVal, JsVal> {
-        let promise = self.import_module(name)?;
+        let name = CString::new(name).unwrap_or_default();
         let mut exc = ptr::null();
+        // SAFETY: NUL-terminated module key and the process's live JSC context.
+        let raw = unsafe { bunjsc_require(ctx(), name.as_ptr(), &mut exc) };
+        let promise = checked(exc, raw)?;
         // SAFETY: the helper holds the VM lock and checks the promise brand.
         unsafe { bunjsc_promise_mark_handled(ctx(), promise.raw(), &mut exc) };
         if !exc.is_null() {
             return Err(JsVal::new(exc));
         }
-        REJECTIONS.with(|rejections| {
-            rejections
-                .borrow_mut()
-                .retain(|(current, _)| current.raw() != promise.raw());
-        });
+        // The tracker hears about the mark and takes the promise out of the rejection queue.
         Ok(promise)
     }
 
@@ -731,8 +787,18 @@ impl Engine for Jsc {
         checked(exc, result)
     }
 
-    fn take_unhandled_rejections(&self) -> Vec<(JsVal, JsVal)> {
-        REJECTIONS.with(|r| r.borrow_mut().drain(..).collect())
+    fn next_unhandled_rejection(&self) -> Option<(JsVal, JsVal)> {
+        loop {
+            let (promise, reason) = REJECTIONS.with(|queue| queue.borrow_mut().pop())?;
+            // SAFETY: valid context and value.
+            if !unsafe { bunjsc_promise_is_handled(ctx(), promise.raw()) } {
+                return Some((promise, reason));
+            }
+        }
+    }
+
+    fn take_late_handled_rejections(&self) -> Vec<JsVal> {
+        LATE_HANDLED.with(|late| std::mem::take(&mut *late.borrow_mut()))
     }
 
     fn same_value(&self, a: &JsVal, b: &JsVal) -> bool {
@@ -758,6 +824,9 @@ impl Engine for Jsc {
     }
 
     fn detach_buffer(&self, v: &JsVal) {
+        // A validation side refuses every allocation from the first detach on.
+        #[cfg(bun_wasm_transfer_fault)]
+        crate::transfer_fault::enter();
         // SAFETY: the transfer native validated every buffer before detaching any.
         unsafe { bunjsc_detach_buffer(ctx(), v.raw()) }
     }
@@ -849,7 +918,13 @@ impl Engine for Jsc {
             .set("heapUsed", memory_counter(snapshot.heap_used))
             .set("external", memory_counter(snapshot.extra_memory))
             .set("arrayBuffers", memory_counter(snapshot.array_buffer_bytes))
+            .set("wasmCapacity", crate::engine::wasm_capacity())
             .into()
+    }
+
+    fn object_type_counts(&self) -> Option<JsVal> {
+        // SAFETY: valid context; the helper returns a new object.
+        Some(JsVal::new(unsafe { bunjsc_object_type_counts(ctx()) }))
     }
 }
 

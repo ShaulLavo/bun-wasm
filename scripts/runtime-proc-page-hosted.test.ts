@@ -72,7 +72,9 @@ class ObservedDriver extends PlaywrightDriver {
     this.roles.push(state.role);
     if (state.role === "case") return;
     expect(state).toMatchObject({ fixture: "undefined", nativeWorker: true });
-    await super.script(verify, signal);
+    // The finish page deletes the run's database after it loads, so a check here races that
+    // cleanup (seen on WebKit). stop() verifies the cleaned state once the run is complete.
+    if (state.role === "list") await super.script(verify, signal);
   }
   override async script(source: string, signal: AbortSignal): Promise<unknown> {
     if ((this.control === "late-console" || this.control === "worker-console") && !this.injected) await this.injectError(signal);

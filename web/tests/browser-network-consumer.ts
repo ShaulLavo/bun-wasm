@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -61,7 +62,7 @@ const cancelStream = async () => {
 async function verifyIsolation(context: BrowserContext, page: Page) {
   const other = await context.newPage();
   try {
-    await other.goto(`http://127.0.0.1:${port}/`);
+    await navigateTestPage(other, `http://127.0.0.1:${port}/`);
     await other.waitForFunction(() => Reflect.has(globalThis, "networkConsumer"));
     const isolated = await other.evaluate(() => Reflect.get(globalThis, "networkConsumer").isolated());
     assert.deepEqual(isolated, { port: 31972, listening: true });
@@ -91,13 +92,13 @@ async function exercise(name: string, mode: "prepare" | "publicAdapter") {
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   try {
-    await page.goto(`http://127.0.0.1:${port}/`);
+    await navigateTestPage(page, `http://127.0.0.1:${port}/`);
     await page.waitForFunction(() => Reflect.has(globalThis, "networkConsumer"));
     const result = await page.evaluate(mode => Reflect.get(globalThis, "networkConsumer")[mode](), mode);
     if (mode === "prepare") await verifyIsolation(context, page);
     const preview = await context.newPage();
     const url = `http://127.0.0.1:${port}/__preview/31972/`;
-    const response = await preview.goto(url);
+    const response = await navigateTestPage(preview, url);
     assert.ok(response, "preview navigation response");
     assert.ok(response.fromServiceWorker(), "child request goes through actual preview service worker");
     assert.equal(response.status(), 200);

@@ -4,6 +4,7 @@ import { admit, awaitWithin, type Admission } from "./scope";
 import type { EvaluationOptions, Transport } from "./scoped-transport";
 import { armNativeClick, observeNativeClick } from "./native-click";
 import { until } from "./playground";
+import { capturePreviewFailure } from "./preview-failure";
 export type { Transport, ScopedTransport } from "./scoped-transport";
 export { scoped } from "./scoped-transport";
 export async function evaluatePage<T>(page: Page, expression: string, timeoutMs: number, admission: Admission, options?: EvaluationOptions): Promise<T> {
@@ -77,11 +78,13 @@ export async function createPlaywrightTransport(kind: Extract<BrowserKind, "chro
 
 export function createPageTransport(context: Pick<BrowserContext, "newPage">, host: Page, capabilities: Record<string, unknown>, timeoutMs: number, cleanupTimeoutMs: number, close: () => Promise<void>): Transport {
   let preview: typeof host | undefined;
+  let previewCapture: ReturnType<typeof capturePreviewFailure> | undefined;
   let page = host;
   let evaluationTimeoutMs = timeoutMs;
   page.setDefaultTimeout(timeoutMs);
   return {
     capabilities,
+    async previewFailure(admission) { return previewCapture?.read(admission) ?? ""; },
     async nativeClick(button, clicked, admission) {
       admit(admission);
       return awaitWithin(clickPage(page, button, clicked, admission), admission);
@@ -102,17 +105,22 @@ export function createPageTransport(context: Pick<BrowserContext, "newPage">, ho
       admit(admission);
       return awaitWithin(closePreview(admission), admission);
     },
-    async close() { await close(); },
+    async close() { previewCapture?.release(); previewCapture = undefined; await close(); },
   };
   async function openPreview(url: string, admission: Admission): Promise<void> {
+    previewCapture?.release();
+    previewCapture = undefined;
     if (preview) await preview.close();
     admit(admission);
     preview = await context.newPage();
+    previewCapture = capturePreviewFailure(preview);
     admit(admission);
     page = preview;
     await page.goto(url, { timeout: timeoutMs, waitUntil: "domcontentloaded" });
   }
   async function closePreview(admission: Admission): Promise<void> {
+    previewCapture?.release();
+    previewCapture = undefined;
     if (preview) await preview.close();
     preview = undefined;
     admit(admission);

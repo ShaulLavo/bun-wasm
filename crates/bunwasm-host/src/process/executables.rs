@@ -2,10 +2,10 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, Once, PoisonError};
 
 use super::{ACCES, IO, NOENT, NOTDIR};
 
@@ -47,21 +47,91 @@ pub struct Executables {
     pub(super) entries: Mutex<BTreeMap<String, wasmtime::Module>>,
 }
 
+/// Roots are named `<ROOT_PREFIX><pid>-<serial>` in the temporary directory.
+const ROOT_PREFIX: &str = "bun-wasm-executables-";
+
+/// Roots this process created and has not removed. A runtime that a detached
+/// thread still references when the launcher exits is never dropped, so `main`
+/// holds [`ProcessRoots`] to remove whatever is left here.
+static LIVE_ROOTS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Removes every root this process still owns when dropped. `main` holds one
+/// for the launcher's lifetime, including its error and panic paths.
+pub struct ProcessRoots;
+
+impl Drop for ProcessRoots {
+    fn drop(&mut self) {
+        let roots = std::mem::take(&mut *LIVE_ROOTS.lock().unwrap_or_else(PoisonError::into_inner));
+        for root in roots {
+            remove_root(&root);
+        }
+    }
+}
+
+fn remove_root(root: &Path) {
+    match fs::remove_dir_all(root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => eprintln!("bun-wasm: removing {}: {error}", root.display()),
+    }
+}
+
+/// Remove roots left by launchers that died without cleanup (killed by a
+/// signal). A root whose owning process is still running, or that another user
+/// owns, stays: its pid answers `kill(pid, 0)` with anything but ESRCH.
+fn sweep_dead_roots(parent: &Path) {
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let user = unsafe { libc::geteuid() };
+    for entry in entries.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(root_owner) else {
+            continue;
+        };
+        // DirEntry metadata does not follow a symlink.
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_dir() || metadata.uid() != user || process_exists(pid) {
+            continue;
+        }
+        // Another launcher may be sweeping the same root; either removal is fine.
+        let _ = fs::remove_dir_all(entry.path());
+    }
+}
+
+fn root_owner(name: &str) -> Option<libc::pid_t> {
+    let (pid, serial) = name.strip_prefix(ROOT_PREFIX)?.split_once('-')?;
+    serial.parse::<usize>().ok()?;
+    pid.parse().ok().filter(|pid| *pid > 0)
+}
+
+fn process_exists(pid: libc::pid_t) -> bool {
+    // SAFETY: signal 0 delivers nothing; it only reports whether `pid` exists.
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
 impl Executables {
     pub fn new(module: &wasmtime::Module) -> io::Result<Self> {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
+        static SWEEP: Once = Once::new();
+        let parent = std::env::temp_dir();
+        SWEEP.call_once(|| sweep_dead_roots(&parent));
         let root = loop {
             let suffix = NEXT.fetch_add(1, Ordering::Relaxed);
-            let candidate = std::env::temp_dir().join(format!(
-                "bun-wasm-executables-{}-{suffix}",
-                std::process::id()
-            ));
+            let candidate = parent.join(format!("{ROOT_PREFIX}{}-{suffix}", std::process::id()));
             match fs::DirBuilder::new().mode(0o700).create(&candidate) {
                 Ok(()) => break candidate,
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             }
         };
+        LIVE_ROOTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(root.clone());
         let executables = Self {
             root,
             entries: Mutex::default(),
@@ -279,9 +349,11 @@ fn follow(
 
 impl Drop for Executables {
     fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(&self.root) {
-            eprintln!("bun-wasm: removing {}: {error}", self.root.display());
-        }
+        LIVE_ROOTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|root| root != &self.root);
+        remove_root(&self.root);
     }
 }
 

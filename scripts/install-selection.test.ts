@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { stableScratch } from "./stable-scratch.ts";
 
 test("native installer selection reuses Bun queries without changing the version scan", () => {
   const root = resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-install-selection-"));
+  const scratch = stableScratch("install-selection");
   try {
     const source = readFileSync(join(root, "crates/bunwasm-glue/src/bun_native.rs"), "utf8");
     const start = source.indexOf("unsafe fn bytes<");

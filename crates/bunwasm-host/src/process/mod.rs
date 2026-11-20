@@ -1,5 +1,6 @@
 mod descriptors;
 mod executables;
+mod identity;
 mod pipe;
 mod stdin;
 mod stdio;
@@ -7,6 +8,9 @@ mod stdio;
 mod tests;
 pub mod wasi;
 
+pub use executables::ProcessRoots;
+use identity::Membership;
+pub use identity::{AdmittedProcess, ProcessKind};
 pub use stdio::{Cancellation, FinalOutcome, Stdio};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -84,7 +88,8 @@ pub struct Runtime {
 
 #[derive(Default)]
 struct Supervisor {
-    next: i32,
+    next: u32,
+    root_admitted: bool,
     stopping: bool,
     processes: HashMap<i32, Child>,
     // Retained ancestry is needed after an intermediate process/job is reaped.
@@ -133,10 +138,67 @@ struct Job {
 
 struct Child {
     parent: i32,
+    membership: Membership,
     job: i32,
     cancel: Arc<Cancellation>,
     result: Option<FinalOutcome>,
     thread: Option<JoinHandle<()>>,
+}
+
+struct ChildLaunch {
+    request: Request,
+    fds: Descriptors,
+    startup: Result<executables::Resolved, i32>,
+    memory_limit: usize,
+    process_admission: AdmittedProcess,
+    memory_admission: Option<crate::linked::Admission>,
+    notify: Arc<Notify>,
+}
+
+impl ChildLaunch {
+    fn run(self) {
+        let runtime = self.process_admission.runtime();
+        let pid = self.process_admission.execution_id().get();
+        let notify = self.notify.clone();
+        let outcome = self.outcome();
+        runtime.state.lock().unwrap().complete(pid, outcome);
+        notify.bump();
+    }
+
+    fn outcome(self) -> FinalOutcome {
+        let cancel = self.process_admission.cancellation();
+        let resolved = match self.startup {
+            Ok(resolved) => resolved,
+            Err(errno) => {
+                drop(self.fds);
+                return cancel.select_start_failure(
+                    -errno,
+                    format!(
+                        "Cannot start {} in {} (WASI errno {})",
+                        self.request.executable, self.request.cwd, -errno
+                    ),
+                );
+            }
+        };
+        let mut env = self.request.env;
+        env.insert("BUNWASM_EXEC_PATH".into(), resolved.path);
+        let stdio = Stdio {
+            fds: self.fds,
+            memory_limit: self.memory_limit,
+        };
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::run_module_instance(
+                self.process_admission,
+                &resolved.module,
+                resolved.argv,
+                env.into_iter().collect(),
+                stdio,
+                self.memory_admission,
+            )
+        }))
+        .unwrap_or_else(|_| Err(std::io::Error::other("child guest panicked").into()))
+        .unwrap_or_else(|error| startup_failure(&error, &cancel, || std::io::stderr().lock()))
+    }
 }
 
 impl Runtime {
@@ -252,6 +314,8 @@ pub struct Request {
     pub env: BTreeMap<String, String>,
     pub job: f64,
     pub fds: Vec<Binding>,
+    #[serde(default, rename = "processKind")]
+    pub process_kind: ProcessKind,
     #[serde(default)]
     worker: Option<serde_json::Value>,
 }
@@ -294,6 +358,7 @@ impl Request {
 pub struct Processes {
     runtime: Arc<Runtime>,
     pub pid: i32,
+    membership: Membership,
     fds: Descriptors,
     inherited: Vec<i32>,
     next: u32,
@@ -320,24 +385,7 @@ impl Drop for Processes {
 }
 
 impl Processes {
-    pub fn new(
-        runtime: Arc<Runtime>,
-        stdio: Stdio,
-        notify: Arc<Notify>,
-        cancel: Arc<Cancellation>,
-    ) -> Self {
-        if stdio.pid == 0 {
-            runtime.state.lock().unwrap().processes.insert(
-                0,
-                Child {
-                    parent: 0,
-                    job: ROOT_JOB,
-                    cancel: cancel.clone(),
-                    result: None,
-                    thread: None,
-                },
-            );
-        }
+    pub fn new(admission: AdmittedProcess, stdio: Stdio, notify: Arc<Notify>) -> Self {
         for endpoint in stdio.fds.values() {
             endpoint.observe(&notify);
         }
@@ -351,13 +399,14 @@ impl Processes {
             .unwrap_or(0)
             .max(FIRST_HANDLE as u32);
         Self {
-            runtime,
-            pid: stdio.pid,
+            runtime: admission.runtime,
+            pid: admission.execution.get(),
+            membership: admission.membership,
             fds: stdio.fds,
             inherited,
             next,
             notify,
-            cancel,
+            cancel: admission.cancel,
             access: HashMap::new(),
             spawn_detail: String::new(),
             memory_group: None,
@@ -652,12 +701,6 @@ impl Processes {
         // Admission and thread-handle publication are one supervisor operation.
         // A very fast child can finish only after this lock is released.
         let mut state = self.runtime.state.lock().unwrap();
-        if state.processes.len() >= PROCESS_CAPACITY {
-            return Err(AGAIN);
-        }
-        if state.stopping {
-            return Err(PERM);
-        }
         if request.job > 0.0 && !state.jobs.contains_key(&(request.job as i32)) {
             return Err(SRCH);
         }
@@ -671,11 +714,12 @@ impl Processes {
         {
             return Err(CHILD);
         }
-        let Some(next) = state.next.checked_add(1) else {
-            return Err(AGAIN);
-        };
-        let pid = state.next;
-        state.next = next;
+        let kind = request.process_kind;
+        let (execution, membership) = state.admit(self.pid, kind)?;
+        let pid = execution.get();
+        let process_admission = self
+            .runtime
+            .admission(execution, membership, cancel.clone());
         // A group member's worker reserves its slot before its thread exists (W1).
         let admission = match &startup {
             Ok(resolved) => self.runtime.linked.worker_admission(
@@ -703,63 +747,20 @@ impl Processes {
             })
             .unwrap_or(stdio::DEFAULT_MEMORY_LIMIT);
         request.env.insert("PWD".into(), request.cwd.clone());
-        let (runtime, notify, cancellation) =
-            (self.runtime.clone(), self.notify.clone(), cancel.clone());
         let new_job = request.job <= 0.0;
+        let launch = ChildLaunch {
+            request,
+            fds,
+            startup,
+            memory_limit,
+            process_admission,
+            memory_admission: admission,
+            notify: self.notify.clone(),
+        };
         let thread = std::thread::Builder::new()
             .name("bun-wasm-child".into())
-            .stack_size(runtime.thread_stack)
-            .spawn(move || {
-                // All owned descriptors and the WASI context drop before publication.
-                let outcome = match startup {
-                    Err(errno) => {
-                        drop(fds);
-                        cancellation.select_start_failure(
-                            -errno,
-                            format!(
-                                "Cannot start {} in {} (WASI errno {})",
-                                request.executable, request.cwd, -errno
-                            ),
-                        )
-                    }
-                    Ok(executables::Resolved {
-                        module,
-                        path: executable,
-                        argv,
-                    }) => {
-                        let stdio = Stdio {
-                            fds,
-                            pid,
-                            memory_limit,
-                        };
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            crate::run_module_instance(
-                                runtime.clone(),
-                                &module,
-                                argv,
-                                {
-                                    let mut env = request.env;
-                                    env.insert("BUNWASM_EXEC_PATH".into(), executable);
-                                    env.into_iter().collect()
-                                },
-                                stdio,
-                                cancellation.clone(),
-                                admission,
-                            )
-                        }))
-                        .unwrap_or_else(|_| {
-                            Err(std::io::Error::other("child guest panicked").into())
-                        })
-                        .unwrap_or_else(|error| {
-                            startup_failure(&error, &cancellation, || std::io::stderr().lock())
-                        })
-                    }
-                };
-                let mut state = runtime.state.lock().unwrap();
-                state.complete(pid, outcome);
-                drop(state);
-                notify.bump();
-            });
+            .stack_size(self.runtime.thread_stack)
+            .spawn(move || launch.run());
         let thread = match thread {
             Ok(thread) => thread,
             Err(error) => {
@@ -782,6 +783,7 @@ impl Processes {
             pid,
             Child {
                 parent: self.pid,
+                membership,
                 job,
                 cancel,
                 result: None,

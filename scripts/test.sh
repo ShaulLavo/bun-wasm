@@ -16,6 +16,8 @@
 #                               TEST_SERVER=http://127.0.0.1:<port> points at
 #                               tests/servers/http.ts, which this script starts
 #   skip-browser                 optional one-line reason to skip this fixture on Browser
+#   skip-browser-native          optional one-line reason to skip it on Browser only without
+#                               --context hooks
 #   show                        optional list of files (one per line) the run creates; their
 #                               contents are appended to stdout as `--- <path>` sections
 #   manual                      optional marker: expected.txt is hand-written because native
@@ -178,14 +180,16 @@ start_test_server() {
   TEST_SERVER="http://127.0.0.1:$(head -1 "$scratch/server.port")"
   export TEST_SERVER
 }
-if [[ $build == 1 && $update == 0 && $engine != browser ]]; then
-  (cd "$root" && cargo build -j "${JOBS:-12}" --release -p bunwasm-host >"$scratch/host-build.log" 2>&1) ||
+if [[ $build == 1 && $update == 0 ]]; then
+  if [[ $engine != browser ]]; then
+    (cd "$root" && cargo build -j "${JOBS:-12}" --release -p bunwasm-host >"$scratch/host-build.log" 2>&1) ||
     { tail -30 "$scratch/host-build.log"; echo "launcher build failed"; exit 1; }
+  fi
   "$root/scripts/build-bash-web-shell.sh" >"$scratch/shell-build.log" 2>&1 ||
     { tail -30 "$scratch/shell-build.log"; echo "bash-web shell build failed"; exit 1; }
 fi
 # Package scripts, Bun.$ and bun exec run in bash-web's shell at /bin/sh and /bin/bash.
-if [[ $update == 0 && $engine != browser && ! ( -f "$shell_wasm" && -f "$env_wasm" ) ]]; then
+if [[ $update == 0 && ! ( -f "$shell_wasm" && -f "$env_wasm" ) ]]; then
   echo "missing $shell_wasm or $env_wasm; run scripts/build-bash-web-shell.sh"
   exit 1
 fi
@@ -254,6 +258,12 @@ for name in "${names[@]}"; do
   if [[ "$engine" == browser && -f "$root/tests/fixtures/$name/skip-browser" ]]; then
     IFS= read -r reason < "$root/tests/fixtures/$name/skip-browser"
     printf 'SKIP %s (browser: %s)\n' "$name" "$reason"
+    skipped=$((skipped + 1))
+    continue
+  fi
+  if [[ "$engine" == browser && "$context" == native && -f "$root/tests/fixtures/$name/skip-browser-native" ]]; then
+    IFS= read -r reason < "$root/tests/fixtures/$name/skip-browser-native"
+    printf 'SKIP %s (browser without --context hooks: %s)\n' "$name" "$reason"
     skipped=$((skipped + 1))
     continue
   fi
@@ -390,7 +400,7 @@ for name in "${names[@]}"; do
     [[ $is_host == 1 ]] && net_flag=(--net)
     gc_flags=()
     [[ ! -f "$src/expose-gc" ]] || gc_flags=(--expose-gc)
-    (cd "$work" && exec timeout --kill-after=5s 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --context "$context" --modules "$modules" "${net_flag[@]}" --dir "$work::/" \
+    (cd "$work" && exec timeout --kill-after=5s 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --shell "$shell_wasm" --env-utility "$env_wasm" --context "$context" --modules "$modules" "${net_flag[@]}" --dir "$work::/" \
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err") &
   else

@@ -1,1 +1,1 @@
-{"owner":"native","path":"tests/fixtures/web-worker"}
+{"owner":"native","path":"tests/fixtures/web-worker","engines":["quickjs","jsc","browser","spidermonkey"]}

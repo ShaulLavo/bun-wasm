@@ -15,10 +15,32 @@ use std::rc::Rc;
 
 pub use crate::data::{Args, DataFn, ErrorKind, NativeError, NativeResult, Record, Val};
 
+/// Current guest linear-memory capacity in bytes, or unknown on a native host.
+pub fn wasm_capacity() -> Val {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Val::Num(core::arch::wasm32::memory_size(0) as f64 * 65536.0)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        Val::Null
+    }
+}
+
 /// A native over engine values: gets the engine and the raw arguments;
 /// `Err` is the value to throw.
 pub type ValueFn<E> =
     Rc<dyn Fn(&E, &[<E as Engine>::Value]) -> Result<<E as Engine>::Value, <E as Engine>::Value>>;
+
+/// Convert a plain-data native at the engine value boundary.
+pub(crate) fn data_fn<E: Engine>(call: impl Fn(Vec<Val>) -> NativeResult + 'static) -> ValueFn<E> {
+    Rc::new(move |e: &E, args: &[E::Value]| {
+        let values = args.iter().map(|value| e.to_val(value)).collect();
+        call(values)
+            .map(|value| e.value_from(value))
+            .map_err(|error| e.error_value(&error))
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromiseState {
@@ -83,8 +105,11 @@ pub trait Engine: Sized + 'static {
 
     /// Create the engine. Module loading calls back into `host`.
     fn new(host: Rc<dyn ModuleHost<Self>>) -> Self;
-    /// Short engine name for `process.versions` ("quickjs", "jsc").
+    /// Short engine name the runtime's JS sees as `native.engine` ("quickjs", "jsc").
     fn name(&self) -> &'static str;
+    /// The `process.versions` entry naming this engine: key and version, such as
+    /// `("quickjs", "0.16.2")` or `("webkit", "<commit>")`, the key native Bun uses for JSC.
+    fn version(&self) -> (&'static str, &'static str);
 
     // --- values ---
     fn undefined(&self) -> Self::Value;
@@ -161,9 +186,16 @@ pub trait Engine: Sized + 'static {
         fulfilled: &Self::Value,
         rejected: &Self::Value,
     ) -> Result<Self::Value, Self::Value>;
-    /// Rejections that had no handler when the job queue drained:
-    /// (promise, reason) pairs, in order. Drains the list.
-    fn take_unhandled_rejections(&self) -> Vec<(Self::Value, Self::Value)>;
+    /// The oldest rejection that still has no handler, as (promise, reason), removed from the
+    /// engine's list. The event loop takes them one at a time, so a handler attached while an
+    /// earlier one is being reported keeps the later one from being reported.
+    fn next_unhandled_rejection(&self) -> Option<(Self::Value, Self::Value)>;
+    /// Rejected promises that got their first handler after they left the list above (taken
+    /// for reporting), since the last call. The runtime emits 'rejectionHandled' for the ones
+    /// it reported. Engines that cannot tell return none.
+    fn take_late_handled_rejections(&self) -> Vec<Self::Value> {
+        Vec::new()
+    }
     fn same_value(&self, a: &Self::Value, b: &Self::Value) -> bool;
 
     // --- introspection for console.log / util.types ---
@@ -219,4 +251,29 @@ pub trait Engine: Sized + 'static {
 
     fn gc(&self);
     fn memory_usage(&self) -> Val;
+    /// Live heap cells per type name (bun:jsc `heapStats().objectTypeCounts`), when the engine
+    /// can count them.
+    fn object_type_counts(&self) -> Option<Self::Value> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn memory_telemetry_native_capacity_is_unknown() {
+        assert_eq!(wasm_capacity(), Val::Null);
+    }
+
+    #[test]
+    #[cfg(target_arch = "wasm32")]
+    fn memory_telemetry_capacity_tracks_guest_growth() {
+        let pages = core::arch::wasm32::memory_size(0);
+        assert_eq!(wasm_capacity(), Val::Num(pages as f64 * 65536.0));
+        assert_eq!(core::arch::wasm32::memory_grow(0, 1), pages);
+        assert_eq!(wasm_capacity(), Val::Num((pages as f64 + 1.0) * 65536.0));
+    }
 }

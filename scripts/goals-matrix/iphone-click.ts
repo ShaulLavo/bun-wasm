@@ -67,3 +67,17 @@ export class IphoneClickTrace {
     this.emit({ stage, progress: this.progress, polls: this.polls, predicates: this.last });
   }
 }
+
+const finalClickStages = new Set(["deadline", "cancelled", "passed", "failed"]);
+
+/** Records a trace's rows in memory and resolves with its final row, whatever stage it ended in. */
+export function recordIphoneClickTrace(timeoutMs: number, signal: AbortSignal) {
+  const rows: Record<string, unknown>[] = [];
+  const final = Promise.withResolvers<Record<string, unknown>>();
+  const trace = new IphoneClickTrace(async text => {
+    const row = JSON.parse(text) as Record<string, unknown>;
+    rows.push(row);
+    if (finalClickStages.has(String(row.stage))) final.resolve(row);
+  }, timeoutMs, signal);
+  return { trace, rows, final: final.promise };
+}

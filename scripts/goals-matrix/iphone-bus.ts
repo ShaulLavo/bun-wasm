@@ -1,6 +1,9 @@
 import { installIphoneObserver, iphonePreviewFocus } from "./iphone-browser";
+import { IphoneResponses, type IphoneResponseObservation } from "./iphone-responses";
 
-type Page = { url: string; nonce: string; timeOrigin?: number; visible: boolean; userAgent?: string; previewFocus?: ReturnType<typeof iphonePreviewFocus> | null };
+/** The owner page always reports `committed`; controller fixtures that don't test it may omit it. */
+type FocusRecord = Omit<ReturnType<typeof iphonePreviewFocus>, "committed"> & { committed?: boolean | null };
+type Page = { url: string; nonce: string; timeOrigin?: number; visible: boolean; userAgent?: string; previewFocus?: FocusRecord | null };
 type Pending = { id: number; source: string; deadline: number; deliverByMs: number; delivered: boolean; observation: boolean; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>; deliveryTimer: ReturnType<typeof setTimeout> };
 export type IphoneSettlement = { settled: true; ok: true; value: unknown } | { settled: true; ok: false; error: string };
 type Role = "host" | "preview";
@@ -8,29 +11,39 @@ function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected iPhone observer object");
   return value as Record<string, unknown>;
 }
-function focusRecord(value: unknown): ReturnType<typeof iphonePreviewFocus> | null {
+function focusRecord(value: unknown): FocusRecord | null {
   if (value === undefined || value === null) return null;
   const row = object(value);
   if (typeof row.presented !== "boolean" || typeof row.focused !== "boolean" || (row.presentation !== null && typeof row.presentation !== "string")) throw new Error("Invalid iPhone focus record");
-  return { presented: row.presented, focused: row.focused, presentation: row.presentation };
+  if (row.committed !== undefined && row.committed !== null && typeof row.committed !== "boolean") throw new Error("Invalid iPhone focus record");
+  const record = { presented: row.presented, focused: row.focused, presentation: row.presentation };
+  return row.committed === undefined ? record : { ...record, committed: row.committed };
 }
 export class IphoneBus {
   private readonly pages = new Map<Role, Page>();
   private readonly pending = new Map<Role, Pending>();
   private readonly issued = new Set<Role>();
+  private readonly responses: IphoneResponses;
   private sequence = 0;
-  constructor(readonly path: string) {}
+  constructor(readonly path: string, observeResponse?: (row: IphoneResponseObservation) => void) {
+    this.responses = new IphoneResponses(() => {
+      const page = this.state("preview");
+      return page && { ...page, issued: this.issued.has("preview") || page.timeOrigin !== undefined };
+    }, observeResponse);
+  }
   configure(role: Role, url: string): void {
     this.cancel(role);
+    if (role === "preview") this.responses.configure();
     this.issued.delete(role);
     this.pages.set(role, { url, nonce: crypto.randomUUID(), visible: false });
   }
   state(role: Role): Page | null { return this.pages.get(role) ?? null; }
-  script(url: string, endpoint: string): string | undefined {
+  script(url: string, endpoint: string, responseNonce?: string): string | undefined {
     const entry = Array.from(this.pages).find(([, page]) => page.url === url);
     if (!entry) return;
     const [role, previous] = entry;
-    const page = (this.issued.has(role) || previous.timeOrigin !== undefined) ? this.reload(role, previous) : previous;
+    const replacing = this.issued.has(role) || previous.timeOrigin !== undefined || responseNonce !== undefined && responseNonce !== previous.nonce;
+    const page = replacing ? this.reload(role, previous, responseNonce) : previous;
     this.issued.add(role);
     const title = role === "host" ? `document.title = ${JSON.stringify("Goals " + page.nonce)};` : "";
     return title + `(${installIphoneObserver.toString()})(${JSON.stringify(endpoint + this.path + "/" + role + "/")},${JSON.stringify(page.nonce)},${iphonePreviewFocus.toString()});`;
@@ -42,12 +55,12 @@ export class IphoneBus {
     if (closing === undefined) throw new Error("iPhone observer needs closing body HTML");
     return html.slice(0, closing) + `<script>${source.replace(/<\/script/gi, "<\\/script")}</script>` + html.slice(closing);
   }
-  private reload(role: Role, previous: Page): Page {
+  private reload(role: Role, previous: Page, nonce: string = crypto.randomUUID()): Page {
     if (role !== "preview") throw new Error("Unexpected iPhone document replacement");
     const pending = this.pending.get(role);
     if (pending?.observation) { pending.delivered = false; this.expireDelivery(role, pending); }
     else this.cancel(role, new Error("iPhone preview document replaced"));
-    const page = { url: previous.url, nonce: crypto.randomUUID(), visible: false };
+    const page = { url: previous.url, nonce, visible: false };
     this.pages.set(role, page);
     return page;
   }
@@ -108,15 +121,19 @@ export class IphoneBus {
     clearTimeout(pending.timer); clearTimeout(pending.deliveryTimer); this.pending.delete(role);
     pending.reject(reason);
   }
-  close(): void { this.cancel("host"); this.cancel("preview"); this.pages.clear(); this.issued.clear(); }
+  close(): void { this.cancel("host"); this.cancel("preview"); this.pages.clear(); this.issued.clear(); this.responses.close(); }
   async handle(request: Request, productOrigin: string): Promise<Response> {
     const route = new URL(request.url).pathname.slice(this.path.length + 1);
     const headers = { "access-control-allow-origin": request.headers.get("origin") ?? "null", "access-control-allow-headers": "content-type", "access-control-allow-methods": "POST, GET", "cache-control": "no-store", "vary": "Origin" };
+    if (route.startsWith("preview/response/")) return this.responses.handle(request, productOrigin).catch(error => Response.json({ error: String(error) }, { status: 400, headers }));
     if (request.method === "OPTIONS") return new Response(null, { headers });
     if (route === "preview/script" && request.method === "GET") {
-      const url = new URL(request.url).searchParams.get("url");
+      const params = new URL(request.url).searchParams;
+      const url = params.get("url");
       if (!url || url !== this.state("preview")?.url || request.headers.get("origin") !== productOrigin) return new Response(null, { status: 204, headers });
-      const source = this.script(url, new URL(request.url).origin);
+      const id = params.get("response");
+      const nonce = id ? this.responses.scriptNonce(id, url) : undefined;
+      const source = this.script(url, new URL(request.url).origin, nonce);
       return new Response(source, { headers: { ...headers, "content-type": "text/javascript" } });
     }
     try { return Response.json(await this.route(route, request, productOrigin), { headers }); }

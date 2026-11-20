@@ -55,6 +55,7 @@
     [key: string]: unknown;
   }
   interface SpawnMeta {
+    processKind: "process" | "thread";
     executable: string;
     argv: string[];
     cwd: string;
@@ -66,6 +67,7 @@
   }
   /** A guest thread started as a process. Only worker_threads, through spawnWorker, supplies one. */
   type WorkerSpawn = object;
+  type SpawnOperation = { kind: "process" } | { kind: "thread"; worker: WorkerSpawn };
   type Input = { data: Uint8Array } | { stream: AsyncIterable<unknown> } | null;
   interface Spec { meta: SpawnMeta; options: SpawnOptions; input: Input }
   interface Started extends Spec {
@@ -139,6 +141,11 @@
       new Error((path === undefined ? `${syscall} ${code}` : `${syscall} ${path} ${code}`) + (detail ? `: ${detail}` : "")),
       { code, errno: nodeErrnos[code], syscall });
     if (path !== undefined) error.path = path;
+    // WebKit stacks contain only frames; stack-only consumers still need the refusal reason.
+    const header = `${error.name}: ${error.message}`;
+    const stack = error.stack;
+    if (!stack) error.stack = header;
+    else if (stack !== header && !stack.startsWith(`${header}\n`)) error.stack = `${header}\n${stack}`;
     return error;
   }
 
@@ -185,7 +192,7 @@
     if (Array.isArray(argv) && argv.length > 0xfffffffd) throw new TypeError("cmd array is too large");
   }
 
-  function normalize(cmd: unknown, options: SpawnOptions | undefined, sync: boolean, worker?: WorkerSpawn): Spec {
+  function normalize(cmd: unknown, options: SpawnOptions | undefined, sync: boolean, operation: SpawnOperation): Spec {
     if (!Array.isArray(cmd)) {
       options = (cmd || {}) as SpawnOptions;
       cmd = options.cmd;
@@ -208,11 +215,11 @@
     const error = Array.isArray(io) ? io[2] : options.stderr;
     const requestedCwd = options.cwd instanceof URL ? decodeURIComponent(options.cwd.pathname) : String(options.cwd || native.cwd());
     const cwd = internal.require("path").resolve(native.cwd(), requestedCwd);
-    const meta: SpawnMeta = { executable: argv[0], argv, cwd, env,
+    const meta: SpawnMeta = { executable: argv[0], argv, cwd, env, processKind: operation.kind,
       stdin: stdioMode(input, 0, "ignore"),
       stdout: stdioMode(output, 1, "pipe"),
       stderr: stdioMode(error, 2, sync ? "pipe" : "inherit") };
-    if (worker) meta.worker = worker;
+    if (operation.kind === "thread") meta.worker = operation.worker;
     return { meta, options, input: prepareInput(input, sync) };
   }
 
@@ -261,8 +268,8 @@
   // Every descriptor the call creates is released again if the spawn fails. Child ends are
   // closed here once procSpawn has taken its own references, so the child sees EOF or EPIPE
   // as soon as the last parent copy goes.
-  function start(cmd: unknown, options: SpawnOptions | undefined, sync: boolean, workerSpawn?: WorkerSpawn): Started {
-    const spec = normalize(cmd, options, sync, workerSpawn);
+  function start(cmd: unknown, options: SpawnOptions | undefined, sync: boolean, operation: SpawnOperation = { kind: "process" }): Started {
+    const spec = normalize(cmd, options, sync, operation);
     if (spec.options.signal && spec.options.signal.aborted) throw spec.options.signal.reason;
     if (spec.options.killSignal !== undefined) signalNumber(spec.options.killSignal);
     checkCwd(spec.meta);
@@ -333,6 +340,7 @@
         if (inherited <= 0) throw processError(inherited < 0 ? inherited : -28, "spawn", argv[0]);
       }
       const request: Record<string, unknown> = { executable, argv, env, cwd, job: inherited, fds: bindings };
+      request.processKind = spec.meta.processKind;
       if (spec.meta.worker) request.worker = spec.meta.worker;
       const pid = native.procSpawn(JSON.stringify(request));
       if (pid < 0) {
@@ -564,11 +572,11 @@
 
   /** Internal only: public Bun.spawn and node:child_process options cannot reach this. */
   function spawnWorker(cmd: unknown, options: SpawnOptions, worker: WorkerSpawn): Child {
-    return run(cmd, options, worker);
+    return run(cmd, options, { kind: "thread", worker });
   }
 
-  function run(cmd: unknown, options?: SpawnOptions, worker?: WorkerSpawn): Child {
-    const spec = start(cmd, options, false, worker);
+  function run(cmd: unknown, options?: SpawnOptions, operation: SpawnOperation = { kind: "process" }): Child {
+    const spec = start(cmd, options, false, operation);
     // The startup notification and onExit run in the frame current at spawn(); the exited Promise,
     // output streams and stdin callbacks keep their own frames.
     const frame = frames.capture();

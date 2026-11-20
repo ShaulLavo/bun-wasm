@@ -13,6 +13,26 @@ class GuestExit extends Error {
   constructor(readonly code: number) { super(`guest exit ${code}`); }
 }
 
+test("shared public identity keeps zero, ignored, handled and fatal self signals on the calling member", () => {
+  const current = fixture();
+  const sibling = fixture();
+  expect(current.process.pid).toBe(sibling.process.pid);
+  expect(current.process.pid).not.toBe(1);
+  expect(current.process.kill(current.process.pid, 0)).toBe(true);
+  expect(current.process.kill(current.process.pid, "SIGPIPE")).toBe(true);
+  expect(current.selected()).toBeUndefined();
+  const calls: string[] = [];
+  current.process.on("SIGUSR1", () => calls.push("current"));
+  sibling.process.on("SIGUSR1", () => calls.push("sibling"));
+  current.process.kill(current.process.pid, "SIGUSR1");
+  current.internal.pumpSignals!();
+  sibling.internal.pumpSignals!();
+  expect(calls).toEqual(["current"]);
+  expect(() => current.process.kill(current.process.pid, "SIGTERM")).toThrow(GuestExit);
+  expect(current.selected()).toEqual({ status: 143, signal: 15 });
+  expect(sibling.selected()).toBeUndefined();
+});
+
 function fixture() {
   const dispositions = new Map<number, number>();
   const pending = new Set<number>();
@@ -26,7 +46,7 @@ function fixture() {
   const internal = {
     native: {
       platformInfo: { version: "test", revision: "test", arch: "wasm32" },
-      env: () => ({}), argv: () => ["bun"], execArgv: () => [], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
+      env: () => ({}), argv: () => ["bun"], execArgv: () => [], processIdentity: () => [50, 7], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
       writeStdout(...args: unknown[]) { writes.push(args); if (writeError) throw writeError; }, writeStderr() {},
       tlsDispose() {}, closeAllDirs() {},
       exit(code: number): never { throw new GuestExit(code); },
@@ -267,7 +287,7 @@ function errorFixture() {
 
   // Execute the actual bootstrap error-policy section against the actual process/EventEmitter.
   const start = bootstrapSource.indexOf("  internal.handleUncaught =");
-  const end = bootstrapSource.indexOf("  internal.emitBeforeExit", start);
+  const end = bootstrapSource.indexOf("  internal.beforeExit = function", start);
   if (start < 0 || end < 0) throw new Error("bootstrap error section missing");
   f.context.internal = f.internal;
   runInContext(`(() => {
@@ -280,13 +300,44 @@ function errorFixture() {
   return f as typeof f & { context: typeof f.context & { printed: unknown[]; forwarded: unknown[] }; internal: typeof f.internal & {
     handleUncaught(error: unknown): boolean;
     handleRejection(error: unknown, promise: unknown): boolean;
+    emitBeforeExit(): boolean;
   }};
+}
+
+// The browser engine's native.exit throws to unwind, as GuestExit does here. A handler that
+// calls process.exit() must exit with its code, not have the unwind treated as its error.
+test("process.exit() inside an uncaughtException listener exits with its code", () => {
+  const f = errorFixture();
+  f.process.on("uncaughtException", () => f.process.exit(3));
+  expect(handled(f, "handleUncaught", new Error("first"))).toBe("exit 3");
+  expect(f.context.forwarded).toEqual([]);
+  expect(f.context.printed).toEqual([]);
+});
+
+test("process.exit() inside a beforeExit listener does not reach uncaughtException", () => {
+  const f = errorFixture();
+  const caught: unknown[] = [];
+  f.process.on("uncaughtException", (error: unknown) => caught.push(error));
+  f.process.on("beforeExit", () => f.process.exit(4));
+  expect(() => f.internal.emitBeforeExit()).toThrow("guest exit 4");
+  expect(caught).toEqual([]);
+  expect(f.context.forwarded).toEqual([]);
+});
+
+// An unclaimed uncaught error ends the guest itself, with the code the exit listeners leave.
+function handled(f: ReturnType<typeof errorFixture>, method: "handleUncaught" | "handleRejection", error: unknown) {
+  try {
+    return method === "handleRejection" ? f.internal[method](error, undefined) : f.internal[method](error);
+  } catch (exit) {
+    if (exit instanceof GuestExit) return `exit ${exit.code}`;
+    throw exit;
+  }
 }
 
 test("worker error forwarding suppresses duplicate uncaught printing", () => {
   const f = errorFixture();
   const error = new Error("worker failure");
-  expect(f.internal.handleUncaught(error)).toBe(false);
+  expect(handled(f, "handleUncaught", error)).toBe("exit 1");
   expect(f.context.forwarded).toEqual([error]);
   expect(f.context.printed).toEqual([]);
 });
@@ -314,6 +365,7 @@ function exitErrorFixture() {
   runInContext(`(() => {
     const native = internal.native;
     const printError = error => printed.push(error);
+    const dispatchUncaught = () => false;
     ${bootstrapSource.slice(start, end)}
   })()`, f.context);
   return f as typeof f & { context: typeof f.context & { printed: unknown[]; forwarded: unknown[] }; internal: typeof f.internal & { emitExit(code: number): void } };
@@ -332,7 +384,7 @@ test("worker exit-listener errors are forwarded without duplicate local printing
 for (const method of ["handleUncaught", "handleRejection"] as const) {
   test(`${method} escaping EPIPE reports the error under SIGPIPE's ignored Node default`, () => {
     const f = errorFixture();
-    expect(method === "handleRejection" ? f.internal[method](epipe(), undefined) : f.internal[method](epipe())).toBe(false);
+    expect(handled(f, method, epipe())).toBe(method === "handleUncaught" ? "exit 1" : false);
     expect(f.selected()).toBeUndefined();
     expect(f.changes).toEqual([]);
     expect(f.process.exitCode).toBe(method === "handleUncaught" ? 1 : undefined);
@@ -343,7 +395,7 @@ for (const method of ["handleUncaught", "handleRejection"] as const) {
     f.process.on("SIGPIPE", () => seen.push("SIGPIPE"));
     f.process.on("SIGINT", () => seen.push("SIGINT"));
     f.send(2);
-    expect(method === "handleRejection" ? f.internal[method](epipe(), undefined) : f.internal[method](epipe())).toBe(false);
+    expect(handled(f, method, epipe())).toBe(method === "handleUncaught" ? "exit 1" : false);
     expect(seen).toEqual([]);
     expect(f.pending.has(2)).toBe(true);
     expect(f.pending.has(13)).toBe(false);
@@ -356,7 +408,7 @@ for (const method of ["handleUncaught", "handleRejection"] as const) {
     const errors: unknown[] = [];
     f.process.on(event, (error: unknown) => errors.push(error));
     const error = epipe();
-    expect(method === "handleRejection" ? f.internal[method](error, undefined) : f.internal[method](error)).toBe(true);
+    expect(handled(f, method, error)).toBe(true);
     expect(errors).toEqual([error]);
     expect(f.changes).toEqual([]);
     expect(f.selected()).toBeUndefined();
@@ -400,7 +452,7 @@ test("unhandled stdio EPIPE reaches the ordinary uncaught-error policy after err
   let error: unknown;
   try { f.ticks(); } catch (err) { error = err; }
   expect((error as Error & { code: string }).code).toBe("EPIPE");
-  expect(f.internal.handleUncaught(error)).toBe(false);
+  expect(handled(f, "handleUncaught", error)).toBe("exit 1");
   expect(f.process.exitCode).toBe(1);
 });
 

@@ -334,6 +334,9 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 
 | import | signature |
 |---|---|
+| `runtime_proc.getpid` | `() -> execution`, the calling execution/member's runtime directory handle |
+| `runtime_proc.process_id` | `() -> pid`, the admitted logical process ID |
+| `runtime_proc.parent_process_id` | `() -> parent_pid`, the immutable logical creation-parent ID |
 | `runtime_proc.access_start` | `(path_ptr, path_len, cwd_ptr, cwd_len, mode) -> request` |
 | `runtime_proc.access_take` | `(request) -> 0` or negative WASI errno (`-6` while pending) |
 | `runtime_proc.access_cancel` | `(request) -> 0` |
@@ -352,6 +355,25 @@ imports exactly these functions, all `i32` parameters and an `i32` result, with 
 | `runtime_proc.poll` | `(subs_ptr, n, timeout_ms, out_ptr) -> n_ready` |
 | `runtime_proc.signal` | `(sig, mode) -> result`, see [Signal dispositions](#signal-dispositions) |
 | `wasi_snapshot_preview1.fd_close` | `(fd) -> errno`, the only way to close a pipe end |
+
+The logical queries are zero-argument `i32` functions over admitted immutable metadata. PID is
+positive; parent PID is nonnegative, different from PID, and zero only for a root. They do not
+access guest memory, wait, allocate, make a service call or look up a collected parent. The common
+`processIdentity` data native reads the pair once for `process.pid` and `process.ppid`; invalid
+metadata is a bridge error. Host constructors require the provider's `processIdentity` alongside
+their distinct execution handle. A missing admitted transport cannot supply a default pair.
+
+Ordinary children receive a fresh PID equal to their subprocess handle and a parent PID equal
+to the caller's logical PID. Threads and nested threads share their caller's entire pair; an
+ordinary child created inside a thread names that shared process as its parent. Parent or leader
+exit does not reparent survivors. Each admitted member stores its own pair, so collection of
+another execution does not invalidate it. Native root execution 0 explicitly reserves logical
+PID 1 in the existing allocator before children; its first child or member execution is 2.
+
+Waits, raw signals, jobs, descriptors, memory routes and worker termination keep using execution
+handles. Sharing a PID grants no additional authority. Public `process.kill(process.pid)` keeps
+its existing current-member signal binding, including inside a thread, rather than looking the
+logical PID up as an execution or signaling a whole process group. Native exec stays unsupported.
 
 `fd_kind` is a non-consuming query of the effective descriptor binding. Its kinds are 0 for
 other or unknown, 1 for a pipe, 2 for a terminal, 3 for a regular file and 4 for a directory.
@@ -373,7 +395,7 @@ bun.wasm no longer links. Results are `>= 0` or a negative WASI errno (`EAGAIN` 
 The guest never chooses descriptor numbers for itself. `spawn` takes UTF-8 JSON:
 
 ```json
-{"executable":"/bin/bun","argv":["bun","run","/app.ts"],"cwd":"/","env":{"HOME":"/"},"job":0,
+{"executable":"/bin/bun","argv":["bun","run","/app.ts"],"cwd":"/","env":{"HOME":"/"},"job":0,"processKind":"process",
  "fds":[{"child":0,"parent":7},{"child":1,"parent":8},{"child":2,"parent":2}]}
 ```
 
@@ -385,6 +407,12 @@ The guest never chooses descriptor numbers for itself. `spawn` takes UTF-8 JSON:
   The worker supplies the resolved executable as guest argv[0], making process.execPath a real
   executable path; spawn error metadata still names the caller's original command.
 - `env` replaces the child environment; the host sets `PWD` to `cwd`.
+- `processKind` is `process` or `thread`; omission selects `process`, while explicit null or
+  malformed values return `EINVAL`. Only the internal worker helper requests `thread`; public
+  spawn options cannot select membership. Opaque `worker` payload and environment fields do not
+  select identity. The provider derives and authenticates the pair at admission. Its exec request
+  rejects `processKind`; a thread or a process with another admitted member cannot exec until the
+  existing cleanup owner proves no consumer was acquired or full cleanup including native return.
 - `job` is the caller's own job, from `job_of(0)`, so job-wide signals and waits from the owner
   reach grandchildren; the guest never waits for or signals that job as a whole. If `job_of(0)`
   fails the spawn throws that error (no new-job fallback). A `detached` child instead requests

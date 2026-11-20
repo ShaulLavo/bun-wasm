@@ -23,6 +23,25 @@
     return privateNames.get(name)!;
   }
 
+  // Internal modules served by bun-wasm's own implementation, listed under "runtimeProvided"
+  // in scripts/bun-builtins.json so the generator does not bundle Bun's copy.
+  const fetchInternal = (name: string) => () => internal.require("bun_provided_internals")[name];
+  const runtimeProvided: Record<string, () => unknown> = {
+    "internal:streams/duplex": () => internal.builtin("node:stream").Duplex,
+    "internal:tls": fetchInternal("internal:tls"),
+    "internal:webstreams_adapters": fetchInternal("internal:webstreams_adapters"),
+  };
+
+  // `$cpp` binding objects whose C++ only hands back the original web classes,
+  // captured at bootstrap (a lazy global such as WebSocket is read on first use).
+  const captured = internal.bunBuiltinGlobals;
+  const webClass = (name: string) => Object.hasOwn(captured, name) ? captured[name] : (globalThis as Record<string, unknown>)[name];
+  const webClasses = (names: readonly string[]) => () => names.map(webClass);
+  const bindingHooks: Record<string, () => unknown> = {
+    createNodeFetchInternalBinding: webClasses(["Response", "Request", "Blob", "Headers", "FormData", "File"]),
+    createUndiciInternalBinding: webClasses(["Response", "Request", "Headers", "FormData", "File", "URL", "AbortSignal", "URLSearchParams", "WebSocket", "CloseEvent", "ErrorEvent", "MessageEvent"]),
+  };
+
   function requireBuiltin(id: string | number): unknown {
     if (typeof id === "string") id = names.indexOf(id);
     if (cache.has(id)) return cache.get(id);
@@ -32,6 +51,8 @@
     const source = native.bunBuiltinSource(id);
     if (source === undefined) {
       if (name === "bun" || name.startsWith("node:") || name.startsWith("bun:")) return internal.builtin(name);
+      const provided = runtimeProvided[name];
+      if (provided) return provided();
       throw unsupported(`module ${name}`);
     }
     const factory = native.evalBuiltin(source, `bun-builtin:${name}`);
@@ -83,6 +104,7 @@
     lazy(id: number) {
       const symbol = native.bunBuiltinHookName(id);
       const message = `native hook ${id} (${symbol})`;
+      if (Object.hasOwn(bindingHooks, symbol)) return bindingHooks[symbol]();
       if (!symbol.startsWith("js2native_wrap_")) throw unsupported(message);
       return function () { throw unsupported(message); };
     },

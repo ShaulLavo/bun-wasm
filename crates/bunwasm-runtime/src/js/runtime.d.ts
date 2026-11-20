@@ -14,6 +14,7 @@ declare namespace BunWasm {
   }
   interface PreparedColumns { version: number; columns: Int32Array; }
   interface Internal {
+    isProgramScriptHash?(hash: string): boolean;
     stringIsWellFormed(value: string): boolean;
     mainPath: string;
     prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;
@@ -30,6 +31,7 @@ declare namespace BunWasm {
     };
   }
   interface Native {
+    fsWatchReady(): boolean;
     readonly prepareVersion: number;
     readonly contextHooks: boolean;
     readonly preparedColumns: Map<string, PreparedColumns>;
@@ -71,12 +73,15 @@ declare namespace BunWasm {
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host" | "hermes" | "spidermonkey";
+    /** The running engine's `process.versions` entry; absent when the host reports none. */
+    readonly engineVersion?: readonly [key: string, version: string];
     /** Optional slot 18: 0/0 dequeues; modes 0/1/2 publish DEFAULT/IGNORE/HANDLE, 3 raises. */
     hostSignal(signal: number, disposition: number): number;
     globMatch(pattern: string, path: string): boolean;
     globScan(pattern: string, cwd: string, dot: boolean, absolute: boolean, followSymlinks: boolean,
       throwErrorOnBrokenSymlink: boolean, onlyFiles: boolean, followMatchedSymlinks?: boolean): string[];
     getAsyncContext(): unknown;
+    setAsyncContext(context: unknown): void;
     runMicrotasks(): void;
     exit(code?: number): never;
   }
@@ -89,12 +94,7 @@ declare namespace BunWasm {
     require(name: "node_url"): { fileURLToPath(url: string | URL): string };
     readonly native: Native;
     readonly builtinFactories: Record<string, () => object>;
-    readonly realTimers: {
-      setTimeout(callback: () => void, delay: number): unknown;
-      clearTimeout(handle: unknown): void;
-      setImmediate(callback: () => void): unknown;
-      clearImmediate(handle: unknown): void;
-    };
+    readonly realTimers: import("./immediate_queue-types").ImmediateTimers;
     require(name: "net_address"): {
       isIP(value: string): 0 | 4 | 6;
       isIPv6(value: string): boolean;
@@ -121,6 +121,7 @@ declare namespace BunWasm {
     builtin(name: "node:async_hooks"): AsyncHooks;
   }
   type EventListener = (...args: unknown[]) => void;
+  type UncaughtCapture = (error: unknown, origin: "uncaughtException" | "unhandledRejection") => void;
   interface NodeEmitter {
     on(this: object, event: string | symbol, listener: EventListener): unknown;
     once(this: object, event: string | symbol, listener: EventListener): unknown;
@@ -140,7 +141,9 @@ declare namespace BunWasm {
     require(name: "events"): { new(options?: { captureRejections?: boolean }): NodeEmitter; call(target: object): void; prototype: NodeEmitter };
     require(name: "v8"): { serialize(value: unknown): BufferBytes; deserialize(value: unknown): unknown };
     require(name: "structured_clone"): { structuredClone(value: unknown, options?: unknown): unknown };
-    messagePortRefs: number;
+    /** The ports and broadcast channels that keep the loop alive. A set, so that taking and
+     * dropping a reference are each one operation that does nothing when repeated. */
+    messagePortRefs: Set<object>;
     isMarkedAsUntransferable?: (value: unknown) => boolean;
   }
 }
@@ -207,6 +210,10 @@ declare namespace BunWasm {
     zstdCompress(data: Uint8Array, level: number): Uint8Array;
     zstdDecompress(data: Uint8Array): Uint8Array;
     crc32(data: Uint8Array, initial?: number): number;
+    /** node:crypto and Bun hashers (node_digest.rs): (canonical name, data, output length). */
+    nodeDigest(algorithm: string, data: Uint8Array, outputLength?: number): Uint8Array;
+    nodeHmac(algorithm: string, key: Uint8Array, data: Uint8Array): Uint8Array;
+    nodePbkdf2(algorithm: string, password: Uint8Array, salt: Uint8Array, iterations: number, keylen: number): Uint8Array;
     streams: {
       /** A node:zlib native handle: (mode, options JSON, dictionary). */
       codec(mode: string, options?: string, dictionary?: Uint8Array): number;
@@ -234,13 +241,15 @@ declare namespace BunWasm {
     concatBytes(chunks: readonly Uint8Array[]): Uint8Array<ArrayBuffer>;
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
+    require(name: "bun_provided_internals"): Record<string, unknown>;
     builtin(name: "node:stream"): {
+      Duplex: unknown;
       Transform: CompressionConstructor;
       Readable: new(options: { read(): void; highWaterMark?: number; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => NodeReadable;
       Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: (error?: unknown) => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
     };
   }
-  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams } }
+  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams; ReadableStream: typeof ReadableStream } }
   type HTMLHandlerKind = "element" | "comments" | "text" | "doctype" | "end" | "endTag";
   interface HTMLStepEvent { handler: number; kind: HTMLHandlerKind }
   interface HTMLStep { output: Uint8Array; event?: HTMLStepEvent }
@@ -321,7 +330,7 @@ declare namespace BunWasm {
 declare function __bunwasm_meta(meta: object, path: string): void;
 declare function __bunwasm_dynamicImport(from: string): (specifier: unknown, options?: unknown) => Promise<unknown>;
 declare namespace BunWasm {
-  interface StackFrame { file: string; name: string; line: number; column: number }
+  interface StackFrame { file: string; name: string; line: number; column: number; anonymousFunction?: boolean }
   interface InspectOptions {
     showHidden?: boolean; depth?: number | null; colors?: boolean; customInspect?: boolean;
     showProxy?: boolean; maxArrayLength?: number | null; maxStringLength?: number | null;
@@ -337,6 +346,8 @@ declare namespace BunWasm {
   interface ConsoleInspector {
     nodeInspect: InspectFunction;
     parseStack(raw: unknown): StackFrame[];
+    errorFrames(error: unknown, raw: unknown): StackFrame[];
+    frameText(frame: StackFrame): string;
   }
   interface StackCallSite {
     getFileName(): string;
@@ -362,6 +373,7 @@ declare namespace BunWasm {
     isProxy(value: unknown): boolean;
     isModuleNamespaceObject?(value: unknown): boolean | undefined;
     isError(value: unknown): boolean;
+    sourceGeneration(): number;
   }
   interface Internal {
     bunBuiltinGlobals: Record<string, unknown> & {
@@ -380,11 +392,15 @@ declare namespace BunWasm {
     pathToFileHref(path: string): string;
     require(name: "caller_origin"): () => string | null;
     mappedCallSites: WeakSet<object>;
-    formatCallSite(site: StackCallSite): string;
+    formatCallSite(site: StackCallSite, keepIdentity?: boolean, anonymousFunction?: boolean): string;
+    stackHeader(error: object): string;
+    hotErrorStacks: WeakMap<object, string>;
     require(name: "inspect"): ConsoleInspector;
+    require(name: "host_call_sites"): object;
   }
   interface ShellFs {
     readonly constants: object;
+    appendFileSync(path: string, data: string): void;
   }
 }
 
@@ -461,6 +477,23 @@ declare namespace BunWasm {
     [Symbol.asyncIterator](): AsyncGenerator<string | BufferBytes>;
   }
   interface ProcessWarningOptions { type?: unknown; code?: unknown }
+  /** What process_warning.ts reads and writes on the process object. stderr is an accessor
+   * defined after the process object is assembled. */
+  interface WarningProcess {
+    readonly pid: number;
+    argv0?: string;
+    execArgv: string[];
+    env: Record<string, unknown>;
+    readonly stderr?: { write(text: string): unknown };
+    noDeprecation?: unknown;
+    throwDeprecation?: unknown;
+    traceDeprecation?: unknown;
+    traceProcessWarnings?: unknown;
+    emitWarning?: Function;
+    on(event: string, listener: EventListener): unknown;
+    removeListener(event: string, listener: EventListener): unknown;
+    emit(event: string, value: unknown): boolean;
+  }
   interface Native {
     readonly platformInfo: { version: string; revision: string; arch: string };
     /** Starts as strings; the process Proxy permits raw Symbol values and accessor results. */
@@ -480,13 +513,31 @@ declare namespace BunWasm {
     nextTick(callback: Function, ...args: unknown[]): void;
     fakeTimers?: { elapsedNanoseconds: number; installIntl(intl: Pick<typeof Intl, "DateTimeFormat">): void };
     emitExit(code: number): void;
+    /** The uncaught exception handlers of bootstrap.js; true when one claimed the error. */
+    dispatchUncaught(error: unknown, isRejection: boolean): boolean;
+    /**
+     * Set just before the guest exits. Where native.exit unwinds with a throw (the browser
+     * engine's ExitSignal), handlers that catch errors rethrow what they catch from then on.
+     */
+    exitStarted?: boolean;
+    /** process.setUncaughtExceptionCaptureCallback's callback, while one is set. */
+    uncaughtCapture?: UncaughtCapture;
     finalizeWorkerChildren?: () => void;
     traceExit(reason: string, code: number): void;
     getMainModule(): unknown;
     listenerChanged?: (target: object, name?: string | symbol) => void;
     require(name: "process_stdin"): () => ProcessReader;
     require(name: "process_signals"): (process: NodeEmitter, names: ReadonlyMap<number, readonly string[]>) => () => boolean;
+    /** Loading it installs the default 'warning' listener on the process global. */
+    require(name: "process_warning"): {
+      configure(process: WarningProcess, argv: readonly string[]): void;
+      emitWarning(process: WarningProcess, warning: unknown, type?: unknown, code?: unknown, ctor?: unknown): void;
+    };
     pumpSignals?: () => boolean;
+    require(name: "uv_errors"): {
+      binding(): Record<string, unknown>;
+      message(name: string): string | undefined;
+    };
     /** The byte helper accepts arbitrary input and throws for unsupported shapes. */
     toUint8(value: unknown): Uint8Array;
   }

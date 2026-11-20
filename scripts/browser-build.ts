@@ -1,3 +1,4 @@
+import { storageObservationPlugin } from "./storage-fs-build";
 import { baseProgramAssets } from "./base-program-build";
 import { relative, join, resolve, isAbsolute, dirname } from "node:path";
 import { existsSync, realpathSync, readFileSync } from "node:fs";
@@ -98,7 +99,7 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
     // The pages' components use Remix's JSX. Bun 1.4.4 drops tsconfig's jsxImportSource once a
     // plugin resolves relative imports (the runtime plugin below), so the build states it too.
     jsx: { runtime: "automatic", importSource: "@remix-run/component" },
-    plugins: [baseProgramAssets(main), {
+    plugins: (process.env.BUN_WASM_STORAGE_DIAGNOSTICS === "1" ? [storageObservationPlugin(() => (runtimePackage ??= resolveRuntimePackage(main)).path)] : []).concat([baseProgramAssets(main), {
       name: "consumer-runtime-package",
       setup(build) {
         // Shared web sources still use the app's installation. Explicit package
@@ -119,7 +120,7 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
         });
         build.onEnd(result => runtimePackage && build.config.outdir ? publishNetworkAsset(result, runtimePackage, build.config.outdir) : undefined);
       },
-    }],
+    }]),
   };
 }
 
@@ -218,7 +219,8 @@ export function buildClassicWorker(entrypoint: string, outdir: string, define?: 
  * themselves, so they ship raw.
  */
 export async function buildShellAssets(consumer: string, outdir: string) {
-  const worker = await Bun.build({ entrypoints: [join(consumer, "node_modules/bash-web/src/runtime/worker.ts")], outdir, naming: "shell-worker.js", target: "browser", format: "esm", minify: true });
+  const plugins = process.env.BUN_WASM_STORAGE_DIAGNOSTICS === "1" ? browserBuildConfig([join(consumer, "src/main.ts")], outdir).plugins : undefined;
+  const worker = await Bun.build({ plugins, entrypoints: [join(consumer, "node_modules/bash-web/src/runtime/worker.ts")], outdir, naming: "shell-worker.js", target: "browser", format: "esm", minify: true });
   if (!worker.success) throw new AggregateError(worker.logs, "bash-web shell worker build failed");
   const dist = resolve(consumer, process.env.BASH_WEB_GUESTS_DIR ?? "../dist");
   const guests = verifiedGuests(dist, pinnedBashWeb(consumer));

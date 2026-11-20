@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { stableScratch } from "./stable-scratch.ts";
 
 test("installer extraction reuses parent directories and preserves archive behavior", () => {
   const root = resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-install-extraction-"));
+  const scratch = stableScratch("install-extraction");
   try {
     const source = readFileSync(join(root, "crates/bunwasm-runtime/src/install/io.rs"), "utf8");
     const start = source.indexOf("type ArchiveEntry");

@@ -10,7 +10,8 @@ import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
 test("ordinary SpiderMonkey recipes, nested runtime inputs and each reviewed fixture select Rust", () => {
   const paths = ["spidermonkey/mozconfig.in", "spidermonkey/prepare-engine-inputs.ts", "spidermonkey/unresolved-symbols.json",
     "scripts/spidermonkey-ordinary-ci.ts", "scripts/spidermonkey-ordinary-ci.test.ts", "scripts/spidermonkey-ordinary-fixtures.ts",
-    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "checks/runtime-spidermonkey-ordinary-fixtures.json",
+    "scripts/spidermonkey-side-core-receipt.ts", "scripts/spidermonkey-side-inputs.ts", "scripts/spidermonkey-engine-semantics.sh",
+    "checks/runtime-spidermonkey-ordinary-fixtures.json",
     "crates/bunwasm-runtime/src/data/codec.rs", "crates/bunwasm-runtime/src/ops/client.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs"]
     .concat(ordinaryFixtures.map(name => `tests/fixtures/${name}/expected.txt`));
   for (const path of paths) expect(needsRust([path])).toBe(true);
@@ -34,7 +35,10 @@ test.each([
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "crates/bunwasm-runtime/src/lib.rs", "vendor/bun/src/parser.rs", "patches/bun/001.patch",
   "third_party/libc/src/lib.rs", "Cargo.lock", "Cargo.toml", ".cargo/config.toml", "rust-toolchain.toml",
-  "tests/install/package-options.ts", "tests/install/registry.mjs", "tests/wasm-tables/table.wasm", "tests/fixtures/webassembly/module.wasm",
+  "tests/install/package-options.ts", "tests/install/registry.mjs", "tests/wasm-tables/table.wasm", "tests/wasm-validation/native.rs", "tests/fixtures/webassembly/module.wasm",
+  "scripts/fixtures/magic-string/original.mjs.gz", "scripts/fixtures/magic-string/candidate.mjs.gz", "scripts/fixtures/magic-string/corrected.mjs.gz",
+  "scripts/fixtures/magic-string/codec.mjs.gz", "scripts/fixtures/magic-string/identities.json", "scripts/fixtures/magic-string/magic-string.d.mts",
+  "scripts/fixtures/magic-string/LICENSE", "scripts/fixtures/magic-string/codec-LICENSE",
   "env.sh", "tests/fixtures/node-misc/main.js", "scripts/test.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts",
   "scripts/quality-wasi-probe.ts", "scripts/quality.ts", "scripts/ci-changes.ts", "package.json", "bun.lock",
   ".github/workflows/ci.yml", "scripts/build.sh", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
@@ -56,7 +60,7 @@ test("the Rust compiler cache dispatcher selects every affected producer", () =>
   expect(needsSharedNative(paths)).toBe(true);
 });
 
-test.each(["web/src/bun-executor.ts", "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js"])("QuickJS browser stack input %s selects its guest producer", path => {
+test.each(["web/src/bun-executor.ts", "web/src/engine-stack-budget.ts", "web/tests/browser-quickjs-stack.ts", "web/tests/quickjs-stack-navigation.ts", "web/tests/playground-navigation.ts", "scripts/quickjs-stack-browser.test.ts", "checks/browser-guest-quickjs-stack.json", "tests/stack-depth.js"])("QuickJS browser stack input %s selects its guest producer", path => {
   expect(needsRust([path])).toBe(true);
 });
 
@@ -181,6 +185,9 @@ beforeAll(() => {
   git(["init", "-q"]);
   mkdirSync(join(fixture, "crates"));
   writeFileSync(join(fixture, "crates/lib.rs"), "owned native input\n");
+  mkdirSync(join(fixture, "checks"));
+  writeFileSync(join(fixture, "checks/native-json-fast-iterative.json"), readFileSync(new URL("../checks/native-json-fast-iterative.json", import.meta.url), "utf8"));
+  writeFileSync(join(fixture, "checks/runtime-legacy-cli.json"), readFileSync(new URL("../checks/runtime-legacy-cli.json", import.meta.url), "utf8"));
   git(["add", "."]);
   git(["commit", "-qm", "base"]);
   base = git(["rev-parse", "HEAD"]);
@@ -197,7 +204,7 @@ beforeAll(() => {
 function selectionOutput(start: string, end: string, event = "pull_request"): string {
   return execFileSync("bun", [join(import.meta.dir, "ci-changes.ts"), start, end], {
     cwd: fixture, encoding: "utf8", env: { ...process.env, GITHUB_EVENT_NAME: event }, stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  }).trim().split("\n").slice(0, 4).join("\n");
 }
 
 function select(start: string, end: string, event = "pull_request"): string {
@@ -225,6 +232,49 @@ function commitInput(path: string, content = "changed input\n"): string {
   git(["add", "."]);
   git(["commit", "-qm", `change ${path}`]);
   return git(["rev-parse", "HEAD"]);
+}
+
+test.each([
+  ["web/src/dev-html-client.ts", false], ["scripts/generate-dev-html-client.ts", false],
+  ["scripts/ci-build-tools.ts", true], ["scripts/ci-binaryen.ts", true],
+  [".github/actions/save-rust-build-cache/action.yml", true], ["scripts/ci-sccache-cache.ts", true],
+  ["jsc/common.sh", false], ["jsc/shim/wasi-compat.c", false],
+] satisfies [string, boolean][])("immutable additions and removals of %s select every consuming native family", (path, shared) => {
+  if (!fixture) throw new Error("Fixture not initialized");
+  const before = commitInput("checks/native-shared-selection.json", JSON.stringify({ owner: "native", path: "tests/fixtures/shared-selection", profile: "shared-group" }));
+  mkdirSync(join(fixture, path, ".."), { recursive: true });
+  writeFileSync(join(fixture, path), "consumed input\n");
+  git(["add", "."]);
+  git(["commit", "-qm", `add ${path}`]);
+  const added = git(["rev-parse", "HEAD"]);
+  git(["rm", "-q", path]);
+  git(["commit", "-qm", `remove ${path}`]);
+  const removed = git(["rev-parse", "HEAD"]);
+  const expected = `rust=true\njsc=true\nshared=${shared}\nshared_native=true`;
+  for (const event of ["pull_request", "push"]) {
+    expect(selectionOutput(before, added, event)).toBe(expected);
+    expect(selectionOutput(added, removed, event)).toBe(expected);
+  }
+});
+
+test.each(["pull_request", "push"])("the exact JSC README skips native jobs through an immutable %s diff", event => {
+  const added = commitInput("jsc/README.md", "documentation\n");
+  expect(selectionOutput(base, added, event)).toBe("rust=false\njsc=false\nshared=false\nshared_native=false");
+  expect(needsSharedNative(["jsc/README.md"])).toBe(false);
+  expect(needsSharedNative(["jsc/common.sh"])).toBe(true);
+});
+
+for (const path of [
+  "scripts/jsc-json-fast-controls.test.ts", "checks/runtime-json-fast-controls.json",
+  "scripts/bench-jsc-json.ts", "scripts/fixtures/jsc-json-bench.ts",
+  "tests/fixtures/json-fast-iterative/index.ts", "tests/fixtures/json-fast-iterative/expected.txt",
+  "checks/native-json-fast-iterative.json", "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects the compiled JSON controls' JSC producer for %s`, event => {
+    const content = path.endsWith(".json")
+      ? readFileSync(new URL(`../${path}`, import.meta.url), "utf8") + "\n" : "changed input\n";
+    expect(select(base, commitInput(path, content), event)).toBe("rust=true\njsc=true");
+  });
 }
 
 for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh", ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", ".github/workflows/jsc-prebuild.yml"]) {
@@ -255,7 +305,7 @@ test("the EncodedSlice proof blocks native CI once after existing tool and vendo
   const rust = workflow.split("\n  native-quality:\n")[1]!.split("\n  rust:\n")[0]!;
   const name = "      - name: Blocking EncodedSlice address regression";
   const step = rust.split(name)[1]?.split("\n      - ")[0];
-  expect(step?.trim()).toBe("run: |\n          source env.sh\n          bun scripts/check-encoded-slice.ts");
+  expect(step?.trim()).toBe("shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}\n        run: |\n          source env.sh\n          bun scripts/check-encoded-slice.ts");
   expect(workflow.match(/bun scripts\/check-encoded-slice\.ts/g)).toHaveLength(1);
   for (const prerequisite of ["targets: wasm32-wasip1", "name: Install pinned Wasmtime", "name: Prepare pinned upstream sources"]) {
     expect(rust.indexOf(prerequisite)).toBeGreaterThan(-1);
@@ -270,7 +320,8 @@ for (const path of [
   test.each(["pull_request", "push"])(`${path} keeps the blocking lightweight CMake owner for a real %s event`, event => {
     expect(select(base, commitInput(path), event)).toBe(`rust=${needsRust([path])}\njsc=${needsJsc([path])}`);
     expect(quality).toContain("run: bun scripts/test-checks.ts cmake");
-    expect(quality).not.toMatch(/^ {4}(?:if|needs):/m);
+    expect(quality).toContain("    needs: selection");
+    expect(quality).not.toMatch(/^ {4}if:/m);
   });
 }
 
@@ -302,7 +353,7 @@ for (const path of [
   "scripts/ci-jsc-artifact.ts",
   "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
   "scripts/jsc-cloop-frame.ts", "scripts/src/wasm-code.ts",
-  "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
+  "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs", "crates/bunwasm-engine-quickjs/src/transfer.rs",
   "crates/bunwasm-engine-quickjs/src/driver.rs", "crates/bunwasm-engine-quickjs/src/client.rs", "crates/bunwasm-engine-quickjs/src/natives.rs", "crates/bunwasm-engine-quickjs/src/allocator.rs", "crates/bunwasm-engine-quickjs/src/transport.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs",
   "crates/bunwasm-engine-jsc/src/lib.rs", "scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "scripts/build-bun-core.sh", "scripts/build.sh", "scripts/quickjs-core-exports.txt",
   "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",
@@ -352,10 +403,10 @@ test("similarly named stack fixtures do not select the JSC producer", () => {
 
 test("unrelated page changes skip JSC; its selected gate builds and executes once", () => {
   expect(needsJsc(["web/src/page.ts", "docs/jsc-build.md"])).toBe(false);
-  expect(workflow).toContain("if: needs.quality.outputs.jsc == 'true'");
+  expect(workflow).toContain("if: needs.selection.outputs.jsc == 'true'");
   expect(workflow.match(/^\s+bash scripts\/build-jsc\.sh$/gm)).toHaveLength(1);
-  expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
-  expect(workflow).toContain("bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm");
+  expect(readFileSync(new URL("../.github/actions/native-production/action.yml", import.meta.url), "utf8").match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
+  expect(workflow).toContain("bun scripts/jsc-embedding.ts verify dist/bun-jsc.wasm");
 });
 
 test("the paired JSC contract selects its crate, producer and consumer inputs", () => {
@@ -447,7 +498,8 @@ for (const path of [
 
 
 test("shared engine bridge and errno adapter inputs retain their JSC and shared gates", () => {
-  for (const path of ["scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs", "crates/bunwasm-engine-quickjs/src/nested_token.rs", "crates/bunwasm-engine-quickjs/group-errno.c"]) {
+  for (const path of ["scripts/src/group-errno-wraps.sh", "crates/bunwasm-engine-quickjs/src/nested_bridge.rs", "crates/bunwasm-engine-quickjs/src/nested_token.rs", "crates/bunwasm-engine-quickjs/group-errno.c",
+    "scripts/src/transfer-fault.sh", "crates/bunwasm-engine-quickjs/src/transfer_fault.rs", "crates/bunwasm-engine-quickjs/build/transfer_fault.rs"]) {
     expect(needsJsc([path])).toBe(true);
     expect(needsRust([path])).toBe(true);
     expect(needsSharedNative([path])).toBe(true);

@@ -1018,6 +1018,11 @@ fn install_watches(
     )?;
     linker.func_wrap(
         "runtime_fs",
+        "watch_ready",
+        |caller: Caller<'_, Host>| -> i32 { i32::from(caller.data().watches.ready()) },
+    )?;
+    linker.func_wrap(
+        "runtime_fs",
         "watch_read",
         |mut caller: Caller<'_, Host>, id: i32, buf: i32, len: i32, out: i32| -> Result<i32> {
             let memory = memory(&mut caller)?;

@@ -68,3 +68,85 @@ export function assertGuestQuiescence(guests: readonly { evidence: { startEntere
     if (!stopped) throw new Error(`guest execution quiescence is unproved after failed case: ${JSON.stringify(guest.evidence)}`);
   }
 }
+
+export type InterruptionEngine = "quickjs" | "jsc" | "spidermonkey";
+export const defaultInterruptionEngines: readonly InterruptionEngine[] = ["quickjs", "jsc"];
+// SpiderMonkey is experimental and outside the coverage catalogue, so it runs only when selected
+// explicitly (--engines=quickjs,jsc,spidermonkey with a staged pair). CI's browser-guest job
+// selects it through the ordinary pair its producer bundles (selectBundledInterruptionEngines).
+const knownInterruptionEngines: readonly InterruptionEngine[] = ["quickjs", "jsc", "spidermonkey"];
+
+export function selectInterruptionEngines(value?: string): readonly InterruptionEngine[] {
+  if (value === undefined) return defaultInterruptionEngines;
+  const supplied = value.split(",");
+  const selected = knownInterruptionEngines.filter(engine => supplied.includes(engine));
+  if (!selected.length || selected.join(",") !== value) throw new Error("Select quickjs, jsc and spidermonkey interruption engines, in that order");
+  return selected;
+}
+
+/** The coverage-selected paired engines, plus SpiderMonkey when the interruption bundle carries its
+ * pair. `required` (CI) turns a missing pair into a failure instead of a silent skip. */
+export function selectBundledInterruptionEngines(selected: readonly string[], spiderMonkeyBundled: boolean, required: boolean): readonly InterruptionEngine[] {
+  if (required && !spiderMonkeyBundled) throw new Error("BUN_WASM_INTERRUPTION_SPIDERMONKEY=required, but the interruption bundle has no SpiderMonkey pair");
+  return selectInterruptionEngines(selected.concat(spiderMonkeyBundled ? ["spidermonkey"] : []).join(","));
+}
+
+const engineInputs: Record<InterruptionEngine, readonly string[]> = {
+  quickjs: ["bun.wasm", "quickjs.wasm"],
+  jsc: ["bun-jsc.wasm", "jsc-engine.wasm"],
+  spidermonkey: ["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"],
+};
+
+/** The core file each paired engine's page loads; its side is resolved from the core's declaration. */
+export function interruptionCore(engine: InterruptionEngine): string { return engineInputs[engine][0]!; }
+
+export function interruptionInputs(engines: readonly InterruptionEngine[]): string[] {
+  return ["bun-browser.wasm"].concat(engines.flatMap(engine => engineInputs[engine]));
+}
+
+/** Waffle's stop: a page SIGKILL, then Worker.terminate() on a guest spinning in JavaScript. */
+export const stopProofName = "runtimeProcess-page-SIGKILL-stops-busy-guest";
+/** The same stop while the guest spends its time in the engine's native regexp matcher. */
+export const nativeStopProofName = "runtimeProcess-page-SIGKILL-stops-guest-in-native-regexp";
+/** The same stop inside one global replace that runs millions of cheap matches. */
+export const nativeMatchesStopProofName = "runtimeProcess-page-SIGKILL-stops-guest-in-global-regexp-replace";
+/** Engines that poll for a stop inside their native regexp matcher: QuickJS's lre interrupt check,
+ * JSC's Yarr interpreter (every 16,384 backtracks or matches of one pattern) and SpiderMonkey's
+ * irregexp (every 8,192 backtracks). */
+export const nativePollingEngines: readonly InterruptionEngine[] = ["quickjs", "jsc", "spidermonkey"];
+/** Engines that also poll across the matches of one global replace or split: JSC's countdown lives
+ * on the compiled pattern and SpiderMonkey's replace loop is self-hosted JavaScript. QuickJS restarts
+ * its countdown on every match (.internal/engines/quickjs-regexp-poll-countdown.md). */
+export const nativeMatchesPollingEngines: readonly InterruptionEngine[] = ["jsc", "spidermonkey"];
+/** The native regexp stop proofs an engine runs, in the order the busy page runs them. */
+export function nativeStopProofNames(engine: string): string[] {
+  return (nativePollingEngines.some(name => name === engine) ? [nativeStopProofName] : [])
+    .concat(nativeMatchesPollingEngines.some(name => name === engine) ? [nativeMatchesStopProofName] : []);
+}
+
+export function interruptionProofs(engines: readonly InterruptionEngine[]) {
+  const paired: { engine: string; route: string; name: string }[] = engines.flatMap(engine => [
+    { engine, route: "legacy", name: "default-2-status-130" },
+    { engine, route: "legacy", name: "default-15-status-143" },
+    { engine, route: "legacy", name: "native-interrupt-true-unwinds-current-frame" },
+    { engine, route: "legacy", name: "handled-SIGINT-queued-until-yield-and-exits-23" },
+    { engine, route: "legacy", name: "nested-SIGINT-handler-default-15-status-143" },
+    { engine, route: "legacy", name: "idle-handled-SIGINT-notifies-blocked-generation-and-exits-23" },
+    { engine, route: "legacy", name: "legacy-page-kill-and-killJob-idle-handled-SIGINT-notifies-blocked-generation-and-exits-23" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-default-2-status-130" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-default-15-status-143" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-handled-SIGINT-queued-until-yield-and-exits-23" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-nested-SIGINT-handler-default-15-status-143" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-kill-and-killJob-idle-handled-SIGINT-notifies-blocked-generation-and-exits-23" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-sleepSync-SIGUSR1-deferred-handler" },
+    { engine, route: "runtimeProcess", name: "runtimeProcess-page-sleepSync-default-SIGUSR1-unwinds" },
+    { engine, route: "runtimeProcess", name: stopProofName },
+  ].concat(nativeStopProofNames(engine).map(name => ({ engine, route: "runtimeProcess", name }))));
+  return paired.concat([
+    { engine: "browser", route: "legacy", name: "default-2-status-130" },
+    { engine: "browser", route: "legacy", name: "default-15-status-143" },
+    { engine: "browser", route: "runtimeProcess", name: stopProofName },
+    { engine: "browser", route: "legacy", name: "legacy-preview1-root-clock-EINTR-dequeue-and-nonsticky-wait" },
+    { engine: "browser", route: "legacy", name: "legacy-preview1-child-clock-EINTR-dequeue-and-nonsticky-wait" },
+  ]);
+}

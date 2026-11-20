@@ -22,7 +22,22 @@ It neither reads a public stack getter again nor changes the error, rejection,
 stack text or prototype. The capability stays in SpiderMonkey initialization;
 no shared Engine ABI, other engine adapter or public Waffle interface changes.
 
+Exception formatting requests the reader's existing self-hosted exclusion option.
+Mozilla's SavedFrame APIs omit internal `apply` frames by native classification.
+User frames whose filename is `self-hosted` remain visible, and native stack text
+still retains its original contents.
+
+Function constructors invoked through the runtime wrapper give user functions
+sources such as `bun-wasm:function line 26 > Function`. Retain those derived
+user frames while continuing to hide the wrapper's own `bun-wasm:function`
+frames. The checked constructor labels come from Mozilla's `js/src/vm/JSFunction.cpp`
+at the revision below, including its async and generator constructors.
+
 Synchronous CommonJS wrappers keep their location but not their synthetic name.
+JSC and host WebKit generated functions can have only `name@` in native stack
+text. Retain those function names with the existing `<eval>` label and zero
+positions instead of dropping the entire frame. This original parser addition
+does not infer source locations or change native stack text.
 After source mapping, a SpiderMonkey constructor column advances only for the
 simple same-line `new` plus horizontal whitespace and identifier form. Comments,
 multiline and unrecognized callee syntax retain the native position instead of

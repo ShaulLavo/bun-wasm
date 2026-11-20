@@ -1,0 +1,3 @@
+bun test vVERSION
+beside undefined
+uncaught inside run uncaught-store

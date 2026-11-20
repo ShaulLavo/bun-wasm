@@ -1,0 +1,64 @@
+rfc6070 sha1 c=1 Buffer 0c60c80f961f0e71f3a9b524af6012062fe037a6
+rfc6070 sha1 c=4096 Buffer 4b007901b765489abead49d926f721d065a429c1
+rfc6070 long Buffer 3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038
+rfc6070 nul Buffer 56fa6aa75548099dcc37d7f03425e0c3
+rfc7914 sha256 64 Buffer 55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783
+empty Buffer f7ce0b653d2d72a4108cf5abe912ffdd777616dbbb27a70e8204f3ae2d0f6fad
+sha512 70 Buffer f03104b7e5cd219659352c9311245f41ff1101f5263fc6bd5f251eb185074aff5d10219513114ad16e2a5f2d6d33a1502200ff7d735c6af7a2557fbdc71838117c60ca442d52
+digest SHA256 Buffer 1998f3d3f22119b7
+digest sha-256 Buffer 1998f3d3f22119b7
+digest sha128 Buffer ea4b66d4030c711f
+digest md5 Buffer c9641e374bfab772
+digest md4 Buffer fb666dd1e5c3a7d9
+digest sha224 Buffer 57544d7d975bc757
+digest sha384 Buffer 33ff1a10447fd575
+digest sha512-224 Buffer cc69191b8129012e
+digest SHA-512/224 Buffer cc69191b8129012e
+digest sha512-256 Buffer e00539fd76094006
+digest sha3-224 Buffer 367958b7a3927a17
+digest sha3-256 Buffer d15fbbb4c04a81cc
+digest sha3-384 Buffer a566d3ca17f14b23
+digest sha3-512 Buffer dd9841dbb7c20533
+digest blake2b256 Buffer ab46b45423284e1e
+digest blake2b512 Buffer 048cf6cf918060ec
+digest ripemd160 Buffer 332c478ecdc03e9f
+digest rmd160 Buffer 332c478ecdc03e9f
+digest blake2s256 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: blake2s256
+digest shake128 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: shake128
+digest shake256 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: shake256
+digest md5-sha1 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: md5-sha1
+digest rsa-sha256 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: rsa-sha256
+digest RSA-SHA1 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: RSA-SHA1
+digest dss1 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: dss1
+digest md55 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: md55
+dataview salt Buffer 9b95ba636460a901
+string object password Buffer 120fb6cffcf8b32c
+salt detached while the password is coerced 0 true
+sync iterations 0 throws RangeError ERR_OUT_OF_RANGE The value of "iterations" is out of range. It must be >= 1 and <= 2147483647. Received 0
+sync iterations -1 throws RangeError ERR_OUT_OF_RANGE The value of "iterations" is out of range. It must be >= 1 and <= 2147483647. Received -1
+sync iterations 1.5 throws RangeError ERR_OUT_OF_RANGE The value of "iterations" is out of range. It must be an integer. Received 1.5
+sync iterations NaN throws RangeError ERR_OUT_OF_RANGE The value of "iterations" is out of range. It must be an integer. Received NaN
+sync iterations 2**31 throws RangeError ERR_OUT_OF_RANGE The value of "iterations" is out of range. It must be >= 1 and <= 2147483647. Received 2147483648
+sync iterations string throws TypeError ERR_INVALID_ARG_TYPE The "iterations" argument must be of type number. Received type string ('1')
+sync iterations null throws TypeError ERR_INVALID_ARG_TYPE The "iterations" argument must be of type number. Received null
+sync keylen -1 throws RangeError ERR_OUT_OF_RANGE The value of "keylen" is out of range. It must be >= 0 and <= 2147483647. Received -1
+sync keylen 2**31 throws RangeError ERR_OUT_OF_RANGE The value of "keylen" is out of range. It must be >= 0 and <= 2147483647. Received 2147483648
+sync keylen 32.9 throws RangeError ERR_OUT_OF_RANGE The value of "keylen" is out of range. It must be an integer. Received 32.9
+sync keylen Infinity throws RangeError ERR_OUT_OF_RANGE The value of "keylen" is out of range. It must be an integer. Received Infinity
+sync keylen string throws TypeError ERR_INVALID_ARG_TYPE The "keylen" argument must be of type number. Received type string ('8')
+sync keylen 0 throws Error undefined PBKDF2 derivation failed
+sync keylen -0 throws Error undefined PBKDF2 derivation failed
+sync password number throws TypeError ERR_INVALID_ARG_TYPE The "password" argument must be of type string or buffer. Received type number (1)
+sync salt object throws TypeError ERR_INVALID_ARG_TYPE The "salt" argument must be of type string or buffer. Received an instance of Object
+sync digest undefined throws TypeError ERR_INVALID_ARG_TYPE The "digest" argument must be of type string. Received undefined
+sync digest number throws TypeError ERR_INVALID_ARG_TYPE The "digest" argument must be of type string. Received type number (5)
+arity pbkdf2 6 pbkdf2Sync 5
+async digest omitted throws TypeError ERR_INVALID_ARG_TYPE The "digest" argument must be of type string. Received undefined
+async no callback throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument must be of type function. Received undefined
+async callback string throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument must be of type function. Received type string ('not a function')
+async bad digest before callback throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: md55
+async keylen out of range throws RangeError ERR_OUT_OF_RANGE The value of "keylen" is out of range. It must be >= 0 and <= 2147483647. Received -1
+async result 2 null true 6f4ad8c78ec365c0 returned=undefined
+async keylen 0 Error: PBKDF2 derivation failed undefined
+promisify 6f4ad8c78ec365c0
+async sha3 null d15fbbb4c04a81cc

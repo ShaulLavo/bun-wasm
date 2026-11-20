@@ -317,7 +317,7 @@ export async function createSafariTransport(options: SafariTransportOptions): Pr
   const counter = { value: 0 };
   const observe = (lane: ProtocolLane): ProtocolObserver | undefined => options.protocolSink ? { sink: options.protocolSink, lane, counter } : undefined;
   const request = createRequest(address, options.timeoutMs, lifetime.signal, observe("command"));
-  const cleanup = { command: createRequest(address, cleanupTimeoutMs, lifetime.signal, observe("cleanup-command")), session: createRequest(address, cleanupTimeoutMs, undefined, observe("session")), timeoutMs: cleanupTimeoutMs };
+  const cleanup = { command: createRequest(address, cleanupTimeoutMs, lifetime.signal, observe("cleanup-command")), session: createRequest(address, Math.min(cleanupTimeoutMs, 10_000), undefined, observe("session")), timeoutMs: cleanupTimeoutMs };
   const witness = options.ownershipSink ? new SafariOwnershipWitness(options.ownershipSink) : undefined;
   let sessionPath: string | undefined;
   let opened: Record<string, unknown>;

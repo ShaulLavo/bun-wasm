@@ -50,16 +50,35 @@ export const jscStackBudgets: Readonly<Record<StackHostFamily, string>> = {
   v8: "800", "firefox-linux": "208", "firefox-desktop": "208", "safari-macos": "192", other: "192",
 };
 
+/**
+ * SpiderMonkey's byte quota in KiB on WebKit, whose workers get Apple's 512 KiB stack on macOS and
+ * iOS. The engine's stack reservations are sized against this value: every measured recursion and
+ * nesting shape ends in a RangeError before the host stack runs out, and Next's webpack hook and
+ * Angular's schema validators load beneath it (docs/stack-limits.md).
+ */
+export const spiderMonkeyWebKitStackKib = "188";
+
+/**
+ * The environment key that carries an engine's budget. SpiderMonkey's byte quota needs about
+ * 100 KiB just to start, so it has its own key: a QuickJS or JSC value (32 KiB) must not reach it.
+ */
+export function engineStackBudgetKey(engine: Engine): string {
+  return engine === "spidermonkey" ? "BUN_WASM_SPIDERMONKEY_STACK_KIB" : "BUN_WASM_STACK_KIB";
+}
+
 export function engineStackBudgets(stack: string, userAgent: string, host?: StackHost): Partial<Record<Engine, string>> | null {
   if (/\n\s+at /.test(stack)) return { jsc: "800" };
-  const desktopFirefox = /\bFirefox\/\d+/.test(userAgent)
+  const firefox = /\bFirefox\/\d+/.test(userAgent);
+  const desktopFirefox = firefox
     && /\b(?:Windows NT|Macintosh|X11)\b/.test(userAgent)
     && !/\b(?:Android|Mobile|Tablet)\b/.test(userAgent);
   if (desktopFirefox) return { jsc: "208" };
   // A Macintosh UA also identifies desktop-style iPads. Touch evidence must come from the page.
   const desktopSafari = host?.platform === "MacIntel" && host.vendor === "Apple Computer, Inc." && host.maxTouchPoints === 0
     && /^Mozilla\/5\.0 \(Macintosh; Intel Mac OS X [\d_.]+\) AppleWebKit\/[\d.]+ \(KHTML, like Gecko\) Version\/[\d.]+ Safari\/[\d.]+$/.test(userAgent);
-  return { quickjs: desktopSafari ? "36" : "32", jsc: "192" };
+  const budgets = { quickjs: desktopSafari ? "36" : "32", jsc: "192" };
+  // Gecko on Android keeps SpiderMonkey's full quota, as desktop Firefox and V8 do.
+  return firefox ? budgets : { ...budgets, spidermonkey: spiderMonkeyWebKitStackKib };
 }
 
 /** The qualified parser reserve for this host, or undefined to keep the guest's default. */

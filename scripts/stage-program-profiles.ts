@@ -12,6 +12,13 @@ export function sharedProgramReceipts(engine: PairedEngine): string[] {
     ? ["spidermonkey-shared.json", "shared-group-library.json"] : [`${programProfile(engine).side}.engine.json`]);
 }
 
+export function requireSharedProgramInputs(engines: readonly PairedEngine[], env: NodeJS.ProcessEnv = process.env): void {
+  for (const engine of engines) {
+    const variable = `SHARED_${engine.toUpperCase()}_PROGRAM`;
+    if (!env[variable]) throw new Error(`The full site requires ${engine} shared-group assets for worker templates. Set ${variable} to its matching program directory before building.`);
+  }
+}
+
 /** Consume complete programs from the existing shared-profile producers. Never build a guest. */
 export async function stageSharedPrograms(out: string, builds: Record<string, string>, inputs: Partial<Record<PairedEngine, string | undefined>> = {
   quickjs: process.env.SHARED_QUICKJS_PROGRAM,
@@ -43,8 +50,8 @@ async function spiderMonkeyReceipts(source: string, core: Uint8Array, side: Uint
   assert(record(pair) && pair.schema === 1 && pair.experimental === true && pair.profile === "shared-group", "Invalid shared SpiderMonkey receipt");
   assert(record(pair.inputs) && record(pair.inputs.native), "Missing shared SpiderMonkey inputs");
   assert.deepEqual(pair.inputs.coreReceipt, coreFile.receipt, "Shared SpiderMonkey core receipt mismatch");
-  assert.deepEqual(pair.inputs.source, coreFile.receipt.inputs.source, "Shared SpiderMonkey source mismatch");
-  assert.equal((await Bun.file(join(source, "source.txt")).text()).trim(), coreFile.receipt.inputs.source.head, "Shared SpiderMonkey source label mismatch");
+  const composition = compositionSource(pair.inputs.source);
+  assert.equal((await Bun.file(join(source, "source.txt")).text()).trim(), composition.head, "Shared SpiderMonkey source label mismatch");
   verifyIdentity(core, pair.program);
   verifyIdentity(side, pair.side);
   verifyIdentity(core.subarray(0, coreFile.receipt.artifact.artifactBytes), pair.inputs.core);
@@ -57,6 +64,14 @@ async function spiderMonkeyReceipts(source: string, core: Uint8Array, side: Uint
   assert.deepEqual(library.library && record(library.library) ? { sha256: library.library.sha256, bytes: library.library.bytes } : null, pair.inputs.native.library, "Shared SpiderMonkey library identity mismatch");
   assert.deepEqual(library.headers, pair.inputs.native.headers, "Shared SpiderMonkey header identity mismatch");
   return files;
+}
+
+function compositionSource(value: unknown) {
+  assert(record(value), "Missing shared SpiderMonkey composition source");
+  const { head, tree } = value;
+  assert(Object.keys(value).sort().join() === "head,tree" && typeof head === "string" && /^[a-f0-9]{40}$/.test(head)
+    && typeof tree === "string" && /^[a-f0-9]{40}$/.test(tree), "Invalid shared SpiderMonkey composition source");
+  return { head, tree };
 }
 
 async function receiptFile(source: string, name: string, scope: ProgramInputSnapshot["scope"]) {

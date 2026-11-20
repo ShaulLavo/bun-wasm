@@ -26,7 +26,7 @@ test("dequeue preserves later pending signals and releases the final WASI wait",
       expect(controlWait(word, 0, expected, milliseconds)).toBe("timed-out");
       waits++;
     } });
-  const abi = new ProcessABI({ memory, descriptors: wasi.descriptors, fs, pid: 1, signals,
+  const abi = new ProcessABI({ memory, descriptors: wasi.descriptors, fs, pid: 1, processIdentity: { pid: 1, parentPid: 0 }, signals,
     service: { waitJob: unused, jobEmpty: unused, childExited: unused, startStatus: unused, spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused, cwd: unused, jobCleanupReady: unused } });
   const signal = abi.imports.signal!;
   const imports = (wasi as unknown as { functions(): Record<string, (...args: number[]) => number> }).functions();

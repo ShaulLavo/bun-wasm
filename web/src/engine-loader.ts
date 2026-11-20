@@ -26,10 +26,11 @@ export function engineBuildHint(engine: Engine): string {
 
 /** Optional engines need the complete staged pair; loading still verifies its bytes and profile. */
 export function engineUnavailable(engine: Engine, memoryProfile: ProgramMemoryProfile = "split"): string | null {
-  if (engine !== "spidermonkey") return null;
+  if (engine !== "spidermonkey" && memoryProfile === "split") return null;
+  if (engine === "browser") return null;
   const { core, side } = programProfile(engine);
   if (assetBuild(profileAsset(core, memoryProfile)) !== null && assetBuild(profileAsset(side, memoryProfile)) !== null) return null;
-  if (memoryProfile === "shared-group") return "SpiderMonkey shared-group is not in this build. Stage its matching pair with SHARED_SPIDERMONKEY_PROGRAM=/absolute/program-spidermonkey before building this host.";
+  if (memoryProfile === "shared-group") return `${ENGINES[engine].name} shared-group is not in this build. Stage its matching pair with SHARED_${engine.toUpperCase()}_PROGRAM=/absolute/program before building this host.`;
   return `SpiderMonkey is not in this build. ${engineBuildHint(engine)}`;
 }
 
@@ -42,6 +43,14 @@ export function mb(bytes: number): string {
 }
 
 export class WasmMissing extends Error {}
+
+/** Retain verified tools for one consumer; optional persistence can finish after launch. */
+export function createToolsLoader(): () => Promise<WebAssembly.Module> {
+  let loading: Promise<WebAssembly.Module> | undefined;
+  return () => loading ??= loadWasm("bun-tools.wasm", () => {})
+    .then(result => result.module)
+    .catch(error => { loading = undefined; throw error; });
+}
 
 /** Select the engine and memory profile before fetching any program bytes. */
 export async function loadEngineProgram(engine: Engine, profile: ProgramMemoryProfile, progress: (text: string) => void, override?: string) {
@@ -223,8 +232,10 @@ async function loadVerifiedFile(url: string, name: string, progress: (text: stri
   if (build !== null) await verifyArtifact(name, bytes, build);
   else verifyWasm(name, bytes);
   progress(`verified ${name} (${mb(bytes.length)})…`);
-  if (build !== null && await cacheEngine(key, build, new Response(bytes, { headers: { "content-type": "application/wasm", "content-length": String(bytes.length) } }))) {
-    performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
+  if (build !== null) {
+    void cacheEngine(key, build, new Response(bytes, { headers: { "content-type": "application/wasm", "content-length": String(bytes.length) } })).then(stored => {
+      if (stored) performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
+    });
   }
   return { bytes, build };
 }

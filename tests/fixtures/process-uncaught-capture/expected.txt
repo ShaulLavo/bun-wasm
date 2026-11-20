@@ -1,0 +1,12 @@
+has false
+TypeError ERR_INVALID_ARG_TYPE The "fn" argument must be of type function or null. Received type number (1)
+unclaimed false
+has true
+Error ERR_UNCAUGHT_EXCEPTION_CAPTURE_ALREADY_SET `process.setupUncaughtExceptionCapture()` was called while a capture callback was already active
+monitor from promise unhandledRejection
+captured from promise unhandledRejection
+claimed true
+monitor from timer uncaughtException
+captured from timer uncaughtException
+has false
+has true

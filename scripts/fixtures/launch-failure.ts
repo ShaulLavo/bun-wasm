@@ -8,6 +8,7 @@ export function launchFailureFixture(count = 1) {
   const groups: ReturnType<ProcessService["memoryGroups"]> = Array.from({ length: count }, (_, index) => ({
     id: `group-${index}`, members: 1, reserved: 1, retained: 0, pids: Array.from({ length: count }, (_, pid) => pid),
     regions: 0, pins: 0, published: 0, holds: 0, watches: 0, committedBytes: 65536, memberPages: 1, bypassed: false, freeBytes: 0,
+    exiting: 0, exitFailures: 0, quarantinedBytes: 0, ended: false,
   }));
   const workers: ReturnType<ProcessService["workerMemory"]> = Array.from({ length: count }, (_, index) => ({
     pid: index, parentPid: 11, rootPid: 10, job: 9, directory: `directory-${index}`, bytes: null,

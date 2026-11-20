@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { stableScratch } from "./stable-scratch.ts";
 
 test("production descriptor reads bound regular tails and preserve syscall behavior", () => {
-  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-descriptor-read-"));
+  const scratch = stableScratch("descriptor-read");
   try {
     const root = resolve(import.meta.dir, "..");
     mkdirSync(join(scratch, "src"));

@@ -18,6 +18,30 @@ const emit = (path, text) => {
   else writeFileSync(path, text);
 };
 const hash = text => createHash("sha256").update(text).digest("hex");
+// [file under lib/internal/streams, exact readable-stream 4.7.0 text, replacement, expected count].
+const nodeStreamSemantics = [
+  // Node 22 raised the default byte highWaterMark to 64 KiB outside Windows; Bun's state.ts matches.
+  ["state.js", "let defaultHighWaterMarkBytes = 16 * 1024\n", "let defaultHighWaterMarkBytes = 64 * 1024\n"],
+  // nodejs/node#62557: pause() is a no-op on a destroyed stream.
+  ["readable.js", "Readable.prototype.pause = function () {\n", "Readable.prototype.pause = function () {\n  if (this._readableState.destroyed) return this\n"],
+  // Bun's narrowing of nodejs/node#62557: resume() is a no-op once a destroyed stream emitted 'end'.
+  ["readable.js", "Readable.prototype.resume = function () {\n  const state = this._readableState\n", "Readable.prototype.resume = function () {\n  const state = this._readableState\n  if (state.destroyed && state.endEmitted) return this\n"],
+  // Node 26 howMuchToRead(): read() without a size returns one buffered chunk unless a decoder is set.
+  ["readable.js", "    // Only flow one buffer at a time.\n", "    if (!state.decoder && state.length) return state.buffer.first().length\n    // Only flow one buffer at a time.\n"],
+  // nodejs/node#60454: no maybeReadMore while a _read is in flight.
+  ["readable.js", "  if (!state.readingMore && state.constructed) {\n", "  if (!state.readingMore && !state.reading && state.constructed) {\n"],
+  // Node 26 test-stream-writable-decoded-encoding.js: a string chunk cannot use the 'buffer' encoding.
+  ["writable.js", "    if (typeof chunk === 'string') {\n      if (state.decodeStrings !== false) {\n", "    if (typeof chunk === 'string') {\n      if (encoding === 'buffer') throw new ERR_UNKNOWN_ENCODING(encoding)\n      if (state.decodeStrings !== false) {\n"],
+  // Writable[Symbol.asyncDispose], as Readable already has: destroy an unfinished stream with AbortError.
+  ["writable.js", "module.exports = Writable\n", "module.exports = Writable\nWritable.prototype[require('../../ours/primordials').SymbolAsyncDispose] = function () {\n  let error\n  if (!this.destroyed) {\n    error = this.writableFinished ? null : new (require('../../ours/errors').AbortError)()\n    this.destroy(error)\n  }\n  return new Promise((resolve, reject) => require('./end-of-stream')(this, (err) => (err && err.name !== 'AbortError' ? reject(err) : resolve(null))))\n}\n"],
+  // nodejs/node#62824: Duplex.from({ readable, writable }) destroys the writable side when the readable side errors.
+  ["duplexify.js", "    eos(r, (err) => {\n      readable = false\n      if (err) {\n        destroyer(r, err)\n", "    eos(r, (err) => {\n      readable = false\n      if (err) {\n        destroyer(w, err)\n"],
+  // nodejs/node#60907: compose() returns the composed Duplex, and compose's own check names streams[1].
+  ["operators.js", "  if (isNodeStream(stream) && !isWritable(stream)) {\n    throw new ERR_INVALID_ARG_VALUE('stream', stream, 'must be writable')\n  }\n", ""],
+  ["operators.js", "  take,\n  compose\n}\nmodule.exports.promiseReturningOperators = {\n", "  take\n}\nmodule.exports.promiseReturningOperators = {\n  compose,\n"],
+  // nodejs/node#59529: operator callbacks are checked like validateFunction.
+  ["operators.js", "['Function', 'AsyncFunction']", "'Function'", 5],
+];
 try {
   for (const file of ["package.json", "bun.lock"]) cpSync(join(source, file), join(work, file));
   execFileSync("bun", ["install", "--ignore-scripts", "--linker", "hoisted", "--frozen-lockfile"], { cwd: work, stdio: "inherit" });
@@ -35,6 +59,14 @@ try {
   const hop = "pumpToWeb(makeAsyncIterable(ret), stream, finish, {";
   if (pipeline.split(hop).length !== 2) throw new Error("Pipeline bridge changed");
   writeFileSync(pipelinePath, pipeline.replace(hop, "pumpToWeb(require('bun-wasm:stream-adapters').pipelineReadable(ret), stream, finish, {"));
+  // Node 26 stream semantics Bun 1.4.4 ships (its src/js/internal/streams), which
+  // readable-stream's Node 18 base predates. docs/bun-patches/node-stream-core-semantics.md.
+  for (const [file, from, to, count = 1] of nodeStreamSemantics) {
+    const path = join(work, "core/lib/internal/streams", file);
+    const text = readFileSync(path, "utf8");
+    if (text.split(from).length !== count + 1) throw new Error(`Node stream semantics patch changed in ${file}: ${from}`);
+    writeFileSync(path, text.replaceAll(from, to));
+  }
   writeFileSync(join(work, "entry.cjs"), readFileSync(join(source, "entry.cjs"), "utf8").replaceAll("readable-stream/lib/", "./core/lib/"));
   const build = `const result = await Bun.build({
     entrypoints: ["./entry.cjs"], target: "browser", format: "cjs", minify: true, keepNames: true,
@@ -73,7 +105,7 @@ try {
   if (hooks !== 3) throw new Error("Node destruction hooks changed");
   body = ts.createPrinter({ removeComments: true }).printFile(transformed.transformed[0]);
   transformed.dispose();
-  const bindings = ["ReadableStream", "WritableStream", "CountQueuingStrategy", "ByteLengthQueuingStrategy", "Writable", "Readable", "Duplex", "destroy", "isDestroyed", "isReadable", "isWritable", "isWritableEnded", "isReadableStream", "isWritableStream", "Buffer", "isAnyArrayBuffer", "AbortError", "ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_VALUE", "ERR_INVALID_STATE", "ERR_STREAM_PREMATURE_CLOSE", "kEmptyObject", "normalizeEncoding", "setOwnProperty", "getDeprecationWarningEmitter", "validateBoolean", "validateFunction", "validateObject", "validateOneOf", "eos", "kEosNodeSynchronousCallback", "TextEncoder", "SafeSet", "zlib", "ArrayPrototypeFilter", "ObjectKeys", "StringPrototypeStartsWith", "PromiseWithResolvers", "PromiseResolve", "PromisePrototypeThen", "SafePromisePrototypeFinally", "SafePromiseAllReturnVoid", "TypedArrayPrototypeGetBuffer", "TypedArrayPrototypeGetByteOffset", "TypedArrayPrototypeGetByteLength", "withDestroyHook", "observeTerminalWritable", "kPipelineBuffers"];
+  const bindings = ["ReadableStream", "WritableStream", "CountQueuingStrategy", "ByteLengthQueuingStrategy", "Writable", "Readable", "Duplex", "destroy", "isDestroyed", "isReadable", "isWritable", "isWritableEnded", "isReadableStream", "isWritableStream", "Buffer", "isAnyArrayBuffer", "AbortError", "ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_VALUE", "ERR_STREAM_PREMATURE_CLOSE", "kEmptyObject", "normalizeEncoding", "setOwnProperty", "getDeprecationWarningEmitter", "validateBoolean", "validateObject", "validateOneOf", "eos", "kEosNodeSynchronousCallback", "TextEncoder", "SafeSet", "zlib", "ArrayPrototypeFilter", "ObjectKeys", "StringPrototypeStartsWith", "PromiseWithResolvers", "PromiseResolve", "PromisePrototypeThen", "SafePromisePrototypeFinally", "SafePromiseAllReturnVoid", "TypedArrayPrototypeGetBuffer", "TypedArrayPrototypeGetByteOffset", "TypedArrayPrototypeGetByteLength", "withDestroyHook", "observeTerminalWritable", "kPipelineBuffers"];
   const factory = header + `(function (internal) {\n"use strict";\nfunction install(bundle) {\nconst { ${bindings.join(", ")} } = internal.require("node_stream_bindings").create(bundle);\n${body}\nconst adapters = { ${names.join(", ")} };\nadapters.pipelineReadable = source => newReadableStreamFromStreamReadable(source._readableState ? source : Readable.wrap(source), { [kPipelineBuffers]: true });\nReadable.toWeb = newReadableStreamFromStreamReadable; Readable.fromWeb = newStreamReadableFromReadableStream;\nWritable.toWeb = newWritableStreamFromStreamWritable; Writable.fromWeb = newStreamWritableFromWritableStream;\nDuplex.toWeb = newReadableWritablePairFromDuplex; Duplex.fromWeb = newStreamDuplexFromReadableWritablePair;\ninstall.adapters = adapters;\nreturn adapters;\n}\nreturn install;\n})\n`;
   new Function(`return ${factory}`);
   emit(join(destination, "node_stream_web.js"), factory);

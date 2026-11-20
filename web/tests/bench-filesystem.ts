@@ -6,6 +6,7 @@ import { join, resolve, sep } from "node:path";
 import { chromium, firefox, webkit, type Browser } from "playwright";
 import { browserBuildConfig } from "../../scripts/browser-build";
 import { filesystemBaselinePlugin } from "./filesystem-bench-baseline";
+import { navigateTestPage } from "./navigate-test-page.ts";
 let scratch: string | undefined, server: ReturnType<typeof Bun.serve> | undefined, browser: Browser | undefined, launch: Promise<Browser> | undefined;
 let cleanupPromise: Promise<void> | undefined;
 function cleanup(): Promise<void> {
@@ -40,7 +41,7 @@ try {
     launch = type.launch({ headless: true, downloadsPath: join(scratch, "downloads"), tracesDir: join(scratch, "traces") });
     browser = await launch;
     const page = await browser.newPage();
-    await page.goto(`http://127.0.0.1:${server.port}/`);
+    await navigateTestPage(page, `http://127.0.0.1:${server.port}/`);
     await page.waitForFunction(() => (globalThis as any).filesystemBench);
     // Smoke every arm/syscall before spending the bounded seven-round measurement window.
     await page.evaluate(() => (globalThis as any).filesystemBench(0, true));

@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::ffi::{CString, c_char};
+use std::collections::{HashMap, VecDeque};
+use std::ffi::c_char;
 use std::io::Write;
 use std::rc::Rc;
 
@@ -13,7 +13,7 @@ thread_local! {
     static NEXT_NATIVE: Cell<u32> = const { Cell::new(1) };
     static DEAD: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static HOST: RefCell<Option<Rc<dyn ModuleHost<SpiderMonkey>>>> = const { RefCell::new(None) };
-    static REJECTIONS: RefCell<Vec<(SmVal, SmVal)>> = const { RefCell::new(Vec::new()) };
+    static REJECTIONS: RefCell<VecDeque<(SmVal, SmVal)>> = const { RefCell::new(VecDeque::new()) };
 }
 
 #[cfg(not(bun_wasm_shared_group))]
@@ -393,9 +393,9 @@ unsafe fn string_reply(
             return false;
         }
     };
-    let text = CString::new(text).expect("host text has no NUL");
-    unsafe { out_len.write(text.as_bytes().len()) };
-    unsafe { out.write(text.into_raw()) };
+    let (bytes, length) = crate::reply_buffer::into_raw(text);
+    unsafe { out_len.write(length) };
+    unsafe { out.write(bytes) };
     true
 }
 
@@ -473,13 +473,13 @@ pub unsafe extern "C" fn bunsm_host_rejection(
                 .retain(|(current, _)| !same_value(current, &promise))
         });
     } else {
-        REJECTIONS.with(|rejections| rejections.borrow_mut().push((promise, reason)));
+        REJECTIONS.with(|rejections| rejections.borrow_mut().push_back((promise, reason)));
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn bunsm_host_free(bytes: *mut c_char) {
-    drop(unsafe { CString::from_raw(bytes) });
+pub unsafe extern "C" fn bunsm_host_free(bytes: *mut c_char, length: usize) {
+    unsafe { crate::reply_buffer::free_raw(bytes, length) };
 }
 
 fn same_value(a: &SmVal, b: &SmVal) -> bool {
@@ -538,11 +538,24 @@ impl Engine for SpiderMonkey {
         };
         HOST.with(|current| *current.borrow_mut() = Some(host));
         unsafe { sys::bsm_init(&config) };
+        // A validation side: `__transferFault()` and `__transferFaultWatch()`, natives of
+        // their own in `cpp/transfer_fault.cpp` (see `transfer_fault.rs`).
+        #[cfg(bun_wasm_transfer_fault)]
+        unsafe {
+            unsafe extern "C" {
+                fn bsm_install_transfer_fault();
+            }
+            bsm_install_transfer_fault();
+        }
         SpiderMonkey
     }
 
     fn name(&self) -> &'static str {
         "spidermonkey"
+    }
+    fn version(&self) -> (&'static str, &'static str) {
+        // Mozilla's milestone at the pinned commit; build.rs fails when the pin moves.
+        ("spidermonkey", env!("BUN_WASM_SPIDERMONKEY_VERSION"))
     }
     fn undefined(&self) -> SmVal {
         undefined()
@@ -620,13 +633,13 @@ impl Engine for SpiderMonkey {
         call(function, this, args)
     }
     fn eval_script(&self, source: &str, filename: &str, first_line: i32) -> Result<SmVal, SmVal> {
-        let filename = CString::new(filename).expect("script filename has no NUL");
         let mut out = 0;
         let ok = unsafe {
             sys::bsm_eval_script(
                 source.as_ptr().cast::<c_char>(),
                 source.len(),
-                filename.as_ptr(),
+                filename.as_ptr().cast::<c_char>(),
+                filename.len(),
                 first_line,
                 &mut out,
             )
@@ -699,14 +712,17 @@ impl Engine for SpiderMonkey {
         };
         checked(ok, out)
     }
-    fn take_unhandled_rejections(&self) -> Vec<(SmVal, SmVal)> {
-        REJECTIONS.with(|rejections| rejections.borrow_mut().drain(..).collect())
+    fn next_unhandled_rejection(&self) -> Option<(SmVal, SmVal)> {
+        REJECTIONS.with(|rejections| rejections.borrow_mut().pop_front())
     }
     fn same_value(&self, a: &SmVal, b: &SmVal) -> bool {
         same_value(a, b)
     }
     fn is_promise(&self, value: &SmVal) -> bool {
         self.promise_state(value).is_some()
+    }
+    fn is_module_namespace(&self, value: &SmVal) -> Option<bool> {
+        Some(unsafe { sys::bsm_is_module_namespace(value.raw()) })
     }
     fn is_proxy(&self, value: &SmVal) -> bool {
         unsafe { sys::bsm_is_proxy(value.raw()) }
@@ -715,6 +731,9 @@ impl Engine for SpiderMonkey {
         unsafe { sys::bsm_is_detachable_buffer(value.raw()) }
     }
     fn detach_buffer(&self, value: &SmVal) {
+        // A validation side refuses every allocation from the first detach on.
+        #[cfg(bun_wasm_transfer_fault)]
+        crate::transfer_fault::enter();
         unsafe { sys::bsm_detach_buffer(value.raw()) }
     }
     unsafe fn wasm_memory_buffer(&self, data: *mut u8, length: usize) -> SmVal {
@@ -785,6 +804,7 @@ impl Engine for SpiderMonkey {
             .set("heapUsed", memory_counter(used))
             .set("external", memory_counter(external))
             .set("arrayBuffers", Val::Null)
+            .set("wasmCapacity", crate::engine::wasm_capacity())
             .into()
     }
 }

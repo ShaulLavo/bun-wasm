@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/test-concurrent-flags",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

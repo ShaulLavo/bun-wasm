@@ -1,0 +1,13 @@
+{
+  "owner": "browser-guest",
+  "path": "scripts/shared-wasm-member-capture.test.ts",
+  "profile": "shared-group",
+  "inputs": [
+    "web/tests/shared-wasm-agent/capture.ts",
+    "web/tests/shared-wasm-agent/capture-page.ts",
+    "web/tests/shared-wasm-agent/capture-controls.ts",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml"
+  ]
+}

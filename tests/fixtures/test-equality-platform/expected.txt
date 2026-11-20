@@ -1,0 +1,6 @@
+platform contents
+boxed string constructors
+array accessors and awaited matchers
+promise throw invocation
+assertion labels
+non-callable toJSON diagnostics

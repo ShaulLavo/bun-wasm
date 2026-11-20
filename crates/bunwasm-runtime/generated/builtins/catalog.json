@@ -5020,8 +5020,8 @@
       "name": "node:wasi",
       "file": "node/wasi.js",
       "upstream": "node/wasi.ts",
-      "sourceSha256": "6062adab5e6aae9fa8c4e4c8153d0b4e8c09c7ec3a01c6110f571f052f3f0bf3",
-      "sha256": "0bf349fe74921d7d30373084270ce0b77140b5bc0bed5ddbef5a8e77646f9c70",
+      "sourceSha256": "82319e44fb25cba14ea4b0469b1d09a37866a5238551a1a6f48a49e1eaee6973",
+      "sha256": "e260108d7913c84560bad8c8f88a84b2042dcb0695428bfc12f7224258e48dc8",
       "intrinsics": [
         "Buffer",
         "String",

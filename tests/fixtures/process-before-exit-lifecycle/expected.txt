@@ -1,0 +1,11 @@
+main
+beforeExit 1 0 undefined
+monitor boom uncaughtException
+uncaughtException boom uncaughtException
+timer
+beforeExit 2 0 undefined
+microtask
+tick
+exit 0 undefined
+monitor from exit uncaughtException
+uncaughtException from exit uncaughtException

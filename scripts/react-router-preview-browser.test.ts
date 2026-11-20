@@ -7,6 +7,7 @@ import { connect, type Socket } from 'node:net';
 import { chromium, type Browser, type Page } from 'playwright';
 import { browserBuildConfig, buildClassicWorker } from './browser-build';
 import { previewWebsocketScript } from '../web/preview-build';
+import { navigatePreview } from '../web/tests/foreground';
 
 const root = resolve(import.meta.dir, '..');
 const timeout = 30_000;
@@ -18,7 +19,7 @@ async function command(args: string[], cwd: string): Promise<void> {
 }
 
 async function checkPage(page: Page, url: string, mounted: boolean): Promise<number> {
-  const response = await page.goto(url);
+  const response = await navigatePreview(page, url);
   const html = await response?.text();
   assert.equal(response?.status(), 200, html ?? 'Missing response');
   assert.ok(html?.includes(`href="${new URL(url).pathname}details"`), 'SSR links must use the browser mount');

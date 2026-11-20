@@ -1,0 +1,32 @@
+default false false false
+cleared true true true
+timeout in callback false true
+timeout after callback true false
+immediate in callback false false
+immediate after callback true false
+cleared in callback true
+refreshed in callback false true
+refresh in callback fired 2 true
+refresh after firing false true
+refresh after firing fired 3 true
+refresh after clear true false
+string ids immediate,kept
+idleStart is a number true
+non-number kept not a number
+infinity kept Infinity
+cleared write kept 0
+shared deadline order t1,t2,immediate
+interval minus10 immediate after 1 runs
+interval zero immediate after 1 runs
+interval refresh immediate after 1 runs
+interval write kept in callback true
+due timers a,b,c
+setTimeout function undefined true false TypeError
+setInterval function undefined true false TypeError
+setImmediate function undefined true false TypeError
+same as timers/promises true true true
+promisified setTimeout value
+promisified setInterval 3 tick
+abort setTimeout rejected AbortError
+abort setImmediate rejected AbortError
+done

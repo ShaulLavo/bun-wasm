@@ -31,7 +31,7 @@ if [[ ! -e "$bun_dir/.git" ]]; then
     echo "error: $bun_dir exists but is not a Git checkout" >&2
     exit 1
   fi
-  git clone --filter=blob:none https://github.com/oven-sh/bun.git "$bun_dir"
+  git clone --filter=blob:none --depth=1 --no-tags --revision="$BUN_COMMIT" https://github.com/oven-sh/bun.git "$bun_dir"
   git -C "$bun_dir" checkout -b wasm "$BUN_COMMIT"
   new_checkout=1
 fi

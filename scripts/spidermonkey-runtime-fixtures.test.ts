@@ -33,6 +33,7 @@ function sandbox() {
   mkdirSync(join(root, "scripts"));
   copyFileSync(join(source, "scripts/test.sh"), join(root, "scripts/test.sh"));
   copyFileSync(join(source, "env.sh"), join(root, "env.sh"));
+  copyFileSync(join(source, "scripts/waffle-release-inputs.json"), join(root, "scripts/waffle-release-inputs.json"));
   mkdirSync(join(root, "tmp"));
   const launcher = join(root, "inputs with spaces", "launcher");
   const core = join(root, "inputs with spaces", "core.wasm");
@@ -306,7 +307,7 @@ for (const context of ["native", "hooks"]) {
     const result = invoke(box, ["--engine", "browser", "--context", context, "--no-build", "hello"], { BUN_WASM_RUNTIME_CHECKED: "1" });
     expect(result.code).toBe(0);
     const record = records(box)[0]!;
-    expect(record.argv.slice(0, 6)).toEqual(["--no-warnings", join(box.root, "web/scripts/node-host.mjs"), "--wasm", join(box.root, "dist/bun-browser.wasm"), "--context", context]);
+    expect(record.argv.slice(0, 10)).toEqual(["--no-warnings", join(box.root, "web/scripts/node-host.mjs"), "--wasm", join(box.root, "dist/bun-browser.wasm"), "--shell", box.shell, "--env-utility", box.utility, "--context", context]);
     expect(record.argv).not.toContain("--engine");
     expect(record.tier).toBe("ambient-must-not-win");
   });
@@ -338,7 +339,8 @@ test("ordinary default invocation retains preflight, guest, launcher, and shell 
 
 async function waitForLaunch(box: Sandbox) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (existsSync(box.env.RECORD)) return records(box)[0]!;
+    // The launcher's append creates the file before writing its line; wait for a complete record.
+    if (existsSync(box.env.RECORD) && readFileSync(box.env.RECORD, "utf8").includes("\n")) return records(box)[0]!;
     await Bun.sleep(10);
   }
   throw new Error("Synthetic launcher never started");

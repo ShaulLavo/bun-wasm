@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { appendCustomSection } from "../../src/engine-kind";
-import { loadEngineProgram } from "../src/engine-loader";
+import { engineUnavailable, loadEngineProgram } from "../src/engine-loader";
 import { parseMemoryProfile, profileAsset, requireProfileEngine, verifyMemoryProfile } from "../src/program-profile";
 
 test("memory profile is explicit and independent of engine selection", async () => {
@@ -43,7 +43,7 @@ test("both production pages validate selection before creating one runtime with 
         await new Page("?engine=quickjs&mode=memory&profile=" + profile).start();
       }
       assert.throws(() => new Page("?profile=shared"), Page === Playground ? /Unknown Bun program profile/ : /Unknown Bun program memory profile/);
-      assert.throws(() => new Page("?engine=browser&profile=shared-group"), Page === Playground ? /does not support/ : /unavailable/);
+      assert.throws(() => new Page("?engine=browser&profile=shared-group"), /does not support/);
     }
     assert.equal(requests.length, 4);
     for (const request of requests) assert.deepEqual(request.memoryGroups, BUN_MEMORY_GROUP_POLICY);
@@ -52,4 +52,9 @@ test("both production pages validate selection before creating one runtime with 
   const child = Bun.spawn([process.execPath, "-e", probe], { cwd: new URL("../..", import.meta.url).pathname, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect({ code, stdout, stderr }).toEqual({ code: 0, stdout: "", stderr: "" });
+});
+
+for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) test(`${engine} missing shared assets fail before a fetch or split substitution`, async () => {
+  expect(engineUnavailable(engine, "shared-group")).toContain(`SHARED_${engine.toUpperCase()}_PROGRAM`);
+  await expect(loadEngineProgram(engine, "shared-group", () => { throw new Error("Must not fetch"); })).rejects.toThrow("shared-group is not in this build");
 });

@@ -22,7 +22,7 @@ export async function processControls(eventsFactory: (internal: object) => Funct
     const internal = {
       native: {
         platformInfo: { version: "test", revision: "test", arch: "wasm32" },
-        env: () => ({}), argv: () => ["bun", "fixture.ts"], execArgv: () => [], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
+        env: () => ({}), argv: () => ["bun", "fixture.ts"], execArgv: () => [], processIdentity: () => [41, 7], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
         hostSignal(number: number, mode: number) { if (mode !== 3) dispositions.set(number, mode); return 0; },
         writeStdout(...args: unknown[]) { writes.push(args); if (state.writeFailure) throw state.writeFailure.error; },
         writeStderr(...args: unknown[]) { writes.push(args); if (state.writeFailure) throw state.writeFailure.error; },
@@ -30,6 +30,7 @@ export async function processControls(eventsFactory: (internal: object) => Funct
         utf8Decode(bytes: Uint8Array) { return new TextDecoder().decode(bytes); },
         exit(code: number) { exits.push(["native", code]); throw exitSentinel; },
       },
+      describe: (value: unknown) => typeof value,
       nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]) { ticks.push(() => callback(...args)); },
       realTimers: { setImmediate(callback: () => void) { immediates.push(callback); } },
       toUint8(value: ArrayBuffer) { return new Uint8Array(value); },
@@ -167,40 +168,45 @@ export async function processControls(eventsFactory: (internal: object) => Funct
   exiting.state.exitMutation = 42;
   assert.throws(() => exiting.guest.exit(7), (value: unknown) => value === exiting.exitSentinel);
   assert.deepEqual(exiting.exits, [["emit", 7], ["process.exit", 42], ["native", 42]]);
-  controls.push("exit initially owns undefined code, then rereads an exit-listener mutation with native error identity");
+  controls.push("exit initially owns undefined code, then exits with the code an exit listener assigns");
 
+  // Bun keeps the exit byte: numeric strings convert, undefined and null keep the previous code.
   const coercions: unknown[] = [];
-  for (const value of [undefined, null, false, true, 1.5, -1, 4294967297, "17", "NaN", {}, { valueOf: () => 23 }]) {
+  for (const value of [undefined, null, -1, 300, 2 ** 40 + 5, "17", " "]) {
     const f = fixture();
     assert.throws(() => f.guest.exit(value), (error: unknown) => error === f.exitSentinel);
     coercions.push(f.exits);
   }
-  for (const value of [Symbol("code"), 1n]) {
+  assert.deepEqual(coercions.map(exits => (exits as unknown[][]).at(-1)), [["native", 0], ["native", 0], ["native", 255], ["native", 44], ["native", 5], ["native", 17], ["native", 0]]);
+  for (const [value, code] of [[false, "ERR_INVALID_ARG_TYPE"], [1.5, "ERR_OUT_OF_RANGE"], ["NaN", "ERR_INVALID_ARG_TYPE"], [{}, "ERR_INVALID_ARG_TYPE"], [{ valueOf: () => 23 }, "ERR_INVALID_ARG_TYPE"], [Symbol("code"), "ERR_INVALID_ARG_TYPE"], [1n, "ERR_INVALID_ARG_TYPE"], [2 ** 60, "ERR_OUT_OF_RANGE"]] as const) {
     const f = fixture();
-    assert.throws(() => f.guest.exit(value), (error: unknown) => error !== null && typeof error === "object" && "name" in error && error.name === "TypeError");
+    assert.throws(() => f.guest.exit(value), (error: unknown) => error !== null && typeof error === "object" && "code" in error && error.code === code);
+    assert.throws(() => { f.guest.exitCode = value; }, (error: unknown) => error !== null && typeof error === "object" && "code" in error && error.code === code);
     assert.deepEqual(f.exits, []);
+    assert.equal(f.guest.exitCode, undefined);
   }
-  const getter = fixture();
-  let reads = 0;
-  Object.defineProperty(getter.guest, "exitCode", { get() { return ++reads; }, configurable: true });
-  assert.throws(() => getter.guest.exit(), (error: unknown) => error === getter.exitSentinel);
-  assert.deepEqual(getter.exits, [["emit", 1], ["process.exit", 2], ["native", 3]]);
-  const conversionError = new Error("coercion identity");
-  const throwing = fixture();
-  assert.throws(() => throwing.guest.exit({ valueOf() { throw conversionError; } }), (error: unknown) => error === conversionError);
-  assert.deepEqual(throwing.exits, []);
-  controls.push("exit ToInt32, raw Symbol/BigInt errors, repeated getter reads and conversion error identity");
+  controls.push("exit and exitCode validate the code as Node does and keep its low byte");
 
   const really = fixture();
   let conversions = 0;
   assert.throws(() => really.guest.reallyExit({ valueOf() { return ++conversions; } }), (value: unknown) => value === really.exitSentinel);
-  assert.deepEqual(really.exits, [["process.reallyExit", 1], ["native", 2]]);
-  const exitingError = fixture();
-  const getterError = new Error("exit getter identity");
-  Object.defineProperty(exitingError.guest, "exitCode", { get() { throw getterError; } });
-  assert.throws(() => exitingError.guest.exit(), (value: unknown) => value === getterError);
-  assert.deepEqual(exitingError.exits, []);
-  controls.push("reallyExit repeats the original ToInt32 conversion and exit getter throws keep identity");
+  assert.deepEqual(really.exits, [["process.reallyExit", 0], ["native", 0]]);
+  assert.equal(conversions, 0);
+  const replaced = fixture();
+  const receivers: unknown[] = [];
+  const original = replaced.guest.reallyExit;
+  Object.defineProperty(replaced.guest, "reallyExit", { configurable: true, writable: true, value(this: unknown, code: unknown) {
+    receivers.push(this, code, Reflect.get(replaced.guest, "_exiting"));
+    return original.call(replaced.guest, code);
+  } });
+  assert.throws(() => replaced.guest.exit(3), (value: unknown) => value === replaced.exitSentinel);
+  assert.deepEqual(receivers, [replaced.guest, 3, false]);
+  assert.deepEqual(replaced.exits, [["emit", 3], ["process.exit", 3], ["native", 3]]);
+  const missing = fixture();
+  Object.defineProperty(missing.guest, "reallyExit", { configurable: true, writable: true, value: undefined });
+  assert.throws(() => missing.guest.exit(0), (error: unknown) => error instanceof TypeError && error.message === "process.reallyExit is not a function");
+  assert.deepEqual(missing.exits, [["emit", 0]]);
+  controls.push("reallyExit keeps an integer's low byte and process.exit calls it as a method of process");
 
   const signals = fixture();
   assert.equal(signals.dispositions.get(13), 1);

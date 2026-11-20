@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
 
-function quickjsDepth(): number {
+// QuickJS and SpiderMonkey keep getter recursion in an interpreter loop on every tier, so it
+// reaches 4,096 levels; other engines recurse natively.
+function engine(): "quickjs" | "spidermonkey" | "native" {
   try { new Function("let let = 1"); } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
-    if (error.message === "'let' is not a valid lexical identifier") return 4096;
-    if (error.message.includes("Cannot use 'let' as an identifier name") || error.message === "let is disallowed as a lexically bound name") return 48;
+    if (error.message === "'let' is not a valid lexical identifier") return "quickjs";
+    if (error.message === "a lexical declaration can't define a 'let' binding") return "spidermonkey";
+    if (error.message.includes("Cannot use 'let' as an identifier name") || error.message === "let is disallowed as a lexically bound name") return "native";
     throw new Error("Unrecognized parser fingerprint", { cause: error });
   }
   throw new Error("Invalid lexical declaration was accepted");
@@ -67,9 +70,11 @@ function main(depth: number): void {
 if (process.argv[2] === "run") {
   main(Number(process.argv[3]));
 } else {
-  const depth = quickjsDepth();
+  const kind = engine();
+  const depth = kind === "native" ? 48 : 4096;
   for (const budget of ["32", "36"]) {
-    const env = depth === 4096 ? { ...process.env, BUN_WASM_STACK_KIB: budget } : process.env;
+    // QuickJS's getter frames use no host stack, so even a tiny budget holds them.
+    const env = kind === "quickjs" ? { ...process.env, BUN_WASM_STACK_KIB: budget } : process.env;
     const child = spawnSync(process.execPath, [__filename, "run", String(depth)], { env, encoding: "utf8" });
     process.stdout.write(child.stdout);
     process.stderr.write(child.stderr);

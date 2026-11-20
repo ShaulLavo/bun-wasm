@@ -1,4 +1,13 @@
 {
   "owner": "browser-guest",
-  "path": "scripts/quickjs-stack-browser.test.ts"
+  "path": "scripts/quickjs-stack-browser.test.ts",
+  "inputs": [
+    "web/tests/quickjs-stack-navigation.ts",
+    "web/tests/playground-navigation.ts",
+    "web/tests/navigate-test-page.ts",
+    "web/navigation-server-log.ts",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml"
+  ]
 }

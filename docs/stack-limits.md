@@ -624,18 +624,20 @@ whether the engine is V8. A worker cannot read touch points, and iPadOS Safari i
 sends a Macintosh user agent, so the page reports its platform, vendor, and `navigator.maxTouchPoints` in the run request's `stackHost` field.
 Both engine policies use that one field. QuickJS retains its positively observed desktop Safari rule above.
 
-| Host | JSC budget | Parser reserve |
-| --- | ---: | --- |
-| V8 (Chrome, Edge, Node) | 800 KiB | Default |
-| Desktop Firefox on Linux: `Firefox/`, `X11` and `Linux`, none of `Android`, `Mobile`, `Tablet`, `FxiOS` | 208 KiB | 960, measured below |
-| Desktop Firefox on macOS or Windows | 208 KiB | Default. Not measured |
-| macOS Safari | 192 KiB | Default. The measured Apple silicon override below is not selected automatically |
-| iPhone, iPad in either user-agent mode, any iOS browser | 192 KiB | Default. Only a native device run could qualify one |
-| Android Firefox, a Macintosh Safari identity with no touch-point fact, anything unknown | 192 KiB | Default |
+| Host | JSC budget | Parser reserve | SpiderMonkey quota |
+| --- | ---: | --- | ---: |
+| V8 (Chrome, Edge, Node) | 800 KiB | Default | Full |
+| Desktop Firefox on Linux: `Firefox/`, `X11` and `Linux`, none of `Android`, `Mobile`, `Tablet`, `FxiOS` | 208 KiB | 960, measured below | Full |
+| Desktop Firefox on macOS or Windows | 208 KiB | Default. Not measured | Full |
+| macOS Safari | 192 KiB | Default. The measured Apple silicon override below is not selected automatically | 188 KiB |
+| iPhone, iPad in either user-agent mode, any iOS browser | 192 KiB | Default. Only a native device run could qualify one | 188 KiB |
+| Android Firefox | 192 KiB | Default | Full |
+| A Macintosh Safari identity with no touch-point fact, anything else unknown | 192 KiB | Default | 188 KiB |
 
-A family without its own passing measurement keeps the default, and the catch-all never carries
-a reduced value. Playwright WebKit on Linux and a phone device descriptor on a desktop qualify
-nothing.
+For JSC's parser reserve, a family without its own passing measurement keeps the default, and the
+catch-all never carries a reduced value. Playwright WebKit on Linux and a phone device descriptor
+on a desktop qualify nothing. SpiderMonkey's quota is the exception by design: every non-Gecko,
+non-V8 host, unknown ones included, gets the WebKit value ("SpiderMonkey on small stacks" below).
 
 Safari reports the same user agent on Apple silicon and Intel Macs. The observations used here
 do not establish which processor is running, and 832 was measured only on Apple silicon.
@@ -788,6 +790,307 @@ needs 196 KiB for Babel's code generator (a chain of bound-function calls, not t
 Angular stops in Ajv's getter recursion. The budget stays 192 KiB. The existing
 `BUN_WASM_JSC_PARSER_RESERVE=832` override remains available for experiments on the measured host;
 other hosts are not qualified by these results.
+
+## SpiderMonkey on small stacks
+
+SpiderMonkey's logical counter (350 units) does not fire before a 512 KiB WebKit worker stack
+runs out on any reentry path, so unbounded getter, `.call` or Ajv-style recursion traps there.
+The engine's own byte check (`JS_SetNativeStackQuota`) counts shadow bytes, so
+`BUN_WASM_SPIDERMONKEY_STACK_KIB` sets it, and the recursive paths that hold few shadow bytes per
+host byte reserve more (`docs/bun-patches/spidermonkey-stack-budget.md` lists each site and size).
+The browser host passes 188 KiB for SpiderMonkey on every WebKit host: desktop Safari, iPhone,
+iPad and the other iOS browsers (`web/src/engine-stack-budget.ts`). V8, desktop Firefox and
+Firefox on Android pass nothing and keep the full 8 MiB quota.
+
+SpiderMonkey has its own variable because its quota and the QuickJS and JSC budget in
+`BUN_WASM_STACK_KIB` are different quantities: the guest's bootstrap alone needs about 100 KiB
+of SpiderMonkey quota, while fixtures run QuickJS children at 32 KiB. With one shared variable,
+`tests/fixtures/require-chain-stack` and `stack-native-call` could not start their SpiderMonkey
+children. The executor writes each engine's budget under its own key
+(`engineStackBudgetKey`).
+
+How it was measured: the guest in a fresh Playwright WebKit page per attempt, so its bootstrap
+runs and the shape meets cold code, on Darwin's 512 KiB worker stack: Playwright WebKit 26.6 on
+the M1 Mac and WebKit 27.2 on Linux under `ulimit -s 512`. Each shape recurses without bound
+through one path, and a second evaluation must then succeed. Runtime shapes are `.call`,
+`.apply`, getters, setters, Ajv's getter-and-`reduce` walk, bound functions, bound chains,
+proxies, `JSON.stringify` and nested-array `String`. Compile shapes are one construct nested
+20,000 deep: blocks, `if` blocks, an Ajv-style validator, labels, labelled loops, arrays, calls,
+`?:` chains, arrows, functions, immediately called functions, classes, methods, parentheses,
+objects, unary operators, element access and templates, and the chains and bodies that pass
+through a single parser function: assignments, `typeof`, `new`, comma expressions, unbraced
+`if` and loop bodies, `while`, `for`, `do`, `with`, `try` and `switch`, plus ten
+[binding pattern](#binding-patterns) shapes since November 15. Each is compiled two
+ways: by `eval` as dead code, which the parser and constant folder see, and as the body of a
+function that is declared (a lazy syntax parse) and then called once (the full compile, emitter
+included).
+
+| | Mac WebKit | Linux WebKit, 512 KiB |
+| --- | --- | --- |
+| At 188 KiB, caught and recovered | every shape, both tiers | the same |
+| Lowest quota still caught, runtime shapes | 218 KiB (PBL `JSON.stringify`), 224 KiB interp (computed getter) | 237 KiB (PBL computed getter), 278 KiB interp |
+| Compile shapes at 188 KiB: the deepest input the quota accepts compiles cold, and what stops the next level is the quota | all 30 shapes, both tiers | the same |
+| The same at 216 KiB, 15 percent above the budget | all 30 shapes, both tiers | the same |
+
+Measured November 15, 2026, cold, after the [PBL hand-over](#spidermonkey-pbl-on-deep-stacks).
+Main's guest has started colder since its `Intl` setup became lazy, and on the Mac main's own
+engine is then caught only up to 157 to 171 KiB for PBL `toString`, proxy and array-like
+`apply`, and below 150 KiB for interp computed getters: those trapped at 188 KiB. The runtime
+sizes are the hand-over's and are unchanged since.
+
+The native launcher has no host limit, so it gives the quota each workload needs with the
+starters this site ships: the guest's bootstrap 86 KiB (interp) and 95 KiB (PBL), loading Next's
+webpack hook (`require-hook` and `loadWebpackHook()`) 151 and 175 KiB, and compiling the Angular
+CLI's workspace schema with Ajv, then validating a workspace with it, 102 and 135 KiB. 188 KiB
+sits 7 percent above Next's need. In the browser guest at the host's own budget, both tiers load
+Next's hook and compile and run Angular's validators on both hosts. The
+reservations run on every WASI host, with or
+without a budget, so the emitted code differs from main everywhere; no CPU regression was
+measured. A recursion-heavy script under the launcher, pinned to one core with 10 interleaved
+runs, took a median 1.42 s on main and 1.45 s here on interp, and 1.28 s and 1.26 s on PBL.
+Compiling Next's 2.5 MB `bundle5.js` with `new Function`, pinned and interleaved over six rounds,
+took a median 177 ms before and after the compile reservations moved, on both tiers.
+`scripts/spidermonkey-stack-quota.test.ts` also runs the smoke under the WebKit value on both
+tiers: every reserved path must end in a caught `RangeError` that the quota, not the counter,
+raises, each compile shape must stop within 15 percent of its recorded depth, and the emitter's
+reservation must refuse a validator's first call before the parser would.
+
+### Compile nesting
+
+Before the [parser frame merges](#spidermonkey-parser-frames) a nested statement cost six host
+frames, and no byte budget could both load Next and catch cold statement nesting: main at
+188 KiB still crashed on labels, labelled loops, `try` blocks and assignment chains on both
+hosts, and on PBL unary and `typeof` chains on the Mac. With two frames per `if` level a budget
+can do both. The compile reservations now sit in the frames that survive on each cycle the
+probe nests ([sites and sizes](bun-patches/spidermonkey-stack-budget.md)), with one in the
+bytecode emitter. A cycle the probe does not nest can still have none: binding patterns had none
+until [their own sites](#binding-patterns) were added. Each is sized so that the depth 188 KiB accepts is at most 80 percent of the depth the host
+stack holds cold. On the portable baseline tier, the tighter one:
+
+| Shape | Host stack holds, cold (Mac, Linux) | 188 KiB accepts | Share of the smaller |
+| --- | ---: | ---: | ---: |
+| Ajv-style validator, lazily parsed | 168, 216 | 125 | 74% |
+| Ajv-style validator, compiled in full | 144, 188 | 102 | 71% |
+| Blocks, compiled in full | 280, 352 | 156 | 56% |
+| `try` blocks, lazily parsed | 264, 296 | 139 | 53% |
+| `try` blocks, compiled in full | 148, 192 | 104 | 70% |
+| `for` loops, compiled in full | 108, 144 | 76 | 70% |
+| Labels | 156, 204 | 120 | 77% |
+| Parentheses | 72, 86 | 54 | 75% |
+| Call arguments | 63, 82 | 47 | 75% |
+| `?:` chains | 180, 212 | 132 | 73% |
+| Unary and `typeof` chains | 320, 424 | 236 | 74% |
+| Nested functions | 70, 78 | 53 | 76% |
+| Immediately called functions | 26, 30 | 18 | 69% |
+
+"Holds" is the deepest level that compiles in a fresh page with no quota, measured on the build
+before the reservations moved (the wrapper frames removed since give parentheses, `?:` chains and
+function expressions a little more). "Accepts" is the deepest level that compiles in a fresh
+page at 188 KiB; it is the same on both hosts, because the quota counts shadow bytes.
+
+The share stays at 80 percent or less, not just under 100, because refusing takes host stack
+too: the engine raises its error at the deepest point, through code that is cold the first time.
+A trial at 216 KiB before `tryStatement` had a reservation showed it: lazily parsed `try`
+nesting was accepted to 248 of the 280 levels the Mac's interpreter tier holds, and the refusal
+at the next level crashed the worker.
+
+What this means for real code: Ajv's deepest Angular validator nests 57 `if` blocks and is
+compiled in full when it first validates, and the deepest validator in Next's `bundle5.js` nests
+83. Both load. A generated function nested deeper than about 100
+validator levels, or 125 when it is never called, is refused on WebKit hosts with a catchable
+`RangeError`, even where warm engine code would have fitted it: the budget cannot see how warm
+the engine's wasm is, so it assumes cold. A function the lazy parse accepted can also be refused
+on its first call, when the emitter walks it.
+
+### Binding patterns
+
+Nested destructuring in a declaration, a parameter list, a `catch` clause or a `for (let ... of)`
+head recurses through the two pattern functions, outside every reserved expression frame. With
+no reservation there, `let [[[...x]]] = []` nested 20,000 deep ran the host stack out at
+188 KiB on both tiers and both WebKit hosts, before the quota or the 1300-unit bound could
+refuse it. Patterns in an assignment or arrow parameters are parsed as expressions first and
+were already caught. Both pattern functions now reserve, the array one more, because the
+emitter's walk of a nested array pattern is the deepest pass and has no check of its own. On the
+portable baseline tier, compiled in full:
+
+| Shape | Host stack holds, cold (Mac, Linux) | 188 KiB accepts | Share of the smaller |
+| --- | ---: | ---: | ---: |
+| `let [[x]]` | 124, 168 | 90 | 73% |
+| `let {a: {a: x}}` | 184, 252 | 128 | 70% |
+| `let [...{a: [...{a: x}]}]` (one level is both kinds) | 82, 108 | 53 | 65% |
+| `catch ({a: {a: x}})` | 184, 256 | 132 | 72% |
+| `function ([[x]]) {}` | 288, 312 | 86 | 30% |
+
+On the interpreter tier `let [[x]]` holds 140 and 192 and 188 KiB accepts 100 (71 percent).
+On both hosts and tiers, at 188 KiB and at 216 KiB, every binding shape's deepest accepted input
+compiles cold and the next level is refused, and the validator, label and `?:` depths above are
+unchanged.
+A lazy parse holds at least 1.7 times what 188 KiB accepts for every pattern shape. Default Chromium and
+Firefox keep the full quota; there the 1300-unit bound refuses about 1,280 levels of array
+patterns and 640 of object patterns, and a full compile at that depth fits Chromium's stack.
+
+## SpiderMonkey parser nesting
+
+SpiderMonkey's WASI build cannot see the host's call stack, so it counts recursion: every
+`AutoCheckRecursionLimit` holds one unit of a per-context counter. Runtime reentry and the
+parser and bytecode emitter shared one 350-unit limit. A nested `if` block costs three units,
+so a generated validator compiled only about 110 properties deep
+(`tests/fixtures/stack-statement-nesting` needs 200, and 300 levels of labelled loops, which
+cost four units each).
+
+The parser and emitter spend much less host stack per unit than runtime reentry. Under
+`BUNWASM_EMBED`, a compile attached to a context now checks the counter against its own bound
+of 1300 units ([patch record](bun-patches/spidermonkey-g2.md)). Two refinements keep every
+shape inside the measured stacks:
+
+- Nested functions cost about three times more host stack per unit than other levels, so each
+  holds two extra units. Arrow chains count three units per level, function declarations four.
+- A runtime unit costs up to four frontend units of host stack on PBL. Each unit held when the
+  compile began beyond the first 32 lowers the bound by three, never below the runtime's 350.
+  Without this, about 100 levels of `toString` reentry followed by a deep compile overflowed
+  Chromium's stack on PBL.
+
+The runtime limit and the 8 MiB byte quota are unchanged. Measured November 14, 2026 with the
+standalone smoke under Wasmtime and in fresh dedicated workers (cold code, compiled from bytes)
+of headless Chromium 156, Firefox 157 and WebKit 27.2 on Linux. "Capacity" is the deepest
+nesting before the browser's own stack overflows, in counter units:
+
+| Shape | Units per level | Chromium capacity | Accepted now (levels) |
+| --- | ---: | ---: | ---: |
+| `{` blocks | 2 | 2,384 | 646 |
+| validator property (`if (ok) {`) | 3 | 2,142 | 427 |
+| `l: while (true) {` | 4 | 2,372 | 322 |
+| labels, `a ? b :` chains | 1 | 1,781, 1,658 | 1,292, 1,287 |
+| nested calls `f(` | 4 | 1,816 | 322 |
+| arrays, objects, parentheses, templates | 5 | 1,900 to 2,220 | 257 to 258 |
+| arrow chains | 3 | 1,890 | 429 |
+| function declarations | 4 | 2,088 | 323 |
+| immediately called functions, class methods | about 14 | 1,960, 2,282 | 92 |
+
+Chromium is the smallest host measured: Firefox and WebKit hold about twice as much. The
+tightest shape, `?:` chains, leaves 27 percent headroom at 1300. In all three browsers, every
+shape one level past its accepted depth ends in a caught `RangeError`, after which the nesting
+sweep ends its worker. Only the Wasmtime run and the smoke test check that a later evaluation
+succeeds. Under Wasmtime, host stack per level ranges from 400 bytes (blocks) to 1.7 KiB
+(template literals). In the ordinary guest, `eval` now has 1,289 units left and
+`new Function` 1,276 to 1,283, against 326 to 339 before.
+
+A shared-memory group member runs the group build, whose host frames are larger, and on V8 it
+has only this bound too. While the parser still had reservation wrapper frames, a 4096-deep `?:`
+chain in a group guest overflowed Chromium's stack before the bound refused it. Since they were
+removed, every shape of the WebKit probe, binding patterns included, ends in a caught
+`RangeError` in a group guest in Chromium 156 on both tiers with no budget (November 15, 2026),
+and the shared-group ownership fixture runs under the host's own setting again.
+
+Not covered: iPhone Safari and Android Chrome were not measured. PBL getter recursion
+overflows the host stack in all three browsers at any setting, because PBL does not hold a
+counter unit per inline frame. That predates this bound.
+
+## SpiderMonkey parser frames
+
+The counter bounds how deep the parser may go, not how much host stack each level costs. Every
+C++ function in a parser recursion cycle is one wasm frame, and a cold WebKit frame costs 0.6 to
+0.9 KiB. Under `BUNWASM_EMBED` the parser's statement and expression cycles are merged into
+fewer functions ([patch record](bun-patches/spidermonkey-frontend-frames.md)): a braced `if`
+level costs two frames instead of six, a block one instead of three, a parenthesised expression
+four instead of six or eight. Counter units per level are unchanged, so the bound above accepts
+and refuses at the same depths.
+
+`scripts/spidermonkey-parser.test.ts` checks that the merged functions stay gone in all four
+parser instantiations, in the smoke and the engine side, and that a differential corpus gives
+main's values, errors, positions and compile-limit boundaries.
+
+In the real guest on the M1 Mac (Playwright WebKit 26.6, 512 KiB worker stacks), Ajv's
+`validate16` from Angular's schema validation, measured November 14, 2026:
+
+| Tier | Before | After |
+| --- | --- | --- |
+| PBL, compile at the top | trapped in 3 of 3 | compiled 6 of 6, with and without calling the validator |
+| PBL, beneath 10 `.call` levels | not measured | compiled 3 of 3, both ways |
+| Interpreter, beneath 40 `.call` levels | not measured | compiled 3 of 3, both ways |
+| Observed deepest compile (of the wrapper-only ceiling) | PBL none, interpreter 10 of 80 (earlier Angular gate run) | PBL 16 of 29, interpreter 49 of 80 |
+
+After the merge the bytecode emitter is the deepest pass for braced statements compiled in full,
+at about 172 levels of the Ajv shape on the Mac. The small stack guard's reservations now sit on
+the surviving frames, with one for the emitter
+(["SpiderMonkey on small stacks"](#spidermonkey-on-small-stacks) above). With them and the
+188 KiB budget, measured November 15, 2026 on the Mac and on Linux WebKit at 512 KiB,
+`validate16` compiles in 6 of 6 fresh pages at the top on both tiers, with and without calling
+the validator, and in 3 of 3 beneath 10 `.call` levels on PBL and 40 on the interpreter tier.
+The real Angular load then gets past Ajv on both tiers and hosts, and stops at an unrelated
+error (`The object cannot be cloned`).
+
+## SpiderMonkey getters, call and apply in the interpreter loop
+
+On SpiderMonkey's C++ interpreter tier, a scripted getter read by `a.b` or `super.b` used to
+call back into native code for every level, holding two counter units and native stack
+until it returned. It now runs as an ordinary interpreter frame that returns to the property read
+([patch record](bun-patches/spidermonkey-loop-dispatch.md)). `f.call(...)` and `f.apply(...)`
+with a scripted target held three units per level; they now run the target as an
+interpreter frame too, for `call` with any arguments and for `apply` with no list, `null`,
+`undefined`, a packed array or an unmodified `arguments` object. Such frames hold no counter
+unit and use no host stack, so this recursion ends at the interpreter's 50,000-frame limit
+with the same catchable `RangeError`.
+
+Measured with the standalone smoke probe in fresh workers of headless Chromium 156,
+Firefox 157 and WebKit 27.2 (WebKit under `ulimit -s 512`), interpreter tier:
+
+| Shape | Before | After |
+| --- | --- | --- |
+| Getter recursion | trap at 78 levels (WebKit 512 KiB) | caught at 50,997 in all three |
+| Ajv's getter walk (`names` through `super.names`) | trap at 70 (WebKit 512 KiB) | caught at 16,999 in all three |
+| `f.call(null, n - 1)` recursion | trap at 550, 1,042 and 95 | caught at 50,998 in all three |
+| `f.apply(null, [n - 1])` recursion | trap at 550, 1,059 and 95 | caught at 50,998 in all three |
+| `apply` with `arguments` (two frames per level) | trap at 550, 1,059 and 93 | caught at 25,499 in all three |
+
+Computed-key getters (`a[k]`), setters, `Reflect.get` and getters on proxies or in another
+realm keep the native route, its counter and the `RunScript` quota reservation ("SpiderMonkey
+on small stacks" above). So do `call` and `apply` to bound, proxy or native targets, `apply`
+with array-likes, holey arrays or a modified `arguments` object, spread calls and
+`Reflect.apply`. Those shapes, proxy traps and `valueOf` coercion still recurse natively. PBL
+reaches these loops once its stack is deep (next section).
+
+## SpiderMonkey PBL on deep stacks
+
+The portable baseline interpreter (PBL) calls getters, setters, bound functions and calls with
+missing arguments by entering itself again in C, so each level held a counter unit and host
+stack, and its getter recursion stopped at 344 levels. Two changes
+([patch record](bun-patches/spidermonkey-pbl-handover.md)):
+
+- Calls with fewer arguments than parameters pad them with `undefined` and stay in PBL's own
+  loop.
+- Once a quarter of the byte quota is in use, or 128 counter units are held, new frames run in
+  the C++ interpreter. PBL's inline caches call through the engine's ordinary call or construct
+  path, and calls from C++ stop entering PBL. From there, getters, `call` and `apply` stay in the
+  C++ interpreter's loop above.
+
+PBL recursion depth before a caught `RangeError`, standalone smoke under Wasmtime with the full
+quota and with the 188 KiB WebKit budget:
+
+| Shape | Before | After, full quota | After, 188 KiB |
+| --- | ---: | ---: | ---: |
+| Getter | 344 | 51,124 | 51,044 |
+| Missing argument | 344 | 55,087 | 55,087 |
+| `f.call`, `f.apply` | 115 | 51,042 | 51,010 |
+| Ajv's getter walk | 340 | 17,120 | 17,035 |
+| Setter, computed getter | 344 | 234 | 73, 75 |
+| Bound function | 342 | 196 | 73 |
+| Proxy `get` trap, `toString` | 115, 172 | 115, 136 | 42, 41 |
+
+Plain PBL recursion is still bounded by PBL's own frame stack, near 4,400 levels in the smoke
+and 3,600 in the guest. Setters, computed getters, bound functions, proxies and coercions
+recurse natively in the C++ interpreter after the crossing, as on that tier, so the counter and
+the quota still stop them.
+
+In the guest, every runtime shape of the WebKit sweep above ends in a caught `RangeError` on PBL
+at 188 KiB, on the Mac and on Linux under `ulimit -s 512`. Default Chromium 156 and Firefox 157
+catch all 18 runtime shapes on both tiers, as before.
+
+Code that runs while the stack is deep runs at interpreter speed. A PBL workload of plain,
+padded, getter, setter, bound, `call` and constructor calls, pinned to one core with 10
+interleaved launcher runs, took a median 0.882 s of CPU against main's 0.917 s at the top of the
+stack (padded calls no longer leave PBL's loop), and 0.995 s against 0.919 s when run under
+200 getter levels, where it now runs in the C++ interpreter.
 
 ## Historical nested require measurements
 

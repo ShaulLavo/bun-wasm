@@ -1,5 +1,46 @@
 (function (internal: Pick<BunWasm.Internal, "native" | "toUint8">) {
   const PlatformRequest = internal.native.engine === "host" ? globalThis.Request : null;
+  // The polyfill streams keep a `_disturbed` flag; a host's native streams do not expose
+  // theirs. On the host engine, set the same flag when a reader reads or the stream is
+  // cancelled, piped or iterated, so bodyUsed and node:stream's isDisturbed see it.
+  function markDisturbed(stream: unknown): void {
+    if (!stream || typeof stream !== "object" || Reflect.get(stream, "_disturbed") === true) return;
+    Object.defineProperty(stream, "_disturbed", { value: true, configurable: true });
+  }
+  function wrapMethod(target: object, name: string | symbol, before: (self: object, args: unknown[]) => void): void {
+    const descriptor = Object.getOwnPropertyDescriptor(target, name);
+    const original: unknown = descriptor?.value;
+    if (!descriptor || typeof original !== "function") return;
+    const wrapped = { [name](this: object, ...args: unknown[]) { before(this, args); return Reflect.apply(original, this, args); } }[name as string];
+    Object.defineProperty(target, name, Object.assign(descriptor, { value: wrapped }));
+  }
+  function trackHostDisturbance(): void {
+    const Stream = globalThis.ReadableStream;
+    const marker = Symbol.for("bun-wasm.disturbance-tracked");
+    if (typeof Stream !== "function" || Reflect.get(Stream.prototype, marker)) return;
+    Object.defineProperty(Stream.prototype, marker, { value: true });
+    const owners = new WeakMap<object, object>();
+    const originalGetReader: unknown = Object.getOwnPropertyDescriptor(Stream.prototype, "getReader")?.value;
+    if (typeof originalGetReader === "function") {
+      const wrapped = function getReader(this: object, ...args: unknown[]) {
+        const reader: unknown = Reflect.apply(originalGetReader, this, args);
+        if (reader && typeof reader === "object") owners.set(reader, this);
+        return reader;
+      };
+      Object.defineProperty(Stream.prototype, "getReader", { value: wrapped, writable: true, configurable: true });
+    }
+    for (const Reader of [globalThis.ReadableStreamDefaultReader, globalThis.ReadableStreamBYOBReader]) {
+      if (typeof Reader !== "function") continue;
+      for (const name of ["read", "cancel"]) wrapMethod(Reader.prototype, name, self => markDisturbed(owners.get(self)));
+    }
+    const disturbUnlocked = (self: object) => { if (Reflect.get(self, "locked") !== true) markDisturbed(self); };
+    // values and [Symbol.asyncIterator] are one function in the platform; keep them one.
+    const sharedIterator = Reflect.get(Stream.prototype, "values") === Reflect.get(Stream.prototype, Symbol.asyncIterator);
+    for (const name of ["cancel", "pipeTo", "pipeThrough", Symbol.asyncIterator]) wrapMethod(Stream.prototype, name, disturbUnlocked);
+    if (sharedIterator) Object.defineProperty(Stream.prototype, "values", { value: Reflect.get(Stream.prototype, Symbol.asyncIterator) });
+    else wrapMethod(Stream.prototype, "values", disturbUnlocked);
+  }
+  if (internal.native.engine === "host") trackHostDisturbance();
   const bodies = new WeakMap<ReadableStream<unknown>, Uint8Array>();
   function remember<T>(stream: ReadableStream<T>, bytes: Uint8Array): ReadableStream<T> {
     bodies.set(stream, bytes);
@@ -18,16 +59,36 @@
     _body: Uint8Array | null;
     _stream: ReadableStream<unknown> | null;
   };
-  function validate(body: Body): void {
-    if (body.bodyUsed || body._stream?.locked) throw new TypeError("Body already used");
-    if (!PlatformRequest || !body._stream) return;
-    const init = { method: "POST", body: body._stream, duplex: "half" };
+  function unusable(): TypeError {
+    return Object.assign(new TypeError("Body is disturbed or locked"), { code: "ERR_BODY_ALREADY_USED" });
+  }
+  function lockedStream(): TypeError {
+    return Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });
+  }
+  function checkPlatform(stream: ReadableStream<unknown>): void {
+    if (!PlatformRequest) return;
+    const init = { method: "POST", body: stream, duplex: "half" };
     new PlatformRequest("http://localhost/", init);
   }
+  // Read a stream to its end and keep its reader: the stream ends closed, disturbed and locked.
+  // A stream over bytes already in memory closes on the first read, before this returns.
+  function finish(stream: ReadableStream<unknown>): void {
+    void drain(stream, () => {}).catch(() => {});
+  }
+  // Fetch's clone() (Bun's "Body is disturbed or locked" when this is unusable). An unread
+  // stream over bytes in memory is not teed: both bodies take the bytes, as Bun lifts them
+  // out of a native stream, and the old stream ends consumed.
   function clone(body: Body): Uint8Array | ReadableStream<unknown> | null {
-    validate(body);
-    if (!body._stream) return body._body;
-    const [source, copy] = tee(body._stream);
+    if (body.bodyUsed || body._stream?.locked) throw unusable();
+    const stream = body._stream;
+    if (!stream) return body._body;
+    if (body._body && bodies.get(stream) === body._body) {
+      finish(stream);
+      body._stream = null;
+      return body._body;
+    }
+    checkPlatform(stream);
+    const [source, copy] = tee(stream);
     body._stream = source;
     return copy;
   }
@@ -39,7 +100,10 @@
   function transfer(body: Body): ReadableStream<unknown> | null {
     const stream = body.body;
     if (stream === null) return null;
-    validate(body);
+    if (body.bodyUsed) throw new TypeError("Body already used");
+    // Bun tees the source's stream here, and the tee reports the lock.
+    if (stream.locked) throw lockedStream();
+    checkPlatform(stream);
     const reader = stream.getReader();
     body._bodyUsed = true;
     return new ReadableStream({
@@ -63,6 +127,23 @@
         await visitChunk(reader, next.value, visit);
       }
     } finally { reader.releaseLock(); }
+  }
+  // Fetch's "fully read" for a body: the reader is never released, so the stream stays
+  // locked, disturbed and closed (or errored) once the body is consumed.
+  async function drain<T>(stream: ReadableStream<T>, visit: (chunk: T) => void): Promise<void> {
+    const reader = stream.getReader();
+    for (let next = await reader.read(); !next.done; next = await reader.read()) await visitChunk(reader, next.value, visit);
+  }
+  // The stream a body read without one would have had: closed, disturbed and locked.
+  function consumedStream(): ReadableStream<Uint8Array> {
+    const stream = new ReadableStream<Uint8Array>({ start: controller => controller.close() });
+    void stream.getReader().read();
+    return stream;
+  }
+  // A ReadableStream body init that something already read or holds cannot become a body.
+  function adoptable(stream: ReadableStream<unknown>): ReadableStream<unknown> {
+    if (stream.locked || Reflect.get(stream, "_disturbed") === true) throw new TypeError("Body object should not be disturbed or locked");
+    return stream;
   }
   type IterableBody = { iterator: AsyncIterator<unknown>; closed: boolean };
   async function closeIterable(body: IterableBody): Promise<void> {
@@ -93,5 +174,33 @@
       cancel: () => closeIterable(body),
     }, { highWaterMark: 0 });
   }
-  return { remember, tee, clone, transfer, fromAsyncIterable, consume, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  // Body.textStream() (Bun's Body.rs to_text_readable_stream): the body as decoded
+  // UTF-8 strings. A character split across chunks is held until it is complete.
+  async function pullText(reader: ReadableStreamDefaultReader<unknown>, decoder: TextDecoder, controller: ReadableStreamDefaultController<string>): Promise<void> {
+    for (let next = await reader.read(); ; next = await reader.read()) {
+      if (next.done) {
+        const tail = decoder.decode();
+        if (tail) controller.enqueue(tail);
+        controller.close();
+        return;
+      }
+      const text = typeof next.value === "string" ? next.value : decoder.decode(internal.toUint8(next.value as Uint8Array), { stream: true });
+      if (text) { controller.enqueue(text); return; }
+    }
+  }
+  function textStream(body: Body): ReadableStream<string> {
+    if (body.bodyUsed || body._stream?.locked) {
+      throw Object.assign(new TypeError("Body is disturbed or locked"), { code: "ERR_BODY_ALREADY_USED" });
+    }
+    const stream = body.body;
+    if (stream === null) return new ReadableStream<string>({ start: controller => controller.close() });
+    const reader = stream.getReader();
+    body._bodyUsed = true;
+    const decoder = new TextDecoder();
+    return new ReadableStream<string>({
+      pull: controller => pullText(reader, decoder, controller),
+      cancel: reason => reader.cancel(reason),
+    });
+  }
+  return { remember, tee, clone, transfer, textStream, fromAsyncIterable, consume, drain, consumedStream, adoptable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })

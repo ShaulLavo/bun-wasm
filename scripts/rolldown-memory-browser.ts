@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
 
 const [treeArgument, adapter, result] = process.argv.slice(2);
 assert(treeArgument && adapter && result, "Usage: bun rolldown-memory-browser.ts TREE COMPILED_ADAPTER RESULT_JSON");
@@ -9,6 +10,7 @@ const tree = resolve(treeArgument);
 const directory = join(tree, "node_modules/@rolldown/binding-wasm32-wasi");
 const original = join(directory, "rolldown-binding.wasi-browser.js");
 const adapted = join(directory, "adapted-browser.js");
+const iphone = join(directory, "iphone-browser.js");
 const dependencies = (name: string) => import(pathToFileURL(join(tree, "node_modules", name)).href);
 const { build } = await dependencies("esbuild/lib/main.js");
 const { chromium, webkit } = await dependencies("playwright/index.mjs");
@@ -62,7 +64,7 @@ async function browserControl() {
 async function runMode(browser: import("playwright").Browser, mode: string) {
   const page = await browser.newPage();
   try {
-    await page.goto(server.url.href);
+    await navigateTestPage(page, server.url.href);
     return await page.evaluate((mode: string) => new Promise(resolve => {
       const worker = new Worker(`/${mode}/control.js`, { type: "module" });
       const timeout = setTimeout(() => { worker.terminate(); resolve({ ok: false, error: "Control timed out" }); }, 45_000);
@@ -77,7 +79,7 @@ async function runMode(browser: import("playwright").Browser, mode: string) {
 async function runBrowser(name: string, browserType: import("playwright").BrowserType) {
   const browser = await browserType.launch({ headless: true, env: { ...process.env, TMPDIR: scratch } });
   try {
-    for (const mode of ["stock", "small"]) {
+    for (const mode of ["stock", "small", "iphone"]) {
       controls.push({ browser: name, version: browser.version(), mode, control: await runMode(browser, mode) });
     }
   } finally {
@@ -86,14 +88,18 @@ async function runBrowser(name: string, browserType: import("playwright").Browse
 }
 
 try {
-  generated.push(adapted);
+  generated.push(adapted, iphone);
   const adaptedResult = Bun.spawnSync([adapter, original, adapted], { stdout: "pipe", stderr: "pipe" });
   assert.equal(adaptedResult.exitCode, 0, adaptedResult.stderr.toString());
   assert.equal(JSON.parse(adaptedResult.stdout.toString()).changed, true);
-  assert.equal(readFileSync(adapted, "utf8"), readFileSync(original, "utf8").replace("initial: 16384,", "initial: 1001 ,"));
+  assert.equal(readFileSync(adapted, "utf8"), readFileSync(original, "utf8").replace("initial: 16384,", "initial: 1001 ,").replace("maximum: 65536,", "maximum: 32768,"));
+  const iphoneResult = Bun.spawnSync([adapter, original, iphone], { stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, BUN_WASM_IPHONE_NATIVE_MEMORY: "1" } });
+  assert.equal(iphoneResult.exitCode, 0, iphoneResult.stderr.toString());
+  assert.equal(readFileSync(iphone, "utf8"), readFileSync(original, "utf8").replace("initial: 16384,", "initial: 1001 ,").replace("maximum: 65536,", "maximum: 4096 ,"));
   const banner = "const probeMemories = [], probeDescriptors = []; const WebAssembly = Object.create(globalThis.WebAssembly); WebAssembly.Memory = class extends globalThis.WebAssembly.Memory { constructor(d) { super(d); probeDescriptors.push(d); probeMemories.push(this); } }; export { probeMemories, probeDescriptors };";
-  for (const mode of ["stock", "small"]) {
-    await build({ entryPoints: [mode === "stock" ? original : adapted], bundle: true, platform: "browser", format: "esm",
+  for (const mode of ["stock", "small", "iphone"]) {
+    await build({ entryPoints: [mode === "stock" ? original : mode === "iphone" ? iphone : adapted], bundle: true, platform: "browser", format: "esm",
       outfile: join(scratch, `${mode}-loader.js`), banner: { js: banner } });
     writeFileSync(join(scratch, `${mode}-control.js`), `(${browserControl.toString()})();`);
   }

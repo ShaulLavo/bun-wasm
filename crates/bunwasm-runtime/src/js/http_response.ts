@@ -12,14 +12,18 @@
     _body: Uint8Array | null;
     _stream: ReadableStream<unknown> | null;
     _bodyUsed: boolean;
+    // What Bun.serve sends for a string or byte body without a Content-Type.
+    _servedType: string | null;
   };
   type Serialize = (status: number, message: string, headers: Pair[]) => Uint8Array;
   const encoder = new TextEncoder();
   const crlf = encoder.encode("\r\n");
   const terminal = encoder.encode("0\r\n\r\n");
 
-  function headers(response: Response, keepAlive: boolean): Pair[] {
+  function headers(response: BodyResponse, keepAlive: boolean): Pair[] {
     const pairs = Array.from(response.headers).filter(([name]) => name !== "content-length" && name !== "transfer-encoding");
+    const served = response._servedType;
+    if (served && response._body?.length && !response.headers.has("content-type")) pairs.push(["content-type", served]);
     if (!response.headers.has("date")) pairs.push(["date", new Date().toUTCString()]);
     if (!keepAlive) pairs.push(["connection", "close"]);
     return pairs;
@@ -82,7 +86,7 @@
     } finally {
       if (connection.onClose === closed) connection.onClose = previousClose;
       if (connection.onEnd === ended) connection.onEnd = previousEnd;
-      reader.releaseLock();
+      // The reader is kept, so the sent body's stream stays locked and used, as in Bun.
     }
   }
 
@@ -91,10 +95,12 @@
     const bodyless = response.status === 204 || response.status === 304;
     const source = response._body === null ? response._stream : null;
     if (source && method !== "HEAD" && !bodyless) return await stream(connection, response, source, pairs, serialize, reportError) && keepAlive;
-    const body = method === "HEAD" || bodyless ? new Uint8Array(0) : new Uint8Array(await response.arrayBuffer());
-    if (!bodyless) pairs.push(["content-length", String(method === "HEAD" ? Number(response.headers.get("content-length") || 0) : body.length)]);
+    // An in-memory body is consumed even for HEAD, as in Bun: a stream its .body made
+    // ends locked and disturbed, bodyUsed turns true, and its size is the Content-Length.
+    const body = bodyless || source ? new Uint8Array(0) : new Uint8Array(await response.arrayBuffer());
+    if (!bodyless) pairs.push(["content-length", String(method === "HEAD" ? Number(response.headers.get("content-length") || body.length) : body.length)]);
     connection.write(serialize(response.status, response.statusText, pairs));
-    if (!bodyless && body.length) connection.write(body);
+    if (method !== "HEAD" && !bodyless && body.length) connection.write(body);
     if (source && !source.locked) void source.cancel().catch(reportError);
     return keepAlive;
   }

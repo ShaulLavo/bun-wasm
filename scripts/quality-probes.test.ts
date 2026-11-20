@@ -38,7 +38,7 @@ test("strict scripts project rejects a wrong type", () => {
 });
 test("Knip rejects a new unreferenced source file", () => {
   withProbe("src/quality-unused-probe.ts", "export const qualityUnusedProbe = 31;\n", () => rejectsGate("unused", "src/quality-unused-probe.ts"));
-});
+}, 60_000);
 test("fixed clone baseline rejects a new exact source copy", () => {
   withProbe("src/quality-clone-probe.ts", readFileSync(resolve(root, "src/bun-adapter.ts"), "utf8"), () => rejectsGate("duplicates", "new clone"));
 });

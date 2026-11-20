@@ -2,10 +2,10 @@ import { TypedEventTarget } from "@remix-run/component";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { createRuntime, type Runtime } from "waffle";
-import { BUN_MEMORY_GROUP_POLICY } from "../../../src/engine-kind";
-import { playgroundProfile, registerPlaygroundBun, requireProfileEngine, type PlaygroundProfile } from "./program-profile";
+import { memoryGroupPolicy } from "../host-memory-policy";
+import { playgroundProfile, registerPlaygroundBun, templateProfile, type PlaygroundProfile } from "./program-profile";
 import { BrowserPrograms } from "../browser-programs";
-import { ENGINES, type Engine, WasmMissing, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
+import { ENGINES, type Engine, WasmMissing, createToolsLoader, engineBuildHint, engineUnavailable, isEngine, loadEngineProgram, loadWasm, mb, registerModuleScope } from "../engine-loader";
 import { installCompileObserver, measurementEnvironment } from "../compile-observer";
 import { HOME, examples } from "../examples";
 import { normalize } from "../fs";
@@ -37,6 +37,7 @@ const HOST_VERSIONS = {};
 export class Playground extends TypedEventTarget<{ change: Event }> {
   readonly engine: Engine;
   readonly profile: PlaygroundProfile;
+  private readonly requestedProfile: PlaygroundProfile | undefined;
   readonly template: ProjectTemplate | undefined;
   term?: Terminal;
   editor?: Editor;
@@ -61,8 +62,13 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const requested = this.params.get("engine");
     if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
     this.engine = requested ?? DEFAULT_ENGINE;
-    this.profile = playgroundProfile(this.params.get("profile"));
-    requireProfileEngine(this.engine, this.profile);
+    const profile = this.params.get("profile");
+    this.requestedProfile = profile === null ? undefined : playgroundProfile(profile);
+    this.profile = this.profileForEngine(this.engine);
+  }
+
+  profileForEngine(engine: Engine): PlaygroundProfile {
+    return templateProfile(engine, this.template?.id, this.requestedProfile);
   }
 
   get status(): Status {
@@ -154,7 +160,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
     const runtime = createRuntime({
       filesystem: { mode, name: this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace" },
-      memoryGroups: BUN_MEMORY_GROUP_POLICY,
+      memoryGroups: memoryGroupPolicy(this.engine, navigator.userAgent),
     });
     const browserPrograms = new BrowserPrograms(runtime, {
       worker: new URL("./preview1-worker.js", location.href),
@@ -214,15 +220,19 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     if (wasm instanceof Error) throw wasm;
     const module = wasm.module;
     const engine = this.engine;
-    const registration = await registerPlaygroundBun({ runtime, engine, module, profile: this.profile, launcher: async (context, service) => {
-      const { bunLauncher } = await import("../bun-launcher");
-      return bunLauncher(engine, {
-        runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
-        // web/build.ts emits the notification helper at the page root in both modes.
-        notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,
-        loadTools: () => loadWasm("bun-tools.wasm", () => {}).then(loaded => loaded.module),
-      })(context, service);
-    } });
+    const loadTools = createToolsLoader();
+    const registration = await registerPlaygroundBun({ runtime, engine, module, profile: this.profile,
+      loadModule: (provider, profile) => loadEngineProgram(provider, profile, () => {}).then(loaded => loaded.module),
+      launcher: provider => async (context, service) => {
+        const { bunLauncher } = await import("../bun-launcher");
+        return bunLauncher(provider, {
+          runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
+          // web/build.ts emits the notification helper at the page root in both modes.
+          notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,
+          loadTools,
+        })(context, service);
+      },
+    });
     await fs.flush();
     const { BrowserSession } = await import("bash-web/session");
     const prompt = (await promptModule)?.createPrompt({

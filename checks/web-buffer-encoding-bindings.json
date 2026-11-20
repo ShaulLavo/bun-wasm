@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/buffer-encoding-bindings.test.ts",
+  "localRuntime": true
+}

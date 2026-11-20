@@ -1,0 +1,17 @@
+{
+  "owner": "browser-guest",
+  "batch": "10-storage",
+  "path": "scripts/sandbox-fs-observation-browser.test.ts",
+  "inputs": [
+    "scripts/storage-fs-control.ts",
+    "scripts/storage-fs-build.ts",
+    "scripts/storage-fs-endpoint.ts",
+    "scripts/storage-fs-metadata.ts",
+    "scripts/storage-fs-observation.ts",
+    "scripts/storage-fs-worker-prelude.ts",
+    "scripts/storage-fs-page-prelude.ts",
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml"
+  ]
+}

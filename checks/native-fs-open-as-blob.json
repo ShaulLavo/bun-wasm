@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fs-open-as-blob",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

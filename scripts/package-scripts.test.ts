@@ -16,7 +16,7 @@ function project(scripts: Record<string, string>, check: (cwd: string) => Promis
   writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ scripts }));
   return Promise.resolve(check(cwd)).finally(() => rmSync(cwd, { recursive: true, force: true }));
 }
-function runtime(cwd: string, name: string, args: string[] = [], options: { exits?: Record<string, Exit>; execArgv?: string[] } = {}) {
+function runtime(cwd: string, name: string, args: string[] = [], options: { exits?: Record<string, Exit>; execArgv?: string[]; handoff?: (plan: string) => number } = {}) {
   const spawned: { argv: string[]; event: string | undefined; script: string | undefined }[] = [];
   const raised: string[] = [];
   let stderr = "";
@@ -28,6 +28,8 @@ function runtime(cwd: string, name: string, args: string[] = [], options: { exit
   };
   const scripts = factory({
     native: {
+      packageScriptsHandoff: options.handoff ?? (() => -58),
+      platformInfo: { version: "1.4.4", arch: "wasm32" },
       mainArg: () => name, setMainPath() {}, exists: existsSync, readFileUtf8: (file: string) => readFileSync(file, "utf8"),
       stat: (file: string, lstat: boolean) => lstat ? lstatSync(file) : statSync(file), readlink: readlinkSync,
       readdir: (file: string) => readdirSync(file, { withFileTypes: true }).map(entry => [entry.name, entry.isDirectory() ? "dir" : entry.isSymbolicLink() ? "symlink" : "file"]),
@@ -68,6 +70,64 @@ test("a package script runs in the system shell with pre and post hooks and esca
   expect(guest.env.npm_execpath).toBe("/bin/bun");
   expect(guest.env.PATH!.split(":").slice(0, 2)).toEqual([path.join(cwd, "node_modules/.bin"), path.join(path.dirname(cwd), "node_modules/.bin")]);
   expect(guest.exitCode).toBeUndefined();
+}));
+
+test("private continuation preparation snapshots the guest environment and prepared commands", () => project({ prebuild: "npm run before", build: "npx vite", postbuild: "pnpm run after" }, async cwd => {
+  const f = runtime(cwd, "build", ["a b", "$HOME"], { execArgv: ["--silent"] });
+  const command = f.scripts.resolve(path.join(cwd, "build"));
+  f.guest.env.ACTUAL = "after resolve";
+  f.guest.env.EMPTY = "";
+  const value = f.scripts.continuationPlan(command);
+  expect(value).toMatchObject({ version: 1, cwd, silent: true, color: false,
+    pre: { name: "prebuild", original: "npm run before", command: "bun run before" },
+    main: { name: "build", original: "npx vite", command: 'bun x vite "a b" "\\$HOME"' },
+    post: { name: "postbuild", original: "pnpm run after", command: "bun run after" },
+    env: { ACTUAL: "after resolve", EMPTY: "", npm_execpath: "/bin/bun", PATH: f.guest.env.PATH }, footer: "Bun v1.4.4 (WASI wasm32)\n" });
+  f.guest.env.ACTUAL = "later";
+  expect(value.env.ACTUAL).toBe("after resolve");
+  expect(Object.isFrozen(value.env)).toBe(true);
+  expect(f.guest.env.npm_execpath).toBeUndefined();
+  expect(f.guest.env.npm_lifecycle_event).toBeUndefined();
+  expect(f.spawned).toHaveLength(0);
+  expect(f.stderr()).toBe("");
+  await f.scripts.run(command);
+  expect(f.spawned).toHaveLength(3);
+}));
+
+for (const errno of [-58, -52]) {
+  test(`only precommit unsupported ${errno} enters the existing loop once`, () => project({ prebuild: "echo pre", build: "echo main", postbuild: "echo post" }, async cwd => {
+    const plans: unknown[] = [];
+    const f = runtime(cwd, "build", [], { handoff(plan) {
+      plans.push(JSON.parse(plan));
+      expect(f.guest.env.npm_lifecycle_event).toBeUndefined();
+      expect(f.guest.env.npm_execpath).toBeUndefined();
+      expect(f.stderr()).toBe("");
+      return errno;
+    } });
+    await f.scripts.run(f.scripts.resolve(path.join(cwd, "build")));
+    expect(plans).toHaveLength(1);
+    expect(f.spawned.map(child => child.event)).toEqual(["prebuild", "build", "postbuild"]);
+  }));
+}
+
+for (const result of [-21, -28, -44, 0, 128]) {
+  test(`handoff result ${result} cannot resume the old loop`, () => project({ build: "echo never" }, async cwd => {
+    const f = runtime(cwd, "build", [], { handoff: () => result });
+    await expect(f.scripts.run(f.scripts.resolve(path.join(cwd, "build")))).rejects.toThrow("Package continuation handoff failed");
+    expect(f.spawned).toHaveLength(0);
+    expect(f.stderr()).toBe("");
+    expect(f.guest.env.npm_lifecycle_event).toBeUndefined();
+    expect(f.guest.env.npm_execpath).toBeUndefined();
+  }));
+}
+
+test("committed replacement unwinds without running another phase", () => project({ prebuild: "echo never", build: "echo never" }, async cwd => {
+  const replacement = new Error("exec control transfer");
+  const f = runtime(cwd, "build", [], { handoff() { throw replacement; } });
+  await expect(f.scripts.run(f.scripts.resolve(path.join(cwd, "build")))).rejects.toBe(replacement);
+  expect(f.spawned).toHaveLength(0);
+  expect(f.stderr()).toBe("");
+  expect(f.guest.env.npm_lifecycle_event).toBeUndefined();
 }));
 
 test("a failing script stops the run with Bun's message and its exit code", () => project({ test: "exit 3", posttest: "echo never", quiet: "exit 2", killed: "sleep 9", interrupted: "sleep 9" }, async cwd => {
@@ -138,4 +198,46 @@ test("a name without a script runs a source file first, then an installed packag
   writeFileSync(path.join(cwd, "tool.ts"), "");
   expect(runtime(cwd, "tool").scripts.resolve(path.join(cwd, "tool"))).toBe(path.join(cwd, "tool.ts"));
   expect(bin.spawned).toEqual([]);
+}));
+
+test("package script preparation resolves an unlinked manifest bin without source-file precedence", () => project({ dev: 'fixture-tool "two words"' }, async cwd => {
+  const entry = path.join(cwd, "node_modules/@fixture/cli/cli.ts");
+  mkdirSync(path.dirname(entry), { recursive: true });
+  writeFileSync(path.join(path.dirname(entry), "package.json"), JSON.stringify({ name: "@fixture/cli", bin: { "fixture-tool": "cli.ts" } }));
+  writeFileSync(entry, 'console.log(JSON.stringify([process.argv.slice(2), process.cwd(), process.env.VALUE, process.env.npm_lifecycle_event]));');
+  writeFileSync(path.join(cwd, "fixture-tool.ts"), 'throw new Error("source collision");');
+  const f = runtime(cwd, "dev", ["tail", "$HOME", "a; echo injected"]);
+  f.guest.execPath = process.execPath;
+  f.guest.env.VALUE = "preserved";
+  const command = f.scripts.resolve(path.join(cwd, "dev"));
+  const plan = f.scripts.continuationPlan(command);
+  expect(plan.main.original).toBe('fixture-tool "two words"');
+  const child = Bun.spawnSync(["/bin/bash", "-c", plan.main.command], { cwd: plan.cwd, env: { ...plan.env, npm_lifecycle_event: "dev" } });
+  expect({ code: child.exitCode, error: child.stderr.toString() }).toEqual({ code: 0, error: "" });
+  expect(JSON.parse(child.stdout.toString())).toEqual([["two words", "tail", "$HOME", "a; echo injected"], cwd, "preserved", "dev"]);
+  await f.scripts.run(command);
+  expect(f.spawned[0]?.argv[2]).toBe(plan.main.command);
+  expect(f.spawned[0]?.script).toBe(plan.main.original);
+  expect(f.guest.env.PATH).toBe(plan.env.PATH);
+}));
+
+for (const [name, original] of [
+  ["echo", "echo safe"],
+  ["if", "if true; then echo safe; fi"],
+  ["command", "command printf safe"],
+  ["for", "for word in safe; do printf %s \"$word\"; done"],
+] satisfies [string, string][]) test(`package manifest bin ${name} preserves shell command precedence`, () => project({ dev: original }, async cwd => {
+  const directory = path.join(cwd, "node_modules/collision");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: "collision", bin: { [name]: "cli.ts" } }));
+  writeFileSync(path.join(directory, "cli.ts"), 'throw new Error("manifest bin replaced shell handling");');
+  const f = runtime(cwd, "dev");
+  f.guest.execPath = process.execPath;
+  const command = f.scripts.resolve(path.join(cwd, "dev"));
+  const plan = f.scripts.continuationPlan(command);
+  expect(plan.main.command).toBe(original);
+  const child = Bun.spawnSync(["/bin/bash", "-c", plan.main.command], { cwd, env: plan.env });
+  expect({ code: child.exitCode, stdout: child.stdout.toString().trim(), stderr: child.stderr.toString() }).toEqual({ code: 0, stdout: "safe", stderr: "" });
+  await f.scripts.run(command);
+  expect(f.spawned[0]?.argv[2]).toBe(original);
 }));

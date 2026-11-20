@@ -1,0 +1,6 @@
+url and init {"multipart":true,"form":"[[\"field\",\"value\\r\\nline\"],[\"upload\",{\"file\":\"notes.txt\",\"type\":\"text/plain;charset=utf-8\"}],[\"blob\",{\"file\":\"blob.bin\",\"type\":\"application/octet-stream\"}]]","files":["upload=file body","blob=asd1"]}
+plain object {"multipart":true,"form":"[[\"field\",\"value\\r\\nline\"],[\"upload\",{\"file\":\"notes.txt\",\"type\":\"text/plain;charset=utf-8\"}],[\"blob\",{\"file\":\"blob.bin\",\"type\":\"application/octet-stream\"}]]","files":["upload=file body","blob=asd1"]}
+request {"multipart":true,"form":"[[\"field\",\"value\\r\\nline\"],[\"upload\",{\"file\":\"notes.txt\",\"type\":\"text/plain;charset=utf-8\"}],[\"blob\",{\"file\":\"blob.bin\",\"type\":\"application/octet-stream\"}]]","files":["upload=file body","blob=asd1"]}
+request with init {"multipart":true,"form":"[[\"field\",\"value\\r\\nline\"],[\"upload\",{\"file\":\"notes.txt\",\"type\":\"text/plain;charset=utf-8\"}],[\"blob\",{\"file\":\"blob.bin\",\"type\":\"application/octet-stream\"}]]","files":["upload=file body","blob=asd1"]}
+echoed multipart [["field","value\r\nline"],["upload",{"file":"notes.txt","type":"text/plain;charset=utf-8"}],["blob",{"file":"blob.bin","type":"application/octet-stream"}]] file body
+echoed urlencoded [["a","1"],["b","two words"]]

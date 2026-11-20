@@ -306,15 +306,16 @@ fn run(options: Options) -> Result<i32> {
         ticker: Some(ticker),
     };
     let result = std::thread::Builder::new()
-        .name("bun-wasm".into())
+        .name("bun-wasm-guest".into())
         .stack_size(thread_stack)
         .spawn(move || {
             run_instance(
-                runtime,
+                runtime
+                    .admit_root(Arc::default())
+                    .map_err(|errno| anyhow::anyhow!("root admission failed: {errno}"))?,
                 args,
                 env,
                 process::Stdio::inherited(),
-                Arc::default(),
             )
         })
         .context("starting the guest thread")?
@@ -325,25 +326,25 @@ fn run(options: Options) -> Result<i32> {
 }
 
 fn run_instance(
-    runtime: Arc<process::Runtime>,
+    process_admission: process::AdmittedProcess,
     argv: Vec<String>,
     env: Vec<(String, String)>,
     stdio: process::Stdio,
-    cancel: Arc<process::Cancellation>,
 ) -> Result<process::FinalOutcome> {
-    let module = runtime.module.clone();
-    run_module_instance(runtime, &module, argv, env, stdio, cancel, None)
+    let module = process_admission.runtime().module.clone();
+    run_module_instance(process_admission, &module, argv, env, stdio, None)
 }
 
 fn run_module_instance(
-    runtime: Arc<process::Runtime>,
+    process_admission: process::AdmittedProcess,
     module: &Module,
     argv: Vec<String>,
     mut env: Vec<(String, String)>,
     stdio: process::Stdio,
-    cancel: Arc<process::Cancellation>,
     admission: Option<linked::Admission>,
 ) -> Result<process::FinalOutcome> {
+    let runtime = process_admission.runtime();
+    let cancel = process_admission.cancellation();
     if !env.iter().any(|(k, _)| k == "BUN_WASM_STACK_KIB") {
         env.push(("BUN_WASM_STACK_KIB".into(), GUEST_STACK_KIB.into()));
     }
@@ -359,17 +360,18 @@ fn run_module_instance(
         .find(|(key, _)| key == "PWD")
         .map_or_else(|| "/".into(), |(_, value)| value.clone());
     let selected = runtime.module_for(&argv, module)?;
-    let member = runtime
-        .linked
-        .member(selected, stdio.pid as u32, admission)?;
+    let member = runtime.linked.member(
+        selected,
+        process_admission.execution_id().get() as u32,
+        admission,
+    )?;
     // Wasmtime drops a Store's data before its instances. This lease of the group backing is
     // declared before the Store, so it outlives every instance that imports the group memory
     // (`Programs::instantiate`), on every return and unwind path.
     let _backing = member.as_ref().map(|member| member.group().memory_lease());
     let net = net::Net::new();
     let memory_limit = stdio.memory_limit;
-    let mut processes =
-        process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
+    let mut processes = process::Processes::new(process_admission, stdio, net.notify());
     processes.join_memory_group(member.as_ref().map(shm::MemberLease::group));
     let watches = fs_watch::Watches::new(net.notify());
     let host = Host {
@@ -514,6 +516,8 @@ fn report_instance_trap(error: &anyhow::Error) {
 }
 
 fn main() -> ExitCode {
+    // Threads that still hold the runtime at exit keep it from dropping; this removes its folder.
+    let _executables = process::ProcessRoots;
     let options = match parse_args(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(error) => {
@@ -598,11 +602,10 @@ mod tests {
             let module = Module::new(&engine, proc_exit_guest(status)).unwrap();
             let runtime = process::Runtime::new(engine.clone(), module, Vec::new()).unwrap();
             let outcome = run_instance(
-                runtime,
+                runtime.admit_root(Arc::default()).unwrap(),
                 Vec::new(),
                 Vec::new(),
                 process::Stdio::inherited(),
-                Arc::default(),
             )
             .unwrap();
             assert_eq!(outcome, FinalOutcome::Exit(expected), "proc_exit({status})");
@@ -715,11 +718,10 @@ mod tests {
         let module = Module::new(&engine, executable_access_guest()).unwrap();
         let runtime = process::Runtime::new(engine, module, Vec::new()).unwrap();
         let outcome = run_instance(
-            runtime.clone(),
+            runtime.admit_root(Arc::default()).unwrap(),
             Vec::new(),
             Vec::new(),
             process::Stdio::inherited(),
-            Arc::default(),
         )
         .unwrap();
         runtime.shutdown();
@@ -764,11 +766,10 @@ mod tests {
             runtime.register_engine(name, &runtime.module).unwrap();
         }
         let outcome = run_instance(
-            runtime.clone(),
+            runtime.admit_root(Arc::default()).unwrap(),
             Vec::new(),
             Vec::new(),
             process::Stdio::inherited(),
-            Arc::default(),
         );
         runtime.shutdown();
         assert_eq!(outcome.unwrap(), FinalOutcome::Exit(0));
@@ -834,10 +835,9 @@ mod tests {
             .register_engine("jsc", &Module::new(&engine, proc_exit_guest(33)).unwrap())
             .unwrap();
         let mut parent = process::Processes::new(
-            runtime.clone(),
+            runtime.clone().admit_root(Arc::default()).unwrap(),
             process::Stdio::inherited(),
             net::Net::new().notify(),
-            Arc::default(),
         );
         struct Cleanup(Arc<process::Runtime>);
         impl Drop for Cleanup {

@@ -12,6 +12,7 @@ import { assetIdentity } from "../goals-matrix/assets";
 import { preflight } from "../goals-matrix/preparation";
 import { canonical, object, sha256, treeInventory } from "./input";
 import { executionIdentity, finalizeHostVerification, lifecycleDriverInputs, recordInvocationEnvironment, verifyResume } from "./lifecycle-campaign";
+import waffleRelease from "../waffle-release-inputs.json";
 
 function options(args: string[]): { output: string; scratch: string; host: string; prepared: string; cells: string[]; timeoutMs: number; mode: "timing" | "selection" | "controls" | "observation" | "observer-off" } {
   const values = new Map<string, string>();
@@ -79,7 +80,7 @@ async function campaign(config: Config, signal: AbortSignal) {
 }
 async function campaignLocked(config: Config, signal: AbortSignal) {
   const host = object(JSON.parse(await readFile(join(config.host, "lifecycle-host.json"), "utf8")));
-  if (host.waffle !== "0.0.129") throw new Error("Prepared host must assert Waffle 0.0.129");
+  if (host.waffle !== waffleRelease.version) throw new Error(`Prepared host must assert Waffle ${waffleRelease.version}`);
   await preflight(config.host, ["browser", "quickjs", "jsc", "spidermonkey"]);
   const inputs = { mode: config.mode, timeoutMs: config.timeoutMs, host: await assetIdentity(config.host),
     drivers: lifecycleDriverInputs(process.cwd()), execution: await executionIdentity(), templates: { next: treeInventory("sandbox/template-next"), vite: treeInventory("sandbox/template") },

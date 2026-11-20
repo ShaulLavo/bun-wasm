@@ -12,7 +12,7 @@ The generator consumes `tmp_modules/modules_out`, immediately before Bun rewrite
 
 The Rust `bunBuiltinSource` data native returns one factory source. Its registry, source lookup, hook names, and error codes live in the shared data-native table used by all engines. The adapter compiles it with the existing `native.evalScript`, backed by `Engine::eval_script` for QuickJS and JSC and the browser host's evaluator for the host engine. It does not evaluate the factory body. `src/js/bun_builtins.ts` invokes that body on first require and caches its exported value by Bun's registry ID. Failed initializations can be retried. Circular initialization fails explicitly instead of recurring indefinitely. CJS require and ESM import share the existing builtin registry and its exports.
 
-An unembedded public dependency delegates to the existing `internal.builtin` implementation. An unembedded internal dependency fails explicitly. This is the module migration boundary, not support for mixed software versions. No new global variables or prototype properties implement intrinsics. Before application code runs, bootstrap stores the original intrinsic constructors and adapter primitives in a frozen runtime-owned table from `bun_builtin_globals.ts`. This realizes the runtime Buffer constructor during bootstrap. The lazy adapter receives those captured values instead of reading mutable globals. Its code and generated factories still load and compile only when a switched module first requires them.
+An unembedded public dependency delegates to the existing `internal.builtin` implementation. An internal dependency listed under `runtimeProvided` in `scripts/bun-builtins.json` resolves to the runtime's own implementation, mapped in `bun_builtins.ts`; `internal:streams/duplex` is the `node:stream` Duplex, and `internal:tls` and `internal:webstreams_adapters` come from `bun_provided_internals.ts`. Any other unembedded internal dependency fails explicitly. This is the module migration boundary, not support for mixed software versions. No new global variables or prototype properties implement intrinsics. Before application code runs, bootstrap stores the original intrinsic constructors and adapter primitives in a frozen runtime-owned table from `bun_builtin_globals.ts`. This realizes the runtime Buffer constructor during bootstrap. The lazy adapter receives those captured values instead of reading mutable globals. Its code and generated factories still load and compile only when a switched module first requires them.
 
 ## Intrinsics
 
@@ -32,7 +32,7 @@ The generated [catalog](../crates/bunwasm-runtime/generated/builtins/catalog.jso
 | internalModuleRegistry, getInternalField, createInternalModuleById | Per-runtime module cache and lazy loader | Initialization cycles report an unsupported operation. |
 | makeTypeError, throwTypeError, throwRangeError | ECMAScript error constructors | No native hook. |
 | makeErrorWithCode | Generated error-code table, URIError for ERR_INVALID_URI | Other error constructors explicitly fail until ported. |
-| lazy | Generated native-hook dispatch metadata | Function hooks return a callable that throws on invocation. Binding-object hooks throw immediately. |
+| lazy | Generated native-hook dispatch metadata | Function hooks return a callable that throws on invocation. Binding-object hooks throw immediately, except `createNodeFetchInternalBinding` and `createUndiciInternalBinding`, which return the web classes their C++ returns. |
 | requireMap | Explicit ERR_BUN_BUILTIN_UNSUPPORTED | Needs Bun's CommonJS cache protocol; it is distinct from the builtin registry. |
 | Any other intrinsic | Explicit ERR_BUN_BUILTIN_UNSUPPORTED | No fake successful result. |
 
@@ -72,6 +72,7 @@ The catalog is the complete hook inventory. The following groups block the next 
 | internal:freelist | Bun's | Loader probe; no native hooks. Not a public Node module. |
 | querystring | Bun's | Four focused upstream files pass on all engines, versus one before. |
 | punycode | Bun's | The focused upstream file passes on all engines, versus zero before. |
+| node-fetch, undici, isomorphic-fetch, @vercel/fetch | Bun's | Resolved ahead of `node_modules`, as in Bun. See [the record](bun-patches/bun-thirdparty-fetch-builtins.md). |
 | events | Blocked | Validators, Node errors, shared hooks, EventTarget and async resources. |
 | util | Blocked | Native comparison, validation and MIME helpers. |
 | assert | Blocked | Native assertion binding and Node errors. |

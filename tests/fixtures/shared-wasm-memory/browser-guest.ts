@@ -15,3 +15,4 @@ await import('./table-controls.ts');
 await import('./worker-refusals.ts');
 await import('./browser-transport-controls.ts');
 await import('./membership-forgery-control.ts');
+await import('./busy-member-stop.ts');

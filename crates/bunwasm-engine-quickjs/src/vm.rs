@@ -18,8 +18,15 @@ use rquickjs::{
 };
 
 use crate::engine::{Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Val, ValueFn};
+use crate::rejection_queue::RejectionQueue;
 
 type V = Value<'static>;
+
+/// A promise's identity for the rejection queue: its object address.
+fn promise_key(promise: &Value<'_>) -> usize {
+    // SAFETY: reads the pointer bits of a live value; promises are objects.
+    unsafe { qjs::JS_VALUE_GET_PTR(promise.as_raw()) as usize }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -133,7 +140,9 @@ struct Inner {
     ctx: Ctx<'static>,
     host: Rc<dyn ModuleHost<QuickJs>>,
     /// Rejected promises without a handler yet: (promise, reason).
-    rejections: RefCell<Vec<(V, V)>>,
+    rejections: RefCell<RejectionQueue<(V, V)>>,
+    /// Promises that got their first handler after they left `rejections`.
+    late_handled: RefCell<Vec<V>>,
 }
 
 impl Drop for Inner {
@@ -279,6 +288,22 @@ fn stack_budget() -> usize {
     kib.filter(|&kib| kib > 0).unwrap_or(152).min(MAX_KIB) * 1024
 }
 
+/// `__transferFault()` and `__transferFaultWatch()` of a validation side
+/// (`transfer_fault.rs`). Neither takes arguments, so the wrapper allocates nothing on entry.
+#[cfg(bun_wasm_transfer_fault)]
+fn install_transfer_fault(ctx: &Ctx<'_>) {
+    use crate::transfer_fault::{bunwasm_transfer_fault_leave, bunwasm_transfer_fault_watch};
+    let report = Function::new(ctx.clone(), || bunwasm_transfer_fault_leave());
+    let watch = Function::new(ctx.clone(), || bunwasm_transfer_fault_watch());
+    let globals = ctx.globals();
+    globals
+        .set("__transferFault", report.expect("transfer fault report"))
+        .expect("transfer fault report global");
+    globals
+        .set("__transferFaultWatch", watch.expect("transfer fault watch"))
+        .expect("transfer fault watch global");
+}
+
 impl Engine for QuickJs {
     type Value = V;
 
@@ -296,6 +321,8 @@ impl Engine for QuickJs {
             install_shared_buffer_storage(runtime_raw);
         };
         TELEMETRY_RUNTIME.with(|active| active.set(runtime_raw));
+        #[cfg(bun_wasm_transfer_fault)]
+        install_transfer_fault(&ctx);
         let has_interrupt_handler = host.has_interrupt_handler();
         let engine = QuickJs(Rc::new(Inner {
             _runtime: runtime.clone(),
@@ -303,7 +330,8 @@ impl Engine for QuickJs {
             _context: context,
             ctx,
             host,
-            rejections: RefCell::new(Vec::new()),
+            rejections: RefCell::new(RejectionQueue::new()),
+            late_handled: RefCell::new(Vec::new()),
         }));
         if has_interrupt_handler {
             let weak = Rc::downgrade(&engine.0);
@@ -324,12 +352,16 @@ impl Engine for QuickJs {
         runtime.set_host_promise_rejection_tracker(Some(Box::new(
             move |_ctx, promise, reason, is_handled| {
                 let Some(inner) = weak.upgrade() else { return };
-                let mut list = inner.rejections.borrow_mut();
-                let promise = erase(promise);
-                if is_handled {
-                    list.retain(|(p, _)| *p != promise);
-                } else {
-                    list.push((promise, erase(reason)));
+                let key = promise_key(&promise);
+                if !is_handled {
+                    let entry = (erase(promise), erase(reason));
+                    inner.rejections.borrow_mut().push(key, entry);
+                    return;
+                }
+                // The removed entry drops after the borrow ends.
+                let queued = inner.rejections.borrow_mut().remove(key);
+                if queued.is_none() {
+                    inner.late_handled.borrow_mut().push(erase(promise));
                 }
             },
         )));
@@ -342,6 +374,12 @@ impl Engine for QuickJs {
 
     fn name(&self) -> &'static str {
         "quickjs"
+    }
+
+    fn version(&self) -> (&'static str, &'static str) {
+        // SAFETY: QuickJS-NG returns a pointer to its static, NUL-terminated version string.
+        let version = unsafe { std::ffi::CStr::from_ptr(qjs::JS_GetVersion()) };
+        ("quickjs", version.to_str().unwrap_or("unknown"))
     }
 
     fn undefined(&self) -> V {
@@ -465,11 +503,8 @@ impl Engine for QuickJs {
             )));
         }
         // SAFETY: the promise and context are live; the mark runs no JavaScript.
+        // The tracker hears about the mark and takes the promise out of the rejection queue.
         unsafe { qjs::JS_PromiseMarkAsHandled(self.raw(), promise.as_raw()) };
-        self.0
-            .rejections
-            .borrow_mut()
-            .retain(|(current, _)| *current != promise);
         Ok(promise)
     }
 
@@ -521,8 +556,12 @@ impl Engine for QuickJs {
         })
     }
 
-    fn take_unhandled_rejections(&self) -> Vec<(V, V)> {
-        self.0.rejections.borrow_mut().drain(..).collect()
+    fn next_unhandled_rejection(&self) -> Option<(V, V)> {
+        self.0.rejections.borrow_mut().pop()
+    }
+
+    fn take_late_handled_rejections(&self) -> Vec<V> {
+        std::mem::take(&mut *self.0.late_handled.borrow_mut())
     }
 
     fn same_value(&self, a: &V, b: &V) -> bool {
@@ -548,6 +587,9 @@ impl Engine for QuickJs {
     }
 
     fn detach_buffer(&self, v: &V) {
+        // A validation build refuses every allocation from the first detach on.
+        #[cfg(bun_wasm_transfer_fault)]
+        crate::transfer_fault::enter();
         // SAFETY: the transfer native validated every buffer before detaching any.
         unsafe { qjs::JS_DetachArrayBuffer(self.raw(), v.as_raw()) }
     }
@@ -650,7 +692,7 @@ impl Engine for QuickJs {
             .set("arrayBuffers", usage.array_buffer_size as f64)
             .set("arrayBufferCount", usage.array_buffer_count as f64)
             .set("failedAllocation", allocation_failure(self.raw()))
-            .set("wasmCapacity", wasm_memory_bytes())
+            .set("wasmCapacity", crate::engine::wasm_capacity())
             .into()
     }
 }
@@ -677,17 +719,6 @@ fn allocation_failure(ctx: *mut qjs::JSContext) -> Val {
         .set("size", size)
         .set("category", category)
         .into()
-}
-
-fn wasm_memory_bytes() -> Val {
-    #[cfg(target_arch = "wasm32")]
-    {
-        Val::Num((core::arch::wasm32::memory_size(0) * 65536) as f64)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Val::Null
-    }
 }
 
 fn utf16_string_val(value: &Value<'_>) -> Val {
@@ -843,22 +874,22 @@ fn unerase<'js>(v: V) -> Value<'js> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    enum InterruptMode {
+    pub(crate) enum InterruptMode {
         Continue,
         Terminate,
         OneShot(Rc<std::cell::Cell<bool>>),
     }
 
-    struct InterruptHost {
+    pub(crate) struct InterruptHost {
         polls: std::cell::Cell<u32>,
         mode: InterruptMode,
     }
 
     impl InterruptHost {
-        fn new(mode: InterruptMode) -> Self {
+        pub(crate) fn new(mode: InterruptMode) -> Self {
             Self {
                 polls: std::cell::Cell::new(0),
                 mode,

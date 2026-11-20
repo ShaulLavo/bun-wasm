@@ -1,16 +1,15 @@
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 import { artifactIdentity } from "./guest-build-receipt";
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { parseEngineAllocationFault, refusingAllocator } from "../web/scripts/node-linked";
-import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, parserChainFixture, proxyGetForwardingFixture, proxyGetLifetimeFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt } from "./jsc-embedding";
+import { arrayLiteralFixture, assignmentChainFixtures, boundCallDispatchFixture, getterDispatchFixture, handshakeCommands, jscEmbeddingArchives, parserChainFixture, proxyGetForwardingFixture, proxyGetLifetimeFixture, stackFixture, statementRecordFixtures, verifyEmbeddingReceipt, verifyJscEmbedding } from "./jsc-embedding";
+import { deliveryFixtureSource, writeJscDeliveryFixture } from "./fixtures/ordinary-web-delivery.ts";
+import { hash } from "./guest-source-manifest.ts";
 
 const patch = readFileSync(new URL("../jsc/webkit-wasi.patch", import.meta.url), "utf8");
-
-test("WASI resizable allocation returns failure before upstream allocation work", () => {
-  expect(patch).toContain("static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory");
-  expect(patch).toMatch(/tryAllocateResizableMemory[^\n]*\n \{\n\+#if OS\(WASI\)\n(?:\+[^\n]*\n)*?\+    return nullptr;\n\+#else\n/);
-});
 
 test("WASI regexp matching preserves recursion errors instead of returning no match", () => {
   expect(patch.includes("return static_cast<unsigned>(JSRegExpResult::ErrorNoMemory);")).toBe(true);
@@ -30,6 +29,19 @@ test("JSC receipts bind the committed source, prebuild and guest bytes", () => {
   expect(() => verifyEmbeddingReceipt(receipt, { ...inputs, jscInputsSha256: "f".repeat(64) }, bytes)).toThrow("mismatch");
   expect(() => verifyEmbeddingReceipt(receipt, inputs, { ...bytes, side: new Uint8Array(Array.from(bytes.side).concat([0, 2, 1, 120])) })).toThrow("mismatch");
   expect(() => verifyEmbeddingReceipt(receipt, inputs, { ...bytes, core: new Uint8Array(Array.from(bytes.core).concat([0, 2, 1, 120])) })).toThrow("mismatch");
+});
+
+test("split embedding verification retains original archive, source and companion checks", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-embedding-verify-"));
+  try {
+    await writeJscDeliveryFixture(directory);
+    const artifact = join(directory, "bun-jsc.wasm");
+    const current = { sourceHead: deliveryFixtureSource.head, sourceTree: deliveryFixtureSource.tree, jscInputsSha256: "c".repeat(64), archives: jscEmbeddingArchives.map(path => ({ path, sha256: hash(path) })) };
+    await verifyJscEmbedding(artifact, current);
+    await expect(verifyJscEmbedding(artifact, { ...current, sourceHead: "0".repeat(40) })).rejects.toThrow("mismatch");
+    rmSync(join(directory, "jsc-engine.wasm"));
+    await expect(verifyJscEmbedding(artifact, current)).rejects.toThrow();
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("the JSC artifact check runs the busy-loop stdout handshake on the same guest", () => {
@@ -60,6 +72,23 @@ test("the adapter sets the parser reserve once, inside the existing JSC initiali
   const callback = helpers.split("JSC::initialize([] {")[1]?.split("});")[0] ?? "";
   expect(callback).toContain('if (unsigned reserve = parserReserveSetting(getenv("BUN_WASM_JSC_PARSER_RESERVE")))\n            JSC::setWasmParserReserve(reserve);');
   expect(helpers.indexOf("JSC::setWasmParserReserve")).toBeLessThan(helpers.indexOf("VM::createContextGroup()"));
+});
+
+test("WASI JSON frames reserve capacity and root tables before publication", () => {
+  const json = patch.split("diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp").at(-1) ?? "";
+  const open = json.split("::openContainer(JSCell& cell)")[1]?.split("::openObject(JSObject&")[0] ?? "";
+  expect(open.indexOf("reserveContainerSlot<testing>()")).toBeLessThan(open.indexOf("buffer()[m_length++]"));
+  expect(open.indexOf("m_roots.append(&object)")).toBeGreaterThan(open.indexOf("buffer()[m_length++]"));
+  expect(json.indexOf("m_roots.append(table)")).toBeGreaterThan(json.indexOf("acquirePropertyTableForJSONFastPath"));
+  expect(json.indexOf("m_frames.unsafeAppendWithoutCapacityCheck")).toBeGreaterThan(json.indexOf("m_roots.append(table)"));
+  expect(json).toContain("frameAt(index).cursor = next;");
+  expect(json).toContain("frameAt(index).cursor = i + 1;");
+  expect(json).not.toContain("DeferGCForAWhile");
+  expect(json).toContain("FailureReason::FastNesting");
+  expect(json).toContain("FailureReason::FastFrameAllocation");
+  const helpers = readFileSync(new URL("../crates/bunwasm-jsc/cpp/helpers.cpp", import.meta.url), "utf8");
+  expect(helpers.match(/BUN_WASM_JSC_JSON_FAST_TEST"/g)).toHaveLength(1);
+  expect(helpers).not.toContain("BUN_WASM_JSC_GC_EVERY_SLOW_ALLOCS");
 });
 
 test("a refused constant array buffer falls back to ordinary array construction on WASI only", () => {

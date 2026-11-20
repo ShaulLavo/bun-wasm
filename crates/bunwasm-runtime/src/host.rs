@@ -313,6 +313,8 @@ pub fn connect_path(path: &str) -> i32 {
 mod runtime_proc {
     #[link(wasm_import_module = "runtime_proc")]
     unsafe extern "C" {
+        pub fn process_id() -> i32;
+        pub fn parent_process_id() -> i32;
         pub fn access_start(path: i32, path_len: i32, cwd: i32, cwd_len: i32, mode: i32) -> i32;
         pub fn access_take(request: i32) -> i32;
         pub fn access_cancel(request: i32) -> i32;
@@ -342,6 +344,12 @@ mod runtime_proc {
 #[cfg(not(target_arch = "wasm32"))]
 mod runtime_proc {
     use super::UNSUPPORTED;
+    pub unsafe fn process_id() -> i32 {
+        UNSUPPORTED
+    }
+    pub unsafe fn parent_process_id() -> i32 {
+        UNSUPPORTED
+    }
     pub unsafe fn access_start(_: i32, _: i32, _: i32, _: i32, _: i32) -> i32 {
         UNSUPPORTED
     }
@@ -399,19 +407,20 @@ mod runtime_proc {
 }
 
 /// Waffle's `runtime_fs` guest filesystem watches (Waffle docs/host-abi.md, "Guest filesystem
-/// watches"). Each call returns a positive WASI errno, 0 on success. Watch ids are process-local
-/// and are not descriptors.
+/// watches"). Open/read/close return a positive WASI errno, 0 on success. Readiness returns
+/// a boolean i32. Watch ids are process-local and are not descriptors.
 #[cfg(target_arch = "wasm32")]
 mod runtime_fs {
     #[link(wasm_import_module = "runtime_fs")]
     unsafe extern "C" {
         pub fn watch_open(fd: i32, flags: i32, out_id: i32) -> i32;
         pub fn watch_read(id: i32, buf: i32, len: i32, out_len: i32) -> i32;
+        pub fn watch_ready() -> i32;
         pub fn watch_close(id: i32) -> i32;
     }
 }
 
-/// Host builds (unit tests) have no runtime_fs namespace: every call is ENOSYS.
+/// Host builds (unit tests) have no watches. Registration/read/close return ENOSYS.
 #[cfg(not(target_arch = "wasm32"))]
 mod runtime_fs {
     const NOSYS: i32 = 52;
@@ -423,6 +432,9 @@ mod runtime_fs {
     }
     pub unsafe fn watch_close(_: i32) -> i32 {
         NOSYS
+    }
+    pub unsafe fn watch_ready() -> i32 {
+        0
     }
 }
 
@@ -466,6 +478,40 @@ pub fn proc_spawn(request: &[u8]) -> i32 {
     proc_call!(runtime_proc::spawn(ptr(request), request.len() as i32))
 }
 
+#[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "bun_package_scripts")]
+unsafe extern "C" {
+    fn handoff(ptr: i32, length: i32, out: i32, capacity: i32) -> i32;
+}
+
+/// Private prepared-plan binding. The caller snapshots its actual JS environment and commands.
+/// Only NOTSUP/NOSYS permit the old loop; a committed exec unwinds and never returns here.
+pub fn package_scripts_handoff(plan: &str) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // SAFETY: both buffers remain live throughout each synchronous host call. No guest
+        // callback, descriptor operation or event-loop turn occurs during the size retry.
+        let required = unsafe { handoff(ptr(plan.as_bytes()), plan.len() as i32, 0, 0) };
+        if required <= 0 {
+            return required;
+        }
+        let mut scratch = vec![0u8; required as usize];
+        unsafe {
+            handoff(
+                ptr(plan.as_bytes()),
+                plan.len() as i32,
+                ptr_mut(&mut scratch),
+                required,
+            )
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = plan;
+        -58
+    }
+}
+
 /// Copy the bounded diagnostic before another spawn or a consuming child wait.
 pub fn proc_spawn_error(pid: i32) -> Result<Vec<u8>, i32> {
     let mut bytes = vec![0u8; 4096];
@@ -479,6 +525,21 @@ pub fn proc_spawn_error(pid: i32) -> Result<Vec<u8>, i32> {
 
 pub fn proc_job_of(pid: i32) -> i32 {
     proc_call!(runtime_proc::job_of(pid))
+}
+
+fn checked_process_identity(pid: i32, parent_pid: i32) -> Result<[i32; 2], &'static str> {
+    if pid <= 0 || parent_pid < 0 || pid == parent_pid {
+        return Err("Host provided an invalid logical process identity");
+    }
+    Ok([pid, parent_pid])
+}
+
+/// Immutable logical process ancestry, independent of execution/member handles.
+pub fn proc_identity() -> Result<[i32; 2], &'static str> {
+    checked_process_identity(
+        proc_call!(runtime_proc::process_id()),
+        proc_call!(runtime_proc::parent_process_id()),
+    )
 }
 
 /// Returns `(read, write)` descriptors, or the negative code.
@@ -595,6 +656,11 @@ pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
         return Err(errno);
     }
     Ok(id)
+}
+
+/// Non-consuming readiness for all process-local watches, including terminal records.
+pub fn fs_watch_ready() -> bool {
+    proc_call!(runtime_fs::watch_ready()) != 0
 }
 
 /// One `watch_read`: whole records (empty at end of stream), or the positive errno
@@ -732,6 +798,16 @@ pub(crate) fn sleep_with(
 
 #[cfg(test)]
 mod signal_tests {
+    #[test]
+    fn logical_identity_rejects_missing_or_invalid_host_values() {
+        for pair in [(0, 0), (-4, 0), (7, -4), (7, 7)] {
+            assert!(super::checked_process_identity(pair.0, pair.1).is_err());
+        }
+        assert_eq!(super::checked_process_identity(37, 11), Ok([37, 11]));
+        assert_eq!(super::checked_process_identity(1, 0), Ok([1, 0]));
+        #[cfg(not(target_arch = "wasm32"))]
+        assert!(super::proc_identity().is_err());
+    }
     use super::*;
 
     #[test]

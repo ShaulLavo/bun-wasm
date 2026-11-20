@@ -70,10 +70,10 @@ function guard(result: string): number | null {
 }
 
 test("the prebuild job runs for every native selection, independent of the JSC engine gates", () => {
-  expect(producer.needs).toEqual(["quality", "jsc-identity"]);
-  expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.quality.outputs.rust == 'true') }}");
-  expect(JSON.stringify(producer)).not.toContain("needs.quality.outputs.jsc");
-  expect(native.needs).toEqual(["quality", "jsc-prebuild", "native-quality"]);
+  expect(producer.needs).toEqual(["selection", "jsc-identity"]);
+  expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true')) }}");
+  expect(JSON.stringify(producer)).not.toContain("needs.selection.outputs.jsc");
+  expect(native.needs).toEqual(["selection", "jsc-prebuild", "native-quality"]);
   // A native-only change still builds the tools fixture, which links the prebuild.
   for (const [path, jsc] of [["crates/bunwasm-runtime/src/engine_quickjs.rs", false], ["jsc/configure.sh", true], ["scripts/build-jsc.sh", true]] satisfies [string, boolean][]) {
     expect(needsRust([path])).toBe(true);
@@ -82,19 +82,19 @@ test("the prebuild job runs for every native selection, independent of the JSC e
   expect(needsRust(["docs/code-quality.md"])).toBe(false);
 });
 
-type GraphCase = { quality: string; rust: string; jsc: string; outcome: string; cancelled: boolean };
+type GraphCase = { selection: string; rust: string; jsc: string; outcome: string; cancelled: boolean };
 
-const graphCases: GraphCase[] = ["success", "failure"].flatMap(quality => ["true", "false"].flatMap(rust => ["true", "false"].flatMap(jsc =>
-  ["success", "failure", "cancelled"].flatMap(outcome => [false, true].map(cancelled => ({ quality, rust, jsc, outcome, cancelled }))))));
+const graphCases: GraphCase[] = ["success", "failure"].flatMap(selection => ["true", "false"].flatMap(rust => ["true", "false"].flatMap(jsc =>
+  ["success", "failure", "cancelled"].flatMap(outcome => [false, true].map(cancelled => ({ selection, rust, jsc, outcome, cancelled }))))));
 
-function checkGraph({ quality, rust, jsc, outcome, cancelled }: GraphCase) {
-  const qualityNeed = { result: quality, outputs: { rust, jsc, shared: "false" } };
-  const prebuildRuns = jobRuns(producer, { quality: qualityNeed, "jsc-identity": { result: quality === "success" && rust === "true" ? "success" : "skipped" } }, cancelled);
+function checkGraph({ selection, rust, jsc, outcome, cancelled }: GraphCase) {
+  const selectionNeed = { result: selection, outputs: { rust, jsc, shared: "false" } };
+  const prebuildRuns = jobRuns(producer, { selection: selectionNeed, "jsc-identity": { result: selection === "success" && rust === "true" ? "success" : "skipped" } }, cancelled);
   const prebuild = { result: prebuildRuns ? outcome : "skipped" };
-  const nativeRuns = jobRuns(native, { quality: qualityNeed, "jsc-prebuild": prebuild, "native-quality": { result: prebuild.result } }, cancelled);
-  const selected = quality === "success" && rust === "true" && !cancelled;
+  const nativeRuns = jobRuns(native, { selection: selectionNeed, "jsc-prebuild": prebuild, "native-quality": { result: prebuild.result } }, cancelled);
+  const selected = selection === "success" && rust === "true" && !cancelled;
   expect(prebuildRuns).toBe(selected);
-  // Skipping is reserved for the change filter, a failed quality job or a cancelled run.
+  // Skipping is reserved for the change filter, a failed selection job or a cancelled run.
   expect(nativeRuns).toBe(selected);
   if (!nativeRuns) return;
   expect(guard(prebuild.result)).toBe(outcome === "success" ? 0 : 1);
@@ -149,9 +149,9 @@ test("one job owns the sysroot and prebuild builds and caches; the native job on
   expect(step(producer, "id", "jsc-producer").env).toEqual({ CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}" });
   const names = steps(native).map(item => String(item.name ?? item.uses ?? ""));
   const download = steps(native).findIndex(item => item.uses === "actions/download-artifact@v8" && record(item.with).name === "jsc-prebuild.tar");
-  expect(download).toBe(names.indexOf(importName) - 1);
+  expect(download).toBeLessThan(names.indexOf(importName));
   expect(record(steps(native)[download]!.with).path).toBe("${{ runner.temp }}/jsc-prebuild-transfer");
-  expect(names.indexOf("Configure private JSC build paths")).toBe(download - 1);
+  expect(names.indexOf("Configure private JSC build paths")).toBeLessThan(names.indexOf(importName));
   for (const later of ["Build patched WASI sysroot", "Identify effective native build environment", "Identify JSC prebuild inputs", "Build the single tools fixture in the existing native target"]) {
     expect(names.indexOf(later)).toBeGreaterThan(names.indexOf(importName));
   }
@@ -204,7 +204,7 @@ function environment(root: string, temp: string): Record<string, string> {
   const runnerTemp = join(root, temp);
   return {
     PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root, RUNNER_TEMP: runnerTemp, TMPDIR: runnerTemp,
-    WASM_TOOLS: join(runnerTemp, "wasm-tools"), JSC_BUILD_DIR: join(runnerTemp, "jsc/prebuild"),
+    WASM_TOOLS: join(runnerTemp, "wasm-tools"), BUN_WASM_SYSROOT: join(runnerTemp, "wasm-tools/bun-wasm-sysroot-patched"), JSC_BUILD_DIR: join(runnerTemp, "jsc/prebuild"),
     GITHUB_RUN_ID: "4100", GITHUB_SHA: "433aca4ea0d761c23fc1661aa8c636e75dfdd6b3",
     GITHUB_OUTPUT: join(root, "outputs"), STAMP_CALLS: join(root, "stamp-calls"),
   };

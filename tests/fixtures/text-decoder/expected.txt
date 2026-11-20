@@ -1,0 +1,1 @@
+TextDecoder native codec, streaming, fatal and dictionary controls passed

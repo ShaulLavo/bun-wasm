@@ -1,0 +1,271 @@
+import { appendFileSync } from "node:fs";
+import type { Browser, BrowserContext, Frame, Page, Request, Response } from "playwright";
+import { StorageRoutingEvidence } from "./storage-routing-evidence";
+import { retainMetadata } from "./storage-fs-metadata";
+
+export type StorageObservation = Pick<StorageLifetime, "step" | "event" | "acquire" | "own" | "observeContext" | "secondary" | "qualifyRouting" | "routingReport">;
+type RecordEvent = (event: { sequence: number; time: string; kind: string; detail: unknown }) => void;
+
+function loadingNavigation(response: Response): boolean {
+  if (response.status() !== 307 || !response.fromServiceWorker() || !response.request().isNavigationRequest()) return false;
+  const location = response.headers().location;
+  if (!location) return false;
+  const request = new URL(response.url());
+  const prefix = /^(.*\/__preview\/)\d{1,5}(?:\/|$)/.exec(request.pathname)?.[1];
+  if (!prefix) return false;
+  try {
+    const target = new URL(location, request);
+    return target.origin === request.origin && new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.loading/[a-f0-9-]{36}$`).test(target.pathname);
+  } catch { return false; }
+}
+
+function errorDetail(error: unknown): unknown {
+  if (!(error instanceof Error)) return { error: String(error) };
+  return { error: String(error), name: error.name, message: error.message, stack: error.stack,
+    cause: error.cause instanceof Error ? { error: String(error.cause), stack: error.cause.stack } : String(error.cause) };
+}
+
+export class StorageLifetime {
+  readonly failures: unknown[] = [];
+  private readonly routing = new StorageRoutingEvidence();
+  private readonly releases: (() => Promise<void>)[] = [];
+  private readonly acquisitions: Promise<void>[] = [];
+  private progressError: { error: unknown } | undefined;
+  private cleanupTask: Promise<void> | undefined;
+  private closing = false;
+  private sequence = 0;
+  private operation = 0;
+  private page = 0;
+  private readonly filesystemRings = new Map<number, { rows: object[]; dropped: number }>();
+  private filesystemFailed = false;
+  private filesystemRetained = false;
+  private filesystemPagesDropped = 0;
+
+  constructor(private readonly write?: RecordEvent) {}
+
+  get observation(): StorageObservation | undefined { return this.write ? this : undefined; }
+
+  event(kind: string, detail: unknown = null): void {
+    try { this.write?.({ sequence: ++this.sequence, time: new Date().toISOString(), kind, detail }); }
+    catch (error) { this.failProgress(error); }
+    if (kind === "begin" && detail && typeof detail === "object" && "phase" in detail && detail.phase === "restart.click") this.routing.beginRestart();
+    if (!["error", "preservation-error", "primary-error", "secondary-error"].includes(kind)) return;
+    this.event("routing-failure", { summary: this.routing.summaries(), trace: this.routing.snapshot() });
+    this.filesystemFailed = true;
+    this.retainFilesystemFailure();
+  }
+
+  private retainFilesystemFailure(final = false): void {
+    if (!this.filesystemRings.size || (final ? !this.filesystemFailed : this.filesystemRetained)) return;
+    this.filesystemRetained = true;
+    this.event(final ? "filesystem-retained-final" : "filesystem-retained", { pagesDropped: this.filesystemPagesDropped,
+      streams: Array.from(this.filesystemRings, ([page, ring]) => ({ page, rows: ring.rows.slice(), dropped: ring.dropped })), limits: { pages: 8, recentPerPage: 32 } });
+  }
+
+  private filesystemMetadata(page: number, text: string): void {
+    try {
+      if (text.length > 32768) throw Error("Filesystem observation metadata exceeded its bound");
+      const row: unknown = JSON.parse(text);
+      if (!row || typeof row !== "object") throw Error("Filesystem observation has no metadata object");
+      let ring = this.filesystemRings.get(page);
+      if (!ring) { ring = { rows: [], dropped: 0 }; this.filesystemRings.set(page, ring); }
+      if (retainMetadata(ring.rows, row)) ring.dropped++;
+      if (this.filesystemRings.size <= 8) return;
+      this.filesystemRings.delete(this.filesystemRings.keys().next().value!);
+      this.filesystemPagesDropped++;
+    } catch (error) { this.secondary("filesystem-observation.metadata", error); }
+  }
+
+  private failProgress(error: unknown): void {
+    if (this.progressError) return;
+    this.progressError = { error };
+    this.failures.push(error);
+  }
+
+  private checkProgress(): void {
+    if (this.progressError) throw this.progressError.error;
+  }
+
+  async step<T>(phase: string, operation: () => T | PromiseLike<T>): Promise<T> {
+    const id = ++this.operation;
+    this.event("begin", { id, phase });
+    this.checkProgress();
+    try {
+      const value = await operation();
+      this.event("end", { id, phase });
+      this.checkProgress();
+      return value;
+    } catch (error) {
+      this.event("error", { id, phase, ...errorObject(error) });
+      throw error;
+    }
+  }
+
+  own(phase: string, close: () => void | PromiseLike<void>): () => Promise<void> {
+    let task: Promise<void> | undefined;
+    const release = () => task ??= this.release(phase, close);
+    this.releases.push(release);
+    if (this.closing) void release();
+    return release;
+  }
+
+  secondary(phase: string, error: unknown): void {
+    this.failures.push(error);
+    this.event("secondary-error", { phase, ...errorObject(error) });
+  }
+
+  private async release(phase: string, close: () => void | PromiseLike<void>): Promise<void> {
+    this.event("cleanup-begin", { phase });
+    try { await close(); }
+    catch (error) {
+      this.secondary(phase, error);
+    }
+    this.event("cleanup-end", { phase });
+  }
+
+  acquire<T>(phase: string, open: () => Promise<T>, close: (value: T) => Promise<void>): Promise<{ value: T; release(): Promise<void> }> {
+    return this.step(phase, () => this.trackAcquisition(phase, open(), close));
+  }
+
+  private trackAcquisition<T>(phase: string, opening: Promise<T>, close: (value: T) => Promise<void>): Promise<{ value: T; release(): Promise<void> }> {
+    const pending = opening.then(value => this.adopt(phase, value, close));
+    this.acquisitions.push(pending.then(() => {}, () => {}));
+    return pending;
+  }
+
+  private async adopt<T>(phase: string, value: T, close: (value: T) => Promise<void>): Promise<{ value: T; release(): Promise<void> }> {
+    const release = this.own(`${phase}.close`, () => close(value));
+    if (this.closing) await release();
+    return { value, release };
+  }
+
+  cleanup(): Promise<void> {
+    this.closing = true;
+    return this.cleanupTask ??= Promise.all(this.releases.map(release => release()).concat(this.acquisitions)).then(() => {
+      this.retainFilesystemFailure(true);
+      if (this.filesystemFailed) this.event("routing-final", { summary: this.routing.summaries(), trace: this.routing.snapshot() });
+    });
+  }
+
+  assertClean(): void {
+    if (this.failures.length) throw new AggregateError(this.failures, "Storage evidence or cleanup failed");
+  }
+
+  async run<T>(body: () => Promise<T>): Promise<T> {
+    let primaryFailed = false;
+    try { return await body(); }
+    catch (error) {
+      primaryFailed = true;
+      this.event("primary-error", errorDetail(error));
+      throw error;
+    } finally {
+      await this.cleanup();
+      if (!primaryFailed) this.assertClean();
+    }
+  }
+
+  observeBrowser(browser: Browser): void {
+    browser.on("disconnected", () => this.event("browser-disconnected"));
+  }
+
+  routingReport(): object[] { return this.routing.summaries(); }
+
+  async qualifyRouting(targets?: string[]): Promise<void> {
+    const deadline = Date.now() + 30_000;
+    while (true) {
+      try { this.routing.qualify(targets); break; }
+      catch (error) { if (Date.now() >= deadline) throw error; }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    this.event("routing-qualified", this.routing.snapshot());
+  }
+
+  async observeContext(context: BrowserContext): Promise<void> {
+    context.on("page", page => this.observePage(page));
+    context.on("close", () => this.event("context-close"));
+    if (this.write) await this.step("filesystem-observation.install", () =>
+      context.addInitScript(() => { Reflect.set(globalThis, "__bunwasmStorageFirstEvent", true); }));
+  }
+
+  private observePage(page: Page): void {
+    const id = ++this.page;
+    const requests = new WeakMap<Request, { request: number; startObserved: boolean }>();
+    const frames = new WeakMap<Frame, number>();
+    let requestId = 0;
+    let frameId = 0;
+    const identifyFrame = (frame: Frame): number => {
+      const existing = frames.get(frame);
+      if (existing !== undefined) return existing;
+      const next = ++frameId;
+      frames.set(frame, next);
+      return next;
+    };
+    const frameDetail = (frame: Frame) => {
+      const parent = frame.parentFrame();
+      return { frame: identifyFrame(frame), url: frame.url(), name: frame.name(),
+        main: frame === page.mainFrame(), parent: parent ? identifyFrame(parent) : null };
+    };
+    const requestDetail = (request: Request, startObserved = false) => {
+      let identity = requests.get(request);
+      if (!identity) { identity = { request: ++requestId, startObserved }; requests.set(request, identity); }
+      return { page: id, ...identity, url: request.url(), method: request.method(), resourceType: request.resourceType(),
+        navigation: request.isNavigationRequest(), ...requestFrame(request, frameDetail) };
+    };
+    this.event("page", { page: id });
+    page.on("console", message => {
+      const routing = "[storage-routing] ";
+      if (message.text().startsWith(routing)) {
+        try {
+          if (message.text().length > 32768) throw Error("Routing metadata exceeded its bound");
+          this.routing.receive(JSON.parse(message.text().slice(routing.length)));
+        }
+        catch (error) { this.secondary("routing.metadata", error); }
+        return;
+      }
+      if (message.text().startsWith("[storage-routing-error] ")) this.secondary("routing.transport", Error(message.text()));
+      const metadata = "[storage-fs-metadata] ";
+      if (message.text().startsWith(metadata)) { this.filesystemMetadata(id, message.text().slice(metadata.length)); return; }
+      this.event("console", { page: id, type: message.type(), text: message.text(), location: message.location() });
+      if (message.text().startsWith("[storage-fs-observation-error] ")) this.secondary("filesystem-observation", new Error(message.text()));
+    });
+    page.on("pageerror", error => this.event("pageerror", { page: id, ...errorObject(error) }));
+    page.on("request", request => {
+      const detail = requestDetail(request, true);
+      this.routing.request({ kind: "request", page: id, request: detail.request, url: detail.url });
+      this.event("request", detail);
+    });
+    page.on("response", response => {
+      const detail = { ...requestDetail(response.request()), status: response.status(), fromServiceWorker: response.fromServiceWorker() };
+      this.routing.request({ kind: "response", page: id, request: detail.request, url: detail.url, status: detail.status, fromServiceWorker: detail.fromServiceWorker, loadingNavigation: loadingNavigation(response) });
+      this.event("response", detail);
+    });
+    page.on("requestfinished", request => {
+      const detail = requestDetail(request);
+      this.routing.request({ kind: "requestfinished", page: id, request: detail.request, url: detail.url });
+      this.event("requestfinished", detail);
+    });
+    page.on("requestfailed", request => this.event("requestfailed", { ...requestDetail(request), failure: request.failure() }));
+    page.on("framenavigated", frame => this.event("navigation", { page: id, ...frameDetail(frame) }));
+    page.on("crash", () => this.event("page-crash", { page: id }));
+    page.on("close", () => this.event("page-close", { page: id }));
+    page.on("worker", worker => {
+      this.event("worker", { page: id, url: worker.url() });
+      worker.on("close", () => this.event("worker-close", { page: id, url: worker.url() }));
+    });
+  }
+}
+
+function requestFrame<T>(request: Request, detail: (frame: Frame) => T): { frame: T } | { frame: null; frameUnavailable: string } {
+  try { return { frame: detail(request.frame()) }; }
+  catch (error) { return { frame: null, frameUnavailable: String(error) }; }
+}
+
+function errorObject(error: unknown): { failure: unknown } { return { failure: errorDetail(error) }; }
+
+export function storageEvidence(path: string | undefined): StorageLifetime {
+  return new StorageLifetime(path ? event => appendFileSync(path, `${JSON.stringify(event)}\n`) : undefined);
+}
+
+export function storageStep<T>(observer: StorageObservation | undefined, phase: string, operation: () => Promise<T>): Promise<T> {
+  return observer ? observer.step(phase, operation) : operation();
+}

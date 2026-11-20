@@ -14,6 +14,7 @@ import type { FilesystemIdentity } from "waffle/fs";
 import { bunLauncher, preview1Launcher, siblingWorkerUrl, type Preview1LauncherOptions } from "./bun-launcher.js";
 import type { BunNetworkOptions } from "./net/helper.js";
 import type { Engine } from "./bun-executor.js";
+import { packageService, preparePackageContinuation } from "../../src/package-continuation-installation.js";
 
 type CompiledExecutable = WebAssembly.Module | (() => Promise<WebAssembly.Module>);
 export type ExecutableRegistration =
@@ -97,20 +98,28 @@ export class SubprocessBroker {
     if (this.root && !this.runtime.disposed) this.service?.rootControlAllocated(this.root.pid, buffer);
   }
   /** Admits the adopted root as the first member of a new memory group. */
-  async admitRootGroup(program: { readonly module: WebAssembly.Module; readonly linkPlan: SharedLinkPlan }): Promise<RootMemoryGroupMember> {
-    if (!this.root) throw new Error("Memory group admission needs an adopted root");
-    const service = await this.processService();
-    this.rootGroup = service.admitRootMemoryGroup(this.root.pid, program);
+  admitRootGroup(program: { readonly module: WebAssembly.Module; readonly linkPlan: SharedLinkPlan }): RootMemoryGroupMember {
+    if (!this.root || !this.service) throw new Error("Memory group admission needs an adopted root");
+    this.rootGroup = this.service.admitRootMemoryGroup(this.root.pid, program);
     return this.rootGroup;
   }
-  rootStopped(): void {
-    if (!this.root) return;
-    // A group root's lease reclaims its memory and also settles the root ticket.
-    if (this.rootGroup) this.rootGroup.stopped();
-    else if (!this.runtime.disposed) this.service?.rootStopped(this.root.pid);
-    this.rootGroup = undefined;
-    this.releaseRoot();
+  /** Capture once for the actual native stop, before invoking it or awaiting its completion. */
+  captureRootStop(): { terminating(): void; stopped(): void } {
+    const group = this.rootGroup, root = this.root, service = this.service;
+    const release = this.releaseRootLease;
+    return {
+      terminating: () => group?.terminating(),
+      stopped: () => {
+        // The receipt owns this admission even if the broker later admits the same PID again.
+        if (group) group.stopped();
+        else if (root && root === this.root && this.rootGroup === group && !this.runtime.disposed) service?.rootStopped(root.pid);
+        if (this.rootGroup === group) this.rootGroup = undefined;
+        if (this.releaseRootLease === release) this.releaseRootLease = undefined;
+        release?.();
+      },
+    };
   }
+  rootStopped(): void { this.captureRootStop().stopped(); }
   private releaseRoot(): void {
     const release = this.releaseRootLease;
     this.releaseRootLease = undefined;
@@ -156,9 +165,22 @@ const installedAdapters = new WeakSet<ProcessRuntime>();
 /** Immutable engine-qualified registrations; concurrent runs never replace a global engine alias. */
 export function installBunAdapters(runtime: ProcessRuntime, workerUrl: string, loadTools?: () => Promise<WebAssembly.Module>, network?: BunNetworkOptions, preview1?: Preview1LauncherOptions): void {
   if (installedAdapters.has(runtime)) return;
-  installedAdapters.add(runtime);
-  runtime.registerAdapter("preview1", preview1Launcher({ workerUrl, runtime, network, preview1 }));
-  const notificationWorkerUrl = siblingWorkerUrl(workerUrl, "notification-worker.js");
-  const engines: readonly Engine[] = pairedEngineKinds;
-  for (const engine of engines.concat(["browser"])) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network }));
+  const packages = packageService(runtime);
+  const removals: Array<() => void> = [];
+  const rollback = () => {
+    for (const remove of removals.reverse()) remove();
+    packages.rollback();
+    installedAdapters.delete(runtime);
+    programFiles.delete(runtime);
+  };
+  try {
+    removals.push(runtime.registerAdapter("preview1", preview1Launcher({ workerUrl, runtime, network, preview1 })));
+    const notificationWorkerUrl = siblingWorkerUrl(workerUrl, "notification-worker.js");
+    const engines: readonly Engine[] = pairedEngineKinds;
+    for (const engine of engines.concat(["browser"])) removals.push(runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network })));
+    const prepared = (programFiles.get(runtime) ?? Promise.resolve()).then(() => preparePackageContinuation(runtime));
+    programFiles.set(runtime, prepared.then(() => { packages.commit(); }, error => { rollback(); throw error; }));
+    void programFiles.get(runtime)!.catch(() => {});
+    installedAdapters.add(runtime);
+  } catch (error) { rollback(); throw error; }
 }

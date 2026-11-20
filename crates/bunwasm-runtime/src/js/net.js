@@ -15,7 +15,7 @@
 
   // --- I/O core -------------------------------------------------------------
 
-  // Waiters: { step(): boolean (true = done), ref: boolean, fail(err) }.
+  // Waiters: { step(): boolean (true = done), ref: boolean, fail(err), permanent?: boolean }.
   const waiters = new Set();
 
   function addWaiter(waiter) {
@@ -63,29 +63,8 @@
   // Run each waiter once; returns whether anything made progress. Filesystem watches step
   // first: a socket step can run a request handler synchronously, so a change already
   // readable this turn reaches its listeners, and queues their deferred work, ahead of it.
-  internal.pumpIo = function pumpIo() {
-    let progressed = false;
-    const turn = Array.from(waiters).sort((a, b) => Number(b.watch === true) - Number(a.watch === true));
-    for (const waiter of turn) {
-      let result;
-      try {
-        result = waiter.step();
-      } catch (err) {
-        waiters.delete(waiter);
-        if (waiter.fail) waiter.fail(err);
-        else throw err;
-        progressed = true;
-        continue;
-      }
-      if (result === true) {
-        waiters.delete(waiter);
-        progressed = true;
-      } else if (result === "progress") {
-        progressed = true;
-      }
-    }
-    return progressed;
-  };
+  const pumpIo = internal.require("io_pump");
+  internal.pumpIo = () => pumpIo(waiters);
 
   function hostError(handle, fallback) {
     const text = native.hostError(handle);
@@ -133,7 +112,8 @@
 
   async function fetch(input, init = {}) {
     const req = input instanceof Request && Object.keys(init).length === 0 ? input : new Request(input, init);
-    const signal = init.signal || req.signal;
+    // A null init.signal detaches from the request's signal, as in Bun.
+    const signal = "signal" in init ? init.signal : req.signal;
     if (signal && signal.aborted) throw signal.reason;
     const headers = Array.from(req.headers);
     // Like Bun, identify as Bun unless the caller set a user agent.
@@ -159,7 +139,8 @@
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
     const head = await waitHead(handle, signal, closeHandle);
     if (signal && signal.aborted) throw signal.reason;
-    const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 304;
+    // A final response with a null body status (204, 205, 304) or to a HEAD request has no body, whatever followed the head.
+    const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 205 || head.status === 304;
     const body = nullBody ? null : internal.require("compression_streams").decode(handleStream(handle, closeHandle, signal), head.bodyEncoding);
     if (nullBody) closeHandle();
     const res = new Response(body, {
@@ -257,7 +238,7 @@
     if (transferEncoding.includes("chunked")) {
       const chunked = parseChunked(bytes, head.headLength);
       if (!chunked) return null;
-      return Object.assign(head, { body: chunked.body, length: head.headLength + chunked.length, trailers: chunked.trailers });
+      return Object.assign(head, { body: chunked.body, chunked: true, length: head.headLength + chunked.length, trailers: chunked.trailers });
     }
     const contentLength = Number(header(head.headers, "content-length") || 0);
     if (bytes.length < head.headLength + contentLength) return null;
@@ -742,7 +723,9 @@
     async function runRequest(request, conn, keepAlive, snapshot, releaseOnAbort) {
       const host = header(request.headers, "host") || `${displayHost}:${port}`;
       const url = `http://${host}${request.target.startsWith("/") ? request.target : "/" + request.target}`;
-      const hasBody = request.method !== "GET" && request.method !== "HEAD";
+      // As in Bun, a request without bytes (no body, Content-Length: 0) has a null body;
+      // a chunked body has a stream even with no chunks.
+      const hasBody = request.method !== "GET" && request.method !== "HEAD" && (request.chunked || request.body.length > 0);
       const result = await internal.require("serve_request_lifetime").run(conn, (signal) => {
         releaseOnAbort?.(signal);
         const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined, signal });

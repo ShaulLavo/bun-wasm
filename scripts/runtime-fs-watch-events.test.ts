@@ -4,6 +4,9 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { resourceFrames } from "./resource-frame-source";
+import { GuestWatchTable } from "../web/node_modules/waffle/fs/guest-watch.ts";
+import { FilesystemError } from "../web/node_modules/waffle/core/filesystem.ts";
+import type { WatchBatch } from "../web/node_modules/waffle/fs/watch.ts";
 
 // The shipped watcher and the real net.js waiter scheduler over the frozen runtime_fs watch ABI
 // as the natives surface it: fsWatchOpen returns an id, fsWatchRead returns whole padded
@@ -39,6 +42,7 @@ function fixture() {
   const closed: number[] = [];
   const ticks: (() => void)[] = [];
   const effects = { stats: 0, timers: 0, scans: 0 };
+  const traffic = { readiness: 0, reads: 0 };
   let nextId = 40;
   let openResult: number | undefined;
   let net: unknown;
@@ -52,7 +56,12 @@ function fixture() {
         queued.set(id, []);
         return id;
       },
+      fsWatchReady() {
+        traffic.readiness++;
+        return Array.from(queued.values()).some(records => records.length > 0);
+      },
       fsWatchRead(id: number) {
+        traffic.reads++;
         if (closed.includes(id)) return -8;
         return queued.get(id)?.shift() ?? -6;
       },
@@ -73,6 +82,7 @@ function fixture() {
       if (name === "http_common") return {};
       if (name === "websocket") return { clientClass: () => class {} };
       if (name === "resource_frame") return resourceFrames();
+      if (name === "io_pump") return runInNewContext(transpile("io_pump.ts"))(internal);
       if (name === "net") return net ??= runInNewContext(readFileSync(new URL("net.js", directory), "utf8"), { Uint8Array, ArrayBuffer, DataView, URL, TextEncoder })(internal);
       throw new Error(`Unexpected module ${name}`);
     },
@@ -88,7 +98,7 @@ function fixture() {
   const factory = runInNewContext(transpile("fs_watch.ts"), { AbortSignal });
   const module: WatchModule = factory(internal)(filesystem);
   return {
-    module, opened, closed, effects, internal,
+    module, opened, closed, effects, traffic, internal,
     commit(id: number, ...results: (Uint8Array | number)[]) { queued.get(id)!.push(...results); },
     failOpen(errno: number) { openResult = -errno; },
     pump: (): boolean => internal.pumpIo(),
@@ -96,6 +106,100 @@ function fixture() {
     runTicks() { while (ticks.length) ticks.shift()!(); },
   };
 }
+
+test("idle turns query readiness once and read none of the registered watches", () => {
+  const world = fixture();
+  const watchers = Array.from({ length: 2000 }, (_, index) => world.module.watch(`/app/${index}`));
+  try {
+    for (let turn = 0; turn < 10; turn++) expect(world.pump()).toBe(false);
+    expect(world.traffic).toEqual({ readiness: 10, reads: 0 });
+  } finally { for (const watcher of watchers) watcher.close(); }
+  world.pump();
+  expect(world.traffic.readiness).toBe(10);
+});
+
+function providerFixture() {
+  const world = fixture();
+  const cells = new Int32Array(new SharedArrayBuffer(16));
+  let revoked = false, closed = 0, id = 0, failed = false;
+  let batch: WatchBatch = { kind: "events", events: [] };
+  const table = new GuestWatchTable({ cells, get revoked() { return revoked; }, open: () => 1,
+    read() { if (failed) throw new FilesystemError(29); return batch; }, close() { closed++; } });
+  world.internal.native.fsWatchOpen = (_path: string, recursive: boolean) => id = table.open(1, recursive);
+  world.internal.native.fsWatchReady = () => table.ready();
+  world.internal.native.fsWatchRead = (watch: number) => {
+    try {
+      const result = table.read(watch, 65536);
+      if (result.kind === "error") return -result.errno;
+      if (result.kind === "short") throw new Error("unexpected short watch record");
+      return result.length ? Buffer.concat(result.records) : 0;
+    } catch (error) {
+      if (error instanceof FilesystemError) return -error.errno;
+      throw error;
+    }
+  };
+  world.internal.native.fsWatchClose = (watch: number) => table.close(watch);
+  return { ...world, table, id: () => id, closed: () => closed,
+    commit(value: WatchBatch) { batch = value; Atomics.add(cells, 3, 1); },
+    revoke() { revoked = true; }, fail() { failed = true; Atomics.add(cells, 3, 1); } };
+}
+
+test("provider ended readiness closes the consumer even when scheduling pending is false", () => {
+  const world = providerFixture();
+  const watcher = world.module.watch("/app");
+  world.commit({ kind: "closed", events: [] });
+  expect(world.table.read(world.id(), 65536)).toMatchObject({ kind: "records", length: 0 });
+  expect(world.table.pending()).toBe(false);
+  expect(world.table.ready()).toBe(true);
+  expect(world.pump()).toBe(true);
+  expect(world.pending()).toBe(0);
+  expect(world.closed()).toBe(1);
+  expect(world.table.ready()).toBe(false);
+  watcher.close();
+});
+
+test("provider queued readiness delivers a record without another generation change", () => {
+  const world = providerFixture();
+  const seen: string[] = [];
+  const watcher = world.module.watch("/app", (_event, name) => seen.push(String(name)));
+  try {
+    world.commit({ kind: "events", events: [{ type: "change", id: 1n, name: "page.ts" }] });
+    expect(world.table.read(world.id(), 0).kind).toBe("short");
+    expect(world.pump()).toBe(true);
+    expect(seen).toEqual(["page.ts"]);
+    expect(world.table.ready()).toBe(false);
+  } finally { watcher.close(); }
+});
+
+test.each([false, true])("provider error readiness retires the consumer, revoked=%s", revoked => {
+  const world = providerFixture();
+  const errors: string[] = [];
+  const watcher = world.module.watch("/app");
+  watcher.on("error", (error: { code: string }) => errors.push(error.code));
+  if (revoked) world.revoke(); else world.fail();
+  expect(world.table.ready()).toBe(true);
+  expect(world.pump()).toBe(true);
+  expect(errors).toEqual([revoked ? "ECANCELED" : "EIO"]);
+  expect(world.pending()).toBe(0);
+  expect(world.table.ready()).toBe(false);
+});
+
+test("a nested idle pump cannot change its outer turn's readiness", () => {
+  const world = fixture();
+  const events: string[] = [];
+  const first = world.module.watch("/first", () => {
+    expect(world.pump()).toBe(false);
+    world.commit(41, record("change", "second"));
+    events.push("first");
+  });
+  const second = world.module.watch("/second", () => events.push("second"));
+  try {
+    world.commit(40, record("change", "first"));
+    expect(world.pump()).toBe(true);
+    expect(events).toEqual(["first", "second"]);
+    expect(world.traffic.readiness).toBe(2);
+  } finally { first.close(); second.close(); }
+});
 
 test("a write committed before the pump reaches change listeners before a socket step runs its handler, with no timer", () => {
   const world = fixture();

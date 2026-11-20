@@ -25,6 +25,11 @@ the current lookup instead of retaining every parsed document. After platform
 selection, it releases the cached responses before archive installation.
 Selected and skipped packages keep their own metadata for lockfile writing and
 downloads. Registry cache validation still runs before parsing and resolution.
+The original registry selector retains each parsed Bun `Version` while filtering
+and comparing candidates. It uses the same Bun range and ordering operations,
+release preference, and last-entry tie behavior without reparsing matching keys
+in the comparator. It retains no additional packument documents.
+
 Archive extraction remembers up to 1,024 successfully prepared parent directories
 per package. The installer owns its staging tree, and tarball links remain
 unsupported, so another entry cannot replace a remembered parent. Repeated files
@@ -47,6 +52,19 @@ When a bin link is absent, the command adapters select the real installed entry
 through its package manifest, including scoped packages. These are original
 adapter changes, with no additional upstream source or patch. The playground
 shell dispatches its `bunx` alias through the same `bun x` command path.
+
+Package-script preparation uses that same manifest-bin resolver for a literal
+leading command when its `.bin` entry is absent. It invokes the admitted current
+Bun executable with the resolved entry, preserving the remaining Bash source
+and the existing argument escaping. Both the continuation plan and native script
+loop use this preparation. Existing `.bin` entries keep their shell/shebang
+dispatch, and explicit file paths keep their existing interpretation. Shell
+builtins and reserved words retain shell precedence even when an installed
+manifest declares a bin with the same name and no link. The
+original lifecycle text, cwd and environment are retained. No failed-spawn
+fallback or additional PATH is introduced. This original adapter repair is
+covered by the real-Bash regression in `scripts/package-scripts.test.ts` and the
+unchanged `web/tests/browser-installer-links.ts` consumer.
 
 Default bunx bin-map selection follows Bun's first-valid-entry behavior in
 `src/runtime/cli/bunx_command.rs`, `get_bin_name_from_subpath`, at the Bun pin.

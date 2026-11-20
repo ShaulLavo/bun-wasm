@@ -12,14 +12,32 @@ Add one `checks/<owner>-<feature>.json` file for a new script test or native fix
 
 Owners are `runtime`, `web`, `quality`, `package-extra`, `cmake`, `web-browser`,
 `browser-guest` and `native`. `browser-guest` checks serve the playground site built from
-the same commit's browser guest (`scripts/browser-guest-site.ts`). CI's rust job builds that
+the same commit's browser guest (`scripts/browser-guest-site.ts`). CI's selected Rust or PR-only Browser producer builds that
 site once from its receipt-verified guest and uploads it with its identities
 (`browser-guest-site`). Browser guest batch jobs in Chromium and WebKit download it and pass it
 in `BUN_WASM_BROWSER_SITE`; each check verifies the site's closed inventory, guest and
 receipt against the checkout before and after the browsers run, and never bundles it again.
 A local run without that variable builds a site in scratch from `dist/bun-browser.wasm`.
-Native paths name a directory under
-`tests/fixtures/`. Native manifests may select `"profile": "shared-group"`; omission
+Split native manifests default to QuickJS and may declare an `engines` array
+containing a nonempty, unique subset of `quickjs`, `jsc`, `browser` and `spidermonkey`.
+The native runner runs the runtime preflight once, then executes each
+declared engine's fixtures without rebuilding guests or increasing fixture-group
+concurrency. CI consumes only the producers selected by its explicit
+`BUN_WASM_CHECK_ENGINES` subset; missing artifacts for selected engines fail. Without
+that subset, local runs consume every declared engine. JSC selections require
+its normal producer, including when the
+manifest or fixture is removed. Shared-group manifests continue to infer their
+engine from their matching producer and cannot declare `engines`.
+
+Native paths name a directory under `tests/fixtures/`. The existing native gate
+compares stdout, stderr and the expected exit through `test.sh`. SpiderMonkey
+requires an absolute `SPIDERMONKEY_WASM` and runs the interpreter tier. CI includes
+that producer in `BUN_WASM_CHECK_ENGINES`. The separate installer matrix and the
+installer checks inside runtime preflight use `INSTALL_ENGINES`, retaining their
+three supported engines.
+Changed targeted fixtures and manifests select JSC from the verified base, head
+and merge ancestor, including removals. Missing selected inputs fail the gate.
+Native manifests may select `"profile": "shared-group"`; omission
 keeps the ordinary split producer and selection. The shared PIC job consumes the
 Rust job's launcher and one matching group core/QuickJS pair through
 `bun scripts/test-checks.ts native --profile shared-group`. A `browser-guest` manifest may
@@ -37,9 +55,13 @@ existing required Processes gates wait for every batch and reject failures,
 cancellations and unexpected skips. A producer-disabled run skips the guest jobs.
 All jobs keep their existing ten-minute budget, and the site is still built once.
 
-`web-browser` manifests select one of three measured `batch` labels. CI uses
-`scripts/ci-web-browser-shards.ts` to discover the matrix and command deadlines.
-Adding an unmeasured batch fails discovery. Every shard runs in parallel with
+`web-browser` manifests select `batch` labels. CI uses
+`scripts/ci-web-browser-shards.ts` to discover every batch with a uniform five-minute
+command hang cap inside the existing ten-minute job. New batches require no timing
+calibration. Bun reports test durations; elapsed speed does not decide correctness.
+The command supervisor retains exit status, timeout diagnostics and descendant cleanup.
+Individual test and hook timeouts remain separate from this aggregate cap.
+Every shard runs in parallel with
 `fail-fast: false`, so one failure does not cancel the others. The required
 Web host gate rejects any failed, cancelled or skipped shard and unit job before
 running its existing smoke checks once. Local `test-web-host.sh --browser` still
@@ -53,8 +75,13 @@ building native guests. The native selector reads registered harness paths and
 fixture directories from the verified base, head and their merge ancestor,
 including removed inputs. Every snapshot manifest must be a regular file with
 valid metadata; empty files and symlinks fail selection.
-Browser guest harnesses and their manifests also select the existing Rust producer,
-which builds the receipt-verified guest and bundles the site once. A `browser-guest`
+Runtime manifests may also declare `inputs` as a nonempty list of exact repository
+paths for their helpers and fixtures. These inputs select the existing native
+preflight from the same three snapshots, including removed declarations.
+Browser guest harnesses and their manifests select fresh production. Browser-only
+PR inputs use the separate producer; independent native inputs and non-PR runs
+retain the Rust route. Each route uses the existing guest entrypoints and bundles
+the site once. Both routes retain the required browser and Processes consumers. A `browser-guest`
 manifest may declare `inputs` as a nonempty list of exact repository paths for
 feature source or helpers that also need this gate. The selector reads these inputs
 from the same three snapshots, including removals. The check keeps its Browser guest
@@ -64,6 +91,26 @@ Seven overlapping probes belong to Web CI only; Web also
 owns the runtime type project. The native fixture runner sets `BUN_WASM_CI_CHECKS=1`
 so `test.sh` runs only Rust-owned probes, without repeating those Web checks.
 Local fixture commands still run their original complete runtime preflight.
+
+The Linux native CI step explicitly sets `BUN_WASM_RUNTIME_JOBS=2`. The runtime owner
+first runs unclassified files in its original single Bun process, then runs files
+marked `"isolation": "process"` in at most two Bun processes. That opt-in belongs
+only to runtime manifests whose controls write private scratch outputs and read
+produced engine inputs. New files default to serial execution. Ordinary SM
+fixtures and loop controls remain serial because they use a shared build target
+or producer compile commands. JSC JSON, Wasm tables and module evaluation controls
+use separate file processes, retaining their internal order, mocks, assertions,
+profile settings and hang caps. No test or compilation is added to the plan.
+
+Without this variable, or with `1`, the runtime command is unchanged. Other values
+fail before starting checks. The bounded mode sets `RAYON_NUM_THREADS=2` and owns
+a temporary root for `TMPDIR` and `WASM_TABLE_TMP`. It uses the existing command
+supervisor with `--until-exit`, preserving each file's existing deadlines rather
+than adding an aggregate deadline. Failure stops pending files and waits for
+active files. Cancellation requests the supervisor's existing stop state and
+drains descendants before removing owned scratch. Other platforms retain the
+default command and reject the bounded option.
+The existing blocking native verdict and later exports stay in place.
 
 The native CI step sets `INSTALL_ENGINES` from its ordinary JSC producer selection.
 The tarball installer matrix runs QuickJS and Browser, adding JSC only when that
@@ -76,7 +123,7 @@ A selected missing artifact fails the check. No file-existence filter changes se
 
 Package tests and Web's own test directory keep their existing narrow globs.
 Do not also register those files. Browser matrix jobs, deadlines, environment,
-engine selection, cache inputs, conditional gates and shared artifact producers
+producer selection, cache inputs, conditional gates and shared artifact producers
 stay in their existing scripts and workflow steps. The CMake probe remains after
 its prerequisite step. No discovered native fixture can request a rebuild.
 
@@ -99,6 +146,28 @@ Feature PRs also run `scripts/feature-versions.ts <base-sha> <head-sha>` in qual
 CI. It rejects package, Cargo and local lockfile version churn. Release and
 required consumer-pin PRs use their corresponding `release` or `consumer-pin`
 label to identify the deliberate exception. No label is needed for feature work.
+
+## A shared-group fixture with more than one command
+
+A native check with `"profile": "shared-group"` may add `"entry": "<name>"` in a second
+manifest for the same fixture directory. The entry names another command of the fixture: the
+runner reads `cmd.<name>` and compares stdout with `expected.<name>.txt`, where a manifest
+without an entry uses `cmd` and `expected.txt`. Each command runs once, or once per
+SpiderMonkey tier, with the same 120,000 ms bound, and a wrong exit, wrong output or timeout
+of either fails the native shared-group owner.
+
+- A check's identity is its owner, profile, path and entry. Its id is the path, or
+  `path#entry`, and that id is what selection, batching, the runner's arguments and its
+  result labels carry. Two commands of one fixture share a path, so nothing compares paths.
+- An entry name is lowercase letters and digits in words joined by single hyphens, at most
+  32 characters. Both of its files must be regular files in the fixture, checked at discovery
+  and again before launch. The command is passed as an argument vector.
+- The same id twice is an error, and so are two manifests without an entry for one path.
+  Only native shared-group checks may share a path. No other owner or profile takes an entry.
+
+`tests/fixtures/shared-wasm-memory` uses this for its 200-worker lane lifetime run
+(`checks/native-shared-wasm-memory-lifetime.json`, `cmd.lifetime`), which then starts one
+more guest to show that the launcher still serves a new group.
 
 ## Native probes consume a producer checkpoint
 

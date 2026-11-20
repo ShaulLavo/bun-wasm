@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { navigateTestPage } from "./navigate-test-page.ts";
 
 const mode = process.argv[2] ?? "chromium";
 const assets = process.argv[3];
@@ -134,7 +135,7 @@ async function playwright(): Promise<Driver> {
   const pages = new Map([["owner", page]]);
   return {
     evaluate: script => page.evaluate(`(async()=>{${script}})()`),
-    async navigate(url) { await page.goto(url); },
+    async navigate(url) { await navigateTestPage(page, url); },
     async reload() { await page.reload(); },
     async back() { await page.goBack(); },
     async forward() { await page.goForward(); },

@@ -1,1 +1,15 @@
-{"owner":"browser-guest","path":"scripts/playground-shared-profile.test.ts","profile":"shared-group"}
+{
+  "owner": "browser-guest",
+  "path": "scripts/playground-shared-profile.test.ts",
+  "profile": "shared-group",
+  "inputs": [
+    ".github/actions/native-production/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-setup/action.yml",
+    "sandbox/src/sandbox.ts",
+    "sandbox/src/template-catalog.ts",
+    "web/src/host-memory-policy.ts",
+    "web/src/playground/program-profile.ts",
+    "web/src/playground/project-templates.ts"
+  ]
+}

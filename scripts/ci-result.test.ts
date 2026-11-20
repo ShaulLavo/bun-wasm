@@ -1,24 +1,31 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { requireCiSuccess } from "./ci-result";
+import { spawnSync } from "node:child_process";
+import { requireCiSuccess as validateCiSuccess } from "./ci-result";
 
-const always = ["quality", "package", "web", "web-unit", "web-browser", "process-bundles", "browser-process"];
-const rustJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "browser-guest"];
-const sharedJobs = ["shared-jsc-identity", "shared-prebuild", "shared-sysroot"];
-const jobIds = always.concat(rustJobs, sharedJobs, ["shared-spidermonkey-prebuild"]);
+const requireCiSuccess = (value: unknown) => validateCiSuccess(value, "pull_request");
+
+const always = ["selection", "quality", "package", "web", "web-unit", "web-browser", "process-bundles", "browser-process"];
+const rustJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "ordinary-web-guests", "browser-guest"];
+const sharedJobs = ["shared-jsc-identity", "shared-prebuild", "shared-sysroot", "shared-proof"];
+const sharedNativeJobs = ["shared-spidermonkey-prebuild", "shared-native", "shared-browser"];
+const jobIds = always.concat(rustJobs, sharedJobs, sharedNativeJobs, ["browser-production"]);
 
 function fixture(rust = true, shared = true, sharedNative = true) {
-  const enabled = new Set(always.concat(rust ? rustJobs : [], shared || sharedNative ? sharedJobs : [], sharedNative ? ["shared-spidermonkey-prebuild"] : []));
+  const enabled = new Set(always.concat(rust ? rustJobs : [], shared || sharedNative ? sharedJobs : [], sharedNative ? sharedNativeJobs : []));
   return Object.fromEntries(jobIds.map(id => [id, { result: enabled.has(id) ? "success" : "skipped",
-    outputs: id === "quality" ? { rust: String(rust), shared: String(shared), "shared-native": String(sharedNative) } : {} }]));
+    outputs: id === "selection" ? { rust: String(rust), browser_guest: String(rust), jsc: "false", shared: String(shared), "shared-native": String(sharedNative) } : {} }]));
 }
 
 test("aggregate accepts success and only classifier-disabled skips for every selection", () => {
   const selections = [true, false].flatMap(rust => [true, false].flatMap(shared => [true, false].map(native => ({ rust, shared, native }))));
-  for (const { rust, shared, native } of selections) expect(() => requireCiSuccess(fixture(rust, shared, native))).not.toThrow();
+  for (const { rust, shared, native } of selections) {
+    if (!rust && native) expect(() => requireCiSuccess(fixture(rust, shared, native))).toThrow("native route");
+    if (rust || !native) expect(() => requireCiSuccess(fixture(rust, shared, native))).not.toThrow();
+  }
 });
 
-test.each(jobIds)("aggregate rejects failure, cancellation, skips and missing results for selected %s", id => {
+test.each(jobIds.filter(id => id !== "browser-production"))("aggregate rejects failure, cancellation, skips and missing results for selected %s", id => {
   for (const result of ["failure", "cancelled", "skipped", "in_progress", ""]) {
     expect(() => requireCiSuccess({ ...fixture(), [id]: { result } })).toThrow();
   }
@@ -39,16 +46,80 @@ test("draft results fail even when their skipped jobs would satisfy individual r
 
 test("aggregate rejects absent or malformed selections and unexpected execution", () => {
   for (const outputs of [{}, { rust: "false", shared: "true" }, { rust: "yes", shared: "false", "shared-native": "false" }]) {
-    expect(() => requireCiSuccess({ ...fixture(), quality: { result: "success", outputs } })).toThrow();
+    expect(() => requireCiSuccess({ ...fixture(), selection: { result: "success", outputs } })).toThrow();
   }
   expect(() => requireCiSuccess({ ...fixture(false, false, false), rust: { result: "success" } })).toThrow();
   expect(() => requireCiSuccess(null)).toThrow();
+});
+
+test("passing consumers cannot hide a failed source check or selector", () => {
+  expect(() => requireCiSuccess({ ...fixture(), quality: { result: "failure" } })).toThrow("Source quality did not pass");
+  expect(() => requireCiSuccess({ ...fixture(), selection: { ...fixture().selection, result: "failure" } })).toThrow("CI selection did not pass");
+});
+
+test("only known events and explicit JSC flags can qualify the full route", () => {
+  for (const event of ["pull_request", "push", "workflow_dispatch"]) expect(() => validateCiSuccess(fixture(), event)).not.toThrow();
+  for (const event of ["", "schedule", "pull_request_target"]) expect(() => validateCiSuccess(fixture(), event)).toThrow("Invalid CI event");
+  for (const jsc of [undefined, "", "yes"]) expect(() => requireCiSuccess({ ...fixture(), selection: { result: "success", outputs: { ...fixture().selection!.outputs, jsc } } })).toThrow("Invalid CI selection: jsc");
 });
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected workflow object");
   return Object.fromEntries(Object.entries(value));
 }
+
+const workflow = object(Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")));
+const jobs = object(workflow.jobs);
+
+function steps(id: string): Record<string, unknown>[] {
+  const entries = object(jobs[id]).steps;
+  if (!Array.isArray(entries)) throw new Error(`Missing ${id} steps`);
+  return entries.map(object);
+}
+
+test("selection fans out before source probes, with both results retained by the aggregate", () => {
+  expect(object(jobs.selection).needs).toBeUndefined();
+  expect(object(jobs.quality).needs).toBe("selection");
+  expect(object(jobs.selection).outputs).toMatchObject({ base: "${{ steps.refs.outputs.base }}", head: "${{ steps.refs.outputs.head }}" });
+  for (const [id, value] of Object.entries(jobs)) {
+    if (["quality", "shared-proof", "ci-result", "update-status"].includes(id)) continue;
+    const job = object(value);
+    const dependencies = Array.isArray(job.needs) ? job.needs : [job.needs];
+    expect(dependencies, id).not.toContain("quality");
+    expect(JSON.stringify(job), id).not.toContain("needs.quality.");
+  }
+  const selection = JSON.stringify(jobs.selection);
+  expect(selection).not.toMatch(/ci-install|bun install|bun run quality|ci-bun-cache/);
+  expect(steps("quality").find(step => step.name === "Blocking quality gates")?.env)
+    .toMatchObject({ JSCPD_BASE_REF: "${{ needs.selection.outputs.base }}" });
+  const publish = steps("quality").find(step => step.name === "Publish the completed dependency cache");
+  expect(publish?.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.bun-dependencies.outputs.cache-hit != 'true'");
+  expect(publish?.with).toEqual({ path: ".ci-bun-cache", key: "${{ steps.bun-dependencies.outputs.cache-primary-key }}" });
+});
+
+test.each(["refs", "changes", "browser-guest-batches", "web-browser-shards"])("selection propagates a failing %s command", id => {
+  const command = steps("selection").find(step => step.id === id)?.run;
+  if (typeof command !== "string") throw new Error(`Missing ${id} command`);
+  const execution = spawnSync("bash", ["-euc", `bun() { return 42; }\n${command}`], {
+    env: { ...process.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_REF: "refs/pull/1/merge", BASE: "a".repeat(40), HEAD: "b".repeat(40), GITHUB_OUTPUT: "/dev/null" },
+    encoding: "utf8", timeout: 3000,
+  });
+  expect(execution.status, execution.stderr).toBe(42);
+});
+
+test("draft admission and missing cumulative main selection fail closed", () => {
+  const draft = steps("selection").find(step => step.name === "Require a ready PR");
+  expect(draft?.if).toBe("github.event_name == 'pull_request' && github.event.pull_request.draft");
+  const changes = steps("selection").find(step => step.id === "changes");
+  for (const command of [draft?.run, changes?.run]) {
+    if (typeof command !== "string") throw new Error("Missing selection guard");
+    const execution = spawnSync("bash", ["-euc", command], {
+      env: { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main", MAIN_SELECTION: "", GITHUB_OUTPUT: "/dev/null" },
+      encoding: "utf8", timeout: 3000,
+    });
+    expect(execution.status).toBe(1);
+  }
+});
 
 test("existing required Code quality name is a final non-skippable gate over every real job", () => {
   const workflow = object(Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")));

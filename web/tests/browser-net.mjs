@@ -4,10 +4,11 @@
 // the terminal through `playground` (main.ts), and kills everything it started on exit.
 // PLAYWRIGHT=<path to playwright/index.mjs> overrides the project's installed package.
 import { spawn } from "node:child_process";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { stopForeground } from "./foreground.ts";
+import { stopForeground, navigatePreview } from "./foreground.ts";
 import { fixtureOutputPattern } from "./fixture-output.ts";
 
 const here = new URL(".", import.meta.url).pathname;
@@ -220,7 +221,7 @@ async function checkHtmlEntry(page, context, appUrl, name) {
       iframe.src = url;
       document.body.append(iframe);
     }, previewUrl);
-    await preview.goto(previewUrl);
+    await navigateTestPage(preview, previewUrl);
     await preview.waitForFunction(() => document.querySelector("#html-app")?.textContent === "bundled HTML entry", null, { timeout: 15000 });
     check(`${name}: Bun bundles HTML and TypeScript`, await preview.textContent("#html-app") === "bundled HTML entry");
     check(`${name}: Bun bundles linked CSS`, await preview.evaluate(() => getComputedStyle(document.body).color) === "rgb(12, 34, 56)");
@@ -285,7 +286,7 @@ async function runEngine(browserName, engine, type, options, appUrl, fixtureBase
   // WebKit reports the deliberate CORS failure (/nocors) as a page error as well as rejecting.
   page.on("pageerror", (e) => /\/nocors due to access control checks/.test(String(e)) || errors.push(String(e)));
   // SLOTS=imports|table picks how the wasm engines get the host functions (?slots=).
-  await page.goto(`${appUrl}?engine=${engine}${process.env.SLOTS ? `&slots=${process.env.SLOTS}` : ""}`);
+  await navigateTestPage(page, `${appUrl}?engine=${engine}${process.env.SLOTS ? `&slots=${process.env.SLOTS}` : ""}`);
   await page.waitForFunction(() => document.querySelector("#status")?.textContent?.startsWith("bun.wasm ready"), null, { timeout: 60000 });
   check(`${name}: page is cross-origin isolated`, await page.evaluate(() => crossOriginIsolated));
 
@@ -327,7 +328,7 @@ async function runEngine(browserName, engine, type, options, appUrl, fixtureBase
   const preview = await context.newPage();
   preview.on("pageerror", (error) => errors.push(`preview: ${String(error)}`));
   const previewUrl = new URL("__preview/3000/some/page?x=1", appUrl).href;
-  await preview.goto(previewUrl);
+  await navigateTestPage(preview, previewUrl);
   await preview.waitForFunction(() => document.title === "app.js loaded", null, { timeout: 15000 }).catch(() => {});
   check(`${name}: preview page served`, (await preview.textContent("h1").catch(() => "")) === "preview ok /some/page");
   check(`${name}: root-relative subresource routed to the server`, (await preview.title()) === "app.js loaded");
@@ -398,7 +399,7 @@ async function runEngine(browserName, engine, type, options, appUrl, fixtureBase
 
   // Explicit test teardown completes before checking that the preview is no longer listening.
   await stopForeground(page);
-  const after = await preview.goto(previewUrl);
+  const after = await navigatePreview(preview, previewUrl, 502);
   check(`${name}: preview gone after foreground teardown`, after?.status() === 502, `status ${after?.status()}`);
 
   check(`${name}: no page errors`, errors.length === 0, errors.join("\n"));

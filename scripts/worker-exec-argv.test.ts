@@ -1,37 +1,40 @@
 import { expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
+import { runInContext } from "node:vm";
+import { eventTargetSource } from "./event-target-source";
 import * as path from "node:path";
 
 const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${readFileSync(
   new URL("../crates/bunwasm-runtime/src/js/worker_threads.ts", import.meta.url), "utf8")}`);
 
 function workerModule(env: Record<string, string> = {}, execArgv: string[] = [], execPath = "bun") {
+  const target = eventTargetSource({ structuredClone });
   const preloads: string[] = [];
   const launches: { argv: string[]; env: Record<string, string>; worker: object }[] = [];
   const stop = new Error("captured spawn");
-  const process = { env: { ...env }, execArgv, execPath, cwd: () => "/", noDeprecation: false };
+  const process = { env: { ...env }, execArgv, execPath, cwd: () => "/" };
+  const warningFlags: unknown[][] = [];
   let port: unknown;
   const modules = {
-    process, path, events: EventEmitter, structured_clone: { structuredClone }, net: {},
+    process, path, events: target.events, structured_clone: { structuredClone }, net: {},
+    process_warning: { configure(target: unknown, argv: string[]) { expect(target).toBe(process); warningFlags.push(argv.slice()); } },
     worker_codec: { create: () => ({ wait: () => null, prepare: () => ({ graph: {}, commit() {}, abort() {} }), decode: () => [null, [], port] }) },
     spawn: { spawnWorker(argv: string[], options: { env: Record<string, string> }, worker: object) { expect(Object.hasOwn(options, "_worker")).toBe(false); launches.push({ argv, env: options.env, worker }); throw stop; } },
     worker_channel: { open: () => ({ send() {} }) },
   };
-  const internal = {
-    native: {}, realTimers: { setImmediate() {} }, messagePortRefs: 0, addIoWaiter() {}, workerNoWarnings: false,
+  const internal = Object.assign(target.internal, {
+    native: {}, realTimers: { setImmediate() {} }, messagePortRefs: new Set<object>(), addIoWaiter() {},
     require(name: string) { if (!(name in modules)) throw new Error(name); return Reflect.get(modules, name); },
     builtin: () => ({ createRequire: () => (name: string) => preloads.push(name) }),
-  };
-  const context = { EventTarget, Event, MessageEvent, DOMException, URL, structuredClone };
-  const implementation = runInNewContext(source, context)(internal);
+  });
+  const context = target.context;
+  const implementation = runInContext(source, context)(internal);
   port = new implementation.MessageChannel().port1;
   function launch(options: object = {}, filename = "") {
     expect(() => new implementation.Worker(filename, { eval: true, ...options })).toThrow(stop);
     return launches[launches.length - 1]!;
   }
-  return { process, preloads, launches, implementation, internal, context, launch };
+  return { process, preloads, launches, implementation, internal, context, launch, warningFlags };
 }
 
 test("Worker launch metadata travels through the private third argument", () => {
@@ -58,8 +61,8 @@ for (const { execArgv, conditions, preloads } of operandCases) {
     child.implementation.initialize();
     expect(child.process.execArgv).toEqual(execArgv);
     expect(child.preloads).toEqual(preloads);
-    expect(child.process.noDeprecation).toBe(false);
-    expect(child.internal.workerNoWarnings).toBe(false);
+    // A flag spelled as an operand (--conditions --no-deprecation) names a condition, not a flag.
+    expect(child.warningFlags).toEqual([[]]);
     expect(Object.hasOwn(child.context, "gc")).toBe(false);
     expect(parent.process.execArgv).toEqual([]);
   });
@@ -103,8 +106,7 @@ test("worker bootstrap applies real flags and preloads in order without consumin
   child.implementation.initialize();
   expect(child.preloads).toEqual(["first", "second"]);
   expect(child.process.execArgv).toEqual(execArgv);
-  expect(child.process.noDeprecation).toBe(true);
-  expect(child.internal.workerNoWarnings).toBe(true);
+  expect(child.warningFlags).toEqual([["--no-deprecation", "--no-warnings", "--expose-gc"]]);
   expect(Object.hasOwn(child.context, "gc")).toBe(true);
 });
 

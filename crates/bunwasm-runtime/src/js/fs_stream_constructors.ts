@@ -3,7 +3,7 @@
 
   type Flags = string | number;
   type Options = {
-    fd?: number;
+    fd?: number | object;
     flags?: Flags;
     mode?: number;
     autoClose?: boolean;
@@ -35,6 +35,7 @@
     once(event: string, listener: () => void): unknown;
     push(chunk: Uint8Array | null): unknown;
     destroy(error?: unknown): unknown;
+    destroyed: boolean;
     _read(size: number): void;
     close(callback?: () => void): void;
   }
@@ -83,7 +84,17 @@
     validateFd(fd: unknown): void;
     readRange(name: string, value: unknown): Error;
     invalidArg(name: string, expected: string, value: unknown): Error;
+    isEncoding(encoding: string): boolean;
+    inspect(value: unknown): string;
     loadStreams(): StreamModule;
+    later(callback: () => void): void;
+    /** A FileHandle passed as options.fd: the stream holds a reference and closes with the handle. */
+    linkHandle(value: unknown, onClose: () => void): HandleLink | undefined;
+  }
+
+  interface HandleLink {
+    fd: number;
+    close(): Promise<void>;
   }
 
   return function createFileStreams(deps: Dependencies) {
@@ -98,11 +109,18 @@
       return fileStreams;
     }
 
+    // Node's assertEncoding for stream options; "buffer" and a missing encoding are fine.
+    function checkedEncoding(options: Options): Options {
+      const { encoding } = options;
+      if (encoding == null || encoding === "buffer" || deps.isEncoding(encoding)) return options;
+      throw Object.assign(new TypeError(`The argument 'encoding' is invalid encoding. Received ${deps.inspect(encoding)}`), { code: "ERR_INVALID_ARG_VALUE" });
+    }
+
     function fileStreamOptions(options: string | Options | null | undefined): Options {
-      if (typeof options === "string") return { encoding: options };
+      if (typeof options === "string") return checkedEncoding({ encoding: options });
       if (options == null) return {};
       if (typeof options !== "object") throw invalidArg("options", "an object or string", options);
-      return options;
+      return checkedEncoding(options);
     }
 
     function fileStreamPosition(name: string, value: number) {
@@ -110,9 +128,21 @@
       return value;
     }
 
-    function initializeFileStream(stream: BaseFileStream, path: unknown, options: Options, flags: Flags) {
-      stream.fd = options.fd === undefined ? null : options.fd;
-      if (stream.fd !== null) validateFd(stream.fd);
+    const handleLinks = new WeakMap<BaseFileStream, HandleLink>();
+
+    function streamFd(stream: BaseFileStream, fd: Options["fd"], onHandleClose: () => void) {
+      if (fd === undefined) return null;
+      const link = typeof fd === "object" ? deps.linkHandle(fd, onHandleClose) : undefined;
+      if (!link) {
+        validateFd(fd);
+        return fd as number;
+      }
+      handleLinks.set(stream, link);
+      return link.fd;
+    }
+
+    function initializeFileStream(stream: BaseFileStream & { close(): void }, path: unknown, options: Options, flags: Flags) {
+      stream.fd = streamFd(stream, options.fd, () => stream.close());
       stream.path = stream.fd === null ? toPath(path) : path;
       stream.flags = options.flags === undefined ? flags : options.flags;
       stream.mode = options.mode === undefined ? 0o666 : options.mode;
@@ -164,6 +194,12 @@
       const fd = this.fd;
       this.fd = null;
       this.pending = false;
+      const link = handleLinks.get(this);
+      if (link) {
+        handleLinks.delete(this);
+        link.close().then(() => callback(error), (closeError: unknown) => callback(error || closeError));
+        return;
+      }
       if (fd === null) { callback(error); return; }
       try { closeSync(fd); }
       catch (closeError) { callback(error || closeError); return; }
@@ -188,7 +224,11 @@
       const count = chunk.length;
       this.bytesRead += count;
       if (this.pos !== undefined) this.pos += count;
-      this.push(count === 0 ? null : chunk);
+      // Deliver like fs.read's callback, on a later turn. A synchronous push(null) right
+      // after a short read lands while the previous 'readable' is still being emitted,
+      // which drops the end-of-file 'readable' Node and Bun emit.
+      const result = count === 0 ? null : chunk;
+      deps.later(() => { if (!this.destroyed) this.push(result); });
     };
 
     function writeFileStreamStep(stream: WriteFileStream, chunk: Uint8Array, offset: number) {

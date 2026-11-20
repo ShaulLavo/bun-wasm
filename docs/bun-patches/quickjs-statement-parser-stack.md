@@ -116,8 +116,8 @@ and `import()`, every statement kind nested, completion values, label,
 `finally` and iterator-close order, declaration contexts and source positions.
 `tests/fixtures/quickjs-parser-deep` compiles about 4,900 levels of each
 statement family at 32 and 36 KiB and enforces the limit on QuickJS. Both
-recognise QuickJS's parser by the wording of one of its early errors, because
-`process.versions` is the same on every engine. JSC reads the same budget
+recognise QuickJS's parser by the wording of one of its early errors; they
+predate `process.versions.quickjs` naming only QuickJS. JSC reads the same budget
 variable and refuses 200 nested blocks at 32 KiB in its own parser, so other
 engines keep the budget they were started with.
 
@@ -134,6 +134,6 @@ previous compiler, so it is not a CI check.
 | --- | --- | --- |
 | `quickjs.c`, statement parser | Port | Parse nested statements in a loop over parser-owned records instead of recursive calls, with a limit of 10,000 suspended records. |
 | `scripts/check-quickjs-parser-stack.ts`, `scripts/fixtures/quickjs-parser-stack.c`, `scripts/fixtures/quickjs-parser-stack.ts` | Original adapter | Exercise the record limit, ownership and statement semantics on the bare engine. |
-| `tests/fixtures/stack-statement-nesting`, `tests/fixtures/quickjs-parser-deep` | Original adapter | Exercise deep statement nesting through the guest entry point at the browser budgets. |
+| `tests/fixtures/stack-statement-nesting`, `tests/fixtures/quickjs-parser-deep` | Original adapter | Exercise deep statement nesting through the guest entry point at the browser budgets. Recognize SpiderMonkey's exact invalid lexical declaration message as non-QuickJS while preserving the unknown-parser guard. |
 
 [Ledger scope and pinned revisions](scope.md).

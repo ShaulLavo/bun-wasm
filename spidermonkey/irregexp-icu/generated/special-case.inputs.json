@@ -9,7 +9,7 @@
   "generator": [
     {
       "path": "spidermonkey/generate-special-case.ts",
-      "sha256": "3b19ef26085ee01ce9ca95ee5d56cf7072dfa1b147917718ba0783a6a02772dc"
+      "sha256": "7aef3c262754840e4ac7d785ed6f2c416b8d057b45d71603fcd48bc4cea34fc4"
     },
     {
       "path": "crates/bunwasm-spidermonkey/examples/unicode-special-case.rs",
@@ -34,10 +34,6 @@
       "sha256": "26c0543b88bd44a4761ff1c79580f7a5f55bc03b04f768e0580fbd815f0a8bca"
     }
   ],
-  "lock": {
-    "path": "Cargo.lock",
-    "sha256": "8e71f914b2e6bc09e4234a5041dba7b06118b82ae9072acfb3a16aa18a0a91d1"
-  },
   "crates": [
     {
       "name": "icu_casemap",

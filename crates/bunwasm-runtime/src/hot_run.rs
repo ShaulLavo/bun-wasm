@@ -129,7 +129,7 @@ pub(crate) fn map_position(
             .map(sourcemap::SourceMap::new),
         line1_shift: shift,
         line_offset: offset,
-        original: None,
+        ..Default::default()
     };
     let (line, column) = position.original_position(line, column);
     Val::Array(vec![line.into(), column.into()])

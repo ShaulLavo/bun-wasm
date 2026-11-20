@@ -5,6 +5,10 @@ use crate::engine::{Engine, NativeError, PromiseState, Val, ValueFn};
 
 #[path = "runtime_js_measurement.rs"]
 mod measurement;
+#[path = "transfer.rs"]
+pub(crate) mod transfer;
+
+pub(crate) use transfer::LaneCommit;
 
 fn arg<E: Engine>(e: &E, args: &[E::Value], i: usize) -> E::Value {
     args.get(i).cloned().unwrap_or_else(|| e.undefined())
@@ -51,7 +55,10 @@ fn eval_arguments<E: Engine>(e: &E, args: &[E::Value]) -> Result<(String, String
     Ok((code, filename, first_line))
 }
 
-pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str, ValueFn<E>)> {
+pub(crate) fn value_natives<E: Engine>(
+    core: &Rc<Core<E>>,
+    lane: Option<LaneCommit>,
+) -> Vec<(&'static str, ValueFn<E>)> {
     let mut list: Vec<(&'static str, ValueFn<E>)> = Vec::new();
     list.push((
         "wasmNestedExecute",
@@ -128,28 +135,7 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
         "isProxy",
         Rc::new(|e: &E, args: &[E::Value]| Ok(e.value_from(e.is_proxy(&arg(e, args, 0)).into()))),
     ));
-    list.push((
-        "transferArrayBuffers",
-        Rc::new(|e: &E, args: &[E::Value]| {
-            let array = arg(e, args, 0);
-            let Val::Num(length) = e.to_val(&e.get(&array, "length")?) else {
-                return Err(e.error_value(&NativeError::type_error("Expected a buffer list")));
-            };
-            let buffers = (0..length as usize)
-                .map(|i| e.get(&array, &i.to_string()))
-                .collect::<Result<Vec<_>, _>>()?;
-            if buffers.iter().any(|buffer| !e.is_detachable_buffer(buffer)) {
-                return Err(e.error_value(
-                    &NativeError::type_error("ArrayBuffer is not detachable")
-                        .named("DataCloneError"),
-                ));
-            }
-            for buffer in &buffers {
-                e.detach_buffer(buffer);
-            }
-            Ok(e.undefined())
-        }),
-    ));
+    list.extend(transfer::natives(core.client, lane));
     list.push((
         "isPromise",
         Rc::new(|e: &E, args: &[E::Value]| Ok(e.value_from(e.is_promise(&arg(e, args, 0)).into()))),
@@ -213,6 +199,12 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
         "memoryUsage",
         Rc::new(|e: &E, _: &[E::Value]| Ok(e.value_from(e.memory_usage()))),
     ));
+    list.push((
+        "objectTypeCounts",
+        Rc::new(|e: &E, _: &[E::Value]| {
+            Ok(e.object_type_counts().unwrap_or_else(|| e.undefined()))
+        }),
+    ));
     list
 }
 
@@ -227,7 +219,7 @@ fn require_esm<E: Engine>(e: &E, core: &Core<E>, path: &str) -> Result<E::Value,
     }
     match e.promise_state(&promise) {
         Some(PromiseState::Rejected) => Err(e.promise_result(&promise)),
-        Some(PromiseState::Pending) => Err(e.error_value(&NativeError::error(format!(
+        Some(PromiseState::Pending) => Err(e.error_value(&NativeError::type_error(format!(
             "require() async module \"{path}\" is unsupported. use \"await import()\" instead."
         )))),
         _ => Ok(e.promise_result(&promise)),
@@ -239,6 +231,7 @@ pub(crate) fn bootstrap<E: Engine>(
     core: &Rc<Core<E>>,
     functions: Vec<(String, ValueFn<E>)>,
     constants: Vec<(String, Val)>,
+    lane: Option<LaneCommit>,
 ) -> Result<E::Value, E::Value> {
     let native = e.new_object();
     let memory_span = functions
@@ -269,10 +262,13 @@ pub(crate) fn bootstrap<E: Engine>(
     for (name, value) in constants {
         e.set(&native, &name, e.value_from(value))?;
     }
-    for (name, function) in value_natives(core) {
+    for (name, function) in value_natives(core, lane) {
         e.set(&native, name, e.new_function(name, function))?;
     }
     e.set(&native, "engine", e.value_from(e.name().into()))?;
+    let (key, version) = e.version();
+    let entry = Val::Array(vec![key.into(), version.into()]);
+    e.set(&native, "engineVersion", e.value_from(entry))?;
     let factory = load_polyfill(e, core, "bootstrap")?;
     measurement::measure(e.name(), "bootstrap-execute", "bootstrap", 0, || {
         e.call(&factory, &e.undefined(), &[native])

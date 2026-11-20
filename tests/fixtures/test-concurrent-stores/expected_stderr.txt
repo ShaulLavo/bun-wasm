@@ -1,0 +1,17 @@
+
+index.test.ts:
+(pass) stores > sees a
+(pass) stores > sees b
+(pass) registered inside run
+error: expect(received).toBe(expected)
+expect(received).toBe(expected)
+(fail) inside als.run > fails inside run
+(pass) inside als.run > enterWith inside a test
+(pass) inside als.run > passes beside it
+(pass) d1 > t1
+(pass) t2
+
+ 7 pass
+ 1 fail
+ 3 expect() calls
+Ran 8 tests across 1 file. [TIME]

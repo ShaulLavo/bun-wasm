@@ -1,0 +1,25 @@
+From 3c9628afb01bba6f9136fde8642c92911f45a62c Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Sat, 14 Nov 2026 07:34:13 +0200
+Subject: [PATCH 26/26] node:wasi refresh views when the memory buffer changes
+
+---
+ src/js/node/wasi.ts | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/js/node/wasi.ts b/src/js/node/wasi.ts
+index 1c2611c0..1b17dd68 100644
+--- a/src/js/node/wasi.ts
++++ b/src/js/node/wasi.ts
+@@ -1715,8 +1715,9 @@ class WASI {
+     return fd;
+   }
+   refreshMemory() {
+-    if (!this.view || this.view.buffer.byteLength === 0) {
+-      this.view = new DataView(this.memory.buffer);
++    const buffer = this.memory.buffer;
++    if (this.view?.buffer !== buffer) {
++      this.view = new DataView(buffer);
+     }
+   }
+   setMemory(memory) {

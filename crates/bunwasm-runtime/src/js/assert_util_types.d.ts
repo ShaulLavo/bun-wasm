@@ -26,6 +26,7 @@ declare namespace BunWasm {
     parseEnv(content: string): Record<string, string>;
     parseArgs(config?: unknown): ParseArgsResult;
     bunDeepEquals(a: unknown, b: unknown, strict?: boolean): boolean;
+    expectEquals(a: unknown, b: unknown, strict: boolean, asymmetric: AsymmetricComparison, isAsymmetric: (value: unknown) => boolean): EqualityResult;
     deprecate<Fn extends Function>(fn: Fn, msg: string, code?: string): Fn;
     isDeepStrictEqual(a: unknown, b: unknown): boolean;
     types: { isRegExp(value: unknown): value is RegExp; isNativeError(value: unknown): value is Error };
@@ -35,6 +36,7 @@ declare namespace BunWasm {
     nodeFormatWithOptions: { (options: InspectOptions, ...args: unknown[]): string; apply(receiver: unknown, args: IArguments): string };
   }
   interface Internal {
+    promiseThen<T, U>(value: Promise<T>, fulfilled: (value: T) => U | Promise<U>, rejected?: (error: unknown) => U | Promise<U>): Promise<U>;
     require(name: "util"): UtilityModule;
     require(name: "inspect"): ConsoleInspector;
     require(name: "partial_assert"): {
@@ -54,6 +56,13 @@ declare namespace BunWasm {
     [key: symbol]: unknown;
   }
   interface EqualityMemo { val1: Map<object, number>; val2: Map<object, number>; position: number }
+  type EqualityResult = boolean | Promise<boolean>;
+  type AsymmetricComparison = (received: unknown, expected: unknown) => EqualityResult | undefined;
+  interface ExpectComparison {
+    asymmetric: AsymmetricComparison;
+    isAsymmetric: (value: unknown) => boolean;
+    memo?: EqualityMemo;
+  }
   interface ComparisonError extends Error { errors?: unknown }
   type BoxedPrimitive<Value> = object & { valueOf(): Value };
   interface NumericView extends ArrayBufferView, ArrayLike<number | bigint> {}

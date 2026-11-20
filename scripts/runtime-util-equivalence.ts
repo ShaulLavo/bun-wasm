@@ -55,16 +55,40 @@ function constructorReceiver(node: ts.NewExpression): ts.Identifier {
 
 interface Edit { start: number; end: number; text: string }
 
-function restoreParseEnv(text: string): string {
+function omitBunComparisonChanges(text: string): string {
   const source = parseRuntime(text);
+  const functions = new Set(["bunCompareArrays", "arraySymbols", "bunArraySymbols", "arrayBuffersEqual", "isDetachedBuffer", "bunCompareSpecial", "arrayIndex", "bunCompareWebObjects", "equalSearchParams", "headerCount", "equalHeaders", "isUrl", "isSearchParams", "isHeaders", "webKind"]);
+  const constants = new Set(["emptyArrayIndex", "urlHref", "searchParamsSize"]);
   const matches: ts.Node[] = [];
+  function approved(node: ts.Node): boolean {
+    if (ts.isFunctionDeclaration(node)) return functions.has(node.name?.text ?? "");
+    if (!ts.isVariableStatement(node) || node.declarationList.declarations.length !== 1) return false;
+    return constants.has(node.declarationList.declarations[0]!.name.getText(source));
+  }
   function visit(node: ts.Node): void {
-    if (ts.isFunctionDeclaration(node) && node.name?.text === "parseEnv") matches.push(node);
-    if (ts.isShorthandPropertyAssignment(node) && node.name.text === "parseEnv") matches.push(node);
+    if (approved(node)) { matches.push(node); return; }
     ts.forEachChild(node, visit);
   }
   visit(source);
-  if (matches.length !== 2) throw new Error("Expected parseEnv function and utility export");
+  matches.sort((left, right) => right.getStart(source) - left.getStart(source));
+  for (const node of matches) text = text.slice(0, node.getStart(source)) + text.slice(node.end);
+  return text;
+}
+
+function restoreAdditions(text: string): string {
+  const source = parseRuntime(text);
+  const names = new Set(["parseEnv", "expectEquals", "expectSettle", "expectEvery", "expectSome", "expectEq", "expectMemo", "expectArrays", "expectArraySymbols", "expectSets", "expectMapEntry", "expectMaps", "expectErrors", "expectObjects", "expectProperties", "expectExtraProperties"]);
+  const exports = new Set(["parseEnv", "expectEquals"]);
+  const matches: ts.Node[] = [];
+  function visit(node: ts.Node): void {
+    if (ts.isFunctionDeclaration(node) && names.has(node.name?.text ?? "")) matches.push(node);
+    if (ts.isShorthandPropertyAssignment(node) && exports.has(node.name.text)) matches.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  const declarations = matches.filter(ts.isFunctionDeclaration);
+  const declared = new Set(declarations.map(node => node.name?.text));
+  if (matches.length !== names.size + exports.size || declared.size !== names.size) throw new Error("Expected exactly the approved parseEnv and private equality declarations and exports");
   for (const node of matches.toSorted((left, right) => right.getStart(source) - left.getStart(source))) {
     const end = ts.isShorthandPropertyAssignment(node) && text[node.end] === "," ? node.end + 1 : node.end;
     text = text.slice(0, node.getStart(source)) + text.slice(end);
@@ -72,9 +96,10 @@ function restoreParseEnv(text: string): string {
   return text;
 }
 
-// Restore the two reviewed extractions and the separately tested parseEnv addition.
+// Restore the Node migration after excluding separately tested Bun additions.
 export function restoreDestinations(text: string): string {
-  text = restoreParseEnv(text);
+  text = restoreAdditions(text);
+  text = omitBunComparisonChanges(text);
   const source = parseRuntime(text);
   const capture = declarations(source, "ConstructorSet");
   const array = declarations(source, "constructors");

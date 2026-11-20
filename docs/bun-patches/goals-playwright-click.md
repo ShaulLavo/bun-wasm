@@ -26,3 +26,30 @@ controls through the real `checkClick` path. They use tiny HTML counters and
 need no guest build or framework installation. Safari retains its existing
 browser controls and transport fixtures. Framework templates, phase limits
 and acceptance assertions are unchanged.
+
+The shared `native-click.ts` document guard reports the first failed predicate
+as `state-missing`, `token-mismatch`, `url-mismatch`, or `document-identity-mismatch`.
+Its existing evaluation error carries only literal boolean evidence for the
+comparisons reached before failure. Later comparisons remain unevaluated. No
+token, URL, Document reference, selector or page content is added to the diagnostic.
+The generated function stays self-contained for both transport callers. Target
+and trusted-event checks, serial Safari dispatch, admission and cancellation
+are unchanged. This distinguishes guard failures, not their reload or session
+cause, and adds no browser command, poll, retry or deadline.
+
+`checks/quality-goals-native-click.json` owns generated-source short-circuit and
+falsy-state controls. The existing Safari transport fixture checks error
+propagation, and `checks/web-browser-goals-safari-click.json` owns actual DOM
+controls in Linux Chromium and WebKit for all four document failures, valid
+input, target identity and trusted-event boundaries. No guest or framework is
+needed for these controls.
+
+The witness retains the armed `Document` and compares its reference at
+observation. `performance.timeOrigin` measures time and is no longer used as
+document identity. The clock comparison rejected a prior native Safari attempt,
+but its numeric readings and Document reference were not captured, so the exact
+cause of that mismatch remains unproved. A controlled varying clock now passes
+with real trusted input in the same Document. A different Document fails even
+when its URL and clock match and the connected button, trusted event and counter
+are transferred intact. Target replacement and synthetic-event controls still
+fail. Existing quality, transport and browser check manifests keep their owners.

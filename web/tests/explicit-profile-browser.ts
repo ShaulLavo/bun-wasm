@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import type { Runtime } from "waffle";
+import { projectTemplates } from "../src/playground/project-templates";
 import { stageFixtureTree } from "../../scripts/fixture-tree";
 import { verifySite } from "../../scripts/browser-guest-site";
 import { stageSharedPrograms } from "../../scripts/stage-program-profiles";
@@ -12,6 +13,7 @@ import { BUN_MEMORY_GROUP_POLICY, isPairedEngine, programKind, programProfile } 
 
 declare const playground: {
   runtime: Runtime;
+  engine: string;
   profile: string;
   fs: Runtime["filesystem"];
   shell: { submit(text: string): Promise<void>; lastExit: number; running: boolean };
@@ -40,7 +42,7 @@ async function site(): Promise<string> {
   const root = join(scratch, "site");
   await cp(source, root, { recursive: true });
   const program = process.env.BUN_WASM_PROFILE_PROGRAM;
-  if (program) {
+  if (program && process.env.BUN_WASM_PREPARED_SHARED_SITE !== "1") {
     const kind = programKind(new WebAssembly.Module(await Bun.file(program).bytes()));
     assert.ok(isPairedEngine(kind), "Existing shared paired producer required");
     const builds: Record<string, string> = await Bun.file(join(root, "engine-builds.json")).json();
@@ -127,6 +129,23 @@ async function shared(page: Page, base: string, engine: string): Promise<void> {
   }
 }
 
+async function workerTemplateDefault(page: Page, base: string, engine: string, template: string): Promise<void> {
+  const requests: string[] = [];
+  const observe = (request: import("playwright").Request) => requests.push(new URL(request.url()).pathname);
+  page.on("request", observe);
+  try {
+    await page.goto(`${base}?template=${template}&engine=${engine}&mode=memory&prompt=off`);
+    await page.waitForFunction(() => typeof playground !== "undefined", undefined, { timeout: 60_000 });
+    assert.equal(new URL(page.url()).searchParams.has("profile"), false);
+    assert.deepEqual(await page.evaluate(() => ({ engine: playground.engine, profile: playground.profile })), { engine, profile: "shared-group" });
+    assert.ok(isPairedEngine(engine));
+    const names = programProfile(engine);
+    const allowed = [names.core, names.side].map(name => `/profiles/shared-group/${name}.gz`);
+    assert.ok(requests.filter(path => /\.wasm(?:\.gz)?$/.test(path)).every(path => allowed.includes(path) || path.startsWith("/programs/")), `${template} eagerly fetched another engine or profile`);
+    console.log(JSON.stringify({ template, engine, profile: "shared-group", explicitProfile: false, requests }));
+  } finally { page.off("request", observe); }
+}
+
 async function mismatch(base: string, root: string): Promise<void> {
   const page = await browser!.newPage();
   const builds: Record<string, string> = await Bun.file(join(root, "engine-builds.json")).json();
@@ -181,7 +200,10 @@ try {
   page.on("pageerror", error => console.error(String(error)));
   const program = process.env.BUN_WASM_PROFILE_PROGRAM;
   const selected = program ? [programKind(new WebAssembly.Module(await Bun.file(program).bytes()))] : ["quickjs", "jsc"];
-  for (const engine of selected) await shared(page, base, engine);
+  for (const engine of selected) {
+    for (const template of projectTemplates.filter(template => template.sharedWorkers)) await workerTemplateDefault(page, base, engine, template.id);
+    await shared(page, base, engine);
+  }
   await ready(page, base, "quickjs", "split");
   await fixture(page, join(scratch!, "fixture-split"));
   const refusal = await command(page, "bun run /home/user/fixture/cross-worker.ts");

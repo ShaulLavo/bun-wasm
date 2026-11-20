@@ -37,6 +37,7 @@
 #include "JSPromise.h"
 #include "JSSourceCode.h"
 #include "MicrotaskQueue.h"
+#include "ModuleRegistryEntry.h"
 #include "ProxyObject.h"
 #include "TopExceptionScope.h"
 #include "SourceProvider.h"
@@ -45,9 +46,14 @@
 #include "Parser.h"
 #include "SimpleTypedArrayController.h"
 #include "WASIMemoryTelemetry.h"
+#include "WASIJSONFastTest.h"
+#include <wtf/DataLog.h>
 #include <wtf/URL.h>
+#include <wtf/text/SymbolRegistry.h>
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <string_view>
 
 using namespace JSC;
 
@@ -65,6 +71,9 @@ char* bunjsc_host_fetch(const char* key, JSValueRef* exception);
 void bunjsc_host_init_meta(JSValueRef meta, const char* key, JSValueRef* exception);
 void bunjsc_host_free(char*);
 void bunjsc_host_uncaught(JSContextRef, JSValueRef);
+// A promise was rejected with no handler (handled = false), or such a promise got its first
+// handler (handled = true). Runs no JavaScript.
+void bunjsc_host_rejection(JSValueRef promise, JSValueRef reason, bool handled);
 // Polls fatal host cancellation without entering JS or consuming handled signals.
 // True requests native, uncatchable termination after the callback has returned.
 bool bunjsc_host_interrupt();
@@ -81,10 +90,33 @@ extern "C" void Bun__reportUnhandledError(JSGlobalObject* globalObject, EncodedJ
     bunjsc_host_uncaught(toRef(globalObject), toRef(globalObject, value));
 }
 
+// Bun's Zig::GlobalObject::promiseRejectionTracker: the host keeps the queue, so it sees each
+// rejection and each first handler at once instead of JSC's batch at microtask exhaustion.
+static void trackPromiseRejection(JSGlobalObject* globalObject, JSPromise* promise, JSPromiseRejectionOperation operation)
+{
+    bool handled = operation == JSPromiseRejectionOperation::Handle;
+    bunjsc_host_rejection(toRef(globalObject, promise), toRef(globalObject, promise->result()), handled);
+}
+
 static std::string utf8(const String& s)
 {
     auto bytes = s.utf8();
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.length());
+}
+
+static JSValue formatErrorStack(VM& vm, JSObject* error, JSValue raw)
+{
+    JSGlobalObject* globalObject = error->globalObject();
+    auto scope = DECLARE_THROW_SCOPE(vm);
+    auto symbol = vm.symbolRegistry().symbolForKey("bunwasm.internal.jsc.formatStack"_s);
+    JSValue formatter = globalObject->getDirect(vm, Identifier::fromUid(symbol.get()));
+    if (!formatter || formatter.isUndefined())
+        return raw;
+    MarkedArgumentBuffer arguments;
+    arguments.append(error);
+    arguments.append(raw);
+    RELEASE_ASSERT(!arguments.hasOverflowed());
+    RELEASE_AND_RETURN(scope, call(globalObject, formatter, jsUndefined(), arguments, "Stack formatter must be callable"_s));
 }
 
 // The URL a module or script's SourceOrigin gets: file URLs for paths (so
@@ -201,8 +233,10 @@ static JSObject* createImportMeta(JSGlobalObject* globalObject, JSModuleLoader*,
     return meta;
 }
 
-// Invoked only by the C loop's trap slow path, after its PC and stack
-// pointer have been saved. Rust only polls fatal cancellation; it must not enter JS.
+// Invoked by the C loop's trap slow path, after its PC and stack pointer have
+// been saved, and by the Yarr interpreter's backtrack poll in the middle of a
+// match (webkit-wasi.patch, RegExpInlines.h). Rust only polls fatal
+// cancellation; it must not enter JS, allocate on the JS heap or touch regexps.
 static bool interruptScriptBeforeTimeout(const JSGlobalObject*)
 {
     return bunjsc_host_interrupt();
@@ -245,6 +279,46 @@ static unsigned parserReserveSetting(const char* text)
     return (value + 15) & ~15u;
 }
 
+static WASIJSONFastTestControl jsonFastTestSetting(const char* text)
+{
+    WASIJSONFastTestControl off { WASIJSONFastTestMode::Off, 0 };
+    if (!text)
+        return off;
+    if (!strcmp(text, "record"))
+        return { WASIJSONFastTestMode::Record, 0 };
+    const char* colon = strchr(text, ':');
+    if (!colon)
+        return off;
+    unsigned value = 0;
+    size_t digits = 0;
+    for (const char* p = colon + 1; *p; ++p) {
+        if (++digits > 4 || *p < '0' || *p > '9')
+            return off;
+        value = value * 10 + static_cast<unsigned>(*p - '0');
+    }
+    if (!digits || !value)
+        return off;
+    std::string_view name(text, colon - text);
+    if (name == "fail-frame-growth")
+        return { WASIJSONFastTestMode::FailFrameGrowth, value };
+    if (name == "fail-root-growth")
+        return { WASIJSONFastTestMode::FailRootGrowth, value };
+    if (name == "collect-at-open")
+        return { WASIJSONFastTestMode::CollectAtOpen, value };
+    return off;
+}
+
+static bool jsonFastTestEnabled;
+
+static void logJSONFastMemory(const BunjscMemoryTelemetry& snapshot)
+{
+    if (!jsonFastTestEnabled)
+        return;
+    BunjscCoreAllocatorSample allocator { };
+    RELEASE_ASSERT(sampleCoreAllocator(allocator));
+    dataLogF("bunwasm-json-fast-memory {\"heapUsed\":%llu,\"extraMemory\":%llu,\"live\":%llu,\"capacity\":%llu,\"maximum\":%llu}\n", static_cast<unsigned long long>(snapshot.heapUsed), static_cast<unsigned long long>(snapshot.extraMemory), static_cast<unsigned long long>(allocator.live), static_cast<unsigned long long>(allocator.capacity), static_cast<unsigned long long>(BUN_WASM_MAX_MEMORY));
+}
+
 extern "C" {
 
 // A global context whose global object has the module loader hooks above.
@@ -272,9 +346,13 @@ JSGlobalContextRef bunjsc_create_context()
         // environment, before its only VM exists and so before any parse.
         if (unsigned reserve = parserReserveSetting(getenv("BUN_WASM_JSC_PARSER_RESERVE")))
             JSC::setWasmParserReserve(reserve);
+        WASIJSONFastTestControl jsonFastControl = jsonFastTestSetting(getenv("BUN_WASM_JSC_JSON_FAST_TEST"));
+        jsonFastTestEnabled = jsonFastControl.mode != WASIJSONFastTestMode::Off;
+        JSC::setWASIJSONFastTestControl(jsonFastControl);
     });
     Ref<VM> vm = VM::createContextGroup();
     JSLockHolder locker(vm.ptr());
+    vm->setOnMaterializeErrorStack(formatErrorStack);
 #if defined(BUN_WASM_SHARED_GROUP)
     // The group futex parks a member safely, so its JS may block in Atomics.wait.
     vm->m_typedArrayController = adoptRef(new SimpleTypedArrayController(true));
@@ -289,6 +367,7 @@ JSGlobalContextRef bunjsc_create_context()
         t.moduleLoaderResolve = resolveModule;
         t.moduleLoaderFetch = fetchModule;
         t.moduleLoaderCreateImportMetaProperties = createImportMeta;
+        t.promiseRejectionTracker = trackPromiseRejection;
         return t;
     }();
     JSGlobalObject* globalObject = JSGlobalObject::createWithCustomMethodTable(vm.get(), JSGlobalObject::createStructure(vm.get(), jsNull()), &table);
@@ -329,6 +408,51 @@ JSValueRef bunjsc_import(JSContextRef ctx, const char* specifier, JSValueRef* ex
         return nullptr;
     }
     return toRef(globalObject, promise);
+}
+
+JSValueRef bunjsc_require(JSContextRef ctx, const char* name, JSValueRef* exception)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    VM& vm = globalObject->vm();
+    JSLockHolder lock(vm);
+    auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
+    auto key = Identifier::fromString(vm, String::fromUTF8(name));
+    auto* loader = globalObject->moduleLoader();
+    // WebKit diverts only loader continuations to its synchronous queue. User
+    // reactions and earlier imports keep their place in the normal job queue.
+    JSPromise* loading = loader->loadModuleSync(globalObject, key, nullptr, nullptr);
+    if (Exception* e = scope.exception()) {
+        *exception = toRef(globalObject, e->value());
+        scope.clearException();
+        return nullptr;
+    }
+    if (loading->status() == JSPromise::Status::Rejected)
+        return toRef(globalObject, loading);
+    loading->markAsHandled();
+    JSPromise* result;
+    if (loading->status() == JSPromise::Status::Pending) {
+        // Keep pending evaluations on the existing owned import path.
+        result = requestImport(globalObject, loader, String::fromUTF8(name), String(), nullptr, false);
+    } else {
+        auto* entry = loader->registryEntry(key);
+        RELEASE_ASSERT(entry && entry->record());
+        auto* moduleNamespace = entry->record()->getModuleNamespace(globalObject);
+        if (Exception* e = scope.exception()) {
+            *exception = toRef(globalObject, e->value());
+            scope.clearException();
+            return nullptr;
+        }
+        result = JSPromise::create(vm, globalObject->promiseStructure());
+        result->markAsHandled();
+        // Retain require's existing namespace-thenable adoption semantics.
+        result->resolve(globalObject, vm, moduleNamespace);
+    }
+    if (Exception* e = scope.exception()) {
+        *exception = toRef(globalObject, e->value());
+        scope.clearException();
+        return nullptr;
+    }
+    return toRef(globalObject, result);
 }
 
 // Evaluate a classic script named `filename` whose first line is
@@ -410,6 +534,7 @@ void bunjsc_refresh_memory_telemetry(JSContextRef ctx)
     snapshot.generationalGcEnabled = Options::useGenerationalGC();
     snapshot.concurrentGcEnabled = Options::useConcurrentGC();
     ++snapshot.snapshotSequence;
+    logJSONFastMemory(snapshot);
 }
 
 BunjscAllocationBoundary* bunjsc_allocation_boundary()
@@ -443,6 +568,19 @@ void bunjsc_collect_garbage(JSContextRef ctx)
     auto* previousTable = thread.setCurrentAtomStringTable(vm.atomStringTable());
     vm.heap.collectNow(Sync, CollectionScope::Full);
     thread.setCurrentAtomStringTable(previousTable);
+}
+
+// bun:jsc heapStats().objectTypeCounts, as Bun's BunJSCModule builds it: live cells per class
+// name, as of the last collection.
+JSValueRef bunjsc_object_type_counts(JSContextRef ctx)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    VM& vm = globalObject->vm();
+    JSLockHolder lock(vm);
+    JSObject* counts = constructEmptyObject(globalObject);
+    for (auto& entry : vm.heap.objectTypeCounts())
+        counts->putDirect(vm, Identifier::fromString(vm, entry.key), jsNumber(entry.value));
+    return toRef(globalObject, counts);
 }
 
 // -1: not a promise, 0: pending, 1: fulfilled, 2: rejected.
@@ -483,7 +621,19 @@ void bunjsc_promise_mark_handled(JSContextRef ctx, JSValueRef value, JSValueRef*
         *exception = toRef(global, createTypeError(global, "Expected a promise"_s));
         return;
     }
+    // As a first handler would: the rejection tracker drops a queued rejection now.
+    if (promise->status() == JSPromise::Status::Rejected && !promise->isHandled())
+        trackPromiseRejection(global, promise, JSPromiseRejectionOperation::Handle);
     promise->markAsHandled();
+}
+
+// JSC marks some promises handled without telling the tracker; the event loop skips those.
+bool bunjsc_promise_is_handled(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    auto* promise = dynamicDowncast<JSPromise>(toJS(global, value));
+    return !promise || promise->isHandled();
 }
 
 JSValueRef bunjsc_promise_then(JSContextRef ctx, JSValueRef value, JSValueRef fulfilled, JSValueRef rejected, JSValueRef* exception)

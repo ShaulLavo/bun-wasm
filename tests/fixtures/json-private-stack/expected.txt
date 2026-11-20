@@ -1,0 +1,4 @@
+private setter and getter counts: 0
+nested, shared, cycle and error recovery passed
+reentrant callbacks and exception identities passed
+public array setter and getter counts: 1 each

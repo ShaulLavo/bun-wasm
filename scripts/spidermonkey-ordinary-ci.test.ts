@@ -1,3 +1,4 @@
+import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -45,26 +46,44 @@ test("ordinary live gate has one runtime owner, no local selection and serial gu
   expect(selectChecks("quality", checks)).not.toContain(live);
   expect(selectChecks("local-runtime", checks)).not.toContain(live);
   expect(readFileSync(resolve("scripts/spidermonkey-ordinary-fixtures.ts"), "utf8")).toContain("scripts/spidermonkey-engine-semantics.sh");
-  expect(ordinaryFixtures).toHaveLength(16);
-  expect(ordinaryFixtureTimeout).toBeGreaterThanOrEqual(16 * 65_000);
+  expect(ordinaryFixtures).toHaveLength(26);
+  expect(ordinaryFixtureTimeout).toBe(26 * 65_000 + 30_000);
 });
 
-test("ordinary invocation passes explicit inputs once and forces the interpreter", () => {
+test.each(["spidermonkey-getter-loop", "spidermonkey-call-loop"])("the %s fixture runs on both SpiderMonkey tiers through the ordinary gate", fixture => {
+  const checks = discoverChecks();
+  // Its native manifest selects only QuickJS; SpiderMonkey reaches it through the ordinary list.
+  expect(checks.filter(check => check.path === `tests/fixtures/${fixture}`)).toHaveLength(1);
+  expect(selectChecks("runtime", checks)).toContain("scripts/spidermonkey-ordinary-fixtures.test.ts");
+  const root = scratch();
+  const path = join(root, "input");
+  writeFileSync(path, "synthetic executable");
+  chmodSync(path, 0o755);
+  const env = { SPIDERMONKEY_WASM: path, BUN_WASM_LAUNCHER: path, BUN_WASM_SHELL: path, BUN_WASM_ENV_UTILITY: path };
+  for (const tier of ["interp", "pbl"] as const) {
+    const command = ordinaryFixtureCommand(root, env, tier);
+    expect(command.slice(0, 8)).toEqual(["bash", join(root, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", path, "--tier", tier]);
+    expect(command.filter(argument => argument === fixture)).toHaveLength(1);
+  }
+});
+
+test("ordinary invocation passes explicit inputs once on either tier", () => {
   const root = scratch();
   const path = join(root, "input with spaces");
   writeFileSync(path, "synthetic executable");
   chmodSync(path, 0o755);
   const env = { SPIDERMONKEY_WASM: path, BUN_WASM_LAUNCHER: path, BUN_WASM_SHELL: path, BUN_WASM_ENV_UTILITY: path };
-  const command = ordinaryFixtureCommand(root, env);
-  expect(command).toEqual(["bash", join(root, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", path, "--tier", "interp"].concat(ordinaryFixtures));
-  expect(() => ordinaryFixtureCommand(root, { ...env, BUN_WASM_SHELL: "relative.wasm" })).toThrow(/absolute/);
-  expect(() => ordinaryFixtureCommand(root, { ...env, SPIDERMONKEY_WASM: join(root, "missing") })).toThrow();
+  for (const tier of ["interp", "pbl"] as const) {
+    const command = ordinaryFixtureCommand(root, env, tier);
+    expect(command).toEqual(["bash", join(root, "scripts/test.sh"), "--engine", "spidermonkey", "--wasm", path, "--tier", tier].concat(ordinaryFixtures));
+  }
+  expect(() => ordinaryFixtureCommand(root, { ...env, BUN_WASM_SHELL: "relative.wasm" }, "interp")).toThrow(/absolute/);
+  expect(() => ordinaryFixtureCommand(root, { ...env, SPIDERMONKEY_WASM: join(root, "missing") }, "pbl")).toThrow();
 });
 
 test("workflow caches only native work and Cargo objects and exports after its single live gate", () => {
-  const source = resolve(import.meta.dir, "..");
-  const workflow = readFileSync(join(source, ".github/workflows/ci.yml"), "utf8");
-  const rust = workflow.slice(workflow.indexOf("  rust:\n"), workflow.indexOf("\n  package:", workflow.indexOf("  rust:\n")));
+  const workflow = expandedCiWorkflow();
+  const rust = workflow.slice(workflow.indexOf("  rust:\n"), workflow.indexOf("\n  browser-production:", workflow.indexOf("  rust:\n")));
   expect(rust.match(/bash scripts\/build-bun-core.sh/g)).toHaveLength(1);
   expect(rust.match(/bash scripts\/build-bun-spidermonkey.sh/g)).toHaveLength(1);
   expect(rust.match(/bun scripts\/test-checks.ts native\n/g)).toHaveLength(1);

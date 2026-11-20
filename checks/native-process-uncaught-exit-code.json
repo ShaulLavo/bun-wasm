@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/process-uncaught-exit-code",
+  "engines": ["quickjs", "jsc", "browser"]
+}

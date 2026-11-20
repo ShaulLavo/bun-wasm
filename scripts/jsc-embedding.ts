@@ -186,6 +186,17 @@ function runHandshake([executable, ...args]: string[], scratch: string): void {
   if (run.status !== 0) throw new Error(`JSC handshake ${args[1]} failed, exit ${run.status}, signal ${run.signal}`);
 }
 
+export async function verifyJscEmbedding(artifactName: string, current = inputs()): Promise<void> {
+  const artifact = resolve(artifactName);
+  const bytes = await Bun.file(artifact).bytes();
+  const side = await Bun.file(join(dirname(artifact), "jsc-engine.wasm")).bytes();
+  verifyEmbeddingReceipt(await Bun.file(`${artifact}.embedding.json`).json(), current, { kind: "jsc", core: bytes, side });
+  const receipt: unknown = await Bun.file(`${artifact}.build.json`).json();
+  verifyGuestBuildReceipt(bytes, receipt);
+  await verifyGuestCompanions(receipt, dirname(artifact));
+  console.log(`JSC source ${current.sourceHead}; guest sha256 ${hash(bytes)}`);
+}
+
 if (import.meta.main) {
   const [command, artifactName, snapshot] = process.argv.slice(2);
   // Development only: the gate's fixture runs on any pair. It checks no receipt, so it says
@@ -202,17 +213,10 @@ if (import.meta.main) {
     const core = await Bun.file(artifactName).bytes();
     const side = await Bun.file(join(dirname(artifactName), "jsc-engine.wasm")).bytes();
     await Bun.write(`${artifactName}.embedding.json`, JSON.stringify({ ...current, program: embeddingProgram({ kind: "jsc", core, side }) }));
-  } else if (command === "test" && artifactName) {
-    const artifact = resolve(artifactName);
-    const bytes = await Bun.file(artifact).bytes();
-    const side = await Bun.file(join(dirname(artifact), "jsc-engine.wasm")).bytes();
-    verifyEmbeddingReceipt(await Bun.file(`${artifact}.embedding.json`).json(), current, { kind: "jsc", core: bytes, side });
-    const receipt: unknown = await Bun.file(`${artifact}.build.json`).json();
-    verifyGuestBuildReceipt(bytes, receipt);
-    await verifyGuestCompanions(receipt, dirname(artifact));
-    console.log(`JSC source ${current.sourceHead}; guest sha256 ${hash(bytes)}`);
-    testFixtures(artifact);
+  } else if ((command === "test" || command === "verify") && artifactName) {
+    await verifyJscEmbedding(artifactName, current);
+    if (command === "test") testFixtures(resolve(artifactName));
   } else {
-    throw new Error("Usage: jsc-embedding.ts inputs | write ARTIFACT INPUTS_JSON | test ARTIFACT | fixtures ARTIFACT");
+    throw new Error("Usage: jsc-embedding.ts inputs | write ARTIFACT INPUTS_JSON | test ARTIFACT | verify ARTIFACT | fixtures ARTIFACT");
   }
 }

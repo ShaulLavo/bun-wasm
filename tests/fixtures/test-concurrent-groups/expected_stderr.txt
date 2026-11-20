@@ -1,0 +1,63 @@
+
+index.test.ts:
+(pass) serial 1
+(pass) concurrent 2
+(pass) concurrent 3
+(pass) serial 4
+(pass) concurrent 5
+(pass) group > concurrent 6
+(pass) group > serial 7 opts out
+(pass) with beforeAll > concurrent 8
+(pass) with beforeAll > concurrent 9
+(pass) attribution > an inline snapshot after an await
+(pass) attribution > concurrent failing
+error: expect(received).toBe(expected)
+expect(received).toBe(expected)
+(fail) attribution > a failing assertion fails its own test
+(pass) a serial test ends the attribution group
+(pass) default limit > limited 0
+(pass) default limit > limited 1
+(pass) default limit > limited 2
+(pass) default limit > limited 3
+(pass) default limit > limited 4
+(pass) default limit > limited 5
+(pass) default limit > limited 6
+(pass) default limit > limited 7
+(pass) default limit > limited 8
+(pass) default limit > limited 9
+(pass) default limit > limited 10
+(pass) default limit > limited 11
+(pass) default limit > limited 12
+(pass) default limit > limited 13
+(pass) default limit > limited 14
+(pass) default limit > limited 15
+(pass) default limit > limited 16
+(pass) default limit > limited 17
+(pass) default limit > limited 18
+(pass) default limit > limited 19
+(pass) default limit > limited 20
+(pass) default limit > limited 21
+(pass) default limit > limited 22
+(pass) default limit > limited 23
+(pass) default limit > limited 24
+(pass) peaks
+(pass) immediate > immediate 1
+(pass) immediate > immediate 2
+(skip) skipped by test.concurrent.skipIf
+(pass) run by test.concurrent.if
+(skip) skipped by describe.concurrent.skipIf > inside a skipped describe
+(pass) modifier variants are the same function on every access
+
+2 tests skipped:
+(skip) skipped by test.concurrent.skipIf
+(skip) skipped by describe.concurrent.skipIf > inside a skipped describe
+
+
+1 tests failed:
+(fail) attribution > a failing assertion fails its own test
+
+ 42 pass
+ 2 skip
+ 1 fail
+ 1 snapshots, 5 expect() calls
+Ran 45 tests across 1 file. [TIME]

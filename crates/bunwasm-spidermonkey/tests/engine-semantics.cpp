@@ -15,6 +15,7 @@ std::vector<bsm_handle> rejected;
 std::vector<bsm_handle> uncaught;
 std::vector<bool> rejectionEvents;
 std::vector<uint32_t> finalized;
+std::string lastReferrer;
 unsigned interruptCalls = 0;
 unsigned interruptAt = 0;
 
@@ -35,7 +36,7 @@ class Value {
 
 Value script(const char* source, const char* filename = "semantics", int32_t line = 1) {
   bsm_handle out = 0;
-  bool ok = bsm_eval_script(source, strlen(source), filename, line, &out);
+  bool ok = bsm_eval_script(source, strlen(source), filename, strlen(filename), line, &out);
   check(ok, source);
   return Value(out);
 }
@@ -204,7 +205,58 @@ void internal_promise_poisoning(int mode, int poison) {
   check(rejected.empty() && uncaught.empty(), "owned poisoning has no rejection report");
 }
 
+void module_namespace_cases() {
+  sources["namespace-live"] = "export let count = 0; export function increment() { ++count; }";
+  sources["namespace-reexport"] = "export * as child from 'namespace-live';";
+  sources["namespace-marker"] = "export let __esModule; export function mark() { __esModule = false; }";
+  sources["namespace-empty"] = "";
+  Value required(require("namespace-live"));
+  jobs();
+  Value ns(bsm_promise_result(required.handle));
+  check(bsm_is_module_namespace(ns.handle), "native namespace brand");
+  install("canonicalNamespace", ns.handle);
+  Value marker(script("if (canonicalNamespace.__esModule !== true || !('__esModule' in canonicalNamespace)) throw new Error('inherited marker'); if (Object.hasOwn(canonicalNamespace, '__esModule')) throw new Error('marker became export'); const markerDescriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(canonicalNamespace), '__esModule'); if (markerDescriptor.value !== true || markerDescriptor.writable || markerDescriptor.enumerable || markerDescriptor.configurable) throw new Error('marker descriptor'); if (Object.getPrototypeOf(Object.getPrototypeOf(canonicalNamespace)) !== null) throw new Error('marker prototype root');"));
+  Value bindings(script("const exportDescriptor = Object.getOwnPropertyDescriptor(canonicalNamespace, 'count'); if (exportDescriptor.value !== 0 || !exportDescriptor.writable || !exportDescriptor.enumerable || exportDescriptor.configurable) throw new Error('export descriptor'); canonicalNamespace.increment(); if (canonicalNamespace.count !== 1 || Object.getOwnPropertyDescriptor(canonicalNamespace, 'count').value !== 1) throw new Error('live binding'); if (Reflect.set(canonicalNamespace, 'count', 9) || Reflect.defineProperty(canonicalNamespace, 'count', {value: 9}) || Reflect.deleteProperty(canonicalNamespace, 'count') || Object.isExtensible(canonicalNamespace)) throw new Error('namespace mutation');"));
+  Value imported(import("namespace-live"));
+  jobs();
+  Value importedNs(bsm_promise_result(imported.handle));
+  check(bsm_same_value(ns.handle, importedNs.handle), "native namespace import identity");
+  bsm_gc();
+  Value prototype(script("const namespacePrototype = Object.getPrototypeOf(canonicalNamespace); const inheritedKey = Symbol('namespace prototype'); for (const key of ['namespacePrototypeValue', inheritedKey]) { Object.defineProperty(namespacePrototype, key, {configurable: true, get() { return this.count; }}); if (canonicalNamespace[key] !== 1 || !(key in canonicalNamespace) || Object.hasOwn(canonicalNamespace, key)) throw new Error('inherited namespace property'); delete namespacePrototype[key]; if (canonicalNamespace[key] !== undefined || key in canonicalNamespace) throw new Error('deleted namespace prototype property'); } if (canonicalNamespace.__esModule !== true || Reflect.set(namespacePrototype, '__esModule', false) || Reflect.deleteProperty(namespacePrototype, '__esModule')) throw new Error('marker prototype mutation');"));
+  Value repeated(require("namespace-live"));
+  jobs();
+  Value repeatedNs(bsm_promise_result(repeated.handle));
+  check(bsm_same_value(ns.handle, repeatedNs.handle), "native namespace require identity");
+  Value reexport(require("namespace-reexport"));
+  jobs();
+  Value reexportNs(bsm_promise_result(reexport.handle));
+  install("namespaceReexport", reexportNs.handle);
+  Value child(script("if (namespaceReexport.child !== canonicalNamespace) throw new Error('namespace reexport identity');"));
+  Value explicitMarker(require("namespace-marker"));
+  jobs();
+  Value explicitNs(bsm_promise_result(explicitMarker.handle));
+  install("explicitNamespace", explicitNs.handle);
+  Value explicitCheck(script("if (explicitNamespace.__esModule !== undefined || !Object.hasOwn(explicitNamespace, '__esModule')) throw new Error('explicit undefined marker'); explicitNamespace.mark(); if (explicitNamespace.__esModule !== false) throw new Error('explicit live marker');"));
+  Value empty(import("namespace-empty"));
+  jobs();
+  Value emptyNs(bsm_promise_result(empty.handle));
+  check(bsm_is_module_namespace(emptyNs.handle), "empty native namespace brand");
+  install("emptyNamespace", emptyNs.handle);
+  Value emptyCheck(script("if (emptyNamespace.__esModule !== true || Object.keys(emptyNamespace).length || Object.getPrototypeOf(emptyNamespace) !== Object.getPrototypeOf(canonicalNamespace)) throw new Error('empty namespace marker');"));
+  const char* negatives[] = {
+      "null", "undefined", "({})", "Object.getPrototypeOf(canonicalNamespace)",
+      "new Proxy(canonicalNamespace, {})",
+      "new Proxy({}, {getPrototypeOf() { throw new Error('must not run'); }})",
+      "Object.preventExtensions(Object.defineProperties(Object.create(Object.getPrototypeOf(canonicalNamespace)), {[Symbol.toStringTag]: {value: 'Module'}, __esModule: {value: true}}))",
+      "(() => { const proxy = Proxy.revocable(canonicalNamespace, {}); proxy.revoke(); return proxy.proxy; })()"};
+  for (const char* source : negatives) {
+    Value negative(script(source));
+    check(!bsm_is_module_namespace(negative.handle), "namespace brand rejects fabricated values and proxies");
+  }
+}
+
 void module_cases() {
+  module_namespace_cases();
   module_promise_poisoning(true, false);
   module_promise_poisoning(true, true);
   module_promise_poisoning(false, false);
@@ -448,7 +500,10 @@ void s15_sweep() {
   }
   check(firstFailure != static_cast<size_t>(-1), "S15 coarse refusal");
   size_t start = firstFailure > 4096 ? firstFailure - 4096 : 0;
-  for (size_t depth = start; depth <= firstFailure + 256 && !state.target; depth += 16) {
+  // The refusal may first land in a deeper frame; reservations such as PBL's
+  // script entry (docs/bun-patches/spidermonkey-stack-budget.md) put up to a
+  // few KiB between it and require_loaded's own check.
+  for (size_t depth = start; depth <= firstFailure + 4096 && !state.target; depth += 16) {
     s15_iteration(state, depth);
   }
   check(state.target && state.error, "S15 require_loaded entry refusal");
@@ -681,7 +736,7 @@ void errors_and_lines() {
   Value zero(script("globalThis.zeroStack = new Error('zero').stack;", "zero.ts", 0));
   Value zeroLine(script("if (!zeroStack.includes('zero.ts:0:')) throw new Error(zeroStack);"));
   bsm_handle negative = 0;
-  check(!bsm_eval_script("42", 2, "negative", -1, &negative), "unrecognized negative source refused");
+  check(!bsm_eval_script("42", 2, "negative", 8, -1, &negative), "unrecognized negative source refused");
   Value negativeError(negative);
   check(bsm_is_error(negativeError.handle), "negative source returns an error");
   Value semantics(script("(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {\n\nreturn [__bunwasm_cjs__, eval('__bunwasm_cjs__'), this, exports, require, module, __filename, __dirname, arguments.length];\n})", "commonjs-bindings.cts", -1));
@@ -696,7 +751,7 @@ void errors_and_lines() {
   install("commonjsReceiver", receiver.handle);
   Value bound(script("if (commonjsFunction.name !== '__bunwasm_cjs__' || commonjsFunction.length !== 5 || commonjsBindings[0] !== commonjsFunction || commonjsBindings[1] !== commonjsFunction || commonjsBindings[2] !== commonjsReceiver || commonjsBindings.slice(3, 8).some(v => v !== 42) || commonjsBindings[8] !== 5) throw new Error('CommonJS bindings');"));
   bsm_handle failure = 0;
-  check(!bsm_eval_script("throw 17", 8, "thrown", 1, &failure), "primitive exception");
+  check(!bsm_eval_script("throw 17", 8, "thrown", 6, 1, &failure), "primitive exception");
   Value primitive(failure);
   check(bsm_number(primitive.handle) == 17, "exception value preserved");
   Value overflow(script("globalThis.overflowName = ''; try { (function recurse() { recurse(); })(); } catch (e) { overflowName = e.name; }"));
@@ -715,16 +770,27 @@ void natives() {
   bsm_gc();
   check(finalized.size() == 1 && finalized[0] == 100, "native finalizer exactly once");
 }
+#include "filename-controls.cpp"
+#include "eval-completion.cpp"
+#include "require-recovery.cpp"
+#if defined(BUNSM_LOOP_CONTROLS)
+#include "loop-dispatch.cpp"
+#endif
+
 }  // namespace
+
+#include "frame-kind-controls.cpp"
 
 extern "C" bool bunsm_host_call(uint32_t id, bsm_handle, const bsm_handle* args, size_t argc, bsm_handle* out) {
   if (id == 1) { *out = bsm_async_context(); return true; }
+  if (id == 200 || id == 201) return recovery_host_call(id, args, argc, out);
   check(id == 100 && argc == 1, "native callback arguments");
   *out = bsm_number_value(bsm_number(args[0]) * 2);
   return true;
 }
 extern "C" void bunsm_host_drop(uint32_t id) { finalized.push_back(id); }
-extern "C" bool bunsm_host_resolve(const char* spec, size_t size, const char*, size_t, char** out, size_t* length, bsm_handle*) {
+extern "C" bool bunsm_host_resolve(const char* spec, size_t size, const char* referrer, size_t referrerLength, char** out, size_t* length, bsm_handle*) {
+  lastReferrer.assign(referrer, referrerLength);
   *out = static_cast<char*>(malloc(size));
   memcpy(*out, spec, size);
   *length = size;
@@ -738,7 +804,7 @@ extern "C" bool bunsm_host_load(const char* name, size_t size, char** out, size_
   memcpy(*out, found->second.data(), *length);
   return true;
 }
-extern "C" void bunsm_host_free(char* text) { free(text); }
+extern "C" void bunsm_host_free(char* text, size_t) { free(text); }
 extern "C" bool bunsm_host_init_meta(const char*, size_t, bsm_handle, bsm_handle*) { return true; }
 extern "C" bool bunsm_host_interrupt() { return interruptAt && ++interruptCalls >= interruptAt; }
 extern "C" void bunsm_host_rejection(bsm_handle promise, bsm_handle, bool handled) {
@@ -754,7 +820,8 @@ extern "C" void bunsm_host_rejection(bsm_handle promise, bsm_handle, bool handle
 extern "C" void bunsm_host_uncaught(bsm_handle value) { uncaught.push_back(bsm_dup(value)); }
 extern "C" [[noreturn]] void bunsm_host_fatal(const char* text, size_t length) {
   fprintf(stderr, "fatal %.*s\n", static_cast<int>(length), text);
-  abort();
+  // abort() is redirected through mozalloc back into this hook; trap so the backtrace survives.
+  __builtin_trap();
 }
 
 extern "C" int engine_semantics_main() {
@@ -765,6 +832,23 @@ extern "C" int engine_semantics_main() {
       static_cast<uint8_t>(tier && !strcmp(tier, "pbl")), 1};
   finalized.reserve(16);
   bsm_init(&config);
+  if (mode && !strcmp(mode, "filename")) {
+    filename_controls();
+    bsm_shutdown();
+    return 0;
+  }
+#if defined(BUNSM_LOOP_CONTROLS)
+  loop_controls();
+  bsm_shutdown();
+  puts("SpiderMonkey loop controls passed");
+  return 0;
+#endif
+  if (mode && !strcmp(mode, "namespace")) {
+    module_namespace_cases();
+    bsm_shutdown();
+    puts("SpiderMonkey canonical namespace controls passed");
+    return 0;
+  }
   if (mode && !strcmp(mode, "fault-terminate")) {
     termination_fault();
     bsm_shutdown();
@@ -777,9 +861,26 @@ extern "C" int engine_semantics_main() {
     puts("SpiderMonkey heap-exhaustion control passed");
     return 0;
   }
+  if (mode && !strcmp(mode, "recovery")) {
+    recovery_controls();
+    bsm_shutdown();
+    puts("SpiderMonkey require recovery controls passed");
+    return 0;
+  }
+  if (mode && !strcmp(mode, "recovery-terminate")) {
+    recovery_termination();
+    bsm_shutdown();
+    puts("SpiderMonkey require termination control passed");
+    return 0;
+  }
+  if (mode && !strcmp(mode, "recovery-map-trap")) {
+    recovery_map_trap();
+    return 1;
+  }
   {
     Value read(bsm_function("readFrame", 9, 1));
     install("readFrame", read.handle);
+    completion_cases();
     module_cases();
     for (auto promise : rejected) bsm_release(promise);
     rejected.clear();
@@ -794,11 +895,13 @@ extern "C" int engine_semantics_main() {
     promise_reactions();
     buffers();
     errors_and_lines();
+    filename_controls();
+    frame_kind_controls();
     natives();
     interruptAt = 1;
     bsm_handle interrupted = 0;
     const char* loop = "globalThis.caught = false; globalThis.finallyRan = false; try { while (true) {} } catch { caught = true; } finally { finallyRan = true; }";
-    check(!bsm_eval_script(loop, strlen(loop), "interrupt", 1, &interrupted), "uncatchable interrupt");
+    check(!bsm_eval_script(loop, strlen(loop), "interrupt", 9, 1, &interrupted), "uncatchable interrupt");
     check(interrupted == 0 && bsm_terminated(), "interrupt has no catchable exception");
     Value global(bsm_global());
     bsm_handle caught = 0;

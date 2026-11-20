@@ -53,6 +53,18 @@ pub(super) fn adapt<'a>(source: &'a str, path: &str) -> Cow<'a, str> {
     if file_digest(&wasm).ok().as_deref() != Some(WASM) {
         return Cow::Borrowed(source);
     }
-    // The real binary imports 1001 pages. Equal width preserves source positions.
-    Cow::Owned(source.replacen("initial: 16384,", "initial: 1001 ,", 1))
+    // The import needs 1001 pages; its 65536-page maximum is an upper bound.
+    // iPhone's native shared memories reserve their maximum in WebKit's cage.
+    // Grouped engines use regions of their existing backing and keep the 2 GiB limit.
+    // Equal-width replacements preserve every original source position.
+    let maximum = if std::env::var("BUN_WASM_IPHONE_NATIVE_MEMORY").as_deref() == Ok("1") {
+        "maximum: 4096 ,"
+    } else {
+        "maximum: 32768,"
+    };
+    Cow::Owned(
+        source
+            .replacen("initial: 16384,", "initial: 1001 ,", 1)
+            .replacen("maximum: 65536,", maximum, 1),
+    )
 }

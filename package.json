@@ -2,7 +2,7 @@
   "name": "bun-wasm",
   "version": "0.0.61",
   "private": true,
-  "waffleHostInterface": 2,
+  "waffleHostInterface": 3,
   "type": "module",
   "exports": {
     ".": {
@@ -46,6 +46,15 @@
     "src/engine-kind.ts",
     "src/program-memory.ts",
     "src/bun-adapter.ts",
+    "src/executable-marker.ts",
+    "src/package-continuation.ts",
+    "src/package-continuation-binding.ts",
+    "src/package-continuation-installation.ts",
+    "src/package-start-diagnostic.ts",
+    "src/package-continuation-plan.ts",
+    "src/package-continuation-children.ts",
+    "src/package-continuation-io.ts",
+    "src/package-continuation-diagnostics.ts",
     "src/shared-objects.ts",
     "src/guest-asset.generated.ts",
     "src/worker-entry.ts",
@@ -54,6 +63,7 @@
     "web/src/engine-host.js",
     "web/src/wasm-call-trap.ts",
     "web/src/script-evaluation.ts",
+    "web/src/stack-programs.ts",
     "web/src/engine-host.d.ts",
     "web/src/crypto-host.js",
     "web/src/crypto-inputs.js",
@@ -75,6 +85,7 @@
     "web/src/tool-command.ts",
     "web/src/bun-executor.ts",
     "web/src/engine-stack-budget.ts",
+    "web/src/host-memory-policy.ts",
     "web/src/memory-telemetry.ts",
     "web/src/launch-failure.ts",
     "web/src/jsc-allocation-boundary.ts",
@@ -102,8 +113,8 @@
   },
   "peerDependencies": {
     "waffle": "*",
-    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.20/waffle-base-0.0.20.tgz",
-    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.129/waffle-relay-0.0.129.tgz"
+    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz",
+    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.143/waffle-relay-0.0.143.tgz"
   },
   "devDependencies": {
     "@builder.io/qwik": "1.17.2",
@@ -112,7 +123,7 @@
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.129/waffle-0.0.129.tgz",
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.143/waffle-0.0.143.tgz",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "miniflare": "5.20261012.0-beta",

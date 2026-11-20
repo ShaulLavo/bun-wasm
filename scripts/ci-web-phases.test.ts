@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
-import { namedCheckBatches, selectCheckBatch, selectChecks } from "./test-checks";
+import { automaticChecks, discoverChecks, namedCheckBatches, parseCheck, selectCheckBatch, selectChecks } from "./test-checks";
 import { webBrowserShards } from "./ci-web-browser-shards";
+import { needsRust } from "./ci-changes";
 
 function object(value: unknown): Record<string, unknown> {
   assert(value && typeof value === "object" && !Array.isArray(value));
@@ -16,6 +17,22 @@ const browser = object(jobs.web);
 const shards = object(jobs["web-browser"]);
 const unit = object(jobs["web-unit"]);
 
+test("a package exact-exec fixture-only edit retains its blocking Web unit owner", () => {
+  const fixture = "tests/package/fixtures/engine-host-exec.ts";
+  const owner = "web/tests/bun-executor.test.ts";
+  expect(needsRust([fixture])).toBe(false);
+  const pullRequest = object(object(workflow.on).pull_request);
+  expect(pullRequest).not.toHaveProperty("paths");
+  expect(pullRequest).not.toHaveProperty("paths-ignore");
+  expect(unit.needs).toBe("selection");
+  expect(unit.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}");
+  expect(unit).not.toHaveProperty("continue-on-error");
+  expect(steps(unit).filter(step => step.run === "bash ../scripts/test-web-host.sh --unit")).toHaveLength(1);
+  expect(readFileSync(new URL("./test-web-host.sh", import.meta.url), "utf8")).toContain("bun run test");
+  expect(automaticChecks().filter(check => check.path === owner)).toEqual([{ owner: "web", path: owner }]);
+  expect(readFileSync(new URL("../web/tests/bun-executor.test.ts", import.meta.url), "utf8")).toContain('import("../../tests/package/fixtures/engine-host-exec.ts")');
+});
+
 function steps(job: Record<string, unknown>) {
   assert(Array.isArray(job.steps));
   return job.steps.map(object);
@@ -23,9 +40,9 @@ function steps(job: Record<string, unknown>) {
 
 test("unit, discovered browser shards and smoke checks retain separate blocking jobs", () => {
   expect(browser.name).toBe("Web host");
-  expect(browser.needs).toEqual(["quality", "web-unit", "web-browser"]);
-  expect(shards.needs).toBe("quality");
-  expect(unit.needs).toBe("quality");
+  expect(browser.needs).toEqual(["selection", "web-unit", "web-browser"]);
+  expect(shards.needs).toBe("selection");
+  expect(unit.needs).toBe("selection");
   const all = Object.values(jobs).flatMap(job => steps(object(job)));
   for (const phase of ["unit", "smoke"]) {
     expect(all.filter(step => step.run === `bash ../scripts/test-web-host.sh --${phase}`)).toHaveLength(1);
@@ -46,7 +63,7 @@ test.each(["web-unit", "web-browser"])("required Web host gate rejects every non
   expect(browser.if).toContain("always()");
   const condition = browser.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("always()", "true")
-    .replaceAll("needs.quality.result", JSON.stringify("success"))
+    .replaceAll("needs.selection.result", JSON.stringify("success"))
     .replaceAll("github.event_name", JSON.stringify("pull_request"))
     .replaceAll("github.event.pull_request.draft", "false");
   expect(new Function(`return (${condition})`)()).toBe(true);
@@ -87,18 +104,19 @@ test("Web jobs reuse the existing release namespace and browser setup is isolate
   }
 });
 
-test("parallel browser shards discover every owned check exactly once and require measured deadlines", () => {
+test("parallel browser shards preserve every owned check under a generous job hang cap", () => {
   const selected = namedCheckBatches("web-browser");
   const matrix = webBrowserShards(selected);
-  expect(matrix).toHaveLength(3);
+  expect(matrix.map(shard => shard.batch)).toEqual(selected.map(batch => batch.name));
   const paths = matrix.flatMap(shard => selectCheckBatch("web-browser", shard.batch));
   expect(paths.toSorted()).toEqual(selectChecks("web-browser"));
   expect(new Set(paths).size).toBe(paths.length);
-  for (const shard of matrix) expect(shard.timeoutSeconds).toBeLessThanOrEqual(300);
-  expect(() => webBrowserShards(selected.concat([{ name: "default", paths: ["scripts/new-browser.test.ts"] }]))).toThrow("measured deadlines");
-  expect(() => webBrowserShards(selected.map(batch => ({ ...batch, name: "unmeasured" })))).toThrow("Unmeasured");
-  expect(object(shards.strategy)).toEqual({ "fail-fast": false, matrix: "${{ fromJSON(needs.quality.outputs.web-browser-shards) }}" });
-  const discovery = steps(object(jobs.quality)).find(step => step.id === "web-browser-shards");
+  for (const shard of matrix) {
+    expect(shard.timeoutSeconds).toBe(300);
+    expect(shard.timeoutSeconds).toBeLessThan(Number(shards["timeout-minutes"]) * 60);
+  }
+  expect(object(shards.strategy)).toEqual({ "fail-fast": false, matrix: "${{ fromJSON(needs.selection.outputs.web-browser-shards) }}" });
+  const discovery = steps(object(jobs.selection)).find(step => step.id === "web-browser-shards");
   assert(discovery && typeof discovery.run === "string");
   expect(discovery.run).toContain("bun scripts/ci-web-browser-shards.ts");
   const execution = spawnSync("bun", [new URL("./ci-web-browser-shards.ts", import.meta.url).pathname], { encoding: "utf8" });
@@ -107,4 +125,19 @@ test("parallel browser shards discover every owned check exactly once and requir
   const command = steps(shards).find(step => step.name === "Run the discovered Web browser shard");
   expect(command?.run).toBe('bun ../scripts/run-with-timeout.mts "$WEB_BROWSER_TIMEOUT_SECONDS" bun ../scripts/test-checks.ts web-browser --batch "$WEB_BROWSER_BATCH"');
   expect(command?.env).toEqual({ EDITOR_SCRATCH_ROOT: "${{ runner.temp }}", WEB_BROWSER_BATCH: "${{ matrix.batch }}", WEB_BROWSER_TIMEOUT_SECONDS: "${{ matrix.timeoutSeconds }}" });
+});
+
+test("new browser batches and the default batch need no timing calibration", () => {
+  const checks = discoverChecks().concat([
+    parseCheck({ owner: "web-browser", path: "scripts/new-browser.test.ts", batch: "40-new" }, "web-browser-new.json"),
+    parseCheck({ owner: "web-browser", path: "scripts/default-browser.test.ts" }, "web-browser-default.json"),
+  ]);
+  const selected = namedCheckBatches("web-browser", checks);
+  const matrix = webBrowserShards(selected);
+  expect(matrix.map(shard => shard.batch)).toEqual(selected.map(batch => batch.name));
+  expect(matrix).toContainEqual({ batch: "40-new", timeoutSeconds: 300 });
+  expect(matrix).toContainEqual({ batch: "default", timeoutSeconds: 300 });
+  const paths = matrix.flatMap(shard => selectCheckBatch("web-browser", shard.batch, checks));
+  expect(paths.toSorted()).toEqual(selectChecks("web-browser", checks).toSorted());
+  expect(new Set(paths).size).toBe(paths.length);
 });

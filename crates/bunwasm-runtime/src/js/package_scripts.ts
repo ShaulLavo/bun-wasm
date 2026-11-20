@@ -191,6 +191,19 @@
     return internal.require("bun_shell").escape(arg);
   }
 
+  const shellCommands = new Set(". alias bg bind break builtin caller case cd command compgen complete compopt continue coproc declare dirs disown do done echo elif else enable esac eval exec exit export false fc fg fi for function getopts hash help history if in jobs kill let local logout mapfile popd printf pushd pwd read readarray readonly return select set shift shopt source suspend test then time times trap true type typeset ulimit umask unalias unset until wait while".split(" "));
+  function expandScriptBinary(script: string): string {
+    const command = /^([ \t]*)([A-Za-z0-9_@.+-]+)(?=[ \t]|$)/.exec(script);
+    if (!command || shellCommands.has(command[2])) return script;
+    const file = binary(process.cwd(), command[2]);
+    if (!file || file.endsWith(`/node_modules/.bin/${command[2]}`)) return script;
+    return command[1] + quote(process.execPath) + " " + quote(dereference(file)) + script.slice(command[0].length);
+  }
+
+  function prepareScript(original: string, args: readonly string[]): string {
+    return [expandScriptBinary(replacePackageManagerRun(original))].concat(args.map(quote)).join(" ");
+  }
+
   function announce(script: string) {
     const colors = Boolean((process as unknown as { stderr: { isTTY?: boolean } }).stderr.isTTY);
     process.stderr.write(colors ? `\x1b[0m\x1b[2m\x1b[35m$\x1b[0m \x1b[2m\x1b[1m${script}\x1b[0m\n` : `$ ${script}\n`);
@@ -200,7 +213,7 @@
   async function runScript(name: string, original: string, args: readonly string[], silent: boolean): Promise<boolean> {
     process.env.npm_lifecycle_event = name;
     process.env.npm_lifecycle_script = original;
-    const script = [replacePackageManagerRun(original)].concat(args.map(quote)).join(" ");
+    const script = prepareScript(original, args);
     if (!silent) announce(script);
     const cwd = process.cwd();
     const shell = internal.require("bun_shell").findShell(process.env, cwd);
@@ -218,6 +231,11 @@
 
   /** pre<name>, <name> with the passthrough arguments, then post<name>, stopping at the first failure. */
   async function run(command: BunWasm.ScriptRuntimeCommand): Promise<void> {
+    const plan = continuationPlan(command);
+    if (plan) {
+      const result = native.packageScriptsHandoff(JSON.stringify(plan));
+      if (result !== -58 && result !== -52) throw new Error(`Package continuation handoff failed: WASI errno ${-result}`);
+    }
     const cwd = process.cwd();
     const silent = process.execArgv.includes("--silent");
     process.env.npm_execpath = process.execPath;
@@ -228,6 +246,27 @@
       if (!await runScript(name, body, args, silent)) return;
     }
   }
+
+  /** Prepare before announcements or lifecycle changes; successful handoff never returns. */
+  function continuationPlan(command: BunWasm.ScriptRuntimeCommand) {
+    const cwd = process.cwd();
+    const table = scripts(cwd);
+    function phase(name: string, args: readonly string[]) {
+      const original = table[name];
+      if (typeof original !== "string") return null;
+      return Object.freeze({ name, original, command: prepareScript(original, args) });
+    }
+    const main = phase(command.name, command.args);
+    if (!main) return null;
+    const env: Record<string, string> = Object.create(null);
+    for (const [name, value] of Object.entries(process.env)) {
+      if (typeof value === "string") env[name] = value;
+    }
+    env.npm_execpath = process.execPath;
+    return Object.freeze({ version: 1, pre: phase(`pre${command.name}`, []), main, post: phase(`post${command.name}`, []),
+      env: Object.freeze(env), cwd, silent: process.execArgv.includes("--silent"), color: Boolean(Reflect.get(process.stderr, "isTTY")),
+      footer: `Bun v${native.platformInfo.version} (WASI ${native.platformInfo.arch})\n` });
+  }
   function spawnArguments(argv: string[], directory: unknown): string[] {
     if (["bunx", "/bunx"].includes(argv[0])) return ["bun", "x"].concat(argv.slice(1));
     const cwd = directory instanceof URL ? decodeURIComponent(directory.pathname) : path.resolve(process.cwd(), String(directory || process.cwd()));
@@ -235,5 +274,5 @@
     if (!executable) return argv;
     return ["bun", dereference(executable)].concat(argv.slice(1));
   }
-  return { resolve, run, spawnArguments };
+  return { resolve, run, spawnArguments, continuationPlan };
 })

@@ -18,6 +18,7 @@ function admitted(job: Record<string, unknown>, event: string, draft: boolean, r
     .replaceAll("always()", "true")
     .replaceAll("github.ref", JSON.stringify(ref))
     .replace(/needs\.[\w-]+\.outputs\.[\w-]+/g, '"true"')
+    .replaceAll("needs.browser-production.result", '"skipped"')
     .replace(/needs\.[\w-]+\.result/g, '"success"');
   const result: unknown = new Function(`return (${expression})`)();
   if (typeof result !== "boolean") throw new Error("Expected boolean admission");
@@ -30,10 +31,10 @@ test("draft PRs defer native and browser work until ready without changing push 
   for (const [id, value] of Object.entries(jobs)) {
     if (id === "update-status") continue;
     const job = record(value);
-    expect(admitted(job, "pull_request", true), id).toBe(id === "quality" || id === "ci-result");
-    expect(admitted(job, "pull_request", false), id).toBe(true);
-    expect(admitted(job, "push", false), id).toBe(true);
-    expect(admitted(job, "workflow_dispatch", false), id).toBe(true);
+    expect(admitted(job, "pull_request", true), id).toBe(id === "selection" || id === "quality" || id === "ci-result");
+    expect(admitted(job, "pull_request", false), id).toBe(id !== "browser-production");
+    expect(admitted(job, "push", false), id).toBe(id !== "browser-production");
+    expect(admitted(job, "workflow_dispatch", false), id).toBe(id !== "browser-production");
   }
 });
 
@@ -65,7 +66,7 @@ test("update statuses run only for manual checks of the standing update branch",
   expect(admitted(reporter, "push", false, branch)).toBe(false);
   expect(admitted(reporter, "workflow_dispatch", false)).toBe(false);
   expect(admitted(reporter, "workflow_dispatch", false, branch)).toBe(true);
-  expect(reporter.needs).toEqual(Object.keys(jobs).filter(id => id !== "update-status"));
+  expect(Array.isArray(reporter.needs) ? reporter.needs.toSorted() : reporter.needs).toEqual(Object.keys(jobs).filter(id => id !== "update-status").sort());
   expect(record(reporter.permissions)).toEqual({ statuses: "write" });
 });
 

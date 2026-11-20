@@ -14,7 +14,7 @@ function quickjsParser(): boolean {
     if (!(error instanceof SyntaxError)) throw error;
     if (error.message === "'let' is not a valid lexical identifier") return true;
     if (error.message === "Unexpected keyword 'let'. Cannot use 'let' as an identifier name for a LexicalDeclaration." ||
-        error.message === "let is disallowed as a lexically bound name") return false;
+        error.message === "let is disallowed as a lexically bound name" || error.message === "a lexical declaration can't define a 'let' binding") return false;
     throw new Error("Unrecognized parser fingerprint", { cause: error });
   }
   throw new Error("Invalid lexical declaration was accepted");

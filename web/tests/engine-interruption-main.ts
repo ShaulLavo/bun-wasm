@@ -12,11 +12,12 @@ import { startRun, type Run } from "../src/runner";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 import { assertCausalIdleWake, assertFatalEngineCompletion, assertNativeEngineCompletion, engineInterruptionFailure, probeCell, probeLength, snapshotProbe, suppressBudgetNotifications } from "./engine-interruption-probe";
 import { measureInterruptionOverhead } from "./engine-interruption-benchmark";
-import { defaultSignalGuest, handledSignalGuest, idleSignalGuest } from "./engine-interruption-guests";
+import { defaultSignalGuest, handledSignalGuest, heartbeatBusyGuest, idleSignalGuest, nativeRegexpGuest, nativeRegexpMatchesGuest, stopHeartbeatMessage } from "./engine-interruption-guests";
 import { assertFatalSleepSync, assertHandledSleepSync, sleepSyncSignalGuest } from "./engine-interruption-sleep";
 import { engineInterruptionTransport } from "./engine-interruption-transport";
 import { createRuntimeEngineScope, type EngineInterruptionChild as Child, type EngineInterruptionRoute, type EngineInterruptionScope, type EngineSignal, type EngineSignalDelivery } from "./engine-interruption-scope";
-import { FunctionalCases, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
+import { FunctionalCases, selectInterruptionEngines, interruptionCore, nativePollingEngines, nativeMatchesPollingEngines, nativeMatchesStopProofName, nativeStopProofName, stopProofName, assertGuestQuiescence, waitFunctionalCondition, type FunctionalCaseIdentity } from "./engine-interruption-cases";
+import { CooperativeWorkerStop } from "./engine-interruption-stop";
 
 interface CaseResources {
   workers: Set<ObservedWorker>;
@@ -47,6 +48,7 @@ let observeCheckpoints = true;
 let idleWaitTimeoutMs = 0;
 let instrumentPreview1Root = false;
 class ObservedWorker extends NativeWorker {
+  private readonly stop = new CooperativeWorkerStop(() => { super.terminate(); activeWorkers.delete(this); });
   readonly probe = new Int32Array(new SharedArrayBuffer(probeLength * 4));
   deferStop = false;
   guestEngine?: Engine;
@@ -54,14 +56,23 @@ class ObservedWorker extends NativeWorker {
   exitObserved = false;
   transport?: ReturnType<typeof engineInterruptionTransport>;
   readonly diagnostics: unknown[] = [];
+  /** A Browser-engine guest's own loop counter; see heartbeatBusyGuest. */
+  heartbeat?: Int32Array;
   constructor(url: string | URL, options?: WorkerOptions) {
     const target = new URL(url, location.href);
     super((instrumentPreview1Root && target.pathname.endsWith("/worker.js") || target.pathname.endsWith("/preview1-worker.js"))
       ? new URL("./engine-interruption-worker.js", target).href : url, options);
     activeWorkers.add(this);
     this.addEventListener("error", event => this.diagnostics.push({ error: event.message }));
+    // Registered before the broker's onmessage handler, so the test-only heartbeat never reaches it.
     this.addEventListener("message", event => {
-      if (event.data?.type === "exit") this.exitObserved = true;
+      if (event.data?.type !== stopHeartbeatMessage || !(event.data.buffer instanceof SharedArrayBuffer)) return;
+      this.heartbeat = new Int32Array(event.data.buffer);
+      event.stopImmediatePropagation();
+    });
+    this.addEventListener("message", event => {
+      if (event.data?.type === "exit") { this.exitObserved = true; this.stop.observeExit(); }
+      if (event.data?.type === "engine-interruption-run-returned") this.stop.observeReturn();
       if (["phase", "error", "exit"].includes(event.data?.type)) this.diagnostics.push(event.data);
     });
   }
@@ -80,11 +91,12 @@ class ObservedWorker extends NativeWorker {
     if (Array.isArray(options)) super.postMessage(message, options);
     else super.postMessage(message, options);
   }
-  override terminate(): void {
+  override terminate(): void | Promise<void> {
     controlAdd(this.probe, probeCell.terminateRequests, 1);
-    if (!this.deferStop) this.forceTerminate();
+    if (this.deferStop) return this.stop.request();
+    this.forceTerminate();
   }
-  forceTerminate(): void { super.terminate(); activeWorkers.delete(this); }
+  forceTerminate(): void { this.stop.force(); }
 }
 // Install teardown before creating the filesystem or any guest worker. In particular,
 // default-action tests deliberately suppress the supervisor's physical backstop.
@@ -99,13 +111,15 @@ function destroy(): Promise<void> {
   if (destruction) return destruction;
   destroyed = true;
   return destruction = (async () => {
+    // Capture failure evidence before native stop releases held execution acknowledgements.
+    for (const context of currentCase?.contexts ?? []) context.final ??= captureContext(context.read);
+    for (const worker of Array.from(activeWorkers)) {
+      try { worker.forceTerminate(); } catch (error) { destroyErrors.push(String(error)); }
+    }
     for (const owned of Array.from(scopes)) {
       try { await owned.dispose(); } catch (error) { destroyErrors.push(String(error)); }
     }
     try { await runtime?.dispose(); } catch (error) { destroyErrors.push(String(error)); }
-    for (const worker of Array.from(activeWorkers)) {
-      try { worker.forceTerminate(); } catch (error) { destroyErrors.push(String(error)); }
-    }
     globalThis.Worker = NativeWorker;
   })();
 }
@@ -183,14 +197,16 @@ async function scope(module: WebAssembly.Module, engine: Engine, route: EngineIn
     async dispose(): Promise<void> {
       if (disposed) return;
       disposed = true;
-      // Preserve diagnostics before broker disposal can forget process metadata.
-      context.final = captureContext(context.read);
+      // Capture failure evidence before forced native stop and broker disposal.
+      context.final ??= captureContext(context.read);
       const children = Array.from(base.children.values());
       const errors: unknown[] = [];
+      for (const child of children) {
+        try { guestWorkers.get(child.pid)?.forceTerminate(); } catch (error) { errors.push(error); }
+      }
       try { await base.dispose(); } catch (error) { errors.push(error); }
       try { await disposeRuntime(owner); } catch (error) { errors.push(error); }
       for (const child of children) {
-        try { guestWorkers.get(child.pid)?.forceTerminate(); } catch (error) { errors.push(error); }
         guestWorkers.delete(child.pid);
       }
       scopes.delete(owned);
@@ -292,6 +308,98 @@ async function testDefault(module: WebAssembly.Module, engine: Engine, signal: 2
   } catch (error) {
     throw engineInterruptionFailure(`${engine}/${route} ${nestedHandler ? "nested-handler " : ""}default signal ${signal} proof failed`, error, diagnostics);
   } finally { await owned.dispose(); }
+}
+/** Resolves once `read()` has kept one value for `quietMs`; a still-changing value times out. */
+async function settled(read: () => number, label: string, quietMs = 250): Promise<{ value: number; settledMs: number }> {
+  const started = performance.now();
+  let last = read(), since = started;
+  await until(() => {
+    const value = read();
+    if (value !== last) { last = value; since = performance.now(); }
+    return performance.now() - since >= quietMs;
+  }, label);
+  return { value: last, settledMs: since - started };
+}
+// Paired engines: the browser may never stop a worker spinning in Wasm (iOS Safari kept such a
+// worker running for minutes after terminate()), so native terminate stays disabled and only
+// the engine's own runtime_proc.signal(0, 4) checkpoint may stop the guest.
+async function assertPairedStop(worker: ObservedWorker, engine: Engine, started: number): Promise<object> {
+  await until(() => controlLoad(worker.probe, probeCell.runReturned) === 1,
+    () => `${engine} _start unwind after SIGKILL; evidence=${JSON.stringify(snapshotProbe(worker.probe))}`);
+  const unwoundMs = performance.now() - started;
+  const evidence = snapshotProbe(worker.probe);
+  assertFatalEngineCompletion(evidence, 9);
+  equal(evidence.startEntered, 1, "real _start called once"); equal(evidence.startLeft, 1, "real _start unwound");
+  equal(evidence.catchWrites, 0, "catch cannot run after SIGKILL");
+  equal(evidence.finallyWrites, 0, "finally cannot run after SIGKILL");
+  equal(evidence.afterWrites, 0, "code after the loop cannot run after SIGKILL");
+  truth(activeWorkers.has(worker), "the engine stopped while native terminate remained disabled");
+  const quiet = await settled(() => controlLoad(worker.probe, probeCell.checkpoints), "no engine checkpoint runs after the unwind");
+  equal(quiet.value, evidence.checkpoints, "no engine checkpoint ran after _start unwound");
+  return { unwoundMs, evidence };
+}
+// Browser engine: guest JavaScript is the browser's own, so Worker.terminate() is the stop and
+// the shared heartbeat shows whether the loop really ended.
+async function assertBrowserStop(worker: ObservedWorker, beat: Int32Array, started: number): Promise<object> {
+  await until(() => !activeWorkers.has(worker), "Waffle called native Worker.terminate()");
+  truth(controlLoad(worker.probe, probeCell.terminateRequests) > 0, "terminate request observed");
+  const terminatedMs = performance.now() - started;
+  const quiet = await settled(() => controlLoad(beat, 0), "Browser-engine guest heartbeat stopped after Worker.terminate()");
+  return { terminatedMs, heartbeatSettledMs: quiet.settledMs, heartbeats: quiet.value };
+}
+type StopWorkload = "loop" | "regexp" | "regexp-matches";
+function stopGuest(engine: Engine, workload: StopWorkload): string {
+  if (workload === "regexp") return nativeRegexpGuest();
+  if (workload === "regexp-matches") return nativeRegexpMatchesGuest();
+  return engine === "browser" ? heartbeatBusyGuest() : defaultSignalGuest();
+}
+const stopProofNames: Record<StopWorkload, string> = { loop: stopProofName, regexp: nativeStopProofName, "regexp-matches": nativeMatchesStopProofName };
+/** The busy-page phase: only the stop proofs, each guest stopped before the next starts. */
+async function runBusyStops(module: WebAssembly.Module, engine: Engine): Promise<void> {
+  await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-busy-stop" }, () => testKillStop(module, engine));
+  if (engine === "browser" || !nativePollingEngines.includes(engine)) return;
+  await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-native-regexp-stop" }, () => testKillStop(module, engine, "regexp"));
+  if (!nativeMatchesPollingEngines.includes(engine)) return;
+  await runCase({ engine, route: "runtimeProcess", name: "SIGKILL-global-regexp-replace-stop" }, () => testKillStop(module, engine, "regexp-matches"));
+}
+/** A failed proof may leave its paired guest spinning with native terminate disabled. Stop it
+ * the same way, by SIGKILL and its own poll, before the case's cleanup and the next case. */
+async function stopLeftover(owned: Awaited<ReturnType<typeof scope>>, child: Child | undefined, killed: boolean): Promise<void> {
+  const worker = child && guestWorkers.get(child.pid);
+  if (!child || !worker || worker.guestEngine === "browser" || controlLoad(worker.probe, probeCell.runReturned) === 1) return;
+  if (!killed) await owned.kill(child, 9);
+  await until(() => controlLoad(worker.probe, probeCell.runReturned) === 1, `${worker.guestEngine} leftover busy guest unwound after SIGKILL`);
+}
+/** Waffle's own stop for a busy guest: a page SIGKILL publishes the signaled outcome, then the
+ * broker calls Worker.terminate(). The guest must stop running, and its exit must be observed. */
+async function testKillStop(module: WebAssembly.Module, engine: Engine, workload: StopWorkload = "loop"): Promise<void> {
+  const owned = await scope(module, engine, "runtimeProcess");
+  let diagnostics: () => unknown = () => ({ phase: "before guest spawn" });
+  let child: Child | undefined, killed = false;
+  try {
+    const spawned = child = owned.spawn(stopGuest(engine, workload));
+    const beat = () => guestWorkers.get(spawned.pid)?.heartbeat;
+    diagnostics = () => ({ stdout: spawned.stdout, stderr: spawned.stderr, status: owned.wait(spawned),
+      heartbeat: beat()?.[0], evidence: guestWorkers.has(spawned.pid) ? snapshotProbe(guestWorkers.get(spawned.pid)!.probe) : null });
+    const worker = await owned.ready(spawned);
+    if (engine === "browser" && workload === "loop") await until(() => (beat()?.[0] ?? 0) > 0, "Browser-engine guest heartbeat is running");
+    else await new Promise<void>(resolve => setTimeout(resolve, 20));
+    if (engine !== "browser") equal(controlLoad(worker.probe, probeCell.startLeft), 0, "guest is still executing before the stop");
+    const started = performance.now();
+    killed = true;
+    equal(await owned.kill(spawned, 9), 0, "SIGKILL accepted");
+    await owned.exit(spawned, 137);
+    const result = await owned.outcome(spawned);
+    equal(result.kind, "signaled", "typed signal outcome"); equal(result.code, 9, "SIGKILL outcome");
+    const stop = engine === "browser" ? await assertBrowserStop(worker, beat()!, started) : await assertPairedStop(worker, engine, started);
+    const name = stopProofNames[workload];
+    checks.push({ engine, route: "runtimeProcess", delivery: "page-kill", name, evidence: stop, elapsedMs: performance.now() - started });
+  } catch (error) {
+    throw engineInterruptionFailure(`${engine} SIGKILL stop of a busy ${workload} guest failed`, error, diagnostics);
+  } finally {
+    try { await stopLeftover(owned, child, killed); }
+    finally { await owned.dispose(); }
+  }
 }
 async function testNativeInterrupt(module: WebAssembly.Module, engine: Engine): Promise<void> {
   const owned = await scope(module, engine);
@@ -550,14 +658,15 @@ async function testPreview1Clock(root: boolean): Promise<void> {
       }
       return { root, latencyMs, generation, suppressedNotifications: mutation?.count() ?? 0, causalRejection, evidence };
     } finally {
-      context.final = captureContext(context.read);
+      context.final ??= captureContext(context.read);
       instrumentPreview1Root = false;
       await cleanupCase([
         () => mutation?.restore(),
         () => { if (run && !rootSettled) run.kill(9); },
+        () => { if (root) (worker ?? guestWorkers.get(1))?.forceTerminate(); },
         () => owned?.dispose(),
         () => disposeRuntime(rootRuntime),
-        () => { if (root) { (worker ?? guestWorkers.get(1))?.forceTerminate(); guestWorkers.delete(1); } },
+        () => { if (root) guestWorkers.delete(1); },
       ]);
     }
   }
@@ -603,7 +712,7 @@ async function loadCandidate(engine: Engine, name: string, prefix = "/") {
   const artifacts = [{ engine, name, sha256: hash, bytes: bytes.byteLength }];
   const candidate = await WebAssembly.compile(bytes);
   const kind = programKind(candidate);
-  const expected = engine === "quickjs" || engine === "jsc" ? engine : "single";
+  const expected = engine === "browser" ? "single" : engine;
   truth(kind === expected, `${engine} core declaration mismatch`);
   if (kind === "single") { recordProgramMemory(candidate, bytes); return { module: candidate, hash, artifacts }; }
   const sideName = programProfile(kind).side;
@@ -619,10 +728,15 @@ void (async () => {
   const modules: { engine: Engine; name: string; hash: string; module: WebAssembly.Module }[] = [];
   let fatalError: unknown;
   let functionalComplete = false;
+  // Busy-guest stops run last, in their own fresh page: a busy guest that ever outlived its
+  // proof would spin on in this page's process and starve every case after it.
+  const busyPhase = new URLSearchParams(location.search).get("phase") === "busy";
   try {
     const runEngineMatrix = async () => {
       truth(crossOriginIsolated, "engine interruption requires cross-origin isolation");
-    for (const [engine, name] of [["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["browser", "bun-browser.wasm"]] as const) {
+    const selected = selectInterruptionEngines(new URLSearchParams(location.search).get("engines") ?? undefined);
+    const candidates: { engine: Engine; name: string }[] = selected.map(engine => ({ engine, name: interruptionCore(engine) }));
+    for (const { engine, name } of candidates.concat([{ engine: "browser", name: "bun-browser.wasm" }])) {
       let module: WebAssembly.Module | undefined, hash = "";
       await runCase({ engine, route: "artifact", name: "load-candidate" }, async () => {
         const loaded = await loadCandidate(engine, name);
@@ -633,6 +747,7 @@ void (async () => {
       if (!module) continue;
       const loaded = module;
       modules.push({ engine, name, hash, module: loaded });
+      if (busyPhase) { await runBusyStops(loaded, engine); continue; }
       await runCase({ engine, route: "legacy", name: "boot" }, async () => {
         const boot = await scope(loaded, engine);
         try {
@@ -655,12 +770,12 @@ void (async () => {
         await testSleepSyncSignals(loaded, engine);
       }
     }
-    await testPreview1Clock(true); await testPreview1Clock(false);
+    if (!busyPhase) { await testPreview1Clock(true); await testPreview1Clock(false); }
     functionalComplete = true;
     // Never start timings when even one functional scenario is RED. Functional
     // matrix runs have already retained every safely reachable independent case.
     const query = new URLSearchParams(location.search);
-    if (functional.ok && query.has("benchmark")) {
+    if (functional.ok && query.has("benchmark") && !busyPhase) {
       for (const { engine, name, hash, module } of modules) {
         if (engine === "browser") continue;
         let pristine: WebAssembly.Module | undefined, pristineSha256: string | undefined;

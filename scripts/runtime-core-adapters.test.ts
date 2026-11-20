@@ -41,30 +41,67 @@ function syntaxHash(source: string) {
 function withoutBuiltinLoaderDeltas(source: string) {
   const file = ts.createSourceFile("runtime.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const properties: ts.PropertyAssignment[] = [];
+  const provided: ts.VariableStatement[] = [];
   function visit(node: ts.Node) {
     if (ts.isPropertyAssignment(node) && node.name.getText(file) === "processBindingConstants") properties.push(node);
+    if (ts.isVariableStatement(node) && node.declarationList.declarations[0]?.name.getText(file) === "runtimeProvided") provided.push(node);
     ts.forEachChild(node, visit);
   }
   visit(file);
   expect(properties).toHaveLength(1);
+  expect(provided).toHaveLength(1);
   const property = properties[0];
-  if (!property) throw new Error("Missing WASI filesystem constants hook");
+  const providedMap = provided[0];
+  if (!property || !providedMap) throw new Error("Missing WASI filesystem constants hook or runtime-provided module map");
   expect(property.getText(file).replace(/\s/g, "")).toBe('processBindingConstants:{getfs(){returninternal.require("node_fs").fs.constants;},}');
   expect(source[property.end]).toBe(",");
+  // Internal modules the runtime serves itself (scripts/bun-builtins.json runtimeProvided).
+  expect(providedMap.getText(file).replace(/\s/g, "")).toBe('construntimeProvided={"internal:streams/duplex":()=>internal.builtin("node:stream").Duplex,"internal:tls":fetchInternal("internal:tls"),"internal:webstreams_adapters":fetchInternal("internal:webstreams_adapters"),};');
+  expect(providedMap.end).toBeLessThan(property.pos);
+  const providedLookup = "      const provided = runtimeProvided[name];\n      if (provided) return provided();\n";
+  expect(source.split(providedLookup)).toHaveLength(2);
   const builtinEvaluation = 'native.evalBuiltin(source, `bun-builtin:${name}`)';
   expect(source.split(builtinEvaluation)).toHaveLength(2);
-  return (source.slice(0, property.pos) + source.slice(property.end + 1))
+  return (source.slice(0, providedMap.pos) + source.slice(providedMap.end, property.pos) + source.slice(property.end + 1))
+    .replace(providedLookup, "")
     .replace(builtinEvaluation, 'native.evalScript(source, `bun-builtin:${name}`)');
 }
 
+function withoutFrameKindPresentationDeltas(source: string) {
+  const parsed = "    toString() { return internal.formatCallSite(this, false, this.#frame.anonymousFunction === true); }\n";
+  const sharedTail = "    getPromiseIndex() { return null; },\n  }";
+  const quickjs = /    internal\.defineHidden\(prototype, \{\n      isAsync\(\) \{ return false; \},\n      toString\(\s*\) \{ return internal\.formatCallSite\(this\); \},\n    \}\);/g;
+  expect(source.split(parsed)).toHaveLength(2);
+  expect(source.split(sharedTail)).toHaveLength(2);
+  expect(source.match(quickjs)).toHaveLength(1);
+  // Invert only the reviewed move: parsed sites own the flag-aware method,
+  // while QuickJS still receives the original generic method explicitly.
+  return source.replace(parsed, "")
+    .replace(sharedTail, "    getPromiseIndex() { return null; },\n    toString() { return internal.formatCallSite(this); },\n  }")
+    .replace(quickjs, "    internal.defineHidden(prototype, { isAsync() { return false; } });");
+}
+
 function withoutStackCapabilityDeltas(source: string) {
+  source = withoutFrameKindPresentationDeltas(source);
   const declaration = '  const parseCapturedStack = native.engine === "jsc" || native.engine === "spidermonkey" || native.engine === "host" && !internal.hasNativeStackTrace;\n';
   const awaitingCaller = "/^async[ *]/.test(this.#frame.name)";
   expect(source.split(declaration)).toHaveLength(2);
   expect(source.split(awaitingCaller)).toHaveLength(2);
   expect(source.split("custom && parseCapturedStack")).toHaveLength(2);
   expect(source.split('native.engine === "quickjs" || parseCapturedStack')).toHaveLength(2);
-  return source.replace(declaration, "")
+  const prototypeWrapper = /  if \(native.engine === "spidermonkey"\) \{\n[\s\S]*?\n  \}\n\n/;
+  const capturedFrames = /  function capturedFrames\(target[^)]*\) \{\n[\s\S]*?\n  \}\n\n/;
+  const jscWrapper = /  if \(native.engine === "jsc"\) \{\n[\s\S]*?\n  \}\n\n/;
+  const hostWrapper = /  if \(native.engine === "host" && internal.hasNativeStackTrace\) \{\n[\s\S]*?\n  \}\n\n/;
+  expect(source.match(prototypeWrapper)).not.toBeNull();
+  expect(source.match(jscWrapper)).not.toBeNull();
+  expect(source.match(hostWrapper)).not.toBeNull();
+  expect(source.match(capturedFrames)).not.toBeNull();
+  expect(source.split("capturedFrames(target, raw)")).toHaveLength(2);
+  return source.replace(prototypeWrapper, "").replace(capturedFrames, "").replace(jscWrapper, "").replace(hostWrapper, "").replace(declaration, "")
+    .replace("capturedFrames(target, raw)", 'internal.require("inspect").parseStack(raw)')
+    .replace(/function formatStack\(target\s*, raw\s*, materializing = false\)/, "function formatStack(target, raw)")
+    .replace("      if (!custom && materializing) return raw;\n", "")
     .replace(awaitingCaller, 'this.#frame.name.startsWith("async ")')
     .replace("custom && parseCapturedStack", 'custom && native.engine === "jsc"')
     .replace('native.engine === "quickjs" || parseCapturedStack', 'native.engine === "quickjs" || native.engine === "jsc"');
@@ -117,19 +154,74 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
   return target;
 }
 
-// Hashes pin original syntax; stack capability selection, SpiderMonkey's awaiting-caller name, descriptors and builtin changes have explicit deltas.
-// The stack_trace hash also covers the call-site predicates React's stack collector calls.
+// Hashes pin original syntax; capability selection, structured frames, anonymous presentation, awaiting-caller names, descriptors and builtin changes have explicit deltas.
+// The stack_trace hash also covers the call-site predicates React's stack collector calls,
+// and the JSC default text rewritten in Bun's form (docs/bun-patches/error-stack-header.md).
 const originalTokens = {
-  stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
-  bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
+  stack_trace: "66ed37444f7b268817c4bf271abc6e07e076e8ab4d828b4af1b6be5a34714a80",
+  // Re-pinned for the thirdparty fetch modules' internal loader and binding hooks (node-fetch, undici).
+  bun_builtins: "acf769db3668622edc5f3d2ba41b86d593371cbdf7537d86e53f9ed8cc0b23f3",
 };
-const originalEmbeddedBytes = { stack_trace: 4330, bun_builtins: 4092 };
+// Allow the JSC formatter registration, host adapter dispatch and JSC default text rewrite with
+// its frame caches (6534 bytes).
+const originalEmbeddedBytes = { stack_trace: 7300, bun_builtins: 4372 };
+
+for (const [label, before, after] of [
+  ["true names", "return this.#frame.name || null;", 'return this.#frame.name || "";'],
+  ["top-level predicate", "return !this.getFunctionName();", "return !!this.getFunctionName();"],
+  ["cached formatter result", "return store(target, value);", "return store(target, raw);"],
+] satisfies [string, string, string][]) {
+  test(`frame-kind normalization still rejects an unrelated change to ${label}`, () => {
+    const source = emit("stack_trace");
+    expect(source.split(before)).toHaveLength(2);
+    expect(syntaxHash(withoutStackCapabilityDeltas(source.replace(before, after)))).not.toBe(originalTokens.stack_trace);
+  });
+}
+
+for (const [label, before, after] of [
+  ["parsed anonymous flag", "this.#frame.anonymousFunction === true", "this.#frame.anonymousFunction !== true"],
+  ["QuickJS generic receiver", "return internal.formatCallSite(this);", "return internal.formatCallSite(undefined);"],
+] satisfies [string, string, string][]) {
+  test(`frame-kind normalization requires the reviewed ${label}`, () => {
+    const source = emit("stack_trace");
+    expect(source.split(before)).toHaveLength(2);
+    expect(() => withoutFrameKindPresentationDeltas(source.replace(before, after))).toThrow();
+  });
+}
+
+test("emitted parsed CallSites keep true names and pass only the anonymous presentation flag", () => {
+  const result = runInNewContext(`
+    class RuntimeError {}
+    Object.defineProperty(RuntimeError.prototype, "stack", { configurable: true, get() { return "raw"; } });
+    RuntimeError.captureStackTrace = target => Object.defineProperty(target, "stack", { value: "raw", configurable: true });
+    globalThis.Error = RuntimeError;
+    const records = [
+      { name: "", file: "/same.ts", line: 1, column: 2, anonymousFunction: true },
+      { name: "", file: "/same.ts", line: 1, column: 2 },
+      { name: "anonymous", file: "/same.ts", line: 1, column: 2 },
+    ];
+    (${emit("stack_trace")})({
+      native: { engine: "spidermonkey" }, mappedCallSites: new WeakSet(), defineHidden: Object.assign,
+      require: () => ({ errorFrames: () => records }),
+      formatCallSite: (site, identity, anonymous) => JSON.stringify([site.getFunctionName(), identity, anonymous]),
+    });
+    Error.prepareStackTrace = (_error, sites) => sites.map(site => [site.getFunctionName(), String(site)]);
+    const holder = {};
+    Error.captureStackTrace(holder);
+    holder.stack;
+  `);
+  expect(result).toEqual([
+    [null, "[null,false,true]"], [null, "[null,false,false]"], ["anonymous", '["anonymous",false,false]'],
+  ]);
+});
+
 test("stack descriptor records are the only executable delta", () => {
   const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/stack_trace.ts"), "utf8");
   const records = stackDescriptorRecords(source);
   expect(records).toEqual([
     { target: "target", properties: ["__proto__", "value", "writable", "configurable", "enumerable"], nullPrototype: true },
     { target: "Error.prototype", properties: ["configurable", "get", "set"], nullPrototype: false },
+    { target: "Error.prototype", properties: ["__proto__", "configurable", "enumerable", "get", "set"], nullPrototype: true },
     { target: "target", properties: ["__proto__", "configurable", "enumerable", "get", "set"], nullPrototype: true },
   ]);
 });
@@ -221,7 +313,7 @@ test("emitted builtin loader keeps caches, private symbols and unsupported error
 });
 
 test("emitted stack adapter leaves host hooks intact", () => {
-  const context = { internal: { native: { engine: "host" }, hasNativeStackTrace: true, defineHidden: Object.assign } };
+  const context = { internal: { native: { engine: "host" }, hasNativeStackTrace: true, defineHidden: Object.assign, require() {} } };
   const source = emit("stack_trace", true);
   expect(runInNewContext(`const capture = Error.captureStackTrace; (${source})(internal); Error.captureStackTrace === capture`, context)).toBe(true);
 });

@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect } from "bun:test";
+import { test } from "./hang-cap.ts";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,8 +10,9 @@ import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture } fro
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { appendCustomSection, ENGINE_SECTION, programKind } from "../../src/engine-kind.ts";
 import waffleRelease from "../../scripts/waffle-release-inputs.json";
+import { expandedCiWorkflow } from "../../scripts/fixtures/ci-jsc-workflow";
 
-const workflow = await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+const workflow = expandedCiWorkflow();
 
 test("fixture Git failures preserve the command and subprocess result", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-fixture-git-error-"));
@@ -304,7 +306,8 @@ async function quickjsWrapperFixture(fixture: Parameters<typeof receiptCli>[0], 
   const temporary = join(root, "private/t");
   await mkdir(temporary, { recursive: true });
   await mkdir(join(root, "jsc"));
-  for (const path of ["scripts/build.sh", "scripts/build-bun-core.sh", "scripts/build-engine-quickjs.sh", "scripts/build-engine-jsc.sh", "scripts/build-bun-jsc.sh", "jsc/common.sh", "jsc/finalize.sh"]) {
+  await mkdir(join(root, "scripts/src"), { recursive: true });
+  for (const path of ["scripts/build.sh", "scripts/build-bun-core.sh", "scripts/build-engine-quickjs.sh", "scripts/build-engine-jsc.sh", "scripts/build-bun-jsc.sh", "scripts/src/transfer-fault.sh", "jsc/common.sh", "jsc/finalize.sh"]) {
     await copyFile(new URL(`../../${path}`, import.meta.url), join(root, path));
     await chmod(join(root, path), 0o700);
   }
@@ -433,7 +436,7 @@ test("direct common-core producer reuses the same origin once for both engine wr
     expect(await readFile(`${recipe.paths.core}.core.json`, "utf8")).toBe(origin);
     expect(await readdir(recipe.temporary)).toEqual([]);
   });
-}, 15_000);
+});
 
 test("direct common-core producer prepares a changed release identity before strict reuse", async () => {
   await withCliReceiptFixture(async fixture => {
@@ -462,7 +465,7 @@ test("direct common-core producer prepares a changed release identity before str
     expect(await readFile(receiptPath, "utf8")).toBe(JSON.stringify(current, null, 2) + "\n");
     expect(await readdir(recipe.temporary)).toEqual([]);
   });
-}, 20_000);
+});
 
 test("real wrappers retain engines across a core delta and rebuild only each changed engine", async () => {
   await withCliReceiptFixture(async fixture => {
@@ -499,7 +502,7 @@ test("real wrappers retain engines across a core delta and rebuild only each cha
     for (const path of [join(dirname(recipe.paths.core), "core-target"), join(dirname(recipe.paths.quickjs), "target"), join(dirname(recipe.paths.jsc), "target")]) expect(await Bun.file(join(path, "wasm32-wasip1/release/bun.wasm")).exists()).toBe(true);
     expect(await readdir(recipe.temporary)).toEqual([]);
   });
-}, 30_000);
+});
 
 for (const kind of ["quickjs", "jsc"] as const) for (const damage of ["corrupt", "partial", "wrong-scope", "wrong-profile", "input-hash", "command-profile"]) {
   test(`${kind} wrapper preserves ${damage} output plus a source delta without retirement or compilation`, async () => {
@@ -527,7 +530,7 @@ for (const kind of ["quickjs", "jsc"] as const) for (const damage of ["corrupt",
       expect(await finalFiles(recipe.paths)).toEqual(files);
       expect(await recipe.builds()).toEqual(builds);
     });
-  }, 15_000);
+  });
 }
 
 test("wrapper preparation refuses start/end source drift before retiring valid stale outputs", async () => {
@@ -544,7 +547,7 @@ test("wrapper preparation refuses start/end source drift before retiring valid s
     expect(await finalFiles(recipe.paths)).toEqual(files);
     expect(await recipe.builds()).toEqual(builds);
   });
-}, 15_000);
+});
 
 for (const caller of ["core", "quickjs"] as const) for (const damage of ["corrupt", "partial", "profile", "schema", "provenance"]) test(`core ${damage} plus source delta fails closed in ${caller} caller`, async () => {
   await withCliReceiptFixture(async fixture => {
@@ -571,8 +574,14 @@ for (const caller of ["core", "quickjs"] as const) for (const damage of ["corrup
     expect(await finalFiles(recipe.paths)).toEqual(files);
     expect(await recipe.builds()).toEqual(builds);
   });
-}, 15_000);
+});
 
+
+/** env.sh names its default sysroot from the Waffle pins beside it. */
+async function copyEnvironment(root: string) {
+  await copyFile(new URL("../../env.sh", import.meta.url), join(root, "env.sh"));
+  await copyFile(new URL("../../scripts/waffle-release-inputs.json", import.meta.url), join(root, "scripts/waffle-release-inputs.json"));
+}
 
 for (const useRunner of [false, true]) test(`transpiler example scratch uses ${useRunner ? "RUNNER_TEMP" : "TMPDIR"} and cleans up before compilation failure`, async () => {
   await withReceiptFixture(async options => {
@@ -583,7 +592,7 @@ for (const useRunner of [false, true]) test(`transpiler example scratch uses ${u
     const bin = join(cargoHome, "bin");
     const trace = join(root, "private/allocation");
     await Promise.all([runner, temporary, bin].map(path => mkdir(path, { recursive: true })));
-    await copyFile(new URL("../../env.sh", import.meta.url), join(root, "env.sh"));
+    await copyEnvironment(root);
     await copyFile(new URL("../../scripts/test-transpiler-example.sh", import.meta.url), join(root, "scripts/test-transpiler-example.sh"));
     await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), "export {};\n");
     await writeFile(join(bin, "cargo"), '#!/usr/bin/env bash\nprintf "stopped before compilation\\n"\nexit 42\n', { mode: 0o755 });
@@ -605,14 +614,14 @@ for (const useRunner of [false, true]) test(`transpiler example scratch uses ${u
 });
 
 
-test.each(["wasmtime", "node"])("transpiler example rejects missing %s before sysroot setup or compilation", async missing => {
+for (const missing of ["wasmtime", "node"]) test(`transpiler example rejects missing ${missing} before sysroot setup or compilation`, async () => {
   await withReceiptFixture(async options => {
     const root = options.repository;
     const bin = join(root, "private/cargo/bin");
     const setupTrace = join(root, "private/sysroot-called");
     const compileTrace = join(root, "private/compiler-called");
     await mkdir(bin, { recursive: true });
-    await copyFile(new URL("../../env.sh", import.meta.url), join(root, "env.sh"));
+    await copyEnvironment(root);
     await copyFile(new URL("../../scripts/test-transpiler-example.sh", import.meta.url), join(root, "scripts/test-transpiler-example.sh"));
     await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), 'await Bun.write(process.env.SETUP_TRACE!, "called");\n');
     await writeFile(join(bin, "cargo"), '#!/bin/sh\nprintf called > "$COMPILE_TRACE"\nexit 42\n', { mode: 0o755 });

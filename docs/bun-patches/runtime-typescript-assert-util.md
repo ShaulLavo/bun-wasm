@@ -4,6 +4,12 @@ Class **Host feature**. `src/js/assert_util_types.d.ts`, the process declaration
 
 The tests pin the approved JavaScript AST with only the two explicit utility destination extractions, check every emitted token against its TypeScript line and column, and require consumers to narrow raw parser outputs. Node controls preserve raw nonstring values, getter counts, receivers, original errors and both extraction orders. The test-only error-capture helper keeps those controls within three block levels, with a mutation rejecting the former depth-four capture.
 
+The intentional AST allowance also removes only the named private expect equality
+declarations and its private export before checking the original hash. Public Bun
+and Node comparison code remains covered by the original hash and outcome controls.
+The private boolean-or-Promise type and synchronous public equality types are
+checked separately. See [awaited asymmetric assertions](test-awaited-asymmetric.md).
+
 `runtime.d.ts` owns the single callable `ConsoleInspector.nodeInspect` property and the complete `InspectFunction` and `InspectOptions` contracts. The callable retains optional `defaultOptions`, `colors` and `styles` properties. Console keeps its existing options domain, formatting and Bun inspection signatures; utility declarations add Node formatting without redeclaring the callable. This avoids a method/property collision when all declarations compose. The mutable global process retains main's required writable stdout and stderr contracts alongside the utility fields. Optional warning overloads admit main's Error call and utility string/kind/code calls. `Error.captureStackTrace` remains required. These are type-only shared-contract reconciliations, not new runtime adapters.
 
 `crypto_host_types.d.ts` owns `Internal.crypto` and its readonly `CryptoHostBridge` contract. Utility types consume that declaration instead of redeclaring a mutable object with only `isKey`. The utility predicate still calls the same bridge method. The combined strict runtime type project checks both adapters together; no executable code changes.

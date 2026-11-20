@@ -1,0 +1,17 @@
+defaultValue x def named
+name "" NaN store NaN
+disable falls back to defaultValue D
+run on a disabled storage Y D
+same-value run keeps enterWith B
+restored after inner disable outer
+restored after inner enterWith outer
+withScope scope
+restored after withScope outer
+outside undefined
+disable after run 2 undefined undefined outer
+disable in an older frame 1 undefined
+bind ERR_INVALID_ARG_TYPE The "fn" argument must be of type function. Received type number (1)
+bound call arg:bound undefined
+no iterator x/y
+await p
+timer t

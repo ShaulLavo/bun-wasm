@@ -1,10 +1,22 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
 import { enableSubreaper } from "./linux-subreaper.mts";
 import { ProcessOwner, describe, isGone, linuxProcess } from "./process-owner.mts";
 
+// waitpid must run in the adopting supervisor, so Linux keeps Bun's FFI available.
+function linuxSupervisorRuntime(): void {
+  if (process.platform !== "linux" || process.versions.bun) return;
+  const executable = spawnSync("bun", ["-p", "process.execPath"], { encoding: "utf8" });
+  if (executable.error) throw executable.error;
+  if (executable.status !== 0) throw new Error(`cannot locate Bun for Linux supervision: ${executable.stderr}`);
+  const bun = executable.stdout.trim();
+  process.execve?.(bun, [bun, import.meta.filename].concat(process.argv.slice(2)), process.env);
+  throw new Error("Linux deadline supervision requires process.execve");
+}
+
+linuxSupervisorRuntime();
 await enableSubreaper();
 
 const inputs = process.argv.slice(2);
@@ -14,19 +26,37 @@ if (inputs[0] === "--state") {
   inputs.splice(0, 2);
 }
 const [seconds, command, ...args] = inputs;
-const timeout = Number(seconds) * 1000;
-if (!command || !Number.isFinite(timeout) || timeout <= 0) {
-  throw new Error("Usage: run-with-timeout.mts [--state <directory>] <seconds> <command> [args...]");
+const timeout = seconds === "--until-exit" ? undefined : Number(seconds) * 1000;
+if (!command || timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+  throw new Error("Usage: run-with-timeout.mts [--state <directory>] <seconds|--until-exit> <command> [args...]");
 }
 const owner = new ProcessOwner();
+const libc = process.platform === "linux" ? (await import("bun:ffi")).dlopen("libc.so.6", {
+  waitpid: { args: ["i32", "ptr", "i32"], returns: "i32" },
+}) : undefined;
+const waitStatus = new Int32Array(1);
 let rootPid: number | undefined;
+let trackingFailure: unknown;
 let timedOut = false;
 let interrupted: number | undefined;
 let stopping: Promise<void> | undefined;
 
 async function teardown() {
   const remaining = await owner.drain({ graceMs: 5000, forceMs: 2000 });
+  captureOwned();
   if (remaining.length > 0) throw new Error(`owned processes survived teardown: ${describe(remaining)}`);
+}
+
+function captureOwned(): void {
+  owner.capture();
+  if (!libc) return;
+  for (const row of owner.owned.values()) {
+    if (row.pid === rootPid || row.parent !== process.pid || row.state !== "Z") continue;
+    const now = linuxProcess(row.pid);
+    // Bun owns the direct child's exit event. Only our adopted, dead children are waitable here.
+    if (now?.birth !== row.birth || now.parent !== process.pid || now.state !== "Z") continue;
+    if (libc.symbols.waitpid(row.pid, waitStatus, 1) < 0 && linuxProcess(row.pid)?.birth === row.birth) throw new Error(`Cannot reap owned supervisor descendant ${row.pid}`);
+  }
 }
 function stop(): Promise<void> {
   stopping ??= teardown();
@@ -59,14 +89,16 @@ function receipt(name: string, contents: string) {
 async function execute(command: string): Promise<number> {
   if (state && existsSync(join(state, "stop"))) return 143;
   const child = spawn(command, args, { stdio: "inherit", detached: true });
-  if (child.pid !== undefined) rootPid = owner.adopt(child.pid)?.pid;
+  rootPid = child.pid;
+  if (rootPid !== undefined) owner.adopt(rootPid);
   tracker = setInterval(() => {
-    owner.capture();
+    try { captureOwned(); }
+    catch (error) { trackingFailure ??= error; void stop(); }
     if (!state || !existsSync(join(state, "stop"))) return;
     interrupted ??= 143;
     void stop();
   }, 50);
-  timer = setTimeout(() => {
+  if (timeout !== undefined) timer = setTimeout(() => {
     timedOut = true;
     diagnoseTimeout();
     void stop();
@@ -77,6 +109,7 @@ async function execute(command: string): Promise<number> {
   });
   clearTimeout(timer);
   await stop();
+  if (trackingFailure) throw trackingFailure;
   return timedOut ? 124 : interrupted ?? status;
 }
 try {
@@ -89,5 +122,8 @@ try {
     await stop();
     receipt("status", `${process.exitCode ?? 1}\n`);
   }
-  finally { for (const { signal, handler } of handlers) process.off(signal, handler); }
+  finally {
+    for (const { signal, handler } of handlers) process.off(signal, handler);
+    libc?.close();
+  }
 }

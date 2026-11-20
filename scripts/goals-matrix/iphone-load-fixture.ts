@@ -3,6 +3,8 @@ import { IphoneBus } from "./iphone-bus";
 import { observeIphoneResponse } from "./iphone-server";
 import { createIphoneTransport } from "./iphone-transport";
 import type { Transport } from "./transport";
+import { object } from "./evidence";
+import { navigateTestPage } from "../../web/tests/navigate-test-page.ts";
 
 /** `document` holds the preview navigation itself; `resource` holds a load-blocking image after the observer attached. */
 export type Hold = "document" | "resource";
@@ -15,6 +17,8 @@ export type HeldPreview = {
   release(): void;
   controllerRequests(): number;
   deviceCommands(): unknown[];
+  evidence(): readonly Record<string, unknown>[];
+  observed(stage: string): Promise<void>;
 };
 
 /**
@@ -28,6 +32,12 @@ export async function withHeldPreview(engine: BrowserType, hold: Hold, timeoutMs
   const release = Promise.withResolvers<void>();
   const presented = Promise.withResolvers<void>();
   const native: Record<string, unknown>[] = [];
+  const observations = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
+  const observation = (stage: string) => {
+    const pending = observations.get(stage) ?? Promise.withResolvers<void>();
+    observations.set(stage, pending);
+    return pending;
+  };
   let ownerOrigin = "";
   let controlOrigin = "";
   let controllerRequests = 0;
@@ -59,14 +69,18 @@ export async function withHeldPreview(engine: BrowserType, hold: Hold, timeoutMs
     const page = await browser.newPage();
     // Native iPhone Safari reports false here with the frame focused; it must never become a readiness predicate.
     await page.addInitScript(() => { Document.prototype.hasFocus = () => false; });
-    await page.goto(owner.url.href);
+    await navigateTestPage(page, owner.url.href);
     await page.waitForFunction(() => document.title.startsWith("Goals "));
     await page.locator("#editor").focus();
     const transport = await createIphoneTransport({ control: control.url.origin + bus.path, agent: "/unused/agent-device", deviceUDID: "load-test", timeoutMs,
-      saveNative: async text => { native.push(JSON.parse(text)); } });
+      saveNative: async text => {
+        const row = object(JSON.parse(text));
+        native.push(row);
+        if (row.event === "iphone-preview" && row.observation && typeof row.stage === "string") observation(row.stage).resolve();
+      } });
     close.push(() => transport.close());
     const deviceCommands = () => native.filter(row => "command" in row);
-    await action({ page, bus, transport, deviceCommands, preview: owner.url.origin + "/preview", requested: requested.promise, presented: presented.promise, release: () => release.resolve(), controllerRequests: () => controllerRequests });
+    await action({ page, bus, transport, deviceCommands, evidence: () => native, observed: stage => observation(stage).promise, preview: owner.url.origin + "/preview", requested: requested.promise, presented: presented.promise, release: () => release.resolve(), controllerRequests: () => controllerRequests });
   } finally {
     release.resolve();
     await Promise.allSettled(close.toReversed().map(async finish => finish()));

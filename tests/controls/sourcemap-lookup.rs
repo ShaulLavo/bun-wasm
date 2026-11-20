@@ -12,6 +12,8 @@ struct PositionMap {
     map: Option<sourcemap::SourceMap>,
     line1_shift: u32,
     line_offset: u32,
+    converted: Option<sourcemap::SourceMap>,
+    module: bool,
 }
 
 // PRODUCTION_POSITION_MAP
@@ -66,9 +68,19 @@ fn composition() {
         line1_shift: 3,
         line_offset: 1,
         map: Some(sourcemap::SourceMap::new("ACEK;ADCA")),
+        ..Default::default()
     };
     assert_eq!(positions.original_position(1, 101), (3, 6));
     assert_eq!(positions.original_position(2, 1), (4, 6));
+    // A required ES module's converted copy maps alone until the file runs as an ES module.
+    let mut positions = PositionMap {
+        map: Some(sourcemap::SourceMap::new("AAEA")),
+        converted: Some(sourcemap::SourceMap::new(";;AAAA")),
+        ..Default::default()
+    };
+    assert_eq!(positions.original_position(3, 1), (1, 1));
+    positions.module = true;
+    assert_eq!(positions.original_position(1, 1), (3, 1));
 }
 
 fn timed(map: &sourcemap::SourceMap, label: &str, queries: impl Iterator<Item = (u32, u32)>) {

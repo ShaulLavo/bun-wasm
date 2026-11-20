@@ -1198,6 +1198,109 @@ diff --git a/Source/JavaScriptCore/heap/Heap.h b/Source/JavaScriptCore/heap/Heap
 +    size_t ramSize() const { return m_ramSize; }
 +#endif
      // Everything the mutator has allocated (cells and reported extra memory), the current cycle included. Mutator thread only.
+diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInlines.h
+--- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInlines.h
++++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewConstructorInlines.h
+@@ -41,2 +41,3 @@
+ #include <cstddef>
++#include <limits>
+ #include <optional>
+@@ -273,4 +274,9 @@
+             RETURN_IF_EXCEPTION(scope, nullptr);
+-            length = lengthValue.toLength(globalObject);
++            uint64_t wideLength = lengthValue.toLength(globalObject);
+             RETURN_IF_EXCEPTION(scope, nullptr);
++            if (wideLength > std::numeric_limits<size_t>::max()) [[unlikely]] {
++                throwOutOfMemoryError(globalObject, scope);
++                return nullptr;
++            }
++            length = static_cast<size_t>(wideLength);
+         }
+@@ -296,1 +302,29 @@
++inline size_t typedArrayLengthFromIndex(JSGlobalObject* globalObject, JSValue value)
++{
++    VM& vm = globalObject->vm();
++    auto scope = DECLARE_THROW_SCOPE(vm);
++    uint64_t length = value.toIndex(globalObject, "length"_s);
++    RETURN_IF_EXCEPTION(scope, 0);
++    if (length > std::numeric_limits<size_t>::max()) [[unlikely]] {
++        throwOutOfMemoryError(globalObject, scope);
++        return 0;
++    }
++    return static_cast<size_t>(length);
++}
++
++// A byteOffset or length that does not fit size_t always lies outside the buffer.
++// Throw the error a 64-bit build reaches for the same arguments.
++template<typename ViewClass>
++inline EncodedJSValue throwUnrepresentableBufferRange(JSGlobalObject* globalObject, ThrowScope& scope, JSArrayBuffer* jsBuffer, uint64_t offset, bool hasLength)
++{
++    ArrayBuffer* buffer = jsBuffer->impl();
++    if (buffer->isDetached())
++        return throwVMTypeError(globalObject, scope, typedArrayErrorMessageBufferIsAlreadyDetached);
++    if (!hasLength && buffer->isResizableOrGrowableShared())
++        return throwVMRangeError(globalObject, scope, typedArrayErrorMessageByteOffsetExceedSourceBufferByteLength);
++    if (!hasLength && (static_cast<uint64_t>(buffer->byteLength()) - offset) % ViewClass::elementSize)
++        return throwVMRangeError(globalObject, scope, "ArrayBuffer length minus the byteOffset is not a multiple of the element size"_s);
++    return throwVMRangeError(globalObject, scope, arrayBufferViewErrorMessageOutOfRangeOfBuffer);
++}
++
+ template<typename ViewClass>
+@@ -306,3 +340,3 @@
+         // the step 9 of https://tc39.es/ecma262/2026/#sec-typedarray
+-        length = firstValue.toIndex(globalObject, "length"_s);
++        length = typedArrayLengthFromIndex(globalObject, firstValue);
+         RETURN_IF_EXCEPTION(scope, { });
+@@ -347,6 +381,7 @@
++        uint64_t wideOffset = 0;
+         if (argCount > 1) {
+-            offset = callFrame->uncheckedArgument(1).toIndex(globalObject, "byteOffset"_s);
++            wideOffset = callFrame->uncheckedArgument(1).toIndex(globalObject, "byteOffset"_s);
+             RETURN_IF_EXCEPTION(scope, { });
+
+-            if (offset % ViewClass::elementSize) [[unlikely]]
++            if (wideOffset % ViewClass::elementSize) [[unlikely]]
+                 return throwVMRangeError(globalObject, scope, "byteOffset modulo TypedArray.BYTES_PER_ELEMENT must be 0"_s);
+@@ -355,1 +390,2 @@
++        std::optional<uint64_t> wideLength;
+         if (argCount > 2) {
+@@ -358,3 +394,3 @@
+             if (!lengthValue.isUndefined()) {
+-                length = lengthValue.toIndex(globalObject, "length"_s);
++                wideLength = lengthValue.toIndex(globalObject, "length"_s);
+                 RETURN_IF_EXCEPTION(scope, encodedJSValue());
+@@ -363,1 +399,8 @@
++
++        constexpr uint64_t sizeMax = std::numeric_limits<size_t>::max();
++        if (wideOffset > sizeMax || wideLength.value_or(0) > sizeMax) [[unlikely]]
++            return throwUnrepresentableBufferRange<ViewClass>(globalObject, scope, arrayBuffer, wideOffset, wideLength.has_value());
++        offset = static_cast<size_t>(wideOffset);
++        if (wideLength)
++            length = static_cast<size_t>(*wideLength);
+     } else {
+@@ -365,3 +408,3 @@
+             // the step 9 of https://tc39.es/ecma262/2026/#sec-typedarray
+-            length = firstValue.toIndex(globalObject, "length"_s);
++            length = typedArrayLengthFromIndex(globalObject, firstValue);
+             RETURN_IF_EXCEPTION(scope, { });
+@@ -404,2 +447,3 @@
+-    size_t offset = 0;
++    // Compare in 64 bits; both values fit size_t once they are within the buffer.
++    uint64_t offset = 0;
+     if (argCount > 1) {
+@@ -420,3 +465,3 @@
+         if (JSValue lengthValue = callFrame->uncheckedArgument(2); !lengthValue.isUndefined()) [[likely]] {
+-            size_t viewByteLength = lengthValue.toIndex(globalObject, "byteLength"_s);
++            uint64_t viewByteLength = lengthValue.toIndex(globalObject, "byteLength"_s);
+             RETURN_IF_EXCEPTION(scope, { });
+@@ -437,2 +482,2 @@
+-            length = viewByteLength;
++            length = static_cast<size_t>(viewByteLength);
+         }
+@@ -452,2 +497,2 @@
+-    RELEASE_AND_RETURN(scope, JSValue::encode(constructGenericTypedArrayViewWithArrayBuffer<JSDataView>(globalObject, structure, arrayBuffer, offset, length)));
++    RELEASE_AND_RETURN(scope, JSValue::encode(constructGenericTypedArrayViewWithArrayBuffer<JSDataView>(globalObject, structure, arrayBuffer, static_cast<size_t>(offset), length)));
+ }
 diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
 --- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
 +++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
@@ -1220,6 +1323,24 @@ diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/So
 +        request.fail();
 +#endif
          throwOutOfMemoryError(globalObject, scope);
+diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
+--- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
++++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
+@@ -507,10 +507,12 @@
+     RETURN_IF_EXCEPTION(scope, { });
+-    size_t sourceLength = sourceLengthValue.toLength(globalObject);
++    uint64_t wideSourceLength = sourceLengthValue.toLength(globalObject);
+     RETURN_IF_EXCEPTION(scope, { });
+
+-    if (offset > MAX_ARRAY_BUFFER_SIZE || !isSumSmallerThanOrEqual(sourceLength, offset, targetLength)) {
++    // A source longer than the target is out of bounds; check before narrowing to a 32-bit size_t.
++    if (offset > MAX_ARRAY_BUFFER_SIZE || wideSourceLength > targetLength || !isSumSmallerThanOrEqual(static_cast<size_t>(wideSourceLength), offset, targetLength)) {
+         throwRangeError(globalObject, scope, "Range consisting of offset and length are out of bounds"_s);
+         return false;
+     }
++    size_t sourceLength = static_cast<size_t>(wideSourceLength);
+
+     // It is not valid to ever call source->get() with an index of more than MAX_ARRAY_INDEX.
 diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
 --- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
 +++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
@@ -3422,6 +3543,984 @@ index 0409be0..907158a 100644
  #endif
      default: {
          static LazyNeverDestroyed<Ref<NativeJITCode>> result;
+diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCore/runtime/JSONObject.cpp
+--- a/Source/JavaScriptCore/runtime/JSONObject.cpp
++++ b/Source/JavaScriptCore/runtime/JSONObject.cpp
+@@ -40,6 +40,11 @@
+ #include "ObjectConstructorInlines.h"
+ #include "PropertyNameArray.h"
+ #include "VMInlines.h"
++#if OS(WASI)
++#include "WASIJSONFastTest.h"
++#include "MarkedVector.h"
++#include "HeapObserver.h"
++#endif
+ #include <charconv>
+ #include <wtf/MathExtras.h>
+ #include <wtf/UnalignedAccess.h>
+@@ -696,7 +701,87 @@
+     Found16BitLate,
+     StackOverflow,
+     Unknown,
++#if OS(WASI)
++    FastNesting,
++    FastFrameAllocation,
++#endif
+ };
++
++#if OS(WASI)
++static WASIJSONFastTestControl wasiJSONFastControl { WASIJSONFastTestMode::Off, 0 };
++static unsigned wasiJSONFastFrameGrowths;
++static unsigned wasiJSONFastRootGrowths;
++static unsigned wasiJSONFastAttempts;
++
++void setWASIJSONFastTestControl(WASIJSONFastTestControl control)
++{
++    wasiJSONFastControl = control;
++    wasiJSONFastFrameGrowths = 0;
++    wasiJSONFastRootGrowths = 0;
++    wasiJSONFastAttempts = 0;
++}
++
++struct WASIJSONFastRecord {
++    unsigned attempt { 0 };
++    const char* fault { "none" };
++    unsigned faultOrdinal { 0 };
++    unsigned framesAtFailure { 0 };
++    unsigned rootsAtFailure { 0 };
++    unsigned frameCapacityAtFailure { 0 };
++    unsigned rootCapacityAtFailure { 0 };
++    bool frameRelocatedInFailingReserve { false };
++    bool rootsRegisteredAtFailure { false };
++    unsigned outputLengthAtFailure { 0 };
++    unsigned depthAtFailure { 0 };
++    unsigned maxFrames { 0 };
++    unsigned frameGrowths { 0 };
++    unsigned rootGrowths { 0 };
++    unsigned framesMoved { 0 };
++    unsigned rootSlotsMoved { 0 };
++    bool rootsEverRegistered { false };
++    unsigned materializations { 0 };
++    unsigned forcedCollectionsAtA { 0 };
++    unsigned forcedCollectionsAtB { 0 };
++    unsigned collections { 0 };
++    unsigned collectionsWithLiveFrames { 0 };
++    unsigned clearedLiveTables { 0 };
++    unsigned resumesOfClearedTableFrames { 0 };
++    unsigned collectionSkippedDeferred { 0 };
++    unsigned eligibleOpens { 0 };
++    unsigned collectionResumeLimit { 0 };
++    bool collectionResumePending { false };
++};
++
++class WASIJSONFastObserver final : public HeapObserver {
++    WTF_MAKE_TZONE_ALLOCATED(WASIJSONFastObserver);
++public:
++    void willGarbageCollect() final { }
++    void didGarbageCollect(CollectionScope) final
++    {
++        if (callback)
++            callback(context);
++    }
++    void* context { nullptr };
++    void (*callback)(void*) { nullptr };
++};
++WTF_MAKE_TZONE_ALLOCATED_IMPL(WASIJSONFastObserver);
++
++static const char* wasiJSONFastOutcome(std::optional<FailureReason> reason)
++{
++    if (!reason)
++        return "success";
++    switch (*reason) {
++    case FailureReason::BufferFull: return "BufferFull";
++    case FailureReason::Found16BitEarly: return "Found16BitEarly";
++    case FailureReason::Found16BitLate: return "Found16BitLate";
++    case FailureReason::StackOverflow: return "StackOverflow";
++    case FailureReason::Unknown: return "Unknown";
++    case FailureReason::FastNesting: return "FastNesting";
++    case FailureReason::FastFrameAllocation: return "FastFrameAllocation";
++    }
++    RELEASE_ASSERT_NOT_REACHED();
++}
++#endif
+
+ template<typename CharType, BufferMode bufferMode>
+ class FastStringifier {
+@@ -711,13 +796,18 @@
+ private:
+     explicit FastStringifier(JSGlobalObject&);
+-    template<HasGap hasGap> void append(JSValue);
++    template<HasGap hasGap, bool testing = false, bool startTraversal = false> void append(JSValue);
+     void appendInt32(int32_t);
+     template<HasGap hasGap> void appendInt32Array(JSArray&);
+     String result();
+
+     static constexpr unsigned maxInt32StringLength = ("-2147483648"_s).length();
+
+     // FIXME These should probably just take an ASCIILiteral.
++#if OS(WASI)
++    ALWAYS_INLINE void append(char, char, char, char);
++    ALWAYS_INLINE void append(char, char, char, char, char);
++#else
+     void append(char, char, char, char);
+     void append(char, char, char, char, char);
++#endif
+     bool setGap(JSValue space);
+@@ -758,6 +848,54 @@
+     std::optional<FailureReason> m_failureReason;
+     Vector<CharType, dynamicBufferInlineCapacity, CrashOnOverflow, 16, WTF::StringImplMalloc> m_dynamicBuffer;
+     uint8_t* m_stackLimit { nullptr };
++
++#if OS(WASI)
++    struct Frame {
++        JSObject* container;
++        Structure* structure;
++        PropertyTable* table;
++        unsigned cursor;
++        unsigned length;
++        enum class Kind : uint8_t { Object, ContiguousArray, GenericArray } kind;
++        uint8_t rootCount;
++    };
++    static_assert(sizeof(Frame) == 24);
++    ALWAYS_INLINE Frame& frameAt(unsigned index)
++    {
++        ASSERT(index < m_frames.size());
++        return m_frames.begin()[index];
++    }
++    static constexpr unsigned maximumFastNesting = 4096;
++    static constexpr unsigned maximumFastRoots = 8192;
++    template<bool testing> ALWAYS_INLINE bool reserveContainerSlot();
++    bool growFrames();
++    ALWAYS_INLINE bool checkObject(JSObject&);
++    bool checkObjectPrototype(JSObject&);
++    ALWAYS_INLINE bool checkArray(JSArray&);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openContainer(JSCell&);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openObject(JSObject&, Structure&);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE void openArray(JSArray&);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE bool appendProperty(JSObject&, Structure&, const PropertyTableEntry&);
++    template<HasGap hasGap> ALWAYS_INLINE bool appendPropertyName(std::span<const Latin1Character>, bool needComma);
++    ALWAYS_INLINE bool appendPropertyString(JSValue);
++    ALWAYS_INLINE bool appendLatin1PropertyString(JSValue);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE bool advanceObject(unsigned);
++    template<HasGap hasGap, bool testing> ALWAYS_INLINE bool advanceArray(unsigned);
++    template<HasGap hasGap> ALWAYS_INLINE void closeContainer(typename Frame::Kind);
++    template<HasGap hasGap, bool testing> void drainContainers();
++    void startTestRecord();
++    void finishTestRecord();
++    void didCollect();
++    void collectForTest(bool pointB);
++    bool shouldCollectAtOpen(PropertyTable*);
++    void publishedFrameForTest();
++    void resumedFrameForTest(unsigned);
++    size_t growthTargetForTest(bool roots, size_t);
++    Vector<Frame, 16> m_frames;
++    MarkedVector<JSCell*, 16, RecordOverflow> m_roots;
++    unsigned m_rootCapacity { 16 };
++    WASIJSONFastRecord m_test;
++#endif
+
+     CharType m_buffer[staticBufferSize];
+ };
+@@ -944,6 +1082,17 @@
+ {
+     if (!haveFailure())
+         logOutcome(std::forward<T>(reason));
++#if OS(WASI)
++    if (!haveFailure() && wasiJSONFastControl.mode != WASIJSONFastTestMode::Off) {
++        m_test.framesAtFailure = m_frames.size();
++        m_test.rootsAtFailure = m_roots.size();
++        m_test.frameCapacityAtFailure = m_frames.capacity();
++        m_test.rootCapacityAtFailure = m_rootCapacity;
++        m_test.rootsRegisteredAtFailure = m_vm.heap.markListSet().contains(&m_roots);
++        m_test.outputLengthAtFailure = m_length;
++        m_test.depthAtFailure = m_depth;
++    }
++#endif
+     m_failureReason = failureReason;
+ }
+
+@@ -1343,20 +1492,24 @@
+ template<typename CharType, BufferMode bufferMode>
+-template<HasGap hasGap>
++template<HasGap hasGap, bool testing, bool startTraversal>
+ void FastStringifier<CharType, bufferMode>::append(JSValue value)
+ {
+     WASM_RESERVE_STACK(1024);
+ #if OS(WASI)
+-    // Static buffers estimate native stack use. Wasm needs the shadow-stack guard too.
+-    if (!m_vm.isSafeToRecurseSoft()) [[unlikely]] {
++    // The WASI traversal has constant native depth. Check its entry, not every value.
++    if (startTraversal && !m_vm.isSafeToRecurseSoft()) [[unlikely]] {
+         recordFailure(FailureReason::StackOverflow, "stack overflow"_s);
+         return;
+     }
+ #endif
+
++#if OS(WASI)
++    if constexpr (bufferMode == BufferMode::DynamicBuffer && startTraversal) {
++#else
+     if constexpr (bufferMode == BufferMode::DynamicBuffer) {
++#endif
+         if (std::bit_cast<uint8_t*>(currentStackPointer()) < m_stackLimit) [[unlikely]] {
+             recordFailure(FailureReason::StackOverflow, "stack overflow"_s);
+             return;
+         }
+     }
+
+@@ -1492,6 +1641,15 @@
+         return;
+     }
+
++#if OS(WASI)
++    case ObjectType:
++    case FinalObjectType:
++    case ArrayType:
++        openContainer<hasGap, testing>(cell);
++        if (startTraversal && !haveFailure())
++            drainContainers<hasGap, testing>();
++        return;
++#else
+     case ObjectType:
+     case FinalObjectType: {
+         auto& object = *asObject(&cell);
+@@ -1791,6 +1949,8 @@
+         return;
+     }
+
++#endif
++
+     case JSFunctionType:
+         recordFailure("function"_s);
+         return;
+@@ -1830,6 +1990,565 @@
+     }
+ }
+
++#if OS(WASI)
++template<typename CharType, BufferMode bufferMode>
++void FastStringifier<CharType, bufferMode>::startTestRecord()
++{
++    m_test.attempt = ++wasiJSONFastAttempts;
++    if (!m_vm.wasiJSONFastObserver) {
++        m_vm.wasiJSONFastObserver = makeUnique<WASIJSONFastObserver>();
++        m_vm.heap.addObserver(m_vm.wasiJSONFastObserver.get());
++    }
++    auto& observer = static_cast<WASIJSONFastObserver&>(*m_vm.wasiJSONFastObserver);
++    observer.context = this;
++    observer.callback = [](void* context) { static_cast<FastStringifier*>(context)->didCollect(); };
++}
++
++template<typename CharType, BufferMode bufferMode>
++void FastStringifier<CharType, bufferMode>::finishTestRecord()
++{
++    static_cast<WASIJSONFastObserver&>(*m_vm.wasiJSONFastObserver).callback = nullptr;
++    const char* characters = std::same_as<CharType, Latin1Character> ? "latin1" : "utf16";
++    const char* storage = bufferMode == BufferMode::StaticBuffer ? "static" : "dynamic";
++    dataLogF("bunwasm-json-fast {\"attempt\":%u,\"variant\":\"%s-%s\",\"outcome\":\"%s\",\"fault\":\"%s", m_test.attempt, characters, storage, wasiJSONFastOutcome(m_failureReason), m_test.fault);
++    if (m_test.faultOrdinal)
++        dataLogF(":%u", m_test.faultOrdinal);
++    dataLogF("\",\"framesAtFailure\":%u,\"rootsAtFailure\":%u,\"frameCapacityAtFailure\":%u,\"rootCapacityAtFailure\":%u,\"frameRelocatedInFailingReserve\":%s,\"rootsRegisteredAtFailure\":%s,\"outputLengthAtFailure\":%u,\"depthAtFailure\":%u,", m_test.framesAtFailure, m_test.rootsAtFailure, m_test.frameCapacityAtFailure, m_test.rootCapacityAtFailure, m_test.frameRelocatedInFailingReserve ? "true" : "false", m_test.rootsRegisteredAtFailure ? "true" : "false", m_test.outputLengthAtFailure, m_test.depthAtFailure);
++    dataLogF("\"maxFrames\":%u,\"frameGrowths\":%u,\"rootGrowths\":%u,\"framesMoved\":%u,\"rootSlotsMoved\":%u,\"rootCapacityAtExit\":%u,\"rootsEverRegistered\":%s,", m_test.maxFrames, m_test.frameGrowths, m_test.rootGrowths, m_test.framesMoved, m_test.rootSlotsMoved, m_rootCapacity, m_test.rootsEverRegistered ? "true" : "false");
++    dataLogF("\"materializations\":%u,\"forcedCollectionsAtA\":%u,\"forcedCollectionsAtB\":%u,\"collections\":%u,\"collectionsWithLiveFrames\":%u,\"clearedLiveTables\":%u,\"resumesOfClearedTableFrames\":%u,\"collectionSkippedDeferred\":%u}\n", m_test.materializations, m_test.forcedCollectionsAtA, m_test.forcedCollectionsAtB, m_test.collections, m_test.collectionsWithLiveFrames, m_test.clearedLiveTables, m_test.resumesOfClearedTableFrames, m_test.collectionSkippedDeferred);
++}
++
++template<typename CharType, BufferMode bufferMode>
++void FastStringifier<CharType, bufferMode>::didCollect()
++{
++    ++m_test.collections;
++    m_test.collectionResumeLimit = m_frames.size();
++    m_test.collectionResumePending = true;
++    for (const auto& frame : m_frames) {
++        if (!frame.table)
++            continue;
++        ++m_test.collectionsWithLiveFrames;
++        return;
++    }
++}
++
++template<typename CharType, BufferMode bufferMode>
++void FastStringifier<CharType, bufferMode>::collectForTest(bool pointB)
++{
++    if (m_vm.heap.isDeferred()) {
++        ++m_test.collectionSkippedDeferred;
++        return;
++    }
++    m_vm.heap.collectNow(Sync, CollectionScope::Full);
++    if (!pointB) {
++        ++m_test.forcedCollectionsAtA;
++        return;
++    }
++    ++m_test.forcedCollectionsAtB;
++    for (const auto& frame : m_frames) {
++        if (frame.table && !frame.structure->cachesPropertyTableForJSONFastPath())
++            ++m_test.clearedLiveTables;
++    }
++}
++
++template<typename CharType, BufferMode bufferMode>
++size_t FastStringifier<CharType, bufferMode>::growthTargetForTest(bool roots, size_t target)
++{
++    unsigned ordinal = roots ? ++wasiJSONFastRootGrowths : ++wasiJSONFastFrameGrowths;
++    if (roots) {
++        ++m_test.rootGrowths;
++        m_test.rootSlotsMoved += m_roots.size();
++    } else {
++        ++m_test.frameGrowths;
++        m_test.framesMoved += m_frames.size();
++    }
++    WASIJSONFastTestMode mode = roots ? WASIJSONFastTestMode::FailRootGrowth : WASIJSONFastTestMode::FailFrameGrowth;
++    if (wasiJSONFastControl.mode != mode || ordinal != wasiJSONFastControl.ordinal)
++        return target;
++    m_test.fault = roots ? "root" : "frame";
++    m_test.faultOrdinal = ordinal;
++    wasiJSONFastControl.ordinal = 0;
++    return roots ? size_t(INT32_MAX) + 1 : std::numeric_limits<size_t>::max() / sizeof(Frame);
++}
++
++template<typename CharType, BufferMode bufferMode>
++template<bool testing>
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::reserveContainerSlot()
++{
++    if constexpr (testing)
++        m_test.frameRelocatedInFailingReserve = false;
++    if (m_frames.size() + 1 >= maximumFastNesting) [[unlikely]] {
++        recordFailure(FailureReason::FastNesting, "fast nesting cap"_s);
++        return false;
++    }
++    if (m_frames.size() + 1 > m_frames.capacity()) [[unlikely]] {
++        if (!growFrames())
++            return false;
++    }
++    if (m_roots.size() + 2 <= m_rootCapacity) [[likely]]
++        return true;
++    size_t target = std::min<size_t>(maximumFastRoots, 2 * m_rootCapacity);
++    if (wasiJSONFastControl.mode != WASIJSONFastTestMode::Off)
++        target = growthTargetForTest(true, target);
++    m_roots.ensureCapacity(target);
++    bool overflowed = m_roots.hasOverflowed();
++    if (wasiJSONFastControl.mode != WASIJSONFastTestMode::Off)
++        m_test.rootsEverRegistered |= m_vm.heap.markListSet().contains(&m_roots);
++    if (overflowed) {
++        recordFailure(FailureReason::FastFrameAllocation, "root growth refused"_s);
++        return false;
++    }
++    m_rootCapacity = target;
++    return true;
++}
++
++template<typename CharType, BufferMode bufferMode>
++bool FastStringifier<CharType, bufferMode>::growFrames()
++{
++    size_t target = std::min<size_t>(maximumFastNesting, 2 * m_frames.capacity());
++    if (wasiJSONFastControl.mode != WASIJSONFastTestMode::Off)
++        target = growthTargetForTest(false, target);
++    if (!m_frames.tryReserveCapacity(target)) {
++        recordFailure(FailureReason::FastFrameAllocation, "frame growth refused"_s);
++        return false;
++    }
++    if (wasiJSONFastControl.mode != WASIJSONFastTestMode::Off)
++        m_test.frameRelocatedInFailingReserve = true;
++    return true;
++}
++
++template<typename CharType, BufferMode bufferMode>
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::checkObject(JSObject& object)
++{
++    if (object.isCallable()) [[unlikely]] {
++        recordFailure("callable object"_s);
++        return false;
++    }
++    auto& structure = *object.structure();
++    if (structure.hasPolyProto()) [[unlikely]] {
++        recordFailure("hasPolyProto"_s);
++        return false;
++    }
++    if (structure.storedPrototype() != m_globalObject.objectPrototype())
++        return checkObjectPrototype(object);
++    if (m_checkedObjectPrototype)
++        return true;
++    if (mayHaveToJSON(*m_globalObject.objectPrototype())) [[unlikely]] {
++        recordFailure("object prototype may have toJSON"_s);
++        return false;
++    }
++    m_checkedObjectPrototype = true;
++    return true;
++}
++
++template<typename CharType, BufferMode bufferMode>
++bool FastStringifier<CharType, bufferMode>::checkObjectPrototype(JSObject& object)
++{
++    if (object.type() != FinalObjectType) [[unlikely]] {
++        recordFailure("non-final object with non-standard prototype"_s);
++        return false;
++    }
++    if (mayHaveToJSON(object)) [[unlikely]] {
++        recordFailure("object may have toJSON"_s);
++        return false;
++    }
++    return true;
++}
++
++template<typename CharType, BufferMode bufferMode>
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::checkArray(JSArray& array)
++{
++    if (!m_checkedArrayPrototype) {
++        if (mayHaveToJSON(*m_globalObject.arrayPrototype())) [[unlikely]] {
++            recordFailure("array prototype may have toJSON"_s);
++            return false;
++        }
++        m_checkedArrayPrototype = true;
++    }
++    auto& structure = *array.structure();
++    if (m_globalObject.isOriginalArrayStructure(&structure)) [[likely]]
++        return true;
++    if (structure.hasPolyProto()) [[unlikely]] {
++        recordFailure("hasPolyProto"_s);
++        return false;
++    }
++    if (structure.storedPrototype() != m_globalObject.arrayPrototype()) [[unlikely]] {
++        recordFailure("non-standard array prototype"_s);
++        return false;
++    }
++    structure.forEachProperty(m_vm, [&](const PropertyTableEntry& entry) -> bool {
++        if (entry.key() != m_vm.propertyNames->toJSON) [[likely]]
++            return true;
++        recordFailure("array has toJSON"_s);
++        return false;
++    });
++    return !haveFailure();
++}
++
++template<typename CharType, BufferMode bufferMode>
++template<HasGap hasGap, bool testing>
++ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::openContainer(JSCell& cell)
++{
++    bool array = cell.type() == ArrayType;
++    auto& object = *asObject(&cell);
++    auto& structure = *object.structure();
++    if (array ? !checkArray(*asArray(&cell)) : !checkObject(object))
++        return;
++    if (!reserveContainerSlot<testing>())
++        return;
++    if (!hasRemainingCapacity()) [[unlikely]] {
++        recordBufferFull();
++        return;
++    }
++    buffer()[m_length++] = array ? '[' : '{';
++    if (!array && !structure.canPerformFastPropertyEnumeration()) [[unlikely]] {
++        recordFastPropertyEnumerationFailure(object);
++        return;
++    }
++    if (!array && structure.hasNonReifiedStaticProperties()) [[unlikely]] {
++        recordFailure("object has non-reified static properties"_s);
++        return;
++    }
++    [[clang::always_inline]] m_roots.append(&object);
++    RELEASE_ASSERT(!m_roots.hasOverflowed());
++    if (array) {
++        openArray<hasGap, testing>(*asArray(&cell));
++        return;
++    }
++    openObject<hasGap, testing>(object, structure);
++}
++
++template<typename CharType, BufferMode bufferMode>
++template<HasGap hasGap, bool testing>
++ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::openObject(JSObject& object, Structure& structure)
++{
++    bool materialized;
++    PropertyTable* table;
++    [[clang::always_inline]] table = structure.acquirePropertyTableForJSONFastPath(m_vm, materialized);
++    bool collect = false;
++    if constexpr (testing) {
++        m_test.materializations += materialized;
++        collect = shouldCollectAtOpen(table);
++        if (collect)
++            collectForTest(false);
++    }
++    if (table) {
++        [[clang::always_inline]] m_roots.append(table);
++        RELEASE_ASSERT(!m_roots.hasOverflowed());
++    }
++    if constexpr (hasGap == HasGap::Yes)
++        ++m_depth;
++    if (!table) {
++        closeContainer<hasGap>(Frame::Kind::Object);
++        if (haveFailure()) [[unlikely]]
++            return;
++        m_roots.removeLast();
++        return;
++    }
++    m_frames.unsafeAppendWithoutCapacityCheck(Frame { &object, &structure, table, 0, 0, Frame::Kind::Object, 2 });
++    if constexpr (testing) {
++        publishedFrameForTest();
++        if (collect)
++            collectForTest(true);
++    }
++}
++
++template<typename CharType, BufferMode bufferMode>
++bool FastStringifier<CharType, bufferMode>::shouldCollectAtOpen(PropertyTable* table)
++{
++    if (!table || m_frames.isEmpty() || wasiJSONFastControl.mode != WASIJSONFastTestMode::CollectAtOpen)
++        return false;
++    return !(++m_test.eligibleOpens % wasiJSONFastControl.ordinal);
++}
++
++template<typename CharType, BufferMode bufferMode>
++void FastStringifier<CharType, bufferMode>::publishedFrameForTest()
++{
++    m_test.maxFrames = std::max<unsigned>(m_test.maxFrames, m_frames.size());
++    m_test.rootsEverRegistered |= m_vm.heap.markListSet().contains(&m_roots);
++}
++
++template<typename CharType, BufferMode bufferMode>
++void FastStringifier<CharType, bufferMode>::resumedFrameForTest(unsigned index)
++{
++    if (!m_test.collectionResumePending || index >= m_test.collectionResumeLimit)
++        return;
++    m_test.collectionResumePending = false;
++    if (!frameAt(index).structure->cachesPropertyTableForJSONFastPath())
++        ++m_test.resumesOfClearedTableFrames;
++}
++
++template<typename CharType, BufferMode bufferMode>
++template<HasGap hasGap, bool testing>
++ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::openArray(JSArray& array)
++{
++    if constexpr (hasGap == HasGap::Yes)
++        ++m_depth;
++    if (hasInt32(array.indexingType())) {
++        appendInt32Array<hasGap>(array);
++        if (haveFailure()) [[unlikely]]
++            return;
++        closeContainer<hasGap>(Frame::Kind::GenericArray);
++        if (haveFailure()) [[unlikely]]
++            return;
++        m_roots.removeLast();
++        return;
++    }
++    unsigned length = array.length();
++    auto kind = hasContiguous(array.indexingType()) ? Frame::Kind::ContiguousArray : Frame::Kind::GenericArray;
++    if (kind == Frame::Kind::ContiguousArray && length > array.butterfly()->vectorLength()) [[unlikely]] {
++        recordFailure("!lengthBeyondVector"_s);
++        return;
++    }
++    if (!length) {
++        closeContainer<hasGap>(kind);
++        if (haveFailure()) [[unlikely]]
++            return;
++        m_roots.removeLast();
++        return;
++    }
++    m_frames.unsafeAppendWithoutCapacityCheck(Frame { &array, array.structure(), nullptr, 0, length, kind, 1 });
++    if constexpr (testing)
++        publishedFrameForTest();
++}
++
++template<typename CharType, BufferMode bufferMode>
++template<HasGap hasGap>
++ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::closeContainer(typename Frame::Kind kind)
++{
++    if constexpr (hasGap == HasGap::Yes)
++        --m_depth;
++    char opener = kind == Frame::Kind::Object ? '{' : '[';
++    bool needNewLine = hasGap == HasGap::Yes && buffer()[m_length - 1] != opener;
++    if (!hasRemainingCapacity(needNewLine ? 1 + newLineAndIndentSize() : 1)) [[unlikely]] {
++        recordBufferFull();
++        return;
++    }
++    if (needNewLine)
++        appendNewLineAndIndentUnchecked();
++    buffer()[m_length++] = kind == Frame::Kind::Object ? '}' : ']';
++}
++
++template<typename CharType, BufferMode bufferMode>
++template<HasGap hasGap, bool testing>
++void FastStringifier<CharType, bufferMode>::drainContainers()
++{
++    while (!m_frames.isEmpty()) {
++        unsigned index = m_frames.size() - 1;
++        bool finished = frameAt(index).kind == Frame::Kind::Object ? advanceObject<hasGap, testing>(index) : advanceArray<hasGap, testing>(index);
++        if (haveFailure()) [[unlikely]]
++            return;
++        if (!finished)
++            continue;
++        auto kind = frameAt(index).kind;
++        unsigned remainingRoots = m_roots.size() - frameAt(index).rootCount;
++        closeContainer<hasGap>(kind);
++        if (haveFailure()) [[unlikely]]
++            return;
++        m_frames.shrink(index);
++        m_roots.shrink(remainingRoots);
++    }
++}
++
++template<typename CharType, BufferMode bufferMode>
++template<HasGap hasGap, bool testing>
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::advanceObject(unsigned index)
++{
++    if constexpr (testing)
++        resumedFrameForTest(index);
++    unsigned count = m_frames.size();
++    auto& object = *frameAt(index).container;
++    auto& structure = *frameAt(index).structure;
++    unsigned next = frameAt(index).table->forEachPropertyFrom(frameAt(index).cursor, [&](const auto& entry) {
++        return appendProperty<hasGap, testing>(object, structure, entry) ? IterationStatus::Continue : IterationStatus::Done;
++    });
++    if (haveFailure()) [[unlikely]]
++        return false;
++    frameAt(index).cursor = next;
++    return m_frames.size() == count;
++}
++
++template<typename CharType, BufferMode bufferMode>
++template<HasGap hasGap, bool testing>
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::advanceArray(unsigned index)
++{
++    unsigned i = frameAt(index).cursor;
++    if (i == frameAt(index).length)
++        return true;
++    auto& array = *asArray(frameAt(index).container);
++    auto kind = frameAt(index).kind;
++    const unsigned newLineAndIndent = hasGap == HasGap::Yes ? newLineAndIndentSize() : 0;
++    if (i || hasGap == HasGap::Yes) {
++        if (!hasRemainingCapacity(!!i + newLineAndIndent)) [[unlikely]] {
++            recordBufferFull();
++            return false;
++        }
++        if (i)
++            buffer()[m_length++] = ',';
++        if constexpr (hasGap == HasGap::Yes)
++            appendNewLineAndIndentUnchecked();
++    }
++    JSValue value;
++    if (kind == Frame::Kind::ContiguousArray)
++        value = array.butterfly()->contiguous().at(&array, i).get();
++    else if (array.canGetIndexQuickly(i))
++        value = array.getIndexQuickly(i);
++    if (!value) [[unlikely]] {
++        recordFailure("!canGetIndexQuickly"_s);
++        return false;
++    }
++    [[clang::always_inline]] append<hasGap, testing>(value);
++    if (haveFailure()) [[unlikely]]
++        return false;
++    frameAt(index).cursor = i + 1;
++    return false;
++}
++
++template<typename CharType, BufferMode bufferMode>
++template<HasGap hasGap, bool testing>
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::appendProperty(JSObject& object, Structure& structure, const PropertyTableEntry& entry)
++{
++    const unsigned newLineAndIndent = hasGap == HasGap::Yes ? newLineAndIndentSize() : 0;
++    if ((entry.attributes() & PropertyAttribute::DontEnum) && entry.key() == m_vm.propertyNames->toJSON) [[unlikely]] {
++        recordFailure("object has non-enumerable toJSON"_s);
++        return false;
++    }
++    if (entry.attributes() & PropertyAttribute::DontEnum) [[unlikely]]
++        return true;
++    auto& name = *entry.key();
++    if (name.isSymbol()) [[unlikely]] {
++        recordFailure("symbol"_s);
++        return false;
++    }
++
++    // Right now, we do not support 16-bit name here since name in 16-bit is significantly more rare than 16-bit string.
++    // FIXME: We should just extract the `StringType` case into a helper and use that.
++    if (!name.is8Bit()) [[unlikely]] {
++        recordFailure("16-bit property name"_s);
++        return false;
++    }
++    auto span = name.span8();
++
++    // The structure cannot transition mid-iteration on FastStringifier's case.
++    // canPerformFastPropertyEnumeration ruled out getters/setters and
++    // mayHaveToJSON ruled out a toJSON / getter / Proxy on the prototype chain,
++    // so there is no JS observable to mutate the structure.
++    ASSERT(object.structure() == &structure);
++
++    JSValue value = object.getDirect(entry.offset());
++    if (value.isUndefined())
++        return true;
++
++    bool needComma = buffer()[m_length - 1] != '{';
++    if (!hasRemainingCapacity(needComma + newLineAndIndent + 1 + span.size() + 2 + (hasGap == HasGap::Yes))) [[unlikely]] {
++        recordBufferFull();
++        return false;
++    }
++
++    if (!appendPropertyName<hasGap>(span, needComma))
++        return false;
++    if (appendPropertyString(value))
++        return !haveFailure();
++
++    // Also Int32 case is too common.
++    if (value.isInt32()) {
++        if (!hasRemainingCapacity(maxInt32StringLength)) [[unlikely]] {
++            recordBufferFull();
++            return false;
++        }
++        appendInt32(value.asInt32());
++        return true;
++    }
++
++    unsigned count = m_frames.size();
++    [[clang::always_inline]] append<hasGap, testing>(value);
++    return !haveFailure() && m_frames.size() == count;
++}
++
++template<typename CharType, BufferMode bufferMode>
++template<HasGap hasGap>
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::appendPropertyName(std::span<const Latin1Character> span, bool needComma)
++{
++    // m_dynamicBuffer has inline capacity, so buffer() can point inside this object
++    // next to m_length: stores through it may-alias the members, forcing the compiler
++    // to reload both after every store. Cache them instead. Scoped because the pointer
++    // dies at the next hasRemainingCapacity(), which can reallocate.
++    CharType* out = buffer();
++    unsigned length = m_length;
++
++    if (needComma)
++        out[length++] = ',';
++
++    if constexpr (hasGap == HasGap::Yes) {
++        // The callee reads m_length and advances it.
++        m_length = length;
++        appendNewLineAndIndentUnchecked();
++        out = buffer();
++        length = m_length;
++    }
++
++    out[length] = '"';
++
++    // Publish m_length before every bail-out.
++    if constexpr (std::same_as<CharType, char16_t>) {
++        if (stringCopyUpconvert(span, out + length + 1)) [[unlikely]] {
++            m_length = length;
++            recordFailure("property name character needs escaping"_s);
++            return false;
++        }
++    } else {
++        if (stringCopySameType<CharType, useShortCopyTier>(span, out + length + 1)) [[unlikely]] {
++            m_length = length;
++            recordFailure("property name character needs escaping"_s);
++            return false;
++        }
++    }
++
++    out[length + 1 + span.size()] = '"';
++    out[length + 1 + span.size() + 1] = ':';
++    length += 1 + span.size() + 2;
++    if constexpr (hasGap == HasGap::Yes)
++        out[length++] = ' ';
++
++    // Mandatory, not bookkeeping: the next hasRemainingCapacity() sizes itself from
++    // m_length, so leaving a stale value here would under-count the space needed.
++    m_length = length;
++    return true;
++}
++
++template<typename CharType, BufferMode bufferMode>
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::appendPropertyString(JSValue value)
++{
++    if constexpr (!std::same_as<CharType, Latin1Character>)
++        return false;
++    else
++        return appendLatin1PropertyString(value);
++}
++
++template<typename CharType, BufferMode bufferMode>
++ALWAYS_INLINE bool FastStringifier<CharType, bufferMode>::appendLatin1PropertyString(JSValue value)
++{
++    if (!value.isCell() || value.asCell()->type() != StringType)
++        return false;
++    auto valueString = asString(value.asCell())->tryGetValue();
++    if (valueString.data.isNull() || !valueString.data.is8Bit())
++        return false;
++    unsigned valueLength = valueString.data.length();
++    if (!hasRemainingCapacity(1 + valueLength + 1)) [[unlikely]] {
++        recordBufferFull();
++        return true;
++    }
++    CharType* out = buffer();
++    unsigned length = m_length;
++    out[length] = '"';
++    if (stringCopySameType<CharType, useShortCopyTier>(valueString.data.span8(), out + length + 1)) [[unlikely]]
++        return false;
++    out[length + 1 + valueLength] = '"';
++    m_length = length + 1 + valueLength + 1;
++    return true;
++}
++#endif
++
+ template<typename CharType, BufferMode bufferMode>
+ inline String FastStringifier<CharType, bufferMode>::stringify(JSGlobalObject& globalObject, JSValue value, JSValue replacer, JSValue space, std::optional<FailureReason>& failureReason)
+ {
+@@ -1844,10 +2563,22 @@
+             return { };
+         }
+     }
+-    if (stringifier.m_gapLength)
+-        stringifier.append<HasGap::Yes>(value);
+-    else
+-        stringifier.append<HasGap::No>(value);
++#if OS(WASI)
++    if (wasiJSONFastControl.mode != WASIJSONFastTestMode::Off) {
++        stringifier.startTestRecord();
++        if (stringifier.m_gapLength)
++            stringifier.append<HasGap::Yes, true, true>(value);
++        else
++            stringifier.append<HasGap::No, true, true>(value);
++        stringifier.finishTestRecord();
++    } else
++#endif
++    {
++        if (stringifier.m_gapLength)
++            stringifier.append<HasGap::Yes, false, true>(value);
++        else
++            stringifier.append<HasGap::No, false, true>(value);
++    }
+     failureReason = stringifier.m_failureReason;
+     return stringifier.result();
+ }
+@@ -1855,6 +2586,19 @@
+ static NEVER_INLINE String stringify(JSGlobalObject& globalObject, JSValue value, JSValue replacer, JSValue space)
+ {
+     VM& vm = globalObject.vm();
++#if OS(WASI)
++    bool record = wasiJSONFastControl.mode != WASIJSONFastTestMode::Off && !replacer.isObject();
++    unsigned markListAtEntry = record ? vm.heap.markListSet().size() : 0;
++    bool general = false;
++    auto recordDispatch = makeScopeExit([&] {
++        if (!record)
++            return;
++        if (general)
++            dataLogF("bunwasm-json-fast-dispatch {\"markListAtEntry\":%u,\"markListAtGeneral\":%u}\n", markListAtEntry, static_cast<unsigned>(vm.heap.markListSet().size()));
++        else
++            dataLogF("bunwasm-json-fast-dispatch {\"markListAtEntry\":%u,\"markListAtGeneral\":null}\n", markListAtEntry);
++    });
++#endif
+     uint8_t* stackLimit = std::bit_cast<uint8_t*>(vm.softStackLimit());
+     if (std::bit_cast<uint8_t*>(currentStackPointer()) >= stackLimit) [[likely]] {
+         std::optional<FailureReason> failureReason;
+@@ -1877,6 +2621,13 @@
+                 return result;
+         }
+     }
++#if OS(WASI)
++    if (record) {
++        general = true;
++        dataLogF("bunwasm-json-fast-dispatch {\"markListAtEntry\":%u,\"markListAtGeneral\":%u}\n", markListAtEntry, static_cast<unsigned>(vm.heap.markListSet().size()));
++        record = false;
++    }
++#endif
+     String result = Stringifier::stringify(globalObject, value, replacer, space);
+ #if FAST_STRINGIFY_LOG_USAGE
+     if (!result.isNull())
+diff --git a/Source/JavaScriptCore/runtime/PropertyTable.h b/Source/JavaScriptCore/runtime/PropertyTable.h
+--- a/Source/JavaScriptCore/runtime/PropertyTable.h
++++ b/Source/JavaScriptCore/runtime/PropertyTable.h
+@@ -164,6 +164,15 @@
+ 
+     template<typename Functor>
+     void forEachProperty(NOESCAPE const Functor&) const;
++#if OS(WASI)
++    template<typename Functor>
++    unsigned forEachPropertyFrom(unsigned start, NOESCAPE const Functor&) const;
++    template<typename Entry, typename Functor>
++    static bool continuePropertyFrom(const Entry& entry, NOESCAPE const Functor& functor)
++    {
++        return entry.key() == PROPERTY_MAP_DELETED_ENTRY_KEY || functor(entry) == IterationStatus::Continue;
++    }
++#endif
+ 
+     static constexpr unsigned EmptyEntryIndex = 0;
+ 
+@@ -660,6 +669,22 @@
+     });
+ }
+ 
++#if OS(WASI)
++template<typename Functor>
++inline unsigned PropertyTable::forEachPropertyFrom(unsigned start, NOESCAPE const Functor& functor) const
++{
++    unsigned next = start;
++    withIndexVector([&](const auto* vector) {
++        const auto* entries = tableFromIndexVector(vector);
++        const auto* cursor = entries + start;
++        const auto* end = tableEndFromIndexVector(vector);
++        while (cursor < end && continuePropertyFrom(*cursor++, functor)) { }
++        next = cursor - entries;
++    });
++    return next;
++}
++#endif
++
+ } // namespace JSC
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+diff --git a/Source/JavaScriptCore/runtime/Structure.h b/Source/JavaScriptCore/runtime/Structure.h
+--- a/Source/JavaScriptCore/runtime/Structure.h
++++ b/Source/JavaScriptCore/runtime/Structure.h
+@@ -607,6 +607,18 @@
+ 
+     template<typename Functor>
+     void forEachProperty(VM&, NOESCAPE const Functor&);
++#if OS(WASI)
++    // The caller immediately roots the result. Pointer spilling covers the local
++    // across materialization's DeferGC exit and the test collection before append.
++    PropertyTable* acquirePropertyTableForJSONFastPath(VM& vm, bool& materialized)
++    {
++        bool cached = !!m_propertyTableUnsafe.get();
++        PropertyTable* table = ensurePropertyTableIfNotEmpty(vm);
++        materialized = table && !cached;
++        return table;
++    }
++    bool cachesPropertyTableForJSONFastPath() const { return !!m_propertyTableUnsafe.get(); }
++#endif
+ 
+     IGNORE_RETURN_TYPE_WARNINGS_BEGIN
+     inline PropertyOffset get(VM&, Concurrency, UniquedStringImpl* uid, unsigned& attributes); // Defined in StructureInlines.h
+diff --git a/Source/JavaScriptCore/runtime/VM.h b/Source/JavaScriptCore/runtime/VM.h
+--- a/Source/JavaScriptCore/runtime/VM.h
++++ b/Source/JavaScriptCore/runtime/VM.h
+@@ -27,6 +27,10 @@
+  */
+ 
+ #pragma once
++
++#if OS(WASI)
++#include "HeapObserver.h"
++#endif
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
+@@ -542,6 +546,9 @@
+     bool m_asyncContextTrackingEnabled { false };
+ #endif
+     ClientData* clientData { nullptr };
++#if OS(WASI)
++    std::unique_ptr<HeapObserver> wasiJSONFastObserver;
++#endif
+ #if ENABLE(WEBASSEMBLY)
+     Wasm::Context wasmContext;
+ #endif
+diff --git a/Source/JavaScriptCore/runtime/WASIJSONFastTest.h b/Source/JavaScriptCore/runtime/WASIJSONFastTest.h
+new file mode 100644
+--- /dev/null
++++ b/Source/JavaScriptCore/runtime/WASIJSONFastTest.h
+@@ -0,0 +1,9 @@
++#pragma once
++
++#if OS(WASI)
++namespace JSC {
++enum class WASIJSONFastTestMode : uint8_t { Off, Record, FailFrameGrowth, FailRootGrowth, CollectAtOpen };
++struct WASIJSONFastTestControl { WASIJSONFastTestMode mode; unsigned ordinal; };
++JS_EXPORT_PRIVATE void setWASIJSONFastTestControl(WASIJSONFastTestControl);
++}
++#endif
 diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
 --- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
 +++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
@@ -3486,3 +4585,904 @@ diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/Java
  
  .osrReturnPoint:
      getterSetterOSRExitReturnPoint(op_get_by_val, size)
+diff --git i/Source/JavaScriptCore/runtime/ErrorInstance.cpp w/Source/JavaScriptCore/runtime/ErrorInstance.cpp
+index ea73c51347..ffb0a419b2 100644
+--- i/Source/JavaScriptCore/runtime/ErrorInstance.cpp
++++ w/Source/JavaScriptCore/runtime/ErrorInstance.cpp
+@@ -467,7 +467,32 @@ JSValue ErrorInstance::stackWithHeader(VM& vm, String&& frames)
+ }
+ #endif
+ 
++#if OS(WASI) && USE(BUN_JSC_ADDITIONS)
+ bool ErrorInstance::materializeErrorInfoIfNeeded(VM& vm)
++{
++    auto scope = DECLARE_THROW_SCOPE(vm);
++    bool wasMaterialized = m_errorInfoMaterialized;
++    bool result = materializeErrorInfo(vm);
++    RETURN_IF_EXCEPTION(scope, result);
++    auto& formatter = vm.onMaterializeErrorStack();
++    if (wasMaterialized || m_stackPropertyProvidedByCapturedStackTrace || !formatter)
++        return result;
++    // Property access, not computeErrorInfo's collection-time string caching.
++    m_errorInfoMaterialized = true;
++    JSValue raw = getDirect(vm, vm.propertyNames->stack);
++    JSValue value = formatter(vm, this, raw ? raw : jsUndefined());
++    RETURN_IF_EXCEPTION(scope, result);
++    if (raw || !value.isUndefined()) {
++        AllowLazyMaterializationOfImmutableProperties allowMaterialization(vm);
++        putDirect(vm, vm.propertyNames->stack, value, static_cast<unsigned>(PropertyAttribute::DontEnum));
++    }
++    return true;
++}
++
++bool ErrorInstance::materializeErrorInfo(VM& vm)
++#else
++bool ErrorInstance::materializeErrorInfoIfNeeded(VM& vm)
++#endif
+ {
+     bool materializedCapturedStackProperty = materializeCapturedStackPropertyIfSaved(vm);
+     if (m_errorInfoMaterialized)
+diff --git i/Source/JavaScriptCore/runtime/ErrorInstance.h w/Source/JavaScriptCore/runtime/ErrorInstance.h
+index 3c69d36c3d..55b5c5efc6 100644
+--- i/Source/JavaScriptCore/runtime/ErrorInstance.h
++++ w/Source/JavaScriptCore/runtime/ErrorInstance.h
+@@ -160,6 +160,9 @@ protected:
+     JS_EXPORT_PRIVATE static bool deleteProperty(JSCell*, JSGlobalObject*, PropertyName, DeletePropertySlot&);
+ 
+     void computeErrorInfo(VM&, bool allocationAllowed);
++#if OS(WASI) && USE(BUN_JSC_ADDITIONS)
++    bool materializeErrorInfo(VM&);
++#endif
+     bool materializeCapturedStackPropertyIfSaved(VM&);
+ 
+     SourceAppender m_sourceAppender { nullptr };
+diff --git i/Source/JavaScriptCore/runtime/VM.h w/Source/JavaScriptCore/runtime/VM.h
+index 3bd4ebd8a4..dbe091015c 100644
+--- i/Source/JavaScriptCore/runtime/VM.h
++++ w/Source/JavaScriptCore/runtime/VM.h
+@@ -183,6 +183,9 @@ constexpr bool validateDFGDoesGC = ENABLE_DFG_DOES_GC_VALIDATION;
+ using StackTraceAppenderFunction = WTF::Function<void(VM&, JSCell* owner, Vector<StackFrame>& stackTrace, size_t maxToAppend)>;
+ using ErrorInfoFunction = WTF::Function<String(VM&, Vector<StackFrame>& stackTrace, unsigned& line, unsigned& column, String& sourceURL)>;
+ using ErrorInfoFunctionJSValue = WTF::Function<JSValue(VM&, Vector<StackFrame>& stackTrace, unsigned& line, unsigned& column, String& sourceURL, JSC::JSObject*)>;
++#if OS(WASI)
++using MaterializeErrorStackFunction = WTF::Function<JSValue(VM&, JSObject*, JSValue)>;
++#endif
+ #endif
+ 
+ #if ENABLE(FTL_JIT)
+@@ -1213,6 +1216,10 @@ public:
+     void setOnAppendStackTrace(StackTraceAppenderFunction&& function) { m_onAppendStackTrace = WTF::move(function); }
+     void setOnComputeErrorInfo(ErrorInfoFunction&& function) { m_onComputeErrorInfo = WTF::move(function); }
+     void setOnComputeErrorInfoJSValue(ErrorInfoFunctionJSValue&& function) { m_onComputeErrorInfoJSValue = WTF::move(function); }
++#if OS(WASI)
++    const MaterializeErrorStackFunction& onMaterializeErrorStack() const { return m_onMaterializeErrorStack; }
++    void setOnMaterializeErrorStack(MaterializeErrorStackFunction&& function) { m_onMaterializeErrorStack = WTF::move(function); }
++#endif
+     void setComputeLineColumnWithSourcemap(WTF::Function<void(VM&, SourceProvider*, LineColumn&, String&)>&& function) { m_computeLineColumnWithSourcemap = WTF::move(function); }
+ #endif
+     
+@@ -1462,6 +1469,9 @@ private:
+ #if USE(BUN_JSC_ADDITIONS)
+     ErrorInfoFunction m_onComputeErrorInfo;
+     ErrorInfoFunctionJSValue m_onComputeErrorInfoJSValue;
++#if OS(WASI)
++    MaterializeErrorStackFunction m_onMaterializeErrorStack;
++#endif
+     StackTraceAppenderFunction m_onAppendStackTrace;
+     WTF::Function<void(VM&, SourceProvider*, LineColumn&, String&)> m_computeLineColumnWithSourcemap;
+ #endif
+
+diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+index 2f06666b36..5e620f0a66 100644
+--- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
++++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+@@ -43,6 +43,10 @@
+ 
+ #if OS(WASI)
+ #include "WASIMemoryTelemetry.h"
++#include <limits>
++#if defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++#include "WASIResizableBufferTesting.h"
++#endif
+ #endif
+ 
+ #if defined(BUN_WASM_SHARED_GROUP)
+@@ -90,41 +94,85 @@ Ref<SharedTask<void(void*)>> ArrayBuffer::primitiveGigacageDestructor()
+     return destructor.get().copyRef();
+ }
+ 
++static void reclaimBufferMemory(VM* vm, bool synchronous)
++{
++    if (!vm)
++        return;
++#if OS(WASI) && defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++    if (auto* hooks = wasiResizableBufferTestHooks; hooks && hooks->willCollect)
++        hooks->willCollect(synchronous);
++#endif
++    if (synchronous)
++        vm->heap.collectSync(CollectionScope::Full);
++    else
++        vm->heap.collectAsync(CollectionScope::Full);
++}
++
+ template<typename Func>
+ static bool tryAllocate(VM* vm, NOESCAPE const Func& allocate)
+ {
+-    unsigned numTries = 2;
+-    bool success = false;
+-    for (unsigned i = 0; i < numTries && !success; ++i) {
++    for (unsigned attempt = 0; attempt < 2; ++attempt) {
+         switch (allocate()) {
+         case BufferMemoryResult::Kind::Success:
+-            success = true;
+-            break;
++            return true;
+         case BufferMemoryResult::Kind::SuccessAndNotifyMemoryPressure:
+-            if (vm)
+-                vm->heap.collectAsync(CollectionScope::Full);
+-            success = true;
+-            break;
++            reclaimBufferMemory(vm, false);
++            return true;
+         case BufferMemoryResult::Kind::SyncTryToReclaimMemory:
+-            if (i + 1 == numTries)
+-                break;
+-            if (vm)
+-                vm->heap.collectSync(CollectionScope::Full);
+             break;
+         }
++        if (!attempt)
++            reclaimBufferMemory(vm, true);
+     }
+-    return success;
++    return false;
+ }
+ 
+-static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory(VM* vm, size_t sizeInBytes, size_t maxByteLength)
++#if OS(WASI)
++// Page-rounded maximum for the handle's PageCount metadata. It is never allocated.
++static std::optional<PageCount> wasiResizableMaximumPages(size_t maxByteLength)
++{
++    CheckedUint64 rounded = maxByteLength;
++    rounded += PageCount::pageSize - 1;
++    if (rounded.hasOverflowed())
++        return std::nullopt;
++    uint64_t bytes = rounded.value() & ~(static_cast<uint64_t>(PageCount::pageSize) - 1);
++    if (!bytes)
++        bytes = PageCount::pageSize;
++    if (bytes > std::numeric_limits<size_t>::max())
++        return std::nullopt;
++    return PageCount::fromBytes(bytes);
++}
++
++// Linear memory is real and never shrinks, so capacity is exactly what is needed (at least one byte,
++// because null data means detached). Growth takes at least half again the old capacity, so stepwise
++// growth reallocates a logarithmic number of times. Capacity never exceeds the buffer's maximum.
++static size_t wasiResizableCapacity(size_t oldCapacity, size_t requested, size_t maxByteLength)
++{
++    uint64_t grown = static_cast<uint64_t>(oldCapacity) + oldCapacity / 2;
++    uint64_t capacity = std::max<uint64_t>(requested, grown);
++    capacity = std::min<uint64_t>(capacity, maxByteLength);
++    return static_cast<size_t>(std::max<uint64_t>(capacity, 1));
++}
++#endif
++
++static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory(VM* vm, size_t sizeInBytes, size_t maxByteLength, MemorySharingMode sharingMode = MemorySharingMode::Default)
+ {
+ #if OS(WASI)
+-    // WASI has no virtual reservation/protection for resizable backing stores.
+-    UNUSED_PARAM(vm);
+-    UNUSED_PARAM(sizeInBytes);
+-    UNUSED_PARAM(maxByteLength);
+-    return nullptr;
++    if (sharingMode != MemorySharingMode::Default)
++        return nullptr;
++    if (sizeInBytes > maxByteLength || maxByteLength > MAX_ARRAY_BUFFER_SIZE)
++        return nullptr;
++    auto maximum = wasiResizableMaximumPages(maxByteLength);
++    if (!maximum)
++        return nullptr;
++    size_t capacity = wasiResizableCapacity(0, sizeInBytes, maxByteLength);
++    RefPtr<BufferMemoryHandle> handle;
++    tryAllocate(vm, [&] {
++        return BufferMemoryHandle::tryCreateWASIResizable(capacity, maximum.value(), handle);
++    });
++    return handle;
+ #else
++    UNUSED_PARAM(sharingMode);
+     // Make sure malloc actually allocates something, but not too much. We use null to mean that the buffer is detached.
+     size_t initialBytes = roundUpToMultipleOf<PageCount::pageSize>(sizeInBytes);
+     if (!initialBytes)
+@@ -491,7 +539,12 @@ void ArrayBuffer::refreshAfterWasmMemoryGrow(Wasm::Memory* memory)
+     if (newData == oldData)
+         return;
+ 
+-    // JSArrayBufferViews (typed arrays) effectively cache their buffer's data pointer.
++    refreshViews(newData);
++}
++
++void ArrayBuffer::refreshViews(void* newData)
++{
++    // Typed arrays and DataViews cache their buffer's data pointer.
+     for (size_t i = numberOfIncomingReferences(); i--;) {
+         JSCell* cell = incomingReferenceAt(i);
+         auto* view = dynamicDowncast<JSArrayBufferView>(cell);
+@@ -596,6 +649,11 @@ std::expected<int64_t, GrowFailReason> ArrayBuffer::resize(VM& vm, size_t newByt
+     if (!deltaByteLength)
+         return 0;
+ 
++#if OS(WASI)
++    if (memoryHandle->isWASIResizable())
++        return resizeWASI(vm, newByteLength);
++#endif
++
+     // A buffer's maxByteLength may exceed the region actually mapped for it, so growth is bounded by
+     // the mapping.
+     if (newByteLength > memoryHandle->mappedCapacity())
+@@ -665,6 +723,50 @@ std::expected<int64_t, GrowFailReason> ArrayBuffer::resize(VM& vm, size_t newByt
+     return deltaByteLength;
+ }
+ 
++#if OS(WASI)
++std::expected<int64_t, GrowFailReason> ArrayBuffer::resizeWASI(VM& vm, size_t newByteLength)
++{
++    if (newByteLength > m_contents.m_maxByteLength)
++        return makeUnexpected(GrowFailReason::InvalidGrowSize);
++
++    Ref<ArrayBuffer> protect(*this);
++    int64_t logicalDelta = 0;
++    bool success = tryAllocate(&vm, [&] {
++        RefPtr handle = m_contents.m_memoryHandle;
++        RELEASE_ASSERT(handle && handle->isWASIResizable() && !m_contents.m_shared);
++        size_t oldLength = m_contents.m_sizeInBytes;
++        size_t oldCapacity = handle->size();
++        auto result = BufferMemoryResult::Kind::Success;
++        if (newByteLength > oldCapacity)
++            result = handle->tryGrowWASIResizable(wasiResizableCapacity(oldCapacity, newByteLength, m_contents.m_maxByteLength));
++        if (result == BufferMemoryResult::Kind::SyncTryToReclaimMemory)
++            return result;
++
++        void* newData = handle->memory();
++        if (newByteLength > oldLength)
++            memset(static_cast<uint8_t*>(newData) + oldLength, 0, newByteLength - oldLength);
++        else
++            memset(static_cast<uint8_t*>(newData) + newByteLength, 0, oldLength - newByteLength);
++        bool moved = m_contents.data() != newData;
++        m_contents.m_data = ArrayBufferContents::DataType(newData);
++        m_contents.m_sizeInBytes = newByteLength;
++        if (moved)
++            refreshViews(newData);
++        logicalDelta = static_cast<int64_t>(newByteLength) - static_cast<int64_t>(oldLength);
++#if defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++        if (auto* hooks = wasiResizableBufferTestHooks; hooks && hooks->didPublish)
++            hooks->didPublish(*this, *handle);
++#endif
++        if (handle->size() > oldCapacity)
++            vm.heap.reportExtraMemoryAllocated(static_cast<JSCell*>(nullptr), handle->size() - oldCapacity);
++        return result;
++    });
++    if (!success)
++        return makeUnexpected(GrowFailReason::OutOfMemory);
++    return logicalDelta;
++}
++#endif
++
+ RefPtr<ArrayBuffer> ArrayBuffer::tryCreateShared(VM& vm, size_t numElements, unsigned elementByteSize, size_t maxByteLength)
+ {
+     CheckedSize sizeInBytes = numElements;
+@@ -672,7 +774,7 @@ RefPtr<ArrayBuffer> ArrayBuffer::tryCreateShared(VM& vm, size_t numElements, uns
+     if (sizeInBytes.hasOverflowed() || sizeInBytes.value() > maxByteLength || maxByteLength > MAX_ARRAY_BUFFER_SIZE)
+         return nullptr;
+ 
+-    auto handle = tryAllocateResizableMemory(&vm, sizeInBytes.value(), maxByteLength);
++    auto handle = tryAllocateResizableMemory(&vm, sizeInBytes.value(), maxByteLength, MemorySharingMode::Shared);
+     if (!handle)
+         return nullptr;
+ 
+diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.h b/Source/JavaScriptCore/runtime/ArrayBuffer.h
+index e781a0fc76..74bd723518 100644
+--- a/Source/JavaScriptCore/runtime/ArrayBuffer.h
++++ b/Source/JavaScriptCore/runtime/ArrayBuffer.h
+@@ -115,6 +115,9 @@ private:
+         , m_mode(mode)
+     {
+         RELEASE_ASSERT(m_maxByteLength <= MAX_ARRAY_BUFFER_SIZE);
++#if OS(WASI)
++        RELEASE_ASSERT(!m_memoryHandle || !m_memoryHandle->isWASIResizable());
++#endif
+ #if ASSERT_ENABLED
+         if (m_hasMaxByteLength)
+             ASSERT(m_memoryHandle);
+@@ -285,6 +288,10 @@ public:
+     inline bool isGrowableShared() const { return m_contents.isGrowableShared(); }
+     inline bool isResizableNonShared() const { return m_contents.isResizableNonShared(); }
+ 
++#if OS(WASI)
++    bool isWASIResizable() const { return m_contents.m_memoryHandle && m_contents.m_memoryHandle->isWASIResizable(); }
++#endif
++
+     inline size_t gcSizeEstimateInBytes() const;
+ 
+     JS_EXPORT_PRIVATE RefPtr<ArrayBuffer> slice(double begin, double end) const;
+@@ -304,6 +311,11 @@ public:
+     // When a resizable buffer is associated with a non-shared Wasm memory, this function is called by the memory's growthSuccessCallback.
+     void refreshAfterWasmMemoryGrow(Wasm::Memory*);
+ 
++    void refreshViews(void* newData);
++#if OS(WASI)
++    std::expected<int64_t, GrowFailReason> resizeWASI(VM&, size_t newByteLength);
++#endif
++
+     JS_EXPORT_PRIVATE bool transferTo(VM&, ArrayBufferContents&);
+     JS_EXPORT_PRIVATE bool shareWith(ArrayBufferContents&);
+ 
+@@ -383,6 +395,10 @@ bool ArrayBuffer::isShared() const
+ 
+ size_t ArrayBuffer::gcSizeEstimateInBytes() const
+ {
++#if OS(WASI)
++    if (isWASIResizable())
++        return sizeof(ArrayBuffer) + m_contents.m_memoryHandle->size();
++#endif
+     // FIXME: We probably want to scale this by the shared ref count or something.
+     return sizeof(ArrayBuffer) + byteLength();
+ }
+diff --git a/Source/JavaScriptCore/runtime/ArrayBufferView.h b/Source/JavaScriptCore/runtime/ArrayBufferView.h
+index f9dc82afe3..8a14512129 100644
+--- a/Source/JavaScriptCore/runtime/ArrayBufferView.h
++++ b/Source/JavaScriptCore/runtime/ArrayBufferView.h
+@@ -76,6 +76,10 @@ public:
+     {
+         if (isDetached())
+             return nullptr;
++#if OS(WASI)
++        if (m_buffer->isWASIResizable())
++            return static_cast<uint8_t*>(m_buffer->data()) + m_byteOffset;
++#endif
+         return m_baseAddress.getMayBeNull();
+     }
+ 
+diff --git a/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp b/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp
+index 92bc17e3f3..2281a1c226 100644
+--- a/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp
++++ b/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp
+@@ -41,6 +41,10 @@
+ #include <wtf/TZoneMallocInlines.h>
+ #include <wtf/Vector.h>
+ 
++#if OS(WASI) && defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++#include "WASIResizableBufferTesting.h"
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
+ namespace JSC {
+@@ -277,6 +281,20 @@ void* BufferMemoryHandle::nullBasePointer()
+ 
+ BufferMemoryHandle::~BufferMemoryHandle()
+ {
++#if OS(WASI)
++    if (isWASIResizable()) {
++        size_t capacity = size();
++        BufferMemoryManager::singleton().freePhysicalBytes(capacity);
++        Gigacage::free(Gigacage::Primitive, memory());
++#if defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++        if (auto* hooks = wasiResizableBufferTestHooks) {
++            hooks->chargedBytes -= capacity;
++            ++hooks->finalFrees;
++        }
++#endif
++        return;
++    }
++#endif
+     if (m_memory) {
+         void* memory = this->memory();
+         BufferMemoryManager::singleton().freePhysicalBytes(m_size);
+@@ -324,6 +342,118 @@ BufferMemoryHandle::~BufferMemoryHandle()
+     }
+ }
+ 
++#if OS(WASI)
++static BufferMemoryResult::Kind tryChargeWASIResizable(size_t bytes)
++{
++#if defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++    auto* hooks = wasiResizableBufferTestHooks;
++    if (hooks)
++        ++hooks->chargeAttempts;
++    if (hooks && hooks->refuseCharges) {
++        --hooks->refuseCharges;
++        return BufferMemoryResult::Kind::SyncTryToReclaimMemory;
++    }
++#endif
++    auto result = BufferMemoryManager::singleton().tryAllocatePhysicalBytes(bytes);
++#if defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++    if (hooks && result != BufferMemoryResult::Kind::SyncTryToReclaimMemory) {
++        hooks->chargedBytes += bytes;
++        if (hooks->forcePressure)
++            return BufferMemoryResult::Kind::SuccessAndNotifyMemoryPressure;
++    }
++#endif
++    return result;
++}
++
++static void rollbackWASIResizableCharge(size_t bytes)
++{
++    BufferMemoryManager::singleton().freePhysicalBytes(bytes);
++#if defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++    if (auto* hooks = wasiResizableBufferTestHooks) {
++        hooks->chargedBytes -= bytes;
++        ++hooks->rollbacks;
++    }
++#endif
++}
++
++static void* tryAllocateWASIResizable(size_t bytes)
++{
++#if defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++    if (auto* hooks = wasiResizableBufferTestHooks) {
++        hooks->initialRequestBytes = bytes;
++        if (hooks->refuseAllocations) {
++            --hooks->refuseAllocations;
++            return nullptr;
++        }
++    }
++#endif
++    return Gigacage::tryZeroedMalloc(Gigacage::Primitive, bytes);
++}
++
++static void* tryReallocateWASIResizable(void* memory, size_t oldCapacity, size_t capacity)
++{
++#if defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++    auto* hooks = wasiResizableBufferTestHooks;
++    if (hooks && hooks->refuseReallocations) {
++        --hooks->refuseReallocations;
++        return nullptr;
++    }
++    if (hooks)
++        ++hooks->reallocations;
++    if (hooks && hooks->forceMove) {
++        void* moved = Gigacage::tryMalloc(Gigacage::Primitive, capacity);
++        if (!moved)
++            return nullptr;
++        memcpy(moved, memory, oldCapacity);
++        Gigacage::free(Gigacage::Primitive, memory);
++        ++hooks->moves;
++        return moved;
++    }
++#else
++    UNUSED_PARAM(oldCapacity);
++#endif
++    return Gigacage::tryRealloc(Gigacage::Primitive, memory, capacity);
++}
++
++BufferMemoryResult::Kind BufferMemoryHandle::tryCreateWASIResizable(size_t capacity, PageCount maximum, RefPtr<BufferMemoryHandle>& result)
++{
++    auto charge = tryChargeWASIResizable(capacity);
++    if (charge == BufferMemoryResult::Kind::SyncTryToReclaimMemory)
++        return charge;
++    void* memory = tryAllocateWASIResizable(capacity);
++    if (!memory) {
++        rollbackWASIResizableCharge(capacity);
++        return BufferMemoryResult::Kind::SyncTryToReclaimMemory;
++    }
++    auto handle = adoptRef(*new BufferMemoryHandle(memory, capacity, capacity, PageCount::fromBytesWithRoundUp(capacity), maximum, MemorySharingMode::Default, MemoryMode::BoundsChecking));
++    handle->m_allocationKind = AllocationKind::WASIResizable;
++    result = WTF::move(handle);
++#if defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++    if (auto* hooks = wasiResizableBufferTestHooks)
++        hooks->lastCreated = result.get();
++#endif
++    return charge;
++}
++
++BufferMemoryResult::Kind BufferMemoryHandle::tryGrowWASIResizable(size_t capacity)
++{
++    RELEASE_ASSERT(isWASIResizable() && capacity > size() && capacity <= maximum().bytes());
++    size_t delta = capacity - size();
++    auto charge = tryChargeWASIResizable(delta);
++    if (charge == BufferMemoryResult::Kind::SyncTryToReclaimMemory)
++        return charge;
++    void* grown = tryReallocateWASIResizable(memory(), size(), capacity);
++    if (!grown) {
++        rollbackWASIResizableCharge(delta);
++        return BufferMemoryResult::Kind::SyncTryToReclaimMemory;
++    }
++    m_memory = CagedMemory(grown);
++    m_mappedCapacity = capacity;
++    updateSize(capacity);
++    return charge;
++}
++#endif
++
+ // FIXME: ARM64E clang has a bug and inlining this function makes optimizer run forever.
+ // For now, putting NEVER_INLINE to suppress inlining of this.
+ NEVER_INLINE void* BufferMemoryHandle::memory() const
+diff --git a/Source/JavaScriptCore/runtime/BufferMemoryHandle.h b/Source/JavaScriptCore/runtime/BufferMemoryHandle.h
+index e6220da4a8..2787fe23fe 100644
+--- a/Source/JavaScriptCore/runtime/BufferMemoryHandle.h
++++ b/Source/JavaScriptCore/runtime/BufferMemoryHandle.h
+@@ -34,6 +34,7 @@
+ #include <wtf/CagedPtr.h>
+ #include <wtf/Lock.h>
+ #include <wtf/RAMSize.h>
++#include <wtf/RefPtr.h>
+ #include <wtf/StdSet.h>
+ #include <wtf/TZoneMalloc.h>
+ #include <wtf/ThreadSafeRefCounted.h>
+@@ -145,6 +146,12 @@ public:
+     BufferMemoryHandle(void*, size_t size, size_t mappedCapacity, PageCount initial, PageCount maximum, MemorySharingMode, MemoryMode);
+     JS_EXPORT_PRIVATE ~BufferMemoryHandle();
+ 
++#if OS(WASI)
++    static BufferMemoryResult::Kind tryCreateWASIResizable(size_t capacity, PageCount maximum, RefPtr<BufferMemoryHandle>&);
++    BufferMemoryResult::Kind tryGrowWASIResizable(size_t capacity);
++    bool isWASIResizable() const { return m_allocationKind == AllocationKind::WASIResizable; }
++#endif
++
+     JS_EXPORT_PRIVATE void* memory() const;
+     size_t size(std::memory_order order = std::memory_order_seq_cst) const
+     {
+@@ -182,6 +189,11 @@ public:
+ private:
+     using CagedMemory = CagedPtr<Gigacage::Primitive, void>;
+ 
++#if OS(WASI)
++    enum class AllocationKind : uint8_t { VirtualPages, WASIResizable };
++    AllocationKind m_allocationKind { AllocationKind::VirtualPages };
++#endif
++
+     Lock m_lock;
+     MemorySharingMode m_sharingMode { MemorySharingMode::Default };
+     MemoryMode m_mode { MemoryMode::BoundsChecking };
+diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp b/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
+index 7bf1d179f2..caa0b72d99 100644
+--- a/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
++++ b/Source/JavaScriptCore/runtime/JSArrayBufferPrototype.cpp
+@@ -342,7 +342,11 @@ JSC_DEFINE_HOST_FUNCTION(arrayBufferProtoFuncResize, (JSGlobalObject* globalObje
+     }
+ #endif
+ 
+-    if (!thisObject->impl()->resize(vm, newByteLength))
++#if OS(WASI)
++    if (newByteLength > thisObject->impl()->maxByteLength().value())
++        return throwVMRangeError(globalObject, scope, makeString("ArrayBuffer resize failed with new byte length "_s, newByteLength));
++#endif
++    if (!thisObject->impl()->resize(vm, static_cast<size_t>(newByteLength)))
+         return throwVMRangeError(globalObject, scope, makeString("ArrayBuffer resize failed with new byte length "_s, newByteLength));
+ 
+     return JSValue::encode(jsUndefined());
+@@ -353,6 +357,20 @@ enum class CopyAndDetachMode {
+     PreserveResizability,
+     FixedLength
+ };
++
++#if OS(WASI)
++static bool resizeBeforeWASITransfer(JSGlobalObject* globalObject, ArrayBuffer& buffer, size_t newByteLength)
++{
++    if (!buffer.isWASIResizable() || !buffer.isDetachable())
++        return true;
++    if (buffer.resize(globalObject->vm(), newByteLength))
++        return true;
++    auto scope = DECLARE_THROW_SCOPE(globalObject->vm());
++    throwVMRangeError(globalObject, scope, makeString("ArrayBuffer resize failed with new byte length "_s, newByteLength));
++    return false;
++}
++#endif
++
+ static JSArrayBuffer* arrayBufferCopyAndDetach(JSGlobalObject* globalObject, JSArrayBuffer* arrayBuffer, size_t newByteLength, CopyAndDetachMode mode)
+ {
+     VM& vm = globalObject->vm();
+@@ -383,6 +401,10 @@ static JSArrayBuffer* arrayBufferCopyAndDetach(JSGlobalObject* globalObject, JSA
+             return nullptr;
+         }
+ 
++#if OS(WASI)
++        if (!resizeBeforeWASITransfer(globalObject, *arrayBuffer->impl(), newByteLength))
++            return nullptr;
++#endif
+         ArrayBufferContents contents;
+         if (!arrayBuffer->impl()->transferTo(vm, contents)) [[unlikely]] {
+             throwVMRangeError(globalObject, scope, "ArrayBuffer transfer failed"_s);
+@@ -431,7 +453,7 @@ static JSArrayBuffer* arrayBufferProtoFuncTransferImpl(JSGlobalObject* globalObj
+         return nullptr;
+     }
+ 
+-    size_t newByteLength = 0;
++    uint64_t newByteLength = 0;
+     if (newLengthValue.isUndefined()) {
+         if (!thisObject->impl()->isDetached())
+             newByteLength = thisObject->impl()->byteLength();
+@@ -440,7 +462,21 @@ static JSArrayBuffer* arrayBufferProtoFuncTransferImpl(JSGlobalObject* globalObj
+         RETURN_IF_EXCEPTION(scope, { });
+     }
+ 
+-    RELEASE_AND_RETURN(scope, arrayBufferCopyAndDetach(globalObject, thisObject, newByteLength, mode));
++#if OS(WASI)
++    if (thisObject->impl()->isDetached()) {
++        throwVMTypeError(globalObject, scope, "Receiver is detached"_s);
++        return nullptr;
++    }
++    if (mode == CopyAndDetachMode::PreserveResizability && thisObject->impl()->isResizableNonShared() && newByteLength > thisObject->impl()->maxByteLength().value()) {
++        throwVMRangeError(globalObject, scope, makeString("ArrayBuffer transfer failed with new byte length "_s, newByteLength));
++        return nullptr;
++    }
++    if (newByteLength > MAX_ARRAY_BUFFER_SIZE) {
++        throwOutOfMemoryError(globalObject, scope);
++        return nullptr;
++    }
++#endif
++    RELEASE_AND_RETURN(scope, arrayBufferCopyAndDetach(globalObject, thisObject, static_cast<size_t>(newByteLength), mode));
+ }
+ 
+ // https://tc39.es/proposal-arraybuffer-transfer/#sec-arraybuffer.prototype.transfer
+diff --git a/Source/JavaScriptCore/runtime/WASIResizableBufferTesting.h b/Source/JavaScriptCore/runtime/WASIResizableBufferTesting.h
+new file mode 100644
+index 0000000000..aeaf24d9e2
+--- /dev/null
++++ b/Source/JavaScriptCore/runtime/WASIResizableBufferTesting.h
+@@ -0,0 +1,28 @@
++#pragma once
++
++#if OS(WASI) && defined(BUN_WASM_JSC_RESIZABLE_TESTING)
++namespace JSC {
++class ArrayBuffer;
++class BufferMemoryHandle;
++
++struct WASIResizableBufferTestHooks {
++    unsigned refuseCharges { 0 };
++    unsigned refuseAllocations { 0 };
++    unsigned refuseReallocations { 0 };
++    bool forceMove { false };
++    bool forcePressure { false };
++    unsigned chargeAttempts { 0 };
++    unsigned rollbacks { 0 };
++    unsigned moves { 0 };
++    unsigned reallocations { 0 };
++    unsigned finalFrees { 0 };
++    size_t chargedBytes { 0 };
++    size_t initialRequestBytes { 0 };
++    BufferMemoryHandle* lastCreated { nullptr };
++    void (*didPublish)(ArrayBuffer&, BufferMemoryHandle&) { nullptr };
++    void (*willCollect)(bool synchronous) { nullptr };
++};
++
++extern WASIResizableBufferTestHooks* wasiResizableBufferTestHooks;
++}
++#endif
+diff --git i/Source/JavaScriptCore/runtime/RegExpInlines.h w/Source/JavaScriptCore/runtime/RegExpInlines.h
+--- i/Source/JavaScriptCore/runtime/RegExpInlines.h
++++ w/Source/JavaScriptCore/runtime/RegExpInlines.h
+@@ -37,10 +37,41 @@
+ #include <string.h>
+ #endif
+
++#if OS(WASI) && ENABLE(C_LOOP)
++#include "GlobalObjectMethodTable.h"
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
+ namespace JSC {
+
++#if OS(WASI) && ENABLE(C_LOOP)
++// A backtracking match reaches no interpreter trap point, so it asks the host
++// the same fatal-cancellation question the C-loop trap slow path asks.
++ALWAYS_INLINE Yarr::InterruptPoll regExpHostInterruptPoll(JSGlobalObject* nullOrGlobalObject, Yarr::MatchFrom matchFrom)
++{
++    if (matchFrom != Yarr::MatchFrom::VMThread || !nullOrGlobalObject || !nullOrGlobalObject->vm().traps().hostInterruptEnabled())
++        return { };
++    auto poll = [](void* context) -> bool {
++        auto* globalObject = static_cast<JSGlobalObject*>(context);
++        if (!globalObject->vm().traps().canPollHostInterrupt())
++            return false;
++        return globalObject->globalObjectMethodTable()->shouldInterruptScriptBeforeTimeout(globalObject);
++    };
++    return { poll, nullOrGlobalObject };
++}
++
++// An interrupted match becomes JSC's uncatchable termination, as at a trap point.
++ALWAYS_INLINE bool terminateInterruptedRegExp(VM& vm, int result)
++{
++    if (result != static_cast<int>(Yarr::JSRegExpResult::ErrorInterrupted)) [[likely]]
++        return false;
++    vm.notifyNeedTermination();
++    vm.throwTerminationExceptionIfNeeded();
++    return true;
++}
++#endif
++
+ #if REGEXP_FUNC_TEST_DATA_GEN
+ class RegExpFunctionalTestCollector {
+     // This class is not thread safe.
+@@ -237,9 +268,17 @@ ALWAYS_INLINE int RegExp::matchInlineOnce(JSGlobalObject* nullOrGlobalObject, VM
+ #endif
+     {
+         Yarr::MatchingContextHolder regExpContext(vm, this, matchFrom);
++#if OS(WASI) && ENABLE(C_LOOP)
++        result = Yarr::interpret(m_regExpBytecode.get(), s, startOffset, reinterpret_cast<unsigned*>(offsetVector), regExpHostInterruptPoll(nullOrGlobalObject, matchFrom));
++#else
+         result = Yarr::interpret(m_regExpBytecode.get(), s, startOffset, reinterpret_cast<unsigned*>(offsetVector));
++#endif
+     }
+
++#if OS(WASI) && ENABLE(C_LOOP)
++    if (terminateInterruptedRegExp(vm, result)) [[unlikely]]
++        return -1;
++#endif
+ #if OS(WASI)
+     if (result == static_cast<int>(Yarr::JSRegExpResult::ErrorNoMemory)) [[unlikely]] {
+         if (nullOrGlobalObject) {
+@@ -398,8 +437,16 @@ ALWAYS_INLINE MatchResult RegExp::matchInlineOnce(JSGlobalObject* nullOrGlobalOb
+     offsetVector = nonReturnedOvector.mutableSpan().data();
+     {
+         Yarr::MatchingContextHolder regExpContext(vm, this, matchFrom);
++#if OS(WASI) && ENABLE(C_LOOP)
++        result = Yarr::interpret(m_regExpBytecode.get(), s, startOffset, reinterpret_cast<unsigned*>(offsetVector), regExpHostInterruptPoll(nullOrGlobalObject, matchFrom));
++#else
+         result = Yarr::interpret(m_regExpBytecode.get(), s, startOffset, reinterpret_cast<unsigned*>(offsetVector));
++#endif
+     }
++#if OS(WASI) && ENABLE(C_LOOP)
++    if (terminateInterruptedRegExp(vm, result)) [[unlikely]]
++        return MatchResult::failed();
++#endif
+ #if OS(WASI)
+     if (result == static_cast<int>(Yarr::JSRegExpResult::ErrorNoMemory)) [[unlikely]] {
+         if (nullOrGlobalObject) {
+diff --git i/Source/JavaScriptCore/runtime/VMTraps.h w/Source/JavaScriptCore/runtime/VMTraps.h
+--- i/Source/JavaScriptCore/runtime/VMTraps.h
++++ w/Source/JavaScriptCore/runtime/VMTraps.h
+@@ -288,6 +288,12 @@ public:
+         m_hostInterruptCountdown = m_hostInterruptInterval;
+         return !m_trapsDeferred && !isDeferringTermination();
+     }
++    bool hostInterruptEnabled() const { return m_hostInterruptInterval; }
++    // Native loops without trap points (Yarr) poll on their own cadence.
++    bool canPollHostInterrupt() const
++    {
++        return m_hostInterruptInterval && !m_trapsDeferred && !isDeferringTermination();
++    }
+ #endif
+
+     ALWAYS_INLINE void* softStackLimit() const { return m_stack.softStackLimit(); };
+diff --git i/Source/JavaScriptCore/yarr/Yarr.h w/Source/JavaScriptCore/yarr/Yarr.h
+--- i/Source/JavaScriptCore/yarr/Yarr.h
++++ w/Source/JavaScriptCore/yarr/Yarr.h
+@@ -71,8 +71,22 @@ enum class JSRegExpResult {
+     ErrorHitLimit = -3,
+     ErrorNoMemory = -4,
+     ErrorInternal = -5,
++#if OS(WASI)
++    ErrorInterrupted = -6,
++#endif
+ };
+
++#if OS(WASI)
++// Single-threaded WASI cannot publish VM traps while a match runs. The bytecode
++// interpreter calls `poll` once every interruptPollInterval backtracks or match starts
++// of one pattern; true abandons the match with ErrorInterrupted. A null poll never fires.
++struct InterruptPoll {
++    bool (*poll)(void*) { nullptr };
++    void* context { nullptr };
++};
++static constexpr unsigned interruptPollInterval = 1 << 14;
++#endif
++
+ enum class CharSize : uint8_t {
+     Char8,
+     Char16
+diff --git i/Source/JavaScriptCore/yarr/YarrInterpreter.cpp w/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+--- i/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
++++ w/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+@@ -2136,6 +2136,14 @@ public:
+         RELEASE_ASSERT_NOT_REACHED();
+
+     backtrack:
++#if OS(WASI)
++        // Every repeated attempt, nested or not, passes here; one decrement per step.
++        if (!--interruptPollCountdown) [[unlikely]] {
++            interruptPollCountdown = interruptPollInterval;
++            if (interruptPoll.poll && interruptPoll.poll(interruptPoll.context))
++                return JSRegExpResult::ErrorInterrupted;
++        }
++#endif
+         ASSERT(context->term < static_cast<int>(disjunction->terms.size()));
+
+         DUMP_TERM();
+@@ -2337,8 +2345,8 @@ public:
+         ASSERT((result == JSRegExpResult::Match) == (output[0] != offsetNoMatch));
+
+ #if OS(WASI)
+-        if (result == JSRegExpResult::ErrorNoMemory)
+-            return static_cast<unsigned>(JSRegExpResult::ErrorNoMemory);
++        if (result == JSRegExpResult::ErrorNoMemory || result == JSRegExpResult::ErrorInterrupted)
++            return static_cast<unsigned>(result);
+ #endif
+
+         return output[0];
+@@ -2355,6 +2363,15 @@ public:
+     {
+     }
+
++#if OS(WASI)
++    void setInterruptPoll(InterruptPoll poll, unsigned countdown)
++    {
++        interruptPoll = poll;
++        interruptPollCountdown = countdown;
++    }
++    unsigned interruptPollCountdownLeft() const { return interruptPollCountdown; }
++#endif
++
+ private:
+     inline bool NODELETE isLegacyCompilation() const { return compileMode == CompileMode::Legacy; }
+     inline bool NODELETE isUnicodeCompilation() const { return compileMode == CompileMode::Unicode; }
+@@ -2373,6 +2390,10 @@ private:
+     static constexpr unsigned bolUnsatisfiable = std::numeric_limits<unsigned>::max();
+     unsigned noNewlineBefore; // see matchDotStarEnclosure
+     unsigned remainingMatchCount;
++#if OS(WASI)
++    InterruptPoll interruptPoll;
++    unsigned interruptPollCountdown { interruptPollInterval };
++#endif
+ };
+
+ class ByteCompiler {
+@@ -3332,6 +3353,35 @@ unsigned interpret(BytecodePattern* bytecode, StringView input, unsigned start,
+     return Interpreter<char16_t>(bytecode, output, input.span16(), start).interpret();
+ }
+
++#if OS(WASI)
++template<typename CharType>
++static unsigned interpretWithPoll(BytecodePattern* bytecode, std::span<const CharType> input, unsigned start, unsigned* output, InterruptPoll poll)
++{
++    if (!poll.poll)
++        return Interpreter<CharType>(bytecode, output, input, start).interpret();
++    // The countdown belongs to the pattern, so a native loop of many cheap matches (a global
++    // replace or split) keeps counting across them; each match start is one more step.
++    unsigned& countdown = bytecode->m_interruptPollCountdown;
++    if (!--countdown) [[unlikely]] {
++        countdown = interruptPollInterval;
++        if (poll.poll(poll.context))
++            return static_cast<unsigned>(JSRegExpResult::ErrorInterrupted);
++    }
++    Interpreter<CharType> interpreter(bytecode, output, input, start);
++    interpreter.setInterruptPoll(poll, countdown);
++    unsigned result = interpreter.interpret();
++    countdown = interpreter.interruptPollCountdownLeft();
++    return result;
++}
++
++unsigned interpret(BytecodePattern* bytecode, StringView input, unsigned start, unsigned* output, InterruptPoll poll)
++{
++    if (input.is8Bit())
++        return interpretWithPoll(bytecode, input.span8(), start, output, poll);
++    return interpretWithPoll(bytecode, input.span16(), start, output, poll);
++}
++#endif
++
+ // These should be the same for both char16_t & Latin1Character.
+ static_assert(sizeof(BackTrackInfoPatternCharacter) == (YarrStackSpaceForBackTrackInfoPatternCharacter * sizeof(uintptr_t)));
+ static_assert(sizeof(BackTrackInfoCharacterClass) == (YarrStackSpaceForBackTrackInfoCharacterClass * sizeof(uintptr_t)));
+diff --git i/Source/JavaScriptCore/yarr/YarrInterpreter.h w/Source/JavaScriptCore/yarr/YarrInterpreter.h
+--- i/Source/JavaScriptCore/yarr/YarrInterpreter.h
++++ w/Source/JavaScriptCore/yarr/YarrInterpreter.h
+@@ -552,6 +552,10 @@ public:
+     unsigned m_offsetVectorBaseForNamedCaptures;
+     unsigned m_offsetsSize;
+     Vector<unsigned> m_duplicateNamedGroupForSubpatternId;
++#if OS(WASI)
++    // Host-poll countdown carried across this pattern's matches (see interpret's InterruptPoll).
++    unsigned m_interruptPollCountdown { interruptPollInterval };
++#endif
+
+     CharacterClass* newlineCharacterClass;
+     CharacterClass* wordcharCharacterClass;
+@@ -564,5 +568,8 @@ private:
+
+ JS_EXPORT_PRIVATE std::unique_ptr<BytecodePattern> byteCompile(YarrPattern&, BumpPointerAllocator*, ErrorCode&, ConcurrentJSLock* = nullptr);
+ JS_EXPORT_PRIVATE unsigned interpret(BytecodePattern*, StringView input, unsigned start, unsigned* output);
++#if OS(WASI)
++JS_EXPORT_PRIVATE unsigned interpret(BytecodePattern*, StringView input, unsigned start, unsigned* output, InterruptPoll);
++#endif
+
+ } } // namespace JSC::Yarr

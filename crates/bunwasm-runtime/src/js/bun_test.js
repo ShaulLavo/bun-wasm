@@ -47,17 +47,45 @@
 
   // ───────────────────────────── run state ─────────────────────────────
 
-  const options = { timeout: 5000, namePattern: null, only: false, bail: 0, runTodo: false, agent: false, updateSnapshots: false };
+  // maxConcurrency 0 means no limit, as in Bun.
+  const options = { timeout: 5000, namePattern: null, only: false, bail: 0, runTodo: false, agent: false, updateSnapshots: false, concurrent: false, maxConcurrency: 20 };
   const preloads = [];
 
   const summary = { pass: 0, fail: 0, skip: 0, todo: 0, filtered: 0, files: 0, expectations: 0, errors: 0 };
 
   // The file whose module is being evaluated (tests register into it).
   let collecting = null;
-  // The test whose body or hooks are running: { expectCount, assertions }.
-  let currentTest = null;
-  // The pending invocation, so uncaught errors can fail it.
-  let activeInvocation = null;
+  // The running test ({ expectCount, assertions }) and its pending invocation, so uncaught
+  // errors can fail it. One test runs at a time outside concurrent groups; inside one, each
+  // test's slot is the store of a private AsyncLocalStorage, so it travels with the async
+  // context its hooks and body run in, alongside the user's own stores.
+  const serialSlot = { test: null, invocation: null };
+  let concurrentGroups = 0;
+  let slotStorage = null;
+
+  function slots() {
+    slotStorage ??= new (internal.builtin("node:async_hooks").AsyncLocalStorage)();
+    return slotStorage;
+  }
+
+  function running() {
+    if (concurrentGroups === 0) return serialSlot;
+    // Code outside every test of the group, such as a timer the group did not start.
+    return slots().getStore() || { test: null, invocation: null };
+  }
+
+  function runInSlot(slot, fn) {
+    return slots().run(slot, fn);
+  }
+  // Opaque token for the file being loaded or run; expectations keep it for snapshot guards.
+  let activeFile = null;
+  let preloadScope = null;
+  let preloading = false;
+  /** @type {"unattempted" | "loading" | "ready" | "stopped"} */
+  let preloadImport = "unattempted";
+  /** @type {"pending" | "running" | "ready" | "stopped"} */
+  let preloadSetup = "pending";
+  let preloadTeardown = false;
 
   // ───────────────────────────── asymmetric matchers ─────────────────────────────
 
@@ -65,14 +93,28 @@
     constructor(sample, inverse) {
       this.sample = sample;
       this.inverse = !!inverse;
+      /** @type {"resolves" | "rejects" | undefined} set by expect.resolvesTo and expect.rejectsTo */
+      this.promise = undefined;
     }
+    // A resolvesTo/rejectsTo matcher compares a real promise's settled value through an
+    // intrinsic reaction; thenables never match. A non-promise or the other settlement
+    // fails before `not` inverts, as in Bun.
     asymmetricMatch(other) {
-      const result = this.matches(other);
-      return this.inverse ? !result : result;
+      if (this.promise === undefined) return this.matchValue(other);
+      if (!internal.isPromise(other)) return this.inverse;
+      const resolves = this.promise === "resolves";
+      return internal.promiseThen(other, value => resolves ? this.matchValue(value) : this.inverse, error => resolves ? this.inverse : this.matchValue(error));
+    }
+    matchValue(other) {
+      return matcherSupport.settle(this.matches(other), result => this.inverse ? !result : result);
+    }
+    label(format) {
+      if (this.promise === undefined) return this.describe(format);
+      return `promise ${this.promise === "resolves" ? "resolved" : "rejected"} to ${this.describe(format)}`;
     }
     // Bun.inspect shows matchers by their pretty description.
     [INSPECT_CUSTOM]() {
-      return this.describe(inspect);
+      return this.label(inspect);
     }
   }
 
@@ -81,18 +123,20 @@
       return matchesConstructor(this.sample, other);
     }
     describe() {
-      return `Any<${this.sample.name}>`;
+      return `${this.inverse ? "NotAny" : "Any"}<${this.sample.name}>`;
     }
   }
 
+  // Bun's expect.any: primitives by type, boxed values and everything else by instanceof,
+  // and Object as Jest's `typeof other === "object"`, so null matches and functions do not.
   function matchesConstructor(ctor, value) {
-    if (ctor === String) return typeof value === "string" || value instanceof String;
-    if (ctor === Number) return typeof value === "number" || value instanceof Number;
-    if (ctor === Boolean) return typeof value === "boolean" || value instanceof Boolean;
-    if (ctor === BigInt) return typeof value === "bigint";
-    if (ctor === Symbol) return typeof value === "symbol";
-    if (ctor === Function) return typeof value === "function";
-    if (ctor === Object) return typeof value === "object" && value !== null;
+    if (ctor === String && typeof value === "string") return true;
+    if (ctor === Number && typeof value === "number") return true;
+    if (ctor === Boolean && typeof value === "boolean") return true;
+    if (ctor === BigInt && typeof value === "bigint") return true;
+    if (ctor === Symbol && typeof value === "symbol") return true;
+    if (ctor === Function && typeof value === "function") return true;
+    if (ctor === Object) return typeof value === "object";
     return isObjectLike(value) && value instanceof ctor;
   }
 
@@ -101,7 +145,7 @@
       return other !== null && other !== undefined;
     }
     describe() {
-      return "Anything";
+      return this.inverse ? "NotAnything" : "Anything";
     }
   }
 
@@ -116,34 +160,40 @@
 
   class StringMatchingMatcher extends AsymmetricMatcher {
     matches(other) {
-      if (typeof other !== "string") return false;
+      // A String object sample is accepted but, as in Bun, matches nothing.
+      if (typeof other !== "string" || !(typeof this.sample === "string" || this.sample instanceof RegExp)) return false;
       const re = typeof this.sample === "string" ? new RegExp(this.sample) : this.sample;
       re.lastIndex = 0;
       return re.test(other);
     }
     describe(format) {
-      return `${this.inverse ? "StringNotMatching" : "StringMatching"} ${format(this.sample)}`;
+      return `${this.inverse ? "StringNotMatching" : "StringMatching"} ${format(this.sample instanceof String ? String(this.sample) : this.sample)}`;
     }
   }
 
   class ObjectContainingMatcher extends AsymmetricMatcher {
     matches(other) {
       if (!isObjectLike(other)) return false;
-      for (const key of Object.keys(this.sample)) {
+      return matcherSupport.every(enumerableOwnKeys(this.sample), key => {
         if (!(key in Object(other))) return false;
-        if (!equals(other[key], this.sample[key], false)) return false;
-      }
-      return true;
+        return equals(other[key], this.sample[key], false);
+      });
     }
     describe(format) {
       return `${this.inverse ? "ObjectNotContaining" : "ObjectContaining"} ${format(this.sample)}`;
     }
   }
 
+  // objectContaining compares enumerable own symbol keys as well as string keys.
+  function enumerableOwnKeys(object) {
+    const symbols = Object.getOwnPropertySymbols(object).filter(key => Object.prototype.propertyIsEnumerable.call(object, key));
+    return Object.keys(object).concat(symbols);
+  }
+
   class ArrayContainingMatcher extends AsymmetricMatcher {
     matches(other) {
       if (!Array.isArray(other)) return false;
-      return this.sample.every((item) => other.some((value) => equals(value, item, false)));
+      return matcherSupport.every(this.sample, item => matcherSupport.some(other, value => equals(value, item, false)));
     }
     describe(format) {
       return `${this.inverse ? "ArrayNotContaining" : "ArrayContaining"} ${format(this.sample)}`;
@@ -155,12 +205,16 @@
       super(sample, inverse);
       this.precision = precision === undefined ? 2 : precision;
     }
-    matches(other) {
+    // A non-number never matches, even negated.
+    matchValue(other) {
       if (typeof other !== "number") return false;
+      return super.matchValue(other);
+    }
+    matches(other) {
       return closeTo(other, this.sample, this.precision).pass;
     }
     describe() {
-      return `NumberCloseTo ${this.sample} (${this.precision} digits)`;
+      return `${this.inverse ? "NumberNotCloseTo" : "NumberCloseTo"} ${this.sample} (${this.precision} digit${this.precision === 1 ? "" : "s"})`;
     }
   }
 
@@ -173,7 +227,7 @@
     }
     matches(other) {
       const result = this.matcher.call(matcherContext(false), other, ...this.sample);
-      return !!(result && result.pass);
+      return extensions.asymmetric(this.name, result, error => writeErr(formatErrorText(error)));
     }
     describe() {
       return `${this.name}(${this.sample.map((v) => inspect(v)).join(", ")})`;
@@ -190,18 +244,6 @@
     return internal.require("util").bunDeepEquals(a, b, strict);
   }
 
-  /** Whether `value` holds an asymmetric matcher anywhere in arrays/plain objects. */
-  function containsAsymmetric(value, seen) {
-    if (isAsymmetric(value)) return true;
-    if (!isObjectLike(value) || typeof value === "function") return false;
-    const visited = seen || new Set();
-    if (visited.has(value)) return false;
-    visited.add(value);
-    if (Array.isArray(value)) return value.some((item) => containsAsymmetric(item, visited));
-    if (!isPlainObject(value)) return false;
-    return Object.keys(value).some((key) => containsAsymmetric(value[key], visited));
-  }
-
   function isPlainObject(value) {
     const proto = Object.getPrototypeOf(value);
     return proto === Object.prototype || proto === null;
@@ -209,49 +251,41 @@
 
   /** toEqual / toStrictEqual semantics, with asymmetric matchers on either side. */
   function equals(received, expected, strict) {
+    return internal.require("util").expectEquals(received, expected, strict, compareAsymmetric, isAsymmetric);
+  }
+
+  function compareAsymmetric(received, expected) {
     if (isAsymmetric(expected)) return expected.asymmetricMatch(received);
     if (isAsymmetric(received)) return received.asymmetricMatch(expected);
-    if (!containsAsymmetric(expected) && !containsAsymmetric(received)) return bunDeepEquals(received, expected, strict);
-    if (Array.isArray(received) && Array.isArray(expected)) return arraysEqual(received, expected, strict);
-    if (isObjectLike(received) && isObjectLike(expected)) return objectsEqual(received, expected, strict);
-    return false;
-  }
-
-  function arraysEqual(received, expected, strict) {
-    if (received.length !== expected.length) return false;
-    return received.every((item, i) => equals(item, expected[i], strict));
-  }
-
-  function objectsEqual(received, expected, strict) {
-    if (strict && Object.getPrototypeOf(received) !== Object.getPrototypeOf(expected)) return false;
-    const keysOf = (obj) => Object.keys(obj).filter((key) => strict || obj[key] !== undefined);
-    const receivedKeys = keysOf(received);
-    const expectedKeys = keysOf(expected);
-    if (receivedKeys.length !== expectedKeys.length) return false;
-    return expectedKeys.every((key) => Object.prototype.hasOwnProperty.call(received, key) && equals(received[key], expected[key], strict));
+    return undefined;
   }
 
   /** toMatchObject: every property of `expected` is present and matches in `received`. */
+  // Bun__deepMatch matches arrays exactly: the same length and the same number of enumerable
+  // keys (symbols included), then every key of the expected array.
+  function matchesArray(received, expected, seen) {
+    if (!Array.isArray(received) || received.length !== expected.length) return false;
+    const keys = enumerableOwnKeys(expected);
+    if (enumerableOwnKeys(received).length !== keys.length) return false;
+    return matcherSupport.every(keys, key => key in received && matchesObject(received[key], expected[key], seen));
+  }
+
   function matchesObject(received, expected, seen) {
-    if (isAsymmetric(expected)) return expected.asymmetricMatch(received);
+    const asymmetric = compareAsymmetric(received, expected);
+    if (asymmetric !== undefined) return asymmetric;
     if (!isObjectLike(expected) || !isObjectLike(received)) return equals(received, expected, false);
-    if (Array.isArray(expected)) {
-      if (!Array.isArray(received) || received.length !== expected.length) return false;
-      return expected.every((item, i) => matchesObject(received[i], item, seen));
-    }
+    if (Array.isArray(expected)) return matchesArray(received, expected, seen);
     if (!isPlainObject(expected) && !isPlainObject(received)) {
       if (expected instanceof Date || expected instanceof RegExp || expected instanceof Map || expected instanceof Set) {
         return equals(received, expected, false);
       }
     }
     const visited = seen || new Set();
-    if (visited.has(expected)) return true;
-    visited.add(expected);
-    for (const key of Object.keys(expected)) {
+    // Bun__deepMatch reads the expected object's enumerable symbol keys as well as its strings.
+    return matcherSupport.ancestors(visited, expected, () => matcherSupport.every(enumerableOwnKeys(expected), key => {
       if (!(key in received)) return false;
-      if (!matchesObject(received[key], expected[key], visited)) return false;
-    }
-    return true;
+      return matchesObject(received[key], expected[key], visited);
+    }));
   }
 
   // ───────────────────────────── Jest pretty format ─────────────────────────────
@@ -299,7 +333,7 @@
   function prettyAsymmetric(matcher, indent, seen, snapshot) {
     // Bun prints arrayContaining through its generic object path.
     if (matcher instanceof ArrayContainingMatcher) return "ExpectArrayContaining {}";
-    return matcher.describe((sample) => prettyValue(sample, indent, seen, snapshot));
+    return matcher.label((sample) => prettyValue(sample, indent, seen, snapshot));
   }
 
   function prettyObject(value, indent, seen, snapshot) {
@@ -338,13 +372,20 @@
     }
     const name = constructorName(value);
     const prefix = name === "Object" || name === "" ? "{" : `${name} {`;
-    const keys = snapshot ? Object.keys(value).concat(Object.getOwnPropertySymbols(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key))) : Object.keys(value);
+    const keys = snapshot ? Object.keys(value).concat(Object.getOwnPropertySymbols(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key))) : Object.getOwnPropertyNames(value);
     keys.sort((a, b) => compareStrings(typeof a === "symbol" ? a.description || "" : a, typeof b === "symbol" ? b.description || "" : b));
     const items = keys.map((key) => {
       const label = typeof key === "symbol" ? `[${String(key)}]` : snapshot ? JSON.stringify(key) : `"${key}"`;
-      return `${label}: ${prettyValue(value[key], inner, seen, snapshot)}`;
+      return `${label}: ${snapshot ? prettyValue(value[key], inner, seen, snapshot) : prettyProperty(value, key, inner, seen)}`;
     });
     return block(prefix, "}", items);
+  }
+
+  // Assertion diagnostics never run accessors; native Bun prints them as [native code].
+  function prettyProperty(value, key, indent, seen) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor && !("value" in descriptor)) return "[native code]";
+    return prettyValue(value[key], indent, seen, false);
   }
 
   function constructorName(value) {
@@ -369,7 +410,11 @@
   function formatDiff(received, expected, not) {
     const expectedText = prettyFormat(expected);
     if (not) return `Expected: not ${expectedText}`;
-    return diffStrings(prettyFormat(received), expectedText);
+    const receivedText = prettyFormat(received);
+    if (typeof received !== typeof expected && (isObjectLike(received) || isObjectLike(expected))) {
+      return `Expected: ${expectedText}\nReceived: ${receivedText}`;
+    }
+    return diffStrings(receivedText, expectedText);
   }
 
   function diffStrings(receivedText, expectedText) {
@@ -538,27 +583,37 @@
 
   function createMock(implementation, restore) {
     const state = {
-      impl: implementation,
+      impl: typeof implementation === "function" || implementation === undefined ? implementation : () => implementation,
       once: [],
-      name: undefined,
+      name: mockFunctionName(implementation),
       restore,
       record: newRecord(),
     };
     const fn = function (...args) {
       return callMock(fn, state, this, args, new.target);
     };
-    Object.defineProperty(fn, "name", { value: (implementation && implementation.name) || "mockConstructor" });
-    Object.defineProperty(fn, "length", { value: implementation ? implementation.length : 0 });
-    Object.defineProperty(fn, "mock", { get: () => state.record, enumerable: false });
-    Object.defineProperty(fn, "_isMockFunction", { value: true });
+    Object.defineProperty(fn, "name", { value: state.name });
+    Object.defineProperty(fn, "length", { value: typeof implementation === "function" ? implementation.length : 0 });
+    Object.setPrototypeOf(fn, mockPrototype);
     mockStates.set(fn, state);
     allMocks.add(fn);
-    Object.assign(fn, mockMethods(fn, state));
     return fn;
   }
 
+  function mockFunctionName(implementation) {
+    try {
+      const name = typeof implementation === "function" && implementation.name;
+      if (typeof name === "string" && name) return name;
+    } catch {}
+    return "mockConstructor";
+  }
+
+  const recordPrototype = Object.create(Object.prototype, {
+    lastCall: { enumerable: true, get() { return this?.calls?.[this.calls.length - 1]; } },
+  });
+
   function newRecord() {
-    return { calls: [], results: [], instances: [], contexts: [], invocationCallOrder: [], lastCall: undefined };
+    return Object.assign(Object.create(recordPrototype), { calls: [], results: [], instances: [], contexts: [], invocationCallOrder: [] });
   }
 
   let mockCallOrder = 0;
@@ -569,7 +624,6 @@
     record.contexts.push(self);
     record.instances.push(newTarget ? undefined : self);
     record.invocationCallOrder.push(++mockCallOrder);
-    record.lastCall = args;
     const result = { type: "incomplete", value: undefined };
     record.results.push(result);
     const impl = state.once.length > 0 ? state.once.shift() : state.impl;
@@ -586,43 +640,67 @@
     }
   }
 
-  function mockMethods(fn, state) {
+  function mockState(receiver) {
+    const state = mockStates.get(receiver);
+    if (state) return state;
+    const error = new TypeError("Expected this to be instanceof Mock");
+    error.code = "ERR_INVALID_THIS";
+    throw error;
+  }
+
+  function mockMethods() {
     const chain = (action) =>
       function (...args) {
-        action(...args);
-        return fn;
+        action(mockState(this), ...args);
+        return this;
       };
     return {
-      getMockName: () => state.name || "mock",
-      getMockImplementation: () => state.impl,
-      mockName: chain((name) => (state.name = name)),
-      mockClear: chain(() => (state.record = newRecord())),
-      mockReset: chain(() => {
+      getMockName() { return mockState(this).name; },
+      getMockImplementation() { return mockState(this).impl; },
+      mockName(name) {
+        const state = mockState(this);
+        if (name) {
+          state.name = String(name);
+          Object.defineProperty(this, "name", { value: state.name });
+        }
+        return this;
+      },
+      mockClear: chain((state) => (state.record = newRecord())),
+      mockReset: chain((state) => {
         state.record = newRecord();
         state.impl = undefined;
         state.once = [];
       }),
-      mockRestore: chain(() => {
+      mockRestore: chain((state) => {
         state.record = newRecord();
         state.impl = undefined;
         state.once = [];
         if (state.restore) state.restore();
       }),
-      mockImplementation: chain((impl) => (state.impl = impl)),
-      mockImplementationOnce: chain((impl) => state.once.push(impl)),
-      mockReturnValue: chain((value) => (state.impl = () => value)),
-      mockReturnValueOnce: chain((value) => state.once.push(() => value)),
-      mockResolvedValue: chain((value) => (state.impl = () => Promise.resolve(value))),
-      mockResolvedValueOnce: chain((value) => state.once.push(() => Promise.resolve(value))),
-      mockRejectedValue: chain((value) => (state.impl = () => Promise.reject(value))),
-      mockRejectedValueOnce: chain((value) => state.once.push(() => Promise.reject(value))),
-      mockReturnThis: chain(() => (state.impl = function () {
+      mockImplementation: chain((state, impl) => (state.impl = impl)),
+      mockImplementationOnce: chain((state, impl) => state.once.push(impl)),
+      mockReturnValue: chain((state, value) => (state.impl = () => value)),
+      mockReturnValueOnce: chain((state, value) => state.once.push(() => value)),
+      mockResolvedValue: chain((state, value) => {
+        const promise = Promise.resolve(value);
+        state.impl = () => promise;
+      }),
+      mockResolvedValueOnce: chain((state, value) => {
+        const promise = Promise.resolve(value);
+        state.once.push(() => promise);
+      }),
+      mockRejectedValue: chain((state, value) => (state.impl = () => Promise.reject(value))),
+      mockRejectedValueOnce: chain((state, value) => state.once.push(() => Promise.reject(value))),
+      mockReturnThis: chain((state) => (state.impl = function () {
         return this;
       })),
       withImplementation(impl, callback) {
+        const state = mockState(this);
         const saved = state.impl;
+        const savedOnce = state.once;
         state.impl = impl;
-        const restore = () => (state.impl = saved);
+        state.once = [];
+        const restore = () => { state.impl = saved; state.once = savedOnce; };
         const result = callback();
         if (isThenable(result)) return result.then(restore, (err) => (restore(), Promise.reject(err)));
         restore();
@@ -631,21 +709,47 @@
     };
   }
 
+  const mockPrototype = Object.create(Function.prototype, {
+    mock: { enumerable: true, get() { return mockState(this).record; } },
+    _protoImpl: { enumerable: true, get() { return mockState(this).impl; } },
+    _isMockFunction: { value: true, enumerable: true, writable: true, configurable: true },
+  });
+  for (const [name, method] of Object.entries(mockMethods())) {
+    Object.defineProperty(mockPrototype, name, { value: method, enumerable: true });
+  }
+  Object.defineProperty(mockPrototype, Symbol.dispose, { value: mockPrototype.mockRestore, configurable: true });
+
   function mock(implementation) {
     return createMock(implementation);
   }
 
   function spyOn(object, method) {
     if (!isObjectLike(object)) throw new TypeError("spyOn(target, prop) expects a target object and a property");
-    const original = object[method];
+    const key = typeof method === "symbol" ? method : String(method);
+    let owner = object;
+    while (owner && !Object.prototype.hasOwnProperty.call(owner, key)) owner = Object.getPrototypeOf(owner);
+    const descriptor = owner && Object.getOwnPropertyDescriptor(owner, key);
+    if (descriptor && !Object.prototype.hasOwnProperty.call(descriptor, "value")) throw new TypeError("spyOn does not support accessor properties");
+    const original = object[key];
     if (isMock(original)) return original;
-    const hadOwn = Object.prototype.hasOwnProperty.call(object, method);
+    const callable = typeof original === "function";
+    if (typeof object === "function" && key === "prototype" && !callable) {
+      throw new TypeError("Cannot spy on the `prototype` property because it is not a function");
+    }
+    const ownDescriptor = Object.getOwnPropertyDescriptor(object, key);
     const restore = () => {
-      if (hadOwn) object[method] = original;
-      else delete object[method];
+      if (ownDescriptor) Object.defineProperty(object, key, ownDescriptor);
+      else if (callable) delete object[key];
+      else Object.defineProperty(object, key, { value: original, writable: true, enumerable: true, configurable: true });
     };
-    const spy = createMock(typeof original === "function" ? original : undefined, restore);
-    object[method] = spy;
+    const spy = createMock(original, restore);
+    try {
+      if (callable) object[key] = spy;
+      else Object.defineProperty(object, key, { get: spy, set: spy, enumerable: true, configurable: true });
+    } catch (error) {
+      allMocks.delete(spy);
+      throw error;
+    }
     return spy;
   }
 
@@ -667,6 +771,7 @@
     clearAllMocks: () => forEachMock("mockClear"),
     resetAllMocks: () => forEachMock("mockReset"),
     isMockFunction: isMock,
+    setTimeout: setDefaultTimeout,
   };
 
   // ───────────────────────────── expect ─────────────────────────────
@@ -676,20 +781,22 @@
 
   const expectProto = {
     get not() {
-      return makeExpectation(this.received, { not: !this.flags.not, promise: this.flags.promise });
+      return makeExpectation(this.received, { not: !this.flags.not, promise: this.flags.promise }, this.label, this.file);
     },
     get resolves() {
-      return makeExpectation(this.received, { not: this.flags.not, promise: "resolves" });
+      return makeExpectation(this.received, { not: this.flags.not, promise: "resolves" }, this.label, this.file);
     },
     get rejects() {
-      return makeExpectation(this.received, { not: this.flags.not, promise: "rejects" });
+      return makeExpectation(this.received, { not: this.flags.not, promise: "rejects" }, this.label, this.file);
     },
   };
 
-  function makeExpectation(received, flags) {
+  function makeExpectation(received, flags, label, file) {
     const expectation = Object.create(expectProto);
     expectation.received = received;
     expectation.flags = flags;
+    expectation.label = label;
+    expectation.file = file;
     return expectation;
   }
 
@@ -698,8 +805,8 @@
     return `expect(received).${modifiers}${name}(${params})`;
   }
 
-  function countExpectation() {
-    if (currentTest) currentTest.expectCount++;
+  function countExpectation(test = running().test) {
+    if (test) test.expectCount++;
     else summary.expectations++;
   }
 
@@ -710,31 +817,54 @@
    * the `expect(...)` line, even for `.resolves`/`.rejects`.
    */
   const matcherSupport = internal.require("test_matchers");
+  const extensions = internal.require("test_extensions");
+  const extendedMatchers = matcherSupport.extended(inspect);
 
   function defineMatcher(name, params, impl) {
     matcherParams[name] = params;
+    const snapshot = name === "toMatchSnapshot" || name === "toMatchInlineSnapshot" || name === "toThrowErrorMatchingSnapshot" || name === "toThrowErrorMatchingInlineSnapshot";
+    const fileSnapshot = name === "toMatchSnapshot" || name === "toThrowErrorMatchingSnapshot";
     expectProto[name] = function (...args) {
       const error = new Error();
-      if (this.flags.promise) return matchPromise(this, name, impl, args, error);
-      countExpectation();
-      const result = applyMatcher(this.flags, this.received, name, impl, args, error);
-      return activeInvocation ? activeInvocation.track(result) : result;
+      const slot = running();
+      const origin = { invocation: slot.invocation, test: slot.test };
+      const context = { not: this.flags.not, promise: this.flags.promise, error, origin, label: this.label };
+      if (snapshot && this.flags.not) {
+        countExpectation(origin.test);
+        error.message = (this.label || signature(name, "", true)) + "\n\nMatcher error: Snapshot matchers cannot be used with not\n";
+        throw error;
+      }
+      if (fileSnapshot && this.file !== activeFile) {
+        error.message = (this.label || signature(name, "", false)) + "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n";
+        throw error;
+      }
+      if (name.endsWith("Snapshot")) context.snapshot = reserveSnapshot(origin, name, args);
+      const result = this.flags.promise
+        ? matcherSupport.settle(matchPromise(this, name, impl, args, context), () => undefined)
+        : matchImmediate(this, name, impl, args, context);
+      return origin.invocation ? origin.invocation.track(result) : result;
     };
   }
 
-  function applyMatcher(flags, received, name, impl, args, error) {
-    return matcherSupport.settle(impl({ not: flags.not, promise: flags.promise, error }, received, ...args), (failure) => {
+  function matchImmediate(expectation, name, impl, args, context) {
+    countExpectation(context.origin.test);
+    return applyMatcher(context, expectation.received, name, impl, args);
+  }
+
+  function applyMatcher(context, received, name, impl, args) {
+    return matcherSupport.settle(impl(context, received, ...args), (failure) => {
       if (!failure) return;
       const params = failure.params === undefined ? matcherParams[name] : failure.params;
-      error.message = failure.raw ? failure.body : signature(name, params, flags.not) + failure.body;
-      throw error;
+      context.error.message = failure.raw ? failure.body : (context.label || signature(name, params, context.not)) + failure.body;
+      throw context.error;
     });
   }
 
-  async function matchPromise(expectation, name, impl, args, error) {
+  async function matchPromise(expectation, name, impl, args, context) {
     const { flags, received } = expectation;
+    const { error } = context;
     const fail = (body) => {
-      error.message = signature(name, matcherParams[name], flags.not, flags.promise) + body;
+      error.message = (context.label || signature(name, matcherParams[name], flags.not, flags.promise)) + body;
       throw error;
     };
     if (!isThenable(received)) return fail(`\n\nExpected promise\nReceived: ${inspect(received)}\n`);
@@ -750,70 +880,143 @@
     if (flags.promise === "resolves" && !settled.ok) {
       return fail("\n\nExpected promise that resolves\nReceived promise that rejected: Promise { <rejected> }\n");
     }
-    countExpectation();
-    await applyMatcher({ not: flags.not, promise: flags.promise }, settled.value, name, impl, args, error);
+    if (context.origin.invocation?.settled) return;
+    countExpectation(context.origin.test);
+    await applyMatcher(context, settled.value, name, impl, args);
     return undefined;
   }
 
-  function expect(value) {
-    return makeExpectation(value, { not: false, promise: undefined });
+  function expect(value, label) {
+    return makeExpectation(value, { not: false, promise: undefined }, typeof label === "string" ? label : undefined, activeFile);
   }
 
-  expect.any = (ctor) => {
-    if (typeof ctor !== "function") throw new TypeError("any() expects to be passed a constructor function. Please pass one or use anything() to match any object.");
-    return new AnyMatcher(ctor);
-  };
-  expect.anything = () => new AnythingMatcher();
-  expect.stringContaining = (s) => new StringContainingMatcher(s);
-  expect.stringMatching = (re) => new StringMatchingMatcher(re);
-  expect.objectContaining = (obj) => new ObjectContainingMatcher(obj);
-  expect.arrayContaining = (arr) => new ArrayContainingMatcher(arr);
-  expect.closeTo = (n, precision) => new CloseToMatcher(n, precision);
-  expect.not = {
-    stringContaining: (s) => new StringContainingMatcher(s, true),
-    stringMatching: (re) => new StringMatchingMatcher(re, true),
-    objectContaining: (obj) => new ObjectContainingMatcher(obj, true),
-    arrayContaining: (arr) => new ArrayContainingMatcher(arr, true),
-  };
+  // expect, expect.not, expect.resolvesTo, expect.not.rejectsTo and so on each create
+  // asymmetric matchers with their own flags, like Bun's ExpectStatic. Factories validate
+  // their samples when called, with Bun's messages.
+  const STATIC_FLAGS = Symbol("expect static flags");
+  const statics = new Map();
+
+  function expectStatic(not, promise) {
+    const key = `${not}:${promise}`;
+    let value = statics.get(key);
+    if (!value) statics.set(key, value = new ExpectStatic(not, promise));
+    return value;
+  }
+
+  // Bun's isString also accepts String objects, derived ones included; they match by value.
+  function isStringSample(value) {
+    return typeof value === "string" || value instanceof String;
+  }
+
+  function factoryError(signature, problem) {
+    return new Error(`expect.${signature}\n\n${problem}`);
+  }
+
+  function isConstructor(value) {
+    try {
+      Reflect.construct(String, [], value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  class ExpectStatic {
+    constructor(not, promise) {
+      this[STATIC_FLAGS] = { not, promise };
+    }
+    get not() {
+      const { not, promise } = this[STATIC_FLAGS];
+      return expectStatic(!not, promise);
+    }
+    get resolvesTo() {
+      return settledStatic(this, "resolves");
+    }
+    get rejectsTo() {
+      return settledStatic(this, "rejects");
+    }
+    anything() {
+      return flagged(this, new AnythingMatcher());
+    }
+    any(...args) {
+      if (args.length === 0) throw new TypeError("any() expects to be passed a constructor function. Please pass one or use anything() to match any object.");
+      if (!isConstructor(args[0])) throw factoryError("any(constructor)", "Expected a constructor\n");
+      return flagged(this, new AnyMatcher(args[0]));
+    }
+    stringContaining(sample) {
+      if (!isStringSample(sample)) throw factoryError("stringContaining(string)", "Expected a string\n");
+      return flagged(this, new StringContainingMatcher(String(sample)));
+    }
+    stringMatching(sample) {
+      // Bun names stringContaining in this message too.
+      if (!isStringSample(sample) && !(sample instanceof RegExp)) throw factoryError("stringContaining(string)", "Expected a string or regular expression\n");
+      return flagged(this, new StringMatchingMatcher(sample));
+    }
+    objectContaining(sample) {
+      if (!isObjectLike(sample)) throw factoryError("objectContaining(object)", "Expected an object\n");
+      return flagged(this, new ObjectContainingMatcher(sample));
+    }
+    arrayContaining(sample) {
+      if (!Array.isArray(sample)) throw factoryError("arrayContaining(array)", "Expected a array\n");
+      return flagged(this, new ArrayContainingMatcher(sample));
+    }
+    closeTo(...args) {
+      if (typeof args[0] !== "number") throw factoryError("closeTo(number, precision?)", "Expected a number value");
+      if (args[1] !== undefined && typeof args[1] !== "number") throw factoryError("closeTo(number, precision?)", "Precision must be a number or undefined");
+      return flagged(this, new CloseToMatcher(args[0], args[1]));
+    }
+  }
+
+  const PROMISE_CHAINS = { resolves: "resolvesTo", rejects: "rejectsTo" };
+
+  function settledStatic(chain, promise) {
+    const flags = chain[STATIC_FLAGS];
+    if (flags.promise) throw new Error(`expect.${PROMISE_CHAINS[promise]}: already called expect.${PROMISE_CHAINS[flags.promise]} on this chain`);
+    return expectStatic(flags.not, promise);
+  }
+
+  function flagged(chain, matcher) {
+    const { not, promise } = chain[STATIC_FLAGS];
+    matcher.inverse = not;
+    matcher.promise = promise;
+    return matcher;
+  }
+
+  const rootStatic = expectStatic(false, undefined);
+  for (const name of ["anything", "any", "stringContaining", "stringMatching", "objectContaining", "arrayContaining", "closeTo"]) {
+    expect[name] = (...args) => rootStatic[name](...args);
+  }
+  for (const name of ["not", "resolvesTo", "rejectsTo"]) {
+    Object.defineProperty(expect, name, { get: () => rootStatic[name], configurable: true });
+  }
   expect.assertions = (count) => {
-    if (currentTest) currentTest.assertions = { exact: count };
+    const test = running().test;
+    if (test) test.assertions = { exact: count };
   };
   expect.hasAssertions = () => {
-    if (currentTest) currentTest.assertions = { atLeastOne: true };
+    const test = running().test;
+    if (test) test.assertions = { atLeastOne: true };
   };
   expect.unreachable = (message) => {
     throw new Error(message === undefined ? "reached unreachable code" : String(message));
   };
   expect.extend = (matchers) => {
-    for (const name of Object.keys(matchers)) defineCustomMatcher(name, matchers[name]);
+    extensions.register(matchers, defineCustomMatcher);
   };
 
   function matcherContext(not, promise) {
-    return {
-      isNot: not,
-      promise: promise || "",
-      equals: (a, b) => equals(a, b, false),
-      utils: {
-        printReceived: (v) => inspect(v),
-        printExpected: (v) => inspect(v),
-        stringify: (v) => inspect(v),
-        matcherHint: (name, received = "received", expected = "expected") => `expect(${received}).${name}(${expected})`,
-      },
-    };
+    return extensions.context(not, promise, (a, b) => equals(a, b, false));
   }
 
   function defineCustomMatcher(name, matcher) {
     defineMatcher(name, "", (ctx, received, ...args) => {
       const result = matcher.call(matcherContext(ctx.not, ctx.promise), received, ...args);
-      if (!result || typeof result.pass !== "boolean") {
-        throw new Error(`Unexpected return from matcher function \`${name}\`.\nMatcher functions should return an object in the following format:\n  {message?: string | function, pass: boolean}`);
-      }
-      if (result.pass !== ctx.not) return null;
-      const message = typeof result.message === "function" ? result.message() : result.message;
-      return { raw: true, body: message === undefined ? "No message was specified for this matcher." : String(message) };
+      return extensions.result(name, result, ctx.not);
     });
-    expect[name] = (...args) => new CustomAsymmetricMatcher(name, matcher, args);
-    expect.not[name] = (...args) => new CustomAsymmetricMatcher(name, matcher, args, true);
+    ExpectStatic.prototype[name] = function (...args) {
+      return flagged(this, new CustomAsymmetricMatcher(name, matcher, args));
+    };
+    expect[name] = (...args) => rootStatic[name](...args);
   }
 
   // Whether a matcher with outcome `pass` fails once `.not` is applied.
@@ -837,8 +1040,10 @@
 
   function defineEqualityMatcher(name, test) {
     defineMatcher(name, "expected", (ctx, received, expected) => {
-      if (!failed(ctx, test(received, expected))) return null;
-      return { body: `\n\n${formatDiff(received, expected, ctx.not)}\n` };
+      return matcherSupport.settle(test(received, expected), pass => {
+        if (!failed(ctx, pass)) return null;
+        return { body: `\n\n${formatDiff(received, expected, ctx.not)}\n` };
+      });
     });
   }
 
@@ -848,8 +1053,10 @@
   defineMatcher("toMatchObject", "expected", (ctx, received, expected) => {
     if (!isObjectLike(received)) return { body: "\n\nMatcher error: received value must be a non-null object\n" };
     if (!isObjectLike(expected)) return { body: "\n\nMatcher error: expected value must be a non-null object\n" };
-    if (!failed(ctx, matchesObject(received, expected))) return null;
-    return { body: `\n\n${formatDiff(received, expected, ctx.not)}\n` };
+    return matcherSupport.settle(matchesObject(received, expected), pass => {
+      if (!failed(ctx, pass)) return null;
+      return { body: `\n\n${formatDiff(received, expected, ctx.not)}\n` };
+    });
   });
 
   // ── simple value checks: `Received: <value>` ──
@@ -879,11 +1086,22 @@
   defineValueMatcher("toBeFinite", (v) => typeof v === "number" && Number.isFinite(v));
   defineValueMatcher("toBePositive", (v) => typeof v === "number" && v > 0 && Number.isFinite(v));
   defineValueMatcher("toBeNegative", (v) => typeof v === "number" && v < 0 && Number.isFinite(v));
-  defineValueMatcher("toBeEven", (v) => Number.isInteger(v) && v % 2 === 0);
-  defineValueMatcher("toBeOdd", (v) => Number.isInteger(v) && Math.abs(v % 2) === 1);
+  defineValueMatcher("toBeEven", matcherSupport.even);
+  defineValueMatcher("toBeOdd", matcherSupport.odd);
   defineValueMatcher("toBeDate", (v) => v instanceof Date);
   defineValueMatcher("toBeValidDate", (v) => v instanceof Date && !Number.isNaN(v.getTime()));
-  defineValueMatcher("toBeObject", (v) => typeof v === "object" && v !== null);
+  // Bun's isObject: functions and classes are objects too.
+  defineMatcher("toBeObject", "", (ctx, received) => {
+    if (!failed(ctx, isObjectLike(received))) return null;
+    return { body: `\n\nExpected value ${ctx.not ? "not " : ""}to be an object\n\nReceived: ${inspect(received)}\n` };
+  });
+  // Bun's is_object_empty: Map, Set (weak ones included), RegExp and Date are their own kinds,
+  // not empty objects.
+  defineValueMatcher("toBeEmptyObject", (v) => isObjectLike(v) && !isKeyedKind(v) && Object.keys(v).length === 0);
+
+  function isKeyedKind(value) {
+    return value instanceof Map || value instanceof Set || value instanceof WeakMap || value instanceof WeakSet || value instanceof RegExp || value instanceof Date;
+  }
   defineValueMatcher("toBeSymbol", (v) => typeof v === "symbol");
 
   // ── ordering ──
@@ -925,16 +1143,25 @@
 
   // ── containers ──
 
+  defineMatcher("pass", "", extendedMatchers.pass);
+  defineMatcher("fail", "", extendedMatchers.fail);
+  defineMatcher("toBeArrayOfSize", "", extendedMatchers.arrayOfSize);
+  defineMatcher("toEqualIgnoringWhitespace", "expected", extendedMatchers.ignoringWhitespace);
+
   function iterableItems(value) {
     if (value === null || value === undefined || typeof value[Symbol.iterator] !== "function") return null;
     return Array.from(value);
   }
 
-  function defineContainMatcher(name, test) {
+  // Bun's contain_matcher. `test` settles to a pass boolean, or to { pass, received } when the
+  // failure prints another value in place of the received one.
+  function defineContainMatcher(name, test, verb = "contain") {
     defineMatcher(name, "expected", (ctx, received, expected) => {
-      if (!failed(ctx, test(received, expected))) return null;
-      if (ctx.not) return { body: `\n\nExpected to not contain: ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
-      return { body: `\n\nExpected to contain: ${inspect(expected)}\nReceived: ${inspect(received)}\n` };
+      return matcherSupport.settle(test(received, expected), outcome => {
+        const shown = typeof outcome === "object" && outcome !== null ? outcome : { pass: outcome, received };
+        if (!failed(ctx, shown.pass)) return null;
+        return { body: `\n\nExpected to ${ctx.not ? "not " : ""}${verb}: ${inspect(expected)}\nReceived: ${inspect(shown.received)}\n` };
+      });
     });
   }
 
@@ -946,7 +1173,7 @@
 
   defineContainMatcher("toContainEqual", (received, expected) => {
     const items = iterableItems(received);
-    return items !== null && items.some((item) => equals(item, expected, false));
+    return items !== null && matcherSupport.some(items, item => equals(item, expected, false));
   });
 
   defineContainMatcher("toContainKey", (received, key) => {
@@ -954,8 +1181,12 @@
     return Object.prototype.hasOwnProperty.call(received, key);
   });
 
+  function requireArray(expected, name) {
+    if (!Array.isArray(expected)) throw new TypeError(`Expected expected to be a array for '${name}'.`);
+  }
+
   function containsKeys(received, keys, any, name) {
-    if (!Array.isArray(keys)) throw new TypeError(`Expected expected to be a array for '${name}'.`);
+    requireArray(keys, name);
     if (!isObjectLike(received)) return !any && keys.length === 0;
     for (const key of keys) {
       const own = Object.prototype.hasOwnProperty.call(received, key);
@@ -967,11 +1198,53 @@
   defineContainMatcher("toContainKeys", (received, keys) => containsKeys(received, keys, false, "toContainKeys"));
   defineContainMatcher("toContainAnyKeys", (received, keys) => containsKeys(received, keys, true, "toContainAnyKeys"));
 
+  // The object matchers below follow Bun's expect/toContain*.rs: own enumerable string keys or
+  // Object.values, each entry compared with toEqual's equality.
+  function containsEvery(values, expected) {
+    return matcherSupport.every(expected, item => matcherSupport.some(values, value => equals(value, item, false)));
+  }
+
+  defineContainMatcher("toContainAllKeys", (received, expected) => {
+    requireArray(expected, "toContainAllKeys");
+    // Object.keys throws for null and undefined, as Bun's toObject does.
+    const keys = Object.keys(received);
+    if (keys.length !== expected.length) return { pass: false, received: keys };
+    const pass = matcherSupport.every(keys, key => matcherSupport.some(expected, item => equals(key, item, false)));
+    return matcherSupport.settle(pass, matched => ({ pass: matched, received: keys }));
+  }, "contain all keys");
+
+  defineContainMatcher("toContainValue", (received, expected) => {
+    if (received === null || received === undefined) return false;
+    return matcherSupport.some(Object.values(received), value => equals(value, expected, false));
+  });
+
+  defineContainMatcher("toContainValues", (received, expected) => {
+    requireArray(expected, "toContainValues");
+    if (received === null || received === undefined) return true;
+    return containsEvery(Object.values(received), expected);
+  });
+
+  defineContainMatcher("toContainAllValues", (received, expected) => {
+    requireArray(expected, "toContainAllValues");
+    if (received === null || received === undefined) return false;
+    const values = Object.values(received);
+    // Bun requires equal counts and at least one value: an empty expectation never passes.
+    if (values.length !== expected.length || expected.length === 0) return false;
+    return containsEvery(values, expected);
+  }, "contain all values");
+
+  defineContainMatcher("toContainAnyValues", (received, expected) => {
+    requireArray(expected, "toContainAnyValues");
+    if (received === null || received === undefined) return false;
+    const values = Object.values(received);
+    return matcherSupport.some(expected, item => matcherSupport.some(values, value => equals(value, item, false)));
+  }, "contain any of the following values");
+
   defineMatcher("toIncludeRepeated", "expected", (ctx, received, ...args) => {
     if (args.length < 2) throw new TypeError("toIncludeRepeated() requires 2 arguments");
     const [substring, count] = args;
     if (typeof substring !== "string") throw new Error("toIncludeRepeated() requires the first argument to be a string");
-    if (!Number.isInteger(count)) throw new Error("toIncludeRepeated() requires the second argument to be a number");
+    if (!Number.isInteger(count) || Object.is(count, -0)) throw new Error("toIncludeRepeated() requires the second argument to be a number");
     if (typeof received !== "string") throw new Error("toIncludeRepeated() requires the expect(value) to be a string");
     if (substring.length === 0) throw new Error("toIncludeRepeated() requires the first argument to be a non-empty string");
     let actual = 0;
@@ -995,51 +1268,99 @@
   });
 
   defineMatcher("toBeEmpty", "", (ctx, received) => {
-    let empty = false;
-    if (typeof received === "string" || Array.isArray(received)) empty = received.length === 0;
-    else if (received instanceof Map || received instanceof Set) empty = received.size === 0;
-    else if (isObjectLike(received)) empty = Object.keys(received).length === 0;
-    if (!failed(ctx, empty)) return null;
+    if (!failed(ctx, matcherSupport.empty(received))) return null;
     return { body: `\n\nReceived: ${inspect(received)}\n` };
   });
 
   defineMatcher("toBeOneOf", "expected", (ctx, received, list) => {
     const items = iterableItems(list) || [];
-    if (!failed(ctx, items.some((item) => equals(received, item, false)))) return null;
-    const not = ctx.not ? "not " : "";
-    return { body: `\n\nExpected: ${not}one of ${inspect(list)}\nReceived: ${inspect(received)}\n` };
+    return matcherSupport.settle(matcherSupport.some(items, item => equals(received, item, false)), pass => {
+      if (!failed(ctx, pass)) return null;
+      const not = ctx.not ? "not " : "";
+      return { body: `\n\nExpected: ${not}one of ${inspect(list)}\nReceived: ${inspect(received)}\n` };
+    });
   });
 
-  function propertyPath(path) {
-    if (Array.isArray(path)) return path;
-    return String(path)
-      .replace(/\[(\w+)\]/g, ".$1")
-      .split(".")
-      .filter((part) => part !== "");
+  const MISSING = { found: false };
+
+  // One step of Bun's path lookup: the value converts to an object (null and undefined throw,
+  // as JSC's toObject does) and the key may be inherited.
+  function lookupKey(value, key) {
+    if (value === null || value === undefined) throw new TypeError(`${value} is not an object`);
+    const object = Object(value);
+    return key in object ? { found: true, value: object[key] } : MISSING;
   }
 
+  function isPathSeparator(char) {
+    return char === "[" || char === "]" || char === ".";
+  }
+
+  // Bun's getIfPropertyExistsFromPath (bindings.cpp). As in Jest, brackets are skipped, and a
+  // "." at the start or end of the path, or doubled, looks up the empty-string key. An array
+  // path names each key: strings and numbers only.
   function lookupPath(object, path) {
-    let value = object;
-    for (const key of propertyPath(path)) {
-      if (value === null || value === undefined || !(key in Object(value))) return { found: false };
-      value = value[key];
+    if (Array.isArray(path)) return lookupKeys(object, path);
+    const text = String(path);
+    if (text === "") return lookupKey(object, "");
+    let current = { found: true, value: object };
+    if (text[0] === ".") current = lookupKey(object, "");
+    let start = 0;
+    let named = false;
+    while (current.found && start < text.length) {
+      const skipped = skipSeparators(text, start, current.value, named);
+      if (skipped.done) return skipped.result;
+      let end = skipped.next;
+      while (end < text.length && !isPathSeparator(text[end])) end++;
+      current = lookupKey(skipped.current.value, text.slice(skipped.next, end));
+      named = true;
+      start = end;
     }
-    return { found: true, value };
+    return current;
+  }
+
+  // Skips a run of separators from `start`. Two dots in a row look up the empty-string key;
+  // a path that ends in separators ends the lookup, with the empty-string key after a final ".".
+  function skipSeparators(text, start, value, named) {
+    let index = start;
+    let current = { found: true, value };
+    while (isPathSeparator(text[index])) {
+      const char = text[index++];
+      if (index === text.length) {
+        if (char === ".") return { done: true, result: lookupKey(current.value, "") };
+        return { done: true, result: named ? current : MISSING };
+      }
+      if (char === "." && text[index] === ".") current = lookupKey(current.value, "");
+      if (!current.found) return { done: true, result: current };
+    }
+    return { done: false, current, next: index };
+  }
+
+  function lookupKeys(object, keys) {
+    let current = { found: true, value: object };
+    for (const key of keys) {
+      if (typeof key !== "string" && typeof key !== "number") return MISSING;
+      current = lookupKey(current.value, String(key));
+      if (!current.found) return current;
+    }
+    return current;
   }
 
   defineMatcher("toHaveProperty", "path", (ctx, received, path, ...rest) => {
     const hasValue = rest.length > 0;
     const expectedValue = rest[0];
     const params = hasValue ? "path, value" : "path";
-    const lookup = lookupPath(received, path);
+    if (typeof path !== "string" && !Array.isArray(path)) throw new Error("Expected path must be a string or an array");
+    const lookup = received === null || received === undefined ? MISSING : lookupPath(received, path);
     const pass = lookup.found && (!hasValue || equals(lookup.value, expectedValue, false));
-    if (!failed(ctx, pass)) return null;
-    const shownPath = inspect(path);
-    if (ctx.not && hasValue) return { params, body: `\n\nExpected path: ${shownPath}\n\nExpected value: not ${inspect(expectedValue)}\n` };
-    if (ctx.not) return { params, body: `\n\nExpected path: not ${shownPath}\n\nReceived value: ${inspect(lookup.value)}\n` };
-    if (hasValue && lookup.found) return { params, body: `\n\n${formatDiff(lookup.value, expectedValue, false)}\n` };
-    if (hasValue) return { params, body: `\n\nExpected path: ${shownPath}\n\nExpected value: ${inspect(expectedValue)}\n\nUnable to find property\n` };
-    return { params, body: `\n\nExpected path: ${shownPath}\n\nUnable to find property\n` };
+    return matcherSupport.settle(pass, matched => {
+      if (!failed(ctx, matched)) return null;
+      const shownPath = inspect(path);
+      if (ctx.not && hasValue) return { params, body: `\n\nExpected path: ${shownPath}\n\nExpected value: not ${inspect(expectedValue)}\n` };
+      if (ctx.not) return { params, body: `\n\nExpected path: not ${shownPath}\n\nReceived value: ${inspect(lookup.value)}\n` };
+      if (hasValue && lookup.found) return { params, body: `\n\n${formatDiff(lookup.value, expectedValue, false)}\n` };
+      if (hasValue) return { params, body: `\n\nExpected path: ${shownPath}\n\nExpected value: ${inspect(expectedValue)}\n\nUnable to find property\n` };
+      return { params, body: `\n\nExpected path: ${shownPath}\n\nUnable to find property\n` };
+    });
   });
 
   defineMatcher("toMatch", "expected", (ctx, received, expected) => {
@@ -1135,10 +1456,10 @@
       }
       const expected = normalizeThrowExpectation(rawExpected);
       return matcherSupport.settle(throwOutcome(ctx, received), (outcome) => {
-        if (outcome.invalid) throw new Error("Expected value must be a function");
-        if (ctx.not) return notThrowFailure(outcome, expected);
-        if (!outcome.threw) return didNotThrowFailure(outcome, expected);
-        return wrongThrowFailure(outcome.value, expected);
+          if (outcome.invalid) throw new Error("Expected value must be a function");
+          if (ctx.not) return notThrowFailure(outcome, expected);
+          if (!outcome.threw) return didNotThrowFailure(outcome, expected);
+          return wrongThrowFailure(outcome.value, expected);
       });
     });
   }
@@ -1153,12 +1474,14 @@
       if (value instanceof Error) return { params: "", body: `\n\nError name: ${inspect(value.name)}\nError message: ${inspect(value.message)}\n` };
       return { params: "", body: `\n\nThrown value: ${inspect(value)}\n` };
     }
-    if (!throwMatches(value, expected)) return null;
-    const message = inspect(thrownMessage(value));
-    if (typeof expected === "string") return { body: `\n\nExpected substring: not ${inspect(expected)}\nReceived message: ${message}\n` };
-    if (expected instanceof RegExp) return { body: `\n\nExpected pattern: not ${inspect(expected)}\nReceived message: ${message}\n` };
-    if (isObjectLike(expected) && "message" in expected) return { body: `\n\nExpected message: not ${inspect(expected.message)}\n` };
-    return { body: `\n\nExpected constructor: not ${expected.name}\n\nReceived message: ${message}\n` };
+    return matcherSupport.settle(throwMatches(value, expected), pass => {
+      if (!pass) return null;
+      const message = inspect(thrownMessage(value));
+      if (typeof expected === "string") return { body: `\n\nExpected substring: not ${inspect(expected)}\nReceived message: ${message}\n` };
+      if (expected instanceof RegExp) return { body: `\n\nExpected pattern: not ${inspect(expected)}\nReceived message: ${message}\n` };
+      if (isObjectLike(expected) && "message" in expected) return { body: `\n\nExpected message: not ${inspect(expected.message)}\n` };
+      return { body: `\n\nExpected constructor: not ${expected.name}\n\nReceived message: ${message}\n` };
+    });
   }
 
   function didNotThrowFailure(outcome, expected) {
@@ -1171,20 +1494,23 @@
   }
 
   function wrongThrowFailure(value, expected) {
-    if (expected === undefined || throwMatches(value, expected)) return null;
-    const message = thrownMessage(value);
-    const hasMessage = message !== undefined;
-    const receivedLine = hasMessage ? `Received message: ${inspect(message)}\n` : `Received value: ${inspect(value)}`;
-    if (typeof expected === "string") return { body: `\n\nExpected substring: ${inspect(expected)}\n${receivedLine}` };
-    if (expected instanceof RegExp) return { body: `\n\nExpected pattern: ${inspect(expected)}\n${receivedLine}` };
-    if (isAsymmetric(expected)) return { body: `\n\nExpected value: ${inspect(expected)}\nReceived value: ${inspect(value)}\n` };
-    if (isObjectLike(expected) && "message" in expected) {
-      const line = hasMessage ? `Received message: ${inspect(message)}` : `Received value: ${inspect(value)}`;
-      return { body: `\n\nExpected message: ${inspect(expected.message)}\n${line}\n` };
-    }
-    const receivedCtor = isObjectLike(value) && value.constructor ? value.constructor.name : typeof value;
-    const last = hasMessage ? `Received message: ${inspect(message)}` : `Received value: ${inspect(value)}`;
-    return { body: `\n\nExpected constructor: ${expected.name}\nReceived constructor: ${receivedCtor}\n\n${last}\n` };
+    if (expected === undefined) return null;
+    return matcherSupport.settle(throwMatches(value, expected), pass => {
+      if (pass) return null;
+      const message = thrownMessage(value);
+      const hasMessage = message !== undefined;
+      const receivedLine = hasMessage ? `Received message: ${inspect(message)}\n` : `Received value: ${inspect(value)}`;
+      if (typeof expected === "string") return { body: `\n\nExpected substring: ${inspect(expected)}\n${receivedLine}` };
+      if (expected instanceof RegExp) return { body: `\n\nExpected pattern: ${inspect(expected)}\n${receivedLine}` };
+      if (isAsymmetric(expected)) return { body: `\n\nExpected value: ${inspect(expected)}\nReceived value: ${inspect(value)}\n` };
+      if (isObjectLike(expected) && "message" in expected) {
+        const line = hasMessage ? `Received message: ${inspect(message)}` : `Received value: ${inspect(value)}`;
+        return { body: `\n\nExpected message: ${inspect(expected.message)}\n${line}\n` };
+      }
+      const receivedCtor = isObjectLike(value) && value.constructor ? value.constructor.name : typeof value;
+      const last = hasMessage ? `Received message: ${inspect(message)}` : `Received value: ${inspect(value)}`;
+      return { body: `\n\nExpected constructor: ${expected.name}\nReceived constructor: ${receivedCtor}\n\n${last}\n` };
+    });
   }
 
   // ── mock matchers ──
@@ -1198,10 +1524,21 @@
   }
 
   function callsEqual(args, expected) {
-    return args.length === expected.length && args.every((arg, i) => equals(arg, expected[i], false));
+    return args.length === expected.length && matcherSupport.every(args, (arg, i) => equals(arg, expected[i], false));
   }
 
-  defineMatcher("toHaveBeenCalled", "", (ctx, received) => {
+  function mockMatcherCount(value, minimum) {
+    if (typeof value !== "number" || !Number.isInteger(value) || value < minimum) {
+      throw new TypeError(`Expected count must be an integer greater than or equal to ${minimum}`);
+    }
+  }
+
+  function mockMatcherNoArguments(args) {
+    if (args.length) throw new TypeError("This mock matcher does not accept arguments");
+  }
+
+  defineMatcher("toHaveBeenCalled", "", (ctx, received, ...args) => {
+    mockMatcherNoArguments(args);
     const record = mockRecord(received);
     const count = record.calls.length;
     if (!failed(ctx, count > 0)) return null;
@@ -1209,7 +1546,8 @@
     return { body: `\n\nExpected number of calls: >= 1\nReceived number of calls: ${count}\n` };
   });
 
-  defineMatcher("toHaveBeenCalledOnce", "", (ctx, received) => {
+  defineMatcher("toHaveBeenCalledOnce", "", (ctx, received, ...args) => {
+    mockMatcherNoArguments(args);
     const count = mockRecord(received).calls.length;
     if (!failed(ctx, count === 1)) return null;
     const not = ctx.not ? "not " : "";
@@ -1217,6 +1555,7 @@
   });
 
   defineMatcher("toHaveBeenCalledTimes", "expected", (ctx, received, times) => {
+    mockMatcherCount(times, 0);
     const count = mockRecord(received).calls.length;
     if (!failed(ctx, count === times)) return null;
     const not = ctx.not ? "not " : "";
@@ -1231,11 +1570,13 @@
     const record = mockRecord(received, true);
     if (record.failure) return record.failure;
     const calls = record.calls;
-    if (!failed(ctx, calls.some((args) => callsEqual(args, expected)))) return null;
-    if (ctx.not) return { body: `\n\nExpected mock function not to have been called with: ${inspect(expected)}\nBut it was.` };
-    if (calls.length === 0) return { body: `\n\nExpected: ${inspect(expected)}\nBut it was not called.` };
-    if (calls.length === 1) return { body: `\n\n${formatDiff(calls[0], expected, false)}\n` };
-    return { body: `\n\n    Expected: ${inspect(expected)}\n    Received:\n${allCallsList(calls)}\n\n    Number of calls: ${calls.length}\n` };
+    return matcherSupport.settle(matcherSupport.some(calls, args => callsEqual(args, expected)), pass => {
+      if (!failed(ctx, pass)) return null;
+      if (ctx.not) return { body: `\n\nExpected mock function not to have been called with: ${inspect(expected)}\nBut it was.` };
+      if (calls.length === 0) return { body: `\n\nExpected: ${inspect(expected)}\nBut it was not called.` };
+      if (calls.length === 1) return { body: `\n\n${formatDiff(calls[0], expected, false)}\n` };
+      return { body: `\n\n    Expected: ${inspect(expected)}\n    Received:\n${allCallsList(calls)}\n\n    Number of calls: ${calls.length}\n` };
+    });
   });
 
   defineMatcher("toHaveBeenLastCalledWith", "...expected", (ctx, received, ...expected) => {
@@ -1243,38 +1584,49 @@
     if (record.failure) return record.failure;
     const calls = record.calls;
     const last = calls[calls.length - 1];
-    if (!failed(ctx, last !== undefined && callsEqual(last, expected))) return null;
-    if (ctx.not) return { body: `\n\nExpected last call not to be with: ${inspect(expected)}\nBut it was.` };
-    if (calls.length === 0) return { body: `\n\nExpected: ${inspect(expected)}\nBut it was not called.` };
-    return { body: `\n\n${formatDiff(last, expected, false)}\n` };
+    return matcherSupport.settle(last !== undefined && callsEqual(last, expected), pass => {
+      if (!failed(ctx, pass)) return null;
+      if (ctx.not) return { body: `\n\nExpected last call not to be with: ${inspect(expected)}\nBut it was.` };
+      if (calls.length === 0) return { body: `\n\nExpected: ${inspect(expected)}\nBut it was not called.` };
+      return { body: `\n\n${formatDiff(last, expected, false)}\n` };
+    });
   });
 
   defineMatcher("toHaveBeenNthCalledWith", "n, ...expected", (ctx, received, n, ...expected) => {
+    mockMatcherCount(n, 1);
     const record = mockRecord(received, true);
     if (record.failure) return record.failure;
     const calls = record.calls;
     const call = calls[n - 1];
-    if (!failed(ctx, call !== undefined && callsEqual(call, expected))) return null;
-    if (ctx.not) return { body: `\n\nExpected call #${n} not to be with: ${inspect(expected)}\nBut it was.` };
-    if (call === undefined) {
-      return { body: `\n\nThe mock function was called ${calls.length} time${calls.length === 1 ? "" : "s"}, but call ${n} was requested.` };
-    }
-    return { body: `\n\nCall #${n}:\n${formatDiff(call, expected, false)}\n` };
+    return matcherSupport.settle(call !== undefined && callsEqual(call, expected), pass => {
+      if (!failed(ctx, pass)) return null;
+      if (ctx.not) return { body: `\n\nExpected call #${n} not to be with: ${inspect(expected)}\nBut it was.` };
+      if (call === undefined) {
+        return { body: `\n\nThe mock function was called ${calls.length} time${calls.length === 1 ? "" : "s"}, but call ${n} was requested.` };
+      }
+      return { body: `\n\nCall #${n}:\n${formatDiff(call, expected, false)}\n` };
+    });
   });
 
   function returnCounts(record) {
-    const returned = record.results.filter((r) => r.type === "return");
+    const returned = [];
+    for (const result of record.results) {
+      if (!isObjectLike(result)) throw new TypeError("Expected value must be a mock function with returns");
+      if (result.type === "return") returned.push(result);
+    }
     return { returned, calls: record.results.length };
   }
 
-  defineMatcher("toHaveReturned", "", (ctx, received) => {
-    const { returned } = returnCounts(mockRecord(received));
+  defineMatcher("toHaveReturned", "expected", (ctx, received, ...args) => {
+    mockMatcherNoArguments(args);
+    const { returned, calls } = returnCounts(mockRecord(received));
     if (!failed(ctx, returned.length > 0)) return null;
     if (ctx.not) return { body: `\n\nExpected number of succesful returns: 0\nReceived number of succesful returns: ${returned.length}\n` };
-    return { body: `\n\nExpected number of succesful returns: >= 1\nReceived number of succesful returns: ${returned.length}\n` };
+    return { body: `\n\nExpected number of succesful returns: >= 1\nReceived number of succesful returns:    ${returned.length}\nReceived number of calls:                ${calls}\n` };
   });
 
   defineMatcher("toHaveReturnedTimes", "expected", (ctx, received, times) => {
+    mockMatcherCount(times, 0);
     const { returned } = returnCounts(mockRecord(received));
     if (!failed(ctx, returned.length === times)) return null;
     const not = ctx.not ? "not " : "";
@@ -1284,25 +1636,32 @@
   defineMatcher("toHaveReturnedWith", "expected", (ctx, received, expected) => {
     const record = mockRecord(received);
     const { returned, calls } = returnCounts(record);
-    if (!failed(ctx, returned.some((r) => equals(r.value, expected, false)))) return null;
-    if (ctx.not) return { body: `\n\nExpected mock function not to have returned: ${inspect(expected)}\n` };
-    if (calls === 1 && returned.length === 1) {
-      const value = returned[0].value;
-      if (typeof value === "string" && typeof expected === "string") return { body: `\n\n${formatDiff(value, expected, false)}\n` };
-      return { body: `\n\nExpected: ${inspect(expected)}\nReceived: ${inspect(value)}` };
-    }
-    const list = record.results.map((r, i) => `              ${i + 1}: ${inspect(r.value)}`).join("\n");
-    return { body: `\n\n    Expected: ${inspect(expected)}\n    Received:\n${list}\n\n    Number of returns: ${returned.length}\n` };
+    return matcherSupport.settle(matcherSupport.some(returned, r => equals(r.value, expected, false)), pass => {
+      if (!failed(ctx, pass)) return null;
+      if (ctx.not) return { body: `\n\nExpected mock function not to have returned: ${inspect(expected)}\n` };
+      if (calls === 1 && returned.length === 1) {
+        const value = returned[0].value;
+        if (typeof value === "string" && typeof expected === "string") return { body: `\n\n${formatDiff(value, expected, false)}\n` };
+        return { body: `\n\nExpected: ${inspect(expected)}\nReceived: ${inspect(value)}` };
+      }
+      const list = record.results.map((r, i) => `              ${i + 1}: ${inspect(r.value)}`).join("\n");
+      return { body: `\n\n    Expected: ${inspect(expected)}\n    Received:\n${list}\n\n    Number of returns: ${returned.length}\n` };
+    });
   });
 
   defineMatcher("toHaveLastReturnedWith", "expected", (ctx, received, expected) => {
     const results = mockRecord(received).results;
     const last = results[results.length - 1];
     const pass = last !== undefined && last.type === "return" && equals(last.value, expected, false);
-    if (!failed(ctx, pass)) return null;
-    const not = ctx.not ? "not " : "";
-    return { body: `\n\nExpected: ${not}${inspect(expected)}\nReceived: ${inspect(last && last.value)}\n` };
+    return matcherSupport.settle(pass, matched => {
+      if (!failed(ctx, matched)) return null;
+      const not = ctx.not ? "not " : "";
+      return { body: `\n\nExpected: ${not}${inspect(expected)}\nReceived: ${inspect(last && last.value)}\n` };
+    });
   });
+
+  defineMatcher("toHaveNthReturnedWith", "n, expected", (ctx, received, nth, expected) =>
+    matcherSupport.nthReturned({ not: ctx.not, results: mockRecord(received).results, nth, expected, equals, inspect, formatDiff }));
 
   // Jest's aliases.
   for (const [alias, target] of [
@@ -1314,6 +1673,7 @@
     ["nthCalledWith", "toHaveBeenNthCalledWith"],
     ["toReturn", "toHaveReturned"],
     ["toReturnWith", "toHaveReturnedWith"],
+    ["nthReturnedWith", "toHaveNthReturnedWith"],
   ]) {
     if (!(alias in expectProto)) expectProto[alias] = expectProto[target];
   }
@@ -1357,18 +1717,26 @@
     return { properties: args[0], expected: typeof args[1] === "string" ? args[1] : undefined };
   }
 
+  function reserveSnapshot(origin, matcher, args) {
+    if (!origin.test) return null;
+    const inline = matcher.endsWith("InlineSnapshot");
+    const hint = inline ? "" : typeof args[0] === "string" ? args[0] : args[1];
+    return { file: origin.test.file, name: nextSnapshotName(origin.test, hint) };
+  }
+
   function prepareSnapshot(ctx, received, args, inline) {
-    if (ctx.not) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used with not\n" } };
-    if (!currentTest) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n" } };
+    if (!ctx.origin.test) return { failure: { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used outside of a test\n" } };
     const parsed = snapshotArguments(args, inline);
     if (parsed.properties !== undefined && !isObjectLike(received)) {
       return { failure: { params: "properties, hint", body: "\n\nMatcher error: received values must be an object when the matcher has properties\n" } };
     }
-    if (parsed.properties !== undefined && !matchesObject(received, parsed.properties)) {
-      return { failure: { params: "propertyMatchers", body: `\n\nExpected propertyMatchers to match properties from received object\n\nReceived: ${inspect(received)}\n` } };
-    }
-    if (parsed.properties !== undefined) replaceSnapshotProperties(received, parsed.properties, new Set());
-    return Object.assign(parsed, { text: prettyValue(received, "", new Set(), true) });
+    const comparison = parsed.properties === undefined || matchesObject(received, parsed.properties);
+    return matcherSupport.settle(comparison, pass => {
+        if (ctx.origin.invocation?.settled) return { cancelled: true };
+        if (!pass) return { failure: { params: "propertyMatchers", body: `\n\nExpected propertyMatchers to match properties from received object\n\nReceived: ${inspect(received)}\n` } };
+        if (parsed.properties !== undefined) replaceSnapshotProperties(received, parsed.properties, new Set());
+        return Object.assign(parsed, { text: prettyValue(received, "", new Set(), true) });
+    });
   }
 
   function replaceSnapshotProperties(received, properties, seen) {
@@ -1380,12 +1748,11 @@
     }
   }
 
-  function nextSnapshotName(hint) {
-    const { test, file } = currentTest;
+  function nextSnapshotName(origin, hint) {
+    const { test, file } = origin;
     const name = displayNames(test).concat([test.name || "(unnamed)"]).join(" ") + (hint ? `: ${hint}` : "");
     const count = (file.snapshotCounts.get(name) || 0) + 1;
     file.snapshotCounts.set(name, count);
-    snapshots.total++;
     return `${name} ${count}`;
   }
 
@@ -1434,16 +1801,19 @@
   }
 
   function matchFileSnapshot(ctx, received, ...args) {
-    const prepared = prepareSnapshot(ctx, received, args, false);
-    if (prepared.failure) return prepared.failure;
-    const state = fileSnapshots(currentTest.file);
-    const name = nextSnapshotName(prepared.expected);
-    if (state.values.has(name)) return compareSnapshot(prepared.text, state.values.get(name));
-    if (isSnapshotCI() && !options.updateSnapshots) {
-      throw new Error(`Snapshot creation is disabled in CI environments unless --update-snapshots is used\nTo override, set the environment variable CI=false.\n\nSnapshot name: "${name}"\nReceived: ${prepared.text}`);
-    }
-    addFileSnapshot(state, name, prepared.text);
-    return null;
+    return matcherSupport.settle(prepareSnapshot(ctx, received, args, false), prepared => {
+      if (prepared.cancelled) return null;
+      if (prepared.failure) return prepared.failure;
+      const state = fileSnapshots(ctx.snapshot.file);
+      const name = ctx.snapshot.name;
+      snapshots.total++;
+      if (state.values.has(name)) return compareSnapshot(prepared.text, state.values.get(name));
+      if (isSnapshotCI() && !options.updateSnapshots) {
+        throw new Error(`Snapshot creation is disabled in CI environments unless --update-snapshots is used\nTo override, set the environment variable CI=false.\n\nSnapshot name: "${name}"\nReceived: ${prepared.text}`);
+      }
+      addFileSnapshot(state, name, prepared.text);
+      return null;
+    });
   }
 
   defineMatcher("toMatchSnapshot", "expected", matchFileSnapshot);
@@ -1465,34 +1835,35 @@
   }
 
   function matchInlineSnapshot(ctx, received, ...args) {
-    const prepared = prepareSnapshot(ctx, received, args, true);
-    if (prepared.failure) return prepared.failure;
-    nextSnapshotName("");
-    const expected = prepared.expected === undefined ? undefined : trimInlineSnapshot(prepared.expected);
-    if (expected === prepared.text) { snapshots.passed++; return null; }
-    if (expected !== undefined && !options.updateSnapshots) return compareSnapshot(prepared.text, expected);
-    if (isSnapshotCI() && !options.updateSnapshots) {
-      return { params: "", body: `\n\nMatcher error: Inline snapshot creation is disabled in CI environments unless --update-snapshots is used.\nTo override, set the environment variable CI=false.\n\nReceived: ${prepared.text}` };
-    }
-    queueInlineSnapshot(ctx.error, prepared);
-    if (expected === undefined) snapshots.added++;
-    else snapshots.passed++;
-    return null;
+    return matcherSupport.settle(prepareSnapshot(ctx, received, args, true), prepared => {
+      if (prepared.cancelled) return null;
+      if (prepared.failure) return prepared.failure;
+      snapshots.total++;
+      const expected = prepared.expected === undefined ? undefined : trimInlineSnapshot(prepared.expected);
+      if (expected === prepared.text) { snapshots.passed++; return null; }
+      if (expected !== undefined && !options.updateSnapshots) return compareSnapshot(prepared.text, expected);
+      if (isSnapshotCI() && !options.updateSnapshots) {
+        return { params: "", body: `\n\nMatcher error: Inline snapshot creation is disabled in CI environments unless --update-snapshots is used.\nTo override, set the environment variable CI=false.\n\nReceived: ${prepared.text}` };
+      }
+      queueInlineSnapshot(ctx.snapshot.file, ctx.error, prepared);
+      if (expected === undefined) snapshots.added++;
+      else snapshots.passed++;
+      return null;
+    });
   }
 
   defineMatcher("toMatchInlineSnapshot", "expected", matchInlineSnapshot);
 
   function defineErrorSnapshotMatcher(name, inline) {
     defineMatcher(name, "expected", (ctx, received, ...args) => {
-      if (ctx.not) return { params: "", body: "\n\nMatcher error: Snapshot matchers cannot be used with not\n" };
       if (args.length > 1) throw new Error("\n\nMatcher error: Expected zero or one arguments\n");
       if (args.length === 1 && typeof args[0] !== "string") throw new Error("\n\nMatcher error: Expected first argument to be a string\n");
       return matcherSupport.settle(typeof received === "function" ? throwOutcome({}, received) : throwOutcome(ctx, received), (outcome) => {
-        if (outcome.invalid) throw new Error("Expected value must be a function");
-        const threw = outcome.threw || outcome.value instanceof Error || (ctx.promise && typeof received !== "function");
-        if (!threw) return { params: "", body: "\n\nMatcher error: Received function did not throw\n" };
-        const message = outcome.value instanceof Error ? outcome.value.message || undefined : undefined;
-        return inline ? matchInlineSnapshot(ctx, message, ...args) : matchFileSnapshot(ctx, message, ...args);
+          if (outcome.invalid) throw new Error("Expected value must be a function");
+          const threw = outcome.threw || outcome.value instanceof Error || (ctx.promise && typeof received !== "function");
+          if (!threw) return { params: "", body: "\n\nMatcher error: Received function did not throw\n" };
+          const message = outcome.value instanceof Error ? outcome.value.message || undefined : undefined;
+          return inline ? matchInlineSnapshot(ctx, message, ...args) : matchFileSnapshot(ctx, message, ...args);
       });
     });
   }
@@ -1523,8 +1894,7 @@
     return { file, line: mapped ? mapped[0] : Number(match[2]), column: mapped ? mapped[1] : Number(match[3]) };
   }
 
-  function queueInlineSnapshot(error, prepared) {
-    const file = currentTest.file;
+  function queueInlineSnapshot(file, error, prepared) {
     const caller = inlineCaller(error);
     if (caller.file !== file.path) throw new Error(`Inline snapshot matchers must be called from the test file: ${file.path}\nCalled from file: ${caller.file}`);
     if (file.source === undefined) file.source = snapshotFS().readFileSync(file.path, "utf8");
@@ -1684,12 +2054,18 @@
 
   // ───────────────────────────── collection ─────────────────────────────
 
-  function createScope(name, parent, mode, only) {
-    return { kind: "scope", name, parent, mode, only, children: [], beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
+  function createScope(name, parent, mode, only, concurrent = false) {
+    return { kind: "scope", name, parent, mode, only, concurrent, children: [], beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
   }
 
-  function currentScope() {
-    if (!collecting) throw new Error("Cannot call test() or describe() outside of a test file");
+  // test.concurrent and describe.concurrent opt in, test.serial and describe.serial opt out,
+  // and everything else inherits from its describe block (the file root follows --concurrent).
+  function effectiveConcurrent(scope, modifiers) {
+    return modifiers.concurrent === undefined ? scope.concurrent : modifiers.concurrent;
+  }
+
+  function currentScope(kind) {
+    if (!collecting) throw new Error(`Cannot use ${kind} outside of the test runner. Run "bun test" to run tests.`);
     return collecting.scope;
   }
 
@@ -1700,15 +2076,24 @@
 
   function readTimeout(options) {
     if (typeof options === "number") return options;
-    if (options && typeof options === "object" && typeof options.timeout === "number") return options.timeout;
-    return undefined;
+    if (!options || typeof options !== "object") return undefined;
+    const timeout = options.timeout;
+    return typeof timeout === "number" ? timeout : undefined;
+  }
+
+  function guardRegistration(kind) {
+    if (preloading) throw new Error(`Cannot use ${kind} during preload.`);
   }
 
   function registerTest(modifiers, name, fn, timeoutOrOptions) {
-    const scope = currentScope();
+    guardRegistration("test");
     const hasFn = typeof fn === "function";
     const mode = modifiers.mode || "run";
-    if (!hasFn && mode === "run") throw new Error("test expects a function as the second argument");
+    const signature = modifiers.failing ? "test.failing" : "test";
+    if (!hasFn && mode === "run") throw new Error(`${signature} expects a function as the second argument`);
+    const timeout = readTimeout(timeoutOrOptions);
+    const repeat = internal.require("test_lifecycle").repeatOptions(timeoutOrOptions, signature);
+    const scope = currentScope("test");
     const test = {
       kind: "test",
       name: name === undefined ? "" : String(name),
@@ -1717,23 +2102,52 @@
       mode: effectiveMode(scope, mode),
       only: !!modifiers.only,
       failing: !!modifiers.failing,
-      timeout: readTimeout(timeoutOrOptions),
+      concurrent: effectiveConcurrent(scope, modifiers),
+      timeout,
+      retry: repeat.retry,
+      repeats: repeat.repeats,
       usesDone: modifiers.usesDone !== undefined ? modifiers.usesDone : hasFn && fn.length > 0,
+      // Bun calls a test in the async context it was registered in.
+      context: native.getAsyncContext(),
     };
     if (test.only) collecting.hasOnly = true;
     scope.children.push(test);
   }
 
-  function registerDescribe(modifiers, name, fn) {
-    const parent = currentScope();
-    const label = typeof name === "function" ? name.name : String(name);
-    const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only);
+  // Bun's ScopeFunctions.rs parse_arguments: a sole function is the callback, a function
+  // followed by a non-function is the callback and its options, and otherwise the first
+  // argument is the description and a function second or third is the callback.
+  function describeArguments([first, second, third]) {
+    const present = (value) => value !== undefined && value !== null;
+    if (present(third)) return { description: first, callback: typeof second === "function" ? second : third };
+    if (present(second)) return typeof first === "function" && typeof second !== "function" ? { callback: first } : { description: first, callback: second };
+    if (present(first)) return typeof first === "function" ? { callback: first } : { description: first };
+    return {};
+  }
+
+  // Bun's get_description: a class's name (empty for an anonymous class), a named function's
+  // name, or a number or string. Anything else, such as an anonymous arrow function, throws.
+  function describeLabel(description) {
+    if (description === undefined || description === null) return "";
+    if (typeof description === "function" && (description.name || /^class\b/.test(Function.prototype.toString.call(description)))) return description.name;
+    if (typeof description === "number" || typeof description === "string") return String(description);
+    throw new Error("describe() expects first argument to be a named class, named function, number, or string");
+  }
+
+  function registerDescribe(modifiers, ...args) {
+    guardRegistration("describe");
+    const parent = currentScope("describe");
+    const { description, callback: fn } = describeArguments(args);
+    const label = describeLabel(description);
+    const scope = createScope(label, parent, effectiveMode(parent, modifiers.mode || "run"), !!modifiers.only, effectiveConcurrent(parent, modifiers));
     if (scope.only) collecting.hasOnly = true;
     parent.children.push(scope);
     if (typeof fn !== "function") return;
     collecting.scope = scope;
     try {
-      fn();
+      // In the caller's context, so an enterWith() inside the callback stays inside it: Bun runs
+      // describe callbacks after the file loads, and later registrations must not see it.
+      internal.runInContext(native.getAsyncContext(), fn, undefined, []);
     } finally {
       collecting.scope = parent;
     }
@@ -1773,9 +2187,13 @@
   function formatVariable(rest, row) {
     const match = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$\d][\w$]*)*/.exec(rest);
     if (!match) return null;
-    const lookup = lookupPath(row, match[0]);
-    if (!lookup.found || lookup.value === undefined || lookup.value === null) return null;
-    const text = typeof lookup.value === "string" ? lookup.value : inspect(lookup.value);
+    let value = row;
+    for (const key of match[0].split(".")) {
+      if (value === null || value === undefined || !(key in Object(value))) return null;
+      value = value[key];
+    }
+    if (value === undefined || value === null) return null;
+    const text = typeof value === "string" ? value : inspect(value);
     return { text, length: match[0].length };
   }
 
@@ -1807,11 +2225,36 @@
     return Array.from(table, (row) => (Array.isArray(row) ? row : [row]));
   }
 
+  const VARIANTS = { skip: { mode: "skip" }, todo: { mode: "todo" }, only: { only: true }, failing: { failing: true }, concurrent: { concurrent: true }, serial: { concurrent: false } };
+
+  // Modifiers chain in any order, as in Bun: test.concurrent.each, test.concurrent.failing, ...
+  // Each variant is made on first use and then kept, so test.failing === test.failing.
+  function addVariants(fn, modifiers, make, names) {
+    for (const name of names) {
+      const get = () => {
+        const variant = make(Object.assign({}, modifiers, VARIANTS[name]));
+        Object.defineProperty(fn, name, { configurable: true, enumerable: true, writable: true, value: variant });
+        return variant;
+      };
+      Object.defineProperty(fn, name, { configurable: true, enumerable: true, get });
+    }
+  }
+
+  // Every variant has its own if, skipIf, todoIf and failingIf, as in Bun:
+  // test.concurrent.skipIf(c) picks test.concurrent.skip or test.concurrent.
+  function addConditionals(fn, failingIf) {
+    fn.if = (condition) => (condition ? fn : fn.skip);
+    fn.skipIf = (condition) => (condition ? fn.skip : fn);
+    fn.todoIf = (condition) => (condition ? fn.todo : fn);
+    fn.failingIf = failingIf;
+  }
+
   function makeTest(modifiers) {
     const fn = (name, callback, timeout) => registerTest(modifiers, name, callback, timeout);
-    fn.concurrent = fn;
-    fn.serial = fn;
+    addVariants(fn, modifiers, makeTest, ["skip", "todo", "only", "failing", "concurrent", "serial"]);
+    addConditionals(fn, (condition) => (condition ? fn.failing : fn));
     fn.each = (table) => (name, callback, timeout) => {
+      guardRegistration("test");
       eachRows(table).forEach((args, index) => {
         const label = formatLabel(String(name), args, index);
         const usesDone = typeof callback === "function" && callback.length > args.length;
@@ -1823,10 +2266,14 @@
   }
 
   function makeDescribe(modifiers) {
-    const fn = (name, callback) => registerDescribe(modifiers, name, callback);
-    fn.concurrent = fn;
-    fn.serial = fn;
+    const fn = (...args) => registerDescribe(modifiers, ...args);
+    addVariants(fn, modifiers, makeDescribe, ["skip", "todo", "only", "concurrent", "serial"]);
+    addConditionals(fn, (condition) => {
+      if (condition) throw new Error("Cannot call .failingIf() on describe");
+      return fn;
+    });
     fn.each = (table) => (name, callback) => {
+      guardRegistration("describe");
       eachRows(table).forEach((args, index) => {
         registerDescribe(modifiers, formatLabel(String(name), args, index), () => callback(...args));
       });
@@ -1835,28 +2282,27 @@
   }
 
   const test = makeTest({});
-  test.skip = makeTest({ mode: "skip" });
-  test.todo = makeTest({ mode: "todo" });
-  test.only = makeTest({ only: true });
-  test.failing = makeTest({ failing: true });
-  test.if = (condition) => (condition ? test : test.skip);
-  test.skipIf = (condition) => (condition ? test.skip : test);
-  test.todoIf = (condition) => (condition ? test.todo : test);
-  test.failingIf = (condition) => (condition ? test.failing : test);
-
   const describe = makeDescribe({});
-  describe.skip = makeDescribe({ mode: "skip" });
-  describe.todo = makeDescribe({ mode: "todo" });
-  describe.only = makeDescribe({ only: true });
-  describe.if = (condition) => (condition ? describe : describe.skip);
-  describe.skipIf = (condition) => (condition ? describe.skip : describe);
-  describe.todoIf = (condition) => (condition ? describe.todo : describe);
 
   function hookRegistrar(kind) {
     return (fn, timeout) => {
       if (typeof fn !== "function") throw new TypeError(`${kind}() expects a function as the first argument`);
-      currentScope()[kind].push({ fn, timeout: readTimeout(timeout) });
+      const test = running().test;
+      const hooks = kind === "afterAll" && test ? test.afterAll : currentScope(`${kind}()`)[kind];
+      hooks.push({ fn, timeout: readTimeout(timeout), context: native.getAsyncContext() });
     };
+  }
+
+  function onTestFinished(fn, timeout) {
+    if (typeof fn !== "function") throw new Error("onTestFinished() expects a function as the first argument");
+    const test = running().test;
+    if (!test) throw new Error("Cannot call onTestFinished() outside of a test. It can only be called inside a test.");
+    test.finished.push({ fn, timeout: readTimeout(timeout), context: native.getAsyncContext() });
+  }
+
+  function setDefaultTimeout(ms) {
+    if (typeof ms !== "number") throw new Error("setTimeout() expects a number (milliseconds)");
+    options.timeout = ms;
   }
 
   // ───────────────────────────── execution ─────────────────────────────
@@ -1866,49 +2312,66 @@
    * { timeout, done }, never rejects. Uses a done callback when the function
    * declares one.
    */
-  function invoke(fn, args, usesDone, timeout) {
+  function invoke(fn, args, usesDone, timeout, slot = running(), context = undefined) {
     return new Promise((resolve) => {
       let timer = null;
       const invocation = matcherSupport.pending();
-      const finish = (result) => invocation.complete(result, finalize);
+      const finish = (result) => invocation.complete(result, finalize, usesDone);
       const finalize = (result) => {
         if (invocation.settled) return;
         invocation.settled = true;
         if (timer !== null) internal.realTimers.clearTimeout(timer);
-        if (activeInvocation === invocation) activeInvocation = null;
+        if (slot.invocation === invocation) slot.invocation = null;
         resolve(result);
       };
       invocation.fail = (error) => finish({ error });
-      activeInvocation = invocation;
+      slot.invocation = invocation;
       const startTimer = () => {
         timer = internal.realTimers.setTimeout(() => finish({ timeout: true, done: usesDone }), timeout);
       };
-      try {
-        if (usesDone) {
-          const done = (err) => finish(err === undefined || err === null ? { ok: true } : { error: err });
-          startTimer();
-          const result = fn(...args.concat([done]));
-          if (isThenable(result)) result.then(null, (err) => finish({ error: err }));
-          return;
-        }
-        startTimer();
-        const result = fn(...args);
-        if (!isThenable(result)) return finish({ ok: true });
-        result.then(() => finish({ ok: true }), (err) => finish({ error: err }));
-      } catch (err) {
-        finish({ error: err });
-      }
+      startTimer();
+      const body = () => internal.require("test_lifecycle").body(fn, args, usesDone, finish);
+      // The callback runs in the async context it was registered in, as in Bun, so stores
+      // entered before it are visible. A lane's slot goes on top, entered again for each call:
+      // runtime JS awaits between a test's hooks and body, and a Browser host does not carry
+      // the frame across those.
+      const call = "blocked" in slot ? () => runInSlot(slot, body) : body;
+      internal.runInContext(context, call, undefined, []);
+      // In a concurrent group, the next test starts only once this one really waits, as in Bun.
+      if (slot.blocked && !invocation.settled) whenStillPending(invocation, slot.blocked);
     });
   }
 
-  function invokeHook(hook) {
-    const timeout = hook.timeout === undefined ? options.timeout : hook.timeout;
-    return invoke(hook.fn, [], hook.fn.length > 0, timeout);
+  // Bun drains the microtask queue after calling a callback and only then reads its promise:
+  // one that awaited only settled values has finished by then. QuickJS, JSC and the other
+  // in-guest engines own their job queue, so they drain it here the same way. The Browser
+  // host cannot run its native jobs synchronously or see an async function's promise state,
+  // so there a callback still unsettled after three microtask turns counts as waiting: a
+  // finished one settles within two (its promise reaction, then completion), and no timer
+  // can have run yet.
+  function whenStillPending(invocation, blocked) {
+    if (native.engine !== "host") {
+      native.runMicrotasks();
+      if (!invocation.settled) blocked();
+      return;
+    }
+    let turns = 3;
+    const check = () => {
+      if (invocation.settled) return;
+      if (turns-- === 0) return blocked();
+      internal.promiseThen(Promise.resolve(), check);
+    };
+    check();
   }
 
-  async function runHooks(hooks) {
+  function invokeHook(hook, slot) {
+    const timeout = hook.timeout === undefined ? options.timeout : hook.timeout;
+    return invoke(hook.fn, [], hook.fn.length > 0, timeout, slot, hook.context);
+  }
+
+  async function runHooks(hooks, slot) {
     for (const hook of hooks) {
-      const result = await invokeHook(hook);
+      const result = await invokeHook(hook, slot);
       if (!result.ok) return result;
     }
     return { ok: true };
@@ -1944,22 +2407,80 @@
     return node.children.some((child) => willRun(child, file));
   }
 
-  async function runScope(scope, file) {
+  // Bun's Order.rs: a file runs as a flat list of steps. Consecutive concurrent tests form one
+  // group, even across describe blocks; beforeAll and afterAll hooks always run on their own,
+  // so they end a group. A failed beforeAll skips its scope's tests and, as before this runner
+  // had groups, its afterAll too; Bun's set_failure_skip_to still runs that afterAll.
+  function planScope(scope, file, steps) {
     const active = willRun(scope, file);
-    if (active) {
-      const before = await runHooks(scope.beforeAll);
-      if (!before.ok) {
-        reportHookFailure(scope, before);
-        return;
-      }
-    }
+    const before = active && scope.beforeAll.length ? { kind: "beforeAll", scope, skipTo: 0 } : null;
+    if (before) steps.push(before);
     for (const child of scope.children) {
-      if (child.kind === "scope") await runScope(child, file);
-      else await runTestNode(child, file);
+      if (child.kind === "scope") planScope(child, file, steps);
+      else steps.push({ kind: "test", test: child });
     }
-    if (!active) return;
-    const after = await runHooks(scope.afterAll);
-    if (!after.ok) reportHookFailure(scope, after);
+    if (active && scope.afterAll.length) steps.push({ kind: "afterAll", scope });
+    if (before) before.skipTo = steps.length;
+    return steps;
+  }
+
+  function concurrentAt(steps, index) {
+    const step = steps[index];
+    return step !== undefined && step.kind === "test" && step.test.concurrent;
+  }
+
+  async function runScope(scope, file) {
+    const steps = planScope(scope, file, []);
+    let index = 0;
+    while (index < steps.length) {
+      const step = steps[index];
+      if (step.kind !== "test") {
+        index = await runScopeHooks(step, index);
+        continue;
+      }
+      let end = index + 1;
+      while (step.test.concurrent && concurrentAt(steps, end)) end++;
+      if (end - index === 1) await runTestNode(step.test, file);
+      else await runConcurrentGroup(steps.slice(index, end).map(entry => entry.test), file);
+      index = end;
+    }
+  }
+
+  async function runScopeHooks(step, index) {
+    const result = await runHooks(step.scope[step.kind]);
+    if (result.ok) return index + 1;
+    reportHookFailure(step.scope, result);
+    return step.kind === "beforeAll" ? step.skipTo : index + 1;
+  }
+
+  // Bun's Execution.rs steps each test of a group until a hook or body really waits, then
+  // starts the next one. Here a lane takes tests in order; whenever a lane's callback is still
+  // pending after it returns, another lane starts, up to --max-concurrency lanes. Tests that
+  // never wait therefore run one after another, in order.
+  function runConcurrentGroup(tests, file) {
+    const limit = options.maxConcurrency > 0 ? Math.min(options.maxConcurrency, tests.length) : tests.length;
+    let next = 0;
+    let lanes = 0;
+    let active = 0;
+    const lane = async (slot) => {
+      while (next < tests.length) await runTestNode(tests[next++], file);
+      slot.blocked = null;
+    };
+    concurrentGroups++;
+    return new Promise((resolve, reject) => {
+      const startLane = () => {
+        if (lanes >= limit || next >= tests.length) return;
+        lanes++;
+        active++;
+        const slot = { test: null, invocation: null, blocked: startLane };
+        runInSlot(slot, () => lane(slot)).then(() => {
+          if (--active === 0) resolve();
+        }, reject);
+      };
+      startLane();
+    }).finally(() => {
+      concurrentGroups--;
+    });
   }
 
   // A failing beforeAll/afterAll is reported as an unnamed test of its scope.
@@ -1976,31 +2497,58 @@
     }
     if (test.mode === "skip") return reportResult(test, { status: "skip" }, 0);
     if (test.mode === "todo" && !(options.runTodo && test.fn)) return reportResult(test, { status: "todo" }, 0);
-    const outcome = await executeTest(test, file);
-    reportResult(test, outcome.result, outcome.elapsed, outcome.expectCount);
+    const outcome = await internal.require("test_lifecycle").attempts(test, () => executeTest(test, file), (failed) => {
+      printFileHeaderIfNeeded();
+      printFailure(failed.result);
+      writeErr(resultNote(failed.result));
+    });
+    reportResult(test, outcome.result, outcome.elapsed, outcome.expectCount, outcome.label);
+  }
+
+  function* cleanupHooks(record, afterEach) {
+    let afterIndex = 0;
+    let finishedIndex = 0;
+    while (record.afterAll.length || afterIndex < afterEach.length || finishedIndex < record.finished.length) {
+      if (record.afterAll.length) { yield record.afterAll.pop(); continue; }
+      if (afterIndex < afterEach.length) { yield afterEach[afterIndex++]; continue; }
+      const callback = record.finished[finishedIndex];
+      delete record.finished[finishedIndex++];
+      yield callback;
+    }
   }
 
   async function executeTest(test, file) {
     const chain = scopeChain(test.parent);
-    const record = { expectCount: 0, assertions: null, test, file };
-    currentTest = record;
+    const record = { expectCount: 0, assertions: null, test, file, afterAll: [], finished: [] };
+    const slot = running();
+    slot.test = record;
     const start = now();
-    let result = await runHooks(chain.flatMap((s) => s.beforeEach));
+    // Without beforeEach hooks the body starts synchronously, so a concurrent group's tests
+    // each reach their first callback in order before the next one starts.
+    const beforeEach = chain.flatMap((s) => s.beforeEach);
+    let result = beforeEach.length ? await runHooks(beforeEach, slot) : { ok: true };
     if (result.ok) {
       const timeout = test.timeout === undefined ? options.timeout : test.timeout;
-      result = await invoke(test.fn, [], test.usesDone, timeout);
+      result = await invoke(test.fn, [], test.usesDone, timeout, slot, test.context);
       if (result.timeout) result.timeoutMs = timeout;
     }
-    const after = await runHooks(chain.toReversed().flatMap((s) => s.afterEach));
-    if (result.ok && !after.ok) result = after;
+    const after = await runHooks(cleanupHooks(record, chain.reverse().flatMap((s) => s.afterEach)), slot);
+    if (!result.ok && !after.ok) {
+      printFileHeaderIfNeeded();
+      const failure = failureFromResult(test.failing ? after : result, test);
+      printFailure(failure);
+      writeErr(resultNote(failure));
+    }
+    if (!after.ok && !test.failing) result = after;
     const elapsed = now() - start;
-    currentTest = null;
-    return { result: classify(test, result, record), elapsed, expectCount: record.expectCount };
+    slot.test = null;
+    const classified = test.failing && !after.ok && result.ok ? failureFromResult(after, test) : classify(test, result, record);
+    return { result: classified, elapsed, expectCount: record.expectCount };
   }
 
   function classify(test, result, record) {
     if (test.mode === "todo") return result.ok ? { status: "fail", note: "todoPassed" } : { status: "todo" };
-    if (test.failing) return result.ok ? { status: "fail", note: "failingPassed" } : { status: "pass" };
+    if (test.failing && !result.timeout) return result.ok ? { status: "fail", note: "failingPassed" } : { status: "pass" };
     if (!result.ok) return failureFromResult(result, test);
     const assertions = record.assertions;
     if (assertions && assertions.exact !== undefined && assertions.exact !== record.expectCount) {
@@ -2051,22 +2599,26 @@
     return ms > 1;
   }
 
-  function reportResult(test, result, elapsed, expectCount) {
+  function reportResult(test, result, elapsed, expectCount, label = "") {
     summary.expectations += expectCount || 0;
     summary[result.status]++;
     // Agents only see failures.
     const quiet = options.agent && result.status !== "fail";
-    if (!quiet) printResult(test, result, elapsed);
+    if (!quiet) printResult(test, result, elapsed, label);
     if (result.status === "fail" && options.bail > 0 && summary.fail === options.bail) bailOut();
   }
 
-  function printResult(test, result, elapsed) {
-    printFileHeaderIfNeeded();
+  function printFailure(result) {
     if (result.error !== undefined) writeErr(formatErrorText(result.error));
     if (result.assertion) writeErr(`AssertionError: ${result.assertion}\n`);
+  }
+
+  function printResult(test, result, elapsed, label) {
+    printFileHeaderIfNeeded();
+    printFailure(result);
     const names = displayNames(test).map((name) => ` ${name} >`).join("");
     const time = showsElapsed(result, elapsed) ? ` ${formatElapsed(elapsed)}` : "";
-    const line = `(${result.status})${names} ${test.name}${time}\n${resultNote(result)}`;
+    const line = `(${result.status})${names} ${test.name}${label}${time}\n${resultNote(result)}`;
     writeErr(line);
     if (result.status in repeated) repeated[result.status] += line;
   }
@@ -2310,6 +2862,8 @@
       else if (flag === "-t" || flag === "--test-name-pattern") setNamePattern(value());
       else if (flag === "--bail") options.bail = inline === undefined ? 1 : Number(inline);
       else if (flag === "--only") options.only = true;
+      else if (flag === "--concurrent") options.concurrent = true;
+      else if (flag === "--max-concurrency") options.maxConcurrency = Number(value());
       else if (flag === "--todo") options.runTodo = true;
       else if (flag === "--update-snapshots" || flag === "-u") options.updateSnapshots = true;
       else if (arg.startsWith("-")) continue;
@@ -2333,38 +2887,113 @@
   function installErrorHandlers() {
     const process = globalThis.process;
     const onError = (error) => {
-      if (activeInvocation) activeInvocation.fail(error);
+      const invocation = running().invocation;
+      if (invocation) invocation.fail(error);
       else reportUnhandledError(error);
     };
     process.on("uncaughtException", onError);
     process.on("unhandledRejection", (error, promise) => {
-      if (activeInvocation) activeInvocation.unhandled(error, promise);
+      const invocation = running().invocation;
+      if (invocation) invocation.unhandled(error, promise);
       onError(error);
     });
   }
 
-  async function runFile(abs, cwd) {
-    summary.files++;
-    const file = { root: createScope("", null, "run", false), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
-    file.scope = file.root;
-    startFileHeader(relativePath(cwd, abs));
-    collecting = file;
+  async function runFile(abs, cwd, last) {
+    const previousFile = activeFile;
+    activeFile = {};
+    try {
+      await runActiveFile(abs, cwd, last);
+    } finally {
+      activeFile = previousFile;
+    }
+  }
+
+  async function importPreloads(file, cwd) {
+    if (preloads.length === 0 || preloadImport === "ready") return true;
+    if (preloadImport !== "unattempted") return false;
+    preloadImport = "loading";
+    preloadScope = createScope("", null, "run", false);
+    const previousScope = file.scope;
+    const previousCollecting = collecting;
+    file.scope = preloadScope;
+    preloading = true;
     try {
       for (const preload of preloads) await internal.importModule(resolveArgument(cwd, preload));
-      await internal.importModule(abs);
+      preloadImport = "ready";
+      return true;
     } catch (error) {
-      // A file that fails to load counts as one failed test.
+      preloadImport = "stopped";
+      preloadSetup = "stopped";
+      throw error;
+    } finally {
+      preloading = false;
+      file.scope = previousScope;
+      collecting = previousCollecting;
+    }
+  }
+
+  async function collectFile(file, cwd) {
+    if (preloadImport === "stopped") return false;
+    collecting = file;
+    try {
+      if (!await importPreloads(file, cwd)) return false;
+      file.root.parent = preloadScope;
+      await internal.importModule(file.path);
+      return true;
+    } catch (error) {
       reportUnhandledError(error);
       summary.fail++;
-      return;
+      return false;
     } finally {
       collecting = null;
     }
-    await runScope(file.root, file);
+  }
+
+  async function setupPreloads() {
+    if (!preloadScope || preloadImport !== "ready" || preloadSetup !== "pending") return;
+    preloadSetup = "running";
+    try {
+      const result = await runHooks(preloadScope.beforeAll);
+      preloadSetup = result.ok ? "ready" : "stopped";
+      if (!result.ok) reportHookFailure(preloadScope, result);
+    } catch (error) {
+      preloadSetup = "stopped";
+      reportHookFailure(preloadScope, { error });
+    }
+  }
+
+  async function finishPreloads() {
+    if (!preloadScope || preloadImport !== "ready" || preloadTeardown) return;
+    preloadTeardown = true;
+    try {
+      const result = await runHooks(preloadScope.afterAll);
+      if (!result.ok) reportHookFailure(preloadScope, result);
+    } catch (error) {
+      reportHookFailure(preloadScope, { error });
+    }
+  }
+
+  function flushFileSnapshots(file) {
     try {
       flushSnapshots(file);
     } catch (error) {
       reportUnhandledError(error);
+    }
+  }
+
+  async function runActiveFile(abs, cwd, last) {
+    summary.files++;
+    const file = { root: createScope("", null, "run", false, options.concurrent), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
+    file.scope = file.root;
+    startFileHeader(relativePath(cwd, abs));
+    const collected = await collectFile(file, cwd);
+    await setupPreloads();
+    try {
+      if (collected && preloadSetup !== "stopped") await runScope(file.root, file);
+    } finally {
+      if (last) await finishPreloads();
+      flushFileSnapshots(file);
     }
   }
 
@@ -2383,7 +3012,7 @@
     }
     installErrorHandlers();
     Object.assign(globalThis, exports);
-    for (const abs of state.files) await runFile(abs, cwd);
+    for (let index = 0; index < state.files.length; index++) await runFile(state.files[index], cwd, index === state.files.length - 1);
     const filteredAll = printSummary();
     if (filteredAll || summary.fail > 0 || summary.errors > 0) globalThis.process.exitCode = 1;
   }
@@ -2397,15 +3026,13 @@
     afterAll: hookRegistrar("afterAll"),
     beforeEach: hookRegistrar("beforeEach"),
     afterEach: hookRegistrar("afterEach"),
+    onTestFinished,
     mock,
     spyOn,
     jest,
     vi: jest,
     setSystemTime: internal.fakeTimers.api.setSystemTime,
-    setDefaultTimeout(ms) {
-      if (typeof ms !== "number") throw new Error("setTimeout() expects a number (milliseconds)");
-      options.timeout = ms;
-    },
+    setDefaultTimeout,
   };
 
   return { exports, run };

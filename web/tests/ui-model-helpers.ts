@@ -6,6 +6,9 @@ import { EditorState } from "@codemirror/state";
 import * as stateModule from "@codemirror/state";
 import * as viewModule from "@codemirror/view";
 import { declareModuleMemory, pages, type Runtime } from "waffle";
+import { MemoryBackend } from "waffle/fs/backend";
+import { FilesystemService } from "waffle/fs/service";
+import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol";
 import { getVfsDescriptor } from "../src/shared-fs";
 import * as engineLoader from "../src/engine-loader";
 import { profileAsset } from "../src/program-profile";
@@ -43,12 +46,27 @@ export function filesystemFixture() {
   const reads = new Map<string, ReturnType<typeof deferred<Uint8Array | undefined>>>();
   const writes: { path: string; text: string; done: ReturnType<typeof deferred<void>> }[] = [];
   const checkpoints: ReturnType<typeof deferred<void>>[] = [];
+  const services: FilesystemService[] = [];
+  const ports: MessagePort[] = [];
   const control = { holdWrites: false, checkpoints: 0, beforeWrite: undefined as ((path: string) => void) | undefined };
   const fs: Runtime["filesystem"] = {
     vfs: getVfsDescriptor("memory"), ownershipLost: false, workspace: undefined,
     state: { status: "ready" as const },
-    directoryHandle: unsupported, createIdentity: unsupported, fork: unsupported, connect: unsupported,
-    revoke: unsupported, reap: unsupported, quiesce: unsupported, drain: unsupported, resolvePath: unsupported, move: unsupported,
+    directoryHandle: unsupported, createIdentity: unsupported, connect: unsupported,
+    revoke: unsupported, reap: unsupported, quiesce: unsupported, drain: unsupported, move: unsupported,
+    async resolvePath(path) {
+      if (path === "/" || directories.has(path)) return { path, kind: "dir" };
+      if (files.has(path)) return { path, kind: "file" };
+    },
+    fork() {
+      const backend = new MemoryBackend();
+      backend.execute = (operation, args, bytes) => filesystemOperation(fs, operation, args, bytes);
+      const service = new FilesystemService(backend);
+      const connection = createFilesystemConnection();
+      services.push(service); ports.push(connection.client.port, connection.server.port);
+      service.connect(connection.server);
+      return connection.client;
+    },
     onOwnershipLost: undefined as (() => void) | undefined,
     onStateChange: undefined as Runtime["filesystem"]["onStateChange"],
     async mkdirp(path: string) {
@@ -77,7 +95,24 @@ export function filesystemFixture() {
     },
     async flush() { control.checkpoints++; await checkpoints.shift()?.promise; },
   };
-  return { fs, files, directories, reads, writes, checkpoints, control };
+  return { fs, files, directories, reads, writes, checkpoints, control,
+    dispose() { for (const service of services) service.dispose(); for (const port of ports) port.close(); },
+  };
+}
+
+async function filesystemOperation(fs: Runtime["filesystem"], operation: string, args: unknown[], bytes: Uint8Array): Promise<unknown> {
+  const path = args[0];
+  if (typeof path !== "string") throw new Error("Missing filesystem path");
+  switch (operation) {
+    case "mkdirp": return fs.mkdirp(path);
+    case "lookup": return fs.lookup(path);
+    case "readFile": return fs.readFile(path);
+    case "remove": return fs.remove(path);
+    case "writeFile":
+      if (args[2] === true && await fs.lookup(path)) throw new FilesystemError(20);
+      return fs.writeFile(path, bytes);
+    default: throw new Error(`Unexpected filesystem operation: ${operation}`);
+  }
 }
 
 type FilesystemFixture = ReturnType<typeof filesystemFixture>;
@@ -110,7 +145,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
   const promptCreates: PromptOptions[] = [];
   const sessionCreates: SessionOptions[] = [];
   const storageEvents: string[] = [];
-  let runtime = { filesystem: filesystem(fixture), disposed: false, dispose: async () => {}, processes: async () => {}, registerAdapter: () => () => {}, registerProgram: () => () => {} };
+  let runtime = { filesystem: filesystem(fixture), disposed: false, dispose: async () => {}, processes: async () => {}, registerAdapter: () => () => {}, registerHostAdapter: () => () => {}, registerProgram: () => () => {} };
   const boundary = {
     ...stateModule, ...viewModule, EditorView: View, EditorState,
     ...engineLoader, declareModuleMemory, pages,
@@ -160,7 +195,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     "@xterm/addon-fit": ["FitAddon"], "@xterm/xterm": ["Terminal"],
     waffle: ["createRuntime", "declareModuleMemory", "pages", "storedWorkspaces", "openIdleWorkspace"], "browser-programs": ["BrowserPrograms"],
     "workspace-storage": ["WorkspaceStorage"],
-    "engine-loader": ["ENGINES", "WasmMissing", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
+    "engine-loader": ["ENGINES", "WasmMissing", "createToolsLoader", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
     "preview-links": ["installPreviewLinks"],
@@ -217,6 +252,7 @@ export { runtimeSharedObjectRoute } from ${JSON.stringify(`${root}web/src/shared
     finally {
       Reflect.deleteProperty(globalThis, key);
       for (const run of runs) run.done.resolve({ code: 0 });
+      fixture.dispose();
       await rm(scratch, { recursive: true });
     }
   } };

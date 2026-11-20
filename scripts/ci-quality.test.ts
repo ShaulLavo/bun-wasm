@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { discoverChecks, automaticChecks, checkCommand, nativeGroups, selectChecks } from "./test-checks";
+import { discoverChecks, automaticChecks, checkCommand, checkId, nativeGroups, selectChecks } from "./test-checks";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { qualityGates } from "./quality";
 import { rustTestPackages } from "./rust-test-packages";
@@ -19,6 +19,32 @@ const boatShell = "setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile 
 const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-identity:\n")[0]!;
 const { prebuild, ordered: rust } = nativePipeline(workflow);
 const importStepName = "Import the verified JSC prebuild and sysroot";
+
+test("compiled JSON runtime controls follow the selected JSC producer", () => {
+  expect(selectChecks("runtime")).toContain("scripts/jsc-json-fast-controls.test.ts");
+  const start = nativeWorkflowStep("name", "Start the JSC Cargo guest build");
+  const wait = nativeWorkflowStep("name", "Build the JSC Cargo guest");
+  const controls = nativeWorkflowStep("name", "Blocking native fixture checks");
+  const outputs = { "needs.selection.outputs.jsc": "true" };
+  for (const step of [start, wait]) expect(cacheCondition(workflowString(workflowField(step, "if")), outputs, true)).toBe(true);
+  expect(controls).not.toHaveProperty("if");
+  expect(workflowString(workflowField(controls, "run"))).toContain("bun scripts/test-checks.ts native");
+  expect(workflowString(workflowField(workflowField(controls, "env"), "INSTALL_ENGINES")))
+    .toBe("${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
+  expect(rust.indexOf("name: Start the JSC Cargo guest build")).toBeLessThan(rust.indexOf("name: Build the JSC Cargo guest\n"));
+  expect(rust.indexOf("name: Build the JSC Cargo guest\n")).toBeLessThan(rust.indexOf("name: Blocking native fixture checks"));
+});
+
+test("JSON runtime controls skip unselected JSC and fail when its selected launcher is missing", () => {
+  const path = new URL("./jsc-json-fast-controls.test.ts", import.meta.url).pathname;
+  const env = { ...process.env, BUN_WASM_LAUNCHER: new URL("../dist/missing-json-control-launcher", import.meta.url).pathname, BUN_WASM_JSON_LONG_STRESS: "1" };
+  const unselected = spawnSync(process.execPath, ["test", path], { encoding: "utf8", env: { ...env, BUN_WASM_CHECK_ENGINES: "quickjs,browser" } });
+  expect(unselected.status).toBe(0);
+  expect(unselected.stderr).toMatch(/0 pass\s+\d+ skip\s+0 fail/);
+  const selected = spawnSync(process.execPath, ["test", path, "--test-name-pattern", "general depth limit remains authoritative"], { encoding: "utf8", env: { ...env, BUN_WASM_CHECK_ENGINES: "quickjs,jsc,browser" } });
+  expect(selected.status).toBe(1);
+  expect(selected.stderr).toContain("ENOENT");
+});
 
 test("CI shares one exact Node patch across TLS handoff jobs and preserves direct spread eval scope", () => {
   const pin = workflowField(workflowField(Bun.YAML.parse(workflow), "env"), "CI_NODE_VERSION");
@@ -76,7 +102,7 @@ test("Web parser probe uses the pinned compiler and restored toolchain before it
 });
 
 test("native checks share one cached target through the quality checkpoint", () => {
-  expect(rust).toContain("needs.quality.outputs.rust == 'true'");
+  expect(rust).toContain("needs.selection.outputs.rust == 'true'");
   expect(rust).toContain("CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target");
   expect(rust).toContain("${{ env.CARGO_TARGET_DIR }}");
   expect(rust).toContain("${{ env.CARGO_HOME }}/registry");
@@ -92,12 +118,12 @@ test("native job budgets and names stay unchanged beside the lightweight update 
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": 10, "browser-process": 10, "ci-result": 5, "update-status": 5,
+    selection: 5, quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, "browser-production": 60, "ordinary-web-guests": 20, package: 10, "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, "shared-native": 30, "shared-browser": 30, "shared-proof": 5, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": "${{ startsWith(matrix.batch, '2') && 60 || 10 }}", "browser-process": 10, "ci-result": 5, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
-    quality: "Source quality", "jsc-identity": "Resolve effective JSC inputs", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
-    package: "Browser adapter package", "shared-jsc-identity": "Resolve effective shared JSC inputs", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
+    selection: "CI selection", quality: "Source quality", "jsc-identity": "Resolve effective JSC inputs", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)", "browser-production": "Browser guest production", "ordinary-web-guests": "Ordinary Web guest checks",
+    package: "Browser adapter package", "shared-jsc-identity": "Resolve effective shared JSC inputs", "shared-prebuild": "Shared PIC sysroot and JSC prebuild", "shared-spidermonkey-prebuild": "Shared SpiderMonkey library prebuild", "shared-sysroot": "Shared PIC program producer", "shared-native": "Shared native (${{ matrix.engine }})", "shared-browser": "Shared Browser (${{ matrix.engine }})", "shared-proof": "Shared PIC sysroot proof", web: "Web host", "web-unit": "Web host unit and types",
     "web-browser": "Web browser (${{ matrix.batch }})", "process-bundles": "Shared process browser bundles", "browser-guest": "Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})", "browser-process": "Processes (${{ matrix.browser }})", "ci-result": "Code quality", "update-status": "Report automated update statuses",
   });
   expect(rust).not.toContain("Whole-job guard");
@@ -159,7 +185,8 @@ test("CMake owner migration accepts new features and rejects missing original ow
 test("every migrated selection retains one blocking owner and the original local runtime set", () => {
   expect(proveCheckMigration().deduplicated).toHaveLength(7);
   expectOriginalCmakeOwners(selectChecks("cmake"));
-  const checks = discoverChecks().map(check => check.path).concat(automaticChecks().map(check => check.path));
+  // By check id: two commands of one shared-group fixture share a path and are two executions.
+  const checks = discoverChecks().map(checkId).concat(automaticChecks().map(check => check.path));
   expect(new Set(checks).size).toBe(checks.length);
   expect(selectChecks("quality")).toContain("scripts/runtime-ts-small.test.ts");
   expect(selectChecks("web")).toContain("scripts/runtime-sqlite.test.ts");
@@ -497,44 +524,46 @@ test("merged main keeps its CMake and package identity checks with one owner eac
 test("CMake preflight has one always-on lightweight owner, independent of native selection", () => {
   expect(quality).toContain("run: bun scripts/test-checks.ts cmake");
   expect(quality).toContain("sudo apt-get install -y cmake ninja-build g++");
-  expect(quality).not.toMatch(/^ {4}(?:if|needs):/m);
+  expect(quality).toContain("    needs: selection");
+  expect(quality).not.toMatch(/^ {4}if:/m);
   expect(rust).not.toContain("scripts/cmake-cache.test.ts");
 });
 
-test("shared browser setup selects HTTPS apt sources with optional mirrors", () => {
+test("apt setup sends every regional Ubuntu mirror to the main HTTPS archive", () => {
+  const script = new URL("../.github/scripts/apt-main-archive.sh", import.meta.url).pathname;
   const action = readFileSync(new URL("../.github/actions/browser-deps/action.yml", import.meta.url), "utf8");
-  const step = action.match(/    - name: Use Ubuntu HTTPS archives for browser dependencies\n      shell: [^\n]+\n      run: \|\n((?:        .*\n)+)/);
-  if (!step?.[1]) throw new Error("Configure apt transport before installing browser dependencies");
-  const command = step[1];
-  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-apt-"));
+  expect(action).toContain('sudo bash "$GITHUB_WORKSPACE/.github/scripts/apt-main-archive.sh"');
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-browser-apt-"));
   try {
-    const mirrors = join(directory, "apt-mirrors.txt");
-    const sources = join(directory, "ubuntu.sources");
+    const apt = join(root, "etc/apt");
+    mkdirSync(join(apt, "sources.list.d"), { recursive: true });
+    const mirrors = join(apt, "apt-mirrors.txt");
+    const sources = join(apt, "sources.list.d/ubuntu.sources");
     const ubuntuSources = "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\n";
+    // Runner images point straight at a regional host too, not only through the mirror list.
+    const regionalSources = "Types: deb\nURIs: http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\nSuites: resolute\n";
+    const unrelated = "http://azureXarchiveXubuntuXcom/ubuntu/\tpriority:5\nhttps://ppa.launchpadcontent.net/x/ubuntu\tpriority:6\n";
+    writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n" + unrelated);
     writeFileSync(sources, ubuntuSources);
-    const fallbacks = "https://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n";
-    const unrelated = "https://azure.archive.ubuntu.com/ubuntu/\tpriority:4\nhttp://azureXarchiveXubuntuXcom/ubuntu/\tpriority:5\n# http://azure.archive.ubuntu.com/ubuntu/\n";
-    const preserved = fallbacks + unrelated;
-    writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:1\n" + preserved);
-    const run = command.replaceAll("sudo ", "").replaceAll("/etc/apt/apt-mirrors.txt", mirrors)
-      .replaceAll("/etc/apt/sources.list.d/ubuntu.sources", sources);
-    const result = spawnSync("bash", ["-euc", run], { encoding: "utf8" });
+    writeFileSync(join(apt, "sources.list.d/regional.sources"), regionalSources);
+    const run = () => spawnSync("bash", [script, root], { encoding: "utf8" });
+    const result = run();
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
-    expect(readFileSync(mirrors, "utf8")).toBe(preserved);
+    expect(result.stdout).toContain("apt archive host: https://archive.ubuntu.com/ubuntu");
+    expect(result.stdout).not.toMatch(/https?:\/\/[a-z0-9.-]+\.archive\.ubuntu\.com/);
+    const rewritten = "https://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n" + unrelated;
+    expect(readFileSync(mirrors, "utf8")).toBe(rewritten);
     expect(readFileSync(sources, "utf8")).toBe(ubuntuSources.replaceAll("http:", "https:"));
-    expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
-    expect(readFileSync(mirrors, "utf8")).toBe(preserved);
-    writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n");
-    expect(spawnSync("bash", ["-euc", run]).status).not.toBe(0);
-    rmSync(mirrors);
-    writeFileSync(sources, ubuntuSources);
-    expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
-    expect(existsSync(mirrors)).toBe(false);
-    expect(readFileSync(sources, "utf8")).toBe(ubuntuSources.replaceAll("http:", "https:"));
-    expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
+    expect(readFileSync(join(apt, "sources.list.d/regional.sources"), "utf8")).toBe(regionalSources.replace("http://us-east-2.ec2.archive", "https://archive"));
+    expect(run().status).toBe(0);
+    expect(readFileSync(mirrors, "utf8")).toBe(rewritten);
+    // Images without a mirror list or a sources directory still pass.
+    rmSync(apt, { recursive: true });
+    mkdirSync(apt, { recursive: true });
+    expect(run().status).toBe(0);
   } finally {
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -556,6 +585,17 @@ test("apt prefetch uses signed-index SHA256 hashes and preserves mirror resoluti
   expect(() => parseArchives(row.replace("archive_1.0_amd64.deb", "../archive.deb"))).toThrow("SHA256");
   expect(() => parseArchives(row.replace(uri, "http://azure.archive.ubuntu.com/ubuntu/pool/main/a/archive.deb"))).toThrow("transport");
   expect(() => parseArchives(row.replace(" 42 ", " 0 "))).toThrow("size");
+});
+
+test("apt prefetch accepts x86-64-v3 security archives only after HTTPS selection", () => {
+  // Shape printed by the AWS-hosted ubuntu-26.04 image (20261111.82.6), whose sources list the security pocket directly.
+  const hash = "b".repeat(64);
+  const path = "ubuntu/pool/main/g/gst-plugins-base1.0/libgstreamer-plugins-base1.0-0_1.28.2-1ubuntu0.3_amd64v3.deb";
+  const row = (uri: string) => `'${uri}' libgstreamer-plugins-base1.0-0_1.28.2-1ubuntu0.3_amd64v3.deb 912034 SHA256:${hash}`;
+  expect(parseArchives(row(`https://security.ubuntu.com/${path}`))).toEqual([{
+    uri: `https://security.ubuntu.com/${path}`, filename: "libgstreamer-plugins-base1.0-0_1.28.2-1ubuntu0.3_amd64v3.deb", size: 912034, sha256: hash,
+  }]);
+  expect(() => parseArchives(row(`http://security.ubuntu.com/${path}`))).toThrow(".github/actions/browser-deps");
 });
 
 test("prefetch starts a bounded batch before waiting, unlike serial apt downloads", async () => {
@@ -680,7 +720,7 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
   const browsers = workflow.split("\n  browser-process:\n")[1]!;
   expect(producer).toContain("bun web/scripts/ci-process-bundles.ts");
   expect(producer).toContain("actions/upload-artifact@v4");
-  expect(browsers).toContain("needs: [quality, rust, process-bundles, browser-guest]");
+  expect(browsers).toContain("needs: [selection, ordinary-web-guests, rust, browser-production, process-bundles, browser-guest]");
   expect(browsers).toContain("actions/download-artifact@v4");
   expect(browsers).toContain("BUN_WASM_PROCESS_BUNDLES:");
   expect(browsers).toContain("BUN_WASM_RUNTIME_PROC_BUNDLE:");
@@ -706,6 +746,21 @@ for (const job of ["jsc-prebuild", "native-quality", "rust"]) {
       expect(failure.stdout).toBe(expected);
     }
   });
+
+  test(`${job} host version reports ignore Ubuntu glibc package revisions`, () => {
+    const jobs = workflowField(Bun.YAML.parse(workflow), "jobs");
+    const steps = workflowField(workflowField(jobs, job), "steps");
+    if (!Array.isArray(steps)) throw new Error("Missing workflow steps");
+    const step = steps.find((step: unknown) => typeof step === "object" && step !== null && "id" in step && step.id === "host-tools");
+    const pipeline = workflowString(workflowField(step, "run")).split("\n").find(line => line.trim().startsWith("ldd --version |"));
+    if (!pipeline) throw new Error("Missing glibc version pipeline");
+    // Runner image rollouts put jobs of one run on different revisions of the same glibc.
+    const reports = ["2.43-2ubuntu2.4", "2.43-2ubuntu2.7"].map(revision => {
+      const setup = `ldd() { printf 'ldd (Ubuntu GLIBC ${revision}) 2.43\\nCopyright (C) 2026 Free Software Foundation, Inc.\\n'; }; `;
+      return spawnSync("bash", ["-euo", "pipefail", "-c", setup + pipeline], { encoding: "utf8" }).stdout;
+    });
+    expect(reports).toEqual(["2.43\n", "2.43\n"]);
+  });
 }
 
 test("Rust build caches follow host tool versions, not the runner image", () => {
@@ -729,7 +784,11 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
-  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(14);
+  const saves = rust.split("\n      - ").filter(step => step.includes("uses: actions/cache/save@v4"));
+  const checkerSaves = saves.filter(step => step.startsWith("name: Save completed Rust dependency checker setup\n"));
+  expect(checkerSaves).toHaveLength(1);
+  expect(checkerSaves[0]).toContain("path: ${{ env.CARGO_HOME }}/bin/cargo-machete");
+  expect(saves.filter(step => !checkerSaves.includes(step))).toHaveLength(14);
   expect(prebuild.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(5);
   expect(prebuild).not.toContain("github.run_id");
   expect(rust).toContain("steps.native-cargo-cache.outputs.cache-matched-key == ''");
@@ -755,7 +814,7 @@ test("completed producers seed caches before unrelated guest gates", () => {
   expect(bootstrapSave).toBeGreaterThan(rust.indexOf("name: Blocking native quality checks"));
   expect(bootstrapSave).toBeLessThan(rust.indexOf("name: Build native fixtures"));
   expect(jscCargoSave).toBeGreaterThan(rust.indexOf("name: Build the JSC Cargo guest"));
-  expect(jscCargoSave).toBeLessThan(rust.indexOf("bun scripts/jsc-embedding.ts test"));
+  expect(jscCargoSave).toBeLessThan(rust.indexOf("bun scripts/jsc-embedding.ts verify"));
   expect(nativeSave).toBeGreaterThan(rust.indexOf("bash scripts/build-bun-tools.sh"));
   expect(nativeSave).toBeLessThan(rust.indexOf("test-web-guests.ts quickjs browser"));
   expect(nativeSave).toBeLessThan(rust.indexOf("test-web-guests.ts jsc"));
@@ -782,11 +841,23 @@ test("split engine producers reuse one common core and retain both pair receipts
   expect(rust).toContain("dist/*.wasm.engine.json");
 });
 
-test("preinstalled native tools skip apt and fallback removes the known slow mirror", () => {
+test("preinstalled native tools skip apt and fallback leaves the regional mirrors", () => {
   for (const section of [quality, rust]) {
     expect(section).toContain("if command -v cmake");
     expect(section.indexOf("then exit 0; fi")).toBeLessThan(section.indexOf("sudo apt-get update"));
-    expect(section).toContain("/etc/apt/apt-mirrors.txt");
+    expect(section.indexOf("apt-main-archive.sh")).toBeGreaterThan(section.indexOf("then exit 0; fi"));
+    expect(section.indexOf("apt-main-archive.sh")).toBeLessThan(section.indexOf("sudo apt-get update"));
+  }
+});
+
+test("every apt install first leaves the regional Ubuntu mirrors", () => {
+  const files = [".github/workflows/ci.yml"].concat(Array.from(new Bun.Glob(".github/actions/*/action.yml").scanSync(new URL("..", import.meta.url).pathname)));
+  for (const file of files) {
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    for (const [index] of Array.from(text.matchAll(/sudo apt-get update/g), match => [match.index] as const)) {
+      const before = text.slice(Math.max(0, text.lastIndexOf("run: |", index)), index);
+      expect(before, `${file} runs apt-get update without apt-main-archive.sh`).toContain("apt-main-archive.sh");
+    }
   }
 });
 
@@ -794,7 +865,7 @@ test("cold and restored JSC setup install Binaryen before sourcing common.sh", (
   for (const [job, consumer] of [[prebuild, "name: Identify JSC prebuild inputs"], [rust, `name: ${importStepName}`]] satisfies [string, string][]) {
     const setup = job.match(/      - name: Install pinned Binaryen\n((?:        .*\n|          .*\n)+)/)?.[0] ?? "";
     expect(setup).toContain("bun scripts/ci-binaryen.ts");
-    expect(setup).not.toContain("needs.quality.outputs.jsc");
+    expect(setup).not.toContain("needs.selection.outputs.jsc");
     expect(setup).not.toContain("cache-hit");
     expect(job.indexOf(setup)).toBeLessThan(job.indexOf(consumer));
   }
@@ -816,7 +887,7 @@ test("source cache runs in real browsers using one source-built host guest", () 
   expect(rust).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
   expect(rust).toContain("uses: actions/upload-artifact@v4");
   expect(processes).toContain("uses: actions/download-artifact@v4");
-  expect(processes).toContain("needs: [quality, rust, process-bundles, browser-guest]");
+  expect(processes).toContain("needs: [selection, ordinary-web-guests, rust, browser-production, process-bundles, browser-guest]");
   expect(processes).toContain("needs.rust.result == 'skipped'");
   expect(processes).toContain("BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache");
   expect(processes).toContain("BUN_WASM_RUNTIME_PROC_PORT: \"4187\"");
@@ -1007,7 +1078,7 @@ function cacheCondition(condition: string, outputs: Readonly<Record<string, stri
 }
 
 function comparison(clause: string, outputs: Readonly<Record<string, string>>): boolean {
-  const match = /^(steps\.[\w-]+\.outputs\.[\w-]+|needs\.quality\.outputs\.jsc|github\.(?:event_name|ref)) (==|!=) '([^']*)'$/.exec(clause);
+  const match = /^(steps\.[\w-]+\.outputs\.[\w-]+|needs\.selection\.outputs\.jsc|github\.(?:event_name|ref)) (==|!=) '([^']*)'$/.exec(clause);
   if (!match || !(match[1]! in outputs)) throw new Error(`Unsupported cache condition: ${clause}`);
   return match[2] === "==" ? outputs[match[1]!] === match[3] : outputs[match[1]!] !== match[3];
 }
@@ -1057,7 +1128,7 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
       "steps.jsc-cargo-cache.outputs.cache-matched-key": "",
       "github.event_name": "push",
       "github.ref": "refs/heads/main",
-      "needs.quality.outputs.jsc": "true",
+      "needs.selection.outputs.jsc": "true",
       "steps.native-producers.outputs.native-ready": "true",
       "steps.jsc-producer.outputs.jsc-ready": "true",
       "steps.tls-artifact.outputs.tls-sha256": "a".repeat(64),
@@ -1079,7 +1150,7 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
 
 function assertJscSaveSelection(conditions: readonly string[], outputs: Readonly<Record<string, string>>) {
   expect(conditions.map(condition => cacheCondition(condition, outputs, true))).toEqual([true, true]);
-  const nativeOnly = { ...outputs, "needs.quality.outputs.jsc": "false" };
+  const nativeOnly = { ...outputs, "needs.selection.outputs.jsc": "false" };
   expect(conditions.map(condition => cacheCondition(condition, nativeOnly, true))).toEqual([true, false]);
   const incomplete = { ...nativeOnly, "steps.jsc-producer.outputs.jsc-ready": "" };
   expect(conditions.map(condition => cacheCondition(condition, incomplete, true))).toEqual([false, false]);
@@ -1139,7 +1210,7 @@ for (const { id, saveName, condition, workflowCompatible } of [
 function assertProducerMutation(contract: ReturnType<typeof nativeCacheContract>, inputs: ReadonlyMap<string, Buffer>, saved: string, path: string, compatible: boolean) {
   const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
   const before = path.endsWith(".sh") ? source.replace(/(?:cargo|"\$GUEST_CARGO") build --locked/, match => match.replace(" --locked", "")) :
-    source.replace(/      - name: Build the single tools fixture[^]*?(?=      - name: Blocking Web guest cases)/, "");
+    source.replace("full: 'true'", "full: 'false'");
   expect(before).not.toBe(source);
   const changed = new Map(inputs);
   changed.set(path, Buffer.from(before));

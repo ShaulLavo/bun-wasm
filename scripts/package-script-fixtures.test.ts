@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import ts from "typescript-api";
-import { checkCommand, discoverChecks, nativeGroups, selectChecks } from "./test-checks";
+import { checkCommand, discoverChecks, nativeEngineGroups, nativeGroups, selectChecks } from "./test-checks";
 
 const root = resolve(import.meta.dir, "..");
 const fixtures = ["package-script-dispatch", "package-script-behavior"];
@@ -67,6 +67,17 @@ test("each package fixture retains one blocking native owner and needs no extra 
   const groups = nativeGroups(selectChecks("native", checks), 4);
   expect(groups.flat().filter(path => paths.includes(path)).toSorted()).toEqual(paths.toSorted());
   expect(readFileSync(join(root, "scripts/test.sh"), "utf8").match(/timeout --kill-after=5s 60 /g)).toHaveLength(2);
+});
+
+test("fixture-only package behavior selection keeps all three maintained engine commands", () => {
+  const path = "tests/fixtures/package-script-behavior";
+  const groups = nativeEngineGroups([path], { count: 4 });
+  expect(groups.map(group => group.engine)).toEqual(["quickjs", "jsc", "browser"]);
+  for (const group of groups) {
+    expect(group.commands).toEqual([checkCommand("native", [path], "split", group.engine)]);
+    expect(group.commands[0]!.at(-1)).toBe("package-script-behavior");
+    expect(group.commands[0]).toContain("--no-build");
+  }
 });
 
 test("the split retains every original output, argv, environment, hook, silence and status assertion", () => {

@@ -11,6 +11,41 @@ export function defaultSignalGuest(): string {
   return `const fs=require('node:fs'); ${protectedLoop("ready")}`;
 }
 
+export const stopHeartbeatMessage = "engine-interruption-heartbeat";
+
+// Browser-engine guest JavaScript runs natively in the worker, so it can publish a shared
+// heartbeat without any host call: the page sees whether the loop is still running after
+// Worker.terminate(). One native worker message hands over the buffer (Bun's runtime replaces
+// BroadcastChannel and MessageChannel, not the worker's own postMessage); the loop is pure Atomics.
+export function heartbeatBusyGuest(): string {
+  return `const fs=require('node:fs');
+    const beat=new Int32Array(new SharedArrayBuffer(4));
+    postMessage({ type: '${stopHeartbeatMessage}', buffer: beat.buffer });
+    try { fs.writeSync(2,'ready\\n'); for (;;) Atomics.add(beat,0,1); } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
+}
+
+// A guest that spends its time inside one native regexp call with about 2^32 possible
+// backtracks. A stop must land inside that call, so the engine must poll inside its native
+// matcher. Not every engine runs the call to its end: JSC's Yarr gives up after 10^8
+// disjunction entries and returns a silent no-match. Either way, if the call ever returned,
+// the finally block and the code after it would write their markers, which fails the proof;
+// the inner catch must not swallow the stop.
+export function nativeRegexpGuest(): string {
+  return `const fs=require('node:fs');
+    const input='a'.repeat(32)+'!', pattern=/^(a+)+$/;
+    try { fs.writeSync(2,'ready\\n'); try { pattern.test(input); } catch {} } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
+}
+
+/** One global replace over 4 Mi characters. Every match costs a few thousand backtracks (the
+ * bounded `(a|a){0,10}b` branch fails before `a` matches one character), well under any per-match
+ * poll interval, so only a poll countdown that persists across matches can stop it. The call runs
+ * for minutes; the stop can only land inside it, or the finally and after markers would appear. */
+export function nativeRegexpMatchesGuest(): string {
+  return `const fs=require('node:fs');
+    const input='a'.repeat(1<<22), pattern=/(?:a|a){0,10}b|a/g;
+    try { fs.writeSync(2,'ready\\n'); try { input.replace(pattern,''); } catch {} } catch (error) { fs.writeSync(2,'CATCH-RAN\\n'); } finally { fs.writeSync(2,'FINALLY-RAN\\n'); } fs.writeSync(2,'AFTER-RAN\\n');`;
+}
+
 export function handledSignalGuest(nested = false, cpuMs = 1_000): string {
   return `const fs=require('node:fs');
     let count=0,loopFinished=false,turns=0;

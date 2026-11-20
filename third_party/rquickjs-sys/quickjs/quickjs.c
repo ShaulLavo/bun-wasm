@@ -51561,8 +51561,9 @@ static JSValue js_regexp_escape(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
-static JSValue js_regexp_exec(JSContext *ctx, JSValueConst this_val,
-                              int argc, JSValueConst *argv)
+static JSValue js_regexp_exec_internal(JSContext *ctx, JSValueConst this_val,
+                                       int argc, JSValueConst *argv,
+                                       bool test_only)
 {
     int rc, capture_count, alloc_count, shift, index, i, re_flags, prop_flags;
     JSRegExp *re = js_get_regexp(ctx, this_val, true);
@@ -51650,6 +51651,10 @@ static JSValue js_regexp_exec(JSContext *ctx, JSValueConst this_val,
             if (JS_SetProperty(ctx, this_val, JS_ATOM_lastIndex,
                                js_int32((capture[1] - str_buf) >> shift)) < 0)
                 goto fail;
+        }
+        if (test_only) {
+            ret = JS_TRUE;
+            goto fail;
         }
         group_name_ptr = lre_get_groupnames(re_bytecode);
         if (group_name_ptr) {
@@ -51790,6 +51795,12 @@ fail:
     return ret;
 }
 
+static JSValue js_regexp_exec(JSContext *ctx, JSValueConst this_val,
+                              int argc, JSValueConst *argv)
+{
+    return js_regexp_exec_internal(ctx, this_val, argc, argv, false);
+}
+
 /* delete portions of a string that match a given regex */
 static JSValue JS_RegExpDelete(JSContext *ctx, JSValueConst this_val, JSValue arg)
 {
@@ -51900,13 +51911,45 @@ fail:
     return JS_EXCEPTION;
 }
 
-static JSValue JS_RegExpExec(JSContext *ctx, JSValueConst r, JSValueConst s)
+/* The intrinsic test call keeps the native call's realm, frame, interrupt
+   poll and stack guard while omitting only its unused match result. */
+static JSValue js_regexp_test_intrinsic(JSContext *ctx, JSValueConst method,
+                                       JSValueConst r, JSValueConst s)
+{
+    JSRuntime *rt = ctx->rt;
+    JSStackFrame sf;
+    JSValue ret;
+
+    if (js_poll_interrupts(ctx))
+        return JS_EXCEPTION;
+    if (js_check_stack_overflow(rt, sizeof(JSValue)))
+        return JS_ThrowStackOverflow(ctx);
+    sf.prev_frame = rt->current_stack_frame;
+    sf.is_strict_mode = false;
+    sf.is_constructor = false;
+    sf.cur_func = unsafe_unconst(method);
+    sf.arg_count = 1;
+    sf.arg_buf = (JSValue *)&s;
+    rt->current_stack_frame = &sf;
+    ctx = JS_VALUE_GET_OBJ(method)->u.cfunc.realm;
+    ret = js_regexp_exec_internal(ctx, r, 1, &s, true);
+    rt->current_stack_frame = sf.prev_frame;
+    return ret;
+}
+
+static JSValue JS_RegExpExecInternal(JSContext *ctx, JSValueConst r,
+                                    JSValueConst s, bool test_only)
 {
     JSValue method, ret;
 
     method = JS_GetProperty(ctx, r, JS_ATOM_exec);
     if (JS_IsException(method))
         return method;
+    if (test_only && JS_IsCFunction(ctx, method, js_regexp_exec, 0)) {
+        ret = js_regexp_test_intrinsic(ctx, method, r, s);
+        JS_FreeValue(ctx, method);
+        return ret;
+    }
     if (JS_IsFunction(ctx, method)) {
         ret = JS_CallFree(ctx, method, r, 1, &s);
         if (JS_IsException(ret))
@@ -51918,7 +51961,12 @@ static JSValue JS_RegExpExec(JSContext *ctx, JSValueConst r, JSValueConst s)
         return ret;
     }
     JS_FreeValue(ctx, method);
-    return js_regexp_exec(ctx, r, 1, &s);
+    return js_regexp_exec_internal(ctx, r, 1, &s, test_only);
+}
+
+static JSValue JS_RegExpExec(JSContext *ctx, JSValueConst r, JSValueConst s)
+{
+    return JS_RegExpExecInternal(ctx, r, s, false);
 }
 
 static JSValue js_regexp_test(JSContext *ctx, JSValueConst this_val,
@@ -51927,7 +51975,7 @@ static JSValue js_regexp_test(JSContext *ctx, JSValueConst this_val,
     JSValue val;
     bool ret;
 
-    val = JS_RegExpExec(ctx, this_val, argv[0]);
+    val = JS_RegExpExecInternal(ctx, this_val, argv[0], true);
     if (JS_IsException(val))
         return JS_EXCEPTION;
     ret = !JS_IsNull(val);
@@ -53451,8 +53499,11 @@ static int js_json_to_str(JSContext *ctx, JSONStringifyContext *jsc,
             sep = js_dup(jsc->empty);
             sep1 = js_dup(jsc->empty);
         }
-        v = js_array_push(ctx, jsc->stack, 1, vc(&val), 0);
-        if (check_exception_free(ctx, v))
+        if (js_get_length64(ctx, &len, jsc->stack))
+            goto exception;
+        /* The ancestor list must not invoke inherited array index setters. */
+        if (JS_DefinePropertyValueInt64(ctx, jsc->stack, len, js_dup(val),
+                                       JS_PROP_C_W_E | JS_PROP_THROW) < 0)
             goto exception;
         ret = js_is_array(ctx, val);
         if (ret < 0)
@@ -53645,11 +53696,13 @@ JSValue JS_JSONStringify(JSContext *ctx, JSValueConst obj,
                     JS_FreeValue(ctx, v);
                     goto exception;
                 }
-                if (!JS_ToBoolFree(ctx, present)) {
-                    JS_SetPropertyInt64(ctx, jsc->property_list, j++, v);
-                } else {
+                if (JS_ToBoolFree(ctx, present)) {
                     JS_FreeValue(ctx, v);
+                    continue;
                 }
+                if (JS_DefinePropertyValueInt64(ctx, jsc->property_list, j++, v,
+                                                JS_PROP_C_W_E | JS_PROP_THROW) < 0)
+                    goto exception;
             }
         }
     }
@@ -61312,7 +61365,8 @@ bool JS_bunwasm_IsArrayBufferLike(JSValueConst obj) {
 
 bool JS_bunwasm_IsDetachableArrayBuffer(JSValueConst obj) {
     JSArrayBuffer *buffer = JS_GetOpaque(obj, JS_CLASS_ARRAY_BUFFER);
-    return buffer && !buffer->detached && !buffer->wasm_memory;
+    /* An immutable buffer cannot be transferred. JS_DetachArrayBuffer would not refuse it. */
+    return buffer && !buffer->detached && !buffer->wasm_memory && !buffer->immutable;
 }
 
 /* A non-resizable WebAssembly.Memory buffer over 'len' bytes at 'buf', which
@@ -61705,8 +61759,10 @@ static JSValue js_array_buffer_transfer(JSContext *ctx, JSValueConst this_val,
     if (magic == JS_ARRAY_BUFFER_TRANSFER) {
         if (array_buffer_is_resizable(abuf)) { // carry over maxByteLength
             max_len = abuf->max_byte_length;
+            // Spec (ArrayBufferCopyAndDetach): a length above the carried
+            // maxByteLength is a RangeError.
             if (new_len > max_len)
-                return JS_ThrowTypeError(ctx, "invalid array buffer length");
+                return JS_ThrowRangeError(ctx, "invalid array buffer length");
             pmax_len = &max_len;
         }
     }

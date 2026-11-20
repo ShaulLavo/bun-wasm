@@ -99,10 +99,9 @@ fn processes() -> Fixture {
     )
     .unwrap();
     Fixture(Processes::new(
-        runtime,
+        runtime.admit_root(Arc::default()).unwrap(),
         Stdio::inherited(),
         crate::net::Net::new().notify(),
-        Arc::default(),
     ))
 }
 
@@ -137,11 +136,13 @@ fn fake_child(
     outcome: Option<FinalOutcome>,
 ) {
     let mut state = processes.runtime.state.lock().unwrap();
+    let identity = state.processes[&0].membership.identity();
     state.parents.insert(pid, parent);
     state.processes.insert(
         pid,
         Child {
             parent,
+            membership: Membership::Thread(identity),
             job,
             cancel: Arc::default(),
             result: outcome,
@@ -178,6 +179,18 @@ fn spawn_request_shared_json_conformance() {
             assert_eq!(serde_json::to_value(decoded.env).unwrap(), expected["env"]);
             assert_eq!(decoded.cwd, expected["cwd"].as_str().unwrap());
             assert_eq!(decoded.job, expected["job"].as_f64().unwrap());
+            let kind = expected
+                .get("processKind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("process");
+            assert_eq!(
+                decoded.process_kind,
+                if kind == "thread" {
+                    ProcessKind::Thread
+                } else {
+                    ProcessKind::Process
+                }
+            );
             let fds: Vec<serde_json::Value> = decoded
                 .fds
                 .into_iter()
@@ -238,14 +251,16 @@ fn arbitrary_bindings_are_retained_and_not_implicitly_inherited() {
     .into_iter()
     .collect();
     let mut child = Processes::new(
-        parent.runtime.clone(),
+        parent
+            .runtime
+            .clone()
+            .admit_fixture(0, crate::process::ProcessKind::Process, Arc::default())
+            .unwrap(),
         Stdio {
             fds,
-            pid: 7,
             memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
         },
         crate::net::Net::new().notify(),
-        Arc::default(),
     );
     parent.close(read);
     parent.close(write);
@@ -254,14 +269,16 @@ fn arbitrary_bindings_are_retained_and_not_implicitly_inherited() {
     assert_eq!(child.read(9, &mut bytes), 2);
     assert_eq!(&bytes, b"ok");
     let grandchild = Processes::new(
-        parent.runtime.clone(),
+        parent
+            .runtime
+            .clone()
+            .admit_fixture(0, crate::process::ProcessKind::Process, Arc::default())
+            .unwrap(),
         Stdio {
             fds: Descriptors::new(),
-            pid: 8,
             memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
         },
         crate::net::Net::new().notify(),
-        Arc::default(),
     );
     assert_eq!(grandchild.read(9, &mut bytes), BADF);
     assert_eq!(grandchild.write(12, b"no"), BADF);
@@ -459,14 +476,16 @@ fn owner_chain_authority_survives_reaping_intermediate_jobs() {
         );
     }
     let outsider = Processes::new(
-        processes.runtime.clone(),
+        processes
+            .runtime
+            .clone()
+            .admit_fixture(0, crate::process::ProcessKind::Process, Arc::default())
+            .unwrap(),
         Stdio {
             fds: Descriptors::new(),
-            pid: 9,
             memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
         },
         crate::net::Net::new().notify(),
-        Arc::default(),
     );
     assert_eq!(outsider.wait_job(2, 1), Err(PERM));
     assert_eq!(processes.wait_job(1, 1), Ok(FinalOutcome::Exit(0)));
@@ -605,14 +624,15 @@ fn executable_access_is_live_consuming_and_process_owned() {
         assert_eq!(p.poll(&subscription(5, id, 99), 0), Err(BADF));
     }
     let mut outsider = Processes::new(
-        p.runtime.clone(),
+        p.runtime
+            .clone()
+            .admit_fixture(0, crate::process::ProcessKind::Process, Arc::default())
+            .unwrap(),
         Stdio {
             fds: Descriptors::new(),
-            pid: 7,
             memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
         },
         crate::net::Net::new().notify(),
-        Arc::default(),
     );
     let id = p.access_start("/bin/bun", "/", 1);
     assert_eq!(outsider.access_take(id), BADF);
@@ -704,14 +724,15 @@ fn process_drop_retires_pending_access_requests_and_teardown_removes_files() {
     let processes = std::mem::replace(
         &mut p.0,
         Processes::new(
-            runtime.clone(),
+            runtime
+                .clone()
+                .admit_fixture(0, crate::process::ProcessKind::Process, Arc::default())
+                .unwrap(),
             Stdio {
                 fds: Descriptors::new(),
-                pid: 7,
                 memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
             },
             crate::net::Net::new().notify(),
-            Arc::default(),
         ),
     );
     drop(processes);
@@ -732,7 +753,7 @@ fn process_directory_capacity_includes_root_and_unwaited_children() {
     for pid in 1..PROCESS_CAPACITY as i32 {
         fake_child(&processes, pid, 0, ROOT_JOB, Some(FinalOutcome::Exit(23)));
     }
-    processes.runtime.state.lock().unwrap().next = PROCESS_CAPACITY as i32;
+    processes.runtime.state.lock().unwrap().next = PROCESS_CAPACITY as u32;
     assert_eq!(
         processes.runtime.state.lock().unwrap().processes.len(),
         PROCESS_CAPACITY
@@ -753,7 +774,7 @@ fn process_directory_capacity_includes_root_and_unwaited_children() {
 #[test]
 fn pid_exhaustion_returns_again_without_partial_child_job_or_descriptor_retention() {
     let mut p = processes();
-    p.runtime.state.lock().unwrap().next = i32::MAX;
+    p.runtime.state.lock().unwrap().next = i32::MAX as u32 + 1;
     let [read, write] = p.pipe().unwrap();
     let before = {
         let state = p.runtime.state.lock().unwrap();
@@ -768,7 +789,7 @@ fn pid_exhaustion_returns_again_without_partial_child_job_or_descriptor_retentio
             AGAIN
         );
         let state = p.runtime.state.lock().unwrap();
-        assert_eq!(state.next, i32::MAX);
+        assert_eq!(state.next, i32::MAX as u32 + 1);
         assert_eq!(
             (state.processes.len(), state.jobs.len(), state.parents.len()),
             before
@@ -833,20 +854,20 @@ fn signaled_child_endpoint_teardown_precedes_safe_wait_and_preserves_queued_outp
         .collect();
     let input_probe = Arc::downgrade(&fds[&0]);
     let control_probe = Arc::downgrade(&fds[&17]);
-    fake_child(&parent, 7, parent.pid, ROOT_JOB, None);
-    let cancel = parent.runtime.state.lock().unwrap().processes[&7]
-        .cancel
-        .clone();
+    let cancel = Arc::new(Cancellation::default());
     let child = Processes::new(
-        parent.runtime.clone(),
+        parent
+            .runtime
+            .clone()
+            .admit_fixture(0, crate::process::ProcessKind::Process, cancel.clone())
+            .unwrap(),
         Stdio {
             fds,
-            pid: 7,
             memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
         },
         parent.notify.clone(),
-        cancel.clone(),
     );
+    let pid = child.pid;
     for (_, fd) in bindings {
         assert_eq!(parent.close(fd), 0);
     }
@@ -855,11 +876,11 @@ fn signaled_child_endpoint_teardown_precedes_safe_wait_and_preserves_queued_outp
     assert_eq!(child.write(1, b"out"), 3);
     assert_eq!(child.write(2, b"err"), 3);
     assert_eq!(child.write(31, b"message"), 7);
-    assert_eq!(parent.kill(7, 2), 0);
+    assert_eq!(parent.kill(pid, 2), 0);
     let selected = cancel.select(FinalOutcome::Exit(0));
     assert_eq!(selected, FinalOutcome::Signal(2));
     assert_eq!(
-        parent.wait(7),
+        parent.wait(pid),
         Err(AGAIN),
         "selection alone is not safe publication"
     );
@@ -870,7 +891,7 @@ fn signaled_child_endpoint_teardown_precedes_safe_wait_and_preserves_queued_outp
     assert_eq!(parent.write(stdin_write, b"late"), PIPE);
     assert_eq!(parent.write(control_write, b"late"), PIPE);
     assert_eq!(
-        parent.wait(7),
+        parent.wait(pid),
         Err(AGAIN),
         "teardown precedes the publication lock"
     );
@@ -884,7 +905,7 @@ fn signaled_child_endpoint_teardown_precedes_safe_wait_and_preserves_queued_outp
         assert_eq!(&bytes[..expected.len()], expected);
         assert_eq!(parent.read(fd, &mut bytes), 0);
     }
-    assert_eq!(parent.kill(7, 9), 0);
+    assert_eq!(parent.kill(pid, 9), 0);
     assert_eq!(cancel.select(FinalOutcome::Signal(9)), selected);
     parent
         .runtime
@@ -892,11 +913,11 @@ fn signaled_child_endpoint_teardown_precedes_safe_wait_and_preserves_queued_outp
         .lock()
         .unwrap()
         .processes
-        .get_mut(&7)
+        .get_mut(&pid)
         .unwrap()
         .result = Some(selected);
-    assert_eq!(parent.wait(7), Ok(FinalOutcome::Signal(2)));
-    assert_eq!(parent.wait(7), Err(CHILD));
+    assert_eq!(parent.wait(pid), Ok(FinalOutcome::Signal(2)));
+    assert_eq!(parent.wait(pid), Err(CHILD));
 }
 
 #[test]
@@ -1101,4 +1122,5 @@ fn only_regular_files_run_as_shebang_scripts() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+mod identity;
 mod poll_wake;

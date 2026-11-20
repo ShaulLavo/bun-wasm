@@ -1,0 +1,196 @@
+import { execFileSync } from "node:child_process";
+import { copyFileSync, lstatSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { join, resolve, dirname, basename } from "node:path";
+import { fileURLToPath } from "node:url";
+import { gunzipSync, brotliDecompressSync } from "node:zlib";
+import { buildBrowserEntries } from "./browser-build";
+import { hash, guestBuilds } from "./guest-source-manifest";
+import { importedMemory, programKind, programKindForBuild, verifyProgramSide } from "../src/engine-kind";
+import { validateSelection, type BrowserGuestSelection } from "./browser-guest-catalogue";
+import { parseInputs, verifyPairBytes } from "./spidermonkey-side-core-receipt";
+
+const repository = resolve(import.meta.dir, "..");
+const coreBuilds = ["browser", "quickjs", "jsc", "tools"] as const;
+type CoverageBuild = typeof coreBuilds[number];
+export interface VerifiedBrowserGuestCoverage {
+  readonly site: string;
+  readonly selection: BrowserGuestSelection;
+  readonly interruptionBundle: string | undefined;
+  /** True when the interruption bundle carries the ordinary SpiderMonkey pair's receipts; the pair's
+   * verified programs are then in `programs`. */
+  readonly interruptionSpiderMonkey: boolean;
+  readonly programs: ReadonlyMap<string, Uint8Array>;
+}
+// The site serves the ordinary SpiderMonkey pair gzipped like every other program (web/build.ts,
+// SPIDERMONKEY_WASM). The interruption bundle carries only the pair's receipts, as
+// scripts/build-bun-spidermonkey.sh writes them to SPIDERMONKEY_PAIR_DIR.
+const spiderMonkeyPrograms = ["bun-spidermonkey.wasm", "spidermonkey-engine.wasm"] as const;
+const spiderMonkeyReceipts = ["bun-spidermonkey.wasm.spidermonkey.json", "inputs.json"];
+function readJson(path: string): unknown {
+  requiredFile(path);
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+function verifySpiderMonkeyPair(receipts: string, core: Uint8Array, side: Uint8Array): ReturnType<typeof parseInputs> {
+  const inputs = parseInputs(readJson(join(receipts, "inputs.json")));
+  verifyPairBytes(core, side, readJson(join(receipts, "bun-spidermonkey.wasm.spidermonkey.json")), inputs);
+  return inputs;
+}
+function servedSpiderMonkeyPair(site: string): [Uint8Array, Uint8Array] {
+  const maps = engineMaps(site);
+  const [core, side] = spiderMonkeyPrograms.map(name => servedProgram(site, maps, name));
+  return [core!, side!];
+}
+/** Producer only: CI's native producer builds the ordinary pair from this checkout and the site
+ * serves it; the served bytes must be exactly the pair its receipt names. */
+function bundleSpiderMonkeyReceipts(pair: string, site: string, out: string): void {
+  const [core, side] = servedSpiderMonkeyPair(site);
+  const inputs = verifySpiderMonkeyPair(pair, core, side);
+  const [head, tree] = execFileSync("git", ["rev-parse", "HEAD", "HEAD^{tree}"], { cwd: repository, encoding: "utf8" }).trim().split("\n");
+  if (inputs.source.head !== head || inputs.source.tree !== tree) throw new Error(`SpiderMonkey pair was built from ${inputs.source.head}, not this checkout ${head}`);
+  mkdirSync(out);
+  for (const name of spiderMonkeyReceipts) copyFileSync(join(pair, name), join(out, name));
+}
+
+function requiredFile(path: string): void {
+  if (!lstatSync(path, { throwIfNoEntry: false })?.isFile()) throw new Error(`Missing required browser coverage file: ${path}`);
+}
+function object(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Missing served engine identity maps");
+  return Object.fromEntries(Object.entries(value));
+}
+
+function requiredBuilds(selection: BrowserGuestSelection): CoverageBuild[] {
+  validateSelection(selection);
+  if (!selection.length) throw new Error("Coverage artifact requires selected rows");
+  const tools = selection.some(item => item.owner === "tools-integrity");
+  return coreBuilds.filter(build => build === "browser" || build === "tools" && tools || build === "quickjs" && tools
+    || selection.some(item => item.engines.some(engine => engine === build)));
+}
+function requiredPrograms(selection: BrowserGuestSelection): string[] {
+  return requiredBuilds(selection).flatMap(build => {
+    const core = guestBuilds[build].artifact;
+    return build === "quickjs" ? [core, "quickjs.wasm"] : build === "jsc" ? [core, "jsc-engine.wasm"] : [core];
+  });
+}
+function selectedInterruption(selection: BrowserGuestSelection): boolean {
+  return selection.some(item => item.owner === "engine-interruption");
+}
+const bundleEntries = ["engine-interruption-page.js", "engine-interruption-worker.js", "worker.js", "fs-worker.js", "notification-worker.js", "preview1-worker.js", "index.html"];
+function requireBundle(out: string): void {
+  for (const name of bundleEntries) {
+    if (!lstatSync(join(out, "interruption", name), { throwIfNoEntry: false })?.isFile()) throw new Error(`Missing interruption bundle entry: ${name}`);
+  }
+}
+
+/** Producer only, after its ordinary site build. Refuses a second build in the same artifact. */
+export async function prepareBrowserGuestInterruptionBundle(request: { out: string; selection: BrowserGuestSelection }): Promise<string | undefined> {
+  validateSelection(request.selection);
+  if (!selectedInterruption(request.selection)) return;
+  const out = join(request.out, "interruption");
+  mkdirSync(out); // Exclusive creation also prevents accidental repeated builds.
+  await buildBrowserEntries(["web/tests/engine-interruption-page.ts", "web/tests/engine-interruption-worker.ts", "web/src/worker.ts", "web/src/fs-worker.ts", "web/src/notification-worker.ts"].map(path => join(repository, path)), out, { runtimeWorker: true });
+  writeFileSync(join(out, "index.html"), '<!doctype html><script type="module" src="./engine-interruption-page.js"></script>');
+  const pair = process.env.SPIDERMONKEY_PAIR_DIR;
+  if (pair) bundleSpiderMonkeyReceipts(resolve(pair), join(request.out, "site"), join(out, "spidermonkey"));
+  requireBundle(request.out);
+  return out;
+}
+
+function engineMaps(site: string) {
+  const manifest = object(JSON.parse(readFileSync(join(site, "engine-builds.json"), "utf8")));
+  const embeddedJson = /globalThis\.__bunwasmBuilds\s*=\s*(\{[^;]*?\})\s*;?/.exec(readFileSync(join(site, "index.html"), "utf8"))?.[1];
+  const embedded = object(embeddedJson ? JSON.parse(embeddedJson) : undefined);
+  return { manifest, embedded };
+}
+function verifyRepresentations(site: string, path: string, expected: string, suffixes = ["", ".br"]): void {
+  for (const suffix of suffixes) {
+    const file = join(site, path + suffix);
+    if (!lstatSync(file, { throwIfNoEntry: false })) continue;
+    const bytes = readFileSync(file);
+    const decoded = suffix === ".br" ? brotliDecompressSync(bytes) : suffix === ".gz" ? gunzipSync(bytes) : bytes;
+    if (hash(decoded) !== expected) throw new Error(`Served representation differs: ${path}${suffix}`);
+  }
+}
+function verifySelectedProgram(name: string, bytes: Uint8Array<ArrayBuffer>): void {
+  let module: WebAssembly.Module;
+  try { module = new WebAssembly.Module(bytes); }
+  catch { throw new Error(`Invalid split coverage program: ${name}`); }
+  if (importedMemory(bytes)?.shared) throw new Error(`Invalid split coverage program: ${name}`);
+  const side = name === "quickjs.wasm" ? "quickjs" : name === "jsc-engine.wasm" ? "jsc" : undefined;
+  if (side) { verifyProgramSide(side, module); return; }
+  const build = coreBuilds.find(build => guestBuilds[build].artifact === name);
+  if (build === undefined || programKind(module) !== programKindForBuild(build)) throw new Error(`Wrong coverage core kind: ${name}`);
+}
+function servedProgram(site: string, maps: ReturnType<typeof engineMaps>, name: string) {
+  requiredFile(join(site, name + ".gz"));
+  const bytes = gunzipSync(readFileSync(join(site, name + ".gz"))), identity = hash(bytes);
+  if (identity !== maps.manifest[name] || identity !== maps.embedded[name]) throw new Error(`Served program identity mismatch: ${name}`);
+  verifyRepresentations(site, name, identity);
+  return bytes;
+}
+function decodePrograms(site: string, selection: BrowserGuestSelection): Map<string, Uint8Array> {
+  const maps = engineMaps(site);
+  return new Map(requiredPrograms(selection).map(name => {
+    const bytes = servedProgram(site, maps, name);
+    verifySelectedProgram(name, bytes);
+    return [name, bytes];
+  }));
+}
+function programBytes(programs: ReadonlyMap<string, Uint8Array>, name: string): Uint8Array {
+  const bytes = programs.get(name);
+  if (!bytes) throw new Error(`Missing selected program: ${name}`);
+  return bytes;
+}
+async function requireShellAndBase(site: string): Promise<void> {
+  for (const name of ["shell-engine.wasm", "env.wasm"]) requiredFile(join(site, "programs", name));
+  const entry = Bun.resolveSync("waffle-base", join(repository, "web"));
+  const { basePrograms }: typeof import("waffle-base") = await import(entry);
+  const wasmPrograms = basePrograms.filter(program => program.wasm);
+  if (!wasmPrograms.length) throw new Error("Pinned base installation has no WASM assets");
+  for (const program of wasmPrograms) {
+    if (!program.wasm) continue;
+    const path = fileURLToPath(program.wasm), family = basename(resolve(dirname(path), ".."));
+    requiredFile(join(site, "programs/base", family, "dist", basename(path)));
+  }
+}
+
+/** Check the selected runtime inputs directly. CI reuses its same-run site; local builds work too. */
+export async function verifyBrowserGuestCoverage(request: { out: string; selection: BrowserGuestSelection }): Promise<VerifiedBrowserGuestCoverage> {
+  requiredBuilds(request.selection);
+  const site = join(request.out, "site");
+  for (const name of ["index.html", "main.js", "sw.js", "worker.js", "fs-worker.js", "notification-worker.js", "preview1-worker.js"]) requiredFile(join(site, name));
+  await requireShellAndBase(site);
+  if (selectedInterruption(request.selection)) requireBundle(request.out);
+  const programs = decodePrograms(site, request.selection);
+  const browser = programBytes(programs, "bun-browser.wasm");
+  requiredFile(join(site, "sandbox/bun-browser.wasm.gz"));
+  const sandbox = gunzipSync(readFileSync(join(site, "sandbox/bun-browser.wasm.gz")));
+  const sandboxMaps = object(JSON.parse(readFileSync(join(site, "sandbox/engine-builds.json"), "utf8")));
+  if (hash(sandbox) !== hash(browser) || sandboxMaps["bun-browser.wasm"] !== hash(browser)) throw new Error("Sandbox guest differs from served Browser program");
+  const interruptionBundle = selectedInterruption(request.selection) ? join(request.out, "interruption") : undefined;
+  const receipts = interruptionBundle === undefined ? undefined : join(interruptionBundle, "spidermonkey");
+  const interruptionSpiderMonkey = receipts !== undefined && lstatSync(receipts, { throwIfNoEntry: false }) !== undefined;
+  if (interruptionSpiderMonkey) {
+    const [core, side] = servedSpiderMonkeyPair(site);
+    verifySpiderMonkeyPair(receipts, core, side);
+    programs.set(spiderMonkeyPrograms[0], core).set(spiderMonkeyPrograms[1], side);
+  }
+  return { site, selection: request.selection, programs, interruptionBundle, interruptionSpiderMonkey };
+}
+
+/** Caller removes private raw staging after its supervised child drains. */
+export function stageBrowserGuestInterruption(verified: VerifiedBrowserGuestCoverage, directory: string): void {
+  if (!verified.interruptionBundle) throw new Error("Interruption was not selected");
+  mkdirSync(directory);
+  const selection = verified.selection.filter(item => item.owner === "engine-interruption");
+  for (const name of requiredPrograms(selection)) writeFileSync(join(directory, name), programBytes(verified.programs, name), { flag: "wx", mode: 0o400 });
+  if (!verified.interruptionSpiderMonkey) return;
+  for (const name of spiderMonkeyPrograms) writeFileSync(join(directory, name), programBytes(verified.programs, name), { flag: "wx", mode: 0o400 });
+}
+
+if (import.meta.main) {
+  const [out, serialized] = process.argv.slice(2);
+  if (!out || !serialized) throw new Error("Usage: browser-guest-coverage.ts <out> <selection-json>");
+  const { parseBrowserGuestSelection } = await import("./browser-guest-catalogue");
+  await prepareBrowserGuestInterruptionBundle({ out: resolve(out), selection: parseBrowserGuestSelection(JSON.parse(serialized)) });
+}

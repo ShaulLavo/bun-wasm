@@ -265,6 +265,8 @@ tests/fixtures/node-console/index.js
 tests/fixtures/node-crypto-keys/index.js
 tests/fixtures/node-duplex-web-terminal/index.js
 tests/fixtures/node-events/index.js
+tests/fixtures/node-fetch-builtin/node_modules/node-fetch/lib/index.js
+tests/fixtures/node-fetch-builtin/node_modules/undici/index.js
 tests/fixtures/node-from-web-async-destroy/index.js
 tests/fixtures/node-from-web-destroy-hooks/index.js
 tests/fixtures/node-from-web-terminal/index.js
@@ -361,7 +363,6 @@ tests/fixtures/parser-lookahead-exception/lib/divided.cjs
 tests/fixtures/parser-lookahead-exception/lib/later.mjs
 tests/fixtures/pipe-closed-output/index.js
 tests/fixtures/pipe-closed-output/large.js
-tests/fixtures/process/index.js
 tests/fixtures/require-string-heavy-chunk/index.js
 tests/fixtures/self-spawn-lifecycle/index.js
 tests/fixtures/self-spawn-network/index.js

@@ -363,6 +363,11 @@ unsafe extern "C" {
         specifier: *const c_char,
         exception: *mut JSValueRef,
     ) -> JSValueRef;
+    pub fn bunjsc_require(
+        ctx: JSContextRef,
+        name: *const c_char,
+        exception: *mut JSValueRef,
+    ) -> JSValueRef;
     pub fn bunjsc_evaluate_script(
         ctx: JSContextRef,
         source: *const c_char,
@@ -403,6 +408,8 @@ unsafe extern "C" {
         value: JSValueRef,
         exception: *mut JSValueRef,
     );
+    pub fn bunjsc_promise_is_handled(ctx: JSContextRef, value: JSValueRef) -> bool;
+    pub fn bunjsc_object_type_counts(ctx: JSContextRef) -> JSValueRef;
     pub fn bunjsc_promise_then(
         ctx: JSContextRef,
         promise: JSValueRef,

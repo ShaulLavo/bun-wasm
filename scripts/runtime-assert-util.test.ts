@@ -11,10 +11,10 @@ const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-assert-util-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const runtime = join(root, "crates/bunwasm-runtime/src/js");
 
-// Original JavaScript at ac43127. Reverse only the two authorized destination extractions and redundant parentheses.
+// Original migration AST, excluding the separately tested Bun comparison changes.
 const originals = {
   assert: "381972f164ac6fd3b776919ccde896d8dd8c20e4758b29d2d500234ee5b291db",
-  util: "72229e61f5716247725a2c3caf6c861a28e1f659fa3ed509f21e41113e428bcf",
+  util: "c10043bce9a1eb5b5c505d3a86f8551c15902ef98d64d9882943b8e21e45554c",
 };
 
 function restoreCallTrackerDelta(text: string): string {
@@ -128,6 +128,18 @@ test("CallTracker AST restoration still rejects unrelated source mutations", () 
   expect(astHash(changed)).not.toBe(originals.assert);
 });
 
+test("Bun comparison exclusions still reject Node comparison and parser mutations", () => {
+  const input = join(runtime, "util.ts");
+  const output = join(scratch, "util-scope.js");
+  expect(Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts"), input, output]).exitCode).toBe(0);
+  const restored = restoreDestinations(readFileSync(output, "utf8"));
+  for (const name of ["nodeDeepEqual", "parseArgs"]) {
+    const changed = restored.replace(`function ${name}(`, `function ${name}Changed(`);
+    expect(changed).not.toBe(restored);
+    expect(astHash(changed)).not.toBe(originals.util);
+  }
+});
+
 const probe = join(scratch, "probe.ts");
 const config = join(scratch, "tsconfig.json");
 writeFileSync(config, JSON.stringify({
@@ -143,6 +155,8 @@ function check(source: string) {
 
 test("accepts inspect, equality, partial assertion, process, and parser token contracts", () => {
   const result = check(`
+    const publicEquality: boolean = internal.require("util").bunDeepEquals(1, 1);
+    const privateEquality: boolean | Promise<boolean> = internal.require("util").expectEquals(1, 1, false, () => Promise.resolve(true), () => false);
 internal.require("inspect").nodeInspect({}, { depth: null, sorted: true, getters: "get" });
 internal.require("inspect").nodeFormatWithOptions({ colors: false }, "%s", 1);
 internal.require("util").bunDeepEquals(new Map(), new Map(), true);
@@ -202,6 +216,7 @@ for (const declarations of [
 }
 
 const invalid = [
+  'const sync: boolean = internal.require("util").expectEquals(1, 1, false, () => Promise.resolve(true), () => false);',
   'const options: BunWasm.AssertionOptions = { operator: 1 };',
   'const options: BunWasm.AssertionOptions = { details: [1] };',
   'const options: BunWasm.AssertionOptions = { details: {} };',

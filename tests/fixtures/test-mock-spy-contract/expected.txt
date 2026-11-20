@@ -1,0 +1,6 @@
+mock receiver and shorthand
+temporary implementations restore queues
+promise wrapping is atomic
+indexed property spies restore descriptors
+failed spy installations preserve global restoration
+matcher arguments and mutated results

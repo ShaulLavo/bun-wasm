@@ -21,10 +21,11 @@ and Symbol keys retain raw unknown values; the worker hook retains its method-ca
 Only the hook input declaration changes, not worker serialization or worker implementations.
 The held worker-owned GuestProcess view is not broadened into the new process factory's type.
 
-`scripts/runtime-process.test.ts` reverses each approved executable change and checks the
-original AST hash, strict directive and token positions. The frozen pre-change reader is restored only for this guard; its obsolete one-shot-read behavior is replaced by dedicated stdin controls. Its original/converted factory controls
-cover own-key order, descriptors, constructor-call state, reentrancy, thrown callbacks, errors,
-exit coercion, environment hooks and signals. `runtime-ts-process` pins the real guest adapter;
+`scripts/runtime-process.test.ts` checks the strict directive and token positions. It used to
+reverse each approved executable change and compare the result with the migration's original AST
+hash; that pin was removed when the [exit lifecycle](process-exit-lifecycle.md) changed the
+factory on purpose. Its factory controls cover own-key order, descriptors, constructor-call state,
+reentrancy, thrown callbacks, errors, exit code validation, environment hooks and signals. `runtime-ts-process` pins the real guest adapter;
 native reference differences remain evidence. The stdin fixture now resumes after its pause check and expects unreadable state at EOF.
 
 Recovery keeps the same runtime source and emitted bytes. Additional controls reject callback

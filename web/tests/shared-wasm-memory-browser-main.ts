@@ -6,6 +6,7 @@ import { BUN_MEMORY_GROUP_POLICY } from "../../src/engine-kind.ts";
 import { startRun } from "../src/runner";
 import { fixtureFileUrl, installFixtureTree, parseFixtureTree } from "./fixture-tree";
 import { AgentLockObserver, heldLockNames } from "./shared-wasm-agent/observer";
+import { captureLaunch, captureMessage, captureStop, memberCaptures } from "./shared-wasm-agent/capture-page";
 
 const FIXTURE = "/home/user/fixture";
 const CONTROL = "/home/user/control";
@@ -47,14 +48,25 @@ function installAgentWorkers(): void {
       super(url, { ...options, name: id });
       agents.set(this, { id });
       this.addEventListener("message", event => {
+        captureMessage(this, event.data);
         if (event.data?.type !== "spidermonkey-stack-proof") return;
         hostStacks.push(event.data);
         event.stopImmediatePropagation();
       });
     }
+    override postMessage(data: unknown, options: Transferable[] | StructuredSerializeOptions = []): void {
+      const captured = captureLaunch(this, agents.get(this)!.id, data);
+      if (Array.isArray(options)) super.postMessage(captured, options);
+      else super.postMessage(captured, options);
+    }
     override terminate(): void {
-      if (agents.get(this)?.tag?.startsWith(FAIL_STOP)) throw new Error("injected native terminate failure");
+      captureStop(this, "native-terminate-entered");
+      if (agents.get(this)?.tag?.startsWith(FAIL_STOP)) {
+        captureStop(this, "injected-native-terminate-failure");
+        throw new Error("injected native terminate failure");
+      }
       super.terminate();
+      captureStop(this, "native-terminate-returned");
     }
   };
 }
@@ -161,6 +173,27 @@ function watchMembers(runtime: ReturnType<typeof createRuntime>, processes: Awai
     releasedAt.set(tag, performance.now());
     publish(`${CONTROL}/gone/${tag}`, ownerHolds(owners.get(groupOf.get(pid) ?? "")));
   };
+  // A fixture asks for its group owner's counters by writing `snapshot-request/<tag>.<id>`. The
+  // owner is sampled only after the page has read that request, and the answer is published under
+  // the same fresh name, so a fixture can never read a sample taken before it asked.
+  const answered = new Set<string>();
+  let answering = false;
+  const answerSnapshot = (request: string) => {
+    const tag = request.slice(0, request.lastIndexOf("."));
+    const pid = Array.from(tags).find(([, value]) => value === tag)?.[0];
+    const owner = pid === undefined ? undefined : owners.get(groupOf.get(pid) ?? "");
+    if (!owner || answered.has(request)) return;
+    answered.add(request);
+    const { pins, regions, holds, published, members, exiting, quarantinedBytes } = owner.snapshot();
+    publish(`${CONTROL}/snapshot/${request}`, JSON.stringify({ pins, regions, holds, published, members, exiting, quarantinedBytes }));
+  };
+  const answerSnapshots = async () => {
+    answering = true;
+    try {
+      const requests = await runtime.filesystem.listFiles(`${CONTROL}/snapshot-request`);
+      for (const path of requests) answerSnapshot(path.slice(path.lastIndexOf("/") + 1));
+    } finally { answering = false; }
+  };
   const lockObserver = new AgentLockObserver({
     armed: tag => publish(`${CONTROL}/armed/${tag}`, "armed"),
     closed: tag => {
@@ -180,6 +213,7 @@ function watchMembers(runtime: ReturnType<typeof createRuntime>, processes: Awai
       for (const group of processes.memoryGroups()) observeGroup(group, live);
       for (const [pid, tag] of tags) if (!live.has(pid) && !gone.has(pid)) release(pid, tag);
       if (!querying && navigator.locks) void queryLocks();
+      if (!answering) void answerSnapshots();
     },
     settled: () => writes,
     ended: () => Array.from(owners.values(), owner => owner.snapshot()),
@@ -208,8 +242,12 @@ async function run() {
     memoryGroups: BUN_MEMORY_GROUP_POLICY,
   });
   await installFixtureTree(runtime.filesystem, fixture, entries, path => bytes(fixtureFileUrl(path)));
-  for (const directory of ["group", "gone", "armed", "unarmable", "closed", "stalled", "retained"]) await runtime.filesystem.mkdirp(`${CONTROL}/${directory}`);
+  for (const directory of ["group", "gone", "armed", "unarmable", "closed", "stalled", "retained", "snapshot-request", "snapshot"]) await runtime.filesystem.mkdirp(`${CONTROL}/${directory}`);
   await runtime.filesystem.flush();
+  if (entry === "member-capture-control.ts") Reflect.set(globalThis, "sharedWasmCaptureRelease", async () => {
+    await runtime.filesystem.writeFile(`${CONTROL}/capture-release`, new Uint8Array());
+    await runtime.filesystem.flush();
+  });
   const kind: unknown = await (await fetch("./program/kind.json")).json();
   if (kind !== "quickjs" && kind !== "jsc" && kind !== "spidermonkey") throw new Error("Invalid program kind");
   const module = await prepareProgram({ kind, core: await bytes("./program/bun.wasm"), side: await bytes("./program/side.wasm") });
@@ -229,7 +267,7 @@ async function run() {
   // Owner-side counters while members live: proof real regions were reserved and charged.
   const processes = await runtime.processes();
   const members = watchMembers(runtime, processes, broker);
-  Reflect.set(globalThis, "sharedWasmMemoryProgress", () => ({ stdout: stdout.slice(-400), stderr: stderr.slice(-800), groups: processes.memoryGroups() }));
+  Reflect.set(globalThis, "sharedWasmMemoryProgress", () => ({ stdout: stdout.slice(-400), stderr: stderr.slice(-800), groups: processes.memoryGroups(), members: memberCaptures() }));
   const peak = { groups: 0, regions: 0, holds: 0, committedBytes: 0 };
   const sampling = setInterval(() => {
     members.sample();
@@ -244,14 +282,16 @@ async function run() {
   const wallMs = performance.now() - started;
   // The broker releases a member only after its supported stop, which trails run.done. A failed
   // stop is debt that never settles here, so that run does not wait on the member it retains.
+  // An ended group stays listed until its last member's exit is proven and its backing retired.
   const debt = entry === DEBT_ENTRY;
   const deadline = performance.now() + 10_000;
-  while (performance.now() < deadline && processes.memoryGroups().some(group => group.members > 0 || (!debt && group.retained > 0))) {
+  const settling = (group: MemoryGroupSnapshot) => group.members > 0 || (!debt && (group.retained > 0 || group.ended));
+  while (performance.now() < deadline && processes.memoryGroups().some(settling)) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   members.sample();
   await members.settled();
-  return { ...result, hostStacks, wallMs, stdout, stderr, peak, groups: processes.memoryGroups(), ended: members.ended(), budget: members.budget(), agentCloseDelays: members.closeDelays() };
+  return { ...result, hostStacks, wallMs, stdout, stderr, peak, groups: processes.memoryGroups(), ended: members.ended(), budget: members.budget(), agentCloseDelays: members.closeDelays(), members: memberCaptures() };
 }
 
 void run().then(

@@ -3,6 +3,7 @@ import {cpSync, readdirSync, readFileSync, writeFileSync} from "node:fs";
 import {join} from "node:path";
 import {playwright, session, ready, run, writeFile} from "./playground.mjs";
 import {firstVisit} from "./first-visit.mjs";
+import { navigateTestPage } from "./navigate-test-page.ts";
 const s = session("bun-wasm-crypto-browser-");
 try {
   const root = join(s.scratch, "dist");
@@ -22,7 +23,7 @@ try {
     const visit = await firstVisit(context, `${url}?engine=browser&prompt=off`);
     try {
       const page = await context.newPage();
-      await page.goto(visit.url);
+      await navigateTestPage(page, visit.url);
       assert.match(await ready(page), /ready/);
       await writeFile(page, "/home/user/crypto-native.js", source);
       const result = await run(page, "bun run crypto-native.js");

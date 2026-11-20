@@ -30,11 +30,20 @@ source=$(awk -F '\\t' -v url="$url" '$1 == url { print $2 }' "$FIXTURE_ROOT/rout
 [[ -n "$source" ]] || { echo "unrouted $url" >&2; exit 22; }
 cp "$source" "$out"
 `;
+// Tags answer from a table, so each release resolves to its own commit as on GitHub.
 const fakeGit = `#!/usr/bin/env bash
 set -euo pipefail
 [[ "$1" == ls-remote ]] || { echo "unexpected git $*" >&2; exit 2; }
-printf '%s\\trefs/tags/waffle-v%s\\n' "$FIXTURE_REVISION" "${record.version}"
+tag=\${4#refs/tags/}
+revision=$(awk -F '\\t' -v tag="$tag" '$1 == tag { print $2 }' "$FIXTURE_ROOT/tags")
+[[ -n "$revision" ]] || { echo "unknown tag $tag" >&2; exit 2; }
+printf '%s\\trefs/tags/%s\\n' "$revision" "$tag"
 `;
+
+type Release = { version: string; sourceCommit: string };
+const relayUrl = (version: string) =>
+  `https://github.com/ShaulLavo/waffle/releases/download/waffle-v${version}/waffle-relay-${version}.tgz`;
+const pinnedRelay: Release = { version: record.relay.version, sourceCommit: record.relay.sourceCommit };
 
 function baseUrl(manifest: Manifest): string {
   const base = manifest.packages.find((entry) => entry.name === "waffle-base");
@@ -60,7 +69,8 @@ async function packFixture(root: string, name: string, files: Readonly<Record<st
 
 const matchingInterfaces = { runtime: record.hostInterface, relay: record.hostInterface, programs: record.hostInterface, base: record.hostInterface };
 
-async function fixture(manifest: Manifest, interfaces: Record<keyof typeof matchingInterfaces, unknown> = matchingInterfaces) {
+async function fixture(manifest: Manifest, interfaces: Record<keyof typeof matchingInterfaces, unknown> = matchingInterfaces,
+  relayRelease: Release = pinnedRelay) {
   const root = await mkdtemp(join(tmpdir(), "waffle-records-"));
   const repository = join(root, "repository");
   await mkdir(join(repository, "scripts"), { recursive: true });
@@ -85,9 +95,11 @@ async function fixture(manifest: Manifest, interfaces: Record<keyof typeof match
     "patches/wasi-libc/preopen-scan.patch": encode("exact reviewed source patch"),
   };
   await serve(root, routes, record.url, await packFixture(root, "runtime", runtimeContents));
-  const relayMetadata = { name: "waffle-relay", version: record.relay.version, waffleHostInterface: interfaces.relay, peerDependencies: { waffle: "*" } };
+  const relayMetadata = { name: "waffle-relay", version: relayRelease.version, waffleHostInterface: interfaces.relay, peerDependencies: { waffle: "*" } };
   const relay = await packFixture(root, "relay", { "package.json": encode(JSON.stringify(relayMetadata)) });
-  await serve(root, routes, record.relay.url, relay);
+  await serve(root, routes, relayUrl(relayRelease.version), relay);
+  const tags = new Map([[`waffle-v${record.version}`, record.sourceCommit], [`waffle-v${relayRelease.version}`, relayRelease.sourceCommit]]);
+  await writeFile(join(root, "tags"), Array.from(tags, ([tag, revision]) => `${tag}\t${revision}\n`).join(""));
   await serve(root, routes, baseUrl(tagged), base);
   const manifestUrl = baseUrl(tagged).replace(/\/[^/]+$/, "/program-release.json");
   await serve(root, routes, manifestUrl, manifestBytes);
@@ -102,7 +114,7 @@ async function fixture(manifest: Manifest, interfaces: Record<keyof typeof match
   await writeFile(join(repository, "package.json"), JSON.stringify({
     waffleHostInterface: record.hostInterface,
     devDependencies: { waffle: record.url },
-    peerDependencies: { "waffle-base": baseUrl(tagged), "waffle-relay": record.relay.url },
+    peerDependencies: { "waffle-base": baseUrl(tagged), "waffle-relay": relayUrl(relayRelease.version) },
   }));
   const before = JSON.stringify(record, null, 2);
   await writeFile(join(repository, "scripts/waffle-release-inputs.json"), before);
@@ -116,7 +128,7 @@ function runUpdater(root: string, repository: string) {
     cwd: repository,
     env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, RUNNER_TEMP: root,
       CI_RELEASE_CACHE: join(root, "assets"), GITHUB_ACTIONS: "true", GITHUB_TOKEN: "",
-      FIXTURE_ROOT: root, FIXTURE_REVISION: record.sourceCommit },
+      FIXTURE_ROOT: root },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -180,18 +192,22 @@ for (const [label, manifest, diagnostic] of rejected) {
 
 
 test("the updater binds relay bytes and source to its exact-interface release", async () => {
-  const f = await fixture(published);
+  // A relay pinned to another release than the runtime must take that release's commit.
+  const relayRelease = { version: "0.0.1", sourceCommit: "1".repeat(40) };
+  const f = await fixture(published, matchingInterfaces, relayRelease);
   try {
     expect(runUpdater(f.root, f.repository).exitCode).toBe(0);
-    expect((await readRecord(f.repository)).relay).toEqual({
-      ...record.relay, bytes: f.relay.length, sha256: digest(f.relay),
-    });
+    const updated = await readRecord(f.repository);
+    expect(updated.sourceCommit).toBe(record.sourceCommit);
+    expect(updated.relay).toEqual({ url: relayUrl(relayRelease.version), ...relayRelease,
+      sha256: digest(f.relay), bytes: f.relay.length, hostInterface: record.hostInterface });
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
 
 for (const component of ["runtime", "relay", "programs", "base"] as const) {
-  for (const value of [undefined, null, 1, 3, "2"]) test(`${component} rejects nonmatching interface ${JSON.stringify(value)} without rewriting the record`, async () => {
+  const current = record.hostInterface;
+  for (const value of [undefined, null, current - 1, current + 1, String(current)]) test(`${component} rejects nonmatching interface ${JSON.stringify(value)} without rewriting the record`, async () => {
     const f = await fixture(published, { ...matchingInterfaces, [component]: value });
     try {
       const result = runUpdater(f.root, f.repository);

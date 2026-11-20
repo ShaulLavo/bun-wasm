@@ -1,3 +1,6 @@
+import type { Page, Response } from "playwright";
+import { navigateTestPage, type NavigationPage } from "./navigate-test-page.ts";
+
 interface ForegroundShell {
   readonly running: boolean;
   readonly lastExit: number;
@@ -6,6 +9,15 @@ interface ForegroundShell {
 }
 
 type PlaygroundGlobal = typeof globalThis & { playground: { shell: ForegroundShell } };
+
+/** A mounted preview may first visit its loading document before the real response. */
+export async function navigatePreview(page: NavigationPage & Pick<Page, "waitForResponse" | "waitForURL">, url: string, status = 200): Promise<Response> {
+  const response = page.waitForResponse(reply => reply.url() === url && reply.status() === status && reply.request().isNavigationRequest());
+  await navigateTestPage(page, url);
+  const delivered = await response;
+  await page.waitForURL(url, { waitUntil: "domcontentloaded" });
+  return delivered;
+}
 
 export interface ForegroundPage {
   evaluate<Result, Argument>(callback: (argument: Argument) => Result | Promise<Result>, argument: Argument): Promise<Result>;

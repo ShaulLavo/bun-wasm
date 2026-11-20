@@ -1,11 +1,12 @@
-# Oxc package initial memory
+# Oxc package memory
 
 ## Classification
 
 | Source | Class | Change |
 | --- | --- | --- |
-| `crates/bunwasm-runtime/src/oxc_memory.rs` and its call in `modules.rs` | Host feature | Original package adapter that reduces the initial capacity of three byte-identified published Oxc loaders. |
+| `crates/bunwasm-runtime/src/oxc_memory.rs` and its call in `modules.rs` | Host feature | Original package adapter that bounds the initial and maximum capacity of three byte-identified published Oxc loaders. |
 | `scripts/oxc-memory.test.ts` and `scripts/fixtures/oxc-memory-{adapter.rs,probe.ts}` | Host feature | Original controls that compile the adapter and exercise the real published Wasm packages. |
+| `tests/real-oxc-consumer/` and `scripts/real-oxc-consumer{,.test}.ts` | Host feature | Original table-driven consumer controls for the official parser, transform and minify packages on selected shared engine profiles. |
 
 ## Upstream identities
 
@@ -50,8 +51,13 @@ Rounding each data end up to a Wasm page gives the corresponding imported
 minimum. The binaries initialize passive data through `memory.init`; successful
 real package initialization and operations at those minima exercise these bounds.
 
-The adapter uses those exact minima. The shared flag, 65,536-page maximum,
-worker settings, imports, exports, package files, and binaries remain unchanged.
+The adapter uses those exact minima and a 4,096-page maximum, matching
+the maintained Oxc package memory profile's 256 MiB capacity. The published shared-memory import
+allows a smaller maximum. A shared memory can reserve its entire declared
+maximum in Safari even when its current size is small, so reducing only the
+initial allocation leaves a separate reservation cost.
+
+The shared flag, worker settings, imports, exports, package files, and binaries remain unchanged.
 Equal-width numeric replacements preserve all source positions. The adapter
 runs at the existing file-module preparation boundary before transpilation and
 source caching, for both Browser and in-guest engines.
@@ -61,8 +67,8 @@ loader string and no full binary copy or retained adapter cache. Unrelated
 module paths return the borrowed source before hashing or filesystem access.
 
 Initial logical capacity across the three packages falls from 786,432,000 to
-192,806,912 bytes. This is a capacity reduction, not an RSS measurement or an
-explanation of Safari's process footprint.
+192,806,912 bytes. Their combined declared maximum falls from 12 GiB to 768 MiB.
+These are capacity bounds, not RSS measurements.
 
 ## Checks and limits
 
@@ -77,5 +83,16 @@ guest. Normal CI builds the changed cores. With the pinned test dependencies,
 stock Node async parser and transform currently fail in Emnapi's worker setup.
 Native Bun 1.4.4 fails loading the stock bindings because its WASI object lacks
 `initialize`. The controls preserve and expose those baseline limitations.
+
+The separate real-consumer driver accepts JSC, QuickJS and SpiderMonkey shared
+profiles and preserves the Browser-engine and production Browser-host controls.
+It installs frozen official 0.94.0 packages with the guest, then checks public
+package selection and direct WASI binding calls separately. Parser checks decode
+the direct JSON AST envelope. Transform checks use a TypeScript filename and
+explicit language and working-directory options. Generated JavaScript must
+compute 42, and minification must shorten its input. Bounded public parser and
+transform async calls check resolved semantics as well. The Quality source check
+uses synthetic controls for driver logic; it does not qualify live addons or
+Nuxt. Live acceptance requires matching producer artifacts and successful runs.
 
 [Ledger scope and pinned revisions](scope.md).

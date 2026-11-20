@@ -6,7 +6,7 @@
 //!
 //! Promises are Hermes's own JS implementation (lib/InternalJavaScript/01-Promise.js): state
 //! `_y` (0 pending, 1 fulfilled, 2 rejected, 3 adopted `_z`), value `_z`. Closure-private
-//! tracker hooks feed [`Engine::take_unhandled_rejections`]. Our patch to that file
+//! tracker hooks feed [`Engine::next_unhandled_rejection`]. Our patch to that file
 //! (docs/bun-patches/hermes-async-context.md) adds `_G`/`_S` (the async context carried across
 //! reactions), `_T` (an internal `then`), and owned-promise hooks. The engine captures and deletes
 //! every private static before any user code runs.
@@ -15,7 +15,7 @@
 //! its loader owns linking, live bindings and top-level await inside this VM.
 
 use std::cell::{Cell, OnceCell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::c_char;
 use std::io::Write;
 use std::rc::Rc;
@@ -55,7 +55,7 @@ thread_local! {
     /// always covers every live native, so the GC-time push never allocates.
     static DEAD: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static HOST: RefCell<Option<Rc<dyn ModuleHost<Hermes>>>> = const { RefCell::new(None) };
-    static REJECTIONS: RefCell<Vec<(HVal, HVal)>> = const { RefCell::new(Vec::new()) };
+    static REJECTIONS: RefCell<VecDeque<(HVal, HVal)>> = const { RefCell::new(VecDeque::new()) };
     static INTRINSICS: OnceCell<Intrinsics> = const { OnceCell::new() };
     static LOADER: OnceCell<HVal> = const { OnceCell::new() };
     /// Attached `WebAssembly.Memory` buffers, until `detach_wasm_memory_buffer`.
@@ -485,7 +485,7 @@ fn promise_core(v: &HVal) -> Option<HVal> {
 fn track_rejection(_: &Hermes, args: &[HVal]) -> Result<HVal, HVal> {
     let promise = args.first().cloned().unwrap_or_else(undefined);
     let reason = args.get(1).cloned().unwrap_or_else(undefined);
-    REJECTIONS.with(|r| r.borrow_mut().push((promise, reason)));
+    REJECTIONS.with(|r| r.borrow_mut().push_back((promise, reason)));
     Ok(undefined())
 }
 
@@ -649,17 +649,6 @@ fn call_loader(method: &str, args: &[HVal]) -> Result<HVal, HVal> {
     call(&get(&loader, method)?, &loader, args)
 }
 
-fn wasm_capacity() -> Val {
-    #[cfg(target_arch = "wasm32")]
-    {
-        Val::Num((core::arch::wasm32::memory_size(0) * 65536) as f64)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Val::Null
-    }
-}
-
 /// Hermes. A unit handle: the runtime is a thread-local in the shim (one per process).
 #[derive(Clone, Copy)]
 pub struct Hermes;
@@ -697,6 +686,10 @@ impl Engine for Hermes {
 
     fn name(&self) -> &'static str {
         "hermes"
+    }
+
+    fn version(&self) -> (&'static str, &'static str) {
+        ("hermes", env!("BUN_WASM_HERMES_COMMIT"))
     }
 
     fn undefined(&self) -> HVal {
@@ -869,8 +862,8 @@ impl Engine for Hermes {
         )
     }
 
-    fn take_unhandled_rejections(&self) -> Vec<(HVal, HVal)> {
-        REJECTIONS.with(|r| r.borrow_mut().drain(..).collect())
+    fn next_unhandled_rejection(&self) -> Option<(HVal, HVal)> {
+        REJECTIONS.with(|r| r.borrow_mut().pop_front())
     }
 
     fn same_value(&self, a: &HVal, b: &HVal) -> bool {
@@ -968,7 +961,7 @@ impl Engine for Hermes {
             .set("external", memory_counter(snapshot.external))
             .set("arrayBuffers", Val::Null)
             .set("arrayBufferCount", Val::Null)
-            .set("wasmCapacity", wasm_capacity())
+            .set("wasmCapacity", crate::engine::wasm_capacity())
             .set("failedAllocation", Val::Null)
             .into()
     }

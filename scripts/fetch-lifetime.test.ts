@@ -30,7 +30,7 @@ function fixture() {
   let headReads = 0;
   let responseRead: Uint8Array | number = 0;
   const modules: Record<string, unknown> = {
-    streams, buffer: { Buffer }, http_common: load("http_common.ts")(),
+    streams, text_decoder: TextDecoder, buffer: { Buffer }, http_common: load("http_common.ts")(),
     websocket: { clientClass: () => undefined },
     html_server: { websocket: () => undefined, developmentEnabled: () => false, attach() {}, dispose() {}, upgrade: () => false, asset: () => null },
   };
@@ -108,7 +108,8 @@ for (const reason of [null, false, 0, "", "cancelled", new Error("cancelled")]) 
     await turn();
     expect(result).toEqual([reason]);
     expect(cancellations).toEqual([reason]);
-    expect(body.locked).toBe(false);
+    // Native Bun keeps an aborted upload's stream locked.
+    expect(body.locked).toBe(true);
     expect(state.uploads).toEqual([]);
     expect(state.closed).toEqual([]);
     expect(state.pending()).toBe(0);
@@ -153,7 +154,8 @@ test("finite upload keeps its bytes and releases the host on response EOF", asyn
   await state.pump();
   expect(await text).toBe("");
   expect(state.uploads.map(bytes => Array.from(bytes))).toEqual([[1, 2, 3]]);
-  expect(body.locked).toBe(false);
+  // The upload consumed the body: its stream stays locked, as in Bun.
+  expect(body.locked).toBe(true);
   expect(state.closed).toEqual([30]);
 });
 
@@ -408,7 +410,7 @@ test("finite response drain releases the next keep-alive request without cross-r
   }
 });
 
-test("reset during blocked streamed response retains request cancellation and reader cleanup", async () => {
+test("reset during blocked streamed response retains request cancellation and keeps the body locked", async () => {
   const state = fixture();
   state.writeBudget(0);
   let signal: AbortSignal | undefined;
@@ -427,7 +429,8 @@ test("reset during blocked streamed response retains request cancellation and re
     await state.pump();
     expect(signal?.aborted).toBe(true);
     expect(cancellations).toBe(1);
-    expect(body.locked).toBe(false);
+    // Native Bun keeps a sent body's stream locked after the client goes away.
+    expect(body.locked).toBe(true);
     expect(state.closed).toEqual([20]);
   } finally {
     await server.stop(true);

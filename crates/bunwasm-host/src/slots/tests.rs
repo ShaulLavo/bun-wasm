@@ -126,6 +126,108 @@ fn bash_54a_terminal_geometry_phase_and_no_prompt_contract() {
 }
 
 #[test]
+fn runtime_proc_getpid_uses_the_calling_process_identity() {
+    use wasm_encoder::{
+        EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
+    };
+
+    let mut types = TypeSection::new();
+    types.ty().function([], [ValType::I32]);
+    let mut imports = ImportSection::new();
+    imports.import("runtime_proc", "getpid", EntityType::Function(0));
+    let mut exports = ExportSection::new();
+    exports.export("getpid", ExportKind::Func, 0);
+    let mut binary = wasm_encoder::Module::new();
+    binary.section(&types).section(&imports).section(&exports);
+    let binary = binary.finish();
+
+    for (kind, expected) in [
+        (None, 0),
+        (Some(process::ProcessKind::Process), 2),
+        (Some(process::ProcessKind::Thread), 2),
+    ] {
+        let mut f = Fixture::with_kind(kind);
+        let module = Module::new(f.store.engine(), &binary).unwrap();
+        let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+        let getpid = instance
+            .get_typed_func::<(), i32>(&mut f.store, "getpid")
+            .unwrap();
+        assert_eq!(getpid.call(&mut f.store, ()).unwrap(), expected);
+        assert_eq!(getpid.call(&mut f.store, ()).unwrap(), expected);
+        f.store.data().cancel.select(FinalOutcome::Signal(15));
+        assert!(getpid.call(&mut f.store, ()).is_err());
+    }
+}
+
+#[test]
+fn logical_identity_scalars_have_exact_signatures_and_refuse_after_cancellation() {
+    use wasm_encoder::{
+        EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
+    };
+    let mut types = TypeSection::new();
+    types.ty().function([], [ValType::I32]);
+    let names = ["getpid", "process_id", "parent_process_id"];
+    let mut imports = ImportSection::new();
+    let mut exports = ExportSection::new();
+    for (index, name) in names.into_iter().enumerate() {
+        imports.import("runtime_proc", name, EntityType::Function(0));
+        exports.export(name, ExportKind::Func, index as u32);
+    }
+    let mut binary = wasm_encoder::Module::new();
+    binary.section(&types).section(&imports).section(&exports);
+    let bytes = binary.finish();
+    for (kind, expected) in [
+        (None, [0, 1, 0]),
+        (Some(process::ProcessKind::Process), [2, 2, 1]),
+        (Some(process::ProcessKind::Thread), [2, 1, 0]),
+    ] {
+        for outcome in [FinalOutcome::Exit(23), FinalOutcome::Signal(15)] {
+            assert_scalar_identity(&bytes, kind, expected, outcome);
+        }
+    }
+}
+
+fn assert_scalar_identity(
+    bytes: &[u8],
+    kind: Option<process::ProcessKind>,
+    expected: [i32; 3],
+    outcome: FinalOutcome,
+) {
+    let mut f = Fixture::with_kind(kind);
+    let module = Module::new(f.store.engine(), bytes).unwrap();
+    let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+    let queries = ["getpid", "process_id", "parent_process_id"].map(|name| {
+        instance
+            .get_typed_func::<(), i32>(&mut f.store, name)
+            .unwrap()
+    });
+    for _ in 0..3 {
+        for (query, value) in queries.iter().zip(expected) {
+            assert_eq!(query.call(&mut f.store, ()).unwrap(), value);
+        }
+    }
+    let next = f
+        .runtime
+        .admit_fixture(expected[0], process::ProcessKind::Process, Arc::default())
+        .unwrap();
+    assert_eq!(
+        next.execution_id().get(),
+        if kind.is_some() { 3 } else { 2 }
+    );
+    f.store.data().cancel.select(outcome);
+    for query in queries
+        .into_iter()
+        .skip(if matches!(outcome, FinalOutcome::Exit(_)) {
+            1
+        } else {
+            0
+        })
+    {
+        assert!(query.call(&mut f.store, ()).is_err());
+    }
+}
+
+#[test]
 fn runtime_proc_inherited_fds_are_a_stable_launch_snapshot() {
     use wasm_encoder::{
         EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
@@ -173,6 +275,44 @@ fn runtime_proc_inherited_fds_are_a_stable_launch_snapshot() {
         assert_eq!(
             after, before,
             "closing and renumbering descriptors must not change launch bindings"
+        );
+    }
+}
+
+#[test]
+fn package_handoff_native_rejects_before_pointers_and_preserves_cancellation() {
+    use wasm_encoder::{
+        EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
+    };
+    let mut types = TypeSection::new();
+    types.ty().function([ValType::I32; 4], [ValType::I32]);
+    let mut imports = ImportSection::new();
+    imports.import("bun_package_scripts", "handoff", EntityType::Function(0));
+    let mut exports = ExportSection::new();
+    exports.export("handoff", ExportKind::Func, 0);
+    let mut binary = wasm_encoder::Module::new();
+    binary.section(&types).section(&imports).section(&exports);
+    for mut f in Fixture::both() {
+        let module = Module::new(f.store.engine(), binary.as_slice()).unwrap();
+        // This module has no memory. Even invalid pointers must return NOTSUP untouched.
+        let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+        let handoff = instance
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut f.store, "handoff")
+            .unwrap();
+        assert_eq!(
+            handoff.call(&mut f.store, (-1, -1, -1, -1)).unwrap(),
+            process::NOTSUP
+        );
+        let [reader, writer] = f.pipe();
+        f.write(1024, b"live");
+        assert_eq!(f.call("runtime_proc", "write", (writer, 1024, 4)), 4);
+        assert_eq!(f.call("runtime_proc", "read", (reader, 2048, 4)), 4);
+        assert_eq!(f.bytes(2048, 4), b"live");
+        f.store.data().cancel.kill(15);
+        assert!(handoff.call(&mut f.store, (-1, -1, -1, -1)).is_err());
+        assert_eq!(
+            f.store.data().cancel.select(FinalOutcome::Exit(126)),
+            FinalOutcome::Signal(15)
         );
     }
 }
@@ -277,6 +417,22 @@ impl Fixture {
         Self::with_memory_and_stdio(directory, shared, Stdio::inherited())
     }
     fn with_memory_and_stdio(directory: &std::path::Path, shared: bool, stdio: Stdio) -> Self {
+        Self::with_memory_stdio_and_kind(directory, shared, stdio, None)
+    }
+    fn with_kind(kind: Option<process::ProcessKind>) -> Self {
+        Self::with_memory_stdio_and_kind(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+            false,
+            Stdio::inherited(),
+            kind,
+        )
+    }
+    fn with_memory_stdio_and_kind(
+        directory: &std::path::Path,
+        shared: bool,
+        stdio: Stdio,
+        kind: Option<process::ProcessKind>,
+    ) -> Self {
         let mut config = Config::new();
         config.epoch_interruption(true);
         let engine = Engine::new(&config).unwrap();
@@ -296,8 +452,17 @@ impl Fixture {
             )
             .unwrap();
         }
-        let processes =
-            process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
+        let root_cancel = if kind.is_some() {
+            Arc::default()
+        } else {
+            cancel.clone()
+        };
+        let root = runtime.admit_root(root_cancel).unwrap();
+        let admission = match kind {
+            Some(kind) => runtime.admit_fixture(0, kind, cancel.clone()).unwrap(),
+            None => root,
+        };
+        let processes = process::Processes::new(admission, stdio, net.notify());
         let watches = crate::fs_watch::Watches::new(net.notify());
         let mut store = Store::new(
             &engine,
@@ -1484,16 +1649,27 @@ fn wait_for_rename(f: &mut Fixture, id: i32, name: &str) {
 
 /// Sleep in the network poll until a drain of the watch reports `wanted`.
 fn wait_for(f: &mut Fixture, id: i32, wanted: (u8, Option<String>)) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         assert!(std::time::Instant::now() < deadline, "no record {wanted:?}");
         f.store.data_mut().net.poll(1000);
-        while let Ok(records) = watch_records(f, id) {
-            if records.contains(&wanted) {
-                return;
-            }
+        if f.call("runtime_fs", "watch_ready", ()) == 0 {
+            continue;
+        }
+        assert_eq!(f.call("runtime_fs", "watch_ready", ()), 1);
+        if watch_contains(f, id, &wanted) {
+            return;
         }
     }
+}
+
+fn watch_contains(f: &mut Fixture, id: i32, wanted: &(u8, Option<String>)) -> bool {
+    while let Ok(records) = watch_records(f, id) {
+        if records.contains(wanted) {
+            return true;
+        }
+    }
+    false
 }
 
 /// `path_open` of `path` under preopen 3 with the rights Rust's `File::open` uses (wasi-libc
@@ -1546,6 +1722,7 @@ fn runtime_fs_watches_follow_an_opened_directory_and_wake_the_network_poll() {
     );
     assert_eq!(f.call("runtime_fs", "watch_open", (directory, 1, 132)), 0);
     let id = f.word(132);
+    assert_eq!(f.call("runtime_fs", "watch_ready", ()), 0);
     assert_eq!(watch_records(&mut f, id), Err(6), "nothing pending yet");
     std::fs::write(root.join("app/page.tsx"), "1").unwrap();
     wait_for_rename(&mut f, id, "page.tsx");

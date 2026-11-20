@@ -1,4 +1,5 @@
 {
   "owner": "runtime",
+  "isolation": "process",
   "path": "scripts/spidermonkey-module-evaluation-info.test.ts"
 }

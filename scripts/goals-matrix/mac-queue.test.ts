@@ -1,6 +1,6 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { options } from "./run";
@@ -8,6 +8,11 @@ import { cleanupStaging, nativeRunnerArgs, removeStaging } from "./fleet";
 import { admission, queuedNativeCommand, nativeQueueScript, quote } from "./mac-queue";
 import { deadlinePolicy } from "./deadlines";
 import { initialCells, type Report } from "./model";
+
+// These tests spawn real queue, shell and Bun processes. The cap only catches a hang; the
+// queue's own one-second wait and timeout budgets under test stay as they are.
+const HANG_CAP_MS = 120_000;
+setDefaultTimeout(HANG_CAP_MS);
 
 const installedQueue = join(homedir(), ".agents/skills/machine-fleet/scripts/mac-queue.ts");
 const installedTest = test.skipIf(!existsSync(installedQueue));
@@ -72,7 +77,7 @@ async function queueStatus(f: Fixture): Promise<{ holder: unknown; waiting: unkn
   return JSON.parse(text);
 }
 async function waitFor(check: () => Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + 6000;
+  const deadline = Date.now() + HANG_CAP_MS / 2;
   while (!await check()) {
     if (Date.now() >= deadline) throw new Error("Fixture checkpoint missing");
     await Bun.sleep(20);
@@ -97,7 +102,7 @@ installedTest.each([0, 7])("real installed queue forwards workload exit %i after
   expect(events[0]).toBe("install");
   expect(JSON.parse(events[1] ?? "")).toEqual(args);
   expect(await queueStatus(f)).toMatchObject({ holder: null, waiting: [] });
-}), 15000);
+}), HANG_CAP_MS);
 
 installedTest("pre-admission cancellation withdraws only its ticket and preserves an unknown lock", () => fixture(async f => {
   const lock = join(f.home, "tmp/.agent-mac-lock");
@@ -111,7 +116,7 @@ installedTest("pre-admission cancellation withdraws only its ticket and preserve
     expect(await queueStatus(f)).toMatchObject({ holder: null, waiting: [] });
     expect(await readFile(join(lock, "owner"), "utf8")).toBe("unknown owner\n");
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
-}), 15000);
+}), HANG_CAP_MS);
 
 installedTest("timeout stops task descendants before installed queue release", () => fixture(async f => {
   const request = { ...config(), nativeAdmission: { ...admission(config()), timeoutSeconds: 1 } };
@@ -123,7 +128,7 @@ installedTest("timeout stops task descendants before installed queue release", (
     for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
     expect(await queueStatus(f)).toMatchObject({ holder: null, waiting: [] });
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
-}), 15000);
+}), HANG_CAP_MS);
 
 async function delayedAcknowledgement(f: Fixture, empty: boolean, entered: string): Promise<void> {
   await mkdir(join(f.remote, "report"));
@@ -222,7 +227,7 @@ installedTest("remote staging requires a settled invocation, never just a missin
     expect(await Bun.file(join(f.remote, "queue-exit")).exists()).toBe(false);
     expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: true, consumersStopped: true });
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
-})), 15000);
+})), HANG_CAP_MS);
 
 test.each([
   { name: "missing", cleanup: null, accepted: false },
@@ -248,6 +253,35 @@ test.each([
   expect(await Bun.file(join(f.home, "fleet-cleanup.json")).exists()).toBe(false);
 }), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
 
+async function readonlyStaging(f: Fixture): Promise<void> {
+  const original = join(f.home, "common"), copied = join(f.remote, "dist"), asset = join(original, "asset");
+  try {
+    await mkdir(original); await writeFile(asset, "unchanged common bytes\n");
+    await chmod(asset, 0o444); await chmod(original, 0o555);
+    await cp(original, copied, { recursive: true });
+    await symlink(original, join(f.remote, "common-link"));
+    await mkdir(join(f.remote, "report"));
+    await writeFile(join(f.remote, "queue-exit"), "0\n");
+    await writeFile(join(f.remote, "queue-workload-started"), "started\n");
+    const receipt = join(f.remote, "report/native-cleanup.json");
+    await writeFile(receipt, JSON.stringify({ driverExited: false, safariExited: true, admissionOwner: "installed-mac-queue" }));
+    const request = { ...config(), output: f.home };
+    await expect(removeStaging(f.remote, true, request)).rejects.toThrow("native shutdown is unproved");
+    expect((await lstat(copied)).mode & 0o777).toBe(0o555);
+    expect(await readFile(join(copied, "asset"), "utf8")).toBe("unchanged common bytes\n");
+    await writeFile(receipt, JSON.stringify({ driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" }));
+    await removeStaging(f.remote, true, request);
+    expect(existsSync(f.remote)).toBe(false);
+    expect(await readFile(asset, "utf8")).toBe("unchanged common bytes\n");
+    expect((await lstat(original)).mode & 0o777).toBe(0o555);
+    expect((await lstat(asset)).mode & 0o777).toBe(0o444);
+    expect(JSON.parse(await readFile(join(f.home, "fleet-cleanup.json"), "utf8"))).toMatchObject({ stagingRemoved: true, consumersStopped: true });
+  } finally {
+    await Promise.all([original, copied].filter(existsSync).map(directory => chmod(directory, 0o755)));
+  }
+}
+test("remote readonly copies change permissions only after native settlement and preserve linked common inputs", () => fixture(f => localMesh(f, () => readonlyStaging(f)), "console.log(JSON.stringify({holder:null,waiting:[]}));"));
+
 installedTest.each([false, true])("native teardown completes inside admission after operation failure %j", fail => fixture(async f => {
   const control = join(f.remote, "native-control.ts");
   await writeFile(control, nativeControl(f, fail));
@@ -259,7 +293,7 @@ installedTest.each([false, true])("native teardown completes inside admission af
   expect(receipt).toMatchObject({ driverExited: true, safariExited: true, admissionOwner: "installed-mac-queue" });
   expect(receipt).not.toHaveProperty("lockRemoved");
   expect(await queueStatus(f)).toMatchObject({ holder: null, waiting: [] });
-}), 15000);
+}), HANG_CAP_MS);
 function nativeControl(f: Fixture, fail: boolean): string {
   return `import {mock,spyOn} from 'bun:test';
 import {appendFile,stat} from 'node:fs/promises';
@@ -295,7 +329,7 @@ installedTest("remote wait cancellation writes a settled result without consumin
     await removeStaging(f.remote, true, { ...config(), output: f.home });
     expect(await readFile(join(lock, "owner"), "utf8")).toBe("unknown owner\n");
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
-})), 15000);
+})), HANG_CAP_MS);
 
 installedTest("owner-busy and wait expiry leave owner state untouched", () => fixture(async f => {
   const busy = join(f.env.MACHINE_FLEET_STATE_DIR ?? "", "owner-busy");
@@ -306,7 +340,7 @@ installedTest("owner-busy and wait expiry leave owner state untouched", () => fi
   expect(await childResult(child)).toBe(75);
   expect(await readFile(busy, "utf8")).toBe("owner working\n");
   expect(await queueStatus(f)).toMatchObject({ holder: null, waiting: [] });
-}), 15000);
+}), HANG_CAP_MS);
 
 test.each([0, 7, 75, 124, 130])("injected installed CLI forwards exit %i without a legacy admission fallback", code => fixture(async f => {
   const controller = join(f.remote, "controller.ts");
@@ -326,7 +360,7 @@ test("controller cancellation waits for the installed CLI to settle", () => fixt
     expect(await childResult(child)).toBe(75);
     expect(await readFile(f.events, "utf8")).toBe("settled\n");
   } finally { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
-}, `process.on('SIGTERM',async()=>{await Bun.sleep(50);await Bun.write(process.env.EVENTS,'settled\\n');process.exit(75);});await Bun.write(process.env.EVENTS,'waiting');setInterval(()=>{},1000);`), 10000);
+}, `process.on('SIGTERM',async()=>{await Bun.sleep(50);await Bun.write(process.env.EVENTS,'settled\\n');process.exit(75);});await Bun.write(process.env.EVENTS,'waiting');setInterval(()=>{},1000);`), HANG_CAP_MS);
 
 test.each([false, true])("direct Mac CLI uses the same admission route with an explicit endpoint %j", endpoint => fixture(async f => {
   const preload = join(f.remote, "darwin.ts");

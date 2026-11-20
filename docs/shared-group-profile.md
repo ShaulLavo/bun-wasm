@@ -5,6 +5,17 @@ with each member's core and engine at their own relocated base. This page is the
 admission contract. The group itself (members, regions, futex, budgets) belongs to
 [Waffle's memory groups](https://github.com/ShaulLavo/waffle/blob/main/docs/memory-groups.md).
 
+The native lifetime command runs all 200 workers and then checks a fresh group in the same
+launcher. It has a ten-minute hang cap; other native commands keep a two-minute hang cap.
+The tests assert delivery, output and ownership outcomes, not elapsed-time targets. Worker
+counts and SpiderMonkey tier/accounting checks are unchanged. Durations belong in benchmarks.
+
+Shared proof handoffs preserve component receipts and their original source labels. The producer
+also records freshly captured `current-inputs.json` snapshots for the composition. The handoff
+checks those current scope, profile and input digests against the unchanged component receipts;
+a compatible cached origin can therefore predate the current checkout. SpiderMonkey's pair
+source names its composition separately from the common core's origin.
+
 ## Profiles
 
 `split` is the default profile. Its flags and receipt shape are unchanged: no profile field is
@@ -38,7 +49,7 @@ under `--shared-memory`.
 ## Explicit page selection and assets
 
 The playground and sandbox accept `?engine=quickjs&profile=shared-group` and
-`?engine=jsc&profile=shared-group` and `?engine=spidermonkey&profile=shared-group`. Omitted `profile` means `split`. Engine kind and memory
+`?engine=jsc&profile=shared-group` and `?engine=spidermonkey&profile=shared-group`. Omitted `profile` uses the [template policy](playground-profiles.md): Vite 8 React, Vite 8 vanilla and Angular use `shared-group` on in-guest engines; Browser and ordinary templates use `split`. Engine kind and memory
 profile are separate selections. Invalid profiles, unavailable engine/profile combinations,
 missing assets and mixed pairs fail before the program executes. An execution failure never
 changes the selected profile. The Browser engine has no shared program profile.

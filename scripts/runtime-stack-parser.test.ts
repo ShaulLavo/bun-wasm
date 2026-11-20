@@ -11,7 +11,7 @@ interface StackFrame {
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/inspect.js", import.meta.url), "utf8");
 
-function inspector(engine: string, hooks: object = {}, frames?: (error: unknown, stack: unknown) => unknown) {
+function inspector(engine: string, hooks: object = {}, frames?: (error: unknown, stack: unknown, skipSelfHosted?: boolean) => unknown) {
   const factory: (internal: object) => {
     parseStack(stack: unknown): StackFrame[];
     formatError(error: unknown): string;
@@ -56,6 +56,16 @@ for (const engine of ["jsc", "host", "quickjs"]) {
     expect(frames.map(frame => frame.name)).toEqual([
       "getStack", "depd", "809", "__nccwpck_require__", "744", "__nccwpck_require__", "<anonymous>", "", "", "", "",
     ]);
+  });
+}
+
+for (const engine of ["jsc", "host"]) {
+  test(`${engine} retains generated function frames without a source position`, () => {
+    expect(inspector(engine).parseStack("sloppyNamed@\nasyncLeaf@\nforEach@[native code]"))
+      .toEqual([
+        { name: "sloppyNamed", file: "<eval>", line: 0, column: 0 },
+        { name: "asyncLeaf", file: "<eval>", line: 0, column: 0 },
+      ]);
   });
 }
 
@@ -145,6 +155,15 @@ test("SpiderMonkey maps anonymous module bodies without inventing a function nam
   ]);
 });
 
+for (const kind of ["Function", "AsyncFunction", "GeneratorFunction", "AsyncGenerator"]) {
+  test(`SpiderMonkey retains user frames created by ${kind} through the runtime wrapper`, () => {
+    const file = `bun-wasm:function line 26 > ${kind}`;
+    expect(inspector("spidermonkey").parseStack(`sloppyNamed@${file}:3:40\nconstructor@bun-wasm:function:26:16`)).toEqual([
+      { name: "sloppyNamed", file, line: 3, column: 40 },
+    ]);
+  });
+}
+
 for (const name of ["async*sync", "at sync", "async*__bunwasm_cjs__"]) {
   test(`SpiderMonkey preserves synchronous native display name ${name}`, () => {
     const stack = inspector("spidermonkey");
@@ -172,6 +191,18 @@ test("SpiderMonkey saved-frame formatting keeps display name and source separate
   expect(stack.formatError(error)).not.toContain("creation");
   expect(error.stack).toBe(raw);
 });
+test("SpiderMonkey exception formatting excludes native self-hosted frames", () => {
+  const error = new Error("original");
+  error.stack = "fail@/index.ts:20:15\napply@self-hosted:2904:23";
+  const stack = inspector("spidermonkey", {}, (value, observed, skipSelfHosted) => {
+    expect(value).toBe(error);
+    expect(observed).toBe(error.stack);
+    expect(skipSelfHosted).toBe(true);
+    return [{ name: "fail", file: "self-hosted", line: 20, column: 15 }];
+  });
+  expect(stack.formatError(error)).toContain("at fail (self-hosted:20:15)");
+  expect(stack.formatError(error)).not.toContain("apply");
+});
 test("SpiderMonkey preserves overridden stack text or a failed metadata read", () => {
   const error = new Error("custom"); error.stack = "async*sync@/custom.js:4:7";
   for (const read of [() => undefined, () => { throw new Error("metadata unavailable"); }]) {
@@ -185,4 +216,16 @@ test("SpiderMonkey keeps a user-supplied V8 stack when native metadata does not 
   const stack = inspector("spidermonkey", {}, () => undefined);
   expect(stack.formatError(error)).toContain("at custom (/custom.js:4:7)");
   expect(error.stack).toBe("    at custom (/custom.js:4:7)");
+});
+
+test("native frame kind changes diagnostic labels without changing real names", () => {
+  const inputs = [
+    { name: null, frameKind: 1 }, { name: null, frameKind: 2 }, { name: "__bunwasm_cjs__", frameKind: 2 },
+    { name: "anonymous", frameKind: 2 }, { name: null, frameKind: 0 }, { name: null, frameKind: 3 },
+  ];
+  const stack = inspector("spidermonkey", {}, () => inputs.map(input => ({ ...input, file: "/capture.ts", line: 1, column: 2 })));
+  const output = stack.formatError(new Error("kind"));
+  expect(output.match(/at <anonymous>/g)).toHaveLength(1);
+  expect(output.match(/at \/capture.ts:1:2/g)).toHaveLength(4);
+  expect(output).toContain("at anonymous (/capture.ts:1:2)");
 });

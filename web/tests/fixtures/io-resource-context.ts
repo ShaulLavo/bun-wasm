@@ -24,7 +24,7 @@ import { CASES, RETIREMENT } from "./io-resource-scenarios.ts";
 
 const MODULES = [
   "resource_frame", "events", "http_common", "net_port", "net_listener", "net_address", "net_hostname", "tls_transport", "http_response",
-  "serve_request_lifetime", "net", "fs_options", "fs_watch", "child_ipc", "spawn", "node_stream_core", "process_stdin",
+  "serve_request_lifetime", "io_pump", "net", "fs_options", "fs_watch", "child_ipc", "spawn", "node_stream_core", "process_stdin",
 ];
 const runtime = new URL("../../../crates/bunwasm-runtime/src/js/", import.meta.url);
 const JAVASCRIPT = new Set(["net", "node_stream_core"]);
@@ -46,6 +46,8 @@ function hostContext(native: boolean): Context {
     EventEmitter, Buffer, nodePath, nodeUtil, Request, Response, Headers, ReadableStream, DOMException, structuredClone, WeakRef,
     provider: native ? createNodeAsyncContext() : undefined,
   });
+  const queueSource = readFileSync(new URL("immediate_queue.ts", runtime), "utf8");
+  context.immediateQueueFactory = runInContext(stripTypeScriptTypes(queueSource), context);
   runInContext(`${engineHostSource()}
     const host = new EngineHost({ instance: { exports: {} }, asyncContext: provider }, () => {});
     host.pendingAsync = 1; host.schedule = () => {}; host.uncaught = error => { throw error; };
@@ -57,6 +59,7 @@ function hostContext(native: boolean): Context {
       platformInfo: { version: "control" }, domainToASCII: value => value,
       isatty: () => false, cwd: () => "/work", stat: () => ({ mode: 0o040755 }), fstat: () => ({ mode: 0o010000 }),
       fsWatchOpen: () => 40 + state.watches.push(state.watches.length ? [] : state.watch) - 1,
+      fsWatchReady: () => state.watches.some(records => records.length > 0),
       fsWatchRead: id => state.watches[id - 40].shift() ?? -6,
       fsWatchClose: id => { state.closed.push(id); return 0; },
       procRead: () => { const next = state.reads.shift() ?? -6; if (next instanceof Error) throw next; return next; },
@@ -73,6 +76,7 @@ function hostContext(native: boolean): Context {
     });
     host.native = native;
     const modules = {
+      immediate_queue: immediateQueueFactory(),
       events: EventEmitter, buffer: { Buffer }, path: nodePath,
       process: Object.assign(new EventEmitter(), { env: {}, execPath: "bun", execArgv: [], cwd: () => "/work" }),
       package_scripts: { spawnArguments: argv => argv }, websocket: { clientClass: () => undefined },

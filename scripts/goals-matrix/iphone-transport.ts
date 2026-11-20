@@ -1,6 +1,6 @@
 import { isAbsolute } from "node:path";
 import type { Transport } from "./transport";
-import { admit, awaitWithin, type Admission } from "./scope";
+import { admit, awaitWithin, within, type Admission } from "./scope";
 import { IphoneLane } from "./iphone-lane";
 import type { IphoneSettlement } from "./iphone-bus";
 import { ownedCommand } from "./lifetime";
@@ -8,6 +8,8 @@ import { until } from "./playground";
 import { armIphoneClick, iphonePreviewLoad, presentIphonePreview } from "./iphone-browser";
 import { object } from "./evidence";
 import { closeIphoneTab } from "./iphone-cleanup";
+import { prepareIphoneSafari } from "./iphone-setup";
+import { safariNodes } from "./iphone-tab-snapshot";
 import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates, saveIphoneEvidence } from "./iphone-click";
 
 type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; cleanupTimeoutMs?: number; saveNative?(text: string): Promise<void> };
@@ -22,25 +24,135 @@ export function nativeButtonRef(snapshot: string, label: string): string {
   return matches[0][1];
 }
 type Row = Record<string, unknown>;
+type PreviewStage = "configure" | "presentation" | "document" | "load" | "focus" | "open-preview-complete";
+class IphonePreviewEvidence {
+  private readonly id = crypto.randomUUID();
+  private progress: PreviewStage = "configure";
+  private previous = "";
+  private changes = 0;
+  private ended = false;
+  private readonly abort = () => this.finish("cancelled");
+  constructor(private readonly save: Config["saveNative"], private readonly signal: AbortSignal) {
+    this.stage("configure");
+    if (signal.aborted) this.abort();
+    else signal.addEventListener("abort", this.abort, { once: true });
+  }
+  private emit(row: object): void { saveIphoneEvidence(this.save, { event: "iphone-preview", previewId: this.id, ...row }); }
+  stage(stage: PreviewStage): void {
+    if (this.ended) return;
+    this.progress = stage;
+    this.previous = "";
+    this.changes = 0;
+    this.emit({ stage });
+  }
+  observed(row: Row, presentation: string): void {
+    if (this.ended) return;
+    const observation = previewObservation(this.progress, row, presentation);
+    const serialized = JSON.stringify(observation);
+    if (serialized === this.previous) return;
+    this.previous = serialized;
+    // Keep changing observations bounded without losing the final state at cancellation.
+    if (this.changes++ < 12) this.emit({ stage: this.progress, observation });
+  }
+  finish(outcome: "returned" | "failed" | "cancelled"): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.signal.removeEventListener("abort", this.abort);
+    this.emit({ stage: this.progress, outcome, observation: this.previous ? JSON.parse(this.previous) : undefined });
+  }
+}
+function previewObservation(stage: PreviewStage, row: Row, presentation: string): object {
+  if (stage === "document") return { attached: attached(row), visible: row.visible === true, hasTimeOrigin: typeof row.timeOrigin === "number", ...(row.navigation ? { navigation: row.navigation } : {}) };
+  if (stage === "load") return { loaded: row.loaded === true, readyState: row.readyState === "loading" || row.readyState === "interactive" || row.readyState === "complete" ? row.readyState : "unknown" };
+  const focus = row.previewFocus;
+  if (!focus || typeof focus !== "object") return { presented: false, focused: false, matchesPresentation: false };
+  return { presented: "presented" in focus && focus.presented === true, focused: "focused" in focus && focus.focused === true,
+    matchesPresentation: "presentation" in focus && focus.presentation === presentation };
+}
+type RenderRequest = { request: number; dispatched: boolean; delivered: "unknown" | "confirmed" | "expired"; settled: boolean; result?: { text: string; matched: boolean } };
+class IphoneRenderEvidence {
+  private readonly id = crypto.randomUUID();
+  private first: RenderRequest | undefined;
+  private last: RenderRequest | undefined;
+  private count = 0;
+  ended = false;
+  private readonly signal: AbortSignal;
+  private readonly abort = () => this.finish("cancelled");
+  constructor(private readonly save: Config["saveNative"], readonly admission: Admission, lifetime: AbortSignal) {
+    this.signal = AbortSignal.any([admission.signal, lifetime]);
+    this.signal.addEventListener("abort", this.abort, { once: true });
+  }
+  private emit(outcome: string): void { saveIphoneEvidence(this.save, { event: "iphone-rendered", renderId: this.id, outcome, requests: this.count, first: this.first, last: this.last }); }
+  requested(): RenderRequest {
+    const request: RenderRequest = { request: ++this.count, dispatched: false, delivered: "unknown", settled: false };
+    this.first ??= request;
+    this.last = request;
+    if (this.count === 1) this.emit("requested");
+    return request;
+  }
+  dispatched(request: RenderRequest): void {
+    if (this.ended) return;
+    request.dispatched = true;
+    if (request === this.first) this.emit("dispatched");
+  }
+  settled(request: RenderRequest, answer: IphoneSettlement): void {
+    if (this.ended) return;
+    request.settled = true;
+    if (answer.ok) {
+      request.delivered = "confirmed";
+      request.result = renderedObservation(answer.value);
+    }
+    if (!answer.ok && answer.error === "Error: iPhone observer delivery deadline expired") request.delivered = "expired";
+    if (request === this.first) this.emit("settled");
+    if (!answer.ok || request.result?.matched) this.finish(answer.ok ? "matched" : "observer-failed");
+  }
+  finish(outcome: string): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.signal.removeEventListener("abort", this.abort);
+    this.emit(outcome);
+  }
+}
+function renderedObservation(value: unknown): RenderRequest["result"] {
+  if (!value || typeof value !== "object" || !("text" in value) || typeof value.text !== "string" || !("matched" in value) || typeof value.matched !== "boolean") return;
+  return { text: value.text.slice(0, 200), matched: value.matched };
+}
 const attached = (row: Row): boolean => typeof row.timeOrigin === "number" && row.visible === true;
 function presentedFocus(row: Row, presentation: string): boolean {
   const focus = row.previewFocus;
   return focus !== null && typeof focus === "object" && "presentation" in focus && focus.presentation === presentation && "focused" in focus && focus.focused === true;
 }
-type PreviewWait = (signal: AbortSignal, stage: string, read: (timeoutMs: number) => Promise<Row>, accept: (row: Row) => boolean) => Promise<void>;
+type PreviewWait = (signal: AbortSignal, stage: string, read: (timeoutMs: number) => Promise<Row>, accept: (row: Row) => boolean, describe?: (last: Row | null) => string) => Promise<void>;
+/** A frame still waiting this long gets its navigation evidence read about once a second. */
+export const previewStallMs = 5000;
+type Navigation = { committed: boolean | null; loaded: boolean; serviceWorkerRequests: number };
+/** Reads, without touching either page, how far the presented frame's navigation got. */
+export function navigationEvidence(host: Row, responses: unknown, nonce: unknown, presentation: string): Navigation {
+  const focus = host.previewFocus && typeof host.previewFocus === "object" ? host.previewFocus as Row : {};
+  const current = focus.presentation === presentation;
+  const rows = Array.isArray(responses) ? responses : [];
+  const serviceWorkerRequests = rows.filter(row => row && typeof row === "object" && row.event === "request" && row.currentNonce === nonce).length;
+  return { committed: current && typeof focus.committed === "boolean" ? focus.committed : null, loaded: current && focus.focused === true, serviceWorkerRequests };
+}
+/** Names a navigation Safari never started; any later stage is left to the generic expiry text. */
+export function describeStalledDocument(last: Row | null): string {
+  const navigation = last?.navigation as Navigation | undefined;
+  if (!navigation || navigation.committed !== false || navigation.loaded || navigation.serviceWorkerRequests !== 0) return "";
+  return "Safari never started the preview navigation: the frame kept its initial about:blank document, fired no load event, and the observed service worker received no request for it. ";
+}
 /**
  * One deadline for opening a preview. Each stage polls short reads, and starts none after the
  * deadline or after `signal` aborts, so a preview that never loads leaves no controller command
  * pending behind it. An expiry names its stage and the last state it read.
  */
-function previewDeadline(timeoutMs: number, admission: Admission): PreviewWait {
+function previewDeadline(timeoutMs: number, admission: Admission, observed: (row: Row) => void): PreviewWait {
   const deadline = Math.min(Date.now() + timeoutMs, admission.deadline);
-  return (signal, stage, read, accept) => waitPreview({ timeoutMs, deadline, admission, signal, stage, read, accept });
+  return (signal, stage, read, accept, describe) => waitPreview({ timeoutMs, deadline, admission, signal, stage, read, accept, describe, observed });
 }
-async function waitPreview(options: { timeoutMs: number; deadline: number; admission: Admission; signal: AbortSignal; stage: string; read: Parameters<PreviewWait>[2]; accept: Parameters<PreviewWait>[3] }): Promise<void> {
+async function waitPreview(options: { timeoutMs: number; deadline: number; admission: Admission; signal: AbortSignal; stage: string; read: Parameters<PreviewWait>[2]; accept: Parameters<PreviewWait>[3]; describe?: Parameters<PreviewWait>[4]; observed(row: Row): void }): Promise<void> {
   const { timeoutMs, deadline, admission, signal, stage, read, accept } = options;
   let last: Row | null = null;
-  const expired = (cause?: unknown) => new Error(`iPhone preview ${stage} did not finish within ${timeoutMs} ms; last observation: ${JSON.stringify(last)}`, { cause });
+  const expired = (cause?: unknown) => new Error(`${options.describe?.(last) ?? ""}iPhone preview ${stage} did not finish within ${timeoutMs} ms; last observation: ${JSON.stringify(last)}`, { cause });
   const fail = (error: unknown): never => { throw Date.now() >= deadline ? expired(error) : error; };
   while (true) {
     signal.throwIfAborted();
@@ -48,6 +160,7 @@ async function waitPreview(options: { timeoutMs: number; deadline: number; admis
     const left = deadline - Date.now();
     if (left <= 0) throw expired();
     last = await read(left).catch(fail);
+    options.observed(last);
     if (accept(last)) return;
     await Bun.sleep(Math.min(100, Math.max(0, deadline - Date.now())));
   }
@@ -62,11 +175,13 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   let opening = new AbortController();
   const cleaning = new AbortController();
   let opened = false;
+  let safariStarted = false;
   let deviceFailed = false;
   let title = "";
   let closing: Promise<void> | undefined;
   let observationTimeoutMs = config.timeoutMs;
   const lifetime = new AbortController();
+  let rendered: IphoneRenderEvidence | undefined;
   const active = new Set<Promise<string>>();
   const capabilities: Record<string, unknown> = { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": config.deviceUDID, transport: "visible-safari-xctest", safariDriverSession: false };
   async function request(action: string, value?: object, timeoutMs: number | null = observationTimeoutMs): Promise<unknown> {
@@ -83,6 +198,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     try {
       const output = await action;
       saveIphoneEvidence(config.saveNative, { command: [config.agent].concat(args), output });
+      if (args[0] === "batch") safariNodes(output, JSON.parse(args[2]!).map((step: { command: string }) => step.command));
       return output;
     } catch (error) {
       deviceFailed = true;
@@ -91,19 +207,30 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     } finally { active.delete(action); }
   }
   const lanes = { host: new IphoneLane(), preview: new IphoneLane() };
-  async function settledRequest(selected: "host" | "preview", source: string, timeoutMs: number, observation: boolean, admission: Admission): Promise<IphoneSettlement> {
+  async function settledRequest(selected: "host" | "preview", source: string, timeoutMs: number, observation: boolean, admission: Admission, trace?: { evidence: IphoneRenderEvidence; request: RenderRequest }): Promise<IphoneSettlement> {
     admit(admission);
+    trace?.evidence.dispatched(trace.request);
     const answer = object(await request(selected + "/execute", { source, timeoutMs, observation, deliverByMs: admission.deadline }, null));
     if (answer.settled !== true) throw new Error("iPhone observer response did not certify settlement");
-    if (answer.ok === true && "value" in answer) return { settled: true, ok: true, value: answer.value };
-    if (answer.ok === false && typeof answer.error === "string") return { settled: true, ok: false, error: answer.error };
-    throw new Error("Malformed iPhone observer settlement");
+    const result = settlement(answer);
+    trace?.evidence.settled(trace.request, result);
+    return result;
   }
-  function execute(selected: "host" | "preview", source: string, timeoutMs: number, admission: Admission, observation = false): Promise<unknown> {
-    return lanes[selected].execute(() => settledRequest(selected, source, timeoutMs, observation, admission), admission);
+  function execute(selected: "host" | "preview", source: string, timeoutMs: number, admission: Admission, observation = false, trace?: { evidence: IphoneRenderEvidence; request: RenderRequest }): Promise<unknown> {
+    return lanes[selected].execute(() => settledRequest(selected, source, timeoutMs, observation, admission, trace), admission);
   }
   async function evaluate<T>(source: string, admission: Admission, timeoutMs = observationTimeoutMs, observation = false): Promise<T> {
-    return await execute(role, source, timeoutMs, admission, observation) as T;
+    admit(admission);
+    const evidence = renderEvidence(source, admission, observation);
+    const trace = evidence ? { evidence, request: evidence.requested() } : undefined;
+    try { return await execute(role, source, timeoutMs, admission, observation, trace) as T; }
+    catch (error) { evidence?.finish("request-failed"); throw error; }
+  }
+  function renderEvidence(source: string, admission: Admission, observation: boolean): IphoneRenderEvidence | undefined {
+    if (!config.saveNative || role !== "preview" || !observation || !source.startsWith("(function rendered(")) return;
+    if (rendered?.admission === admission && !rendered.ended) return rendered;
+    rendered?.finish("superseded");
+    return rendered = new IphoneRenderEvidence(config.saveNative, admission, lifetime.signal);
   }
   // Every presentation change ends the wait on the previous frame and withdraws its focus record.
   async function present(url: string | null, admission: Admission): Promise<{ signal: AbortSignal; presentation: string | null }> {
@@ -123,8 +250,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     lifetime.abort(new Error("iPhone transport closing"));
     await Promise.allSettled(Array.from(active));
     if (deviceFailed) throw new Error("T3 device command failed; stopping device interactions, task tab cleanup is unproved");
-    if (!opened) return;
-    await closeIphoneTab(device, title, deadline);
+    if (!safariStarted) return;
+    await closeIphoneTab(device, opened ? title : null, deadline);
     opened = false;
   }
   return {
@@ -159,10 +286,16 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   };
   async function navigate(url: string, admission: Admission): Promise<void> {
       admit(admission);
+      const signal = AbortSignal.any([admission.signal, lifetime.signal]);
+      const setup = within(admission, config.timeoutMs, new Error("iPhone ordinary tab-group setup deadline expired"));
+      admit(setup);
+      safariStarted = true;
+      await prepareIphoneSafari(device, { signal, deadline: setup.deadline, expiryReason: setup.expiryReason });
+      admit(admission);
       const target = await request("host/configure", { url });
       if (typeof target !== "string") throw new Error("Missing iPhone navigation target");
       admit(admission);
-      await device(["open", "com.apple.mobilesafari", target], config.timeoutMs); opened = true;
+      await device(["open", "com.apple.mobilesafari", target], admit(admission), signal); opened = true;
       const state = await until(async () => { admit(admission); return object(await request("host/state") ?? {}); }, attached, config.timeoutMs);
       if (typeof state.userAgent !== "string" || !/iPhone.*Safari/.test(state.userAgent)) throw new Error("Observer did not identify iPhone Safari");
       admit(admission);
@@ -170,21 +303,59 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       if (typeof state.nonce !== "string") throw new Error("Missing task tab identity");
       title = "Goals " + state.nonce;
   }
+  // After `previewStallMs` without a preview document, also reads the owner's frame record and the
+  // service worker's response rows, at most once a second. Both are controller state; no page runs anything.
+  function stalledNavigation(presentation: string): (row: Row, left: number) => Promise<{ navigation?: Navigation }> {
+    const presentedAt = Date.now();
+    let checkedAt = 0;
+    let navigation: Navigation | undefined;
+    return async (row, left) => {
+      const now = Date.now();
+      if (now - presentedAt < previewStallMs || now - checkedAt < 1000) return navigation ? { navigation } : {};
+      checkedAt = now;
+      const [host, responses] = await Promise.all([request("host/state", undefined, left), request("preview/response/state", undefined, left)]);
+      navigation = navigationEvidence(object(host ?? {}), responses, row.nonce, presentation);
+      return { navigation };
+    };
+  }
   async function openPreview(url: string, admission: Admission): Promise<void> {
-      const wait = previewDeadline(config.timeoutMs, admission);
+      const trace = new IphonePreviewEvidence(config.saveNative, AbortSignal.any([admission.signal, lifetime.signal, cleaning.signal]));
+      try { await openingPreview(url, admission, trace); trace.finish("returned"); }
+      finally { trace.finish("failed"); }
+  }
+  async function openingPreview(url: string, admission: Admission, trace: IphonePreviewEvidence): Promise<void> {
+      let identity = "";
+      const wait = previewDeadline(config.timeoutMs, admission, row => trace.observed(row, identity));
       admit(admission);
       await request("preview/configure", { url });
+      trace.stage("presentation");
       const { signal, presentation } = await present(url, admission);
       if (presentation === null) throw new Error("Missing iPhone presentation identity");
-      await wait(signal, "document", async left => { admit(admission); return object(await request("preview/state", undefined, left) ?? {}); }, attached);
+      identity = presentation;
+      trace.stage("document");
+      const stalled = stalledNavigation(presentation);
+      await wait(signal, "document", async left => {
+        admit(admission);
+        const row = object(await request("preview/state", undefined, left) ?? {});
+        return attached(row) ? row : { ...row, ...await stalled(row, left) };
+      }, attached, describeStalledDocument);
+      trace.stage("load");
       await wait(signal, "load", async left => object(await execute("preview", `(${iphonePreviewLoad.toString()})()`, left, admission, true)), row => row.loaded === true);
+      trace.stage("focus");
       await wait(signal, "focus", async left => { admit(admission); return object(await request("host/state", undefined, left) ?? {}); }, row => presentedFocus(row, presentation));
       signal.throwIfAborted();
       admit(admission);
       role = "preview";
       focused = true;
+      trace.stage("open-preview-complete");
   }
 
+}
+
+function settlement(answer: Row): IphoneSettlement {
+  if (answer.ok === true && "value" in answer) return { settled: true, ok: true, value: answer.value };
+  if (answer.ok === false && typeof answer.error === "string") return { settled: true, ok: false, error: answer.error };
+  throw new Error("Malformed iPhone observer settlement");
 }
 
 async function nativeClick(options: {

@@ -1,0 +1,14 @@
+instance bind o1/i1 this=caller arg=x
+instance bind thisArg o1/i1 this=fixed
+static bind o1/i1 this=caller args=1,2
+static bind thisArg o1/i1 this=receiver
+after calls undefined/undefined
+bound shape bound 1 bound 2 bound runInAsyncScope false
+runInAsyncScope o1/i1 this=self args=3,4
+nested run inside bound o1/i3 then o1/i1 undefined/undefined
+bound throw o1/i1 restored o5/undefined
+bind non-function ERR_INVALID_ARG_TYPE The "fn" argument must be of type function. Received type number (1)
+type ERR_INVALID_ARG_TYPE The "type" argument must be of type string. Received undefined
+options ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received an instance of Array
+options ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received null
+bound in timer o1/i1 this=undefined arg=t timer context timer/undefined

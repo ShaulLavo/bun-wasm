@@ -39,6 +39,7 @@ runs:
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         if command -v cmake && command -v ninja; then exit 0; fi
+        sudo bash "$GITHUB_WORKSPACE/.github/scripts/apt-main-archive.sh"
         sudo apt-get update
         sudo apt-get install -y cmake ninja-build
     - name: Install pinned shared build tools
@@ -109,6 +110,7 @@ runs:
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         if command -v ruby && command -v gperf && command -v bison; then exit 0; fi
+        sudo bash "$GITHUB_WORKSPACE/.github/scripts/apt-main-archive.sh"
         sudo apt-get update
         sudo apt-get install -y ruby gperf bison
     - uses: actions/cache/restore@v4

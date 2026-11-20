@@ -58,84 +58,7 @@
     }
   }
 
-  const DECODER_LABELS = {
-    "utf-8": "utf-8", utf8: "utf-8", "unicode-1-1-utf-8": "utf-8",
-    "utf-16le": "utf-16le", "utf-16": "utf-16le", ucs2: "utf-16le", "ucs-2": "utf-16le",
-    latin1: "windows-1252", "iso-8859-1": "windows-1252", ascii: "windows-1252",
-    "us-ascii": "windows-1252", "windows-1252": "windows-1252",
-  };
-
-  // Length of an incomplete UTF-8 sequence at the end of `bytes` (0 if none).
-  function incompleteUtf8Tail(bytes) {
-    const n = bytes.length;
-    for (let back = 1; back <= Math.min(3, n); back++) {
-      const b = bytes[n - back];
-      if ((b & 0xc0) === 0x80) continue;
-      const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
-      return need > back ? back : 0;
-    }
-    return 0;
-  }
-
-  class TextDecoder {
-    #encoding;
-    #fatal;
-    #ignoreBOM;
-    #bomSeen = false;
-    #pending = null;
-    constructor(label = "utf-8", options = {}) {
-      const encoding = DECODER_LABELS[String(label).trim().toLowerCase()];
-      if (!encoding) {
-        const err = new RangeError(`Unsupported encoding label "${label}"`);
-        err.code = "ERR_ENCODING_NOT_SUPPORTED";
-        throw err;
-      }
-      this.#encoding = encoding;
-      this.#fatal = Boolean(options.fatal);
-      this.#ignoreBOM = Boolean(options.ignoreBOM);
-    }
-    get encoding() {
-      return this.#encoding;
-    }
-    get fatal() {
-      return this.#fatal;
-    }
-    get ignoreBOM() {
-      return this.#ignoreBOM;
-    }
-    decode(input, options = {}) {
-      let bytes = input === undefined ? new Uint8Array(0) : toUint8(input);
-      if (this.#pending) {
-        const joined = new Uint8Array(this.#pending.length + bytes.length);
-        joined.set(this.#pending);
-        joined.set(bytes, this.#pending.length);
-        bytes = joined;
-        this.#pending = null;
-      }
-      const stream = Boolean(options.stream);
-      if (stream && this.#encoding === "utf-8") {
-        const tail = incompleteUtf8Tail(bytes);
-        if (tail > 0) {
-          this.#pending = bytes.slice(bytes.length - tail);
-          bytes = bytes.subarray(0, bytes.length - tail);
-        }
-      }
-      try {
-        return this.#decodeBytes(bytes);
-      } finally {
-        if (!stream) this.#bomSeen = false;
-      }
-    }
-    #decodeBytes(bytes) {
-      if (this.#encoding === "windows-1252") return native.latin1Decode(bytes.slice());
-      const text = this.#encoding === "utf-16le"
-        ? native.utf16leDecode(bytes.slice())
-        : native.utf8Decode(bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice(), this.#fatal);
-      if (this.#bomSeen || text.length === 0) return text;
-      this.#bomSeen = true;
-      return !this.#ignoreBOM && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-    }
-  }
+  const TextDecoder = internal.require("text_decoder");
 
   // --- base64 -----------------------------------------------------------------
 
@@ -163,7 +86,8 @@
 
   // --- URLSearchParams / URL --------------------------------------------------
 
-  const { toUSVString, initFromObject, convertMethodArgs } = internal.require("url_search_params");
+  const { toUSVString, initFromObject, convertMethodArgs, inspectParams, urlContext } = internal.require("url_search_params");
+  const removeQueryPairs = internal.require("url_pairs");
 
   // application/x-www-form-urlencoded byte serializer.
   function formEncode(str) {
@@ -213,21 +137,24 @@
       params.#url = url;
     }
     static _reset(params, search) {
-      params.#list = parseQuery(search.startsWith("?") ? search.slice(1) : search);
+      const list = parseQuery(search.startsWith("?") ? search.slice(1) : search);
+      params.#list.length = 0;
+      for (const pair of list) params.#list.push(pair);
     }
     #update() {
-      if (this.#url) internal.urlSetSearchFromParams(this.#url, this.toString());
+      if (this.#url) internal.urlSetSearchFromParams(this.#url);
     }
     get size() {
       return this.#list.length;
     }
     append(name, value) {
-      this.#list.push([toUSVString(name), toUSVString(value)]);
+      const [n, val] = convertMethodArgs(() => this.#list, name, value, true);
+      this.#list.push([n, val]);
       this.#update();
     }
     delete(name, value) {
       const [n, val] = convertMethodArgs(() => this.#list, name, value);
-      this.#list = this.#list.filter(([k, v]) => k !== n || (val !== undefined && v !== val));
+      removeQueryPairs(this.#list, n, val);
       this.#update();
     }
     get(name) {
@@ -250,7 +177,7 @@
         this.#list.push([n, val]);
       } else {
         this.#list[i][1] = val;
-        this.#list = this.#list.filter(([k], j) => k !== n || j <= i);
+        removeQueryPairs(this.#list, n, undefined, i + 1);
       }
       this.#update();
     }
@@ -280,12 +207,18 @@
     get [Symbol.toStringTag]() {
       return "URLSearchParams";
     }
+    [Symbol.for("nodejs.util.inspect.custom")](depth, options, inspect) {
+      const fn = typeof inspect === "function" ? inspect : internal.require("inspect").nodeInspect;
+      return inspectParams(this.constructor?.name || "URLSearchParams", this.#list, depth ?? null, options, fn);
+    }
   }
 
   // Component array, or undefined when the input doesn't parse.
+  const stringifyParams = URLSearchParams.prototype.toString;
+  const urlErrors = internal.require("url_errors");
   function parseUrl(input, base) {
-    if (base === undefined) return native.urlParse(String(input));
-    return native.urlParse(String(input), String(base));
+    if (base === undefined) return native.urlParse(urlErrors.toString(input));
+    return native.urlParse(urlErrors.toString(input), urlErrors.toString(base));
   }
 
   const URL_FIELDS = ["href", "protocol", "username", "password", "hostname", "port", "pathname", "search", "hash", "origin"];
@@ -293,100 +226,129 @@
   class URL {
     #parts;
     #searchParams = null;
+    #searchDirty = false;
     constructor(input, base) {
-      if (arguments.length === 0) throw new TypeError("URL constructor requires at least 1 argument");
+      if (arguments.length === 0) throw urlErrors.missingArguments();
+      input = urlErrors.toString(input);
+      if (base !== undefined) base = urlErrors.toString(base);
       const parts = parseUrl(input, base);
-      if (!parts) {
-        const err = new TypeError(`"${input}" cannot be parsed as a URL.`);
-        err.code = "ERR_INVALID_URL";
-        err.input = String(input);
-        throw err;
-      }
+      if (!parts) throw urlErrors.invalidURL(input, base);
       this.#parts = parts;
     }
-    static canParse(input, base) {
+    static canParse(input, base = undefined) {
+      if (arguments.length === 0) throw urlErrors.missingArguments();
       return parseUrl(input, base) != null;
     }
-    static parse(input, base) {
+    static parse(input, base = undefined) {
+      if (arguments.length === 0) throw urlErrors.missingArguments();
+      input = urlErrors.toString(input);
+      if (base !== undefined) base = urlErrors.toString(base);
       try {
         return new URL(input, base);
       } catch {
         return null;
       }
     }
-    static _setSearch(url, query) {
-      url.#set("search", query);
+    static _setSearch(url) {
+      url.#searchDirty = true;
     }
-    #set(field, value) {
-      const parts = native.urlSet(this.#parts[0], field, String(value));
+    #syncSearch() {
+      if (!this.#searchDirty) return;
+      const parts = native.urlSet(this.#parts[0], "search", stringifyParams.call(this.#searchParams));
       if (!parts) return;
       this.#parts = parts;
-      if (this.#searchParams && field !== "search-from-params") URLSearchParams._reset(this.#searchParams, this.#parts[7]);
+      this.#searchDirty = false;
+    }
+    #set(field, value) {
+      value = urlErrors.toString(value);
+      if (field !== "search") this.#syncSearch();
+      const parts = native.urlSet(this.#parts[0], field, value);
+      if (!parts) return;
+      this.#parts = parts;
+      this.#searchDirty = false;
+      if (this.#searchParams && field === "search") URLSearchParams._reset(this.#searchParams, this.#parts[7]);
     }
     get href() {
+      this.#syncSearch();
       return this.#parts[0];
     }
     set href(value) {
-      const parts = native.urlParse(String(value));
-      if (!parts) throw new TypeError(`"${value}" cannot be parsed as a URL.`);
+      value = urlErrors.toString(value);
+      const parts = native.urlParse(value);
+      if (!parts) throw urlErrors.invalidURL(value);
       this.#parts = parts;
+      this.#searchDirty = false;
       if (this.#searchParams) URLSearchParams._reset(this.#searchParams, this.#parts[7]);
     }
     get protocol() {
+      this.#syncSearch();
       return this.#parts[1];
     }
     set protocol(v) {
       this.#set("protocol", v);
     }
     get username() {
+      this.#syncSearch();
       return this.#parts[2];
     }
     set username(v) {
       this.#set("username", v);
     }
     get password() {
+      this.#syncSearch();
       return this.#parts[3];
     }
     set password(v) {
       this.#set("password", v);
     }
     get host() {
+      this.#syncSearch();
       return this.#parts[5] ? `${this.#parts[4]}:${this.#parts[5]}` : this.#parts[4];
     }
     set host(v) {
       this.#set("host", v);
     }
     get hostname() {
+      this.#syncSearch();
       return this.#parts[4];
     }
     set hostname(v) {
       this.#set("hostname", v);
     }
     get port() {
+      this.#syncSearch();
       return this.#parts[5];
     }
     set port(v) {
       this.#set("port", v);
     }
     get pathname() {
+      this.#syncSearch();
       return this.#parts[6];
     }
     set pathname(v) {
       this.#set("pathname", v);
     }
     get search() {
+      this.#syncSearch();
       return this.#parts[7];
     }
     set search(v) {
       this.#set("search", v);
     }
     get hash() {
+      this.#syncSearch();
       return this.#parts[8];
     }
     set hash(v) {
       this.#set("hash", v);
     }
     get origin() {
+      this.#syncSearch();
+      if (this.#parts[1] === "blob:") {
+        const inner = native.urlParse(this.#parts[6]);
+        if (inner && inner[1] === "file:") return "file://" + inner[4];
+      }
       return this.#parts[9];
     }
     get searchParams() {
@@ -410,21 +372,22 @@
       for (const field of ["href", "origin", "protocol", "username", "password", "host", "hostname", "port", "pathname", "search", "searchParams", "hash"]) {
         view[field] = this[field];
       }
+      if (options?.showHidden) view[Symbol("context")] = urlContext(this);
       const fn = typeof inspect === "function" ? inspect : internal.require("inspect").bunInspect;
       return "URL " + fn(view, options);
     }
   }
   void URL_FIELDS;
 
-  internal.urlSetSearchFromParams = function (url, query) {
-    const parts = native.urlSet(url.href, "search", query);
-    if (parts) URL._setSearch(url, query);
+  internal.urlSetSearchFromParams = function (url) {
+    URL._setSearch(url);
   };
 
   // --- events -----------------------------------------------------------------
 
   const kStop = Symbol("stop");
   const kImmediateStop = Symbol("immediateStop");
+  let beginEvent, endEvent, passiveEvent;
 
   class Event {
     #type;
@@ -433,6 +396,25 @@
     #composed;
     #defaultPrevented = false;
     #timeStamp;
+    #dispatching = false;
+    #passive = false;
+    static {
+      beginEvent = event => {
+        if (event.#dispatching) {
+          const error = new Error(`The event "${event.#type}" is already being dispatched`);
+          error.code = "ERR_EVENT_RECURSION";
+          throw error;
+        }
+        event.#dispatching = true;
+      };
+      endEvent = event => {
+        event.#dispatching = false;
+        event.#passive = false;
+        event[kStop] = false;
+        event[kImmediateStop] = false;
+      };
+      passiveEvent = (event, value) => { event.#passive = value; };
+    }
     target = null;
     currentTarget = null;
     eventPhase = 0;
@@ -480,7 +462,7 @@
       return this.currentTarget ? [this.currentTarget] : [];
     }
     preventDefault() {
-      if (this.#cancelable) this.#defaultPrevented = true;
+      if (this.#cancelable && !this.#passive) this.#defaultPrevented = true;
     }
     stopPropagation() {
       this[kStop] = true;
@@ -539,53 +521,154 @@
     }
   }
 
+  let targetListeners, targetObserver, observeTarget, isTarget, isSignal, signalAborted, signalReason, addAbortAlgorithm, abortSignal;
+  const callListener = Function.prototype.call.bind(Function.prototype.call);
+  const protectedListeners = new WeakMap();
+  const protectedListener = protectedListeners.get.bind(protectedListeners);
+  const protectListener = protectedListeners.set.bind(protectedListeners);
+
+  function eventName(type) {
+    return `${type}`;
+  }
+  function checkEventListener(listener) {
+    if (listener == null || typeof listener === "object" || typeof listener === "function") return;
+    throw new TypeError("Event listener must be a function or an object");
+  }
+  function notifyTarget(target, type) {
+    const record = targetObserver(target);
+    if (!record || !record.callback) return;
+    try { callListener(record.callback, undefined, type); }
+    catch (error) { internal.nextTick(() => { throw error; }); }
+  }
+  function removeTargetEntry(target, table, type, entry, notify = true) {
+    if (entry.removed) return;
+    entry.removed = true;
+    const list = table.get(type);
+    const index = list ? list.indexOf(entry) : -1;
+    if (index >= 0) removeListenerIndex(list, index);
+    if (list && list.length === 0) table.delete(type);
+    const cleanup = entry.signalCleanup;
+    entry.signalCleanup = null;
+    if (cleanup) cleanup();
+    if (notify) notifyTarget(target, type);
+  }
+  function removeListenerIndex(list, index) {
+    for (let i = index; i + 1 < list.length; i++) list[i] = list[i + 1];
+    list.length--;
+  }
+  function addTargetEntry(table, type, listener, options, protect = false) {
+    const list = table.get(type) || [];
+    const existing = list.find(entry => entry.kind === "listener" && entry.listener === listener && entry.capture === options.capture);
+    if (existing) return existing;
+    const entry = { kind: "listener", listener, capture: options.capture, once: options.once, passive: options.passive, removed: false, signalCleanup: null };
+    if (protect) protectListener(entry, listener);
+    list.push(entry);
+    table.set(type, list);
+    return entry;
+  }
+  function setAbortAttribute(target, entry, value) {
+    const table = targetListeners(target);
+    if (value === null || typeof value !== "object" && typeof value !== "function") {
+      if (entry) removeTargetEntry(target, table, "abort", entry, false);
+      return null;
+    }
+    if (entry) { entry.listener = value; return entry; }
+    const list = table.get("abort") || [];
+    const attribute = { kind: "attribute", listener: value, capture: false, once: false, passive: false, removed: false, signalCleanup: null };
+    list.push(attribute);
+    table.set("abort", list);
+    return attribute;
+  }
+  function deliverTargetEntry(target, entry, event, listener) {
+    if (entry.kind === "attribute" && typeof listener !== "function") return;
+    passiveEvent(event, entry.passive);
+    try {
+      const callback = typeof listener === "function" ? listener : listener.handleEvent;
+      if (typeof callback !== "function") throw new TypeError("Event listener handleEvent is not a function");
+      callListener(callback, typeof listener === "function" ? target : listener, event);
+    } catch (error) {
+      internal.nextTick(() => { throw error; });
+    } finally {
+      passiveEvent(event, false);
+    }
+  }
+  function dispatchTargetEntries(target, table, type, entries, event) {
+    for (const entry of entries) {
+      const protectedCallback = protectedListener(entry);
+      if (entry.removed || event[kImmediateStop] && !protectedCallback) continue;
+      if (entry.once) removeTargetEntry(target, table, type, entry);
+      deliverTargetEntry(target, entry, event, protectedCallback || entry.listener);
+    }
+  }
+  function dispatchTargetEvent(target, table, event) {
+    const type = event.type;
+    const entries = (table.get(type) || []).slice();
+    if (!(type === "abort" && isSignal(target))) appendDynamicHandler(target, type, entries);
+    dispatchTargetEntries(target, table, type, entries, event);
+    return !event.defaultPrevented;
+  }
+  function appendDynamicHandler(target, type, entries) {
+    const listener = target["on" + type];
+    if (typeof listener === "function") entries.push({ kind: "attribute", listener, once: false, passive: false, removed: false });
+  }
+
   class EventTarget {
     #listeners = new Map();
+    #observer = null;
+    static {
+      targetListeners = target => target.#listeners;
+      targetObserver = target => target.#observer;
+      observeTarget = (target, callback) => {
+        if (!isTarget(target)) throw new TypeError("target must be an EventTarget");
+        if (typeof callback !== "function") throw new TypeError("observer must be a function");
+        if (target.#observer) throw new TypeError("EventTarget already has an observer");
+        const record = { callback };
+        target.#observer = record;
+        return () => {
+          if (target.#observer === record) target.#observer = null;
+          record.callback = null;
+        };
+      };
+      isTarget = value => value !== null && (typeof value === "object" || typeof value === "function") && #listeners in value;
+    }
     addEventListener(type, listener, options) {
-      if (!listener) return;
+      const table = this.#listeners;
+      const name = eventName(type);
+      checkEventListener(listener);
       const opts = typeof options === "boolean" ? { capture: options } : options || {};
-      const list = this.#listeners.get(type) || [];
-      if (list.some((l) => l.listener === listener && l.capture === Boolean(opts.capture))) return;
-      const entry = { listener, capture: Boolean(opts.capture), once: Boolean(opts.once) };
-      list.push(entry);
-      this.#listeners.set(type, list);
-      if (opts.signal) opts.signal.addEventListener("abort", () => this.removeEventListener(type, listener, opts));
+      const capture = Boolean(opts.capture), once = Boolean(opts.once), passive = Boolean(opts.passive), signal = opts.signal;
+      if (signal !== undefined && !isSignal(signal)) throw new TypeError("signal must be an AbortSignal");
+      if (listener == null || signal && signalAborted(signal)) return;
+      const list = table.get(name);
+      if (list && list.some(entry => entry.kind === "listener" && entry.listener === listener && entry.capture === capture)) return;
+      const entry = addTargetEntry(table, name, listener, { capture, once, passive });
+      if (signal) entry.signalCleanup = addAbortAlgorithm(signal, () => removeTargetEntry(this, table, name, entry));
+      notifyTarget(this, name);
     }
     removeEventListener(type, listener, options) {
+      const table = this.#listeners;
+      const name = eventName(type);
+      checkEventListener(listener);
       const capture = typeof options === "boolean" ? options : Boolean(options && options.capture);
-      const list = this.#listeners.get(type);
+      const list = table.get(name);
       if (!list) return;
-      const i = list.findIndex((l) => l.listener === listener && l.capture === capture);
-      if (i >= 0) list.splice(i, 1);
+      const entry = list.find(item => item.kind === "listener" && item.listener === listener && item.capture === capture);
+      if (entry) removeTargetEntry(this, table, name, entry);
     }
     dispatchEvent(event) {
       if (!(event instanceof Event)) throw new TypeError("Argument 1 ('event') to EventTarget.dispatchEvent must be an instance of Event");
-      event.target = this;
-      event.currentTarget = this;
-      event.eventPhase = 2;
-      const handlerName = "on" + event.type;
-      const list = (this.#listeners.get(event.type) || []).slice();
-      if (typeof this[handlerName] === "function") list.push({ listener: this[handlerName], once: false, capture: false });
-      for (const entry of list) {
-        if (entry.once) this.removeEventListener(event.type, entry.listener, entry);
-        invokeListener(this, entry.listener, event);
-        if (event[kImmediateStop]) break;
+      const table = this.#listeners;
+      beginEvent(event);
+      try {
+        event.target = this;
+        event.currentTarget = this;
+        event.eventPhase = 2;
+        return dispatchTargetEvent(this, table, event);
+      } finally {
+        endEvent(event);
+        event.currentTarget = null;
+        event.eventPhase = 0;
       }
-      event.currentTarget = null;
-      event.eventPhase = 0;
-      return !event.defaultPrevented;
-    }
-  }
-
-  function invokeListener(target, listener, event) {
-    try {
-      if (typeof listener === "function") listener.call(target, event);
-      else if (listener && typeof listener.handleEvent === "function") listener.handleEvent(event);
-    } catch (err) {
-      // Listener errors are reported, not propagated, like in browsers.
-      internal.nextTick(() => {
-        throw err;
-      });
     }
   }
 
@@ -594,7 +677,28 @@
   class AbortSignal extends EventTarget {
     #aborted = false;
     #reason = undefined;
-    onabort = null;
+    #algorithms = new Set();
+    #onabort = null;
+    static {
+      isSignal = value => value !== null && (typeof value === "object" || typeof value === "function") && #aborted in value;
+      signalAborted = signal => signal.#aborted;
+      signalReason = signal => signal.#reason;
+      addAbortAlgorithm = (signal, callback) => {
+        const entry = { callback, active: true };
+        if (signal.#aborted) { callback(); return () => {}; }
+        signal.#algorithms.add(entry);
+        return () => { entry.active = false; signal.#algorithms.delete(entry); };
+      };
+      abortSignal = (signal, reason) => {
+        if (signal.#aborted) return;
+        signal.#aborted = true;
+        signal.#reason = reason === undefined ? new DOMException("The operation was aborted.", "AbortError") : reason;
+        const algorithms = Array.from(signal.#algorithms);
+        signal.#algorithms.clear();
+        runAbortAlgorithms(algorithms);
+        dispatchAbortEvent(signal, new Event("abort"));
+      };
+    }
     constructor(key) {
       super();
       if (key !== internal) throw new TypeError("Illegal constructor");
@@ -605,14 +709,19 @@
     get reason() {
       return this.#reason;
     }
+    get onabort() {
+      return this.#onabort ? this.#onabort.listener : null;
+    }
+    set onabort(value) {
+      const previous = this.#onabort ? this.#onabort.listener : null;
+      this.#onabort = setAbortAttribute(this, this.#onabort, value);
+      if (previous !== (this.#onabort ? this.#onabort.listener : null)) notifyTarget(this, "abort");
+    }
     throwIfAborted() {
       if (this.#aborted) throw this.#reason;
     }
     static _abort(signal, reason) {
-      if (signal.#aborted) return;
-      signal.#aborted = true;
-      signal.#reason = reason === undefined ? new DOMException("This operation was aborted", "AbortError") : reason;
-      signal.dispatchEvent(new Event("abort"));
+      abortSignal(signal, reason);
     }
     static abort(reason) {
       const signal = new AbortSignal(internal);
@@ -629,16 +738,41 @@
       return signal;
     }
     static any(signals) {
-      const signal = new AbortSignal(internal);
+      const sources = new Set();
       for (const source of signals) {
-        if (source.aborted) {
-          AbortSignal._abort(signal, source.reason);
-          return signal;
-        }
-        source.addEventListener("abort", () => AbortSignal._abort(signal, source.reason), { once: true });
+        if (!isSignal(source)) throw new TypeError("Expected an AbortSignal");
+        sources.add(source);
+      }
+      const signal = new AbortSignal(internal);
+      const removers = new Set();
+      addAbortAlgorithm(signal, () => clearAbortAlgorithms(removers));
+      try {
+        for (const source of sources) attachAbortSource(signal, source, removers);
+      } catch (error) {
+        clearAbortAlgorithms(removers);
+        throw error;
       }
       return signal;
     }
+  }
+  Object.defineProperty(AbortSignal.prototype, "onabort", { ...Object.getOwnPropertyDescriptor(AbortSignal.prototype, "onabort"), enumerable: true });
+
+  const dispatchAbortEvent = Function.prototype.call.bind(EventTarget.prototype.dispatchEvent);
+  function runAbortAlgorithms(entries) {
+    for (const entry of entries) {
+      if (!entry.active) continue;
+      entry.active = false;
+      entry.callback();
+    }
+  }
+  function clearAbortAlgorithms(removers) {
+    for (const remove of removers) remove();
+    removers.clear();
+  }
+  function attachAbortSource(signal, source, removers) {
+    if (signalAborted(signal)) return;
+    if (signalAborted(source)) { abortSignal(signal, signalReason(source)); return; }
+    removers.add(addAbortAlgorithm(source, () => abortSignal(signal, signalReason(source))));
   }
 
   class AbortController {
@@ -650,6 +784,28 @@
       AbortSignal._abort(this.#signal, reason);
     }
   }
+
+  internal.eventTargets = {
+    isTarget,
+    isSignal,
+    listeners(target, type) {
+      const name = eventName(type);
+      return (targetListeners(target).get(name) || []).map(entry => entry.listener);
+    },
+    count(target, type) {
+      const name = eventName(type);
+      const list = targetListeners(target).get(name);
+      return list ? list.length : 0;
+    },
+    addAbortListener(signal, listener) {
+      const table = targetListeners(signal);
+      const before = table.get("abort")?.length || 0;
+      addTargetEntry(table, "abort", listener, { capture: false, once: true, passive: false }, true);
+      if (table.get("abort").length !== before) notifyTarget(signal, "abort");
+      return () => signal.removeEventListener("abort", listener);
+    },
+    observe: observeTarget,
+  };
 
   // --- Blob / File ------------------------------------------------------------
 
@@ -673,27 +829,41 @@
     return native.utf8Encode(String(part));
   }
 
-  // Bun adds the charset to text types: "text/plain" -> "text/plain;charset=utf-8".
+  // Bun's MimeType.rs by_name_static: an exact, case-sensitive match of a few known
+  // types gives Bun's canonical value; any other type is only lowercased.
+  const canonicalBlobTypes = new Map([
+    ["text/plain", "text/plain;charset=utf-8"], ["text/html", "text/html;charset=utf-8"], ["text/css", "text/css;charset=utf-8"],
+    ["text/javascript", "text/javascript;charset=utf-8"], ["text/jsx", "text/javascript;charset=utf-8"],
+    ["application/javascript", "text/javascript;charset=utf-8"], ["application/json", "application/json;charset=utf-8"],
+    ["application/x-www-form-urlencoded", "application/x-www-form-urlencoded;charset=UTF-8"], ["application/webassembly", "application/wasm"],
+  ]);
   function normalizeBlobType(type) {
     if (!type) return "";
-    const lower = String(type).toLowerCase();
-    if (lower.startsWith("text/") && !lower.includes("charset")) return lower + ";charset=utf-8";
-    return lower;
+    const given = String(type);
+    return canonicalBlobTypes.get(given) ?? given.toLowerCase();
   }
 
   class Blob {
     #bytes;
     #type;
+    #read;
     constructor(parts = [], options = {}) {
       if (parts !== null && typeof parts === "object" && typeof parts[Symbol.iterator] !== "function") {
         throw new TypeError("new Blob() expects an Array");
       }
       this.#bytes = concatBytes(Array.from(parts || [], partBytes));
       this.#type = normalizeBlobType(options.type);
+      // The constructing class's reader, fixed now so a replaced prototype cannot change the bytes.
+      this.#read = new.target.prototype._bytes;
     }
     // Subclasses (BunFile) read lazily.
     _bytes() {
       return this.#bytes;
+    }
+    // Brand-checked bytes that ignore the public prototype; throws TypeError for a non-Blob.
+    _intrinsicBytes() {
+      const read = this.#read;
+      return read === blobBytes ? this.#bytes : Reflect.apply(read, this, []);
     }
     get size() {
       return this._bytes().length;
@@ -718,7 +888,10 @@
       return this._bytes().slice();
     }
     async formData() {
-      throw new TypeError("Blob.formData() is not supported in bun-wasm");
+      const forms = formBody();
+      const encoding = forms.api.encoding(this.type);
+      if (!encoding) throw new Error("Invalid encoding");
+      return forms.api.parse(this._bytes(), encoding, forms.deps, reason => new Error(`FormData encoding failed: ${reason}`));
     }
     slice(start = 0, end = undefined, type = "") {
       const bytes = this._bytes();
@@ -735,6 +908,8 @@
       return `Blob (${formatBytes(this.size)})`;
     }
   }
+
+  const blobBytes = Blob.prototype._bytes;
 
   function formatBytes(n) {
     if (n < 1024) return `${n} bytes`;
@@ -784,6 +959,24 @@
     return n.toLowerCase();
   }
 
+  // WebCore's HTTPHeaderNames.in (Bun's copy), which FetchHeaders stores apart from other names.
+  const commonHeaderNames = new Set(("accept accept-charset accept-language accept-encoding accept-ranges " +
+    "access-control-allow-credentials access-control-allow-headers access-control-allow-methods " +
+    "access-control-allow-origin access-control-expose-headers access-control-max-age " +
+    "access-control-request-headers access-control-request-method age authorization cache-control connection " +
+    "content-disposition content-encoding content-language content-length content-location " +
+    "content-security-policy content-security-policy-report-only content-type content-range cookie cookie2 " +
+    "cross-origin-embedder-policy cross-origin-embedder-policy-report-only cross-origin-opener-policy " +
+    "cross-origin-opener-policy-report-only cross-origin-resource-policy date dnt default-style etag expect " +
+    "expires host if-match if-modified-since if-none-match if-range if-unmodified-since keep-alive last-event-id " +
+    "last-modified link location origin ping-from ping-to purpose pragma proxy-authorization proxy-connection " +
+    "range referer referrer-policy refresh report-to sec-fetch-dest sec-fetch-mode sec-websocket-accept " +
+    "sec-websocket-extensions sec-websocket-key sec-websocket-protocol sec-websocket-version server-timing " +
+    "service-worker service-worker-allowed service-worker-navigation-preload set-cookie2 sourcemap te " +
+    "timing-allow-origin trailer transfer-encoding upgrade upgrade-insecure-requests user-agent vary via " +
+    "x-content-type-options x-dns-prefetch-control x-frame-options x-sourcemap x-xss-protection x-temp-tablet " +
+    "icy-metaint icy-metadata").split(" "));
+
   class Headers {
     #map = new Map();
     #cookies = [];
@@ -791,7 +984,6 @@
       if (init === undefined || init === null) return;
       if (init instanceof Headers) {
         for (const [k, v] of init) this.append(k, v);
-        for (const c of init.getSetCookie()) this.#cookies.push(c);
         return;
       }
       if (typeof init[Symbol.iterator] === "function") {
@@ -849,15 +1041,10 @@
     forEach(callback, thisArg) {
       for (const [k, v] of this) callback.call(thisArg, v, k, this);
     }
+    // Sorted names, then every Set-Cookie line last, as Bun iterates.
     *entries() {
-      const names = Array.from(this.#map.keys()).concat(this.#cookies.length ? ["set-cookie"] : []).sort();
-      for (const name of names) {
-        if (name === "set-cookie") {
-          for (const c of this.#cookies) yield [name, c];
-          continue;
-        }
-        yield [name, this.#map.get(name)];
-      }
+      for (const name of Array.from(this.#map.keys()).sort()) yield [name, this.#map.get(name)];
+      for (const c of this.#cookies) yield ["set-cookie", c];
     }
     *keys() {
       for (const [k] of this.entries()) yield k;
@@ -868,9 +1055,13 @@
     [Symbol.iterator]() {
       return this.entries();
     }
+    // Bun lists its well-known header names first and the others after Set-Cookie,
+    // each group in insertion order, and keeps every Set-Cookie line as an array.
     toJSON() {
       const out = {};
-      for (const [k, v] of this) out[k] = v;
+      for (const [k, v] of this.#map) if (commonHeaderNames.has(k)) out[k] = v;
+      if (this.#cookies.length) out["set-cookie"] = this.#cookies.slice();
+      for (const [k, v] of this.#map) if (!commonHeaderNames.has(k)) out[k] = v;
       return out;
     }
     get [Symbol.toStringTag]() {
@@ -879,28 +1070,37 @@
   }
 
   // Body helpers shared by Request and Response.
+  // Like Bun, a string or byte body adds no Content-Type header; `served` is the type
+  // Bun.serve sends for it when the response sets none.
   function extractBody(body) {
     if (body === undefined || body === null) return { bytes: null, type: null };
-    if (typeof body === "string") return { bytes: native.utf8Encode(body), type: "text/plain;charset=utf-8" };
+    if (typeof body === "string") return { bytes: native.utf8Encode(body), type: null, served: "text/plain;charset=utf-8" };
     if (body instanceof URLSearchParams) {
       return { bytes: native.utf8Encode(body.toString()), type: "application/x-www-form-urlencoded;charset=UTF-8" };
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
-    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: new Uint8Array(toUint8(body)), type: null };
-    if (body instanceof ReadableStream) return { stream: body, bytes: bodyStreams.bytes(body) || null, type: null };
+    if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && body instanceof SharedArrayBuffer)) {
+      return { bytes: new Uint8Array(toUint8(body)), type: null, served: "application/octet-stream" };
+    }
+    if (body instanceof FormData) return formBody().api.serialize(body, formBody().deps);
+    if (body instanceof ReadableStream) return { stream: bodyStreams.adoptable(body), bytes: bodyStreams.bytes(body) || null, type: null };
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
-    return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
+    return { bytes: native.utf8Encode(String(body)), type: null, served: "text/plain;charset=utf-8" };
   }
 
   async function streamBytes(stream) {
     const chunks = [];
-    await bodyStreams.consume(stream, chunk => chunks.push(typeof chunk === "string" ? native.utf8Encode(chunk) : toUint8(chunk)));
+    await bodyStreams.drain(stream, chunk => chunks.push(typeof chunk === "string" ? native.utf8Encode(chunk) : toUint8(chunk)));
     return concatBytes(chunks);
   }
 
   const BodyMixin = {
     async _consume() {
+      // A null body is not a zero-length body: every read gives nothing and nothing uses it up.
+      if (this._body === null && !this._stream) return new Uint8Array(0);
       if (this.bodyUsed) throw new TypeError("Body already used");
+      // Someone else holds the stream's reader: refuse without using the body, as Bun does.
+      if (this._stream && this._stream.locked) throw Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });
       this._bodyUsed = true;
       if (this._stream) return streamBytes(this._stream);
       return this._body || new Uint8Array(0);
@@ -919,11 +1119,24 @@
       return (await this._consume()).slice();
     },
     async blob() {
-      const type = this.headers.get("content-type") || "";
-      return new Blob([await this._consume()], { type });
+      // A typed body (Blob, FormData, URLSearchParams) keeps its own type over the header;
+      // without either, Bun types a non-empty buffered body as text.
+      const type = this._bodyType || this.headers.get("content-type") || (this._body && this._body.length ? "text/plain;charset=utf-8" : "");
+      const blob = new Blob([await this._consume()]);
+      // Bun keeps the Content-Type as written, canonicalizing only its known types.
+      blob._setType(canonicalBlobTypes.get(type) ?? type);
+      return blob;
     },
     async formData() {
-      throw new TypeError("formData() is not supported in bun-wasm");
+      const forms = formBody();
+      const encoding = forms.api.encoding(this.headers.get("content-type"));
+      // Bun rejects an undecodable type without using the body; a used body reports that first.
+      if (!encoding && !this.bodyUsed) throw formParseError("Can't decode form data from body because of incorrect MIME type/boundary");
+      const bytes = await this._consume();
+      return forms.api.parse(bytes, encoding, forms.deps, reason => formParseError(`FormData parse error ${reason}`));
+    },
+    textStream() {
+      return bodyStreams.textStream(this);
     },
   };
 
@@ -932,6 +1145,8 @@
     target._body = extracted.bytes;
     target._stream = extracted.stream || null;
     target._bodyUsed = false;
+    target._servedType = extracted.served || null;
+    target._bodyType = extracted.type || null;
     if (extracted.type && !headers.has("content-type")) headers.set("content-type", extracted.type);
   }
 
@@ -999,19 +1214,17 @@
     get redirected() {
       return this.#redirected;
     }
-    get bodyUsed() {
-      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
-    }
-    get body() {
-      if (this._stream) return this._stream;
-      if (this._body === null) return null;
-      this._stream = internal.makeByteStream(this._body);
-      return this._stream;
-    }
     clone() {
       const body = bodyStreams.clone(this);
-      const copy = new Response(body, { status: this.#status, statusText: this.#statusText, headers: this.#headers });
+      // Response.error()'s status 0 is out of the constructor's range; copy it after.
+      const copy = new Response(body, { statusText: this.#statusText, headers: this.#headers });
+      copy.#status = this.#status;
+      copy.#type = this.#type;
       copy.#url = this.#url;
+      copy.#redirected = this.#redirected;
+      copy._servedType = this._servedType;
+      // A clone made from the bytes keeps the type of the Blob behind them, as in Bun.
+      copy._bodyType = this._bodyType;
       return copy;
     }
     get [Symbol.toStringTag]() {
@@ -1019,9 +1232,28 @@
     }
   }
   Object.assign(Response.prototype, BodyMixin);
+  // The bodyUsed and body getters Request and Response share, with class getter attributes.
+  const bodyAccessors = {
+    bodyUsed: {
+      get() {
+        return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
+      },
+      configurable: true,
+    },
+    body: {
+      get() {
+        if (this._stream) return this._stream;
+        if (this._body === null) return null;
+        this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
+        return this._stream;
+      },
+      configurable: true,
+    },
+  };
+  Object.defineProperties(Response.prototype, bodyAccessors);
 
   function defineInternalBody(target) {
-    for (const key of ["_body", "_stream", "_bodyUsed"]) {
+    for (const key of ["_body", "_stream", "_bodyUsed", "_servedType", "_bodyType"]) {
       Object.defineProperty(target, key, { value: null, writable: true, enumerable: false, configurable: true });
     }
   }
@@ -1047,6 +1279,9 @@
       if (body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
+      // Fetch forbids keepalive with a stream init.body (a source request's body is fine);
+      // Bun reports it before any lock check.
+      if (init.keepalive && replacementBody instanceof ReadableStream) throw new TypeError("keepalive");
       initBody(this, source && replacementBody === undefined ? bodyStreams.transfer(source) : body, this.#headers);
     }
     get url() {
@@ -1064,35 +1299,32 @@
     get redirect() {
       return this.#redirect;
     }
-    get bodyUsed() {
-      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
-    }
-    get body() {
-      if (this._stream) return this._stream;
-      if (this._body === null) return null;
-      this._stream = internal.makeByteStream(this._body);
-      return this._stream;
-    }
     clone() {
       const body = bodyStreams.clone(this);
-      return new Request(this, { body });
+      const copy = new Request(this, { body });
+      copy._bodyType = this._bodyType;
+      return copy;
     }
     get [Symbol.toStringTag]() {
       return "Request";
     }
   }
   Object.assign(Request.prototype, BodyMixin);
+  Object.defineProperties(Request.prototype, bodyAccessors);
 
   // No sockets under WASI. file: URLs still work, like in Bun.
-  async function fetch(input, init = {}) {
-    const url = input instanceof Request ? input.url : String(input instanceof URL ? input.href : input);
+  // Arguments are read and checked as Bun does (fetch_args.ts); errors reject.
+  async function fetch(input) {
+    const parsed = internal.require("fetch_args").parse(arguments, { Request, Headers, AbortSignal, Blob });
+    if (parsed.data !== undefined) return fetchDataUrl(parsed.data);
+    const { url, init } = parsed;
+    input = parsed.request || url;
     if (url.startsWith("file:")) {
       const path = decodeURIComponent(new URL(url).pathname);
       const res = new Response(native.readFile(path), { headers: { "content-type": internal.mimeType(path) } });
       Response._setUrl(res, url);
       return res;
     }
-    if (url.startsWith("data:")) return fetchDataUrl(url);
     // Hosts implementing the bun_wasm ABI (docs/host-abi.md) do real HTTP.
     if (native.hostCaps.fetch) return internal.require("net").fetch(input, init);
     const err = new TypeError(`fetch() is not available in bun-wasm: WASI has no network access (${url})`);
@@ -1101,12 +1333,8 @@
   }
 
   function fetchDataUrl(url) {
-    const comma = url.indexOf(",");
-    const meta = url.slice(5, comma);
-    const data = url.slice(comma + 1);
-    const isBase64 = meta.endsWith(";base64");
-    const type = (isBase64 ? meta.slice(0, -7) : meta) || "text/plain;charset=US-ASCII";
-    const bytes = isBase64 ? native.base64Decode(data) : native.utf8Encode(decodeURIComponent(data));
+    const { type, base64, data } = internal.require("fetch_args").dataUrlParts(url);
+    const bytes = base64 ? native.base64Decode(data) : native.utf8Encode(decodeURIComponent(data));
     return new Response(bytes, { headers: { "content-type": type } });
   }
 
@@ -1118,7 +1346,7 @@
     toml: "application/toml", xml: "application/xml", svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg",
     jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", ico: "image/x-icon", wasm: "application/wasm",
     pdf: "application/pdf", zip: "application/zip", gz: "application/gzip", csv: "text/csv;charset=utf-8",
-    mp3: "audio/mpeg", mp4: "video/mp4", woff: "font/woff", woff2: "font/woff2",
+    mp3: "audio/mpeg", mp4: "video/mp4", woff: "font/woff", woff2: "font/woff2", bin: "application/octet-stream",
   };
   internal.mimeType = function mimeType(path) {
     const dot = path.lastIndexOf(".");
@@ -1197,9 +1425,7 @@
     if (!ArrayBuffer.isView(array) || array instanceof Float32Array || array instanceof Float64Array || array instanceof DataView) {
       throw new DOMException("The data argument must be an integer-type TypedArray", "TypeMismatchError");
     }
-    if (array.byteLength > 65536) {
-      throw new DOMException(`The ArrayBufferView's byte length (${array.byteLength}) exceeds the number of bytes of entropy available via this API (65536)`, "QuotaExceededError");
-    }
+    // Bun has no 65536-byte quota; the Browser host's random_get fills in chunks.
     toUint8(array).set(native.randomBytes(array.byteLength));
     return array;
   }
@@ -1275,6 +1501,24 @@
     return String(value);
   }
 
+  // Multipart and urlencoded bodies (form_data_body.ts), loaded on first use.
+  let formBodies;
+  function formBody() {
+    formBodies ??= {
+      api: internal.require("form_data_body"),
+      deps: {
+        FormData, File, URLSearchParams,
+        mimeByExtension: extension => (Object.hasOwn(MIME, extension) ? MIME[extension] : undefined),
+        blobBytes: blob => blob._intrinsicBytes(),
+      },
+    };
+    return formBodies;
+  }
+
+  function formParseError(message) {
+    return Object.assign(new TypeError(message), { code: "ERR_FORMDATA_PARSE_ERROR" });
+  }
+
   const navigator = {
     userAgent: `Bun/${native.platformInfo.version}`,
     hardwareConcurrency: 1,
@@ -1302,8 +1546,9 @@
       defineLazyGlobal(name, () => internal.require("worker_threads")[name]);
     }
     defineLazyGlobal("Worker", () => internal.require("web_worker").Worker);
-    URL.createObjectURL = blob => internal.require("web_worker").createObjectURL(blob);
-    URL.revokeObjectURL = url => internal.require("web_worker").revokeObjectURL(url);
+    const objectURLs = internal.require("object_urls");
+    URL.createObjectURL = objectURLs.createObjectURL;
+    URL.revokeObjectURL = objectURLs.revokeObjectURL;
     defineLazyGlobal("WebSocket", () => internal.require("net").WebSocket);
   };
 })

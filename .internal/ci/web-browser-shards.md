@@ -1,6 +1,42 @@
 # Web browser shard measurements
 
-Status: Approved. Measured on November 13, 2026.
+Status: Historical measurements from November 13, 2026. The measured-limit policy
+below was retired on November 14 under the owner's outcome-first test rule.
+
+## Current hang policy
+
+Every discovered batch receives the same five-minute command hang cap, including
+new batches and the default batch. The ten-minute job still includes setup and
+cleanup. `scripts/ci-web-browser-shards.ts` contains no measured-limit mapping.
+Bun's normal reporter records durations, and the existing command supervisor
+preserves nonzero outcomes, process-tree diagnostics, interruption and descendant
+cleanup. Individual test and hook caps are separate and remain unchanged here.
+The observations below are historical reports, not correctness thresholds or
+instructions to recalibrate a batch after a slow run.
+
+## Open: intermittent WebKit hangs (November 16, 2026)
+
+Rare WebKit tests in the 10-interface shard run into their whole test cap
+without an error. Each time, Bun reports `killed 1 dangling process` (the WebKit
+child) before the failure. Since the WebKit process was still alive, the stall
+happened at or before `browser.close()`. A stuck close in a `finally` block also
+hides any earlier error. Different tests hang, so this is not one test's logic:
+
+| Run | Commit or branch | WebKit test | Usual time |
+| --- | --- | --- | --- |
+| 43841729585 | `fix/worker-port-continuations`, 09:39 UTC (before the last green main, bbf316576) | Playwright fences late preview close | about 0.4 s |
+| 43888116284 | main 6b815599e | iphone-browser preview reload, iphone-click trusted input | 1.6 s, 0.4 s |
+| 43934455471 | PR 890 | iphone-browser preview reload | 1.6 s |
+
+PR 825 changed nothing on this path, so it is not the cause. Both the Azure
+(20261111.196.1) and the AWS (20261111.82.6) ubuntu-26.04 images hit it. The PC
+did not reproduce it: 50 runs of both iPhone files, 40 WebKit-only reruns pinned
+to two cores, one complete 10-interface batch on four cores, and 300 bare
+launch, page, goto and close rounds on four cores all passed. Next step: run the
+same launch loop in an `ubuntu:26.04` container with the Playwright 1.64.1 WebKit
+build, or record which Playwright call is still pending when the cap fires.
+
+## Historical rollout
 
 PR 657's [hosted Web host job](https://github.com/ShaulLavo/bun-wasm/actions/runs/43461758984/job/132016209809)
 hit the unchanged 300-second command deadline with 31 of 33 file groups complete.
@@ -9,9 +45,9 @@ The retained log is
 `/work/reports/wave-20261112/engines-active/j11-atomicity/current-ci/ae410-web-host.log`.
 Its selected paths match all 33 current manifests.
 
-The manifests now allocate ten interface files, eighteen preview files and five
-lifecycle files. `ci-web-browser-shards.ts` discovers those batches and supplies
-the matrix deadlines. The matrix has `fail-fast: false` and no concurrency cap.
+At measurement time, the manifests allocated ten interface files, eighteen preview
+files and five lifecycle files. `ci-web-browser-shards.ts` discovered those batches
+and supplied the former matrix deadlines. The matrix had `fail-fast: false` and no concurrency cap.
 The existing Web host guard requires successful unit and matrix results before
 running the original smoke commands once. The eleven required branch contexts
 and all test assertions and individual deadlines stay unchanged.
@@ -37,7 +73,7 @@ All commands exited zero. Sandbox readiness completed all twelve checks. Its
 previously unprinted WebKit failures and deadlines checks took 6.08943 and
 1.50770 seconds locally. The storage-index check took 5.15111 seconds and passed.
 
-## Deadline calculation and limits
+## Historical deadline calculation and limits
 
 All three shards completed successfully in [PR CI run 43468007947](https://github.com/ShaulLavo/bun-wasm/actions/runs/43468007947)
 on source `9ce67b0a0bb64593f604d22fd8d879c150af79bf`. Each shard used a separate
@@ -91,7 +127,7 @@ test deadlines, allocation or the aggregate guard.
 Source `env.sh`, then run each name from
 `bun scripts/test-checks.ts web-browser --batches` through
 `bun scripts/run-with-timeout.mts 300 bun scripts/test-checks.ts web-browser --batch NAME`.
-Use `bun scripts/ci-web-browser-shards.ts` for the final CI matrix and deadlines.
+Use `bun scripts/ci-web-browser-shards.ts` for the current CI matrix and hang caps.
 Run browser commands through the heavy runner on the PC. Use a fresh short
 `/work/tmp/bws-*` directory for `TMPDIR`, with an EXIT trap that removes it after
 the owned command and browser processes stop.

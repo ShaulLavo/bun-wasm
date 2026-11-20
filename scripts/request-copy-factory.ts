@@ -16,8 +16,10 @@ export function requestCopyFactory(kind: "polyfill" | "native" = "polyfill") {
   const streams: Pick<typeof globalThis, "ReadableStream" | "TransformStream"> = kind === "native" ? { ReadableStream, TransformStream } : factory("streams_polyfill", "js")();
   Object.assign(context, streams);
   const modules = new Map<string, unknown>([
+    ["text_decoder", TextDecoder],
     ["streams", streams], ["body_streams", factory("body_streams")({ native: { engine } })],
     ["url_search_params", factory("url_search_params")()], ["web_brand", () => {}],
+    ["url_errors", factory("url_errors")()], ["url_pairs", factory("url_pairs")()],
     ["websocket", { clientClass: () => class {} }],
     ["compression_streams", { decode: (value: unknown) => value }],
     ["http_common", factory("http_common")()],
@@ -49,6 +51,7 @@ export function requestCopyFactory(kind: "polyfill" | "native" = "polyfill") {
   };
   factory("web", "js")(internal);
   modules.set("fetch_lifetime", factory("fetch_lifetime")(internal));
+  modules.set("io_pump", factory("io_pump")(internal));
   const net: { fetch: typeof fetch } = factory("net", "js")(internal);
   return { web: { Request: internal.web.Request, ReadableStream: streams.ReadableStream }, net, internal, sent, closed };
 }

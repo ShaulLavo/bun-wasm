@@ -8,7 +8,7 @@ test("the playground retains separate Vite React, Pages and App Router workspace
   expect(projectTemplates.slice(0, 3).map(template => template.id)).toEqual(["vite-react", "next", "next-app"]);
   expect(projectTemplate("vite-react")?.editorFile).toBe("src/App.tsx");
   expect(projectTemplate("next")?.editorFile).toBe("pages/index.tsx");
-  expect(projectTemplate("next-app")).toEqual({ id: "next-app", label: "Next.js App Router", directory: "template-next-app", file: "next-app.json", editorFile: "app/page.tsx" });
+  expect(projectTemplate("next-app")).toEqual({ id: "next-app", label: "Next.js App Router", directory: "template-next-app", file: "next-app.json", sharedWorkers: false, editorFile: "app/page.tsx" });
   expect(projectTemplate(null)).toBeUndefined();
   expect(projectTemplate("unknown")).toBeUndefined();
 });

@@ -1,11 +1,14 @@
 #include "shim.h"
+#include "stack-budget.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include <vector>
 #include "jsapi.h"
 #include "js/CompilationAndEvaluation.h"
 #include "js/Context.h"
+#include "js/Conversions.h"
 #include "js/Exception.h"
 #include "js/GCAPI.h"
 #include "js/GlobalObject.h"
@@ -33,9 +36,12 @@ extern "C" void bunsm_vm_fatal(const char* text) {
   bunsm_host_fatal(text, strlen(text));
 }
 extern "C" void* bunsm_stack_base() { return reinterpret_cast<void*>(stackBase); }
+// Tiers 0 and 1 are the interpreter and PBL safe points. Tier 2 is irregexp's backtracking,
+// already batched 8,192 backtracks per call (spidermonkey-wasi.patch), so it is not counted
+// and asks the host at once, as in engine.cpp.
 extern "C" void bunsm_poll_interrupt(JSContext* cx, uint8_t tier) {
   if (!interruptible) return;
-  if (++checks[tier] % 10000 != 0) return;
+  if (tier < 2 && ++checks[tier] % 10000 != 0) return;
   if (!bunsm_host_interrupt()) return;
   terminating = true;
   JS_RequestInterruptCallback(cx);
@@ -53,7 +59,7 @@ extern "C" void bsm_init(const bsm_config* config) {
   JS_SetGlobalJitCompilerOption(context, JSJITCOMPILER_PORTABLE_BASELINE_ENABLE, config->tier);
   JS_SetGlobalJitCompilerOption(context, JSJITCOMPILER_PORTABLE_BASELINE_WARMUP_THRESHOLD, 0);
   require(config->stack_high > config->stack_low + 65536, "invalid stack bounds");
-  const size_t quota = config->stack_high - config->stack_low - 65536;
+  const size_t quota = bunsm_stack_quota(config->stack_high - config->stack_low - 65536);
   JS_SetNativeStackQuota(context, quota);
   const uintptr_t expected = JS::GetNativeStackLimit(stackBase, quota - 1);
   for (const auto limit : JS::RootingContext::get(context)->nativeStackLimit) {
@@ -85,6 +91,25 @@ extern "C" bsm_handle bsm_eval(const char* source, size_t len, uint32_t* status)
   handles.push_back(new JS::PersistentRootedValue(context, result));
   return handles.size();
 }
+// Probe support for the smoke's parser corpus (scripts/spidermonkey-parser-semantics.ts).
+extern "C" bool bsm_set_global(const char* name, size_t len, bsm_handle handle) {
+  JSAutoRealm realm(context, *global);
+  JS::RootedObject object(context, *global);
+  JS::RootedValue value(context, handles.at(handle - 1)->get());
+  std::string key(name, len);
+  return JS_SetProperty(context, object, key.c_str(), value);
+}
+extern "C" bool bsm_print(bsm_handle handle) {
+  JSAutoRealm realm(context, *global);
+  JS::RootedValue value(context, handles.at(handle - 1)->get());
+  JS::RootedString text(context, JS::ToString(context, value));
+  if (!text) return false;
+  JS::UniqueChars bytes = JS_EncodeStringToUTF8(context, text);
+  if (!bytes) return false;
+  fputs(bytes.get(), stdout);
+  fflush(stdout);
+  return true;
+}
 extern "C" void bsm_release(bsm_handle handle) {
   if (!handle) return;
   delete handles.at(handle - 1);
@@ -99,7 +124,7 @@ extern "C" double bsm_answer(bsm_handle handle) {
   return answer.toNumber();
 }
 extern "C" void bsm_gc() { JS_GC(context); }
-extern "C" uint32_t bsm_poll_count(uint8_t tier) { return checks[tier]; }
+extern "C" uint32_t bsm_poll_count(uint8_t tier) { return tier < 2 ? checks[tier] : 0; }
 extern "C" uint32_t bsm_pbl_entries() { return pblEntries; }
 extern "C" void bsm_force_oom() { void* p = moz_xmalloc(SIZE_MAX - 65535); free(p); }
 extern "C" void bsm_shutdown() {

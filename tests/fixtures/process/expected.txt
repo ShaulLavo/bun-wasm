@@ -8,6 +8,8 @@ platform: linux
 version prefix: true string
 types: number object bigint number
 memoryUsage keys: arrayBuffers,external,heapTotal,heapUsed,rss
+memoryUsage base values: true
+memoryUsage extensions: true
 hrtime: true true
 stdout.write works
 bytes

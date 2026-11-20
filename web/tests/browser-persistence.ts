@@ -1,5 +1,6 @@
 // Browser durability gate and corpus diagnostic. No Rust/WASM build or package payload is used.
 import { strict as assert } from "node:assert";
+import { navigateTestPage } from "./navigate-test-page.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -33,7 +34,7 @@ const report: { method: string; platform: string; arch: string; storage: string;
 };
 async function ready(context: BrowserContext): Promise<Page> {
   const page = await context.newPage();
-  await page.goto(`http://127.0.0.1:${server!.port}/`);
+  await navigateTestPage(page, `http://127.0.0.1:${server!.port}/`);
   await page.waitForFunction(() => (globalThis as any).persistenceHarness);
   return page;
 }

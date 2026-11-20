@@ -7,5 +7,11 @@
   for (const name of ["ReadableByteStreamController", "ReadableStream", "ReadableStreamBYOBReader", "ReadableStreamBYOBRequest", "ReadableStreamDefaultController", "ReadableStreamDefaultReader", "TransformStream", "TransformStreamDefaultController", "WritableStream", "WritableStreamDefaultController", "WritableStreamDefaultWriter"] satisfies (keyof typeof globalThis)[]) {
     globals[name] = globalThis[name];
   }
+  // Web classes for the thirdparty fetch builtins' bindings (node-fetch, undici), which use the
+  // originals even after application code replaces the globals. Lazy globals are skipped, not realized.
+  for (const name of ["AbortSignal", "Blob", "CloseEvent", "ErrorEvent", "File", "FormData", "Headers", "MessageEvent", "Request", "Response", "URL", "URLSearchParams"]) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    if (descriptor && "value" in descriptor) globals[name] = descriptor.value;
+  }
   return Object.freeze(globals);
 })

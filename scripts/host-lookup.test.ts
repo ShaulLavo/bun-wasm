@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import * as hostStreams from "node:stream/web";
 import { createContext, runInContext, runInNewContext } from "node:vm";
 import { netAddressSource } from "./net-address-source";
+import { nativeTextDecoderCodec } from "./fixtures/native-text-decoder";
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/host_lookup.ts", import.meta.url), "utf8");
 const context = { Array, Error, JSON, Object, Promise, TypeError };
@@ -47,7 +48,7 @@ function bootstrapFixture(caps: Record<string, boolean> = completeCaps, provider
     mainPath: () => "/startup.ts",
     env: () => ({}),
     argv: () => ["bun", "/startup.ts"],
-    execArgv: () => [],
+    execArgv: () => [], processIdentity: () => [44, 7],
     execPath: () => "/bun",
     isatty: () => false,
     now: () => 0,
@@ -58,7 +59,7 @@ function bootstrapFixture(caps: Record<string, boolean> = completeCaps, provider
     setAsyncContext() {},
     tlsDispose() {},
     closeAllDirs() {},
-    streams: {},
+    streams: nativeTextDecoderCodec().streams,
     loadPolyfill(name: string): unknown {
       loaded.push(name);
       const typed = new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url);
