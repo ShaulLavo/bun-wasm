@@ -159,13 +159,13 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 // and the JSC default text rewritten in Bun's form (docs/bun-patches/error-stack-header.md),
 // without the runtime's own frames (docs/bun-patches/runtime-stack-frames.md).
 const originalTokens = {
-  stack_trace: "37d1a12bc6957766219a3c31cdd3ff1edc696f379521362b90f25380d12e94a7",
+  stack_trace: "fbbff28914609883dab58441cd9bc56d22d94148d341a6593d3e7870d94b34c1",
   // Re-pinned for the thirdparty fetch modules' internal loader and binding hooks (node-fetch, undici).
   bun_builtins: "acf769db3668622edc5f3d2ba41b86d593371cbdf7537d86e53f9ed8cc0b23f3",
 };
-// Allow the JSC formatter registration, host adapter dispatch and JSC default text rewrite with
-// its frame caches (6534 bytes).
-const originalEmbeddedBytes = { stack_trace: 7300, bun_builtins: 4372 };
+// Allow the JSC formatter registration, host adapter dispatch, JSC default text rewrite with
+// its frame caches, hidden runtime frames and QuickJS's stack limit headroom (8193 bytes).
+const originalEmbeddedBytes = { stack_trace: 9100, bun_builtins: 4372 };
 
 for (const [label, before, after] of [
   ["true names", "return this.#frame.name || null;", 'return this.#frame.name || "";'],

@@ -395,6 +395,7 @@ declare namespace BunWasm {
     formatCallSite(site: StackCallSite, keepIdentity?: boolean, anonymousFunction?: boolean): string;
     stackHeader(error: object): string;
     showRuntimeFrames(): boolean;
+    capturedStackLimit?(sites: object): number | undefined;
     hotErrorStacks: WeakMap<object, string>;
     require(name: "inspect"): ConsoleInspector;
     require(name: "host_call_sites"): object;

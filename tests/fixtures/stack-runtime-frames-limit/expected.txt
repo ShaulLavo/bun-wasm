@@ -1,0 +1,11 @@
+limit reads back: 3
+Buffer.alloc: at <anonymous> (./index.ts:23:10)
+fs.readFileSync: at <anonymous> (./index.ts:26:6)
+Error: deep
+    at innermost (./index.ts:33:34)
+    at inner (./index.ts:32:20)
+    at middle (./index.ts:31:21)
+Error: early
+    at ./index.ts:38:19
+2 call sites
+limit 0: <undefined>

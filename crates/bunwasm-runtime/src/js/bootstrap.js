@@ -104,14 +104,15 @@
     return typeof file === "string" && file.startsWith("bun-wasm:");
   }
 
-  // BUN_WASM_INTERNAL_FRAMES=1 keeps them, for debugging the runtime itself.
+  // BUN_WASM_INTERNAL_FRAMES=1 keeps them, for debugging the runtime itself. An environment that
+  // cannot be read yet hides them, so no unfiltered text reaches JavaScriptCore's stack cache.
   let runtimeFramesShown;
   function showRuntimeFrames() {
     if (runtimeFramesShown !== undefined) return runtimeFramesShown;
     try {
       runtimeFramesShown = native.env().BUN_WASM_INTERNAL_FRAMES === "1";
     } catch {
-      return true;
+      return false;
     }
     return runtimeFramesShown;
   }
@@ -245,9 +246,14 @@
     let out = stackHeader(error);
     let raw = "";
     const hidden = showRuntimeFrames() ? undefined : hiddenCallSites(callsites);
+    // QuickJS captures past Error.stackTraceLimit, so hidden frames leave room for the program's.
+    const limit = internal.capturedStackLimit?.(callsites);
+    let shown = 0;
     for (let i = start; i < callsites.length; i++) {
       if (hidden?.[i]) continue;
-      out += `\n    at ${formatCallSite(callsites[i])}`;
+      if (shown === limit) break;
+      shown++;
+      out +=`\n    at ${formatCallSite(callsites[i])}`;
       if (internal.hotRun) raw += `    at ${formatCallSite(callsites[i], true)}\n`;
     }
     if (internal.hotRun) internal.hotErrorStacks.set(error, raw);

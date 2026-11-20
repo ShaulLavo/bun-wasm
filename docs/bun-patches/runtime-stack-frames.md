@@ -12,6 +12,7 @@ V8 source.
 | --- | --- | --- |
 | `crates/bunwasm-runtime/src/js/bootstrap.js`, `hiddenCallSites`, `isSuspendedProgram` and `prepareStackTrace` | Host feature | Leave the runtime's frames out of the default text on QuickJS and the Browser engine. |
 | `crates/bunwasm-runtime/src/js/stack_trace.ts`, `hiddenJscFrames` and `jscFrames` | Host feature | Leave them out of JavaScriptCore's rewritten text. |
+| `crates/bunwasm-runtime/src/js/stack_trace.ts`, `installStackHeadroom`, `recordLimit` and `limitedSites` | Host feature | Capture past `Error.stackTraceLimit` on QuickJS and cut to it after the filter. |
 
 ## Which frames
 
@@ -28,6 +29,19 @@ Native Bun prints its builtins' frames, such as `emit (node:events:97:22)` and
 `processTicksAndRejections (native:7:39)`. bun-wasm implements most of those modules in its
 own runtime, so it prints neither the frame nor a made-up replacement.
 
+## Error.stackTraceLimit
+
+Engines apply the limit while they capture, before the filter runs, so with
+`Error.stackTraceLimit = 3` an error thrown three runtime frames deep printed no frame at all.
+Bun prints the builtin's frame, such as `alloc (unknown)`, then the program's frames.
+
+On QuickJS the limit is an accessor, and the runtime wraps it: `Error.stackTraceLimit` reads
+back the program's value, the engine captures 16 more frames than that, each capture records
+the limit in force when it ran, and the default text keeps that many frames after the filter.
+A custom `Error.prepareStackTrace` receives that many CallSites. A limit below one, or one that
+is not a finite number, reaches the engine unchanged. `tests/fixtures/stack-runtime-frames-limit`
+checks this against native Bun 1.4.4.
+
 ## What still sees them
 
 - On QuickJS and the Browser engine, a custom `Error.prepareStackTrace` receives every
@@ -41,6 +55,11 @@ own runtime, so it prints neither the frame nor a made-up replacement.
   sets it to check the runtime's own source positions.
 
 ## Not covered
+
+JavaScriptCore and V8 read `Error.stackTraceLimit` as a plain data property while capturing
+(`getDirect` and `GetDataProperty`); an accessor there would stop every capture. On those
+engines a small limit the runtime's frames fill still prints only the header, until the
+engines can be given headroom natively.
 
 The experimental SpiderMonkey guest and a Browser engine running on a JavaScriptCore host
 (Safari) keep their engine's own stack text, as in
