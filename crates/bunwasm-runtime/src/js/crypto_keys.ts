@@ -73,6 +73,7 @@ declare namespace CryptoKeys {
     dsaEncoding?: "der" | "ieee-p1363";
     oaepHash?: string;
     oaepLabel?: Input;
+    encoding?: string;
   };
   type KeyInput = KeyOptions | Input | KeyObject | CryptoKey;
   type GeneratePairType = "rsa" | "ec" | "ed25519" | "x25519";
@@ -435,18 +436,19 @@ declare namespace CryptoKeys {
       const record = { algorithm: c.keyAlgorithm(c.algorithm(a), parsed), type: keyType, key: parsed } as const;
       return wantPrivate || keyType === "public" ? make(record) : publicPart(record);
     }
-    function parseInput(input: CryptoKeys.KeyInput): CryptoKeys.KeyOptions {
-      if (
-        input &&
+    // An options object, as opposed to key material passed directly.
+    function isOptions(input: CryptoKeys.KeyInput): input is CryptoKeys.KeyOptions {
+      return (
+        !!input &&
         typeof input === "object" &&
         !(input instanceof KeyObject) &&
         !ArrayBuffer.isView(input) &&
         !(input instanceof ArrayBuffer) &&
         !c.isKey(input)
-      ) {
-        return { ...input } as CryptoKeys.KeyOptions;
-      }
-      return { key: input };
+      );
+    }
+    function parseInput(input: CryptoKeys.KeyInput): CryptoKeys.KeyOptions {
+      return isOptions(input) ? ({ ...input } as CryptoKeys.KeyOptions) : { key: input };
     }
     function keyEncoding(mode: number, data: CryptoKeys.Input, password?: CryptoKeys.Input, cipher = ""): CryptoKeys.Buffer {
       const pass =
@@ -806,26 +808,24 @@ declare namespace CryptoKeys {
       return verify ? result.verified! : Buffer.from(c.decode(result.data));
     }
     function rsaCrypt(decrypt: boolean, inputKey: CryptoKeys.KeyInput, data: CryptoKeys.Input): CryptoKeys.Buffer {
-      const options = parseInput(inputKey);
-      if (
-        options.padding !== undefined &&
-        options.padding !== constants.RSA_PKCS1_OAEP_PADDING
-      )
+      // Bun's JSCipher reads padding, oaepHash, encoding and oaepLabel before the key, and
+      // copies the label: parsing the key runs option getters that may detach its buffer.
+      const given = isOptions(inputKey) ? inputKey : undefined;
+      const padding = given?.padding;
+      const oaepHash = given?.oaepHash;
+      const encoding = given?.encoding;
+      const oaepLabel = given?.oaepLabel;
+      const label = oaepLabel === undefined ? "" : c.encode(inputBytes(oaepLabel, encoding));
+      if (padding !== undefined && padding !== constants.RSA_PKCS1_OAEP_PADDING)
         throw Object.assign(
           new Error("Only RSA-OAEP encryption is implemented"),
           { code: "ERR_NOT_SUPPORTED_IN_WASM" },
         );
-      const key = importAsymmetric(options, decrypt);
+      const digest = hash(oaepHash || "sha1");
+      const key = importAsymmetric(parseInput(inputKey), decrypt);
       const r = nodeRecord(key);
       if (r.key.kty !== "RSA") throw error("Expected an RSA key");
-      const algorithm = {
-        name: "RSA-OAEP",
-        hash: { name: hash(options.oaepHash || "sha1") },
-        label:
-          options.oaepLabel === undefined
-            ? ""
-            : c.encode(inputBytes(options.oaepLabel)),
-      };
+      const algorithm = { name: "RSA-OAEP", hash: { name: digest }, label };
       return Buffer.from(
         c.decode(
           c.backend(decrypt ? "decrypt" : "encrypt", algorithm, {

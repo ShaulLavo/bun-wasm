@@ -54,3 +54,5 @@ padding 6 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.padding' 
 padding 4294967296 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.padding' is invalid. Received 4294967296
 pkcs1 public as private throws Error ERR_OSSL_EVP_DECODE_ERROR error:06000066:public key routines:OPENSSL_internal:DECODE_ERROR
 pkcs8 garbage throws Error ERR_OSSL_ASN1_DECODE_ERROR error:0c00006d:ASN.1 encoding routines:OPENSSL_internal:DECODE_ERROR
+oaepLabel detached by a getter hello
+oaepLabel hex encoding hex

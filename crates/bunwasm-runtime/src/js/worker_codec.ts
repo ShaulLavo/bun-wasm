@@ -30,6 +30,13 @@
     return ["buffer", internal.native.base64Encode(new Uint8Array(buffer), false), buffer.resizable ? buffer.maxByteLength : 0];
   }
   function cloneError(message = "The object cannot be cloned") { return new DOMException(message, "DataCloneError"); }
+  // Runtime objects that travel by value: a Blob as its bytes, and a CryptoKey as its record,
+  // which the receiving realm's crypto module rebuilds.
+  function hostObjectNode(object: object): Node | undefined {
+    if (object instanceof Blob) return ["blob", internal.native.base64Encode(object._bytes(), false), object.type];
+    const keyRecord = internal.crypto?.serializeKey?.(object);
+    return keyRecord === undefined ? undefined : ["crypto-key", keyRecord];
+  }
   function create(hooks: BunWasm.WorkerCodecHooks): BunWasm.WorkerCodec {
     const sharedObjects = hooks.sharedObjects;
     const groupLanes = hooks.groupLanes;
@@ -125,7 +132,8 @@
         if (isSharedBuffer(object)) return sharedNode(object);
         if (typeof WebAssembly === "object" && object instanceof WebAssembly.Module) return wasmNode(object, implicit);
         if (typeof WebAssembly === "object" && object instanceof WebAssembly.Memory) return wasmNode(object, implicit);
-        if (object instanceof Blob) return ["blob", internal.native.base64Encode(object._bytes(), false), object.type];
+        const hosted = hostObjectNode(object);
+        if (hosted) return hosted;
         if (isArrayBuffer(object)) return bufferViews.has(object) ? ["buffer", "", 0] : encodeBuffer(object);
         if (ArrayBuffer.isView(object) && hooks.buffer?.isBuffer(object)) return bufferView(object, implicit);
         if (ArrayBuffer.isView(object)) return ["view", tag(object), visit(object.buffer, implicit), object.byteOffset, object.byteLength];
@@ -301,6 +309,7 @@
           case "number": return Number(node[1]);
           case "bigint": return BigInt(node[1]);
           case "blob": result = new Blob([internal.native.base64Decode(node[1])], { type: node[2] }); break;
+          case "crypto-key": result = internal.crypto.deserializeKey(node[1]); break;
           case "date": result = new Date(Number(node[1])); break;
           case "regexp": result = new RegExp(node[1], node[2]); break;
           case "buffer": {
@@ -435,6 +444,7 @@
         case "map": return pairs(node[1], false);
         case "set": return Array.isArray(node[1]) && node[1].every(ref);
         case "blob": return node.length === 3 && canonicalBase64(node[1]) && typeof node[2] === "string";
+        case "crypto-key": return node.length === 2 && typeof node[1] === "string";
         case "regexp": return strings(node.slice(1)) && node.length === 3;
         case "shared": return shared && validShared(node);
         case "wasm-module": case "wasm-memory": return validWasm(node, shared, nodes);

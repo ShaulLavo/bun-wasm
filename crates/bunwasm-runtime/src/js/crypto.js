@@ -233,6 +233,50 @@
     material.set(out, { ...r, algorithm: copy(r.algorithm), displayAlgorithm: copy(r.displayAlgorithm), usages: r.usages.slice(), key: { ...r.key } });
     return out;
   }
+  // postMessage: a key the wasm provider owns travels as its record in JSON, and the
+  // receiving realm rebuilds a key over the same material, as Bun's serializer does.
+  const exponentOut = (a) => (a.publicExponent ? { ...a, publicExponent: encode(a.publicExponent) } : { ...a });
+  const exponentIn = (a) => (typeof a.publicExponent === "string" ? { ...a, publicExponent: decode(a.publicExponent) } : { ...a });
+  function serializeKey(value) {
+    const r = material.get(value);
+    if (!r || r.nativeKey) return undefined;
+    return JSON.stringify({
+      algorithm: exponentOut(r.algorithm),
+      displayAlgorithm: exponentOut(r.displayAlgorithm),
+      type: r.type,
+      extractable: r.extractable,
+      usages: r.usages,
+      key: r.key,
+    });
+  }
+  function deserializeKey(text) {
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch {}
+    const valid =
+      data !== null &&
+      typeof data === "object" &&
+      names.includes(data.algorithm?.name) &&
+      data.displayAlgorithm?.name === data.algorithm.name &&
+      ["secret", "public", "private"].includes(data.type) &&
+      typeof data.extractable === "boolean" &&
+      Array.isArray(data.usages) &&
+      data.usages.every((usage) => keyUsages.includes(usage)) &&
+      data.key !== null &&
+      typeof data.key === "object";
+    if (!valid) fail("DataCloneError", "The object cannot be cloned");
+    const out = Object.create(CryptoKey.prototype);
+    material.set(out, {
+      algorithm: exponentIn(data.algorithm),
+      displayAlgorithm: exponentIn(data.displayAlgorithm),
+      type: data.type,
+      extractable: data.extractable,
+      usages: data.usages,
+      key: data.key,
+    });
+    return out;
+  }
   function use(key, a, usage) {
     if (!allowed[a.name].includes(usage))
       fail("NotSupportedError", "Algorithm does not support this operation");
@@ -788,6 +832,8 @@
     record,
     // Keys the wasm provider owns; the browser engine's native keys clone natively.
     cloneKey: (value) => (material.has(value) && !material.get(value).nativeKey ? cloneKey(value) : undefined),
+    serializeKey,
+    deserializeKey,
     makeKey,
     generate,
     importKey,
