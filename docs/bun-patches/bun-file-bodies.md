@@ -18,6 +18,9 @@ init) with a user ReadableStream body"), checked against native Bun 1.4.4.
   (the given stream ends locked) instead of teeing it, `Bun.serve` sends the file's type, and
   `fetch()` uploads it with a Content-Length. Neither a Request nor a Response gets a
   Content-Type header from it.
+- A file given by descriptor (`Bun.stdin`, `Bun.file(fd)`) can be read only once, so it is
+  teed as Bun does: a clone of a body over one reads it once and both bodies share the bytes
+  (or the error), and a stream over a descriptor is not lifted back to the file.
 - `new Request(request, init)` copies the source's body the way `clone()` does, so the
   source keeps its own body (Bun tees it). A used stream body copies as a used body, a used
   body that was in memory copies as empty bytes, and only a stream someone else holds
