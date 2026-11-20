@@ -51049,9 +51049,10 @@ static int bunwasm_zone_minutes(int32_t offset)
     return -(int)(offset / 60);
 }
 
+/* floor(ms / 1000) without negating ms, which overflows for INT64_MIN. */
 static int64_t bunwasm_floor_seconds(int64_t ms)
 {
-    return ms >= 0 ? ms / 1000 : -((-ms + 999) / 1000);
+    return ms >= 0 ? ms / 1000 : (ms + 1) / 1000 - 1;
 }
 
 static int getTimezoneOffset(int64_t time);

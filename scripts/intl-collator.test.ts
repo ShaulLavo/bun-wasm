@@ -150,7 +150,14 @@ test("generated library runs the engine fixture with production locale wrappers 
   const end = bootstrap.indexOf("\n\n  return internal;", start);
   expect(start).toBeGreaterThan(0);
   expect(end).toBeGreaterThan(start);
+  // The block's inputs from earlier in bootstrap.js, with QuickJS's toLocaleString wrapper on.
   vm.runInContext(`const installIntlFallback = true;
+    const native = { engine: "quickjs" };
+    const localeFormats = new Map();
+    const {
+      getTime: dateGetTime, getFullYear: dateGetFullYear, getMonth: dateGetMonth, getDate: dateGetDate,
+      getHours: dateGetHours, getMinutes: dateGetMinutes, getSeconds: dateGetSeconds,
+    } = Date.prototype;
     function defineHidden(target, values) {
       for (const key of Object.keys(values)) Object.defineProperty(target, key, {
         value: values[key], writable: true, configurable: true,

@@ -12,7 +12,7 @@ const locale = (text: string) => text.replace(/ /g, " ");
 const show = (value: Date) => [value.getHours(), value.getMinutes(), value.getTimezoneOffset(), value.toString(), value.toTimeString(), locale(value.toLocaleString("en-US")), locale(value.toLocaleTimeString("en-US"))].join(" | ");
 
 console.log("start", zone(), "|", show(winter));
-for (const name of ["America/New_York", "Europe/London", "Australia/Lord_Howe", "Asia/Kolkata", "Etc/GMT+3", "GMT", "Etc/UTC", "EST5EDT", "US/Pacific", "asia/tokyo"]) {
+for (const name of ["America/New_York", "Europe/London", "Australia/Lord_Howe", "Asia/Kolkata", "Etc/GMT+3", "GMT", "Etc/UTC", "EST5EDT", "US/Pacific", "asia/tokyo", "Asia/Calcutta", "Europe/Berlin", "Pacific/Chatham", "Africa/Casablanca", "Etc/Unknown", "Factory"]) {
   process.env.TZ = name;
   console.log(`${name} -> ${zone()}`);
   console.log("  winter", show(winter));
@@ -47,3 +47,14 @@ console.log("empty", winter.getHours(), winter.getTimezoneOffset(), zone(), wint
 process.env.TZ = "Asia/Kolkata";
 delete process.env.TZ;
 console.log("deleted", winter.getHours(), winter.getTimezoneOffset(), zone(), "TZ" in process.env);
+
+// Locale strings with no arguments, first used here because Bun keeps the zone of its first
+// such call: midnight, noon, an ordinary time and an invalid date. Date() as a function, and
+// the methods' lengths.
+process.env.TZ = "Asia/Kolkata";
+for (const iso of ["2024-01-14T18:30:00Z", "2024-01-15T06:30:00Z", "2024-07-15T12:34:56Z", "invalid"]) {
+  const value = new Date(iso);
+  console.log("default locale", value.toLocaleString(), "|", value.toLocaleDateString(), "|", value.toLocaleTimeString());
+}
+console.log("Date()", typeof Date(), / GMT\+0530 \(India Standard Time\)$/.test(Date()));
+console.log("lengths", Date.prototype.toLocaleString.length, Date.prototype.toLocaleDateString.length, Date.prototype.toLocaleTimeString.length);
