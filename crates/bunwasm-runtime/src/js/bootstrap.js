@@ -1415,6 +1415,34 @@
   if (process.env.BUNWASM_IPC_CHANNEL) internal.require("child_ipc").initialize();
   if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
 
+  // QuickJS prints local time without the zone's name; Bun's JavaScriptCore appends it, as in
+  // "GMT-0500 (Eastern Standard Time)". UTC needs no data; another zone (time_zone.ts) takes
+  // its long name from the fallback Intl, which loads only when such a date is printed.
+  if (installIntlFallback && native.engine === "quickjs") {
+    const nativeToString = Date.prototype.toString;
+    const nativeToTimeString = Date.prototype.toTimeString;
+    const getTime = Date.prototype.getTime;
+    const zoneNames = new Map();
+    function zoneName(date) {
+      const zone = internal.localTimeZone;
+      if (zone === undefined || zone === "UTC") return "Coordinated Universal Time";
+      let format = zoneNames.get(zone);
+      if (!format) zoneNames.set(zone, format = new globalThis.Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "long" }));
+      return format.formatToParts(date).find(part => part.type === "timeZoneName")?.value ?? zone;
+    }
+    function withZoneName(date, text) {
+      return Number.isNaN(Reflect.apply(getTime, date, [])) ? text : `${text} (${zoneName(date)})`;
+    }
+    defineHidden(Date.prototype, {
+      toString() {
+        return withZoneName(this, Reflect.apply(nativeToString, this, []));
+      },
+      toTimeString() {
+        return withZoneName(this, Reflect.apply(nativeToTimeString, this, []));
+      },
+    });
+  }
+
   // Temporal probes Date's native locale methods during initialization. Install
   // these wrappers last so that probe does not eagerly load the Intl bundle.
   if (installIntlFallback) {

@@ -314,6 +314,8 @@ declare namespace BunWasm {
     envFromPeer?: boolean;
     /** Bootstrap's Intl fallback follows process.env.TZ once the engine applied it. */
     setIntlTimeZone?: (zone: string | undefined) => void;
+    /** QuickJS: the zone ID local time follows (time_zone.ts); undefined until TZ is set. */
+    localTimeZone?: string;
     /** Bootstrap's lazy Intl global reports the fallback it installed. */
     fallbackIntlLoaded?: (intl: unknown) => void;
     sharedObjects?: SharedObjects;

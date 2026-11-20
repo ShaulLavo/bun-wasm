@@ -24,18 +24,17 @@
     for (const zone of data.zones) {
       const separator = zone.indexOf("|");
       const name = zone.slice(0, separator);
-      names.set(name.toUpperCase(), name);
+      names.set(name, name);
       entries.set(name, zone.slice(separator + 1));
     }
-    const links = new Map(Object.entries(data.links).map(([from, to]) => [from.toUpperCase(), to]));
-    zones = { names, entries, links, offsets: data.offsets.split("|").map(offset => parseInt(offset, 36)) };
+    zones = { names, entries, links: new Map(Object.entries(data.links)), offsets: data.offsets.split("|").map(offset => parseInt(offset, 36)) };
     return zones;
   }
 
-  // FormatJS's CanonicalizeTimeZoneName, with the city links above.
+  // FormatJS's CanonicalizeTimeZoneName with the city links above, but case-sensitive as ICU
+  // is for JavaScriptCore: Bun keeps the previous zone for "asia/tokyo".
   function resolve(name: string, data: Zones): string | undefined {
-    const upper = name.toUpperCase();
-    const resolved = cityLinks.get(upper) ?? data.links.get(upper) ?? data.names.get(upper);
+    const resolved = cityLinks.get(name) ?? data.links.get(name) ?? data.names.get(name);
     return resolved === "Etc/UTC" || resolved === "Etc/GMT" ? "UTC" : resolved;
   }
 
@@ -57,16 +56,16 @@
     return table;
   }
 
-  // The zone ID now in use, or null when `zone` names no zone (the previous zone stays). An
-  // empty name restores the start zone, UTC.
   // The names that are UTC, answered without loading the 1.36 MB zone data: test harnesses and
   // CI often start every process with one of them.
-  const utcNames = new Set(["", "UTC", "ETC/UTC", "GMT", "ETC/GMT"]);
+  const utcNames = new Set(["", "UTC", "Etc/UTC", "GMT", "Etc/GMT"]);
+  // The zone ID now in use, or null when `zone` names no zone (the previous zone stays). An
+  // empty name restores the start zone, UTC. `internal.localTimeZone` names it for toString.
   return function applyTimeZone(zone: string): string | null {
     const native = internal.native;
-    if (utcNames.has(zone.toUpperCase())) {
+    if (utcNames.has(zone)) {
       native.setLocalTimeOffsets?.(null);
-      return "UTC";
+      return (internal.localTimeZone = "UTC");
     }
     const data = load();
     const resolved = resolve(zone, data);
@@ -74,6 +73,7 @@
     const entries = data.entries.get(resolved);
     if (resolved !== "UTC" && entries === undefined) return null;
     const table = entries === undefined ? null : offsetsOf(entries, data);
-    return native.setLocalTimeOffsets?.(table) ? resolved : null;
+    if (!native.setLocalTimeOffsets?.(table)) return null;
+    return (internal.localTimeZone = resolved);
   };
 })

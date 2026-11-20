@@ -1,0 +1,48 @@
+start UTC | 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+America/New_York -> America/New_York
+  winter 7 | 0 | 300 | Mon Jan 15 2024 07:00:00 GMT-0500 (Eastern Standard Time) | 07:00:00 GMT-0500 (Eastern Standard Time) | 1/15/2024, 7:00:00 AM | 7:00:00 AM
+  summer 8 | 0 | 240 | Mon Jul 15 2024 08:00:00 GMT-0400 (Eastern Daylight Time) | 08:00:00 GMT-0400 (Eastern Daylight Time) | 7/15/2024, 8:00:00 AM | 8:00:00 AM
+Europe/London -> Europe/London
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 13 | 0 | -60 | Mon Jul 15 2024 13:00:00 GMT+0100 (British Summer Time) | 13:00:00 GMT+0100 (British Summer Time) | 7/15/2024, 1:00:00 PM | 1:00:00 PM
+Australia/Lord_Howe -> Australia/Lord_Howe
+  winter 23 | 0 | -660 | Mon Jan 15 2024 23:00:00 GMT+1100 (Lord Howe Daylight Time) | 23:00:00 GMT+1100 (Lord Howe Daylight Time) | 1/15/2024, 11:00:00 PM | 11:00:00 PM
+  summer 22 | 30 | -630 | Mon Jul 15 2024 22:30:00 GMT+1030 (Lord Howe Standard Time) | 22:30:00 GMT+1030 (Lord Howe Standard Time) | 7/15/2024, 10:30:00 PM | 10:30:00 PM
+Asia/Kolkata -> Asia/Kolkata
+  winter 17 | 30 | -330 | Mon Jan 15 2024 17:30:00 GMT+0530 (India Standard Time) | 17:30:00 GMT+0530 (India Standard Time) | 1/15/2024, 5:30:00 PM | 5:30:00 PM
+  summer 17 | 30 | -330 | Mon Jul 15 2024 17:30:00 GMT+0530 (India Standard Time) | 17:30:00 GMT+0530 (India Standard Time) | 7/15/2024, 5:30:00 PM | 5:30:00 PM
+Etc/GMT+3 -> Etc/GMT+3
+  winter 9 | 0 | 180 | Mon Jan 15 2024 09:00:00 GMT-0300 (GMT-03:00) | 09:00:00 GMT-0300 (GMT-03:00) | 1/15/2024, 9:00:00 AM | 9:00:00 AM
+  summer 9 | 0 | 180 | Mon Jul 15 2024 09:00:00 GMT-0300 (GMT-03:00) | 09:00:00 GMT-0300 (GMT-03:00) | 7/15/2024, 9:00:00 AM | 9:00:00 AM
+GMT -> UTC
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
+Etc/UTC -> UTC
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
+EST5EDT -> America/New_York
+  winter 7 | 0 | 300 | Mon Jan 15 2024 07:00:00 GMT-0500 (Eastern Standard Time) | 07:00:00 GMT-0500 (Eastern Standard Time) | 1/15/2024, 7:00:00 AM | 7:00:00 AM
+  summer 8 | 0 | 240 | Mon Jul 15 2024 08:00:00 GMT-0400 (Eastern Daylight Time) | 08:00:00 GMT-0400 (Eastern Daylight Time) | 7/15/2024, 8:00:00 AM | 8:00:00 AM
+US/Pacific -> America/Los_Angeles
+  winter 4 | 0 | 480 | Mon Jan 15 2024 04:00:00 GMT-0800 (Pacific Standard Time) | 04:00:00 GMT-0800 (Pacific Standard Time) | 1/15/2024, 4:00:00 AM | 4:00:00 AM
+  summer 5 | 0 | 420 | Mon Jul 15 2024 05:00:00 GMT-0700 (Pacific Daylight Time) | 05:00:00 GMT-0700 (Pacific Daylight Time) | 7/15/2024, 5:00:00 AM | 5:00:00 AM
+asia/tokyo -> America/Los_Angeles
+  winter 4 | 0 | 480 | Mon Jan 15 2024 04:00:00 GMT-0800 (Pacific Standard Time) | 04:00:00 GMT-0800 (Pacific Standard Time) | 1/15/2024, 4:00:00 AM | 4:00:00 AM
+  summer 5 | 0 | 420 | Mon Jul 15 2024 05:00:00 GMT-0700 (Pacific Daylight Time) | 05:00:00 GMT-0700 (Pacific Daylight Time) | 7/15/2024, 5:00:00 AM | 5:00:00 AM
+Lord Howe 2024-04-06T14:59:00Z 1 59 -660
+Lord Howe 2024-04-06T15:00:00Z 1 30 -630
+Lord Howe 2024-10-05T15:29:00Z 1 59 -630
+Lord Howe 2024-10-05T15:30:00Z 2 30 -660
+New York local gap 2024-03-10T07:30:00.000Z 3 240
+New York local overlap 2024-11-03T05:30:00.000Z 1 240
+New York local plain 2024-01-15T14:00:00.000Z 9 300
+New York local UTC fields 2024-07-04T00:00:00.000Z 20 240
+setHours into the gap 2024-03-10T07:30:00.000Z
+parsed local 2024-07-04T16:00:00.000Z 1720108800000
+far future 240 300
+before 1970 240 7
+unknown Not/AZone 17 30 Asia/Kolkata
+unknown Mars/Olympus 17 30 Asia/Kolkata
+unknown +05:30 17 30 Asia/Kolkata
+empty 12 0 UTC Mon Jan 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time)
+deleted 12 0 UTC false
