@@ -243,7 +243,10 @@ fn local_time_offsets(value: Val) -> Option<(Vec<i64>, Vec<i32>)> {
         .iter()
         .map(|item| if let Val::Num(n) = item { *n } else { f64::NAN })
         .collect();
-    if numbers.is_empty() || numbers.len() % 2 == 0 || numbers.iter().any(|n| !n.is_finite()) {
+    if numbers.is_empty()
+        || numbers.len().is_multiple_of(2)
+        || numbers.iter().any(|n| !n.is_finite())
+    {
         return None;
     }
     let offsets = numbers.iter().step_by(2).map(|n| *n as i32).collect();
