@@ -50,7 +50,12 @@ mod tests {
     use crate::data::Val;
 
     fn stamp(seconds: f64, nanos: f64) -> [Val; 4] {
-        [Val::Num(seconds), Val::Num(nanos), Val::Num(seconds), Val::Num(nanos)]
+        [
+            Val::Num(seconds),
+            Val::Num(nanos),
+            Val::Num(seconds),
+            Val::Num(nanos),
+        ]
     }
 
     #[test]

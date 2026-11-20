@@ -203,7 +203,10 @@ fn metadata_record(
         // Bun's Stat.rs `to_time_ms_f64`: seconds and nanoseconds convert separately. One
         // f64 division of the whole nanosecond count (above 2^53 for any time after April
         // 1970) turns 1700000000.25 s into 1700000000249.9998 ms.
-        let (seconds, nanos) = (value.div_euclid(1_000_000_000), value.rem_euclid(1_000_000_000));
+        let (seconds, nanos) = (
+            value.div_euclid(1_000_000_000),
+            value.rem_euclid(1_000_000_000),
+        );
         record.push(
             &format!("{name}Ms"),
             seconds as f64 * 1000.0 + nanos as f64 / 1_000_000.0,
@@ -1903,11 +1906,23 @@ mod builtin_tests {
         let record = metadata_record(
             [("dev", 0); 8],
             [("blksize", 0); 2],
-            [("atime", 1_700_000_000_250_000_000), ("mtime", -1_500_000_000), ("ctime", 0), ("birthtime", 0)],
+            [
+                ("atime", 1_700_000_000_250_000_000),
+                ("mtime", -1_500_000_000),
+                ("ctime", 0),
+                ("birthtime", 0),
+            ],
             false,
         );
-        let Val::Object(fields) = record else { panic!("expected a record") };
-        let field = |name: &str| fields.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone());
+        let Val::Object(fields) = record else {
+            panic!("expected a record")
+        };
+        let field = |name: &str| {
+            fields
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
         assert_eq!(field("atimeMs"), Some(Val::Num(1_700_000_000_250.0)));
         assert_eq!(field("mtimeMs"), Some(Val::Num(-1_500.0)));
     }
