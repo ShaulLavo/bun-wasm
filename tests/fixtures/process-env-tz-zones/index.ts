@@ -6,7 +6,10 @@
 const winter = new Date("2024-01-15T12:00:00Z");
 const summer = new Date("2024-07-15T12:00:00Z");
 const zone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
-const show = (value: Date) => [value.getHours(), value.getMinutes(), value.getTimezoneOffset(), value.toString(), value.toTimeString(), value.toLocaleString("en-US"), value.toLocaleTimeString("en-US")].join(" | ");
+// The fallback Intl (FormatJS, on QuickJS and JSC) puts U+202F before AM/PM where native Bun
+// prints a space; that is not about zones, so the comparison reads both as a space.
+const locale = (text: string) => text.replace(/ /g, " ");
+const show = (value: Date) => [value.getHours(), value.getMinutes(), value.getTimezoneOffset(), value.toString(), value.toTimeString(), locale(value.toLocaleString("en-US")), locale(value.toLocaleTimeString("en-US"))].join(" | ");
 
 console.log("start", zone(), "|", show(winter));
 for (const name of ["America/New_York", "Europe/London", "Australia/Lord_Howe", "Asia/Kolkata", "Etc/GMT+3", "GMT", "Etc/UTC", "EST5EDT", "US/Pacific", "asia/tokyo"]) {
