@@ -239,11 +239,63 @@
       return native.timingSafeEqual(x,y);
     }
 
-    function randomFillSync(buffer, offset = 0, size) {
-      const view = internal.toUint8(buffer);
-      const end = size === undefined ? view.length : offset + size;
-      view.set(native.randomBytes(end - offset), offset);
-      return buffer;
+    // Node's lib/internal/crypto/random.js: offset and size count elements of a typed array,
+    // so they are scaled to bytes before the bounds checks.
+    const kMaxPossibleLength = 0x7fffffff;
+    const argTypeError = (name, expected, value) =>
+      Object.assign(new TypeError(`The "${name}" argument must be of type ${expected}. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_TYPE" });
+    const rangeError = (name, rule, value) =>
+      Object.assign(new RangeError(`The value of "${name}" is out of range. It must be ${rule}. Received ${value}`), { code: "ERR_OUT_OF_RANGE" });
+    function fillTarget(buf) {
+      if (!(buf instanceof ArrayBuffer) && !(typeof SharedArrayBuffer === "function" && buf instanceof SharedArrayBuffer) && !ArrayBuffer.isView(buf))
+        throw argTypeError("buf", "ArrayBuffer or ArrayBufferView", buf);
+      return buf.BYTES_PER_ELEMENT || 1;
+    }
+    function assertOffset(offset, elementSize, length) {
+      if (typeof offset !== "number") throw argTypeError("offset", "number", offset);
+      offset *= elementSize;
+      const maxLength = Math.min(length, kMaxPossibleLength);
+      if (Number.isNaN(offset) || offset > maxLength || offset < 0) throw rangeError("offset", `>= 0 && <= ${maxLength}`, offset);
+      return offset >>> 0;
+    }
+    function assertSize(size, elementSize, offset, length) {
+      if (typeof size !== "number") throw argTypeError("size", "number", size);
+      size *= elementSize;
+      if (Number.isNaN(size) || size > kMaxPossibleLength || size < 0) throw rangeError("size", `>= 0 && <= ${kMaxPossibleLength}`, size);
+      if (size + offset > length) throw rangeError("size + offset", `<= ${length}`, size + offset);
+      return size >>> 0;
+    }
+    function fillBytes(buf, offset, size) {
+      if (size === 0) return;
+      const bytes = buf instanceof ArrayBuffer || (typeof SharedArrayBuffer === "function" && buf instanceof SharedArrayBuffer)
+        ? new Uint8Array(buf)
+        : new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+      bytes.set(native.randomBytes(size), offset);
+    }
+    function randomFillSync(buf, offset = 0, size) {
+      const elementSize = fillTarget(buf);
+      offset = assertOffset(offset, elementSize, buf.byteLength);
+      size = size === undefined ? buf.byteLength - offset : assertSize(size, elementSize, offset, buf.byteLength);
+      fillBytes(buf, offset, size);
+      return buf;
+    }
+    function randomFill(buf, offset, size, callback) {
+      const elementSize = fillTarget(buf);
+      if (typeof offset === "function") {
+        callback = offset;
+        offset = 0;
+        size = buf.byteLength;
+      } else if (typeof size === "function") {
+        callback = size;
+        offset = assertOffset(offset, elementSize, buf.byteLength);
+        size = buf.byteLength - offset;
+      } else {
+        if (typeof callback !== "function") throw argTypeError("callback", "function", callback);
+        offset = assertOffset(offset, elementSize, buf.byteLength);
+        size = size === undefined ? buf.byteLength - offset : assertSize(size, elementSize, offset, buf.byteLength);
+      }
+      fillBytes(buf, offset, size);
+      internal.realTimers.setImmediate(() => callback(null, buf));
     }
 
     const unsupportedCrypto = ["scrypt", "scryptSync", "privateEncrypt", "publicDecrypt"];
@@ -256,11 +308,7 @@
       randomBytes,
       pseudoRandomBytes: randomBytes,
       randomFillSync,
-      randomFill: (buffer, ...rest) => {
-        const callback = rest.pop();
-        randomFillSync(buffer, ...rest);
-        internal.realTimers.setImmediate(() => callback(null, buffer));
-      },
+      randomFill,
       randomInt,
       randomUUID: () => webcrypto.randomUUID(),
       getRandomValues: (array) => webcrypto.getRandomValues(array),

@@ -1,0 +1,36 @@
+sync no buffer throws TypeError ERR_INVALID_ARG_TYPE The "buf" argument must be of type ArrayBuffer or ArrayBufferView. Received undefined
+sync string throws TypeError ERR_INVALID_ARG_TYPE The "buf" argument must be of type ArrayBuffer or ArrayBufferView. Received type string ('abc')
+sync offset -1 throws RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be >= 0 && <= 4. Received -1
+sync offset 5 throws RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be >= 0 && <= 4. Received 5
+sync offset string throws TypeError ERR_INVALID_ARG_TYPE The "offset" argument must be of type number. Received type string ('1')
+sync offset NaN throws RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be >= 0 && <= 4. Received NaN
+sync offset 1.5 Uint8Array 4
+sync size 5 throws RangeError ERR_OUT_OF_RANGE The value of "size + offset" is out of range. It must be <= 4. Received 5
+sync size -1 throws RangeError ERR_OUT_OF_RANGE The value of "size" is out of range. It must be >= 0 && <= 2147483647. Received -1
+sync size 3 offset 2 throws RangeError ERR_OUT_OF_RANGE The value of "size + offset" is out of range. It must be <= 4. Received 5
+sync Float64Array offset 2 true
+sync Float64Array offset 5 throws RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be >= 0 && <= 32. Received 40
+sync Float64Array size 3 offset 2 throws RangeError ERR_OUT_OF_RANGE The value of "size + offset" is out of range. It must be <= 32. Received 40
+sync ArrayBuffer true
+sync DataView DataView 8
+sync past 2**24 throws RangeError ERR_OUT_OF_RANGE The value of "size + offset" is out of range. It must be <= 16777218. Received 16777219
+sync at 2**24 Uint8Array 16777218
+async no callback throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument must be of type function. Received undefined
+async callback number throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument must be of type function. Received type number (5)
+async offset 9 throws RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be >= 0 && <= 4. Received 9
+async size 9 throws RangeError ERR_OUT_OF_RANGE The value of "size + offset" is out of range. It must be <= 4. Received 9
+async Float64Array offset 2 null 0 0
+async empty null 0
+async Uint16Array 1 2 null 0 0
+checkPrimeSync candidate at call time true 1
+checkPrime candidate at call time undefined true 2
+hkdfSync length 0 throws Error undefined HKDF derivation failed
+hkdfSync length 0 throws Error undefined HKDF derivation failed
+hkdfSync length 0 throws Error undefined HKDF derivation failed
+hkdfSync length 0 throws Error undefined HKDF derivation failed
+hkdf length 0 1 Error HKDF derivation failed false
+hkdfSync length 1 9c
+getRandomValues Float16Array throws TypeMismatchError 17 The data argument must be an integer-type TypedArray
+getRandomValues Float32Array throws TypeMismatchError 17 The data argument must be an integer-type TypedArray
+getRandomValues DataView throws TypeMismatchError 17 The data argument must be an integer-type TypedArray
+getRandomValues Uint16Array true

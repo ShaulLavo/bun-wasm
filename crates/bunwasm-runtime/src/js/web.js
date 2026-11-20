@@ -1422,7 +1422,8 @@
   // --- crypto -----------------------------------------------------------------
 
   function getRandomValues(array) {
-    if (!ArrayBuffer.isView(array) || array instanceof Float32Array || array instanceof Float64Array || array instanceof DataView) {
+    const float16 = typeof Float16Array === "function" && array instanceof Float16Array;
+    if (!ArrayBuffer.isView(array) || float16 || array instanceof Float32Array || array instanceof Float64Array || array instanceof DataView) {
       throw new DOMException("The data argument must be an integer-type TypedArray", "TypeMismatchError");
     }
     // Bun has no 65536-byte quota; the Browser host's random_get fills in chunks.

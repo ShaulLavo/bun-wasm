@@ -909,6 +909,8 @@ declare namespace CryptoKeys {
         false,
         ["deriveBits"],
       );
+      // Node accepts a keylen of 0, then OpenSSL refuses the empty output: a plain Error.
+      if (keylen === 0) throw new Error("HKDF derivation failed");
       return c.deriveBits(
         {
           name: "HKDF",

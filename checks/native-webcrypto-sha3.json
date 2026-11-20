@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/webcrypto-sha3",
+  "engines": ["quickjs", "jsc", "spidermonkey"]
+}

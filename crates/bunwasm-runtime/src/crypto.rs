@@ -1,4 +1,5 @@
 use crate::crypto_ec;
+use crate::crypto_pqc;
 use aes::cipher::{
     BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher, block_padding::Pkcs7,
 };
@@ -67,6 +68,9 @@ pub fn request(input: &str) -> String {
 
 fn dispatch(q: &J) -> Result<J> {
     let alg = &q["algorithm"];
+    if let Some(a) = alg["name"].as_str().and_then(crypto_pqc::algorithm) {
+        return pqc(q, a);
+    }
     match text(q, "op")? {
         "keyEncoding" => key_encoding(q),
         "generate" => generate(alg),
@@ -75,6 +79,74 @@ fn dispatch(q: &J) -> Result<J> {
         "sign" | "verify" => sign(q),
         "encrypt" | "decrypt" => crypt(q),
         "derive" => derive(q),
+        _ => Err("NotSupportedError"),
+    }
+}
+
+/// An AKP JWK's public key and seed, after checking that it names `a`.
+fn pqc_parts(k: &J, a: crypto_pqc::Algorithm) -> Result<crypto_pqc::Parts> {
+    if k["kty"] != "AKP" || k["alg"] != a.name {
+        return Err("DataError");
+    }
+    Ok(crypto_pqc::Parts {
+        public: bytes(k, "pub")?,
+        seed: if k["priv"].is_string() {
+            Some(bytes(k, "priv")?)
+        } else {
+            None
+        },
+    })
+}
+
+/// ML-KEM and ML-DSA requests.
+fn pqc(q: &J, a: crypto_pqc::Algorithm) -> Result<J> {
+    let k = &q["key"];
+    let extra = |name: &str| {
+        if q["algorithm"][name].is_string() {
+            bytes(&q["algorithm"], name)
+        } else {
+            Ok(vec![])
+        }
+    };
+    match text(q, "op")? {
+        "generate" => Ok(pair(crypto_pqc::generate(a)?)),
+        "import" => {
+            let format = text(q, "format")?;
+            let b = bytes(q, "data")?;
+            let parts = if format == "jwk" {
+                Some(pqc_parts(&data(serde_json::from_slice(&b))?, a)?)
+            } else {
+                None
+            };
+            Ok(json!({"key": crypto_pqc::import(a, format, &b, parts.as_ref())?}))
+        }
+        "export" => Ok(output(crypto_pqc::export(
+            a,
+            text(q, "format")?,
+            &pqc_parts(k, a)?,
+        )?)),
+        "sign" => Ok(output(crypto_pqc::sign(
+            a,
+            &pqc_parts(k, a)?,
+            &bytes(q, "data")?,
+            &extra("context")?,
+        )?)),
+        "verify" => Ok(json!({"verified": crypto_pqc::verify(
+            a,
+            &pqc_parts(k, a)?,
+            &bytes(q, "data")?,
+            &bytes(q, "signature")?,
+            &extra("context")?,
+        )})),
+        "encapsulate" => {
+            let (shared, ciphertext) = crypto_pqc::encapsulate(a, &pqc_parts(k, a)?)?;
+            Ok(json!({"sharedKey": b64(&shared), "ciphertext": b64(&ciphertext)}))
+        }
+        "decapsulate" => Ok(output(crypto_pqc::decapsulate(
+            a,
+            &pqc_parts(k, a)?,
+            &bytes(q, "ciphertext")?,
+        )?)),
         _ => Err("NotSupportedError"),
     }
 }
@@ -219,7 +291,7 @@ fn okp_jwk(curve: &str, secret: &[u8], public: &[u8]) -> J {
 }
 fn pair(mut private: J) -> J {
     let mut public = private.clone();
-    for name in ["d", "p", "q", "dp", "dq", "qi"] {
+    for name in ["d", "p", "q", "dp", "dq", "qi", "priv"] {
         public.as_object_mut().unwrap().remove(name);
     }
     json!({"privateKey":private.take(),"publicKey":public})
@@ -531,6 +603,9 @@ fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J
         "SHA-256" => 256,
         "SHA-384" => 384,
         "SHA-512" => 512,
+        "SHA3-256" => 3256,
+        "SHA3-384" => 3384,
+        "SHA3-512" => 3512,
         _ => return Err("NotSupportedError"),
     };
     let pss = text(a, "name")? == "RSA-PSS";
@@ -596,6 +671,13 @@ fn crypt(q: &J) -> Result<J> {
             &bytes(a, "additionalData")?,
             &input,
             number(a, "tagLength")?,
+            encrypt,
+        ),
+        "ChaCha20-Poly1305" => crypto_pqc::chacha20_poly1305(
+            &key,
+            &bytes(a, "iv")?,
+            &bytes(a, "additionalData")?,
+            &input,
             encrypt,
         ),
         _ => Err("NotSupportedError"),
@@ -804,6 +886,9 @@ fn derive_password(a: &J, key: &[u8], length: usize) -> Result<Vec<u8>> {
         "SHA-256" => run!(sha2::Sha256),
         "SHA-384" => run!(sha2::Sha384),
         "SHA-512" => run!(sha2::Sha512),
+        "SHA3-256" => run!(sha3::Sha3_256),
+        "SHA3-384" => run!(sha3::Sha3_384),
+        "SHA3-512" => run!(sha3::Sha3_512),
         _ => Err("NotSupportedError"),
     }
 }

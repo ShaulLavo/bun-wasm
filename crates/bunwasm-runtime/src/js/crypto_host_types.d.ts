@@ -48,6 +48,8 @@ declare namespace BunWasm {
     encode(data: unknown): string;
     decode(data: unknown): Uint8Array<ArrayBuffer>;
     supportsAlgorithm(name: string): boolean;
+    /** A structured clone of a key the wasm provider owns; undefined for any other value. */
+    cloneKey(value: unknown): CryptoKey | undefined;
     crypt(mode: "decrypt", a: CryptoAlgorithm, key: CryptoKey, bytes: BufferSource, usage: "unwrapKey"): ArrayBuffer;
   }
   interface Internal {
