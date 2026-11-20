@@ -1417,17 +1417,24 @@
 
   // QuickJS prints local time without the zone's name; Bun's JavaScriptCore appends it, as in
   // "GMT-0500 (Eastern Standard Time)". UTC needs no data; another zone (time_zone.ts) takes
-  // its long name from the fallback Intl, which loads only when such a date is printed.
+  // its long name from the fallback Intl, which loads only when such a date is printed, and
+  // zone_names.js corrects the names ICU gives differently (scripts/generate-zone-names.ts).
+  // toLocaleString formats through that Intl too, as the other locale methods below do.
   if (installIntlFallback && native.engine === "quickjs") {
     const nativeToString = Date.prototype.toString;
     const nativeToTimeString = Date.prototype.toTimeString;
     const getTime = Date.prototype.getTime;
-    const zoneNames = new Map();
+    const getTimezoneOffset = Date.prototype.getTimezoneOffset;
+    const zoneFormats = new Map();
+    let icuNames;
     function zoneName(date) {
       const zone = internal.localTimeZone;
       if (zone === undefined || zone === "UTC") return "Coordinated Universal Time";
-      let format = zoneNames.get(zone);
-      if (!format) zoneNames.set(zone, format = new globalThis.Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "long" }));
+      icuNames ??= internal.require("zone_names");
+      const icu = icuNames[`${zone}|${-Reflect.apply(getTimezoneOffset, date, [])}`];
+      if (icu !== undefined) return icu;
+      let format = zoneFormats.get(zone);
+      if (!format) zoneFormats.set(zone, format = new globalThis.Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "long" }));
       return format.formatToParts(date).find(part => part.type === "timeZoneName")?.value ?? zone;
     }
     function withZoneName(date, text) {
@@ -1440,7 +1447,20 @@
       toTimeString() {
         return withZoneName(this, Reflect.apply(nativeToTimeString, this, []));
       },
+      toLocaleString(locales, options) {
+        // A TypeError for a receiver that is not a Date, "Invalid Date" for NaN, as natively.
+        const time = Reflect.apply(getTime, this, []);
+        if (Number.isNaN(time)) return "Invalid Date";
+        return new globalThis.Intl.DateTimeFormat(locales, localeStringOptions(options)).format(time);
+      },
     });
+    // ECMA-402 ToDateTimeOptions(options, "any", "all"): the date and time defaults apply only
+    // when the options choose no field or style of their own.
+    const dateTimeFields = ["weekday", "year", "month", "day", "dayPeriod", "hour", "minute", "second", "fractionalSecondDigits", "dateStyle", "timeStyle"];
+    function localeStringOptions(options) {
+      if (options != null && dateTimeFields.some(field => options[field] !== undefined)) return options;
+      return Object.assign({ year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" }, options);
+    }
   }
 
   // Temporal probes Date's native locale methods during initialization. Install
