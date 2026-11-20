@@ -1329,6 +1329,93 @@ mod tests {
         assert_eq!(result, "|1,true,4");
     }
 
+    /// Runs `script`, collects garbage, drains the job queue (where cleanup
+    /// callbacks run), then returns `check`.
+    fn after_gc_and_jobs(script: &str, check: &str) -> String {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| ctx.eval::<(), _>(script).unwrap());
+        runtime.run_gc();
+        while runtime.execute_pending_job().unwrap() {}
+        context.with(|ctx| ctx.eval::<String, _>(check).unwrap())
+    }
+
+    #[test]
+    fn finalization_registry_holds_a_self_token_weakly() {
+        // zlib, TextDecoder, SQLite and stream wrappers register with
+        // `registry.register(obj, handle, obj)`; a strong token kept obj alive.
+        let result = after_gc_and_jobs(
+            "globalThis.cleaned = [];
+             globalThis.registry = new FinalizationRegistry(held => cleaned.push(held));
+             globalThis.refs = [];
+             for (let i = 0; i < 100; i++) { const obj = { i }; registry.register(obj, i, obj); refs.push(new WeakRef(obj)); }
+             globalThis.separate = [];
+             for (let i = 0; i < 100; i++) { const obj = {}; const token = {}; separate.push(token); registry.register(obj, 'separate', token); }",
+            "[cleaned.filter(v => typeof v === 'number').length, new Set(cleaned).size - 1,
+              cleaned.filter(v => v === 'separate').length, refs.filter(r => r.deref()).length].join(',')",
+        );
+        assert_eq!(result, "100,100,100,0");
+    }
+
+    #[test]
+    fn finalization_registry_unregister_tokens() {
+        let result = after_gc_and_jobs(
+            "globalThis.cleaned = [];
+             globalThis.registry = new FinalizationRegistry(held => cleaned.push(held));
+             globalThis.live = {};
+             registry.register(live, 'live', live);
+             globalThis.unregisteredLive = registry.unregister(live);
+             globalThis.shared = {};
+             globalThis.keep = [{}, {}, {}];
+             for (const obj of keep) registry.register(obj, 'shared', shared);
+             globalThis.unregisteredShared = registry.unregister(shared);
+             globalThis.again = registry.unregister(shared);
+             globalThis.errors = [1, 'token', undefined, null, Symbol.for('registered')].map(token => {
+               try { registry.unregister(token); return 'none'; } catch (e) { return e instanceof TypeError ? 'TypeError' : 'other'; }
+             }).concat([1, 'token', null].map(token => {
+               try { registry.register({}, 'bad', token); return 'none'; } catch (e) { return e instanceof TypeError ? 'TypeError' : 'other'; }
+             }));
+             // A token that dies first leaves its entry registered.
+             globalThis.target = {};
+             { const token = {}; registry.register(target, 'dead-token', token); }
+             { const sym = Symbol('token'); registry.register({}, 'symbol', sym); }
+             { const obj = {}; registry.register(obj, 'dropped-after-unregister', obj); globalThis.droppedRemoved = registry.unregister(obj); }",
+            "[unregisteredLive, unregisteredShared, again, errors.join(' '), cleaned.toSorted().join(' '), droppedRemoved].join('|')",
+        );
+        assert_eq!(
+            result,
+            "true|true|false|TypeError TypeError TypeError TypeError TypeError TypeError TypeError TypeError|symbol|true"
+        );
+    }
+
+    #[test]
+    fn finalization_registry_cleanup_runs_once() {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            ctx.eval::<(), _>(
+                "globalThis.cleaned = [];
+                 globalThis.registry = new FinalizationRegistry(held => cleaned.push(held));
+                 globalThis.target = {}; globalThis.token = {};
+                 registry.register(target, 'a', token);
+                 { const obj = {}; registry.register(obj, 'self', obj); }",
+            )
+            .unwrap()
+        });
+        let collect = || {
+            runtime.run_gc();
+            while runtime.execute_pending_job().unwrap() {}
+        };
+        collect();
+        context.with(|ctx| ctx.eval::<(), _>("token = undefined").unwrap());
+        collect();
+        context.with(|ctx| ctx.eval::<(), _>("target = undefined").unwrap());
+        collect();
+        collect();
+        let result = context.with(|ctx| ctx.eval::<String, _>("cleaned.join(' ')").unwrap());
+        assert_eq!(result, "self a");
+    }
+
     #[test]
     fn parser_lookahead_leaves_no_exception() {
         let runtime = Runtime::new().unwrap();
