@@ -51004,34 +51004,28 @@ static const JSCFunctionListEntry js_math_obj[] = {
 /* bun-wasm: process.env.TZ. wasi-libc's localtime_r knows only UTC, so the runtime installs
    the zone's UTC offsets (seconds east of UTC) from its zone data: offsets[0] applies before
    times[0], offsets[i + 1] from times[i] (seconds since 1970, ascending) on. Without a table,
-   local time is the libc's. */
-static int64_t *bunwasm_zone_times;
-static int32_t *bunwasm_zone_offsets;
+   local time is the libc's. One process has one local zone; the largest zone in the data has
+   365 transitions, so fixed storage holds any of them without an allocator. */
+#define BUNWASM_ZONE_MAX 1024
+static int64_t bunwasm_zone_times[BUNWASM_ZONE_MAX];
+static int32_t bunwasm_zone_offsets[BUNWASM_ZONE_MAX + 1];
 static size_t bunwasm_zone_count;
 static bool bunwasm_zone_set;
 
 bool JS_bunwasm_SetLocalTimeOffsets(const int64_t *times, const int32_t *offsets, size_t count)
 {
-    int64_t *new_times = NULL;
-    int32_t *new_offsets = NULL;
-    if (offsets) {
-        new_times = malloc(sizeof(int64_t) * (count ? count : 1));
-        new_offsets = malloc(sizeof(int32_t) * (count + 1));
-        if (!new_times || !new_offsets) {
-            free(new_times);
-            free(new_offsets);
-            return false;
-        }
-        if (count)
-            memcpy(new_times, times, sizeof(int64_t) * count);
-        memcpy(new_offsets, offsets, sizeof(int32_t) * (count + 1));
+    if (!offsets) {
+        bunwasm_zone_set = false;
+        bunwasm_zone_count = 0;
+        return true;
     }
-    free(bunwasm_zone_times);
-    free(bunwasm_zone_offsets);
-    bunwasm_zone_times = new_times;
-    bunwasm_zone_offsets = new_offsets;
-    bunwasm_zone_count = offsets ? count : 0;
-    bunwasm_zone_set = offsets != NULL;
+    if (count > BUNWASM_ZONE_MAX)
+        return false;
+    if (count)
+        memcpy(bunwasm_zone_times, times, sizeof(int64_t) * count);
+    memcpy(bunwasm_zone_offsets, offsets, sizeof(int32_t) * (count + 1));
+    bunwasm_zone_count = count;
+    bunwasm_zone_set = true;
     return true;
 }
 
