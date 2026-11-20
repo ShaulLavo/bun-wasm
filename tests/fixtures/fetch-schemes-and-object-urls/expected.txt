@@ -1,0 +1,11 @@
+host:port without a scheme: 200 GET /hello world
+object URL: 200 "" text/x-fixture true false hi
+revoked object URL TypeError ERR_INVALID_ARG_VALUE "Failed to resolve blob:<uuid>"
+unregistered object URL TypeError ERR_INVALID_ARG_VALUE "Failed to resolve blob:<uuid>"
+a scheme in front of a scheme TypeError ERR_INVALID_ARG_VALUE "protocol must be http:, https: or s3:"
+view-source: TypeError ERR_INVALID_ARG_VALUE "protocol must be http:, https: or s3:"
+unsupported protocol TypeError ERR_INVALID_ARG_VALUE "protocol must be http:, https: or s3:"
+unhandled rejection: true ERR_INVALID_ARG_VALUE protocol must be http:, https: or s3:
+FetchSession: [object FetchSession] function function
+session fetch: GET /session null TypeError ERR_INVALID_ARG_VALUE "protocol must be http:, https: or s3:"
+a directory body: EISDIR read

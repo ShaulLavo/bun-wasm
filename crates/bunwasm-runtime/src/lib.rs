@@ -35,6 +35,7 @@ pub mod import_requests;
 pub mod init;
 pub mod install;
 mod intl;
+mod mime_types;
 mod modules;
 mod natives;
 mod node_cipher;

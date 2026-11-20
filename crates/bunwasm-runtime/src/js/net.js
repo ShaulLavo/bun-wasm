@@ -110,8 +110,20 @@
     });
   }
 
+  // fetch(request, init) sends the request's own body unless init gives one, as Bun does: the
+  // request's body ends used, where new Request(request, init) would leave it a copy.
+  function requestToSend(input, init) {
+    if (!(input instanceof Request)) return new Request(input, init);
+    if (Object.keys(init).length === 0) return input;
+    if ("body" in init) return new Request(input, init);
+    const req = new Request(input, Object.assign({}, init, { body: null }));
+    for (const key of ["_body", "_stream", "_blob", "_bodyType", "_servedType"]) req[key] = input[key];
+    if (input._body !== null || input._blob) input._bodyUsed = true;
+    return req;
+  }
+
   async function fetch(input, init = {}) {
-    const req = input instanceof Request && Object.keys(init).length === 0 ? input : new Request(input, init);
+    const req = requestToSend(input, init);
     // A null init.signal detaches from the request's signal, as in Bun.
     const signal = "signal" in init ? init.signal : req.signal;
     if (signal && signal.aborted) throw signal.reason;

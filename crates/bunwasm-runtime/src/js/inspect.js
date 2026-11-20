@@ -916,7 +916,8 @@
     // body's backing. `view` comes from web.js (fetchInspectView). A comma follows each
     // field that has a line after it, except a Request's headers.
     printFetchBody(view) {
-      this.write(`${view.name} (${view.size}) {\n`);
+      // No size when it cannot be known, such as a Bun.file() body that cannot be read.
+      this.write(view.size === null ? `${view.name} {\n` : `${view.name} (${view.size}) {\n`);
       const prevQuote = this.quoteStrings;
       this.quoteStrings = true;
       this.indent += 1;

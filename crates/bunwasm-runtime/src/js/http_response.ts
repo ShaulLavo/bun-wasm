@@ -11,6 +11,8 @@
   type BodyResponse = Response & {
     _body: Uint8Array | null;
     _stream: ReadableStream<unknown> | null;
+    // A Bun.file() body: sent whole, with a Content-Length, like bytes in memory.
+    _blob: Blob | null;
     _bodyUsed: boolean;
     // What Bun.serve sends for a string or byte body without a Content-Type.
     _servedType: string | null;
@@ -23,7 +25,7 @@
   function headers(response: BodyResponse, keepAlive: boolean): Pair[] {
     const pairs = Array.from(response.headers).filter(([name]) => name !== "content-length" && name !== "transfer-encoding");
     const served = response._servedType;
-    if (served && response._body?.length && !response.headers.has("content-type")) pairs.push(["content-type", served]);
+    if (served && (response._body?.length || response._blob) && !response.headers.has("content-type")) pairs.push(["content-type", served]);
     if (!response.headers.has("date")) pairs.push(["date", new Date().toUTCString()]);
     if (!keepAlive) pairs.push(["connection", "close"]);
     return pairs;
@@ -93,7 +95,7 @@
   async function writeResponse(connection: Connection, response: BodyResponse, method: string, keepAlive: boolean, serialize: Serialize, reportError: (error: unknown) => void): Promise<boolean> {
     const pairs = headers(response, keepAlive);
     const bodyless = response.status === 204 || response.status === 304;
-    const source = response._body === null ? response._stream : null;
+    const source = response._body === null && !response._blob ? response._stream : null;
     if (source && method !== "HEAD" && !bodyless) return await stream(connection, response, source, pairs, serialize, reportError) && keepAlive;
     // An in-memory body is consumed even for HEAD, as in Bun: a stream its .body made
     // ends locked and disturbed, bodyUsed turns true, and its size is the Content-Length.

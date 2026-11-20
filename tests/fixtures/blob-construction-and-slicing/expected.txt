@@ -1,0 +1,40 @@
+parts string throws TypeError ERR_INVALID_ARG_TYPE "new Blob() expects an Array"
+parts number throws TypeError ERR_INVALID_ARG_TYPE "new Blob() expects an Array"
+parts plain object throws TypeError ERR_INVALID_ARG_TYPE "new Blob() expects an Array"
+parts Set throws TypeError ERR_INVALID_ARG_TYPE "new Blob() expects an Array"
+parts File with a string throws TypeError ERR_INVALID_ARG_TYPE "new Blob() expects an Array"
+parts Uint8Array Blob(2, "")
+parts ArrayBuffer Blob(3, "")
+parts DataView Blob(1, "")
+parts null Blob(0, "")
+parts no options Blob(1, "")
+Uint8Array text: 1234 1234
+type "Text/HTML" "text/html" slice: "" slice X/Y: "x/y" slice invalid: ""
+type "text/plain" "text/plain;charset=utf-8" slice: "text/plain;charset=utf-8" slice X/Y: "x/y" slice invalid: "text/plain;charset=utf-8"
+type "TEXT/PLAIN" "text/plain" slice: "" slice X/Y: "x/y" slice invalid: ""
+type "image/tiff" "image/tiff" slice: "image/tiff" slice X/Y: "x/y" slice invalid: "image/tiff"
+type "application/x-www-form-urlencoded" "application/x-www-form-urlencoded;charset=UTF-8" slice: "application/x-www-form-urlencoded;charset=UTF-8" slice X/Y: "x/y" slice invalid: "application/x-www-form-urlencoded;charset=UTF-8"
+type "application/x-not-registered" "application/x-not-registered" slice: "" slice X/Y: "x/y" slice invalid: ""
+type "ሴ" "" slice: "" slice X/Y: "x/y" slice invalid: ""
+type "a\tb" "" slice: "" slice X/Y: "x/y" slice invalid: ""
+type "" "" slice: "" slice X/Y: "x/y" slice invalid: ""
+type "application/json" "application/json;charset=utf-8" slice: "application/json;charset=utf-8" slice X/Y: "x/y" slice invalid: "application/json;charset=utf-8"
+Blob bounds: 6,6,0,6,6,0,0,3,6,6,6,6
+Blob slice texts: nF unF "text/plain;charset=utf-8" Blob(0, "")
+Bun.file bounds: 6,6,0,6,6,0,0,3,6,6,6,6
+Bun.file slice: Blob(3, "text/html") nF "text/plain;charset=utf-8"
+missing file slice: Blob(2, "application/octet-stream") Blob(0, "application/octet-stream")
+lastModified null 0
+lastModified "not a number" 0
+lastModified {} 0
+lastModified null 0
+lastModified "" 0
+lastModified false 0
+lastModified true 1
+lastModified "123" 123
+lastModified -1 -1
+lastModified 1.5 1.5
+lastModified valueOf throws: throws Error undefined "boom"
+Blob name: [null,"logo.svg","logo.svg",null] 0
+File name: b.txt 42 bar.txt
+UTF-16 text: hi 42 "" "h"
