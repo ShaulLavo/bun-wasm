@@ -1,0 +1,8 @@
+self token finalized: true
+separate token finalized: true
+symbol token finalized: true
+each cleanup ran once: true
+unregister a live self token: true false
+unregister a token used three times: true false
+unregister invalid tokens: TypeError TypeError TypeError TypeError TypeError
+register invalid tokens: TypeError TypeError TypeError accepted TypeError 3

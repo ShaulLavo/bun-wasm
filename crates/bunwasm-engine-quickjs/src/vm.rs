@@ -1360,6 +1360,154 @@ pub(crate) mod tests {
         assert_eq!(result, "|1,true,4");
     }
 
+    /// Runs `script`, collects garbage, drains the job queue (where cleanup
+    /// callbacks run), then returns `check`.
+    fn after_gc_and_jobs(script: &str, check: &str) -> String {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| ctx.eval::<(), _>(script).unwrap());
+        runtime.run_gc();
+        while runtime.execute_pending_job().unwrap() {}
+        context.with(|ctx| ctx.eval::<String, _>(check).unwrap())
+    }
+
+    #[test]
+    fn finalization_registry_holds_a_self_token_weakly() {
+        // zlib, TextDecoder, SQLite and stream wrappers register with
+        // `registry.register(obj, handle, obj)`; a strong token kept obj alive.
+        let result = after_gc_and_jobs(
+            "globalThis.cleaned = [];
+             globalThis.registry = new FinalizationRegistry(held => cleaned.push(held));
+             globalThis.refs = [];
+             for (let i = 0; i < 100; i++) { const obj = { i }; registry.register(obj, i, obj); refs.push(new WeakRef(obj)); }
+             globalThis.separate = [];
+             for (let i = 0; i < 100; i++) { const obj = {}; const token = {}; separate.push(token); registry.register(obj, 'separate', token); }",
+            "[cleaned.filter(v => typeof v === 'number').length, new Set(cleaned).size - 1,
+              cleaned.filter(v => v === 'separate').length, refs.filter(r => r.deref()).length].join(',')",
+        );
+        assert_eq!(result, "100,100,100,0");
+    }
+
+    #[test]
+    fn finalization_registry_unregister_tokens() {
+        let result = after_gc_and_jobs(
+            "globalThis.cleaned = [];
+             globalThis.registry = new FinalizationRegistry(held => cleaned.push(held));
+             globalThis.live = {};
+             registry.register(live, 'live', live);
+             globalThis.unregisteredLive = registry.unregister(live);
+             globalThis.shared = {};
+             globalThis.keep = [{}, {}, {}];
+             for (const obj of keep) registry.register(obj, 'shared', shared);
+             globalThis.unregisteredShared = registry.unregister(shared);
+             globalThis.again = registry.unregister(shared);
+             globalThis.errors = [1, 'token', undefined, null, Symbol.for('registered')].map(token => {
+               try { registry.unregister(token); return 'none'; } catch (e) { return e instanceof TypeError ? 'TypeError' : 'other'; }
+             }).concat([1, 'token', null].map(token => {
+               try { registry.register({}, 'bad', token); return 'none'; } catch (e) { return e instanceof TypeError ? 'TypeError' : 'other'; }
+             }));
+             // A token that dies first leaves its entry registered.
+             globalThis.target = {};
+             { const token = {}; registry.register(target, 'dead-token', token); }
+             { const sym = Symbol('token'); registry.register({}, 'symbol', sym); }
+             { const obj = {}; registry.register(obj, 'dropped-after-unregister', obj); globalThis.droppedRemoved = registry.unregister(obj); }
+             // Freeing the removed entry's held value frees the next entry
+             // while unregister walks the list.
+             globalThis.tokenA = {}; globalThis.tokenB = {};
+             (() => { const owned = {}; registry.register(live, { owned }, tokenA); registry.register(owned, 'owned', tokenB); })();
+             globalThis.chainRemoved = registry.unregister(tokenA) && !registry.unregister(tokenB);",
+            "[unregisteredLive, unregisteredShared, again, errors.join(' '), cleaned.toSorted().join(' '), droppedRemoved, chainRemoved].join('|')",
+        );
+        assert_eq!(
+            result,
+            "true|true|false|TypeError TypeError TypeError TypeError TypeError TypeError TypeError TypeError|owned symbol|true|true"
+        );
+    }
+
+    #[test]
+    fn finalization_registry_cleanup_runs_once() {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            ctx.eval::<(), _>(
+                "globalThis.cleaned = [];
+                 globalThis.registry = new FinalizationRegistry(held => cleaned.push(held));
+                 globalThis.target = {}; globalThis.token = {};
+                 registry.register(target, 'a', token);
+                 { const obj = {}; registry.register(obj, 'self', obj); }",
+            )
+            .unwrap()
+        });
+        let collect = || {
+            runtime.run_gc();
+            while runtime.execute_pending_job().unwrap() {}
+        };
+        collect();
+        context.with(|ctx| ctx.eval::<(), _>("token = undefined").unwrap());
+        collect();
+        context.with(|ctx| ctx.eval::<(), _>("target = undefined").unwrap());
+        collect();
+        collect();
+        let result = context.with(|ctx| ctx.eval::<String, _>("cleaned.join(' ')").unwrap());
+        assert_eq!(result, "self a");
+    }
+
+    #[test]
+    fn weak_lists_unlink_records_in_any_order() {
+        // One key carries WeakMap, WeakRef, target and token records; removing
+        // them from the middle of its weak list must keep the list intact.
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        let collect = || {
+            runtime.run_gc();
+            while runtime.execute_pending_job().unwrap() {}
+        };
+        context.with(|ctx| {
+            ctx.eval::<(), _>(
+                "globalThis.cleaned = [];
+                 globalThis.registry = new FinalizationRegistry(held => cleaned.push(held));
+                 globalThis.map = new WeakMap();
+                 globalThis.key = {};
+                 globalThis.refs = [];
+                 globalThis.targets = [];
+                 for (let i = 0; i < 300; i++) {
+                   const target = { i };
+                   targets.push(target);
+                   registry.register(target, i, key);
+                   if (i % 3 === 0) registry.register(key, 'key');
+                   if (i % 5 === 0) refs.push(new WeakRef(key));
+                   if (i % 7 === 0) map.set(key, i);
+                 }
+                 // Free every other target (token records from the middle).
+                 for (let i = 0; i < 300; i += 2) targets[i] = null;
+                 refs.length = 30;",
+            )
+            .unwrap()
+        });
+        collect();
+        let middle = context.with(|ctx| {
+            ctx.eval::<String, _>(
+                "[cleaned.length, map.get(key), refs.every(r => r.deref() === key), registry.unregister(key), registry.unregister(key)].join(',')",
+            )
+            .unwrap()
+        });
+        assert_eq!(middle, "150,294,true,true,false");
+        context.with(|ctx| {
+            ctx.eval::<(), _>("cleaned.length = 0; registry.register(key, 'key'); targets = null; key = undefined;")
+                .unwrap()
+        });
+        collect();
+        collect();
+        let end = context.with(|ctx| {
+            ctx.eval::<String, _>(
+                "[cleaned.filter(v => v === 'key').length, cleaned.length, refs.filter(r => r.deref()).length].join(',')",
+            )
+            .unwrap()
+        });
+        // 100 earlier registrations of key itself plus the one just added.
+        assert_eq!(end, "101,101,0");
+    }
+
     #[test]
     fn weak_map_finalizer_survives_values_that_free_later_keys() {
         // Freeing a record's value frees the key of a later record, whose

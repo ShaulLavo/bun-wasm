@@ -1,0 +1,1 @@
+bun-wasm only: liveCipherCount from bun:internal-for-testing counts the runtime's BoringSSL cipher contexts, which native Bun does not expose.

@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/node-crypto-cipher-finalization",
+  "engines": ["quickjs", "jsc", "browser"]
+}

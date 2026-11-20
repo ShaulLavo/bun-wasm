@@ -1,0 +1,5 @@
+dropped ciphers live 1000
+dropped ciphers finalized true
+live while open 1
+live after final 0
+live after a failed final 0

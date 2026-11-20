@@ -1,0 +1,125 @@
+aes-128-ecb sp800-38a true true
+aes-128-cbc sp800-38a true true
+aes-256-cbc sp800-38a true true
+aes-128-ctr sp800-38a true true
+aes-256-ctr sp800-38a true true
+aes-128-ofb sp800-38a true true
+aes-128-cfb sp800-38a true true
+cbc padded dfb6b7e029be3ad6b090349ed75931f28f991b52ca9a89f5bf6f82fa1c87aa2d624bd77701dcddfcceaf3add7d66ce06ced17aebca4cb35feffc4b8b9008b3c4
+cbc unpadded Out of the mountain of despair, a stone of hope.
+cbc chunks 0,16,32,16 true
+cbc base64 37a34Cm+OtawkDSe11kx8o+ZG1LKmon1v2+C+hyHqi1iS9d3Adzd/M6vOt19Zs4GztF668pMs1/v/EuLkAizxA==
+cbc base64 back Out of the mountain of despair, a stone of hope.
+ctr hex parts 8deebc 729a6378b5 
+cbc no padding partial block throws Error ERR_OSSL_DATA_NOT_MULTIPLE_OF_BLOCK_LENGTH error:1e00006a:Cipher functions:OPENSSL_internal:DATA_NOT_MULTIPLE_OF_BLOCK_LENGTH Cipher functions DATA_NOT_MULTIPLE_OF_BLOCK_LENGTH
+cbc wrong key throws Error ERR_OSSL_BAD_DECRYPT error:1e000065:Cipher functions:OPENSSL_internal:BAD_DECRYPT Cipher functions BAD_DECRYPT
+cbc truncated throws Error ERR_OSSL_WRONG_FINAL_BLOCK_LENGTH error:1e00007b:Cipher functions:OPENSSL_internal:WRONG_FINAL_BLOCK_LENGTH Cipher functions WRONG_FINAL_BLOCK_LENGTH
+cbc empty Buffer c84af0b613435d5d9182801a9bd9320b
+ecb dataview Buffer 7df76b0c1ab899b33e42f047b91b546fa254be88e037ddd9d79fb6411c3f9df8
+gcm tc2 true true
+gcm tc4 true true
+gcm tc4 open true
+gcm tc4 forged update 60
+gcm tc4 forged final throws Error undefined Unsupported state or unable to authenticate data  
+gcm without tag final throws Error undefined Unsupported state or unable to authenticate data  
+gcm tc6 true true
+gcm authTagLength 4 Buffer 581ddf6c
+gcm authTagLength 8 Buffer 581ddf6c148f04b0
+gcm authTagLength 12 Buffer 581ddf6c148f04b0d3f09e6a
+gcm authTagLength 13 Buffer 581ddf6c148f04b0d3f09e6a2c
+gcm authTagLength 16 Buffer 581ddf6c148f04b0d3f09e6a2ce408c8
+gcm authTagLength 3 throws TypeError ERR_CRYPTO_INVALID_AUTH_TAG Invalid authentication tag length: 3  
+gcm authTagLength 17 throws TypeError ERR_CRYPTO_INVALID_AUTH_TAG Invalid authentication tag length: 17  
+gcm iv 1 Buffer 313522d802e207c89e83306999b7e4ae46fb918e2a
+gcm iv 8 Buffer 18826005dfb3f26de8640c373aa7b830585e64c3e3
+gcm iv 16 Buffer 716000b5107d3f40c299ced8dfc2d0707c45a50193
+gcm iv 64 Buffer 7772c50d8c06319ba025af4611b973e52c7686fe2a
+gcm iv 128 Buffer 8e25b32faeb9b4b0d522ab6288c170cad50cf33dd1
+gcm iv 129 throws TypeError ERR_CRYPTO_INVALID_IV Invalid initialization vector  
+gcm iv 0 throws TypeError ERR_CRYPTO_INVALID_IV Invalid initialization vector  
+gcm getAuthTag before final throws Error ERR_CRYPTO_INVALID_STATE Invalid state for operation getAuthTag  
+gcm setAAD string true
+gcm setAAD plaintextLength throws TypeError ERR_INVALID_ARG_VALUE The property 'options.plaintextLength' is invalid. Received -1  
+gcm setAAD bad encoding option throws TypeError ERR_INVALID_ARG_TYPE The "options.encoding" property must be of type string. Received type number (1)  
+gcm setAAD after final throws Error ERR_CRYPTO_INVALID_STATE Invalid state for operation setAAD  
+gcm update after final throws Error undefined Trying to add data in unsupported state  
+gcm final twice throws Error ERR_CRYPTO_INVALID_STATE Invalid state  
+gcm setAutoPadding after final throws Error ERR_CRYPTO_INVALID_STATE Invalid state for operation setAutoPadding  
+gcm cipher has setAuthTag false
+gcm setAuthTag short throws TypeError ERR_CRYPTO_INVALID_AUTH_TAG Invalid authentication tag length: 8  
+gcm setAuthTag hex true
+gcm setAuthTag twice throws Error ERR_CRYPTO_INVALID_STATE Invalid state for operation setAuthTag  
+gcm decipher has getAuthTag false
+gcm setAAD after update throws Error ERR_CRYPTO_INVALID_STATE Invalid state for operation setAAD  
+cipher des-ede3-cbc 55ae4eb94bb9c5893f8c25adfb7c8ff29b86fff8547f8598f8e2782fb3c693f501243f7ecdde6b21a1b1ee65e74e4e0ae28fd83bd708fc28 true
+cipher des-ede3 a0827b97b6645628d5ea4ed15c0dfb099b0ebcbffbbdf518444505245fbc4eb74579373020e41fc8e35e00aa86d108fcb21c053f63aef2b8 true
+cipher des-ede-cbc 55ae4eb94bb9c5893f8c25adfb7c8ff29b86fff8547f8598f8e2782fb3c693f501243f7ecdde6b21a1b1ee65e74e4e0ae28fd83bd708fc28 true
+cipher des-cbc 55ae4eb94bb9c5893f8c25adfb7c8ff29b86fff8547f8598f8e2782fb3c693f501243f7ecdde6b21a1b1ee65e74e4e0ae28fd83bd708fc28 true
+cipher des-ecb a0827b97b6645628d5ea4ed15c0dfb099b0ebcbffbbdf518444505245fbc4eb74579373020e41fc8e35e00aa86d108fcb21c053f63aef2b8 true
+cipher bf-cbc f2c6fa14faa71af5730494a292cc8bde32affa23bb1bfca4536566dd04a864fdfc8990842b7c6e8e80b897d95347622eceefdd74eb1d7a6e true
+cipher bf-ecb throws TypeError ERR_CRYPTO_INVALID_IV Invalid initialization vector  
+cipher bf-cfb 34e77be29f9408e3f4333fe3d6be734832c19e49e1b5f21fa5e340361e48ef6a8809d96a65a3441cc1a1b0f69c74c581 true
+cipher rc4 3ed765f62f2dca05a57ec2c0560af112574dcc6fdf92ab3ed8bf70721e5b98173693983d5f85214e4ffea7d67c93c5cc true
+cipher rc2-cbc e577c5a242137d8ae4487439bec8addaa78aa7a91b140cf0a5940bba02c93d9026a4052e0d2ce9494bb0bdd73b9cb466c9fefa8d457ef554 true
+cipher aes-192-ecb 1cbf8394ccf9c30888dbdc20dd0aa86524c244cec4c8fac1903123d6e686aafe3194a5c97aa841dadd6ba3891d388a827f473d13572d7cc0265ca5d961d38a6e true
+cipher aes-256-cfb b5c0a089e0d8d381ab601b4004f987eb2f3cd9ca03a2817b9065b45a22726fd1caa88edaf1f84a3bdb037b66c8aa728e true
+cipher aes256 4555a541b8a4ded47c6f78519e85e5ca674599a9db4494fde455f3edd1801be57f983d884a7b89648d838cd9daa5d439f90ed68242ea765decb3806207bf6764 true
+cipher AES-128-CBC c85ac4abb2bb738bd9a22813aec9a81fc9a80c128227d15f415013b1a900dfac5cfd00ef33c25b77a1bc559bba85e333bfec74bf05dcb265c144dbd5c22e4a82 true
+cipher 3des 55ae4eb94bb9c5893f8c25adfb7c8ff29b86fff8547f8598f8e2782fb3c693f501243f7ecdde6b21a1b1ee65e74e4e0ae28fd83bd708fc28 true
+bf-cbc variable key Buffer eb0e8d38ddbff0cc
+rc4 variable key Buffer 676a6d
+unknown cipher throws Error ERR_CRYPTO_UNKNOWN_CIPHER Unknown cipher  
+cipher not string throws TypeError ERR_INVALID_ARG_TYPE The "cipher" argument must be of type string. Received type number (1)  
+key wrong length throws RangeError ERR_CRYPTO_INVALID_KEYLEN Invalid key length  
+key wrong type throws TypeError ERR_INVALID_ARG_TYPE The "key" argument must be of type string or an instance of ArrayBuffer, Buffer, TypedArray, DataView, KeyObject, or CryptoKey. Received type number (5)  
+key string Buffer 28f8b322c9b9d956d86c90e292a87fa5
+key hex encoding option Buffer b02a154cffd6aedd56e1674f64edf150
+key KeyObject Buffer 81a64f2e8e604c0a02795af502150dd5
+key private KeyObject throws TypeError ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE Invalid key object type private, expected secret.  
+iv wrong length throws TypeError ERR_CRYPTO_INVALID_IV Invalid initialization vector  
+iv missing throws TypeError ERR_INVALID_ARG_TYPE The "iv" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received undefined  
+iv null for cbc throws TypeError ERR_CRYPTO_INVALID_IV Invalid initialization vector  
+iv wrong type throws TypeError ERR_INVALID_ARG_TYPE The "iv" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (5)  
+iv string 0
+iv for ecb throws TypeError ERR_CRYPTO_INVALID_IV Invalid initialization vector  
+empty iv for ecb 0
+authTagLength negative throws TypeError ERR_INVALID_ARG_VALUE The property 'options.authTagLength' is invalid. Received -1  
+authTagLength fraction throws TypeError ERR_INVALID_ARG_VALUE The property 'options.authTagLength' is invalid. Received 4.5  
+authTagLength on cbc 0
+options encoding not string throws TypeError ERR_INVALID_ARG_TYPE The "options.encoding" property must be of type string. Received type number (5)  
+update array throws TypeError ERR_INVALID_ARG_TYPE The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Array  
+update number throws TypeError ERR_INVALID_ARG_TYPE The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (5)  
+setAAD on cbc throws Error ERR_CRYPTO_INVALID_STATE Invalid state for operation setAAD  
+setAAD on ctr decipher throws Error ERR_CRYPTO_INVALID_STATE Invalid state for operation setAAD  
+getAuthTag on cbc throws Error ERR_CRYPTO_INVALID_STATE Invalid state for operation getAuthTag  
+setAutoPadding chain true
+update encoding change throws Error ERR_INTERNAL_ASSERTION Cannot change encoding  
+update unknown output encoding throws TypeError ERR_UNKNOWN_ENCODING Unknown encoding: nope  
+names update final setAutoPadding getAuthTag setAAD _transform setAuthTag
+instances true true function createCipheriv createDecipheriv 4
+call without new true
+getCiphers ["aes-128-cbc","aes-128-cfb","aes-128-ctr","aes-128-ecb","aes-128-gcm","aes-128-ofb","aes-192-cbc","aes-192-ctr","aes-192-ecb","aes-192-gcm","aes-192-ofb","aes-256-cbc","aes-256-cfb","aes-256-ctr","aes-256-ecb","aes-256-gcm","aes-256-ofb","bf-cbc","bf-cfb","bf-ecb","des-cbc","des-ecb","des-ede","des-ede-cbc","des-ede3","des-ede3-cbc","rc2-cbc","rc4"]
+getCipherInfo aes-128-cbc {"mode":"cbc","name":"aes-128-cbc","nid":419,"blockSize":16,"ivLength":16,"keyLength":16}
+getCipherInfo aes-256-gcm {"mode":"gcm","name":"id-aes256-gcm","nid":901,"blockSize":1,"ivLength":12,"keyLength":32}
+getCipherInfo AES-192-CTR {"mode":"ctr","name":"aes-192-ctr","nid":905,"blockSize":1,"ivLength":16,"keyLength":24}
+getCipherInfo aes-128-ecb {"mode":"ecb","name":"aes-128-ecb","nid":418,"blockSize":16,"keyLength":16}
+getCipherInfo rc4 {"mode":"stream","name":"rc4","nid":5,"keyLength":16}
+getCipherInfo bf-cbc {"mode":"cbc","name":"bf-cbc","nid":91,"blockSize":8,"ivLength":8,"keyLength":16}
+getCipherInfo des-ede3 {"mode":"ecb","name":"des-ede3","nid":33,"blockSize":8,"keyLength":24}
+getCipherInfo aes-128-cfb {"mode":"cfb","name":"aes-128-cfb","nid":421,"blockSize":1,"ivLength":16,"keyLength":16}
+getCipherInfo aes-128-ofb {"mode":"ofb","name":"aes-128-ofb","nid":420,"blockSize":1,"ivLength":16,"keyLength":16}
+getCipherInfo aes256 {"mode":"cbc","name":"aes-256-cbc","nid":427,"blockSize":16,"ivLength":16,"keyLength":32}
+getCipherInfo chacha20-poly1305 undefined
+getCipherInfo nope undefined
+getCipherInfo nid {"mode":"cbc","name":"aes-128-cbc","nid":419,"blockSize":16,"ivLength":16,"keyLength":16}
+getCipherInfo double nid {"mode":"cbc","name":"aes-128-cbc","nid":419,"blockSize":16,"ivLength":16,"keyLength":16}
+getCipherInfo keyLength {"mode":"cbc","name":"aes-128-cbc","nid":419,"blockSize":16,"ivLength":16,"keyLength":16}
+getCipherInfo bad keyLength undefined
+getCipherInfo rc4 keyLength {"mode":"stream","name":"rc4","nid":5,"keyLength":9}
+getCipherInfo gcm ivLength {"mode":"gcm","name":"id-aes128-gcm","nid":895,"blockSize":1,"ivLength":7,"keyLength":16}
+getCipherInfo cbc ivLength undefined
+getCipherInfo bad arg throws TypeError ERR_INVALID_ARG_TYPE The "nameOrNid" argument must be of type string or number. Received an instance of Object  
+getCipherInfo bad options throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received type number (5)  
+getCipherInfo string keyLength throws TypeError ERR_INVALID_ARG_TYPE The "keyLength" argument must be of type number. Received type string ('16')  
+stream true prefinish,end,finish
+stream error true
