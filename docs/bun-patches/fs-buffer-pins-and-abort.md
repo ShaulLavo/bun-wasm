@@ -31,8 +31,9 @@ its result, so the buffer is detachable again by the time the callback or
 promise reaction runs. The replacement methods are installed when the module
 first loads, which is the first callback or promise fs call given bytes. A call
 whose path and data hold no bytes allocates nothing for pins and runs the same
-delivery closure as before; on QuickJS, 100,000 promise `readFile` and callback
-`write` calls cost the same as on main (see the PR).
+delivery closure as before. On QuickJS, 100,000 promise `readFile` and callback
+`write` calls take about 2% more CPU than on main, the same difference a control
+loop over unchanged code shows between the two builds.
 
 Bun reads a byte path when the call starts (`PathLike::from_js` copies a
 resizable buffer at once). `readFileSync`, `writeFileSync` and `mkdirSync` now
