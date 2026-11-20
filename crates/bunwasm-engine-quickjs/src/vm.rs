@@ -126,7 +126,8 @@ unsafe extern "C" {
     fn JS_bunwasm_IsModuleNamespace(value: qjs::JSValue) -> bool;
     /// Added by bun-wasm: local time follows these UTC offsets (`offsets` holds `count + 1`
     /// entries), or the libc's again when `offsets` is null. False when memory ran out.
-    fn JS_bunwasm_SetLocalTimeOffsets(times: *const i64, offsets: *const i32, count: usize) -> bool;
+    fn JS_bunwasm_SetLocalTimeOffsets(times: *const i64, offsets: *const i32, count: usize)
+    -> bool;
 }
 
 /// Erase a value's lifetime (all values belong to the one context).
@@ -683,7 +684,9 @@ impl Engine for QuickJs {
     fn set_local_time_offsets(&self, zone: Option<(&[i64], &[i32])>) -> bool {
         let Some((times, offsets)) = zone else {
             // SAFETY: null offsets clears the table.
-            return unsafe { JS_bunwasm_SetLocalTimeOffsets(std::ptr::null(), std::ptr::null(), 0) };
+            return unsafe {
+                JS_bunwasm_SetLocalTimeOffsets(std::ptr::null(), std::ptr::null(), 0)
+            };
         };
         if offsets.len() != times.len() + 1 {
             return false;

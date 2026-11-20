@@ -236,13 +236,23 @@ pub(crate) fn value_natives<E: Engine>(
 /// `[offset, time, offset, time, offset, ...]` (seconds) from time_zone.ts, as the engine's
 /// times and offsets; `None` for anything that is not such an array.
 fn local_time_offsets(value: Val) -> Option<(Vec<i64>, Vec<i32>)> {
-    let Val::Array(items) = value else { return None };
-    let numbers: Vec<f64> = items.iter().map(|item| if let Val::Num(n) = item { *n } else { f64::NAN }).collect();
+    let Val::Array(items) = value else {
+        return None;
+    };
+    let numbers: Vec<f64> = items
+        .iter()
+        .map(|item| if let Val::Num(n) = item { *n } else { f64::NAN })
+        .collect();
     if numbers.is_empty() || numbers.len() % 2 == 0 || numbers.iter().any(|n| !n.is_finite()) {
         return None;
     }
     let offsets = numbers.iter().step_by(2).map(|n| *n as i32).collect();
-    let times = numbers.iter().skip(1).step_by(2).map(|n| *n as i64).collect();
+    let times = numbers
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .map(|n| *n as i64)
+        .collect();
     Some((times, offsets))
 }
 
