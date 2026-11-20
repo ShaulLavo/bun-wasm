@@ -1,12 +1,15 @@
 import type { Transport } from "./transport";
 import type { Admission } from "./scope";
 import { withScoped, withAdmission } from "./scope-fixture";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { frameworks } from "./catalog";
 import { execute } from "./execute";
 import { namedAngularDiagnostic, buildAngularDiagnosticSource } from "./angular-diagnostic";
 import { diagnosticFilesystem, diagnosticPath, type DiagnosticFixture } from "./angular-diagnostic-fixture";
 import { withPlayground } from "./test-fixture";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const path = diagnosticPath;
 const reference = `See "${path}" for further details.`;

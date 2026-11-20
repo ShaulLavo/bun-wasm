@@ -1,5 +1,5 @@
 import { createContext, runInContext, type Context } from "node:vm";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { completeObservations, observeProductTraffic, productObservations, waitForPreviewReady, type ProductPage } from "./product-browser";
 import type { ProductCheck } from "./product-types";
 import { fullstackApps } from "./product-fullstack";
@@ -9,6 +9,9 @@ import { HarnessCleanupError } from "./cleanup";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 interface FixtureOptions {
   updateMessage: string | null;

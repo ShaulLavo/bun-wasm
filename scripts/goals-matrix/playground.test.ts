@@ -1,6 +1,6 @@
 import { admit, awaitWithin, type Admission } from "./scope";
 import { withScoped, withAdmission } from "./scope-fixture";
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
 import { createContext, runInContext } from "node:vm";
 import { command, foreground, ObservationTimeout, start, stopServer, terminal, until } from "./playground";
 import { execute } from "./execute";
@@ -8,6 +8,9 @@ import { frameworks } from "./catalog";
 import type { Transport } from "./transport";
 import { createSafariTransport } from "./safari-transport";
 import { withPlayground } from "./test-fixture";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("an expired observation bound does not dispatch another operation", async () => {
   let dispatched = 0;

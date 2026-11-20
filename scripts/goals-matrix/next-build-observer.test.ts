@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { frameworks } from "./catalog";
 import { execute } from "./execute";
 import { options } from "./run";
@@ -14,6 +14,9 @@ import { nextBuildFilesystem } from "./next-build-fixture";
 import { nextBuildFiles, parseBuildFile, compareBuildFiles, type FileRead } from "./next-build-files";
 import { NextBuildObserver, buildNextBuildReaderSource, closeNextBuildObserver, type NextBuildObservation } from "./next-build-observer";
 import type { NextBuildCapture } from "./next-build-browser";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const next = frameworks.find(item => item.id === "next");
 if (!next) throw new Error("Missing Next fixture");

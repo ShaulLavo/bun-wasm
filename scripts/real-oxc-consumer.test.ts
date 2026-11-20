@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,9 @@ import { quickjsPair, sharedQuickjsPair } from "../tests/package/quickjs-plan-fi
 import { command, observe, oxcFixture, oxcFixtureFiles, oxcOutputs, oxcTreeVariable, requireOxcEnvironment, requireOxcInputs, requireOxcTree } from "./real-oxc-consumer";
 import { checkCode, checkMinified, checkParser, exerciseAsyncConsumer, exerciseConsumer, oxcAsyncConsumers, oxcConsumers } from "../tests/real-oxc-consumer/api";
 import { selectChecks } from "./test-checks";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function scratch(check: (directory: string) => void): void {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-oxc-selection-"));

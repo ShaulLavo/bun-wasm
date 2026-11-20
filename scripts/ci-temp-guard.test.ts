@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { auditTemporaryPaths, ciTemporarySources, temporaryPathFailures, webTemporarySources } from "./ci-temp-guard";
 import { automaticChecks, discoverChecks, selectChecks } from "./test-checks";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = join(import.meta.dir, "..");
 const failures = (text: string) => temporaryPathFailures("control.ts", text);
