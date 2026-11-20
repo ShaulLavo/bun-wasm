@@ -24,7 +24,19 @@ Native Bun implements these in C++ over BoringSSL. The adapters follow Bun at re
 - SHA3-256, SHA3-384 and SHA3-512 in digest, HMAC (whose default length is the hash's
   block size), RSA, ECDSA, PBKDF2, HKDF and node:crypto's `hkdf`, with no JWK `alg`
   because JOSE defines none.
-- CryptoKey structured cloning: a clone is a key over the same material.
+- CryptoKey structured cloning: a clone is a key over the same material. A key sent to a
+  Worker with `postMessage` (or back) travels in the worker message graph as a
+  `["crypto-key", record]` node: `crypto.js` `serializeKey` writes the algorithm, type,
+  extractability, usages and key material as JSON, and the receiving realm's
+  `deserializeKey` checks every field and rebuilds a usable key, as Bun's
+  `SerializedScriptValue` does for `CryptoKey`. A record that does not check out fails
+  with `DataCloneError`. An RSA key's `algorithm` lists `name`, `modulusLength`,
+  `publicExponent` and `hash` in Bun's `RsaHashedKeyAlgorithm` order.
+- Bun's `src/jsc/bindings/node/crypto/JSCipher.cpp` for `publicEncrypt` and
+  `privateDecrypt` options: `padding`, `oaepHash`, `encoding` and `oaepLabel` are read
+  and the label copied before the key is parsed, so an option getter that detaches the
+  label's buffer while the key is read does not change the label, and a string label
+  uses `encoding`.
 - Node's `lib/internal/crypto/random.js` (through Bun's `src/js/node/crypto.ts`) for
   `randomFill` and `randomFillSync`: offset and size in elements of the typed array,
   then the `ERR_OUT_OF_RANGE` bounds; `crypto.hkdf` with a keylen of 0 failing with a
@@ -58,19 +70,22 @@ Differences from native Bun, all deliberate:
 
 - PKCS#8 import of ML-DSA and ML-KEM takes the seed form Bun exports; the expanded-key
   and "both" forms report "Invalid keyData".
-- Keys do not cross to a Worker through `postMessage`: each worker has its own key
-  records. Same-thread `structuredClone` works.
+- On the Browser engine WebCrypto belongs to the host page, so keys cross workers by the
+  browser's own structured clone; the `crypto-key` node covers the runtime's provider.
+- `publicEncrypt` copies the options object while parsing the key, which calls a
+  `passphrase` getter that Bun does not call when the key is a `KeyObject`.
 
 The `webcrypto-chacha20-poly1305` (RFC 8439 section 2.8.2 vector), `webcrypto-ml-kem-ml-dsa`
-(fixed seeds), `webcrypto-sha3` (FIPS 202 vectors), `node-crypto-random-fill` and `node-crypto-spkac`
-fixtures are original test code with native Bun 1.4.4's output. The SPKACs come from
+(fixed seeds), `webcrypto-sha3` (FIPS 202 vectors), `webcrypto-key-postmessage`,
+`node-crypto-random-fill` and `node-crypto-spkac` fixtures are original test code with native Bun 1.4.4's output. The SPKACs come from
 `openssl spkac` with a synthetic key.
 
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`crates/bunwasm-runtime/src/js/crypto.js`, `structured_clone.ts`, `builtins.js`, `crypto_keys.ts`, `node_dh.ts`, `web.js`](#webcrypto-chacha20-poly1305-ml-kem-ml-dsa-and-sha-3-node-randomfill-bounds) | Adapted implementation | Bun's WebCrypto algorithm checks and messages, CryptoKey cloning and Node's randomFill bounds in the runtime adapters. |
+| [`crates/bunwasm-runtime/src/js/crypto.js`, `structured_clone.ts`, `builtins.js`, `crypto_keys.ts`, `node_dh.ts`, `web.js`](#webcrypto-chacha20-poly1305-ml-kem-ml-dsa-and-sha-3-node-randomfill-bounds) | Adapted implementation | Bun's WebCrypto algorithm checks and messages, CryptoKey cloning, Node's randomFill bounds and JSCipher's option read order in the runtime adapters. |
+| [`crates/bunwasm-runtime/src/js/worker_codec.ts` `crypto-key` node, `worker_protocol.d.ts`](#webcrypto-chacha20-poly1305-ml-kem-ml-dsa-and-sha-3-node-randomfill-bounds) | Original adapter | CryptoKey records in the worker message graph. |
 | [`crates/bunwasm-crypto-sys/c/pqc.c`, `c/spkac.c`, `src/pqc.rs`, `crates/bunwasm-runtime/src/crypto_pqc.rs`](#webcrypto-chacha20-poly1305-ml-kem-ml-dsa-and-sha-3-node-randomfill-bounds) | Original adapter | BoringSSL ML-KEM, ML-DSA and ChaCha20-Poly1305 bindings and their key encodings. |
 
 [Ledger scope and pinned revisions](scope.md).
