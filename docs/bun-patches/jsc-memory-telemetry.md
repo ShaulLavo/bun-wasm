@@ -30,10 +30,14 @@ The adapters reference `heap/{Heap.h,Heap.cpp,MarkedSpace.cpp}`,
 
 ## Heap accounting
 
-`process.memoryUsage()` returns JSC `Heap::size()` as `heapUsed`,
+`process.memoryUsage()` returns JSC `Heap::sizeAfterLastCollection()` as
+`heapUsed` (`Heap::capacity()` before the first collection, as Bun does),
 `Heap::capacity()` as `heapTotal`, `Heap::extraMemorySize()` as `external`,
-and `Heap::arrayBufferSize()` as `arrayBuffers`. `rss` is null. These values
-never use Wasm memory capacity. The adapter does not collect garbage.
+and `Heap::arrayBufferSize()` as `arrayBuffers`. The engine record's `rss` is
+null; `process.ts` reports the linear memory capacity there
+([Process memory figures](process-memory-report.md)). The heap values never use
+Wasm memory capacity. The adapter does not collect garbage. The telemetry
+snapshot keeps `Heap::size()` as its own `heapUsed`.
 
 These are JSC's GC-accounted estimates. `size()` counts marked cells and extra
 memory. It does not count every newly allocated, unmarked cell.

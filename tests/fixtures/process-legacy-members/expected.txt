@@ -1,0 +1,34 @@
+undefined stubs true
+array stubs true,true,true
+empty arrays [],[]
+flags set true true true true
+flags has true,true,true,true,true,true,false,false
+flags immutable false false true
+flags iterate true --conditions
+config true number true string true
+binding "async_wrap" process.binding("async_wrap") is not implemented in Bun.
+binding "buffer" object
+binding "config" object
+binding "constants" object
+binding "crypto" process.binding("crypto") is not implemented in Bun.
+binding "crypto/x509" object
+binding "fs" object
+binding "http_parser" object
+binding "natives" object
+binding "stream_wrap" process.binding("stream_wrap") is not implemented in Bun.
+binding "tty_wrap" object
+binding "util" object
+binding "uv" object
+binding "v8" process.binding("v8") is not implemented in Bun.
+binding "nope" No such module: nope
+binding "" No such module: 
+binding 10 No such module: 10
+binding null No such module: null
+binding symbol TypeError
+buffer binding number function true
+process.binding('buffer').compare is not implemented in Bun.
+config binding ["isDebugBuild","hasOpenSSL","fipsMode","hasIntl","hasTracing","hasNodeOptions","hasInspector","noBrowserGlobals","bits"]
+http methods 35 47 true true
+natives string undefined
+util types function
+fs stat values 36 18

@@ -256,6 +256,17 @@ pub trait Engine: Sized + 'static {
     fn object_type_counts(&self) -> Option<Self::Value> {
         None
     }
+    /// The heap size the most recent collection measured, where the engine keeps one apart
+    /// from its memory record (`Bun.gc()`'s result).
+    fn heap_size_after_collection(&self) -> Option<f64> {
+        None
+    }
+    /// Make `zone` (a string; empty restores the host's zone) the zone of local time and
+    /// `Intl`, for `process.env.TZ`. `None` when the engine has no settable zone; otherwise
+    /// whether the zone applied.
+    fn set_time_zone(&self, _zone: &Self::Value) -> Option<bool> {
+        None
+    }
 }
 
 #[cfg(test)]

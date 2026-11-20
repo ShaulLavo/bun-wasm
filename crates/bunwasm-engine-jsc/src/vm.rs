@@ -912,10 +912,17 @@ impl Engine for Jsc {
 
     fn memory_usage(&self) -> Val {
         let snapshot = unsafe { *jsc_memory_telemetry_refresh() };
+        // Bun's Process_functionMemoryUsage: the size measured at the end of the most recent
+        // collection, eden or full, since Heap::size() walks every block. Before the first
+        // collection nothing has been freed, so the whole heap counts as used.
+        let heap_used = match snapshot.heap_after_last_collection {
+            0 | u64::MAX => snapshot.heap_total,
+            measured => measured,
+        };
         crate::engine::Record::new()
             .set("rss", Val::Null)
             .set("heapTotal", memory_counter(snapshot.heap_total))
-            .set("heapUsed", memory_counter(snapshot.heap_used))
+            .set("heapUsed", memory_counter(heap_used))
             .set("external", memory_counter(snapshot.extra_memory))
             .set("arrayBuffers", memory_counter(snapshot.array_buffer_bytes))
             .set("wasmCapacity", crate::engine::wasm_capacity())
@@ -925,6 +932,16 @@ impl Engine for Jsc {
     fn object_type_counts(&self) -> Option<JsVal> {
         // SAFETY: valid context; the helper returns a new object.
         Some(JsVal::new(unsafe { bunjsc_object_type_counts(ctx()) }))
+    }
+
+    fn heap_size_after_collection(&self) -> Option<f64> {
+        // SAFETY: valid context.
+        Some(unsafe { bunjsc_heap_size_after_collection(ctx()) } as f64)
+    }
+
+    fn set_time_zone(&self, zone: &JsVal) -> Option<bool> {
+        // SAFETY: valid context and value.
+        Some(unsafe { bunjsc_set_time_zone(ctx(), zone.raw()) })
     }
 }
 

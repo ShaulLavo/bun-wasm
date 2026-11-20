@@ -1,0 +1,11 @@
+memoryUsage keys ["rss","heapTotal","heapUsed","external","arrayBuffers"]
+memoryUsage numbers true
+rss number true true
+bun:jsc keys ["current","peak","currentCommit","peakCommit","pageFaults"]
+current agrees true true
+peak agrees true true true
+report sections true
+report header 3 JavaScript API GetReport true
+report message Error [ERR_SYNTHETIC]: JavaScript Callstack ERR_SYNTHETIC
+report serializes string
+report frames viaFunction true

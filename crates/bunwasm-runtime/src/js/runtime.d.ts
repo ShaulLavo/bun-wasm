@@ -498,8 +498,15 @@ declare namespace BunWasm {
   }
   interface Native {
     readonly platformInfo: { version: string; revision: string; arch: string };
-    /** Starts as strings; the process Proxy permits raw Symbol values and accessor results. */
+    /** Starts as strings; the process Proxy keeps every string-named value a string. */
     env(): Record<PropertyKey, unknown>;
+    /** Dotenv text to name/value pairs in file order (util.parseEnv, process.loadEnvFile). */
+    parseEnv(content: string): [string, string][];
+    /**
+     * process.env.TZ: make `zone` the zone of local time and Intl ("" restores the host's).
+     * Whether it applied; undefined, or absent, where the engine has no settable zone.
+     */
+    setTimeZone?(zone: string): boolean | undefined;
     argv(): string[];
     execArgv(): string[];
     execPath(): string;
@@ -536,6 +543,9 @@ declare namespace BunWasm {
       emitWarning(process: WarningProcess, warning: unknown, type?: unknown, code?: unknown, ctor?: unknown): void;
     };
     pumpSignals?: () => boolean;
+    require(name: "process_binding"): (name: unknown, own: Record<string, () => unknown>) => unknown;
+    require(name: "process_allowed_flags"): ReadonlySet<string>;
+    require(name: "process_report"): (process: object) => object;
     require(name: "uv_errors"): {
       binding(): Record<string, unknown>;
       message(name: string): string | undefined;

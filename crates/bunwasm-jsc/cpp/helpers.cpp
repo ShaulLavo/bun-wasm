@@ -18,7 +18,10 @@
 #include "JSObjectRef.h"
 #include "JSValueRef.h"
 #include "Completion.h"
+#include "DateInstance.h"
 #include "ErrorInstance.h"
+#include "HeapIterationScope.h"
+#include "SubspaceInlines.h"
 #include "DeferredWorkTimer.h"
 #include <wtf/Threading.h>
 #include "Identifier.h"
@@ -48,6 +51,8 @@
 #include "WASIMemoryTelemetry.h"
 #include "WASIJSONFastTest.h"
 #include <wtf/DataLog.h>
+#include <wtf/DateMath.h>
+#include <wtf/TimeZone.h>
 #include <wtf/URL.h>
 #include <wtf/text/SymbolRegistry.h>
 #include <cstdlib>
@@ -581,6 +586,38 @@ JSValueRef bunjsc_object_type_counts(JSContextRef ctx)
     for (auto& entry : vm.heap.objectTypeCounts())
         counts->putDirect(vm, Identifier::fromString(vm, entry.key), jsNumber(entry.value));
     return toRef(globalObject, counts);
+}
+
+// The heap size JSC measured at the end of the most recent collection (Bun's Bun.gc() result
+// and process.memoryUsage().heapUsed), without refreshing the memory telemetry.
+uint64_t bunjsc_heap_size_after_collection(JSContextRef ctx)
+{
+    VM& vm = toJS(ctx)->vm();
+    JSLockHolder lock(vm);
+    return vm.heap.sizeAfterLastCollection();
+}
+
+// process.env.TZ, as Bun's applyTZFromString and its TZ delete path
+// (src/jsc/bindings/JSEnvironmentVariableMap.cpp): a valid zone, or an empty name that
+// restores the host's, becomes WTF's override, and the shared and per-Date caches start over.
+// Returns whether the zone applied.
+bool bunjsc_set_time_zone(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    VM& vm = globalObject->vm();
+    JSLockHolder lock(vm);
+    JSValue zone = toJS(globalObject, value);
+    String name = zone.isString() ? zone.toWTFString(globalObject) : String();
+    if (name.length() >= 32 || !WTF::setTimeZoneOverride(name))
+        return false;
+    WTF::timeZoneDidChange();
+    vm.dateCache.clearForTimeZoneChange();
+    HeapIterationScope iterationScope(vm.heap);
+    vm.heap.dateInstanceSpace.forEachLiveCell([](HeapCell* cell, HeapCell::Kind) -> IterationStatus {
+        static_cast<DateInstance*>(static_cast<JSCell*>(cell))->invalidateCachedLocalGregorianDateTime();
+        return IterationStatus::Continue;
+    });
+    return true;
 }
 
 // -1: not a promise, 0: pending, 1: fulfilled, 2: rejected.

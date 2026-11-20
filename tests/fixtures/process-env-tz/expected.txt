@@ -1,0 +1,7 @@
+assigned 7 America/New_York
+deleted restores the start zone true true false
+assigned after delete 21 Asia/Tokyo
+defined 7 America/New_York
+assigned after define 12
+inherited write 12 UTC Asia/Kolkata
+after worker writes 7 America/New_York

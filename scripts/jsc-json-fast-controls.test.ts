@@ -14,7 +14,6 @@ type RecordLine = Record<string, string | number | boolean | null>;
 type Run = { records: RecordLine[]; dispatches: RecordLine[]; memory: RecordLine[]; linear: RecordLine[]; stdout: string; stderr: string };
 const common = String.raw`
 import assert from "node:assert/strict";
-import { memoryUsage } from "bun:jsc";
 import { linearMemoryBytes } from "bun:internal-for-testing";
 function chain(n, array = false, leaf = 0) {
   let value = leaf;
@@ -52,7 +51,7 @@ function sharedGraph() {
   return { values };
 }
 function sampleMemory(label) {
-  const usage = memoryUsage();
+  const usage = process.memoryUsage();
   console.error("bunwasm-json-fast-linear " + JSON.stringify({ label, capacity: linearMemoryBytes(), heapUsed: usage.heapUsed, extraMemory: usage.external }));
 }
 function equal(graph, gap) {

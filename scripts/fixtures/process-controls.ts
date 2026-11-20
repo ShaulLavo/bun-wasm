@@ -126,38 +126,36 @@ export async function processControls(eventsFactory: (internal: object) => Funct
   controls.push("unhandled error event retains identity after reset; supplied callback consumes it without extra ticks");
 
   const env = fixture();
-  const raw = { identity: true };
-  Object.defineProperty(env.guest.env, "ACCESSOR", { configurable: true, enumerable: true, get: () => raw });
-  assert.equal(env.guest.env.ACCESSOR, raw);
-  assert.equal(env.envChanges.at(-1)![1], raw);
-  const symbol = Symbol("raw environment property");
-  env.guest.env[symbol] = raw;
-  assert.equal(env.guest.env[symbol], raw);
+  const defineError = (value: unknown) => (value as { code?: unknown }).code === "ERR_INVALID_OBJECT_DEFINE_PROPERTY";
   env.guest.env.DATA = 7;
   assert.equal(env.guest.env.DATA, "7");
-  controls.push("environment accessor and symbol values stay raw while assigned string-key values are coerced");
+  assert.deepEqual(env.envChanges.at(-1), ["DATA", "7"]);
+  assert.throws(() => { env.guest.env[Symbol("environment key")] = "x"; }, TypeError);
+  env.guest.env[""] = "ignored";
+  assert.equal(Object.hasOwn(env.guest.env, ""), false);
+  assert.equal(env.envChanges.length, 1);
+  controls.push("environment assignment coerces string names, throws for a symbol and ignores an empty name");
 
-  const envOrder: unknown[] = [];
-  Object.defineProperty(env.guest.env, "SETTER", {
-    configurable: true,
-    get() { envOrder.push("get"); return raw; },
-    set(value: unknown) { envOrder.push(value); },
-  });
-  envOrder.length = 0;
-  env.guest.env.SETTER = 23;
-  assert.deepEqual(envOrder, ["23", "get"]);
-  assert.deepEqual(env.envChanges.at(-1), ["SETTER", raw]);
-  controls.push("environment assignment coerces before the setter and publishes the raw getter result once");
+  const full = { configurable: true, writable: true, enumerable: true };
+  Object.defineProperty(env.guest.env, "DEFINED", { ...full, value: 8 });
+  assert.equal(env.guest.env.DEFINED, "8");
+  assert.deepEqual(env.envChanges.at(-1), ["DEFINED", "8"]);
+  assert.throws(() => Object.defineProperty(env.guest.env, "ACCESSOR", { configurable: true, enumerable: true, get: () => "x" }), defineError);
+  assert.throws(() => Object.defineProperty(env.guest.env, "PARTIAL", { value: "x", configurable: true }), defineError);
+  assert.throws(() => Object.defineProperty(env.guest.env, "NO_VALUE", full), defineError);
+  assert.equal("ACCESSOR" in env.guest.env || "PARTIAL" in env.guest.env || "NO_VALUE" in env.guest.env, false);
+  assert.equal(env.envChanges.length, 2);
+  controls.push("environment defineProperty takes only complete data descriptors, through the setter");
 
-  const envError = new Error("environment getter");
-  assert.throws(() => Object.defineProperty(env.guest.env, "THROW", { get() { throw envError; } }), (value: unknown) => value === envError);
-  assert.equal(env.envChanges.length, 4);
-  const rawSymbol = Symbol("defined raw");
-  Object.defineProperty(env.guest.env, rawSymbol, { value: raw, configurable: true });
-  assert.equal(env.guest.env[rawSymbol], raw);
-  delete env.guest.env.ACCESSOR;
-  assert.deepEqual(env.envChanges.at(-1), ["ACCESSOR", undefined]);
-  controls.push("environment getter throw identity, raw Symbol descriptor and delete hook");
+  const child = Object.create(env.guest.env) as Record<string, unknown>;
+  child.INHERITED = 5;
+  assert.equal(child.INHERITED, 5);
+  assert.equal(Object.hasOwn(child, "INHERITED"), true);
+  assert.equal(env.guest.env.INHERITED, undefined);
+  assert.equal(env.envChanges.length, 2);
+  delete env.guest.env.DATA;
+  assert.deepEqual(env.envChanges.at(-1), ["DATA", undefined]);
+  controls.push("environment writes through an inheriting object stay on it; delete hook");
 
   const exiting = fixture();
   assert.equal(Object.hasOwn(exiting.guest, "exitCode"), true);

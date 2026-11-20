@@ -1319,6 +1319,20 @@
   internal.require("readable_stream_methods"); // Bun's ReadableStream text/json/bytes/blob
   internal.require("stream_inspect"); // Bun's util.inspect.custom for the web stream classes
   internal.require("crypto")(defineGlobal);
+  // process.env.TZ, once the engine applied it to local time: the Intl fallback's default zone
+  // follows it (undefined restores the fallback's own default). Set before process, which
+  // applies the zone the process started with.
+  let fallbackIntl = null;
+  let intlTimeZone;
+  const applyIntlTimeZone = () => fallbackIntl.DateTimeFormat.__setDefaultTimeZone(intlTimeZone ?? "UTC");
+  internal.setIntlTimeZone = zone => {
+    intlTimeZone = zone;
+    if (fallbackIntl) applyIntlTimeZone();
+  };
+  internal.fallbackIntlLoaded = intl => {
+    fallbackIntl = intl;
+    if (intlTimeZone !== undefined) applyIntlTimeZone();
+  };
   defineGlobal("process", internal.require("process"));
   // Node's setupWarningHandler: the default 'warning' listener and the warning flags.
   internal.require("process_warning");
@@ -1343,6 +1357,7 @@
     defineLazyGlobal("Intl", () => {
       const intl = internal.require("intl");
       internal.fakeTimers?.installIntl(intl);
+      internal.fallbackIntlLoaded?.(intl);
       return intl;
     });
   }

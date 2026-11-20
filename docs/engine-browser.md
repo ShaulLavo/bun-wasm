@@ -235,6 +235,7 @@ These follow from running on a standard JS engine without engine hooks. Every fi
 | `Function.prototype.toString` of module code | The printed record's text: names and structure as written, formatting, comments and literal spelling may differ. |
 | Proxy detection, Map/Set iterator entries in `console.log` | Inspection prints less, e.g. a Proxy prints as its target. |
 | `process.memoryUsage()` | `performance.memory` where available (Chromium), else zeros. `rss` equals `heapUsed`. |
+| `process.env.TZ` | Changes the variable only: the page's `Date` and `Intl` keep the host's zone. |
 | Stack strings | `err.stack` read directly is V8's `    at f (url:line:col)` or JSC's `f@url:line:col`, with module URLs. Bun-style printing (uncaught errors, `console.log(err)`, `bun test`) is mapped and matches the other engines. |
 | `process.nextTick` vs `await` continuations | Ticks run before `.then`/`queueMicrotask` callbacks queued earlier, but not before `await` continuations queued earlier. |
 
