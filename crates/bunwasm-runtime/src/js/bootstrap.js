@@ -313,11 +313,16 @@
   // Set when nothing was due after immediates ran: the loop then waits for the next timer,
   // through as many bounded waits as that takes. A timer that runs clears it.
   let timerWait = false;
+  // Whether the entry module's promise is still pending; the engines keep it current. Bun's
+  // load_entry_point waits for that promise without looking at the error count, so the loop
+  // stops only after it settles, or when nothing at all is left to wake it.
+  internal.entryPending = false;
   // runTimers asks whenever no callback is due. `idle`: nothing else keeps the loop alive.
   function loopStopped(idle) {
     if (immediateRan) timerWait = !idle;
     immediateRan = false;
-    return unclaimedErrors > 0 && (idle || !timerWait);
+    if (unclaimedErrors === 0) return false;
+    return idle || (!internal.entryPending && !timerWait);
   }
 
   function insertTimer(timer) {
@@ -1187,6 +1192,9 @@
       return;
     }
     unclaimedErrors++;
+    // Bun sets its exit code to 1 here; process.exitCode shows it only once a code was set.
+    const process = globalThis.process;
+    if (process.exitCode !== undefined) process.exitCode = 1;
     printError(err, false);
     // The browser engine's loop may be asleep until a later timer: have it look now.
     if (native.wake) native.wake(0);
@@ -1229,11 +1237,11 @@
     return finalCode;
   };
 
-  // After unclaimed listener errors Bun's 'exit' listeners see code 1 unless an exit code was
-  // set, and the process exits 1 whatever they leave.
+  // After unclaimed listener errors Bun's 'exit' listeners see code 1 unless an exit code was set
+  // after the last of them (reportListenerError), and the process exits 1 whatever they leave.
   function exitUnclaimed(process) {
-    if (!(process.exitCode | 0)) process.exitCode = 1;
-    emitExit((process.exitCode | 0) || 1);
+    if (process.exitCode === undefined) process.exitCode = 1;
+    emitExit(process.exitCode | 0);
     printVersionLine();
     internal.traceExit("uncaught-exception", 1);
     return 1;

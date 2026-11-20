@@ -1127,6 +1127,8 @@ class EngineHost {
       return;
     }
     if (started && typeof started.then === "function") {
+      // An unclaimed listener error stops the loop only once the entry settles (bootstrap.js).
+      internal.entryPending = true;
       this.track(started).then(
         () => this.entrySettled(),
         (err) => { this.uncaught(err); this.entrySettled(); },
@@ -1135,6 +1137,7 @@ class EngineHost {
   }
 
   entrySettled() {
+    this.internal.entryPending = false;
     if (this.entry.kind !== "test") return;
     this.testComplete = true;
     this.schedule(0);

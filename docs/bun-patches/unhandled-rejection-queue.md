@@ -10,7 +10,7 @@ JavaScript below reimplement these upstream pieces:
 | `src/jsc/bindings/ZigGlobalObject.cpp` `GlobalObject::promiseRejectionTracker` | JSC's rejection tracker in the custom global object method table feeds the queue on `Reject` and removes the entry on `Handle`, instead of JSC's default batch at microtask exhaustion. `bunjsc_promise_mark_handled` tells the tracker too | `crates/bunwasm-jsc/cpp/helpers.cpp` `trackPromiseRejection`; `crates/bunwasm-engine-jsc/src/vm.rs` `bunjsc_host_rejection` |
 | `ZigGlobalObject.cpp` `GlobalObject::handleRejectedPromises` | After the microtasks drain, rejections are taken and reported one at a time, so a listener that handles a later rejection keeps it from being reported. Rejections made by a listener are reported in the same pass | `crates/bunwasm-engine-quickjs/src/program.rs` `check_rejections` (QuickJS and JSC) |
 | `RejectedPromiseQueue::markReported`, `didHandle`, `src/jsc/virtual_machine_exports.rs` `handle_handled_promise`, `src/jsc/bindings/BunProcess.cpp` `Bun__emitHandledPromiseEvent` | A promise reported to an `unhandledRejection` listener that later gets a handler emits `rejectionHandled` with the promise, once. One owed from before a pass comes before that pass's reports, as Bun's `HandledPromise` task and Node's `processPromiseRejections` run first; one owed by a listener of the pass comes after its reports. The reported set is a `WeakSet` | `crates/bunwasm-runtime/src/js/bootstrap.js` `handleRejection`, `handleRejectionHandled`; `program.rs` `check_rejections` |
-| `src/jsc/VirtualMachine.rs` `uncaught_exception`, `is_event_loop_alive`, `src/runtime/cli/run_command.rs` run loop | A throw from an `unhandledRejection` listener is an uncaught exception (origin `uncaughtException`): the monitor, capture callback and `uncaughtException` listeners see it with PR 951's exit codes, and the remaining rejections are still reported. One nothing claims is printed and counted. Bun's loop then stays alive only while immediates are queued, and an iteration that ran them still waits for the next timer. So the loop stops, skipping `beforeExit` and exiting 1, at the first point where nothing is due, unless immediates ran since the last such point; then it first waits for and runs the next timer. `runTimers` reports the stop as -2. A worker ends at once, as on its other fatal paths | `bootstrap.js` `handleRejection`, `reportListenerError`, `loopStopped`, `exitUnclaimed`; `program.rs` `run_event_loop` (QuickJS and JSC); `web/src/engine-host.js` `pump`, `finish` (Browser) |
+| `src/jsc/VirtualMachine.rs` `uncaught_exception`, `is_event_loop_alive`, `src/runtime/cli/run_command.rs` run loop | A throw from an `unhandledRejection` listener is an uncaught exception (origin `uncaughtException`): the monitor, capture callback and `uncaughtException` listeners see it with PR 951's exit codes, and the remaining rejections are still reported. One nothing claims is printed and counted, and an exit code already set reads 1 from then on. While the entry module's promise is pending the loop goes on, as Bun's `load_entry_point` waits for it without looking at the count. After that Bun's loop stays alive only while immediates are queued, and an iteration that ran them still waits for the next timer. So the loop stops, skipping `beforeExit`, at the first point where nothing is due, unless immediates ran since the last such point; then it first waits for and runs the next timer. It also stops when nothing at all is left. `exit` listeners see 1 unless a code was set after the throw; the process exits 1. `runTimers` reports the stop as -2. A worker ends at once, as on its other fatal paths | `bootstrap.js` `handleRejection`, `reportListenerError`, `loopStopped`, `exitUnclaimed`; `program.rs` `run_event_loop` (QuickJS and JSC); `web/src/engine-host.js` `pump`, `finish` (Browser) |
 | `src/jsc/event_loop.rs` `drain_microtasks` | The ticks and microtasks the listeners of a report pass queue run when the pass ends, then the rejections they made are reported, until both are empty, before the next immediate or timer | `program.rs` `check_rejections` (QuickJS and JSC) |
 | `src/jsc/modules/BunJSCModule.h` `heapStats` | `bun:jsc` `heapStats().objectTypeCounts` holds JSC's live cells per class name. Other engines report an empty object as before | `helpers.cpp` `bunjsc_object_type_counts`; `crates/bunwasm-runtime/src/js/builtins.js` |
 
@@ -36,12 +36,14 @@ but do not report late handlers.
   new report. Bun, QuickJS, JSC and Chromium report the new rejection first.
 - Bun emits a `PromiseRejectionHandledWarning` with `rejectionHandled` when
   `--unhandled-rejections` is set to a Node mode; bun-wasm has no such option, so it never does.
-
 - After an unclaimed listener error Bun's own stopping point depends on where in its loop
   iteration the report ran: a rejection made by a timer is reported at the start of the next
   iteration, which still waits for the following timer. bun-wasm stops at the first point where
-  nothing is due and no immediate ran, so it skips that timer. Bun also sets an exit code that
-  was already set to 1 at the throw; bun-wasm leaves it until exit. Both exit 1.
+  nothing is due and no immediate ran, so it skips that timer. With chained immediates (each
+  queuing the next) and 0, 30 and 300 ms timers, bun-wasm runs the 0 ms timer before the
+  immediates and then also the 30 ms one, which Bun skips.
+- bun-wasm prints the `Bun v… (WASI …)` line at exit after every unclaimed listener error.
+  Bun leaves it out when the rejection came from a `beforeExit` listener or a repeating interval.
 - The Browser engine leaves this order to its host. Node, the test host, matches Bun. A browser
   page runs microtasks after each `unhandledrejection` event, so there a tick or microtask a
   listener queues runs before the next report instead of after the pass.
@@ -54,17 +56,22 @@ but do not report late handlers.
   phase from PR 966 runs every due timer before the next immediate, but one callback per loop
   turn, and the loop reports rejections after every turn. Matching Bun needs the loop to hold
   rejection reports until the timers phase ends.
+- Bun's test runner never calls a user's `unhandledRejection` listener; it reports the rejection
+  itself. bun-wasm's runner listens with `process.on`, so user listeners run too, and since this
+  change a throw from one is an extra error between tests. Inside a test Bun reports 2 pass and
+  1 fail where bun-wasm reports the same plus 1 error; at module scope Bun runs no tests and
+  reports 1 error, while bun-wasm runs them.
 
 ## Tests
 
 The native fixtures `process-rejections-one-at-a-time`, `process-rejection-handled`,
 `process-rejection-handled-order` and `process-rejections-many-handled` hold native Bun's output
 and run on all three engines. `process-rejection-handled-own-listener` runs on QuickJS and JSC
-(Node orders it differently, above). `process-rejection-listener-throws` and
-`process-rejection-listener-throws-stops` hold native Bun's output for throwing listeners, and
-`process-rejection-listener-microtasks` for work the listeners queue; all three run on all three
-engines.
-`process-rejection-queue-releases` counts live rejection
+(Node orders it differently, above). `process-rejection-listener-throws`,
+`process-rejection-listener-throws-stops` and `process-rejection-listener-throws-await` hold
+native Bun's output for throwing listeners, the last one while the entry module awaits, and
+`process-rejection-listener-microtasks` for work the listeners queue; all four run on all three
+engines. `process-rejection-queue-releases` counts live rejection
 reasons with `heapStats` and runs on JSC. `rejection_queue.rs` has unit tests for order, removal
 and compaction.
 

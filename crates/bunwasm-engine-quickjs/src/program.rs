@@ -135,6 +135,18 @@ impl<E: Engine> Core<E> {
     fn check_main(&self, e: &E, main: &mut Option<E::Value>) {
         if let Some(promise) = main.take() {
             *main = check_main_promise(e, self, promise);
+            if main.is_none() {
+                self.mark_entry_pending(e, false);
+            }
+        }
+    }
+
+    /// `internal.entryPending`: whether the entry module's promise is still pending. An unclaimed
+    /// listener error stops the loop only after it settles (bootstrap.js loopStopped).
+    fn mark_entry_pending(&self, e: &E, pending: bool) {
+        let internal = self.internal(e);
+        if let Err(err) = e.set(&internal, "entryPending", e.value_from(Val::Bool(pending))) {
+            self.uncaught(e, err);
         }
     }
 
@@ -245,6 +257,9 @@ const LOOP_STOPPED: f64 = -2.0;
 /// until the next timer when idle.
 fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test_command: bool) {
     let mut main = main;
+    if main.is_some() {
+        core.mark_entry_pending(e, true);
+    }
     loop {
         // Signal handlers run only at cooperative guest checkpoints. Pending
         // signals do not count as work keeping an otherwise-finished loop alive.

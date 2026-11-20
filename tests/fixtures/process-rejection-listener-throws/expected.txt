@@ -7,6 +7,6 @@ uncaught from a3 uncaughtException
 still running
 rejection b1
 rejection b2
-immediate queued by a listener
+immediate queued by a listener, exitCode undefined
 timer set by a listener
-exit 1 1
+exit 4 4
