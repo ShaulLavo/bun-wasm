@@ -28,6 +28,7 @@ export function createNodeNet({ net, http, https, zlib }) {
     const code = (err && err.code) || (cause && cause.code);
     if (code) info.code = code;
     if (err?.syscall) info.syscall = err.syscall;
+    if (typeof err?.hostname === "string") info.hostname = err.hostname;
     return info;
   };
   const fail = (info) => {
@@ -127,15 +128,20 @@ export function createNodeNet({ net, http, https, zlib }) {
       if (key === "accept-encoding" || !Object.hasOwn(headers, key)) headers[key] = value;
       else headers[key] = [].concat(headers[key], value);
     }
-    const req = client.request(url, { method: request.method, headers, agent: freshConnection ? false : undefined });
+    // Node's 16 KiB head limit would refuse a Location Bun follows (Bun allows 128 KiB URLs).
+    const req = client.request(url, { method: request.method, headers, agent: freshConnection ? false : undefined, maxHeaderSize: 512 * 1024 });
     h.request = req;
     req.on("error", (err) => {
+      // The request was dropped for a reason already recorded (a body length mismatch).
+      if (h.error) return;
       if (!freshConnection && !h.closed && !h.head && req.reusedSocket && err.code === "ECONNRESET" && ["GET", "HEAD"].includes(request.method)) {
         send(h, url, request, redirects, true);
         return;
       }
       const parsed = parseFailureCode(err.code);
-      h.error = parsed ? fetchFailure(parsed, h.url) : errorInfo({ name: "TypeError", message: err.message, code: err.code }, "fetch failed");
+      // A name that does not resolve keeps the resolver's syscall and the host that failed, as in Bun.
+      const lookup = err.code === "ENOTFOUND" ? { syscall: err.syscall, hostname: err.hostname } : {};
+      h.error = parsed ? fetchFailure(parsed, h.url) : errorInfo({ name: "TypeError", message: err.message, code: err.code, ...lookup }, "fetch failed");
       news();
     });
     req.on("response", (res) => {
@@ -150,6 +156,16 @@ export function createNodeNet({ net, http, https, zlib }) {
       }
       if (location && REDIRECT_STATUSES.includes(status) && request.redirect === "follow") {
         res.resume();
+        // A stream has no source to send again: only a 303, which drops the body, is
+        // followed (Fetch's HTTP-redirect fetch, step 11, as in Bun).
+        if (request.streaming) {
+          h.uploadClosed = true;
+          if (status !== 303) {
+            h.error = { name: "TypeError", message: "Request body is a ReadableStream and cannot be replayed for this redirect" };
+            news();
+            return;
+          }
+        }
         if (redirects >= 20) {
           h.error = { name: "TypeError", message: "fetch failed: too many redirects" };
           news();
@@ -162,7 +178,9 @@ export function createNodeNet({ net, http, https, zlib }) {
           return;
         }
         const next = target.next;
-        const keepBody = status === 307 || status === 308;
+        // A 303 (except to HEAD), and a 301 or 302 to a POST, turn into a GET without the body;
+        // every other redirect resends the request as it was (crates/bunwasm-host does the same).
+        const keepBody = status === 303 ? request.method === "HEAD" : !(status <= 302 && request.method === "POST");
         const nextRequest = keepBody ? request : { method: request.method === "HEAD" ? "HEAD" : "GET", headers: request.headers.filter(([k]) => !/^content-/i.test(k)), body: null, redirect: request.redirect };
         if (next.origin !== url.origin) nextRequest.headers = nextRequest.headers.filter(([name]) => !/^(authorization|proxy-authorization|cookie2?|www-authenticate)$/i.test(name));
         send(h, next, nextRequest, redirects + 1);
@@ -189,40 +207,89 @@ export function createNodeNet({ net, http, https, zlib }) {
       });
       news();
     });
+    if (request.streaming) {
+      // hostWrite and hostShutdown carry the body; Node chunks it unless a Content-Length is set.
+      req.on("drain", news);
+      req.on("finish", () => {
+        h.uploadClosed = true;
+        news();
+      });
+      return;
+    }
     if (request.body) req.end(request.body);
     else req.end();
+  }
+
+  function startFetch(metaText, body, streaming) {
+    let meta;
+    try {
+      meta = JSON.parse(metaText);
+    } catch {
+      return fail({ name: "TypeError", message: "fetch: malformed request metadata" });
+    }
+    let url;
+    try {
+      url = new URL(meta.url);
+    } catch {
+      return fail({ name: "TypeError", message: "Failed to parse fetch URL" });
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return fail({ name: "TypeError", message: `fetch: unsupported protocol ${url.protocol}` });
+    }
+    const method = (meta.method || "GET").toUpperCase();
+    const h = stream("fetch");
+    h.head = null;
+    h.request = null;
+    h.url = url.href;
+    h.streaming = streaming;
+    h.uploadClosed = !streaming;
+    const id = add(h);
+    // As in Bun, every other method sends its body, even an empty one, with a Content-Length.
+    const payload = method !== "GET" && method !== "HEAD" ? new Uint8Array(body ?? 0) : null;
+    const headers = meta.headers || [];
+    // Node writes no header for an empty body.
+    if (!streaming && payload?.length === 0 && !headers.some(([name]) => name.toLowerCase() === "content-length")) headers.push(["content-length", "0"]);
+    const request = { method, headers, body: payload, redirect: meta.redirect || "follow", streaming };
+    // A streamed body must match the caller's Content-Length exactly.
+    const declared = headers.find(([name]) => name.toLowerCase() === "content-length")?.[1];
+    h.declared = streaming && declared !== undefined && /^\s*\d+\s*$/.test(declared) ? Number(declared) : null;
+    h.sent = 0;
+    send(h, url, request, 0);
+    return id;
+  }
+
+  // Bun's error when a streamed body does not match its Content-Length; the request is dropped.
+  function lengthMismatch(h) {
+    h.error = {
+      name: "Error",
+      code: "ERR_HTTP_CONTENT_LENGTH_MISMATCH",
+      message: `Request body of ${h.sent} bytes does not match the Content-Length of ${h.declared}`,
+    };
+    h.uploadClosed = true;
+    h.request?.destroy();
+    news();
+    return ERROR;
+  }
+
+  /** Request body bytes for a fetch_stream handle, as crates/bunwasm-host does. */
+  function writeUpload(h, bytes) {
+    if (!h.streaming) return BADF;
+    if (h.uploadClosed || h.error || !h.request || h.request.destroyed) return ERROR;
+    if (bytes.length === 0) return 0;
+    if (h.request.writableLength >= MAX_QUEUED) return AGAIN;
+    h.sent += bytes.length;
+    // A chunk past the declared length is not sent.
+    if (h.declared !== null && h.sent > h.declared) return lengthMismatch(h);
+    h.request.write(new Uint8Array(bytes));
+    return bytes.length;
   }
 
   const natives = {
     hostPoll: () => UNSUPPORTED,
 
-    hostFetch(metaText, body) {
-      let meta;
-      try {
-        meta = JSON.parse(metaText);
-      } catch {
-        return fail({ name: "TypeError", message: "fetch: malformed request metadata" });
-      }
-      let url;
-      try {
-        url = new URL(meta.url);
-      } catch {
-        return fail({ name: "TypeError", message: "Failed to parse fetch URL" });
-      }
-      if (url.protocol !== "http:" && url.protocol !== "https:") {
-        return fail({ name: "TypeError", message: `fetch: unsupported protocol ${url.protocol}` });
-      }
-      const method = (meta.method || "GET").toUpperCase();
-      const h = stream("fetch");
-      h.head = null;
-      h.request = null;
-      h.url = url.href;
-      const id = add(h);
-      const payload = body && body.length > 0 && method !== "GET" && method !== "HEAD" ? new Uint8Array(body) : null;
-      const request = { method, headers: meta.headers || [], body: payload, redirect: meta.redirect || "follow" };
-      send(h, url, request, 0);
-      return id;
-    },
+    hostFetch: (metaText, body) => startFetch(metaText, body, false),
+
+    hostFetchStream: (metaText) => startFetch(metaText, null, true),
 
     hostFetchHead(handle) {
       const h = handles.get(handle);
@@ -243,6 +310,7 @@ export function createNodeNet({ net, http, https, zlib }) {
     hostWrite(handle, bytes) {
       const h = handles.get(handle);
       if (!h) return BADF;
+      if (h.kind === "fetch") return writeUpload(h, bytes);
       if (h.kind !== "conn") return UNSUPPORTED;
       if (h.error) return ERROR;
       if (h.socket.connecting) return AGAIN;
@@ -256,6 +324,12 @@ export function createNodeNet({ net, http, https, zlib }) {
 
     hostShutdown(handle) {
       const h = handles.get(handle);
+      if (h?.kind === "fetch" && h.streaming) {
+        if (h.uploadClosed || !h.request || h.request.writableEnded) return 0;
+        if (h.declared !== null && h.sent < h.declared) lengthMismatch(h);
+        else h.request.end();
+        return 0;
+      }
       if (h?.kind !== "conn") return BADF;
       h.socket.end();
       return 0;
@@ -352,7 +426,7 @@ export function createNodeNet({ net, http, https, zlib }) {
     },
   };
 
-  const caps = { poll: false, fetch: true, fetch_head: true, read: true, write: true, close: true, listen: true, local_port: true, accept: true, connect: true, error: true, peer_addr: true, shutdown: true, local_addr: true };
+  const caps = { poll: false, fetch: true, fetch_stream: true, fetch_head: true, read: true, write: true, close: true, listen: true, local_port: true, accept: true, connect: true, error: true, peer_addr: true, shutdown: true, local_addr: true };
   return {
     natives,
     caps,

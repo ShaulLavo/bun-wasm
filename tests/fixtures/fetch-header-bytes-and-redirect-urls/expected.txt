@@ -1,0 +1,5 @@
+header values match: true [ 41, 42 ]
+long fragments: 200 ok true ORIGIN/hop/3#<98304 bytes> /hop/0 /hop/1 /hop/2 /hop/3
+no redirect: 200 false ORIGIN/hop/3#<4 bytes>
+direct: {"name":"TypeError","code":"ENOTFOUND","syscall":"getaddrinfo","hostname":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","message":"getaddrinfo ENOTFOUND aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com"}
+after a redirect: {"name":"TypeError","code":"ENOTFOUND","syscall":"getaddrinfo","hostname":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.com","message":"getaddrinfo ENOTFOUND cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.com"}

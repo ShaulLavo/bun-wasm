@@ -1771,6 +1771,9 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
         };
         Ok(host::fetch(a.str(0)?.as_bytes(), body).into())
     });
+    t.add("hostFetchStream", |a| {
+        Ok(host::fetch_stream(a.str(0)?.as_bytes()).into())
+    });
     t.add("hostFetchHead", |a| {
         text_or_code(host::fetch_head(a.i32(0)?))
     });

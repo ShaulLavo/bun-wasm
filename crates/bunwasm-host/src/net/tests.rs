@@ -339,6 +339,198 @@ fn fetch_abort_does_not_cancel_another_pending_request() {
     assert!(net.handles.is_empty());
 }
 
+/// A one-shot server that records the request until `complete` says it has
+/// all of it, then sends `response`. The thread returns what it recorded.
+fn recording_server(
+    complete: fn(&[u8]) -> bool,
+    response: &'static [u8],
+) -> (u16, std::thread::JoinHandle<Vec<u8>>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let thread = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut recorded = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !complete(&recorded) {
+            let count = stream.read(&mut buf).unwrap();
+            assert!(count > 0, "the client closed early: {recorded:?}");
+            recorded.extend_from_slice(&buf[..count]);
+        }
+        stream.write_all(response).unwrap();
+        recorded
+    });
+    (port, thread)
+}
+
+fn request_body(recorded: &[u8]) -> (String, String) {
+    let text = String::from_utf8_lossy(recorded).into_owned();
+    let end = text.find("\r\n\r\n").expect("a request head");
+    (
+        text[..end].to_ascii_lowercase(),
+        text[end + 4..].to_string(),
+    )
+}
+
+/// Writes `chunks` to a `fetch_stream` handle, ends the body and returns the head.
+fn stream_upload(net: &mut Net, handle: i32, chunks: &[&[u8]]) -> serde_json::Value {
+    for chunk in chunks {
+        assert_eq!(
+            wait(net, |net| net.write(handle, chunk)),
+            chunk.len() as i32
+        );
+    }
+    assert_eq!(net.shutdown(handle), 0);
+    assert_eq!(wait(net, |net| fetch_head_ready(net, handle)), 0);
+    json(net.fetch_head(handle))
+}
+
+#[test]
+fn fetch_stream_sends_each_write_as_one_chunk_and_skips_empty_writes() {
+    let ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+    let (port, server) = recording_server(|bytes| bytes.ends_with(b"0\r\n\r\n"), ok);
+    let mut net = Net::new();
+    let meta = format!(r#"{{"method":"POST","url":"http://127.0.0.1:{port}/"}}"#);
+    let handle = net.fetch_stream(meta.as_bytes());
+    assert!(handle > 0);
+    let head = stream_upload(&mut net, handle, &[b"", b"AAAA", b"", b"BBBB"]);
+    assert_eq!(head["status"], 200);
+    assert_eq!(read_all(&mut net, handle), b"ok");
+    assert_eq!(net.write(handle, b"late"), ERROR);
+    let (head, body) = request_body(&server.join().unwrap());
+    assert!(head.contains("transfer-encoding: chunked"), "{head}");
+    assert!(!head.contains("content-length"), "{head}");
+    assert_eq!(body, "4\r\nAAAA\r\n4\r\nBBBB\r\n0\r\n\r\n");
+    assert_eq!(net.close(handle), 0);
+}
+
+#[test]
+fn fetch_stream_keeps_the_callers_content_length() {
+    let ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+    let (port, server) = recording_server(|bytes| bytes.ends_with(b"AAAABBBB"), ok);
+    let mut net = Net::new();
+    let meta = format!(
+        r#"{{"method":"POST","url":"http://127.0.0.1:{port}/","headers":[["content-length","8"]]}}"#
+    );
+    let handle = net.fetch_stream(meta.as_bytes());
+    let head = stream_upload(&mut net, handle, &[b"AAAA", b"", b"BBBB"]);
+    assert_eq!(head["status"], 200);
+    let (head, body) = request_body(&server.join().unwrap());
+    assert!(head.contains("content-length: 8"), "{head}");
+    assert!(!head.contains("transfer-encoding"), "{head}");
+    assert_eq!(body, "AAAABBBB");
+    assert_eq!(net.close(handle), 0);
+}
+
+#[test]
+fn fetch_stream_rejects_a_body_that_does_not_match_its_content_length() {
+    // (declared length, bytes produced when the request fails, whether "bc" may reach the wire)
+    for (declared, produced, sends_all) in [(2, 3, false), (5, 3, true)] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut recorded = Vec::new();
+            let _ = stream.read_to_end(&mut recorded);
+            recorded
+        });
+        let mut net = Net::new();
+        let meta = format!(
+            r#"{{"method":"POST","url":"http://127.0.0.1:{port}/","headers":[["content-length","{declared}"]]}}"#
+        );
+        let handle = net.fetch_stream(meta.as_bytes());
+        assert_eq!(net.write(handle, b"a"), 1);
+        assert_eq!(net.write(handle, b"bc"), 2);
+        assert_eq!(net.shutdown(handle), 0);
+        assert_eq!(wait(&mut net, |net| fetch_head_ready(net, handle)), ERROR);
+        let error = json(net.error(handle));
+        assert_eq!(error["name"], "Error", "{error}");
+        assert_eq!(error["code"], "ERR_HTTP_CONTENT_LENGTH_MISMATCH", "{error}");
+        assert_eq!(
+            error["message"],
+            format!(
+                "Request body of {produced} bytes does not match the Content-Length of {declared}"
+            )
+        );
+        assert_eq!(net.close(handle), 0);
+        // The chunk past the declared length is never sent.
+        let recorded = String::from_utf8_lossy(&server.join().unwrap()).into_owned();
+        assert!(sends_all || !recorded.contains("bc"), "{recorded}");
+    }
+}
+
+#[test]
+fn fetch_stream_reports_backpressure_until_the_body_is_sent() {
+    // Nobody reads the upload, so the queue fills and `write` asks the guest to wait.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut net = Net::new();
+    let meta = format!(r#"{{"method":"PUT","url":"http://127.0.0.1:{port}/"}}"#);
+    let handle = net.fetch_stream(meta.as_bytes());
+    let chunk = vec![b'x'; 64 * 1024];
+    let mut accepted = 0usize;
+    while net.write(handle, &chunk) != AGAIN {
+        accepted += chunk.len();
+        assert!(accepted <= 64 << 20, "write never reported backpressure");
+    }
+    assert_eq!(net.close(handle), 0);
+    drop(listener);
+}
+
+#[test]
+fn fetch_stream_follows_only_a_303_redirect() {
+    let moved = b"HTTP/1.1 307 Temporary Redirect\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let (port, _server) = recording_server(|bytes| bytes.ends_with(b"0\r\n\r\n"), moved);
+    let mut net = Net::new();
+    let meta = format!(r#"{{"method":"POST","url":"http://127.0.0.1:{port}/start"}}"#);
+    let handle = net.fetch_stream(meta.as_bytes());
+    assert_eq!(net.write(handle, b"data"), 4);
+    assert_eq!(net.shutdown(handle), 0);
+    assert_eq!(wait(&mut net, |net| fetch_head_ready(net, handle)), ERROR);
+    let error = json(net.error(handle));
+    assert_eq!(
+        error["message"],
+        "Request body is a ReadableStream and cannot be replayed for this redirect"
+    );
+    assert!(
+        error.get("code").is_none_or(|code| code.is_null()),
+        "{error}"
+    );
+    assert_eq!(net.close(handle), 0);
+
+    // A fetch with a buffered body takes no writes.
+    let buffered = net.fetch(br#"{"url":"http://127.0.0.1:9/"}"#, b"");
+    assert_eq!(net.write(buffered, b"x"), BADF);
+    assert_eq!(net.shutdown(buffered), BADF);
+    assert_eq!(net.close(buffered), 0);
+}
+
+#[test]
+fn fetch_sends_no_fragment_and_reads_header_bytes_as_latin1() {
+    let response = b"HTTP/1.1 200 OK\r\nX-Name: caf\xc3\xa9 \xe9\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let (port, server) = recording_server(|bytes| bytes.ends_with(b"\r\n\r\n"), response);
+    let mut net = Net::new();
+    let fragment = "f".repeat(70_000);
+    let meta = format!(r#"{{"url":"http://127.0.0.1:{port}/path?q=1#{fragment}"}}"#);
+    let handle = net.fetch(meta.as_bytes(), b"");
+    assert_eq!(wait(&mut net, |net| fetch_head_ready(net, handle)), 0);
+    let head = json(net.fetch_head(handle));
+    assert_eq!(
+        head["url"],
+        format!("http://127.0.0.1:{port}/path?q=1#{fragment}")
+    );
+    assert_eq!(head["redirected"], false);
+    let name = head["headers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pair| pair[0] == "x-name")
+        .map(|pair| pair[1].clone());
+    assert_eq!(name.unwrap(), "caf\u{c3}\u{a9} \u{e9}");
+    let (request, _) = request_body(&server.join().unwrap());
+    assert!(request.starts_with("get /path?q=1 http/1.1"), "{request}");
+    assert_eq!(net.close(handle), 0);
+}
+
 #[test]
 fn fetch_errors() {
     let mut net = Net::new();

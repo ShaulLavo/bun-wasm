@@ -352,7 +352,8 @@ test("every network slot refuses to run once the process has a fatal outcome", c
   let signals!: ReturnType<typeof workerProcessState>["signals"];
   startEngineHost.mockImplementationOnce(async () => {
     const slots = installed[0]!;
-    const supportedSlots = SLOT_NAMES.slice();
+    // A page's fetch cannot stream an HTTP/1.1 upload, so browsers leave fetch_stream unset.
+    const supportedSlots = SLOT_NAMES.filter(name => name !== "fetch_stream");
     supportedSlots.sort();
     expect(Object.keys(slots).sort()).toEqual(supportedSlots);
     expect(slots.lookup_start).toBeFunction();

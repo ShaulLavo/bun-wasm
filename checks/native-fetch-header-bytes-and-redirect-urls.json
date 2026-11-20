@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fetch-header-bytes-and-redirect-urls",
+  "engines": ["quickjs", "jsc", "browser"]
+}
