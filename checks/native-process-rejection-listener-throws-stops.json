@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/process-rejection-listener-throws-stops",
+  "engines": ["quickjs", "jsc", "browser"]
+}

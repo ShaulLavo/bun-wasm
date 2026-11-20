@@ -52,6 +52,8 @@ const NativeBlob = globalThis.Blob;
 const nativeCreateObjectURL = globalThis.URL && globalThis.URL.createObjectURL ? globalThis.URL.createObjectURL.bind(globalThis.URL) : null;
 const nativeRevokeObjectURL = globalThis.URL && globalThis.URL.revokeObjectURL ? globalThis.URL.revokeObjectURL.bind(globalThis.URL) : null;
 const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+// What the runtime's runTimers returns when an unclaimed error stopped the loop.
+const LOOP_STOPPED = -2;
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const nativeDateNow = globalThis.Date.now.bind(globalThis.Date);
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
@@ -1125,6 +1127,8 @@ class EngineHost {
       return;
     }
     if (started && typeof started.then === "function") {
+      // An unclaimed listener error stops the loop only once the entry settles (bootstrap.js).
+      internal.entryPending = true;
       this.track(started).then(
         () => this.entrySettled(),
         (err) => { this.uncaught(err); this.entrySettled(); },
@@ -1133,6 +1137,7 @@ class EngineHost {
   }
 
   entrySettled() {
+    this.internal.entryPending = false;
     if (this.entry.kind !== "test") return;
     this.testComplete = true;
     this.schedule(0);
@@ -1202,6 +1207,9 @@ class EngineHost {
     if (this.o.debug) this.o.debug(`pump next=${next} pending=${this.pendingAsync} io=${io}`);
     this.flush();
     if (this.exited) return;
+    // Bun's is_event_loop_alive: an error an 'unhandledRejection' listener threw and no handler
+    // claimed stops the loop, without 'beforeExit' (bootstrap.js loopStopped).
+    if (next === LOOP_STOPPED) return this.finish(true);
     if (next >= 0 || this.pendingAsync > 0 || io > 0) {
       this.idleWait = false;
       this.beforeExitRan = false;
@@ -1244,7 +1252,7 @@ class EngineHost {
     });
   }
 
-  finish() {
+  finish(stopped = false) {
     // Chromium reports unhandled rejections in a later task: look once more
     // after one before deciding the program is done.
     if (!this.idleWait) {
@@ -1255,7 +1263,7 @@ class EngineHost {
     this.idleWait = false;
     // Bun's on_before_exit: the microtasks and ticks that 'beforeExit' listeners queue run
     // first (the next turn), and the event comes again only after loop work they left alive.
-    if (!this.beforeExitRan) {
+    if (!stopped && !this.beforeExitRan) {
       this.beforeExitRan = !this.testComplete && this.guard(() => this.internal.emitBeforeExit(), false);
       if (this.beforeExitRan) return this.schedule(0);
     }

@@ -1,0 +1,12 @@
+rejection a1
+uncaught from a1 uncaughtException
+rejection a2
+uncaught from a2 uncaughtException
+rejection a3
+uncaught from a3 uncaughtException
+still running
+rejection b1
+rejection b2
+immediate queued by a listener, exitCode undefined
+timer set by a listener
+exit 4 4

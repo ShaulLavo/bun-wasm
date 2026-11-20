@@ -1,0 +1,5 @@
+rejection r1 exitCode 3
+after sleep 1
+rejection r2 exitCode 1
+after second sleep
+exit 1 1
