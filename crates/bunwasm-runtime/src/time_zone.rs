@@ -11,7 +11,8 @@ pub fn install(table: &mut Table) {
         let name = args.str(0)?;
         let found = source().and_then(|text| entries(text, name));
         Ok(found.map_or(Val::Undefined, |(zone, entries)| {
-            Val::Array(vec![Val::Str(zone), Val::Str(entries.into())])
+            let entries = entries.map_or(Val::Undefined, |entries| Val::Str(entries.into()));
+            Val::Array(vec![Val::Str(zone), entries])
         }))
     });
     table.add("timeZoneOffsets", |_| offsets_value());
@@ -50,74 +51,85 @@ fn is_zone_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"/_+-".contains(&b))
 }
 
-/// The zone a name stands for (FormatJS's link if it is one) and that zone's
-/// `time,abbreviation,offset,dst` entries.
-fn entries<'a>(text: &'a str, name: &str) -> Option<(String, &'a str)> {
+/// The zone a name stands for and that zone's `time,abbreviation,offset,dst` entries: its own
+/// when the data has them (ICU keeps Asia/Kuala_Lumpur's history although FormatJS links it to
+/// Singapore), else FormatJS's link. A link whose zone has no entries (the UTC names and
+/// Africa/Abidjan's group) answers with that zone and no entries; `time_zone.ts` decides.
+fn entries<'a>(text: &'a str, name: &str) -> Option<(String, Option<&'a str>)> {
     if !is_zone_name(name) {
         return None;
     }
     let (_, zones, links) = sections(text)?;
-    let zone = [
+    if let Some(own) = string_after(zones, &format!("\"{name}|")) {
+        return Some((name.to_owned(), Some(own)));
+    }
+    let link = [
         format!("\"{name}\":\""),
         format!("{{{name}:\""),
         format!(",{name}:\""),
     ]
     .iter()
-    .find_map(|key| string_after(links, key))
-    .unwrap_or(name);
-    let entries = string_after(zones, &format!("\"{zone}|"))?;
-    Some((zone.to_owned(), entries))
+    .find_map(|key| string_after(links, key))?;
+    Some((link.to_owned(), string_after(zones, &format!("\"{link}|"))))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const DATA: &str = r#"(function () { "use strict"; const data = {abbrvs:"LMT|EST|EDT",offsets:"0|-50|-40",zones:["America/New_York|,0,0,0|-1,1,1,0","Etc/UTC|,0,0,0"]}; data.links = {"US/Eastern":"America/New_York",UTC:"Etc/UTC","1918":"USback"}; return data; })"#;
+    fn found(name: &str) -> Option<(String, Option<&'static str>)> {
+        entries(source().expect("tz_data.js is embedded"), name)
+    }
 
-    fn found(name: &str) -> Option<(String, &'static str)> {
-        entries(DATA, name)
+    fn zone(name: &str) -> Option<String> {
+        found(name).map(|found| found.0)
     }
 
     #[test]
-    fn zones_links_and_offsets() {
-        let new_york = Some(("America/New_York".to_owned(), ",0,0,0|-1,1,1,0"));
-        assert_eq!(found("America/New_York"), new_york);
-        assert_eq!(found("US/Eastern"), new_york);
-        assert_eq!(found("UTC"), Some(("Etc/UTC".to_owned(), ",0,0,0")));
-        assert_eq!(
-            string_after(sections(DATA).unwrap().0, "offsets:\""),
-            Some("0|-50|-40")
+    fn zones_and_links_in_the_embedded_data() {
+        assert!(found("America/New_York").is_some_and(|found| found.1.is_some()));
+        assert_eq!(zone("US/Eastern"), Some("America/New_York".to_owned()));
+        assert_eq!(zone("Asia/Calcutta"), Some("Asia/Kolkata".to_owned()));
+        // A zone with entries of its own keeps them although FormatJS links it elsewhere.
+        assert!(
+            found("Asia/Kuala_Lumpur")
+                .is_some_and(|found| found.0 == "Asia/Kuala_Lumpur" && found.1.is_some())
         );
+        let offsets = offsets_value().expect("offsets");
+        assert!(matches!(offsets, Val::Str(text) if text.contains('|')));
     }
 
     #[test]
-    fn names_outside_the_zone_list_are_unknown() {
-        // An abbreviation, a link to no zone, a prefix or a suffix of a zone, a different case,
-        // and names that could reach across entries.
+    fn links_to_zones_without_entries() {
+        // The data has no Etc/UTC, Etc/GMT or Africa/Abidjan entries, only links to them.
+        for (name, target) in [
+            ("UTC", "Etc/UTC"),
+            ("Zulu", "Etc/UTC"),
+            ("Etc/Universal", "Etc/UTC"),
+            ("GMT0", "Etc/GMT"),
+            ("Greenwich", "Etc/GMT"),
+            ("Iceland", "Africa/Abidjan"),
+            ("Africa/Timbuktu", "Africa/Abidjan"),
+        ] {
+            assert_eq!(found(name), Some((target.to_owned(), None)), "{name}");
+        }
+    }
+
+    #[test]
+    fn names_outside_the_data_are_unknown() {
+        // An abbreviation, a prefix or a suffix of a zone, a different case, and names that
+        // could reach across entries.
         for name in [
             "LMT",
-            "1918",
             "America/New",
             "New_York",
             "america/new_york",
             "",
             "a\"b",
             "x|y",
+            "-5:00",
         ] {
             assert_eq!(found(name), None, "{name}");
         }
-    }
-
-    #[test]
-    fn the_embedded_data_has_every_part() {
-        let text = source().expect("tz_data.js is embedded");
-        assert!(entries(text, "America/New_York").is_some());
-        assert_eq!(
-            entries(text, "Asia/Calcutta").map(|found| found.0),
-            Some("Asia/Kolkata".to_owned())
-        );
-        let offsets = offsets_value().expect("offsets");
-        assert!(matches!(offsets, Val::Str(text) if text.contains('|')));
     }
 }

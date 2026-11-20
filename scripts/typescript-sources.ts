@@ -12,6 +12,7 @@ const generatedDirectories = [
 const generatedFiles = new Set([
   "crates/bunwasm-runtime/src/js/intl.js",
   "crates/bunwasm-runtime/src/js/tz_data.js",
+  "crates/bunwasm-runtime/src/js/zone_ids.js",
   "crates/bunwasm-runtime/src/js/zone_names.js",
   "third_party/node-streams/entry.cjs",
   "third_party/streams/entry.js",

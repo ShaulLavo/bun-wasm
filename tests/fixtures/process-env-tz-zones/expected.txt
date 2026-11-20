@@ -47,6 +47,69 @@ Etc/Unknown -> UTC
 Factory -> UTC
   winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
   summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
+Asia/Tokyo -> Asia/Tokyo
+  winter 21 | 0 | -540 | Mon Jan 15 2024 21:00:00 GMT+0900 (Japan Standard Time) | 21:00:00 GMT+0900 (Japan Standard Time) | 1/15/2024, 9:00:00 PM | 9:00:00 PM
+  summer 21 | 0 | -540 | Mon Jul 15 2024 21:00:00 GMT+0900 (Japan Standard Time) | 21:00:00 GMT+0900 (Japan Standard Time) | 7/15/2024, 9:00:00 PM | 9:00:00 PM
+Zulu -> UTC
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
+Asia/Tokyo -> Asia/Tokyo
+  winter 21 | 0 | -540 | Mon Jan 15 2024 21:00:00 GMT+0900 (Japan Standard Time) | 21:00:00 GMT+0900 (Japan Standard Time) | 1/15/2024, 9:00:00 PM | 9:00:00 PM
+  summer 21 | 0 | -540 | Mon Jul 15 2024 21:00:00 GMT+0900 (Japan Standard Time) | 21:00:00 GMT+0900 (Japan Standard Time) | 7/15/2024, 9:00:00 PM | 9:00:00 PM
+GMT0 -> UTC
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
+Asia/Tokyo -> Asia/Tokyo
+  winter 21 | 0 | -540 | Mon Jan 15 2024 21:00:00 GMT+0900 (Japan Standard Time) | 21:00:00 GMT+0900 (Japan Standard Time) | 1/15/2024, 9:00:00 PM | 9:00:00 PM
+  summer 21 | 0 | -540 | Mon Jul 15 2024 21:00:00 GMT+0900 (Japan Standard Time) | 21:00:00 GMT+0900 (Japan Standard Time) | 7/15/2024, 9:00:00 PM | 9:00:00 PM
+Etc/Greenwich -> UTC
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
+Africa/Dakar -> Africa/Dakar
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
+Iceland -> Atlantic/Reykjavik
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
+Africa/Abidjan -> Africa/Abidjan
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
+Asia/Kuala_Lumpur -> Asia/Kuala_Lumpur
+  winter 20 | 0 | -480 | Mon Jan 15 2024 20:00:00 GMT+0800 (Malaysia Time) | 20:00:00 GMT+0800 (Malaysia Time) | 1/15/2024, 8:00:00 PM | 8:00:00 PM
+  summer 20 | 0 | -480 | Mon Jul 15 2024 20:00:00 GMT+0800 (Malaysia Time) | 20:00:00 GMT+0800 (Malaysia Time) | 7/15/2024, 8:00:00 PM | 8:00:00 PM
+Europe/Jersey -> Europe/Jersey
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 13 | 0 | -60 | Mon Jul 15 2024 13:00:00 GMT+0100 (GMT+01:00) | 13:00:00 GMT+0100 (GMT+01:00) | 7/15/2024, 1:00:00 PM | 1:00:00 PM
+Indian/Reunion -> Indian/Reunion
+  winter 16 | 0 | -240 | Mon Jan 15 2024 16:00:00 GMT+0400 (Réunion Time) | 16:00:00 GMT+0400 (Réunion Time) | 1/15/2024, 4:00:00 PM | 4:00:00 PM
+  summer 16 | 0 | -240 | Mon Jul 15 2024 16:00:00 GMT+0400 (Réunion Time) | 16:00:00 GMT+0400 (Réunion Time) | 7/15/2024, 4:00:00 PM | 4:00:00 PM
+Pacific/Majuro -> Pacific/Majuro
+  winter 0 | 0 | -720 | Tue Jan 16 2024 00:00:00 GMT+1200 (Marshall Islands Time) | 00:00:00 GMT+1200 (Marshall Islands Time) | 1/16/2024, 12:00:00 AM | 12:00:00 AM
+  summer 0 | 0 | -720 | Tue Jul 16 2024 00:00:00 GMT+1200 (Marshall Islands Time) | 00:00:00 GMT+1200 (Marshall Islands Time) | 7/16/2024, 12:00:00 AM | 12:00:00 AM
+America/Nipigon -> America/Toronto
+  winter 7 | 0 | 300 | Mon Jan 15 2024 07:00:00 GMT-0500 (Eastern Standard Time) | 07:00:00 GMT-0500 (Eastern Standard Time) | 1/15/2024, 7:00:00 AM | 7:00:00 AM
+  summer 8 | 0 | 240 | Mon Jul 15 2024 08:00:00 GMT-0400 (Eastern Daylight Time) | 08:00:00 GMT-0400 (Eastern Daylight Time) | 7/15/2024, 8:00:00 AM | 8:00:00 AM
+America/Coyhaique -> America/Coyhaique
+  winter 9 | 0 | 180 | Mon Jan 15 2024 09:00:00 GMT-0300 (GMT-03:00) | 09:00:00 GMT-0300 (GMT-03:00) | 1/15/2024, 9:00:00 AM | 9:00:00 AM
+  summer 8 | 0 | 240 | Mon Jul 15 2024 08:00:00 GMT-0400 (GMT-03:00) | 08:00:00 GMT-0400 (GMT-03:00) | 7/15/2024, 8:00:00 AM | 8:00:00 AM
+Asia/Almaty -> Asia/Almaty
+  winter 18 | 0 | -360 | Mon Jan 15 2024 18:00:00 GMT+0600 (Kazakhstan Time) | 18:00:00 GMT+0600 (Kazakhstan Time) | 1/15/2024, 6:00:00 PM | 6:00:00 PM
+  summer 17 | 0 | -300 | Mon Jul 15 2024 17:00:00 GMT+0500 (Kazakhstan Time) | 17:00:00 GMT+0500 (Kazakhstan Time) | 7/15/2024, 5:00:00 PM | 5:00:00 PM
+Asia/Qostanay -> Asia/Qostanay
+  winter 18 | 0 | -360 | Mon Jan 15 2024 18:00:00 GMT+0600 (Kazakhstan Time) | 18:00:00 GMT+0600 (Kazakhstan Time) | 1/15/2024, 6:00:00 PM | 6:00:00 PM
+  summer 17 | 0 | -300 | Mon Jul 15 2024 17:00:00 GMT+0500 (Kazakhstan Time) | 17:00:00 GMT+0500 (Kazakhstan Time) | 7/15/2024, 5:00:00 PM | 5:00:00 PM
+1918 -> Asia/Qostanay
+  winter 18 | 0 | -360 | Mon Jan 15 2024 18:00:00 GMT+0600 (Kazakhstan Time) | 18:00:00 GMT+0600 (Kazakhstan Time) | 1/15/2024, 6:00:00 PM | 6:00:00 PM
+  summer 17 | 0 | -300 | Mon Jul 15 2024 17:00:00 GMT+0500 (Kazakhstan Time) | 17:00:00 GMT+0500 (Kazakhstan Time) | 7/15/2024, 5:00:00 PM | 5:00:00 PM
+past America/Mexico_City Wed Jul 15 2020 07:00:00 GMT-0500 (Central Daylight Time)
+past Asia/Tehran Wed Jul 15 2020 16:30:00 GMT+0430 (Iran Daylight Time)
+past Asia/Tehran Wed Jan 15 2020 15:30:00 GMT+0330 (Iran Standard Time)
+past Europe/Moscow Thu Jul 15 2010 16:00:00 GMT+0400 (Moscow Summer Time)
+past Europe/Moscow Sun Jan 15 2012 16:00:00 GMT+0400 (Moscow Standard Time)
+past America/Sao_Paulo Mon Jan 15 2018 10:00:00 GMT-0200 (Brasilia Summer Time)
+past Europe/Istanbul Wed Jul 15 2015 15:00:00 GMT+0300 (Türkiye Summer Time)
+past Asia/Almaty Sat Jan 15 2000 18:00:00 GMT+0600 (Kazakhstan Time)
+past Europe/London Tue Jul 15 1975 13:00:00 GMT+0100 (British Summer Time)
 Lord Howe 2024-04-06T14:59:00Z 1 59 -660
 Lord Howe 2024-04-06T15:00:00Z 1 30 -630
 Lord Howe 2024-10-05T15:29:00Z 1 59 -630

@@ -1375,7 +1375,11 @@
     const previous = new DateTimeFormat().resolvedOptions().timeZone;
     try {
       DateTimeFormat.__setDefaultTimeZone(intlTimeZone);
-      if (typeof new DateTimeFormat().resolvedOptions().timeZone === "string") return;
+      if (typeof new DateTimeFormat().resolvedOptions().timeZone !== "string") throw new RangeError(intlTimeZone);
+      // FormatJS canonicalizes through its links (Asia/Kuala_Lumpur becomes Asia/Singapore);
+      // the default keeps the zone the engine resolved, whose data FormatJS has, as Bun does.
+      if (intlTimeZone !== undefined) DateTimeFormat.__defaultTimeZone = intlTimeZone;
+      return;
     } catch {
       // Unknown to the fallback's zone data.
     }
@@ -1455,14 +1459,43 @@
   if (installIntlFallback && native.engine === "quickjs") {
     const nativeToString = Date.prototype.toString;
     const nativeToTimeString = Date.prototype.toTimeString;
+    // zone_names.js lists, per zone, "minutes:dst:name:day" entries: a name for that offset and
+    // daylight flag from that day (since 1970, base 36) on; a key's first entry applies to every
+    // earlier day too. Parsed once per zone, with the latest name for each daylight flag, which
+    // an offset the table never saw (before 1970, a future rule) takes: JavaScriptCore names a
+    // date by the zone's standard or daylight name.
     let zoneNames;
+    const zoneTables = new Map();
+    function zoneTable(zone) {
+      let table = zoneTables.get(zone);
+      if (table) return table;
+      zoneNames ??= internal.require("zone_names");
+      table = { keys: new Map(), latest: [[-1, undefined], [-1, undefined]] };
+      for (const entry of (zoneNames.zones[zone] ?? "").split(",")) {
+        if (!entry) continue;
+        const [minutes, dst, index, day] = entry.split(":");
+        const key = `${minutes}:${dst}`;
+        const from = day === "0" ? -Infinity : parseInt(day, 36);
+        const name = zoneNames.names[Number(index)];
+        if (!table.keys.has(key)) table.keys.set(key, []);
+        table.keys.get(key).push([from, name]);
+        if (from >= table.latest[dst][0]) table.latest[dst] = [from, name];
+      }
+      zoneTables.set(zone, table);
+      return table;
+    }
     function zoneName(date) {
       const zone = internal.localTimeZone;
       if (zone === undefined || zone === "UTC") return "Coordinated Universal Time";
-      zoneNames ??= internal.require("zone_names");
+      const time = Reflect.apply(dateGetTime, date, []);
       const minutes = -Reflect.apply(dateGetTimezoneOffset, date, []);
-      const index = zoneNames.zones[`${zone}|${minutes}`];
-      return index === undefined ? gmtName(minutes) : zoneNames.names[index];
+      const dst = internal.localTimeZoneDaylight?.(time) ? 1 : 0;
+      const table = zoneTable(zone);
+      const day = Math.floor(time / 864e5);
+      let name;
+      for (const [from, value] of table.keys.get(`${minutes}:${dst}`) ?? []) if (from <= day) name = value;
+      name ??= table.latest[dst][1];
+      return name || gmtName(minutes);
     }
     // ICU's name for an offset with no name of its own, as in "GMT-03:00" (Etc/GMT+3).
     function gmtName(minutes) {
@@ -1516,7 +1549,8 @@
       if (Number.isNaN(time)) return "Invalid Date";
       const year = Reflect.apply(dateGetFullYear, date, []);
       if (locales === undefined && options === undefined && year > 0 && year < 10000) return defaultLocalDate(date, kind, year);
-      return localeFormat(kind, locales, options).format(time);
+      // ICU prints a narrow no-break space before AM/PM; Bun's Date methods print a space.
+      return localeFormat(kind, locales, options).format(time).replace(/ /g, " ");
     }
     function defaultLocalDate(date, kind, year) {
       const day = `${Reflect.apply(dateGetMonth, date, []) + 1}/${Reflect.apply(dateGetDate, date, [])}/${year}`;
