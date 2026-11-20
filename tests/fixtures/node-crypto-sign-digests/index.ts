@@ -90,3 +90,18 @@ show("randomInt range", () => {
   return Array.from(seen).sort().join(",");
 });
 crypto.randomInt(7, 8, (error, value) => console.log("randomInt callback", error, value));
+
+// One-shot verify takes the signature only as a view, checked before the key.
+show("verify string signature", () => crypto.verify(null, Buffer.alloc(1), "test", "oops" as never));
+show("verify number signature", () => crypto.verify("sha256", Buffer.alloc(1), "test", 5 as never));
+for (const length of [128, 192, 256, 128.5, 64, "128", undefined]) {
+  show(`generateKeySync aes ${String(length)}`, () => crypto.generateKeySync("aes", { length } as never).symmetricKeySize);
+}
+show("generateKeySync hmac 7", () => crypto.generateKeySync("hmac", { length: 7 }).symmetricKeySize);
+show("generateKeySync hmac string", () => crypto.generateKeySync("hmac", { length: "8" as never }).symmetricKeySize);
+show("generateKeySync hmac 20", () => crypto.generateKeySync("hmac", { length: 20 }).symmetricKeySize);
+// crypto.Hash and crypto.Hmac are util.deprecate wrappers (DEP0179, DEP0181).
+process.noDeprecation = true;
+show("constructor names", () => [crypto.Hash.name, crypto.Hmac.name, crypto.Sign.name, crypto.Verify.name].join());
+show("new Hash", () => new (crypto.Hash as unknown as new (algorithm: string) => crypto.Hash)("sha256").update("a").digest("hex").slice(0, 8));
+show("Hash()", () => (crypto.Hash as unknown as (algorithm: string) => crypto.Hash)("sha256") instanceof crypto.Hash);

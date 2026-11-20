@@ -142,14 +142,33 @@
   // The frames Bun would not show: the runtime's own, and native frames the runtime called, such
   // as the `apply` its event loop runs a callback through. A native frame called by user code,
   // like `forEach`, stays. Sites run from the innermost call outwards.
+  // The tick pass (`internal.runTicks`, named after Bun's processTicksAndRejections) is the
+  // one runtime frame Bun shows: it prints `tickPassFrame`, and the native call it runs a
+  // callback through stays hidden. A program's own function of that name is an ordinary frame.
   function hiddenCallSites(callsites) {
     const hidden = new Array(callsites.length);
     let callerHidden = false;
     for (let i = callsites.length - 1; i >= 0; i--) {
-      hidden[i] = isRuntimeCallSite(callsites[i]) || isSuspendedProgram(callsites[i]) || callerHidden && isNativeCallSite(callsites[i]);
+      const site = callsites[i];
+      if (isTickPass(site)) {
+        hidden[i] = tickPass;
+        callerHidden = true;
+        continue;
+      }
+      hidden[i] = isRuntimeCallSite(site) || isSuspendedProgram(site) || callerHidden && isNativeCallSite(site);
       callerHidden = hidden[i];
     }
     return hidden;
+  }
+
+  const tickPass = "tick pass";
+  // Bun's frame for its tick pass, a builtin at a fixed position.
+  const tickPassFrame = "processTicksAndRejections (native:7:39)";
+  internal.tickPassFrame = tickPassFrame;
+  // The runtime's own script is `bun-wasm:bootstrap`. Node's frame of the same name on the
+  // Browser fixture host (`node:internal/process/task_queues`) only maps to a host frame.
+  function isTickPass(site) {
+    return site.getFunctionName() === "processTicksAndRejections" && isRuntimeFrameFile(callSiteFile(site));
   }
 
   function syntaxCallSite(site, name, file) {
@@ -250,9 +269,14 @@
     const limit = internal.capturedStackLimit?.(callsites);
     let shown = 0;
     for (let i = start; i < callsites.length; i++) {
-      if (hidden?.[i]) continue;
+      if (hidden?.[i] === true) continue;
       if (shown === limit) break;
       shown++;
+      if (hidden?.[i] === tickPass) {
+        out += `\n    at ${tickPassFrame}`;
+        if (internal.hotRun) raw += `    at ${tickPassFrame}\n`;
+        continue;
+      }
       out +=`\n    at ${formatCallSite(callsites[i])}`;
       if (internal.hotRun) raw += `    at ${formatCallSite(callsites[i], true)}\n`;
     }
@@ -727,7 +751,8 @@
     tickQueue.push([callback, args, native.getAsyncContext()]);
   };
 
-  internal.runTicks = function runTicks() {
+  // Named after Bun's tick pass, whose frame error.stack shows (see hiddenCallSites).
+  internal.runTicks = function processTicksAndRejections() {
     try {
       while (tickQueue.length > 0) {
         const [callback, args, context] = tickQueue.shift();

@@ -399,6 +399,8 @@ declare namespace BunWasm {
     formatCallSite(site: StackCallSite, keepIdentity?: boolean, anonymousFunction?: boolean): string;
     stackHeader(error: object): string;
     showRuntimeFrames(): boolean;
+    /** Bun's frame for its tick pass, printed in place of the runtime's own. */
+    tickPassFrame: string;
     capturedStackLimit?(sites: object): number | undefined;
     hotErrorStacks: WeakMap<object, string>;
     require(name: "inspect"): ConsoleInspector;

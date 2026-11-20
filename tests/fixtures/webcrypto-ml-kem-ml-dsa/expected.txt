@@ -1,0 +1,72 @@
+ML-DSA-44 {"name":"ML-DSA-44"} private ["sign"] ["verify"]
+ML-DSA-44 spki 1334 8386e6e12b8cf28c pkcs8 3034020100300b060960864801650304031104228020090a
+ML-DSA-44 raw-public 04ed5780f64a566f raw-seed 090a0b0c0d0e0f10
+ML-DSA-44 jwk AKP ML-DSA-44 CQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJyg 1750 ["sign"] true
+ML-DSA-44 sign 2420 true false true false
+ML-DSA-44 reimport true true
+ML-DSA-44 clone private 090a0b0c0d0e0f10
+ML-DSA-65 {"name":"ML-DSA-65"} private ["sign"] ["verify"]
+ML-DSA-65 spki 1974 54ffb9ed4546e53f pkcs8 3034020100300b060960864801650304031204228020090a
+ML-DSA-65 raw-public 751b7766605da964 raw-seed 090a0b0c0d0e0f10
+ML-DSA-65 jwk AKP ML-DSA-65 CQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJyg 2603 ["sign"] true
+ML-DSA-65 sign 3309 true false true false
+ML-DSA-65 reimport true true
+ML-DSA-65 clone private 090a0b0c0d0e0f10
+ML-DSA-87 {"name":"ML-DSA-87"} private ["sign"] ["verify"]
+ML-DSA-87 spki 2614 6324daf459cc0bf7 pkcs8 3034020100300b060960864801650304031304228020090a
+ML-DSA-87 raw-public 56d63fb334a9172b raw-seed 090a0b0c0d0e0f10
+ML-DSA-87 jwk AKP ML-DSA-87 CQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJyg 3456 ["sign"] true
+ML-DSA-87 sign 4627 true false true false
+ML-DSA-87 reimport true true
+ML-DSA-87 clone private 090a0b0c0d0e0f10
+context 256 throws OperationError 0 The operation failed for an operation-specific reason
+verify short false
+export raw-public of private throws NotSupportedError 9 Unable to export ML-DSA-44 private key using raw-public format
+export raw-seed of public throws NotSupportedError 9 Unable to export ML-DSA-44 public key using raw-seed format
+export raw throws NotSupportedError 9 Unable to export ML-DSA-44 public key using raw format
+export spki of private throws NotSupportedError 9 Unable to export ML-DSA-44 private key using spki format
+import raw-public short throws DataError 0 Invalid keyData
+import raw-seed short throws DataError 0 Invalid keyData
+import raw throws NotSupportedError 9 Unable to import ML-DSA-44 using raw format
+import spki garbage throws DataError 0 Invalid keyData
+import spki of 65 throws DataError 0 Invalid key type
+import jwk wrong alg throws DataError 0 JWK "alg" Parameter and algorithm name mismatch
+import jwk no alg throws DataError 0 Invalid keyData
+import jwk wrong kty throws DataError 0 Invalid JWK "kty" Parameter
+import jwk other pub throws DataError 0 Invalid keyData
+verify context 256 throws OperationError 0 The operation failed for an operation-specific reason
+import jwk use sig {}
+import jwk use enc throws DataError 0 Invalid JWK "use" Parameter
+import jwk use enc without usages {}
+import jwk duplicate key_ops throws DataError 0 Duplicate key operation
+import jwk key_ops mismatch throws DataError 0 Key operations and usage mismatch
+import jwk ext false throws DataError 0 JWK "ext" Parameter and extractable mismatch
+import pkcs8 verify usage throws SyntaxError  Unsupported key usage for a ML-DSA-44 key
+import seed no usages throws SyntaxError  Usages cannot be empty when importing a private key.
+generate encrypt usage throws SyntaxError  Unsupported key usage for an ML-DSA-65 key
+generate verify only throws SyntaxError  Usages cannot be empty when creating a key.
+generate [{"name":"ML-DSA-87"},false,true,["sign"],["verify"]]
+ML-KEM-768 {"name":"ML-KEM-768"} ["decapsulateKey","decapsulateBits"] ["encapsulateKey","encapsulateBits"]
+ML-KEM-768 spki 1206 4b42808c55c7561d pkcs8 86 3054020100300b060960864801650304040204428040fffe
+ML-KEM-768 jwk AKP ML-KEM-768 86 1579
+ML-KEM-768 bits ["sharedKey","ciphertext"] 32 1088 true
+ML-KEM-768 key ["ciphertext","sharedKey"] {"name":"AES-GCM","length":256} true
+ML-KEM-768 reimport private ["decapsulateKey","decapsulateBits"]
+ML-KEM-1024 {"name":"ML-KEM-1024"} ["decapsulateKey","decapsulateBits"] ["encapsulateKey","encapsulateBits"]
+ML-KEM-1024 spki 1590 f156ed8f620ac59a pkcs8 86 3054020100300b060960864801650304040304428040fffe
+ML-KEM-1024 jwk AKP ML-KEM-1024 86 2091
+ML-KEM-1024 bits ["sharedKey","ciphertext"] 32 1568 true
+ML-KEM-1024 key ["ciphertext","sharedKey"] {"name":"AES-GCM","length":256} true
+ML-KEM-1024 reimport private ["decapsulateKey","decapsulateBits"]
+encapsulate with private throws InvalidAccessError 15 encapsulationKey does not have encapsulateBits usage
+decapsulate bad ciphertext throws OperationError 0 The operation failed for an operation-specific reason
+encapsulateKey without usage throws InvalidAccessError 15 encapsulationKey does not have encapsulateKey usage
+encapsulate wrong set throws InvalidAccessError 15 key algorithm mismatch
+import unreduced raw-public throws DataError 0 Invalid keyData
+import unreduced spki throws DataError 0 Invalid keyData
+import unreduced jwk throws DataError 0 Invalid keyData
+import ML-KEM jwk use enc {}
+import ML-KEM jwk use sig throws DataError 0 Invalid JWK "use" Parameter
+ML-KEM-512 throws NotSupportedError 9 Unrecognized algorithm name
+generate sign usage throws SyntaxError  Unsupported key usage for an ML-KEM-768 key
+lengths 2 5 3 6

@@ -52,6 +52,8 @@ fn crypto(manifest: &Path, out: &Path) {
         println!("cargo:rerun-if-env-changed={name}");
     }
     println!("cargo:rerun-if-changed=c/rsa.c");
+    println!("cargo:rerun-if-changed=c/pqc.c");
+    println!("cargo:rerun-if-changed=c/spkac.c");
     println!("cargo:rerun-if-changed=src/tls.rs");
     println!("cargo:rerun-if-changed=../../jsc/wasi-jsc.cmake");
     let source = std::env::var_os("BUNWASM_BORINGSSL_SOURCE")
@@ -152,6 +154,8 @@ fn crypto(manifest: &Path, out: &Path) {
     legacy.compile("bunwasm_crypto_legacy");
     cc::Build::new()
         .file(manifest.join("c/rsa.c"))
+        .file(manifest.join("c/pqc.c"))
+        .file(manifest.join("c/spkac.c"))
         .include(source.join("include"))
         .compile("bunwasm_crypto");
     println!("cargo:rustc-link-search=native={}", build.display());
