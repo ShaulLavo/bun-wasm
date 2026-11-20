@@ -111,8 +111,11 @@
       const end = this.#end === undefined ? stat.size : Math.min(this.#end, stat.size);
       return Math.max(0, end - this.#start);
     }
+    // A bounded slice of a file that cannot be stat'ed still has its length, as in Bun.
     get size() {
-      return this._knownSize() ?? 0;
+      const known = this._knownSize();
+      if (known !== null) return known;
+      return this.#end === undefined ? 0 : Math.max(0, this.#end - this.#start);
     }
     get lastModified() {
       try {
@@ -145,9 +148,12 @@
       const known = this._knownSize();
       const size = known === null || !Number.isFinite(known) ? 2 ** 52 - 1 : known;
       const { start, length, type } = internal.sliceBounds(args, size);
-      const [given] = internal.blobType(type);
+      const [given, interned] = internal.blobType(type);
       const from = this.#start + start;
-      return new BunFile(this.#fd !== null ? this.#fd : this.#path, { type: given || this.type }, internal, [from, from + length]);
+      const slice = new BunFile(this.#fd !== null ? this.#fd : this.#path, {}, internal, [from, from + length]);
+      // The type is already Bun's; the constructor would normalize it again.
+      slice._setType(given || this.type, given ? interned : false);
+      return slice;
     }
     writer() {
       const path = this.#path;
