@@ -159,7 +159,7 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 // and the JSC default text rewritten in Bun's form (docs/bun-patches/error-stack-header.md),
 // without the runtime's own frames (docs/bun-patches/runtime-stack-frames.md).
 const originalTokens = {
-  stack_trace: "fbbff28914609883dab58441cd9bc56d22d94148d341a6593d3e7870d94b34c1",
+  stack_trace: "498778015efc8fb62977d849e0e7802dfebfa0cfb7598f74d0c9207f6ed3e34d",
   // Re-pinned for the thirdparty fetch modules' internal loader and binding hooks (node-fetch, undici).
   bun_builtins: "acf769db3668622edc5f3d2ba41b86d593371cbdf7537d86e53f9ed8cc0b23f3",
 };
