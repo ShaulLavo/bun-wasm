@@ -35,7 +35,10 @@ reports after `process.env.TZ = name`:
   (`Asia/Kuala_Lumpur`, `Europe/Jersey`, `Indian/Reunion`, `Pacific/Majuro`);
 - Africa/Abidjan, which the data lacks, and the links to it that have no entries of their own
   (`Iceland` is `Atlantic/Reykjavik` with its entries; `Africa/Abidjan` is GMT all along).
-  FormatJS's rule names in its link table (`1918`, `-5:00`) are not zones.
+  FormatJS's rule names in its link table (`1918`, `-5:00`) are not zones, and neither is
+  `America/Argentina/ComodRivadavia`, which Bun rejects; `zone_ids.js` lists such names as "".
+  The fallback `Intl` gets a GMT entry for Africa/Abidjan, and a zone it cannot use leaves its
+  previous default exactly as it was.
 
 It turns the zone's entries into `[offset, time, offset, ...]` (seconds) and calls the
 `setLocalTimeOffsets` native, and keeps the times its daylight flag changes for the zone's name.
@@ -121,7 +124,11 @@ Against main at ee45ea714 the QuickJS guest grows by 50.9 KB raw and 14.6 KB gzi
   `Intl.DateTimeFormat` output where Bun prints a space; the Date locale methods print the space.
   FormatJS also canonicalizes an explicit `timeZone` option through its links
   (`{ timeZone: "Asia/Kuala_Lumpur" }` reports and names Singapore); only the default zone keeps
-  its name.
+  its name. FormatJS looks a zone's names up under the zone it formats in, so keeping the
+  engine's zone costs a few `Intl` long names: America/Atikokan prints "GMT-05:00" and
+  Africa/Asmara "GMT+03:00" where Bun prints Eastern Standard Time and East Africa Time.
+  Taking names from the canonical zone while reporting the requested one would mean patching
+  FormatJS. Date's own `toString` names come from `zone_names.js` and are right.
 
 ### Tests
 
