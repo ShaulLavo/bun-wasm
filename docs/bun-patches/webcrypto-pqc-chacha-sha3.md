@@ -30,7 +30,8 @@ Native Bun implements these in C++ over BoringSSL. The adapters follow Bun at re
   extractability, usages and key material as JSON, and the receiving realm's
   `deserializeKey` checks every field and rebuilds a usable key, as Bun's
   `SerializedScriptValue` does for `CryptoKey`. A record that does not check out fails
-  with `DataCloneError`.
+  with `DataCloneError`. An RSA key's `algorithm` lists `name`, `modulusLength`,
+  `publicExponent` and `hash` in Bun's `RsaHashedKeyAlgorithm` order.
 - Bun's `src/jsc/bindings/node/crypto/JSCipher.cpp` for `publicEncrypt` and
   `privateDecrypt` options: `padding`, `oaepHash`, `encoding` and `oaepLabel` are read
   and the label copied before the key is parsed, so an option getter that detaches the
