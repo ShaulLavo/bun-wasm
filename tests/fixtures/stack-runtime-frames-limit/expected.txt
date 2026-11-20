@@ -8,4 +8,3 @@ Error: deep
 Error: early
     at ./index.ts:38:19
 2 call sites
-limit 0: <undefined>

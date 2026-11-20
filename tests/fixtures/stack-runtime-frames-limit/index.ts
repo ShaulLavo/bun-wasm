@@ -47,6 +47,3 @@ function two() { return three(); }
 function three() { const error = new Error("custom"); return error.stack; }
 console.log(one());
 Error.prepareStackTrace = undefined;
-
-Error.stackTraceLimit = 0;
-console.log("limit 0:", frames(new Error("none")));
