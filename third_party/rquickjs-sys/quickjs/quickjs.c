@@ -8005,6 +8005,13 @@ static void js_free_value_rt(JSRuntime *rt, JSValue v)
                 if (rt->gc_phase == JS_GC_PHASE_NONE) {
                     free_zero_refcount(rt);
                 }
+            } else if (JS_GC_MARK(p) == 0) {
+                /* bun-wasm: the scan found this object live, but its last
+                   reference came from a record the collector cannot see,
+                   such as a symbol's weak list. Free it with the cycles. */
+                list_del(&p->link);
+                list_add_tail(&p->link, &rt->tmp_obj_list);
+                JS_GC_MARK(p) = 1;
             }
         }
         break;
@@ -8125,10 +8132,12 @@ static void mark_weak_map_value(JSRuntime *rt, JSWeakRefRecord *first_weak_ref, 
     }
 }
 
-/* The map side of the scan and restore passes (see mark_weak_map_value).
-   `key_live` tells whether the record's key object is live in this pass. */
+/* The map side of the decref, scan and restore passes (see
+   mark_weak_map_value). Symbol keys are not GC objects and die only by
+   reference count, so they count as live: their values are children of the
+   map, like Map values. `key_live` tells whether an object key is live. */
 static void mark_weak_map_records(JSRuntime *rt, JSGCObjectHeader *gp,
-                                  bool restore, JS_MarkFunc *mark_func)
+                                  JS_MarkFunc *mark_func)
 {
     JSObject *p = (JSObject *)gp;
     JSMapState *s;
@@ -8144,11 +8153,17 @@ static void mark_weak_map_records(JSRuntime *rt, JSGCObjectHeader *gp,
         return;
     list_for_each(el, &s->records) {
         mr = list_entry(el, JSMapRecord, link);
-        /* Symbol keys are not GC objects: their values were never decreffed. */
-        if (mr->empty || mr->gc_restored || JS_VALUE_GET_TAG(mr->key) != JS_TAG_OBJECT)
+        if (mr->empty)
+            continue;
+        if (JS_VALUE_GET_TAG(mr->key) != JS_TAG_OBJECT) {
+            JS_MarkValue(rt, mr->value, mark_func);
+            continue;
+        }
+        /* Object keys attribute the value to the key in the decref pass. */
+        if (rt->weak_value_pass == WEAK_VALUE_PASS_DECREF || mr->gc_restored)
             continue;
         /* After the scan, live objects have mark 0 and dead ones mark 1. */
-        if (restore)
+        if (rt->weak_value_pass == WEAK_VALUE_PASS_RESTORE)
             key_live = JS_GC_MARK(&JS_VALUE_GET_OBJ(mr->key)->header) == 0;
         else
             key_live = JS_REF_COUNT(&JS_VALUE_GET_OBJ(mr->key)->header) > 0;
@@ -8292,6 +8307,7 @@ static void gc_decref(JSRuntime *rt)
         p = list_entry(el, JSGCObjectHeader, link);
         assert(JS_GC_MARK(p) == 0);
         mark_children(rt, p, gc_decref_child);
+        mark_weak_map_records(rt, p, gc_decref_child);
         JS_GC_MARK(p) = 1;
         if (JS_REF_COUNT(p) == 0) {
             list_del(&p->link);
@@ -8329,7 +8345,7 @@ static void gc_scan(JSRuntime *rt)
         assert(JS_REF_COUNT(p) > 0);
         JS_GC_MARK(p) = 0; /* reset the mark for the next GC call */
         mark_children(rt, p, gc_scan_incref_child);
-        mark_weak_map_records(rt, p, false, gc_scan_incref_child);
+        mark_weak_map_records(rt, p, gc_scan_incref_child);
     }
 
     /* restore the refcount of the objects to be deleted. */
@@ -8337,7 +8353,7 @@ static void gc_scan(JSRuntime *rt)
     list_for_each(el, &rt->tmp_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         mark_children(rt, p, gc_scan_incref_child2);
-        mark_weak_map_records(rt, p, true, gc_scan_incref_child2);
+        mark_weak_map_records(rt, p, gc_scan_incref_child2);
     }
     rt->weak_value_pass = WEAK_VALUE_PASS_NONE;
 }
@@ -55409,6 +55425,7 @@ static JSMapRecord *map_add_record(JSContext *ctx, JSMapState *s,
     mr->ref_count = 1;
     mr->map = s;
     mr->empty = false;
+    mr->gc_restored = false;
     if (s->is_weak) {
         JSWeakRefRecord *wr = js_malloc(ctx, sizeof(*wr));
         if (!wr) {
@@ -55606,14 +55623,21 @@ static JSValue js_map_clear(JSContext *ctx, JSValueConst this_val,
                             int argc, JSValueConst *argv, int magic)
 {
     JSMapState *s = JS_GetOpaque2(ctx, this_val, JS_CLASS_MAP + magic);
-    struct list_head *el, *el1;
+    struct list_head *el;
     JSMapRecord *mr;
 
     if (!s)
         return JS_EXCEPTION;
-    list_for_each_safe(el, el1, &s->records) {
+    el = s->records.next;
+    while (el != &s->records) {
         mr = list_entry(el, JSMapRecord, link);
+        // Freeing the key or the value can free other records: a map
+        // iterator may be the last holder of an already deleted record.
+        // Keep 'mr' alive and read its successor only afterwards.
+        mr->ref_count++;
         map_delete_record(ctx->rt, s, mr);
+        el = el->next;
+        map_decref_record(ctx->rt, mr);
     }
     return JS_UNDEFINED;
 }
@@ -55772,12 +55796,20 @@ static void js_map_finalizer(JSRuntime *rt, JSValueConst val)
     if (s) {
         /* if the object is deleted we are sure that no iterator is
            using it */
+        if (s->is_weak) {
+            /* first pass to remove the weak references, so that freeing
+               a value (e.g. a symbol that is also a key of this map)
+               cannot reset and free records we have yet to visit */
+            list_for_each(el, &s->records) {
+                mr = list_entry(el, JSMapRecord, link);
+                if (!mr->empty)
+                    delete_map_weak_ref(rt, mr);
+            }
+        }
         list_for_each_safe(el, el1, &s->records) {
             mr = list_entry(el, JSMapRecord, link);
             if (!mr->empty) {
-                if (s->is_weak)
-                    delete_map_weak_ref(rt, mr);
-                else
+                if (!s->is_weak)
                     JS_FreeValueRT(rt, mr->key);
                 JS_FreeValueRT(rt, mr->value);
             }

@@ -1,0 +1,5 @@
+freed weak maps: 1000
+cleared maps are empty: true
+values of dropped maps collected: true
+values of dropped symbols collected: true
+live entry kept: true
