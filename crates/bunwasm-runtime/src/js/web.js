@@ -822,60 +822,134 @@
   }
   internal.concatBytes = concatBytes;
 
+  const isBufferSource = value => ArrayBuffer.isView(value) || value instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer);
+
   function partBytes(part) {
     if (part instanceof Blob) return part._bytes();
     if (typeof part === "string") return native.utf8Encode(part);
-    if (ArrayBuffer.isView(part) || part instanceof ArrayBuffer) return toUint8(part).slice();
+    if (isBufferSource(part)) return toUint8(part).slice();
     return native.utf8Encode(String(part));
   }
 
-  // Bun's MimeType.rs by_name_static: an exact, case-sensitive match of a few known
-  // types gives Bun's canonical value; any other type is only lowercased.
-  const canonicalBlobTypes = new Map([
-    ["text/plain", "text/plain;charset=utf-8"], ["text/html", "text/html;charset=utf-8"], ["text/css", "text/css;charset=utf-8"],
-    ["text/javascript", "text/javascript;charset=utf-8"], ["text/jsx", "text/javascript;charset=utf-8"],
-    ["application/javascript", "text/javascript;charset=utf-8"], ["application/json", "application/json;charset=utf-8"],
-    ["application/x-www-form-urlencoded", "application/x-www-form-urlencoded;charset=UTF-8"], ["application/webassembly", "application/wasm"],
-  ]);
-  function normalizeBlobType(type) {
-    if (!type) return "";
-    const given = String(type);
-    return canonicalBlobTypes.get(given) ?? given.toLowerCase();
+  // Bun's Blob constructor takes an Array of parts, or one ArrayBuffer or view as the only part.
+  function blobParts(parts) {
+    if (parts === undefined || parts === null) return [];
+    if (Array.isArray(parts)) return parts;
+    if (isBufferSource(parts)) return [parts];
+    throw Object.assign(new TypeError("new Blob() expects an Array"), { code: "ERR_INVALID_ARG_TYPE" });
+  }
+
+  // Bun's Blob type rules: printable ASCII only (Blob.rs is_valid_blob_type), then a type in
+  // Bun's interned list keeps Bun's value for it, and any other type is lowercased. Returns
+  // the type and whether it is interned, which is what slice() inherits.
+  function blobType(value) {
+    // Bun ignores a type that is not a string.
+    if (typeof value !== "string") return ["", false];
+    const given = value;
+    if (given === "" || !/^[\x20-\x7e]*$/.test(given)) return ["", false];
+    const interned = native.mimeTypeInterned(given);
+    return interned === undefined ? [given.toLowerCase(), false] : [interned, true];
+  }
+
+  // Bun's Blob.slice bounds (Blob.rs get_slice): a string argument is the type, only numbers
+  // move a bound (NaN is 0), and a negative bound counts back from the end.
+  function sliceBounds(args, size) {
+    let [start, end, type] = args;
+    if (typeof start === "string") {
+      type = start;
+      start = end = undefined;
+    } else if (typeof end === "string") {
+      type = end;
+      end = undefined;
+    }
+    const bound = (value, fallback) => {
+      if (typeof value !== "number") return fallback;
+      const n = Number.isNaN(value) ? 0 : Math.trunc(value);
+      return n < 0 ? Math.max(n + size, 0) : Math.min(n, size);
+    };
+    const from = bound(start, 0);
+    return { start: from, length: Math.max(bound(end, size) - from, 0), type: typeof type === "string" ? type : undefined };
+  }
+  internal.blobType = blobType;
+  internal.sliceBounds = sliceBounds;
+
+  // Bun's Blob text: a UTF-16LE byte order mark decodes the rest as UTF-16LE (an odd last
+  // byte is dropped); anything else is UTF-8, without its byte order mark.
+  function blobText(bytes) {
+    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+      return new TextDecoder("utf-16le").decode(bytes.slice(2, 2 + ((bytes.length - 2) & ~1)));
+    }
+    return new TextDecoder().decode(bytes);
   }
 
   class Blob {
     #bytes;
     #type;
+    #interned = false;
+    #name;
+    // A Blob made from one lazily read Blob (a Bun.file()) reads it when its bytes are needed, as
+    // Bun shares the file's store.
+    #source = null;
     #read;
-    constructor(parts = [], options = {}) {
-      if (parts !== null && typeof parts === "object" && typeof parts[Symbol.iterator] !== "function") {
-        throw new TypeError("new Blob() expects an Array");
-      }
-      this.#bytes = concatBytes(Array.from(parts || [], partBytes));
-      this.#type = normalizeBlobType(options.type);
+    constructor(parts = undefined, options = undefined) {
+      const list = blobParts(parts);
+      const only = list.length === 1 ? list[0] : null;
+      this.#source = only instanceof Blob && only._isLazy() ? only : null;
+      this.#bytes = this.#source ? null : concatBytes(Array.from(list, partBytes));
+      [this.#type, this.#interned] = blobType(options === undefined || options === null ? undefined : options.type);
       // The constructing class's reader, fixed now so a replaced prototype cannot change the bytes.
       this.#read = new.target.prototype._bytes;
     }
+    // A Blob made from bytes in memory, without copying them (slice).
+    static _of(bytes, type, interned) {
+      const blob = new Blob([]);
+      blob.#bytes = bytes;
+      blob.#type = type;
+      blob.#interned = interned;
+      return blob;
+    }
+    // Whether the bytes are read when needed rather than held (Bun.file() and Blobs over one).
+    _isLazy() {
+      return this.#source !== null;
+    }
+    // Whether the bytes can be read only once (a Bun.file() given by descriptor).
+    _readsOnce() {
+      return this.#source !== null && this.#source._readsOnce();
+    }
     // Subclasses (BunFile) read lazily.
     _bytes() {
-      return this.#bytes;
+      return this.#source ? this.#source._bytes() : this.#bytes;
     }
     // Brand-checked bytes that ignore the public prototype; throws TypeError for a non-Blob.
     _intrinsicBytes() {
       const read = this.#read;
-      return read === blobBytes ? this.#bytes : Reflect.apply(read, this, []);
+      if (read !== blobBytes) return Reflect.apply(read, this, []);
+      return this.#source ? this.#source._intrinsicBytes() : this.#bytes;
     }
     get size() {
-      return this._bytes().length;
+      return this.#source ? this.#source.size : this._bytes().length;
+    }
+    // The size, or null when it cannot be known (a Bun.file() that cannot be read).
+    _knownSize() {
+      return this.#source ? this.#source._knownSize() : this.size;
     }
     get type() {
       return this.#type;
     }
-    _setType(type) {
+    _setType(type, interned = false) {
       this.#type = type;
+      this.#interned = interned;
+    }
+    // Bun keeps a name only when it is set to a string; undefined or null clears it.
+    get name() {
+      return this.#name;
+    }
+    set name(value) {
+      if (value === undefined || value === null) this.#name = undefined;
+      else if (typeof value === "string") this.#name = value;
     }
     async text() {
-      return new TextDecoder().decode(this._bytes());
+      return blobText(this._bytes());
     }
     async json() {
       return JSON.parse(await this.text());
@@ -893,10 +967,15 @@
       if (!encoding) throw new Error("Invalid encoding");
       return forms.api.parse(this._bytes(), encoding, forms.deps, reason => new Error(`FormData encoding failed: ${reason}`));
     }
-    slice(start = 0, end = undefined, type = "") {
-      const bytes = this._bytes();
-      const blob = new Blob([bytes.slice(start, end)], { type });
-      return blob;
+    // Without a valid type of its own, a slice keeps its parent's type only when that is
+    // interned, as in Bun.
+    slice(...args) {
+      const size = this.size;
+      if (size === 0) return new Blob([]);
+      const { start, length, type } = sliceBounds(args, size);
+      let [value, interned] = blobType(type);
+      if (value === "" && this.#interned) [value, interned] = [this.#type, true];
+      return Blob._of(this._bytes().slice(start, start + length), value, interned);
     }
     stream() {
       return internal.makeByteStream(this._bytes(), this.type);
@@ -919,15 +998,23 @@
   internal.formatBytes = formatBytes;
 
   class File extends Blob {
-    #name;
     #lastModified;
-    constructor(parts, name, options = {}) {
+    constructor(parts, name, options = undefined) {
       super(parts, options);
-      this.#name = String(name);
-      this.#lastModified = options.lastModified === undefined ? Date.now() : Number(options.lastModified);
+      super.name = String(name);
+      // Bun converts a given lastModified with ToNumber, and NaN becomes 0.
+      const value = options === undefined || options === null ? undefined : options.lastModified;
+      const number = value === undefined ? Date.now() : Number(value);
+      this.#lastModified = Number.isNaN(number) ? 0 : number;
     }
+    // File's own name accessor, as in Bun; it also brands a File (object_urls.ts relies on it).
     get name() {
-      return this.#name;
+      void this.#lastModified;
+      return super.name;
+    }
+    set name(value) {
+      void this.#lastModified;
+      super.name = value;
     }
     get lastModified() {
       return this.#lastModified;
@@ -1078,14 +1165,19 @@
     if (body instanceof URLSearchParams) {
       return { bytes: native.utf8Encode(body.toString()), type: "application/x-www-form-urlencoded;charset=UTF-8" };
     }
-    if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
+    // A Bun.file() (or a Blob over one) stays the file: it is read when the body is used, as Bun
+    // shares the file's store, so a clone or a later read sees the file as it is then.
+    if (body instanceof Blob) return body._isLazy() ? { bytes: null, blob: body, type: body.type || null } : { bytes: body._bytes(), type: body.type || null };
     if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && body instanceof SharedArrayBuffer)) {
       return { bytes: new Uint8Array(toUint8(body)), type: null, served: "application/octet-stream" };
     }
     if (body instanceof FormData) return formBody().api.serialize(body, formBody().deps);
     if (body instanceof ReadableStream) {
       // A stream over a Blob's bytes gives the body that Blob's type too, as Bun lifts the Blob out.
-      // Bun then adds the Content-Type header to a Request but not to a Response.
+      // Bun then adds the Content-Type header to a Request but not to a Response. Over a Bun.file()
+      // neither gets the header, but Bun.serve still sends the file's type.
+      const file = bodyStreams.blobOf(body);
+      if (file) return { stream: bodyStreams.adoptable(body), bytes: null, blob: file, type: file.type || null, served: file.type || null, lifted: true, header: false };
       const bytes = bodyStreams.bytes(body) || null;
       return { stream: bodyStreams.adoptable(body), bytes, type: (bytes && bodyStreams.type(body)) || null, lifted: true };
     }
@@ -1102,12 +1194,14 @@
   const BodyMixin = {
     async _consume() {
       // A null body is not a zero-length body: every read gives nothing and nothing uses it up.
-      if (this._body === null && !this._stream) return new Uint8Array(0);
-      if (this.bodyUsed) throw new TypeError("Body already used");
+      if (this._body === null && !this._stream && !this._blob) return new Uint8Array(0);
+      if (this.bodyUsed) throw Object.assign(new TypeError("Body already used"), { code: "ERR_BODY_ALREADY_USED" });
       // Someone else holds the stream's reader: refuse without using the body, as Bun does.
       if (this._stream && this._stream.locked) throw Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });
       this._bodyUsed = true;
       if (this._stream) return streamBytes(this._stream);
+      // A Bun.file() body is read now, so it sees the file as it is when the body is used.
+      if (this._blob) return this._blob._bytes();
       return this._body || new Uint8Array(0);
     },
     async text() {
@@ -1128,8 +1222,9 @@
       // without either, Bun types a non-empty buffered body as text.
       const type = this._bodyType || this.headers.get("content-type") || (this._body && this._body.length ? "text/plain;charset=utf-8" : "");
       const blob = new Blob([await this._consume()]);
-      // Bun keeps the Content-Type as written, canonicalizing only its known types.
-      blob._setType(canonicalBlobTypes.get(type) ?? type);
+      // Bun keeps the Content-Type as written, canonicalizing only its interned types.
+      const interned = type ? native.mimeTypeInterned(type) : undefined;
+      blob._setType(interned ?? type, interned !== undefined);
       return blob;
     },
     async formData() {
@@ -1149,10 +1244,12 @@
     const extracted = extractBody(body);
     target._body = extracted.bytes;
     target._stream = extracted.stream || null;
+    target._blob = extracted.blob || null;
     target._bodyUsed = false;
     target._servedType = extracted.served || null;
     target._bodyType = extracted.type || null;
-    if (extracted.type && !headers.has("content-type") && !(extracted.lifted && target instanceof Response)) headers.set("content-type", extracted.type);
+    const header = extracted.header !== false && !(extracted.lifted && target instanceof Response);
+    if (extracted.type && header && !headers.has("content-type")) headers.set("content-type", extracted.type);
   }
 
 
@@ -1184,11 +1281,17 @@
     const used = value.bodyUsed;
     const network = networkSizes.get(value);
     const streamed = value._stream && (network === undefined || exposedBodies.has(value));
+    // A Bun.file() body has the file's size now, and none (Bun prints no size) when it cannot be read.
+    const file = value._stream ? null : value._blob;
+    const known = file ? file._knownSize() : undefined;
+    const fileSize = known === null || known === undefined || Number.isFinite(known) ? known : null;
     let body = null;
-    if (used || (value._body === null && !value._stream)) body = null;
+    if (used || (value._body === null && !value._stream && !file)) body = null;
     else if (streamed) body = { kind: "stream", stream: value._stream };
+    else if (file) body = fileSize === null ? null : { kind: "blob", size: bunSize(fileSize), type: value._bodyType };
     else body = { kind: "blob", size: bunSize(network ?? value._body.length), type: network === undefined ? value._bodyType : null };
-    const size = bunSize(used ? 0 : network ?? (streamed ? 0 : value._body?.length ?? 0));
+    let size = bunSize(used ? 0 : network ?? (streamed ? 0 : value._body?.length ?? 0));
+    if (file && !used) size = fileSize === null ? null : bunSize(fileSize);
     const headers = Object.entries(value.headers.toJSON()).flatMap(([name, entry]) => Array.isArray(entry) ? entry.map(item => [name, item]) : [[name, entry]]);
     const fields = isResponse
       ? [["ok", value.ok], ["url", value.url], ["status", value.status], ["statusText", value.statusText], ["headers", headers], ["redirected", value.redirected], ["bodyUsed", used]]
@@ -1290,8 +1393,13 @@
     },
     body: {
       get() {
-        if (this._stream || this._body !== null) exposedBodies.add(this);
+        if (this._stream || this._body !== null || this._blob) exposedBodies.add(this);
         if (this._stream) return this._stream;
+        // A Bun.file() body reads the file when its stream is read; clone() can still lift it back.
+        if (this._blob) {
+          this._stream = this._bodyUsed ? bodyStreams.consumedStream() : this._blob.stream();
+          return this._stream;
+        }
         if (this._body === null) return null;
         this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body, this._bodyType);
         return this._stream;
@@ -1302,7 +1410,7 @@
   Object.defineProperties(Response.prototype, bodyAccessors);
 
   function defineInternalBody(target) {
-    for (const key of ["_body", "_stream", "_bodyUsed", "_servedType", "_bodyType"]) {
+    for (const key of ["_body", "_stream", "_blob", "_bodyUsed", "_servedType", "_bodyType"]) {
       Object.defineProperty(target, key, { value: null, writable: true, enumerable: false, configurable: true });
     }
   }
@@ -1314,6 +1422,10 @@
     #signal;
     #redirect;
     constructor(input, init = {}) {
+      // Bun takes a Response as init: its headers, and a copy of its body (the Response keeps its
+      // own), whatever the method.
+      const response = init instanceof Response ? init : null;
+      if (response) init = { headers: response.headers, body: bodyStreams.clone(response) };
       const source = input instanceof Request ? input : null;
       const url = source ? source.url : String(input);
       if (!URL.canParse(url)) throw new TypeError(`Invalid URL: "${url}"`);
@@ -1324,14 +1436,20 @@
       this.#redirect = init.redirect || (source && source.redirect) || "follow";
       defineInternalBody(this);
       const replacementBody = init.body;
-      const body = replacementBody !== undefined ? replacementBody : source ? source._stream || source._body : null;
-      if (body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
+      const body = replacementBody !== undefined ? replacementBody : source ? source._stream || source._body || source._blob : null;
+      if (!response && body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
       // Fetch forbids keepalive with a stream init.body (a source request's body is fine);
       // Bun reports it before any lock check.
       if (init.keepalive && replacementBody instanceof ReadableStream) throw new TypeError("keepalive");
-      initBody(this, source && replacementBody === undefined ? bodyStreams.transfer(source) : body, this.#headers);
+      const copied = source && replacementBody === undefined ? bodyStreams.transfer(source) : body;
+      // A copy of a used stream body is used too, as in Bun: read, disturbed and locked.
+      if (copied === bodyStreams.usedBody) {
+        initBody(this, null, this.#headers);
+        this._stream = bodyStreams.consumedStream();
+        this._bodyUsed = true;
+      } else initBody(this, copied, this.#headers);
     }
     get url() {
       return this.#url;
@@ -1368,17 +1486,41 @@
     if (parsed.data !== undefined) return fetchDataUrl(parsed.data);
     const { url, init } = parsed;
     input = parsed.request || url;
+    // An object URL (blob: in any case and a UUID, as Bun recognizes one) answers with its Blob,
+    // or rejects when it is not registered; Bun ignores the method and body.
+    if (url.length === 41 && url.slice(0, 5).toLowerCase() === "blob:") return fetchObjectUrl(`blob:${url.slice(5)}`);
     if (url.startsWith("file:")) {
       const path = decodeURIComponent(new URL(url).pathname);
       const res = new Response(native.readFile(path), { headers: { "content-type": internal.mimeType(path) } });
       Response._setUrl(res, url);
       return res;
     }
-    // Hosts implementing the bun_wasm ABI (docs/host-abi.md) do real HTTP.
-    if (native.hostCaps.fetch) return internal.require("net").fetch(input, init);
+    const remote = remoteUrl(url);
+    if (remote === null) throw Object.assign(new TypeError("protocol must be http:, https: or s3:"), { code: "ERR_INVALID_ARG_VALUE" });
+    // Hosts implementing the bun_wasm ABI (docs/host-abi.md) do real HTTP, to `remote` for a
+    // string or a Request alike.
+    if (native.hostCaps.fetch) return internal.require("net").fetch(input, init, remote === url ? undefined : remote);
     const err = new TypeError(`fetch() is not available in bun-wasm: WASI has no network access (${url})`);
     err.code = "ERR_NO_NETWORK";
     throw err;
+  }
+
+  // Bun's own URL reader (src/url/lib.rs parse_protocol) takes a scheme only before "://", so
+  // "localhost:3000/a" is that host and port over http. The http:, https: and s3: schemes go to
+  // the host; any other gives null, which Bun refuses.
+  function remoteUrl(url) {
+    const scheme = /^([^/?%]*?):\/\//.exec(url);
+    if (!scheme) return /^[A-Za-z0-9.-]+:\d+(?:[/?#]|$)/.test(url) ? `http://${url}` : null;
+    const name = scheme[1].toLowerCase();
+    return name === "http" || name === "https" || name === "s3" ? url : null;
+  }
+
+  function fetchObjectUrl(url) {
+    const blob = internal.require("object_urls").resolveObjectURL(url);
+    if (!blob) throw Object.assign(new TypeError(`Failed to resolve ${url}`), { code: "ERR_INVALID_ARG_VALUE" });
+    const res = new Response(blob);
+    Response._setUrl(res, url);
+    return res;
   }
 
   function fetchDataUrl(url) {

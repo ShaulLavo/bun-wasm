@@ -7,6 +7,7 @@
     method: string;
     readonly bodyUsed: boolean;
     _body: Uint8Array | null;
+    _blob: Blob | null;
     _stream: ReadableStream<unknown> | null;
     _bodyUsed: boolean;
     arrayBuffer(): Promise<ArrayBuffer>;
@@ -34,7 +35,7 @@
   async function requestBody(req: BodyRequest, signal?: AbortSignal): Promise<Uint8Array> {
     if (signal?.aborted) throw signal.reason;
     if (req.method === "GET" || req.method === "HEAD") return new Uint8Array(0);
-    if (req._body === null && !req._stream) return new Uint8Array(0);
+    if (req._body === null && !req._stream && !req._blob) return new Uint8Array(0);
     if (!req._stream) return new Uint8Array(await req.arrayBuffer());
     if (req.bodyUsed) throw new TypeError("Body already used");
     const reader = req._stream.getReader();
@@ -57,9 +58,10 @@
   }
 
   // A body Bun streams to the server: a ReadableStream with no bytes in memory behind it.
-  // Bytes already in memory (a string, a Blob, an untouched stream over either) are sent
-  // whole, with a Content-Length. The stream stays unlocked and the body unused until the
-  // upload starts (lockUpload), as in Bun.
+  // Bytes already in memory (a string, a Blob, an untouched stream over either) and a
+  // Bun.file() are sent whole, with a Content-Length; a Bun.file().stream() body is streamed,
+  // chunked, as in Bun. The stream stays unlocked and the body unused until the upload starts
+  // (lockUpload), as in Bun.
   function uploadStream(req: BodyRequest): ReadableStream<unknown> | null {
     if (req.method === "GET" || req.method === "HEAD" || !req._stream || req._body !== null) return null;
     if (req.bodyUsed) throw new TypeError("Body already used");

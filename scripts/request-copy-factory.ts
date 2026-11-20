@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { mimeTypeInterned } from "./mime-types-stub";
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 
@@ -34,6 +35,7 @@ export function requestCopyFactory(kind: "polyfill" | "native" = "polyfill") {
       engine, hostCaps: { fetch: true }, platformInfo: { version: "fixture", arch: "fixture" },
       timeOrigin: () => 0,
       utf8Encode: (text: string) => new TextEncoder().encode(text),
+      mimeTypeInterned,
       utf8Decode: (bytes: Uint8Array) => new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes),
       urlParse(input: string, base?: string) {
         if (!URL.canParse(input, base)) return null;

@@ -26,9 +26,22 @@
     return (cwd === "/" ? "" : cwd) + "/" + path;
   }
 
+  // Bun.FetchSession: in Bun, fetch() over the session's own connections. The host keeps one
+  // shared set of connections, so a session's fetch() is fetch() and close() has nothing to release.
+  class FetchSession {
+    fetch(_input) {
+      return Reflect.apply(internal.web.fetch, undefined, arguments);
+    }
+    close() {}
+    get [Symbol.toStringTag]() {
+      return "FetchSession";
+    }
+  }
+
   // Bun.file(): a lazily read Blob backed by a path or a file descriptor.
   class BunFile extends Blob {
     #path;
+    #nullName = false;
     #fd;
     #start;
     #end;
@@ -47,30 +60,81 @@
       if (!options.type && this.#path) this._setType(internal.mimeType(this.#path));
       else if (!options.type) this._setType("application/octet-stream");
     }
+    // A name the caller set, else the path, as Bun's get_name_string does. Set to null, it is
+    // null.
     get name() {
+      if (this.#nullName) return null;
+      const name = super.name;
+      if (name !== undefined) return name;
       return this.#path === null ? undefined : this.#path;
+    }
+    set name(value) {
+      this.#nullName = value === null;
+      super.name = value;
     }
     get fd() {
       return this.#fd;
     }
+    _isLazy() {
+      return true;
+    }
+    // A file given by descriptor (Bun.stdin included) can be read only once: a second read
+    // starts where the first stopped. Bodies sharing it share that one read, as Bun tees it.
+    _readsOnce() {
+      return this.#fd !== null;
+    }
     _bytes() {
-      if (this.#fd === 0 && this.#start === 0 && this.#end === undefined) return native.readStdin();
-      if (this.#path !== null && this.#start === 0 && this.#end === undefined) return native.readFile(absolute(this.#path));
-      return internal.require("bun_file").bytes(this.#fd !== null ? this.#fd : absolute(this.#path), this.#start, this.#end);
-    }
-    stream() {
-      return internal.require("bun_file").stream(this.#fd !== null ? this.#fd : absolute(this.#path), this.#start, this.#end);
-    }
-    get size() {
       try {
-        const stat = this.#fd !== null ? native.fstat(this.#fd) : native.stat(absolute(this.#path));
-        if (this.#fd !== null && (stat.mode & 0o170000) !== 0o100000) return Infinity;
-        const total = stat.size;
-        const end = this.#end === undefined ? total : Math.min(this.#end, total);
-        return Math.max(0, end - this.#start);
-      } catch {
-        return 0;
+        if (this.#fd === 0 && this.#start === 0 && this.#end === undefined) return native.readStdin();
+        if (this.#path !== null && this.#start === 0 && this.#end === undefined) return native.readFile(absolute(this.#path));
+        return internal.require("bun_file").bytes(this.#fd !== null ? this.#fd : absolute(this.#path), this.#start, this.#end);
+      } catch (error) {
+        throw this.#directoryError(error);
       }
+    }
+    // Bun reports reading a directory as EISDIR, where opening one under WASI gives EBADF.
+    #directoryError(error) {
+      if (!error || (error.code !== "EBADF" && error.code !== "EISDIR")) return error;
+      return this.#isDirectory() ? this.#readsDirectory() : error;
+    }
+    #isDirectory() {
+      try { return (this.#stat().mode & 0o170000) === 0o040000; } catch { return false; }
+    }
+    #readsDirectory() {
+      const directory = Object.assign(new Error("Directories cannot be read like files"), { code: "EISDIR", errno: 0, syscall: "read" });
+      if (this.#path !== null) directory.path = this.#path;
+      return directory;
+    }
+    // A stream over a file opened by path remembers the file, so a body built from it can lift
+    // the file back out. Bun tees a stream over a descriptor, which can only be read once; over
+    // a directory it fails with Bun's EISDIR, as a read does.
+    stream() {
+      if (this.#fd !== null && this.#isDirectory()) {
+        const error = this.#readsDirectory();
+        return new ReadableStream({ start(controller) { controller.error(error); } });
+      }
+      if (this.#fd !== null) return internal.require("bun_file").stream(this.#fd, this.#start, this.#end);
+      const stream = internal.require("bun_file").stream(absolute(this.#path), this.#start, this.#end);
+      return internal.require("body_streams").rememberFile(stream, this);
+    }
+    #stat() {
+      return this.#fd !== null ? native.fstat(this.#fd) : native.stat(absolute(this.#path));
+    }
+    // The size of this view of the file now, or null when the file cannot be stat'ed. As in
+    // Bun, a device or pipe (and anything but a regular file behind a descriptor) is Infinity.
+    _knownSize() {
+      let stat;
+      try { stat = this.#stat(); } catch { return null; }
+      const kind = stat.mode & 0o170000;
+      if (kind !== 0o100000 && (this.#fd !== null || kind !== 0o040000)) return Infinity;
+      const end = this.#end === undefined ? stat.size : Math.min(this.#end, stat.size);
+      return Math.max(0, end - this.#start);
+    }
+    // A bounded slice of a file that cannot be stat'ed still has its length, as in Bun.
+    get size() {
+      const known = this._knownSize();
+      if (known !== null) return known;
+      return this.#end === undefined ? 0 : Math.max(0, this.#end - this.#start);
     }
     get lastModified() {
       try {
@@ -97,9 +161,18 @@
     async unlink() {
       return this.delete();
     }
-    slice(start = 0, end = undefined, type = undefined) {
-      const opts = { type: type === undefined ? this.type : type };
-      return new BunFile(this.#fd !== null ? this.#fd : this.#path, opts, internal, [this.#start + start, end === undefined ? this.#end : this.#start + end]);
+    // Bun's Blob.slice bounds over the file's size now (Bun's largest Blob size when it is not
+    // known); without a valid type of its own the slice keeps the file's.
+    slice(...args) {
+      const known = this._knownSize();
+      const size = known === null || !Number.isFinite(known) ? 2 ** 52 - 1 : known;
+      const { start, length, type } = internal.sliceBounds(args, size);
+      const [given, interned] = internal.blobType(type);
+      const from = this.#start + start;
+      const slice = new BunFile(this.#fd !== null ? this.#fd : this.#path, {}, internal, [from, from + length]);
+      // The type is already Bun's; the constructor would normalize it again.
+      slice._setType(given || this.type, given ? interned : false);
+      return slice;
     }
     writer() {
       const path = this.#path;
@@ -571,6 +644,7 @@
     fetch: function fetch(_input) {
       return Reflect.apply(internal.web.fetch, undefined, arguments);
     },
+    FetchSession,
     serve: native.hostCaps.listen ? (options) => internal.require("net").serve(options) : unsupported("Bun.serve", noNetwork),
     listen: (options) => internal.require("net").bunTcp().listen(options),
     connect: (options) => internal.require("net").bunTcp().connect(options),

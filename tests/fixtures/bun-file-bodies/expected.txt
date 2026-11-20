@@ -1,0 +1,23 @@
+both bodies see a file that grew: ["123456789","123456789"]
+inspect whole Response (5 bytes) { | Response (5 bytes) {
+inspect slice Response (3 bytes) { | Response (3 bytes) {
+inspect grew Response (9 bytes) { | Response (9 bytes) {
+inspect deleted Response { | Response {
+Response over Bun.file().stream() {"header":null,"original":["text/html;charset=utf-8","<p>hi</p>"],"clone":["text/html;charset=utf-8","<p>hi</p>"]}
+Request over Bun.file().stream() {"header":null,"original":["text/html;charset=utf-8","<p>hi</p>"],"clone":["text/html;charset=utf-8","<p>hi</p>"]}
+Response over Bun.file() after .body {"header":"<not compared>","original":["text/html;charset=utf-8","<p>hi</p>"],"clone":["text/html;charset=utf-8","<p>hi</p>"]}
+given stream after clone: true true ["<p>hi</p>","<p>hi</p>"]
+Bun.serve /direct text/html;charset=utf-8 9 <p>hi</p>
+Bun.serve /clone text/html;charset=utf-8 9 <p>hi</p>
+upload Bun.file() content-length 9 text/html;charset=utf-8 <p>hi</p>
+upload Bun.file().stream() transfer-encoding chunked null <p>hi</p>
+source after new Request(src): false false
+Request(url, response): GET [["x-r","1"]]
+bodies: [1,2,3] [1,2,3] [1,2,3] [1,2,3] [1,2,3] [1,2,3]
+the file after Request(url, response): 9 123456789
+directory by path: ["EISDIR","EISDIR"] by descriptor: ["EISDIR","EISDIR"] closed descriptor: ["EBADF","EBADF"]
+directory read: Error EISDIR read "Directories cannot be read like files"
+missing file body: Response { ENOENT
+descriptor body Bun.file(fd) ["hello world","hello world"]
+descriptor body Bun.file(fd).stream() ["hello world","hello world"]
+descriptor body new Blob([Bun.file(fd)]) ["hello world","hello world"]

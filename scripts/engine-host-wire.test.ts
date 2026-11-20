@@ -183,6 +183,8 @@ const consumerCodecs = evaluate(`${publicSource}\n${blobSource}\n${bodySource}\n
   ...globals, JSON, URL, URLSearchParams, AbortController, ReadableStream,
   internal: { mimeType: () => "", toUint8: (bytes: Uint8Array) => bytes, require: requireDecoder },
   native: { utf8Encode: (text: string) => new TextEncoder().encode(text) },
+  // The Request constructor compares a copied body with this marker; these inputs are bytes.
+  bodyStreams: { usedBody: Symbol("used body") },
 });
 
 function consumerInput(name: string, bytes: Uint8Array): Uint8Array | ReadableStream<Uint8Array> {

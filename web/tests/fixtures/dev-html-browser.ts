@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { generateDevelopmentHtmlClient } from "../../../scripts/generate-dev-html-client";
+import { mimeTypeInterned } from "../../../scripts/mime-types-stub";
 
 const root = new URL("../../../", import.meta.url);
 function factory(name: string, globals: object = {}) {
@@ -22,8 +23,9 @@ export async function developmentFixture() {
       utf8Decode: (data: Uint8Array, fatal: boolean) => new TextDecoder("utf-8", { fatal }).decode(data),
       timeOrigin: () => 0, now: () => 0,
       randomBytes: (length: number) => new Uint8Array(length).fill(++nextToken),
+      mimeTypeInterned,
     },
-    web: { Response },
+    web: { Response, Blob },
     printError(error: unknown) { errors.push(error); },
     require(name: string): unknown {
       if (modules.has(name)) return modules.get(name);
@@ -45,9 +47,10 @@ export async function developmentFixture() {
   };
   factory("web.js")(internal);
   const GuestResponse: typeof Response = internal.web.Response;
+  const GuestBlob: typeof Blob = internal.web.Blob;
   const adapt = factory("dev_html.ts", { Response: GuestResponse })(internal);
   const createSource = factory("hot_revisions.ts")(internal);
-  return { client: client.source, GuestResponse, adapt, createSource, errors, writer: factory("http_response.ts")() };
+  return { client: client.source, GuestResponse, GuestBlob, adapt, createSource, errors, writer: factory("http_response.ts")() };
 }
 
 export const counterHtml = '<!doctype html><html><head><meta charset="utf-8"><title>Counter</title></head><body><h1>Before</h1><button id="counter" disabled>Count</button><output id="value">0</output><script type="module" src="/counter.ts"></script></body></html>';

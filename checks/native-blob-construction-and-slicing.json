@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/blob-construction-and-slicing",
+  "engines": ["quickjs", "jsc", "browser"]
+}

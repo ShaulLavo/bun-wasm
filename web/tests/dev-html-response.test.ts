@@ -98,6 +98,70 @@ test("application streams pass before locking or EOF, and the real writer cancel
   } finally { f.adapter.dispose(); f.source.close(); await stream.cancel().catch(() => {}); }
 });
 
+// A stand-in for a Bun.file() body: read whole through _bytes(), or in `chunks` pulls.
+function lazyFile(f: Awaited<ReturnType<typeof setup>>, data: Uint8Array<ArrayBuffer>, chunks = 1) {
+  const reads = { whole: 0, pulls: 0 };
+  class LazyFile extends f.GuestBlob {
+    _isLazy() { return true; }
+    _readsOnce() { return false; }
+    _knownSize() { return data.length; }
+    _bytes() { reads.whole++; return data; }
+    override stream() {
+      const size = Math.ceil(data.length / chunks);
+      let offset = 0;
+      return new ReadableStream<Uint8Array<ArrayBuffer>>({ pull(controller) {
+        reads.pulls++;
+        if (offset >= data.length) return controller.close();
+        controller.enqueue(data.subarray(offset, (offset += size)));
+      } });
+    }
+  }
+  return { file: new LazyFile([], { type: "text/html" }), reads };
+}
+
+test("a Bun.file() HTML body is decorated within the limit and left unused", async () => {
+  const f = await setup();
+  try {
+    const { file, reads } = lazyFile(f, new TextEncoder().encode(html));
+    const input = new f.GuestResponse(file);
+    const decorated = await f.adapter.decorate(f.request(), input, f.stamp);
+    const text = await decorated.text();
+    expect(text).toContain('data-bun-wasm-dev="config"');
+    expect(text).toContain('data-bun-wasm-dev="client"');
+    expect(input.bodyUsed).toBe(false);
+    expect(reads.whole).toBe(1);
+    const big = lazyFile(f, new Uint8Array(256 * 1024 + 1));
+    const oversize = new f.GuestResponse(big.file);
+    expect(await f.adapter.decorate(f.request(), oversize, f.stamp)).toBe(oversize);
+    expect(big.reads.whole).toBe(0);
+  } finally { f.adapter.dispose(); f.source.close(); }
+});
+
+test("the writer streams a Bun.file() body with its size and never reads it whole", async () => {
+  const f = await setup();
+  try {
+    const data = new Uint8Array(1024 * 1024).fill(97);
+    const { file, reads } = lazyFile(f, data, 16);
+    const written: Uint8Array[] = [];
+    let head: [string, string][] = [];
+    let pullsAtHead = -1;
+    const connection = {
+      closed: false, readEnded: false, onClose: undefined as (() => void) | null | undefined, onEnd: undefined as (() => void) | null | undefined,
+      write(chunk: Uint8Array, done?: (error?: unknown) => void) { written.push(chunk); done?.(); },
+      destroy() { this.closed = true; },
+    };
+    const serialize = (_status: number, _text: string, pairs: [string, string][]) => { head = pairs; pullsAtHead = reads.pulls; return new Uint8Array(0); };
+    expect(await f.writer.writeResponse(connection, new f.GuestResponse(file), "GET", true, serialize, (error: unknown) => { throw error; })).toBe(true);
+    expect(head.find(([name]) => name === "content-length")).toEqual(["content-length", String(data.length)]);
+    expect(head.some(([name]) => name === "transfer-encoding")).toBe(false);
+    // The head goes out before the file is read, and the file is read in pieces, never whole.
+    expect(pullsAtHead).toBeLessThanOrEqual(1);
+    expect(reads.whole).toBe(0);
+    expect(written.filter(chunk => chunk.length).length).toBe(16);
+    expect(written.reduce((total, chunk) => total + chunk.length, 0)).toBe(data.length);
+  } finally { f.adapter.dispose(); f.source.close(); }
+});
+
 test("oversize, malformed UTF-8, abort and non-200 bodies are never consumed", async () => {
   const f = await setup();
   const controller = new AbortController();

@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fetch-schemes-and-object-urls",
+  "engines": ["quickjs", "jsc", "browser"]
+}
