@@ -1,0 +1,5 @@
+response ends first: HTTP/1.1 200 OK
+  then the clone's read: rejected: AbortError: The connection was closed.
+client goes away first: rejected: AbortError: The connection was closed.
+both branches end together: true
+fetch clone shares chunks: true bytes: 1048576

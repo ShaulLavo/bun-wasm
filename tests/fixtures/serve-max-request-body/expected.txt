@@ -1,0 +1,13 @@
+declared over the cap: HTTP/1.1 413 Request Entity Too Large handlers run: 0
+at the cap: HTTP/1.1 200 OK text 10
+chunked over the cap, sent whole: HTTP/1.1 413 Payload Too Large rejected Error: Request body exceeded maxRequestBodySize
+chunked under the cap: HTTP/1.1 200 OK text 8
+fetch over the cap: 413 "" handlers run: 3
+streamed past the cap, reading the original: rejected after 6 bytes: Error: Request body exceeded maxRequestBodySize
+  client got: HTTP/1.1 413 Payload Too Large
+streamed past the cap, reading the clone: rejected after 6 bytes: Error: Request body exceeded maxRequestBodySize
+  client got: HTTP/1.1 413 Payload Too Large
+maxRequestBodySize undefined -> 200 64
+maxRequestBodySize 0 -> 413 
+maxRequestBodySize "5" -> 200 64
+maxRequestBodySize -1 -> 413 

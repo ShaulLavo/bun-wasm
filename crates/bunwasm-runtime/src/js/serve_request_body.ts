@@ -19,8 +19,10 @@ type ServeBodyDecoder = { push(bytes: Uint8Array): { output: ServeBodyOutput[]; 
     private controller: ReadableByteStreamController | null = null;
     private finished = false;
     private received = 0;
+    private readonly limit: number;
     private readonly decoder: Decoder;
-    constructor(chunked: boolean, length: number, onDemand: () => void, private readonly limit = Infinity) {
+    constructor(chunked: boolean, length: number, onDemand: () => void, limit = Infinity) {
+      this.limit = limit;
       this.decoder = new (internal.require("http_body").BodyDecoder)(chunked ? { kind: "chunked" } : { kind: "fixed", length });
       this.stream = new ReadableStream({
         type: "bytes",

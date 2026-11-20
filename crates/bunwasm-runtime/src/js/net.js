@@ -689,10 +689,10 @@
     return new Response("Internal Server Error", { status: 500, headers: { "content-type": "text/plain;charset=utf-8" } });
   }
 
-  // Bun.serve's maxRequestBodySize: a truthy number, truncated and at least 0, or 128 MiB.
+  // Bun.serve's maxRequestBodySize: a number, truncated and at least 0, or 128 MiB.
   function bodyLimit(value) {
-    if (!value || typeof value !== "number") return 128 * 1024 * 1024;
-    return Math.max(0, Math.trunc(value));
+    if (typeof value !== "number") return 128 * 1024 * 1024;
+    return Math.max(0, Math.trunc(value) || 0);
   }
 
   function serve(options = {}) {

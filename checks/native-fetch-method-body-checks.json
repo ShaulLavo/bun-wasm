@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fetch-method-body-checks",
+  "engines": ["quickjs", "jsc", "browser"]
+}
