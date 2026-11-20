@@ -13,6 +13,12 @@
     return err;
   }
 
+  // bun:jsc's collections return the heap size the collection measured (Bun's BunJSCModule).
+  function collectHeap() {
+    const measured = native.gc();
+    return typeof measured === "number" ? measured : native.memoryUsage().heapUsed ?? 0;
+  }
+
   function thrower(what, why) {
     const fn = function () {
       throw unsupportedError(what, why);
@@ -631,9 +637,10 @@
     bun: () => globalThis.Bun,
     "bun:jsc": () => ({
       callerSourceOrigin: internal.require("caller_origin"),
-      gcAndSweep: () => native.gc(),
-      fullGC: () => native.gc(),
-      edenGC: () => native.gc(),
+      // Each returns the heap size its collection measured. Every collection here is full.
+      gcAndSweep: collectHeap,
+      fullGC: collectHeap,
+      edenGC: collectHeap,
       heapSize: () => native.memoryUsage().heapUsed,
       // Per-type cell counts come only from JSC; other engines report none.
       heapStats: () => ({
@@ -647,7 +654,13 @@
         objectTypeCounts: native.objectTypeCounts?.() ?? {},
         protectedObjectTypeCounts: {},
       }),
-      memoryUsage: () => native.memoryUsage(),
+      // Bun's shape. A guest's resident memory is its linear memory, which never shrinks, so
+      // the current size is also the peak, and all of it is committed.
+      memoryUsage: () => {
+        const usage = native.linearMemoryBytes ? null : native.memoryUsage();
+        const current = usage ? usage.rss ?? usage.wasmCapacity ?? 0 : native.linearMemoryBytes();
+        return { current, peak: current, currentCommit: current, peakCommit: current, pageFaults: 0 };
+      },
       describe: (v) => String(v),
       serialize: thrower("bun:jsc.serialize", "JavaScriptCore is not available"),
       deserialize: thrower("bun:jsc.deserialize", "JavaScriptCore is not available"),

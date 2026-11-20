@@ -1,5 +1,5 @@
 capacity is positive bytes true
 capacity is page aligned true
-rss stays unknown true
+rss is the linear memory true
 capacity does not shrink true
 buffer remains usable true

@@ -199,7 +199,8 @@ declare namespace BunWasm {
   interface Native {
     processIdentity(): [pid: number, parentPid: number];
     sharedObjects?: SharedObjects;
-    gc(): void;
+    /** The heap size the collection measured, where the engine keeps one apart from memoryUsage. */
+    gc(): number | undefined;
     hostCaps: Record<string, boolean>;
     hostRead(handle: number, capacity?: number): Uint8Array | number;
     hostWrite(handle: number, bytes: Uint8Array): number;
@@ -309,6 +310,12 @@ declare namespace BunWasm {
     workerErrorData?: (error: unknown) => WorkerErrorData;
     workerExit?: (code: number) => void;
     workerEnvChange?: (key: string, value: unknown) => void;
+    /** True while worker_threads applies another thread's write to a shared environment. */
+    envFromPeer?: boolean;
+    /** Bootstrap's Intl fallback follows process.env.TZ once the engine applied it. */
+    setIntlTimeZone?: (zone: string | undefined) => void;
+    /** Bootstrap's lazy Intl global reports the fallback it installed. */
+    fallbackIntlLoaded?: (intl: unknown) => void;
     sharedObjects?: SharedObjects;
     workerStartup?: { readonly ready: Promise<void>; cancel(): void };
     clonePorts?: (value: unknown, options: unknown) => unknown;

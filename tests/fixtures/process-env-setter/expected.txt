@@ -1,0 +1,13 @@
+assignment coerces "42"
+symbol assignment TypeError
+symbol define TypeError
+accessor define ERR_INVALID_OBJECT_DEFINE_PROPERTY
+define without value ERR_INVALID_OBJECT_DEFINE_PROPERTY undefined
+partial define ERR_INVALID_OBJECT_DEFINE_PROPERTY undefined
+full define coerces "7"
+empty name ignored undefined false
+inherited write true 5 6 undefined 42
+loadEnvFile file "" 42
+loadEnvFile path type ERR_INVALID_ARG_TYPE
+loadEnvFile missing ENOENT
+worker {"coerced":"42","symbol":"TypeError","accessor":"ERR_INVALID_OBJECT_DEFINE_PROPERTY","seeded":"yes"}

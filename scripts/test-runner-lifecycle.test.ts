@@ -58,7 +58,7 @@ async function runner(load: (api: API, file: string, uncaught: (error: unknown) 
     test_matchers: factory("test_matchers.ts")({ isPromise: types.isPromise, promiseState: Bun.peek.status, realTimers: { setTimeout },
       promiseThen: (promise: Promise<unknown>, resolve: (value: unknown) => unknown, reject: (value: unknown) => unknown) => promise.then(resolve, reject) }),
   };
-  const internal = {
+  const internal: { testUncaught?: (error: unknown) => void } & Record<string, unknown> = {
     native: { now: () => performance.now(), cwd: () => "/", stat: () => ({ mode: 0o100644 }),
       getAsyncContext: () => undefined,
       writeStdout() {}, writeStderr: (value: string) => { stderr += value; } },
@@ -72,7 +72,8 @@ async function runner(load: (api: API, file: string, uncaught: (error: unknown) 
     importModule: async (file: string) => {
       if (imported.has(file)) return;
       imported.add(file);
-      await load(runtime.exports, file, error => process.emit("uncaughtException", error), runtime.getExpectationOrigin);
+      // The runtime's uncaught exception path, which the runner takes before process listeners.
+      await load(runtime.exports, file, error => internal.testUncaught?.(error), runtime.getExpectationOrigin);
     },
   };
   modules.test_extensions = factory("test_extensions.ts")(internal);
