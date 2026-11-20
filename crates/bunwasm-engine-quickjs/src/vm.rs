@@ -1379,12 +1379,17 @@ mod tests {
              globalThis.target = {};
              { const token = {}; registry.register(target, 'dead-token', token); }
              { const sym = Symbol('token'); registry.register({}, 'symbol', sym); }
-             { const obj = {}; registry.register(obj, 'dropped-after-unregister', obj); globalThis.droppedRemoved = registry.unregister(obj); }",
-            "[unregisteredLive, unregisteredShared, again, errors.join(' '), cleaned.toSorted().join(' '), droppedRemoved].join('|')",
+             { const obj = {}; registry.register(obj, 'dropped-after-unregister', obj); globalThis.droppedRemoved = registry.unregister(obj); }
+             // Freeing the removed entry's held value frees the next entry
+             // while unregister walks the list.
+             globalThis.tokenA = {}; globalThis.tokenB = {};
+             (() => { const owned = {}; registry.register(live, { owned }, tokenA); registry.register(owned, 'owned', tokenB); })();
+             globalThis.chainRemoved = registry.unregister(tokenA) && !registry.unregister(tokenB);",
+            "[unregisteredLive, unregisteredShared, again, errors.join(' '), cleaned.toSorted().join(' '), droppedRemoved, chainRemoved].join('|')",
         );
         assert_eq!(
             result,
-            "true|true|false|TypeError TypeError TypeError TypeError TypeError TypeError TypeError TypeError|symbol|true"
+            "true|true|false|TypeError TypeError TypeError TypeError TypeError TypeError TypeError TypeError|owned symbol|true|true"
         );
     }
 
