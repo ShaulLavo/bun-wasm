@@ -267,18 +267,51 @@ def command(opts, wasm, work, preloads, path):
     return [str(opts.launcher), "--wasm", str(wasm)] + dirs + flags + tests
 
 
-def parse_output(text):
+FILE_HEADER = re.compile(r"^\S.*(?:\.test|_test|\.spec|_spec)\.(?:[cm]?[jt]s|[jt]sx):$")
+RAN = re.compile(r"^Ran \d+ tests? across")
+
+
+def own_report(report):
+    """The outer run's report, without the nested `bun test` runs a test echoed into it.
+
+    Each invocation runs one file, so its own file header comes first. `Bun.$` echoes a child
+    run's report to the parent's stderr as well as capturing it (done-async.test.ts): such a run
+    starts at a later file header and ends at its own "Ran N tests across" line. The outer
+    run's summary is always the last one.
+    """
+    lines = report.splitlines(keepends=True)
+    ran = [index for index, line in enumerate(lines) if RAN.match(line)]
+    if len(ran) < 2:
+        return report
+    headers = [index for index, line in enumerate(lines) if FILE_HEADER.match(line.rstrip("\n"))]
+    kept, skip_until = [], -1
+    for index, line in enumerate(lines):
+        if index <= skip_until:
+            continue
+        if headers and index in headers and index != headers[0]:
+            end = next((row for row in ran if row > index), None)
+            if end is not None and end != ran[-1]:
+                skip_until = end
+                continue
+        kept.append(line)
+    return "".join(kept)
+
+
+def parse_output(report, text=None):
+    """Counts and failures from the runner's `report`; error lines and the excerpt from all of `text`."""
+    text = report if text is None else text
+    report = own_report(report)
     counts = dict.fromkeys(["pass", "fail", "skip", "todo", "errors"], 0)
     failures = []
-    for status, name in MARKER.findall(text):
+    for status, name in MARKER.findall(report):
         counts[status] += 1
         if status == "fail":
             failures.append(re.sub(r" \[[\d.]+m?s\]$", "", name))
-    for count, status in COUNTER.findall(text):
+    for count, status in COUNTER.findall(report):
         counts["errors" if status.startswith("error") else status] = int(count)
     lines = [line for line in text.splitlines() if line.strip() and not re.match(r"^\((pass|skip|todo)\)", line)]
     errors = [line for line in lines if re.search(r"error:|Error:|Expected:|Received:|not supported|not a function|Cannot find|SyntaxError|trap|panicked|Timed out", line, re.I)]
-    return {"counts": counts, "failing_tests": failures, "first_errors": errors[:20], "excerpt": "\n".join(lines[:55])[:10000], "complete": bool(re.search(r"^Ran \d+ tests? across", text, re.M))}
+    return {"counts": counts, "failing_tests": failures, "first_errors": errors[:20], "excerpt": "\n".join(lines[:55])[:10000], "complete": bool(re.search(r"^Ran \d+ tests? across", report, re.M))}
 
 
 def worker(opts, wasm, source, scratch, preloads, pending, finished):
@@ -328,14 +361,27 @@ def worker_loop(opts, wasm, work, preloads, pending, finished):
         finished.put(record)
 
 
+def read_bounded(stream):
+    size = stream.tell()
+    stream.seek(0)
+    text = stream.read(4 * 1024 * 1024).decode("utf-8", errors="replace")
+    if size > 4 * 1024 * 1024:
+        stream.seek(max(0, size - 65536))
+        text += "\n[output truncated]\n" + stream.read().decode("utf-8", errors="replace")
+    return size, text
+
+
 def invoke(opts, wasm, work, preloads, path):
     started = time.monotonic()
     timed_out = False
-    with output_log(work).open("w+b") as output:
+    # `bun test` writes its report (the (pass)/(fail) markers and totals) to stderr. The tests'
+    # own stdout stays apart, so a test that prints a child `bun test` run's report cannot add
+    # that run's results to its own.
+    with output_log(work).open("w+b") as output, output_log(work).with_name("stderr").open("w+b") as errors:
         argv = command(opts, wasm, work, preloads, path)
         if opts.network == "loopback":
             argv = loopback_command(argv)
-        proc = subprocess.Popen(argv, cwd=work / SNAPSHOT / "test", stdin=subprocess.DEVNULL, stdout=output, stderr=output, start_new_session=True)
+        proc = subprocess.Popen(argv, cwd=work / SNAPSHOT / "test", stdin=subprocess.DEVNULL, stdout=output, stderr=errors, start_new_session=True)
         with LOCK:
             PROCESSES.add(proc)
         try:
@@ -346,17 +392,16 @@ def invoke(opts, wasm, work, preloads, path):
             stop_process(proc)
             with LOCK:
                 PROCESSES.discard(proc)
-        size = output.tell()
-        output.seek(0)
-        text = output.read(4 * 1024 * 1024).decode("utf-8", errors="replace")
-        if size > 4 * 1024 * 1024:
-            output.seek(max(0, size - 65536))
-            text += "\n[output truncated]\n" + output.read().decode("utf-8", errors="replace")
+        stdout_size, stdout_text = read_bounded(output)
+        stderr_size, stderr_text = read_bounded(errors)
+    size = stdout_size + stderr_size
+    text = stdout_text + ("\n--- stderr ---\n" + stderr_text if stderr_text else "")
     if opts.log_dir:
         log = opts.log_dir / (path + ".log")
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text(text)
-    result = parse_output(text)
+    # Node assertion scripts report on either stream; bun test reports only on stderr.
+    result = parse_output(text if runs_as_script(opts, work / SNAPSHOT / "test" / path, path) else stderr_text, text)
     result.update(file=path, exit=proc.returncode, duration_seconds=round(time.monotonic() - started, 3), timed_out=timed_out, output_bytes=size, interrupted=STOP.is_set())
     result["assertion_script"] = is_assertion_script(opts, work / SNAPSHOT / "test" / path, path)
     result["skipped_script"] = result["assertion_script"] and bool(re.search(r"^1\.\.0 # Skipped:", text, re.M))

@@ -346,6 +346,31 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(result["complete"])
         self.assertEqual(result["first_errors"], ["error: bad value"])
 
+    def test_a_child_report_printed_to_stdout_is_not_counted(self):
+        # done-async.test.ts prints a child `bun test` run's report with console.log.
+        child = "(fail) child test that is meant to fail\n 0 pass\n 7 fail\nRan 7 tests across 1 file. [9ms]\n"
+        report = "(pass) the parent sees the child fail\n 1 pass\n 0 fail\nRan 1 test across 1 file. [5ms]\n"
+        result = suite.parse_output(report, child + report)
+        self.assertEqual(result["counts"]["pass"], 1)
+        self.assertEqual(result["counts"]["fail"], 0)
+        self.assertEqual(result["failing_tests"], [])
+
+    def test_a_child_report_echoed_to_stderr_is_not_counted(self):
+        # Bun.$ also echoes the child's report to the parent's stderr, inside the parent's run.
+        report = ("\ntest/js/bun/test/done-async.test.ts:\n(pass) an earlier parent test\n"
+                  "\ndone.test.ts:\n(fail) child test that is meant to fail\n 0 pass\n 7 fail\nRan 7 tests across 1 file. [9ms]\n"
+                  "(pass) the parent sees the child fail\n 2 pass\n 0 fail\nRan 2 tests across 1 file. [5ms]\n")
+        result = suite.parse_output(report)
+        self.assertEqual(result["counts"]["pass"], 2)
+        self.assertEqual(result["counts"]["fail"], 0)
+        self.assertEqual(result["failing_tests"], [])
+        self.assertTrue(result["complete"])
+
+    def test_an_unfinished_child_run_is_kept(self):
+        # Without its own summary a later header is not a nested run: nothing is dropped.
+        report = "\na.test.ts:\n(fail) outer\n\nb.test.ts:\n(fail) inner\n 0 pass\n 2 fail\nRan 2 tests across 1 file. [1ms]\n"
+        self.assertEqual(suite.parse_output(report)["failing_tests"], ["outer", "inner"])
+
     def test_import_failure_is_distinct_from_a_test_failure(self):
         result = suite.parse_output("# Unhandled error between tests\n 0 pass\n 1 fail\n 1 error\nRan 1 test across 1 file. [1ms]\n")
         self.assertEqual(result["counts"]["errors"], 1)

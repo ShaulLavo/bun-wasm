@@ -366,11 +366,38 @@
     native.setAsyncContext(context);
     try {
       return fn.apply(thisArg, args);
+    } catch (error) {
+      rememberThrown(error, context);
+      throw error;
     } finally {
       native.setAsyncContext(previous);
     }
   }
   internal.runInContext = runInContext;
+  // The context of the innermost callback an uncaught error escaped, for Bun's uncaught
+  // exception dispatch: its handlers read the store that callback was started in. Keyed by the
+  // error, so an error something caught keeps its frame only as long as the error lives; a
+  // thrown primitive keeps the last one. Declared after runInContext, which first uses them
+  // only once a callback runs.
+  const thrownContexts = new WeakMap();
+  let thrownPrimitive = null;
+  function rememberThrown(error, context) {
+    if (error === null || (typeof error !== "object" && typeof error !== "function")) {
+      if (thrownPrimitive === null || thrownPrimitive.error !== error) thrownPrimitive = { error, context };
+    } else if (!thrownContexts.has(error)) thrownContexts.set(error, context);
+  }
+  // The context `error` escaped from, once; null for an error no callback threw.
+  internal.takeThrownContext = function takeThrownContext(error) {
+    if (error === null || (typeof error !== "object" && typeof error !== "function")) {
+      const origin = thrownPrimitive !== null && thrownPrimitive.error === error ? { context: thrownPrimitive.context } : null;
+      thrownPrimitive = null;
+      return origin;
+    }
+    if (!thrownContexts.has(error)) return null;
+    const context = thrownContexts.get(error);
+    thrownContexts.delete(error);
+    return { context };
+  };
 
   // --- timers ---------------------------------------------------------------
 
@@ -1186,11 +1213,16 @@
   internal.handleUncaught = function handleUncaught(err) {
     // Bun's test runner reports uncaught exceptions itself; the program's own listeners and
     // monitor never see them.
+    const origin = internal.takeThrownContext?.(err);
     if (internal.testUncaught) {
+      // The runner tells tests apart by its own async context, not the callback's.
       internal.testUncaught(err);
       return true;
     }
-    if (dispatchUncaught(err, false)) return true;
+    const claimed = origin
+      ? internal.runInContext(origin.context, () => dispatchUncaught(err, false), undefined, [])
+      : dispatchUncaught(err, false);
+    if (claimed) return true;
     fatalExit("uncaught-exception", 1, err);
     return false;
   };
@@ -1310,11 +1342,14 @@
   // Bun's dispatch_on_before_exit: a throw goes to the uncaught exception handlers. Returns
   // whether listeners ran. The engine then runs the microtasks and ticks they queued, and
   // emits again only after loop work that this left alive (`loopAlive`).
+  // The loop's own 'beforeExit' and 'exit' run outside every async context, as in Bun: an
+  // enterWith() left by the entry module or a callback does not reach them.
+  const outsideContext = (fn) => internal.runInContext(undefined, fn, undefined, []);
   internal.emitBeforeExit = function emitBeforeExit() {
     if (listenerCount("beforeExit") === 0) return false;
     const process = globalThis.process;
     try {
-      process.emit("beforeExit", (process.exitCode | 0) || 0);
+      outsideContext(() => process.emit("beforeExit", (process.exitCode | 0) || 0));
     } catch (err) {
       if (internal.exitStarted) throw err;
       if (!internal.handleUncaught(err)) {
@@ -1328,9 +1363,9 @@
 
   internal.beforeExit = function beforeExit() {
     const process = globalThis.process;
-    if (unclaimedErrors > 0) return exitUnclaimed(process);
+    if (unclaimedErrors > 0) return outsideContext(() => exitUnclaimed(process));
     const code = (process.exitCode | 0) || 0;
-    emitExit(code);
+    outsideContext(() => emitExit(code));
     const finalCode = (process.exitCode | 0) || 0;
     internal.traceExit(internal.exitReason || "event-loop-drained", finalCode);
     return finalCode;
@@ -1353,6 +1388,8 @@
 
   internal.mainPath = native.mainPath();
   internal.require("web")(defineGlobal, defineLazyGlobal);
+  // The ReadableStream programs construct runs its source in the stream's construction context.
+  defineGlobal("ReadableStream", internal.require("stream_context").ReadableStream);
   internal.require("readable_stream_methods"); // Bun's ReadableStream text/json/bytes/blob
   internal.require("stream_inspect"); // Bun's util.inspect.custom for the web stream classes
   internal.require("crypto")(defineGlobal);
