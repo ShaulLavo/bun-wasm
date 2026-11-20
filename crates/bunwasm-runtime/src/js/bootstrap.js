@@ -97,6 +97,60 @@
     return internal.displayName ? internal.displayName(file, typeof site.isEval === "function" && site.isEval()) : file;
   }
 
+  // The runtime's own code (its polyfills, and the Browser engine's host worker) is internal, as
+  // Bun's native code is: Bun's stacks never show it, so the default text leaves its frames out.
+  // A custom Error.prepareStackTrace still receives them, as Bun's formatters receive its own.
+  function isRuntimeFrameFile(file) {
+    return typeof file === "string" && file.startsWith("bun-wasm:");
+  }
+
+  // BUN_WASM_INTERNAL_FRAMES=1 keeps them, for debugging the runtime itself.
+  let runtimeFramesShown;
+  function showRuntimeFrames() {
+    if (runtimeFramesShown !== undefined) return runtimeFramesShown;
+    try {
+      runtimeFramesShown = native.env().BUN_WASM_INTERNAL_FRAMES === "1";
+    } catch {
+      return true;
+    }
+    return runtimeFramesShown;
+  }
+  internal.showRuntimeFrames = showRuntimeFrames;
+
+  function callSiteFile(site) {
+    return (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName();
+  }
+
+  function isRuntimeCallSite(site) {
+    const rawFile = callSiteFile(site);
+    if (typeof rawFile !== "string" || rawFile.startsWith("bunwasm:hot:")) return false;
+    return isRuntimeFrameFile(rawFile) || isRuntimeFrameFile(callSiteName(rawFile, site));
+  }
+
+  function isNativeCallSite(site) {
+    if (site.isNative()) return true;
+    return !callSiteFile(site) && !(typeof site.isEval === "function" && site.isEval()) && !evalOriginFile(site);
+  }
+
+  // V8 lists a module suspended in a top-level await among its async frames; JavaScriptCore
+  // does not, so Bun never prints it.
+  function isSuspendedProgram(site) {
+    return isV8 && typeof site.isAsync === "function" && site.isAsync() && !site.getFunctionName() && v8TopLevel(site);
+  }
+
+  // The frames Bun would not show: the runtime's own, and native frames the runtime called, such
+  // as the `apply` its event loop runs a callback through. A native frame called by user code,
+  // like `forEach`, stays. Sites run from the innermost call outwards.
+  function hiddenCallSites(callsites) {
+    const hidden = new Array(callsites.length);
+    let callerHidden = false;
+    for (let i = callsites.length - 1; i >= 0; i--) {
+      hidden[i] = isRuntimeCallSite(callsites[i]) || isSuspendedProgram(callsites[i]) || callerHidden && isNativeCallSite(callsites[i]);
+      callerHidden = hidden[i];
+    }
+    return hidden;
+  }
+
   function syntaxCallSite(site, name, file) {
     return !isV8 && site.getFunction() === undefined && !name && file;
   }
@@ -190,7 +244,9 @@
     while (start < callsites.length - 1 && isErrorConstructorFrame(callsites[start])) start++;
     let out = stackHeader(error);
     let raw = "";
+    const hidden = showRuntimeFrames() ? undefined : hiddenCallSites(callsites);
     for (let i = start; i < callsites.length; i++) {
+      if (hidden?.[i]) continue;
       out += `\n    at ${formatCallSite(callsites[i])}`;
       if (internal.hotRun) raw += `    at ${formatCallSite(callsites[i], true)}\n`;
     }

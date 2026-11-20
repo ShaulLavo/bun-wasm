@@ -70,11 +70,13 @@
   // One line of JavaScriptCore's text as QuickJS's formatter prints it: application frames
   // mapped back to their source, the runtime's own and native frames as they are. A frame with
   // no source (eval code, a `new Function` body) has no position: eval code prints as Bun's
-  // `eval (unknown)`. Caller-origin checks read these frames as opaque, so none is left out.
+  // `eval (unknown)`. Caller-origin checks read these frames as opaque, so they stay.
+  const runtimeFrame = /^(.*?)@(bun-wasm:.*:\d+:\d+)$/;
+  const nativeFrame = /^(.*)@\[native code\]$/;
   function jscFrameText(inspect: BunWasm.ConsoleInspector, line: string) {
-    const runtime = /^(.*?)@(bun-wasm:.*:\d+:\d+)$/.exec(line);
+    const runtime = runtimeFrame.exec(line);
     if (runtime) return topLevelCode.has(runtime[1]!) ? runtime[2]! : `${runtime[1]} (${runtime[2]})`;
-    const nativeCode = /^(.*)@\[native code\]$/.exec(line);
+    const nativeCode = nativeFrame.exec(line);
     if (nativeCode) return `${nativeCode[1] || "<anonymous>"} (native)`;
     const unlocated = /^(.*)@$/.exec(line);
     if (unlocated) return `${topLevelCode.has(unlocated[1]!) ? "eval" : unlocated[1]} (unknown)`;
@@ -100,12 +102,30 @@
     return frameTexts.get(line) ?? remember(frameTexts, 4096, line, jscFrameText(inspect, line));
   }
 
+  // The frames Bun would not show: the runtime's own, and native frames the runtime called, such
+  // as the `apply` its event loop runs a callback through. A native frame called by user code,
+  // like `forEach`, stays.
+  function hiddenJscFrames(lines: readonly string[]) {
+    const hidden = new Array<boolean>(lines.length);
+    let callerHidden = false;
+    for (let index = lines.length - 1; index >= 0; index--) {
+      const line = lines[index]!;
+      hidden[index] = runtimeFrame.test(line) || callerHidden && nativeFrame.test(line);
+      callerHidden = hidden[index]!;
+    }
+    return hidden;
+  }
+
   // The `\n    at` lines for JavaScriptCore's text. A hot run maps through changing revisions,
   // so it formats every frame afresh.
   function jscFrames(raw: string, hot: boolean) {
     const inspect = internal.require("inspect");
+    const lines = raw.split("\n");
+    const hidden = internal.showRuntimeFrames() ? undefined : hiddenJscFrames(lines);
     let frames = "";
-    for (const line of raw.split("\n")) {
+    for (let index = 0; index < lines.length; index++) {
+      if (hidden?.[index]) continue;
+      const line = lines[index]!;
       const text = hot ? jscFrameText(inspect, line) : cachedFrameText(inspect, line);
       if (text) frames += `\n    at ${text}`;
     }

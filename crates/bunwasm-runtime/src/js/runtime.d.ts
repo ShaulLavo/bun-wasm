@@ -394,6 +394,7 @@ declare namespace BunWasm {
     mappedCallSites: WeakSet<object>;
     formatCallSite(site: StackCallSite, keepIdentity?: boolean, anonymousFunction?: boolean): string;
     stackHeader(error: object): string;
+    showRuntimeFrames(): boolean;
     hotErrorStacks: WeakMap<object, string>;
     require(name: "inspect"): ConsoleInspector;
     require(name: "host_call_sites"): object;

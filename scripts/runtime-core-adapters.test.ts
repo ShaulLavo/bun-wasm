@@ -156,9 +156,10 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 
 // Hashes pin original syntax; capability selection, structured frames, anonymous presentation, awaiting-caller names, descriptors and builtin changes have explicit deltas.
 // The stack_trace hash also covers the call-site predicates React's stack collector calls,
-// and the JSC default text rewritten in Bun's form (docs/bun-patches/error-stack-header.md).
+// and the JSC default text rewritten in Bun's form (docs/bun-patches/error-stack-header.md),
+// without the runtime's own frames (docs/bun-patches/runtime-stack-frames.md).
 const originalTokens = {
-  stack_trace: "66ed37444f7b268817c4bf271abc6e07e076e8ab4d828b4af1b6be5a34714a80",
+  stack_trace: "37d1a12bc6957766219a3c31cdd3ff1edc696f379521362b90f25380d12e94a7",
   // Re-pinned for the thirdparty fetch modules' internal loader and binding hooks (node-fetch, undici).
   bun_builtins: "acf769db3668622edc5f3d2ba41b86d593371cbdf7537d86e53f9ed8cc0b23f3",
 };
