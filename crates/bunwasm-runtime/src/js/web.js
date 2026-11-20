@@ -911,6 +911,10 @@
     _isLazy() {
       return this.#source !== null;
     }
+    // Whether the bytes can be read only once (a Bun.file() given by descriptor).
+    _readsOnce() {
+      return this.#source !== null && this.#source._readsOnce();
+    }
     // Subclasses (BunFile) read lazily.
     _bytes() {
       return this.#source ? this.#source._bytes() : this.#bytes;

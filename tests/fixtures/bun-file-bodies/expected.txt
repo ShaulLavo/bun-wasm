@@ -16,3 +16,6 @@ the file after Request(url, response): 9 123456789
 directory by path: ["EISDIR","EISDIR"] by descriptor: ["EISDIR","EISDIR"] closed descriptor: ["EBADF","EBADF"]
 directory read: Error EISDIR read "Directories cannot be read like files"
 missing file body: Response { ENOENT
+descriptor body Bun.file(fd) ["hello world","hello world"]
+descriptor body Bun.file(fd).stream() ["hello world","hello world"]
+descriptor body new Blob([Bun.file(fd)]) ["hello world","hello world"]

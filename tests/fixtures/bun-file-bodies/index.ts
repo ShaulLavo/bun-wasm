@@ -99,3 +99,19 @@ for (const [label, make, change] of [
   console.log("directory read:", error.name, error.code, error.syscall, JSON.stringify(error.message));
   console.log("missing file body:", firstLine(new Response(Bun.file(join(dir, "missing")))), await new Response(Bun.file(join(dir, "missing"))).text().catch(e => e.code));
 }
+
+// A file given by descriptor can be read only once, so a clone is teed: both bodies get the bytes.
+{
+  const path = fresh("descriptor.txt", "hello world");
+  for (const [label, make] of [
+    ["Bun.file(fd)", (fd: number) => Bun.file(fd)],
+    ["Bun.file(fd).stream()", (fd: number) => Bun.file(fd).stream()],
+    ["new Blob([Bun.file(fd)])", (fd: number) => new Blob([Bun.file(fd)])],
+  ] as const) {
+    const fd = openSync(path, "r");
+    const original = new Response(make(fd));
+    const clone = original.clone();
+    console.log("descriptor body", label, JSON.stringify(await Promise.all([original.text(), clone.text()])));
+    closeSync(fd);
+  }
+}

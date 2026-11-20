@@ -74,6 +74,11 @@
     _isLazy() {
       return true;
     }
+    // A file given by descriptor (Bun.stdin included) can be read only once: a second read
+    // starts where the first stopped. Bodies sharing it share that one read, as Bun tees it.
+    _readsOnce() {
+      return this.#fd !== null;
+    }
     _bytes() {
       try {
         if (this.#fd === 0 && this.#start === 0 && this.#end === undefined) return native.readStdin();
@@ -93,9 +98,11 @@
       if (this.#path !== null) directory.path = this.#path;
       return directory;
     }
-    // A Bun.file()'s stream remembers the file, so a body built from it can lift the file back out.
+    // A stream over a file opened by path remembers the file, so a body built from it can lift
+    // the file back out. Bun tees a stream over a descriptor, which can only be read once.
     stream() {
-      const stream = internal.require("bun_file").stream(this.#fd !== null ? this.#fd : absolute(this.#path), this.#start, this.#end);
+      if (this.#fd !== null) return internal.require("bun_file").stream(this.#fd, this.#start, this.#end);
+      const stream = internal.require("bun_file").stream(absolute(this.#path), this.#start, this.#end);
       return internal.require("body_streams").rememberFile(stream, this);
     }
     #stat() {
