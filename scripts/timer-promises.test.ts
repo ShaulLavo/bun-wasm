@@ -24,11 +24,19 @@ function load(name: string) {
   const emitted = name.endsWith(".ts") ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`) : source;
   return runInNewContext(emitted);
 }
+// The guest's protected abort listener resists stopImmediatePropagation(); the
+// factory tests only need an ordinary once listener.
+const eventTargets = {
+  addAbortListener(signal: AbortSignal, listener: () => void) {
+    signal.addEventListener("abort", listener, { once: true });
+    return () => signal.removeEventListener("abort", listener);
+  },
+};
 function adapter(timers: TimerApi): Promises {
   const factories: Record<string, () => Promises> = {};
   load("builtins.js")({
     timers, native: {}, builtinFactories: factories,
-    require(name: string) { return load(`${name}.ts`)({ timers }); },
+    require(name: string) { return load(`${name}.ts`)({ timers, eventTargets }); },
   });
   const factory = factories["node:timers/promises"];
   if (!factory) throw new Error("Missing timers builtin");

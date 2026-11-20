@@ -5,25 +5,29 @@ import net from "node:net";
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const nativeControl = process.env.BUN_WASM_NATIVE_CONTROL === "1";
+// A hang cap that names the stuck step, not a speed check; scripts/test.sh stops the run at 60 s.
 async function deadline<T>(promise: Promise<T>, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(label)), 1500); });
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(label)), 20_000); });
   try { return await Promise.race([promise, timeout]); }
   finally { clearTimeout(timer); }
 }
 
+// The server holds "second" until the client has read "first", so the check proves streaming
+// before EOF without depending on how fast either side runs. TCP keeps the byte order, not
+// the write boundaries: a timer here let a slow client read both writes as one chunk.
 function stagedBody() {
-  let finish: ReturnType<typeof setTimeout> | undefined;
+  let release = () => {};
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(new TextEncoder().encode("first"));
-      finish = setTimeout(() => {
+      release = () => {
         controller.enqueue(new TextEncoder().encode("second"));
         controller.close();
-      }, 30);
+      };
     },
   });
-  return { stream, clear() { clearTimeout(finish); } };
+  return { stream, release: () => release() };
 }
 
 function readBody(response: http.IncomingMessage) {
@@ -38,10 +42,10 @@ function readBody(response: http.IncomingMessage) {
 
 async function stagedServer() {
   if (nativeControl) {
-    let finish: ReturnType<typeof setTimeout> | undefined;
+    let release = () => {};
     const respond = (_request: http.IncomingMessage, response: http.ServerResponse) => {
       response.write("first");
-      finish = setTimeout(() => response.end("second"), 30);
+      release = () => response.end("second");
     };
     const server = http.createServer(respond);
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -49,8 +53,8 @@ async function stagedServer() {
     if (!address || typeof address === "string") throw new Error("Missing staged server address");
     return {
       port: address.port,
+      release: () => release(),
       async close() {
-        clearTimeout(finish);
         server.closeAllConnections();
         await new Promise<void>(resolve => server.close(() => resolve()));
       },
@@ -60,7 +64,8 @@ async function stagedServer() {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { return new Response(body.stream); } });
   return {
     port: server.port,
-    async close() { body.clear(); await server.stop(true); },
+    release: body.release,
+    async close() { await server.stop(true); },
   };
 }
 
@@ -99,7 +104,7 @@ async function checkFetchBackedHttps() {
     response = incoming;
     incoming.on("data", chunk => {
       received += chunk;
-      firstData();
+      if (received.length >= "first".length) firstData();
     });
     incoming.on("end", () => { ended = true; endedBody(); });
   };
@@ -115,6 +120,7 @@ async function checkFetchBackedHttps() {
     assert.equal(received, "first");
     assert.equal(ended, false);
     assert.equal(response?.complete, false);
+    server.release();
     await deadline(end, "fetch-backed HTTPS EOF");
     assert.equal(received, "firstsecond");
     console.log("fetch-backed HTTPS streams before EOF");

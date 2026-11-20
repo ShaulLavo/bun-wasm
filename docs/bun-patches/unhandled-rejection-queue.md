@@ -50,9 +50,10 @@ but do not report late handlers.
 
 - With several timers due at once, native Bun runs all of them before reporting a rejection
   made in the first; bun-wasm reports it after that timer's microtasks, before the next timer.
-  `setImmediate` callbacks are ordered differently around rejection reports too. Matching it
-  needs the loop to hold rejection reports until a timer phase ends, which belongs with the
-  timer phase work in PR 966 (not yet merged).
+  `setImmediate` callbacks are ordered differently around rejection reports too. The timers
+  phase from PR 966 runs every due timer before the next immediate, but one callback per loop
+  turn, and the loop reports rejections after every turn. Matching Bun needs the loop to hold
+  rejection reports until the timers phase ends.
 
 ## Tests
 
