@@ -79,8 +79,45 @@ fn dispatch(q: &J) -> Result<J> {
         "sign" | "verify" => sign(q),
         "encrypt" | "decrypt" => crypt(q),
         "derive" => derive(q),
+        "spkac" => spkac(q),
         _ => Err("NotSupportedError"),
     }
+}
+
+/// crypto.Certificate: mode 0 verifies, 1 exports the public key PEM, 2 the challenge.
+/// An empty result means the SPKAC did not decode.
+fn spkac(q: &J) -> Result<J> {
+    let input = bytes(q, "data")?;
+    let mode = i32::try_from(number(q, "mode")?).map_err(|_| "DataError")?;
+    // SAFETY: the adapter reads `input` and, with a null buffer, only measures.
+    let size = unsafe {
+        bunwasm_crypto_sys::pqc::bunwasm_spkac(
+            mode,
+            input.as_ptr(),
+            input.len(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if mode == 0 {
+        return Ok(json!({"verified": size == 1}));
+    }
+    let mut out = vec![0; size];
+    // SAFETY: `out` holds `size` bytes, the length the first call reported.
+    if size > 0
+        && unsafe {
+            bunwasm_crypto_sys::pqc::bunwasm_spkac(
+                mode,
+                input.as_ptr(),
+                input.len(),
+                out.as_mut_ptr(),
+                size,
+            )
+        } != size
+    {
+        out.clear();
+    }
+    Ok(output(out))
 }
 
 /// An AKP JWK's public key and seed, after checking that it names `a`.

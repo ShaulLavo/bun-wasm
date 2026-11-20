@@ -27,6 +27,20 @@ Native Bun implements these in C++ over BoringSSL. The adapters follow Bun at re
   then the `ERR_OUT_OF_RANGE` bounds; `crypto.hkdf` with a keylen of 0 failing with a
   plain "HKDF derivation failed"; `checkPrime` copying the candidate before it reads the
   options; and `getRandomValues` refusing `Float16Array`.
+- Bun's `src/js/node/crypto.ts` and ncrypto's `VerifySpkac`, `ExportPublicKey` and
+  `ExportChallenge` for `crypto.Certificate`: the `spkac` argument check, trailing
+  whitespace ignored, `false` or `""` for input that does not decode, the public key as
+  a PEM string and the challenge as a Buffer. `crates/bunwasm-crypto-sys/c/spkac.c` is
+  the original C adapter over BoringSSL's `NETSCAPE_SPKI` functions.
+- Node's key and signing validators as Bun reports them: `KeyObject.export` requires an
+  options object (a secret key may omit it) and a format; `crypto.verify` takes the
+  signature only as a view, checked before the key; `padding` and `saltLength` must be
+  int32 (`ERR_INVALID_ARG_VALUE`); `generateKeySync` takes AES lengths 128, 192 and 256
+  and HMAC lengths 8 to 2^31 - 1 with Node's messages; BoringSSL's `DECODE_ERROR`s for an
+  unreadable DER PKCS#1 or PKCS#8 private key; and `crypto.Hash` and `crypto.Hmac` as
+  `util.deprecate` wrappers (DEP0179, DEP0181). The `node-crypto-keys` fixture's
+  expectation that `hkdfSync` with a keylen of 0 returns an empty buffer is updated to
+  Bun's error.
 
 `crates/bunwasm-crypto-sys/c/pqc.c` is an original C adapter over BoringSSL's
 `mlkem.h`, `mldsa.h` and `aead.h`. BoringSSL's ML-KEM and ML-DSA private key structures
@@ -47,14 +61,15 @@ Differences from native Bun, all deliberate:
   when additional data was used; clones here decrypt.
 
 The `webcrypto-chacha20-poly1305` (RFC 8439 section 2.8.2 vector), `webcrypto-ml-kem-ml-dsa`
-(fixed seeds), `webcrypto-sha3` (FIPS 202 vectors) and `node-crypto-random-fill` fixtures
-are original test code with native Bun 1.4.4's output.
+(fixed seeds), `webcrypto-sha3` (FIPS 202 vectors), `node-crypto-random-fill` and `node-crypto-spkac`
+fixtures are original test code with native Bun 1.4.4's output. The SPKACs come from
+`openssl spkac` with a synthetic key.
 
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/crypto.js`, `structured_clone.ts`, `builtins.js`, `crypto_keys.ts`, `node_dh.ts`, `web.js`](#webcrypto-chacha20-poly1305-ml-kem-ml-dsa-and-sha-3-node-randomfill-bounds) | Adapted implementation | Bun's WebCrypto algorithm checks and messages, CryptoKey cloning and Node's randomFill bounds in the runtime adapters. |
-| [`crates/bunwasm-crypto-sys/c/pqc.c`, `src/pqc.rs`, `crates/bunwasm-runtime/src/crypto_pqc.rs`](#webcrypto-chacha20-poly1305-ml-kem-ml-dsa-and-sha-3-node-randomfill-bounds) | Original adapter | BoringSSL ML-KEM, ML-DSA and ChaCha20-Poly1305 bindings and their key encodings. |
+| [`crates/bunwasm-crypto-sys/c/pqc.c`, `c/spkac.c`, `src/pqc.rs`, `crates/bunwasm-runtime/src/crypto_pqc.rs`](#webcrypto-chacha20-poly1305-ml-kem-ml-dsa-and-sha-3-node-randomfill-bounds) | Original adapter | BoringSSL ML-KEM, ML-DSA and ChaCha20-Poly1305 bindings and their key encodings. |
 
 [Ledger scope and pinned revisions](scope.md).

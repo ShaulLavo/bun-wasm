@@ -37,3 +37,20 @@ keygen compressed 49
 keygen bad type throws TypeError ERR_INVALID_ARG_VALUE The property 'options.publicKeyEncoding.type' is invalid. Received 'garbage'
 keygen raw cipher throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding raw format does not support encryption.
 keygen raw passphrase throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding raw format does not support encryption.
+export undefined throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received undefined
+export null throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received null
+export "foo" throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received type string ('foo')
+export 0 throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received type number (0)
+export [] throws TypeError ERR_INVALID_ARG_VALUE The property 'options.format' is invalid. Received undefined
+export {} throws TypeError ERR_INVALID_ARG_VALUE The property 'options.format' is invalid. Received undefined
+secret export 00000000
+secret export null throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received null
+saltLength 20.5 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.saltLength' is invalid. Received 20.5
+saltLength 2147483648 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.saltLength' is invalid. Received 2147483648
+saltLength 20 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.saltLength' is invalid. Received '20'
+saltLength null throws TypeError ERR_INVALID_ARG_VALUE The property 'options.saltLength' is invalid. Received null
+padding 6.5 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.padding' is invalid. Received 6.5
+padding 6 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.padding' is invalid. Received '6'
+padding 4294967296 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.padding' is invalid. Received 4294967296
+pkcs1 public as private throws Error ERR_OSSL_EVP_DECODE_ERROR error:06000066:public key routines:OPENSSL_internal:DECODE_ERROR
+pkcs8 garbage throws Error ERR_OSSL_ASN1_DECODE_ERROR error:0c00006d:ASN.1 encoding routines:OPENSSL_internal:DECODE_ERROR

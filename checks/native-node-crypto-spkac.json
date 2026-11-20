@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/node-crypto-spkac",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

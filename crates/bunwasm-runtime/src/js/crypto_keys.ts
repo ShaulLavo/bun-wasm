@@ -225,6 +225,7 @@ declare namespace CryptoKeys {
       export(options?: CryptoKeys.ExportOptions): CryptoKeys.Buffer | string | JsonWebKey;
       export(options?: CryptoKeys.ExportOptions): CryptoKeys.Buffer | string | JsonWebKey {
         const r = nodeRecord(this);
+        checkExportOptions(r, options);
         const encrypted =
           options?.cipher !== undefined || options?.passphrase !== undefined;
         if (encrypted && (r.type !== "private" || options?.format === "jwk"))
@@ -367,6 +368,15 @@ declare namespace CryptoKeys {
         },
         key: { kty: "oct", k: Buffer.from(bytes).toString("base64url") },
       });
+    }
+    // Node's parseKeyEncoding: options is an object (a secret key may omit it), and an
+    // asymmetric key needs a format.
+    function checkExportOptions(r: CryptoKeys.Record, options: unknown): void {
+      const missing = options === undefined && r.type !== "secret";
+      if (missing || (options !== undefined && (options === null || typeof options !== "object")))
+        throw args().argType("options", "object", options);
+      if (r.type !== "secret" && (options as CryptoKeys.ExportOptions).format === undefined)
+        throw args().invalidArgValue("options.format", undefined);
     }
     // KeyObject.export's raw formats, with the checks of Bun's KeyObject::exportRaw.
     function exportRaw(r: CryptoKeys.Record, options: CryptoKeys.RawExportOptions): CryptoKeys.Buffer {
@@ -573,6 +583,11 @@ declare namespace CryptoKeys {
       const kty = jwk ? (key as JsonWebKey).kty : undefined;
       if (kty === "EC" || kty === "RSA")
         throw Object.assign(new TypeError(`Invalid JWK ${kty} key`), { code: "ERR_CRYPTO_INVALID_JWK" });
+      // BoringSSL's decode errors for DER private keys, as Bun reports them.
+      if (options.format === "der" && isPrivateEncoding && format === "pkcs1")
+        throw args().opensslError("06000066", "public key routines", "DECODE_ERROR", "ERR_OSSL_EVP_DECODE_ERROR");
+      if (options.format === "der" && isPrivateEncoding && format === "pkcs8" && options.passphrase === undefined)
+        throw args().opensslError("0c00006d", "ASN.1 encoding routines", "DECODE_ERROR", "ERR_OSSL_ASN1_DECODE_ERROR");
       throw Object.assign(new Error("Failed to read asymmetric key"), {
         code: "ERR_OSSL_ASN1_HEADER_TOO_LONG",
       });
@@ -610,16 +625,18 @@ declare namespace CryptoKeys {
           code: "ERR_INVALID_ARG_VALUE",
         });
       const length = options?.length;
-      if (typeof length !== "number")
-        throw error("options.length must be a number");
-      if (!Number.isInteger(length) || length < 8 || length > 0x7fffffff)
-        throw Object.assign(new RangeError("Invalid key length"), {
-          code: "ERR_OUT_OF_RANGE",
-        });
+      // Node's generateKey validation: AES takes one of three lengths; HMAC any whole
+      // number of bits from 8 to 2^31 - 1.
       if (type === "aes" && ![128, 192, 256].includes(length))
-        throw Object.assign(new TypeError("Invalid AES key length"), {
+        throw Object.assign(new TypeError("The property 'options.length' must be one of: 128, 192, 256"), {
           code: "ERR_INVALID_ARG_VALUE",
         });
+      if (typeof length !== "number") throw args().argType("options.length", "number", length);
+      if (!Number.isInteger(length) || length < 8 || length > 0x7fffffff)
+        throw Object.assign(
+          new RangeError(`The value of "options.length" is out of range. It must be >= 8 && <= 2147483647. Received ${length}`),
+          { code: "ERR_OUT_OF_RANGE" },
+        );
       return createSecretKey(
         internal.native.randomBytes(Math.floor(length / 8)),
       );
@@ -735,6 +752,12 @@ declare namespace CryptoKeys {
     function signVerify(verify: true, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature: CryptoKeys.Input): boolean;
     function signVerify(verify: boolean, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature?: CryptoKeys.Input): CryptoKeys.Buffer | boolean {
       const options = parseInput(input);
+      // Node's getIntOption: an int32 or undefined.
+      for (const name of ["padding", "saltLength"] as const) {
+        const value: unknown = options[name];
+        if (value !== undefined && !(Number.isInteger(value) && (value as number) >= -(2 ** 31) && (value as number) < 2 ** 31))
+          throw args().invalidArgValue(`options.${name}`, value);
+      }
       const key = importAsymmetric(options, !verify);
       // Only Ed448 takes a signing context, and BoringSSL has no Ed448.
       if (options.context !== undefined) throw args().operationFailed("Context parameter is unsupported");
@@ -831,6 +854,9 @@ declare namespace CryptoKeys {
     function verify(algorithm: string | null | undefined, data: CryptoKeys.Input, key: CryptoKeys.KeyInput, signature: CryptoKeys.Input, callback?: null): boolean;
     function verify(algorithm: string | null | undefined, data: CryptoKeys.Input, key: CryptoKeys.KeyInput, signature: CryptoKeys.Input, callback: CryptoKeys.VerifyCallback): void;
     function verify(algorithm: string | null | undefined, data: CryptoKeys.Input, key: CryptoKeys.KeyInput, signature: CryptoKeys.Input, callback?: CryptoKeys.VerifyCallback | null): boolean | void {
+      // Node's one-shot verify takes the signature only as a view, checked before the key.
+      if (!ArrayBuffer.isView(signature))
+        throw args().argType("signature", "an instance of Buffer, TypedArray, or DataView", signature);
       if (typeof callback !== "function")
         return signVerify(true, algorithm, data, key, signature);
       internal.realTimers.setImmediate(() => {
@@ -941,6 +967,30 @@ declare namespace CryptoKeys {
       };
     }
     const hkdfCallback = callbackVersion(hkdfSync);
+    // crypto.Certificate (Netscape SPKAC), as Bun's src/js/node/crypto.ts and ncrypto do.
+    function spkacBytes(spkac: unknown, encoding?: string): Uint8Array {
+      if (spkac instanceof ArrayBuffer || ArrayBuffer.isView(spkac)) return inputBytes(spkac as CryptoKeys.Input);
+      if (typeof spkac === "string") return Buffer.from(spkac, encoding === "buffer" ? "utf8" : encoding);
+      throw args().argType("spkac", "string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView", spkac);
+    }
+    const spkac = (mode: number, value: unknown, encoding?: string) => c.backend("spkac", {}, { mode, data: c.encode(spkacBytes(value, encoding)) });
+    const certificateMethods = {
+      verifySpkac: (value: unknown, encoding?: string): boolean => spkac(0, value, encoding).verified!,
+      // An SPKAC that does not decode gives "", as in Bun.
+      exportPublicKey(value: unknown, encoding?: string): string {
+        return Buffer.from(c.decode(spkac(1, value, encoding).data)).toString();
+      },
+      exportChallenge(value: unknown, encoding?: string): CryptoKeys.Buffer | string {
+        const bytes = c.decode(spkac(2, value, encoding).data);
+        return bytes.length ? Buffer.from(bytes) : "";
+      },
+    };
+    function Certificate(this: object | undefined): object {
+      if (!new.target) return new (Certificate as unknown as new () => object)();
+      return Object.assign(this!, certificateMethods);
+    }
+    Certificate.prototype = {};
+    Object.assign(Certificate, certificateMethods);
     return {
       KeyObject,
       createSecretKey,
@@ -959,6 +1009,7 @@ declare namespace CryptoKeys {
       createSign: (a: string, o?: unknown) => new Sign(a, o),
       createVerify: (a: string, o?: unknown) => new Verify(a, o),
       constants,
+      Certificate,
       hkdfSync,
       // The digest is checked synchronously, as in Node; derivation errors reach the callback.
       hkdf: (...args: Parameters<typeof hkdfCallback>) => {

@@ -49,4 +49,19 @@ randomInt(1, 2, 3) throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument
 randomInt(1, 2) 1
 randomInt(-3, -2) -3
 randomInt range 0,1,2
+verify string signature throws TypeError ERR_INVALID_ARG_TYPE The "signature" argument must be an instance of Buffer, TypedArray, or DataView. Received type string ('oops')
+verify number signature throws TypeError ERR_INVALID_ARG_TYPE The "signature" argument must be an instance of Buffer, TypedArray, or DataView. Received type number (5)
+generateKeySync aes 128 16
+generateKeySync aes 192 24
+generateKeySync aes 256 32
+generateKeySync aes 128.5 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.length' must be one of: 128, 192, 256
+generateKeySync aes 64 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.length' must be one of: 128, 192, 256
+generateKeySync aes 128 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.length' must be one of: 128, 192, 256
+generateKeySync aes undefined throws TypeError ERR_INVALID_ARG_VALUE The property 'options.length' must be one of: 128, 192, 256
+generateKeySync hmac 7 throws RangeError ERR_OUT_OF_RANGE The value of "options.length" is out of range. It must be >= 8 && <= 2147483647. Received 7
+generateKeySync hmac string throws TypeError ERR_INVALID_ARG_TYPE The "options.length" property must be of type number. Received type string ('8')
+generateKeySync hmac 20 2
+constructor names deprecated,deprecated,Sign,Verify
+new Hash ca978112
+Hash() true
 randomInt callback undefined 7

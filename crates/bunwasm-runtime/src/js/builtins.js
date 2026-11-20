@@ -180,6 +180,24 @@
     function Hmac(hmac, key, options) {
       return createHmac(hmac, key, options);
     }
+    function HashConstructor(algorithm, options) {
+      return createHash(algorithm, options);
+    }
+    HashConstructor.prototype = Hash.prototype;
+    // util.deprecate's wrapper (DEP0179, DEP0181), without loading node:util with node:crypto.
+    function deprecatedConstructor(fn, message, code) {
+      let warned = false;
+      function deprecated(...args) {
+        if (!warned) {
+          warned = true;
+          globalThis.process.emitWarning?.(message, "DeprecationWarning", code);
+        }
+        return new.target ? Reflect.construct(fn, args, new.target) : Reflect.apply(fn, this, args);
+      }
+      Object.setPrototypeOf(deprecated, fn);
+      deprecated.prototype = fn.prototype;
+      return deprecated;
+    }
     Hmac.prototype = Object.create(Object.getPrototypeOf(Hash.prototype), Object.getOwnPropertyDescriptors(Hash.prototype));
     delete Hmac.prototype.copy;
     Object.defineProperty(Hmac.prototype, "constructor", { value: Hmac, writable: true, configurable: true });
@@ -321,8 +339,8 @@
       ...internal.require("node_dh")(),
       ...internal.require("node_pbkdf2")(digests, Buffer),
       ...internal.require("x509")(Buffer, keyApi),
-      Hash,
-      Hmac,
+      Hash: deprecatedConstructor(HashConstructor, "crypto.Hash constructor is deprecated.", "DEP0179"),
+      Hmac: deprecatedConstructor(Hmac, "crypto.Hmac constructor is deprecated.", "DEP0181"),
     });
   }
 

@@ -1,7 +1,17 @@
-//! The byte-level ML-KEM, ML-DSA and ChaCha20-Poly1305 entry points of `c/pqc.c`.
+//! The byte-level ML-KEM, ML-DSA and ChaCha20-Poly1305 entry points of `c/pqc.c`, and
+//! the Netscape SPKAC entry point of `c/spkac.c`.
 //! Kinds: 0 ML-KEM-768, 1 ML-KEM-1024, 2 ML-DSA-44, 3 ML-DSA-65, 4 ML-DSA-87.
 
 unsafe extern "C" {
+    /// `c/spkac.c`. mode 0 verifies (1 or 0); mode 1 writes the public key PEM and mode 2
+    /// the challenge, returning the full length or 0 on failure.
+    pub fn bunwasm_spkac(
+        mode: i32,
+        data: *const u8,
+        len: usize,
+        out: *mut u8,
+        capacity: usize,
+    ) -> usize;
     /// `what`: 0 public key, 1 seed, 2 ciphertext (ML-KEM) or signature (ML-DSA).
     pub fn bunwasm_pqc_size(kind: i32, what: i32) -> usize;
     pub fn bunwasm_pqc_public(
