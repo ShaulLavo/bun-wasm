@@ -1,0 +1,52 @@
+checkPrimeSync 0 false
+checkPrimeSync 1 false
+checkPrimeSync 2 true
+checkPrimeSync 3 true
+checkPrimeSync 4 false
+checkPrimeSync 561 carmichael false
+checkPrimeSync mersenne 61 true
+checkPrimeSync mersenne 67 composite false
+checkPrimeSync mersenne 127 true
+checkPrimeSync 2^255-19 true
+checkPrimeSync 2^255-21 false
+checkPrimeSync buffer true
+checkPrimeSync arraybuffer true
+checkPrimeSync dataview false
+checkPrimeSync checks true
+checkPrimeSync negative bigint throws RangeError ERR_OUT_OF_RANGE The value of "candidate" is out of range. It must be >= 0. Received -7n
+checkPrimeSync number throws TypeError ERR_INVALID_ARG_TYPE The "candidate" argument must be of type string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView. Received type number (7)
+checkPrimeSync string false
+checkPrimeSync bad checks throws RangeError ERR_OUT_OF_RANGE The value of "options.checks" is out of range. It must be >= 0 && <= 2147483647. Received -1
+checkPrimeSync string checks throws TypeError ERR_INVALID_ARG_TYPE The "options.checks" property must be of type number. Received type string ('1')
+checkPrimeSync bad options throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received type number (5)
+generatePrimeSync 2 2 true
+generatePrimeSync 3 3 true
+generatePrimeSync 8 8 true
+generatePrimeSync 16 16 true
+generatePrimeSync 64 64 true
+generatePrimeSync 128 128 true
+generatePrimeSync arraybuffer true 8 true
+generatePrimeSync safe 64 true true
+generatePrimeSync add rem 32 11 true
+generatePrimeSync add buffer 32 3 true
+generatePrimeSync safe add 32 11 true
+generatePrimeSync size 1 throws Error ERR_CRYPTO_OPERATION_FAILED could not generate prime
+generatePrimeSync size 0 throws RangeError ERR_OUT_OF_RANGE The value of "size" is out of range. It must be >= 1 && <= 2147483647. Received 0
+generatePrimeSync size fraction throws RangeError ERR_OUT_OF_RANGE The value of "size" is out of range. It must be an integer. Received 8.5
+generatePrimeSync size string throws TypeError ERR_INVALID_ARG_TYPE The "size" argument must be of type number. Received type string ('8')
+generatePrimeSync add too big throws RangeError ERR_OUT_OF_RANGE invalid options.add
+generatePrimeSync rem not below add throws RangeError ERR_OUT_OF_RANGE invalid options.rem
+generatePrimeSync add number throws TypeError ERR_INVALID_ARG_TYPE The "options.add" property must be of type ArrayBuffer, Buffer, TypedArray, DataView, or bigint. Received type number (12)
+generatePrimeSync rem string throws TypeError ERR_INVALID_ARG_TYPE The "options.rem" property must be of type ArrayBuffer, Buffer, TypedArray, DataView, or bigint. Received type string ('1')
+generatePrimeSync safe not boolean throws TypeError ERR_INVALID_ARG_TYPE The "options.safe" property must be of type boolean. Received type number (1)
+generatePrimeSync bigint not boolean throws TypeError ERR_INVALID_ARG_TYPE The "options.bigint" property must be of type boolean. Received type string ('yes')
+generatePrimeSync bad options throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received type number (5)
+generatePrime callback undefined bigint 48 true
+generatePrime no options undefined true 4
+checkPrime callback undefined true
+checkPrime options callback undefined false
+generatePrime no callback throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument must be of type function. Received undefined
+checkPrime no callback throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument must be of type function. Received undefined
+generatePrime bad size throws RangeError ERR_OUT_OF_RANGE The value of "size" is out of range. It must be >= 1 && <= 2147483647. Received -1
+names generatePrime generatePrimeSync checkPrime checkPrimeSync
+checkPrime runs after later
