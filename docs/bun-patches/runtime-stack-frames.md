@@ -17,7 +17,11 @@ V8 source.
 ## Which frames
 
 - A runtime frame is one whose script is named `bun-wasm:…`: the polyfills, and on the
-  Browser engine the host worker, which `displayName` already names `bun-wasm:host`.
+  Browser engine the host worker, which `displayName` (`web/src/engine-host.js`) already names
+  `bun-wasm:host`. On the Node test host that includes every `node:` module, public ones too:
+  with async context on, Node runs the host microtask that drains a program's ticks through
+  `AsyncResource.runInAsyncScope` (`node:async_hooks`). `tests/fixtures/stack-host-microtask`
+  checks it.
 - A native frame whose caller is a hidden frame goes too, such as the `apply` the event loop
   runs a callback through, or the `Promise` constructor called by the http server. A native
   frame called by the program, like `forEach`, stays.

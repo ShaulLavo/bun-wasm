@@ -1,4 +1,4 @@
-tick [ "at <anonymous> (/index.ts:10:57)" ]
-nested tick [ "at <anonymous> (/index.ts:14:66)" ]
-microtask [ "at <anonymous> (/index.ts:11:60)" ]
-reaction [ "at <anonymous> (/index.ts:12:67)" ]
+tick [ "at tick (/index.ts:12:36)" ]
+nested tick [ "at nested (/index.ts:22:45)" ]
+microtask [ "at microtask (/index.ts:15:41)" ]
+reaction [ "at reaction (/index.ts:18:40)" ]
