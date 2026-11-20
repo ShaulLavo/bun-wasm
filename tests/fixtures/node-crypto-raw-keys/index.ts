@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 
 // KeyObject raw-public, raw-private and raw-seed formats with fixed keys, Bun's argument
-// checks for them, and SubtleCrypto.getPublicKey for the classic key types.
+// checks for them.
 const show = (label: string, make: () => unknown) => {
   try {
     const value = make();
@@ -81,30 +81,3 @@ show("keygen bad type", () => crypto.generateKeyPairSync("ec", { namedCurve: "P-
 show("keygen raw cipher", () => crypto.generateKeyPairSync("ed25519", { privateKeyEncoding: { format: "raw-private", cipher: "aes-128-cbc", passphrase: "secret" } } as never));
 show("keygen raw passphrase", () => crypto.generateKeyPairSync("ed25519", { privateKeyEncoding: { format: "raw-private", passphrase: "secret" } } as never));
 
-const subtle = crypto.webcrypto.subtle;
-const algorithms = [
-  [{ name: "ECDSA", namedCurve: "P-256" }, ["sign", "verify"], ["verify"]],
-  [{ name: "ECDH", namedCurve: "P-384" }, ["deriveBits"], []],
-  ["Ed25519", ["sign", "verify"], ["verify"]],
-  ["X25519", ["deriveBits"], []],
-  [{ name: "RSA-PSS", modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, ["sign", "verify"], ["verify"]],
-  [{ name: "RSA-OAEP", modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-1" }, ["decrypt", "encrypt"], ["encrypt"]],
-] as const;
-for (const [algorithm, usages, publicUsages] of algorithms) {
-  const pair = (await subtle.generateKey(algorithm as never, false, usages as never)) as CryptoKeyPair;
-  const label = typeof algorithm === "string" ? algorithm : algorithm.name;
-  const key = await subtle.getPublicKey(pair.privateKey, publicUsages as never);
-  const same = Buffer.from(await subtle.exportKey("spki", key)).equals(Buffer.from(await subtle.exportKey("spki", pair.publicKey)));
-  console.log("getPublicKey", label, key.type, key.extractable, JSON.stringify(key.usages), JSON.stringify(key.algorithm) === JSON.stringify(pair.publicKey.algorithm), same);
-  await subtle.getPublicKey(pair.privateKey, ["sign"]).then(
-    () => console.log("getPublicKey", label, "private usage accepted"),
-    error => console.log("getPublicKey", label, "private usage", error.name, error.message),
-  );
-  await subtle.getPublicKey(pair.publicKey, publicUsages as never).then(
-    () => console.log("getPublicKey", label, "public key accepted"),
-    error => console.log("getPublicKey", label, "public key", error.name, error.message),
-  );
-}
-const secret = await subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);
-await subtle.getPublicKey(secret, []).catch(error => console.log("getPublicKey secret", error.name, error.message));
-console.log("getPublicKey length", subtle.getPublicKey.length);

@@ -564,6 +564,10 @@ declare namespace CryptoKeys {
           return wantPrivate ? fromCrypto(result) : publicPart(r);
         } catch {}
       }
+      // Bun's getKeyObjectHandleFromJwk names a JWK whose EC point or RSA components fail.
+      const kty = jwk ? (key as JsonWebKey).kty : undefined;
+      if (kty === "EC" || kty === "RSA")
+        throw Object.assign(new TypeError(`Invalid JWK ${kty} key`), { code: "ERR_CRYPTO_INVALID_JWK" });
       throw Object.assign(new Error("Failed to read asymmetric key"), {
         code: "ERR_OSSL_ASN1_HEADER_TOO_LONG",
       });
