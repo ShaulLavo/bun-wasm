@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdir, mkdtemp, open, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseCacheLimits, retainReleaseCaches } from "./ci-release-cache";
 import { releaseCacheKey } from "./ci-release-download";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const bunUrl = "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip";
 const nodeUrl = "https://github.com/actions/node-versions/releases/download/26.13.1-43134154182/node-26.13.1-linux-x64.tar.gz";

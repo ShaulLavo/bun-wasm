@@ -1,10 +1,13 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildToolPins, installBuildTools, verifyBuildToolArchive } from "./ci-build-tools";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const repo = join(import.meta.dir, "..");
 type Step = Record<string, unknown>;

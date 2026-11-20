@@ -50,6 +50,10 @@ declare namespace BunWasm {
     supportsAlgorithm(name: string): boolean;
     /** A structured clone of a key the wasm provider owns; undefined for any other value. */
     cloneKey(value: unknown): CryptoKey | undefined;
+    /** A wasm-provider key's record as JSON for another realm; undefined for any other value. */
+    serializeKey(value: unknown): string | undefined;
+    /** The key a serializeKey record describes, in this realm; throws DataCloneError for a bad record. */
+    deserializeKey(record: string): CryptoKey;
     crypt(mode: "decrypt", a: CryptoAlgorithm, key: CryptoKey, bytes: BufferSource, usage: "unwrapKey"): ArrayBuffer;
   }
   interface Internal {

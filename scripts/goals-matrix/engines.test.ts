@@ -1,5 +1,5 @@
 import { withScoped } from "./scope-fixture";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,9 @@ import { preflight, withStagedAssets } from "./preparation";
 import { engineFiles } from "./engines";
 import { ready } from "./playground";
 import type { Transport } from "./transport";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const profile = programProfile("spidermonkey");
 const pair = [profile.core, profile.side];

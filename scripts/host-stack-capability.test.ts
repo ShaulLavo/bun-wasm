@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { chromium, firefox, webkit } from "playwright";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 const read = (name: string) => readFileSync(new URL(name, directory), "utf8");

@@ -1,5 +1,5 @@
 import { deadlinePolicy } from "./deadlines";
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
 import { mkdtemp, mkdir, access, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,9 @@ import { options, run, playgroundURL } from "./run";
 import { frameworks, type Browser } from "./catalog";
 import { saveReport } from "./report";
 import { initialCells, validateReport } from "./model";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("the actual CLI inventory discovers all missing prerequisites and reaps its real asset server", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-goals-test-"));

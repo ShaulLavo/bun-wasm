@@ -1,8 +1,11 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { wasmMemoryLimits } from "../src/engine-kind";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-rolldown-memory-"));
 const directory = join(scratch, "node_modules/@rolldown/binding-wasm32-wasi");

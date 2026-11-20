@@ -1,10 +1,13 @@
 import { withScoped, withAdmission } from "./scope-fixture";
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
 import { chromium, type Page } from "playwright";
 import { frameworks } from "./catalog";
 import { edit, render } from "./playground";
 import type { Admission } from "./scope";
 import { evaluatePage, type Transport } from "./transport";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const framework = frameworks.find(framework => framework.id === "astro")!;
 const timeoutMs = 2_000;

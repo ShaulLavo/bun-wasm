@@ -72,6 +72,42 @@ static int interrupt(JSRuntime *rt, void *opaque)
     return 1;
 }
 
+/* Interrupts on the fourth poll. One evaluation of a single call reaches the interpreter's
+   own poll at most once, so a stop through this handler polled inside the call. */
+static int interrupt_fourth(JSRuntime *rt, void *opaque)
+{
+    int *calls = opaque;
+    return ++*calls >= 4;
+}
+
+/* One call of many cheap matches, each well under libregexp's 10,000-step poll interval:
+   the bounded (a|a){0,10}b branch backtracks a few thousand times before failing. */
+static const char *const many_matches[] = {
+    "'a'.repeat(1<<14).replace(/(?:a|a){0,10}b|a/g, 'x')",
+    "'a'.repeat(1<<14).replace(/(?:a|a){0,10}b|a/g, '')",
+    "'a'.repeat(1<<14).split(/(?:a|a){0,10}b/)",
+    "[...'a'.repeat(1<<14).matchAll(/(?:a|a){0,10}b|a/g)]",
+};
+
+/* A stop lands inside one global replace, split or matchAll of many cheap matches. */
+static void expect_stop_across_matches(JSContext *ctx, const char *source)
+{
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JSValue result, exception;
+    int calls = 0;
+    JS_SetInterruptHandler(rt, interrupt_fourth, &calls);
+    result = evaluate(ctx, source);
+    JS_SetInterruptHandler(rt, NULL, NULL);
+    if (!JS_IsException(result))
+        fprintf(stderr, "not stopped across matches (%d polls): %s\n", calls, source);
+    assert(JS_IsException(result));
+    assert(calls == 4);
+    exception = JS_GetException(ctx);
+    assert(JS_IsUncatchableError(exception));
+    JS_FreeValue(ctx, exception);
+    JS_FreeValue(ctx, result);
+}
+
 static JSValue limit_stack(JSContext *ctx, JSValueConst receiver, int argc, JSValueConst *argv)
 {
     JS_SetMaxStackSize(JS_GetRuntime(ctx), 1);
@@ -108,6 +144,8 @@ static void native_checks(JSContext *ctx)
     assert(JS_IsUncatchableError(exception));
     JS_FreeValue(ctx, exception);
     JS_FreeValue(ctx, result);
+    for (size_t i = 0; i < sizeof(many_matches) / sizeof(many_matches[0]); i++)
+        expect_stop_across_matches(ctx, many_matches[i]);
     function = evaluate(ctx, "(()=>{const re=/a/;return ()=>re.test('a');})()");
     assert(!JS_IsException(function));
     JS_SetMemoryLimit(rt, 1);
@@ -120,7 +158,7 @@ static void native_checks(JSContext *ctx)
     JS_FreeValue(ctx, function);
     expect_true(ctx, "/a/.test('a') && !/a/.test('b')");
     JS_FreeContext(other);
-    puts("native realm, frame, stack, interrupt, allocation failure and recovery: passed");
+    puts("native realm, frame, stack, interrupt, interrupt across matches, allocation failure and recovery: passed");
 }
 
 static int run_file(JSContext *ctx, const char *path)

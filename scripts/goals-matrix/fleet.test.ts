@@ -3,11 +3,14 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deadlinePolicy } from "./deadlines";
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
 import { nativePlatformBlocker, blockedCell } from "./platform";
 import { combine, collectNativeReport, cleanupStaging, cleanupLocalStaging } from "./fleet";
 import { options } from "./run";
 import { initialCells, finish, phases, type Report, type Attempt } from "./model";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 function report(): Report { return { schema: 2, run: "unit", createdAt: "unit", command: "unit", deadlines: deadlinePolicy(180_000), source: { commit: "unit", dirty: false, assets: {} }, cells: initialCells() }; }
 async function localCleanupReceipts(output: string): Promise<unknown[]> {
   const files = (await readdir(output)).filter(file => file.startsWith("fleet-local-cleanup") && file.endsWith(".json"));

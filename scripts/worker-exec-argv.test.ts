@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInContext } from "node:vm";
 import { eventTargetSource } from "./event-target-source";
 import * as path from "node:path";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${readFileSync(
   new URL("../crates/bunwasm-runtime/src/js/worker_threads.ts", import.meta.url), "utf8")}`);

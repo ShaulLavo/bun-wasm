@@ -1,4 +1,4 @@
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { chromium, webkit } from "playwright";
@@ -6,6 +6,9 @@ import { verifySite } from "./browser-guest-site";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
 import { overflowBudget } from "../web/src/shared-objects/lane-overflow";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const worker = String.raw`
 const { parentPort, receiveMessageOnPort } = require("node:worker_threads");

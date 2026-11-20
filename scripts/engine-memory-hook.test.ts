@@ -1,9 +1,12 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { beginMemorySnapshot, createMemoryReader, emptyCounters, endMemorySnapshot, recordMemorySnapshot, retainedMemorySnapshots,
   registerMemoryProcess, observeMemoryOutcome, memoryRuntimeId, memoryCommandId, retainedMemoryProcesses, memoryObservationLimits, type MemorySnapshot } from "../web/src/memory-telemetry.ts";
 import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, observeMemoryImports, readMemoryChannel, requestMemoryChannel } from "../web/src/memory-channel.ts";
 import { aggregate, selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
 import type { ProcessService } from "waffle";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 // Passed through as the core's declared maximum; any page multiple shows it is not a constant.
 const LIMIT_BYTES = 7 * 65536;

@@ -1,0 +1,4 @@
+tick [ "at tick (/index.ts:12:36)" ]
+nested tick [ "at nested (/index.ts:22:45)" ]
+microtask [ "at microtask (/index.ts:15:41)" ]
+reaction [ "at reaction (/index.ts:18:40)" ]

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +11,9 @@ import { prepareSharedProofInputs, verifySharedProofInputs } from "./ci-shared-p
 import { needsRust, needsSharedNative } from "./ci-changes";
 import { hash } from "./guest-source-manifest";
 import { parseProgramReceipt, record, type ProgramBuildReceipt } from "./guest-core-receipt";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const [head, tree] = execFileSync("git", ["rev-parse", "HEAD", "HEAD^{tree}"], { encoding: "utf8" }).trim().split("\n");
 const source = { head: head!, tree: tree! };

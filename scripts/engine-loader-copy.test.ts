@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("build-qualified streaming engines reuse one source snapshot for declarations and verified cache storage", () => {
   const result = spawnSync(process.execPath, [new URL("../web/tests/fixtures/engine-loader-copy-probe.ts", import.meta.url).pathname], { encoding: "utf8", timeout: 3000 });

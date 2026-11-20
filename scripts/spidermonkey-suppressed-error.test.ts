@@ -3,8 +3,11 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import { maxMemoryBytes } from "./src/program-profile.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("JSAPI preserves suppressed error operand identity on explicit interpreter and PBL tiers", () => {
   const native = process.env.SPIDERMONKEY_NATIVE_DIR;

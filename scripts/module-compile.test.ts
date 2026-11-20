@@ -1,9 +1,12 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { productionHostEvaluation } from "./module-compile-runtime.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-module-compile-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));

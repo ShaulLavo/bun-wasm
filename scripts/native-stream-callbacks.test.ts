@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { chromium, webkit } from "playwright";
 import { nativeStreamBridgeSource } from "./fixtures/native-stream-source";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 const controls = transpiler.transformSync(readFileSync(new URL("../web/tests/native-stream-callback-controls.ts", import.meta.url), "utf8")).replace("export async function", "async function");

@@ -94,7 +94,7 @@ declare namespace BunWasm {
     | ["undefined"] | ["null"] | ["string", string] | ["number", string] | ["boolean", boolean] | ["bigint", string]
     | ["object", [string, number][]] | ["array", number, [string, number][]]
     | ["map", [number, number][]] | ["set", number[]] | ["date", string] | ["regexp", string, string]
-    | ["blob", string, string] | ["buffer", string, number] | ["view", string, number, number, number]
+    | ["blob", string, string] | ["crypto-key", string] | ["buffer", string, number] | ["view", string, number, number, number]
     | ["node-buffer", number, number, number] | ["shared", string, number]
     | ["wasm-module", string] | ["wasm-memory", string, number]
     | ["error", string, string, string | null, number] | ["boxed", number]

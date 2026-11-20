@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -6,6 +6,9 @@ import { captureSourceManifest } from "./guest-source-manifest";
 import { jscArtifactInventory, packJscArtifact } from "./ci-jsc-artifact";
 import { excludedJscSentinels, excludedSharedSentinels, seedJscArtifact } from "./fixtures/jsc-artifact";
 import { withReceiptFixture } from "../tests/package/guest-receipt-fixture";
+
+// These tests run real git, zstd, tar and CMake. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 for (const profile of ["split", "shared-group"] as const) {
   test(`${profile} compact archive preserves the same producer's qualified source groups`, async () => {

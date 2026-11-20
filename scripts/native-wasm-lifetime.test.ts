@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { installNativeWasmLifetime } from "../web/src/native-wasm-lifetime";
 import { observePromise } from "../web/src/promise-reactions";
 import { SLOT_NAMES } from "../web/src/net/trampoline";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const source = readFileSync(new URL("../web/src/engine-host.js", import.meta.url), "utf8")
   .replace(/^import .*;\n/gm, "")

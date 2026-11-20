@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/stack-host-microtask",
+  "engines": ["quickjs", "jsc", "browser"]
+}

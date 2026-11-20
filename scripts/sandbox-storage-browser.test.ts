@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, firefox, webkit, type Browser } from "playwright";
 import { resolve, join } from "node:path";
 import { preservationScenario, quotaRefusalScenario, storageReportPath } from "../sandbox/tests/storage-browser";
@@ -6,6 +6,9 @@ import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 import { reportStorageFailure } from "./storage-failure-report";
 import { storageEvidence, type StorageLifetime, type StorageObservation } from "./storage-browser-evidence";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const requested = (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",");
 const browsers = Array.from(new Set(requested.flatMap(name => name === "chromium" ? ["chromium", "firefox"] : [name])));

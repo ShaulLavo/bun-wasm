@@ -1,0 +1,10 @@
+worker chacha true secret true ["encrypt","decrypt"] {"name":"ChaCha20-Poly1305"} 0909090909090909090909090909090909090909090909090909090909090909
+worker aes true secret false ["encrypt"] {"name":"AES-GCM","length":128} InvalidAccessError
+worker dsa true private true ["sign"] {"name":"ML-DSA-44"} 0202020202020202
+worker dsaPublic true public true ["verify"] {"name":"ML-DSA-44"} 1334
+worker rsa true private true ["sign"] {"name":"RSA-PSS","modulusLength":1024,"publicExponent":[1,0,1],"hash":{"name":"SHA-256"}}
+worker sameObject true
+main decrypts worker ciphertext 010203
+main verifies worker signature true
+key back from worker true ChaCha20-Poly1305 true
+generated in worker true {"name":"HMAC","hash":{"name":"SHA-256"},"length":64} 8

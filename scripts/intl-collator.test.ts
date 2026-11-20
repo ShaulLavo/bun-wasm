@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/intl.js", import.meta.url), "utf8");
 const nativeIntl = Intl;

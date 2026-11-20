@@ -1,10 +1,13 @@
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { boundaryChecks } from "../tests/fixtures/buffer-allocation-boundaries/checks.ts";
 import { loadBufferSource } from "./buffer-source.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function toUint8(value: unknown): Uint8Array {
   if (value instanceof Uint8Array) return value;

@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -7,6 +7,9 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { cursorBytes, cursorCases, verifyDelegation, verifyNoop, verifyValidation, verifyCoercion } from "./fixtures/stdio-cursor-contract";
 import type { Callback, CursorWriter } from "./fixtures/stdio-cursor-contract";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 type Writer = CursorWriter & EventEmitter & { fd: number; writable: boolean; isTTY: boolean };
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-stdio-cursor-"));

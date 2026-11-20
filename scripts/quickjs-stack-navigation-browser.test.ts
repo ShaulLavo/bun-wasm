@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { chromium, errors, webkit, type BrowserType, type Page, type Route } from "playwright";
 import { openQuickjsStackPage } from "../web/tests/quickjs-stack-navigation";
 import { openPlaygroundPage } from "../web/tests/playground-navigation";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const consumers = [
   { name: "quickjs", prefix: "quickjs-stack-navigation", open: openQuickjsStackPage },

@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, type Browser } from "playwright";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { observeNativeProductTraffic } from "./app-matrix/product-browser";
 import { serverCommand } from "./app-matrix/browser.mjs";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("native HMR evidence comes from real frames after editing without patching browser events", async () => {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0,

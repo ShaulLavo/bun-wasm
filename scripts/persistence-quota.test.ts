@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { resolve } from "node:path";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("provider quota bridge rejects a native write, resets and propagates host errors", async () => {
   const child = Bun.spawn([

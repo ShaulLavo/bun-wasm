@@ -51663,6 +51663,22 @@ static JSValue js_regexp_escape(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/* bun-wasm: lre_exec restarts libregexp's poll countdown on every call, so a native loop of
+   many cheap matches (a global replace, split or matchAll) never reached the interrupt
+   handler and could not be stopped. Each match attempt now also counts against the
+   interpreter's countdown, as JS_REGEXP_EXEC_STEPS of its steps: between two polls run at most
+   10,000 / 100 = 100 attempts of under 10,000 matcher steps each. The matcher itself is
+   unchanged; carrying its countdown across calls made it 15 to 20% slower. */
+#define JS_REGEXP_EXEC_STEPS 100
+
+static inline __exception int js_regexp_poll_interrupts(JSContext *ctx)
+{
+    ctx->interrupt_counter -= JS_REGEXP_EXEC_STEPS;
+    if (unlikely(ctx->interrupt_counter <= 0))
+        return __js_poll_interrupts(ctx);
+    return 0;
+}
+
 static JSValue js_regexp_exec_internal(JSContext *ctx, JSValueConst this_val,
                                        int argc, JSValueConst *argv,
                                        bool test_only)
@@ -51720,6 +51736,8 @@ static JSValue js_regexp_exec_internal(JSContext *ctx, JSValueConst this_val,
     str_buf = str8(str);
     if (last_index > str->len) {
         rc = 2;
+    } else if (js_regexp_poll_interrupts(ctx)) {
+        goto fail;
     } else {
         rc = lre_exec(capture, re_bytecode,
                       str_buf, last_index, str->len,
@@ -51950,6 +51968,8 @@ static JSValue JS_RegExpDelete(JSContext *ctx, JSValueConst this_val, JSValue ar
     for (;;) {
         if (last_index > str->len)
             break;
+        if (js_regexp_poll_interrupts(ctx))
+            goto fail;
 
         ret = lre_exec(capture, re_bytecode,
                        str_buf, last_index, str->len, shift, ctx);

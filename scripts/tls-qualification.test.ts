@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -24,6 +24,9 @@ import type { HostTool, HostTools } from "./c1/replay.ts";
 import { PassThrough } from "node:stream";
 import { GUEST_OBSERVER_BINDING, GuestObserver, TlsGuestCaseFailure, guardedToken, guestCaseFailure, installGuestObserver, verifyTlsBrowserHost } from "../web/tests/tls-relay-browser.ts";
 import { FixtureCommandError, execute, ownerFailureLine, piPostgresPlan, assertPiPostgresImage, removePiPostgres, type PodmanRun } from "../tests/servers/tls.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 /**
  * Every fixture here is synthetic parser data built from the controller's

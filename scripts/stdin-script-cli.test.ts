@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runInNewContext } from "node:vm";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("run accepts only the lone dash as stdin and preserves script arguments and flags", () => {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-stdin-cli-"));

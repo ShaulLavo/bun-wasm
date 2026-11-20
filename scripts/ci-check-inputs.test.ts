@@ -1,10 +1,13 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
 import { discoverChecks } from "./test-checks";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-ci-check-inputs-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));

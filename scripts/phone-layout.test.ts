@@ -1,7 +1,10 @@
-import { afterAll, beforeAll, test } from "bun:test";
+import { afterAll, beforeAll, setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { chromium, type Browser, type Page } from "playwright";
 import { fits } from "../web/tests/phone-ui.mjs";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 let browser: Browser;
 let page: Page;

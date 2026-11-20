@@ -100,3 +100,29 @@ for (const padding of [6.5, "6", 2 ** 32]) show(`padding ${String(padding)}`, ()
 show("pkcs1 public as private", () => crypto.createPrivateKey({ key: rsa.publicKey.export({ format: "der", type: "pkcs1" }), format: "der", type: "pkcs1" }));
 show("pkcs8 garbage", () => crypto.createPrivateKey({ key: Buffer.alloc(10), format: "der", type: "pkcs8" }));
 
+// publicEncrypt reads oaepLabel before the key, so a passphrase getter that detaches the
+// label's buffer cannot change the label used.
+show("oaepLabel detached by a getter", () => {
+  const label = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+  const sealed = crypto.publicEncrypt(
+    {
+      key: rsa.publicKey,
+      oaepLabel: label,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      get passphrase() {
+        structuredClone(label.buffer, { transfer: [label.buffer] });
+        return undefined;
+      },
+    },
+    Buffer.from("hello"),
+  );
+  const oaepLabel = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+  const padding = crypto.constants.RSA_PKCS1_OAEP_PADDING;
+  return String(crypto.privateDecrypt({ key: rsa.privateKey, oaepLabel, padding }, sealed));
+});
+show("oaepLabel hex encoding", () => {
+  const padding = crypto.constants.RSA_PKCS1_OAEP_PADDING;
+  const sealed = crypto.publicEncrypt({ key: rsa.publicKey, oaepLabel: "0102", encoding: "hex", padding } as never, Buffer.from("hex"));
+  return String(crypto.privateDecrypt({ key: rsa.privateKey, oaepLabel: Buffer.from([1, 2]), padding }, sealed));
+});
+

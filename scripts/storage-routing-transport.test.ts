@@ -1,10 +1,13 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, webkit } from "playwright";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { instrumentWorker } from "./storage-routing-build-source";
 import { StorageLifetime } from "./storage-browser-evidence";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const lifetimes: StorageLifetime[] = [];
 afterEach(async () => { await Promise.all(lifetimes.splice(0).map(lifetime => lifetime.cleanup())); });

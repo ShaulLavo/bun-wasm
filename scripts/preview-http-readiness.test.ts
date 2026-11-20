@@ -1,8 +1,11 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { waitForPreviewReady } from "./app-matrix/product-browser";
 import { browserRegistryRoute } from "./app-matrix/registry-request";
 import { boundedCleanup } from "./app-matrix/cleanup";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 // Real Chromium against loopback servers: the probe page must reach the preview the way the
 // application page will (same context, routing, service worker and redirects) without running it.

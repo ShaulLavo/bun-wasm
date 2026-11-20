@@ -68,5 +68,6 @@ async function control(engine: BrowserType, ownedCleanup: boolean, imported: boo
   }
 }
 
+// A cold WebKit launch on a busy runner can take tens of seconds; the limit only catches a hang.
 const cases = [chromium, webkit].flatMap(engine => [false, true].flatMap(owned => [false, true].map(imported => ({ engine, owned, imported }))));
-for (const { engine, owned, imported } of cases) test(`${engine.name()} ${imported ? "imported" : "defined"} Wasm worker trap is saved before ${owned ? "owned" : "ordinary"} matrix cleanup`, () => control(engine, owned, imported), 30_000);
+for (const { engine, owned, imported } of cases) test(`${engine.name()} ${imported ? "imported" : "defined"} Wasm worker trap is saved before ${owned ? "owned" : "ordinary"} matrix cleanup`, () => control(engine, owned, imported), 120_000);

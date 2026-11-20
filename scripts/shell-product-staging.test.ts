@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -8,6 +8,9 @@ import { browserBuildConfig, resolveRuntimePackage } from "./browser-build";
 import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests";
 import { PreparationFlow } from "../tests/shell-product/prepare-flow";
 import { stageWaffle, waffleCommits, waffleSourceRoot } from "../tests/shell-product/waffle-stage";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const shellCommit = "a".repeat(40);
 const gitPeer = (commit: string) => `git+https://github.com/ShaulLavo/waffle.git#${commit}`;

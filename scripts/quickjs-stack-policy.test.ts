@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 for (const budget of [undefined, "45"]) test(`discovered WebKit stack controls preserve inputs at ${budget ?? "selected policy"}`, () => {
   const child = spawnSync(process.execPath, [new URL("./fixtures/quickjs-stack-policy.ts", import.meta.url).pathname], {

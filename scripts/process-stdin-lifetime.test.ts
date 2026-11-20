@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { runInThisContext } from "node:vm";
 import { resourceFrames } from "./resource-frame-source";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const require = createRequire(import.meta.url);
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));

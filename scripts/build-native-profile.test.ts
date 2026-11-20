@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, setDefaultTimeout, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,6 +10,9 @@ import { pin } from '../spidermonkey/native-profile.ts';
 import { verifySharedSysroot } from './src/program-profile.ts';
 import { profileArtifacts, runDeclaredFixtures, runProfileFixtures } from './native-profile-fixtures.ts';
 import { appendCustomSection, tagProgramCore } from '../src/engine-kind.ts';
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const text = (value: string) => [value.length].concat(Array.from(value, character => character.charCodeAt(0)));
 const section = (id: number, payload: number[]) => [id, payload.length].concat(payload);

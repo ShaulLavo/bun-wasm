@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,9 @@ import { releaseCacheKey } from "./ci-release-download";
 import record from "./waffle-release-inputs.json";
 // The published programs-v0.0.15 manifest, keeping only the waffle-base package and no install receipt.
 import published from "./fixtures/program-release-v0.0.15.trimmed.json";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 type Manifest = Record<string, unknown> & { packages: Array<Record<string, unknown>> };
 

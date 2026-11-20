@@ -1,7 +1,7 @@
 // Browser-guest check: the JSC parser reserve through the real executor, on the verified site.
 // CI names whether this change selected the JSC producer (BUN_WASM_JSC_PRODUCER): a selected
 // producer whose pair is missing from the site fails, and an unselected one leaves nothing to run.
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -11,6 +11,9 @@ import { join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { buildSite, verifySite } from "./browser-guest-site";
 import { preflight } from "./goals-matrix/preparation";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = resolve(import.meta.dir, "..");
 const selected = process.env.BUN_WASM_TEST_BROWSERS ?? "chromium";

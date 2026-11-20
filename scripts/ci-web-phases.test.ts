@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { automaticChecks, discoverChecks, namedCheckBatches, parseCheck, selectCheckBatch, selectChecks } from "./test-checks";
 import { webBrowserShards } from "./ci-web-browser-shards";
 import { needsRust } from "./ci-changes";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function object(value: unknown): Record<string, unknown> {
   assert(value && typeof value === "object" && !Array.isArray(value));

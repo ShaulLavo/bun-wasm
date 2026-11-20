@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, firefox, webkit } from "playwright";
 import { indexTransactions, quotaTransaction, refusedQuotaTransaction } from "../sandbox/tests/workspace-index";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 declare global {
   var sandboxIndexChecks: {

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,6 +9,9 @@ import { array, object } from "./input";
 import { splitProfile } from "./profile";
 import { collectorConfiguration, validateProfileControl } from "./lifecycle-profile-config";
 import { chromeRetention, chromeTraceConfig } from "./lifecycle-profile-retention";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const window = { before: 100, after: 110 };
 const telemetry = { requested: chromeTraceConfig, startAccepted: true,

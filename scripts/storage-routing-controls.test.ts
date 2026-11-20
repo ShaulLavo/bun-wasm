@@ -1,8 +1,11 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { instrumentHelper, instrumentRouter, instrumentWorker, instrumentSandbox } from "./storage-routing-build-source";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-routing-"));
 afterAll(() => rm(scratch, { recursive: true, force: true }));

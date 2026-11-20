@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { testSubreaper } from "../test-subreaper.ts";
 import { ProcessOwner, linuxProcess } from "../process-owner.mts";
 import { StageFailed, UnsafeDrain, runOwned } from "./process.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const quick = { graceMs: 300, forceMs: 3000 };
 let scratch = "";

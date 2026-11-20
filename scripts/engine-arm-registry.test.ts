@@ -1,5 +1,5 @@
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,9 @@ import { executionOutcome, nativeLauncherAdapter, nativeRegistryBuilds, parseCom
 import { parseMatrixReport, reduceArmCensus, registerArmCensus, registrySizes } from "./engine-comparison.ts";
 import { censusChild, runChromiumSchedule } from "./app-matrix/engine-arms.ts";
 import { censusProvenance, selectCensusArm, verifyCensusCatalog } from "./app-matrix/census-request.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const source = { sourceCommit: "a".repeat(40), sourceTree: "b".repeat(40) };
 

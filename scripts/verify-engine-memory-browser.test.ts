@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,9 @@ import { selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
 import { emptyCounters } from "../web/src/memory-telemetry.ts";
 import { actorSnapshot, failedBytes, fixtureAllocationBytes, verifyAllocation, verifyFailure, verifyChild, installActorObserver, selectActor } from "./verify-engine-memory-browser.ts";
 import { maxMemoryBytes } from "./src/program-profile.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const engine = "quickjs";
 const actor = { authority: "host-worker-launch", id: "fixture", engine, path: "/home/user/memory-producer.ts" } as const;

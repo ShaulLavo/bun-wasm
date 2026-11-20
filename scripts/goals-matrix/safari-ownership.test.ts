@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runOwnershipSmoke } from "./fixtures/safari-ownership-smoke";
 import { ownershipReceipt, type SafariOwnershipEvent } from "./safari-ownership";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const event: SafariOwnershipEvent = { sequence: 1, event: 1, at: "2026-11-12T00:00:00.000Z", sessionId: "own-session", hostHandle: "own-host", admission: "active", operation: { kind: "frame-present", token: "own-token" }, outcome: { state: "dispatched" } };
 

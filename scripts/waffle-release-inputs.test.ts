@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import release from "./waffle-release-inputs.json";
 import { prepareWaffleNativeInputs, prepareWaffleReleaseArchive } from "./waffle-release-inputs";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const encode = (text: string) => new TextEncoder().encode(text);
 const digest = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");

@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { selectChecks } from "./test-checks.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = join(import.meta.dir, "..");
 const wrapper = join(import.meta.dir, "shared-wasm-memory-browser.test.ts");

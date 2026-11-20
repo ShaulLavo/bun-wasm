@@ -3,10 +3,13 @@
 // statement after it, no `try` around it, no result taken from it. This checks that shape in the
 // JavaScript the guest actually embeds, which the build makes from the TypeScript sources with
 // `scripts/transpile-runtime.ts`, and in every wrapper that forwards to a port's `postMessage`.
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = new URL("..", import.meta.url).pathname;
 const scratch = mkdtempSync(join(tmpdir(), "worker-post-shape-"));

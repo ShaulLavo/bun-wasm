@@ -1,7 +1,7 @@
 import type { Admission } from "./goals-matrix/scope";
 import type { Transport } from "./goals-matrix/transport";
 import { withAdmission } from "./goals-matrix/scope-fixture";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { runInNewContext } from "node:vm";
 import { readFileSync } from "node:fs";
 import { memoryViews } from "waffle/core/memory-views";
@@ -16,6 +16,9 @@ import { execute } from "./goals-matrix/execute.ts";
 import { cleanupTimeoutMs } from "./goals-matrix/deadlines.ts";
 import { frameworks } from "./goals-matrix/catalog.ts";
 import { withPlayground } from "./goals-matrix/test-fixture.ts";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 // Exercise the production codec and call wrapper without starting an engine realm
 // in the shared unit-test process. The full host runs in disposable Browser workers.
