@@ -267,6 +267,15 @@ pub trait Engine: Sized + 'static {
     fn set_time_zone(&self, _zone: &Self::Value) -> Option<Self::Value> {
         None
     }
+
+    /// For an engine without zones of its own (QuickJS): make local time follow a zone given
+    /// as its UTC offsets. `offsets[0]` (seconds east of UTC) applies before `times[0]`, and
+    /// `offsets[i + 1]` from `times[i]` (seconds since 1970, ascending) on; `offsets` has one
+    /// more entry than `times`. `None` restores the libc's local time. False when the engine
+    /// cannot take offsets.
+    fn set_local_time_offsets(&self, _zone: Option<(&[i64], &[i32])>) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

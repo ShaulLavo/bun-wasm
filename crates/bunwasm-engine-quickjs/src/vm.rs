@@ -124,6 +124,9 @@ unsafe extern "C" {
     fn JS_bunwasm_GetAsyncContext(ctx: *mut qjs::JSContext) -> qjs::JSValue;
     fn JS_bunwasm_SetAsyncContext(ctx: *mut qjs::JSContext, value: qjs::JSValue);
     fn JS_bunwasm_IsModuleNamespace(value: qjs::JSValue) -> bool;
+    /// Added by bun-wasm: local time follows these UTC offsets (`offsets` holds `count + 1`
+    /// entries), or the libc's again when `offsets` is null. False when memory ran out.
+    fn JS_bunwasm_SetLocalTimeOffsets(times: *const i64, offsets: *const i32, count: usize) -> bool;
 }
 
 /// Erase a value's lifetime (all values belong to the one context).
@@ -675,6 +678,18 @@ impl Engine for QuickJs {
 
     fn gc(&self) {
         self.ctx().run_gc();
+    }
+
+    fn set_local_time_offsets(&self, zone: Option<(&[i64], &[i32])>) -> bool {
+        let Some((times, offsets)) = zone else {
+            // SAFETY: null offsets clears the table.
+            return unsafe { JS_bunwasm_SetLocalTimeOffsets(std::ptr::null(), std::ptr::null(), 0) };
+        };
+        if offsets.len() != times.len() + 1 {
+            return false;
+        }
+        // SAFETY: `times` has `times.len()` entries and `offsets` one more; the hook copies both.
+        unsafe { JS_bunwasm_SetLocalTimeOffsets(times.as_ptr(), offsets.as_ptr(), times.len()) }
     }
 
     fn memory_usage(&self) -> Val {

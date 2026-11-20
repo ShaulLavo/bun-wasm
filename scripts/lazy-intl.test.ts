@@ -9,9 +9,10 @@ const callbackStart = bootstrap.indexOf("  if (installIntlFallback) {");
 const callback = bootstrap.slice(callbackStart, bootstrap.indexOf("\n  }", callbackStart) + 4);
 const timers = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.timersFactory = ${readFileSync(new URL("fake_timers.ts", runtime), "utf8")}`);
 const intl = readFileSync(new URL("intl.js", runtime), "utf8");
+const tzData = readFileSync(new URL("tz_data.js", runtime), "utf8");
 
 function loader(order: "native" | "before" | "after") {
-  const context = createContext({ timers, intl, definitions, callback, order, otherIntl: runInNewContext("Intl") });
+  const context = createContext({ timers, intl, tzData, definitions, callback, order, otherIntl: runInNewContext("Intl") });
   runInContext(`
     const internal = { native: {} };
     const originalIntl = Intl;
@@ -19,7 +20,10 @@ function loader(order: "native" | "before" | "after") {
     const originalGetter = Object.getOwnPropertyDescriptor(originalPrototype, "format").get;
     const originalParts = originalPrototype.formatToParts;
     let loads = 0;
+    let zoneData;
     internal.require = name => {
+      // intl.js reads its time zone data from tz_data.js (scripts/vendor-intl.ts).
+      if (name === "tz_data") return zoneData ??= (0, eval)(tzData)();
       if (name !== "intl") throw new Error("Unexpected polyfill " + name);
       loads++;
       return (0, eval)(intl)(internal);

@@ -44,8 +44,15 @@ function factoryWithNativeCallback() {
         collation,
       }).compare(left, right));
     },
-  } });
+  }, require: zoneData });
   return { fallback, calls, context };
+}
+
+// intl.js reads its time zone data from tz_data.js (scripts/vendor-intl.ts).
+const zoneSource = readFileSync(new URL("../crates/bunwasm-runtime/src/js/tz_data.js", import.meta.url), "utf8");
+function zoneData(name: string): unknown {
+  if (name !== "tz_data") throw new Error(`Unexpected module ${name}`);
+  return vm.runInNewContext(zoneSource)();
 }
 
 test("generated factory preserves extension defaults and explicit option precedence through the native callback", () => {

@@ -92,6 +92,10 @@ declare namespace BunWasm {
     defineGlobal(name: string, value: unknown): void;
     require(name: "builtins"): { "bun:jsc": () => { callerSourceOrigin(): string | null } };
     require(name: "node_url"): { fileURLToPath(url: string | URL): string };
+    /** QuickJS's process.env.TZ: the zone ID now in use, or null for an unknown zone. */
+    require(name: "time_zone"): (zone: string) => string | null;
+    /** FormatJS's add-all-tz data and link table, split out of intl.js by scripts/vendor-intl.ts. */
+    require(name: "tz_data"): { abbrvs: string; offsets: string; zones: string[]; links: Record<string, string> };
     readonly native: Native;
     readonly builtinFactories: Record<string, () => object>;
     readonly realTimers: import("./immediate_queue-types").ImmediateTimers;
@@ -508,6 +512,8 @@ declare namespace BunWasm {
      * engine has no settable zone.
      */
     setTimeZone?(zone: string): string | null | undefined;
+    /** QuickJS's local time from offsets (`[offset, time, offset, ...]`, seconds); null restores UTC. */
+    setLocalTimeOffsets?(offsets: number[] | null): boolean;
     /** The size of the core's linear memory in bytes, where the core runs as wasm32. */
     linearMemoryBytes?(): number;
     argv(): string[];

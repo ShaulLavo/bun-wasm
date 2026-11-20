@@ -81,7 +81,9 @@
   // The engine answers with the zone ID ICU resolved (GMT and Etc/UTC are UTC, EST5EDT is
   // America/New_York), and the Intl fallback takes that ID rather than the raw name.
   function applyTimeZone(zone: string | undefined) {
-    const resolved = native.setTimeZone?.(zone ?? "");
+    let resolved = native.setTimeZone?.(zone ?? "");
+    // QuickJS has no zones of its own: time_zone.ts gives it the offsets from the Intl data.
+    if (resolved === undefined && native.setLocalTimeOffsets) resolved = internal.require("time_zone")(zone ?? "");
     if (typeof resolved === "string") internal.setIntlTimeZone?.(resolved);
   }
   function timeZoneChanged(zone: string | undefined) {
