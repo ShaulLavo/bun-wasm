@@ -58,6 +58,9 @@ but do not report late handlers.
   phase from PR 966 runs every due timer before the next immediate, but one callback per loop
   turn, and the loop reports rejections after every turn. Matching Bun needs the loop to hold
   rejection reports until the timers phase ends.
+- A rejection made by a synchronous hook is reported when the runner next yields to the event
+  loop, which can be after the tests; native Bun drains microtasks after each callback and
+  reports it right after the hook. A hook that awaits is reported while it runs, as in Bun.
 - In the turn after a test file loads, native Bun also runs a 0 ms timer the file set when a
   millisecond has passed; bun-wasm runs it only if it is due when the turn's timers run, which
   is usually after the first test.
