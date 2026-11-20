@@ -83,9 +83,11 @@
       return encoding === undefined || encoding === "buffer" ? buf : buf.toString(encoding);
     }
 
+    // A view over a detached buffer reads as no bytes, as in Bun.
+    const viewBytes = (data) => (ArrayBuffer.isView(data) && data.byteLength === 0 ? new Uint8Array(0) : internal.toUint8(data));
     function inputBytes(data, encoding) {
       if (typeof data === "string") return Buffer.from(data, encoding);
-      if (ArrayBuffer.isView(data) || data instanceof ArrayBuffer) return internal.toUint8(data);
+      if (ArrayBuffer.isView(data) || data instanceof ArrayBuffer) return viewBytes(data);
       const err = new TypeError(`The "data" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received ${internal.describe(data)}`);
       err.code = "ERR_INVALID_ARG_TYPE";
       throw err;
@@ -96,13 +98,19 @@
 
     const digests = internal.require("node_digest");
 
+    const finalized = () => Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
+    // Bun's JSHash.cpp and JSHmac.cpp states: the stream's _flush computes and caches the
+    // digest without finalizing a Hash, so a later digest() returns it and only empty
+    // updates still succeed. Hmac finalizes on any digest, and a later digest() is empty.
+    let flushDigest;
     // `algorithm` is a canonical name from node_digest.ts, already validated.
     class Hash {
       #algorithm;
       #key;
       #outputLength;
       #chunks = [];
-      #done = false;
+      #digest = null;
+      #finalized = false;
       constructor(algorithm, key, outputLength, options) {
         this.#algorithm = algorithm;
         this.#key = key;
@@ -110,20 +118,31 @@
         // Stream options, applied when crypto_hash_stream.ts first builds the Transform state.
         this._options = options;
       }
+      static {
+        flushDigest = (hash) => (hash.#key === undefined ? encodeOut(hash.#compute()) : hash.digest());
+      }
+      #compute() {
+        if (this.#digest !== null) return this.#digest;
+        const input = internal.concatBytes(this.#chunks);
+        this.#chunks = [];
+        this.#digest = this.#key === undefined ? native.nodeDigest(this.#algorithm, input, this.#outputLength) : native.nodeHmac(this.#algorithm, this.#key, input);
+        return this.#digest;
+      }
       update(data, encoding) {
-        if (this.#done) throw Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
-        this.#chunks.push(inputBytes(data, encoding).slice());
+        if (this.#finalized) throw finalized();
+        const bytes = inputBytes(data, encoding);
+        if (this.#digest !== null && bytes.length) throw Object.assign(new Error("Hash update failed"), { code: "ERR_CRYPTO_HASH_UPDATE_FAILED" });
+        this.#chunks.push(bytes.slice());
         return this;
       }
       digest(encoding) {
-        if (this.#done) throw Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
-        this.#done = true;
-        const input = internal.concatBytes(this.#chunks);
-        const bytes = this.#key === undefined ? native.nodeDigest(this.#algorithm, input, this.#outputLength) : native.nodeHmac(this.#algorithm, this.#key, input);
-        return encodeOut(bytes, encoding);
+        if (this.#finalized && this.#key !== undefined) return encodeOut(new Uint8Array(0), Buffer.isEncoding(encoding) ? encoding : undefined);
+        if (this.#finalized) throw finalized();
+        this.#finalized = true;
+        return encodeOut(this.#compute(), encoding);
       }
       copy(options) {
-        if (this.#done) throw Object.assign(new Error("Digest already called"), { code: "ERR_CRYPTO_HASH_FINALIZED" });
+        if (this.#finalized || this.#digest !== null) throw finalized();
         // A copy takes its own output length; without one it uses the default, as in Bun.
         const requested = digests.outputLength(options);
         if (requested !== undefined && !digests.isXof(this.#algorithm) && requested !== digests.byteLength(this.#algorithm)) throw digests.notXofError();
@@ -133,7 +152,16 @@
       }
     }
 
-    internal.require("crypto_hash_stream")(Hash);
+    internal.require("crypto_hash_stream")(Hash, {
+      _transform(chunk, encoding, callback) {
+        this.update(chunk, encoding);
+        callback();
+      },
+      _flush(callback) {
+        this.push(flushDigest(this));
+        callback();
+      },
+    });
 
     function createHash(algorithm, options) {
       const name = digests.hashName(String(algorithm));
@@ -145,11 +173,22 @@
     }
 
     function createHmac(algorithm, key, options) {
-      const keyBytes = internal.crypto.isKey(key) ? internal.crypto.decode(internal.crypto.record(key).key.k) : typeof key === "string" ? Buffer.from(key) : internal.toUint8(key && key.export ? key.export() : key).slice();
+      const args = internal.require("node_crypto_args");
+      args.validateString(algorithm, "hmac");
+      const keyBytes = ArrayBuffer.isView(key) ? viewBytes(key).slice() : args.secretKey(key).slice();
       const name = digests.hmacName(String(algorithm));
       if (name === undefined) throw Object.assign(new TypeError(`Invalid digest: ${algorithm}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
-      return new Hash(name, keyBytes, undefined, options);
+      return Reflect.construct(Hash, [name, keyBytes, undefined, options], Hmac);
     }
+
+    // crypto.Hmac works with or without `new`. As in Bun, Hmac and Hash are unrelated
+    // classes on the same LazyTransform; Hmac shares Hash's methods except copy().
+    function Hmac(hmac, key, options) {
+      return createHmac(hmac, key, options);
+    }
+    Hmac.prototype = Object.create(Object.getPrototypeOf(Hash.prototype), Object.getOwnPropertyDescriptors(Hash.prototype));
+    delete Hmac.prototype.copy;
+    Object.defineProperty(Hmac.prototype, "constructor", { value: Hmac, writable: true, configurable: true });
 
     function randomBytes(size, callback) {
       const buf = Buffer.from(native.randomBytes(size).buffer);
@@ -160,19 +199,38 @@
       return buf;
     }
 
+    // Node's lib/internal/crypto/random.js: argument checks, then rejection sampling over
+    // 48-bit draws so every value in the range is equally likely.
+    const RAND_MAX = 0xffff_ffff_ffff;
+    const rangeNumber = (value) => (Math.abs(value) <= 2 ** 32 ? String(value) : String(value).replace(/\B(?=(\d{3})+$)/g, "_"));
     function randomInt(min, max, callback) {
-      if (typeof max === "function" || max === undefined) {
+      const minNotSpecified = typeof max === "undefined" || typeof max === "function";
+      if (minNotSpecified) {
         callback = max;
         max = min;
         min = 0;
       }
+      if (callback !== undefined && typeof callback !== "function")
+        throw Object.assign(new TypeError(`The "callback" argument must be of type function. Received ${internal.describe(callback)}`), { code: "ERR_INVALID_ARG_TYPE" });
+      for (const [name, value] of [["min", min], ["max", max]]) {
+        if (!Number.isSafeInteger(value))
+          throw Object.assign(new TypeError(`The "${name}" argument must be a safe integer. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_TYPE" });
+      }
+      const outOfRange = (name, rule, received) =>
+        Object.assign(new RangeError(`The value of "${name}" is out of range. It must be ${rule}. Received ${received}`), { code: "ERR_OUT_OF_RANGE" });
+      // Bun prints max plainly here and separates the digits of a too-large range.
+      if (max <= min) throw outOfRange("max", `greater than the value of "min" (${min})`, max);
       const range = max - min;
-      const bytes = native.randomBytes(6);
-      let n = 0;
-      for (const b of bytes) n = n * 256 + b;
+      if (range > RAND_MAX) throw outOfRange(`max${minNotSpecified ? "" : " - min"}`, `<= ${RAND_MAX}`, rangeNumber(range));
+      const limit = RAND_MAX - (RAND_MAX % range);
+      let n;
+      do {
+        n = 0;
+        for (const b of native.randomBytes(6)) n = n * 256 + b;
+      } while (n >= limit);
       const value = min + (n % range);
-      if (typeof callback === "function") {
-        internal.realTimers.setImmediate(() => callback(null, value));
+      if (callback !== undefined) {
+        internal.realTimers.setImmediate(() => callback(undefined, value));
         return undefined;
       }
       return value;
@@ -222,7 +280,7 @@
       ...internal.require("node_pbkdf2")(digests, Buffer),
       ...internal.require("x509")(Buffer, keyApi),
       Hash,
-      Hmac: Hash,
+      Hmac,
     });
   }
 

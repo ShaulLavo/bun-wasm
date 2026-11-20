@@ -1225,6 +1225,12 @@
   const reportedRejections = new WeakSet();
 
   internal.handleRejection = function handleRejection(reason, promise) {
+    // Bun's test runner reports unhandled rejections itself (VirtualMachine's
+    // onUnhandledRejection for `bun test`); the program's own listeners never see them.
+    if (internal.testRejection) {
+      internal.testRejection(reason, promise);
+      return true;
+    }
     if (listenerCount("unhandledRejection") > 0) {
       if (promise !== null && typeof promise === "object") reportedRejections.add(promise);
       try {

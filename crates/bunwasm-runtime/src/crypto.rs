@@ -1,3 +1,4 @@
+use crate::crypto_ec;
 use aes::cipher::{
     BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher, block_padding::Pkcs7,
 };
@@ -8,17 +9,14 @@ use bunwasm_crypto_sys::{
     bunwasm_rsa_generate, bunwasm_rsa_parse,
 };
 use ed25519_dalek::Signer;
-use pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use rand_core::OsRng;
 use serde_json::{Value as J, json};
-use signature::hazmat::{PrehashSigner, PrehashVerifier};
-use spki::{DecodePublicKey, EncodePublicKey};
 use subtle::ConstantTimeEq;
 
 type Result<T> = std::result::Result<T, &'static str>;
 // An error is a DOMException name, or "Name: message" where Bun gives a specific message.
-const KEY_TYPE: &str = "DataError: Invalid key type";
-const CURVE_MISMATCH: &str = "DataError: Named curve mismatch";
+pub(crate) const KEY_TYPE: &str = "DataError: Invalid key type";
+pub(crate) const CURVE_MISMATCH: &str = "DataError: Named curve mismatch";
 const RSA_OID: &str = "1.2.840.113549.1.1.1";
 const EC_OID: &str = "1.2.840.10045.2.1";
 fn data<T, E>(r: std::result::Result<T, E>) -> Result<T> {
@@ -248,15 +246,7 @@ fn generate(a: &J) -> Result<J> {
             .map_err(|_| "OperationError")?;
             Ok(pair(key.jwk(true)?))
         }
-        "ECDSA" | "ECDH" => match text(a, "namedCurve")? {
-            "P-256" => Ok(pair(data(serde_json::from_str(
-                &p256::SecretKey::random(&mut OsRng).to_jwk_string(),
-            ))?)),
-            "P-384" => Ok(pair(data(serde_json::from_str(
-                &p384::SecretKey::random(&mut OsRng).to_jwk_string(),
-            ))?)),
-            _ => Err("NotSupportedError"),
-        },
+        "ECDSA" | "ECDH" => Ok(pair(crypto_ec::generate(ec_curve(a)?)?)),
         "Ed25519" => {
             let k = ed25519_dalek::SigningKey::generate(&mut OsRng);
             Ok(pair(okp_jwk(
@@ -277,58 +267,34 @@ fn generate(a: &J) -> Result<J> {
     }
 }
 
-fn ec_material(jwk: &J) -> J {
-    let mut key = serde_json::Map::new();
-    for name in ["kty", "crv", "x", "y", "d"] {
-        if let Some(value) = jwk.get(name) {
-            key.insert(name.to_owned(), value.clone());
-        }
+fn ec_curve(a: &J) -> Result<crypto_ec::Curve> {
+    crypto_ec::curve(text(a, "namedCurve")?)
+}
+
+/// An EC JWK's coordinates and scalar, after checking that it names `curve`.
+fn ec_parts(k: &J, curve: crypto_ec::Curve, private: bool) -> Result<crypto_ec::JwkParts> {
+    if k["kty"] != "EC" || k["crv"] != curve.name {
+        return Err("DataError");
     }
-    J::Object(key)
+    Ok(crypto_ec::JwkParts {
+        x: bytes(k, "x")?,
+        y: bytes(k, "y")?,
+        d: if private && k["d"].is_string() {
+            Some(bytes(k, "d")?)
+        } else {
+            None
+        },
+    })
 }
 
 fn ec_import(a: &J, format: &str, b: &[u8]) -> Result<J> {
-    macro_rules! curve {
-        ($c:ident) => {
-            match format {
-                "sec1" => Ok(data(serde_json::from_str(
-                    &data($c::SecretKey::from_sec1_der(b))?.to_jwk_string(),
-                ))?),
-                "pkcs8" => Ok(data(serde_json::from_str(
-                    &data($c::SecretKey::from_pkcs8_der(b))?.to_jwk_string(),
-                ))?),
-                "spki" => Ok(data(serde_json::from_str(
-                    &data($c::PublicKey::from_public_key_der(b))?.to_jwk_string(),
-                ))?),
-                "raw" => Ok(data(serde_json::from_str(
-                    &data($c::PublicKey::from_sec1_bytes(b))?.to_jwk_string(),
-                ))?),
-                "jwk" => {
-                    let j = ec_material(&data(serde_json::from_slice(b))?);
-                    if j["d"].is_string() {
-                        return data(serde_json::from_str(
-                            &data($c::SecretKey::from_jwk_str(&j.to_string()))?.to_jwk_string(),
-                        ));
-                    }
-                    Ok(data(serde_json::from_str(
-                        &data($c::PublicKey::from_jwk_str(&j.to_string()))?.to_jwk_string(),
-                    ))?)
-                }
-                _ => Err("NotSupportedError"),
-            }
-        };
+    let curve = ec_curve(a)?;
+    ec_identifier(format, b, curve.oid)?;
+    if format != "jwk" {
+        return crypto_ec::import(curve, format, b, None);
     }
-    match text(a, "namedCurve")? {
-        "P-256" => {
-            ec_identifier(format, b, "1.2.840.10045.3.1.7")?;
-            curve!(p256)
-        }
-        "P-384" => {
-            ec_identifier(format, b, "1.3.132.0.34")?;
-            curve!(p384)
-        }
-        _ => Err("NotSupportedError"),
-    }
+    let parts = ec_parts(&data(serde_json::from_slice(b))?, curve, true)?;
+    crypto_ec::import(curve, format, b, Some(&parts))
 }
 
 /// Bun names a DER key of another key type or of another curve before parsing it.
@@ -383,6 +349,8 @@ fn okp_import(name: &str, format: &str, b: &[u8]) -> Result<J> {
             )
         }
         "raw" => (vec![], b.to_vec()),
+        // Node's raw-private form is the 32-byte seed alone.
+        "raw-private" if !b.is_empty() => (b.to_vec(), vec![]),
         "spki" => {
             let info = data(spki::SubjectPublicKeyInfoRef::try_from(b))?;
             if info.algorithm.oid.to_string() != oid {
@@ -459,38 +427,18 @@ fn export(a: &J, format: &str, k: &J) -> Result<J> {
     rsa_export(format, k)
 }
 fn ec_export(a: &J, format: &str, k: &J) -> Result<J> {
-    macro_rules! curve {
-        ($c:ident) => {
-            match format {
-                "sec1" => Ok(output(
-                    data(data($c::SecretKey::from_jwk_str(&k.to_string()))?.to_sec1_der())?
-                        .as_slice(),
-                )),
-                "pkcs8" => Ok(output(
-                    data(data($c::SecretKey::from_jwk_str(&k.to_string()))?.to_pkcs8_der())?
-                        .as_bytes(),
-                )),
-                "spki" => Ok(output(
-                    data(data($c::PublicKey::from_jwk_str(&k.to_string()))?.to_public_key_der())?
-                        .as_bytes(),
-                )),
-                "raw" => {
-                    use $c::elliptic_curve::sec1::ToEncodedPoint;
-                    Ok(output(
-                        data($c::PublicKey::from_jwk_str(&k.to_string()))?
-                            .to_encoded_point(false)
-                            .as_bytes(),
-                    ))
-                }
-                _ => Err("NotSupportedError"),
-            }
-        };
+    let curve = ec_curve(a)?;
+    let private = format == "sec1" || format == "pkcs8";
+    let parts = ec_parts(k, curve, private)?;
+    if private && parts.d.is_none() {
+        return Err("DataError");
     }
-    match text(a, "namedCurve")? {
-        "P-256" => curve!(p256),
-        "P-384" => curve!(p384),
-        _ => Err("NotSupportedError"),
+    let mut der = crypto_ec::export(curve, format, &parts)?;
+    let encoded = output(&der);
+    if private {
+        crypto_ec::wipe(&mut der);
     }
+    Ok(encoded)
 }
 fn okp_export(name: &str, format: &str, k: &J) -> Result<J> {
     use pkcs8::der::Encode;
@@ -561,29 +509,14 @@ fn sign(q: &J) -> Result<J> {
     }
 }
 fn ec_sign(a: &J, k: &J, input: &[u8], sig: &[u8], verify: bool) -> Result<J> {
-    let mut digest = hash(a, input)?;
-    // RustCrypto rejects short prehashes. Left padding preserves ECDSA's digest integer.
-    if text(a, "namedCurve")? == "P-384" && digest.len() < 48 {
-        let mut padded = vec![0; 48 - digest.len()];
-        padded.extend_from_slice(&digest);
-        digest = padded;
+    let curve = ec_curve(a)?;
+    let digest = hash(a, input)?;
+    let der = a["der"].as_bool().unwrap_or(false);
+    let parts = ec_parts(k, curve, !verify)?;
+    if !verify {
+        return Ok(output(crypto_ec::sign(curve, &parts, &digest, der)?));
     }
-    macro_rules! curve { ($c:ident) => {{
-        if !verify {
-            let key=data($c::ecdsa::SigningKey::from_slice(&bytes(k,"d")?))?;
-            let s: $c::ecdsa::Signature=operation(key.sign_prehash(&digest))?;
-            return Ok(output(if a["der"].as_bool().unwrap_or(false) {s.to_der().as_bytes().to_vec()} else {s.to_bytes().to_vec()}));
-        }
-        let public=data($c::PublicKey::from_jwk_str(&k.to_string()))?;
-        let key=$c::ecdsa::VerifyingKey::from(public);
-        let parsed=if a["der"].as_bool().unwrap_or(false) {$c::ecdsa::Signature::from_der(sig)} else {$c::ecdsa::Signature::from_slice(sig)};
-        Ok(json!({"verified":parsed.is_ok_and(|s| key.verify_prehash(&digest,&s).is_ok())}))
-    }}; }
-    match text(a, "namedCurve")? {
-        "P-256" => curve!(p256),
-        "P-384" => curve!(p384),
-        _ => Err("NotSupportedError"),
-    }
+    Ok(json!({"verified": crypto_ec::verify(curve, &parts, &digest, sig, der)?}))
 }
 
 fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J> {
@@ -591,6 +524,8 @@ fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J
     let key = RsaKey::from_jwk(k)?;
     let der = key.der(private)?;
     let hash = match text(a, "hash")? {
+        // Only Node's signing names reach MD5; WebCrypto has no MD5 hash.
+        "MD5" => 5,
         "SHA-1" => 1,
         "SHA-224" => 224,
         "SHA-256" => 256,
@@ -873,22 +808,12 @@ fn derive_password(a: &J, key: &[u8], length: usize) -> Result<Vec<u8>> {
     }
 }
 fn ec_derive(a: &J, k: &J, public: &J) -> Result<Vec<u8>> {
-    macro_rules! run {
-        ($c:ident) => {{
-            let secret = data($c::SecretKey::from_jwk_str(&k.to_string()))?;
-            let public = data($c::PublicKey::from_jwk_str(&public.to_string()))?;
-            Ok(
-                $c::ecdh::diffie_hellman(secret.to_nonzero_scalar(), public.as_affine())
-                    .raw_secret_bytes()
-                    .to_vec(),
-            )
-        }};
-    }
-    match text(a, "namedCurve")? {
-        "P-256" => run!(p256),
-        "P-384" => run!(p384),
-        _ => Err("NotSupportedError"),
-    }
+    let curve = ec_curve(a)?;
+    crypto_ec::derive(
+        curve,
+        &ec_parts(k, curve, true)?,
+        &ec_parts(public, curve, false)?,
+    )
 }
 
 fn kw_crypt(key: &[u8], input: &[u8], encrypt: bool) -> Result<Vec<u8>> {

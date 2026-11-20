@@ -377,7 +377,7 @@
       fail("NotSupportedError", "Multi-prime RSA keys are not supported");
     const expected =
       a.name === "ECDSA"
-        ? { "P-256": "ES256", "P-384": "ES384" }[a.namedCurve]
+        ? { "P-256": "ES256", "P-384": "ES384", "P-521": "ES512" }[a.namedCurve]
         : jwkAlg(
             kty === "oct"
               ? {
@@ -520,12 +520,7 @@
     const r = use(key, a, usage);
     const out = operationAlgorithm(a, r);
     const agreement = a.name === "ECDH" || a.name === "X25519";
-    const max =
-      a.name === "X25519"
-        ? 256
-        : r.algorithm.namedCurve === "P-384"
-          ? 384
-          : 256;
+    const max = a.name === "X25519" ? 256 : { "P-384": 384, "P-521": 528 }[r.algorithm.namedCurve] ?? 256;
     if (length == null && agreement) length = max;
     integer(length, 0, 0x7fffffff, "derived length");
     // A key agreement keeps the leading bits of a length that is not a multiple of 8.
@@ -566,6 +561,15 @@
     }
     async exportKey(format, key) {
       return exportKey(format, key);
+    }
+    // The public half of a private key, always extractable, as in Bun.
+    async getPublicKey(key, usages) {
+      usages = usageList(usages);
+      const r = record(key);
+      if (r.type !== "private") fail(r.type === "secret" ? "NotSupportedError" : "InvalidAccessError", "key must be a private key");
+      const k = { ...r.key };
+      for (const field of ["d", "p", "q", "dp", "dq", "qi"]) delete k[field];
+      return makeKey(r.algorithm, "public", true, usages, k);
     }
     async sign(a, key, data) {
       return signVerify("sign", a, key, data);

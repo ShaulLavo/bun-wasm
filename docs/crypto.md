@@ -16,14 +16,14 @@ The WASI host also captures its entropy function before globals change.
 | Algorithms | Operations | Key formats |
 | --- | --- | --- |
 | HMAC | Generate, import, export, sign, verify | raw, JWK |
-| ECDSA P-256 and P-384 | Generate, import, export, sign, verify | JWK, SPKI, PKCS#8, raw public |
+| ECDSA P-256, P-384 and P-521 | Generate, import, export, sign, verify | JWK, SPKI, PKCS#8, raw public |
 | Ed25519 | Generate, import, export, sign, verify | JWK, SPKI, PKCS#8, raw public |
 | RSASSA-PKCS1-v1_5 and RSA-PSS | Generate, import, export, sign, verify | JWK, SPKI, PKCS#8 |
 | AES-GCM, AES-CBC and AES-CTR | Generate, import, export, encrypt, decrypt, wrap, unwrap | raw, JWK |
 | RSA-OAEP | Generate, import, export, encrypt, decrypt, wrap, unwrap | JWK, SPKI, PKCS#8 |
 | AES-KW | Generate, import, export, wrap, unwrap | raw, JWK |
 | PBKDF2 and HKDF | Import, derive bits, derive keys | raw input, non-extractable |
-| ECDH P-256 and P-384, X25519 | Generate, import, export, derive bits, derive keys | JWK, SPKI, PKCS#8, raw public |
+| ECDH P-256, P-384 and P-521, X25519 | Generate, import, export, derive bits, derive keys | JWK, SPKI, PKCS#8, raw public |
 
 Digest supports SHA-1, SHA-256, SHA-384 and SHA-512. Wrapping uses the selected key format
 and encryption algorithm. AES-KW JWK wrapping pads the JSON with spaces to an eight-byte
@@ -38,11 +38,13 @@ synchronously inside those promises; native provider scheduling stays with the h
 
 ## Backend
 
-RustCrypto implements AES, GHASH, HMAC, the SHA digests, PBKDF2, HKDF, P-256, P-384,
-Ed25519 and X25519. RustCrypto's PKCS#8 and SPKI parsers decode the outer key envelopes.
+RustCrypto implements AES, GHASH, HMAC, the SHA digests, PBKDF2, HKDF, Ed25519 and X25519.
+RustCrypto's PKCS#8 and SPKI parsers decode the outer key envelopes.
 The GCM adapter and its upstream license are recorded in [the source ledger](bun-patches/webcrypto-backend.md#webcrypto-backend).
 
-Bun's BoringSSL pin `41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f` owns RSA generation,
+Bun's BoringSSL pin `41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f` owns the P-256, P-384 and
+P-521 keys, ECDSA and ECDH, through the same calls as Bun's WebCrypto ([the source
+ledger](bun-patches/node-crypto-ec-raw-keys.md)). It also owns RSA generation,
 component validation, PKCS#1 parsing, signing, verification and OAEP operations. Its native
 EVP operations provide Bun's RSA behavior without the documented RUSTSEC-2023-0071 issue in
 the RustCrypto RSA crate. That crate is not a dependency.
@@ -94,10 +96,12 @@ generateKeyPair and generateKeyPairSync, generateKey and generateKeySync, create
 createVerify, sign and verify. Signing objects are Writable streams. Callback variants
 schedule work on the runtime event loop. PBKDF2 and HKDF expose sync and callback forms.
 
-Key-pair generation supports RSA, EC P-256/P-384, Ed25519 and X25519. Secret generation
+Key-pair generation supports RSA, EC P-256/P-384/P-521, Ed25519 and X25519. Secret generation
 supports HMAC and AES. HMAC lengths round down to complete bytes, as in native Node.
 Asymmetric keys import and export JWK, PEM and DER. RSA also supports PKCS#1; EC supports
-SEC1. Private-key encryption uses BoringSSL for PEM PKCS#8/PKCS#1/SEC1 and DER PKCS#8,
+SEC1. EC, Ed25519 and X25519 keys also take Node's `raw-public` (EC points compressed or
+not) and `raw-private` formats. Signing accepts OpenSSL's digest names and their
+signature aliases, such as `RSA-SHA256`, `sha256WithRSAEncryption` and `RSA-MD5`. Private-key encryption uses BoringSSL for PEM PKCS#8/PKCS#1/SEC1 and DER PKCS#8,
 with byte-preserving passphrases. RSA-OAEP is also available through publicEncrypt and
 privateDecrypt. Other classic RSA encryption padding and privateEncrypt/publicDecrypt
 remain unsupported.
@@ -157,7 +161,7 @@ curves and failures are Bun's: AES in CBC, CTR, ECB, CFB, OFB and GCM, DES, 3DES
 Blowfish, RC2 and RC4; no ChaCha20-Poly1305 and no secp256k1, as in Bun 1.4.4. The
 browser engine uses the same wasm implementation; SubtleCrypto has no streaming
 ciphers or classic Diffie-Hellman to delegate to. `crypto.diffieHellman` takes EC
-P-256, P-384 and X25519 KeyObjects. [The source ledger](bun-patches/node-crypto-ciphers-dh-primes.md)
+P-256, P-384, P-521 and X25519 KeyObjects. [The source ledger](bun-patches/node-crypto-ciphers-dh-primes.md)
 lists the Bun sources the argument checks follow and the deliberate differences.
 
 The `node-crypto-ciphers`, `node-crypto-dh` and `node-crypto-primes` fixtures compare

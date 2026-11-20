@@ -65,7 +65,7 @@ async function runner(load: (api: API, file: string, uncaught: (error: unknown) 
     // No async context in this harness: every frame is empty and runs its callback directly.
     runInContext: (_context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) => Reflect.apply(fn, receiver, args),
     require: (name: string) => modules[name],
-    realTimers: { setTimeout, clearTimeout },
+    realTimers: { setTimeout, clearTimeout, setImmediate },
     fakeTimers: { api: {} },
     promiseState: Bun.peek.status,
     isPromise: types.isPromise,

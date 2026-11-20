@@ -1,0 +1,21 @@
+
+index.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+3 | process.on("unhandledRejection", reason => {
+4 |   console.log("listener saw", String(reason));
+5 |   throw new Error("thrown by the listener");
+6 | });
+7 | 
+8 | Promise.reject(new Error("unhandled at module scope"));
+                       ^
+error: unhandled at module scope
+      at /index.test.ts:8:20
+-------------------------------
+
+
+ 0 pass
+ 0 fail
+ 1 error
+Ran 0 tests across 1 file. [TIME]
