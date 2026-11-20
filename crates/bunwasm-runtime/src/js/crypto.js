@@ -106,7 +106,7 @@
     typeError(`Failed to execute '${method}' on 'SubtleCrypto': ${position} argument is not instance of ArrayBuffer, Buffer, TypedArray, or DataView.`, "ERR_INVALID_ARG_TYPE");
   }
   // The JsonWebKey dictionary: each member is read once, in WebIDL's sorted order.
-  const jwkMembers = ["alg", "crv", "d", "dp", "dq", "e", "ext", "k", "key_ops", "kty", "n", "oth", "p", "q", "qi", "use", "x", "y"];
+  const jwkMembers = ["alg", "crv", "d", "dp", "dq", "e", "ext", "k", "key_ops", "kty", "n", "oth", "p", "priv", "pub", "q", "qi", "use", "x", "y"];
   function jwkDictionary(value) {
     if (value === null || value === undefined) return {};
     if (typeof value !== "object" && typeof value !== "function") typeError("Type error");

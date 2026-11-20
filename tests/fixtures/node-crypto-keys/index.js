@@ -145,7 +145,8 @@ assert.equal(
   pbkdf2Sync("password", "salt", 1, 32, "sha256").toString("hex"),
   "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b",
 );
-assert.equal(hkdfSync("sha256", "input", "salt", "info", 0).byteLength, 0);
+// Node and Bun accept a keylen of 0 and then fail the derivation.
+assert.throws(() => hkdfSync("sha256", "input", "salt", "info", 0), { message: "HKDF derivation failed" });
 await new Promise((resolve, reject) =>
   generateKeyPair("ed25519", {}, (err, pub, priv) => {
     if (err) return reject(err);

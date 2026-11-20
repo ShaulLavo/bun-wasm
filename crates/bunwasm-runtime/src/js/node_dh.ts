@@ -277,7 +277,7 @@
       if (typeof candidate === "bigint") return bigintBytes(candidate, "candidate");
       // A copy: the options getters run later and may change the caller's buffer, and Bun
       // checks the bytes passed at call time.
-      if (typeof candidate === "string" || args.isBufferSource(candidate)) return args.bytes(candidate, "candidate").slice();
+      if (typeof candidate === "string" || args.isBufferSource(candidate)) return Uint8Array.from(args.bytes(candidate, "candidate"));
       throw args.argType("candidate", "string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView", candidate);
     }
 
