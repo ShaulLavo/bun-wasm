@@ -9,7 +9,7 @@ const times = (path: string) => {
 };
 const describe = (error: unknown) => {
   const { name, code, syscall, message } = error as { name: string; code: string; syscall?: string; message: string };
-  return `${name} ${code} ${syscall} ${message.replace(process.cwd(), ".")}`;
+  return `${name} ${code} ${syscall} ${message}`;
 };
 const attempt = (label: string, run: () => unknown) => {
   try {

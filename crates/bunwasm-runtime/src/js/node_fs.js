@@ -640,7 +640,8 @@
     if (typeof fd !== "number") throw invalidArg("fd", "of type number", fd);
     if (Number.isInteger(fd) && fd >= 0 && fd <= 2147483647) return;
     const expected = Number.isInteger(fd) ? ">= 0 && <= 2147483647" : "an integer";
-    const error = new RangeError(`The value of "fd" is out of range. It must be ${expected}. Received ${internal.describe(fd)}`);
+    // A range error shows the number itself ("Received -1"), as Bun's does.
+    const error = new RangeError(`The value of "fd" is out of range. It must be ${expected}. Received ${String(fd)}`);
     error.code = "ERR_OUT_OF_RANGE";
     throw error;
   }
