@@ -61348,9 +61348,10 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
     obj = js_create_from_ctor(ctx, new_target, class_id);
     if (JS_IsException(obj))
         return obj;
-    /* XXX: we are currently limited to 2 GB */
+    /* XXX: we are currently limited to 2 GB. bun-wasm: a length past it cannot be
+       allocated, which JSC (and so Bun) reports as RangeError: Out of memory. */
     if (len > INT32_MAX) {
-        JS_ThrowRangeError(ctx, "invalid array buffer length");
+        JS_ThrowRangeError(ctx, "Out of memory");
         goto fail;
     }
     if (max_len && *max_len > INT32_MAX) {
@@ -61366,13 +61367,6 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
         goto fail;
     }
 #endif
-    if (alloc_flag && class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len &&
-        *max_len > len && !rt->sab_funcs.sab_alloc) {
-        JS_ThrowTypeError(ctx,
-                          "growable SharedArrayBuffer requires "
-                          "SAB allocator hooks");
-        goto fail;
-    }
     abuf = js_malloc(ctx, sizeof(*abuf));
     if (!abuf)
         goto fail;
@@ -61385,6 +61379,13 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
             // is hard so we cheat and allocate |maxByteLength| bytes upfront
             sab_alloc_len = max_len ? *max_len : len;
             abuf->data = js_bunwasm_shared_array_buffer_mallocz(ctx, max_int(sab_alloc_len, 1));
+            if (!abuf->data)
+                goto fail;
+        } else if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len) {
+            /* bun-wasm: without allocator hooks no other agent can map this buffer, so a
+               growable one takes its |maxByteLength| from the ordinary allocator upfront and
+               grow() only moves byteLength, as with the hooks. */
+            abuf->data = js_bunwasm_array_buffer_mallocz(ctx, max_int(*max_len, 1));
             if (!abuf->data)
                 goto fail;
         } else {
