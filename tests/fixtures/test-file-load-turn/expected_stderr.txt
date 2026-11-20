@@ -1,0 +1,24 @@
+
+a.test.ts:
+(pass) a runs after the load turn
+
+b.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+1 | import { test } from "bun:test";
+2 | 
+3 | // A rejection left unhandled in the load turn fails the file: Bun runs none of its tests.
+4 | setImmediate(() => {
+5 |   Promise.reject(new Error("rejected in the load turn"));
+                         ^
+error: rejected in the load turn
+      at <anonymous> (/b.test.ts:5:22)
+-------------------------------
+
+
+ 1 pass
+ 0 fail
+ 1 error
+ 1 expect() calls
+Ran 1 test across 2 files. [TIME]
