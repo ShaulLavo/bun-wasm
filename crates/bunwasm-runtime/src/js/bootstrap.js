@@ -374,17 +374,18 @@
     }
   }
   internal.runInContext = runInContext;
-  // The context of the innermost callback an uncaught error escaped, for Bun's uncaught
-  // exception dispatch: its handlers read the store that callback was started in. Keyed by the
-  // error, so an error something caught keeps its frame only as long as the error lives; a
-  // thrown primitive keeps the last one. Declared after runInContext, which first uses them
-  // only once a callback runs.
+  // The context of the last callback an error escaped, for Bun's uncaught exception dispatch:
+  // its handlers read the store current when the error goes uncaught, which is the outermost
+  // callback's, since every inner one has unwound. Each escape overwrites the entry, so the
+  // outermost callback wins and an error caught in one callback and rethrown from another gets
+  // the second one's. Keyed by the error, so an error something caught keeps its entry only as
+  // long as the error lives; a thrown primitive keeps the last escape. Declared after
+  // runInContext, which first uses them only once a callback runs.
   const thrownContexts = new WeakMap();
   let thrownPrimitive = null;
   function rememberThrown(error, context) {
-    if (error === null || (typeof error !== "object" && typeof error !== "function")) {
-      if (thrownPrimitive === null || thrownPrimitive.error !== error) thrownPrimitive = { error, context };
-    } else if (!thrownContexts.has(error)) thrownContexts.set(error, context);
+    if (error === null || (typeof error !== "object" && typeof error !== "function")) thrownPrimitive = { error, context };
+    else thrownContexts.set(error, context);
   }
   // The context `error` escaped from, once; null for an error no callback threw.
   internal.takeThrownContext = function takeThrownContext(error) {

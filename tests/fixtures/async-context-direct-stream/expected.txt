@@ -1,3 +1,7 @@
 pull direct
 cancel direct
 after undefined
+close undefined true
+text bye
+close without a store undefined
+text plain
