@@ -174,19 +174,46 @@
       cancel: () => closeIterable(body),
     }, { highWaterMark: 0 });
   }
-  // Body.textStream() (Bun's Body.rs to_text_readable_stream): the body as decoded
-  // UTF-8 strings. A character split across chunks is held until it is complete.
-  async function pullText(reader: ReadableStreamDefaultReader<unknown>, decoder: TextDecoder, controller: ReadableStreamDefaultController<string>): Promise<void> {
-    for (let next = await reader.read(); ; next = await reader.read()) {
+  // Body.textStream() (Bun's readableStreamTextDecodeFrom in ReadableStreamOperations.cpp):
+  // the body as decoded UTF-8 strings. A character split across chunks is held until it is
+  // complete. The source's reader is released once the source closes, the output is
+  // cancelled, or a chunk is not a BufferSource, so the source ends unlocked.
+  type TextSource = { reader: ReadableStreamDefaultReader<unknown>; decoder: TextDecoder; released: boolean };
+  function releaseText(source: TextSource): void {
+    if (source.released) return;
+    source.released = true;
+    source.reader.releaseLock();
+  }
+  function isBufferSource(value: unknown): value is ArrayBufferView | ArrayBuffer {
+    return ArrayBuffer.isView(value) || value instanceof ArrayBuffer || typeof SharedArrayBuffer === "function" && value instanceof SharedArrayBuffer;
+  }
+  function rejectChunk(source: TextSource, controller: ReadableStreamDefaultController<string>): void {
+    const error = new TypeError("Body.textStream() received a chunk that is not a BufferSource");
+    controller.error(error);
+    source.reader.cancel(error).catch(() => {});
+    releaseText(source);
+  }
+  async function pullText(source: TextSource, controller: ReadableStreamDefaultController<string>): Promise<void> {
+    for (let next = await source.reader.read(); ; next = await source.reader.read()) {
+      // The output was cancelled while this read was pending.
+      if (source.released) return;
       if (next.done) {
-        const tail = decoder.decode();
+        const tail = source.decoder.decode();
         if (tail) controller.enqueue(tail);
         controller.close();
+        releaseText(source);
         return;
       }
-      const text = typeof next.value === "string" ? next.value : decoder.decode(internal.toUint8(next.value as Uint8Array), { stream: true });
+      if (!isBufferSource(next.value)) return rejectChunk(source, controller);
+      const text = source.decoder.decode(internal.toUint8(next.value), { stream: true });
       if (text) { controller.enqueue(text); return; }
     }
+  }
+  function cancelText(source: TextSource, reason: unknown): Promise<void> {
+    if (source.released) return Promise.resolve();
+    const result = source.reader.cancel(reason);
+    releaseText(source);
+    return result;
   }
   function textStream(body: Body): ReadableStream<string> {
     if (body.bodyUsed || body._stream?.locked) {
@@ -194,13 +221,12 @@
     }
     const stream = body.body;
     if (stream === null) return new ReadableStream<string>({ start: controller => controller.close() });
-    const reader = stream.getReader();
+    const source: TextSource = { reader: stream.getReader(), decoder: new TextDecoder(), released: false };
     body._bodyUsed = true;
-    const decoder = new TextDecoder();
     return new ReadableStream<string>({
-      pull: controller => pullText(reader, decoder, controller),
-      cancel: reason => reader.cancel(reason),
-    });
+      pull: controller => pullText(source, controller),
+      cancel: reason => cancelText(source, reason),
+    }, { highWaterMark: 0 });
   }
   return { remember, tee, clone, transfer, textStream, fromAsyncIterable, consume, drain, consumedStream, adoptable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })

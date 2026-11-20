@@ -88,6 +88,32 @@ export function createNodeNet({ net, http, https, zlib }) {
 
   const json = (value) => JSON.stringify(value);
 
+  // Bun's fetch error for a code it reports by name, as crates/bunwasm-host does.
+  const fetchFailure = (code, url) => ({
+    name: "TypeError",
+    code,
+    message: `${code} fetching "${url}". For more information, pass \`verbose: true\` in the second argument to fetch()`,
+  });
+  // llhttp's parse errors under Bun's codes. A bad status line keeps Node's error: Bun
+  // reports that as a closed connection, not a malformed response.
+  const parseFailureCode = (code) => {
+    if (code === "HPE_INVALID_CONTENT_LENGTH" || code === "HPE_UNEXPECTED_CONTENT_LENGTH") return "InvalidContentLength";
+    if (code === "HPE_INVALID_HEADER_TOKEN" || code === "HPE_INVALID_TRANSFER_ENCODING" || code === "HPE_LF_EXPECTED" || code === "HPE_CR_EXPECTED") return "Malformed_HTTP_Response";
+    return null;
+  };
+  const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
+  /** Where a redirect goes, or the Bun error that stops it. */
+  function redirectTarget(location, url, requested) {
+    let next;
+    try {
+      next = new URL(location, url);
+    } catch {
+      return { error: { name: "TypeError", code: "RedirectURLInvalid", message: "RedirectURLInvalid: Redirect URL in Location header is invalid." } };
+    }
+    if (next.protocol !== "http:" && next.protocol !== "https:") return { error: fetchFailure("UnsupportedRedirectProtocol", requested) };
+    return { next };
+  }
+
   // HTTP client for fetch handles: node:http(s), not Node's fetch, whose
   // body streams use the global (polyfill) ReadableStream once the runtime
   // replaced it. Redirects and content-encoding are handled here, as a
@@ -108,25 +134,34 @@ export function createNodeNet({ net, http, https, zlib }) {
         send(h, url, request, redirects, true);
         return;
       }
-      h.error = errorInfo({ name: "TypeError", message: err.message, code: err.code }, "fetch failed");
+      const parsed = parseFailureCode(err.code);
+      h.error = parsed ? fetchFailure(parsed, h.url) : errorInfo({ name: "TypeError", message: err.message, code: err.code }, "fetch failed");
       news();
     });
     req.on("response", (res) => {
       const status = res.statusCode || 0;
       const location = res.headers.location;
-      if (location && [301, 302, 303, 307, 308].includes(status) && request.redirect !== "manual") {
+      // Bun rejects every redirect status under "error", with or without a Location.
+      if (REDIRECT_STATUSES.includes(status) && request.redirect === "error") {
         res.resume();
-        if (request.redirect === "error") {
-          h.error = { name: "TypeError", message: "fetch failed: unexpected redirect" };
-          news();
-          return;
-        }
+        h.error = fetchFailure("UnexpectedRedirect", h.url);
+        news();
+        return;
+      }
+      if (location && REDIRECT_STATUSES.includes(status) && request.redirect === "follow") {
+        res.resume();
         if (redirects >= 20) {
           h.error = { name: "TypeError", message: "fetch failed: too many redirects" };
           news();
           return;
         }
-        const next = new URL(location, url);
+        const target = redirectTarget(location, url, h.url);
+        if (target.error) {
+          h.error = target.error;
+          news();
+          return;
+        }
+        const next = target.next;
         const keepBody = status === 307 || status === 308;
         const nextRequest = keepBody ? request : { method: request.method === "HEAD" ? "HEAD" : "GET", headers: request.headers.filter(([k]) => !/^content-/i.test(k)), body: null, redirect: request.redirect };
         if (next.origin !== url.origin) nextRequest.headers = nextRequest.headers.filter(([name]) => !/^(authorization|proxy-authorization|cookie2?|www-authenticate)$/i.test(name));
@@ -181,6 +216,7 @@ export function createNodeNet({ net, http, https, zlib }) {
       const h = stream("fetch");
       h.head = null;
       h.request = null;
+      h.url = url.href;
       const id = add(h);
       const payload = body && body.length > 0 && method !== "GET" && method !== "HEAD" ? new Uint8Array(body) : null;
       const request = { method, headers: meta.headers || [], body: payload, redirect: meta.redirect || "follow" };

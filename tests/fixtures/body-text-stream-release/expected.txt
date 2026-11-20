@@ -1,0 +1,10 @@
+Request closed source: text=A locked before=true after=false
+Request cancelled text stream: source locked=false
+Request accessed .body: locked=true getReader=TypeError cancel=TypeError text=hello unlocked after=true
+Request non-BufferSource chunk: error=TypeError source cancelled with=TypeError message=Body.textStream() received a chunk that is not a BufferSource source locked=false
+Request split character at close: value="�" then done=true source locked=false
+Response closed source: text=A locked before=true after=false
+Response cancelled text stream: source locked=false
+Response accessed .body: locked=true getReader=TypeError cancel=TypeError text=hello unlocked after=true
+Response non-BufferSource chunk: error=TypeError source cancelled with=TypeError message=Body.textStream() received a chunk that is not a BufferSource source locked=false
+Response split character at close: value="�" then done=true source locked=false

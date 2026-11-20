@@ -30,4 +30,16 @@ it is complete. A null body gives an empty stream and leaves the body unused.
 Otherwise the body becomes used, and a second call throws `ERR_BODY_ALREADY_USED`
 (`Body is disturbed or locked`).
 
-The `stream-consumer-methods` fixture compares all of this with native Bun.
+The text stream follows Bun's `SourceKind::TextDecode` source
+(`readableStreamTextDecodeFrom` and the `textDecode*` steps in
+`src/jsc/bindings/webcore/streams/ReadableStreamOperations.cpp`). It has a high-water
+mark of 0, so nothing is read before the first read. It releases the source's reader
+when the source closes (after the flushed tail), when the text stream is cancelled
+(after passing the cancel on), and when the source yields a chunk that is not a
+BufferSource. That chunk errors the text stream with Bun's `TypeError` ("Body.textStream()
+received a chunk that is not a BufferSource") and cancels the source with it. The
+source therefore ends unlocked in every case, as in Bun. ArrayBuffer and any view are
+accepted, and a detached one reads as empty.
+
+The `stream-consumer-methods` and `body-text-stream-release` fixtures compare all of
+this with native Bun.

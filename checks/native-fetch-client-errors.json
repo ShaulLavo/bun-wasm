@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fetch-client-errors",
+  "engines": ["quickjs", "jsc", "browser"]
+}

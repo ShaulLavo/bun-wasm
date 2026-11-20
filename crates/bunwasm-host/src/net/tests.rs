@@ -360,6 +360,80 @@ fn fetch_errors() {
     assert_eq!(json(net.error(0))["code"], "ERR_INVALID_ARG_VALUE");
 }
 
+/// The head of a fetch from a one-shot server: `Ok(head)` or `Err(error)`.
+fn fetch_once(
+    response: &'static [u8],
+    redirect: &str,
+) -> Result<serde_json::Value, serde_json::Value> {
+    let port = http_server(response);
+    let mut net = Net::new();
+    let meta = format!(r#"{{"url":"http://127.0.0.1:{port}/start","redirect":"{redirect}"}}"#);
+    let handle = net.fetch(meta.as_bytes(), b"");
+    assert!(handle > 0);
+    loop {
+        match net.fetch_head(handle) {
+            Output::Code(AGAIN) => {
+                net.poll(1000);
+            }
+            Output::Code(_) => return Err(json(net.error(handle))),
+            output => return Ok(json(output)),
+        }
+    }
+}
+
+#[test]
+fn fetch_reports_malformed_responses_with_buns_codes() {
+    let cases: [(&[u8], &str); 4] = [
+        (b"HTTP/1.1 302 Found\r\nLocation: /a\x0bb\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", "Malformed_HTTP_Response"),
+        (b"HTTP/1.1 302 Found\r\nLocation: /a\x7fb\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", "Malformed_HTTP_Response"),
+        (b"HTTP/1.1 200 OK\r\nSet-Cookie: sid=1;\r\n Secure; HttpOnly\r\nContent-Length: 2\r\n\r\nok", "Malformed_HTTP_Response"),
+        (b"HTTP/1.1 200 OK\r\nContent-Length: 1_0\r\nConnection: close\r\n\r\n0123456789", "InvalidContentLength"),
+    ];
+    for (response, code) in cases {
+        let error = fetch_once(response, "follow").expect_err("a malformed response is rejected");
+        assert_eq!(error["code"], code, "{error}");
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            message.starts_with(&format!("{code} fetching \"http://127.0.0.1:")),
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn fetch_redirect_error_rejects_only_redirect_statuses() {
+    for status in [301, 302, 303, 307, 308] {
+        let response =
+            format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let error = fetch_once(Box::leak(response.into_bytes().into_boxed_slice()), "error")
+            .expect_err("a redirect status is rejected");
+        assert_eq!(error["code"], "UnexpectedRedirect", "{status}");
+    }
+    for status in [300, 304, 305, 306] {
+        let response = format!(
+            "HTTP/1.1 {status} X\r\nLocation: /elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let head = fetch_once(Box::leak(response.into_bytes().into_boxed_slice()), "error")
+            .expect("a 3xx that is not a redirect is returned");
+        assert_eq!(head["status"], status);
+    }
+}
+
+#[test]
+fn fetch_rejects_a_redirect_to_a_non_http_scheme() {
+    for location in ["file:/etc/hosts", "file:hosts", "data:text/plain,hi"] {
+        let response = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let error = fetch_once(
+            Box::leak(response.into_bytes().into_boxed_slice()),
+            "follow",
+        )
+        .expect_err("the redirect is not followed");
+        assert_eq!(error["code"], "UnsupportedRedirectProtocol", "{location}");
+    }
+}
+
 #[test]
 fn notify_wait_past_ends_on_a_bump_made_before_or_during_the_wait() {
     let notify = Notify::new();
