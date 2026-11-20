@@ -20,6 +20,7 @@ ecdsa sha256WithRSAEncryption true
 sign context throws Error ERR_CRYPTO_OPERATION_FAILED Context parameter is unsupported
 verify context throws Error ERR_CRYPTO_OPERATION_FAILED Context parameter is unsupported
 sign context callback ERR_CRYPTO_OPERATION_FAILED Context parameter is unsupported
+hkdf bad digest throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: nope
 randomInt() throws TypeError ERR_INVALID_ARG_TYPE The "max" argument must be a safe integer. Received undefined
 randomInt(1.5) throws TypeError ERR_INVALID_ARG_TYPE The "max" argument must be a safe integer. Received type number (1.5)
 randomInt(0) throws RangeError ERR_OUT_OF_RANGE The value of "max" is out of range. It must be greater than the value of "min" (0). Received 0

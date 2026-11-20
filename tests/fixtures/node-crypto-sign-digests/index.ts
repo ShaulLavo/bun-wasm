@@ -63,7 +63,9 @@ await new Promise<void>(resolve =>
   }),
 );
 
-show("randomInt()", () => crypto.randomInt(undefined as never));
+// hkdf checks its digest before it schedules the callback.
+show("hkdf bad digest", () => crypto.hkdf("nope", "key", "", "", 1, () => console.log("hkdf callback ran")));
+show("randomInt()",() => crypto.randomInt(undefined as never));
 show("randomInt(1.5)", () => crypto.randomInt(1.5));
 show("randomInt(0)", () => crypto.randomInt(0));
 show("randomInt(5, 5)", () => crypto.randomInt(5, 5));

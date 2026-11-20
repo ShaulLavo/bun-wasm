@@ -920,6 +920,7 @@ declare namespace CryptoKeys {
         });
       };
     }
+    const hkdfCallback = callbackVersion(hkdfSync);
     return {
       KeyObject,
       createSecretKey,
@@ -939,7 +940,11 @@ declare namespace CryptoKeys {
       createVerify: (a: string, o?: unknown) => new Verify(a, o),
       constants,
       hkdfSync,
-      hkdf: callbackVersion(hkdfSync),
+      // The digest is checked synchronously, as in Node; derivation errors reach the callback.
+      hkdf: (...args: Parameters<typeof hkdfCallback>) => {
+        hash(args[0]);
+        hkdfCallback(...args);
+      },
     };
   };
 });
