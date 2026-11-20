@@ -24,10 +24,22 @@ V8 source.
 - On the Browser engine in V8, the module suspended in a top-level await goes too. V8 lists it
   among a promise callback's async frames; JavaScriptCore does not, so Bun never prints it.
 - Frames of Bun's own builtins (`bun-builtin:…`) stay: they are the frames Bun shows.
+- The tick pass is the exception among the runtime's frames. `internal.runTicks` in
+  `bootstrap.js` is named `processTicksAndRejections`, after Bun's builtin, and the default
+  text prints it as Bun's frame, `processTicksAndRejections (native:7:39)`, below every
+  `process.nextTick` callback, on QuickJS, JavaScriptCore and the Browser engine. The native
+  call it runs the callback through stays hidden. Code outside the tick pass (a timer, an
+  immediate, a microtask, a promise reaction after the tick queue went idle) shows no such
+  frame, and a program's own function of that name prints as an ordinary frame.
 
 Native Bun prints its builtins' frames, such as `emit (node:events:97:22)` and
 `processTicksAndRejections (native:7:39)`. bun-wasm implements most of those modules in its
-own runtime, so it prints neither the frame nor a made-up replacement.
+own runtime, so apart from the tick pass it prints neither the frame nor a made-up
+replacement. Upstream `process-nexttick.test.js` checks that a tick's stack names
+`processTicksAndRejections`; before this, Browser passed only because Node's own
+`node:internal/process/task_queues` frame of the fixture host showed through, which this
+record's filter then hid. The `stack-tick-frame` fixture compares the tick frames with native
+Bun 1.4.4.
 
 ## Error.stackTraceLimit
 
