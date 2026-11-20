@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { webkit, type Page } from "playwright";
 import { session } from "../web/tests/playground.mjs";
 import { openPlaygroundPage } from "../web/tests/playground-navigation";
 import { navigationParameter, navigationServerListening, navigationServerLog, readNavigationServerLog } from "../web/navigation-server-log";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 type Boundary = "before-arrival" | "in-handler" | "returned";
 const html = '<span id="status">ready</span>';

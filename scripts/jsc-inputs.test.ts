@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// These tests run the real JSC input scripts and git. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 type Shell = (command: string, env?: Record<string, string>) => string;
 

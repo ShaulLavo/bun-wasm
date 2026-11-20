@@ -1,12 +1,15 @@
 import { sourceLane } from "./fixtures/shared-objects/source-lane";
 import { poolChargedWord, overflowBudget, slotWord } from "../web/src/shared-objects/lane-overflow";
 import { sharedPoolLaneCursor, sharedPoolLanes, type SharedReference } from "../web/src/shared-objects/protocol";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { brokerClients, testCleanup } from "./fixtures/shared-objects/broker-clients";
 import type { Graph } from "./fixtures/shared-objects/runtime-types";
 import type { SourcePort } from "./fixtures/shared-objects/source-runtime";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const cleanup = testCleanup();
 type Client = ReturnType<ReturnType<typeof brokerClients>["client"]>;

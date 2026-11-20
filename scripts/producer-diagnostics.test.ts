@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, setDefaultTimeout, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -7,6 +7,9 @@ import { join } from 'node:path';
 import { producerPhase } from './producer-diagnostics.ts';
 import { needsRust, needsSharedNative } from './ci-changes.ts';
 import { selectChecks } from './test-checks.ts';
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const diagnostics = join(import.meta.dir, 'producer-diagnostics.ts');
 

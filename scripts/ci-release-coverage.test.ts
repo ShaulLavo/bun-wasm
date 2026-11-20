@@ -1,5 +1,5 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,6 +9,9 @@ import { updateReleaseLock } from "./ci-update-lock";
 import { installStagedPackages } from "./ci-install";
 import { stageReleasePackages, verifyStagedResolutions } from "./ci-stage-release-packages";
 import { selectNodeRelease } from "./ci-bootstrap-tools";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const releaseUrl = (name: string) => `https://github.com/owner/project/releases/download/v1/${name.replaceAll("/", "-")}.tgz`;
 const digest = (bytes: Uint8Array) => `sha512-${createHash("sha512").update(bytes).digest("base64")}`;

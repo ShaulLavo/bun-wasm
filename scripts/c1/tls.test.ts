@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { cpSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +12,9 @@ import { fileIdentity, sha256, treeIdentity } from "./identity.ts";
 import { bindLoaded, parseLoaded, type LoadedObservation } from "./loaded.ts";
 import { TLS_PAGE_ENTRY, TLS_PAGE_WORKERS, TLS_PG_CLIENT, UNRESOLVED_RELAY, prepareTlsPage, verifyTlsPage, type PageBuilder } from "./tls-page.ts";
 import { childResult, completedConsumerResult, driverOutcome, fiveOwnerDriver, tlsDriver } from "./operations.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "bun-wasm-c1-tls-")));
 afterAll(() => {

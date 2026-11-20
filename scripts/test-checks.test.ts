@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -9,6 +9,9 @@ import { migrationBase } from "./migrations/split-bun-patches";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { needsJsc, needsRust } from "./ci-changes";
 import { installFixtureTargets } from "./install-fixture-command";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = resolve(import.meta.dir, "..");
 

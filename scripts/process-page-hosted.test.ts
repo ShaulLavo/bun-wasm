@@ -1,9 +1,12 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { runHostedProcess } from "../web/tests/browser-process-hosted";
 import { prepareProcessBundle } from "../web/tests/process-page-assets";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function availablePort(): number {
   const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });

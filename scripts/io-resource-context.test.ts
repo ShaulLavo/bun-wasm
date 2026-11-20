@@ -1,6 +1,6 @@
 // Host-only checks of the live driver: argument boundary, row evaluation and the stdin gate with
 // cleanup. Nothing here runs a guest engine, so no result counts as an engine pass.
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,9 @@ import { qualificationFixture } from "./tls-qualification-fixture.ts";
 import type { ReleaseTuple } from "./c1/contract.ts";
 import { selectedReleaseArchives } from "./producer-closure.ts";
 import release from "./waffle-release-inputs.json";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const selectedArchives = selectedReleaseArchives();
 const fixtureTuple = { runtime: selectedArchives.runtime.version, relay: selectedArchives.relay.version,

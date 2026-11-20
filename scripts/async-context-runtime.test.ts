@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { checkPageReady } from "../web/tests/async-context-runtime-page.ts";
 import assert from "node:assert/strict";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const fixture = resolve(import.meta.dir, "../tests/async-context-runtime/index.ts");
 

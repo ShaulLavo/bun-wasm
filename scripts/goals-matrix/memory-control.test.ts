@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { assertMemoryControl, memoryControlBytes, memoryControlCommand, memoryControlBoundary, readMemoryControlResult, type MemoryControlResult } from "./memory-control";
@@ -10,6 +10,9 @@ import type { MemoryProcessEnvelope, MemoryProcessRow } from "../../web/src/memo
 import { discoverChecks, selectChecks } from "../test-checks";
 import { checkInputPaths } from "../ci-check-inputs";
 import { launchFailureFixture } from "../fixtures/launch-failure";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 const nonce = "synthetic-memory-control-nonce";
 const boundary = { nonce, sequence: 5 };
 

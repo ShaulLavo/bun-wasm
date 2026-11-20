@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// These tests run the real ICU build script. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function fixture(run: (root: string, invoke: (env?: NodeJS.ProcessEnv) => { exitCode: number; stdout: Uint8Array; stderr: Uint8Array }) => void) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-icu-inputs-"));

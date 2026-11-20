@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -8,6 +8,9 @@ import { browserCoverageOutputs, browserCoverageSnapshot } from "./ci-browser-co
 import { selectBrowserGuestCoverage, browserGuestManifest } from "./browser-guest-selection";
 import { expectedBrowserGuestRows, fullBrowserGuestSelection, coverageOwners } from "./browser-guest-catalogue";
 import { parseCheck } from "./test-checks";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const cleanup = new Set<string>();
 test("actual repository declarations remain raw and the real PR entrypoint accepts the full corpus", () => {

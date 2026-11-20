@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import * as host from "node:fs";
 import * as path from "node:path";
 import { Buffer } from "node:buffer";
@@ -7,6 +7,9 @@ import { inspect } from "node:util";
 import { execFileSync } from "node:child_process";
 import { loadFileHandleModule } from "./fs-file-handle-source";
 import { checkFsOptions, checkBigintStats, checkCopyOptions, checkCopyTypeErrors } from "../tests/fixtures/fs-options/index";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const source = host.readFileSync(new URL("../crates/bunwasm-runtime/src/js/node_fs.js", import.meta.url), "utf8");
 const roots: string[] = [];

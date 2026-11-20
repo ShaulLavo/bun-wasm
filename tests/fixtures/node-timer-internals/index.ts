@@ -159,6 +159,10 @@ async function intervalWritesInCallback() {
   });
 }
 
+// Every timer due when the timers phase starts runs before an immediate one of them queues.
+// Native Bun and Node read the clock once per phase, so the script waits past both
+// deadlines: two setTimeout(0) calls can land in different milliseconds on a slow host,
+// and then b is not due yet when a runs (a,c,b in Bun and Node too).
 async function dueTimersBeforeImmediates() {
   const order: string[] = [];
   await new Promise<void>(resolve => {
@@ -170,6 +174,8 @@ async function dueTimersBeforeImmediates() {
       });
     }, 0);
     setTimeout(() => order.push("b"), 0);
+    const due = performance.now() + 5;
+    while (performance.now() < due);
   });
   console.log("due timers", order.join(","));
 }

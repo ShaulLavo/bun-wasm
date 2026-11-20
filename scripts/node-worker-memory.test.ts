@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { productApps } from "./app-matrix/product.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const app = productApps.find(app => app.id === "next-15-app-static");
 const source = app?.files["next.config.ts"];

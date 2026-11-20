@@ -1,5 +1,5 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -13,6 +13,9 @@ import { rustTestPackages } from "./rust-test-packages";
 import { inBatches, missingPackages, parseArchives, planArchives, prefetchArchive } from "../web/scripts/ci-browser-deps";
 
 import { nativePipeline } from "./ci-native-pipeline";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const workflow = expandedCiWorkflow();
 const boatShell = "setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}";

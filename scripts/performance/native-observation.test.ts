@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -6,6 +6,9 @@ import { bounded } from "../goals-matrix/bounded";
 import { launchProcess } from "./lifecycle-process";
 import { scoped, type Transport } from "../goals-matrix/transport";
 import { Scope } from "../goals-matrix/scope";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("scoped observation retains the browser root and rejects sends after closure", async () => {
   let requests = 0;

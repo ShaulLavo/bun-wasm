@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
 import { gzipSync } from "node:zlib";
 import { installToolsRoute } from "../web/tests/tools-route.ts";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const rejected = gzipSync("intentionally different guest");
 const verified = gzipSync("verified tools fixture");

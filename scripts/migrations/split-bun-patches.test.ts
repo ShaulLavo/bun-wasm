@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { migrationBase, migrationOutputs, rewriteLinks, splitLedger } from "./split-bun-patches";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = new URL("../../", import.meta.url).pathname;
 

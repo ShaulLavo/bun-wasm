@@ -1,9 +1,12 @@
-import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RuntimeJsCommands } from "./runtime-js-process";
 import { testSubreaper } from "./test-subreaper.ts";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-runtime-js-controls-"));
 const commands = new RuntimeJsCommands(() => rmSync(scratch, { recursive: true, force: true }));

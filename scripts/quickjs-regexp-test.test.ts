@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { nativeCheck } from "./quickjs-native-check";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function run(command: string, args: string[]): string {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 180000, maxBuffer: 4 * 1024 * 1024 });

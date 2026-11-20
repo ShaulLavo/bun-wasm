@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fixture } from "./net-http-fixture";
 import { exchanges, normalizeWire, observe, request, type Trace } from "../tests/fixtures/http-response-lifecycle/scenarios.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 // Real Node is the reference; the runtime side runs the actual net.js server over the modeled host ABI.
 function nodeReference(): Record<string, unknown> {

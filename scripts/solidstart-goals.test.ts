@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { frameworks } from "./goals-matrix/catalog";
 import { playgroundURL } from "./goals-matrix/run";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("SolidStart acceptance keeps the browser router at the server's root path", () => {
   const framework = frameworks.find(item => item.id === "solidstart");

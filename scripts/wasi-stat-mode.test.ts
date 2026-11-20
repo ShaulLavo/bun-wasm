@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("Preview1 stat modes present readable types without changing filesystem rights", () => {
   const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-wasi-stat-"));

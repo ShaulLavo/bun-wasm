@@ -1,8 +1,11 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
+
+// These tests run the runtime transpiler. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-worker-codec-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));

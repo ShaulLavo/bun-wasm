@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +13,9 @@ import { admitIntake, readSealedDelivery, requireSealedArtifacts, sealDelivery }
 import { admitReplayHandoffFile, parseReplay, parseReplayHandoff, requireReplayHandoff } from "./replay.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
 import { admitReleases } from "./inputs.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const scratch: string[] = [];
 /** Test-owned cleanup: the fixture's own sealed directories are made writable only to delete them. */

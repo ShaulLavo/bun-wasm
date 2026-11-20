@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { cloopFrame, cloopFrameFindings, cloopFrameFloor, cloopValueSlotCeiling, wasmFrame } from "./jsc-cloop-frame.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 // A side with an imported callee and the interpreter function under test. Global 0 is the
 // imported, exported stack pointer, as wasm-ld lays out a PIC side. Locals 0 and 1 hold the two

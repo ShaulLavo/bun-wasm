@@ -1,6 +1,6 @@
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import { discoverChecks } from "./test-checks.ts";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,6 +12,9 @@ import { checkDiagnosticMacros } from "../spidermonkey/diagnostic-profile.ts";
 const root = "/work/tmp/bun-wasm-native-profile-fixture";
 const irregexp = root + "/firefox/js/src/irregexp/";
 import { checkIrregexpClosure, requiredIrregexpUnits } from "../spidermonkey/native-source-closure.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 const units = requiredIrregexpUnits;
 const entries = units.map((name) => ({ file: irregexp + name, directory: root, arguments: ["clang++", "-DBUNWASM_EMBED=1", "-DV8_INTL_SUPPORT", "-DBUNWASM_IRREGEXP_ICU4X", "-I" + irregexp + "bunwasm-icu/include"] }));
 const firstEntry = entries[0];

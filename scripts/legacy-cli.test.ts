@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 import { discoverChecks, selectChecks } from "./test-checks";
 import { assertLegacyCliResults, legacyCliCommand, legacyCliFixtures, legacyCliRows, prepareLegacyCli, runLegacyCli } from "./legacy-cli";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = resolve(import.meta.dir, "..");
 

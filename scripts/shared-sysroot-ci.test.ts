@@ -1,5 +1,5 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsSharedSysroot } from "./ci-changes";
 import { discoverChecks } from "./test-checks";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const workflow = expandedCiWorkflow();
 const producer = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-spidermonkey-prebuild:\n")[0]!;

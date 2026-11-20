@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { join, resolve } from "node:path";
 import type { Page } from "playwright";
 import { chromium, firefox, webkit } from "playwright";
 import { verifySite } from "./browser-guest-site";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 async function checkRejections(page: Page, extension: string): Promise<void> {
   await writeFile(page, `/home/user/entry.${extension}`, 'import("./failure.mjs");');

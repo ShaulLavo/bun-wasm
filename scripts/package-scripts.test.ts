@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
 import { runInNewContext } from "node:vm";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 // The runtime module with a recording spawn: what bun run hands the system shell.
 const load = (name: string) => runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync("globalThis.factory = " + readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url), "utf8")), { Blob, Response, ReadableStream, ArrayBuffer });

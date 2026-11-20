@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function git(root: string, args: readonly string[]): string {
   return execFileSync("git", ["-C", root, "-c", "user.name=Patch Author", "-c", "user.email=author@example.invalid"].concat(args), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();

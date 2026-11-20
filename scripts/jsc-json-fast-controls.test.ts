@@ -1,8 +1,11 @@
-import { expect, test as bunTest } from "bun:test";
+import { expect, setDefaultTimeout, test as bunTest } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { nativeProducerEngines } from "./test-checks";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const jscSelected = nativeProducerEngines().includes("jsc");
 const test = jscSelected ? bunTest : bunTest.skip;

@@ -1,6 +1,6 @@
 import { Scope, type Admission } from "./scope";
 import { withScoped } from "./scope-fixture";
-import { test, expect, spyOn } from "bun:test";
+import { test, expect, spyOn, setDefaultTimeout } from "bun:test";
 import { IphoneBus } from "./iphone-bus";
 import { createIphoneTransport, nativeButtonRef, validateIphoneControl } from "./iphone-transport";
 import { checkClick } from "./playground";
@@ -15,6 +15,9 @@ import { join } from "node:path";
 import { execute } from "./execute";
 import { object } from "./evidence";
 import type { Transport } from "./transport";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("visible iPhone options reject SafariDriver-shaped or non-loopback controls", () => {
   validateIphoneControl("http://127.0.0.1:1234/__goals_iphone/" + "a".repeat(64), "/bound/agent-device");

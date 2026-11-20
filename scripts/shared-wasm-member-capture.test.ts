@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("the selected shared engine retains blocked child stderr, identity and host boundaries without draining its pipe", () => {
   const output = execFileSync(process.execPath, ["web/tests/shared-wasm-memory-browser.ts", "chromium"], {

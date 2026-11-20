@@ -4,7 +4,7 @@
 // Inside the supported domain the first receive returns the message; outside it the same receive
 // fails by name, the frame stays whole, and a later turn delivers it. Every case asserts the
 // process's natural exit status.
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +13,9 @@ import { chromium, webkit } from "playwright";
 import { buildSite, verifySite } from "./browser-guest-site";
 import { ready, run, session, writeFile } from "../web/tests/playground.mjs";
 import { navigateTestPage } from "../web/tests/navigate-test-page.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const notAttached = "ERR_WORKER_MESSAGE_BACKING_NOT_ATTACHED";
 type Pool = { created: boolean; classes: number[]; lanes: number };

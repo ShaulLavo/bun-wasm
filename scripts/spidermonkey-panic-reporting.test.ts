@@ -1,9 +1,12 @@
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("the panic hook reports payloads and locations with a bounded fatal fallback", () => {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-panic-report-"));
