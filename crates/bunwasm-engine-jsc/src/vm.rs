@@ -939,9 +939,9 @@ impl Engine for Jsc {
         Some(unsafe { bunjsc_heap_size_after_collection(ctx()) } as f64)
     }
 
-    fn set_time_zone(&self, zone: &JsVal) -> Option<bool> {
-        // SAFETY: valid context and value.
-        Some(unsafe { bunjsc_set_time_zone(ctx(), zone.raw()) })
+    fn set_time_zone(&self, zone: &JsVal) -> Option<JsVal> {
+        // SAFETY: valid context and value; the helper returns a string or null.
+        Some(JsVal::new(unsafe { bunjsc_set_time_zone(ctx(), zone.raw()) }))
     }
 }
 

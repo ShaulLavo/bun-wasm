@@ -42,3 +42,13 @@ console.log("http methods", parser.methods.length, parser.allMethods.length, par
 console.log("natives", typeof process.binding("natives").fs, typeof process.binding("natives")["node:fs"]);
 console.log("util types", typeof process.binding("util").isPromise);
 console.log("fs stat values", process.binding("fs").statValues.length, process.binding("fs").kFsStatsFieldsNumber);
+
+// Bun builds these lazily into ordinary writable data properties; strict code may assign them.
+(function () {
+  "use strict";
+  const descriptor = Object.getOwnPropertyDescriptor(process, "allowedNodeEnvironmentFlags")!;
+  console.log("flags property", "value" in descriptor, descriptor.writable, descriptor.enumerable, descriptor.configurable);
+  (process as unknown as Record<string, unknown>).allowedNodeEnvironmentFlags = 5;
+  process.report = 7 as never;
+  console.log("assigned", process.allowedNodeEnvironmentFlags, process.report);
+})();

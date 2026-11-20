@@ -5,7 +5,11 @@ const { memoryUsage: jscMemoryUsage } = require("bun:jsc");
 const usage = process.memoryUsage();
 console.log("memoryUsage keys", JSON.stringify(Object.keys(usage)));
 console.log("memoryUsage numbers", Object.values(usage).every(value => typeof value === "number" && value >= 0));
-console.log("rss number", typeof process.memoryUsage.rss() === "number", process.memoryUsage.rss() === process.memoryUsage().rss || Math.abs(process.memoryUsage.rss() - process.memoryUsage().rss) < 16 * 1024 * 1024);
+// Real figures, not agreeing zeros: a process always has resident memory, a peak, and less than
+// all of its address space free.
+const MiB = 1024 * 1024;
+console.log("rss positive", process.memoryUsage.rss() > MiB, usage.rss > MiB, Math.abs(process.memoryUsage.rss() - usage.rss) < 16 * MiB);
+console.log("peak and available", process.resourceUsage().maxRSS * 1024 > MiB, process.availableMemory() > 0, process.availableMemory() !== 2 ** 32);
 console.log("bun:jsc keys", JSON.stringify(Object.keys(jscMemoryUsage())));
 
 // Everything is bytes except maxRSS (kilobytes); reads in between allocate, hence the slack.

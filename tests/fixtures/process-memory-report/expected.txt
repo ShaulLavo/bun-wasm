@@ -1,6 +1,7 @@
 memoryUsage keys ["rss","heapTotal","heapUsed","external","arrayBuffers"]
 memoryUsage numbers true
-rss number true true
+rss positive true true true
+peak and available true true true
 bun:jsc keys ["current","peak","currentCommit","peakCommit","pageFaults"]
 current agrees true true
 peak agrees true true true

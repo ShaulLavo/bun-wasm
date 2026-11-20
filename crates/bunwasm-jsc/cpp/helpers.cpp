@@ -600,8 +600,9 @@ uint64_t bunjsc_heap_size_after_collection(JSContextRef ctx)
 // process.env.TZ, as Bun's applyTZFromString and its TZ delete path
 // (src/jsc/bindings/JSEnvironmentVariableMap.cpp): a valid zone, or an empty name that
 // restores the host's, becomes WTF's override, and the shared and per-Date caches start over.
-// Returns whether the zone applied.
-bool bunjsc_set_time_zone(JSContextRef ctx, JSValueRef value)
+// Returns the primary IANA ID the date cache resolved for the zone now in use (GMT and Etc/UTC
+// are UTC, EST5EDT is America/New_York), or null when the zone did not apply.
+JSValueRef bunjsc_set_time_zone(JSContextRef ctx, JSValueRef value)
 {
     JSGlobalObject* globalObject = toJS(ctx);
     VM& vm = globalObject->vm();
@@ -609,7 +610,7 @@ bool bunjsc_set_time_zone(JSContextRef ctx, JSValueRef value)
     JSValue zone = toJS(globalObject, value);
     String name = zone.isString() ? zone.toWTFString(globalObject) : String();
     if (name.length() >= 32 || !WTF::setTimeZoneOverride(name))
-        return false;
+        return toRef(globalObject, jsNull());
     WTF::timeZoneDidChange();
     vm.dateCache.clearForTimeZoneChange();
     HeapIterationScope iterationScope(vm.heap);
@@ -617,7 +618,7 @@ bool bunjsc_set_time_zone(JSContextRef ctx, JSValueRef value)
         static_cast<DateInstance*>(static_cast<JSCell*>(cell))->invalidateCachedLocalGregorianDateTime();
         return IterationStatus::Continue;
     });
-    return true;
+    return toRef(globalObject, jsString(vm, vm.dateCache.defaultTimeZone().toString()));
 }
 
 // -1: not a promise, 0: pending, 1: fulfilled, 2: rejected.

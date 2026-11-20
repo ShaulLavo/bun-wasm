@@ -657,8 +657,8 @@
       // Bun's shape. A guest's resident memory is its linear memory, which never shrinks, so
       // the current size is also the peak, and all of it is committed.
       memoryUsage: () => {
-        const usage = native.memoryUsage();
-        const current = usage.rss ?? usage.wasmCapacity ?? 0;
+        const usage = native.linearMemoryBytes ? null : native.memoryUsage();
+        const current = usage ? usage.rss ?? usage.wasmCapacity ?? 0 : native.linearMemoryBytes();
         return { current, peak: current, currentCommit: current, peakCommit: current, pageFaults: 0 };
       },
       describe: (v) => String(v),

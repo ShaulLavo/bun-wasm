@@ -6,7 +6,7 @@ report, and `process.report.getReport()`, follow Bun at revision
 
 | Upstream | Behaviour reproduced | Where |
 | --- | --- | --- |
-| `src/jsc/bindings/BunProcess.cpp` `Process_functionMemoryUsage`, `Process_functionMemoryUsageRSS` | `process.memoryUsage()` has exactly Node's five enumerable numbers. `rss` is the guest's resident memory: its linear memory capacity on QuickJS and JSC (the engines' `wasmCapacity`), the host's figure on Browser. An engine counter it cannot measure reads 0. The engine extensions (`wasmCapacity`, `arrayBufferCount`, `failedAllocation`) stay readable as non-enumerable properties | `crates/bunwasm-runtime/src/js/process.ts` `memoryUsage`, `residentBytes` |
+| `src/jsc/bindings/BunProcess.cpp` `Process_functionMemoryUsage`, `Process_functionMemoryUsageRSS` | `process.memoryUsage()` has exactly Node's five enumerable numbers. `rss` is the guest's resident memory: the core's linear memory size, which the core reads itself (`linearMemoryBytes`) on all three engines, the Browser engine included, without walking the engine's heap; `memoryUsage.rss()`, `resourceUsage().maxRSS`, `availableMemory()` and `bun:jsc` `memoryUsage()` take only that read. An engine counter it cannot measure reads 0. The engine extensions (`wasmCapacity`, `arrayBufferCount`, `failedAllocation`) stay readable as non-enumerable properties | `crates/bunwasm-runtime/src/js/process.ts` `memoryUsage`, `residentBytes` |
 | `Process_functionMemoryUsage` `heapUsed`, `BunClientData.h` `HeapSizeAfterLastCollection` | On JSC, `heapUsed` is the heap size measured at the end of the most recent collection, eden or full (`Heap::sizeAfterLastCollection`), and the whole heap before the first collection | `crates/bunwasm-engine-jsc/src/vm.rs` `memory_usage` |
 | `src/jsc/bindings/bindings.cpp` `JSC__VM__runGC`, `src/jsc/modules/BunJSCModule.h` `functionFullGC`, `functionEdenGC`, `functionGCAndSweep` | `Bun.gc()` and `bun:jsc`'s `fullGC`, `edenGC` and `gcAndSweep` return the heap size the collection measured, which `heapUsed` then reports. Every bun-wasm collection is a full one | `crates/bunwasm-runtime/src/js/bun.js`, `builtins.js` |
 | `BunJSCModule.h` `functionMemoryUsage` | `bun:jsc` `memoryUsage()` returns `current`, `peak`, `currentCommit`, `peakCommit` and `pageFaults`. Linear memory never shrinks and is all committed, so all four sizes are the current resident size | `builtins.js` |
@@ -16,7 +16,9 @@ report, and `process.report.getReport()`, follow Bun at revision
 ## Differences from native Bun 1.4.4
 
 - QuickJS reference counting frees most objects at once, so its `heapUsed` is the live size,
-  not a figure from the last collection; Browser reports the host's `usedJSHeapSize` or 0.
+  not a figure from the last collection; Browser's `heapUsed` is the host's `usedJSHeapSize` or 0.
+- On JSC `process.memoryUsage()` itself still refreshes the engine's memory record, which
+  measures `Heap::size()` by walking the heap, as on main.
   The upstream `heapUsed reports the most recent collection` tests describe JSC's collector and
   pass only on JSC.
 - `arrayBuffers` on Browser is 0: a page cannot measure its ArrayBuffers. On JSC the figure

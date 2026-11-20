@@ -32,3 +32,5 @@ http methods 35 47 true true
 natives string undefined
 util types function
 fs stat values 36 18
+flags property true true true true
+assigned 5 7

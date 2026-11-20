@@ -13,9 +13,17 @@ and `RealEnvStore` as Bun implements them at revision
 
 ## Engines
 
-`TZ` takes effect only on JSC, whose `Date` and `Intl` use ICU and WTF's override exactly as in
-Bun. QuickJS computes local time with wasi-libc's `localtime_r`, which knows only UTC, and its
-`Intl` is the FormatJS polyfill: `Date` stays in UTC whatever `TZ` says. The Browser engine runs
+`TZ` takes effect only on JSC, whose `Date` uses ICU and WTF's override exactly as in Bun.
+`bunjsc_set_time_zone` answers with the primary IANA ID the date cache resolved for the zone
+now in use (`GMT`, `Etc/UTC` and `Etc/GMT` are `UTC`; `EST5EDT` is `America/New_York`), or null
+when the zone did not apply. JSC's guest uses the FormatJS `Intl` fallback, and
+`bootstrap.js` `applyIntlTimeZone` gives it that resolved ID, never the raw name; a zone the
+fallback's data cannot use keeps the previous one, so `Intl` never throws for `TZ`. The zone a
+process or a worker starts with applies the same way at startup, so a worker's `Date` and `Intl`
+agree.
+
+QuickJS computes local time with wasi-libc's `localtime_r`, which knows only UTC, and its
+`Intl` is the same polyfill: `Date` stays in UTC whatever `TZ` says. The Browser engine runs
 on its host's `Date`, whose zone a page cannot change. Both engines report no settable zone
 (`Engine::set_time_zone` returns `None`), so `TZ` writes only change the variable there.
 
@@ -25,6 +33,9 @@ on its host's `Date`, whose zone a page cannot change. Both engines report no se
   option.
 - Bun writes the proxy variables (`HTTP_PROXY` and the like) back to its native environment for
   `fetch()`'s proxy resolution; bun-wasm's `fetch` does not resolve proxies from the environment.
+- Native Bun's zone is process-wide, so a worker given an `env` with another `TZ` still uses
+  the main thread's zone. A bun-wasm worker is its own guest and starts in the `TZ` of the
+  environment it is given. With the default environment both follow the main thread.
 
 ## Tests
 

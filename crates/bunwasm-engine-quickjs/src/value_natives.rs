@@ -214,10 +214,7 @@ pub(crate) fn value_natives<E: Engine>(
         "setTimeZone",
         Rc::new(|e: &E, args: &[E::Value]| {
             let zone = args.first().cloned().unwrap_or_else(|| e.undefined());
-            Ok(match e.set_time_zone(&zone) {
-                Some(applied) => e.value_from(Val::Bool(applied)),
-                None => e.undefined(),
-            })
+            Ok(e.set_time_zone(&zone).unwrap_or_else(|| e.undefined()))
         }),
     ));
     list

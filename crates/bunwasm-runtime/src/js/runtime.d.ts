@@ -503,10 +503,13 @@ declare namespace BunWasm {
     /** Dotenv text to name/value pairs in file order (util.parseEnv, process.loadEnvFile). */
     parseEnv(content: string): [string, string][];
     /**
-     * process.env.TZ: make `zone` the zone of local time and Intl ("" restores the host's).
-     * Whether it applied; undefined, or absent, where the engine has no settable zone.
+     * process.env.TZ: make `zone` the zone of local time ("" restores the host's). The zone ID
+     * the engine now uses, null when it rejected `zone`, and undefined (or absent) where the
+     * engine has no settable zone.
      */
-    setTimeZone?(zone: string): boolean | undefined;
+    setTimeZone?(zone: string): string | null | undefined;
+    /** The size of the core's linear memory in bytes, where the core runs as wasm32. */
+    linearMemoryBytes?(): number;
     argv(): string[];
     execArgv(): string[];
     execPath(): string;

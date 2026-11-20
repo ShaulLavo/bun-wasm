@@ -78,12 +78,17 @@
   // to a shared environment do not, as in Bun. Names over 31 characters are ignored, as in Bun.
   const envTarget = native.env();
   const workerProcess = Object.hasOwn(envTarget, "BUNWASM_WORKER_INIT");
-  function timeZoneChanged(zone: string | undefined) {
-    if (workerProcess || internal.envFromPeer || !native.setTimeZone) return;
-    if (native.setTimeZone(zone ?? "") === true) internal.setIntlTimeZone?.(zone || undefined);
+  // The engine answers with the zone ID ICU resolved (GMT and Etc/UTC are UTC, EST5EDT is
+  // America/New_York), and the Intl fallback takes that ID rather than the raw name.
+  function applyTimeZone(zone: string | undefined) {
+    const resolved = native.setTimeZone?.(zone ?? "");
+    if (typeof resolved === "string") internal.setIntlTimeZone?.(resolved);
   }
-  // A zone the process started with applies to the Intl fallback as well as to local time.
-  if (typeof envTarget.TZ === "string") timeZoneChanged(envTarget.TZ);
+  function timeZoneChanged(zone: string | undefined) {
+    if (!workerProcess && !internal.envFromPeer) applyTimeZone(zone);
+  }
+  // The zone a process or worker starts with applies to the Intl fallback as well as to local time.
+  if (typeof envTarget.TZ === "string") applyTimeZone(envTarget.TZ);
   function defineError(message: string) {
     return Object.assign(new TypeError(message), { code: "ERR_INVALID_OBJECT_DEFINE_PROPERTY" });
   }
@@ -142,10 +147,14 @@
   }
   hrtime.bigint = () => BigInt(Math.floor(internal.fakeTimers?.elapsedNanoseconds ?? native.nanoseconds()));
 
-  // A guest's resident memory is its linear memory (wasmCapacity), which the engines report
-  // apart from their heap counters. A host engine reports its own figure as rss.
-  function residentBytes(usage: ReturnType<BunWasm.Native["memoryUsage"]>) {
-    return usage.rss ?? usage.wasmCapacity ?? 0;
+  // A guest's resident memory is the core's linear memory, which every engine shares (on the
+  // Browser engine too, whose JS heap is the page's). The core reads its size directly, without
+  // the engine's heap counters; where it cannot, the engine record's figures stand in.
+  function residentBytes(usage?: ReturnType<BunWasm.Native["memoryUsage"]>) {
+    const linear = native.linearMemoryBytes?.();
+    if (typeof linear === "number") return linear;
+    const record = usage ?? native.memoryUsage();
+    return record.rss ?? record.wasmCapacity ?? 0;
   }
   // Node's five counters, as numbers. The engine's own extras stay readable but are not
   // enumerable, so the result compares and prints like Node's and Bun's.
@@ -160,8 +169,17 @@
     }
     return result;
   }
-  memoryUsage.rss = () => residentBytes(native.memoryUsage());
-  let report: object | undefined;
+  memoryUsage.rss = () => residentBytes();
+
+  // Bun's lazily built process properties (PropertyCallback): the first read or write leaves an
+  // ordinary writable data property behind.
+  function lazyData(name: string, build: () => unknown): PropertyDescriptor {
+    const settle = (value: unknown) => {
+      Object.defineProperty(process, name, { value, writable: true, configurable: true, enumerable: true });
+      return value;
+    };
+    return { get: () => settle(build()), set: settle, configurable: true, enumerable: true };
+  }
 
   function validateCursorCallback(callback: unknown): void {
     if (callback === undefined || typeof callback === "function") return;
@@ -393,7 +411,6 @@
     };
   }
   let finalization: ReturnType<typeof createFinalization> | undefined;
-  let allowedFlags: ReadonlySet<string> | undefined;
 
   const [pid, ppid] = native.processIdentity();
   const props = {
@@ -534,8 +551,8 @@
     mainModule: { get: () => internal.getMainModule(), configurable: true, enumerable: false },
     exitCode: { get: () => exitByte, set: setExitCode, configurable: true, enumerable: true },
     finalization: { get: () => finalization ??= createFinalization(), configurable: true, enumerable: false },
-    allowedNodeEnvironmentFlags: { get: () => allowedFlags ??= internal.require("process_allowed_flags"), configurable: true, enumerable: true },
-    report: { get: () => report ??= internal.require("process_report")(process), set(value: object) { report = value; }, configurable: true, enumerable: true },
+    allowedNodeEnvironmentFlags: lazyData("allowedNodeEnvironmentFlags", () => internal.require("process_allowed_flags")),
+    report: lazyData("report", () => internal.require("process_report")(process)),
     _exiting: { value: false, writable: true, configurable: true, enumerable: false },
     [Symbol.toStringTag]: { value: "process", configurable: true },
   });

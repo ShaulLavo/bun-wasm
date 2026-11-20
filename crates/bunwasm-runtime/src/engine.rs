@@ -261,10 +261,10 @@ pub trait Engine: Sized + 'static {
     fn heap_size_after_collection(&self) -> Option<f64> {
         None
     }
-    /// Make `zone` (a string; empty restores the host's zone) the zone of local time and
-    /// `Intl`, for `process.env.TZ`. `None` when the engine has no settable zone; otherwise
-    /// whether the zone applied.
-    fn set_time_zone(&self, _zone: &Self::Value) -> Option<bool> {
+    /// Make `zone` (a string; empty restores the host's zone) the zone of local time, for
+    /// `process.env.TZ`. `None` when the engine has no settable zone; otherwise the zone ID the
+    /// engine resolved and now uses (a string), or null when it rejected `zone`.
+    fn set_time_zone(&self, _zone: &Self::Value) -> Option<Self::Value> {
         None
     }
 }
