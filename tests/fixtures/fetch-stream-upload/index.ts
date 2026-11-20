@@ -152,3 +152,56 @@ for (const status of [303, 307, 308, 302]) {
   console.log("failing body:", outcome);
   server.close();
 }
+
+const failure = (error: any) => JSON.stringify({ name: error?.name, code: error?.code, message: error?.message });
+
+// A streamed body must match the caller's Content-Length: too long or too short rejects.
+for (const [label, length] of [["longer than", "2"], ["shorter than", "5"], ["equal to", "3"]] as const) {
+  const server = await recorder(raw => raw.includes("\r\n\r\n") && raw.length - raw.indexOf("\r\n\r\n") - 4 >= Number(length));
+  const outcome = await fetch(server.url, {
+    method: "POST",
+    headers: { "content-length": length },
+    body: stream(["a", "bc"]),
+    duplex: "half",
+  } as RequestInit).then(async res => `resolved ${await res.text()}`, failure);
+  console.log("body", label, "its Content-Length:", outcome, "wire has the overflow:", server.wire().body.includes("bc") && length === "2");
+  server.close();
+}
+
+// The request's stream stays unlocked and unused until the upload starts.
+{
+  const server = await recorder(raw => raw.endsWith("0\r\n\r\n"));
+  const request = new Request(server.url, { method: "POST", body: stream(["x"]), duplex: "half" } as RequestInit);
+  const pending = fetch(request);
+  const before = [request.body!.locked, request.bodyUsed];
+  await Promise.resolve();
+  const microtask = [request.body!.locked, request.bodyUsed];
+  await (await pending).text();
+  console.log("fetch(request) locks:", JSON.stringify({ before, microtask, after: [request.body!.locked, request.bodyUsed] }));
+  server.close();
+}
+
+// An abort while the upload is open cancels the source without a reason.
+{
+  const server = await recorder(() => false);
+  const controller = new AbortController();
+  const reason = Promise.withResolvers<unknown>();
+  const body = new ReadableStream({
+    start(source) { source.enqueue(encoder.encode("part")); },
+    cancel(value) { reason.resolve(value); },
+  });
+  const result = fetch(server.url, { method: "POST", body, duplex: "half", signal: controller.signal } as RequestInit).catch(error => error);
+  await server.until(raw => raw.includes("part"));
+  controller.abort();
+  console.log("abort:", (await result).name, "cancel reason:", String(await reason.promise));
+  server.close();
+}
+
+// A chunk that is not a string or bytes rejects with Bun's error.
+for (const chunk of [42, { a: 1 }]) {
+  const server = await recorder(raw => raw.includes("\r\n\r\n"));
+  const body = new ReadableStream({ start(source) { source.enqueue(chunk); source.close(); } });
+  const outcome = await fetch(server.url, { method: "POST", body, duplex: "half" } as RequestInit).then(() => "resolved", failure);
+  console.log("chunk", JSON.stringify(chunk), outcome);
+  server.close();
+}

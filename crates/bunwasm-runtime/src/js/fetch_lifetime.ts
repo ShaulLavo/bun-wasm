@@ -58,11 +58,15 @@
 
   // A body Bun streams to the server: a ReadableStream with no bytes in memory behind it.
   // Bytes already in memory (a string, a Blob, an untouched stream over either) are sent
-  // whole, with a Content-Length.
-  function uploadReader(req: BodyRequest): ReadableStreamDefaultReader<unknown> | null {
+  // whole, with a Content-Length. The stream stays unlocked and the body unused until the
+  // upload starts (lockUpload), as in Bun.
+  function uploadStream(req: BodyRequest): ReadableStream<unknown> | null {
     if (req.method === "GET" || req.method === "HEAD" || !req._stream || req._body !== null) return null;
     if (req.bodyUsed) throw new TypeError("Body already used");
-    const reader = req._stream.getReader();
+    return req._stream;
+  }
+  function lockUpload(req: BodyRequest, stream: ReadableStream<unknown>): ReadableStreamDefaultReader<unknown> {
+    const reader = stream.getReader();
     req._bodyUsed = true;
     return reader;
   }
@@ -108,24 +112,28 @@
     });
   }
 
-  const chunkBytes = (chunk: unknown): Uint8Array => typeof chunk === "string" ? internal.native.utf8Encode(chunk) : internal.toUint8(chunk);
+  // Bun's error for a body chunk that is neither a string nor bytes.
+  function chunkBytes(chunk: unknown): Uint8Array {
+    if (typeof chunk === "string") return internal.native.utf8Encode(chunk);
+    if (ArrayBuffer.isView(chunk) || chunk instanceof ArrayBuffer || typeof SharedArrayBuffer === "function" && chunk instanceof SharedArrayBuffer) return internal.toUint8(chunk);
+    throw Object.assign(new TypeError("write() expects a string, ArrayBufferView, or ArrayBuffer"), { code: "ERR_INVALID_ARG_TYPE" });
+  }
 
   // Streams the body to a fetch_stream handle, one write per chunk; empty chunks send
   // nothing. The returned promise rejects only when the body stream fails, after the
-  // request is closed.
+  // request is closed. Bun cancels the source without a reason.
   async function sendBody(options: UploadOptions): Promise<void> {
-    const cancel = (reason: unknown) => { void options.reader.cancel(reason).catch(() => {}); };
+    const cancel = () => { void options.reader.cancel(undefined).catch(() => {}); };
     // An abort also ends a read the stream has not answered yet.
-    const onAbort = () => cancel(options.signal?.reason);
-    options.signal?.addEventListener("abort", onAbort, { once: true });
+    options.signal?.addEventListener("abort", cancel, { once: true });
     try {
       for (;;) {
         const next = await options.reader.read();
-        if (options.signal?.aborted) { cancel(options.signal.reason); return; }
+        if (options.signal?.aborted) { cancel(); return; }
         if (next.done) { options.end(options.handle); return; }
         const bytes = chunkBytes(next.value);
         if (bytes.length && !(await writeAll(options, bytes))) {
-          cancel(options.signal?.aborted ? options.signal.reason : undefined);
+          cancel();
           return;
         }
       }
@@ -133,7 +141,7 @@
       options.close();
       throw error;
     } finally {
-      options.signal?.removeEventListener("abort", onAbort);
+      options.signal?.removeEventListener("abort", cancel);
     }
   }
 
@@ -166,5 +174,5 @@
   function waitHead(options: HeadOptions): Promise<Head> {
     return new Promise((resolve, reject) => startHead(options, resolve, reject));
   }
-  return { requestBody, waitHead, uploadReader, sendBody };
+  return { requestBody, waitHead, uploadStream, lockUpload, sendBody };
 })

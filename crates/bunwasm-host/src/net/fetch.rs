@@ -162,6 +162,29 @@ struct UploadQueue {
     /// The request no longer takes body bytes (sent, failed or replaced by a redirect).
     closed: bool,
     waker: Option<Waker>,
+    /// The caller's Content-Length, which the body must match exactly.
+    declared: Option<u64>,
+    /// Bytes handed to hyper so far.
+    sent: u64,
+    /// Why the body failed, reported instead of hyper's error for it.
+    error: Option<ErrorInfo>,
+}
+
+impl UploadQueue {
+    /// Bun's error when a streamed body does not match its Content-Length: the
+    /// count is the bytes produced up to the chunk that overflowed, or all of them.
+    fn mismatch(&mut self, declared: u64) -> io::Error {
+        let message = format!(
+            "Request body of {} bytes does not match the Content-Length of {declared}",
+            self.sent
+        );
+        self.error = Some(ErrorInfo::new(
+            "Error",
+            message.clone(),
+            Some("ERR_HTTP_CONTENT_LENGTH_MISMATCH"),
+        ));
+        io::Error::other(message)
+    }
 }
 
 /// `write` reports AGAIN while this much of the request body is unsent.
@@ -200,14 +223,25 @@ impl hyper::body::Body for UploadBody {
         if state.aborted {
             return Poll::Ready(Some(Err(io::ErrorKind::ConnectionAborted.into())));
         }
-        if let Some(chunk) = state.upload.chunks.pop_front() {
-            state.upload.queued -= chunk.len();
+        let upload = &mut state.upload;
+        if let Some(chunk) = upload.chunks.pop_front() {
+            upload.queued -= chunk.len();
+            upload.sent += chunk.len() as u64;
+            // A chunk past the declared length is not sent: the request fails.
+            let overflow = upload.declared.filter(|&declared| upload.sent > declared);
+            let frame = match overflow {
+                Some(declared) => Err(upload.mismatch(declared)),
+                None => Ok(hyper::body::Frame::data(chunk)),
+            };
             drop(state);
             // The guest may be waiting to write more.
             self.notify.bump();
-            return Poll::Ready(Some(Ok(hyper::body::Frame::data(chunk))));
+            return Poll::Ready(Some(frame));
         }
-        if state.upload.ended {
+        if upload.ended {
+            if let Some(declared) = upload.declared.filter(|&declared| upload.sent < declared) {
+                return Poll::Ready(Some(Err(upload.mismatch(declared))));
+            }
             return Poll::Ready(None);
         }
         state.upload.waker = Some(cx.waker().clone());
@@ -336,8 +370,13 @@ impl Fetch {
             state: Mutex::new(State::default()),
             drained: Condvar::new(),
         });
-        if !matches!(body, RequestBody::Stream) {
-            shared.state.lock().unwrap().upload.closed = true;
+        {
+            let mut state = shared.state.lock().unwrap();
+            state.upload.closed = !matches!(body, RequestBody::Stream);
+            state.upload.declared = headers
+                .get(http_header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok()?.trim().parse().ok())
+                .filter(|_| streaming);
         }
         let request = Request {
             method,
@@ -483,7 +522,10 @@ impl Job {
             Ok(response) => response,
             Err(SendError::Aborted) => return,
             Err(SendError::Network(error)) => {
-                self.finish_head(Err(fetch_error(&error, &url, &host)));
+                let upload = self.shared.state.lock().unwrap().upload.error.take();
+                self.finish_head(Err(
+                    upload.unwrap_or_else(|| fetch_error(&error, &url, &host))
+                ));
                 return;
             }
             Err(SendError::Policy(error)) => {

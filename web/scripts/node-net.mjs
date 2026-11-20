@@ -132,6 +132,8 @@ export function createNodeNet({ net, http, https, zlib }) {
     const req = client.request(url, { method: request.method, headers, agent: freshConnection ? false : undefined, maxHeaderSize: 512 * 1024 });
     h.request = req;
     req.on("error", (err) => {
+      // The request was dropped for a reason already recorded (a body length mismatch).
+      if (h.error) return;
       if (!freshConnection && !h.closed && !h.head && req.reusedSocket && err.code === "ECONNRESET" && ["GET", "HEAD"].includes(request.method)) {
         send(h, url, request, redirects, true);
         return;
@@ -248,8 +250,25 @@ export function createNodeNet({ net, http, https, zlib }) {
     // Node writes no header for an empty body.
     if (!streaming && payload?.length === 0 && !headers.some(([name]) => name.toLowerCase() === "content-length")) headers.push(["content-length", "0"]);
     const request = { method, headers, body: payload, redirect: meta.redirect || "follow", streaming };
+    // A streamed body must match the caller's Content-Length exactly.
+    const declared = headers.find(([name]) => name.toLowerCase() === "content-length")?.[1];
+    h.declared = streaming && declared !== undefined && /^\s*\d+\s*$/.test(declared) ? Number(declared) : null;
+    h.sent = 0;
     send(h, url, request, 0);
     return id;
+  }
+
+  // Bun's error when a streamed body does not match its Content-Length; the request is dropped.
+  function lengthMismatch(h) {
+    h.error = {
+      name: "Error",
+      code: "ERR_HTTP_CONTENT_LENGTH_MISMATCH",
+      message: `Request body of ${h.sent} bytes does not match the Content-Length of ${h.declared}`,
+    };
+    h.uploadClosed = true;
+    h.request?.destroy();
+    news();
+    return ERROR;
   }
 
   /** Request body bytes for a fetch_stream handle, as crates/bunwasm-host does. */
@@ -258,6 +277,9 @@ export function createNodeNet({ net, http, https, zlib }) {
     if (h.uploadClosed || h.error || !h.request || h.request.destroyed) return ERROR;
     if (bytes.length === 0) return 0;
     if (h.request.writableLength >= MAX_QUEUED) return AGAIN;
+    h.sent += bytes.length;
+    // A chunk past the declared length is not sent.
+    if (h.declared !== null && h.sent > h.declared) return lengthMismatch(h);
     h.request.write(new Uint8Array(bytes));
     return bytes.length;
   }
@@ -303,7 +325,9 @@ export function createNodeNet({ net, http, https, zlib }) {
     hostShutdown(handle) {
       const h = handles.get(handle);
       if (h?.kind === "fetch" && h.streaming) {
-        if (!h.uploadClosed && h.request && !h.request.writableEnded) h.request.end();
+        if (h.uploadClosed || !h.request || h.request.writableEnded) return 0;
+        if (h.declared !== null && h.sent < h.declared) lengthMismatch(h);
+        else h.request.end();
         return 0;
       }
       if (h?.kind !== "conn") return BADF;

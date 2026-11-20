@@ -422,6 +422,43 @@ fn fetch_stream_keeps_the_callers_content_length() {
 }
 
 #[test]
+fn fetch_stream_rejects_a_body_that_does_not_match_its_content_length() {
+    // (declared length, bytes produced when the request fails, whether "bc" may reach the wire)
+    for (declared, produced, sends_all) in [(2, 3, false), (5, 3, true)] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut recorded = Vec::new();
+            let _ = stream.read_to_end(&mut recorded);
+            recorded
+        });
+        let mut net = Net::new();
+        let meta = format!(
+            r#"{{"method":"POST","url":"http://127.0.0.1:{port}/","headers":[["content-length","{declared}"]]}}"#
+        );
+        let handle = net.fetch_stream(meta.as_bytes());
+        assert_eq!(net.write(handle, b"a"), 1);
+        assert_eq!(net.write(handle, b"bc"), 2);
+        assert_eq!(net.shutdown(handle), 0);
+        assert_eq!(wait(&mut net, |net| fetch_head_ready(net, handle)), ERROR);
+        let error = json(net.error(handle));
+        assert_eq!(error["name"], "Error", "{error}");
+        assert_eq!(error["code"], "ERR_HTTP_CONTENT_LENGTH_MISMATCH", "{error}");
+        assert_eq!(
+            error["message"],
+            format!(
+                "Request body of {produced} bytes does not match the Content-Length of {declared}"
+            )
+        );
+        assert_eq!(net.close(handle), 0);
+        // The chunk past the declared length is never sent.
+        let recorded = String::from_utf8_lossy(&server.join().unwrap()).into_owned();
+        assert!(sends_all || !recorded.contains("bc"), "{recorded}");
+    }
+}
+
+#[test]
 fn fetch_stream_reports_backpressure_until_the_body_is_sent() {
     // Nobody reads the upload, so the queue fills and `write` asks the guest to wait.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

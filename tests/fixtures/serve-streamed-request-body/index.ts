@@ -92,6 +92,50 @@ for (const read of ["textStream", "text"] as const) {
   console.log(read, "after disconnect:", JSON.stringify(await done.promise));
 }
 
+// A response sent before the body ended aborts the body; the rest of it is read and dropped,
+// and the connection then serves the next request.
+{
+  const lateRead = Promise.withResolvers<string>();
+  await using server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      if (new URL(req.url).pathname === "/next") return new Response("next");
+      setTimeout(() => req.text().then(text => lateRead.resolve(`text ${text.length}`), error => lateRead.resolve(`${error.name}: ${error.message}`)), 100);
+      return new Response("early");
+    },
+  });
+  const client = await connect(server.port!);
+  client.socket.write("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n\r\nhello");
+  console.log("late read after the response:", await lateRead.promise);
+  client.socket.write("worldGET /next HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+  await client.closed;
+  const received = client.received();
+  console.log("responses on the connection:", received.match(/HTTP\/1\.1 \d+/g)?.join(", "), "bodies:", received.includes("\r\n\r\nearly"), received.endsWith("\r\n\r\nnext"));
+}
+
+// A malformed chunked body gets 400 Bad Request, then the connection closes.
+for (const bad of ["zz\r\n", "3\r\nabcX"]) {
+  const handler = Promise.withResolvers<string>();
+  await using server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      try {
+        await req.text();
+        handler.resolve("read");
+      } catch (error) {
+        handler.resolve((error as Error).name);
+      }
+      return new Response("handled");
+    },
+  });
+  const client = await connect(server.port!);
+  client.socket.write("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n");
+  await Bun.sleep(20);
+  client.socket.write(bad);
+  await client.closed;
+  console.log("malformed chunk", JSON.stringify(bad), JSON.stringify(client.received()), "handler read:", await handler.promise);
+}
+
 // fetch() to Bun.serve with a streamed body, end to end.
 {
   await using server = Bun.serve({

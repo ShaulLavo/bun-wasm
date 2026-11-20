@@ -10,11 +10,12 @@ and its size formatter `bun_core::fmt::size` at revision
 fields included. They now print what Bun prints: `Response (<size>) {` with `ok`, `url`,
 `status`, `statusText`, `headers`, `redirected` and `bodyUsed` (a Request: `method`, `url`
 and `headers`), then what backs the body: `Blob (<size>)`, with its type when it has one,
-or the body stream once something took it through the `body` getter. Headers list common
-names first, as Bun's header storage does.
+for bytes in memory that no stream holds yet, or the body stream otherwise: a body built
+from a stream (even `blob.stream()` or another body's `.body`) or handed out through the
+`body` getter. Headers list common names first, as Bun's header storage does.
 
-The size is the body's byte length while the bytes are in memory, `0 KB` once the body is
-used or handed out as a stream, and for a fetched Response the Content-Length until the
+The size is the body's byte length while the bytes are in memory with no stream, `0 KB`
+for a used body or a stream, and for a fetched Response the Content-Length until the
 body is used (`body.test.ts`, "a fetch() Response still reports the Content-Length after
 .body created the stream"). Native Bun 1.4.4 still prints `0 KB` after `.body` on a
 fetched Response; the suite revision expects the Content-Length, and this follows the

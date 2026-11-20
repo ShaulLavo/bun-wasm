@@ -86,6 +86,9 @@ nested: {
     Blob (2 bytes)
   },
 }
+from blob.stream(): Response (0 KB) { true
+request from blob.stream(): Request (0 KB) {
+from another body: Response (0 KB) {
 [object Response] [object Request]
 fetched: Response (10 bytes) {
   ok: true,

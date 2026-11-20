@@ -126,17 +126,15 @@
     });
     const lifetime = internal.require("fetch_lifetime");
     // A host with fetch_stream gets a stream body as it is produced; others take it whole.
-    const reader = caps.fetch_stream ? lifetime.uploadReader(req) : null;
-    // A streamed request starts on the next turn, as Bun's does, so an abort in this turn
-    // sends nothing; a buffered one waits for its whole body anyway.
-    const bytes = reader ? await new Promise(resolve => internal.realTimers.setImmediate(() => resolve(null))) : await requestBody(req, signal);
-    if (signal && signal.aborted) {
-      if (reader) void reader.cancel(signal.reason).catch(() => {});
-      throw signal.reason;
-    }
+    const upload = caps.fetch_stream ? lifetime.uploadStream(req) : null;
+    // A streamed request starts on the next turn, as Bun's does: an abort in this turn sends
+    // nothing, and until then the stream stays unlocked. A buffered one waits for its body.
+    const bytes = upload ? await new Promise(resolve => internal.realTimers.setImmediate(() => resolve(null))) : await requestBody(req, signal);
+    if (signal && signal.aborted) throw signal.reason;
+    const reader = upload ? lifetime.lockUpload(req, upload) : null;
     const handle = reader ? native.hostFetchStream(meta) : native.hostFetch(meta, bytes);
     if (handle < 0) {
-      if (reader) void reader.cancel().catch(() => {});
+      if (reader) void reader.cancel(undefined).catch(() => {});
       throw hostError(0, "fetch failed");
     }
     let closed = false;
@@ -152,11 +150,11 @@
     let head;
     if (reader) {
       // The body stream's own failure rejects the fetch; the request is closed by then.
-      const upload = lifetime.sendBody({
+      const sending = lifetime.sendBody({
         handle, reader, signal, write: native.hostWrite, end: native.hostShutdown, close: closeHandle,
         add: addWaiter, remove: removeWaiter, again: AGAIN,
       });
-      const failed = upload.then(() => new Promise(() => {}));
+      const failed = sending.then(() => new Promise(() => {}));
       headPromise.catch(() => {});
       failed.catch(() => {});
       head = await Promise.race([headPromise, failed]);
@@ -478,7 +476,8 @@
       const chunked = (header(head.headers, "transfer-encoding") || "").toLowerCase().includes("chunked");
       const length = Number(header(head.headers, "content-length") || 0);
       if (!chunked && !(length > 0)) return null;
-      const body = new (internal.require("serve_request_body").RequestUpload)(chunked, length);
+      const onDemand = () => { if (native.wake) native.wake(0); };
+      const body = new (internal.require("serve_request_body").RequestUpload)(chunked, length, onDemand);
       return Object.assign(head, { body: body.stream, streamed: true, chunked, trailers: [], length: buffer.length, upload: body, initial: buffer.subarray(head.headLength) });
     }
     function feedUpload(bytes) {
@@ -486,8 +485,10 @@
       try {
         rest = upload.push(bytes);
       } catch {
+        // A malformed chunked body: Bun answers 400 unless the response already went out.
         failUpload();
-        conn.destroy();
+        if (busy) conn.write(encoder.encode("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"));
+        conn.end();
         return;
       }
       if (rest === null) return;
@@ -545,6 +546,9 @@
           }
           busy = false;
           conn.busy = false;
+          // The response went out before the body ended: as in Bun, the body is aborted and
+          // the rest of it is read and dropped, so the connection can serve the next request.
+          upload?.abort();
           if (stillOpen === false || !keepAlive || conn.serverClosing) {
             conn.end();
             return;
@@ -568,6 +572,8 @@
     };
     conn.onError = failUpload;
     if (streamBodies) {
+      // Stop reading while the handler leaves a streamed body unread.
+      conn.canRead = () => !upload || upload.wantsMore();
       const onClose = conn.onClose;
       conn.onClose = () => {
         failUpload();

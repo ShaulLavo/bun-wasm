@@ -1159,8 +1159,8 @@
   // The Content-Length of Responses that came over the network: their size until the body
   // is used, even after the body getter handed out the stream.
   const networkSizes = new WeakMap();
-  // Bodies whose getter handed out a stream. Until then Bun keeps bytes in memory (or on
-  // their way from the network) as a Blob, and shows them as one.
+  // Bodies whose getter handed out a stream. Until then Bun keeps a fetched body, on its
+  // way from the network, as a Blob, and shows it as one.
   const exposedBodies = new WeakSet();
 
   // Bun's size format (bun_core::fmt::size), used for Request and Response sizes.
@@ -1178,17 +1178,17 @@
   internal.fetchInspectView = function fetchInspectView(value) {
     const isResponse = value instanceof Response;
     if (!isResponse && !(value instanceof Request)) return null;
+    // In memory with no stream yet: a Blob of its bytes. Built from a stream, even one over a
+    // Blob's bytes, or handed out as one: the stream, of unknown size. A fetched body is a
+    // Blob of its Content-Length until something takes the stream.
     const used = value.bodyUsed;
     const network = networkSizes.get(value);
-    const bytes = value._body ?? (value._stream && bodyStreams.bytes(value._stream)) ?? null;
-    const exposed = exposedBodies.has(value);
-    const blobSize = network ?? bytes?.length;
-    let size = used ? 0 : network ?? (exposed ? 0 : blobSize ?? 0);
+    const streamed = value._stream && (network === undefined || exposedBodies.has(value));
     let body = null;
     if (used || (value._body === null && !value._stream)) body = null;
-    else if (!exposed && blobSize !== undefined) body = { kind: "blob", size: bunSize(blobSize), type: network === undefined ? value._bodyType : null };
-    else if (value._stream) body = { kind: "stream", stream: value._stream };
-    size = bunSize(size);
+    else if (streamed) body = { kind: "stream", stream: value._stream };
+    else body = { kind: "blob", size: bunSize(network ?? value._body.length), type: network === undefined ? value._bodyType : null };
+    const size = bunSize(used ? 0 : network ?? (streamed ? 0 : value._body?.length ?? 0));
     const headers = Object.entries(value.headers.toJSON()).flatMap(([name, entry]) => Array.isArray(entry) ? entry.map(item => [name, item]) : [[name, entry]]);
     const fields = isResponse
       ? [["ok", value.ok], ["url", value.url], ["status", value.status], ["statusText", value.statusText], ["headers", headers], ["redirected", value.redirected], ["bodyUsed", used]]

@@ -19,7 +19,14 @@ their order.
 When the client goes away before the body ends (end of stream, a connection error, or the
 server destroying the connection), the body stream errors with a `DOMException` named
 `AbortError` ("The connection was closed."), as Bun aborts it with its connection-closed
-reason, and reads in the handler reject with it. A malformed chunked body closes the
-connection. `node:http` servers are unchanged.
+reason, and reads in the handler reject with it. A malformed chunked body gets Bun's
+`400 Bad Request` (`Connection: close`) and the connection closes; the handler's read fails
+with the same `AbortError`. `node:http` servers are unchanged.
+
+When the response goes out before the body ended, Bun aborts the body: a later read gets
+the `AbortError`. The rest of the body is still read and dropped, so the connection serves
+the next keep-alive request. While the handler leaves the body unread, the connection stops
+reading once 256 KiB wait in the stream (the existing `canRead` hook), so an upload the
+handler never reads is not held in memory.
 
 The `serve-streamed-request-body` fixture compares this with native Bun.

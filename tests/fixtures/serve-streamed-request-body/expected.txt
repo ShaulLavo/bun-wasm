@@ -5,4 +5,8 @@ POST /a "abcde" | GET /b ""
 responses: #1 #2
 textStream after disconnect: {"name":"AbortError","received":"hello"}
 text after disconnect: {"name":"AbortError","received":""}
+late read after the response: AbortError: The connection was closed.
+responses on the connection: HTTP/1.1 200, HTTP/1.1 200 bodies: true true
+malformed chunk "zz\r\n" "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n" handler read: AbortError
+malformed chunk "3\r\nabcX" "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n" handler read: AbortError
 fetch to Bun.serve: chunked: one two three

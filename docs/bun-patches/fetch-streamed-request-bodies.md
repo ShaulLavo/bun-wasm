@@ -26,9 +26,16 @@ finishes, and a stream that waits on the server (a duplex exchange) can complete
 - Without a caller Content-Length the body goes out chunked, one chunk per non-empty
   read. An empty read sends nothing, so it can no longer look like the `0\r\n\r\n`
   terminator. With a caller Content-Length the bytes go out raw.
+- A body longer or shorter than the caller's Content-Length rejects the fetch with Bun's
+  `Error` `ERR_HTTP_CONTENT_LENGTH_MISMATCH` ("Request body of N bytes does not match the
+  Content-Length of L", N counting up to the chunk that overflowed). The overflowing chunk
+  is never sent; both hosts count what the guest writes.
 - The request starts on the next event-loop turn, so an abort in the same turn sends
-  nothing. An abort later cancels the source with the abort reason. A source that fails
-  rejects the fetch with its error.
+  nothing, and until then the request's stream stays unlocked and its body unused, as in
+  Bun. An abort later cancels the source without a reason, as Bun does. A source that
+  fails rejects the fetch with its error; a chunk that is neither a string nor bytes
+  rejects it with Bun's `TypeError` `ERR_INVALID_ARG_TYPE` ("write() expects a string,
+  ArrayBufferView, or ArrayBuffer").
 - `write` reports backpressure while 256 KiB is unsent (Node host: 1 MiB, its connection
   limit).
 - Only a 303 redirect is followed with a streamed body, as in Bun (Fetch's
