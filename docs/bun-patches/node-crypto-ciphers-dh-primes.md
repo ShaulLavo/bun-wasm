@@ -49,6 +49,16 @@ Differences from native Bun, all deliberate:
   returns for that case; the fixtures pass both.
 - `crypto.diffieHellman` covers the key types the KeyObject layer holds: EC P-256,
   P-384 and X25519. DH and X448 KeyObjects do not exist here.
+- `getDiffieHellman` does not run `DH_check` on the constant RFC 3526 primes. With
+  generator 2, BoringSSL reports `DH_NOT_SUITABLE_GENERATOR` (8) for every group, the
+  `verifyError` native Bun 1.4.4 prints for modp5 to modp18, and the check took up to
+  14 seconds for modp16 in the guest.
+
+The FinalizationRegistry that frees unfinished ciphers uses each cipher's state, not
+the cipher, as its unregister token: QuickJS never collects an object that is its own
+token. `bun:internal-for-testing` exposes `liveCipherCount()` for the
+`node-crypto-cipher-finalization` fixture, which drops 1000 unfinished ciphers and
+checks that their contexts are released.
 
 The `node-crypto-ciphers`, `node-crypto-dh` and `node-crypto-primes` fixtures are
 original test code. They check NIST SP 800-38A, the GCM specification's test cases 2, 4

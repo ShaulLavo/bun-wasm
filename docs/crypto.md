@@ -162,5 +162,7 @@ lists the Bun sources the argument checks follow and the deliberate differences.
 
 The `node-crypto-ciphers`, `node-crypto-dh` and `node-crypto-primes` fixtures compare
 NIST SP 800-38A, GCM, RFC 5903 and RFC 7748 vectors and each argument error with
-native Bun. Construction checks a DH group's prime as Bun does, which takes about a
-second for the 1536-bit group in the guest.
+native Bun. A DiffieHellman built from a caller's prime checks it as Bun does, which
+takes about a second for a 1536-bit prime in the guest; the built-in RFC 3526 groups
+report Bun's `verifyError` of 8 without the check. `node-crypto-cipher-finalization`
+checks that ciphers dropped before `final()` release their contexts when collected.
