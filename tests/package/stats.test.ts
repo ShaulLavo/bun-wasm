@@ -10,8 +10,11 @@ const source = await Bun.file(new URL("../../crates/bunwasm-runtime/src/js/node_
 const optionsSource = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url), "utf8");
 const optionsFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${optionsSource}`));
 const factory = new Function(`return (${source})`)();
+// Every stat result is a native metadata record that node_fs.js turns into Stats. The
+// stub answers each path, link and descriptor stat with the record under test.
+let record: Record<string, number> = {};
 const { fs } = factory({
-  native: {},
+  native: { stat: () => record, fstat: () => record },
   require(name: string) {
     if (name === "buffer") return { Buffer };
     if (name === "fs_watch") return () => ({});
@@ -25,7 +28,19 @@ for (const [name, kind] of [
   ["isBlockDevice", 0o060000], ["isCharacterDevice", 0o020000], ["isFIFO", 0o010000], ["isSocket", 0o140000],
 ] as const) {
   test(`production Stats preserves ${name} with permission bits`, () => {
-    const stat = new fs.Stats({ mode: kind | 0o640, atimeMs: 0, mtimeMs: 0, ctimeMs: 0, birthtimeMs: 0 });
-    for (const predicate of predicates) expect(stat[predicate]()).toBe(predicate === name);
+    record = { mode: kind | 0o640, atimeMs: 0, mtimeMs: 0, ctimeMs: 0, birthtimeMs: 0 };
+    // Bun's public constructor is positional: (dev, mode, nlink, ...).
+    const stats = [fs.statSync("/entry"), fs.lstatSync("/entry"), fs.fstatSync(3), new fs.Stats(0, kind | 0o640)];
+    for (const stat of stats) {
+      expect(stat).toBeInstanceOf(fs.Stats);
+      for (const predicate of predicates) expect(stat[predicate]()).toBe(predicate === name);
+    }
   });
 }
+
+test("a single object passed to the Stats constructor is its dev field, as in Bun 1.4.4", () => {
+  const stat = new fs.Stats({ mode: 0o100640 });
+  expect(typeof stat.dev).toBe("object");
+  expect(stat.mode).toBeUndefined();
+  expect(stat.isFile()).toBe(false);
+});

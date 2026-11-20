@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fs-stats-constructor",
+  "engines": ["quickjs", "jsc", "browser"]
+}

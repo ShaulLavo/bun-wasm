@@ -200,7 +200,17 @@ fn metadata_record(
             record.push(&format!("{name}Ns"), value.to_string());
             continue;
         }
-        record.push(&format!("{name}Ms"), value as f64 / 1_000_000.0);
+        // Bun's Stat.rs `to_time_ms_f64`: seconds and nanoseconds convert separately. One
+        // f64 division of the whole nanosecond count (above 2^53 for any time after April
+        // 1970) turns 1700000000.25 s into 1700000000249.9998 ms.
+        let (seconds, nanos) = (
+            value.div_euclid(1_000_000_000),
+            value.rem_euclid(1_000_000_000),
+        );
+        record.push(
+            &format!("{name}Ms"),
+            seconds as f64 * 1000.0 + nanos as f64 / 1_000_000.0,
+        );
     }
     record.into()
 }
@@ -847,7 +857,22 @@ fn install_fs(t: &mut Table) {
             .map_err(|e| io_error(e, "ftruncate", Some(path)))?;
         ok()
     });
+    t.add("utimes", |a| {
+        let follow = !a.bool(5);
+        let syscall = if follow { "utime" } else { "lutime" };
+        let path = required_path(a.str(0)?, syscall)?;
+        file_times::set_path(path, &file_times::times(&a, 1)?, follow)
+            .map_err(|e| io_error(e, syscall, Some(path)))?;
+        ok()
+    });
+    t.add("futimes", |a| {
+        file_times::set_descriptor(a.i32(0)?, &file_times::times(&a, 1)?)
+            .map_err(|e| io_error(e, "futime", None))?;
+        ok()
+    });
 }
+
+mod file_times;
 
 #[cfg(target_os = "wasi")]
 pub(crate) fn symlink(target: &str, path: &str) -> io::Result<()> {
@@ -1874,6 +1899,32 @@ mod builtin_tests {
         assert_eq!(metadata_integer(value, false), Val::Num(value as f64));
         assert_eq!(metadata_integer(u64::MAX, true), Val::BigUint(u64::MAX));
         assert_eq!(nanos(Ok(UNIX_EPOCH - Duration::new(1, 1))), -1_000_000_001);
+    }
+
+    #[test]
+    fn filesystem_millisecond_times_keep_their_fraction() {
+        let record = metadata_record(
+            [("dev", 0); 8],
+            [("blksize", 0); 2],
+            [
+                ("atime", 1_700_000_000_250_000_000),
+                ("mtime", -1_500_000_000),
+                ("ctime", 0),
+                ("birthtime", 0),
+            ],
+            false,
+        );
+        let Val::Object(fields) = record else {
+            panic!("expected a record")
+        };
+        let field = |name: &str| {
+            fields
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(field("atimeMs"), Some(Val::Num(1_700_000_000_250.0)));
+        assert_eq!(field("mtimeMs"), Some(Val::Num(-1_500.0)));
     }
 
     #[test]
