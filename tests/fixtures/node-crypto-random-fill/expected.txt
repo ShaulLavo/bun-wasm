@@ -30,6 +30,9 @@ hkdfSync length 0 throws Error undefined HKDF derivation failed
 hkdfSync length 0 throws Error undefined HKDF derivation failed
 hkdf length 0 1 Error HKDF derivation failed false
 hkdfSync length 1 9c
+hkdfSync sha3-256 7c0ef77d81593534
+hkdfSync SHA3-384 1a93888f0e34c22d
+hkdfSync sha3-512 bdc190fe6b334e28
 getRandomValues Float16Array throws TypeMismatchError 17 The data argument must be an integer-type TypedArray
 getRandomValues Float32Array throws TypeMismatchError 17 The data argument must be an integer-type TypedArray
 getRandomValues DataView throws TypeMismatchError 17 The data argument must be an integer-type TypedArray

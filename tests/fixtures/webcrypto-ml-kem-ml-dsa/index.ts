@@ -65,6 +65,14 @@ await report("import jwk wrong alg", () => subtle.importKey("jwk", { ...dsaJwk, 
 await report("import jwk no alg", () => subtle.importKey("jwk", { ...dsaJwk, alg: undefined }, "ML-DSA-44", true, ["sign"]));
 await report("import jwk wrong kty", () => subtle.importKey("jwk", { ...dsaJwk, kty: "OKP" }, "ML-DSA-44", true, ["sign"]));
 await report("import jwk other pub", async () => subtle.importKey("jwk", { ...dsaJwk, pub: (await subtle.exportKey("jwk", await subtle.getPublicKey(await subtle.importKey("raw-seed", new Uint8Array(32), "ML-DSA-44", true, ["sign"]), []))).pub }, "ML-DSA-44", true, ["sign"]));
+await report("verify context 256", () => subtle.verify({ name: "ML-DSA-44", context: new Uint8Array(256) } as never, dsaPublic, new Uint8Array(2420), data));
+for (const use of ["sig", "enc"]) {
+  await report(`import jwk use ${use}`, () => subtle.importKey("jwk", { ...dsaJwk, use }, "ML-DSA-44", true, ["sign"]));
+}
+await report("import jwk use enc without usages", async () => subtle.importKey("jwk", { ...(await subtle.exportKey("jwk", dsaPublic)), use: "enc", key_ops: [] }, "ML-DSA-44", true, []));
+await report("import jwk duplicate key_ops", () => subtle.importKey("jwk", { ...dsaJwk, key_ops: ["sign", "sign"] }, "ML-DSA-44", true, ["sign"]));
+await report("import jwk key_ops mismatch", () => subtle.importKey("jwk", { ...dsaJwk, key_ops: ["verify"] }, "ML-DSA-44", true, ["sign"]));
+await report("import jwk ext false", () => subtle.importKey("jwk", { ...dsaJwk, ext: false }, "ML-DSA-44", true, ["sign"]));
 await report("import pkcs8 verify usage", async () => subtle.importKey("pkcs8", await subtle.exportKey("pkcs8", dsa), "ML-DSA-44", true, ["verify"]));
 await report("import seed no usages", () => subtle.importKey("raw-seed", new Uint8Array(32), "ML-DSA-44", true, []));
 await report("generate encrypt usage", () => subtle.generateKey("ML-DSA-65", true, ["encrypt"]));
@@ -99,6 +107,18 @@ await report("encapsulate with private", () => subtle.encapsulateBits("ML-KEM-76
 await report("decapsulate bad ciphertext", () => subtle.decapsulateBits("ML-KEM-768", kemPair.privateKey, new Uint8Array(10)));
 await report("encapsulateKey without usage", () => subtle.encapsulateKey("ML-KEM-768", kemPair.publicKey, "HKDF", false, ["deriveBits"]));
 await report("encapsulate wrong set", () => subtle.encapsulateBits("ML-KEM-1024", kemPair.publicKey));
+// A public key whose coefficients are not reduced is refused at import, as in Bun.
+const unreduced = new Uint8Array(1184).fill(0xff);
+await report("import unreduced raw-public", () => subtle.importKey("raw-public", unreduced, "ML-KEM-768", true, ["encapsulateBits"] as never));
+await report("import unreduced spki", async () => {
+  const spki = new Uint8Array(await subtle.exportKey("spki", kemPair.publicKey));
+  spki.set(unreduced, spki.length - unreduced.length);
+  return subtle.importKey("spki", spki, "ML-KEM-768", true, ["encapsulateBits"] as never);
+});
+await report("import unreduced jwk", async () => subtle.importKey("jwk", { ...(await subtle.exportKey("jwk", kemPair.publicKey)), pub: Buffer.from(unreduced).toString("base64url") }, "ML-KEM-768", true, ["encapsulateBits"] as never));
+for (const use of ["enc", "sig"]) {
+  await report(`import ML-KEM jwk use ${use}`, async () => subtle.importKey("jwk", { ...(await subtle.exportKey("jwk", kemPair.publicKey)), use }, "ML-KEM-768", true, ["encapsulateBits"] as never));
+}
 await report("ML-KEM-512", () => subtle.generateKey("ML-KEM-512", true, ["encapsulateBits"] as never));
 await report("generate sign usage", () => subtle.generateKey("ML-KEM-768", true, ["sign"]));
 console.log("lengths", subtle.encapsulateBits.length, subtle.encapsulateKey.length, subtle.decapsulateBits.length, subtle.decapsulateKey.length);

@@ -89,6 +89,9 @@ await new Promise<void>(resolve =>
   }),
 );
 show("hkdfSync length 1", () => Buffer.from(crypto.hkdfSync("sha256", "key", "salt", "info", 1)).toString("hex"));
+for (const digest of ["sha3-256", "SHA3-384", "sha3-512"]) {
+  show(`hkdfSync ${digest}`, () => Buffer.from(crypto.hkdfSync(digest, "key", "salt", "info", 8)).toString("hex"));
+}
 
 for (const make of [() => new Float16Array(4), () => new Float32Array(4), () => new DataView(new ArrayBuffer(4)), () => new Uint16Array(4)]) {
   const view = make();

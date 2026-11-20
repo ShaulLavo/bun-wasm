@@ -31,7 +31,10 @@ show("challenge md5", () => Certificate.exportChallenge(md5));
 show("challenge invalid", () => Certificate.exportChallenge("not a spkac"));
 show("public key", () => Certificate.exportPublicKey(sha256));
 show("public key invalid", () => Certificate.exportPublicKey("not a spkac"));
-show("verify 42", () => Certificate.verifySpkac(42 as never));
+for (const blank of ["", "   ", "\n"]) {
+  show(`blank ${JSON.stringify(blank)}`, () => [Certificate.verifySpkac(Buffer.from(blank)), Certificate.exportPublicKey(blank), Certificate.exportChallenge(blank)]);
+}
+show("verify 42",() => Certificate.verifySpkac(42 as never));
 const pair = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
 for (const key of [pair.publicKey, pair.privateKey, crypto.createSecretKey(Buffer.from("secret"))]) {
   for (const method of ["verifySpkac", "exportPublicKey", "exportChallenge"] as const) {

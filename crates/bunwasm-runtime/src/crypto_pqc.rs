@@ -84,6 +84,15 @@ impl Algorithm {
         }
         Ok(public)
     }
+    /// An imported public key, after BoringSSL parses it as this parameter set's encoding.
+    fn check_public(self, public: &[u8]) -> Result<()> {
+        // SAFETY: the adapter only reads `public`.
+        let ok = unsafe { bunwasm_pqc_check_public(self.kind, public.as_ptr(), public.len()) };
+        if public.len() != self.public_size() || ok != 1 {
+            return Err("DataError");
+        }
+        Ok(())
+    }
     fn alg_id(self) -> Result<pkcs8::ObjectIdentifier> {
         pkcs8::ObjectIdentifier::new(self.oid).map_err(|_| "OperationError")
     }
@@ -129,9 +138,7 @@ pub(crate) fn generate(a: Algorithm) -> Result<J> {
 pub(crate) fn import(a: Algorithm, format: &str, b: &[u8], parts: Option<&Parts>) -> Result<J> {
     match format {
         "raw-public" => {
-            if b.len() != a.public_size() {
-                return Err("DataError");
-            }
+            a.check_public(b)?;
             Ok(jwk(a, b, None))
         }
         "raw-seed" => Ok(jwk(a, &a.public_from_seed(b)?, Some(b))),
@@ -141,9 +148,10 @@ pub(crate) fn import(a: Algorithm, format: &str, b: &[u8], parts: Option<&Parts>
                 return Err(crate::crypto::KEY_TYPE);
             }
             let public = info.subject_public_key.as_bytes().ok_or("DataError")?;
-            if info.algorithm.parameters.is_some() || public.len() != a.public_size() {
+            if info.algorithm.parameters.is_some() {
                 return Err("DataError");
             }
+            a.check_public(public)?;
             Ok(jwk(a, public, None))
         }
         "pkcs8" => {
@@ -166,9 +174,7 @@ pub(crate) fn import(a: Algorithm, format: &str, b: &[u8], parts: Option<&Parts>
         "jwk" => {
             let parts = parts.ok_or("DataError")?;
             let Some(seed) = parts.seed.as_deref() else {
-                if parts.public.len() != a.public_size() {
-                    return Err("DataError");
-                }
+                a.check_public(&parts.public)?;
                 return Ok(jwk(a, &parts.public, None));
             };
             // Bun refuses a private JWK whose "pub" is not the seed's public key.
@@ -291,6 +297,28 @@ pub(crate) fn decapsulate(a: Algorithm, k: &Parts, ct: &[u8]) -> Result<Vec<u8>>
     Ok(ss)
 }
 
+/// Whether an SPKAC (base64, trailing whitespace ignored) is signed by its own key.
+pub(crate) fn spkac_verify(input: &[u8]) -> bool {
+    // SAFETY: the adapter reads `input`; with no output buffer it only verifies.
+    unsafe { bunwasm_spkac(0, input.as_ptr(), input.len(), std::ptr::null_mut(), 0) == 1 }
+}
+
+/// An SPKAC's public key as PEM (mode 1) or its challenge (mode 2); empty when the
+/// SPKAC does not decode.
+pub(crate) fn spkac_export(mode: i32, input: &[u8]) -> Vec<u8> {
+    // SAFETY: with a null buffer the adapter only measures.
+    let size = unsafe { bunwasm_spkac(mode, input.as_ptr(), input.len(), std::ptr::null_mut(), 0) };
+    let mut out = vec![0; size];
+    // SAFETY: `out` holds `size` bytes, the length the first call reported.
+    if size > 0
+        && unsafe { bunwasm_spkac(mode, input.as_ptr(), input.len(), out.as_mut_ptr(), size) }
+            != size
+    {
+        out.clear();
+    }
+    out
+}
+
 /// ChaCha20-Poly1305 with a 16-byte tag after the ciphertext.
 pub(crate) fn chacha20_poly1305(
     key: &[u8],
@@ -390,6 +418,60 @@ mod tests {
             seed: k.seed.clone(),
         };
         assert_eq!(import(a, "jwk", &[], Some(&mixed)).err(), Some("DataError"));
+    }
+
+    #[test]
+    fn an_ml_kem_public_key_with_unreduced_coefficients_is_refused() {
+        for name in ["ML-KEM-768", "ML-KEM-1024"] {
+            let a = algorithm(name).unwrap();
+            let bad = vec![0xff; a.public_size()];
+            assert_eq!(
+                import(a, "raw-public", &bad, None).err(),
+                Some("DataError"),
+                "{name}"
+            );
+            let spki = export(
+                a,
+                "spki",
+                &Parts {
+                    public: bad.clone(),
+                    seed: None,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                import(a, "spki", &spki, None).err(),
+                Some("DataError"),
+                "{name}"
+            );
+            let parts = Parts {
+                public: bad,
+                seed: None,
+            };
+            assert_eq!(
+                import(a, "jwk", &[], Some(&parts)).err(),
+                Some("DataError"),
+                "{name}"
+            );
+        }
+    }
+
+    // `openssl spkac -digest sha256` over a synthetic RSA key, as in the node-crypto-spkac fixture.
+    const SPKAC: &str = "MIIBTTCBtzCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAyp5F2hG0aC9aYsH4phY73Pu/uXiU8Uw8Sw8OR/8B9c88T1Yr4shwjMAI34M5ToPoMiJb7WUzYmdAepSsLuEdiI+E4Y7PYn/9I+p1j3dCwbSMkseuvHbHBdSpp6D+7/QURBR9n2tHLA+M6HSSA9jRqdy7QyUcrjTtmvWYdr4WVU8CAwEAARYTdGhpcyBpcyBhIGNoYWxsZW5nZTANBgkqhkiG9w0BAQsFAAOBgQCY9SOFe6fgJ/vGaSzcspw55nuwwKtAnrevqkxw5MBFCmDICIX+L3KgcROjq7ElmwjBkZ238fi+o6klhzwMLAa5Su3kVhxuy0nWPCCobhI68lbXiKz3IDHYl0Sb6Brg/2h4bbTNNqHFlrIVEwZYih4ZunqD2zmGC/26vbhc1SCcgA==";
+
+    #[test]
+    fn spkac_decodes_and_empty_or_blank_input_is_refused() {
+        // Exact-size buffers, so a read past the input is a sanitizer error.
+        for input in ["", "   ", "\n", " \t\r\n"] {
+            let bytes = input.as_bytes().to_vec().into_boxed_slice();
+            assert!(!spkac_verify(&bytes), "{input:?}");
+            assert!(spkac_export(1, &bytes).is_empty(), "{input:?}");
+            assert!(spkac_export(2, &bytes).is_empty(), "{input:?}");
+        }
+        let spkac = format!("{SPKAC}\n").into_bytes().into_boxed_slice();
+        assert!(spkac_verify(&spkac));
+        assert_eq!(spkac_export(2, &spkac), b"this is a challenge");
+        assert!(spkac_export(1, &spkac).starts_with(b"-----BEGIN PUBLIC KEY-----\n"));
     }
 
     #[test]

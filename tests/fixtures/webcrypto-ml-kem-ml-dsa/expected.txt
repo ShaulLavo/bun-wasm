@@ -34,6 +34,13 @@ import jwk wrong alg throws DataError 0 JWK "alg" Parameter and algorithm name m
 import jwk no alg throws DataError 0 Invalid keyData
 import jwk wrong kty throws DataError 0 Invalid JWK "kty" Parameter
 import jwk other pub throws DataError 0 Invalid keyData
+verify context 256 throws OperationError 0 The operation failed for an operation-specific reason
+import jwk use sig {}
+import jwk use enc throws DataError 0 Invalid JWK "use" Parameter
+import jwk use enc without usages {}
+import jwk duplicate key_ops throws DataError 0 Duplicate key operation
+import jwk key_ops mismatch throws DataError 0 Key operations and usage mismatch
+import jwk ext false throws DataError 0 JWK "ext" Parameter and extractable mismatch
 import pkcs8 verify usage throws SyntaxError  Unsupported key usage for a ML-DSA-44 key
 import seed no usages throws SyntaxError  Usages cannot be empty when importing a private key.
 generate encrypt usage throws SyntaxError  Unsupported key usage for an ML-DSA-65 key
@@ -55,6 +62,11 @@ encapsulate with private throws InvalidAccessError 15 encapsulationKey does not 
 decapsulate bad ciphertext throws OperationError 0 The operation failed for an operation-specific reason
 encapsulateKey without usage throws InvalidAccessError 15 encapsulationKey does not have encapsulateKey usage
 encapsulate wrong set throws InvalidAccessError 15 key algorithm mismatch
+import unreduced raw-public throws DataError 0 Invalid keyData
+import unreduced spki throws DataError 0 Invalid keyData
+import unreduced jwk throws DataError 0 Invalid keyData
+import ML-KEM jwk use enc {}
+import ML-KEM jwk use sig throws DataError 0 Invalid JWK "use" Parameter
 ML-KEM-512 throws NotSupportedError 9 Unrecognized algorithm name
 generate sign usage throws SyntaxError  Unsupported key usage for an ML-KEM-768 key
 lengths 2 5 3 6

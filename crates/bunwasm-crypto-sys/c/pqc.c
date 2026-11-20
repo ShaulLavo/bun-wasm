@@ -69,6 +69,34 @@ int bunwasm_pqc_public(int kind, const uint8_t *seed, size_t seed_len, uint8_t *
   }
 }
 
+// 1 when `pub` parses as an encoded public key of this parameter set: ML-KEM checks
+// that every coefficient is reduced, as Bun's import does.
+#define PARSE_PUBLIC(NAME)                                                           \
+  static int NAME##_check_public(const uint8_t *pub_bytes, size_t pub_len) {        \
+    struct NAME##_public_key *pub = alloc_key(sizeof(*pub));                         \
+    CBS cbs;                                                                         \
+    CBS_init(&cbs, pub_bytes, pub_len);                                              \
+    int ok = pub && NAME##_parse_public_key(pub, &cbs) && CBS_len(&cbs) == 0;        \
+    free_key(pub, sizeof(*pub));                                                     \
+    return ok;                                                                       \
+  }
+PARSE_PUBLIC(MLKEM768)
+PARSE_PUBLIC(MLKEM1024)
+PARSE_PUBLIC(MLDSA44)
+PARSE_PUBLIC(MLDSA65)
+PARSE_PUBLIC(MLDSA87)
+
+int bunwasm_pqc_check_public(int kind, const uint8_t *pub, size_t pub_len) {
+  switch (kind) {
+    case MLKEM768: return MLKEM768_check_public(pub, pub_len);
+    case MLKEM1024: return MLKEM1024_check_public(pub, pub_len);
+    case MLDSA44: return MLDSA44_check_public(pub, pub_len);
+    case MLDSA65: return MLDSA65_check_public(pub, pub_len);
+    case MLDSA87: return MLDSA87_check_public(pub, pub_len);
+    default: return 0;
+  }
+}
+
 #define KEM_OPS(NAME)                                                                \
   static int NAME##_encap_bytes(const uint8_t *pub_bytes, size_t pub_len,           \
                                 uint8_t *ct, uint8_t *ss) {                          \

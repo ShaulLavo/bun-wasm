@@ -12,6 +12,8 @@ unsafe extern "C" {
         out: *mut u8,
         capacity: usize,
     ) -> usize;
+    /// 1 when `public` parses as this parameter set's encoded public key.
+    pub fn bunwasm_pqc_check_public(kind: i32, public: *const u8, public_len: usize) -> i32;
     /// `what`: 0 public key, 1 seed, 2 ciphertext (ML-KEM) or signature (ML-DSA).
     pub fn bunwasm_pqc_size(kind: i32, what: i32) -> usize;
     pub fn bunwasm_pqc_public(

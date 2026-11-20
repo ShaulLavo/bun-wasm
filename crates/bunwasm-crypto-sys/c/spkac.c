@@ -11,6 +11,9 @@
 
 static NETSCAPE_SPKI *decode_spkac(const char *data, size_t len) {
   while (len > 0 && isspace((unsigned char)data[len - 1])) len--;
+  // NETSCAPE_SPKI_b64_decode takes a length of 0 to mean a NUL-terminated string, and
+  // this input is not terminated.
+  if (len == 0) return NULL;
   return NETSCAPE_SPKI_b64_decode(data, (ossl_ssize_t)len);
 }
 

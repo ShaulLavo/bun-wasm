@@ -922,7 +922,9 @@ declare namespace CryptoKeys {
     // The digest is checked first, as in Node's hkdf validation.
     function hkdfDigest(digest: unknown): string {
       if (typeof digest !== "string") throw args().argType("digest", "string", digest);
-      return hash(digest);
+      // BoringSSL's names for SHA-3, which the HKDF backend also takes.
+      const sha3 = /^(?:sha3|SHA3)-(256|384|512)$/.exec(digest);
+      return sha3 ? `SHA3-${sha3[1]}` : hash(digest);
     }
     function hkdfSync(digest: string, ikm: CryptoKeys.Input | KeyObject, salt: CryptoKeys.Input, info: CryptoKeys.Input, keylen: number): ArrayBuffer {
       const name = hkdfDigest(digest);

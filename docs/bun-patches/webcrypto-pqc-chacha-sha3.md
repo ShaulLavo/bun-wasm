@@ -15,12 +15,15 @@ Native Bun implements these in C++ over BoringSSL. The adapters follow Bun at re
   messages.
 - The ML-DSA and ML-KEM algorithms: SPKI and PKCS#8 with the parameter set's OID and no
   parameters, PKCS#8 holding only the seed (`[0]` IMPLICIT OCTET STRING), `raw-public`,
-  `raw-seed`, AKP JWK (`kty`, `alg`, `pub`, `priv`), the optional ML-DSA `context`, and
-  each import, export and usage message ("Unable to export ML-DSA-44 private key using
-  raw-public format", "JWK \"alg\" Parameter and algorithm name mismatch", and so on).
-  ML-KEM-512 is not supported, as in Bun.
+  `raw-seed`, AKP JWK (`kty`, `use`, `key_ops`, `ext`, `alg`, `pub`, `priv`, checked in
+  Node's order), the optional ML-DSA `context` (at most 255 bytes, for sign and verify),
+  a public key parsed by BoringSSL at import (so an ML-KEM key with unreduced
+  coefficients is refused), and each import, export and usage message ("Unable to export
+  ML-DSA-44 private key using raw-public format", "JWK \"alg\" Parameter and algorithm
+  name mismatch", and so on). ML-KEM-512 is not supported, as in Bun.
 - SHA3-256, SHA3-384 and SHA3-512 in digest, HMAC (whose default length is the hash's
-  block size), RSA, ECDSA, PBKDF2 and HKDF, with no JWK `alg` because JOSE defines none.
+  block size), RSA, ECDSA, PBKDF2, HKDF and node:crypto's `hkdf`, with no JWK `alg`
+  because JOSE defines none.
 - CryptoKey structured cloning: a clone is a key over the same material.
 - Node's `lib/internal/crypto/random.js` (through Bun's `src/js/node/crypto.ts`) for
   `randomFill` and `randomFillSync`: offset and size in elements of the typed array,

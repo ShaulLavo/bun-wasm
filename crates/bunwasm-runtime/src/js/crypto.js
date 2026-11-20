@@ -363,14 +363,18 @@
     if (isAkp(a.name)) return "AKP";
     return ["ECDSA", "ECDH"].includes(a.name) ? "EC" : "OKP";
   }
-  // An AKP JWK (ML-DSA, ML-KEM): Bun names a wrong "kty" and "alg"; the rest is "Invalid keyData".
+  // An AKP JWK (ML-DSA, ML-KEM), checked in Node's order with Bun's messages; a missing
+  // "alg" and bad key material are "Invalid keyData".
   function validateAkpJwk(k, a, extractable, usages) {
     const reject = (message = "Invalid keyData") => fail("DataError", message);
     if (k.kty !== "AKP") reject('Invalid JWK "kty" Parameter');
+    if (k.use !== undefined && usages.length && k.use !== (a.name.startsWith("ML-DSA") ? "sig" : "enc"))
+      reject('Invalid JWK "use" Parameter');
+    if (k.key_ops !== undefined && new Set(k.key_ops).size !== k.key_ops.length) reject("Duplicate key operation");
+    if (k.key_ops !== undefined && usages.some((u) => !k.key_ops.includes(u))) reject("Key operations and usage mismatch");
+    if (k.ext !== undefined && !k.ext && extractable) reject('JWK "ext" Parameter and extractable mismatch');
     if (k.alg === undefined) reject();
     if (k.alg !== a.name) reject('JWK "alg" Parameter and algorithm name mismatch');
-    if (k.key_ops !== undefined && (new Set(k.key_ops).size !== k.key_ops.length || usages.some((u) => !k.key_ops.includes(u)))) reject();
-    if (k.ext !== undefined && !k.ext && extractable) reject();
     for (const field of ["pub", "priv"]) {
       if (k[field] !== undefined && (typeof k[field] !== "string" || !/^[A-Za-z0-9_-]*$/.test(k[field]))) reject();
     }
@@ -552,7 +556,11 @@
     a = algorithm(a);
     const r = use(key, a, op);
     const out = operationAlgorithm(a, r);
-    if (isAkp(a.name)) out.context = a.context === undefined ? "" : encode(a.context);
+    if (isAkp(a.name)) {
+      // FIPS 204 caps the context at 255 bytes; Bun fails both sign and verify past it.
+      if (a.context !== undefined && buffer(a.context).length > 255) fail("OperationError");
+      out.context = a.context === undefined ? "" : encode(a.context);
+    }
     const result = backend(op, out, {
       key: r.key,
       data: encode(data),
