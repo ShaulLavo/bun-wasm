@@ -23,7 +23,7 @@ console.log("key", JSON.stringify(key.algorithm), key.type, key.extractable, JSO
 const sealed = await subtle.encrypt({ name: algorithm, iv, additionalData }, key, text);
 console.log("sealed", sealed.byteLength, hex(sealed).slice(0, 32), hex(sealed).slice(-32));
 console.log("opened", new TextDecoder().decode(await subtle.decrypt({ name: algorithm, iv, additionalData, tagLength: 128 }, key, sealed)).slice(0, 20));
-const tampered = new Uint8Array(sealed);
+const tampered = new Uint8Array(sealed.slice(0));
 tampered[0] ^= 1;
 await report("tampered", () => subtle.decrypt({ name: algorithm, iv, additionalData }, key, tampered));
 await report("short", () => subtle.decrypt({ name: algorithm, iv }, key, new Uint8Array(5)));

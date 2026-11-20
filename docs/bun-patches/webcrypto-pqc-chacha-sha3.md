@@ -57,8 +57,6 @@ Differences from native Bun, all deliberate:
   and "both" forms report "Invalid keyData".
 - Keys do not cross to a Worker through `postMessage`: each worker has its own key
   records. Same-thread `structuredClone` works.
-- Native Bun 1.4.4 fails to decrypt with a structured clone of a ChaCha20-Poly1305 key
-  when additional data was used; clones here decrypt.
 
 The `webcrypto-chacha20-poly1305` (RFC 8439 section 2.8.2 vector), `webcrypto-ml-kem-ml-dsa`
 (fixed seeds), `webcrypto-sha3` (FIPS 202 vectors), `node-crypto-random-fill` and `node-crypto-spkac`
