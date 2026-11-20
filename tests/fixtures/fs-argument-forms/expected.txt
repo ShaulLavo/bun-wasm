@@ -1,0 +1,76 @@
+read(fd, cb) null 15 16384 bun bun bun bun
+read(fd, options, cb) null 3 true "\u0000bun\u0000\u0000\u0000\u0000"
+read(fd, buffer, options, cb) null 3 true "\u0000\u0000bun\u0000\u0000\u0000"
+promisify(read) bytesRead,buffer 15 true
+promisify(readv) bytesRead,buffers 7 true
+readSync("not a buffer", -1) TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received type string ('not a buffer')
+read("not a buffer", -1) TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received type string ('not a buffer')
+readSync(123, "bad") TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received type number (123)
+read(123, "bad") TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received type number (123)
+readSync(null, -1) TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received null
+read(null, -1) TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received null
+readSync({}, 1.5) TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received an instance of Object
+read({}, 1.5) TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received an instance of Object
+readSync([1,2,3], -1) TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received an instance of Array
+read([1,2,3], -1) TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received an instance of Array
+readSync(fd, 'x', { offset: -1 }) TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be an instance of Buffer, TypedArray, or DataView. Received type string ('x')
+readSync offset -1 RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be >= 0 && <= 9007199254740991. Received -1
+readSync offset 'bad' TypeError ERR_INVALID_ARG_TYPE The "offset" argument must be of type number. Received type string ('bad')
+writeSync(Buffer, byteLength + 1) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 5. Received 6
+writeSync(Uint8Array, byteLength + 1) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 3. Received 4
+writeSync(Uint16Array, byteLength + 1) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 4. Received 5
+writeSync(DataView, byteLength + 1) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 3. Received 4
+writeSync(Uint8Array, byteLength + 1) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 0. Received 1
+writeSync(hello, 6, undefined) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 5. Received 6
+writeSync(hello, 6, null) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 5. Received 6
+writeSync(hello, 6, "5") RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 5. Received 6
+writeSync(hello, 6, undefined, 0) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 5. Received 6
+writeSync(hello, { offset: 6 }) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 5. Received 6
+write(hello, 6, cb) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 5. Received 6
+write(hello, 6, undefined, undefined, cb) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 5. Received 6
+write(hello, { offset: 6 }, cb) RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 5. Received 6
+writeSync(hello, 5) ok 0
+writeSync(hello, 2) ok 3
+write(hello, 5, cb) null 0 true
+write({ length: 3 }, 0, 'hex', cb) TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object
+writeSync({ length: 3 }, 0, 'hex') TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object
+promisify(write) bytesWritten,buffer 3 bun
+promisify(writev) bytesWritten,buffers 2 true
+handle.write(hello, 6) rejected RangeError ERR_OUT_OF_RANGE The value of "offset" is out of range. It must be <= 5. Received 6
+handle.write(hello, 5) resolved 0
+handle.write({ length: 3 }, 0, 'hex') rejected TypeError ERR_INVALID_ARG_TYPE The "buffer" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object
+writeSync ["abc",0,"utf16le"] 6 97,0,98,0,99,0
+writeSync ["abc",null,"ucs2"] 6 97,0,98,0,99,0
+writeSync ["abc",null,"utf16le"] 6 97,0,98,0,99,0
+writeSync ["61626364",0,"hex"] 4 97,98,99,100
+writeSync ["aGk=",null,"base64"] 2 104,105
+writeSync ["ÿ",0,"latin1"] 1 255
+writeSync ["é",0,"buffer"] 2 195,169
+writeSync ["aé中",0,"buffer"] 6 97,195,169,228,184,173
+writeSync ["ab","utf16le"] 2 97,98
+writeSync ["abc",0] 3 97,98,99
+writeSync ["abc"] 3 97,98,99
+exists(path) TypeError ERR_INVALID_ARG_TYPE The "cb" argument must be of type function. Received undefined
+exists callback true false
+promisify(exists) true false
+close(fd) ok undefined
+truncateSync(p, null) TypeError ERR_INVALID_ARG_TYPE The "len" argument must be of type number. Received null
+promises.truncate(p, null) rejected TypeError ERR_INVALID_ARG_TYPE The "len" argument must be of type number. Received null
+ftruncateSync(fd, null) TypeError ERR_INVALID_ARG_TYPE The "len" argument must be of type number. Received null
+after truncation attempts bun bun bun bun
+openSync with a String mode TypeError ERR_INVALID_ARG_TYPE The "mode" argument must be of type number. Received an instance of String
+chmodSync with a String mode TypeError ERR_INVALID_ARG_TYPE The "mode" argument must be of type number. Received an instance of String
+chmodSync with mode 'x' TypeError ERR_INVALID_ARG_VALUE The argument 'mode' must be a 32-bit unsigned integer or an octal string. Received 'x'
+mkdirSync recursive string "lalala" TypeError ERR_INVALID_ARG_TYPE The "recursive" property must be of type boolean, got string
+mkdirSync recursive string "" TypeError ERR_INVALID_ARG_TYPE The "recursive" property must be of type boolean, got string
+mkdirSync recursive number 1 TypeError ERR_INVALID_ARG_TYPE The "recursive" property must be of type boolean, got number
+mkdirSync recursive object {} TypeError ERR_INVALID_ARG_TYPE The "recursive" property must be of type boolean, got object
+mkdirSync recursive object [] TypeError ERR_INVALID_ARG_TYPE The "recursive" property must be of type boolean, got array
+mkdirSync recursive object null TypeError ERR_INVALID_ARG_TYPE The "recursive" property must be of type boolean, got object
+mkdirSync recursive function undefined TypeError ERR_INVALID_ARG_TYPE The "recursive" property must be of type boolean, got function
+mkdirSync recursive symbol TypeError ERR_INVALID_ARG_TYPE The "recursive" property must be of type boolean, got symbol
+cp(a, b) TypeError ERR_INVALID_ARG_TYPE The "cb" argument must be of type function. Received undefined
+new ReadStream(path, function) ok object
+new ReadStream(path, {}) ok object
+promises getter function true true
+misnamed functions []
