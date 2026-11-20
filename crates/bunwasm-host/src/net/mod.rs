@@ -196,6 +196,19 @@ impl Net {
         if let Err(error) = self.require_handle() {
             return self.fail(error);
         }
+        let body = fetch::Upload::Bytes(body.to_vec());
+        match fetch::Fetch::start(&self.clients, meta, body, self.notify.clone()) {
+            Ok(request) => self.insert(Handle::Fetch(request)),
+            Err(error) => self.fail(error),
+        }
+    }
+
+    /// A request whose body the guest writes to the handle, ending it with `shutdown`.
+    pub fn fetch_stream(&mut self, meta: &[u8]) -> i32 {
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
+        let body = fetch::Upload::Stream;
         match fetch::Fetch::start(&self.clients, meta, body, self.notify.clone()) {
             Ok(request) => self.insert(Handle::Fetch(request)),
             Err(error) => self.fail(error),
@@ -237,6 +250,7 @@ impl Net {
     pub fn write(&mut self, handle: i32, data: &[u8]) -> i32 {
         match self.handles.get(&handle) {
             Some(Handle::Conn(conn)) => conn.write(data),
+            Some(Handle::Fetch(request)) => request.write(data),
             _ => BADF,
         }
     }
@@ -294,6 +308,7 @@ impl Net {
                 conn.shutdown();
                 0
             }
+            Some(Handle::Fetch(request)) => request.end_body(),
             _ => BADF,
         }
     }

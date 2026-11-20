@@ -2312,10 +2312,11 @@
    * { timeout, done }, never rejects. Uses a done callback when the function
    * declares one.
    */
-  function invoke(fn, args, usesDone, timeout, slot = running(), context = undefined) {
+  function invoke(fn, args, usesDone, timeout, slot = running(), context = undefined, hook = false) {
     return new Promise((resolve) => {
       let timer = null;
       const invocation = matcherSupport.pending();
+      invocation.hook = hook;
       const finish = (result) => invocation.complete(result, finalize, usesDone);
       const finalize = (result) => {
         if (invocation.settled) return;
@@ -2366,7 +2367,7 @@
 
   function invokeHook(hook, slot) {
     const timeout = hook.timeout === undefined ? options.timeout : hook.timeout;
-    return invoke(hook.fn, [], hook.fn.length > 0, timeout, slot, hook.context);
+    return invoke(hook.fn, [], hook.fn.length > 0, timeout, slot, hook.context, true);
   }
 
   async function runHooks(hooks, slot) {
@@ -2883,20 +2884,30 @@
     options.namePattern = new RegExp(source);
   }
 
-  // Errors thrown outside any awaited test code (timers, stray promises).
+  // Errors thrown outside any awaited test code (timers, stray promises). Like Bun's runner,
+  // take them before the program's own 'uncaughtException', 'uncaughtExceptionMonitor' and
+  // 'unhandledRejection' listeners, which never run under `bun test`.
   function installErrorHandlers() {
-    const process = globalThis.process;
     const onError = (error) => {
       const invocation = running().invocation;
       if (invocation) invocation.fail(error);
       else reportUnhandledError(error);
     };
-    process.on("uncaughtException", onError);
-    process.on("unhandledRejection", (error, promise) => {
+    internal.testUncaught = onError;
+    internal.testRejection = (error, promise) => {
       const invocation = running().invocation;
-      if (invocation) invocation.unhandled(error, promise);
-      onError(error);
-    });
+      // One left unhandled by a hook is an error between tests in Bun; the hook and its
+      // tests go on.
+      if (!invocation || invocation.hook) return reportUnhandledError(error);
+      invocation.unhandled(error, promise);
+      invocation.fail(error);
+    };
+  }
+
+  // Bun runs one event loop turn after it loads a test file: its immediates and the timers
+  // already due run, and rejections left unhandled are reported, before the first test.
+  function loopTurn() {
+    return new Promise(resolve => internal.realTimers.setImmediate(resolve));
   }
 
   async function runFile(abs, cwd, last) {
@@ -2987,7 +2998,13 @@
     const file = { root: createScope("", null, "run", false, options.concurrent), hasOnly: false, path: abs, snapshotCounts: new Map(), inlineWrites: new Map() };
     file.scope = file.root;
     startFileHeader(relativePath(cwd, abs));
-    const collected = await collectFile(file, cwd);
+    const errorsBefore = summary.errors;
+    let collected = await collectFile(file, cwd);
+    if (collected) {
+      await loopTurn();
+      // An unhandled error while the file loaded fails it: Bun runs none of its tests.
+      collected = summary.errors === errorsBefore;
+    }
     await setupPreloads();
     try {
       if (collected && preloadSetup !== "stopped") await runScope(file.root, file);

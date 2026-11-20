@@ -387,8 +387,9 @@
     if (body.kind === "env") {
       if (typeof body.key !== "string" || body.value !== undefined && typeof body.value !== "string") throw new Error("Invalid environment update");
       applyingEnv = true;
+      internal.envFromPeer = true;
       try { if (body.value === undefined) delete process.env[body.key]; else process.env[body.key] = body.value; }
-      finally { applyingEnv = false; }
+      finally { applyingEnv = false; internal.envFromPeer = false; }
       return;
     }
     if (body.kind === "broadcast" && typeof body.name === "string") {
@@ -1612,6 +1613,8 @@
     exports.workerData = initial[0]; parentPort = initial[2]; exports.parentPort = parentPort;
     for (const pair of initial[1]) if (Array.isArray(pair) && pair.length === 2) environmentData.set(pair[0], pair[1]);
     process.argv = config.argv; process.execArgv = config.execArgv;
+    // Node has these debugger and profiler stubs only on the main thread, and so does Bun.
+    for (const name of ["_debugEnd", "_debugProcess", "_startProfilerIdleNotifier", "_stopProfilerIdleNotifier"]) delete (process as unknown as Record<string, unknown>)[name];
     if (config.web) internal.require("bun").isMainThread = false;
     root({ kind: "member", path: route, group: envGroup });
     internal.workerExit = code => {

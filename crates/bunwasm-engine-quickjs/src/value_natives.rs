@@ -190,9 +190,14 @@ pub(crate) fn value_natives<E: Engine>(
     ));
     list.push((
         "gc",
+        // The size the collection measured where the engine keeps one; JS falls back to the
+        // memory record otherwise.
         Rc::new(|e: &E, _: &[E::Value]| {
             e.gc();
-            Ok(e.undefined())
+            Ok(match e.heap_size_after_collection() {
+                Some(bytes) => e.value_from(Val::Num(bytes)),
+                None => e.undefined(),
+            })
         }),
     ));
     list.push((
@@ -203,6 +208,13 @@ pub(crate) fn value_natives<E: Engine>(
         "objectTypeCounts",
         Rc::new(|e: &E, _: &[E::Value]| {
             Ok(e.object_type_counts().unwrap_or_else(|| e.undefined()))
+        }),
+    ));
+    list.push((
+        "setTimeZone",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            let zone = args.first().cloned().unwrap_or_else(|| e.undefined());
+            Ok(e.set_time_zone(&zone).unwrap_or_else(|| e.undefined()))
         }),
     ));
     list

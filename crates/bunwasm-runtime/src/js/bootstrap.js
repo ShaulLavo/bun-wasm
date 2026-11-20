@@ -1159,6 +1159,12 @@
   internal.reportHotError = printFatal;
 
   internal.handleUncaught = function handleUncaught(err) {
+    // Bun's test runner reports uncaught exceptions itself; the program's own listeners and
+    // monitor never see them.
+    if (internal.testUncaught) {
+      internal.testUncaught(err);
+      return true;
+    }
     if (dispatchUncaught(err, false)) return true;
     fatalExit("uncaught-exception", 1, err);
     return false;
@@ -1225,6 +1231,12 @@
   const reportedRejections = new WeakSet();
 
   internal.handleRejection = function handleRejection(reason, promise) {
+    // Bun's test runner reports unhandled rejections itself (VirtualMachine's
+    // onUnhandledRejection for `bun test`); the program's own listeners never see them.
+    if (internal.testRejection) {
+      internal.testRejection(reason, promise);
+      return true;
+    }
     if (listenerCount("unhandledRejection") > 0) {
       if (promise !== null && typeof promise === "object") reportedRejections.add(promise);
       try {
@@ -1319,6 +1331,31 @@
   internal.require("readable_stream_methods"); // Bun's ReadableStream text/json/bytes/blob
   internal.require("stream_inspect"); // Bun's util.inspect.custom for the web stream classes
   internal.require("crypto")(defineGlobal);
+  // process.env.TZ, once the engine applied it to local time: the Intl fallback's default zone
+  // follows the zone ID the engine resolved. A zone the fallback's data cannot use keeps the
+  // previous one; Intl never throws for it. Set before process, which applies the zone the
+  // process started with.
+  let fallbackIntl = null;
+  let intlTimeZone;
+  function applyIntlTimeZone() {
+    const DateTimeFormat = fallbackIntl.DateTimeFormat;
+    const previous = new DateTimeFormat().resolvedOptions().timeZone;
+    try {
+      DateTimeFormat.__setDefaultTimeZone(intlTimeZone);
+      if (typeof new DateTimeFormat().resolvedOptions().timeZone === "string") return;
+    } catch {
+      // Unknown to the fallback's zone data.
+    }
+    DateTimeFormat.__setDefaultTimeZone(previous);
+  }
+  internal.setIntlTimeZone = zone => {
+    intlTimeZone = zone;
+    if (fallbackIntl) applyIntlTimeZone();
+  };
+  internal.fallbackIntlLoaded = intl => {
+    fallbackIntl = intl;
+    if (intlTimeZone !== undefined) applyIntlTimeZone();
+  };
   defineGlobal("process", internal.require("process"));
   // Node's setupWarningHandler: the default 'warning' listener and the warning flags.
   internal.require("process_warning");
@@ -1343,6 +1380,7 @@
     defineLazyGlobal("Intl", () => {
       const intl = internal.require("intl");
       internal.fakeTimers?.installIntl(intl);
+      internal.fallbackIntlLoaded?.(intl);
       return intl;
     });
   }

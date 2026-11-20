@@ -95,10 +95,13 @@ reads as `UNSUPPORTED`. The playground and sandbox use this by default (`web/src
 | 15   | `lookup_head` | `(handle, buf_ptr, buf_cap) -> len`                              |
 | 16   | `listen_path` | `(path_ptr, path_len, flags) -> handle`                         |
 | 17   | `connect_path` | `(path_ptr, path_len) -> handle`                              |
+| 18   | `fetch_stream` | `(meta_ptr, meta_len) -> handle`                              |
 
-Version 2 has 18 slots. Slots 0 through 13 are unchanged. Hosts that do not
+Version 2 has 19 slots. Slots 0 through 13 are unchanged. Hosts that do not
 provide lookup leave slots 14 and 15 at 0; the runtime then keeps its existing
-unsupported-capability rejection. There is no version-skew bridge.
+unsupported-capability rejection. Hosts that do not provide `fetch_stream`
+leave slot 18 at 0; the runtime then reads a stream request body to its end and
+sends it with `fetch`. There is no version-skew bridge.
 The Bun-specific child slots (`spawn`, `child_wait`, `child_pipe`,
 `child_kill`) and the signal slot no longer exist; slots after `peer_addr` were renumbered when
 they went away. Child processes and signals use the `runtime_proc` imports.
@@ -134,6 +137,22 @@ Installer requests set `credentialPolicy` to `"package"`. Each redirect destinat
 must use HTTP or HTTPS without userinfo, a query or embedded npm auth options.
 Redirects drop sensitive headers whenever the scheme, host or effective port changes.
 Host traces report request, response and error sizes without printing payloads or headers.
+
+### `fetch_stream(meta_ptr, meta_len) -> handle`
+
+Start an HTTP request like `fetch`, with the same `meta`, whose body the guest
+sends while the request runs: `write(handle, …)` queues body bytes and
+`shutdown(handle)` ends the body. The runtime uses it for a `ReadableStream`
+body with no bytes in memory behind it, as Bun streams those. Without a
+`content-length` header in `meta` the body goes out with chunked framing, one
+chunk per write; empty writes send nothing. With one, the bytes go out raw.
+
+`write` returns `AGAIN` while the host already holds about 256 KiB of unsent
+body, and `ERROR` once the request takes no more body: it failed, finished,
+was aborted, or followed a 303 redirect. Only a 303 is followed: any other
+redirect the request would follow fails with Bun's `TypeError` ("Request body
+is a ReadableStream and cannot be replayed for this redirect"), because the
+stream cannot be sent again.
 
 ### `fetch_head(handle, buf_ptr, buf_cap) -> len`
 
@@ -173,9 +192,10 @@ synchronous and callback reads keep one position.
 
 ### `write(handle, buf_ptr, len) -> n`
 
-Connection handles only. Queues up to `len` bytes; returns how many were
-accepted (`0 < n <= len`) or `AGAIN` when the host's buffer is full. Hosts
-should accept at least 64 KiB per call when idle.
+Connection handles, and `fetch_stream` handles for their request body.
+Queues up to `len` bytes; returns how many were accepted (`0 < n <= len`) or
+`AGAIN` when the host's buffer is full. Hosts should accept at least 64 KiB per
+call when idle.
 
 ### `close(handle) -> i32`
 

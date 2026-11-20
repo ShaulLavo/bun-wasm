@@ -42,14 +42,20 @@
   }
   if (internal.native.engine === "host") trackHostDisturbance();
   const bodies = new WeakMap<ReadableStream<unknown>, Uint8Array>();
-  function remember<T>(stream: ReadableStream<T>, bytes: Uint8Array): ReadableStream<T> {
+  // The type of the Blob behind a stream over its bytes, which a body built from the stream keeps.
+  const types = new WeakMap<ReadableStream<unknown>, string>();
+  function remember<T>(stream: ReadableStream<T>, bytes: Uint8Array, type?: string | null): ReadableStream<T> {
     bodies.set(stream, bytes);
+    if (type) types.set(stream, type);
     return stream;
+  }
+  function rememberAs<T>(stream: ReadableStream<T>, source: ReadableStream<unknown>): ReadableStream<T> {
+    const bytes = bodies.get(source);
+    return bytes ? remember(stream, bytes, types.get(source)) : stream;
   }
   function tee<T>(stream: ReadableStream<T>): [ReadableStream<T>, ReadableStream<T>] {
     const branches = stream.tee();
-    const bytes = bodies.get(stream);
-    if (bytes) for (const branch of branches) bodies.set(branch, bytes);
+    for (const branch of branches) rememberAs(branch, stream);
     return branches;
   }
   type Body = {
@@ -106,10 +112,12 @@
     checkPlatform(stream);
     const reader = stream.getReader();
     body._bodyUsed = true;
-    return new ReadableStream({
+    const copy = new ReadableStream({
       pull: controller => pull(reader, controller),
       cancel: reason => reader.cancel(reason),
     });
+    // Bytes in memory stay known behind the new stream, so fetch() still sends them whole.
+    return rememberAs(copy, stream);
   }
   async function visitChunk<T>(reader: ReadableStreamDefaultReader<T>, chunk: T, visit: (chunk: T) => void): Promise<void> {
     try { visit(chunk); }
@@ -228,5 +236,5 @@
       cancel: reason => cancelText(source, reason),
     }, { highWaterMark: 0 });
   }
-  return { remember, tee, clone, transfer, textStream, fromAsyncIterable, consume, drain, consumedStream, adoptable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  return { remember, tee, clone, transfer, textStream, fromAsyncIterable, consume, drain, consumedStream, adoptable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream), type: (stream: ReadableStream<unknown>) => types.get(stream) };
 })

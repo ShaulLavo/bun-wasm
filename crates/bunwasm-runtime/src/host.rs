@@ -9,7 +9,7 @@
 use std::ptr::{addr_of, addr_of_mut, read_volatile};
 
 pub const ABI_VERSION: u32 = 2;
-pub const SLOT_COUNT: usize = 18;
+pub const SLOT_COUNT: usize = 19;
 
 pub const ERROR: i32 = -1;
 pub const AGAIN: i32 = -2;
@@ -37,6 +37,7 @@ pub enum Slot {
     LookupHead = 15,
     ListenPath = 16,
     ConnectPath = 17,
+    FetchStream = 18,
 }
 
 pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
@@ -58,6 +59,7 @@ pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
     "lookup_head",
     "listen_path",
     "connect_path",
+    "fetch_stream",
 ];
 
 #[repr(C)]
@@ -152,7 +154,9 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
             Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept | Slot::Shutdown => {
                 std::mem::transmute::<usize, F1>(index as usize)(args[0])
             }
-            Slot::ConnectPath => std::mem::transmute::<usize, F2>(index as usize)(args[0], args[1]),
+            Slot::ConnectPath | Slot::FetchStream => {
+                std::mem::transmute::<usize, F2>(index as usize)(args[0], args[1])
+            }
             Slot::Fetch | Slot::LookupStart => {
                 std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3])
             }
@@ -190,6 +194,11 @@ pub fn fetch(meta: &[u8], body: &[u8]) -> i32 {
         [ptr(meta), meta.len() as i32, ptr(body), body.len() as i32],
     )
     .unwrap_or(UNSUPPORTED)
+}
+
+/// Starts a request whose body the guest sends with `write` and ends with `shutdown`.
+pub fn fetch_stream(meta: &[u8]) -> i32 {
+    call(Slot::FetchStream, [ptr(meta), meta.len() as i32, 0, 0]).unwrap_or(UNSUPPORTED)
 }
 
 /// Calls a `(handle, buf, cap) -> len` function, growing the buffer when the
@@ -820,7 +829,8 @@ mod signal_tests {
         assert_eq!(SLOT_NAMES[15], "lookup_head");
         assert_eq!(SLOT_NAMES[16], "listen_path");
         assert_eq!(SLOT_NAMES[17], "connect_path");
-        assert_eq!(SLOT_COUNT, 18);
+        assert_eq!(SLOT_NAMES[18], "fetch_stream");
+        assert_eq!(SLOT_COUNT, 19);
         assert!(
             SLOT_NAMES
                 .iter()

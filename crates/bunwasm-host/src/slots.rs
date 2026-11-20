@@ -15,7 +15,7 @@ use crate::guest::GuestMemory;
 use crate::net::{ErrorInfo, Output};
 
 const ABI_VERSION: u32 = 2;
-const SLOT_NAMES: [&str; 18] = [
+const SLOT_NAMES: [&str; 19] = [
     "poll",
     "fetch",
     "fetch_head",
@@ -34,6 +34,7 @@ const SLOT_NAMES: [&str; 18] = [
     "lookup_head",
     "listen_path",
     "connect_path",
+    "fetch_stream",
 ];
 
 /// Fills the networking slot table. Generic guests without the export run
@@ -68,7 +69,13 @@ pub fn install(store: &mut Store<Host>, instance: &Instance) -> Result<()> {
 
     let funcs = functions(store);
     for (slot, func) in funcs.into_iter().enumerate().take(count) {
-        // `grow` returns the old size, which is the new element's index.
+        // Host calls name the slot, so `functions` keeps one entry per slot. A slot
+        // this host does not provide stays 0 and its entry is never called.
+        let Some(func) = func else {
+            let absent = Func::wrap(&mut *store, || -> i32 { -4 });
+            store.data_mut().functions.push(absent);
+            continue;
+        };
         let index = u32::MAX;
         store.data_mut().functions.push(func);
         let at = base + 8 + 4 * slot;
@@ -169,8 +176,38 @@ fn text(bytes: &[u8]) -> String {
     }
 }
 
-/// Host functions in slot order, with the exact ABI signatures.
-fn functions(store: &mut Store<Host>) -> Vec<Func> {
+/// Host functions in slot order, `None` where the launcher provides no slot
+/// (`listen_path`, `connect_path`).
+fn functions(store: &mut Store<Host>) -> Vec<Option<Func>> {
+    let mut slots: Vec<Option<Func>> = network_functions(store).into_iter().map(Some).collect();
+    slots.extend([None, None, Some(fetch_stream_function(store))]);
+    slots
+}
+
+/// `fetch_stream(meta, meta_len) -> handle`: the body follows through `write` and `shutdown`.
+fn fetch_stream_function(store: &mut Store<Host>) -> Func {
+    Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, Host>, meta: i32, meta_len: i32| {
+            let (memory, size) = guest(&mut caller)?;
+            let ranges = [range(size, meta, meta_len)?];
+            view(&mut caller, &memory, &ranges, |parts, host| {
+                let handle = host.net.fetch_stream(parts[0]);
+                trace(
+                    host,
+                    format_args!(
+                        "fetch_stream({} metadata bytes) -> {handle}",
+                        parts[0].len()
+                    ),
+                );
+                handle
+            })
+        },
+    )
+}
+
+/// The slots 0 through 15, with the exact ABI signatures.
+fn network_functions(store: &mut Store<Host>) -> Vec<Func> {
     vec![
         Func::wrap(
             &mut *store,

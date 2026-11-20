@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fs-utimes-fractions",
+  "engines": ["quickjs", "jsc"]
+}

@@ -1,0 +1,19 @@
+
+index.test.ts:
+(pass) before
+10 | test("before", () => {
+11 |   expect(1).toBe(1);
+12 | });
+13 | 
+14 | test("rejects without a handler", async () => {
+15 |   Promise.reject(new Error("unhandled inside a test"));
+                          ^
+error: unhandled inside a test
+      at <anonymous> (/index.test.ts:15:22)
+(fail) rejects without a handler
+(pass) after
+
+ 2 pass
+ 1 fail
+ 2 expect() calls
+Ran 3 tests across 1 file. [TIME]

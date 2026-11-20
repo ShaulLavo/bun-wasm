@@ -21,7 +21,7 @@ test("filesystem options module exports the helper factory expected by node:fs",
   expect(typeof createOptions).toBe("function");
   const { Stats, flagsNumber } = createOptions({}, (path: string) => path);
   expect(flagsNumber("wx")).toBe(705);
-  expect(new Stats({ mode: 0o100640 }).isFile()).toBe(true);
+  expect(new Stats(0, 0o100640).isFile()).toBe(true);
 });
 
 test("erases types without printing constructors or moving source positions", () => {

@@ -48,32 +48,7 @@
       return mode;
     }
 
-    class Stats {
-      declare mode: number | bigint;
-      declare atimeMs: number | bigint;
-      declare mtimeMs: number | bigint;
-      declare ctimeMs: number | bigint;
-      declare birthtimeMs: number | bigint;
-      atime: Date;
-      mtime: Date;
-      ctime: Date;
-      birthtime: Date;
-      constructor(raw: Record<string, number | bigint | string>, bigint = false) {
-        const fields = bigint ? Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, BigInt(value)])) : raw;
-        Object.assign(this, fields);
-        this.atime = new Date(Number(this.atimeMs));
-        this.mtime = new Date(Number(this.mtimeMs));
-        this.ctime = new Date(Number(this.ctimeMs));
-        this.birthtime = new Date(Number(this.birthtimeMs));
-      }
-      isFile() { return (Number(this.mode) & 0o170000) === 0o100000; }
-      isDirectory() { return (Number(this.mode) & 0o170000) === 0o040000; }
-      isSymbolicLink() { return (Number(this.mode) & 0o170000) === 0o120000; }
-      isBlockDevice() { return (Number(this.mode) & 0o170000) === 0o060000; }
-      isCharacterDevice() { return (Number(this.mode) & 0o170000) === 0o020000; }
-      isFIFO() { return (Number(this.mode) & 0o170000) === 0o010000; }
-      isSocket() { return (Number(this.mode) & 0o170000) === 0o140000; }
-    }
+    const { Stats, BigIntStats, makeStats } = createStats();
 
     type CopyOptions = { recursive?: boolean; force?: boolean; errorOnExist?: boolean; filter?: (from: string, to: string) => boolean | Promise<boolean> };
     function copyError(code: string, from: string, to: string): Error {
@@ -116,6 +91,137 @@
       if (!accepted || !copyEntry(from, to, options)) return;
       for (const [name] of native.readdir(absolute(from))) await cp(childPath(from, name), childPath(to, name), options);
     }
-    return { flagsNumber, parseFileMode, Stats, cpSync, cp };
+    return { flagsNumber, parseFileMode, Stats, BigIntStats, makeStats, timeSpec, cpSync, cp };
   };
+
+  type StatsRecord = Record<string, unknown>;
+  type StatsConstructor = ((...args: unknown[]) => StatsRecord) & { prototype: object };
+
+  // Bun's Stats and BigIntStats (src/jsc/bindings/NodeFSStatBinding.cpp): constructors that
+  // also work without `new`, taking Node's argument order but laying fields out in Bun's
+  // order. The prototypes hold enumerable `is*` methods and date accessors that build a
+  // Date from the matching `*Ms` field and cache it as an own property. A receiver that is
+  // not an object gets undefined.
+  function createStats() {
+    "use strict";
+    const kArgumentOrder = ["dev", "mode", "nlink", "uid", "gid", "rdev", "blksize", "ino", "size", "blocks"];
+    const kLayout = ["dev", "ino", "mode", "nlink", "uid", "gid", "rdev", "size", "blksize", "blocks"];
+    const kTimes = ["atime", "mtime", "ctime", "birthtime"];
+    const kModeTests: [string, number][] = [
+      ["isBlockDevice", 0o060000], ["isCharacterDevice", 0o020000], ["isDirectory", 0o040000], ["isFIFO", 0o010000],
+      ["isFile", 0o100000], ["isSocket", 0o140000], ["isSymbolicLink", 0o120000],
+    ];
+    const isObject = (value: unknown): value is StatsRecord => (typeof value === "object" && value !== null) || typeof value === "function";
+    // JSC's toBigInt64: BigInt conversion that refuses numbers, wrapped to 64 bits.
+    function bigInt64(value: unknown): bigint {
+      if (typeof value === "number") throw new TypeError("Invalid argument type in ToBigInt operation");
+      return BigInt.asIntN(64, BigInt(value as bigint));
+    }
+    function own(target: object, key: string, value: unknown) {
+      Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
+    }
+
+    function fill(target: StatsRecord, args: unknown[], bigint: boolean): StatsRecord {
+      const given: StatsRecord = {};
+      kArgumentOrder.forEach((key, index) => { given[key] = args[index]; });
+      for (const key of kLayout) own(target, key, given[key]);
+      const times = kTimes.map((_, index) => args[10 + index]);
+      kTimes.forEach((name, index) => own(target, `${name}Ms`, bigint ? Number(bigInt64(times[index])) / 1e6 : times[index]));
+      if (bigint) kTimes.forEach((name, index) => own(target, `${name}Ns`, times[index]));
+      return target;
+    }
+
+    function defineConstructor(name: string, bigint: boolean): StatsConstructor {
+      const prototype: StatsRecord = {};
+      const create = (target: StatsRecord | undefined, args: unknown[]) => fill(target ?? Object.create(prototype), args, bigint);
+      const constructor = {
+        [name]: function (this: StatsRecord, ...args: unknown[]) { return create(new.target ? this : undefined, args); },
+      }[name] as unknown as StatsConstructor;
+      // Native: a fixed prototype, tagged with the class name ("[object Stats]").
+      Object.defineProperty(constructor, "prototype", { value: prototype, writable: false, enumerable: false, configurable: false });
+      Object.defineProperty(prototype, Symbol.toStringTag, { value: name, writable: false, enumerable: false, configurable: true });
+      for (const [method, kind] of kModeTests) own(prototype, method, modeTest(method, kind, bigint));
+      for (const field of kTimes) {
+        Object.defineProperty(prototype, field, {
+          get: dateGetter(field, bigint, prototype), set: dateSetter(field), enumerable: true, configurable: true,
+        });
+      }
+      Object.defineProperty(prototype, "constructor", { value: constructor, writable: true, enumerable: false, configurable: true });
+      return constructor;
+    }
+
+    function modeTest(method: string, kind: number, bigint: boolean) {
+      const test = {
+        [method](this: unknown) {
+          if (!isObject(this)) return undefined;
+          const mode = bigint ? Number(bigInt64(this.mode) & 0o170000n) : Number(this.mode) & 0o170000;
+          return mode === kind;
+        },
+      }[method]!;
+      return test;
+    }
+
+    function dateGetter(field: string, bigint: boolean, prototype: object) {
+      return {
+        [field](this: unknown) {
+          if (!isObject(this)) return undefined;
+          const raw = this[`${field}Ms`];
+          const date = new Date(bigint ? Number(bigInt64(raw)) : Number(raw));
+          if (this !== prototype) own(this, field, date);
+          return date;
+        },
+      }[field];
+    }
+
+    function dateSetter(field: string) {
+      return {
+        [field](this: unknown, value: unknown) {
+          if (isObject(this)) own(this, field, value);
+        },
+      }[field];
+    }
+
+    const Stats = defineConstructor("Stats", false);
+    const BigIntStats = defineConstructor("BigIntStats", true);
+    // statSync and friends: native records already carry Bun's field names. Bigint records
+    // carry integers and decimal strings, converted here.
+    function makeStats(raw: StatsRecord, bigint: boolean): StatsRecord {
+      const target = Object.create((bigint ? BigIntStats : Stats).prototype);
+      const value = (key: string) => bigint && raw[key] !== undefined ? BigInt(raw[key] as string) : raw[key];
+      for (const key of kLayout) own(target, key, value(key));
+      for (const name of kTimes) own(target, `${name}Ms`, value(`${name}Ms`));
+      if (bigint) for (const name of kTimes) own(target, `${name}Ns`, value(`${name}Ns`));
+      return target;
+    }
+    return { Stats, BigIntStats, makeStats };
+  }
+
+  // Bun's time_like.rs: utimes takes a number of seconds, a Date or a numeric string. A
+  // negative number means now; a non-finite one or any other type is rejected. Returns whole
+  // seconds and nanoseconds, with -1 nanoseconds for "now".
+  function timeSpec(value: unknown, name: string): [number, number] {
+    if (value === undefined) throw invalidTime(`${name} is required`);
+    if (typeof value === "number" && Number.isFinite(value) && value < 0) return [0, -1];
+    if (value instanceof Date && Number.isFinite(value.getTime())) {
+      const [seconds, millis] = euclid(value.getTime(), 1000);
+      return [seconds, Math.trunc(millis * 1e6)];
+    }
+    const seconds = typeof value === "number" || typeof value === "string" ? Number(value) : NaN;
+    if (!Number.isFinite(seconds)) throw invalidTime(`${name} must be a number or a Date`);
+    const [whole, fraction] = euclid(seconds, 1);
+    const nanos = fraction * 1e9;
+    // A fraction that rounds to 1 (as -1e-17 does) carries into the seconds.
+    return nanos >= 1e9 ? [whole + 1, Math.trunc(nanos - 1e9)] : [whole, Math.trunc(nanos)];
+  }
+
+  // Rust's f64 div_euclid and rem_euclid for a positive divisor.
+  function euclid(value: number, divisor: number): [number, number] {
+    const remainder = value % divisor;
+    const quotient = Math.trunc(value / divisor);
+    return remainder < 0 ? [quotient - 1, remainder + divisor] : [quotient, remainder];
+  }
+
+  function invalidTime(message: string): TypeError {
+    return Object.assign(new TypeError(message), { code: "ERR_INVALID_ARG_TYPE" });
+  }
 })

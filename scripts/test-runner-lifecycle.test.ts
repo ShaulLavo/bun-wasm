@@ -58,21 +58,22 @@ async function runner(load: (api: API, file: string, uncaught: (error: unknown) 
     test_matchers: factory("test_matchers.ts")({ isPromise: types.isPromise, promiseState: Bun.peek.status, realTimers: { setTimeout },
       promiseThen: (promise: Promise<unknown>, resolve: (value: unknown) => unknown, reject: (value: unknown) => unknown) => promise.then(resolve, reject) }),
   };
-  const internal = {
+  const internal: { testUncaught?: (error: unknown) => void } & Record<string, unknown> = {
     native: { now: () => performance.now(), cwd: () => "/", stat: () => ({ mode: 0o100644 }),
       getAsyncContext: () => undefined,
       writeStdout() {}, writeStderr: (value: string) => { stderr += value; } },
     // No async context in this harness: every frame is empty and runs its callback directly.
     runInContext: (_context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) => Reflect.apply(fn, receiver, args),
     require: (name: string) => modules[name],
-    realTimers: { setTimeout, clearTimeout },
+    realTimers: { setTimeout, clearTimeout, setImmediate },
     fakeTimers: { api: {} },
     promiseState: Bun.peek.status,
     isPromise: types.isPromise,
     importModule: async (file: string) => {
       if (imported.has(file)) return;
       imported.add(file);
-      await load(runtime.exports, file, error => process.emit("uncaughtException", error), runtime.getExpectationOrigin);
+      // The runtime's uncaught exception path, which the runner takes before process listeners.
+      await load(runtime.exports, file, error => internal.testUncaught?.(error), runtime.getExpectationOrigin);
     },
   };
   modules.test_extensions = factory("test_extensions.ts")(internal);

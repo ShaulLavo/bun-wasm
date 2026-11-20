@@ -1,0 +1,22 @@
+
+index.test.ts:
+ 6 | process.on("uncaughtExceptionMonitor", e => console.log("monitor", String(e)));
+ 7 | 
+ 8 | test("throws later", async () => {
+ 9 |   // A failed expect, which every engine reports at the same source position.
+10 |   setTimeout(() => {
+11 |     expect("from timer").toBe("caught");
+                              ^
+error: expect(received).toBe(expected)
+
+Expected: "caught"
+Received: "from timer"
+
+      at <anonymous> (/index.test.ts:11:26)
+(fail) throws later
+(pass) after
+
+ 1 pass
+ 1 fail
+ 2 expect() calls
+Ran 2 tests across 1 file. [TIME]

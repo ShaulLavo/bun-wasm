@@ -34,6 +34,23 @@
 
   let execveWarned = false;
   let bindingConstants: object | undefined;
+  let bindingLookup: ((name: unknown, own: Record<string, () => unknown>) => unknown) | undefined;
+  const ownBindings: Record<string, () => unknown> = {
+    constants: () => constantsBinding(),
+    uv: () => internal.require("uv_errors").binding(),
+  };
+
+  // Bun's constructProcessConfigObject for Linux, with the guest's architecture. Frozen, as in Bun.
+  function processConfig() {
+    const variables = {
+      v8_enable_i18n_support: 1, enable_lto: false, enable_thin_lto: false, lto_jobs: "", node_module_version: 147,
+      napi_build_version: 10, node_builtin_shareable_builtins: [], node_byteorder: "little", node_without_node_options: true,
+      clang: 0, control_flow_guard: false, coverage: false, dcheck_always_on: 0, debug_nghttp2: false, debug_node: false,
+      enable_pgo_generate: false, enable_pgo_use: false, error_on_warn: false, force_dynamic_crt: 0, napi_build: "0.0",
+      host_arch: info.arch, target_arch: info.arch, asan: 0,
+    };
+    return Object.freeze({ target_defaults: {}, variables });
+  }
 
   function constantsBinding() {
     return bindingConstants ??= Object.assign(Object.create(null), {
@@ -44,25 +61,75 @@
     });
   }
 
-  // Like Node, assigned values become strings (`process.env.N = 1` -> "1").
-  const env = new Proxy(native.env(), {
-    set(target, key, value) {
-      target[key] = typeof key === "symbol" ? value : String(value);
-      if (typeof key === "string" && internal.workerEnvChange) internal.workerEnvChange(key, target[key]);
-      return true;
+  // Node's EnvSetter, as Bun's JSEnvironmentVariableMap::put has it: a symbol name throws, an
+  // empty name is ignored (nodejs/node#32920), and the value becomes a string
+  // (`process.env.N = 1` -> "1").
+  function setEnv(target: Record<PropertyKey, unknown>, key: string | symbol, value: unknown) {
+    if (typeof key === "symbol") throw new TypeError("Cannot convert a symbol to a string");
+    if (key === "") return true;
+    const text = `${value as string}`;
+    target[key] = text;
+    if (key === "TZ") timeZoneChanged(text);
+    if (internal.workerEnvChange) internal.workerEnvChange(key, text);
+    return true;
+  }
+  // Node's RealEnvStore::Set and ::Delete reset the time zone on every TZ write, on the main
+  // thread only (a worker's env is a map), and so does Bun. Updates another thread made
+  // to a shared environment do not, as in Bun. Names over 31 characters are ignored, as in Bun.
+  const envTarget = native.env();
+  const workerProcess = Object.hasOwn(envTarget, "BUNWASM_WORKER_INIT");
+  // The engine answers with the zone ID ICU resolved (GMT and Etc/UTC are UTC, EST5EDT is
+  // America/New_York), and the Intl fallback takes that ID rather than the raw name.
+  function applyTimeZone(zone: string | undefined) {
+    const resolved = native.setTimeZone?.(zone ?? "");
+    if (typeof resolved === "string") internal.setIntlTimeZone?.(resolved);
+  }
+  function timeZoneChanged(zone: string | undefined) {
+    if (!workerProcess && !internal.envFromPeer) applyTimeZone(zone);
+  }
+  // The zone a process or worker starts with applies to the Intl fallback as well as to local time.
+  if (typeof envTarget.TZ === "string") applyTimeZone(envTarget.TZ);
+  function defineError(message: string) {
+    return Object.assign(new TypeError(message), { code: "ERR_INVALID_OBJECT_DEFINE_PROPERTY" });
+  }
+  const env: Record<PropertyKey, unknown> = new Proxy(envTarget, {
+    set(target, key, value, receiver) {
+      // A write to an object that only inherits from process.env is that object's own,
+      // with the value as given, and changes nothing about the process.
+      if (receiver !== env) return Reflect.defineProperty(receiver, key, { value, writable: true, enumerable: true, configurable: true });
+      return setEnv(target, key, value);
     },
     deleteProperty(target, key) {
       delete target[key];
+      if (key === "TZ") timeZoneChanged(undefined);
       if (typeof key === "string" && internal.workerEnvChange) internal.workerEnvChange(key, undefined);
       return true;
     },
+    // Node's EnvDefiner: only a complete, configurable, writable and enumerable data
+    // descriptor, which then goes through the setter like an assignment.
     defineProperty(target, key, descriptor) {
-      if ("value" in descriptor && typeof key !== "symbol") descriptor = Object.assign({}, descriptor, { value: String(descriptor.value) });
-      const result = Reflect.defineProperty(target, key, descriptor);
-      if (result && typeof key === "string" && internal.workerEnvChange) internal.workerEnvChange(key, target[key]);
-      return result;
+      if ("get" in descriptor || "set" in descriptor) throw defineError("'process.env' does not accept an accessor(getter/setter) descriptor");
+      if (!("value" in descriptor) || descriptor.configurable !== true || descriptor.writable !== true || descriptor.enumerable !== true) {
+        throw defineError("'process.env' only accepts a configurable, writable, and enumerable data descriptor");
+      }
+      return setEnv(target, key, descriptor.value);
     },
   });
+
+  // Bun's loadEnvFile (src/js/builtins/ProcessObjectInternals.ts): the file fills in only the
+  // variables that read undefined, so an existing empty value wins.
+  function loadEnvFile(path?: unknown) {
+    if (path === undefined) path = ".env";
+    else if (typeof path !== "string") {
+      throw Object.assign(new TypeError(`The "path" argument must be of type string. Received ${internal.describe(path)}`), { code: "ERR_INVALID_ARG_TYPE" });
+    }
+    const fs = internal.builtin("node:fs") as unknown as { readFileSync(path: string, encoding: string): string };
+    const content = fs.readFileSync(path as string, "utf8");
+    const parsed = Object.fromEntries(native.parseEnv(content));
+    for (const key of Object.keys(parsed)) {
+      if (env[key] === undefined) env[key] = parsed[key];
+    }
+  }
 
   function hrtime(previous?: readonly [number, number]): [number, number] {
     const ns = internal.fakeTimers?.elapsedNanoseconds ?? native.nanoseconds();
@@ -80,10 +147,39 @@
   }
   hrtime.bigint = () => BigInt(Math.floor(internal.fakeTimers?.elapsedNanoseconds ?? native.nanoseconds()));
 
-  function memoryUsage() {
-    return native.memoryUsage();
+  // A guest's resident memory is the core's linear memory, which every engine shares (on the
+  // Browser engine too, whose JS heap is the page's). The core reads its size directly, without
+  // the engine's heap counters; where it cannot, the engine record's figures stand in.
+  function residentBytes(usage?: ReturnType<BunWasm.Native["memoryUsage"]>) {
+    const linear = native.linearMemoryBytes?.();
+    if (typeof linear === "number") return linear;
+    const record = usage ?? native.memoryUsage();
+    return record.rss ?? record.wasmCapacity ?? 0;
   }
-  memoryUsage.rss = () => native.memoryUsage().rss;
+  // Node's five counters, as numbers. The engine's own extras stay readable but are not
+  // enumerable, so the result compares and prints like Node's and Bun's.
+  function memoryUsage() {
+    const usage = native.memoryUsage();
+    const result = {
+      rss: residentBytes(usage), heapTotal: usage.heapTotal ?? 0, heapUsed: usage.heapUsed ?? 0,
+      external: usage.external ?? 0, arrayBuffers: usage.arrayBuffers ?? 0,
+    };
+    for (const key of ["arrayBufferCount", "wasmCapacity", "failedAllocation"] as const) {
+      if (key in usage) Object.defineProperty(result, key, { value: usage[key], writable: true, configurable: true, enumerable: false });
+    }
+    return result;
+  }
+  memoryUsage.rss = () => residentBytes();
+
+  // Bun's lazily built process properties (PropertyCallback): the first read or write leaves an
+  // ordinary writable data property behind.
+  function lazyData(name: string, build: () => unknown): PropertyDescriptor {
+    const settle = (value: unknown) => {
+      Object.defineProperty(process, name, { value, writable: true, configurable: true, enumerable: true });
+      return value;
+    };
+    return { get: () => settle(build()), set: settle, configurable: true, enumerable: true };
+  }
 
   function validateCursorCallback(callback: unknown): void {
     if (callback === undefined || typeof callback === "function") return;
@@ -338,14 +434,26 @@
     execArgv: native.execArgv(),
     execPath: native.execPath(),
     env,
+    loadEnvFile,
     pid,
     ppid,
     noDeprecation: false,
     isBun: true,
     browser: false,
-    config: { target_defaults: {}, variables: {} },
+    config: processConfig(),
     features: { inspector: false, debug: false, uv: false, ipv6: false, tls_alpn: false, tls_sni: false, tls_ocsp: false, tls: false, cached_builtins: true, typescript: "transform" },
-    allowedNodeEnvironmentFlags: new Set(),
+    // Node's legacy and private members, as Bun stubs them (BunProcess.cpp processObjectTable).
+    _getActiveRequests: () => [],
+    _getActiveHandles: () => [],
+    _linkedBinding() {},
+    _tickCallback() {},
+    // Main thread only: worker_threads removes these from a worker's process.
+    _debugEnd() {},
+    _debugProcess() {},
+    _startProfilerIdleNotifier() {},
+    _stopProfilerIdleNotifier() {},
+    moduleLoadList: [],
+    _preload_modules: [],
     cwd: () => native.cwd(),
     chdir: (dir: unknown) => native.chdir(internal.require("path").resolve(String(dir))),
     // Bun's Process_functionExit: set the code, emit 'exit' (which sets _exiting), then call
@@ -390,10 +498,8 @@
     nextTick: internal.nextTick,
     hrtime,
     memoryUsage,
-    resourceUsage: () => {
-      const rss = native.memoryUsage().rss;
-      return { userCPUTime: 0, systemCPUTime: 0, maxRSS: rss === null ? null : rss / 1024 };
-    },
+    // maxRSS is kilobytes. Linear memory never shrinks, so its current size is the peak.
+    resourceUsage: () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: memoryUsage.rss() / 1024 }),
     cpuUsage: () => ({ user: Math.floor(native.now() * 1000), system: 0 }),
     uptime: () => native.now() / 1000,
     umask: () => 0o22,
@@ -408,9 +514,7 @@
       internal.require("process_warning").emitWarning(process, warning, options[0], options[1], options[2]);
     },
     binding(name: unknown) {
-      if (name === "constants") return constantsBinding();
-      if (name === "uv") return internal.require("uv_errors").binding();
-      throw new Error(`No such module: ${name}`);
+      return (bindingLookup ??= internal.require("process_binding"))(name, ownBindings);
     },
     dlopen() {
       throw new Error("process.dlopen is not supported in bun-wasm");
@@ -434,11 +538,7 @@
     _fatalException: (error: unknown, fromPromise?: unknown) => internal.dispatchUncaught(error, Boolean(fromPromise)),
     getActiveResourcesInfo: () => [],
     constrainedMemory: () => 0,
-    availableMemory: () => {
-      const rss = native.memoryUsage().rss;
-      return rss === null ? null : 4294967296 - rss;
-    },
-    report: { getReport: () => ({ header: {} }) },
+    availableMemory: () => 4294967296 - memoryUsage.rss(),
     stdin: undefined,
   };
   const process: BunWasm.NodeEmitter & { noDeprecation: boolean; exitCode?: unknown; reallyExit: unknown; pid: number; env: Record<PropertyKey, unknown>; execArgv: string[]; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
@@ -451,6 +551,8 @@
     mainModule: { get: () => internal.getMainModule(), configurable: true, enumerable: false },
     exitCode: { get: () => exitByte, set: setExitCode, configurable: true, enumerable: true },
     finalization: { get: () => finalization ??= createFinalization(), configurable: true, enumerable: false },
+    allowedNodeEnvironmentFlags: lazyData("allowedNodeEnvironmentFlags", () => internal.require("process_allowed_flags")),
+    report: lazyData("report", () => internal.require("process_report")(process)),
     _exiting: { value: false, writable: true, configurable: true, enumerable: false },
     [Symbol.toStringTag]: { value: "process", configurable: true },
   });

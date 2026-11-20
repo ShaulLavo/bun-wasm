@@ -109,8 +109,10 @@
       return true;
     }
     private readCrlf(): boolean {
+      // A wrong byte fails at once, without waiting for the second one.
+      if (this.buffer.length >= 1 && this.buffer[0] !== 13) throw fail();
+      if (this.buffer.length >= 2 && this.buffer[1] !== 10) throw fail();
       if (this.buffer.length < 2) return false;
-      if (this.buffer[0] !== 13 || this.buffer[1] !== 10) throw fail();
       this.buffer = this.buffer.slice(2);
       this.phase = { kind: "size" };
       return true;
