@@ -847,7 +847,22 @@ fn install_fs(t: &mut Table) {
             .map_err(|e| io_error(e, "ftruncate", Some(path)))?;
         ok()
     });
+    t.add("utimes", |a| {
+        let follow = !a.bool(5);
+        let syscall = if follow { "utime" } else { "lutime" };
+        let path = required_path(a.str(0)?, syscall)?;
+        file_times::set_path(path, &file_times::times(&a, 1)?, follow)
+            .map_err(|e| io_error(e, syscall, Some(path)))?;
+        ok()
+    });
+    t.add("futimes", |a| {
+        file_times::set_descriptor(a.i32(0)?, &file_times::times(&a, 1)?)
+            .map_err(|e| io_error(e, "futime", None))?;
+        ok()
+    });
 }
+
+mod file_times;
 
 #[cfg(target_os = "wasi")]
 pub(crate) fn symlink(target: &str, path: &str) -> io::Result<()> {

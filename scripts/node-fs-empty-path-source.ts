@@ -33,6 +33,8 @@ async function checkSource(): Promise<void> {
       if (name === "path") return path;
       if (name === "fs_options") return helpers;
       if (name === "fs_watch") return () => ({});
+      // Pins only matter while a buffer can be transferred mid-call; this fixture never does.
+      if (name === "fs_buffer_pins") return { pin: () => () => {} };
       throw new Error(`Unexpected dependency ${name}`);
     },
   });

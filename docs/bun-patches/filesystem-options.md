@@ -8,7 +8,38 @@ The filesystem regions of `crates/bunwasm-runtime/src/natives.rs` translate publ
 
 Native Unix opens pass `O_SYNC` and `O_DSYNC` to the OS. WASI retains those modes in the runtime's owned-descriptor table instead of passing Preview1 sync fdflags, which the pinned Wasmtime rejects at open. Every successful one-shot, scalar or vectored write then issues the corresponding `fd_sync` or `fd_datasync` barrier before returning; closing removes the retained mode. Waffle already provides both barriers, so this uses the existing OS/runtime boundary rather than adding a second filesystem adapter.
 
-Bigint stat calls serialize integer metadata with `Val::BigUint` before any float conversion. Timestamp nanoseconds and integer milliseconds use decimal strings across the engine-neutral boundary, then the Stats constructor turns them into BigInts. This also represents negative timestamps and timestamps outside a 64-bit nanosecond range. Dates convert milliseconds to numbers only for the Date API. Normal Stats retain numeric fields and omit nanoseconds. Each path stat serializes one metadata snapshot: Unix uses `std::fs::Metadata` and its metadata extensions; WASI uses one libc `stat` or `lstat` result. Descriptor serialization likewise takes fields from one snapshot and retains the existing process-host FIFO mode correction. WASI has no birth timestamp, so it remains zero rather than being inferred from another filesystem call.
+Bigint stat calls serialize integer metadata with `Val::BigUint` before any float conversion. Timestamp nanoseconds and integer milliseconds use decimal strings across the engine-neutral boundary, then `makeStats` turns them into BigInts. This also represents negative timestamps and timestamps outside a 64-bit nanosecond range. Dates convert milliseconds to numbers only for the Date API. Normal Stats retain numeric fields and omit nanoseconds. Each path stat serializes one metadata snapshot: Unix uses `std::fs::Metadata` and its metadata extensions; WASI uses one libc `stat` or `lstat` result. Descriptor serialization likewise takes fields from one snapshot and retains the existing process-host FIFO mode correction. WASI has no birth timestamp, so it remains zero rather than being inferred from another filesystem call.
+
+`fs.Stats` and the `BigIntStats` prototype follow Bun's
+`src/jsc/bindings/NodeFSStatBinding.cpp` at pinned revision
+`9510e74152073d850a18758ca41114d8f214ffa6`, rebuilt in TypeScript (no C++ is
+copied). `Stats(...)` works with or without `new`, takes Node's argument order
+(`dev, mode, nlink, uid, gid, rdev, blksize, ino, size, blocks, atimeMs, mtimeMs,
+ctimeMs, birthtimeMs`) and lays fields out in Bun's order (`dev, ino, mode, nlink,
+uid, gid, rdev, size, blksize, blocks`, then the times). The prototype holds
+enumerable `is*` methods and `atime`, `mtime`, `ctime` and `birthtime` accessors.
+An accessor builds a Date from the matching `*Ms` field and caches it as an own
+property, so a later `*Ms` change does not move it; its setter stores the given
+value. Methods and accessors return undefined for a receiver that is not an
+object. `BigIntStats` has its own prototype (not a Stats subclass); its
+constructor derives `*Ms` numbers from `*Ns` BigInts, and its date accessors
+refuse number fields, as JSC's `toBigInt64` does. `statSync`, `lstatSync` and
+`fstatSync` build their results through `makeStats` with the same prototypes and
+order; `fstatSync` validates its descriptor first. The `fs-stats-constructor`
+fixture compares these with native Bun 1.4.4.
+
+`utimes`, `lutimes` and `futimes` (sync, callback and promise forms) convert
+their times as Bun's `src/runtime/node/time_like.rs` does: a number of seconds
+(a negative one means now), a Date (by its milliseconds) or a numeric string;
+anything else, or a non-finite value, is a `TypeError` with code
+`ERR_INVALID_ARG_TYPE`. `timeSpec` in `fs_options.ts` returns whole seconds and
+nanoseconds with Rust's euclidean division. The original
+`src/natives/file_times.rs` sets them with `utimensat` (with
+`AT_SYMLINK_NOFOLLOW` for `lutimes`) or `futimens`, using `UTIME_NOW` for now.
+Errors carry Node's operation names `utime`, `lutime` and `futime`. WASI Preview1
+timestamps are unsigned nanoseconds since the epoch, so a time before 1970 is
+`EINVAL` on both hosts; native Bun stores it. The `fs-utimes` fixture compares
+the rest with native Bun 1.4.4.
 
 `src/natives/wasi_metadata.rs` is an original metadata adapter. Preview1 reports
 file types without POSIX permission bits. WASI Stats therefore present `0644`

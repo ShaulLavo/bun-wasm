@@ -30,6 +30,9 @@
     if (typeof path === "string") p = path;
     else if (path instanceof String) p = String.prototype.valueOf.call(path);
     else if (path instanceof Uint8Array) p = native.utf8Decode(path);
+    // Bun's PathLike also takes a DataView or an ArrayBuffer of path bytes.
+    else if (path instanceof DataView) p = native.utf8Decode(new Uint8Array(path.buffer, path.byteOffset, path.byteLength));
+    else if (path instanceof ArrayBuffer) p = native.utf8Decode(new Uint8Array(path));
     else if (path instanceof URL) {
       if (path.protocol !== "file:") throw Object.assign(new TypeError("The URL must be of scheme file"), { code: "ERR_INVALID_URL_SCHEME" });
       p = decodeURIComponent(path.pathname);
@@ -80,7 +83,7 @@
 
   // --- Stats / Dirent ---------------------------------------------------------
 
-  const { Stats, flagsNumber, parseFileMode, cpSync: copySync, cp: copyAsync } = internal.require("fs_options")(native, absolute, (value) => internal.require("inspect").nodeInspect(value));
+  const { Stats, makeStats, timeSpec, flagsNumber, parseFileMode, cpSync: copySync, cp: copyAsync } = internal.require("fs_options")(native, absolute, (value) => internal.require("inspect").nodeInspect(value));
 
   class Dirent {
     constructor(name, kind, parentPath) {
@@ -275,7 +278,10 @@
 
   // --- sync API ---------------------------------------------------------------
 
+  // Like Bun, the path is read before the options, so an option getter that changes
+  // the path's buffer cannot change which file is used.
   function readFileSync(path, options) {
+    if (typeof path !== "number") path = toPath(path);
     const encoding = encodingOf(options);
     // Node validates the flag before opening; the read itself does not use it here.
     // A null or undefined flag means the default, as in Bun.
@@ -297,6 +303,7 @@
   }
 
   function writeFileSync(path, data, options) {
+    if (typeof path !== "number") path = toPath(path);
     const encoding = encodingOf(options);
     const flag = (options && typeof options === "object" ? options.flag : undefined) ?? "w";
     const bytes = toBytes(data, encoding);
@@ -322,7 +329,7 @@
 
   function statSync(path, options) {
     try {
-      return new Stats(withPath(path, (abs) => native.stat(abs, false, Boolean(options && options.bigint))), Boolean(options && options.bigint));
+      return makeStats(withPath(path, (abs) => native.stat(abs, false, Boolean(options && options.bigint))), Boolean(options && options.bigint));
     } catch (err) {
       if (options && options.throwIfNoEntry === false && err.code === "ENOENT") return undefined;
       throw err;
@@ -331,7 +338,7 @@
 
   function lstatSync(path, options) {
     try {
-      return new Stats(withPath(path, (abs) => native.stat(abs, true, Boolean(options && options.bigint))), Boolean(options && options.bigint));
+      return makeStats(withPath(path, (abs) => native.stat(abs, true, Boolean(options && options.bigint))), Boolean(options && options.bigint));
     } catch (err) {
       if (options && options.throwIfNoEntry === false && err.code === "ENOENT") return undefined;
       throw err;
@@ -339,6 +346,7 @@
   }
 
   function mkdirSync(path, options) {
+    path = toPath(path);
     const recursive = Boolean(options && typeof options === "object" && options.recursive);
     // Node validates the mode (a number or string argument, or options.mode); WASI applies none.
     parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
@@ -401,6 +409,14 @@
     return withPath(path, (abs) => native.realpath(abs === "" ? absolute(".") : abs));
   }
   realpathSync.native = realpathSync;
+
+  // Bun converts the path, then both times, then sets them (utimensat, or without
+  // following a final symlink for lutimes).
+  function setPathTimes(path, atime, mtime, noFollow) {
+    const given = toPath(path);
+    const times = timeSpec(atime, "atime").concat(timeSpec(mtime, "mtime"));
+    withPath(given, (abs) => native.utimes(abs, ...times, noFollow));
+  }
 
   function accessSync(path, mode) {
     void mode;
@@ -653,10 +669,14 @@
     validateFd(fd);
     validateWritev(buffers);
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
+    const release = pinArguments("writev", [fd, buffers]);
     let written = 0;
     let error = null;
     try { written = writeBuffers(fd, buffers, position); } catch (err) { error = err; }
-    later(() => callback(error, written, buffers));
+    later(() => {
+      release();
+      callback(error, written, buffers);
+    });
   }
 
   const noop = () => {};
@@ -722,7 +742,10 @@
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
     openSync, closeSync, readSync, readvSync, writeSync, writevSync, globSync, opendirSync,
     statfsSync: (path) => internal.require("fs_statfs")(statSync, toPath)(path),
-    fstatSync: (fd, options) => new Stats(native.fstat(fd, Boolean(options && options.bigint)), Boolean(options && options.bigint)),
+    fstatSync: (fd, options) => {
+      validateFd(fd);
+      return makeStats(native.fstat(fd, Boolean(options && options.bigint)), Boolean(options && options.bigint));
+    },
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
     readlinkSync: (path, options) => {
@@ -737,9 +760,12 @@
     chownSync: (path) => void statSync(path),
     lchownSync: noop,
     fchownSync: noop,
-    utimesSync: (path) => void statSync(path),
-    lutimesSync: noop,
-    futimesSync: noop,
+    utimesSync: (path, atime, mtime) => setPathTimes(path, atime, mtime, false),
+    lutimesSync: (path, atime, mtime) => setPathTimes(path, atime, mtime, true),
+    futimesSync: (fd, atime, mtime) => {
+      validateFd(fd);
+      native.futimes(fd, ...timeSpec(atime, "atime"), ...timeSpec(mtime, "mtime"));
+    },
     fsyncSync: noop,
     fdatasyncSync: noop,
   };
@@ -751,27 +777,46 @@
     internal.realTimers.setImmediate(fn);
   }
 
+  // Bun keeps a Buffer path and the data a write reads attached until the call completes
+  // (fs_buffer_pins.ts). The module loads on the first call that has bytes to pin.
+  let bufferPins;
+  const dataArguments = { write: 1, writev: 1, writeFile: 1, appendFile: 1 };
+  function pinArguments(name, args) {
+    const values = [args[0], args[dataArguments[name] ?? 0]];
+    if (!values.some((value) => ArrayBuffer.isView(value) || value instanceof ArrayBuffer || Array.isArray(value))) return noop;
+    bufferPins ??= internal.require("fs_buffer_pins");
+    return bufferPins.pin(values);
+  }
+
   const argumentErrors = new Set(["ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_VALUE", "ERR_OUT_OF_RANGE"]);
   function callbackify(name, fn, shape) {
     return function (...args) {
       const callback = args.pop();
       if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
+      const release = pinArguments(name, args);
       let result;
       let error = null;
       try {
         result = fn.apply(undefined, args);
       } catch (err) {
         // Node validates arguments before queuing the operation, so those errors throw now.
-        if (err && argumentErrors.has(err.code)) throw err;
+        if (err && argumentErrors.has(err.code)) {
+          release();
+          throw err;
+        }
         error = err;
       }
-      later(() => (shape ? shape(callback, error, result, args) : callback(error, result)));
+      later(() => {
+        release();
+        if (shape) shape(callback, error, result, args);
+        else callback(error, result);
+      });
     };
   }
 
   const callbackApi = {};
   for (const name of Object.keys(sync)) {
-    callbackApi[name.slice(0, -4)] = callbackify(name, sync[name]);
+    callbackApi[name.slice(0, -4)] = callbackify(name.slice(0, -4), sync[name]);
   }
   // fs.exists(path, cb) passes only a boolean.
   callbackApi.exists = function exists(path, callback) {
@@ -822,18 +867,67 @@
 
   // --- promises ---------------------------------------------------------------
 
-  function promisifySync(fn) {
+  function promisifySync(fn, name) {
     return function (...args) {
       return new Promise((resolve, reject) => {
+        const release = pinArguments(name, args);
         let result;
         try {
           result = fn.apply(undefined, args);
         } catch (err) {
-          later(() => reject(err));
+          later(() => {
+            release();
+            reject(err);
+          });
           return;
         }
-        later(() => resolve(result));
+        later(() => {
+          release();
+          resolve(result);
+        });
       });
+    };
+  }
+
+  // AbortSignal options and iterable writeFile data (fs_abortable.ts), loaded on first use.
+  let abortableModule;
+  function abortable() {
+    abortableModule ??= internal.require("fs_abortable")({
+      openSync, closeSync, writeSync, ftruncateSync: sync.ftruncateSync, later,
+      isEncoding: (encoding) => Buffer.isEncoding(encoding), encode: (chunk, encoding) => Buffer.from(chunk, encoding),
+      describe: internal.describe,
+    });
+    return abortableModule;
+  }
+  const hasSignal = (options) => options !== null && typeof options === "object" && options.signal !== undefined;
+  const optionsIndex = { readFile: 1, writeFile: 2, appendFile: 2 };
+
+  function wholeFilePromise(name, byPath) {
+    const run = (path, args) => fileHandleModule?.isFileHandle(path) ? path[name](...args) : byPath(path, ...args);
+    return async function (path, ...args) {
+      const data = args[0];
+      const options = args[optionsIndex[name] - 1];
+      // Only writeFile takes iterable data; strings and views never need the helper module.
+      const mayIterate = name === "writeFile" && data !== null && typeof data === "object" && !ArrayBuffer.isView(data);
+      if (!mayIterate && !hasSignal(options)) return run(path, args);
+      const helpers = abortable();
+      if (mayIterate && helpers.isIterableData(data)) {
+        return helpers.writeIterable(fileHandleModule?.isFileHandle(path) ? path.fd : path, data, options);
+      }
+      if (!hasSignal(options)) return run(path, args);
+      return helpers.promise(helpers.signalOf(options), () => run(path, args));
+    };
+  }
+
+  function wholeFileCallback(name) {
+    const base = callbackApi[name];
+    return function (...args) {
+      const options = args.length > optionsIndex[name] ? args[optionsIndex[name]] : undefined;
+      if (!hasSignal(options)) return base(...args);
+      const done = args.pop();
+      if (typeof done !== "function") throw invalidArg("cb", "of type function", done);
+      const helpers = abortable();
+      helpers.callback(helpers.signalOf(options), (finish) => base(...args, finish), done);
     };
   }
 
@@ -848,12 +942,13 @@
 
   const promises = {};
   for (const name of Object.keys(sync)) {
-    promises[name.slice(0, -4)] = promisifySync(sync[name]);
+    promises[name.slice(0, -4)] = promisifySync(sync[name], name.slice(0, -4));
   }
-  // The whole-file operations also take a FileHandle, which reads or writes at its position.
+  // The whole-file operations also take a FileHandle, which reads or writes at its
+  // position, and an AbortSignal.
   for (const name of ["readFile", "writeFile", "appendFile"]) {
-    const byPath = promises[name];
-    promises[name] = (path, ...args) => fileHandleModule?.isFileHandle(path) ? path[name](...args) : byPath(path, ...args);
+    promises[name] = wholeFilePromise(name, promises[name]);
+    callbackApi[name] = wholeFileCallback(name);
   }
   promises.glob = async function* glob(pattern, options) { yield* globSync(pattern, options); };
   promises.open = async (path, flags, mode) => new (fileHandles().FileHandle)(openSync(path, flags, mode));

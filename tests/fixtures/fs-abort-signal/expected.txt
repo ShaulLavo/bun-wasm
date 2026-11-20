@@ -1,0 +1,24 @@
+readFile pre-aborted AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+readFile custom reason AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+appendFile pre-aborted AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+writeFile pre-aborted AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+pre-aborted writes created files false false
+readFile aborted in flight AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+readFile aborted in flight, default reason AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+readFile with a live signal resolved hello
+readFile with a bad signal Error undefined "TypeError ERR_INVALID_ARG_TYPE" DOMException=false cause=true
+iterable pre-aborted AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+iterable aborted between chunks AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+written before the abort 
+array of chunks xyz
+sync generator hex:6869
+hex chunks hi
+iterable flag r+ ZZ23456789
+iterable flag rs+ ZZ23456789
+iterable flag w ZZ
+iterable flag w+ ZZ
+iterable null chunk Error undefined "TypeError ERR_INVALID_ARG_TYPE" DOMException=false cause=true
+callback readFile AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+callback writeFile AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+callback appendFile AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
+callback readFile live signal null hello

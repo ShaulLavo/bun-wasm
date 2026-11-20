@@ -1,0 +1,29 @@
+new keys dev,ino,mode,nlink,uid,gid,rdev,size,blksize,blocks,atimeMs,mtimeMs,ctimeMs,birthtimeMs
+new values {"dev":0,"ino":7,"mode":1,"nlink":2,"uid":3,"gid":4,"rdev":5,"size":8,"blksize":6,"blocks":9,"atimeMs":10,"mtimeMs":11,"ctimeMs":12,"birthtimeMs":13}
+call values {"dev":0,"ino":7,"mode":1,"nlink":2,"uid":3,"gid":4,"rdev":5,"size":8,"blksize":6,"blocks":9,"atimeMs":10,"mtimeMs":11,"ctimeMs":12,"birthtimeMs":13}
+shared prototype true true true true
+name and length Stats 0
+prototype names isBlockDevice,isCharacterDevice,isDirectory,isFIFO,isFile,isSocket,isSymbolicLink,atime,mtime,ctime,birthtime,constructor
+atime accessor function function true true
+isFile method true true true
+dates true 10 13
+keys after reading atime atime,birthtime
+no arguments {} true
+first read 0
+cached read 0
+assigned date true atime
+detached undefined undefined undefined undefined
+plain receiver true 5
+subclass true true 7 true
+stat keys dev,ino,mode,nlink,uid,gid,rdev,size,blksize,blocks,atimeMs,mtimeMs,ctimeMs,birthtimeMs true true
+fstat true 5
+bigint keys dev,ino,mode,nlink,uid,gid,rdev,size,blksize,blocks,atimeMs,mtimeMs,ctimeMs,birthtimeMs,atimeNs,mtimeNs,ctimeNs,birthtimeNs
+bigint prototype BigIntStats false true bigint true
+bigint dates true true
+bigint constructor {"dev":"1n","ino":"8n","mode":"2n","nlink":"3n","uid":"4n","gid":"5n","rdev":"6n","size":"9n","blksize":"7n","blocks":"10n","atimeMs":11,"mtimeMs":-1.5,"ctimeMs":0.000013,"birthtimeMs":0.000014,"atimeNs":"11000000n","mtimeNs":"-1500000n","ctimeNs":"13n","birthtimeNs":"14n"}
+bigint constructor date TypeError
+fstat 1 ok
+fstat -1 ERR_OUT_OF_RANGE
+fstat Infinity ERR_OUT_OF_RANGE
+fstat 2147483648 ERR_OUT_OF_RANGE
+fstat 2147483647 EBADF
