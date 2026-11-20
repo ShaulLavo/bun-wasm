@@ -1,0 +1,5 @@
+created 8 32 true
+grown 32 4 32 32 7 0
+shrink RangeError
+past the maximum RangeError
+fixed size false 4

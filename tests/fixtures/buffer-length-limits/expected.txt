@@ -1,0 +1,3 @@
+Uint8Array(2 ** 32 + 1) RangeError Out of memory
+ArrayBuffer(2 ** 32 + 1) RangeError Out of memory
+Float64Array(2 ** 30) RangeError Out of memory
