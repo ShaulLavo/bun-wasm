@@ -18,6 +18,7 @@ use std::time::Instant;
 mod archive;
 mod compression;
 mod crypto;
+mod crypto_ec;
 pub(crate) mod data;
 mod directory;
 mod encoding;

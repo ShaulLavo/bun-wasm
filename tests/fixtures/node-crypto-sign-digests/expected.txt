@@ -1,0 +1,32 @@
+createSign sha1 l7a2Fq0wwnJVo8/YkKOctKRJ true
+createSign RSA-SHA1 l7a2Fq0wwnJVo8/YkKOctKRJ true
+createSign sha1WithRSAEncryption l7a2Fq0wwnJVo8/YkKOctKRJ true
+createSign SHA256 aG8jmNeqNiwLrcdkUdEhfjLq true
+createSign sha224WithRSAEncryption Arnywkg2eQf+U9kFJZQs1Z6J true
+createSign RSA-SHA224 Arnywkg2eQf+U9kFJZQs1Z6J true
+createSign sha256WithRSAEncryption aG8jmNeqNiwLrcdkUdEhfjLq true
+createSign RSA-SHA256 aG8jmNeqNiwLrcdkUdEhfjLq true
+createSign sha384WithRSAEncryption NwOuEXnKrFsmZhcaztJ6wCri true
+createSign RSA-SHA384 NwOuEXnKrFsmZhcaztJ6wCri true
+createSign sha512WithRSAEncryption aOMMS/L2JIymN1npVolSI/LT true
+createSign RSA-SHA512 aOMMS/L2JIymN1npVolSI/LT true
+createSign md5 jFB7MmnwZMDiYU7CdJHyOk5+ true
+createSign RSA-MD5 jFB7MmnwZMDiYU7CdJHyOk5+ true
+createSign md5WithRSAEncryption jFB7MmnwZMDiYU7CdJHyOk5+ true
+createSign no-such-digest throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: no-such-digest
+sign RSA-SHA256 one-shot aG8jmNeqNiwLrcdkUdEhfjLq
+verify md5WithRSAEncryption one-shot true
+ecdsa sha256WithRSAEncryption true
+sign context throws Error ERR_CRYPTO_OPERATION_FAILED Context parameter is unsupported
+verify context throws Error ERR_CRYPTO_OPERATION_FAILED Context parameter is unsupported
+sign context callback ERR_CRYPTO_OPERATION_FAILED Context parameter is unsupported
+randomInt() throws TypeError ERR_INVALID_ARG_TYPE The "max" argument must be a safe integer. Received undefined
+randomInt(1.5) throws TypeError ERR_INVALID_ARG_TYPE The "max" argument must be a safe integer. Received type number (1.5)
+randomInt(0) throws RangeError ERR_OUT_OF_RANGE The value of "max" is out of range. It must be greater than the value of "min" (0). Received 0
+randomInt(5, 5) throws RangeError ERR_OUT_OF_RANGE The value of "max" is out of range. It must be greater than the value of "min" (5). Received 5
+randomInt(0, 2 ** 48) throws RangeError ERR_OUT_OF_RANGE The value of "max - min" is out of range. It must be <= 281474976710655. Received 281_474_976_710_656
+randomInt(1, 2, 3) throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument must be of type function. Received type number (3)
+randomInt(1, 2) 1
+randomInt(-3, -2) -3
+randomInt range 0,1,2
+randomInt callback undefined 7

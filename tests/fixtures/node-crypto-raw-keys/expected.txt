@@ -1,0 +1,51 @@
+ed25519  import private public ed25519 {} true ea4a6c63e29c520abef5 32 true true
+x25519  import private public x25519 {} true 13be4feaeaf204c7fd33 32 true true
+ec P-256 import private public ec {"namedCurve":"prime256v1"} true 047135fa4fd93a09dce9 65 true true
+ec P-256 compressed 33 true true
+ec prime256v1 import private public ec {"namedCurve":"prime256v1"} true 047135fa4fd93a09dce9 65 true true
+ec prime256v1 compressed 33 true true
+ec P-384 import private public ec {"namedCurve":"secp384r1"} true 0433aa895ff1a0cd1c6e 97 true true
+ec P-384 compressed 49 true true
+ec secp521r1 import private public ec {"namedCurve":"secp521r1"} true 040165d1e63e89f2b9ca 133 true true
+ec secp521r1 compressed 67 true true
+rsa raw-public throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding is incompatible with the key type
+rsa raw-private throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding is incompatible with the key type
+ed raw-seed throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding is incompatible with the key type
+ed public raw-private throws TypeError ERR_INVALID_ARG_VALUE The property 'options.format' is invalid. Received 'raw-private'
+ed raw-private passphrase throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding raw-private does not support encryption.
+ec raw-public bad type throws TypeError ERR_INVALID_ARG_VALUE The property 'options.type' must be one of: 'compressed', 'uncompressed'. Received 'hybrid'
+import rsa throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding is incompatible with the key type
+import banana throws TypeError ERR_INVALID_ARG_VALUE The argument 'key' Invalid asymmetricKeyType: banana. Received undefined
+import ec no curve throws TypeError ERR_INVALID_ARG_TYPE The "key.namedCurve" property must be of type string. Received undefined
+import ec bad curve throws TypeError ERR_CRYPTO_INVALID_CURVE Invalid EC curve name
+import ec short scalar throws TypeError ERR_INVALID_ARG_VALUE The argument 'key' Invalid key data. Received undefined
+import ec bad point throws TypeError ERR_INVALID_ARG_VALUE The argument 'key' Invalid key data. Received undefined
+import private from raw-public throws TypeError ERR_INVALID_ARG_VALUE The property 'key.format' is invalid. Received 'raw-public'
+import string throws TypeError ERR_INVALID_ARG_TYPE The "key.key" property must be of type ArrayBuffer, Buffer, TypedArray, or DataView. Received type string ('not a buffer')
+import ed raw-seed throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding is incompatible with the key type
+import ed short throws TypeError ERR_INVALID_ARG_VALUE The argument 'key' Invalid key data. Received undefined
+keygen raw encodings 32 32
+keygen compressed 49
+keygen bad type throws TypeError ERR_INVALID_ARG_VALUE The property 'options.publicKeyEncoding.type' is invalid. Received 'garbage'
+keygen raw cipher throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding raw format does not support encryption.
+keygen raw passphrase throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding raw format does not support encryption.
+getPublicKey ECDSA public true ["verify"] true true
+getPublicKey ECDSA private usage SyntaxError Unsupported key usage for an ECDSA key
+getPublicKey ECDSA public key InvalidAccessError key must be a private key
+getPublicKey ECDH public true [] true true
+getPublicKey ECDH private usage SyntaxError Unsupported key usage for an ECDH key
+getPublicKey ECDH public key InvalidAccessError key must be a private key
+getPublicKey Ed25519 public true ["verify"] true true
+getPublicKey Ed25519 private usage SyntaxError Unsupported key usage for an Ed25519 key
+getPublicKey Ed25519 public key InvalidAccessError key must be a private key
+getPublicKey X25519 public true [] true true
+getPublicKey X25519 private usage SyntaxError Unsupported key usage for an X25519 key
+getPublicKey X25519 public key InvalidAccessError key must be a private key
+getPublicKey RSA-PSS public true ["verify"] true true
+getPublicKey RSA-PSS private usage SyntaxError Unsupported key usage for an RSA-PSS key
+getPublicKey RSA-PSS public key InvalidAccessError key must be a private key
+getPublicKey RSA-OAEP public true ["encrypt"] true true
+getPublicKey RSA-OAEP private usage SyntaxError Unsupported key usage for an RSA-OAEP key
+getPublicKey RSA-OAEP public key InvalidAccessError key must be a private key
+getPublicKey secret NotSupportedError key must be a private key
+getPublicKey length 2

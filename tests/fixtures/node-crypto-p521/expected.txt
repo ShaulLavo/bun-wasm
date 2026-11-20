@@ -1,0 +1,34 @@
+type ["private","ec",{"namedCurve":"secp521r1"}]
+pkcs8 round trip true
+jwk {"crv":"P-521","d":"APh-FS-5m2pFy7BvVx-9D8pvOCYVMOd4n-FpZyUiSAXxocjX76fuOgqwWs7K03O8RnR1c9puBTRVB5hDIPszBQfy","kty":"EC","x":"ANng9Sc-BPsxyGO4tCbb97yCX8jGdX2wQdbBkqapM1yEQXimnwL1_DixYCYw57MVH8cym_ZDR9UC_WfQc0qxrXgp","y":"AYiAaXHvGAYPPxO3J4HdqKaP2Q6O3IKDB8yFY_JV2dw3xNLfEdWvMej7WLTnLa1YX4zFnNKhpq-VN4laa18pxG-L"}
+sec1 3081dc020101044200f87e152fb99b6a45cbb06f571fbd0fca6f38261530e7789fe1696725224805f1a1c8d7efa7ee3a0ab05acecad373bc46747573da6e05345507984320fb330507f2a00706052b81040023a18189038186000400d9e0f5273e04fb31c863b8b426dbf7bc825fc8c6757db041d6c192a6a9335c844178a69f02f5fc38b1602630e7b3151fc7329bf64347d502fd67d0734ab1ad78290188806971ef18060f3f13b72781dda8a68fd90e8edc828307cc8563f255d9dc37c4d2df11d5af31e8fb58b4e72dad585f8cc59cd2a1a6af9537895a6b5f29c46f8b
+spki -----BEGIN PUBLIC KEY-----
+MIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQA2eD1Jz4E+zHIY7i0Jtv3vIJfyMZ1
+fbBB1sGSpqkzXIRBeKafAvX8OLFgJjDnsxUfxzKb9kNH1QL9Z9BzSrGteCkBiIBp
+ce8YBg8/E7cngd2opo/ZDo7cgoMHzIVj8lXZ3DfE0t8R1a8x6PtYtOctrVhfjMWc
+0qGmr5U3iVprXynEb4s=
+-----END PUBLIC KEY-----
+
+public jwk {"crv":"P-521","kty":"EC","x":"ANng9Sc-BPsxyGO4tCbb97yCX8jGdX2wQdbBkqapM1yEQXimnwL1_DixYCYw57MVH8cym_ZDR9UC_WfQc0qxrXgp","y":"AYiAaXHvGAYPPxO3J4HdqKaP2Q6O3IKDB8yFY_JV2dw3xNLfEdWvMej7WLTnLa1YX4zFnNKhpq-VN4laa18pxG-L"}
+public from spki true
+public from sec1 true
+short d {"crv":"P-521","d":"APh-FS-5m2pFy7BvVx-9D8pvOCYVMOd4n-FpZyUiSAXxocjX76fuOgqwWs7K03O8RnR1c9puBTRVB5hDIPszBQfy","kty":"EC","x":"ANng9Sc-BPsxyGO4tCbb97yCX8jGdX2wQdbBkqapM1yEQXimnwL1_DixYCYw57MVH8cym_ZDR9UC_WfQc0qxrXgp","y":"AYiAaXHvGAYPPxO3J4HdqKaP2Q6O3IKDB8yFY_JV2dw3xNLfEdWvMej7WLTnLa1YX4zFnNKhpq-VN4laa18pxG-L"}
+bad point throws TypeError ERR_CRYPTO_INVALID_JWK Invalid JWK EC key
+sign der size true
+verify der true
+verify der other data false
+sign ieee-p1363 size 132
+verify ieee-p1363 true
+verify ieee-p1363 other data false
+createVerify true
+generated [{"namedCurve":"secp521r1"},"P-521",66,66,66]
+generated P-521 name {"namedCurve":"secp521r1"}
+diffieHellman [66,true]
+diffieHellman curve mismatch throws Error ERR_CRYPTO_OPERATION_FAILED diffieHellman operation failed
+webcrypto signature 132 true
+webcrypto jwk P-521 undefined ["sign"]
+webcrypto raw 133 158
+webcrypto import {"name":"ECDSA","namedCurve":"P-521"}
+webcrypto wrong alg DataError JWK "alg" does not match the requested algorithm
+webcrypto ecdh 66 true
+webcrypto ecdh too long OperationError derived bit length is too small

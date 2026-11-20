@@ -38,17 +38,33 @@ declare namespace CryptoKeys {
     native: BunWasm.Native & { randomBytes(size: number): Uint8Array };
     nodeCryptoIsKeyObject(value: unknown): boolean;
     builtin(name: "node:stream"): { Writable: WritableConstructor };
+    require(name: "node_crypto_args"): Args;
   }
+  // The part of node_crypto_args.ts this adapter uses.
+  type Args = {
+    argType(name: string, expected: string, value: unknown): TypeError;
+    invalidArgValue(name: string, value: unknown, reason?: string): TypeError;
+    operationFailed(message: string): Error;
+  };
   type ExportType = "pkcs8" | "spki" | "pkcs1" | "sec1";
   type ExportOptions = {
-    format?: "jwk" | "pem" | "der";
+    format?: "jwk" | "pem" | "der" | RawFormat;
     type?: ExportType;
     cipher?: string;
     passphrase?: Input;
   };
+  type RawFormat = "raw-public" | "raw-private" | "raw-seed";
+  type RawExportOptions = {
+    format: RawFormat;
+    type?: unknown;
+    passphrase?: unknown;
+  };
   type KeyOptions = {
     key: Input | KeyObject | CryptoKey | JsonWebKey;
-    format?: "jwk" | "pem" | "der";
+    format?: "jwk" | "pem" | "der" | RawFormat;
+    asymmetricKeyType?: unknown;
+    namedCurve?: unknown;
+    context?: unknown;
     type?: ExportType;
     passphrase?: Input;
     padding?: number;
@@ -104,21 +120,38 @@ declare namespace CryptoKeys {
         : a.name === "ECDSA"
           ? "ec"
           : a.name.toLowerCase();
-    const hash = (name: unknown): string => {
-      const normalized = String(name)
-        .toUpperCase()
-        .replace(/^RSA-/, "")
-        .replace(/^SHA(\d)/, "SHA-$1");
-      if (
-        !["SHA-1", "SHA-224", "SHA-256", "SHA-384", "SHA-512"].includes(
-          normalized,
-        )
-      )
-        throw Object.assign(new TypeError("Invalid digest"), {
+    // OpenSSL's digest names and their signature aliases (RSA-SHA256, sha256WithRSAEncryption).
+    // MD5 only signs; the HKDF and OAEP backends have no MD5.
+    const digestNames: Partial<Record<string, string>> = {
+      sha1: "SHA-1",
+      sha224: "SHA-224",
+      sha256: "SHA-256",
+      sha384: "SHA-384",
+      sha512: "SHA-512",
+      md5: "MD5",
+    };
+    const hash = (name: unknown, signing = false): string => {
+      const key = String(name)
+        .toLowerCase()
+        .replace(/^rsa-/, "")
+        .replace(/withrsaencryption$/, "")
+        .replace(/^sha-(\d)/, "sha$1");
+      const normalized = digestNames[key];
+      if (normalized === undefined || (normalized === "MD5" && !signing))
+        throw Object.assign(new TypeError(`Invalid digest: ${String(name)}`), {
           code: "ERR_CRYPTO_INVALID_DIGEST",
         });
       return normalized;
     };
+    // Node's curve names for the WebCrypto curves, and the names Node accepts for each.
+    const curveNames: Partial<Record<string, string>> = { "P-256": "prime256v1", "P-384": "secp384r1", "P-521": "secp521r1" };
+    const webCurve = (name: string): string | undefined =>
+      curveNames[name] ? name : ({ prime256v1: "P-256", secp256r1: "P-256", secp384r1: "P-384", secp521r1: "P-521" } as Partial<Record<string, string>>)[name];
+    let nodeArgs: CryptoKeys.Args | undefined;
+    const args = () => (nodeArgs ??= internal.require("node_crypto_args"));
+    const incompatible = (message = "The selected key encoding is incompatible with the key type") =>
+      Object.assign(new Error(message), { code: "ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS" });
+    const rawFormats = ["raw-public", "raw-private", "raw-seed"];
     function nodeRecord(key: unknown): CryptoKeys.Record {
       const r = records.get(key as KeyObject);
       if (!r) throw error("Expected a KeyObject");
@@ -177,10 +210,7 @@ declare namespace CryptoKeys {
               0n,
             ),
           };
-        if (a.namedCurve)
-          return {
-            namedCurve: a.namedCurve === "P-256" ? "prime256v1" : "secp384r1",
-          };
+        if (a.namedCurve) return { namedCurve: curveNames[a.namedCurve] };
         return {};
       }
       export(options: CryptoKeys.ExportOptions & { format: "jwk" }): JsonWebKey;
@@ -198,6 +228,7 @@ declare namespace CryptoKeys {
           );
         if (r.type === "secret" && options?.format !== "jwk")
           return Buffer.from(c.decode(r.key.k));
+        if (rawFormats.includes(String(options?.format))) return exportRaw(r, options as CryptoKeys.RawExportOptions);
         const format = options?.format || "pem";
         if (format === "jwk") return { ...r.key };
         if (r.type === "secret" || !["pem", "der"].includes(format))
@@ -331,6 +362,64 @@ declare namespace CryptoKeys {
         key: { kty: "oct", k: Buffer.from(bytes).toString("base64url") },
       });
     }
+    // KeyObject.export's raw formats, with the checks of Bun's KeyObject::exportRaw.
+    function exportRaw(r: CryptoKeys.Record, options: CryptoKeys.RawExportOptions): CryptoKeys.Buffer {
+      const { format, type } = options;
+      if (r.type === "private" && options.passphrase !== undefined)
+        throw incompatible(`The selected key encoding ${format} does not support encryption.`);
+      if (format !== "raw-public" && r.type !== "private") throw args().invalidArgValue("options.format", format);
+      const ec = r.key.kty === "EC";
+      if (format === "raw-seed" || (!ec && r.key.kty !== "OKP")) throw incompatible();
+      if (format === "raw-private") return Buffer.from(c.decode(r.key.d!));
+      if (!ec) return Buffer.from(c.decode(r.key.x!));
+      if (type !== undefined && type !== "compressed" && type !== "uncompressed")
+        throw args().invalidArgValue("options.type", type, "must be one of: 'compressed', 'uncompressed'");
+      return ecPoint(r.key, type === "compressed");
+    }
+    // An SEC1 point from JWK coordinates, which the backend pads to the field size.
+    function ecPoint(key: JsonWebKey, compressed: boolean): CryptoKeys.Buffer {
+      const x = c.decode(key.x!), y = c.decode(key.y!);
+      if (compressed) return Buffer.concat([Uint8Array.of(2 + (y[y.length - 1] & 1)), x]);
+      return Buffer.concat([Uint8Array.of(4), x, y]);
+    }
+    // createPrivateKey and createPublicKey with a raw format, as Bun's
+    // KeyObject::getKeyObjectHandleFromRaw checks them.
+    function importRaw(options: CryptoKeys.KeyOptions, wantPrivate: boolean): KeyObject {
+      const format = options.format as string;
+      if (wantPrivate && format === "raw-public") throw args().invalidArgValue("key.format", format);
+      const data = options.key;
+      if (!ArrayBuffer.isView(data) && !(data instanceof ArrayBuffer))
+        throw args().argType("key.key", "ArrayBuffer, Buffer, TypedArray, or DataView", data);
+      const type: unknown = options.asymmetricKeyType;
+      if (typeof type !== "string") throw args().argType("key.asymmetricKeyType", "string", type);
+      if (type === "ec" && typeof options.namedCurve !== "string") throw args().argType("key.namedCurve", "string", options.namedCurve);
+      const okp = ({ ed25519: "Ed25519", x25519: "X25519" } as Partial<Record<string, string>>)[type.toLowerCase()];
+      const invalid = (reason: string) => args().invalidArgValue("key", undefined, reason);
+      if (type !== "ec" && !okp && !["ed448", "x448"].includes(type.toLowerCase())) {
+        if (/^(ml-dsa-|ml-kem-|slh-dsa-)/.test(type)) throw invalid("Unsupported key type");
+        if (["rsa", "rsa-pss", "dsa", "dh"].includes(type)) throw incompatible();
+        throw invalid(`Invalid asymmetricKeyType: ${type}`);
+      }
+      if (format === "raw-seed") throw incompatible();
+      const curve = type === "ec" ? webCurve(options.namedCurve as string) : undefined;
+      if (type === "ec" && curve === undefined)
+        throw Object.assign(new TypeError("Invalid EC curve name"), { code: "ERR_CRYPTO_INVALID_CURVE" });
+      // Node's Ed448 and X448 have no BoringSSL implementation.
+      if (!okp && type !== "ec") throw invalid("Invalid key data");
+      const a = curve ? { name: "ECDSA", namedCurve: curve } : { name: okp! };
+      let parsed: CryptoKeys.KeyMaterial;
+      try {
+        parsed = c.backend("import", c.algorithm(a), {
+          format: format === "raw-public" ? "raw" : "raw-private",
+          data: c.encode(inputBytes(data)),
+        }).key!;
+      } catch {
+        throw invalid("Invalid key data");
+      }
+      const keyType = format === "raw-public" ? "public" : "private";
+      const record = { algorithm: c.keyAlgorithm(c.algorithm(a), parsed), type: keyType, key: parsed } as const;
+      return wantPrivate || keyType === "public" ? make(record) : publicPart(record);
+    }
     function parseInput(input: CryptoKeys.KeyInput): CryptoKeys.KeyOptions {
       if (
         input &&
@@ -422,6 +511,7 @@ declare namespace CryptoKeys {
         if (wantPrivate) return make({ ...r });
         return publicPart(r);
       }
+      if (rawFormats.includes(String(options.format))) return importRaw(options, wantPrivate);
       const jwk = options.format === "jwk";
       let format: CryptoKeys.ExportType = options.type || (wantPrivate ? "pkcs8" : "spki"),
         bytes: CryptoKeys.Input | JsonWebKey,
@@ -447,6 +537,7 @@ declare namespace CryptoKeys {
         { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
         { name: "ECDSA", namedCurve: "P-256" },
         { name: "ECDSA", namedCurve: "P-384" },
+        { name: "ECDSA", namedCurve: "P-521" },
         { name: "Ed25519" },
         { name: "X25519" },
       ];
@@ -539,9 +630,23 @@ declare namespace CryptoKeys {
         callback(null, key);
       });
     }
+    // generateKeyPair's raw encodings, as Bun's parseKeyFormatAndType checks them.
+    function checkRawEncoding(encoding: CryptoKeys.ExportOptions | undefined, isPublic: boolean): void {
+      const format = String(encoding?.format);
+      if (!rawFormats.includes(format)) return;
+      const name = `options.${isPublic ? "public" : "private"}KeyEncoding`;
+      if (isPublic !== (format === "raw-public")) throw args().invalidArgValue(`${name}.format`, encoding!.format);
+      const type: unknown = encoding!.type;
+      if (type !== undefined && (!isPublic || (type !== "compressed" && type !== "uncompressed")))
+        throw args().invalidArgValue(`${name}.type`, type);
+      if (!isPublic && (encoding!.cipher !== undefined || encoding!.passphrase !== undefined))
+        throw incompatible("The selected key encoding raw format does not support encryption.");
+    }
     function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options?: CryptoKeys.GeneratePairOptions & { privateKeyEncoding?: undefined; publicKeyEncoding?: undefined }): CryptoKeys.KeyPair<KeyObject>;
     function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options?: CryptoKeys.GeneratePairOptions): CryptoKeys.KeyPair;
     function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options: CryptoKeys.GeneratePairOptions = {}): CryptoKeys.KeyPair {
+      checkRawEncoding(options.publicKeyEncoding, true);
+      checkRawEncoding(options.privateKeyEncoding, false);
       let a: BunWasm.CryptoParameters;
       const exponent = options.publicExponent ?? 65537;
       if (
@@ -569,10 +674,7 @@ declare namespace CryptoKeys {
       else if (type === "ec")
         a = {
           name: "ECDSA",
-          namedCurve:
-            ({ prime256v1: "P-256", secp256r1: "P-256", secp384r1: "P-384" } as Record<string, string | undefined>)[
-              options.namedCurve!
-            ] || options.namedCurve,
+          namedCurve: webCurve(options.namedCurve!) || options.namedCurve,
         };
       else if (type === "ed25519" || type === "x25519")
         a = { name: type === "ed25519" ? "Ed25519" : "X25519" };
@@ -621,6 +723,8 @@ declare namespace CryptoKeys {
     function signVerify(verify: boolean, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature?: CryptoKeys.Input): CryptoKeys.Buffer | boolean {
       const options = parseInput(input);
       const key = importAsymmetric(options, !verify);
+      // Only Ed448 takes a signing context, and BoringSSL has no Ed448.
+      if (options.context !== undefined) throw args().operationFailed("Context parameter is unsupported");
       const r = nodeRecord(key),
         a: CryptoKeys.OperationAlgorithm = { ...r.algorithm };
       if (a.name === "X25519") throw error("Key cannot sign");
@@ -628,7 +732,7 @@ declare namespace CryptoKeys {
         throw Object.assign(new Error("Ed25519 does not accept a digest"), {
           code: "ERR_OSSL_EVP_COMMAND_NOT_SUPPORTED",
         });
-      if (a.name !== "Ed25519") a.hash = { name: hash(digest) };
+      if (a.name !== "Ed25519") a.hash = { name: hash(digest, true) };
       if (family(a) === "rsa") {
         const padding = options.padding;
         if (padding !== undefined &&
@@ -730,7 +834,7 @@ declare namespace CryptoKeys {
       declare readonly algorithm: string;
       constructor(algorithm: string, options?: unknown) {
         super(options);
-        this.algorithm = hash(algorithm);
+        this.algorithm = hash(algorithm, true);
       }
       update(data: CryptoKeys.Input, encoding?: string): this {
         if (this.#chunks === null)
@@ -832,7 +936,6 @@ declare namespace CryptoKeys {
       constants,
       hkdfSync,
       hkdf: callbackVersion(hkdfSync),
-      getCurves: () => ["prime256v1", "secp384r1"],
     };
   };
 });
