@@ -119,9 +119,18 @@ same stop inside one `'a'.repeat(1<<22).replace(/(?:a|a){0,10}b|a/g, '')`. Every
 few thousand backtracks, under any per-match interval, and the call runs for about 500 seconds
 under the native launcher, so only a countdown that persists across matches can stop it. Against
 main's JSC this proof fails (the guest never unwinds) while every other proof passes. It runs for
-`nativeMatchesPollingEngines`: JSC, whose countdown now lives on the pattern, and SpiderMonkey,
-whose global replace loop is self-hosted JavaScript with ordinary interrupt checks. QuickJS has
-the same per-match restart in `lre_exec` and does not stop in this proof yet.
+`nativeMatchesPollingEngines`: QuickJS, JSC, whose countdown now lives on the pattern, and
+SpiderMonkey, whose global replace loop is self-hosted JavaScript with ordinary interrupt checks.
+
+QuickJS's `lre_exec` restarts libregexp's 10,000-step countdown on every call, so before this
+change a global replace, split or matchAll of many cheap matches never polled. Carrying that
+countdown across calls inside `lre_exec` made the matcher 15 to 20% slower, even for one long
+match. Instead, its two callers in `quickjs.c` (`js_regexp_exec_internal` and
+`JS_RegExpDelete`) charge each match attempt 100 steps of the interpreter's own countdown
+(`js_regexp_poll_interrupts`), so a poll comes at least every 100 attempts, and the matcher's
+code is untouched. The native probe `scripts/quickjs-regexp-test.test.ts` stops a global replace
+(with a replacement and with an empty one, which takes `JS_RegExpDelete`), a split and a
+matchAll spread of 16,384 cheap matches; against main's `quickjs.c` all of them run to the end.
 
 The stop proofs run last, in a separate page (`?phase=busy`) that the runner opens in a
 fresh browser context after the main matrix's context has closed, and closes right after.

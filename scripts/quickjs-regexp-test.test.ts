@@ -57,7 +57,7 @@ test("RegExp.test preserves native semantics and the separate baseline Node diff
     expect(node).toEqual(nodeBaseline);
     expect(differingLabels(actual, node)).toEqual(differingLabels(baseline, nodeBaseline));
     expect(differingLabels(actual, node)).toHaveLength(20);
-    expect(run(binary, ["--native"])).toContain("realm, frame, stack, interrupt, allocation failure and recovery: passed");
+    expect(run(binary, ["--native"])).toContain("realm, frame, stack, interrupt, interrupt across matches, allocation failure and recovery: passed");
     console.log(JSON.stringify({ sourceSha256: createHash("sha256").update(readFileSync(join(check.engine, "quickjs.c"))).digest("hex"), semanticRows: Array.isArray(actual) ? actual.length : 0, preservedBaselineNodeDifferences: 20 }));
   } finally {
     check.cleanup();
