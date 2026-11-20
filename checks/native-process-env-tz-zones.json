@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/process-env-tz-zones",
+  "engines": ["quickjs", "jsc"]
+}
