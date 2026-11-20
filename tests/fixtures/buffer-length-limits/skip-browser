@@ -1,0 +1,1 @@
+The Browser engine uses its host's ArrayBuffer, whose allocation limits are the host's.
