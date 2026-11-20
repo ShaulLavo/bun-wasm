@@ -165,8 +165,11 @@
   // Bun's frame for its tick pass, a builtin at a fixed position.
   const tickPassFrame = "processTicksAndRejections (native:7:39)";
   internal.tickPassFrame = tickPassFrame;
+  // On the Browser engine the runtime's own functions have no script (Node's frames of the
+  // same name, from the fixture host, do); elsewhere they are `bun-wasm:` scripts.
   function isTickPass(site) {
-    return site.getFunctionName() === "processTicksAndRejections" && (isRuntimeCallSite(site) || isNativeCallSite(site));
+    if (site.getFunctionName() !== "processTicksAndRejections") return false;
+    return isV8 ? !callSiteFile(site) : isRuntimeCallSite(site);
   }
 
   function syntaxCallSite(site, name, file) {
