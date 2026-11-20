@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/growable-shared-array-buffer",
+  "engines": ["quickjs", "browser"]
+}
