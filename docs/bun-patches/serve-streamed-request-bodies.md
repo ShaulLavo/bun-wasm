@@ -21,7 +21,8 @@ server destroying the connection), the body stream errors with a `DOMException` 
 `AbortError` ("The connection was closed."), as Bun aborts it with its connection-closed
 reason, and reads in the handler reject with it. A malformed chunked body gets Bun's
 `400 Bad Request` (`Connection: close`) and the connection closes; the handler's read fails
-with the same `AbortError`. `node:http` servers are unchanged.
+with the same `AbortError`. The shared decoder now rejects a chunk not followed by CRLF at
+the first wrong byte, where it used to wait for a second byte that might never come. `node:http` servers are unchanged.
 
 When the response goes out before the body ended, Bun aborts the body: a later read gets
 the `AbortError`. The rest of the body is still read and dropped, so the connection serves
