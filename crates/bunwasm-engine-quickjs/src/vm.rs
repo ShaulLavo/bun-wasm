@@ -125,7 +125,8 @@ unsafe extern "C" {
     fn JS_bunwasm_SetAsyncContext(ctx: *mut qjs::JSContext, value: qjs::JSValue);
     fn JS_bunwasm_IsModuleNamespace(value: qjs::JSValue) -> bool;
     /// Added by bun-wasm: local time follows these UTC offsets (`offsets` holds `count + 1`
-    /// entries), or the libc's again when `offsets` is null. False when memory ran out.
+    /// entries), or the libc's again when `offsets` is null. False when the table is longer
+    /// than the engine's fixed storage holds.
     fn JS_bunwasm_SetLocalTimeOffsets(times: *const i64, offsets: *const i32, count: usize)
     -> bool;
 }

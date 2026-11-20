@@ -20,8 +20,8 @@ const packages = [
 ];
 
 // The time zone data (FormatJS's add-all-tz payload and its link table) becomes its own module,
-// tz_data.js, so the runtime can give QuickJS local time from it without loading the 2.6 MB
-// Intl bundle (time_zone.ts). The bundle reads the same module, so nothing is duplicated.
+// tz_data.js, so the runtime can give QuickJS local time from it without loading the Intl
+// bundle (time_zone.ts). The bundle reads the same module, so nothing is duplicated.
 function splitZoneData(bundle: string): { bundle: string; zones: string } {
   const call = "Intl.DateTimeFormat.__addTZData(";
   const callStart = bundle.indexOf(call);
