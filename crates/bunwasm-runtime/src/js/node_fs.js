@@ -278,10 +278,10 @@
 
   // --- sync API ---------------------------------------------------------------
 
-  // Like Bun, the path is read before the options, so an option getter that changes
-  // the path's buffer cannot change which file is used.
+  // Like Bun, a byte path is read before the options, so an option getter that changes
+  // the path's buffer cannot change which file is used. Strings cannot change.
   function readFileSync(path, options) {
-    if (typeof path !== "number") path = toPath(path);
+    if (typeof path !== "number" && typeof path !== "string") path = toPath(path);
     const encoding = encodingOf(options);
     // Node validates the flag before opening; the read itself does not use it here.
     // A null or undefined flag means the default, as in Bun.
@@ -303,7 +303,7 @@
   }
 
   function writeFileSync(path, data, options) {
-    if (typeof path !== "number") path = toPath(path);
+    if (typeof path !== "number" && typeof path !== "string") path = toPath(path);
     const encoding = encodingOf(options);
     const flag = (options && typeof options === "object" ? options.flag : undefined) ?? "w";
     const bytes = toBytes(data, encoding);
@@ -346,7 +346,7 @@
   }
 
   function mkdirSync(path, options) {
-    path = toPath(path);
+    if (typeof path !== "string") path = toPath(path);
     const recursive = Boolean(options && typeof options === "object" && options.recursive);
     // Node validates the mode (a number or string argument, or options.mode); WASI applies none.
     parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
@@ -788,6 +788,8 @@
   function pinArguments(dataIndex, args) {
     const path = args[0];
     const data = args[dataIndex];
+    // Strings, numbers and undefined (nearly every call) need no further check.
+    if (typeof path !== "object" && typeof data !== "object") return null;
     if (!holdsBytes(path) && !holdsBytes(data)) return null;
     bufferPins ??= internal.require("fs_buffer_pins");
     return bufferPins.pin([path, data]);
@@ -929,8 +931,8 @@
     const iterates = name === "writeFile";
     const run = (path, args) => fileHandleModule?.isFileHandle(path) ? path[name](...args) : byPath(path, ...args);
     return function (path, ...args) {
-      if (!(iterates && mayIterate(args[0])) && !hasSignal(args[optionsIndex])) return run(path, args);
-      return wholeFileSlowPath(run, path, args, args[optionsIndex]);
+      if ((iterates && mayIterate(args[0])) || hasSignal(args[optionsIndex])) return wholeFileSlowPath(run, path, args, args[optionsIndex]);
+      return fileHandleModule?.isFileHandle(path) ? path[name](...args) : byPath(path, ...args);
     };
   }
 
