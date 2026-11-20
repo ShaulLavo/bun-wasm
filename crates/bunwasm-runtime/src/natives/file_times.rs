@@ -62,7 +62,9 @@ mod tests {
     fn negative_nanoseconds_mean_now() {
         let values = stamp(5.0, -1.0);
         let [atime, _] = times(&Args(&values), 0).unwrap();
-        assert_eq!(i64::from(atime.tv_nsec), libc::UTIME_NOW as i64);
+        let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+        now.tv_nsec = libc::UTIME_NOW as _;
+        assert_eq!(atime.tv_nsec, now.tv_nsec);
     }
 
     #[test]
