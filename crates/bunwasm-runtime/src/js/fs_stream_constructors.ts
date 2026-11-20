@@ -118,7 +118,8 @@
 
     function fileStreamOptions(options: string | Options | null | undefined): Options {
       if (typeof options === "string") return checkedEncoding({ encoding: options });
-      if (options == null) return {};
+      // Node's getOptions: a function in the options slot means no options.
+      if (options == null || typeof options === "function") return {};
       if (typeof options !== "object") throw invalidArg("options", "an object or string", options);
       return checkedEncoding(options);
     }

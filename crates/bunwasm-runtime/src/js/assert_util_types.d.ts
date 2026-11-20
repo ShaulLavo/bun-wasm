@@ -1,5 +1,4 @@
 declare namespace BunWasm {
-  interface Native { parseEnv(content: string): [string, string][] }
   interface UtilityError extends Error { code?: string; reason?: unknown }
   interface AssertionDetail {
     message?: unknown; actual?: unknown; expected?: unknown; operator?: unknown; stack?: unknown;

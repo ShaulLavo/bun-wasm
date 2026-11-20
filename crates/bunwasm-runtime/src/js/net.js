@@ -124,10 +124,19 @@
       headers,
       redirect: init.redirect || req.redirect || "follow",
     });
-    const bytes = await requestBody(req, signal);
+    const lifetime = internal.require("fetch_lifetime");
+    // A host with fetch_stream gets a stream body as it is produced; others take it whole.
+    const upload = caps.fetch_stream ? lifetime.uploadStream(req) : null;
+    // A streamed request starts on the next turn, as Bun's does: an abort in this turn sends
+    // nothing, and until then the stream stays unlocked. A buffered one waits for its body.
+    const bytes = upload ? await new Promise(resolve => internal.realTimers.setImmediate(() => resolve(null))) : await requestBody(req, signal);
     if (signal && signal.aborted) throw signal.reason;
-    const handle = native.hostFetch(meta, bytes);
-    if (handle < 0) throw hostError(0, "fetch failed");
+    const reader = upload ? lifetime.lockUpload(req, upload) : null;
+    const handle = reader ? native.hostFetchStream(meta) : native.hostFetch(meta, bytes);
+    if (handle < 0) {
+      if (reader) void reader.cancel(undefined).catch(() => {});
+      throw hostError(0, "fetch failed");
+    }
     let closed = false;
     let onAbort;
     const closeHandle = () => {
@@ -137,7 +146,19 @@
     };
     onAbort = closeHandle;
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
-    const head = await waitHead(handle, signal, closeHandle);
+    const headPromise = waitHead(handle, signal, closeHandle);
+    let head;
+    if (reader) {
+      // The body stream's own failure rejects the fetch; the request is closed by then.
+      const sending = lifetime.sendBody({
+        handle, reader, signal, write: native.hostWrite, end: native.hostShutdown, close: closeHandle,
+        add: addWaiter, remove: removeWaiter, again: AGAIN,
+      });
+      const failed = sending.then(() => new Promise(() => {}));
+      headPromise.catch(() => {});
+      failed.catch(() => {});
+      head = await Promise.race([headPromise, failed]);
+    } else head = await headPromise;
     if (signal && signal.aborted) throw signal.reason;
     // A final response with a null body status (204, 205, 304) or to a HEAD request has no body, whatever followed the head.
     const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 205 || head.status === 304;
@@ -441,13 +462,47 @@
   // pipelining are supported; responses go out in request order).
   const UPGRADED = Symbol("websocket upgrade");
 
-  function serveHttp(conn, handleRequest, startRequest) {
+  // With `streamBodies` (Bun.serve), a request whose body is still arriving starts its handler
+  // at once with a body stream (serve_request_body.ts); the next request waits for the body.
+  function serveHttp(conn, handleRequest, startRequest, streamBodies) {
     let pending = null;
     let buffer = new Uint8Array(0);
     let busy = false;
     let ended = false;
+    let upload = null;
+    function startUpload() {
+      const head = parseHead(buffer);
+      if (!head) return null;
+      const chunked = (header(head.headers, "transfer-encoding") || "").toLowerCase().includes("chunked");
+      const length = Number(header(head.headers, "content-length") || 0);
+      if (!chunked && !(length > 0)) return null;
+      const onDemand = () => { if (native.wake) native.wake(0); };
+      const body = new (internal.require("serve_request_body").RequestUpload)(chunked, length, onDemand);
+      return Object.assign(head, { body: body.stream, streamed: true, chunked, trailers: [], length: buffer.length, upload: body, initial: buffer.subarray(head.headLength) });
+    }
+    function feedUpload(bytes) {
+      let rest;
+      try {
+        rest = upload.push(bytes);
+      } catch {
+        // A malformed chunked body: Bun answers 400 unless the response already went out.
+        failUpload();
+        if (busy) conn.write(encoder.encode("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"));
+        conn.end();
+        return;
+      }
+      if (rest === null) return;
+      upload = null;
+      buffer = rest;
+      if (!busy) next();
+    }
+    function failUpload() {
+      if (!upload) return;
+      upload.abort();
+      upload = null;
+    }
     function next() {
-      if (busy || conn.closed) return;
+      if (busy || upload || conn.closed) return;
       let request;
       try {
         if (startRequest && !pending && buffer.length) {
@@ -455,6 +510,7 @@
           if (head && header(head.headers, "expect")?.toLowerCase() === "100-continue") pending = startRequest(head, conn, wantsKeepAlive(head));
         }
         request = buffer.length ? parseRequest(buffer) : null;
+        if (!request && streamBodies && buffer.length) request = startUpload();
       } catch {
         conn.write(encoder.encode("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
         conn.end();
@@ -467,6 +523,10 @@
       buffer = buffer.slice(request.length);
       busy = true;
       conn.busy = true;
+      if (request.upload) {
+        upload = request.upload;
+        feedUpload(request.initial);
+      }
       const keepAlive = wantsKeepAlive(request) && !ended;
       const active = pending;
       pending = null;
@@ -486,6 +546,9 @@
           }
           busy = false;
           conn.busy = false;
+          // The response went out before the body ended: as in Bun, the body is aborted and
+          // the rest of it is read and dropped, so the connection can serve the next request.
+          upload?.abort();
           if (stillOpen === false || !keepAlive || conn.serverClosing) {
             conn.end();
             return;
@@ -494,6 +557,7 @@
         });
     }
     conn.onData = (chunk) => {
+      if (upload) return feedUpload(chunk);
       buffer = buffer.length ? internal.concatBytes([buffer, chunk]) : chunk;
       next();
     };
@@ -502,10 +566,20 @@
     }
     conn.onEnd = () => {
       ended = true;
+      failUpload();
       if (busy) internal.realTimers.setImmediate(endActive);
       else next();
     };
-    conn.onError = () => {};
+    conn.onError = failUpload;
+    if (streamBodies) {
+      // Stop reading while the handler leaves a streamed body unread.
+      conn.canRead = () => !upload || upload.wantsMore();
+      const onClose = conn.onClose;
+      conn.onClose = () => {
+        failUpload();
+        onClose?.();
+      };
+    }
     conn.startReading();
   }
 
@@ -725,7 +799,7 @@
       const url = `http://${host}${request.target.startsWith("/") ? request.target : "/" + request.target}`;
       // As in Bun, a request without bytes (no body, Content-Length: 0) has a null body;
       // a chunked body has a stream even with no chunks.
-      const hasBody = request.method !== "GET" && request.method !== "HEAD" && (request.chunked || request.body.length > 0);
+      const hasBody = request.method !== "GET" && request.method !== "HEAD" && (request.streamed || request.chunked || request.body.length > 0);
       const result = await internal.require("serve_request_lifetime").run(conn, (signal) => {
         releaseOnAbort?.(signal);
         const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined, signal });
@@ -793,7 +867,7 @@
         connections.delete(conn);
         destroy();
       };
-      serveHttp(conn, handleRequest);
+      serveHttp(conn, handleRequest, undefined, true);
     });
     // A frame entered at Bun.serve() is where its connections start reading and its requests
     // run, as under Bun. Started outside any frame, it keeps each turn's own frame.

@@ -1,0 +1,14 @@
+assigned 7 America/New_York
+deleted restores the start zone true true false
+assigned after delete 21 Asia/Tokyo
+defined 7 America/New_York
+assigned after define 12
+alias GMT UTC 12 12 1,234.5
+alias Etc/UTC UTC 12 12 1,234.5
+alias Etc/GMT UTC 12 12 1,234.5
+alias EST5EDT America/New_York 8 08 1,234.5
+unknown zone keeps the previous one 21 Asia/Tokyo 21
+inherited write 21 Not/AZone Asia/Kolkata
+after worker writes 8 America/New_York
+worker started in Asia/Tokyo ["Asia/Tokyo",21,"Asia/Tokyo","1,234.5"]
+worker started in GMT ["GMT",12,"UTC","1,234.5"]

@@ -1,0 +1,106 @@
+string: Response (5 bytes) {
+  ok: true,
+  url: "",
+  status: 200,
+  statusText: "",
+  headers: Headers {},
+  redirected: false,
+  bodyUsed: false,
+  Blob (5 bytes)
+}
+null body: Response (0 KB) {
+  ok: true,
+  url: "",
+  status: 204,
+  statusText: "Nothing",
+  headers: Headers {},
+  redirected: false,
+  bodyUsed: false
+}
+blob: Response (3 bytes) {
+  ok: true,
+  url: "",
+  status: 200,
+  statusText: "",
+  headers: Headers {
+    "content-type": "text/x",
+    "x-a": "1",
+    "x-quote": "say \"hi\"",
+  },
+  redirected: false,
+  bodyUsed: false,
+  Blob (3 bytes) {
+    type: "text/x"
+  }
+}
+bytes: Response (2.0 KB) {
+  ok: true,
+  url: "",
+  status: 200,
+  statusText: "",
+  headers: Headers {},
+  redirected: false,
+  bodyUsed: false,
+  Blob (2.0 KB)
+}
+used: Response (0 KB) {
+  ok: true,
+  url: "",
+  status: 200,
+  statusText: "",
+  headers: Headers {},
+  redirected: false,
+  bodyUsed: true
+}
+error: Response (0 KB) {
+  ok: false,
+  url: "",
+  status: 0,
+  statusText: "",
+  headers: Headers {},
+  redirected: false,
+  bodyUsed: false
+}
+request: Request (3 bytes) {
+  method: "POST",
+  url: "http://localhost/x",
+  headers: Headers {
+    "accept": "*/*",
+  }
+  Blob (3 bytes)
+}
+request without body: Request (0 KB) {
+  method: "GET",
+  url: "http://localhost/y",
+  headers: Headers {}
+}
+nested: {
+  response: Response (2 bytes) {
+    ok: true,
+    url: "",
+    status: 200,
+    statusText: "",
+    headers: Headers {},
+    redirected: false,
+    bodyUsed: false,
+    Blob (2 bytes)
+  },
+}
+from blob.stream(): Response (0 KB) { true
+request from blob.stream(): Request (0 KB) {
+from another body: Response (0 KB) {
+[object Response] [object Request]
+fetched: Response (10 bytes) {
+  ok: true,
+  url: "http://127.0.0.1:PORT/path",
+  status: 200,
+  statusText: "OK",
+  headers: Headers {
+    "content-length": "10",
+    "x-server": "raw",
+  },
+  redirected: false,
+  bodyUsed: false,
+  Blob (10 bytes)
+}
+text: 0123456789

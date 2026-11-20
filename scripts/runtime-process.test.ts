@@ -81,7 +81,7 @@ const mutations: readonly [string, string, string][] = [
   ["callback snapshots lose reentrant appends", "for (const callback of callbacks)", "for (const callback of callbacks.slice())"],
   ["callback throws must prevent reset", "for (const callback of callbacks) callback(error);", "try { for (const callback of callbacks) callback(error); } finally { failure = null; stream.writable = true; }"],
   ["callbacks must not acquire a receiver", "callback(error);", "callback.call(stream, error);"],
-  ["Symbol environment values stay raw", 'typeof key === "symbol" ? value : String(value)', "String(value)"],
+  ["inherited environment writes stay on the receiver", "if (receiver !== env) return", "if (receiver === undefined) return"],
 ];
 for (const [name, before, after] of mutations) {
   test(`controls reject a semantic mutation: ${name}`, async () => {
@@ -150,12 +150,13 @@ for (const engine of ["bun", "node"]) {
   });
 }
 
-for (const rss of [null, 2048]) test(`derived process memory preserves ${rss === null ? "unknown" : "known"} RSS`, () => {
+// A guest engine reports no rss of its own; its linear memory is its resident memory.
+for (const [usage, rss] of [[{ rss: null, wasmCapacity: 131072 }, 131072], [{ rss: 2048, wasmCapacity: 131072 }, 2048]] as const) test(`derived process memory uses ${usage.rss === null ? "the linear memory" : "a known RSS"}`, () => {
   const internal = {
     native: {
       platformInfo: { version: "test", revision: "test", arch: "wasm32" },
       env: () => ({}), argv: () => ["bun"], execArgv: () => [], processIdentity: () => [49, 7], execPath: () => "/bin/bun",
-      hostSignal() { return 0; }, memoryUsage: () => ({ rss }),
+      hostSignal() { return 0; }, memoryUsage: () => usage,
     },
     require(name: string) {
       if (name === "events") return function EventEmitter() {};
@@ -170,6 +171,7 @@ for (const rss of [null, 2048]) test(`derived process memory preserves ${rss ===
   assert(process !== null && typeof process === "object");
   const resources: unknown = Reflect.get(process, "resourceUsage")();
   assert(resources !== null && typeof resources === "object");
-  expect(Reflect.get(resources, "maxRSS")).toBe(rss === null ? null : 2);
-  expect(Reflect.get(process, "availableMemory")()).toBe(rss === null ? null : 4294965248);
+  expect(Reflect.get(resources, "maxRSS")).toBe(rss / 1024);
+  expect(Reflect.get(process, "availableMemory")()).toBe(4294967296 - rss);
+  expect(Reflect.get(process, "memoryUsage").rss()).toBe(rss);
 });

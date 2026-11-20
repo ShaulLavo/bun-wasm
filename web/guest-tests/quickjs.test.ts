@@ -66,10 +66,11 @@ test("installHostSlots fills bun.wasm's slot table", () => {
   const view = new DataView((instance.exports.memory as WebAssembly.Memory).buffer);
   expect(view.getUint32(ptr, true)).toBe(2);
   expect(view.getUint32(ptr + 4, true)).toBe(SLOT_NAMES.length);
-  expect(SLOT_NAMES).toHaveLength(18);
+  expect(SLOT_NAMES).toHaveLength(19);
   expect(SLOT_NAMES).toEqual([
     "poll", "fetch", "fetch_head", "read", "write", "close", "listen", "local_port", "accept", "connect",
     "error", "peer_addr", "shutdown", "local_addr", "lookup_start", "lookup_head", "listen_path", "connect_path",
+    "fetch_stream",
   ]);
   const table = instance.exports.__indirect_function_table as WebAssembly.Table;
   const slot = (i: number) => view.getUint32(ptr + 8 + 4 * i, true);
@@ -78,6 +79,7 @@ test("installHostSlots fills bun.wasm's slot table", () => {
   expect((table.get(slot(1)) as Function)(0, 0, 0, 0)).toBe(-1);
   expect(slot(16)).toBeGreaterThan(0);
   expect(slot(17)).toBeGreaterThan(0);
+  expect(slot(18)).toBe(0); // fetch_stream not provided
   expect(slot(16)).not.toBe(slot(17));
   const listenPath = table.get(slot(16)), connectPath = table.get(slot(17));
   expect(typeof listenPath).toBe("function");

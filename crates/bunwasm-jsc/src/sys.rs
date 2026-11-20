@@ -410,6 +410,8 @@ unsafe extern "C" {
     );
     pub fn bunjsc_promise_is_handled(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_object_type_counts(ctx: JSContextRef) -> JSValueRef;
+    pub fn bunjsc_set_time_zone(ctx: JSContextRef, value: JSValueRef) -> JSValueRef;
+    pub fn bunjsc_heap_size_after_collection(ctx: JSContextRef) -> u64;
     pub fn bunjsc_promise_then(
         ctx: JSContextRef,
         promise: JSValueRef,

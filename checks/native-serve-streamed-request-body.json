@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/serve-streamed-request-body",
+  "engines": ["quickjs", "jsc", "browser"]
+}

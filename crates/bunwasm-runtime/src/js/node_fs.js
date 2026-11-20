@@ -347,7 +347,12 @@
 
   function mkdirSync(path, options) {
     if (typeof path !== "string") path = toPath(path);
-    const recursive = Boolean(options && typeof options === "object" && options.recursive);
+    const given = options !== null && typeof options === "object" ? options.recursive : undefined;
+    if (given !== undefined && typeof given !== "boolean") {
+      const kind = Array.isArray(given) ? "array" : typeof given;
+      throw Object.assign(new TypeError(`The "recursive" property must be of type boolean, got ${kind}`), { code: "ERR_INVALID_ARG_TYPE" });
+    }
+    const recursive = given === true;
     // Node validates the mode (a number or string argument, or options.mode); WASI applies none.
     parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
     const created = withPath(path, (abs) => native.mkdir(abs, recursive));
@@ -400,7 +405,7 @@
 
   function cp(from, to, options, callback) {
     if (typeof options === "function") { callback = options; options = undefined; }
-    if (typeof callback !== "function") throw invalidArg("callback", "of type function", callback);
+    if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
     promises.cp(from, to, options).then(() => later(() => callback(null)), error => later(() => callback(error)));
   }
 
@@ -472,20 +477,33 @@
     if (offsetOrOptions == null || typeof offsetOrOptions === "object") {
       ({ offset = 0, length = buffer.byteLength - offset, position = null } = offsetOrOptions || {});
     }
-    if (typeof offset !== "number") throw invalidArg("offset", "of type number", offset);
-    if (!Number.isSafeInteger(offset) || offset < 0) throw readRange("offset", offset);
+    offset = validateOffset(offset);
     if (length === undefined) length = buffer.byteLength - offset;
     length = Number(length);
-    if (!Number.isSafeInteger(length) || length < 0) throw readRange("length", length);
-    // Zero-byte reads allow an offset beyond the view. Bun also ignores position in this case.
+    // Bun's Read::from_js: a zero-byte read allows an offset beyond the view and ignores
+    // position; otherwise the length is checked against the view, then against what
+    // follows the offset, then for its sign.
     if (length === 0) return { offset, length, position };
-    if (buffer.byteLength === 0) throw Object.assign(new TypeError("The argument 'buffer' is empty and cannot be written"), { code: "ERR_INVALID_ARG_VALUE" });
-    if (offset > buffer.byteLength || length > buffer.byteLength - offset) throw readRange("length", length);
+    if (buffer.byteLength === 0) throw Object.assign(new TypeError("The argument 'buffer' is empty and cannot be written."), { code: "ERR_INVALID_ARG_VALUE" });
+    if (!Number.isInteger(length)) throw readRange("length", length, "an integer");
+    if (length > buffer.byteLength) throw readRange("length", length, `<= ${buffer.byteLength}`);
+    if (offset + length > buffer.byteLength) throw readRange("length", length, `<= ${Math.max(0, buffer.byteLength - offset)}`);
+    if (length < 0) throw readRange("length", length, ">= 0");
     return { offset, length, position };
   }
 
-  function readRange(name, value) {
-    return Object.assign(new RangeError(`The value of "${name}" is out of range. Received ${value}`), { code: "ERR_OUT_OF_RANGE" });
+  function readRange(name, value, rule) {
+    const must = rule === undefined ? "" : ` It must be ${rule}.`;
+    return Object.assign(new RangeError(`The value of "${name}" is out of range.${must} Received ${value}`), { code: "ERR_OUT_OF_RANGE" });
+  }
+
+  // Node's validateInteger(offset, "offset", 0): a buffer offset that is missing is 0.
+  function validateOffset(offset) {
+    if (offset == null) return 0;
+    if (typeof offset !== "number") throw invalidArg("offset", "of type number", offset);
+    if (!Number.isInteger(offset)) throw readRange("offset", offset, "an integer");
+    if (offset < 0 || offset > Number.MAX_SAFE_INTEGER) throw readRange("offset", offset, `>= 0 && <= ${Number.MAX_SAFE_INTEGER}`);
+    return offset;
   }
 
   // Each native read returns a fresh copy of its bytes. Reading a large regular
@@ -625,15 +643,31 @@
     return Number.isSafeInteger(value) && value >= 0 ? value : -1;
   }
 
+  // Bun's writeSync (src/js/node/fs.ts): writeSync(fd, string[, position[, encoding]]) or
+  // writeSync(fd, view[, offset[, length[, position]]]), where the offset may be an
+  // options object. The "buffer" encoding writes UTF-8, as Bun's does.
   function writeSync(fd, data, offsetOrPosition, lengthOrEncoding, position) {
     if (typeof data === "string") {
-      const bytes = toBytes(data, typeof lengthOrEncoding === "string" ? lengthOrEncoding : "utf8");
-      return native.write(fd, bytes, filePosition(offsetOrPosition));
+      const encoding = typeof lengthOrEncoding === "string" && lengthOrEncoding !== "buffer" ? lengthOrEncoding : "utf8";
+      return native.write(fd, toBytes(data, encoding), filePosition(offsetOrPosition));
     }
+    if (!ArrayBuffer.isView(data)) throw invalidArg("buffer", "of type string or an instance of Buffer, TypedArray, or DataView", data);
+    if (offsetOrPosition !== null && typeof offsetOrPosition === "object") {
+      const { offset = 0, length = data.byteLength - offset, position: at = null } = offsetOrPosition;
+      return writeView(fd, data, offset, length, at);
+    }
+    return writeView(fd, data, offsetOrPosition, lengthOrEncoding, position);
+  }
+
+  // Node's validateOffsetLengthWrite: the offset may reach the end of the view, and a
+  // length that is not a number means the rest of it.
+  function writeView(fd, data, offsetValue, lengthValue, position) {
+    const offset = validateOffset(offsetValue);
+    if (offset > data.byteLength) throw readRange("offset", offset, `<= ${data.byteLength}`);
+    const length = typeof lengthValue === "number" ? Math.trunc(lengthValue) : data.byteLength - offset;
+    if (!(length >= 0 && length <= data.byteLength - offset)) throw readRange("length", lengthValue, `>= 0 and <= ${data.byteLength - offset}`);
     const view = internal.toUint8(data);
-    const offset = offsetOrPosition || 0;
-    const length = typeof lengthOrEncoding === "number" ? lengthOrEncoding : view.byteLength - offset;
-    return native.write(fd, view.slice(offset, offset + length), filePosition(position));
+    return native.write(fd, view.subarray(offset, offset + length), filePosition(position));
   }
 
   function validateFd(fd) {
@@ -679,8 +713,6 @@
       callback(error, written, buffers);
     });
   }
-
-  const noop = () => {};
 
   function globSync(pattern, options) {
     const patterns = typeof pattern === "string" ? [pattern] : pattern;
@@ -747,29 +779,45 @@
       validateFd(fd);
       return makeStats(native.fstat(fd, Boolean(options && options.bigint)), Boolean(options && options.bigint));
     },
-    ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
-    truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
+    ftruncateSync: (fd, len) => native.ftruncate(fd, truncateLength(len)),
+    truncateSync: (path, len) => {
+      if (typeof path === "number") return sync.ftruncateSync(path, len);
+      const length = truncateLength(len);
+      withPath(path, (abs) => native.truncate(abs, length));
+    },
     readlinkSync: (path, options) => {
       encodingOf(options);
       return withPath(path, (abs) => native.readlink(abs));
     },
     symlinkSync: (target, path) => withPath(path, (abs) => native.symlink(toPath(target, "target"), abs)),
     linkSync: (from, to) => withPath(from, (abs) => native.link(abs, absolute(toPath(to, "newPath")))),
-    chmodSync: (path) => void statSync(path),
-    lchmodSync: noop,
-    fchmodSync: noop,
+    // WASI has no permission bits to set: the mode is validated as Node's parseFileMode does
+    // and the path must exist.
+    chmodSync: (path, mode) => {
+      parseFileMode(mode, "mode");
+      void statSync(path);
+    },
+    lchmodSync: (path, mode) => void parseFileMode(mode, "mode"),
+    fchmodSync: (fd, mode) => void parseFileMode(mode, "mode"),
     chownSync: (path) => void statSync(path),
-    lchownSync: noop,
-    fchownSync: noop,
+    lchownSync: () => {},
+    fchownSync: () => {},
     utimesSync: (path, atime, mtime) => setPathTimes(path, atime, mtime, false),
     lutimesSync: (path, atime, mtime) => setPathTimes(path, atime, mtime, true),
     futimesSync: (fd, atime, mtime) => {
       validateFd(fd);
       native.futimes(fd, ...timeSpec(atime, "atime"), ...timeSpec(mtime, "mtime"));
     },
-    fsyncSync: noop,
-    fdatasyncSync: noop,
+    fsyncSync: () => {},
+    fdatasyncSync: () => {},
   };
+
+  // Bun's truncate length: missing means 0, anything but a number is a TypeError.
+  function truncateLength(len) {
+    if (len === undefined) return 0;
+    if (typeof len !== "number") throw invalidArg("len", "of type number", len);
+    return len;
+  }
 
   // --- callback API -----------------------------------------------------------
 
@@ -803,13 +851,18 @@
   function callbackify(name, fn, shape) {
     const dataIndex = dataArguments[name] ?? 0;
     const signalIndex = optionsArguments[name] ?? -1;
-    return function (...args) {
+    return named(name, function (...args) {
       const callback = args.pop();
       if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
       if (signalIndex < 0 || !hasSignal(args[signalIndex])) return runCallback(fn, shape, dataIndex, args, callback);
       const helpers = abortable();
       helpers.callback(helpers.signalOf(args[signalIndex]), (done) => runCallback(fn, shape, dataIndex, args, done), callback);
-    };
+    });
+  }
+
+  // Every exported function is named after its key, as in Bun.
+  function named(name, fn) {
+    return Object.defineProperty(fn, "name", { value: name, configurable: true });
   }
 
   function runCallback(fn, shape, dataIndex, args, callback) {
@@ -841,10 +894,21 @@
   for (const name of Object.keys(sync)) {
     callbackApi[name.slice(0, -4)] = callbackify(name.slice(0, -4), sync[name]);
   }
-  // fs.exists(path, cb) passes only a boolean.
+  // fs.exists(path, cb) passes only a boolean, so util.promisify needs its custom form.
   callbackApi.exists = function exists(path, callback) {
+    if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
     const result = existsSync(path);
     later(() => callback(result));
+  };
+  callbackApi.exists[Symbol.for("nodejs.util.promisify.custom")] = {
+    exists(path) { return new Promise((resolve) => callbackApi.exists(path, resolve)); },
+  }.exists;
+  // fs.close(fd) without a callback closes on a later turn, as Bun's does.
+  const closeCallback = callbackApi.close;
+  callbackApi.close = function close(fd, callback) {
+    if (callback !== undefined) return closeCallback(fd, callback);
+    validateFd(fd);
+    later(() => closeSync(fd));
   };
   callbackApi.cp = cp;
   callbackApi.glob = glob;
@@ -860,7 +924,20 @@
     31: ["EISDIR", -21], 48: ["ENOMEM", -12], 52: ["ENOSYS", -38], 58: ["ENOTSUP", -95],
     61: ["EOVERFLOW", -75], 63: ["EPERM", -1], 64: ["EPIPE", -32], 76: ["ENOTCAPABLE", undefined],
   };
-  callbackApi.read = function (...args) {
+  // Bun's fs.read(fd, callback) and fs.read(fd, options, callback): without a buffer the
+  // read fills a fresh 16 KiB Buffer, and an options object may name the buffer, offset,
+  // length and position.
+  function readCallArguments(args) {
+    if (args.length > 3 || args.length < 2 || (args.length === 3 && ArrayBuffer.isView(args[1]))) return args;
+    const callback = args[args.length - 1];
+    const params = args.length === 3 ? args[1] : undefined;
+    if (params !== undefined && (typeof params !== "object" || Array.isArray(params))) throw invalidArg("options", "of type object", params);
+    const { buffer = Buffer.alloc(16384), offset = 0, length = buffer?.byteLength - offset, position = null } = params ?? {};
+    return [args[0], buffer, offset, length, position, callback];
+  }
+
+  callbackApi.read = function read(...callArgs) {
+    const args = readCallArguments(callArgs);
     if (args[0] !== 0 || !native.hostCaps.proc_spawn) return readCallback(...args);
     const callback = args.pop();
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
@@ -887,12 +964,17 @@
     internal.addIoWaiter({ step, subscriptions: () => subscription, fail: error => later(() => complete(error, 0, buffer)) });
   };
   callbackApi.write = callbackify("write", writeSync, (cb, err, n, args) => cb(err, n, args[1]));
+  // util.promisify resolves these with named results, as Bun's defineCustomPromisifyArgs does.
+  const customPromisifyArgs = Symbol.for("nodejs.util.promisify.customArgs");
+  for (const [name, values] of [["read", ["bytesRead", "buffer"]], ["readv", ["bytesRead", "buffers"]], ["write", ["bytesWritten", "buffer"]], ["writev", ["bytesWritten", "buffers"]]]) {
+    Object.defineProperty(callbackApi[name], customPromisifyArgs, { value: values, enumerable: false });
+  }
 
   // --- promises ---------------------------------------------------------------
 
   function promisifySync(fn, name) {
     const dataIndex = dataArguments[name] ?? 0;
-    return function (...args) {
+    return named(name, function (...args) {
       return new Promise((resolve, reject) => {
         const release = pinArguments(dataIndex, args);
         let result;
@@ -910,7 +992,7 @@
           resolve(result);
         });
       });
-    };
+    });
   }
 
   // AbortSignal options and iterable writeFile data (fs_abortable.ts), loaded on first use.
@@ -930,10 +1012,10 @@
     const optionsIndex = optionsArguments[name] - 1;
     const iterates = name === "writeFile";
     const run = (path, args) => fileHandleModule?.isFileHandle(path) ? path[name](...args) : byPath(path, ...args);
-    return function (path, ...args) {
+    return named(name, function (path, ...args) {
       if ((iterates && mayIterate(args[0])) || hasSignal(args[optionsIndex])) return wholeFileSlowPath(run, path, args, args[optionsIndex]);
       return fileHandleModule?.isFileHandle(path) ? path[name](...args) : byPath(path, ...args);
-    };
+    });
   }
 
   // An async function, so an invalid signal rejects instead of throwing.
@@ -1018,8 +1100,9 @@
 
   const { watch, FSWatcher } = internal.require("fs_watch")({ statSync, toPath, absolute });
   promises.watch = (path, options) => internal.require("fs_promises_watch")(watch, toPath)(path, options);
+  // The getter below is a function named `promises`, which would shadow the object.
+  const promisesApi = promises;
   const fs = Object.assign({}, sync, callbackApi, {
-    promises,
     constants,
     Stats,
     Dirent,
@@ -1028,7 +1111,7 @@
     createWriteStream,
     watch,
     FSWatcher,
-    watchFile: watchUnsupported,
+    watchFile: function watchFile() { watchUnsupported(); },
     unwatchFile: () => {},
     // Bun's src/js/node/fs.ts: a lazily read Bun.file Blob.
     openAsBlob: function openAsBlob(path, options) {
@@ -1045,6 +1128,8 @@
     WriteStream: { get: writeStreamConstructor, enumerable: true, configurable: true },
     FileReadStream: { get: readStreamConstructor, enumerable: true, configurable: true },
     FileWriteStream: { get: writeStreamConstructor, enumerable: true, configurable: true },
+    // Bun's `get promises()`: node:fs/promises, read through a getter.
+    promises: { get: function promises() { return promisesApi; }, enumerable: true, configurable: true },
   });
-  return { fs, promises };
+  return { fs, promises: promisesApi };
 })

@@ -101,6 +101,8 @@ pub fn socket_error(syscall: &str, err: &io::Error, target: &str) -> ErrorInfo {
 /// A `fetch` failure, using Bun's messages and codes where they are known.
 pub fn fetch_error(err: &reqwest::Error, url: &str, host: &str) -> ErrorInfo {
     let type_error = |message: String, code: &str| ErrorInfo::new("TypeError", message, Some(code));
+    // After a redirect the failing request is not the original one.
+    let host = err.url().and_then(|url| url.host_str()).unwrap_or(host);
     // reqwest wraps hyper, which wraps the I/O or TLS error that matters.
     let mut io = None;
     let mut tls = None;
@@ -146,7 +148,8 @@ pub fn fetch_error(err: &reqwest::Error, url: &str, host: &str) -> ErrorInfo {
     }
     if text.contains("dns error") || text.contains("failed to lookup address") {
         return type_error(format!("getaddrinfo ENOTFOUND {host}"), "ENOTFOUND")
-            .with_syscall("getaddrinfo");
+            .with_syscall("getaddrinfo")
+            .with_hostname(host);
     }
     if let Some(io) = io {
         return io_fetch_error(io, host);

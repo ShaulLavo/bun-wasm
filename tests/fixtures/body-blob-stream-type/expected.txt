@@ -1,0 +1,11 @@
+Response content-type: null
+Response blob(): ["text/x-bun","bye"]
+Response around .body: "text/x-bun"
+Response JS stream: [null,""]
+Response slice stream: "text/x-slice"
+Request content-type: text/x-bun
+Request blob(): ["text/x-bun","bye"]
+Request around .body: "text/x-bun"
+Request JS stream: [null,""]
+Request slice stream: "text/x-slice"
+clone: "text/x-bun"
