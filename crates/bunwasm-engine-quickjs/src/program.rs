@@ -67,11 +67,36 @@ impl<E: Engine> Core<E> {
     }
 
     /// Report promises that are still unhandled once the microtask queue
-    /// drained (Bun treats an unhandled rejection as fatal).
+    /// drained (Bun treats an unhandled rejection as fatal), one at a time as Bun's
+    /// handleRejectedPromises does: a listener that handles a later one keeps it from being
+    /// reported, and one that rejects another promise has it reported in the same pass.
+    /// 'rejectionHandled' for handlers attached since the last pass comes first, as Bun's
+    /// HandledPromise task (and Node's processPromiseRejections) runs before the reports; one
+    /// owed by this pass's listeners comes after its reports.
     fn check_rejections(&self, e: &E) {
-        for (promise, reason) in e.take_unhandled_rejections() {
-            self.uncaught_values(e, "handleRejection", &[reason, promise]);
+        self.emit_late_handled(e);
+        loop {
+            if let Some((promise, reason)) = e.next_unhandled_rejection() {
+                self.uncaught_values(e, "handleRejection", &[reason, promise]);
+                continue;
+            }
+            if !self.emit_late_handled(e) {
+                return;
+            }
         }
+    }
+
+    /// 'rejectionHandled' for reported promises that got a handler since the last call.
+    /// Returns whether there were any.
+    fn emit_late_handled(&self, e: &E) -> bool {
+        let handled = e.take_late_handled_rejections();
+        let any = !handled.is_empty();
+        for promise in handled {
+            if let Err(err) = self.call_internal(e, "handleRejectionHandled", &[promise]) {
+                self.uncaught(e, err);
+            }
+        }
+        any
     }
     fn report_fallback(&self, e: &E, fallback: E::Value) {
         let text = match e.to_val(&fallback) {
@@ -279,14 +304,11 @@ fn check_main_promise<E: Engine>(e: &E, core: &Core<E>, promise: E::Value) -> Op
 
 fn report_main_rejection<E: Engine>(e: &E, core: &Core<E>, promise: &E::Value) {
     let reason = e.promise_result(promise);
-    // The rejection tracker saw this promise too; don't report twice.
-    let others: Vec<_> = e
-        .take_unhandled_rejections()
-        .into_iter()
-        .filter(|(p, _)| !e.same_value(p, promise))
-        .collect();
     core.uncaught_values(e, "handleUncaught", &[reason]);
-    for (promise, reason) in others {
-        core.uncaught_values(e, "handleRejection", &[reason, promise]);
+    // The rejection tracker saw this promise too; don't report twice.
+    while let Some((other, reason)) = e.next_unhandled_rejection() {
+        if !e.same_value(&other, promise) {
+            core.uncaught_values(e, "handleRejection", &[reason, other]);
+        }
     }
 }

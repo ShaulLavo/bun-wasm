@@ -47,6 +47,9 @@ mod parse_env;
 #[allow(dead_code)]
 #[path = "../../bunwasm-engine-quickjs/src/vm.rs"]
 mod quickjs_embedding;
+#[cfg(all(test, feature = "engine-split"))]
+#[path = "../../bunwasm-engine-quickjs/src/rejection_queue.rs"]
+mod rejection_queue;
 mod resolve;
 mod semver;
 mod sourcemap;
@@ -132,6 +135,9 @@ pub(crate) struct State {
     /// Stack-position fixups for files whose evaluated code differs from the
     /// file on disk (transpiled code, injected ESM prologue).
     positions: RefCell<HashMap<String, modules::PositionMap>>,
+    /// Moves whenever `sources` or `positions` change, so a cache of formatted
+    /// stack frames knows when to empty (`sourceGeneration`).
+    source_generation: Cell<u32>,
     /// The original file most recently read for an error excerpt.
     last_original: RefCell<Option<(String, Rc<str>)>>,
     stdout: RefCell<BufWriter<io::Stdout>>,
@@ -173,6 +179,7 @@ impl State {
             #[cfg(feature = "engine-host")]
             cjs_sources: RefCell::new(HashMap::new()),
             positions: RefCell::new(HashMap::new()),
+            source_generation: Cell::new(0),
             last_original: RefCell::new(None),
             stdout: RefCell::new(BufWriter::with_capacity(16 * 1024, io::stdout())),
             deferred_signals: RefCell::new(host::DeferredSignals::default()),

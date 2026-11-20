@@ -1,4 +1,4 @@
-(function (internal: { timers: BunWasm.PromiseTimerApi }) {
+(function (internal: { timers: BunWasm.PromiseTimerApi } & Pick<BunWasm.Internal, "eventTargets">) {
   "use strict";
   const t = internal.timers;
   type Options = { signal?: AbortSignal; ref?: boolean };
@@ -27,7 +27,9 @@
       cancellable?.(finish);
       try {
         handle = schedule(finish);
-        signal?.addEventListener("abort", onAbort, { once: true });
+        // Like Node's kResistStopPropagation: another listener's
+        // stopImmediatePropagation() must not keep the promise pending.
+        if (signal) internal.eventTargets.addAbortListener(signal, onAbort);
         if (signal?.aborted) onAbort();
         if (!settled && options.ref === false) handle.unref?.();
       } catch (error) { fail(error); }

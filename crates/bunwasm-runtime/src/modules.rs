@@ -84,11 +84,23 @@ pub struct PositionMap {
     /// Lines injected above the file's line 1 (the host engine's CommonJS
     /// wrapper, which can't start at line -1).
     pub line_offset: u32,
+    /// Source map of the CommonJS copy Bun's bundler made of an ES module for
+    /// `require()` on the host engine ([`State::esm_as_cjs`]). Both copies run
+    /// under the file's name, so this one maps the file's frames until the file
+    /// is also loaded as an ES module.
+    pub converted: Option<crate::sourcemap::SourceMap>,
+    /// The file was loaded as an ES module.
+    pub module: bool,
 }
 
 impl PositionMap {
     /// Original 1-based (line, column) for a position in evaluated code.
     pub fn original_position(&self, line: u32, col: u32) -> (u32, u32) {
+        if !self.module
+            && let Some(map) = &self.converted
+        {
+            return map.lookup(line, col).unwrap_or((line, col));
+        }
         let (line, col) = self
             .record
             .as_ref()
@@ -388,6 +400,7 @@ impl State {
             .mappings
             .filter(|m| !m.is_empty())
             .map(crate::sourcemap::SourceMap::new);
+        self.sources_changed();
         Ok(out.code)
     }
 
@@ -492,7 +505,19 @@ impl State {
         self.sources
             .borrow_mut()
             .insert(path.to_owned(), entry.clone());
+        self.sources_changed();
         Ok(entry)
+    }
+
+    /// Records that a loaded source or a position map changed.
+    fn sources_changed(&self) {
+        self.source_generation
+            .set(self.source_generation.get().wrapping_add(1));
+    }
+
+    /// Moves whenever a loaded source or a position map changes (`sourceGeneration`).
+    pub fn source_generation(&self) -> u32 {
+        self.source_generation.get()
     }
 
     pub(crate) fn prepare_javascript(
@@ -589,11 +614,12 @@ impl State {
             .entry(path.to_owned())
             .or_default()
             .line_offset = lines;
+        self.sources_changed();
     }
 
     /// [`crate::Transpiler::esm_to_cjs`] for `path`, with its source map
-    /// recorded unless the file already has one (when it is also imported as
-    /// a real ES module, that copy's positions win).
+    /// recorded as the file's [`PositionMap::converted`] map (when the file is
+    /// also imported as a real ES module, that copy's positions win).
     #[cfg(feature = "engine-host")]
     pub fn esm_as_cjs(&self, path: &str) -> Result<crate::transpiler::Transpiled, NativeError> {
         if let Ok(raw) = std::fs::read(path) {
@@ -608,16 +634,10 @@ impl State {
             .map_err(|msg| build_error(&msg, ""))?;
         if let Some(mappings) = out.mappings.as_ref().filter(|m| !m.is_empty()) {
             let mut positions = self.positions.borrow_mut();
-            if !positions.contains_key(path) {
-                positions.insert(
-                    path.to_owned(),
-                    PositionMap {
-                        map: Some(crate::sourcemap::SourceMap::new(mappings.as_str())),
-                        original: Some(Original::File),
-                        ..Default::default()
-                    },
-                );
-            }
+            let entry = positions.entry(path.to_owned()).or_default();
+            entry.converted = Some(crate::sourcemap::SourceMap::new(mappings.as_str()));
+            entry.original.get_or_insert(Original::File);
+            self.sources_changed();
         }
         self.cjs_sources
             .borrow_mut()
@@ -666,10 +686,23 @@ impl State {
         self.sources.borrow_mut().remove(path);
         self.positions.borrow_mut().remove(path);
         self.last_original.borrow_mut().take();
+        self.sources_changed();
         #[cfg(feature = "engine-host")]
         {
             self.source_imports.borrow_mut().remove(path);
             self.cjs_sources.borrow_mut().remove(path);
+        }
+    }
+
+    /// Remember that `path` was loaded as an ES module: its frames map through
+    /// that copy's positions, not a converted CommonJS copy's.
+    #[cfg(feature = "engine-host")]
+    pub fn record_module(&self, path: &str) {
+        let mut positions = self.positions.borrow_mut();
+        let entry = positions.entry(path.to_owned()).or_default();
+        if !entry.module {
+            entry.module = true;
+            self.sources_changed();
         }
     }
 
@@ -683,6 +716,7 @@ impl State {
             .entry(path.to_owned())
             .or_default()
             .line1_shift = len as u32;
+        self.sources_changed();
     }
 }
 
@@ -752,6 +786,8 @@ pub fn esm_source_with(state: &State, name: &str, code: &str, extra: &str) -> St
         ""
     };
     let prologue = format!("{extra}{worker}{}", esm_prologue(code));
+    #[cfg(feature = "engine-host")]
+    state.record_module(name);
     state.record_prologue(name, prologue.chars().count());
     format!("{prologue}{code}")
 }
@@ -763,6 +799,7 @@ pub fn eval_entry(state: &State, code: &str) -> (String, String) {
         .sources
         .borrow_mut()
         .insert(name.clone(), (Rc::from(code), Format::Esm));
+    state.sources_changed();
     let source = esm_source(state, &name, code);
     (name, source)
 }
@@ -977,9 +1014,14 @@ mod tests {
         state.record_prologue(path, 3);
         assert_eq!(load(&state), "module.exports = 1;");
         assert!(state.positions.borrow().contains_key(path));
+        // A cached source leaves the generation alone; a rewritten file moves it.
+        let cached = state.source_generation();
+        assert_eq!(load(&state), "module.exports = 1;");
+        assert_eq!(state.source_generation(), cached);
         std::fs::write(&file, "module.exports = 2;").unwrap();
         assert_eq!(load(&state), "module.exports = 2;");
         assert!(!state.positions.borrow().contains_key(path));
+        assert_ne!(state.source_generation(), cached);
         std::fs::remove_dir_all(&dir).unwrap();
         let (name, _) = eval_entry(&state, "console.log(1)");
         assert_eq!(&*state.load_source(&name).unwrap().0, "console.log(1)");
@@ -1182,6 +1224,55 @@ mod tests {
             .prepare_javascript(&source, "/project/main.js", SourceLoader::Js)
             .unwrap();
         assert_eq!(unrelated.code, source);
+    }
+
+    /// Module preparation maps generated line 1 to line 3; the CommonJS
+    /// conversion maps generated line 3 to line 1.
+    #[cfg(feature = "engine-host")]
+    struct TwoCopyTranspiler;
+
+    #[cfg(feature = "engine-host")]
+    impl crate::Transpiler for TwoCopyTranspiler {
+        fn transpile(&self, source: &str, _: &str, _: SourceLoader) -> Result<String, String> {
+            Ok(source.to_owned())
+        }
+
+        fn transpile_with_map(
+            &self,
+            source: &str,
+            _: &str,
+            _: SourceLoader,
+        ) -> Result<crate::Transpiled, String> {
+            Ok(crate::Transpiled {
+                code: source.to_owned(),
+                mappings: Some("AAEA".into()),
+                ..Default::default()
+            })
+        }
+
+        fn esm_to_cjs(&self, path: &str) -> Result<crate::Transpiled, String> {
+            Ok(crate::Transpiled {
+                code: std::fs::read_to_string(path).map_err(|error| error.to_string())?,
+                mappings: Some(";;AAAA".into()),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_required_esm_maps_through_its_converted_copy() {
+        let file = TestModule::new("host-converted-positions");
+        let path = file.path();
+        let state = State::new(Vec::new(), Box::new(TwoCopyTranspiler));
+        file.write("export const value = 1;");
+        // require(): the format check loads the prepared module first.
+        state.load_source(&path).unwrap();
+        state.esm_as_cjs(&path).unwrap();
+        assert_eq!(state.map_position(&path, 3, 1), Some((1, 1)));
+        // Once the file also runs as an ES module, that copy's positions win.
+        state.record_module(&path);
+        assert_eq!(state.map_position(&path, 1, 1), Some((3, 1)));
     }
 
     #[cfg(feature = "engine-host")]

@@ -141,13 +141,57 @@
     return Function.prototype.toString.call(fn).startsWith("function () {\n    [native code]");
   }
 
+  // The first line of Bun's error.stack: JavaScriptCore's sanitized "name: message", which
+  // reads data properties only, so no getter or Proxy trap runs. The name is the error's own or
+  // its prototype's, the message the error's own. Any other capture target reads "Error".
+  function dataSlot(holder, key) {
+    let descriptor;
+    try { descriptor = Reflect.getOwnPropertyDescriptor(holder, key); } catch { return undefined; }
+    return descriptor !== undefined && "value" in descriptor ? descriptor : undefined;
+  }
+
+  // A Proxy prototype is skipped, as JavaScriptCore's inquiry skips it. Where the host cannot
+  // tell a Proxy (a browser), a throwing trap reads as no name.
+  const builtinErrorPrototypes = new Set([Error, TypeError, RangeError, ReferenceError, SyntaxError, EvalError, URIError]
+    .concat(typeof AggregateError === "function" ? [AggregateError] : [])
+    .map(constructor => constructor.prototype));
+  function prototypeSlot(error, key) {
+    const prototype = Object.getPrototypeOf(error);
+    if (prototype === null || !builtinErrorPrototypes.has(prototype) && native.isProxy?.(prototype)) return undefined;
+    return dataSlot(prototype, key);
+  }
+
+  function primitiveText(value) {
+    if (typeof value === "symbol" || typeof value === "function" || typeof value === "object" && value !== null) return undefined;
+    return String(value);
+  }
+
+  const isErrorValue = typeof Error.isError === "function" ? Error.isError : native.isError;
+  function stackHeader(error) {
+    if (!isErrorValue(error)) return "Error";
+    const nameSlot = dataSlot(error, "name") ?? prototypeSlot(error, "name");
+    const name = nameSlot === undefined || nameSlot.value === undefined ? "Error" : primitiveText(nameSlot.value) ?? "Error";
+    const messageSlot = dataSlot(error, "message");
+    const message = messageSlot === undefined ? "" : primitiveText(messageSlot.value) ?? "";
+    return name + (name && message ? ": " : "") + message;
+  }
+  internal.stackHeader = stackHeader;
+
+  // The frame lines of `stack`, after the error's header when it begins with one.
+  function stackWithoutHeader(error, stack) {
+    const header = stackHeader(error);
+    if (stack === header) return "";
+    return stack.startsWith(header + "\n") ? stack.slice(header.length + 1) : stack;
+  }
+  internal.stackWithoutHeader = stackWithoutHeader;
+
   Error.prepareStackTrace = function prepareStackTrace(error, callsites) {
     let start = 0;
     while (start < callsites.length - 1 && isErrorConstructorFrame(callsites[start])) start++;
-    let out = "";
+    let out = stackHeader(error);
     let raw = "";
     for (let i = start; i < callsites.length; i++) {
-      out += `    at ${formatCallSite(callsites[i])}\n`;
+      out += `\n    at ${formatCallSite(callsites[i])}`;
       if (internal.hotRun) raw += `    at ${formatCallSite(callsites[i], true)}\n`;
     }
     if (internal.hotRun) internal.hotErrorStacks.set(error, raw);
@@ -259,6 +303,7 @@
   let refedTimers = 0;
 
   function insertTimer(timer) {
+    timer._queued = true;
     let lo = 0;
     let hi = timerQueue.length;
     while (lo < hi) {
@@ -274,24 +319,37 @@
   }
 
   function removeTimer(timer) {
+    if (!timer._queued) return;
+    timer._queued = false;
     const i = timerQueue.indexOf(timer);
     if (i >= 0) timerQueue.splice(i, 1);
   }
 
+  function scheduleTimer(timer, start) {
+    timer._idleStartValue = start;
+    timer._when = start + timer._delay;
+    timer._seq = timerSeq++;
+    insertTimer(timer);
+  }
+
+  // A Timeout stays active (not `_destroyed`, and counted as a ref) from
+  // scheduling until it is cleared, or until a one-shot callback returns
+  // without re-arming it through refresh() or an _idleStart write.
   class Timeout {
     constructor(callback, delay, args, repeat) {
-      this._id = timerSeq++;
-      this._seq = this._id;
+      this._id = timerSeq;
       this._callback = callback;
       this._args = args;
       this._delay = delay;
       this._repeat = repeat;
       this._ref = true;
       this._active = true;
+      this._cleared = false;
+      this._queued = false;
       this._context = native.getAsyncContext();
-      this._when = native.now() + delay;
+      timersById.set(this._id, this);
       refedTimers++;
-      insertTimer(this);
+      scheduleTimer(this, native.now());
     }
     ref() {
       if (!this._ref && this._active) refedTimers++;
@@ -304,29 +362,58 @@
       return this;
     }
     hasRef() {
-      return this._ref;
+      return this._ref && this._active;
     }
+    // Like Node and Bun, refresh() re-arms a timer that already fired, but not
+    // one that was cleared.
     refresh() {
-      if (!this._active) return this;
+      if (this._cleared) return this;
+      if (!this._active) {
+        this._active = true;
+        if (this._ref) refedTimers++;
+        timersById.set(this._id, this);
+      }
       removeTimer(this);
-      this._when = native.now() + this._delay;
-      this._seq = timerSeq++;
-      insertTimer(this);
+      scheduleTimer(this, native.now());
       return this;
     }
     close() {
       cancelTimer(this);
       return this;
     }
+    get _destroyed() {
+      return !this._active;
+    }
+    get _idleStart() {
+      return this._idleStartValue;
+    }
+    // Node's deadline is _idleStart + _idleTimeout, so Next.js writes
+    // `t2._idleStart = t1._idleStart` to make two timers fire together.
+    set _idleStart(value) {
+      this._idleStartValue = value;
+      if (!this._queued || typeof value !== "number" || !Number.isFinite(value)) return;
+      const seq = this._seq;
+      removeTimer(this);
+      this._when = Math.max(0, value + this._delay);
+      this._seq = seq;
+      insertTimer(this);
+    }
     [Symbol.toPrimitive]() {
       return this._id;
     }
   }
 
-  function cancelTimer(timer) {
-    if (!timer || !timer._active) return;
+  function retireTimer(timer) {
+    if (!timer._active) return;
     timer._active = false;
     if (timer._ref) refedTimers--;
+    timersById.delete(timer._id);
+  }
+
+  function cancelTimer(timer) {
+    if (!timer) return;
+    timer._cleared = true;
+    retireTimer(timer);
     removeTimer(timer);
   }
 
@@ -353,22 +440,23 @@
 
   function realSetTimeout(callback, delay, ...args) {
     checkCallback(callback);
-    const timer = new Timeout(callback, normalizeDelay(delay), args, false);
-    timersById.set(timer._id, timer);
-    return timer;
+    return new Timeout(callback, normalizeDelay(delay), args, false);
   }
 
   function setInterval(callback, delay, ...args) {
     checkCallback(callback);
     if (internal.fakeTimers?.active) return internal.fakeTimers.schedule(callback, delay, args, "interval");
-    const timer = new Timeout(callback, normalizeDelay(delay), args, true);
-    timersById.set(timer._id, timer);
-    return timer;
+    return new Timeout(callback, normalizeDelay(delay), args, true);
   }
+
+  // Node and Bun accept a timer's primitive id as a string, written exactly as
+  // String(id) prints it: no sign, spaces or leading zeros.
+  const timerIdString = /^[1-9][0-9]{0,15}$/;
 
   function lookupTimer(handle) {
     if (handle instanceof Timeout) return handle;
-    if (typeof handle === "number" || typeof handle === "string") return timersById.get(Number(handle));
+    if (typeof handle === "number") return timersById.get(handle);
+    if (typeof handle === "string" && timerIdString.test(handle)) return timersById.get(Number(handle));
     return undefined;
   }
 
@@ -378,10 +466,7 @@
   }
 
   function realClearTimeout(handle) {
-    const timer = lookupTimer(handle);
-    if (!timer) return;
-    cancelTimer(timer);
-    timersById.delete(timer._id);
+    cancelTimer(lookupTimer(handle));
   }
 
   class Immediate {
@@ -390,6 +475,7 @@
       this._args = args;
       this._ref = true;
       this._active = true;
+      this._running = false;
       this._context = native.getAsyncContext();
     }
     ref() {
@@ -401,7 +487,12 @@
       return this;
     }
     hasRef() {
-      return this._ref;
+      return this._ref && this._active;
+    }
+    // Node and Bun report a running immediate as not destroyed until its
+    // callback returns or clears it, though it no longer holds a ref.
+    get _destroyed() {
+      return !this._active && !this._running;
     }
   }
 
@@ -443,21 +534,44 @@
   }
 
   function realClearImmediate(immediate) {
-    if (immediate instanceof Immediate) immediate._active = false;
+    if (!(immediate instanceof Immediate)) return;
+    immediate._active = false;
+    immediate._running = false;
   }
 
+  // Like Node's listOnTimeout, a repeating timer is re-armed after its
+  // callback from the time it fired, overriding refresh() or _idleStart writes
+  // made inside the callback, so it can never become due again in this phase.
   function runOneTimer(now) {
     const timer = timerQueue.shift();
-    if (timer._repeat) {
-      timer._when = now + timer._delay;
-      timer._seq = timerSeq++;
-      insertTimer(timer);
-    } else {
-      timer._active = false;
-      if (timer._ref) refedTimers--;
-      timersById.delete(timer._id);
+    timer._queued = false;
+    try {
+      runInContext(timer._context, timer._callback, timer, timer._args);
+    } finally {
+      finishTimer(timer, now);
     }
-    runInContext(timer._context, timer._callback, timer, timer._args);
+  }
+
+  function finishTimer(timer, start) {
+    if (!timer._repeat || !timer._active) {
+      if (!timer._queued) retireTimer(timer);
+      return;
+    }
+    removeTimer(timer);
+    scheduleTimer(timer, start);
+  }
+
+  // Node's timers phase: every timer due when the phase starts runs before the
+  // next immediate, even one an earlier timer in the phase queued.
+  let timerPhaseEnd = null;
+
+  function runDueTimer() {
+    if (timerQueue.length === 0 || timerQueue[0]._when > timerPhaseEnd) {
+      timerPhaseEnd = null;
+      return false;
+    }
+    runOneTimer(native.now());
+    return true;
   }
 
   // Called by the Rust event loop. Runs at most one callback so microtasks
@@ -465,6 +579,7 @@
   // until the next timer, or -1 when nothing keeps the process alive.
   internal.runTimers = function runTimers() {
     const workerProgress = internal.workerPump && internal.workerPump();
+    if (timerPhaseEnd !== null && runDueTimer()) return 0;
     // Immediates first: like Bun, setImmediate callbacks queued by the
     // main script run before even a due setTimeout(0).
     if (immediateBatchRemaining === null) immediateBatchRemaining = immediates?.length || 0;
@@ -473,12 +588,18 @@
       const immediate = immediates.shift();
       if (!immediate._active) continue;
       immediate._active = false;
-      runInContext(immediate._context, immediate._callback, immediate, immediate._args);
+      immediate._running = true;
+      try {
+        runInContext(immediate._context, immediate._callback, immediate, immediate._args);
+      } finally {
+        immediate._running = false;
+      }
       return 0;
     }
     immediateBatchRemaining = null;
     const now = native.now();
     if (timerQueue.length > 0 && timerQueue[0]._when <= now) {
+      timerPhaseEnd = now;
       runOneTimer(now);
       return 0;
     }
@@ -546,6 +667,18 @@
   defineGlobal("setImmediate", setImmediate);
   defineGlobal("clearImmediate", clearImmediate);
   defineGlobal("queueMicrotask", queueMicrotask);
+  // Node's lib/timers.js: a getter-only, non-configurable accessor that
+  // util.promisify uses, without loading node:util or the promises module.
+  const promisifyCustom = Symbol.for("nodejs.util.promisify.custom");
+  for (const [fn, name] of [[setTimeout, "setTimeout"], [setInterval, "setInterval"], [setImmediate, "setImmediate"]]) {
+    Object.defineProperty(fn, promisifyCustom, {
+      enumerable: true,
+      configurable: false,
+      get() {
+        return internal.builtin("node:timers/promises")[name];
+      },
+    });
+  }
   internal.realTimers = {
     setTimeout: realSetTimeout,
     clearTimeout: realClearTimeout,
@@ -854,8 +987,10 @@
   internal.printError = printError;
 
   function fallbackErrorText(err) {
-    if (err instanceof Error) return `${err.name === "Error" ? "error" : err.name}: ${err.message}\n${err.stack || ""}\n`;
-    return `error: ${String(err)}\n`;
+    if (!(err instanceof Error)) return `error: ${String(err)}\n`;
+    // The label line below replaces the stack's own "Name: message" header.
+    const frames = stackWithoutHeader(err, typeof err.stack === "string" ? err.stack : "");
+    return `${err.name === "Error" ? "error" : err.name}: ${err.message}\n${frames}\n`;
   }
 
   function emitExit(code) {
@@ -990,8 +1125,14 @@
   }
   internal.dispatchUncaught = dispatchUncaught;
 
+  // Promises reported to 'unhandledRejection' listeners. A handler attached to one later owes
+  // it 'rejectionHandled' (Bun's RejectedPromiseQueue::markReported). Weak: a reported promise
+  // that dies leaves it.
+  const reportedRejections = new WeakSet();
+
   internal.handleRejection = function handleRejection(reason, promise) {
     if (listenerCount("unhandledRejection") > 0) {
+      if (promise !== null && typeof promise === "object") reportedRejections.add(promise);
       globalThis.process.emit("unhandledRejection", reason, promise);
       return true;
     }
@@ -1001,6 +1142,14 @@
     // Bun reports exit code 0 to "exit" listeners here (and still exits 1).
     emitExit(0);
     return false;
+  };
+
+  // A promise got its first handler after it left the engine's rejection queue. Bun's
+  // Bun__emitHandledPromiseEvent: 'rejectionHandled' with the promise, once, and only for
+  // promises reported as unhandled. A throw from a listener is an uncaught exception.
+  internal.handleRejectionHandled = function handleRejectionHandled(promise) {
+    if (!reportedRejections.delete(promise) || internal.exitStarted) return;
+    if (listenerCount("rejectionHandled") > 0) globalThis.process.emit("rejectionHandled", promise);
   };
 
   // Bun's dispatch_on_before_exit: a throw goes to the uncaught exception handlers. Returns

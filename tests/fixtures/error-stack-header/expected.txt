@@ -1,0 +1,44 @@
+Error: "Error: boom"
+no message: "Error"
+empty message: "Error"
+TypeError: "TypeError: bad type"
+RangeError: "RangeError: out"
+SyntaxError: "SyntaxError: s"
+Error() call: "Error: called"
+subclass named in constructor: "NamedInConstructor: custom"
+subclass named on prototype: "NamedOnPrototype: p"
+unnamed subclass: "Error: x"
+unnamed TypeError subclass: "Error: deep"
+getter name: "Error: g"
+multi-line message: "Error: line one\nline two"
+message changed before first read: "Error: after"
+message changed after first read: "Error: first"
+name set before first read: "LateName: late"
+empty name: "only message"
+empty name and message: ""
+numeric name: "42: n"
+undefined name: "Error: u"
+object message: "Error"
+getter message: "Error"
+own toString: "Error: plain"
+with cause: "Error: outer"
+AggregateError: "AggregateError: many"
+AggregateError without message: "AggregateError"
+engine TypeError header is String(error): true
+engine ReferenceError header is String(error): true
+thrown string stack: undefined
+thrown object stack: undefined
+captureStackTrace on a plain object: "Error"
+captureStackTrace on a named object: "Error"
+captureStackTrace on an Error.prototype object: "Error"
+captureStackTrace on an error: "Recaptured: recaptured later"
+captureStackTrace in a constructor: "Custom: captured in constructor"
+prepareStackTrace override: "custom p true" (no frames)
+prepareStackTrace delegating to the default: "TypeError: delegated"
+util.inspect header lines: 1
+Bun.inspect header lines: 2
+String(error) unchanged: Error: printed once
+Proxy prototype: "Error: proxied"
+eval frame has a fake position: false
+new Function frame has a fake position: false
+eval frame shown: true
