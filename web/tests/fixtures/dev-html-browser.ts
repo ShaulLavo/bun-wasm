@@ -25,7 +25,7 @@ export async function developmentFixture() {
       randomBytes: (length: number) => new Uint8Array(length).fill(++nextToken),
       mimeTypeInterned,
     },
-    web: { Response },
+    web: { Response, Blob },
     printError(error: unknown) { errors.push(error); },
     require(name: string): unknown {
       if (modules.has(name)) return modules.get(name);

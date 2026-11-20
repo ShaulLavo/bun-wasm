@@ -99,7 +99,7 @@ test("application streams pass before locking or EOF, and the real writer cancel
 });
 
 // A stand-in for a Bun.file() body: read whole through _bytes(), or in `chunks` pulls.
-function lazyFile(f: Awaited<ReturnType<typeof setup>>, data: Uint8Array, chunks = 1) {
+function lazyFile(f: Awaited<ReturnType<typeof setup>>, data: Uint8Array<ArrayBuffer>, chunks = 1) {
   const reads = { whole: 0, pulls: 0 };
   class LazyFile extends f.GuestBlob {
     _isLazy() { return true; }
@@ -109,7 +109,7 @@ function lazyFile(f: Awaited<ReturnType<typeof setup>>, data: Uint8Array, chunks
     override stream() {
       const size = Math.ceil(data.length / chunks);
       let offset = 0;
-      return new ReadableStream<Uint8Array>({ pull(controller) {
+      return new ReadableStream<Uint8Array<ArrayBuffer>>({ pull(controller) {
         reads.pulls++;
         if (offset >= data.length) return controller.close();
         controller.enqueue(data.subarray(offset, (offset += size)));
