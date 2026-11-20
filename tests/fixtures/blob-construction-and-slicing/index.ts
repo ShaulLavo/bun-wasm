@@ -67,6 +67,14 @@ console.log("Blob name:", JSON.stringify(seen), Object.getOwnPropertyNames(named
 const renamed = new File(["x"], "a.txt") as any;
 renamed.name = "b.txt";
 console.log("File name:", renamed.name, new File([], 42 as any).name, new File([Bun.file(join(dir, "missing"))], "bar.txt").name);
+const nulled = Bun.file(join(dir, "missing"));
+nulled.name = null as any;
+console.log("Bun.file name set to null:", JSON.stringify(nulled.name));
+// A type that is not a string is ignored.
+console.log("type 5:", JSON.stringify(new Blob([], { type: 5 as any }).type), JSON.stringify(new File([], "f", { type: 5 as any }).type));
+const used = new Response("x");
+await used.text();
+console.log("used body:", await used.text().catch((error: any) => `${error.name} ${error.code} ${error.message}`));
 
 // A UTF-16LE byte order mark is decoded by text() and json(), even at an odd offset.
 const odd = new Blob([new Uint8Array([0x41, 0xff, 0xfe, 0x68, 0x00, 0x69, 0x00])]).slice(1);

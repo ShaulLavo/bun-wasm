@@ -37,4 +37,7 @@ lastModified 1.5 1.5
 lastModified valueOf throws: throws Error undefined "boom"
 Blob name: [null,"logo.svg","logo.svg",null] 0
 File name: b.txt 42 bar.txt
+Bun.file name set to null: null
+type 5: "" ""
+used body: TypeError ERR_BODY_ALREADY_USED Body already used
 UTF-16 text: hi 42 "" "h"

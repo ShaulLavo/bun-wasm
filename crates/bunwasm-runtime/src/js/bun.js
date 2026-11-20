@@ -41,6 +41,7 @@
   // Bun.file(): a lazily read Blob backed by a path or a file descriptor.
   class BunFile extends Blob {
     #path;
+    #nullName = false;
     #fd;
     #start;
     #end;
@@ -59,13 +60,16 @@
       if (!options.type && this.#path) this._setType(internal.mimeType(this.#path));
       else if (!options.type) this._setType("application/octet-stream");
     }
-    // A name the caller set, else the path, as Bun's get_name_string does.
+    // A name the caller set, else the path, as Bun's get_name_string does. Set to null, it is
+    // null.
     get name() {
+      if (this.#nullName) return null;
       const name = super.name;
       if (name !== undefined) return name;
       return this.#path === null ? undefined : this.#path;
     }
     set name(value) {
+      this.#nullName = value === null;
       super.name = value;
     }
     get fd() {

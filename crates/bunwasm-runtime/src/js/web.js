@@ -843,8 +843,9 @@
   // Bun's interned list keeps Bun's value for it, and any other type is lowercased. Returns
   // the type and whether it is interned, which is what slice() inherits.
   function blobType(value) {
-    if (value === undefined || value === null) return ["", false];
-    const given = String(value);
+    // Bun ignores a type that is not a string.
+    if (typeof value !== "string") return ["", false];
+    const given = value;
     if (given === "" || !/^[\x20-\x7e]*$/.test(given)) return ["", false];
     const interned = native.mimeTypeInterned(given);
     return interned === undefined ? [given.toLowerCase(), false] : [interned, true];
@@ -1194,7 +1195,7 @@
     async _consume() {
       // A null body is not a zero-length body: every read gives nothing and nothing uses it up.
       if (this._body === null && !this._stream && !this._blob) return new Uint8Array(0);
-      if (this.bodyUsed) throw new TypeError("Body already used");
+      if (this.bodyUsed) throw Object.assign(new TypeError("Body already used"), { code: "ERR_BODY_ALREADY_USED" });
       // Someone else holds the stream's reader: refuse without using the body, as Bun does.
       if (this._stream && this._stream.locked) throw Object.assign(new TypeError("Invalid state: ReadableStream is locked"), { code: "ERR_INVALID_STATE" });
       this._bodyUsed = true;
