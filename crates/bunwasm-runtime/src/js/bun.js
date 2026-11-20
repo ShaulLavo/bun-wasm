@@ -95,16 +95,24 @@
     // Bun reports reading a directory as EISDIR, where opening one under WASI gives EBADF.
     #directoryError(error) {
       if (!error || (error.code !== "EBADF" && error.code !== "EISDIR")) return error;
-      let stat;
-      try { stat = this.#stat(); } catch { return error; }
-      if ((stat.mode & 0o170000) !== 0o040000) return error;
+      return this.#isDirectory() ? this.#readsDirectory() : error;
+    }
+    #isDirectory() {
+      try { return (this.#stat().mode & 0o170000) === 0o040000; } catch { return false; }
+    }
+    #readsDirectory() {
       const directory = Object.assign(new Error("Directories cannot be read like files"), { code: "EISDIR", errno: 0, syscall: "read" });
       if (this.#path !== null) directory.path = this.#path;
       return directory;
     }
     // A stream over a file opened by path remembers the file, so a body built from it can lift
-    // the file back out. Bun tees a stream over a descriptor, which can only be read once.
+    // the file back out. Bun tees a stream over a descriptor, which can only be read once; over
+    // a directory it fails with Bun's EISDIR, as a read does.
     stream() {
+      if (this.#fd !== null && this.#isDirectory()) {
+        const error = this.#readsDirectory();
+        return new ReadableStream({ start(controller) { controller.error(error); } });
+      }
       if (this.#fd !== null) return internal.require("bun_file").stream(this.#fd, this.#start, this.#end);
       const stream = internal.require("bun_file").stream(absolute(this.#path), this.#start, this.#end);
       return internal.require("body_streams").rememberFile(stream, this);
