@@ -29,8 +29,7 @@ revision `9510e74152073d850a18758ca41114d8f214ffa6`, measured against native Bun
 
 The JavaScript side is in `crates/bunwasm-runtime/src/js/node_cipher.ts`,
 `node_dh.ts` and `node_crypto_args.ts`. `crypto.diffieHellman` reads the two keys
-through `KeyObject.export({ format: "jwk" })`, so `crypto_keys.ts` (pinned by its
-syntax guard) is unchanged. `crypto_hash_stream.ts` now takes the
+through `KeyObject.export({ format: "jwk" })`. `crypto_hash_stream.ts` now takes the
 `_transform` and `_flush` pair, so ciphers reuse the Hash LazyTransform.
 
 The native side is original Rust over the BoringSSL already linked for WebCrypto and
@@ -48,7 +47,7 @@ Differences from native Bun, all deliberate:
 - `generatePrime` with `add` and no `rem` follows BoringSSL. Native Bun 1.4.4 never
   returns for that case; the fixtures pass both.
 - `crypto.diffieHellman` covers the key types the KeyObject layer holds: EC P-256,
-  P-384 and X25519. DH and X448 KeyObjects do not exist here.
+  P-384, P-521 and X25519. DH and X448 KeyObjects do not exist here.
 - `getDiffieHellman` does not run `DH_check` on the constant RFC 3526 primes. With
   generator 2, BoringSSL reports `DH_NOT_SUITABLE_GENERATOR` (8) for every group, the
   `verifyError` native Bun 1.4.4 prints for modp5 to modp18, and the check took up to

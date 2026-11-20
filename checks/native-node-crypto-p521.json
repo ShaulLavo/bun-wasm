@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/node-crypto-p521",
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
+}

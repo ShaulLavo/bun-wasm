@@ -1,0 +1,23 @@
+getPublicKey ECDSA P-256 public true ["verify"] true true
+getPublicKey ECDSA P-256 private usage SyntaxError Unsupported key usage for an ECDSA key
+getPublicKey ECDSA P-256 public key InvalidAccessError key must be a private key
+getPublicKey ECDH P-384 public true [] true true
+getPublicKey ECDH P-384 private usage SyntaxError Unsupported key usage for an ECDH key
+getPublicKey ECDH P-384 public key InvalidAccessError key must be a private key
+getPublicKey ECDSA P-521 public true ["verify"] true true
+getPublicKey ECDSA P-521 private usage SyntaxError Unsupported key usage for an ECDSA key
+getPublicKey ECDSA P-521 public key InvalidAccessError key must be a private key
+getPublicKey Ed25519 public true ["verify"] true true
+getPublicKey Ed25519 private usage SyntaxError Unsupported key usage for an Ed25519 key
+getPublicKey Ed25519 public key InvalidAccessError key must be a private key
+getPublicKey X25519 public true [] true true
+getPublicKey X25519 private usage SyntaxError Unsupported key usage for an X25519 key
+getPublicKey X25519 public key InvalidAccessError key must be a private key
+getPublicKey RSA-PSS  public true ["verify"] true true
+getPublicKey RSA-PSS  private usage SyntaxError Unsupported key usage for an RSA-PSS key
+getPublicKey RSA-PSS  public key InvalidAccessError key must be a private key
+getPublicKey RSA-OAEP  public true ["encrypt"] true true
+getPublicKey RSA-OAEP  private usage SyntaxError Unsupported key usage for an RSA-OAEP key
+getPublicKey RSA-OAEP  public key InvalidAccessError key must be a private key
+getPublicKey secret NotSupportedError key must be a private key
+getPublicKey length 2
