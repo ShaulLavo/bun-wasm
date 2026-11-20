@@ -1,0 +1,6 @@
+[200,null] "HTTP/1.1 200 OK"
+[200,""] "HTTP/1.1 200 OK"
+[200,"Fine"] "HTTP/1.1 200 OK"
+[404,null] "HTTP/1.1 404 Not Found"
+[599,null] "HTTP/1.1 599 HM"
+[299,""] "HTTP/1.1 299 HM"

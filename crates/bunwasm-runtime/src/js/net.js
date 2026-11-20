@@ -677,11 +677,16 @@
     return null;
   }
 
+  // Bun.serve ignores a Response's statusText and writes its own reason phrase.
+  function bunStatusHead(status, _statusText, headerPairs) {
+    return serializeHead(status, internal.require("serve_status_text").reason(status), headerPairs);
+  }
+
   function writeResponse(conn, res, method, keepAlive) {
     if (!(res instanceof Response)) {
       throw new TypeError(`Expected a Response object, but received '${internal.describe(res)}'`);
     }
-    return internal.require("http_response").writeResponse(conn, res, method, keepAlive, serializeHead, internal.printError);
+    return internal.require("http_response").writeResponse(conn, res, method, keepAlive, bunStatusHead, internal.printError);
   }
 
   function errorResponse(err) {
