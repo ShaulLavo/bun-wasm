@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/weak-map-symbol-keys",
+  "engines": ["quickjs", "browser"]
+}

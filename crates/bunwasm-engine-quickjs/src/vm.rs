@@ -1509,6 +1509,98 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn weak_map_finalizer_survives_values_that_free_later_keys() {
+        // Freeing a record's value frees the key of a later record, whose
+        // weak-list reset frees that record while the finalizer walks the list.
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        let result = context.with(|ctx| {
+            ctx.eval::<String, _>(
+                "globalThis.keep = {}; globalThis.keepSymbol = {}; let freed = 0;
+                 for (let round = 0; round < 50; round++) {
+                   const holder = { map: new WeakMap() };
+                   (() => {
+                     const object = {}; const symbol = Symbol('next');
+                     holder.map.set(keep, { object });
+                     holder.map.set(object, { tag: round });
+                     holder.map.set(keepSymbol, symbol);
+                     holder.map.set(symbol, 1);
+                   })();
+                   holder.map = null;
+                   freed++;
+                 }
+                 String(freed)",
+            )
+            .unwrap()
+        });
+        assert_eq!(result, "50");
+        drop(context);
+        drop(runtime);
+    }
+
+    #[test]
+    fn weak_map_symbol_key_values_free_with_the_runtime() {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            ctx.eval::<(), _>(
+                "globalThis.wm = new WeakMap(); globalThis.s = Symbol('k'); wm.set(s, { v: 1 });",
+            )
+            .unwrap()
+        });
+        runtime.run_gc();
+        let value = context.with(|ctx| ctx.eval::<i32, _>("wm.get(s).v").unwrap());
+        assert_eq!(value, 1);
+        // JS_FreeRuntime asserts that no GC object outlived the runtime: the
+        // value lost its last reference while the global's cycle was freed.
+        drop(context);
+        drop(runtime);
+    }
+
+    #[test]
+    fn weak_map_symbol_key_values_follow_map_and_symbol() {
+        let result = alive_after_gc(
+            "globalThis.cases = [];
+             const check = (name, value, expected) => cases.push([name, new WeakRef(value), expected]);
+             globalThis.liveSymbol = Symbol('live'); globalThis.liveMap = new WeakMap();
+             { const value = { tag: 1 }; liveMap.set(liveSymbol, value); check('symbol and map live', value, true); }
+             { const value = { map: liveMap }; liveMap.set(Symbol.iterator, value); check('well-known symbol key', value, true); }
+             { const map = new WeakMap(); const value = { map }; map.set(liveSymbol, value); check('map only through its value', value, false); }
+             { const a = {}; const b = { a }; a.b = b; a.symbol = Symbol('dead');
+               const value = { tag: 2 }; liveMap.set(a.symbol, value); check('symbol only in a dead cycle', value, false); }",
+            "cases.filter(([, ref, expected]) => (ref.deref() !== undefined) !== expected).map(([name]) => name).join(',') +
+             '|' + [liveMap.get(liveSymbol).tag, liveMap.get(Symbol.iterator).map === liveMap].join(',')",
+        );
+        assert_eq!(result, "|1,true");
+    }
+
+    #[test]
+    fn map_clear_survives_records_freed_by_deleted_values() {
+        // Upstream QuickJS-ng #1907: a deleted record kept only for an
+        // iterator dies with the value of the record being cleared.
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        let result = context.with(|ctx| {
+            ctx.eval::<String, _>(
+                "const sizes = [];
+                 for (let round = 0; round < 50; round++) {
+                   const m = new Map([['a', 0], ['b', 1], ['c', 2], ['d', 3]]);
+                   let it = m.entries(); it.next(); it.next();
+                   m.delete('b'); m.delete('c'); m.set('a', it); it = null;
+                   m.clear(); sizes.push(m.size);
+                   const s = new Set(); let h = {}; s.add(h); s.add('b');
+                   let values = s.values(); values.next(); values.next();
+                   s.delete('b'); h.it = values; h = values = null;
+                   s.clear(); sizes.push(s.size);
+                 }
+                 String(sizes.every(size => size === 0))",
+            )
+            .unwrap()
+        });
+        assert_eq!(result, "true");
+    }
+
+    #[test]
     fn parser_lookahead_leaves_no_exception() {
         let runtime = Runtime::new().unwrap();
         let context = Context::full(&runtime).unwrap();
