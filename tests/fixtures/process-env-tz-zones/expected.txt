@@ -1,4 +1,5 @@
 start UTC | 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Coordinated Universal Time) | 12:00:00 GMT+0000 (Coordinated Universal Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+first Africa/Abidjan -> Africa/Abidjan | 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
 America/New_York -> America/New_York
   winter 7 | 0 | 300 | Mon Jan 15 2024 07:00:00 GMT-0500 (Eastern Standard Time) | 07:00:00 GMT-0500 (Eastern Standard Time) | 1/15/2024, 7:00:00 AM | 7:00:00 AM
   summer 8 | 0 | 240 | Mon Jul 15 2024 08:00:00 GMT-0400 (Eastern Daylight Time) | 08:00:00 GMT-0400 (Eastern Daylight Time) | 7/15/2024, 8:00:00 AM | 8:00:00 AM
@@ -74,7 +75,16 @@ Iceland -> Atlantic/Reykjavik
 Africa/Abidjan -> Africa/Abidjan
   winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
   summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
+Asia/Tokyo -> Asia/Tokyo
+  winter 21 | 0 | -540 | Mon Jan 15 2024 21:00:00 GMT+0900 (Japan Standard Time) | 21:00:00 GMT+0900 (Japan Standard Time) | 1/15/2024, 9:00:00 PM | 9:00:00 PM
+  summer 21 | 0 | -540 | Mon Jul 15 2024 21:00:00 GMT+0900 (Japan Standard Time) | 21:00:00 GMT+0900 (Japan Standard Time) | 7/15/2024, 9:00:00 PM | 9:00:00 PM
+Africa/Abidjan -> Africa/Abidjan
+  winter 12 | 0 | 0 | Mon Jan 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 1/15/2024, 12:00:00 PM | 12:00:00 PM
+  summer 12 | 0 | 0 | Mon Jul 15 2024 12:00:00 GMT+0000 (Greenwich Mean Time) | 12:00:00 GMT+0000 (Greenwich Mean Time) | 7/15/2024, 12:00:00 PM | 12:00:00 PM
 Asia/Kuala_Lumpur -> Asia/Kuala_Lumpur
+  winter 20 | 0 | -480 | Mon Jan 15 2024 20:00:00 GMT+0800 (Malaysia Time) | 20:00:00 GMT+0800 (Malaysia Time) | 1/15/2024, 8:00:00 PM | 8:00:00 PM
+  summer 20 | 0 | -480 | Mon Jul 15 2024 20:00:00 GMT+0800 (Malaysia Time) | 20:00:00 GMT+0800 (Malaysia Time) | 7/15/2024, 8:00:00 PM | 8:00:00 PM
+Not/AZone -> Asia/Kuala_Lumpur
   winter 20 | 0 | -480 | Mon Jan 15 2024 20:00:00 GMT+0800 (Malaysia Time) | 20:00:00 GMT+0800 (Malaysia Time) | 1/15/2024, 8:00:00 PM | 8:00:00 PM
   summer 20 | 0 | -480 | Mon Jul 15 2024 20:00:00 GMT+0800 (Malaysia Time) | 20:00:00 GMT+0800 (Malaysia Time) | 7/15/2024, 8:00:00 PM | 8:00:00 PM
 Europe/Jersey -> Europe/Jersey
@@ -87,6 +97,9 @@ Pacific/Majuro -> Pacific/Majuro
   winter 0 | 0 | -720 | Tue Jan 16 2024 00:00:00 GMT+1200 (Marshall Islands Time) | 00:00:00 GMT+1200 (Marshall Islands Time) | 1/16/2024, 12:00:00 AM | 12:00:00 AM
   summer 0 | 0 | -720 | Tue Jul 16 2024 00:00:00 GMT+1200 (Marshall Islands Time) | 00:00:00 GMT+1200 (Marshall Islands Time) | 7/16/2024, 12:00:00 AM | 12:00:00 AM
 America/Nipigon -> America/Toronto
+  winter 7 | 0 | 300 | Mon Jan 15 2024 07:00:00 GMT-0500 (Eastern Standard Time) | 07:00:00 GMT-0500 (Eastern Standard Time) | 1/15/2024, 7:00:00 AM | 7:00:00 AM
+  summer 8 | 0 | 240 | Mon Jul 15 2024 08:00:00 GMT-0400 (Eastern Daylight Time) | 08:00:00 GMT-0400 (Eastern Daylight Time) | 7/15/2024, 8:00:00 AM | 8:00:00 AM
+America/Argentina/ComodRivadavia -> America/Toronto
   winter 7 | 0 | 300 | Mon Jan 15 2024 07:00:00 GMT-0500 (Eastern Standard Time) | 07:00:00 GMT-0500 (Eastern Standard Time) | 1/15/2024, 7:00:00 AM | 7:00:00 AM
   summer 8 | 0 | 240 | Mon Jul 15 2024 08:00:00 GMT-0400 (Eastern Daylight Time) | 08:00:00 GMT-0400 (Eastern Daylight Time) | 7/15/2024, 8:00:00 AM | 8:00:00 AM
 America/Coyhaique -> America/Coyhaique

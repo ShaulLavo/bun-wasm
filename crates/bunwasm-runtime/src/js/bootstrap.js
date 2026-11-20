@@ -1372,18 +1372,19 @@
   } = Date.prototype;
   function applyIntlTimeZone() {
     const DateTimeFormat = fallbackIntl.DateTimeFormat;
-    const previous = new DateTimeFormat().resolvedOptions().timeZone;
+    // FormatJS's data lacks Africa/Abidjan, which Bun knows as GMT all along (time_zone.ts).
+    DateTimeFormat.tzData["Africa/Abidjan"] ??= [[-Infinity, "GMT", 0, false]];
+    const previous = DateTimeFormat.__defaultTimeZone;
     try {
       DateTimeFormat.__setDefaultTimeZone(intlTimeZone);
       if (typeof new DateTimeFormat().resolvedOptions().timeZone !== "string") throw new RangeError(intlTimeZone);
       // FormatJS canonicalizes through its links (Asia/Kuala_Lumpur becomes Asia/Singapore);
       // the default keeps the zone the engine resolved, whose data FormatJS has, as Bun does.
       if (intlTimeZone !== undefined) DateTimeFormat.__defaultTimeZone = intlTimeZone;
-      return;
     } catch {
-      // Unknown to the fallback's zone data.
+      // Unknown to the fallback's zone data: the previous zone stays, as it was set.
+      DateTimeFormat.__defaultTimeZone = previous;
     }
-    DateTimeFormat.__setDefaultTimeZone(previous);
   }
   internal.setIntlTimeZone = zone => {
     intlTimeZone = zone;

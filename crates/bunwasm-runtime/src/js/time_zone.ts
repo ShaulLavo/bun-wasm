@@ -75,6 +75,8 @@
     // Bun's zone is the data's, except for the few names zone_ids.js lists (America/Nipigon is
     // America/Toronto in Bun although FormatJS keeps its entries).
     const id = (ids ??= internal.require("zone_ids"))[name] ?? target;
+    // A name in the data that Bun does not know (America/Argentina/ComodRivadavia).
+    if (id === "") return null;
     if (id === "UTC" || target === "Etc/UTC" || target === "Etc/GMT") return useUtc();
     if (id !== target) {
       const own = internal.native.timeZoneEntries?.(id);

@@ -11,10 +11,14 @@ const zone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 const show = (value: Date) => [value.getHours(), value.getMinutes(), value.getTimezoneOffset(), value.toString(), value.toTimeString(), value.toLocaleString("en-US"), value.toLocaleTimeString("en-US")].join(" | ");
 
 console.log("start", zone(), "|", show(winter));
+// Africa/Abidjan as the first zone: FormatJS's data has no entry for it.
+process.env.TZ = "Africa/Abidjan";
+console.log("first Africa/Abidjan ->", zone(), "|", show(winter));
 const zones = ["America/New_York", "Europe/London", "Australia/Lord_Howe", "Asia/Kolkata", "Etc/GMT+3", "GMT", "Etc/UTC", "EST5EDT", "US/Pacific", "asia/tokyo", "Asia/Calcutta", "Europe/Berlin", "Pacific/Chatham", "Africa/Casablanca", "Etc/Unknown", "Factory"];
 // A UTC name after another zone, Africa/Abidjan's group, merged zones, current names, and one
 // of FormatJS's rule names, which Bun does not know.
-const more = ["Asia/Tokyo", "Zulu", "Asia/Tokyo", "GMT0", "Asia/Tokyo", "Etc/Greenwich", "Africa/Dakar", "Iceland", "Africa/Abidjan", "Asia/Kuala_Lumpur", "Europe/Jersey", "Indian/Reunion", "Pacific/Majuro", "America/Nipigon", "America/Coyhaique", "Asia/Almaty", "Asia/Qostanay", "1918"];
+// Each unknown name follows a zone it must leave in place.
+const more = ["Asia/Tokyo", "Zulu", "Asia/Tokyo", "GMT0", "Asia/Tokyo", "Etc/Greenwich", "Africa/Dakar", "Iceland", "Africa/Abidjan", "Asia/Tokyo", "Africa/Abidjan", "Asia/Kuala_Lumpur", "Not/AZone", "Europe/Jersey", "Indian/Reunion", "Pacific/Majuro", "America/Nipigon", "America/Argentina/ComodRivadavia", "America/Coyhaique", "Asia/Almaty", "Asia/Qostanay", "1918"];
 for (const name of zones.concat(more)) {
   process.env.TZ = name;
   console.log(`${name} -> ${zone()}`);

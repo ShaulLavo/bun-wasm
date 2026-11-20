@@ -3,8 +3,8 @@
 //   bun scripts/generate-zone-names.ts
 //
 // zone_ids.js: the zone Bun reports after `process.env.TZ = name`, for every name in the data
-// whose zone differs from FormatJS's link (FormatJS merges Asia/Kuala_Lumpur into Singapore and
-// has no Africa/Abidjan for Africa/Dakar's group).
+// whose zone differs from FormatJS's (America/Nipigon is America/Toronto in Bun), and "" for the
+// names Bun does not know.
 //
 // zone_names.js: the names native Bun prints in Date.prototype.toString for every such zone, keyed
 // by FormatJS's offset (minutes east of UTC, whole minutes as QuickJS keeps them) and daylight
@@ -53,7 +53,12 @@ const ids: Record<string, string> = {};
 const bunZones = new Map<string, string>();
 for (const name of new Set(Array.from(zones.keys()).concat(Object.keys(links), ["Africa/Abidjan"]))) {
   const id = bunZone(name);
-  if (id === null) continue;
+  // A name in the data that Bun does not know (America/Argentina/ComodRivadavia, FormatJS's rule
+  // names such as 1918) is listed as "": time_zone.ts rejects it.
+  if (id === null) {
+    ids[name] = "";
+    continue;
+  }
   const target = zones.has(name) ? name : links[name] ?? name;
   const formatjs = target === "Etc/UTC" || target === "Etc/GMT" ? "UTC" : target;
   if (id !== formatjs) ids[name] = id;
