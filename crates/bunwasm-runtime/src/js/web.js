@@ -899,7 +899,7 @@
       return blob;
     }
     stream() {
-      return internal.makeByteStream(this._bytes());
+      return internal.makeByteStream(this._bytes(), this.type);
     }
     get [Symbol.toStringTag]() {
       return "Blob";
@@ -941,14 +941,14 @@
   const { ReadableStream } = streamWeb;
 
   const bodyStreams = internal.require("body_streams");
-  internal.makeByteStream = function makeByteStream(bytes) {
+  internal.makeByteStream = function makeByteStream(bytes, type) {
     return bodyStreams.remember(new ReadableStream({
       type: "bytes",
       start(controller) {
         if (bytes.length > 0) controller.enqueue(new Uint8Array(bytes));
         controller.close();
       },
-    }), bytes);
+    }), bytes, type);
   };
 
   // --- Headers / Request / Response -------------------------------------------
@@ -1083,7 +1083,12 @@
       return { bytes: new Uint8Array(toUint8(body)), type: null, served: "application/octet-stream" };
     }
     if (body instanceof FormData) return formBody().api.serialize(body, formBody().deps);
-    if (body instanceof ReadableStream) return { stream: bodyStreams.adoptable(body), bytes: bodyStreams.bytes(body) || null, type: null };
+    if (body instanceof ReadableStream) {
+      // A stream over a Blob's bytes gives the body that Blob's type too, as Bun lifts the Blob out.
+      // Bun then adds the Content-Type header to a Request but not to a Response.
+      const bytes = bodyStreams.bytes(body) || null;
+      return { stream: bodyStreams.adoptable(body), bytes, type: (bytes && bodyStreams.type(body)) || null, lifted: true };
+    }
     if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
     return { bytes: native.utf8Encode(String(body)), type: null, served: "text/plain;charset=utf-8" };
   }
@@ -1147,9 +1152,49 @@
     target._bodyUsed = false;
     target._servedType = extracted.served || null;
     target._bodyType = extracted.type || null;
-    if (extracted.type && !headers.has("content-type")) headers.set("content-type", extracted.type);
+    if (extracted.type && !headers.has("content-type") && !(extracted.lifted && target instanceof Response)) headers.set("content-type", extracted.type);
   }
 
+
+  // The Content-Length of Responses that came over the network: their size until the body
+  // is used, even after the body getter handed out the stream.
+  const networkSizes = new WeakMap();
+  // Bodies whose getter handed out a stream. Until then Bun keeps bytes in memory (or on
+  // their way from the network) as a Blob, and shows them as one.
+  const exposedBodies = new WeakSet();
+
+  // Bun's size format (bun_core::fmt::size), used for Request and Response sizes.
+  function bunSize(n) {
+    if (n === 0) return "0 KB";
+    if (n < 512) return `${n} bytes`;
+    const magnitude = Math.min(Math.floor(Math.floor(Math.log2(n)) / 9), 8);
+    const value = n / 1000 ** magnitude;
+    if (magnitude === 0) return `${(value / 1000).toFixed(2)} KB`;
+    const precision = Math.abs(value - Math.trunc(value)) <= 0.1 ? 1 : 2;
+    return `${value.toFixed(precision)} ${" KMGTPEZY"[magnitude]}B`;
+  }
+
+  // What Bun.inspect shows for a Request or Response (inspect.js, printFetchBody), or null.
+  internal.fetchInspectView = function fetchInspectView(value) {
+    const isResponse = value instanceof Response;
+    if (!isResponse && !(value instanceof Request)) return null;
+    const used = value.bodyUsed;
+    const network = networkSizes.get(value);
+    const bytes = value._body ?? (value._stream && bodyStreams.bytes(value._stream)) ?? null;
+    const exposed = exposedBodies.has(value);
+    const blobSize = network ?? bytes?.length;
+    let size = used ? 0 : network ?? (exposed ? 0 : blobSize ?? 0);
+    let body = null;
+    if (used || (value._body === null && !value._stream)) body = null;
+    else if (!exposed && blobSize !== undefined) body = { kind: "blob", size: bunSize(blobSize), type: network === undefined ? value._bodyType : null };
+    else if (value._stream) body = { kind: "stream", stream: value._stream };
+    size = bunSize(size);
+    const headers = Object.entries(value.headers.toJSON()).flatMap(([name, entry]) => Array.isArray(entry) ? entry.map(item => [name, item]) : [[name, entry]]);
+    const fields = isResponse
+      ? [["ok", value.ok], ["url", value.url], ["status", value.status], ["statusText", value.statusText], ["headers", headers], ["redirected", value.redirected], ["bodyUsed", used]]
+      : [["method", value.method], ["url", value.url], ["headers", headers]];
+    return { name: isResponse ? "Response" : "Request", size, fields, body };
+  };
 
   class Response {
     #status;
@@ -1192,6 +1237,9 @@
       res.#url = url;
       res.#redirected = redirected;
       res.#type = "basic";
+      // Until the body arrives, Bun knows its size only from the Content-Length.
+      const length = Number(res.#headers.get("content-length"));
+      networkSizes.set(res, Number.isSafeInteger(length) && length >= 0 ? length : 0);
     }
     get status() {
       return this.#status;
@@ -1242,9 +1290,10 @@
     },
     body: {
       get() {
+        if (this._stream || this._body !== null) exposedBodies.add(this);
         if (this._stream) return this._stream;
         if (this._body === null) return null;
-        this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body);
+        this._stream = this._bodyUsed ? bodyStreams.consumedStream() : internal.makeByteStream(this._body, this._bodyType);
         return this._stream;
       },
       configurable: true,

@@ -1,0 +1,17 @@
+chunks ["AAAA","","BBBB"] ok {"framing":"chunked","body":"4\r\nAAAA\r\n4\r\nBBBB\r\n0\r\n\r\n"}
+chunks ["","AAAA"] ok {"framing":"chunked","body":"4\r\nAAAA\r\n0\r\n\r\n"}
+with Content-Length: ok {"framing":"content-length: 8","body":"AAAABBBB"}
+sent while open: ok {"framing":"chunked","body":"5\r\nfirst\r\n6\r\nsecond\r\n0\r\n\r\n"}
+Response body "content-length: 1"
+Blob stream "content-length: 4"
+Request around a stream "content-length: 2"
+POST without a body "content-length: 0"
+POST with an empty string "content-length: 0"
+PUT with empty bytes "content-length: 0"
+DELETE without a body "content-length: 0"
+GET "none"
+303 followed: 200 GET /next 1
+307 rejected: TypeError undefined "Request body is a ReadableStream and cannot be replayed for this redirect" 1
+308 rejected: TypeError undefined "Request body is a ReadableStream and cannot be replayed for this redirect" 1
+302 rejected: TypeError undefined "Request body is a ReadableStream and cannot be replayed for this redirect" 1
+failing body: rejected: source broke

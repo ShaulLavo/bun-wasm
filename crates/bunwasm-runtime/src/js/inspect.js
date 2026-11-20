@@ -206,6 +206,8 @@
   }
 
   function objectTag(value) {
+    const fetchView = internal.fetchInspectView?.(value);
+    if (fetchView) return { tag: "FetchBody", view: fetchView };
     if (isErrorInstance(value)) return { tag: "Error" };
     if (Array.isArray(value)) return { tag: "Array" };
     if (ArrayBuffer.isView(value) || isArrayBuffer(value) || isSharedArrayBuffer(value)) return { tag: "TypedArray" };
@@ -569,6 +571,8 @@
           return this.printSymbol(value);
         case "CustomFormattedObject":
           return this.printCustomFormatted();
+        case "FetchBody":
+          return this.printFetchBody(info.view);
         case "Error":
           return this.printError(value);
         case "Class":
@@ -905,6 +909,72 @@
         this.quoteStrings = prevQuote;
       }
       if (!this.singleLine) this.writeIndent();
+      this.write("}");
+    }
+
+    // Response.rs and Request.rs write_format: the size, the fields, the headers and the
+    // body's backing. `view` comes from web.js (fetchInspectView). A comma follows each
+    // field that has a line after it, except a Request's headers.
+    printFetchBody(view) {
+      this.write(`${view.name} (${view.size}) {\n`);
+      const prevQuote = this.quoteStrings;
+      this.quoteStrings = true;
+      this.indent += 1;
+      this.depth += 1;
+      try {
+        const last = view.fields.length - 1;
+        view.fields.forEach(([key, value], index) => {
+          this.writeIndent();
+          this.write(key + ": ");
+          if (key === "headers") this.printHeaderPairs(value);
+          else this.formatValue(value);
+          const followed = index < last || view.body !== null;
+          if (followed && !(key === "headers" && view.name === "Request")) this.printComma();
+          this.write("\n");
+        });
+        if (view.body !== null) {
+          this.writeIndent();
+          this.printFetchBodyValue(view.body);
+          this.write("\n");
+        }
+      } finally {
+        this.indent -= 1;
+        this.depth -= 1;
+        this.quoteStrings = prevQuote;
+      }
+      this.writeIndent();
+      this.write("}");
+    }
+
+    printHeaderPairs(pairs) {
+      if (pairs.length === 0) {
+        this.write("Headers {}");
+        return;
+      }
+      this.write("Headers {\n");
+      this.indent += 1;
+      for (const [name, value] of pairs) {
+        this.writeIndent();
+        this.write(`${quoteJSON(name)}: ${quoteJSON(value)},\n`);
+      }
+      this.indent -= 1;
+      this.writeIndent();
+      this.write("}");
+    }
+
+    printFetchBodyValue(body) {
+      if (body.kind !== "blob") {
+        this.formatValue(body.stream);
+        return;
+      }
+      this.write(`Blob (${body.size})`);
+      if (!body.type) return;
+      this.write(" {\n");
+      this.indent += 1;
+      this.writeIndent();
+      this.write(`type: ${quoteJSON(body.type)}\n`);
+      this.indent -= 1;
+      this.writeIndent();
       this.write("}");
     }
 

@@ -5,6 +5,7 @@
 //! publishes the response head, then streams the (decoded) body into the
 //! handle's queue, pausing while the guest has a lot unread.
 
+use std::collections::VecDeque;
 use std::future::{Future, poll_fn};
 use std::io::{self, BufRead, BufReader, Read};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -17,7 +18,7 @@ use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 
 use super::error::{ErrorInfo, fetch_error};
-use super::{AGAIN, ByteQueue, ERROR, Notify, Output, READ_HIGH_WATER};
+use super::{AGAIN, BADF, ByteQueue, ERROR, Notify, Output, READ_HIGH_WATER};
 
 const ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
 const MAX_REDIRECTS: usize = 20;
@@ -148,6 +149,81 @@ struct State {
     body_error: Option<ErrorInfo>,
     aborted: bool,
     waker: Option<Waker>,
+    upload: UploadQueue,
+}
+
+/// Request body bytes the guest wrote to a `fetch_stream` handle, not yet sent.
+#[derive(Default)]
+struct UploadQueue {
+    chunks: VecDeque<bytes::Bytes>,
+    queued: usize,
+    /// The guest called `shutdown`: the body ends after the queued chunks.
+    ended: bool,
+    /// The request no longer takes body bytes (sent, failed or replaced by a redirect).
+    closed: bool,
+    waker: Option<Waker>,
+}
+
+/// `write` reports AGAIN while this much of the request body is unsent.
+const UPLOAD_HIGH_WATER: usize = 256 * 1024;
+
+/// The request body the guest supplied.
+pub enum Upload {
+    /// The whole body, sent with a Content-Length.
+    Bytes(Vec<u8>),
+    /// Chunks the guest writes to the handle until `shutdown`. Without a
+    /// Content-Length header it goes out chunked, one chunk per write.
+    Stream,
+}
+
+enum RequestBody {
+    None,
+    Bytes(Vec<u8>),
+    Stream,
+}
+
+/// The `fetch_stream` body as hyper reads it: each queued write is one data frame.
+struct UploadBody {
+    shared: Arc<Shared>,
+    notify: Arc<Notify>,
+}
+
+impl hyper::body::Body for UploadBody {
+    type Data = bytes::Bytes;
+    type Error = io::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<hyper::body::Frame<bytes::Bytes>, io::Error>>> {
+        let mut state = self.shared.state.lock().unwrap();
+        if state.aborted {
+            return Poll::Ready(Some(Err(io::ErrorKind::ConnectionAborted.into())));
+        }
+        if let Some(chunk) = state.upload.chunks.pop_front() {
+            state.upload.queued -= chunk.len();
+            drop(state);
+            // The guest may be waiting to write more.
+            self.notify.bump();
+            return Poll::Ready(Some(Ok(hyper::body::Frame::data(chunk))));
+        }
+        if state.upload.ended {
+            return Poll::Ready(None);
+        }
+        state.upload.waker = Some(cx.waker().clone());
+        Poll::Pending
+    }
+}
+
+impl Drop for UploadBody {
+    fn drop(&mut self) {
+        let mut state = self.shared.state.lock().unwrap();
+        state.upload.closed = true;
+        state.upload.chunks.clear();
+        state.upload.queued = 0;
+        drop(state);
+        self.notify.bump();
+    }
 }
 
 struct Shared {
@@ -158,6 +234,8 @@ struct Shared {
 
 pub struct Fetch {
     shared: Arc<Shared>,
+    /// Started by `fetch_stream`: `write` and `shutdown` carry the body.
+    streaming: bool,
 }
 
 fn invalid(message: impl Into<String>, code: &str) -> ErrorInfo {
@@ -170,9 +248,10 @@ impl Fetch {
     pub fn start(
         clients: &Arc<Clients>,
         meta: &[u8],
-        body: &[u8],
+        upload: Upload,
         notify: Arc<Notify>,
     ) -> Result<Fetch, ErrorInfo> {
+        let streaming = matches!(upload, Upload::Stream);
         let meta: Meta = serde_json::from_slice(meta).map_err(|e| {
             invalid(
                 format!("invalid fetch request: {e}"),
@@ -220,8 +299,11 @@ impl Fetch {
                     "ERR_INVALID_HTTP_TOKEN",
                 )
             })?;
-            // The client frames the body itself.
-            if name == http_header::CONTENT_LENGTH || name == http_header::TRANSFER_ENCODING {
+            // The client frames the body itself. A streamed body keeps the caller's
+            // Content-Length, as in Bun: it is then sent raw instead of chunked.
+            if name == http_header::TRANSFER_ENCODING
+                || name == http_header::CONTENT_LENGTH && !streaming
+            {
                 continue;
             }
             let value = HeaderValue::from_str(value).map_err(|_| {
@@ -238,19 +320,31 @@ impl Fetch {
                 HeaderValue::from_static(ACCEPT_ENCODING),
             );
         }
-        let body = (!body.is_empty() && method != Method::GET && method != Method::HEAD)
-            .then(|| body.to_vec());
+        let bodiless = method == Method::GET || method == Method::HEAD;
+        // Bun frames every other method's body, even an empty or absent one, with a
+        // Content-Length (`content-length: 0`).
+        let body = match upload {
+            _ if bodiless => RequestBody::None,
+            Upload::Stream => RequestBody::Stream,
+            Upload::Bytes(bytes) => RequestBody::Bytes(bytes),
+        };
+        // hyper writes no header for an empty body.
+        if matches!(&body, RequestBody::Bytes(bytes) if bytes.is_empty()) {
+            headers.insert(http_header::CONTENT_LENGTH, HeaderValue::from_static("0"));
+        }
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State::default()),
+            drained: Condvar::new(),
+        });
+        if !matches!(body, RequestBody::Stream) {
+            shared.state.lock().unwrap().upload.closed = true;
+        }
         let request = Request {
             method,
             url,
             headers,
             body,
         };
-
-        let shared = Arc::new(Shared {
-            state: Mutex::new(State::default()),
-            drained: Condvar::new(),
-        });
         let package = meta.credential_policy.as_deref() == Some("package");
         let job = Job {
             clients: clients.clone(),
@@ -263,7 +357,45 @@ impl Fetch {
             .name("bun-wasm-fetch".into())
             .spawn(move || job.run(request))
             .map_err(|e| invalid(format!("failed to start request: {e}"), "EAGAIN"))?;
-        Ok(Fetch { shared })
+        Ok(Fetch { shared, streaming })
+    }
+
+    /// Queue request body bytes of a `fetch_stream` request. ERROR once the
+    /// request takes no more body (it failed, finished or was redirected).
+    pub fn write(&self, data: &[u8]) -> i32 {
+        if !self.streaming {
+            return BADF;
+        }
+        let mut state = self.shared.state.lock().unwrap();
+        let upload = &mut state.upload;
+        if upload.closed || upload.ended {
+            return ERROR;
+        }
+        if data.is_empty() {
+            return 0;
+        }
+        if upload.queued >= UPLOAD_HIGH_WATER {
+            return AGAIN;
+        }
+        upload.queued += data.len();
+        upload.chunks.push_back(bytes::Bytes::copy_from_slice(data));
+        if let Some(waker) = upload.waker.take() {
+            waker.wake();
+        }
+        data.len() as i32
+    }
+
+    /// End a `fetch_stream` request's body after the queued bytes.
+    pub fn end_body(&self) -> i32 {
+        if !self.streaming {
+            return BADF;
+        }
+        let mut state = self.shared.state.lock().unwrap();
+        state.upload.ended = true;
+        if let Some(waker) = state.upload.waker.take() {
+            waker.wake();
+        }
+        0
     }
 
     pub fn head(&self) -> Output {
@@ -307,10 +439,10 @@ impl Fetch {
     pub fn abort(self) {
         let mut state = self.shared.state.lock().unwrap();
         state.aborted = true;
-        let waker = state.waker.take();
+        let wakers = [state.waker.take(), state.upload.waker.take()];
         drop(state);
         self.shared.drained.notify_all();
-        if let Some(waker) = waker {
+        for waker in wakers.into_iter().flatten() {
             waker.wake();
         }
     }
@@ -320,7 +452,7 @@ struct Request {
     method: Method,
     url: Url,
     headers: HeaderMap,
-    body: Option<Vec<u8>>,
+    body: RequestBody,
 }
 
 struct Job {
@@ -345,9 +477,9 @@ impl Job {
                 request.headers,
                 request.body,
             )
-            .map(|response| (response, transport))
+            .map(|(response, final_url)| (response, final_url, transport))
         });
-        let (response, transport) = match result {
+        let (response, final_url, transport) = match result {
             Ok(response) => response,
             Err(SendError::Aborted) => return,
             Err(SendError::Network(error)) => {
@@ -379,19 +511,18 @@ impl Job {
         let head = Head {
             status: status.as_u16(),
             status_text,
-            url: response.url().to_string(),
-            redirected: *response.url() != request.url,
+            url: final_url.to_string(),
+            redirected: final_url != request.url,
             body_encoding: None,
             // Bun reports the original content-encoding/-length even though
-            // the body is decoded, so the headers pass through unchanged.
+            // the body is decoded, so the headers pass through unchanged. Each
+            // value byte is one character (Latin-1), as Bun and browsers read them.
             headers: response
                 .headers()
                 .iter()
                 .map(|(name, value)| {
-                    (
-                        name.as_str().to_string(),
-                        String::from_utf8_lossy(value.as_bytes()).into_owned(),
-                    )
+                    let value = value.as_bytes().iter().map(|&byte| char::from(byte));
+                    (name.as_str().to_string(), value.collect())
                 })
                 .collect(),
         };
@@ -427,23 +558,43 @@ impl Job {
         mut method: Method,
         mut url: Url,
         mut headers: HeaderMap,
-        mut body: Option<Vec<u8>>,
-    ) -> Result<reqwest::Response, SendError> {
+        mut body: RequestBody,
+    ) -> Result<(reqwest::Response, Url), SendError> {
         for redirects in 0..=MAX_REDIRECTS {
+            // A fragment is never sent (a long one would not even fit an HTTP
+            // request target), but the response URL keeps it, as in Bun.
+            let mut wire = url.clone();
+            wire.set_fragment(None);
             let mut builder = transport
                 .client
-                .request(method.clone(), url.clone())
+                .request(method.clone(), wire)
                 .headers(headers.clone());
-            if let Some(body) = &body {
-                builder = builder.body(body.clone());
+            match &body {
+                RequestBody::None => {}
+                RequestBody::Bytes(bytes) => builder = builder.body(bytes.clone()),
+                RequestBody::Stream => {
+                    builder = builder.body(reqwest::Body::wrap(UploadBody {
+                        shared: self.shared.clone(),
+                        notify: self.notify.clone(),
+                    }));
+                }
             }
             let response = transport.wait(&self.shared, builder.send())?;
             let status = response.status();
             let Some(location) = response.headers().get(http_header::LOCATION) else {
-                return Ok(response);
+                return Ok((response, url));
             };
             if self.redirect != Redirect::Follow || !is_redirect_status(status) {
-                return Ok(response);
+                return Ok((response, url));
+            }
+            // A stream has no source to send again: only a 303, which drops the
+            // body, is followed (Fetch's HTTP-redirect fetch, step 11, as in Bun).
+            if matches!(body, RequestBody::Stream) && status != StatusCode::SEE_OTHER {
+                return Err(SendError::Policy(ErrorInfo::new(
+                    "TypeError",
+                    "Request body is a ReadableStream and cannot be replayed for this redirect",
+                    None,
+                )));
             }
             if redirects == MAX_REDIRECTS {
                 return Err(SendError::Policy(invalid(
@@ -480,7 +631,7 @@ impl Job {
                 || matches!(status.as_u16(), 301 | 302) && method == Method::POST
             {
                 method = Method::GET;
-                body = None;
+                body = RequestBody::None;
                 headers.remove(http_header::CONTENT_LENGTH);
                 headers.remove(http_header::CONTENT_TYPE);
                 headers.remove(http_header::TRANSFER_ENCODING);

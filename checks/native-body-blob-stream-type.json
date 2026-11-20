@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/body-blob-stream-type",
+  "engines": ["quickjs", "jsc", "browser"]
+}

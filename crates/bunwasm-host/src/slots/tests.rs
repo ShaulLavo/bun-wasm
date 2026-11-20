@@ -548,7 +548,7 @@ impl Fixture {
 
 #[test]
 fn network_slots_have_no_child_or_signal_transport() {
-    assert_eq!(SLOT_NAMES.len(), 18);
+    assert_eq!(SLOT_NAMES.len(), 19);
     assert_eq!(
         &SLOT_NAMES[12..],
         &[
@@ -557,7 +557,8 @@ fn network_slots_have_no_child_or_signal_transport() {
             "lookup_start",
             "lookup_head",
             "listen_path",
-            "connect_path"
+            "connect_path",
+            "fetch_stream"
         ]
     );
     assert!(
@@ -588,6 +589,7 @@ fn lookup_start_rejects_invalid_utf8_before_allocating_a_handle() {
     let lookup_start = functions(&mut f.store)
         .into_iter()
         .nth(14)
+        .flatten()
         .unwrap()
         .typed::<(i32, i32, i32, i32), i32>(&f.store)
         .unwrap();
