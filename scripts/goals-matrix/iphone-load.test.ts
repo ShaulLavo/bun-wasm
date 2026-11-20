@@ -1,5 +1,5 @@
 import { withScoped, withAdmission } from "./scope-fixture";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { object } from "./evidence";
 import { createIphoneTransport, describeStalledDocument, navigationEvidence, previewStallMs } from "./iphone-transport";
 import { IphoneBus } from "./iphone-bus";
@@ -8,6 +8,9 @@ import { frameworks } from "./catalog";
 import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 type Row = Record<string, unknown>;
 type Script = { states: Row[]; loads: Row[]; focuses: Row[]; fail?: string; disconnect?: string; rendered?: unknown[] };

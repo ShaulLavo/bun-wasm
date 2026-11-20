@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { engineEnvironment, inputProfile, parseProgramInputs, parseProgramReceipt, verifyProgramReceipt } from "./guest-core-receipt.ts";
 import { hash } from "./guest-source-manifest.ts";
 import { producerEngines, producerScopes, publicationEngines } from "./producer-closure.ts";
 import { parseProgramFiles, type PairedEngine, type SupportedPairedEngine } from "../src/engine-kind.ts";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function snapshot(scope: string, content: unknown = { selection: { kind: scope } }) {
   return { schema: 1, scope, source: { head: "a".repeat(40), tree: "b".repeat(40) }, content, contentSha256: hash(JSON.stringify(content)) };

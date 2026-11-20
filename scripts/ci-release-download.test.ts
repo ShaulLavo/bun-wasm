@@ -1,10 +1,13 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { spawnSync } from "node:child_process";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseCacheKey, releaseDownload as downloadRelease } from "./ci-release-download";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function releaseDownload(url: string, options: Parameters<typeof downloadRelease>[1] = {}) {
   return downloadRelease(url, { cache: undefined, ...options });

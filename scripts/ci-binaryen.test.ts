@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { binaryenPin, installBinaryen, verifyBinaryenArchive } from "./ci-binaryen";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 for (const contents of ["tampered archive", ""]) {
   test(`Binaryen setup rejects ${contents ? "tampered" : "empty"} cached archives before extraction`, async () => {

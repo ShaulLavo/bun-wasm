@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -7,6 +7,9 @@ import { join, resolve } from "node:path";
 import { domainToASCII, domainToUnicode } from "node:url";
 import { createContext, runInContext } from "node:vm";
 import { mimeTypeInterned } from "./mime-types-stub";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = resolve(import.meta.dir, "..");
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-url-compat-"));

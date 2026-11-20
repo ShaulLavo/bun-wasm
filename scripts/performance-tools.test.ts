@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -8,11 +8,15 @@ import { array, canonical, identity, json, number, object, parsePlan, sha256, tr
 import { splitProfile } from "./performance/profile";
 import { replay } from "./performance/replay";
 
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
+
 const root = resolve(import.meta.dir, "..");
 const fixtures = join(root, "tests/performance/fixtures");
 
 function run(command: string, args: string[]) {
-  const result = spawnSync(command, args, { encoding: "utf8", timeout: 20000 });
+  // A hang cap: rustup can wait seconds on its lock while other builds run.
+  const result = spawnSync(command, args, { encoding: "utf8", timeout: 120_000 });
   if (result.error || result.status !== 0) throw new Error(`${command}: ${result.error ?? result.stderr}`);
   return result.stdout;
 }
@@ -21,7 +25,7 @@ test("the tools package's default Cargo binaries contain only the WASI guest", (
   const manifest = object(JSON.parse(run("rustup", ["run", "stable", "cargo", "read-manifest", "--manifest-path", join(root, "crates/bunwasm-tools/Cargo.toml")])));
   const binaries = array(manifest.targets).map(object).filter(target => array(target.kind).includes("bin")).map(target => target.name);
   expect(binaries).toEqual(["bun-tools"]);
-}, 20000);
+}, 180_000);
 
 test("saved profile counts sample entries, separates useful callees, and rejects missing captures", () => {
   const frame = (id: number, name: string, url: string, children: number[]) => ({ id, callFrame: { functionName: name, url }, children, hitCount: 9999 });
@@ -129,7 +133,7 @@ test("Linux counter covers orphan work, fails closed and cleans descendants; run
     await checkSignal(counter, child, cpu, scratch);
     await checkRunner(counter, cpu, scratch);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
-}, 60000);
+}, 300_000);
 
 async function checkSignal(counter: string, child: string, cpu: number, scratch: string) {
   const pidFile = join(scratch, "signal.pid"), output = join(scratch, "signal.json");

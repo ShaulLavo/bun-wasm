@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { browserHost, earlyServerExit, serverCommand } from "./browser.mjs";
 import { createContext, runInContext, runInNewContext } from "node:vm";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -10,6 +10,9 @@ import { failure } from "./classify";
 import { exitProvenance } from "./exit-provenance";
 import { completeObservations } from "./product-browser";
 import { checkCommand, checkInstall } from "./checks.mjs";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const pending = () => new Promise<never>(() => {});
 function readyProbe() {

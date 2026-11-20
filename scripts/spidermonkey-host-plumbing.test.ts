@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -17,6 +17,9 @@ import { createMemoryReader, recordMemorySnapshot } from "../web/src/memory-tele
 import { engineEnvironment } from "../src/executable-paths.ts";
 import { isEngine, loadWasm, WasmMissing } from "../web/src/engine-loader.ts";
 import { stageSharedPrograms } from "./stage-program-profiles";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const kind = "spidermonkey";
 

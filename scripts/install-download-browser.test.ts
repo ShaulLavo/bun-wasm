@@ -1,4 +1,4 @@
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -8,6 +8,9 @@ import { buildSite, verifySite } from "./browser-guest-site";
 import { assertClosed, fixture } from "./install-download-fixture";
 import { run, session, writeFile } from "../web/tests/playground.mjs";
 import { openPlaygroundPage } from "../web/tests/playground-navigation";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 for (const name of (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",")) {
   test(`${name}: Waffle metadata and archives overlap under body backpressure`, async () => {

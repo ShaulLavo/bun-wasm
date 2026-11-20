@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { browserBuildConfig, resolveRuntimePackage } from "./browser-build";
 import { stageReleasePackages, verifyStagedResolutions } from "./ci-stage-release-packages";
 import release from "./waffle-release-inputs.json";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 interface OwnedCommand {
   exited: Promise<number>;

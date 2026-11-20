@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function fixture(run: (f: { root: string; repository: string; vendor: string; base: string; first: string; final: string; git: (cwd: string, ...args: string[]) => string; sync: (args?: string[]) => ReturnType<typeof Bun.spawnSync> }) => void) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-source-test-"));

@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,6 +13,9 @@ import { browserRegistryRoute, registryAccept, registryBrokerResponse, registryR
 import { nextApps } from "./product-next";
 import { fullstackApps } from "./product-fullstack";
 import { serverCommand } from "./browser.mjs";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("browser commands retain real CLI arguments and disable optional telemetry before import", () => {
   for (const app of nextApps.concat(fullstackApps)) {

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chmod, mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,9 @@ import { runSmoke } from "./run";
 import { templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { engineFiles, profileEngineFiles } from "../goals-matrix/engines";
 import { comparedHeaders, decodedSha256, pick, type LiveServed } from "../goals-matrix/iphone-live-proxy";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const source: Report["source"] = { commit: "a".repeat(40), dirty: false, assets: { source: "local-test-build" } };
 const capabilities = { browserName: "safari", platformName: "iOS", "safari:useSimulator": true, "safari:deviceUDID": deviceUDID, transport: "visible-safari-xctest" };

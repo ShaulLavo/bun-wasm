@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { copyFile, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -7,6 +7,9 @@ import { campaignDeadlines, deadlinePolicy } from "./deadlines";
 import { authoritativePolicy, stagePolicyMetadata } from "./policy-metadata";
 import { metadataFiles, publicationMarker, publishPolicyMetadata, recoverPolicyMetadata } from "./policy-publication";
 import { withCanonicalWriter } from "./canonical-write";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const owner = { date: "2026-11-11", framework: "next", engine: "spidermonkey", phase: "build", activeLimitMs: 110_000, authorizedLimitMs: 150_000, status: "held-for-integration-diagnosis" };
 async function fixture(action: (root: string, stage: string, before: Map<string, string>) => Promise<void>): Promise<void> {

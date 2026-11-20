@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -7,6 +7,9 @@ import { once } from "node:events";
 import { completeStackParts, stackSelection } from "./stack-parts.ts";
 import { stackModeSlice } from "./stack-measurement.ts";
 import { cleanupPlayground } from "../web/tests/playground-cleanup.ts";
+
+// These tests run real stack measurement commands. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const owned: string[] = [];
 afterAll(() => { for (const directory of owned) rmSync(directory, { recursive: true, force: true }); });

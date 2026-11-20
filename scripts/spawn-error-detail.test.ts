@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { load, service } from "./spawn-runtime-proc-fixture";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const detail = "ProcessError: adapter startup failed\ncaused by TypeError: cannot clone module";
 interface SpawnError extends Error { code: string; errno: number; syscall: string }

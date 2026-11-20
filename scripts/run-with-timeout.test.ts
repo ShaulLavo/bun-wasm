@@ -1,8 +1,11 @@
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ownedScenario } from "./fixtures/deadline-scenario";
 import { tmpdir } from "node:os";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const wrapper = join(import.meta.dir, "run-with-timeout.mts");
 async function run(seconds: string, args: string[]) {

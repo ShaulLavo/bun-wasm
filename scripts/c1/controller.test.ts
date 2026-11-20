@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +13,9 @@ import { AdmissionError, admitWebkit } from "./inputs.ts";
 import { Invocation, operationSucceeded, rehearse, treeWitness, type Cleanup } from "./operations.ts";
 import { publicationMatrix, restage, smokeInputs, verifyMatrixScratch } from "./publication.ts";
 import { STAGES, blockReason, runStages, validateStages, type Stage, type StageContext } from "./stages.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const repository = realpathSync(join(import.meta.dir, "../.."));
 let scratch = "";

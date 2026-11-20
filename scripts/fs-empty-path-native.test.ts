@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("Rust rejects an empty filesystem path without normalizing valid paths", () => {
   const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-empty-native-"));

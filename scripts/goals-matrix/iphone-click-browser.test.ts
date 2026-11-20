@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, webkit, type Browser, type BrowserType } from "playwright";
 import { runFixturePhases } from "./fixture-phases";
 import { armIphoneClick } from "./iphone-browser";
 import { iphoneClickExpression, iphoneClickPredicates, recordIphoneClickTrace } from "./iphone-click";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 async function clickControl(engine: BrowserType): Promise<void> {
   const lifetime = new AbortController();

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { collectReport, compareSamples, githubRequest, parseSample, parseTimingLog, readBounded, summary, trustedRun, type Transport } from "./timing-report.ts";
 import { TIMING_PREFIX, timingWorkloads, type TimingSample } from "./timing-observation.ts";
 import { needsJsc, needsRust, needsSharedNative, needsSharedSysroot } from "./ci-changes.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const sha = "a".repeat(40);
 const run = { id: 1, run_attempt: 1, event: "push", head_branch: "main", status: "completed", conclusion: "success", head_repository: { full_name: "ShaulLavo/bun-wasm" }, head_sha: sha, path: ".github/workflows/ci.yml" };

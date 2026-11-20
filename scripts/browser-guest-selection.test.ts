@@ -1,10 +1,13 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { browserGuestRows, coverageOwners, expectedBrowserGuestRows, fullBrowserGuestSelection, withoutJscBrowserGuestSelection, unionBrowserGuestSelections, rowIdentity, parseBrowserGuestSelection } from "./browser-guest-catalogue";
 import { browserGuestManifest, browserGuestOwnerInputs, selectBrowserGuestCoverage, type CoverageManifestSnapshot } from "./browser-guest-selection";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const cleanup = new Set<string>();
 afterEach(() => { for (const directory of cleanup) rmSync(directory, { recursive: true, force: true }); cleanup.clear(); });

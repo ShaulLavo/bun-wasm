@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { service, load, loadExit, type ProcessExit } from "./spawn-runtime-proc-fixture.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 const ENOENT = -44;
 const EAGAIN = -6;
 

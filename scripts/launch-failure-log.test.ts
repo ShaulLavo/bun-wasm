@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { launchFailureFixture } from "./fixtures/launch-failure.ts";
 import { beginMemorySnapshot, endMemorySnapshot, recordLaunchFailure, retainedMemorySnapshots } from "../web/src/memory-telemetry.ts";
 import { withPlayground } from "./goals-matrix/test-fixture.ts";
@@ -11,6 +11,9 @@ import { ENGINES } from "../web/src/engine-loader.ts";
 import type { Engine } from "../src/engine-kind.ts";
 import { runInNewContext } from "node:vm";
 import { launchFailureLog } from "./goals-matrix/browser-memory";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("a missing retained hook is unavailable rather than an observed empty result", async () => {
   const transport = (context: object) => ({ async useHost() {}, async evaluate<T>(expression: string): Promise<T> { return runInNewContext(expression, context); } });

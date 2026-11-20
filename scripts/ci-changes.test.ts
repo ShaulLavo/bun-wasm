@@ -1,11 +1,14 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changedPaths, needsJsc, needsRust, needsSharedNative, needsSharedSysroot } from "./ci-changes";
 import { ordinaryFixtures } from "./spidermonkey-ordinary-fixtures.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("ordinary SpiderMonkey recipes, nested runtime inputs and each reviewed fixture select Rust", () => {
   const paths = ["spidermonkey/mozconfig.in", "spidermonkey/prepare-engine-inputs.ts", "spidermonkey/unresolved-symbols.json",

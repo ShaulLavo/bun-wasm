@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 import { viteApps } from "./app-matrix/product-vite";
@@ -22,6 +22,9 @@ import { WorkerJobs } from "../tests/shell-product/worker-jobs";
 import { confirmWorkerProcessJob, createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { SpawnRequest } from "waffle/proc";
 import { DescriptorTable } from "waffle/core/descriptors";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function workerJobFixture() {
   const live = new Set<object>();

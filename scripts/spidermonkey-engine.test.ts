@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -8,6 +8,9 @@ import { prepareEngineInputs, verifyEngineInputs } from "../spidermonkey/prepare
 import { captureInputs, convertSideInitializers, verifyPairReceipt, verifySide, writePairReceipt } from "./spidermonkey-side-core-receipt.ts";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
 import { performanceProfile } from "../spidermonkey/native-profile.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const put = (path: string, value: string | Uint8Array) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, value); };

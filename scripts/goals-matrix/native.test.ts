@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFile, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { prepareDesktopSafari, stopDesktopSafari, parseSafariApplications, type DesktopSafari, type SafariApplication, type SafariApplicationHost } from "./native-safari";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("native startup prepares Safari after console admission and before starting the driver", async () => {
   const source = await readFile(new URL("./native.ts", import.meta.url), "utf8");

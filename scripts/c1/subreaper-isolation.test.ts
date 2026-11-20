@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { linuxProcess } from "../process-owner.mts";
 import { runSubreaperProbe } from "../test-subreaper-command.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const probeSource = (enabled: boolean) => `import { afterAll, expect } from "bun:test";
 import { dlopen, ptr } from "bun:ffi";

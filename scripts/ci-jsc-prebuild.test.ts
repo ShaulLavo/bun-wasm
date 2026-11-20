@@ -1,11 +1,14 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
 import { excludedJscRoots, excludedJscSentinels, seedJscArtifact } from "./fixtures/jsc-artifact";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 // The JSC C/C++ prebuild runs in its own job and hands one verified archive to the
 // native job. These tests pin the job graph, the shared setup and the hand-off.

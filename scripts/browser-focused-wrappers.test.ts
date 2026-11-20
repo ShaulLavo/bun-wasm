@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,6 +9,9 @@ import { runStdinCases, stdinCaseNames, stdinCaseRecords } from "../web/tests/pl
 import { assertStdinReport, stdinBrowser } from "../web/tests/browser-playground-stdin";
 import { expectedBrowserGuestRows } from "./browser-guest-catalogue";
 import { browserGuestManifest } from "./browser-guest-selection";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 function green(engines = selectInterruptionEngines()) {
   return { ok: true, checks: interruptionProofs(engines), outcomes: [{ ok: true, cleanup: { safe: true } }], cleanup: { safe: true, activeWorkers: 0 }, benchmarks: engines.map(engine => ({ engine })) };

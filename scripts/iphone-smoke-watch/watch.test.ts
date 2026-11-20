@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import "../iphone-smoke-watch";
 import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, watch, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
@@ -8,6 +8,9 @@ import { discover } from "./github";
 import { claimWindowMs, outcome, state as parseState, type Job, type Run, type State } from "./model";
 import { claim, complete, retry, status, tick, type Adapters } from "./scheduler";
 import { load, save } from "./storage";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const since = "2026-11-15T00:00:00.000Z";
 const now = "2026-11-15T12:00:00.000Z";

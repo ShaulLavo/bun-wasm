@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -8,6 +8,9 @@ import { runInNewContext } from "node:vm";
 import { selectChecks } from "./test-checks";
 import { firstFsSource, measurementArgs, parseFirstFs, parseRuntimeScopes, verifyMeasurementClosure } from "./measure-runtime-js";
 import { launcherReceipt, producerArtifactPaths, producerEngines } from "./producer-closure.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("first-fs workload validates the actual module and cached identity", () => {
   const result = spawnSync(process.execPath, ["-e", firstFsSource], { encoding: "utf8" });

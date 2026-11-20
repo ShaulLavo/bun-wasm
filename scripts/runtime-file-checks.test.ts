@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +9,9 @@ import { discoverChecks, parseCheck, selectChecks } from "./test-checks.ts";
 import { linuxProcess } from "./process-owner.mts";
 import { runSubreaperProbe } from "./test-subreaper-command.ts";
 import { needsJsc, needsRust } from "./ci-changes.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const owned: string[] = [];
 afterEach(() => { for (const path of owned.splice(0)) rmSync(path, { recursive: true, force: true }); });

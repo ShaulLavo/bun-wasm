@@ -3,8 +3,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
 import { programProfile } from "../src/engine-kind";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { distribution, engineArtifacts, engineOrder, median, nativeControlAdapter, parseEngineSpecs, parseMicroOutput } from "./bench-engines";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("micro parser checks every section and checksum", () => {
   const output = [

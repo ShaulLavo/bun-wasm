@@ -1,9 +1,12 @@
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { stableScratch } from "./stable-scratch.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("native module evaluation query preserves state and error classification on both tiers", () => {
   const build = process.env.SPIDERMONKEY_BUILD_DIR;

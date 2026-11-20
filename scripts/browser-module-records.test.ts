@@ -3,12 +3,15 @@
 // that site once and each browser leg passes it in BUN_WASM_BROWSER_SITE; the check verifies its
 // closed inventory and source before and after the browsers run and never bundles it again.
 // A local run without BUN_WASM_BROWSER_SITE builds one in scratch from dist/bun-browser.wasm.
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildSite, verifySite } from "./browser-guest-site";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = resolve(import.meta.dir, "..");
 

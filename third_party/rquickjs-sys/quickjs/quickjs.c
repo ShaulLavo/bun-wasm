@@ -51587,6 +51587,22 @@ static JSValue js_regexp_escape(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/* bun-wasm: lre_exec restarts libregexp's poll countdown on every call, so a native loop of
+   many cheap matches (a global replace, split or matchAll) never reached the interrupt
+   handler and could not be stopped. Each match attempt now also counts against the
+   interpreter's countdown, as JS_REGEXP_EXEC_STEPS of its steps: between two polls run at most
+   10,000 / 100 = 100 attempts of under 10,000 matcher steps each. The matcher itself is
+   unchanged; carrying its countdown across calls made it 15 to 20% slower. */
+#define JS_REGEXP_EXEC_STEPS 100
+
+static inline __exception int js_regexp_poll_interrupts(JSContext *ctx)
+{
+    ctx->interrupt_counter -= JS_REGEXP_EXEC_STEPS;
+    if (unlikely(ctx->interrupt_counter <= 0))
+        return __js_poll_interrupts(ctx);
+    return 0;
+}
+
 static JSValue js_regexp_exec_internal(JSContext *ctx, JSValueConst this_val,
                                        int argc, JSValueConst *argv,
                                        bool test_only)
@@ -51644,6 +51660,8 @@ static JSValue js_regexp_exec_internal(JSContext *ctx, JSValueConst this_val,
     str_buf = str8(str);
     if (last_index > str->len) {
         rc = 2;
+    } else if (js_regexp_poll_interrupts(ctx)) {
+        goto fail;
     } else {
         rc = lre_exec(capture, re_bytecode,
                       str_buf, last_index, str->len,
@@ -51874,6 +51892,8 @@ static JSValue JS_RegExpDelete(JSContext *ctx, JSValueConst this_val, JSValue ar
     for (;;) {
         if (last_index > str->len)
             break;
+        if (js_regexp_poll_interrupts(ctx))
+            goto fail;
 
         ret = lre_exec(capture, re_bytecode,
                        str_buf, last_index, str->len, shift, ctx);
@@ -61272,9 +61292,10 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
     obj = js_create_from_ctor(ctx, new_target, class_id);
     if (JS_IsException(obj))
         return obj;
-    /* XXX: we are currently limited to 2 GB */
+    /* XXX: we are currently limited to 2 GB. bun-wasm: a length past it cannot be
+       allocated, which JSC (and so Bun) reports as RangeError: Out of memory. */
     if (len > INT32_MAX) {
-        JS_ThrowRangeError(ctx, "invalid array buffer length");
+        JS_ThrowRangeError(ctx, "Out of memory");
         goto fail;
     }
     if (max_len && *max_len > INT32_MAX) {
@@ -61290,13 +61311,6 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
         goto fail;
     }
 #endif
-    if (alloc_flag && class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len &&
-        *max_len > len && !rt->sab_funcs.sab_alloc) {
-        JS_ThrowTypeError(ctx,
-                          "growable SharedArrayBuffer requires "
-                          "SAB allocator hooks");
-        goto fail;
-    }
     abuf = js_malloc(ctx, sizeof(*abuf));
     if (!abuf)
         goto fail;
@@ -61309,6 +61323,13 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
             // is hard so we cheat and allocate |maxByteLength| bytes upfront
             sab_alloc_len = max_len ? *max_len : len;
             abuf->data = js_bunwasm_shared_array_buffer_mallocz(ctx, max_int(sab_alloc_len, 1));
+            if (!abuf->data)
+                goto fail;
+        } else if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER && max_len) {
+            /* bun-wasm: without allocator hooks no other agent can map this buffer, so a
+               growable one takes its |maxByteLength| from the ordinary allocator upfront and
+               grow() only moves byteLength, as with the hooks. */
+            abuf->data = js_bunwasm_array_buffer_mallocz(ctx, max_int(*max_len, 1));
             if (!abuf->data)
                 goto fail;
         } else {

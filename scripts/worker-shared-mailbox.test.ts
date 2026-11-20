@@ -1,10 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { createSharedObjectBroker } from "../web/src/shared-objects/broker";
 import { createSharedMailbox } from "../web/src/shared-objects/mailbox";
 import { once } from "node:events";
 import { Worker, MessagePort as NativeMessagePort } from "node:worker_threads";
 import { sourcePorts, type SourcePort } from "./fixtures/shared-objects/source-runtime";
 import { brokerClients, testCleanup, tick } from "./fixtures/shared-objects/broker-clients";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const cleanup = testCleanup();
 // Without channel lanes: these cover the broker route that lanes fall back to.

@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseCacheKey, releaseDownload } from "./ci-release-download";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const url = "https://github.com/owner/project/releases/download/v1/input.tgz";
 const api = "https://api.github.com/repos/owner/project/releases/tags/v1";

@@ -114,10 +114,10 @@ export const nativeMatchesStopProofName = "runtimeProcess-page-SIGKILL-stops-gue
  * JSC's Yarr interpreter (every 16,384 backtracks or matches of one pattern) and SpiderMonkey's
  * irregexp (every 8,192 backtracks). */
 export const nativePollingEngines: readonly InterruptionEngine[] = ["quickjs", "jsc", "spidermonkey"];
-/** Engines that also poll across the matches of one global replace or split: JSC's countdown lives
- * on the compiled pattern and SpiderMonkey's replace loop is self-hosted JavaScript. QuickJS restarts
- * its countdown on every match (.internal/engines/quickjs-regexp-poll-countdown.md). */
-export const nativeMatchesPollingEngines: readonly InterruptionEngine[] = ["jsc", "spidermonkey"];
+/** Engines that also poll across the matches of one global replace or split: QuickJS counts every
+ * match attempt against its interpreter's countdown, JSC's countdown lives on the compiled pattern
+ * and SpiderMonkey's replace loop is self-hosted JavaScript. */
+export const nativeMatchesPollingEngines: readonly InterruptionEngine[] = ["quickjs", "jsc", "spidermonkey"];
 /** The native regexp stop proofs an engine runs, in the order the busy page runs them. */
 export function nativeStopProofNames(engine: string): string[] {
   return (nativePollingEngines.some(name => name === engine) ? [nativeStopProofName] : [])

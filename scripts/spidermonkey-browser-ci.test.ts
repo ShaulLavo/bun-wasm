@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,9 @@ import { appendCustomSection, programProfile, type PairedEngine } from "../src/e
 import { quickjsPair, sharedQuickjsPair } from "../tests/package/quickjs-plan-fixture";
 import { needsRust, needsSharedNative } from "./ci-changes";
 import { selectChecks } from "./test-checks";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const root = resolve(import.meta.dir, "..");
 const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");

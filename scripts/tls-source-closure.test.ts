@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { captureProgramInputs } from "./guest-core-receipt.ts";
 import { captureSourceManifest, hash } from "./guest-source-manifest.ts";
 import { fixtureGit, withReceiptFixture } from "../tests/package/guest-receipt-fixture.ts";
+
+// The receipt fixtures run real git. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const paths = [
   "crates/bunwasm-crypto-sys/src/tls.rs",

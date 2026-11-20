@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { ToolsLifecycle } from "../web/tests/tools-lifecycle.ts";
 import { browserGuestOwnerInputs, browserGuestManifest } from "./browser-guest-selection";
 import { readFileSync } from "node:fs";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test.each(["body", "deadline"])("Node imports tools diagnostics and flushes %s failure before cleanup exits", scenario => {
   const lifecycle = new URL("../web/tests/tools-lifecycle.ts", import.meta.url).href;

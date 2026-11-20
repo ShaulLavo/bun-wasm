@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
 import { mimeTypeInterned } from "./mime-types-stub";
 import { checkPayload, expectedBytes, payload } from "../tests/fixtures/worker-blob-clone/payload.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-blob-clone-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));

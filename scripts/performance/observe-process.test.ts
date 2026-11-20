@@ -1,10 +1,13 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startObservation, finishObservation } from "./sharing-controls";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { observeProcess, parseTaskStat, schedstatsEnabled, summarizeTask } from "./observe-process";
 import { launchProcess } from "./lifecycle-process";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 test("proc stat parser retains start identity with spaces and parentheses", () => {
   const fields = Array.from({ length: 50 }, () => "0");

@@ -1,4 +1,4 @@
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildSite, verifySite } from "./browser-guest-site";
 import { preflight } from "./goals-matrix/preparation";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const selected = process.env.BUN_WASM_TEST_BROWSERS ?? "chromium";
 test("QuickJS native-call capacity and cold recursion guards", async () => {

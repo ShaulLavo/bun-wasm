@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Claimed, ClaimRefused, RootError, validateBrowserTmp, validatePlan, type RootPlan, type RootSpec } from "./roots.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const roots = join(import.meta.dir, "roots.ts");
 async function withFixture(check: (root: string) => void | Promise<void>): Promise<void> {

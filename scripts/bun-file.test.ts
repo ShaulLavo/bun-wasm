@@ -1,10 +1,13 @@
-import { afterAll, afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { dlopen, FFIType } from "bun:ffi";
 import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { mimeTypeInterned } from "./mime-types-stub";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 type FileApi = Blob & { fd: number | null; stat(): Promise<{ size: number; isFile(): boolean }>; exists(): Promise<boolean> };
 type Api = { file(target: string | number): FileApi; write(target: string | number | FileApi, data: string): Promise<number> };

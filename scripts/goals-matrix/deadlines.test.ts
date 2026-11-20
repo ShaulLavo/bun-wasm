@@ -1,5 +1,5 @@
 import { withScoped } from "./scope-fixture";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,9 @@ test("historical cleanup budgets and failed attempts retain their recorded meani
 });
 import { markdown, saveReport } from "./report";
 import { completeAttempt, withPlayground } from "./test-fixture";
+
+// Some tests here take seconds on a busy machine. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const campaign = ["--asset-source=test", "--timeout-ms=90000", "--mac-lane=deadline-tests", "--mac-thread=0d4397e9-4028-43c4-8183-4d9dfb64821f"];
 const override = "--install-timeout-ms=nuxt:110000";

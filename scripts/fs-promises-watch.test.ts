@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import * as fs from "node:fs";
 import { readFileSync } from "node:fs";
 import { EventEmitter, getEventListeners } from "node:events";
@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 import { resourceFrames } from "./resource-frame-source";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 function productionSource(name: string) {

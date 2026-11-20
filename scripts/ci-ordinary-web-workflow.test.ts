@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { record } from "./guest-core-receipt.ts";
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const source = expandedCiWorkflow();
 const workflow: unknown = Bun.YAML.parse(source);

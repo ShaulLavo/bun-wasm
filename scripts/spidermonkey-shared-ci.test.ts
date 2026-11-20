@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
-import { expect, test } from 'bun:test';
+import { expect, setDefaultTimeout, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { needsRust, needsSharedNative } from './ci-changes.ts';
 import { discoverChecks, selectChecks } from './test-checks.ts';
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const shared = workflow.split('\n  shared-sysroot:\n')[1]!.split('\n  shared-native:\n')[0]!;

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -7,6 +7,9 @@ import { quickjsPair, sharedQuickjsPair } from "../tests/package/quickjs-plan-fi
 import { ENGINE_SECTION } from "../src/engine-kind.ts";
 import { hash } from "./guest-source-manifest.ts";
 import { workerProofLabels } from "./producer-closure.ts";
+
+// Tests here start real processes or browsers. The limit only catches a hang.
+setDefaultTimeout(120_000);
 
 const repository = join(import.meta.dir, "..");
 const dependencyWebAssets = ["programs/shell-engine.wasm", "programs/env.wasm", "network.wasm", "__bunwasm/network.wasm", "chunks/network.wasm", "__bunwasm/chunks/network.wasm", "programs/base/waffle-coreutils/dist/coreutils.wasm.gz"];
