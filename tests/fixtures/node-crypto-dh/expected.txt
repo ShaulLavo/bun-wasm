@@ -1,0 +1,95 @@
+group MODP5 192 ffffffff ffffffff 02 8
+group modp14 256 ffffffff ffffffff 02 8
+group modp15 384 ffffffff ffffffff 02 8
+group modp16 512 ffffffff ffffffff 02 8
+group modp17 768 ffffffff ffffffff 02 8
+group modp18 1024 ffffffff ffffffff 02 8
+group modp1 throws Error ERR_CRYPTO_UNKNOWN_DH_GROUP Unknown DH group
+group modp2 throws Error ERR_CRYPTO_UNKNOWN_DH_GROUP Unknown DH group
+group modp99 throws Error ERR_CRYPTO_UNKNOWN_DH_GROUP Unknown DH group
+group not string throws TypeError ERR_INVALID_ARG_TYPE The "group name" argument must be of type string. Received type number (5)
+dh fixed public b79d1507f3edd0b94ae241ace2ab868a 192
+dh fixed secret 192 dc63fc1761f3cb0a941ee1971529b391 true
+dh hex secret true
+dh private true 8 8
+dh no public key throws Error ERR_CRYPTO_INVALID_STATE No public key - did you forget to generate one?
+dh no private key throws Error ERR_CRYPTO_INVALID_STATE No private key - did you forget to generate one?
+dh compute without keys throws Error ERR_CRYPTO_OPERATION_FAILED Failed to compute shared secret
+dh invalid peer 1 throws RangeError ERR_CRYPTO_INVALID_KEYTYPE Supplied key is invalid
+dh invalid peer p throws RangeError ERR_CRYPTO_INVALID_KEYTYPE Supplied key is invalid
+dh empty peer throws RangeError ERR_CRYPTO_INVALID_KEYTYPE Supplied key is invalid
+dh peer wrong type throws TypeError ERR_INVALID_ARG_TYPE The "key" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (5)
+dh random true true true
+dh setPublicKey chain true true
+dh generated 512 64 02 0 true true
+dh generated 512 gen 5 64 05 0 true true
+dh size too small throws Error ERR_OSSL_BN_BITS_TOO_SMALL error:03000067:bignum routines:OPENSSL_internal:BITS_TOO_SMALL
+dh size not int32 throws RangeError ERR_OUT_OF_RANGE The value of "sizeOrKey" is out of range. It must be >= -2147483648 && <= 2147483647. Received 1_099_511_627_776
+dh size fraction throws RangeError ERR_OUT_OF_RANGE The value of "sizeOrKey" is out of range. It must be an integer. Received 512.5
+dh generator string with size throws TypeError ERR_INVALID_ARG_TYPE Second argument must be an int32
+dh generator 1 throws Error ERR_OSSL_DH_BAD_GENERATOR error:05000064:Diffie-Hellman routines:OPENSSL_internal:BAD_GENERATOR
+dh bad sizeOrKey throws TypeError ERR_INVALID_ARG_TYPE The "sizeOrKey" argument must be of type number, string, ArrayBuffer, Buffer, TypedArray, or DataView. Received an instance of Object
+dh bad generator throws TypeError ERR_INVALID_ARG_TYPE The "generator" argument must be of type number, string, ArrayBuffer, Buffer, TypedArray, or DataView. Received an instance of Object
+dh buffer generator 0 throws Error ERR_OSSL_DH_BAD_GENERATOR error:05000064:Diffie-Hellman routines:OPENSSL_internal:BAD_GENERATOR
+dh buffer generator 1 throws Error ERR_OSSL_DH_BAD_GENERATOR error:05000064:Diffie-Hellman routines:OPENSSL_internal:BAD_GENERATOR
+dh number generator 0 {"verifyError":8}
+dh tiny prime 0 05
+dh composite prime 10
+dh empty prime throws Error ERR_CRYPTO_OPERATION_FAILED Checking DH parameters failed
+dh double generator 05
+dh wide generator throws Error ERR_CRYPTO_OPERATION_FAILED Checking DH parameters failed
+dh new without factory 02
+dh call without new true
+dh size 2 throws TypeError ERR_INVALID_ARG_VALUE Invalid DH parameters
+dh group class true false false verifyError
+dh verifyError own false verifyError
+dh subclass true true true
+dh names generateKeys,computeSecret,getPrime,getGenerator,getPublicKey,getPrivateKey,setPublicKey,setPrivateKey createDiffieHellman
+ecdh prime256v1 true true true true
+ecdh prime256v1 compressed 03dad0b65394221cf9b051e1feca5787d098dfe637fc90b9ef945d0c3772581180 true
+ecdh prime256v1 hybrid throws Error ERR_CRYPTO_OPERATION_FAILED Failed to determine size for public key encoding
+ecdh prime256v1 bad format throws TypeError ERR_CRYPTO_ECDH_INVALID_FORMAT Invalid ECDH format: nope
+ecdh prime256v1 compressed peer true
+ecdh prime256v1 convertKey true true
+ecdh secp384r1 true true true true
+ecdh secp384r1 compressed 02667842d7d180ac2cde6f74f37551f55755c7645c20ef73e31634fe72b4c55ee6de3ac808acb4bdb4c88732aee95f41aa true
+ecdh secp384r1 hybrid throws Error ERR_CRYPTO_OPERATION_FAILED Failed to determine size for public key encoding
+ecdh secp384r1 bad format throws TypeError ERR_CRYPTO_ECDH_INVALID_FORMAT Invalid ECDH format: nope
+ecdh secp384r1 compressed peer true
+ecdh secp384r1 convertKey true true
+ecdh p521 133 67 true 66
+ecdh p224 57 true
+ecdh small private 01 133
+ecdh unknown curve throws TypeError ERR_CRYPTO_INVALID_CURVE Invalid EC curve name
+ecdh secp256k1 throws Error ERR_CRYPTO_OPERATION_FAILED Failed to create key using named curve
+ecdh curve not string throws TypeError ERR_INVALID_ARG_TYPE The "curve" argument must be of type string. Received type number (5)
+ecdh no public key throws Error ERR_CRYPTO_INVALID_STATE Failed to get ECDH public key
+ecdh no private key throws Error ERR_CRYPTO_INVALID_STATE Failed to get ECDH private key
+ecdh compute without keys throws RangeError ERR_CRYPTO_INVALID_KEYPAIR Invalid key pair
+ecdh compute no args throws TypeError ERR_MISSING_ARGS ECDH.prototype.computeSecret requires a key argument
+ecdh invalid peer throws Error ERR_CRYPTO_ECDH_INVALID_PUBLIC_KEY Public key is not valid for specified curve
+ecdh peer from other curve throws Error ERR_CRYPTO_ECDH_INVALID_PUBLIC_KEY Public key is not valid for specified curve
+ecdh private zero throws RangeError ERR_CRYPTO_INVALID_KEYTYPE Private key is not valid for specified curve
+ecdh private too big throws RangeError ERR_CRYPTO_INVALID_KEYTYPE Private key is not valid for specified curve
+ecdh private wrong type throws TypeError ERR_INVALID_ARG_TYPE The "key" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received type number (5)
+ecdh setPublicKey true
+ecdh setPublicKey invalid throws Error ERR_CRYPTO_OPERATION_FAILED Failed to set EC_POINT from buffer
+ecdh public-only compute throws Error ERR_CRYPTO_OPERATION_FAILED Failed to compute ECDH key
+convertKey bad curve throws TypeError ERR_CRYPTO_INVALID_CURVE Invalid EC curve name
+convertKey bad point throws Error ERR_CRYPTO_OPERATION_FAILED Failed to convert Buffer to EC_POINT
+convertKey curve not string throws TypeError ERR_INVALID_ARG_TYPE The "curve" argument must be of type string. Received type number (5)
+ecdh names generateKeys,computeSecret,getPublicKey,getPrivateKey,deprecated,setPrivateKey createECDH true
+getCurves ["secp224r1","prime256v1","secp384r1","secp521r1"]
+diffieHellman ec true
+diffieHellman x25519 4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742
+diffieHellman private as public 32
+diffieHellman curve mismatch throws Error ERR_CRYPTO_OPERATION_FAILED diffieHellman operation failed
+diffieHellman type mismatch throws TypeError ERR_INVALID_ARG_VALUE The property 'options.privateKey' must be a supported key type. Received KeyObject
+diffieHellman public as private throws TypeError ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE Invalid key object type public, expected private.
+diffieHellman secret key throws TypeError ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE Invalid key object type secret, expected private.
+diffieHellman not a key throws TypeError ERR_INVALID_ARG_VALUE The property 'options.privateKey' is invalid. Received 'nope'
+diffieHellman not an object throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received type number (5)
+diffieHellman ed25519 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.privateKey' must be a supported key type. Received KeyObject
+diffieHellman bad callback throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument must be of type function. Received type number (5)
+diffieHellman callback null true
+diffieHellman callback failure ERR_CRYPTO_OPERATION_FAILED diffieHellman operation failed

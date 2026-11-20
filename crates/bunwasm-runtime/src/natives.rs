@@ -502,6 +502,7 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::streams::install(&mut t);
     crate::archive::install(&mut t);
     install_crypto(&mut t);
+    crate::node_cipher::install(&mut t);
     crate::tls::install(&mut t, state.tls.clone());
     install_url(&mut t);
     crate::intl::install(&mut t);

@@ -13,7 +13,19 @@
   };
   type StreamModule = { Transform: { prototype: object } };
 
-  return function makeHashStream(Hash: { prototype: object }): void {
+  const hashMethods = {
+    _transform(this: Streamable, chunk: unknown, encoding: string, callback: Callback) {
+      this.update(chunk, encoding);
+      callback();
+    },
+    _flush(this: Streamable, callback: Callback) {
+      this.push(this.digest());
+      callback();
+    },
+  };
+
+  // Cipheriv and Decipheriv (node_cipher.ts) pass their own _transform and _flush.
+  return function makeHashStream(Hash: { prototype: object }, methods: object = hashMethods): void {
     const { Transform } = internal.builtin("node:stream") as unknown as StreamModule;
     function LazyTransform() {}
     Object.setPrototypeOf(LazyTransform.prototype, Transform.prototype);
@@ -32,16 +44,6 @@
       });
     }
     Object.setPrototypeOf(Hash.prototype, LazyTransform.prototype);
-    const methods = {
-      _transform(this: Streamable, chunk: unknown, encoding: string, callback: Callback) {
-        this.update(chunk, encoding);
-        callback();
-      },
-      _flush(this: Streamable, callback: Callback) {
-        this.push(this.digest());
-        callback();
-      },
-    };
     for (const [name, value] of Object.entries(methods)) {
       Object.defineProperty(Hash.prototype, name, { value, writable: true, configurable: true });
     }

@@ -689,17 +689,29 @@ typedef enum {
     JS_WEAK_REF_KIND_MAP,
     JS_WEAK_REF_KIND_WEAK_REF,
     JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_ENTRY,
+    /* bun-wasm: weak link from an unregister token to its entry */
+    JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_TOKEN,
 } JSWeakRefKindEnum;
 
 typedef struct JSWeakRefRecord {
     JSWeakRefKindEnum kind;
     struct JSWeakRefRecord *next_weak_ref;
+    /* bun-wasm: the link that points at this record, for O(1) removal */
+    struct JSWeakRefRecord **prev_weak_ref;
     union {
         struct JSMapRecord *map_record;
         struct JSWeakRefData *weak_ref_data;
         struct JSFinRecEntry *fin_rec_entry;
     } u;
 } JSWeakRefRecord;
+
+/* bun-wasm: unlink a record from its key's weak list without walking it. */
+static void unlink_weakref_record(JSWeakRefRecord *wr)
+{
+    *wr->prev_weak_ref = wr->next_weak_ref;
+    if (wr->next_weak_ref)
+        wr->next_weak_ref->prev_weak_ref = wr->prev_weak_ref;
+}
 
 typedef struct JSMapRecord {
     int ref_count; /* used during enumeration to avoid freeing the record */
@@ -55448,7 +55460,7 @@ static void delete_map_weak_ref(JSRuntime *rt, JSMapRecord *mr)
             break;
         pwr = &wr->next_weak_ref;
     }
-    *pwr = wr->next_weak_ref;
+    unlink_weakref_record(wr);
     js_free_rt(rt, wr);
 }
 
@@ -65264,7 +65276,7 @@ static void js_weakref_finalizer(JSRuntime *rt, JSValueConst val)
             break;
         pwr = &wr->next_weak_ref;
     }
-    *pwr = wr->next_weak_ref;
+    unlink_weakref_record(wr);
     js_free_rt(rt, wrd);
     js_free_rt(rt, wr);
 }
@@ -65325,9 +65337,15 @@ typedef struct JSFinRecEntry {
     struct list_head link;
     JSValueConst target;
     JSValue held_val;
-    JSValue token;
+    /* bun-wasm: held weakly through a FINALIZATION_REGISTRY_TOKEN record on
+       the token; JS_UNDEFINED when there is none or it has been freed. */
+    JSValueConst token;
     JSValue cb;
     JSContext *ctx;
+    /* bun-wasm: this entry's records in the target's and the token's weak
+       lists, so removal does not walk lists shared by many entries. */
+    JSWeakRefRecord *target_wr;
+    JSWeakRefRecord *token_wr;
 } JSFinRecEntry;
 
 typedef struct JSFinalizationRegistryData {
@@ -65338,24 +65356,27 @@ typedef struct JSFinalizationRegistryData {
 
 static void delete_finrec_weakref(JSRuntime *rt, JSFinRecEntry *fre)
 {
-    JSWeakRefRecord **pwr, *wr;
+    unlink_weakref_record(fre->target_wr);
+    js_free_rt(rt, fre->target_wr);
+    fre->target_wr = NULL;
+}
 
-    pwr = get_first_weak_ref(fre->target);
-    for(;;) {
-        wr = *pwr;
-        assert(wr != NULL);
-        if (wr->kind == JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_ENTRY && wr->u.fin_rec_entry == fre)
-            break;
-        pwr = &wr->next_weak_ref;
-    }
-    *pwr = wr->next_weak_ref;
-    js_free_rt(rt, wr);
+/* bun-wasm: drop the token's weak link; reset_weak_ref clears fre->token
+   first when the token itself is being freed. */
+static void delete_finrec_token(JSRuntime *rt, JSFinRecEntry *fre)
+{
+    if (JS_IsUndefined(fre->token))
+        return;
+    unlink_weakref_record(fre->token_wr);
+    js_free_rt(rt, fre->token_wr);
+    fre->token_wr = NULL;
+    fre->token = JS_UNDEFINED;
 }
 
 static void js_finrec_free(JSRuntime *rt, JSFinRecEntry *fre)
 {
+    delete_finrec_token(rt, fre);
     JS_FreeValueRT(rt, fre->held_val);
-    JS_FreeValueRT(rt, fre->token);
     JS_FreeValueRT(rt, fre->cb);
     JS_FreeContext(fre->ctx);
     js_free_rt(rt, fre);
@@ -65371,6 +65392,7 @@ static void js_finrec_finalizer(JSRuntime *rt, JSValueConst val)
         list_for_each_safe(el, el1, &frd->entries) {
             JSFinRecEntry *fre = list_entry(el, JSFinRecEntry, link);
             delete_finrec_weakref(rt, fre);
+            delete_finrec_token(rt, fre);
         }
         /* second pass to actually free all objects. */
         list_for_each_safe(el, el1, &frd->entries) {
@@ -65393,7 +65415,6 @@ static void js_finrec_mark(JSRuntime *rt, JSValueConst val,
         list_for_each(el, &frd->entries) {
             JSFinRecEntry *fre = list_entry(el, JSFinRecEntry, link);
             JS_MarkValue(rt, fre->held_val, mark_func);
-            JS_MarkValue(rt, fre->token, mark_func);
             JS_MarkValue(rt, fre->cb, mark_func);
             mark_func(rt, &fre->ctx->header);
         }
@@ -65452,15 +65473,33 @@ static JSValue js_finrec_register(JSContext *ctx, JSValueConst this_val,
         js_free(ctx, fre);
         return JS_EXCEPTION;
     }
+    /* bun-wasm: the spec holds the unregister token weakly. A strong token
+       that is the target itself kept the target alive forever. */
+    JSWeakRefRecord *token_wr = NULL;
+    if (!JS_IsUndefined(token)) {
+        token_wr = js_malloc(ctx, sizeof(*token_wr));
+        if (!token_wr) {
+            js_free(ctx, wr);
+            js_free(ctx, fre);
+            return JS_EXCEPTION;
+        }
+    }
     fre->cb = js_dup(frd->cb);
     fre->ctx = JS_DupContext(frd->ctx);
     fre->target = target;
     fre->held_val = js_dup(held_val);
-    fre->token = js_dup(token);
+    fre->token = token;
+    fre->target_wr = wr;
+    fre->token_wr = token_wr;
     list_add_tail(&fre->link, &frd->entries);
     wr->kind = JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_ENTRY;
     wr->u.fin_rec_entry = fre;
     insert_weakref_record(target, wr);
+    if (token_wr) {
+        token_wr->kind = JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_TOKEN;
+        token_wr->u.fin_rec_entry = fre;
+        insert_weakref_record(token, token_wr);
+    }
 
     return JS_UNDEFINED;
 }
@@ -65475,19 +65514,28 @@ static JSValue js_finrec_unregister(JSContext *ctx, JSValueConst this_val, int a
     if (!is_valid_weakref_target(token))
         return JS_ThrowTypeError(ctx, "invalid unregister token");
 
-    struct list_head *el, *el1;
-    bool removed = false;
+    /* bun-wasm: detach every match before freeing any. Freeing a held value
+       can free the next entry's target, which unlinks and frees that entry
+       under the iterator. */
+    struct list_head *el, *el1, removed;
+    init_list_head(&removed);
     list_for_each_safe(el, el1, &frd->entries) {
         JSFinRecEntry *fre = list_entry(el, JSFinRecEntry, link);
         if (js_same_value(ctx, fre->token, token)) {
             list_del(&fre->link);
             delete_finrec_weakref(ctx->rt, fre);
-            js_finrec_free(ctx->rt, fre);
-            removed = true;
+            delete_finrec_token(ctx->rt, fre);
+            list_add_tail(&fre->link, &removed);
         }
     }
+    bool any = !list_empty(&removed);
+    list_for_each_safe(el, el1, &removed) {
+        JSFinRecEntry *fre = list_entry(el, JSFinRecEntry, link);
+        list_del(&fre->link);
+        js_finrec_free(ctx->rt, fre);
+    }
 
-    return js_bool(removed);
+    return js_bool(any);
 }
 
 static const JSCFunctionListEntry js_finrec_proto_funcs[] = {
@@ -65573,6 +65621,13 @@ static void reset_weak_ref(JSRuntime *rt, JSWeakRefRecord **first_weak_ref)
             fre = wr->u.fin_rec_entry;
             list_del(&fre->link);
             break;
+        case JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_TOKEN:
+            /* The token dies: the entry stays registered but can no longer be
+               unregistered. Clearing it here also stops js_finrec_free from
+               unlinking the record from this list, which is being reset. */
+            wr->u.fin_rec_entry->token = JS_UNDEFINED;
+            wr->u.fin_rec_entry->token_wr = NULL;
+            break;
         default:
             abort();
         }
@@ -65622,6 +65677,9 @@ static void reset_weak_ref(JSRuntime *rt, JSWeakRefRecord **first_weak_ref)
             js_finrec_free(rt, fre);
             break;
         }
+        case JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_TOKEN:
+            /* The entry may already be freed when the token is its target. */
+            break;
         default:
             abort();
         }
@@ -65656,6 +65714,9 @@ static void insert_weakref_record(JSValueConst target,
     JSWeakRefRecord **pwr = get_first_weak_ref(target);
     /* Add the weak reference */
     wr->next_weak_ref = *pwr;
+    wr->prev_weak_ref = pwr;
+    if (wr->next_weak_ref)
+        wr->next_weak_ref->prev_weak_ref = &wr->next_weak_ref;
     *pwr = wr;
 }
 

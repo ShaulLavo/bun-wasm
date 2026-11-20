@@ -188,7 +188,7 @@
       return buffer;
     }
 
-    const unsupportedCrypto = ["createCipheriv", "createDecipheriv", "createECDH", "createDiffieHellman", "scrypt", "scryptSync", "privateEncrypt", "publicDecrypt"];
+    const unsupportedCrypto = ["scrypt", "scryptSync", "privateEncrypt", "publicDecrypt"];
     return unsupportedModule("crypto", "this Node crypto operation is not implemented", unsupportedCrypto, {
       createHash,
       createHmac,
@@ -208,11 +208,11 @@
       getRandomValues: (array) => webcrypto.getRandomValues(array),
       timingSafeEqual,
       getHashes: () => digests.nodeHashes.slice(),
-      getCiphers: () => [],
-      getCurves: () => [],
       webcrypto,
       subtle: webcrypto.subtle,
       ...keyApi,
+      ...internal.require("node_cipher")(),
+      ...internal.require("node_dh")(),
       ...internal.require("node_pbkdf2")(digests, Buffer),
       ...internal.require("x509")(Buffer, keyApi),
       Hash,
@@ -600,6 +600,7 @@
       prepareSource: (...args) => internal.prepareText(...args),
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
       directoryCount: () => native.directoryCount(),
+      liveCipherCount: () => native.nodeCrypto.liveCiphers(),
       bunStringRoundTrip: (bytes, encoding) => native.bunStringRoundTrip(bytes, encoding),
       linearMemoryBytes: () => native.linearMemoryBytes(),
       // Node-internal modules for vendored Node tests, under the names they import them by.
