@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fs-buffer-pins",
+  "engines": ["quickjs", "jsc", "browser"]
+}

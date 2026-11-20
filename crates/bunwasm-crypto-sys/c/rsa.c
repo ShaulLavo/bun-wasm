@@ -11,6 +11,7 @@
 
 static const EVP_MD *digest(int bits) {
   switch (bits) {
+    case 5: return EVP_md5();
     case 1: return EVP_sha1();
     case 224: return EVP_sha224();
     case 256: return EVP_sha256();

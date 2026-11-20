@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/fs-abort-signal",
+  "engines": ["quickjs", "jsc", "browser"]
+}

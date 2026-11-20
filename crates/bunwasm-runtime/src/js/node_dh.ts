@@ -332,9 +332,9 @@
     }
 
     // crypto.diffieHellman with the checks of Bun's CryptoDhJob.cpp, over the key types the
-    // KeyObject layer (crypto_keys.ts) holds: EC P-256 and P-384, and X25519.
+    // KeyObject layer (crypto_keys.ts) holds: EC P-256, P-384 and P-521, and X25519.
     type KeyObjectLike = { type: string; asymmetricKeyType?: string; export(options: { format: "jwk" }): JsonWebKey };
-    const CURVE_NIDS: Partial<Record<string, number>> = { "P-256": 415, "P-384": 715 };
+    const CURVE_NIDS: Partial<Record<string, number>> = { "P-256": 415, "P-384": 715, "P-521": 716 };
     const base64url = (value: unknown) => Buffer.from(String(value), "base64url");
     const point = (key: JsonWebKey) => Buffer.concat([new Uint8Array([4]), base64url(key.x), base64url(key.y)]);
 

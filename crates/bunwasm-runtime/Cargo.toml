@@ -62,14 +62,11 @@ cbc = { version = "0.1", features = ["alloc", "block-padding"] }
 ctr = "0.9"
 pbkdf2 = "0.12"
 hkdf = "0.12"
-p256 = { version = "0.13", features = ["ecdsa", "ecdh", "jwk"] }
-p384 = { version = "0.13", features = ["ecdsa", "ecdh", "jwk"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 pkcs8 = { version = "0.10", features = ["alloc"] }
 spki = { version = "0.7", features = ["alloc"] }
-signature = "2"
 
 
 [dev-dependencies]

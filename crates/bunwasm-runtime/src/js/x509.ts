@@ -127,7 +127,7 @@
           result.exponent = `0x${exponent.toString(16)}`;
         }
         if (jwk.kty === "EC") {
-          result.bits = jwk.crv === "P-384" ? 384 : 256;
+          result.bits = { "P-384": 384, "P-521": 521 }[jwk.crv as string] ?? 256;
           result.asn1Curve = key.asymmetricKeyDetails?.namedCurve;
           result.nistCurve = jwk.crv;
           const x = Buffer.from(jwk.x, "base64url"), y = Buffer.from(jwk.y, "base64url");
