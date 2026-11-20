@@ -696,12 +696,22 @@ typedef enum {
 typedef struct JSWeakRefRecord {
     JSWeakRefKindEnum kind;
     struct JSWeakRefRecord *next_weak_ref;
+    /* bun-wasm: the link that points at this record, for O(1) removal */
+    struct JSWeakRefRecord **prev_weak_ref;
     union {
         struct JSMapRecord *map_record;
         struct JSWeakRefData *weak_ref_data;
         struct JSFinRecEntry *fin_rec_entry;
     } u;
 } JSWeakRefRecord;
+
+/* bun-wasm: unlink a record from its key's weak list without walking it. */
+static void unlink_weakref_record(JSWeakRefRecord *wr)
+{
+    *wr->prev_weak_ref = wr->next_weak_ref;
+    if (wr->next_weak_ref)
+        wr->next_weak_ref->prev_weak_ref = wr->prev_weak_ref;
+}
 
 typedef struct JSMapRecord {
     int ref_count; /* used during enumeration to avoid freeing the record */
@@ -55450,7 +55460,7 @@ static void delete_map_weak_ref(JSRuntime *rt, JSMapRecord *mr)
             break;
         pwr = &wr->next_weak_ref;
     }
-    *pwr = wr->next_weak_ref;
+    unlink_weakref_record(wr);
     js_free_rt(rt, wr);
 }
 
@@ -65266,7 +65276,7 @@ static void js_weakref_finalizer(JSRuntime *rt, JSValueConst val)
             break;
         pwr = &wr->next_weak_ref;
     }
-    *pwr = wr->next_weak_ref;
+    unlink_weakref_record(wr);
     js_free_rt(rt, wrd);
     js_free_rt(rt, wr);
 }
@@ -65332,6 +65342,10 @@ typedef struct JSFinRecEntry {
     JSValueConst token;
     JSValue cb;
     JSContext *ctx;
+    /* bun-wasm: this entry's records in the target's and the token's weak
+       lists, so removal does not walk lists shared by many entries. */
+    JSWeakRefRecord *target_wr;
+    JSWeakRefRecord *token_wr;
 } JSFinRecEntry;
 
 typedef struct JSFinalizationRegistryData {
@@ -65340,27 +65354,11 @@ typedef struct JSFinalizationRegistryData {
     JSValue cb;
 } JSFinalizationRegistryData;
 
-static void delete_finrec_record(JSRuntime *rt, JSValueConst key,
-                                 JSWeakRefKindEnum kind, JSFinRecEntry *fre)
-{
-    JSWeakRefRecord **pwr, *wr;
-
-    pwr = get_first_weak_ref(key);
-    for(;;) {
-        wr = *pwr;
-        assert(wr != NULL);
-        if (wr->kind == kind && wr->u.fin_rec_entry == fre)
-            break;
-        pwr = &wr->next_weak_ref;
-    }
-    *pwr = wr->next_weak_ref;
-    js_free_rt(rt, wr);
-}
-
 static void delete_finrec_weakref(JSRuntime *rt, JSFinRecEntry *fre)
 {
-    delete_finrec_record(rt, fre->target,
-                         JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_ENTRY, fre);
+    unlink_weakref_record(fre->target_wr);
+    js_free_rt(rt, fre->target_wr);
+    fre->target_wr = NULL;
 }
 
 /* bun-wasm: drop the token's weak link; reset_weak_ref clears fre->token
@@ -65369,8 +65367,9 @@ static void delete_finrec_token(JSRuntime *rt, JSFinRecEntry *fre)
 {
     if (JS_IsUndefined(fre->token))
         return;
-    delete_finrec_record(rt, fre->token,
-                         JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_TOKEN, fre);
+    unlink_weakref_record(fre->token_wr);
+    js_free_rt(rt, fre->token_wr);
+    fre->token_wr = NULL;
     fre->token = JS_UNDEFINED;
 }
 
@@ -65490,6 +65489,8 @@ static JSValue js_finrec_register(JSContext *ctx, JSValueConst this_val,
     fre->target = target;
     fre->held_val = js_dup(held_val);
     fre->token = token;
+    fre->target_wr = wr;
+    fre->token_wr = token_wr;
     list_add_tail(&fre->link, &frd->entries);
     wr->kind = JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_ENTRY;
     wr->u.fin_rec_entry = fre;
@@ -65623,8 +65624,9 @@ static void reset_weak_ref(JSRuntime *rt, JSWeakRefRecord **first_weak_ref)
         case JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_TOKEN:
             /* The token dies: the entry stays registered but can no longer be
                unregistered. Clearing it here also stops js_finrec_free from
-               searching this list, which is being reset. */
+               unlinking the record from this list, which is being reset. */
             wr->u.fin_rec_entry->token = JS_UNDEFINED;
+            wr->u.fin_rec_entry->token_wr = NULL;
             break;
         default:
             abort();
@@ -65712,6 +65714,9 @@ static void insert_weakref_record(JSValueConst target,
     JSWeakRefRecord **pwr = get_first_weak_ref(target);
     /* Add the weak reference */
     wr->next_weak_ref = *pwr;
+    wr->prev_weak_ref = pwr;
+    if (wr->next_weak_ref)
+        wr->next_weak_ref->prev_weak_ref = &wr->next_weak_ref;
     *pwr = wr;
 }
 
