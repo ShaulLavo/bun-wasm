@@ -482,7 +482,10 @@ class EngineHost {
     internal.isProgramScriptHash = hash => this.stackPrograms?.has(hash) === true;
     installHostCrypto(nativeSubtleCrypto,NativeCryptoKey,internal.crypto,native);
     // Module URLs show as their paths; frames of this host itself (and the
-    // worker bundle it lives in) are internal, like the polyfills.
+    // worker bundle it lives in) are internal, like the polyfills. So are Node's
+    // own modules on the Node test host, internal or public: with async context
+    // on, Node runs a host microtask through AsyncResource.runInAsyncScope
+    // (node:async_hooks). A guest's builtins are the runtime's, never node: files.
     internal.displayName = (file, evalFrame = false) => {
       if (typeof file !== "string") return file;
       const generated = native.preparedSourceName(file);
@@ -491,7 +494,7 @@ class EngineHost {
       const path = this.paths.get(fragment < 0 ? file : file.slice(0, fragment));
       if (path) return path;
       if (evalFrame) return file;
-      return /^(blob:|data:|file:|https?:|node:internal\/)/.test(file) ? `bun-wasm:host` : file;
+      return /^(blob:|data:|file:|https?:|node:)/.test(file) ? `bun-wasm:host` : file;
     };
     this.installGlobals();
     this.wrapPromiseJobs();
