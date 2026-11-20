@@ -122,7 +122,9 @@
     return req;
   }
 
-  async function fetch(input, init = {}) {
+  // `target` is where to send it when that differs from the request's URL (a host:port
+  // without a scheme goes over http).
+  async function fetch(input, init = {}, target = undefined) {
     const req = requestToSend(input, init);
     // A null init.signal detaches from the request's signal, as in Bun.
     const signal = "signal" in init ? init.signal : req.signal;
@@ -132,7 +134,7 @@
     if (!req.headers.has("user-agent")) headers.push(["user-agent", `Bun/${native.platformInfo.version}`]);
     const meta = JSON.stringify({
       method: req.method,
-      url: req.url,
+      url: target || req.url,
       headers,
       redirect: init.redirect || req.redirect || "follow",
     });
@@ -181,7 +183,8 @@
       statusText: head.statusText || "",
       headers: head.headers,
     });
-    Response._setNetwork(res, head.url || req.url, Boolean(head.redirected));
+    // Bun keeps a scheme-less "host:port/path" as the response's URL.
+    Response._setNetwork(res, target && !head.redirected ? req.url : head.url || req.url, Boolean(head.redirected));
     return res;
   }
 

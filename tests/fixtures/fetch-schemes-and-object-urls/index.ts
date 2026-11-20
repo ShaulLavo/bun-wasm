@@ -6,11 +6,16 @@ const failure = (error: any) => `${error.name} ${error.code} ${JSON.stringify(St
 
 await using server = Bun.serve({ port: 0, fetch: req => new Response(`${req.method} ${new URL(req.url).pathname} ${req.headers.get("hello")}`) });
 const res = await fetch(`localhost:${server.port}/hello`, { headers: { hello: "world" } });
-console.log("host:port without a scheme:", res.status, await res.text());
+console.log("host:port without a scheme:", res.status, await res.text(), res.url === `localhost:${server.port}/hello`);
+const viaRequest = await fetch(new Request(`localhost:${server.port}/request`, { method: "POST", body: "x" }));
+console.log("a Request to host:port without a scheme:", viaRequest.status, await viaRequest.text());
+console.log("an IP and port without a scheme:", await fetch(`127.0.0.1:${server.port}/a`).then(r => `resolved ${r.status}`, (error: any) => `${error.name} ${error.code} ${error.message}`));
 
 const url = URL.createObjectURL(new Blob(["hi"], { type: "text/x-fixture" }));
 const blobRes = await fetch(url, { method: "POST", body: "ignored" });
 console.log("object URL:", blobRes.status, JSON.stringify(blobRes.statusText), blobRes.headers.get("content-type"), blobRes.url === url, blobRes.redirected, await blobRes.text());
+const upper = await fetch(url.replace("blob:", "BLOB:"));
+console.log("object URL with an upper-case scheme:", upper.status, upper.url === url, await upper.text());
 URL.revokeObjectURL(url);
 for (const [label, target] of [
   ["revoked object URL", url],

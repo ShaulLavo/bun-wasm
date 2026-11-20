@@ -115,21 +115,14 @@
     return copy;
   }
   // A file given by descriptor (Bun.stdin, Bun.file(fd)) can be read only once, so a clone
-  // reads it now and both bodies share that read, or its error, as Bun's tee does.
-  function sharedFile(body: Body, file: Blob): Uint8Array | Blob | ReadableStream<unknown> {
-    const reader = file as Blob & { _readsOnce(): boolean; _bytes(): Uint8Array };
-    if (!reader._readsOnce()) return file;
+  // tees a stream over it, as Bun does: both bodies read it as it arrives, and a pipe that
+  // never ends (`yes |`) never has to be read whole.
+  function sharedFile(body: Body, file: Blob): Blob | ReadableStream<unknown> {
+    if (!(file as Blob & { _readsOnce(): boolean })._readsOnce()) return file;
+    const [kept, copy] = tee(file.stream());
     body._blob = null;
-    try {
-      body._body = reader._bytes();
-      return body._body;
-    } catch (error) {
-      body._stream = erroredStream(error);
-      return erroredStream(error);
-    }
-  }
-  function erroredStream(error: unknown): ReadableStream<unknown> {
-    return new ReadableStream({ start(controller) { controller.error(error); } });
+    body._stream = kept;
+    return copy;
   }
   // new Request(request): Bun copies the source's body as clone() does, so the source keeps
   // its own. A used body copies as used (a stream that is already read, or empty bytes for a

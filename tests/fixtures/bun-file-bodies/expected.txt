@@ -9,6 +9,8 @@ Response over Bun.file() after .body {"header":"<not compared>","original":["tex
 given stream after clone: true true ["<p>hi</p>","<p>hi</p>"]
 Bun.serve /direct text/html;charset=utf-8 9 <p>hi</p>
 Bun.serve /clone text/html;charset=utf-8 9 <p>hi</p>
+upload Bun.file() content-length 9 text/html;charset=utf-8 <p>hi</p>
+upload Bun.file().stream() transfer-encoding chunked null <p>hi</p>
 source after new Request(src): false false
 Request(url, response): GET [["x-r","1"]]
 bodies: [1,2,3] [1,2,3] [1,2,3] [1,2,3] [1,2,3] [1,2,3]

@@ -1485,9 +1485,9 @@
     if (parsed.data !== undefined) return fetchDataUrl(parsed.data);
     const { url, init } = parsed;
     input = parsed.request || url;
-    // An object URL (blob: and a UUID, as Bun recognizes one) answers with its Blob, or rejects
-    // when it is not registered; Bun ignores the method and body.
-    if (url.length === 41 && url.startsWith("blob:")) return fetchObjectUrl(url);
+    // An object URL (blob: in any case and a UUID, as Bun recognizes one) answers with its Blob,
+    // or rejects when it is not registered; Bun ignores the method and body.
+    if (url.length === 41 && url.slice(0, 5).toLowerCase() === "blob:") return fetchObjectUrl(`blob:${url.slice(5)}`);
     if (url.startsWith("file:")) {
       const path = decodeURIComponent(new URL(url).pathname);
       const res = new Response(native.readFile(path), { headers: { "content-type": internal.mimeType(path) } });
@@ -1496,9 +1496,9 @@
     }
     const remote = remoteUrl(url);
     if (remote === null) throw Object.assign(new TypeError("protocol must be http:, https: or s3:"), { code: "ERR_INVALID_ARG_VALUE" });
-    if (remote !== url && !parsed.request) input = remote;
-    // Hosts implementing the bun_wasm ABI (docs/host-abi.md) do real HTTP.
-    if (native.hostCaps.fetch) return internal.require("net").fetch(input, init);
+    // Hosts implementing the bun_wasm ABI (docs/host-abi.md) do real HTTP, to `remote` for a
+    // string or a Request alike.
+    if (native.hostCaps.fetch) return internal.require("net").fetch(input, init, remote === url ? undefined : remote);
     const err = new TypeError(`fetch() is not available in bun-wasm: WASI has no network access (${url})`);
     err.code = "ERR_NO_NETWORK";
     throw err;

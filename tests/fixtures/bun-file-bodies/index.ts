@@ -55,11 +55,22 @@ for (const [label, make, change] of [
 
   await using server = Bun.serve({
     port: 0,
-    fetch: req => (new URL(req.url).pathname === "/clone" ? new Response(Bun.file(path).stream()).clone() : new Response(Bun.file(path).stream())),
+    async fetch(req) {
+      if (req.method === "POST") {
+        const framing = req.headers.get("content-length") ? `content-length ${req.headers.get("content-length")}` : `transfer-encoding ${req.headers.get("transfer-encoding")}`;
+        return new Response(`${framing} ${req.headers.get("content-type")} ${await req.text()}`);
+      }
+      return new URL(req.url).pathname === "/clone" ? new Response(Bun.file(path).stream()).clone() : new Response(Bun.file(path).stream());
+    },
   });
   for (const pathname of ["/direct", "/clone"]) {
     const res = await fetch(new URL(pathname, server.url));
     console.log("Bun.serve", pathname, res.headers.get("content-type"), res.headers.get("content-length"), await res.text());
+  }
+  // A Bun.file() uploads with a Content-Length; a stream over one is sent chunked.
+  for (const [label, body] of [["Bun.file()", () => Bun.file(path)], ["Bun.file().stream()", () => Bun.file(path).stream()]] as const) {
+    const res = await fetch(server.url, { method: "POST", body: body() });
+    console.log("upload", label, await res.text());
   }
 }
 
