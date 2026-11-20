@@ -1,10 +1,10 @@
 tick: at <anonymous> (./index.ts:10:35) | at processTicksAndRejections (native:7:39)
 named tick: at named (./index.ts:15:41) | at processTicksAndRejections (native:7:39)
 nested tick: at <anonymous> (./index.ts:17:44) | at processTicksAndRejections (native:7:39)
-tick from an immediate: at <anonymous> (./index.ts:24:55) | at processTicksAndRejections (native:7:39)
+tick from an immediate: true
 tick arguments: 1 two true
 idle reaction: {"tick":true,"reaction":false}
 timer: false
 microtask: false
 uncaught: thrown in a tick true
-user function: at processTicksAndRejections (./index.ts:66:21) | at ./index.ts:68:31
+user function: at processTicksAndRejections (./index.ts:67:21) | at ./index.ts:69:31

@@ -165,11 +165,10 @@
   // Bun's frame for its tick pass, a builtin at a fixed position.
   const tickPassFrame = "processTicksAndRejections (native:7:39)";
   internal.tickPassFrame = tickPassFrame;
-  // On the Browser engine the runtime's own functions have no script (Node's frames of the
-  // same name, from the fixture host, do); elsewhere they are `bun-wasm:` scripts.
+  // The runtime's own script is `bun-wasm:bootstrap`. Node's frame of the same name on the
+  // Browser fixture host (`node:internal/process/task_queues`) only maps to a host frame.
   function isTickPass(site) {
-    if (site.getFunctionName() !== "processTicksAndRejections") return false;
-    return isV8 ? !callSiteFile(site) : isRuntimeCallSite(site);
+    return site.getFunctionName() === "processTicksAndRejections" && isRuntimeFrameFile(callSiteFile(site));
   }
 
   function syntaxCallSite(site, name, file) {

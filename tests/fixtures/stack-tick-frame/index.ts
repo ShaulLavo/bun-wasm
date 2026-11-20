@@ -19,9 +19,10 @@ await new Promise<void>(resolve => process.nextTick(function named() {
   });
 }));
 
+// The Browser fixture host's own async_hooks frame can follow here, so only the tick frame is checked.
 await new Promise<void>(resolve => setImmediate(() => {
   process.nextTick(() => {
-    console.log("tick from an immediate:", frames(new Error("immediate tick")));
+    console.log("tick from an immediate:", inTicks(new Error("immediate tick")));
     resolve();
   });
 }));
