@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { requestCopyContract } from "../tests/fixtures/runtime-request-copy/contract.ts";
 import { requestCopyFactory } from "./request-copy-factory";
 
-test.each(["polyfill", "native"] as const)("Request copying matches the Node ownership contract with %s streams", async kind => {
+test.each(["polyfill", "native"] as const)("Request copying matches Bun's copy contract with %s streams", async kind => {
   expect(await requestCopyContract(requestCopyFactory(kind).web)).toBe("request copy contract");
 });
 

@@ -58,12 +58,21 @@
     for (const branch of branches) rememberAs(branch, stream);
     return branches;
   }
+  // The Bun.file() behind a stream it made: a body built from the stream keeps the file, as Bun
+  // lifts the Blob back out of its own stream.
+  const files = new WeakMap<ReadableStream<unknown>, Blob>();
+  function rememberFile<T>(stream: ReadableStream<T>, file: Blob): ReadableStream<T> {
+    files.set(stream, file);
+    return stream;
+  }
   type Body = {
     readonly bodyUsed: boolean;
     readonly body: ReadableStream<unknown> | null;
     _bodyUsed: boolean;
     _body: Uint8Array | null;
     _stream: ReadableStream<unknown> | null;
+    // A Bun.file() body, read when the body is used.
+    _blob: Blob | null;
   };
   function unusable(): TypeError {
     return Object.assign(new TypeError("Body is disturbed or locked"), { code: "ERR_BODY_ALREADY_USED" });
@@ -84,10 +93,17 @@
   // Fetch's clone() (Bun's "Body is disturbed or locked" when this is unusable). An unread
   // stream over bytes in memory is not teed: both bodies take the bytes, as Bun lifts them
   // out of a native stream, and the old stream ends consumed.
-  function clone(body: Body): Uint8Array | ReadableStream<unknown> | null {
+  // A Bun.file() body is not teed either: both bodies keep the file and read it when used, and
+  // an unread stream the file made ends locked.
+  function clone(body: Body): Uint8Array | Blob | ReadableStream<unknown> | null {
     if (body.bodyUsed || body._stream?.locked) throw unusable();
     const stream = body._stream;
-    if (!stream) return body._body;
+    if (!stream) return body._blob ? sharedFile(body, body._blob) : body._body;
+    if (body._blob && files.get(stream) === body._blob) {
+      void stream.getReader().cancel().catch(() => {});
+      body._stream = null;
+      return body._blob;
+    }
     if (body._body && bodies.get(stream) === body._body) {
       finish(stream);
       body._stream = null;
@@ -98,26 +114,34 @@
     body._stream = source;
     return copy;
   }
-  async function pull(reader: ReadableStreamDefaultReader<unknown>, controller: ReadableStreamDefaultController<unknown>): Promise<void> {
-    const { value, done } = await reader.read();
-    if (done) { controller.close(); return; }
-    controller.enqueue(value);
+  // A file given by descriptor (Bun.stdin, Bun.file(fd)) can be read only once, so a clone
+  // tees a stream over it, as Bun does: both bodies read it as it arrives, and a pipe that
+  // never ends (`yes |`) never has to be read whole.
+  function sharedFile(body: Body, file: Blob): Blob | ReadableStream<unknown> {
+    if (!(file as Blob & { _readsOnce(): boolean })._readsOnce()) return file;
+    const [kept, copy] = tee(file.stream());
+    body._blob = null;
+    body._stream = kept;
+    return copy;
   }
-  function transfer(body: Body): ReadableStream<unknown> | null {
-    const stream = body.body;
-    if (stream === null) return null;
-    if (body.bodyUsed) throw new TypeError("Body already used");
+  // new Request(request): Bun copies the source's body as clone() does, so the source keeps
+  // its own. A used body copies as used (a stream that is already read, or empty bytes for a
+  // body that was in memory); only a stream someone else holds throws.
+  const usedBody = Symbol("a used stream body");
+  function transfer(body: Body): Uint8Array | Blob | ReadableStream<unknown> | null | typeof usedBody {
+    const stream = body._stream;
+    if (body._body === null && !stream && !body._blob) return null;
+    // A body read through text() and the like keeps its reader, so this comes before the lock.
+    if (body.bodyUsed) return body._body !== null || body._blob ? new Uint8Array(0) : usedBody;
     // Bun tees the source's stream here, and the tee reports the lock.
-    if (stream.locked) throw lockedStream();
-    checkPlatform(stream);
-    const reader = stream.getReader();
-    body._bodyUsed = true;
-    const copy = new ReadableStream({
-      pull: controller => pull(reader, controller),
-      cancel: reason => reader.cancel(reason),
-    });
-    // Bytes in memory stay known behind the new stream, so fetch() still sends them whole.
-    return rememberAs(copy, stream);
+    if (stream?.locked) throw lockedStream();
+    // A host engine's own stream can be disturbed without our flag; its Request says so.
+    try {
+      if (stream) checkPlatform(stream);
+    } catch {
+      return usedBody;
+    }
+    return clone(body);
   }
   async function visitChunk<T>(reader: ReadableStreamDefaultReader<T>, chunk: T, visit: (chunk: T) => void): Promise<void> {
     try { visit(chunk); }
@@ -236,5 +260,5 @@
       cancel: reason => cancelText(source, reason),
     }, { highWaterMark: 0 });
   }
-  return { remember, tee, clone, transfer, textStream, fromAsyncIterable, consume, drain, consumedStream, adoptable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream), type: (stream: ReadableStream<unknown>) => types.get(stream) };
+  return { remember, tee, clone, transfer, textStream, fromAsyncIterable, consume, drain, consumedStream, adoptable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream), type: (stream: ReadableStream<unknown>) => types.get(stream), rememberFile, blobOf: (stream: ReadableStream<unknown>) => files.get(stream), usedBody };
 })

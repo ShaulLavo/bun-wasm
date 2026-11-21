@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createContext, runInContext } from "node:vm";
+import { mimeTypeInterned } from "./mime-types-stub";
 import { checkPayload, expectedBytes, payload } from "../tests/fixtures/worker-blob-clone/payload.ts";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
@@ -31,6 +32,7 @@ function runtime(capabilities = new WeakSet<object>()) {
     native: {
       timeOrigin: () => 0, platformInfo: { version: "test", arch: "test" },
       utf8Encode: (text: string) => new TextEncoder().encode(text),
+      mimeTypeInterned,
       utf8Decode: (bytes: Uint8Array, fatal: boolean) => new TextDecoder("utf-8", { ignoreBOM: true, fatal }).decode(bytes),
       base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
       base64Decode: (text: string) => new Uint8Array(Buffer.from(text, "base64")),

@@ -1416,6 +1416,10 @@ fn build_request(json: &str) -> Result<crate::BuildRequest, NativeError> {
 }
 
 fn install_encoding(t: &mut Table) {
+    // Bun's interned MIME type for an exact name, or undefined (src/mime_types.rs).
+    t.add("mimeTypeInterned", |a| {
+        Ok(crate::mime_types::interned(a.str(0)?).map_or(Val::Undefined, Into::into))
+    });
     t.add("utf8Encode", |a| {
         Ok(Val::Bytes(a.str(0)?.as_bytes().to_vec()))
     });

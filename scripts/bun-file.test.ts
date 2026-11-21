@@ -4,6 +4,7 @@ import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
+import { mimeTypeInterned } from "./mime-types-stub";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -44,6 +45,7 @@ function adapter(Stream = ReadableStream) {
   const native = {
     cwd: () => scratch,
     utf8Encode: (text: string) => new TextEncoder().encode(text),
+    mimeTypeInterned,
     stat: statSync, fstat: fstatSync, exists: existsSync,
     readFile(path: string) { wholeReads.push(path); return readFileSync(path); },
     open(path: string, flags: number) { expect(flags).toBe(0); const fd = open(path); opens.push(fd); return fd; },
@@ -66,6 +68,8 @@ function adapter(Stream = ReadableStream) {
   function requireModule(name: string): unknown {
     if (name === "archive") return { Archive: class Archive {} };
     if (name === "streams") return { ReadableStream: Stream };
+    // Bun.file().stream() remembers its file for body lifting, which these checks do not reach.
+    if (name === "body_streams") return { rememberFile: (stream: unknown) => stream };
     if (name !== "bun_file") throw new Error(`Unexpected require ${name}`);
     const path = new URL("../crates/bunwasm-runtime/src/js/bun_file.ts", import.meta.url);
     const output = join(scratch, "bun_file.js");

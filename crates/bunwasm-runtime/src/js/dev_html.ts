@@ -20,10 +20,26 @@
   const encoder = new TextEncoder();
   const owned = Symbol("development HTML socket");
 
+  function view(data: unknown): Uint8Array<ArrayBuffer> | null {
+    if (!(data instanceof Uint8Array) || !(data.buffer instanceof ArrayBuffer)) return null;
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+
+  // The body bytes, without using the response: bytes in memory, or a Bun.file() body (the
+  // usual `new Response(Bun.file("index.html"))`) read when it fits the limit.
   function bytes(response: Response): Uint8Array<ArrayBuffer> | null {
+    if (response.bodyUsed) return null;
     const body: unknown = Reflect.get(response, "_body");
-    if (response.bodyUsed || !(body instanceof Uint8Array) || !(body.buffer instanceof ArrayBuffer)) return null;
-    return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+    if (body !== null && body !== undefined) return view(body);
+    const file = Reflect.get(response, "_blob") as { _knownSize(): number | null; _bytes(): unknown } | null | undefined;
+    if (!file || Reflect.get(response, "_stream")) return null;
+    const size = file._knownSize();
+    if (size === null || size > limit) return null;
+    try {
+      return view(file._bytes());
+    } catch {
+      return null;
+    }
   }
 
   function htmlType(value: string | null): boolean {

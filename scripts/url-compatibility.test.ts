@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { domainToASCII, domainToUnicode } from "node:url";
 import { createContext, runInContext } from "node:vm";
+import { mimeTypeInterned } from "./mime-types-stub";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -33,6 +34,7 @@ function sourceRuntime() {
       timeOrigin: () => 0,
       platformInfo: { version: "test", arch: "test" },
       utf8Encode: (input: string) => new TextEncoder().encode(input),
+      mimeTypeInterned,
       randomBytes,
       domainToASCII,
       domainToUnicode,

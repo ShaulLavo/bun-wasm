@@ -1,0 +1,4 @@
+a bound callback called from a timer -> timer
+a snapshot run from a timer -> timer 2
+an error caught in one callback and rethrown from another -> rethrow
+a primitive -> no store

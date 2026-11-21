@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/async-context-uncaught-outermost",
+  "engines": ["quickjs", "jsc", "browser"]
+}

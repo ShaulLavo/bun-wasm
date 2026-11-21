@@ -647,7 +647,7 @@
     "node:stream": streamModule,
     "node:stream/promises": () => internal.builtin("node:stream").promises,
     "node:stream/consumers": lazy("stream_consumers"),
-    "node:stream/web": () => internal.require("streams"),
+    "node:stream/web": () => internal.require("stream_context"),
     "node:perf_hooks": () => ({
       performance: globalThis.performance,
       PerformanceObserver: class PerformanceObserver {
