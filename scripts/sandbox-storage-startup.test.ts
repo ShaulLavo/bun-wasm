@@ -3,6 +3,52 @@ import { deferred, method, models, turn } from "../web/tests/ui-model-helpers";
 
 const sources = { "package.json": JSON.stringify({ scripts: { dev: "vite", build: "vite build" } }), "src/App.tsx": "app" };
 
+/** A stored workspace this Waffle cannot read: the filesystem fails to open with INVALID_VFS_FORMAT. */
+async function unreadableSandbox(answer: "deleted" | "busy") {
+  const page = await models(undefined, sources);
+  const error = Object.assign(new Error("Incompatible IndexedDB filesystem format identity"), { name: "VfsError", code: "INVALID_VFS_FORMAT", vfs: "indexeddb" });
+  const fs = page.runtime.filesystem;
+  Object.assign(fs, { state: { status: "failed", error }, mkdirp: async () => { throw error; } });
+  page.boundary.deleteResult = answer;
+  const sandbox = new page.Sandbox("?mode=fast");
+  sandbox.start();
+  await turn();
+  page.runtime.dispose = async () => { page.storageEvents.push("dispose"); };
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  return { page, sandbox };
+}
+
+test("a workspace that cannot be opened offers Start fresh, which deletes only it and reloads", async () => {
+  const { page, sandbox } = await unreadableSandbox("deleted");
+  try {
+    expect(sandbox.failure).toBe("storage");
+    expect(sandbox.unreadable).toBe(true);
+    expect(sandbox.status.text).toContain("cannot be opened");
+    const html = await page.renderSandbox(sandbox);
+    expect(html).toContain(">Start fresh</button>");
+    expect(html).not.toContain(">Reset template</button>");
+    await sandbox.startFresh();
+    expect(page.storageEvents.slice(page.storageEvents.indexOf("dispose"))).toEqual(["dispose", `delete bun-wasm-sandbox-${sandbox.template}`]);
+    expect(page.boundary.location.reloads).toBe(1);
+  } finally { await page.cleanup(); }
+});
+
+test("Start fresh on a workspace another tab holds deletes nothing and asks to close that tab", async () => {
+  const { page, sandbox } = await unreadableSandbox("busy");
+  try {
+    await sandbox.startFresh();
+    expect(page.boundary.location.reloads).toBe(0);
+    expect(sandbox.status.text).toContain("open in another tab");
+    expect(sandbox.resetting).toBe(false);
+    expect(await page.renderSandbox(sandbox)).toContain(">Start fresh</button>");
+    // Its runtime is gone, so Retry opens the workspace again in a new page.
+    sandbox.restart();
+    expect(page.boundary.location.reloads).toBe(1);
+    expect(page.storageEvents.filter(event => event === "runtime")).toHaveLength(1);
+  } finally { await page.cleanup(); }
+});
+
 test("persistent startup reclaims before runtime creation while engine loading proceeds", async () => {
   const page = await models(undefined, sources);
   const prepare = deferred<void>();

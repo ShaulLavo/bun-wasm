@@ -102,6 +102,24 @@ button {
   cursor: progress;
 }
 
+#start-fresh {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  min-height: 34px;
+  white-space: nowrap;
+}
+
+#start-fresh:hover {
+  border-color: var(--dim);
+}
+
+#start-fresh:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
 main {
   flex: 1;
   min-height: 0;
@@ -275,6 +293,12 @@ main {
     grid-column: 2;
     grid-row: 3;
     min-height: 34px;
+  }
+
+  header #start-fresh {
+    grid-column: 1 / -1;
+    grid-row: 5;
+    justify-self: start;
   }
 
   #engine {

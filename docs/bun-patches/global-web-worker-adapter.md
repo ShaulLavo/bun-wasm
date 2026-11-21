@@ -13,7 +13,7 @@ TypeScript adapter in `web/src/buffer-transfer.ts` for this boundary check.
 It wraps the separate-guest execution, clone, port, reference and termination
 contracts in `worker_threads.ts`. Port packets retain transferred ports for
 web events while Node listeners and synchronous receives still return the data. `web.js` installs the constructor and blob URL
-entry points. `web/src/worker.ts` captures the physical browser worker sender
+entry points. `web/src/worker-main.ts` (loaded by the `web/src/worker.ts` entry) captures the physical browser worker sender
 before the guest installs its own `postMessage`. After the Waffle layout split,
 the Bun worker passes captured host messaging and event methods into the generic
 bootstrap, so guest globals cannot replace the physical worker transport. The original `workerSource`

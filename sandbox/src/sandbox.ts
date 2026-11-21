@@ -12,6 +12,7 @@ import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/
 import { Previews } from "../../web/src/preview";
 import type { Run, RunHooks, RunOptions, RunResult } from "../../web/src/runner";
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../../web/src/shared-fs";
+import { START_FRESH_BUSY, startFresh, unreadableWorkspace } from "../../web/src/start-fresh";
 import { errorText, measureStartup } from "../../web/src/startup";
 import { openTerminal } from "../../web/src/terminal-mount";
 import { linkLocalUrls } from "../../web/src/terminal-links";
@@ -67,6 +68,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   readonly engine: Engine;
   readonly profile: ProgramMemoryProfile;
   failure?: Failure;
+  /** Startup could not open the stored workspace, so Start fresh is offered. */
+  unreadable = false;
   resetting = false;
   storageNotice = "";
   /** Project files, relative to the app directory, as of the last listing. */
@@ -169,8 +172,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
         this.fail("startup", error);
       } else {
         this.failure = "storage";
+        this.unreadable = !this.started && unreadableWorkspace(error, this.workspace?.fs.state);
         const action = this.canReloadStartup() ? "Retry reloads this page." : "Keep this page open and retry.";
-        this.storageError = `Browser storage could not be opened or saved. Your workspace was kept. ${action} ${errorText(error)}`;
+        this.storageError = this.unreadable
+          ? `This browser's saved copy of the workspace cannot be opened. Start fresh deletes it and opens the template again. ${errorText(error)}`
+          : `Browser storage could not be opened or saved. Your workspace was kept. ${action} ${errorText(error)}`;
         this.changed();
       }
       this.term?.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
@@ -234,6 +240,9 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   restart(): void {
     if (this.failure === "storage") {
       if (this.startup) return;
+      // The workspace cannot be opened in this page (and a busy Start fresh already disposed its
+      // runtime), so Retry opens it again in a new page.
+      if (this.unreadable) { location.reload(); return; }
       if (!this.started && this.workspace?.fs.state.status === "failed") {
         if (this.canReloadStartup()) location.reload();
         return;
@@ -254,6 +263,26 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const workspace = this.workspace;
     return !this.started && !!workspace && workspace.fs.state.status === "failed"
       && workspace.editor.path === "" && !workspace.editor.hasPending && workspace.editor.view.state.doc.length === 0;
+  }
+
+  /** Deletes a workspace that cannot be opened, then reloads into a fresh one. */
+  async startFresh(): Promise<void> {
+    if (!this.unreadable || this.resetting) return;
+    this.resetting = true;
+    this.changed();
+    try {
+      this.storage?.close();
+      this.storage = undefined;
+      const workspace = this.workspace;
+      const dispose = workspace && (() => Promise.all([workspace.runtime.dispose(), workspace.browserPrograms.dispose()]));
+      const result = await startFresh(dispose, workspaceName(this.template));
+      if (result !== "busy") { location.reload(); return; }
+      this.storageError = START_FRESH_BUSY;
+    } catch (error) {
+      this.storageError = `Start fresh failed. ${errorText(error)}`;
+    }
+    this.resetting = false;
+    this.changed();
   }
 
   async reset(): Promise<void> {

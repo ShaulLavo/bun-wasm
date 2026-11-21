@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { Runtime } from "waffle";
 import { createContext, runInContext } from "node:vm";
 import { MemFS } from "waffle/fs/memory";
+import { pageEntry } from "./page-entry";
 import { createPrompt, type PromptContext } from "bash-web/prompt";
 import { importPromptRepository, promptRepositoryFixtures, type PromptRepositoryFixture } from "./shell-prompt-fixture";
 import { armPromptReadBarrier, deferredPromptSource, assertActivePromptWrap, assertPreservedDraft, installPromptReadBudget, promptReadBudgetSetup, restorePromptFixture, withPromptFixture, type PromptSnapshot } from "./shell-prompt-check";
@@ -273,7 +274,7 @@ test("narrow-wrap control rejects historical wraps outside the active prompt", (
 function providerFilesystem() {
   const memory = new MemFS();
   return {
-    async lookup(path: string) { return memory.lookup(path); },
+    async lookup(path: string) { return pageEntry(memory.lookup(path)); },
     async readFile(path: string) { return memory.readFile(path); },
     async mkdirp(path: string) { memory.mkdirp(path); },
     async writeFile(path: string, contents: string | Uint8Array) { memory.writeFile(path, contents); },

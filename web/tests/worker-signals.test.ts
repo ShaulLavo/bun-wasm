@@ -4,13 +4,34 @@ import { runInNewContext } from "node:vm";
 import type { RuntimeWorkerHost } from "waffle/browser/worker";
 import type { BunExecutorHost, RunRequest } from "../src/bun-executor.js";
 
-// Exercise the actual Bun worker entry without executing guest code in the test runner's realm.
-// Waffle's bootstrap/authority behavior is covered separately; this isolates the entry's capture
-// of the browser's receiver-sensitive methods before Bun installs guest globals.
-const source = new Bun.Transpiler({ loader: "ts", target: "browser" }).transformSync(
-  readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8")
-    .replace(/^import .*;\n/gm, "").replace(/^export type .*;\n/gm, ""),
+// Exercise the actual Bun worker entry and bootstrap module without executing guest code in the
+// test runner's realm. Waffle's bootstrap/authority behavior is covered separately; this isolates
+// the capture of the browser's receiver-sensitive methods before Bun installs guest globals.
+const transpiler = new Bun.Transpiler({ loader: "ts", target: "browser" });
+const script = (file: string) => transpiler.transformSync(
+  readFileSync(new URL(file, import.meta.url), "utf8")
+    .replace(/^import .*;\n/gm, "").replace(/^export type .*;\n/gm, "").replace(/^export function/gm, "function"),
 );
+const source = script("../src/worker-main.ts") + "\nstart(self, []);\n";
+const entry = script("../src/worker.ts").replace('import("./worker-main.js")', "loadMain()");
+
+test("Bun worker entry posts before loading its bootstrap and keeps an early start message", async () => {
+  const messages: unknown[] = [];
+  const loaded = Promise.withResolvers<{ start(ctx: unknown, early: { data: unknown }[]): void }>();
+  const scope = {
+    postMessage(message: unknown) { messages.push(message); },
+    onmessage: undefined as unknown as (event: { data: unknown }) => void,
+  };
+  let loads = 0;
+  runInNewContext(entry, { self: scope, setTimeout, loadMain() { loads++; expect(messages).toEqual([{ type: "worker-script" }]); return loaded.promise; } });
+  expect(messages).toEqual([{ type: "worker-script" }]);
+  expect(loads).toBe(1);
+  const request = { data: { start: true } };
+  scope.onmessage(request);
+  const started = Promise.withResolvers<unknown[]>();
+  loaded.resolve({ start(ctx, early) { expect(ctx).toBe(scope); started.resolve(early.slice()); } });
+  expect(await started.promise).toEqual([request]);
+});
 
 test("Bun worker captures host messaging, events and native fetch before guest replacement", async () => {
   const messages: unknown[] = [], events: string[] = [];

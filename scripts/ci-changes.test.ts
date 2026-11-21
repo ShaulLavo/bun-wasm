@@ -488,7 +488,7 @@ function sharedBrowserSelection(path: string, event: string): string {
 }
 
 for (const path of [
-  "web/src/runner.ts", "web/src/worker.ts", "web/src/subprocess-broker.ts",
+  "web/src/runner.ts", "web/src/worker.ts", "web/src/worker-main.ts", "web/src/subprocess-broker.ts",
   "web/src/memory-telemetry.ts", "web/src/net/trampoline.ts", "src/assets.ts",
   "scripts/browser-build.ts", "web/package.json", "web/bun.lock",
 ]) {

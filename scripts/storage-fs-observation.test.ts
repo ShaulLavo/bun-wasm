@@ -35,17 +35,20 @@ test("retention bounds recent metadata and separates stale shared closure from a
 });
 test("all actual consumer seams fail closed on source drift and leave executors untouched", () => {
   const waffle = ["web", "sandbox"].flatMap(app => ["fs/client.ts", "fs/service.ts", "runtime.ts", "browser/shared-fs.ts"].map(file => `${app}/node_modules/waffle/${file}`));
-  const consumers = ["web/src/main.ts", "sandbox/src/main.ts", "web/src/worker.ts", "web/src/preview1-worker.ts", "web/src/fs-worker.ts", "web/node_modules/bash-web/src/runtime/worker.ts", "sandbox/node_modules/bash-web/src/runtime/worker.ts"].concat(waffle);
+  const consumers = ["web/src/main.ts", "sandbox/src/main.ts", "web/src/worker-main.ts", "web/src/preview1-worker.ts", "web/src/fs-worker.ts", "web/node_modules/bash-web/src/runtime/worker.ts", "sandbox/node_modules/bash-web/src/runtime/worker.ts"].concat(waffle);
   for (const file of consumers) {
     const path = resolve(import.meta.dir, "..", file), original = readFileSync(path, "utf8");
     const transformed = storageObservationSource(path, original);
     expect(transformed).toBeDefined();
-    if (file.endsWith("/client.ts") || file.endsWith("/service.ts") || file.endsWith("/worker.ts") || file.endsWith("/preview1-worker.ts")) {
+    if (file.endsWith("/client.ts") || file.endsWith("/service.ts") || file.endsWith("/worker.ts") || file.endsWith("/worker-main.ts") || file.endsWith("/preview1-worker.ts")) {
       expect(() => storageObservationSource(path, "source drift")).toThrow();
     }
-    if (file === "web/src/worker.ts") expect(transformed).toContain("await bootstrap(request, executor, host);");
+    if (file === "web/src/worker-main.ts") expect(transformed).toContain("await bootstrap(request, executor, host);");
     if (file === "web/src/preview1-worker.ts") expect(transformed).toContain("await bootstrap(request, executor);");
   }
+  // The Bun worker entry stays unobserved, so its first message still precedes every import.
+  const entry = resolve(import.meta.dir, "../web/src/worker.ts");
+  expect(storageObservationSource(entry, readFileSync(entry, "utf8"))).toBeUndefined();
 });
 test("default build has no observation plugin and helper-only edits select the same blocking storage gate", () => {
   const previous = process.env.BUN_WASM_STORAGE_DIAGNOSTICS;

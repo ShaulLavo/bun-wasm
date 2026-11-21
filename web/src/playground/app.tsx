@@ -59,10 +59,19 @@ function Header(handle: Handle<Props>) {
             >{option.label}</option>;
           })}
         </select>
+        {playground.unreadable ? <StartFreshButton playground={playground} /> : null}
         <RunButton playground={playground} />
       </header>
     );
   };
+}
+
+function StartFreshButton(handle: Handle<Props>) {
+  const click = on<HTMLButtonElement>("click", () => {
+    if (!confirm("Delete this browser's saved playground workspace and start a new one? Its files cannot be opened and will be lost.")) return;
+    void handle.props.playground.startFresh();
+  });
+  return () => <button id="start-fresh" type="button" title="Delete the workspace that cannot be opened and start a new one" disabled={handle.props.playground.startingFresh} mix={click}>Start fresh</button>;
 }
 
 function RunButton(handle: Handle<Props>) {

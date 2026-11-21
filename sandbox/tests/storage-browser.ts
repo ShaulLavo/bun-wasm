@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import type { Browser, BrowserContext, Page, Worker as PlaywrightWorker } from "playwright";
-import type { Runtime } from "waffle";
+import type { ProcessStartState, Runtime } from "waffle";
 import type { Editor } from "../src/editor";
 import type { Terminal } from "@xterm/xterm";
 import { workspaceName } from "../src/workspace-policy";
@@ -11,7 +11,7 @@ import { storageStep, type StorageObservation } from "../../scripts/storage-brow
 import { assertPreviewDocumentPreserved } from "./storage-document";
 
 declare const sandbox: {
-  fs: Runtime["filesystem"]; editor: Editor; term?: Terminal; started?: () => boolean;
+  runtime: Runtime; fs: Runtime["filesystem"]; editor: Editor; term?: Terminal; started?: () => boolean;
   template: string; server: () => PreviewNavigation["server"] | null;
   preview: () => PreviewNavigation | null; status: () => Status;
 };
@@ -264,12 +264,20 @@ interface StoragePageDiagnostic {
     filesystem: { status: string; error?: string }; started: boolean | null;
     editorPath: string | null; pending: boolean;
   };
+  /**
+   * Each live process start's latest step, with the page's `performance.now()` when read. The Bun
+   * worker posts a message before its imports load and Waffle stamps `worker-started` on it, so a
+   * start left at `start-posted` never ran its script, and one left at `worker-started` hung
+   * loading its imports.
+   */
+  starts?: { now: number; states: readonly ProcessStartState[] } | string | null;
 }
 
 export async function diagnostic(page: Page): Promise<StoragePageDiagnostic | string> {
   if (page.isClosed()) return "closed";
-  return page.evaluate(() => {
+  return page.evaluate(async () => {
     const api = typeof sandbox === "undefined" ? null : sandbox;
+    const starts = api ? await api.runtime.processes().then(service => ({ now: performance.now(), states: service.startStates() }), error => String(error)) : null;
     const buffer = api?.term?.buffer.active;
     const terminal = buffer ? Array.from({ length: Math.min(buffer.length, 80) }, (_, index) => buffer.getLine(Math.max(0, buffer.length - 80) + index)?.translateToString(true) ?? "").join("\n") : "";
     const frames = Array.from(document.querySelectorAll("iframe"), frame => {
@@ -278,7 +286,7 @@ export async function diagnostic(page: Page): Promise<StoragePageDiagnostic | st
         readyState: current?.readyState, acceptedDocument: current !== null && api?.preview()?.loaded?.document === current };
     });
     const runtime = api ? { filesystem: { ...api.fs.state, error: api.fs.state.error?.message }, started: api.started?.() ?? null, editorPath: api.editor.path, pending: api.editor.hasPending } : null;
-    return { url: location.href, status: document.querySelector("#status")?.textContent, storage: document.querySelector("#storage-status")?.textContent, terminal, frames, runtime };
+    return { url: location.href, status: document.querySelector("#status")?.textContent, storage: document.querySelector("#storage-status")?.textContent, terminal, frames, runtime, starts };
   }).catch(error => String(error));
 }
 
@@ -306,6 +314,92 @@ async function unsupportedData(page: Page, base: string, observer?: StorageObser
   observer?.event("assert", { phase: "symlink.preserved" });
   assert.equal(await storageStep(observer, "symlink.stored", () => stored(page, "vanilla")), true, "unsupported user symlink was destroyed");
   assert.match(await storageStep(observer, "symlink.status", () => page.locator("#storage-status").textContent()) ?? "", /symlink.*cannot be restored/i);
+}
+
+/** Waffle's fast mode stores each workspace in the IndexedDB database named after it. */
+const PLAYGROUND_WORKSPACE = "bun-wasm-workspace";
+
+/**
+ * Seeds stored workspaces this Waffle cannot read: the database layout it expects, with a format
+ * identity it does not know, as a workspace saved by another format would have.
+ */
+async function seedUnreadable(page: Page, names: readonly string[]): Promise<void> {
+  await page.evaluate(async names => {
+    for (const name of names) await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open(name, 1);
+      request.onupgradeneeded = () => { for (const store of ["metadata", "journal", "data"]) request.result.createObjectStore(store); };
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const database = request.result;
+        const transaction = database.transaction("metadata", "readwrite");
+        transaction.objectStore("metadata").put("waffle-indexeddb-v0", "format");
+        transaction.oncomplete = () => { database.close(); resolve(); };
+        transaction.onabort = () => { database.close(); reject(transaction.error); };
+      };
+    });
+  }, names);
+}
+
+async function storedName(page: Page, name: string): Promise<boolean> {
+  return page.evaluate(async name => (await indexedDB.databases()).some(database => database.name === name), name);
+}
+
+/**
+ * A workspace that no longer opens must not trap the page: the sandbox and the playground offer
+ * Start fresh, which deletes only that workspace and opens a new one.
+ */
+export async function startFreshScenario(browser: Browser, base: string, observer?: StorageObservation): Promise<void> {
+  const acquired = observer ? await observer.acquire("context.create", () => browser.newContext(), context => context.close()) : undefined;
+  const context = acquired ? acquired.value : await browser.newContext();
+  const step = <T>(phase: string, operation: () => Promise<T>) => storageStep(observer, phase, operation);
+  try {
+    if (observer) await observer.observeContext(context);
+    const page = await step("start-fresh.page.create", () => context.newPage());
+    page.on("dialog", dialog => void dialog.accept());
+    await step("start-fresh.origin", () => page.goto(new URL("engine-builds.json", base).href));
+    const sandboxWorkspace = workspaceName("vanilla");
+    await step("start-fresh.seed", () => seedUnreadable(page, [sandboxWorkspace, PLAYGROUND_WORKSPACE, "bun-wasm-start-fresh-bystander"]));
+    const url = new URL(base);
+    url.searchParams.set("template", "vanilla");
+    url.searchParams.set("engine", "browser");
+    await step("start-fresh.sandbox.navigate", () => page.goto(url.href));
+    await step("start-fresh.sandbox.offered", () => page.locator("#start-fresh").waitFor({ timeout: STARTUP_MS }));
+    observer?.event("assert", { phase: "start-fresh.sandbox.offered" });
+    assert.match(await page.locator("#status").textContent() ?? "", /cannot be opened/);
+    assert.equal(await page.locator("#reset").count(), 0, "Reset template is replaced while the workspace cannot be opened");
+    // Another tab that has the workspace open holds Waffle's writer lock for it, so Start fresh
+    // deletes nothing and says so.
+    const other = await step("start-fresh.other.create", () => context.newPage());
+    await step("start-fresh.other.origin", () => other.goto(new URL("engine-builds.json", base).href));
+    await step("start-fresh.other.hold", () => other.evaluate(name => new Promise<void>(held => {
+      void navigator.locks.request(`bun-wasm:filesystem:indexeddb:${name}`, () => { held(); return new Promise<void>(() => {}); });
+    }), sandboxWorkspace));
+    await step("start-fresh.busy.click", () => page.locator("#start-fresh").click());
+    await step("start-fresh.busy.reported", () => page.locator("#status", { hasText: "open in another tab" }).waitFor({ timeout: STARTUP_MS }));
+    observer?.event("assert", { phase: "start-fresh.busy" });
+    assert.equal(await storedName(page, sandboxWorkspace), true, "a busy Start fresh deleted the workspace");
+    await step("start-fresh.other.close", () => other.close());
+    await step("start-fresh.observe-readiness", () => observeReadiness(page));
+    await step("start-fresh.sandbox.click", () => Promise.all([page.waitForEvent("load", { timeout: STARTUP_MS }), page.locator("#start-fresh").click()]));
+    await ready(page, "vanilla", Date.now() + STARTUP_MS, observer);
+    observer?.event("assert", { phase: "start-fresh.sandbox.recovered" });
+    assert.equal(await page.locator("#start-fresh").count(), 0);
+    assert.equal(await storedName(page, sandboxWorkspace), true, "the fresh workspace was not saved");
+
+    await step("start-fresh.playground.navigate", () => page.goto(new URL("../", base).href));
+    await step("start-fresh.playground.offered", () => page.locator("#start-fresh").waitFor({ timeout: STARTUP_MS }));
+    assert.match(await page.locator("#status").textContent() ?? "", /cannot be opened/);
+    await step("start-fresh.playground.click", () => Promise.all([page.waitForEvent("load", { timeout: STARTUP_MS }), page.locator("#start-fresh").click()]));
+    // The playground hides a status that reports success.
+    await step("start-fresh.playground.recovered", () => page.locator("#status[data-kind=ok]", { hasText: "bun.wasm ready" }).waitFor({ state: "attached", timeout: STARTUP_MS }));
+    observer?.event("assert", { phase: "start-fresh.playground.recovered" });
+    assert.equal(await page.locator("#start-fresh").count(), 0);
+    assert.equal(await storedName(page, "bun-wasm-start-fresh-bystander"), true, "Start fresh deleted another workspace");
+  } catch (error) {
+    const pages = await Promise.all(context.pages().map(page => diagnostic(page)));
+    console.error(JSON.stringify({ error: String(error), pages }, null, 2));
+    throw error;
+  } finally { await (acquired ? acquired.release() : context.close()); }
 }
 
 export async function quotaRefusalScenario(browser: Browser, base: string): Promise<void> {

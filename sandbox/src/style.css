@@ -136,6 +136,7 @@ select {
 }
 
 #reset,
+#start-fresh,
 #restart {
   background: transparent;
   border: 1px solid var(--border);
@@ -147,6 +148,7 @@ select {
 }
 
 #reset:hover,
+#start-fresh:hover,
 #restart:hover {
   border-color: var(--dim);
 }
@@ -412,7 +414,8 @@ main {
     min-height: 34px;
   }
 
-  header #reset {
+  header #reset,
+  header #start-fresh {
     grid-column: 3;
     grid-row: 3;
     min-height: 30px;

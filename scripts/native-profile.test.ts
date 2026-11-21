@@ -141,7 +141,7 @@ test.each([
 });
 
 const sharedBrowserInputs = [
-  'web/src/runner.ts', 'web/src/worker.ts', 'web/src/subprocess-broker.ts',
+  'web/src/runner.ts', 'web/src/worker.ts', 'web/src/worker-main.ts', 'web/src/subprocess-broker.ts',
   'web/src/memory-telemetry.ts', 'web/src/net/trampoline.ts', 'web/src/engine-loader.ts',
   'web/src/preview1-worker.ts', 'web/src/fs-worker.ts', 'web/src/notification-worker.ts',
   'src/assets.ts', 'src/program-memory.ts', 'src/bun-adapter.ts', 'src/process-runtime.ts',
