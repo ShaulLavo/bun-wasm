@@ -27,6 +27,6 @@ export async function load(directory: string, since?: string): Promise<State> {
   } catch (error) {
     if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
     if (!since) throw new Error("First enrollment requires --since=<activation UTC>");
-    return { schema: 1, since, polledAt: null, error: null, jobs: [] };
+    return { schema: 1, since, polledAt: null, error: null, mac: { kind: "reachable" }, jobs: [] };
   }
 }

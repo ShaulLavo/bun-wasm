@@ -4,8 +4,9 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { attemptDirectory, coordinator, instructions, managing } from "./iphone-smoke-watch/dispatch";
 import { discover } from "./iphone-smoke-watch/github";
+import { macReachable } from "./iphone-smoke-watch/mac";
 import { integer, outcome, redMessage, revision, timestamp, type Job, type State } from "./iphone-smoke-watch/model";
-import { claim, complete, retry, status, tick } from "./iphone-smoke-watch/scheduler";
+import { claim, macNotice, record, retry, status, tick } from "./iphone-smoke-watch/scheduler";
 import { atomic, load, save } from "./iphone-smoke-watch/storage";
 
 const defaultDirectory = "/work/reports/goals/iphone-smoke";
@@ -56,7 +57,7 @@ async function finish(directory: string, state: State, config: Options): Promise
   const contents = await readFile(required(config, "result-file"), "utf8");
   const result = outcome(JSON.parse(contents), job.revision);
   const output = attemptDirectory(directory, job);
-  complete(job, result, new Date().toISOString());
+  record(state, job, result, new Date().toISOString());
   await mkdir(output, { recursive: true });
   await atomic(join(output, "result.json"), contents);
   return job;
@@ -82,6 +83,7 @@ async function poll(directory: string, state: State, config: Options): Promise<v
       save: value => save(directory, value),
       dispatch: job => dispatch(directory, checkout, config.values.get("dispatch-thread") ?? coordinator, job),
       notify: async message => { send(notifyThread, message); },
+      reachable: async () => macReachable(),
       now: () => new Date().toISOString(),
     });
   } catch (error) {
@@ -105,8 +107,10 @@ async function run(config: Options, directory: string): Promise<void> {
 }
 
 async function deliver(directory: string, state: State, config: Options, job: Job): Promise<void> {
+  const thread = config.values.get("notify-thread") ?? managing;
+  await macNotice(state, async message => { send(thread, message); }, value => save(directory, value));
   if (job.state.kind !== "complete" || job.state.notified) return;
-  send(config.values.get("notify-thread") ?? managing, redMessage(job, job.state));
+  send(thread, redMessage(job, job.state));
   job.state.notified = true;
   await save(directory, state);
 }
