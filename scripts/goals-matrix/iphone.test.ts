@@ -344,7 +344,7 @@ async function pendingCleanupControl(agent: string, log: string, closed: string)
       expect(logs[0]).toContain("Final terminal observation unavailable");
       expect(await readFile(closed, "utf8")).toBe("closed");
       const commands = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
-      expect(commands.map(row => row.args[0])).toEqual(["open", "batch", "batch", "open", "open", "batch", "batch", "batch", "batch"]);
+      expect(commands.map(row => row.args[0])).toEqual(["open", "batch", "batch", "open", "open", "batch", "batch", "batch", "batch", "batch"]);
     } finally { release.resolve(); await transport.close(true).catch(() => {}); await server.stop(true); }
   });
 }

@@ -156,6 +156,10 @@ URL. Startup must report that same running profile, and final verification check
 the same selected assets after cleanup. Profile policy stays in the shared
 frontend helper; the smoke command has no separate template/profile map.
 
+The runner reads Safari's More menu before pressing its All Tabs control. If the
+first tap leaves the native More button visible, the runner tries it once more
+using the latest snapshot. This requires no input on the page in the front tab.
+
 The runner selects the ordinary numbered group before counting tabs. It closes
 only the unique recorded task title through that card's own Close child. If the
 owned card is in Private, cleanup proves its removal and preserves the other
