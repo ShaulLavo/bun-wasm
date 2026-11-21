@@ -89,3 +89,17 @@ test("native checkpoint cache cannot publish without the TLS producer output", (
   expect(allows(checkpoint, healthy)).toBe(true);
   expect(allows(checkpoint, { ...healthy, "steps.tls-artifact.outputs.tls-sha256": "" })).toBe(false);
 });
+
+test("both Bash shell cache routes key on the verified native inputs independently of the lockfile", () => {
+  for (const id of ["rust", "browser-production"]) {
+    const job = record(record(workflow.jobs)[id]);
+    if (!Array.isArray(job.steps)) throw new Error(`Missing steps for ${id}`);
+    const restore = job.steps.map(record).find(step => step.id === "shell-cache");
+    if (!restore) throw new Error(`Missing shell cache for ${id}`);
+    const key = cacheKey(restore);
+    expect(key).toContain("${{ steps.native-inputs.outputs.hash }}");
+    expect(key).toContain("'scripts/build-bash-web-shell.sh'");
+    expect(key).not.toContain("'bun.lock'");
+    expect(record(restore.with)).not.toHaveProperty("restore-keys");
+  }
+});
