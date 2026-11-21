@@ -11,7 +11,7 @@ const requireCiSuccess = (value: unknown) => validateCiSuccess(value, "pull_requ
 const always = ["selection", "quality", "package", "web", "web-unit", "web-browser", "process-bundles", "browser-process"];
 const rustJobs = ["jsc-identity", "jsc-prebuild", "native-quality", "rust", "ordinary-web-guests", "browser-guest"];
 const sharedJobs = ["shared-jsc-identity", "shared-prebuild", "shared-sysroot", "shared-proof"];
-const sharedNativeJobs = ["shared-spidermonkey-prebuild", "shared-native", "shared-browser"];
+const sharedNativeJobs = ["shared-spidermonkey-prebuild", "shared-proof-inputs", "shared-native", "shared-browser"];
 const jobIds = always.concat(rustJobs, sharedJobs, sharedNativeJobs, ["browser-production"]);
 
 function fixture(rust = true, shared = true, sharedNative = true) {

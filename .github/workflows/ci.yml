@@ -1082,8 +1082,8 @@ jobs:
 
   shared-sysroot:
     name: Shared PIC program producer
-    needs: [selection, ordinary-web-guests, rust, shared-prebuild, shared-spidermonkey-prebuild]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (((needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')) && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success') || ((needs.selection.outputs.rust == 'false' && (github.event_name == 'pull_request' || needs.selection.outputs.browser_guest == 'false')) && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped')) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
+    needs: [selection, shared-prebuild, shared-spidermonkey-prebuild]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1106,29 +1106,11 @@ jobs:
         env:
           SHARED_PREBUILD_RESULT: ${{ needs.shared-prebuild.result }}
         run: test "$SHARED_PREBUILD_RESULT" = success
-      - name: Require the shared native launcher producer
-        if: needs.selection.outputs.shared-native == 'true'
-        env:
-          ORDINARY_WEB_RESULT: ${{ needs.ordinary-web-guests.result }}
-          PROFILE_LAUNCHER_RESULT: ${{ needs.rust.result }}
-        run: |
-          test "$PROFILE_LAUNCHER_RESULT" = success
-          test "$ORDINARY_WEB_RESULT" = success
       - name: Require the shared SpiderMonkey library producer
         if: needs.selection.outputs.shared-native == 'true'
         env:
           SM_PREBUILD_RESULT: ${{ needs.shared-spidermonkey-prebuild.result }}
         run: test "$SM_PREBUILD_RESULT" = success
-      - name: Reuse the production playground for shared profile checks
-        if: needs.selection.outputs.shared-native == 'true'
-        uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: browser-guest-site
-          path: ${{ runner.temp }}/shared-playground-site
-      - name: Select the existing playground site for shared profile checks
-        if: needs.selection.outputs.shared-native == 'true'
-        run: echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/shared-playground-site" >> "$GITHUB_ENV"
       - name: Configure private shared sysroot paths
         run: |
           echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
@@ -1437,13 +1419,54 @@ jobs:
           key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
+  shared-proof-inputs:
+    name: Prepare shared proof inputs
+    needs: [selection, ordinary-web-guests, shared-sysroot]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.selection.outputs.shared-native == 'true' && needs.ordinary-web-guests.result == 'success' && needs.shared-sysroot.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-downloads
+        with:
+          scope: quality
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
+      - name: Reuse the production playground for shared profile checks
+        uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: browser-guest-site
+          path: ${{ runner.temp }}/shared-playground-site
+      - name: Reuse the three retained shared programs
+        uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          pattern: shared-*-program
+          path: ${{ runner.temp }}/shared-program-downloads
       - name: Prepare the same-source shared proof handoff
-        if: needs.selection.outputs.shared-native == 'true'
         run: |
-          source env.sh
-          bun scripts/ci-shared-proof-inputs.ts prepare "$RUNNER_TEMP/shared-proof-inputs" "$CARGO_TARGET_DIR/shared-native" "$BUN_WASM_BROWSER_SITE"
+          downloads="$RUNNER_TEMP/shared-program-downloads"
+          programs="$RUNNER_TEMP/shared-programs"
+          # SpiderMonkey's upload preserves its path alongside the native diagnostics.
+          shopt -s globstar nullglob
+          spidermonkey=("$downloads/shared-spidermonkey-program"/**/shared-native/program-spidermonkey)
+          [[ ${#spidermonkey[@]} == 1 ]]
+          mkdir "$programs"
+          mv "$downloads/shared-quickjs-program" "$programs/program"
+          mv "$downloads/shared-jsc-program" "$programs/program-jsc"
+          mv "${spidermonkey[0]}" "$programs/program-spidermonkey"
+          bun scripts/ci-shared-proof-inputs.ts prepare "$RUNNER_TEMP/shared-proof-inputs" "$programs" "$RUNNER_TEMP/shared-playground-site"
       - name: Export ready shared proof inputs
-        if: needs.selection.outputs.shared-native == 'true'
         uses: actions/upload-artifact@v4
         timeout-minutes: 5
         with:
@@ -1454,8 +1477,8 @@ jobs:
 
   shared-native:
     name: Shared native (${{ matrix.engine }})
-    needs: [selection, ordinary-web-guests, rust, shared-sysroot]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success' && needs.shared-sysroot.result == 'success' && needs.selection.outputs.shared-native == 'true' }}
+    needs: [selection, rust, shared-proof-inputs]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.rust.result == 'success' && needs.shared-proof-inputs.result == 'success' && needs.selection.outputs.shared-native == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -1467,10 +1490,6 @@ jobs:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     steps:
       - uses: actions/checkout@v4
-      - name: Require the ready shared producer
-        env:
-          SHARED_PRODUCER_RESULT: ${{ needs.shared-sysroot.result }}
-        run: test "$SHARED_PRODUCER_RESULT" = success
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
@@ -1518,8 +1537,8 @@ jobs:
 
   shared-browser:
     name: Shared Browser (${{ matrix.engine }})
-    needs: [selection, shared-sysroot]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.selection.outputs.shared-native == 'true' }}
+    needs: [selection, shared-proof-inputs]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.shared-proof-inputs.result == 'success' && needs.selection.outputs.shared-native == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -1531,10 +1550,6 @@ jobs:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     steps:
       - uses: actions/checkout@v4
-      - name: Require the ready shared producer
-        env:
-          SHARED_PRODUCER_RESULT: ${{ needs.shared-sysroot.result }}
-        run: test "$SHARED_PRODUCER_RESULT" = success
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
@@ -1582,7 +1597,7 @@ jobs:
 
   shared-proof:
     name: Shared PIC sysroot proof
-    needs: [selection, ordinary-web-guests, quality, rust, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser]
+    needs: [selection, ordinary-web-guests, quality, rust, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-proof-inputs, shared-native, shared-browser]
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1598,6 +1613,7 @@ jobs:
           ORDINARY_WEB_RESULT: ${{ needs.ordinary-web-guests.result }}
           RUST_RESULT: ${{ needs.rust.result }}
           SM_RESULT: ${{ needs.shared-spidermonkey-prebuild.result }}
+          INPUTS_RESULT: ${{ needs.shared-proof-inputs.result }}
           NATIVE_RESULT: ${{ needs.shared-native.result }}
           BROWSER_RESULT: ${{ needs.shared-browser.result }}
         run: |
@@ -1616,6 +1632,7 @@ jobs:
             *) exit 1 ;;
           esac
           test "$SM_RESULT" = "$expected"
+          test "$INPUTS_RESULT" = "$expected"
           test "$NATIVE_RESULT" = "$expected"
           test "$BROWSER_RESULT" = "$expected"
 
@@ -1946,7 +1963,7 @@ jobs:
 
   ci-result:
     name: Code quality
-    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, browser-production, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
+    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, browser-production, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-proof-inputs, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1963,7 +1980,7 @@ jobs:
 
   update-status:
     name: Report automated update statuses
-    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, browser-production, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process, ci-result]
+    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, browser-production, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-proof-inputs, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process, ci-result]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

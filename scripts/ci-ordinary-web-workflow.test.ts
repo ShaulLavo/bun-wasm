@@ -27,13 +27,13 @@ function named(id: string, name: string) {
   return value;
 }
 
-type Route = { full: boolean; native: boolean; outcome: string; consumer?: string; browser?: boolean; event?: string; draft?: boolean; cancelled?: boolean };
+type Route = { full: boolean; native: boolean; outcome: string; consumer?: string; programs?: string; handoff?: string; browser?: boolean; event?: string; draft?: boolean; cancelled?: boolean };
 function admission(id: string, route: Route): boolean {
   const value = job(id);
   if (!Array.isArray(value.needs) || typeof value.if !== "string") throw new Error("Missing explicit dependencies/admission");
   const browser = route.browser ?? route.full;
   const full = route.full || route.event !== undefined && route.event !== "pull_request" && browser;
-  const outcomes: Record<string, string> = { rust: full ? "success" : "skipped", "browser-production": browser && !full ? "success" : "skipped", "ordinary-web-guests": route.consumer ?? (full ? route.outcome : "skipped"), "browser-guest": browser ? "success" : "skipped" };
+  const outcomes: Record<string, string> = { rust: full ? "success" : "skipped", "browser-production": browser && !full ? "success" : "skipped", "ordinary-web-guests": route.consumer ?? (full ? route.outcome : "skipped"), "browser-guest": browser ? "success" : "skipped", "shared-sysroot": route.programs ?? "success", "shared-proof-inputs": route.handoff ?? "success" };
   const expression = value.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("github.event_name", JSON.stringify(route.event ?? "pull_request")).replaceAll("github.event.pull_request.draft", String(route.draft ?? false))
     .replace(/needs\.selection\.outputs\.([\w-]+)/g, (_all, flag: string) => JSON.stringify(String(flag === "rust" ? route.full : flag === "browser_guest" ? browser : flag === "shared-native" ? route.native : true)))
@@ -43,16 +43,18 @@ function admission(id: string, route: Route): boolean {
   return implicit && new Function(`return (${expression})`)() === true;
 }
 
-test("all seven existing direct consumers retain the independent full-route gate", () => {
-  for (const id of ["shared-sysroot", "shared-native", "shared-proof", "browser-guest", "browser-process", "ci-result", "update-status"]) expect(job(id).needs).toContain("ordinary-web-guests");
+test("ordinary Web still gates shared qualification and ordinary consumers", () => {
+  for (const id of ["shared-proof-inputs", "shared-proof", "browser-guest", "browser-process", "ci-result", "update-status"]) expect(job(id).needs).toContain("ordinary-web-guests");
   for (const outcome of ["failure", "cancelled", "skipped", "", "missing"]) {
-    for (const id of ["shared-sysroot", "shared-native", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome }), `${id}: ${outcome}`).toBe(false);
+    for (const id of ["shared-proof-inputs", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome }), `${id}: ${outcome}`).toBe(false);
+    expect(admission("shared-sysroot", { full: true, native: true, outcome })).toBe(true);
   }
   for (const event of ["pull_request", "push", "workflow_dispatch"]) {
-    for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-native", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome: "success", event }), id).toBe(true);
+    for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-proof-inputs", "shared-native", "shared-browser", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome: "success", event }), id).toBe(true);
   }
   expect(admission("browser-process", { full: false, native: false, outcome: "skipped" })).toBe(true);
   expect(admission("shared-sysroot", { full: false, native: false, outcome: "skipped" })).toBe(true);
+  expect(admission("shared-proof-inputs", { full: false, native: false, outcome: "skipped" })).toBe(false);
   expect(admission("ordinary-web-guests", { full: false, native: false, outcome: "skipped" })).toBe(false);
   expect(admission("browser-guest", { full: false, native: false, outcome: "skipped" })).toBe(false);
   for (const event of ["pull_request", "push", "workflow_dispatch"]) {
@@ -62,12 +64,20 @@ test("all seven existing direct consumers retain the independent full-route gate
     const failures = event === "pull_request" ? [] : ["failure", "cancelled", "skipped", "", "unknown"];
     for (const outcome of failures) expect(admission("browser-process", { ...route, outcome })).toBe(false);
   }
-  for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-native", "browser-guest", "browser-process"]) {
+  for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-proof-inputs", "shared-native", "shared-browser", "browser-guest", "browser-process"]) {
     expect(admission(id, { full: true, native: true, outcome: "success", draft: true })).toBe(false);
     expect(admission(id, { full: true, native: true, outcome: "success", cancelled: true })).toBe(false);
   }
 });
 
+test("missing or failed production or assembly keeps both shared matrices closed", () => {
+  const route = { full: true, native: true, outcome: "success" };
+  for (const result of ["failure", "cancelled", "skipped", "", "missing"]) {
+    expect(admission("shared-proof-inputs", { ...route, programs: result })).toBe(false);
+    expect(admission("shared-native", { ...route, handoff: result })).toBe(false);
+    expect(admission("shared-browser", { ...route, handoff: result })).toBe(false);
+  }
+});
 
 test("every provider join rejects an independent consumer outside its exact full-route state", () => {
   const routes = [
@@ -83,7 +93,7 @@ test("every provider join rejects an independent consumer outside its exact full
 function checkConsumerJoins(route: Route): void {
   const full = route.full || route.event !== "pull_request" && route.browser;
   const required = full ? "success" : "skipped";
-  const ids = ["shared-sysroot", "browser-process"].concat(route.browser ? ["browser-guest"] : [], route.native ? ["shared-native"] : []);
+  const ids = ["browser-process"].concat(route.browser ? ["browser-guest"] : [], route.native ? ["shared-proof-inputs"] : []);
   for (const consumer of ["success", "failure", "cancelled", "skipped", "", "missing", "unknown"]) {
     for (const id of ids) expect(admission(id, { ...route, consumer }), `${id}/${route.event}/${consumer}`).toBe(consumer === required);
   }
