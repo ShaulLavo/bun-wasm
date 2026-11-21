@@ -98,6 +98,7 @@ test("both Bash shell cache routes key on the verified native inputs independent
     if (!restore) throw new Error(`Missing shell cache for ${id}`);
     const key = cacheKey(restore);
     expect(key).toContain("${{ steps.native-inputs.outputs.hash }}");
+    expect(key).toContain("${{ steps.shell-wasi-inputs.outputs.hash }}");
     expect(key).toContain("'scripts/build-bash-web-shell.sh'");
     expect(key).not.toContain("'bun.lock'");
     expect(record(restore.with)).not.toHaveProperty("restore-keys");
