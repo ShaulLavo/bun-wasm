@@ -1,0 +1,11 @@
+process.nextTick: throws -> outer
+process.nextTick: throws inside its own run() -> outer
+setTimeout: throws -> outer
+setTimeout: throws inside its own run() -> outer
+setImmediate: throws -> outer
+setImmediate: throws inside its own run() -> outer
+fs.readFile callback: throws -> outer
+fs.readFile callback: throws inside its own run() -> outer
+an EventEmitter listener, emitted from a timer: throws -> outer
+an EventEmitter listener, emitted from a timer: throws inside its own run() -> outer
+setTimeout with no store: throws inside its own run() -> undefined

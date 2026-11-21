@@ -77,6 +77,8 @@ function fixture() {
     },
     nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]) { ticks.push(() => callback(...args)); },
     cancelIoWaiters() { cancelIoWaitersCalls++; },
+    // No async contexts in this harness: a callback runs where it is called.
+    runInContext: (_context: unknown, fn: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]) => Reflect.apply(fn, receiver, args),
     emitExit() {},
     traceExit() {},
     require(name: string) {

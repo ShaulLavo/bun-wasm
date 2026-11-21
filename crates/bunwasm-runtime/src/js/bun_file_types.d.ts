@@ -8,5 +8,6 @@ declare namespace BunWasm {
   }
   interface Internal {
     require(name: "streams"): { ReadableStream: typeof ReadableStream };
+    require(name: "stream_context"): { ReadableStream: typeof ReadableStream };
   }
 }
