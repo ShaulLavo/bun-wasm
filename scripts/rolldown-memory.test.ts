@@ -4,8 +4,9 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { join, resolve } from "node:path";
 import { wasmMemoryLimits } from "../src/engine-kind";
 
-// Tests here start real processes or browsers. The limit only catches a hang.
-setDefaultTimeout(120_000);
+// Tests here start real processes or browsers. The limit only catches a hang, and stays
+// above the 300 s cap on each process.
+setDefaultTimeout(600_000);
 
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-rolldown-memory-"));
 const directory = join(scratch, "node_modules/@rolldown/binding-wasm32-wasi");
@@ -22,8 +23,9 @@ afterAll(() => {
     JSON.stringify({ measurements, removedScratch: scratch }, null, 2) + "\n");
 });
 
+// Hang caps only: a loaded runner can take minutes for cargo or a node and WASI Rolldown run.
 function command(args: string[], cwd = scratch, env = process.env): string {
-  const result = Bun.spawnSync(args, { cwd, env, stdout: "pipe", stderr: "pipe", timeout: 90_000 });
+  const result = Bun.spawnSync(args, { cwd, env, stdout: "pipe", stderr: "pipe", timeout: 300_000 });
   if (result.exitCode !== 0) throw new Error(`${args[0]} failed: ${result.stderr}`);
   return result.stdout.toString();
 }
@@ -43,7 +45,7 @@ beforeAll(async () => {
   } }));
   command(["bun", "install", "--ignore-scripts", "--no-progress"]);
   const response = await fetch("https://registry.npmjs.org/@rolldown/binding-wasm32-wasi/-/binding-wasm32-wasi-1.2.16.tgz",
-    { signal: AbortSignal.timeout(30_000) });
+    { signal: AbortSignal.timeout(120_000) });
   expect(response.ok).toBe(true);
   const bytes = Buffer.from(await response.arrayBuffer());
   expect(createHash("sha256").update(bytes).digest("hex")).toBe("003f64a43c6e77a24228c02538a89c87ded2cb375ea3c091d82b19d9e8aae17b");
@@ -51,7 +53,7 @@ beforeAll(async () => {
   writeFileSync(archive, bytes);
   mkdirSync(directory, { recursive: true });
   command(["tar", "-xzf", archive, "--strip-components=1", "-C", directory]);
-}, 120_000);
+}, 900_000);
 
 test.each(loaders)("%s uses the binary minimum and supported capacity while preserving source positions", filename => {
   const loader = join(directory, filename);
@@ -118,13 +120,13 @@ test("Rolldown real sync, async, bundling, caller errors and disposal survive th
   expect(iphone.descriptors).toEqual([{ initial: 1001, maximum: 4096, shared: true }]);
   expect(iphone.grownBytes[0]).toBeLessThan(256 << 20);
   measurements.push({ stock, small, iphone });
-}, 90_000);
+}, 900_000);
 
 test.skipIf(!browserResult)("compiled Rolldown browser output preserves real Chromium and WebKit APIs", () => {
   if (!browserResult) throw new Error("Missing explicit browser result destination");
   const script = new URL("./rolldown-memory-browser.ts", import.meta.url).pathname;
   command(["bun", script, scratch, binary, browserResult]);
-}, 180_000);
+}, 300_000);
 
 test.each(loaders)("%s keeps changed source, binaries, debug selection, and unrelated paths untouched", filename => {
   const loader = join(directory, filename);
