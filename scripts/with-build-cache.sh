@@ -18,18 +18,18 @@ if [[ -z ${RUSTC_WRAPPER:-} || ${RUSTC_WRAPPER:-} == sccache || "$RUSTC_WRAPPER"
 fi
 export CMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER:-$(command -v sccache)}
 export CMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER:-$(command -v sccache)}
-cache_phase() {
+record_cache_stop() {
   if [[ -n ${BUN_WASM_PRODUCER_DIAGNOSTICS:-} ]]; then
-    bun "$root/scripts/producer-diagnostics.ts" phase "$@"
-    return
+    bun "$root/scripts/producer-diagnostics.ts" event cache-stop "$1" || true
   fi
-  shift
-  "$@"
 }
 cleanup() {
   trap '' HUP INT TERM
   if [[ -S $SCCACHE_SERVER_UDS ]]; then
-    cache_phase cache-stop sccache --stop-server || true
+    local status=0
+    record_cache_stop start
+    sccache --stop-server || status=$?
+    record_cache_stop "end status=$status"
   fi
   rm -rf -- "$socket_dir"
 }
@@ -37,5 +37,9 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-cache_phase cache-start sccache --start-server
+if [[ -n ${BUN_WASM_PRODUCER_DIAGNOSTICS:-} ]]; then
+  bun "$root/scripts/producer-diagnostics.ts" phase cache-start sccache --start-server
+else
+  sccache --start-server
+fi
 "$@"

@@ -21,7 +21,10 @@ case "$1" in
     ;;
   --stop-server)
     if [[ ! -S $SCCACHE_SERVER_UDS ]]; then echo "couldn't connect to server" >&2; exit 1; fi
-    if [[ -n \${CACHE_STOP_SIGNAL:-} ]]; then kill -s "$CACHE_STOP_SIGNAL" -- "-$PPID"; fi
+    if [[ -n \${CACHE_STOP_SIGNAL:-} ]]; then
+      read -r pgid < <(ps -o pgid= -p "$$")
+      kill -s "$CACHE_STOP_SIGNAL" -- "-$pgid"
+    fi
     rm -- "$SCCACHE_SERVER_UDS"
     echo 'Compile requests 0'
     exit "\${CACHE_STOP_STATUS:-0}"
@@ -201,6 +204,18 @@ test.each(["HUP", "TERM"])("%s during cache shutdown lets the stop and socket cl
   try {
     const result = run({ ...env, CACHE_STOP_SIGNAL: signal }, ["sccache", "--check-live"]);
     expect(result.status, result.stderr).toBe(0);
+    expectStopped(root);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test.each(["HUP", "TERM"])("%s during diagnostic cache shutdown still records stats", signal => {
+  const { root, env } = fixture();
+  try {
+    const result = run({ ...env, CACHE_STOP_SIGNAL: signal, BUN_WASM_PRODUCER_DIAGNOSTICS: root,
+      BUN_WASM_PRODUCER_STARTED_MS: String(Date.now()) }, ["bash", "-c", "sccache --check-live; exit 23"]);
+    expect(result.status, result.stderr).toBe(23);
+    expect(result.stdout).toContain("Compile requests 0");
+    expect(readFileSync(join(root, "phases.log"), "utf8")).toContain("phase=cache-stop end status=0");
     expectStopped(root);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
