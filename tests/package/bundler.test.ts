@@ -21,7 +21,13 @@ test("Vite emits the exported worker URL without demo code or a second Runtime o
     expect(worker).toBeDefined();
     const entry = files.find(name => name.startsWith("vite-main-") && name.endsWith(".js"))!;
     const page = await readFile(join(scratch, "assets", entry), "utf8");
-    const source = await readFile(join(scratch, "assets", worker!), "utf8");
+    // The worker entry posts first and then loads its bootstrap chunk (web/src/worker-main.ts).
+    const main = files.find(name => name.startsWith("worker-main-") && name.endsWith(".js"));
+    expect(main).toBeDefined();
+    const workerEntry = await readFile(join(scratch, "assets", worker!), "utf8");
+    expect(workerEntry).toContain("worker-script");
+    expect(workerEntry).toContain(main!);
+    const source = workerEntry + await readFile(join(scratch, "assets", main!), "utf8");
     expect(page).toContain(worker!);
     expect(source).toContain("onmessage");
     expect(source).not.toContain("codemirror");
