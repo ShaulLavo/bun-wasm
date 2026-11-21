@@ -135,3 +135,37 @@ test.each([
     expect(next.exitCode, next.stderr.toString()).toBe(0);
   });
 }, 65_000);
+
+test("termination during Git cleanup leaves the slot available", async () => {
+  await fixture(async ({ repository, checkout, revision }) => {
+    const realGit = Bun.which("git");
+    if (!realGit) throw new Error("Git is required for the build slot test");
+    const bin = join(repository, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "git"), `#!/bin/sh
+if [ "$1" = worktree ] && [ "$2" = remove ]; then
+  printf 'cleanup ready\\n' >&2
+  read -r release
+fi
+exec "$SLOT_TEST_GIT" "$@"
+`, { mode: 0o755 });
+    const command = invocation(checkout, revision, "true");
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, SLOT_TEST_GIT: realGit };
+    const owner = Bun.spawn(command, {
+      cwd: repository, env, detached: true, stdin: "pipe", stdout: "inherit", stderr: "pipe", timeout: 60_000,
+    });
+    const reader = owner.stderr.getReader();
+    try {
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe("cleanup ready\n");
+      process.kill(-owner.pid, "SIGTERM");
+    } finally {
+      reader.releaseLock();
+      owner.stdin.end("continue\n");
+      await owner.exited;
+    }
+    expect(await owner.exited).toBe(143);
+    expect(existsSync(checkout)).toBe(false);
+    const next = Bun.spawnSync(command, { cwd: repository });
+    expect(next.exitCode, next.stderr.toString()).toBe(0);
+  });
+}, 65_000);

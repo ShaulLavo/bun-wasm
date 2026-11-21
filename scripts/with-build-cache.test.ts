@@ -21,6 +21,7 @@ case "$1" in
     ;;
   --stop-server)
     if [[ ! -S $SCCACHE_SERVER_UDS ]]; then echo "couldn't connect to server" >&2; exit 1; fi
+    if [[ -n \${CACHE_STOP_SIGNAL:-} ]]; then kill -s "$CACHE_STOP_SIGNAL" -- "-$PPID"; fi
     rm -- "$SCCACHE_SERVER_UDS"
     echo 'Compile requests 0'
     exit "\${CACHE_STOP_STATUS:-0}"
@@ -192,6 +193,15 @@ test("a signal arriving during server startup still cleans its socket", () => {
     expect(result.stdout).not.toContain("workload");
     expect(events(root).map(call => call[0])).toEqual(["--start-server", "--stop-server"]);
     expect(readdirSync(join(root, "sockets"))).toEqual([]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test.each(["HUP", "TERM"])("%s during cache shutdown lets the stop and socket cleanup finish", signal => {
+  const { root, env } = fixture();
+  try {
+    const result = run({ ...env, CACHE_STOP_SIGNAL: signal }, ["sccache", "--check-live"]);
+    expect(result.status, result.stderr).toBe(0);
+    expectStopped(root);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

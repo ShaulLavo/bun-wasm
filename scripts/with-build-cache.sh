@@ -27,6 +27,7 @@ cache_phase() {
   "$@"
 }
 cleanup() {
+  trap '' HUP INT TERM
   if [[ -S $SCCACHE_SERVER_UDS ]]; then
     cache_phase cache-stop sccache --stop-server || true
   fi

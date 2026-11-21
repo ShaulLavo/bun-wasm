@@ -2,8 +2,23 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
+const interruptionExitCodes = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
+
+function runProtectedGit(...args: string[]): string {
+  const command = ["-p", "-c", 'trap "" HUP INT TERM; exec git "$@"', "git"].concat(args);
+  const run = () => execFileSync("bash", command, { encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] });
+  try {
+    return run();
+  } catch (error) {
+    // A signal can reach the shell before it installs the ignore handlers.
+    if (!(error instanceof Error) || !("signal" in error) || typeof error.signal !== "string"
+      || !Object.hasOwn(interruptionExitCodes, error.signal)) throw error;
+    return run();
+  }
+}
+
 function registeredCheckout(checkout: string): boolean {
-  const entries = execFileSync("git", ["worktree", "list", "--porcelain", "-z"], { encoding: "utf8" });
+  const entries = runProtectedGit("worktree", "list", "--porcelain", "-z");
   return entries.split("\0").includes(`worktree ${checkout}`);
 }
 
@@ -40,7 +55,7 @@ async function build(checkout: string, revision: string, command: string[]): Pro
     return await child.exited;
   } finally {
     if (registeredCheckout(checkout)) {
-      execFileSync("git", ["worktree", "remove", "--force", checkout], { stdio: "inherit" });
+      runProtectedGit("worktree", "remove", "--force", checkout);
     }
   }
 }
@@ -63,7 +78,7 @@ async function main(args: string[]): Promise<number> {
 // The heavy runner signals the full build scope. Keep the lock and wait for
 // the build command to finish its own teardown before removing the checkout.
 let interrupted: number | undefined;
-for (const [signal, code] of [["SIGHUP", 129], ["SIGINT", 130], ["SIGTERM", 143]] as const) {
+for (const [signal, code] of Object.entries(interruptionExitCodes)) {
   process.on(signal, () => { interrupted ??= code; });
 }
 const status = await main(Bun.argv.slice(2));
