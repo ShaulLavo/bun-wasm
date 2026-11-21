@@ -664,11 +664,14 @@ test("durable state reload preserves jobs and cannot silently reset corrupt stat
   await expect(load(path, since)).rejects.toThrow();
 });
 
-test("dispatch requires atomic claim, exact-source preparation, FIFO and cleanup", async () => {
+test("dispatch requires atomic claim, stable exact-source build, FIFO and cleanup", async () => {
   const state = fresh(), fake = harness([run(1)]);
   await tick(state, fake.adapters);
   const message = instructions("/work/reports/smoke", "/work/checkout", first(state));
   for (const word of [" claim ", sha(1), "device_open", "Mac FIFO", "cleanup", " complete ", "--attempt=1", "Never substitute"]) expect(message).toContain(word);
+  expect(message).toContain(`scripts/iphone-smoke-build-slot.ts /work/worktrees/bun-wasm/iphone-smoke-build ${sha(1)}`);
+  expect(message).toContain("scripts/with-build-cache.sh");
+  expect(message).toContain("Stage prepared assets outside the build slot");
   expect(message).not.toContain("iphone-smoke-job");
 });
 
