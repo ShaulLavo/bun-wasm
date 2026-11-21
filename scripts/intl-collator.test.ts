@@ -47,8 +47,15 @@ function factoryWithNativeCallback() {
         collation,
       }).compare(left, right));
     },
-  } });
+  }, require: zoneData });
   return { fallback, calls, context };
+}
+
+// intl.js reads its time zone data from tz_data.js (scripts/vendor-intl.ts).
+const zoneSource = readFileSync(new URL("../crates/bunwasm-runtime/src/js/tz_data.js", import.meta.url), "utf8");
+function zoneData(name: string): unknown {
+  if (name !== "tz_data") throw new Error(`Unexpected module ${name}`);
+  return vm.runInNewContext(zoneSource)();
 }
 
 test("generated factory preserves extension defaults and explicit option precedence through the native callback", () => {
@@ -146,7 +153,14 @@ test("generated library runs the engine fixture with production locale wrappers 
   const end = bootstrap.indexOf("\n\n  return internal;", start);
   expect(start).toBeGreaterThan(0);
   expect(end).toBeGreaterThan(start);
+  // The block's inputs from earlier in bootstrap.js, with QuickJS's toLocaleString wrapper on.
   vm.runInContext(`const installIntlFallback = true;
+    const native = { engine: "quickjs" };
+    const localeFormats = new Map();
+    const {
+      getTime: dateGetTime, getFullYear: dateGetFullYear, getMonth: dateGetMonth, getDate: dateGetDate,
+      getHours: dateGetHours, getMinutes: dateGetMinutes, getSeconds: dateGetSeconds,
+    } = Date.prototype;
     function defineHidden(target, values) {
       for (const key of Object.keys(values)) Object.defineProperty(target, key, {
         value: values[key], writable: true, configurable: true,

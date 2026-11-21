@@ -51001,9 +51001,85 @@ static const JSCFunctionListEntry js_math_obj[] = {
 
 /* Date */
 
+/* bun-wasm: process.env.TZ. wasi-libc's localtime_r knows only UTC, so the runtime installs
+   the zone's UTC offsets (seconds east of UTC) from its zone data: offsets[0] applies before
+   times[0], offsets[i + 1] from times[i] (seconds since 1970, ascending) on. Without a table,
+   local time is the libc's. One process has one local zone; the largest zone in the data has
+   365 transitions, so fixed storage holds any of them without an allocator. */
+#define BUNWASM_ZONE_MAX 1024
+static int64_t bunwasm_zone_times[BUNWASM_ZONE_MAX];
+static int32_t bunwasm_zone_offsets[BUNWASM_ZONE_MAX + 1];
+static size_t bunwasm_zone_count;
+static bool bunwasm_zone_set;
+
+bool JS_bunwasm_SetLocalTimeOffsets(const int64_t *times, const int32_t *offsets, size_t count)
+{
+    if (!offsets) {
+        bunwasm_zone_set = false;
+        bunwasm_zone_count = 0;
+        return true;
+    }
+    if (count > BUNWASM_ZONE_MAX)
+        return false;
+    if (count)
+        memcpy(bunwasm_zone_times, times, sizeof(int64_t) * count);
+    memcpy(bunwasm_zone_offsets, offsets, sizeof(int32_t) * (count + 1));
+    bunwasm_zone_count = count;
+    bunwasm_zone_set = true;
+    return true;
+}
+
+/* The zone's offset in seconds at the UTC instant 'seconds'. */
+static int32_t bunwasm_zone_offset(int64_t seconds)
+{
+    size_t low = 0, high = bunwasm_zone_count;
+    while (low < high) {
+        size_t mid = low + (high - low) / 2;
+        if (bunwasm_zone_times[mid] <= seconds)
+            low = mid + 1;
+        else
+            high = mid;
+    }
+    return bunwasm_zone_offsets[low];
+}
+
+/* UTC minus local time in minutes, as getTimezoneOffset returns it, from an offset in seconds. */
+static int bunwasm_zone_minutes(int32_t offset)
+{
+    return -(int)(offset / 60);
+}
+
+/* floor(ms / 1000) without negating ms, which overflows for INT64_MIN. */
+static int64_t bunwasm_floor_seconds(int64_t ms)
+{
+    return ms >= 0 ? ms / 1000 : (ms + 1) / 1000 - 1;
+}
+
+static int getTimezoneOffset(int64_t time);
+
+/* The offset for a local time 'time' (ms, read as if it were UTC), for building a date from
+   local fields. A local time in a gap (spring forward) uses the offset before the gap and so
+   lands after it; one that occurs twice (fall back) is the first, as JavaScriptCore does. */
+static int getLocalTimezoneOffset(int64_t time)
+{
+    if (!bunwasm_zone_set)
+        return getTimezoneOffset(time);
+    int64_t local = bunwasm_floor_seconds(time);
+    /* The offsets a day either side; a zone's transitions are further apart than that. */
+    int32_t before = bunwasm_zone_offset(local - 86400);
+    int32_t after = bunwasm_zone_offset(local + 86400);
+    if (bunwasm_zone_offset(local - before) == before)
+        return bunwasm_zone_minutes(before);
+    if (bunwasm_zone_offset(local - after) == after)
+        return bunwasm_zone_minutes(after);
+    return bunwasm_zone_minutes(before);
+}
+
 /* OS dependent. d = argv[0] is in ms from 1970. Return the difference
    between UTC time and local time 'd' in minutes */
 static int getTimezoneOffset(int64_t time) {
+    if (bunwasm_zone_set)
+        return bunwasm_zone_minutes(bunwasm_zone_offset(bunwasm_floor_seconds(time)));
 #if defined(_WIN32)
     DWORD r;
     TIME_ZONE_INFORMATION t;
@@ -59606,7 +59682,7 @@ static double set_date_fields(double fields[minimum_length(7)], int is_local) {
     /* adjust for local time and clip */
     if (is_local) {
         int64_t ti = tv < INT64_MIN ? INT64_MIN : tv >= 0x1p63 ? INT64_MAX : (int64_t)tv;
-        tv += getTimezoneOffset(ti) * 60000;
+        tv += getLocalTimezoneOffset(ti) * 60000;
     }
     d = time_clip(tv);
 out:

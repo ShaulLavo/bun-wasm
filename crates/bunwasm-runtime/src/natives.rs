@@ -507,6 +507,7 @@ pub fn table(state: &Rc<State>) -> Table {
         ))
     });
     crate::parse_env::install(&mut t);
+    crate::time_zone::install(&mut t);
     crate::node_path::install(&mut t);
     install_encoding(&mut t);
     crate::streams::install(&mut t);

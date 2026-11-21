@@ -22,10 +22,12 @@ fallback's data cannot use keeps the previous one, so `Intl` never throws for `T
 process or a worker starts with applies the same way at startup, so a worker's `Date` and `Intl`
 agree.
 
-QuickJS computes local time with wasi-libc's `localtime_r`, which knows only UTC, and its
-`Intl` is the same polyfill: `Date` stays in UTC whatever `TZ` says. The Browser engine runs
-on its host's `Date`, whose zone a page cannot change. Both engines report no settable zone
-(`Engine::set_time_zone` returns `None`), so `TZ` writes only change the variable there.
+QuickJS computes local time with wasi-libc's `localtime_r`, which knows only UTC, so its
+engine reports no settable zone and `process.ts` `applyTimeZone` asks `time_zone.ts` instead:
+that module resolves the name and installs the zone's UTC offsets in QuickJS
+([QuickJS time zones](quickjs-time-zones.md)), and the `Intl` fallback takes the resolved ID as
+on JSC. The Browser engine runs on its host's `Date`, whose zone a page cannot change, so `TZ`
+writes only change the variable there.
 
 ## Differences from native Bun 1.4.4
 
@@ -39,8 +41,8 @@ on its host's `Date`, whose zone a page cannot change. Both engines report no se
 
 ## Tests
 
-The native fixtures `process-env-setter` (all three engines) and `process-env-tz` (JSC) hold
-native Bun's output. `scripts/fixtures/process-controls.ts` checks the setter rules against the
+The native fixtures `process-env-setter` (all three engines), `process-env-tz` and
+`process-env-tz-zones` (QuickJS and JSC) hold native Bun's output. `scripts/fixtures/process-controls.ts` checks the setter rules against the
 runtime source.
 
 [Ledger scope and pinned revisions](scope.md).

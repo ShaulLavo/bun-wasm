@@ -1400,19 +1400,33 @@
   // process started with.
   let fallbackIntl = null;
   let intlTimeZone;
+  // The fallback's Date locale formatters by kind and locale (formatLocalDate below); they
+  // format in the zone they were made in, so a zone change drops them.
+  const localeFormats = new Map();
+  const {
+    getTime: dateGetTime, getTimezoneOffset: dateGetTimezoneOffset, getFullYear: dateGetFullYear,
+    getMonth: dateGetMonth, getDate: dateGetDate, getHours: dateGetHours, getMinutes: dateGetMinutes,
+    getSeconds: dateGetSeconds,
+  } = Date.prototype;
   function applyIntlTimeZone() {
     const DateTimeFormat = fallbackIntl.DateTimeFormat;
-    const previous = new DateTimeFormat().resolvedOptions().timeZone;
+    // FormatJS's data lacks Africa/Abidjan, which Bun knows as GMT all along (time_zone.ts).
+    DateTimeFormat.tzData["Africa/Abidjan"] ??= [[-Infinity, "GMT", 0, false]];
+    const previous = DateTimeFormat.__defaultTimeZone;
     try {
       DateTimeFormat.__setDefaultTimeZone(intlTimeZone);
-      if (typeof new DateTimeFormat().resolvedOptions().timeZone === "string") return;
+      if (typeof new DateTimeFormat().resolvedOptions().timeZone !== "string") throw new RangeError(intlTimeZone);
+      // FormatJS canonicalizes through its links (Asia/Kuala_Lumpur becomes Asia/Singapore);
+      // the default keeps the zone the engine resolved, whose data FormatJS has, as Bun does.
+      if (intlTimeZone !== undefined) DateTimeFormat.__defaultTimeZone = intlTimeZone;
     } catch {
-      // Unknown to the fallback's zone data.
+      // Unknown to the fallback's zone data: the previous zone stays, as it was set.
+      DateTimeFormat.__defaultTimeZone = previous;
     }
-    DateTimeFormat.__setDefaultTimeZone(previous);
   }
   internal.setIntlTimeZone = zone => {
     intlTimeZone = zone;
+    localeFormats.clear();
     if (fallbackIntl) applyIntlTimeZone();
   };
   internal.fallbackIntlLoaded = intl => {
@@ -1478,6 +1492,69 @@
   if (process.env.BUNWASM_IPC_CHANNEL) internal.require("child_ipc").initialize();
   if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
 
+  // QuickJS prints local time without the zone's name; Bun's JavaScriptCore appends it, as in
+  // "GMT-0500 (Eastern Standard Time)". zone_names.js holds ICU's names for every zone
+  // (scripts/generate-zone-names.ts), so printing a date never loads Intl.
+  if (installIntlFallback && native.engine === "quickjs") {
+    const nativeToString = Date.prototype.toString;
+    const nativeToTimeString = Date.prototype.toTimeString;
+    // zone_names.js lists, per zone, "minutes:dst:name:day" entries: a name for that offset and
+    // daylight flag from that day (since 1970, base 36) on; a key's first entry applies to every
+    // earlier day too. Parsed once per zone, with the latest name for each daylight flag, which
+    // an offset the table never saw (before 1970, a future rule) takes: JavaScriptCore names a
+    // date by the zone's standard or daylight name.
+    let zoneNames;
+    const zoneTables = new Map();
+    function zoneTable(zone) {
+      let table = zoneTables.get(zone);
+      if (table) return table;
+      zoneNames ??= internal.require("zone_names");
+      table = { keys: new Map(), latest: [[-1, undefined], [-1, undefined]] };
+      for (const entry of (zoneNames.zones[zone] ?? "").split(",")) {
+        if (!entry) continue;
+        const [minutes, dst, index, day] = entry.split(":");
+        const key = `${minutes}:${dst}`;
+        const from = day === "0" ? -Infinity : parseInt(day, 36);
+        const name = zoneNames.names[Number(index)];
+        if (!table.keys.has(key)) table.keys.set(key, []);
+        table.keys.get(key).push([from, name]);
+        if (from >= table.latest[dst][0]) table.latest[dst] = [from, name];
+      }
+      zoneTables.set(zone, table);
+      return table;
+    }
+    function zoneName(date) {
+      const zone = internal.localTimeZone;
+      if (zone === undefined || zone === "UTC") return "Coordinated Universal Time";
+      const time = Reflect.apply(dateGetTime, date, []);
+      const minutes = -Reflect.apply(dateGetTimezoneOffset, date, []);
+      const dst = internal.localTimeZoneDaylight?.(time) ? 1 : 0;
+      const table = zoneTable(zone);
+      const day = Math.floor(time / 864e5);
+      let name;
+      for (const [from, value] of table.keys.get(`${minutes}:${dst}`) ?? []) if (from <= day) name = value;
+      name ??= table.latest[dst][1];
+      return name || gmtName(minutes);
+    }
+    // ICU's name for an offset with no name of its own, as in "GMT-03:00" (Etc/GMT+3).
+    function gmtName(minutes) {
+      if (minutes === 0) return "GMT";
+      const abs = Math.abs(minutes);
+      return `GMT${minutes < 0 ? "-" : "+"}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+    }
+    function withZoneName(date, text) {
+      return Number.isNaN(Reflect.apply(dateGetTime, date, [])) ? text : `${text} (${zoneName(date)})`;
+    }
+    defineHidden(Date.prototype, {
+      toString() {
+        return withZoneName(this, Reflect.apply(nativeToString, this, []));
+      },
+      toTimeString() {
+        return withZoneName(this, Reflect.apply(nativeToTimeString, this, []));
+      },
+    });
+  }
+
   // Temporal probes Date's native locale methods during initialization. Install
   // these wrappers last so that probe does not eagerly load the Intl bundle.
   if (installIntlFallback) {
@@ -1486,14 +1563,61 @@
         return new globalThis.Intl.NumberFormat(locales, options).format(Number(this));
       },
     });
-    defineHidden(Date.prototype, {
-      toLocaleDateString(locales, options) {
-        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ year: "numeric", month: "numeric", day: "numeric" }, options)).format(this);
+    // Bun formats in en-US unless told otherwise, and so does the fallback Intl, so a call with
+    // no arguments is built from the local fields without loading Intl: "1/15/2024, 7:00:00 AM".
+    // Other calls keep one formatter per kind and locale until TZ changes (localeFormats).
+    // QuickJS's own toLocaleString ignores its arguments and pads ("01/15/2024, 07:00:00 AM");
+    // JavaScriptCore keeps its own.
+    const dateLocaleMethods = {
+      toLocaleDateString() {
+        return formatLocalDate(this, "date", arguments[0], arguments[1]);
       },
-      toLocaleTimeString(locales, options) {
-        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ hour: "numeric", minute: "2-digit", second: "2-digit" }, options)).format(this);
+      toLocaleTimeString() {
+        return formatLocalDate(this, "time", arguments[0], arguments[1]);
       },
-    });
+    };
+    if (native.engine === "quickjs") {
+      dateLocaleMethods.toLocaleString = function toLocaleString() {
+        return formatLocalDate(this, "any", arguments[0], arguments[1]);
+      };
+    }
+    defineHidden(Date.prototype, dateLocaleMethods);
+    function formatLocalDate(date, kind, locales, options) {
+      // A TypeError for a receiver that is not a Date, "Invalid Date" for NaN, as natively.
+      const time = Reflect.apply(dateGetTime, date, []);
+      if (Number.isNaN(time)) return "Invalid Date";
+      const year = Reflect.apply(dateGetFullYear, date, []);
+      if (locales === undefined && options === undefined && year > 0 && year < 10000) return defaultLocalDate(date, kind, year);
+      // ICU prints a narrow no-break space before AM/PM; Bun's Date methods print a space.
+      return localeFormat(kind, locales, options).format(time).replace(/ /g, " ");
+    }
+    function defaultLocalDate(date, kind, year) {
+      const day = `${Reflect.apply(dateGetMonth, date, []) + 1}/${Reflect.apply(dateGetDate, date, [])}/${year}`;
+      if (kind === "date") return day;
+      const hours = Reflect.apply(dateGetHours, date, []);
+      const minutes = String(Reflect.apply(dateGetMinutes, date, [])).padStart(2, "0");
+      const seconds = String(Reflect.apply(dateGetSeconds, date, [])).padStart(2, "0");
+      const time = `${hours % 12 || 12}:${minutes}:${seconds} ${hours < 12 ? "AM" : "PM"}`;
+      return kind === "time" ? time : `${day}, ${time}`;
+    }
+    function localeFormat(kind, locales, options) {
+      const key = options === undefined && (locales === undefined || typeof locales === "string") ? `${kind}|${locales}` : undefined;
+      let format = key === undefined ? undefined : localeFormats.get(key);
+      if (format) return format;
+      format = new globalThis.Intl.DateTimeFormat(locales, localeOptions(kind, options));
+      if (key !== undefined) localeFormats.set(key, format);
+      return format;
+    }
+    // ECMA-402 ToDateTimeOptions(options, "any", "all") for toLocaleString: the date and time
+    // defaults apply only when the options choose no field or style of their own. The date and
+    // time methods add theirs under the given options, as before.
+    const dateTimeFields = ["weekday", "year", "month", "day", "dayPeriod", "hour", "minute", "second", "fractionalSecondDigits", "dateStyle", "timeStyle"];
+    function localeOptions(kind, options) {
+      if (kind === "date") return Object.assign({ year: "numeric", month: "numeric", day: "numeric" }, options);
+      if (kind === "time") return Object.assign({ hour: "numeric", minute: "2-digit", second: "2-digit" }, options);
+      if (options != null && dateTimeFields.some(field => options[field] !== undefined)) return options;
+      return Object.assign({ year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" }, options);
+    }
   }
 
   return internal;

@@ -58,6 +58,7 @@ mod semver;
 mod sourcemap;
 mod sqlite;
 mod streams;
+mod time_zone;
 mod tls;
 pub mod transpiler;
 mod wasm;
