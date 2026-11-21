@@ -93,10 +93,11 @@ so `test.sh` runs only Rust-owned probes, without repeating those Web checks.
 Local fixture commands still run their original complete runtime preflight.
 
 The Linux native CI step explicitly sets `BUN_WASM_RUNTIME_JOBS=2`. The runtime owner
-first runs unclassified files in its original single Bun process, then runs files
-marked `"isolation": "process"` in at most two Bun processes. That opt-in belongs
-only to runtime manifests whose controls write private scratch outputs and read
-produced engine inputs. New files default to serial execution. Ordinary SM
+keeps unclassified files in their original single Bun process. At the same time,
+it starts the first file marked `"isolation": "process"` in a separate process.
+Each of the two slots takes another isolated file as it becomes free. That opt-in
+belongs only to runtime manifests whose controls write private scratch outputs
+and read produced engine inputs. New files default to serial execution. Ordinary SM
 fixtures and loop controls remain serial because they use a shared build target
 or producer compile commands. JSC JSON, Wasm tables and module evaluation controls
 use separate file processes, retaining their internal order, mocks, assertions,
