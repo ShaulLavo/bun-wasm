@@ -175,7 +175,7 @@ test.each([0, 23])("a shutdown failure does not replace workload status %s", sta
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test.each([{ signal: "INT", status: 130 }, { signal: "TERM", status: 143 }])("$signal runs cache cleanup once", ({ signal, status }) => {
+test.each([{ signal: "HUP", status: 129 }, { signal: "INT", status: 130 }, { signal: "TERM", status: 143 }])("$signal runs cache cleanup once", ({ signal, status }) => {
   const { root, env } = fixture();
   try {
     const result = run(env, ["bash", "-c", `sccache --check-live; kill -${signal} "$PPID"`]);

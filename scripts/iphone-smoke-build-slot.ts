@@ -2,11 +2,22 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-async function build(checkout: string, revision: string, command: string[]): Promise<number> {
-  if (lstatSync(checkout, { throwIfNoEntry: false })) throw new Error(`Smoke build checkout already exists: ${checkout}`);
-  execFileSync("git", ["worktree", "add", "--quiet", "--detach", checkout, revision], { stdio: "inherit" });
+function registeredCheckout(checkout: string): boolean {
+  const entries = execFileSync("git", ["worktree", "list", "--porcelain", "-z"], { encoding: "utf8" });
+  return entries.split("\0").includes(`worktree ${checkout}`);
+}
 
+async function build(checkout: string, revision: string, command: string[]): Promise<number> {
+  if (lstatSync(checkout, { throwIfNoEntry: false }) || registeredCheckout(checkout)) {
+    throw new Error(`Smoke build checkout already exists: ${checkout}`);
+  }
   try {
+    const added = await Bun.spawn(["git", "worktree", "add", "--quiet", "--detach", checkout, revision], {
+      stdin: "inherit", stdout: "inherit", stderr: "inherit",
+    }).exited;
+    if (interrupted !== undefined) return interrupted;
+    if (added !== 0) return added;
+
     const work = join(checkout, "target", "iphone-smoke");
     const tmp = join(work, "tmp");
     mkdirSync(tmp, { recursive: true });
@@ -28,7 +39,9 @@ async function build(checkout: string, revision: string, command: string[]): Pro
     });
     return await child.exited;
   } finally {
-    execFileSync("git", ["worktree", "remove", "--force", checkout], { stdio: "inherit" });
+    if (registeredCheckout(checkout)) {
+      execFileSync("git", ["worktree", "remove", "--force", checkout], { stdio: "inherit" });
+    }
   }
 }
 
@@ -50,7 +63,8 @@ async function main(args: string[]): Promise<number> {
 // The heavy runner signals the full build scope. Keep the lock and wait for
 // the build command to finish its own teardown before removing the checkout.
 let interrupted: number | undefined;
-process.on("SIGINT", () => { interrupted = 130; });
-process.on("SIGTERM", () => { interrupted = 143; });
+for (const [signal, code] of [["SIGHUP", 129], ["SIGINT", 130], ["SIGTERM", 143]] as const) {
+  process.on(signal, () => { interrupted ??= code; });
+}
 const status = await main(Bun.argv.slice(2));
 process.exitCode = interrupted ?? status;
