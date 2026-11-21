@@ -46,17 +46,17 @@ function admission(id: string, route: Route): boolean {
 }
 
 test("ordinary Web still gates shared qualification and ordinary consumers", () => {
-  for (const id of ["shared-native", "shared-browser", "shared-proof", "browser-guest", "browser-process", "ci-result", "update-status"]) expect(job(id).needs).toContain("ordinary-web-guests");
+  for (const id of ["shared-consumers", "shared-proof", "browser-guest", "browser-process", "ci-result", "update-status"]) expect(job(id).needs).toContain("ordinary-web-guests");
   for (const outcome of ["failure", "cancelled", "skipped", "", "missing"]) {
-    for (const id of ["shared-native", "shared-browser", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome }), `${id}: ${outcome}`).toBe(false);
+    for (const id of ["shared-consumers", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome }), `${id}: ${outcome}`).toBe(false);
     expect(admission("shared-sysroot", { full: true, native: true, outcome })).toBe(true);
   }
   for (const event of ["pull_request", "push", "workflow_dispatch"]) {
-    for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-native", "shared-browser", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome: "success", event }), id).toBe(true);
+    for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-consumers", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome: "success", event }), id).toBe(true);
   }
   expect(admission("browser-process", { full: false, native: false, outcome: "skipped" })).toBe(true);
   expect(admission("shared-sysroot", { full: false, native: false, outcome: "skipped" })).toBe(true);
-  expect(admission("shared-browser", { full: false, native: false, outcome: "skipped" })).toBe(false);
+  expect(admission("shared-consumers", { full: false, native: false, outcome: "skipped" })).toBe(false);
   expect(admission("ordinary-web-guests", { full: false, native: false, outcome: "skipped" })).toBe(false);
   expect(admission("browser-guest", { full: false, native: false, outcome: "skipped" })).toBe(false);
   for (const event of ["pull_request", "push", "workflow_dispatch"]) {
@@ -66,7 +66,7 @@ test("ordinary Web still gates shared qualification and ordinary consumers", () 
     const failures = event === "pull_request" ? [] : ["failure", "cancelled", "skipped", "", "unknown"];
     for (const outcome of failures) expect(admission("browser-process", { ...route, outcome })).toBe(false);
   }
-  for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-native", "shared-browser", "browser-guest", "browser-process"]) {
+  for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-consumers", "browser-guest", "browser-process"]) {
     expect(admission(id, { full: true, native: true, outcome: "success", draft: true })).toBe(false);
     expect(admission(id, { full: true, native: true, outcome: "success", cancelled: true })).toBe(false);
   }
@@ -76,8 +76,7 @@ test("ordinary checks still run when shared production fails, and shared tests r
   const route = { full: true, native: true, outcome: "success" };
   for (const result of ["failure", "cancelled", "skipped", "", "missing"]) {
     expect(admission("ordinary-web-guests", { ...route, programs: result })).toBe(true);
-    expect(admission("shared-native", { ...route, handoff: result })).toBe(false);
-    expect(admission("shared-browser", { ...route, handoff: result })).toBe(false);
+    expect(admission("shared-consumers", { ...route, handoff: result })).toBe(false);
   }
 });
 
@@ -86,8 +85,7 @@ test("only the ordinary browser route can proceed after an assembly failure", ()
     const route = { full: true, native: true, outcome, handoffFailed: true, handoff: "failure" };
     expect(admission("browser-guest", route)).toBe(outcome === "failure");
     expect(admission("browser-process", route)).toBe(outcome === "failure");
-    expect(admission("shared-native", route)).toBe(false);
-    expect(admission("shared-browser", route)).toBe(false);
+    expect(admission("shared-consumers", route)).toBe(false);
   }
 });
 
@@ -105,7 +103,7 @@ test("every provider join rejects an independent consumer outside its exact full
 function checkConsumerJoins(route: Route): void {
   const full = route.full || route.event !== "pull_request" && route.browser;
   const required = full ? "success" : "skipped";
-  const ids = ["browser-process"].concat(route.browser ? ["browser-guest"] : [], route.native ? ["shared-native", "shared-browser"] : []);
+  const ids = ["browser-process"].concat(route.browser ? ["browser-guest"] : [], route.native ? ["shared-consumers"] : []);
   for (const consumer of ["success", "failure", "cancelled", "skipped", "", "missing", "unknown"]) {
     for (const id of ids) expect(admission(id, { ...route, consumer }), `${id}/${route.event}/${consumer}`).toBe(consumer === required);
   }

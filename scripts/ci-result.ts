@@ -30,7 +30,7 @@ export function requireCiSuccess(value: unknown, event = "pull_request"): void {
     selection: true, quality: true, "jsc-identity": browser, "jsc-prebuild": browser, "native-quality": native, rust: native,
     "browser-production": browser && !native, "ordinary-web-guests": native,
     package: true, "shared-jsc-identity": shared, "shared-prebuild": shared, "shared-spidermonkey-prebuild": sharedNative,
-    "shared-sysroot": shared, "shared-native": sharedNative, "shared-browser": sharedNative, "shared-proof": shared,
+    "shared-sysroot": shared, "shared-consumers": sharedNative, "shared-proof": shared,
     web: true, "web-unit": true, "web-browser": true, "process-bundles": true, "browser-guest": browser, "browser-process": true,
   };
   for (const [name, required] of Object.entries(expected)) {

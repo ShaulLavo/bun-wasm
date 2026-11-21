@@ -14,7 +14,7 @@ setDefaultTimeout(120_000);
 const workflow = expandedCiWorkflow();
 const producer = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-spidermonkey-prebuild:\n")[0]!;
 const smProducer = workflow.split("\n  shared-spidermonkey-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
-const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  shared-native:\n")[0]!;
+const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  shared-consumers:\n")[0]!;
 
 test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
   expect(shared).toContain("needs: [selection, shared-prebuild, shared-spidermonkey-prebuild]");
@@ -184,7 +184,7 @@ test("shared native checks consume one matching launcher and one produced group 
   const rust = workflow.split("\n  rust:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
   expect(rust).toContain('cp "$CARGO_TARGET_DIR/release/bun-wasm" "$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   expect(rust).toContain("name: native-profile-launcher");
-  const native = workflow.split("\n  shared-native:\n")[1]!.split("\n  shared-browser:\n")[0]!;
+  const native = workflow.split("\n  shared-consumers:\n")[1]!.split("\n  shared-proof:\n")[0]!;
   expect(native).toContain("name: native-profile-launcher");
   expect(native).toContain('test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"');
   expect(native).toContain('test "$PROFILE_LAUNCHER_RESULT" = success');

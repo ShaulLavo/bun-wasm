@@ -58,12 +58,12 @@ test("every browser dependency install goes through the HTTPS-selecting action",
     const direct = steps.map(record).filter(step => String(step.run ?? "").includes("ci-browser-deps.ts"));
     expect({ id, direct }).toEqual({ id, direct: [] });
   }
-  const steps = record(jobs["shared-browser"]).steps;
+  const steps = record(jobs["shared-consumers"]).steps;
   if (!Array.isArray(steps)) throw new Error("Expected shared Browser steps");
   const entries = steps.map(record);
   const setup = entries.findIndex(step => step.uses === "./.github/actions/browser-deps");
   expect(record(entries[setup]?.with).browsers).toBe("chromium");
-  expect(entries.findIndex(step => String(step.run).startsWith("bunx playwright install chromium"))).toBeGreaterThan(setup);
+  expect(entries.findIndex(step => step.name === "Install Chromium" && String(step.run).includes("bunx playwright install chromium"))).toBeGreaterThan(setup);
 });
 
 test("cache identity is browser-set independent and refreshed for runner and Playwright updates", () => {
