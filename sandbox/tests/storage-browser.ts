@@ -11,7 +11,7 @@ import { storageStep, type StorageObservation } from "../../scripts/storage-brow
 import { assertPreviewDocumentPreserved } from "./storage-document";
 
 declare const sandbox: {
-  runtime: Runtime; fs: Runtime["filesystem"]; editor: Editor; term?: Terminal; started?: () => boolean;
+  runtime?: Runtime; fs: Runtime["filesystem"]; editor: Editor; term?: Terminal; started?: () => boolean;
   template: string; server: () => PreviewNavigation["server"] | null;
   preview: () => PreviewNavigation | null; status: () => Status;
 };
@@ -277,7 +277,14 @@ export async function diagnostic(page: Page): Promise<StoragePageDiagnostic | st
   if (page.isClosed()) return "closed";
   return page.evaluate(async () => {
     const api = typeof sandbox === "undefined" ? null : sandbox;
-    const starts = api ? await api.runtime.processes().then(service => ({ now: performance.now(), states: service.startStates() }), error => String(error)) : null;
+    // Read on its own so a page without a runtime, or a failed one, still yields the rest.
+    const starts = await (async () => {
+      if (!api?.runtime) return null;
+      try {
+        const service = await api.runtime.processes();
+        return { now: performance.now(), states: service.startStates() };
+      } catch (error) { return String(error); }
+    })();
     const buffer = api?.term?.buffer.active;
     const terminal = buffer ? Array.from({ length: Math.min(buffer.length, 80) }, (_, index) => buffer.getLine(Math.max(0, buffer.length - 80) + index)?.translateToString(true) ?? "").join("\n") : "";
     const frames = Array.from(document.querySelectorAll("iframe"), frame => {

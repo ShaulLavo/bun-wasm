@@ -13,8 +13,11 @@ const nestedModule = (request: RunRequest): Promise<NestedModule> => request.mem
   ? import("./nested/host.js").catch((error: unknown) => error instanceof Error ? error : new Error(String(error)))
   : Promise.resolve(undefined);
 
-/** Takes over the worker's messages, then runs the start messages that arrived while this loaded. */
-export function start(ctx: DedicatedWorkerGlobalScope, early: MessageEvent<RunRequest>[]): void {
+/**
+ * Takes over the worker's messages, then dispatches again, in order, the messages the entry kept
+ * while this module loaded, so listeners installed meanwhile see them as they would have.
+ */
+export function start(ctx: DedicatedWorkerGlobalScope, early: readonly MessageEvent[], stopKeeping: () => void): void {
   // Keep the process transport on host-owned callables. Bun's browser guest runs in this same
   // worker realm and may replace global methods while evaluating user code; passing `ctx` directly
   // would let that code forge or suppress lifecycle messages after bootstrap starts.
@@ -41,6 +44,7 @@ export function start(ctx: DedicatedWorkerGlobalScope, early: MessageEvent<RunRe
     }
     await bootstrap(request, executor, host);
   };
+  stopKeeping();
   ctx.onmessage = run;
-  for (const event of early.splice(0)) void run(event);
+  for (const event of early) ctx.dispatchEvent(new MessageEvent("message", { data: event.data, ports: Array.from(event.ports) }));
 }

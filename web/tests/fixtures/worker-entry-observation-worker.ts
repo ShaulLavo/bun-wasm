@@ -6,8 +6,8 @@ Object.defineProperty(host, "crossOriginIsolated", { configurable: true, value: 
 host.onmessage = async (event: MessageEvent<{ entry: string; request: RunRequest; gate: SharedArrayBuffer }>) => {
   const { entry, request, gate } = event.data;
   host.bunImportGate = new Int32Array(gate);
-  const main: { start(ctx: DedicatedWorkerGlobalScope, early: MessageEvent[]): void } = await import(entry);
-  main.start(host, []);
+  const main: { start(ctx: DedicatedWorkerGlobalScope, early: readonly MessageEvent[], stopKeeping: () => void): void } = await import(entry);
+  main.start(host, [], () => {});
   const execute = host.onmessage;
   if (!execute) throw new Error("Bun worker bootstrap did not install its handler");
   const environment = request.env;
