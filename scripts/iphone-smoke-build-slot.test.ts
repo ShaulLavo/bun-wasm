@@ -26,6 +26,13 @@ function invocation(checkout: string, revision: string, script: string): string[
   return [process.execPath, cli, checkout, revision, "--", "bash", "-eu", "-c", script];
 }
 
+function stopFixtureGroup(pid: number): void {
+  try { process.kill(-pid, "SIGTERM"); }
+  catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error;
+  }
+}
+
 test("each build uses the same paths and starts from a clean exact checkout", async () => {
   await fixture(({ repository, checkout, revision }) => {
     const command = invocation(checkout, revision, `
@@ -112,21 +119,25 @@ test.each([
   { phase: "build", signal: "SIGHUP", status: 129 },
 ] as const)("$signal during $phase releases the slot", async ({ phase, signal, status }) => {
   await fixture(async ({ repository, checkout, revision }) => {
-    const ready = 'printf "ready\\n"; read -r || true';
+    const ready = 'printf "ready\\n"; read -r release || true';
     const hook = join(repository, ".git", "hooks", "post-checkout");
-    if (phase === "checkout") writeFileSync(hook, `#!/bin/sh\n${ready}\n`, { mode: 0o755 });
+    // Git gives checkout hooks an empty stdin. Stay in checkout until the group is signaled.
+    if (phase === "checkout") writeFileSync(hook, '#!/bin/sh\nprintf "ready\\n"\nexec sleep 60\n', { mode: 0o755 });
     const command = invocation(checkout, revision, phase === "build" ? ready : "exit 93");
     const owner = Bun.spawn(["bash", "-c", 'exec "$@" 2>&1', "bash"].concat(command), {
       cwd: repository, detached: true, stdin: "pipe", stdout: "pipe", stderr: "inherit", timeout: 60_000,
     });
     const reader = owner.stdout.getReader();
+    let signaled = false;
     try {
       expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready\n");
       process.kill(-owner.pid, signal);
+      signaled = true;
       expect(await owner.exited).toBe(status);
       expect(existsSync(checkout)).toBe(false);
     } finally {
       reader.releaseLock();
+      if (!signaled) stopFixtureGroup(owner.pid);
       owner.stdin.end();
       await owner.exited;
     }
