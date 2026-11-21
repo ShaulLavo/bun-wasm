@@ -71,9 +71,11 @@ export function fixture() {
   const ports = load("net_port")();
   const modules: Record<string, unknown> = {
     events: EventEmitter, buffer: { Buffer }, websocket: { clientClass: () => undefined },
-    http_common: load("http_common")(), http_body: load("http_body")(), http_agent: load("http_agent")(),
+    http_common: load("http_common")(), http_body: load("http_body")(), http_agent: load("http_agent")(), serve_status_text: load("serve_status_text")(),
     net_port: ports, net_address: load("net_address")({ require: () => ports }), node_net_socket_options: load("node_net_socket_options")(),
     fetch_body: load("fetch_body")(), compression_streams: { decode: (body: ReadableStream) => body },
+    // Marks a network body for clone(); these tests do not clone.
+    body_streams: { markNetwork: (body: ReadableStream) => body },
   };
   modules.net_hostname = load("net_hostname")({ require: (name: string) => modules[name] });
   modules.node_net_socket_state = load("node_net_socket_state")();
