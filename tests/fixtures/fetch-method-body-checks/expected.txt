@@ -1,0 +1,16 @@
+GET Request with a body: GET "hi"
+HEAD Request with a body: HEAD "hi"
+get Request with a body: GET "hi"
+a POST Request copied as GET keeps its body: GET "copied"
+fetch(GET Request with a body) rejects TypeError ERR_INVALID_ARG_VALUE: fetch() request with GET/HEAD method cannot have body.
+fetch(HEAD Request with a stream) rejects TypeError ERR_INVALID_ARG_VALUE: fetch() request with GET/HEAD method cannot have body.
+fetch(POST Request, { method: GET }) rejects TypeError ERR_INVALID_ARG_VALUE: fetch() request with GET/HEAD method cannot have body.
+fetch(url, { method: HEAD, body }) rejects TypeError ERR_INVALID_ARG_VALUE: fetch() request with GET/HEAD method cannot have body.
+s3: DELETE with a stream body rejects Error (no code): Only POST and PUT do support body when using S3
+s3: PATCH with a stream body rejects Error (no code): Only POST and PUT do support body when using S3
+s3: GET with a stream body rejects TypeError ERR_INVALID_ARG_VALUE: fetch() request with GET/HEAD method cannot have body.
+s3: accessKeyId of the wrong type rejects TypeError ERR_INVALID_ARG_TYPE: The "accessKeyId" argument must be of type string. Received type number (1)
+s3: no credentials rejects Error ERR_S3_MISSING_CREDENTIALS: Missing S3 credentials. 'accessKeyId', 'secretAccessKey', 'bucket', and 'endpoint' are required
+s3: PATCH without credentials rejects Error ERR_S3_MISSING_CREDENTIALS: Missing S3 credentials. 'accessKeyId', 'secretAccessKey', 'bucket', and 'endpoint' are required
+s3: PATCH with credentials rejects Error ERR_S3_INVALID_METHOD: Method must be GET, PUT, DELETE or HEAD when using s3:// protocol
+a refused GET Request's body is used: true rejects TypeError ERR_BODY_ALREADY_USED: Request body already used

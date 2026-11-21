@@ -1,0 +1,7 @@
+response ends first: HTTP/1.1 200 OK
+  then the clone's read: rejected: AbortError: The connection was closed.
+client goes away first: rejected: AbortError: The connection was closed.
+both branches end together: true
+fetch clone shares chunks: true bytes: 1048576
+clone of a user bytes stream shares the chunk: false [ 1, 2, 3 ]
+clone of a user default stream shares the chunk: true [ 1, 2, 3 ]

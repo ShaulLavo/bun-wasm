@@ -13,7 +13,7 @@
     AbortSignal: abstract new (...args: never[]) => AbortSignal;
     Blob: abstract new (...args: never[]) => Blob;
   };
-  type FetchRequest = { url: string; method: string; redirect: string; bodyUsed: boolean };
+  type FetchRequest = { url: string; method: string; redirect: string; bodyUsed: boolean; _bodyUsed: boolean; _body: Uint8Array | null; _stream: ReadableStream | null; _blob: Blob | null };
   type Parsed =
     | { data: string }
     | { url: string; request: FetchRequest | null; init: Source };
@@ -229,10 +229,41 @@
     if (headers !== undefined) init.headers = headers;
     if (proxy !== null && unix) throw codedTypeError("fetch() cannot use a proxy with a unix socket.", "ERR_INVALID_ARG_VALUE");
     const verb = String(init.method ?? (request ? request.method : "GET")).toUpperCase();
-    if (body !== undefined && body !== null && (verb === "GET" || verb === "HEAD")) {
+    // A Request's own body counts too, unless empty or replaced by the init's.
+    const carried = body === undefined && request !== null && (request._stream !== null || request._blob !== null || (request._body?.length ?? 0) > 0);
+    if (((body !== undefined && body !== null) || carried) && (verb === "GET" || verb === "HEAD")) {
+      // Bun has taken the Request's own body by then, so it is used even though nothing is sent.
+      if (carried) request._bodyUsed = true;
       throw codedTypeError("fetch() request with GET/HEAD method cannot have body.", "ERR_INVALID_ARG_VALUE");
     }
+    if (new URL(url).protocol === "s3:") checkS3(sources, verb, body);
     return { url, request, init };
+  }
+
+  const S3_STRINGS = ["accessKeyId", "secretAccessKey", "region", "endpoint", "bucket", "sessionToken"];
+  // The checks Bun's fetch() makes on an s3:// request before signing it, in Bun's order. There
+  // is no S3 client here, so a request that passes them fails later, as an unsupported URL.
+  function checkS3(sources: Source[], verb: string, body: unknown): void {
+    if (body instanceof ReadableStream && verb !== "POST" && verb !== "PUT") {
+      throw new Error("Only POST and PUT do support body when using S3");
+    }
+    const options = firstDefined(sources, "s3", isObject);
+    const s3 = isObject(options) ? options : {};
+    for (const name of S3_STRINGS) {
+      const value = s3[name];
+      if (value === undefined || value === null || typeof value === "string") continue;
+      const received = typeof value === "number" || typeof value === "boolean" ? `type ${typeof value} (${String(value)})` : `type ${typeof value}`;
+      throw codedTypeError(`The "${name}" argument must be of type string. Received ${received}`, "ERR_INVALID_ARG_TYPE");
+    }
+    const env = globalThis.process?.env ?? {};
+    const accessKeyId = s3.accessKeyId || env.S3_ACCESS_KEY_ID || env.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = s3.secretAccessKey || env.S3_SECRET_ACCESS_KEY || env.AWS_SECRET_ACCESS_KEY;
+    if (!accessKeyId || !secretAccessKey) {
+      throw Object.assign(new Error("Missing S3 credentials. 'accessKeyId', 'secretAccessKey', 'bucket', and 'endpoint' are required"), { code: "ERR_S3_MISSING_CREDENTIALS" });
+    }
+    if (!["GET", "PUT", "DELETE", "HEAD", "POST"].includes(verb)) {
+      throw Object.assign(new Error("Method must be GET, PUT, DELETE or HEAD when using s3:// protocol"), { code: "ERR_S3_INVALID_METHOD" });
+    }
   }
 
   // A data: URL's body, or Bun's error for a malformed one (no comma, bad base64).

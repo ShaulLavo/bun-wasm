@@ -46,8 +46,6 @@ Checked against native Bun 1.4.4 and not fixed here:
 
 - `blob()` on a body over a missing file: Bun resolves with a Blob over the same file
   (size 0, `application/octet-stream`); here it reads the file and rejects with `ENOENT`.
-- `new Request(post, { method: "GET" })` throws here; Bun allows a GET or HEAD Request with a
-  body and refuses it only in `fetch()`. The next serve and fetch change takes that on.
 - `text()` on a body held in memory whose `.body` a reader has locked rejects with
   `ERR_INVALID_STATE` "Invalid state: ReadableStream is locked"; Bun says
   `ERR_BODY_ALREADY_USED` "Body already used". Stream bodies already match Bun.

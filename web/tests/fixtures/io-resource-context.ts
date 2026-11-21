@@ -24,7 +24,7 @@ import { CASES, RETIREMENT } from "./io-resource-scenarios.ts";
 
 const MODULES = [
   "resource_frame", "events", "http_common", "net_port", "net_listener", "net_address", "net_hostname", "tls_transport", "http_response",
-  "serve_request_lifetime", "io_pump", "net", "fs_options", "fs_watch", "child_ipc", "spawn", "node_stream_core", "process_stdin",
+  "serve_status_text", "serve_request_lifetime", "io_pump", "net", "fs_options", "fs_watch", "child_ipc", "spawn", "node_stream_core", "process_stdin",
 ];
 const runtime = new URL("../../../crates/bunwasm-runtime/src/js/", import.meta.url);
 const JAVASCRIPT = new Set(["net", "node_stream_core"]);

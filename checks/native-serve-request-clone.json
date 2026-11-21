@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/serve-request-clone",
+  "engines": ["quickjs", "jsc", "browser"]
+}
