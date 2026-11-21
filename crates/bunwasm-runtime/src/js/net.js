@@ -1148,6 +1148,7 @@
         if (this.headersSent) return;
         this._implicitHead = true;
         this.writeHead(this.statusCode);
+        this._implicitHead = false;
       }
       writeHead(status, message, headers) {
         if (this.headersSent) {
@@ -1160,6 +1161,7 @@
           message = undefined;
         }
         this.statusCode = status;
+        if (!this._implicitHead) this._wroteHead = true;
         if (message !== undefined) this.statusMessage = message;
         if (Array.isArray(headers) && this._headers.size === 0) {
           this._rawHeadPairs = [];
@@ -1255,7 +1257,7 @@
         this.statusCode = status.status;
         // A head written for the program (statusCode set, then end()) carries Bun's own reason
         // phrase, "HM" for a code it has none for; writeHead() carries Node's, or "unknown".
-        const reason = this._implicitHead && status.message === undefined ? internal.require("serve_status_text").reason(this.statusCode) : undefined;
+        const reason = !this._wroteHead && status.message === undefined ? internal.require("serve_status_text").reason(this.statusCode) : undefined;
         this.statusMessage = status.message ?? internal.builtin("node:http").STATUS_CODES[this.statusCode] ?? "unknown";
         this._statusLine = reason ?? this.statusMessage;
         this._bodyless = this.statusCode < 200 || this.statusCode === 204 || this.statusCode === 304 || this._req.method === "HEAD";
