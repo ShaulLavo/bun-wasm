@@ -319,7 +319,7 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
     "web-unit": { needs: "selection", minutes: 10 },
     "web-browser": { needs: "selection", minutes: 10 },
     "process-bundles": { needs: "selection", minutes: 10 },
-    "browser-guest": { needs: ["selection", "ordinary-web-guests", "rust", "browser-production"], minutes: "${{ startsWith(matrix.batch, '2') && 60 || 10 }}" },
+    "browser-guest": { needs: ["selection", "ordinary-web-guests", "rust", "browser-production"], minutes: "${{ matrix.timeoutMinutes }}" },
     "browser-process": { needs: ["selection", "ordinary-web-guests", "rust", "browser-production", "process-bundles", "browser-guest"], minutes: 10 },
     "ci-result": { needs: ["selection", "ordinary-web-guests", "quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "browser-production", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process"], minutes: 5 },
     "update-status": { needs: ["selection", "ordinary-web-guests", "quality", "jsc-identity", "jsc-prebuild", "native-quality", "rust", "browser-production", "package", "shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof", "web", "web-unit", "web-browser", "process-bundles", "browser-guest", "browser-process", "ci-result"], minutes: 5 },

@@ -35,7 +35,7 @@ test("Web host and every Processes leg use one browser dependency cache owner", 
   for (const id of ["web", "web-browser", "browser-process", "browser-guest"]) {
     const job = record(jobs[id]);
     expect(job["runs-on"]).toBe("ubuntu-latest");
-    expect(job["timeout-minutes"]).toBe(id === "browser-guest" ? "${{ startsWith(matrix.batch, '2') && 60 || 10 }}" : 10);
+    expect(job["timeout-minutes"]).toBe(id === "browser-guest" ? "${{ matrix.timeoutMinutes }}" : 10);
     expect(JSON.stringify(job)).not.toContain("browser-apt-v2");
     const steps = job.steps;
     if (!Array.isArray(steps)) throw new Error("Expected job steps");
