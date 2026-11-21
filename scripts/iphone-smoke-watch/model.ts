@@ -4,17 +4,26 @@ import { tabCountAlert } from "./tab-count-alert";
 export type Run = { revision: string; id: number; number: number; createdAt: string };
 export type Outcome = { revision: string; reportPath: string } & (
   | { status: "green"; failedPhase: null }
-  | { status: "red"; failedPhase: string; operational?: "safari-tab-count" }
+  | { status: "red"; failedPhase: string; operational?: "safari-tab-count" | "mac-unreachable" }
 );
+/** A smoke worker reports this phase when the Mac never answered; it is an outage, not a regression. */
+export const macUnreachable = "mac-unreachable";
 export type Completed = { kind: "complete"; attempt: number; lastGreen: string | null; finishedAt: string; outcome: Outcome; notified: boolean };
 export const claimWindowMs = 10 * 60_000;
 export type Dispatch = { kind: "pending" } | { kind: "waiting"; delivery: 1 | 2; claimDeadline: string } | { kind: "unclaimed"; notified: boolean };
 export type Job = Run & { history: Completed[]; state:
   | { kind: "pending"; attempt: number }
+  // Not dispatched because the Mac was unreachable; only the newest main runs once it is back.
+  | { kind: "paused"; attempt: number }
   | { kind: "running"; attempt: number; lastGreen: string | null; startedAt: string; dispatch: Dispatch; claimedAt: string | null }
   | Completed
 };
-export type State = { schema: 1; since: string; polledAt: string | null; error: string | null; jobs: Job[] };
+/** Mac availability, with a durable flag for its one operational notice per transition. */
+export type Mac =
+  | { kind: "reachable" }
+  | { kind: "unreachable"; since: string; revision: string; reportPath: string; notified: boolean }
+  | { kind: "resumed"; since: string; at: string; revision: string; notified: boolean };
+export type State = { schema: 1; since: string; polledAt: string | null; error: string | null; mac: Mac; jobs: Job[] };
 
 export function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected an object");
@@ -52,6 +61,7 @@ export function outcome(value: unknown, expected: string): Outcome {
   if (data.status === "green" && data.failedPhase === null) return { ...base, status: "green", failedPhase: null };
   if (data.status === "red") {
     const result: Outcome = { ...base, status: "red", failedPhase: text(data.failedPhase) };
+    if (result.failedPhase === macUnreachable) return { ...result, operational: macUnreachable };
     return tabCountAlert(data) ? { ...result, operational: "safari-tab-count" } : result;
   }
   throw new Error("Invalid smoke result status or failed phase");
@@ -67,7 +77,7 @@ function completed(value: unknown, expected: string): Completed {
 
 function storedOutcome(value: unknown, expected: string): Outcome {
   const data = object(value), result = outcome(data, expected);
-  if (data.operational === undefined) return result;
+  if (data.operational === undefined || (result.status === "red" && result.operational === data.operational)) return result;
   if (data.operational !== "safari-tab-count" || result.status !== "red" || result.failedPhase !== "cleanup") throw new Error("Invalid operational smoke classification");
   return { ...result, operational: data.operational };
 }
@@ -78,7 +88,7 @@ function job(value: unknown): Job {
   if (!Array.isArray(data.history)) throw new Error("Invalid job history");
   const base = { revision: source, id: integer(data.id), number: integer(data.number), createdAt: timestamp(data.createdAt), history: data.history.map(item => completed(item, source)) };
   const attempt = integer(progress.attempt);
-  if (progress.kind === "pending") return { ...base, state: { kind: "pending", attempt } };
+  if (progress.kind === "pending" || progress.kind === "paused") return { ...base, state: { kind: progress.kind, attempt } };
   if (progress.kind === "running") return { ...base, state: running(progress, attempt) };
   return { ...base, state: completed(progress, source) };
 }
@@ -108,7 +118,36 @@ export function state(value: unknown): State {
   const jobs = data.jobs.map(job);
   if (new Set(jobs.map(item => item.revision)).size !== jobs.length) throw new Error("Duplicate source in watcher state");
   if (jobs.filter(item => item.state.kind === "running").length > 1) throw new Error("Multiple running smoke jobs");
-  return { schema: 1, since: timestamp(data.since), polledAt: data.polledAt === null ? null : timestamp(data.polledAt), error: data.error === null ? null : text(data.error), jobs };
+  return { schema: 1, since: timestamp(data.since), polledAt: data.polledAt === null ? null : timestamp(data.polledAt), error: data.error === null ? null : text(data.error), mac: data.mac === undefined ? inferredMac(jobs) : mac(data.mac), jobs };
+}
+
+const isMacUnreachable = (result: Completed) => result.outcome.status === "red" && result.outcome.operational === macUnreachable;
+
+// Snapshots written before Mac outages were tracked: an outage is a trailing run of mac-unreachable
+// results by finish time. Its pause notice was never sent.
+function inferredMac(jobs: readonly Job[]): Mac {
+  const results = jobs.flatMap(job => job.history.concat(job.state.kind === "complete" ? [job.state] : []).map(result => ({ job, result })));
+  results.sort((first, second) => first.result.finishedAt.localeCompare(second.result.finishedAt));
+  const start = results[results.findLastIndex(entry => !isMacUnreachable(entry.result)) + 1];
+  if (!start) return { kind: "reachable" };
+  return { kind: "unreachable", since: start.result.finishedAt, revision: start.job.revision, reportPath: start.result.outcome.reportPath, notified: false };
+}
+
+function mac(value: unknown): Mac {
+  const data = object(value);
+  if (data.kind === "reachable") return { kind: "reachable" };
+  if (typeof data.notified !== "boolean") throw new Error("Invalid Mac availability");
+  if (data.kind === "unreachable") return { kind: "unreachable", since: timestamp(data.since), revision: revision(data.revision), reportPath: text(data.reportPath), notified: data.notified };
+  if (data.kind === "resumed") return { kind: "resumed", since: timestamp(data.since), at: timestamp(data.at), revision: revision(data.revision), notified: data.notified };
+  throw new Error("Invalid Mac availability");
+}
+
+export function pausedMessage(outage: Extract<Mac, { kind: "unreachable" }>): string {
+  return `iPhone smoke: Mac unreachable, iPhone smokes paused. This is an outage, not a regression: no smoke ran and the tested-green baseline is unchanged. First seen: ${outage.since} while testing ${outage.revision} (report ${outage.reportPath}). Newer mains are not dispatched while it lasts; once the Mac answers again, only the newest successful main is smoked.`;
+}
+
+export function resumedMessage(outage: Extract<Mac, { kind: "resumed" }>): string {
+  return `iPhone smoke: Mac back, smokes resumed. The Mac answered at ${outage.at} after an outage since ${outage.since}. The next smoke is the newest successful main, ${outage.revision}; mains skipped during the outage stay paused.`;
 }
 
 export function compareRuns(first: Run, second: Run): number { return first.number - second.number || first.id - second.id; }

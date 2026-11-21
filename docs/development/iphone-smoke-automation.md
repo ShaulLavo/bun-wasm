@@ -139,6 +139,23 @@ does not replace the actual smoke result.
 GitHub discovery failures and send errors remain visible in `state.json`,
 `STATUS.md` and the service log; already enrolled jobs stay intact.
 
+A result whose `failedPhase` is `mac-unreachable` is a Mac outage, not a
+regression. It sends no per-commit red and is not retried. The watcher records
+the outage in `state.json` (`mac`), sends one "Mac unreachable, iPhone smokes
+paused" notice, and marks every queued main, and every main that succeeds during
+the outage, `paused`. While the outage lasts each tick probes the Mac the way
+the smoke workers do: `tailscale status` must list `shauls-macbook-air` without
+`offline` (10 second limit), then `mesh ssh mac -- true` must succeed (20 second
+limit). Mesh is skipped while Tailscale lists the Mac offline, and nothing is
+probed when no outage is recorded. When the probe succeeds, or a later result is
+anything other than `mac-unreachable`, the watcher queues only the newest
+successful main (a fresh attempt if that main was the one that found the Mac
+unreachable), sends one "Mac back, smokes resumed" notice and dispatches it.
+Older paused mains stay paused; an audited `retry` queues one explicitly. Both
+notices are durable like the dispatch-failure alert. A snapshot from before this
+policy has no `mac` record: if its latest finished results are `mac-unreachable`,
+loading it starts an outage at the first of them, with its pause notice unsent.
+
 ## Claim, complete and retry
 
 Run these in the reviewed watcher checkout after `source env.sh`. Use the revision
