@@ -94,7 +94,8 @@ test("both Bash shell cache routes key on the verified native inputs independent
   for (const id of ["rust", "browser-production"]) {
     const job = record(record(workflow.jobs)[id]);
     if (!Array.isArray(job.steps)) throw new Error(`Missing steps for ${id}`);
-    const restore = job.steps.map(record).find(step => step.id === "shell-cache");
+    const jobSteps = job.steps.map(record);
+    const restore = jobSteps.find(step => step.id === "shell-cache");
     if (!restore) throw new Error(`Missing shell cache for ${id}`);
     const key = cacheKey(restore);
     expect(key).toContain("${{ steps.native-inputs.outputs.hash }}");
@@ -102,5 +103,11 @@ test("both Bash shell cache routes key on the verified native inputs independent
     expect(key).toContain("'scripts/build-bash-web-shell.sh'");
     expect(key).not.toContain("'bun.lock'");
     expect(record(restore.with)).not.toHaveProperty("restore-keys");
+    const path = "${{ runner.temp }}/bash-web-shell-build";
+    expect(record(restore.with).path).toBe(path);
+    const save = jobSteps.find(step => step.name === "Save the completed bash-web shell guest build");
+    expect(record(save?.with).path).toBe(path);
+    const build = jobSteps.find(step => typeof step.run === "string" && step.run.includes("bash scripts/build-bash-web-shell.sh"));
+    expect(build?.run).toContain('CARGO_TARGET_DIR="$RUNNER_TEMP/bash-web-shell-build" JOBS=2 bash scripts/build-bash-web-shell.sh');
   }
 });
