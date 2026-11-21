@@ -38,3 +38,8 @@ for (const [label, attempt] of attempts) {
   }
   console.log(label, await promise.then(() => "resolves", error => `rejects ${describe(error)}`));
 }
+
+// The refused GET Request's body counts as used, so it cannot be sent again.
+const refused = new Request("http://127.0.0.1:1/", { method: "GET", body: "x" });
+await fetch(refused).catch(() => {});
+console.log("a refused GET Request's body is used:", refused.bodyUsed, await fetch(refused, { method: "POST" }).then(() => "resolves", error => `rejects ${describe(error)}`));

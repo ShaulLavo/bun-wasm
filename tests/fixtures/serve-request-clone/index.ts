@@ -78,3 +78,12 @@ for (const park of [false, true]) {
   }
   console.log("fetch clone shares chunks:", shared, "bytes:", bytes);
 }
+
+// A byte stream the program made is teed by the standard: the clone gets its own copy.
+for (const type of ["bytes", undefined] as const) {
+  const chunk = new Uint8Array([1, 2, 3]);
+  const response = new Response(new ReadableStream({ type, start(controller) { controller.enqueue(chunk); controller.close(); } }));
+  const clone = response.clone();
+  const [a, b] = await Promise.all([response.body!.getReader().read(), clone.body!.getReader().read()]);
+  console.log(`clone of a user ${type ?? "default"} stream shares the chunk:`, a.value === b.value, Array.from(b.value!));
+}

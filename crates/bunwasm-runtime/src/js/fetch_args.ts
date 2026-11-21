@@ -13,7 +13,7 @@
     AbortSignal: abstract new (...args: never[]) => AbortSignal;
     Blob: abstract new (...args: never[]) => Blob;
   };
-  type FetchRequest = { url: string; method: string; redirect: string; bodyUsed: boolean; _body: Uint8Array | null; _stream: ReadableStream | null; _blob: Blob | null };
+  type FetchRequest = { url: string; method: string; redirect: string; bodyUsed: boolean; _bodyUsed: boolean; _body: Uint8Array | null; _stream: ReadableStream | null; _blob: Blob | null };
   type Parsed =
     | { data: string }
     | { url: string; request: FetchRequest | null; init: Source };
@@ -232,6 +232,8 @@
     // A Request's own body counts too, unless empty or replaced by the init's.
     const carried = body === undefined && request !== null && (request._stream !== null || request._blob !== null || (request._body?.length ?? 0) > 0);
     if (((body !== undefined && body !== null) || carried) && (verb === "GET" || verb === "HEAD")) {
+      // Bun has taken the Request's own body by then, so it is used even though nothing is sent.
+      if (carried) request._bodyUsed = true;
       throw codedTypeError("fetch() request with GET/HEAD method cannot have body.", "ERR_INVALID_ARG_VALUE");
     }
     if (new URL(url).protocol === "s3:") checkS3(sources, verb, body);

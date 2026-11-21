@@ -13,3 +13,4 @@ s3: accessKeyId of the wrong type rejects TypeError ERR_INVALID_ARG_TYPE: The "a
 s3: no credentials rejects Error ERR_S3_MISSING_CREDENTIALS: Missing S3 credentials. 'accessKeyId', 'secretAccessKey', 'bucket', and 'endpoint' are required
 s3: PATCH without credentials rejects Error ERR_S3_MISSING_CREDENTIALS: Missing S3 credentials. 'accessKeyId', 'secretAccessKey', 'bucket', and 'endpoint' are required
 s3: PATCH with credentials rejects Error ERR_S3_INVALID_METHOD: Method must be GET, PUT, DELETE or HEAD when using s3:// protocol
+a refused GET Request's body is used: true rejects TypeError ERR_BODY_ALREADY_USED: Request body already used

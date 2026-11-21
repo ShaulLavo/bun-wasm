@@ -7,6 +7,11 @@ streamed past the cap, reading the original: rejected after 6 bytes: Error: Requ
   client got: HTTP/1.1 413 Payload Too Large
 streamed past the cap, reading the clone: rejected after 6 bytes: Error: Request body exceeded maxRequestBodySize
   client got: HTTP/1.1 413 Payload Too Large
+past the cap after the response started: rejected: Request body exceeded maxRequestBodySize
+  client got status lines: ["HTTP/1.1 200 OK"] and the streamed part: true
+body past the cap after an early response: ["HTTP/1.1 200 OK","HTTP/1.1 200 OK"] true
+whole body past the cap, never read: ["HTTP/1.1 200 OK","HTTP/1.1 200 OK"] true
+formData() of a non-form body past the cap: ["HTTP/1.1 200 OK"] ERR_FORMDATA_PARSE_ERROR
 maxRequestBodySize undefined -> 200 64
 maxRequestBodySize 0 -> 413 
 maxRequestBodySize "5" -> 200 64

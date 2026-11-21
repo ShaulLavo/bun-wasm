@@ -42,10 +42,12 @@ type ServeBodyDecoder = { push(bytes: Uint8Array): { output: ServeBodyOutput[]; 
       let complete = false;
       for (const item of output) {
         if (item.kind === "end") complete = true;
-        if (item.kind !== "data") continue;
+        // Bytes only being dropped (after the response, or once the reader cancelled) do not
+        // count toward the cap, as in Bun.
+        if (item.kind !== "data" || this.finished) continue;
         this.received += item.bytes.length;
         if (this.received > this.limit) throw this.overflow();
-        if (!this.finished) this.controller?.enqueue(item.bytes);
+        this.controller?.enqueue(item.bytes);
       }
       if (!complete) return null;
       if (!this.finished) {
@@ -72,9 +74,15 @@ type ServeBodyDecoder = { push(bytes: Uint8Array): { output: ServeBodyOutput[]; 
   function tooLargeError(): Error {
     return new Error("Request body exceeded maxRequestBodySize");
   }
-  // The body of a request that arrived whole but over the cap: reading it fails as in Bun.
-  function tooLargeBody(): ReadableStream<Uint8Array> {
-    return new ReadableStream({ start(controller) { controller.error(tooLargeError()); } });
+  // The body of a request that arrived whole but over the cap: the first read fails as in Bun
+  // and calls `read`; a handler that never reads it is not refused.
+  function tooLargeBody(read: () => void): ReadableStream<Uint8Array> {
+    return new ReadableStream({
+      pull(controller) {
+        controller.error(tooLargeError());
+        read();
+      },
+    }, { highWaterMark: 0 });
   }
   return { RequestUpload, TooLarge, tooLargeBody };
 })

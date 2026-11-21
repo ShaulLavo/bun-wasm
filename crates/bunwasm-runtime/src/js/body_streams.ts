@@ -53,9 +53,15 @@
     const bytes = bodies.get(source);
     return bytes ? remember(stream, bytes, types.get(source)) : stream;
   }
-  // Bun's tee gives both branches the same chunk objects. The streams standard copies each
-  // chunk of a byte stream (a fetch() or Bun.serve body) for the second branch, so a byte
-  // stream is read through a plain stream first, whose tee shares chunks.
+  // Bun's tee of its own network bodies (fetch() responses, Bun.serve requests) gives both
+  // branches the same chunk objects. The streams standard copies each chunk of a byte stream
+  // for the second branch, so such a body is read through a plain stream first, whose tee
+  // shares chunks. A byte stream the program made keeps the standard copy, as in Bun.
+  const network = new WeakSet<object>();
+  function markNetwork<T extends object | null>(stream: T): T {
+    if (stream) network.add(stream);
+    return stream;
+  }
   function isByteStream(stream: ReadableStream<unknown>): boolean {
     try {
       stream.getReader({ mode: "byob" }).releaseLock();
@@ -65,7 +71,7 @@
     }
   }
   function plain<T>(stream: ReadableStream<T>): ReadableStream<T> {
-    if (!isByteStream(stream)) return stream;
+    if (!network.has(stream) || !isByteStream(stream)) return stream;
     const reader = stream.getReader();
     return new ReadableStream<T>({
       async pull(controller) {
@@ -283,5 +289,5 @@
       cancel: reason => cancelText(source, reason),
     }, { highWaterMark: 0 });
   }
-  return { remember, tee, clone, transfer, textStream, fromAsyncIterable, consume, drain, consumedStream, adoptable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream), type: (stream: ReadableStream<unknown>) => types.get(stream), rememberFile, blobOf: (stream: ReadableStream<unknown>) => files.get(stream), usedBody };
+  return { remember, markNetwork, tee, clone, transfer, textStream, fromAsyncIterable, consume, drain, consumedStream, adoptable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream), type: (stream: ReadableStream<unknown>) => types.get(stream), rememberFile, blobOf: (stream: ReadableStream<unknown>) => files.get(stream), usedBody };
 })

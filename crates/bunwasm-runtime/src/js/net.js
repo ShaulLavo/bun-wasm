@@ -176,7 +176,7 @@
     if (signal && signal.aborted) throw signal.reason;
     // A final response with a null body status (204, 205, 304) or to a HEAD request has no body, whatever followed the head.
     const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 205 || head.status === 304;
-    const body = nullBody ? null : internal.require("compression_streams").decode(handleStream(handle, closeHandle, signal), head.bodyEncoding);
+    const body = nullBody ? null : internal.require("body_streams").markNetwork(internal.require("compression_streams").decode(handleStream(handle, closeHandle, signal), head.bodyEncoding));
     if (nullBody) closeHandle();
     const res = new Response(body, {
       status: head.status >= 200 && head.status <= 599 ? head.status : 200,
@@ -480,8 +480,10 @@
   // With `streamBodies` (Bun.serve), a request whose body is still arriving starts its handler
   // at once with a body stream (serve_request_body.ts); the next request waits for the body.
   // `maxBody` is Bun.serve's maxRequestBodySize: a Content-Length over it is answered with 413
-  // before any handler runs; a chunked body that grows past it fails the handler's reads, and
-  // once the handler has started the connection answers 413 and closes, dropping its response.
+  // before any handler runs. A chunked body that grows past it while the handler reads it, or
+  // while it waits for the handler, fails those reads; once the handler has started, the
+  // connection answers 413 (unless a response head already went out) and closes. Bytes that
+  // arrive after the response, which are only dropped, do not count, as in Bun.
   function serveHttp(conn, handleRequest, startRequest, streamBodies, maxBody = Infinity) {
     let pending = null;
     let buffer = new Uint8Array(0);
@@ -500,22 +502,27 @@
       if (!chunked && !(length > 0)) return null;
       const onDemand = () => { if (native.wake) native.wake(0); };
       const body = new (uploads().RequestUpload)(chunked, length, onDemand, maxBody);
-      return Object.assign(head, { body: body.stream, streamed: true, chunked, trailers: [], length: buffer.length, upload: body, initial: buffer.subarray(head.headLength) });
+      return Object.assign(head, { body: internal.require("body_streams").markNetwork(body.stream), streamed: true, chunked, trailers: [], length: buffer.length, upload: body, initial: buffer.subarray(head.headLength) });
     }
     function declaredTooLarge() {
       if (maxBody === Infinity || !buffer.length) return false;
       const head = parseHead(buffer);
       return Boolean(head) && Number(header(head.headers, "content-length") || 0) > maxBody;
     }
-    // A chunked body that arrived whole but over maxBody reads as Bun's error.
+    // A chunked body that arrived whole but over maxBody fails when the handler reads it, as
+    // in Bun; a handler that never reads it answers as usual.
     function capBuffered(request) {
       if (!request || !request.chunked || request.body.length <= maxBody) return request;
-      tooLarge = true;
-      return Object.assign(request, { body: uploads().tooLargeBody(), streamed: true });
+      const read = () => {
+        tooLarge = true;
+        answerTooLarge();
+      };
+      return Object.assign(request, { body: uploads().tooLargeBody(read), streamed: true });
     }
+    // Bun writes the 413 only while no response has started; otherwise it just closes.
     function answerTooLarge() {
       if (!tooLarge || !started || conn.closed) return;
-      if (busy) conn.write(encoder.encode("HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n"));
+      if (busy && !conn.responded) conn.write(encoder.encode("HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n"));
       conn.end();
     }
     function feedUpload(bytes) {
@@ -530,7 +537,7 @@
           return;
         }
         // A malformed chunked body: Bun answers 400 unless the response already went out.
-        if (busy) conn.write(encoder.encode("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"));
+        if (busy && !conn.responded) conn.write(encoder.encode("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"));
         conn.end();
         return;
       }
@@ -572,6 +579,7 @@
       buffer = buffer.slice(request.length);
       busy = true;
       conn.busy = true;
+      conn.responded = false;
       started = false;
       if (request.upload) {
         upload = request.upload;
@@ -683,6 +691,8 @@
   }
 
   function writeResponse(conn, res, method, keepAlive) {
+    // From here the response head is on its way, so serveHttp sends no 413 or 400 of its own.
+    conn.responded = true;
     if (!(res instanceof Response)) {
       throw new TypeError(`Expected a Response object, but received '${internal.describe(res)}'`);
     }
@@ -1136,6 +1146,7 @@
       }
       _implicitHeader() {
         if (this.headersSent) return;
+        this._implicitHead = true;
         this.writeHead(this.statusCode);
       }
       writeHead(status, message, headers) {
@@ -1242,7 +1253,11 @@
         if (String(connection || "").toLowerCase().includes("close")) this._keepAlive = false;
         const status = validateStatus(this.statusCode, this.statusMessage);
         this.statusCode = status.status;
+        // A head written for the program (statusCode set, then end()) carries Bun's own reason
+        // phrase, "HM" for a code it has none for; writeHead() carries Node's, or "unknown".
+        const reason = this._implicitHead && status.message === undefined ? internal.require("serve_status_text").reason(this.statusCode) : undefined;
         this.statusMessage = status.message ?? internal.builtin("node:http").STATUS_CODES[this.statusCode] ?? "unknown";
+        this._statusLine = reason ?? this.statusMessage;
         this._bodyless = this.statusCode < 200 || this.statusCode === 204 || this.statusCode === 304 || this._req.method === "HEAD";
         let autoLength;
         let autoChunked = false;
@@ -1263,7 +1278,7 @@
           pairs.push(["Transfer-Encoding", "chunked"]);
         }
         this.headersSent = true;
-        this._headBytes = serializeHead(this.statusCode, this.statusMessage, pairs);
+        this._headBytes = serializeHead(this.statusCode, this._statusLine, pairs);
         this._header = this._headBytes.toString("latin1");
         if (send) { this._conn.write(this._headBytes); this._headersFlushed = true; }
       }

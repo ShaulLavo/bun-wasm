@@ -77,6 +77,77 @@ for (const side of ["original", "clone"] as const) {
   console.log(`  client got:`, statusLine(client.received()));
 }
 
+const until = async (ready: () => boolean) => {
+  while (!ready()) await Bun.sleep(5);
+};
+const statusLines = (raw: string) => JSON.stringify(raw.match(/HTTP\/1\.1 \d{3}[^\r]*/g));
+
+// A response already under way when the body passes the cap: Bun closes the connection and
+// writes no 413 into the response.
+{
+  const read = Promise.withResolvers<string>();
+  const encoder = new TextEncoder();
+  await using server = Bun.serve({
+    port: 0,
+    maxRequestBodySize: 8,
+    fetch(req) {
+      let output!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({ start(controller) { output = controller; controller.enqueue(encoder.encode("first;")); } });
+      void (async () => {
+        const reader = req.body!.getReader();
+        let got = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            got += value.byteLength;
+            output.enqueue(encoder.encode(`got ${got};`));
+          }
+          read.resolve("done");
+        } catch (error) {
+          read.resolve(`rejected: ${(error as Error).message}`);
+        }
+      })();
+      return new Response(body);
+    },
+  });
+  const client = await connect(server.port!);
+  client.socket.write(`POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n${chunk("abcdef")}`);
+  await until(() => client.received().includes("got 6;"));
+  client.socket.write(chunk("ghijkl"));
+  console.log("past the cap after the response started:", await read.promise);
+  await client.closed;
+  console.log("  client got status lines:", statusLines(client.received()), "and the streamed part:", client.received().includes("first;") && client.received().includes("got 6;"));
+}
+
+// The cap counts only bytes the handler reads or waits for: a body that arrives after the
+// response, or arrives whole but is never read, keeps the connection open for the next request.
+{
+  await using server = Bun.serve({
+    port: 0,
+    maxRequestBodySize: 8,
+    async fetch(req) {
+      const path = new URL(req.url).pathname;
+      if (path === "/form") return new Response(await req.formData().then(() => "parsed", (error: any) => error.code));
+      return new Response(path === "/" ? "early" : path);
+    },
+  });
+  const late = await connect(server.port!);
+  late.socket.write(`POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n${chunk("abc")}`);
+  await until(() => late.received().includes("early"));
+  late.socket.write(`${chunk("defghijkl")}0\r\n\r\nGET /next HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`);
+  await late.closed;
+  console.log("body past the cap after an early response:", statusLines(late.received()), late.received().endsWith("/next"));
+  const unread = await connect(server.port!);
+  unread.socket.write(`POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n${chunk("abcdefghijkl")}0\r\n\r\nGET /next HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`);
+  await unread.closed;
+  console.log("whole body past the cap, never read:", statusLines(unread.received()), unread.received().endsWith("/next"));
+  const form = await connect(server.port!);
+  form.socket.write(`POST /form HTTP/1.1\r\nHost: x\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n${chunk("abcdefghijkl")}0\r\n\r\n`);
+  await form.closed;
+  console.log("formData() of a non-form body past the cap:", statusLines(form.received()), form.received().split("\r\n\r\n")[1]);
+}
+
 // The default cap is Bun's 128 MiB; an option that is not a positive number keeps it.
 for (const value of [undefined, 0, "5", -1]) {
   await using server = Bun.serve({ port: 0, maxRequestBodySize: value as number, fetch: async req => new Response(`${(await req.text()).length}`) });
