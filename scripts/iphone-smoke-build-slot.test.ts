@@ -145,7 +145,7 @@ test("termination during Git cleanup leaves the slot available", async () => {
     writeFileSync(join(bin, "git"), `#!/bin/sh
 if [ "$1" = worktree ] && [ "$2" = remove ]; then
   printf 'cleanup ready\\n' >&2
-  read -r release
+  read -r release || true
 fi
 exec "$SLOT_TEST_GIT" "$@"
 `, { mode: 0o755 });
@@ -160,7 +160,7 @@ exec "$SLOT_TEST_GIT" "$@"
       process.kill(-owner.pid, "SIGTERM");
     } finally {
       reader.releaseLock();
-      owner.stdin.end("continue\n");
+      owner.stdin.end();
       await owner.exited;
     }
     expect(await owner.exited).toBe(143);
