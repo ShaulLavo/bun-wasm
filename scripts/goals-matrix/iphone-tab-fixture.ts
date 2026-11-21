@@ -13,7 +13,15 @@ export function tabOverview(labels: string[], count = labels.length) {
 
 export function tabPage() {
   return { appBundleId: "com.apple.mobilesafari", truncated: false,
-    nodes: [{ kind: "button", index: 92, parentIndex: 99, label: "More", ref: "e101" }] };
+    nodes: [{ kind: "button", index: 92, parentIndex: 99, label: "More", ref: "e101", identifier: "MoreMenuButton", enabled: true, hittable: true }] };
+}
+
+export function tabMoreMenu() {
+  return { appBundleId: "com.apple.mobilesafari", truncated: false, nodes: [
+    { kind: "other", index: 1, parentIndex: 0, ref: "e2", identifier: "TabBarMoreMenu" },
+    { kind: "collection", index: 2, parentIndex: 1, ref: "e3" },
+    { kind: "cell", index: 3, parentIndex: 2, label: "All Tabs", ref: "e4", identifier: "TabOverviewButton", enabled: true, hittable: true },
+  ] };
 }
 
 export function tabBatch(snapshot: unknown, commands = ["press", "snapshot"]) {
@@ -33,18 +41,19 @@ if(args[0]==='batch'){
  if(target?.ref==='@e2')await writeFile(config.closed,'closed');
  const labels=existsSync(navigated)&&!existsSync(config.closed)?[config.title,config.unrelated]:[config.unrelated];
  const page=target?.ref==='@e100'||steps[0].command==='snapshot'&&existsSync(navigated);
- const snapshot=page?(${tabPage.toString()})():(${tabOverview.toString()})(labels);
+ const snapshot=target?.ref==='@e101'?(${tabMoreMenu.toString()})():page?(${tabPage.toString()})():(${tabOverview.toString()})(labels);
  console.log((${tabBatch.toString()})(snapshot,steps.map(step=>step.command)));
 }else console.log('@e1 [button] "Increment"');
 `;
 }
 
 export function cleanupGroups(ownedGroup: "private" | "ordinary", options: { overview?: boolean; ignoreClose?: boolean } = {}) {
-  let selected: "private" | "ordinary" = "private", overview = options.overview ?? false;
+  let selected: "private" | "ordinary" = "private", overview = options.overview ?? false, menu = false;
   const cards = { private: ["Unrelated private"], ordinary: ["Unrelated ordinary"] };
   cards[ownedGroup].unshift("Goals owned");
   const closed: string[] = [];
   const snapshot = () => {
+    if (menu) return tabMoreMenu();
     if (!overview) return tabPage();
     const result = tabOverview(cards[selected], cards.ordinary.length);
     result.nodes.find(node => node.identifier === "CapsuleTabGroup")!.selected = selected === "ordinary";
@@ -54,8 +63,8 @@ export function cleanupGroups(ownedGroup: "private" | "ordinary", options: { ove
   function input(step: Record<string, unknown>) {
     if (step.command !== "press") return;
     const target = object(object(step.input).target);
-    if (target.ref === "@e101") return;
-    if (target.selector === 'label="All Tabs"') { overview = true; return; }
+    if (target.ref === "@e101" && !overview && !menu) { menu = true; return; }
+    if (target.ref === "@e4" && menu) { menu = false; overview = true; return; }
     if (target.ref === "@e99") { selected = "ordinary"; return; }
     if (target.ref === "@e98") { selected = "private"; return; }
     if (target.ref === "@e100") { overview = false; return; }

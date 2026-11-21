@@ -7,7 +7,7 @@ import { createIphoneTransport } from "./iphone-transport";
 import { Scope } from "./scope";
 import { prepareIphoneSafari } from "./iphone-setup";
 import { closeIphoneTab } from "./iphone-cleanup";
-import { cleanupGroups, tabBatch, tabPage } from "./iphone-tab-fixture";
+import { cleanupGroups, tabBatch, tabMoreMenu, tabPage } from "./iphone-tab-fixture";
 import { batchSnapshot } from "./iphone-tab-snapshot";
 import privateOverview from "./fixtures/iphone-private-overview.json";
 import axOverview from "./fixtures/iphone-group-ax.json";
@@ -148,24 +148,47 @@ test("cancelled setup dispatches no native or owned navigation", async () => {
   } finally { await f.close(); }
 });
 
-test("setup leaves the overview and settles every transition before returning", async () => {
-  const commands: string[][] = [];
-  const page = { ...privateOverview, nodes: [{ kind: "button", label: "More", index: 1, ref: "e2" }] };
-  const snapshots = [page, privateOverview, ordinaryOverview(), page];
+test.each(["opens the menu", "leaves the page visible"])("setup proves each Safari transition when the first More tap %s", async firstTap => {
+  const missedFirstTap = firstTap === "leaves the page visible";
+  const page = tabPage();
+  const afterMiss = { ...page, nodes: [{ ...page.nodes[0]!, ref: "e102" },
+    { kind: "button", index: 93, parentIndex: 94, label: "All Tabs", ref: "e103", identifier: "", enabled: true, hittable: true }] };
+  const first: { target?: string; snapshot: Snapshot }[] = [{ snapshot: page }];
+  const expected = first.concat(
+    missedFirstTap ? [{ target: "@e101", snapshot: afterMiss }] : [],
+    [{ target: missedFirstTap ? "@e102" : "@e101", snapshot: tabMoreMenu() },
+      { target: "@e4", snapshot: privateOverview }, { target: "@e18", snapshot: ordinaryOverview() }, { target: "@e20", snapshot: page }],
+  );
   const scope = Scope.open(10_000);
   try {
     await prepareIphoneSafari(async args => {
-      commands.push(args);
       if (args[0] !== "batch") return "Opened";
-      const steps: { command: string; input: { settle?: boolean } }[] = JSON.parse(args[2]!);
-      expect(steps.filter(step => step.command === "press").every(step => step.input.settle === true)).toBe(true);
-      return tabBatch(snapshots.shift(), steps.map(step => step.command));
+      const steps: { command: string; input: { settle?: boolean; target?: { kind: string; ref?: string } } }[] = JSON.parse(args[2]!);
+      if (missedFirstTap && steps.some(step => step.input.target?.kind === "selector")) throw new Error("All Tabs is absent when the first More tap leaves the page visible");
+      const next = expected.shift()!;
+      expect(steps.map(step => step.command)).toEqual(next.target ? ["press", "snapshot"] : ["snapshot"]);
+      if (next.target) expect(steps[0]?.input).toEqual({ target: { kind: "ref", ref: next.target }, settle: true });
+      return tabBatch(next.snapshot, steps.map(step => step.command));
     }, scope);
-    expect(commands).toHaveLength(5);
-    expect(commands[2]?.[2]).toContain('label=\\"All Tabs\\"');
-    expect(commands[4]?.[2]).toContain('"ref":"@e20"');
-    expect(JSON.stringify(commands)).not.toContain("Close");
-    expect(snapshots).toHaveLength(0);
+    expect(expected).toHaveLength(0);
+  } finally { scope.close(); }
+});
+
+test.each(["still shows page controls", "shows a menu with an ambiguous All Tabs control"])("setup fails without opening the overview when Safari %s", async state => {
+  const page = tabPage();
+  const menu = tabMoreMenu();
+  menu.nodes.push({ ...menu.nodes[2]!, index: 4, ref: "e5" });
+  const last = state === "still shows page controls" ? page : menu;
+  const scope = Scope.open(10_000);
+  const targets: string[] = [];
+  try {
+    await expect(prepareIphoneSafari(async args => {
+      if (args[0] !== "batch") return "Opened";
+      const steps: { command: string; input: { target?: { ref: string } } }[] = JSON.parse(args[2]!);
+      if (steps[0]?.input.target) targets.push(steps[0].input.target.ref);
+      return tabBatch(targets.length === 0 ? page : last, steps.map(step => step.command));
+    }, scope)).rejects.toThrow("Safari More menu did not expose its All Tabs control");
+    expect(targets).toEqual(last === page ? ["@e101", "@e101"] : ["@e101"]);
   } finally { scope.close(); }
 });
 
