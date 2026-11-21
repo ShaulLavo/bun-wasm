@@ -1724,7 +1724,7 @@ jobs:
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Web browser (${{ matrix.batch }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: ${{ matrix.pairedBatch != '' && 15 || 10 }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.selection.outputs.web-browser-shards) }}
@@ -1752,10 +1752,18 @@ jobs:
           browsers: chromium firefox webkit
       - name: Install Chromium, Firefox and WebKit
         run: bunx playwright install chromium firefox webkit
-      - name: Run the discovered Web browser shard
+      - name: Run Web browser batch (${{ matrix.batch }})
+        id: web-browser-batch
         env:
           EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
           WEB_BROWSER_BATCH: ${{ matrix.batch }}
+          WEB_BROWSER_TIMEOUT_SECONDS: ${{ matrix.timeoutSeconds }}
+        run: bun ../scripts/run-with-timeout.mts "$WEB_BROWSER_TIMEOUT_SECONDS" bun ../scripts/test-checks.ts web-browser --batch "$WEB_BROWSER_BATCH"
+      - name: Run Web browser batch (${{ matrix.pairedBatch }})
+        if: ${{ !cancelled() && matrix.pairedBatch != '' && (steps.web-browser-batch.outcome == 'success' || steps.web-browser-batch.outcome == 'failure') }}
+        env:
+          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
+          WEB_BROWSER_BATCH: ${{ matrix.pairedBatch }}
           WEB_BROWSER_TIMEOUT_SECONDS: ${{ matrix.timeoutSeconds }}
         run: bun ../scripts/run-with-timeout.mts "$WEB_BROWSER_TIMEOUT_SECONDS" bun ../scripts/test-checks.ts web-browser --batch "$WEB_BROWSER_BATCH"
       - uses: ./.github/actions/save-release-downloads

@@ -56,16 +56,17 @@ cancellations and unexpected skips. A producer-disabled run skips the guest jobs
 All jobs keep their existing ten-minute budget, and the site is still built once.
 
 `web-browser` manifests select `batch` labels. CI uses
-`scripts/ci-web-browser-shards.ts` to discover every batch with a uniform five-minute
-command hang cap inside the existing ten-minute job. New batches require no timing
-calibration. Bun reports test durations; elapsed speed does not decide correctness.
-The command supervisor retains exit status, timeout diagnostics and descendant cleanup.
-Individual test and hook timeouts remain separate from this aggregate cap.
-Every shard runs in parallel with
-`fail-fast: false`, so one failure does not cancel the others. The required
-Web host gate rejects any failed, cancelled or skipped shard and unit job before
-running its existing smoke checks once. Local `test-web-host.sh --browser` still
-runs both the discovered checks and smoke checks; CI uses `--smoke` after shards.
+`scripts/ci-web-browser-shards.ts` to discover every batch. Interface shares a
+runner with preview navigation, and preview shares one with lifecycle. Other
+batches get their own runner. Each batch has its own blocking step and five-minute
+command hang cap. Runners get 15 minutes for two batches or 10 minutes for one,
+including setup and cleanup. The command supervisor reports timeouts and
+cleans up descendants. Individual test and hook timeouts still apply.
+
+The parallel runners use `fail-fast: false`. A paired batch still runs after a
+failure in the first batch when the job is active. The required Web host job
+requires successful browser and unit jobs before running its smoke checks.
+Local `test-web-host.sh --browser` runs both the discovered checks and smoke checks.
 
 `localRuntime` retains the former local `check-runtime.sh` selection. It does not
 add a second CI owner. The `runtime` owner runs in the compiled native fixture
