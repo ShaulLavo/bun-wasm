@@ -51,7 +51,8 @@ export interface RunRequest extends RuntimeWorkerRequest {
   slots?: "table" | "imports" | "off";
 }
 
-export type WorkerMessage = RuntimeWorkerMessage | { type: "bun-memory"; snapshot: MemorySnapshot } | { type: "net"; req: NetRequest } | BunSharedConnection;
+/** `worker-script` is the entry's first message (worker.ts), posted before anything loads. */
+export type WorkerMessage = RuntimeWorkerMessage | { type: "bun-memory"; snapshot: MemorySnapshot } | { type: "net"; req: NetRequest } | { type: "worker-script" } | BunSharedConnection;
 
 export type SleepMode = "atomics" | "busy-wait";
 

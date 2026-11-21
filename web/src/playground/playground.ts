@@ -15,6 +15,7 @@ import { Previews } from "../preview";
 import { installRuntimeSharedObjects } from "../shared-objects/runtime";
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../shared-fs";
 import type { BrowserSession, SessionState } from "bash-web/session";
+import { START_FRESH_BUSY, startFresh, unreadableWorkspace } from "../start-fresh";
 import { errorText } from "../startup";
 import { commandChunks } from "../startup-cache";
 import { openTerminal } from "../terminal-mount";
@@ -42,6 +43,9 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   term?: Terminal;
   editor?: Editor;
   failure?: Failure;
+  /** Startup could not open the stored workspace, so Start fresh is offered. */
+  unreadable = false;
+  startingFresh = false;
   /** Startup finished with the workspace still owned by this tab. */
   ready = false;
   private readonly params: URLSearchParams;
@@ -49,6 +53,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private terminalOpened!: () => void;
   private readonly terminalOpen = new Promise<void>((resolve) => { this.terminalOpened = resolve; });
   private fs?: Filesystem;
+  private disposeRuntime?: () => Promise<unknown>;
   private shell?: BrowserSession;
   private shellState: SessionState = "starting";
   private runPending = false;
@@ -90,10 +95,38 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       await this.boot();
     } catch (error) {
       console.error(error);
-      this.message = { text: errorText(error), kind: "error" };
+      this.unreadable = this.fast && !this.fs?.ownershipLost && unreadableWorkspace(error, this.fs?.state);
+      this.message = this.unreadable
+        ? { text: `This browser's saved copy of the workspace cannot be opened. Start fresh deletes it and opens a new one. ${errorText(error)}`, kind: "error" }
+        : { text: errorText(error), kind: "error" };
       this.failure = "startup";
       this.changed();
     }
+  }
+
+  /** Deletes a workspace that cannot be opened, then reloads into a fresh one. */
+  async startFresh(): Promise<void> {
+    if (!this.unreadable || this.startingFresh) return;
+    this.startingFresh = true;
+    this.changed();
+    try {
+      const result = await startFresh(this.disposeRuntime, this.workspaceName);
+      if (result !== "busy") { location.reload(); return; }
+      this.setStatus(START_FRESH_BUSY, "error");
+    } catch (error) {
+      this.setStatus(`Start fresh failed. ${errorText(error)}`, "error");
+    }
+    this.startingFresh = false;
+    this.changed();
+  }
+
+  /** Only fast mode keeps a stored workspace; an unsupported mode is itself the startup failure. */
+  private get fast(): boolean {
+    try { return getVfsDescriptor(this.params.get("mode") ?? "fast").mode === "fast"; } catch { return false; }
+  }
+
+  private get workspaceName(): string {
+    return this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace";
   }
 
   openTerminal(term: Terminal, node: HTMLElement, signal: AbortSignal): void {
@@ -159,7 +192,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     };
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
     const runtime = createRuntime({
-      filesystem: { mode, name: this.template ? `bun-wasm-workspace-${this.template.id}` : "bun-wasm-workspace" },
+      filesystem: { mode, name: this.workspaceName },
       memoryGroups: memoryGroupPolicy(this.engine, navigator.userAgent),
     });
     const browserPrograms = new BrowserPrograms(runtime, {
@@ -167,6 +200,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       shell: new URL("./programs/shell-engine.wasm", location.href),
       shellWorker: new URL("./shell-worker.js", location.href),
     });
+    this.disposeRuntime = () => Promise.all([runtime.dispose(), browserPrograms.dispose()]);
     const sharedObjects = installRuntimeSharedObjects(runtime);
     addEventListener("pagehide", (event: PageTransitionEvent) => { if (!event.persisted) sharedObjects.close(); });
     const fs = this.fs = runtime.filesystem;

@@ -1,6 +1,7 @@
 import { storageReportPath } from "../sandbox/tests/storage-browser";
 import { describe, expect, test } from "bun:test";
 import { MemoryBackend } from "waffle/fs";
+import { pageEntry } from "../web/tests/page-entry";
 import { templates } from "../sandbox/src/template-catalog";
 import { templateFiles } from "../sandbox/template-files";
 import { evictIdle, type EvictionDependencies } from "../sandbox/src/workspace-eviction";
@@ -185,7 +186,7 @@ function restoreFixture() {
   const events: string[] = [];
   const control = { failWrite: "", failFlush: false };
   const fs: Parameters<typeof restoreSource>[0] = {
-    lookup: async path => memory.lookup(path), readFile: async path => memory.readFile(path),
+    lookup: async path => pageEntry(memory.lookup(path)), readFile: async path => memory.readFile(path),
     mkdirp: async path => { memory.mkdirp(path); }, remove: async path => memory.remove(path),
     writeFile: async (path, data) => {
       if (path === control.failWrite) throw new Error("interrupted restore");

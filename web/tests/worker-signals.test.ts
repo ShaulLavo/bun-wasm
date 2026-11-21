@@ -4,13 +4,56 @@ import { runInNewContext } from "node:vm";
 import type { RuntimeWorkerHost } from "waffle/browser/worker";
 import type { BunExecutorHost, RunRequest } from "../src/bun-executor.js";
 
-// Exercise the actual Bun worker entry without executing guest code in the test runner's realm.
-// Waffle's bootstrap/authority behavior is covered separately; this isolates the entry's capture
-// of the browser's receiver-sensitive methods before Bun installs guest globals.
-const source = new Bun.Transpiler({ loader: "ts", target: "browser" }).transformSync(
-  readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8")
-    .replace(/^import .*;\n/gm, "").replace(/^export type .*;\n/gm, ""),
+// Exercise the actual Bun worker entry and bootstrap module without executing guest code in the
+// test runner's realm. Waffle's bootstrap/authority behavior is covered separately; this isolates
+// the capture of the browser's receiver-sensitive methods before Bun installs guest globals.
+const transpiler = new Bun.Transpiler({ loader: "ts", target: "browser" });
+const script = (file: string) => transpiler.transformSync(
+  readFileSync(new URL(file, import.meta.url), "utf8")
+    .replace(/^import .*;\n/gm, "").replace(/^export type .*;\n/gm, "").replace(/^export function/gm, "function"),
 );
+const source = script("../src/worker-main.ts") + "\nstart(self, [], () => {});\n";
+const entry = script("../src/worker.ts").replace('import("./worker-main.js")', "loadMain()");
+
+test("Bun worker entry posts before loading its bootstrap and keeps early messages for it", async () => {
+  const messages: unknown[] = [];
+  const listeners = new Set<(event: { data: unknown }) => void>();
+  const loaded = Promise.withResolvers<{ start(ctx: unknown, early: readonly { data: unknown }[], stopKeeping: () => void): void }>();
+  const scope = {
+    postMessage(message: unknown) { messages.push(message); },
+    addEventListener(_type: string, listener: (event: { data: unknown }) => void) { listeners.add(listener); },
+    removeEventListener(_type: string, listener: (event: { data: unknown }) => void) { listeners.delete(listener); },
+  };
+  let loads = 0;
+  runInNewContext(entry, { self: scope, setTimeout, loadMain() { loads++; expect(messages).toEqual([{ type: "worker-script" }]); return loaded.promise; } });
+  expect(messages).toEqual([{ type: "worker-script" }]);
+  expect(loads).toBe(1);
+  expect(listeners.size).toBe(1);
+  const handshake = { data: { diagnostic: true } }, request = { data: { start: true } };
+  for (const listener of listeners) { listener(handshake); listener(request); }
+  const started = Promise.withResolvers<unknown[]>();
+  loaded.resolve({ start(ctx, early, stopKeeping) { expect(ctx).toBe(scope); stopKeeping(); started.resolve(early.slice()); } });
+  expect(await started.promise).toEqual([handshake, request]);
+  expect(listeners.size).toBe(0);
+});
+
+test("Bun worker bootstrap dispatches kept messages again after installing its handler", () => {
+  const events: unknown[] = [];
+  let stopped = 0;
+  const scope = {
+    crossOriginIsolated: true, location: { href: "https://fixture.test/worker.js" },
+    postMessage() {}, addEventListener() {}, removeEventListener() {}, fetch() { return Promise.resolve(new Response()); },
+    onmessage: undefined as unknown,
+    dispatchEvent(event: { data: unknown; ports: readonly unknown[] }) { events.push({ data: event.data, handler: typeof scope.onmessage, ports: event.ports.length }); return true; },
+  };
+  const kept = [{ data: { diagnostic: true }, ports: [] }, { data: { start: true }, ports: [] }];
+  runInNewContext(script("../src/worker-main.ts") + "\nstart(self, kept, stop);\n", {
+    self: scope, kept, stop() { expect(scope.onmessage).toBeUndefined(); stopped++; },
+    MessageEvent: class { readonly data: unknown; readonly ports: readonly unknown[]; constructor(_type: string, init: { data: unknown; ports: unknown[] }) { this.data = init.data; this.ports = init.ports; } },
+  });
+  expect(stopped).toBe(1);
+  expect(events).toEqual([{ data: { diagnostic: true }, handler: "function", ports: 0 }, { data: { start: true }, handler: "function", ports: 0 }]);
+});
 
 test("Bun worker captures host messaging, events and native fetch before guest replacement", async () => {
   const messages: unknown[] = [], events: string[] = [];

@@ -73,7 +73,7 @@ export function filesystemFixture() {
       const parts = path.split("/").filter(Boolean);
       for (let length = 1; length <= parts.length; length++) directories.add(`/${parts.slice(0, length).join("/")}`);
     },
-    async lookup(path: string): ReturnType<Runtime["filesystem"]["lookup"]> { return directories.has(path) ? { kind: "dir", ino: 0, mtime: 0, children: new Map() } : files.has(path) ? { kind: "file", ino: 0, mtime: 0 } : undefined; },
+    async lookup(path: string): ReturnType<Runtime["filesystem"]["lookup"]> { return directories.has(path) ? { kind: "dir", ino: 0, mtime: 0, ctime: 0, children: new Map() } : files.has(path) ? { kind: "file", ino: 0, mtime: 0, ctime: 0 } : undefined; },
     async readFile(path: string) { return reads.get(path)?.promise ?? (files.has(path) ? new TextEncoder().encode(files.get(path)) : undefined); },
     async listFiles(root = "/") { return Array.from(files.keys()).filter(path => path.startsWith(root)); },
     async writeFile(path: string, contents: string | Uint8Array) {
@@ -151,7 +151,11 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     ...engineLoader, declareModuleMemory, pages,
     FitAddon: class { fit() {} }, Terminal: TerminalFixture,
     createRuntime: () => { storageEvents.push("runtime"); return runtime = { ...runtime }; },
-    storedWorkspaces: async () => [], openIdleWorkspace: async () => "missing",
+    storedWorkspaces: async () => [],
+    openIdleWorkspace: (selection: { name: string }) => { storageEvents.push(`open ${selection.name}`); return boundary.openIdle(); },
+    openIdle: async (): Promise<"missing" | "busy" | { close(): Promise<void> }> => "missing",
+    deleteWorkspace: async (selection: { name: string }) => { storageEvents.push(`delete ${selection.name}`); return boundary.deleteResult; },
+    deleteResult: "deleted" as "deleted" | "missing" | "busy",
     openStorage: async () => {}, prepareStorage: async () => {},
     WorkspaceStorage: class {
       readonly recovery = new StorageRecovery(async () => { storageEvents.push("recover"); });
@@ -193,7 +197,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
   const replacements: Record<string, string[]> = {
     "@codemirror/state": Object.keys(stateModule), "@codemirror/view": Object.keys(viewModule),
     "@xterm/addon-fit": ["FitAddon"], "@xterm/xterm": ["Terminal"],
-    waffle: ["createRuntime", "declareModuleMemory", "pages", "storedWorkspaces", "openIdleWorkspace"], "browser-programs": ["BrowserPrograms"],
+    waffle: ["createRuntime", "declareModuleMemory", "pages", "storedWorkspaces", "openIdleWorkspace", "deleteWorkspace"], "browser-programs": ["BrowserPrograms"],
     "workspace-storage": ["WorkspaceStorage"],
     "engine-loader": ["ENGINES", "WasmMissing", "createToolsLoader", "engineBuildHint", "engineUnavailable", "isEngine", "loadEngineProgram", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],

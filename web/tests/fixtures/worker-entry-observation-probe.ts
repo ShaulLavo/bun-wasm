@@ -20,7 +20,8 @@ let stopWorker = () => Promise.resolve();
 const runtime = createRuntime({ filesystem: { workerURL: new URL("../../src/fs-worker.ts", import.meta.url), mode: "memory" } });
 const filesystem = runtime.filesystem.fork();
 try {
-  const source = new URL("../../src/worker.ts", import.meta.url).pathname;
+  // The bootstrap module behind the worker entry; worker-signals.test.ts covers the entry itself.
+  const source = new URL("../../src/worker-main.ts", import.meta.url).pathname;
   const config = browserBuildConfig([source], scratch);
   config.plugins = (config.plugins ?? []).concat([{ name: "held-bun-import", setup(build) {
     build.onResolve({ filter: /(?:bun-terminal|nested\/host)\.js$/ }, () => ({ path: new URL("./worker-entry-import.ts", import.meta.url).pathname }));
@@ -61,7 +62,7 @@ try {
     memoryGroup: group?.request,
   };
   const transfers: Transferable[] = [filesystem.port];
-  worker.postMessage({ entry: join(scratch, "worker.js"), request, gate: gate.buffer }, transfers.concat(group ? Array.from(group.transfer) : []));
+  worker.postMessage({ entry: join(scratch, "worker-main.js"), request, gate: gate.buffer }, transfers.concat(group ? Array.from(group.transfer) : []));
   await Atomics.waitAsync(gate, 0, 0).value;
   assert.equal(Atomics.load(gate, 0), 1, "real Bun import is held");
   await service.killJob(workerProcessState(transport).job, 15);

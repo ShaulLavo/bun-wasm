@@ -117,6 +117,7 @@ const commonInputs = [
   "web/src/sw.ts",
   "web/src/tool-command.ts",
   "web/src/wasm-call-trap.ts",
+  "web/src/worker-main.ts",
   "web/src/worker.ts"
 ];
 const playgroundInputs = [

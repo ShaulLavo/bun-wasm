@@ -183,8 +183,10 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
   this installed Waffle package entrypoint for standalone consumers.
 - `waffle/core/wasi`: the WASI preview1 implementation over the Waffle filesystem service. Any import
   it does not implement gets an ENOSYS stub that prints `[wasi] unimplemented import …` once.
-- `src/worker.ts`: the worker entry. Each `bun …` command starts a fresh worker running Waffle's
-  process bootstrap with Bun's executor (`src/bun-executor.ts`, `createBunExecutor`, which has no
+- `src/worker.ts`: the worker entry. It posts one `worker-script` message before it imports
+  anything, so a start that stalls can be told apart from a script that never loaded (Waffle's
+  `startStates()` shows `worker-started`), then loads `src/worker-main.ts`. Each `bun …` command
+  starts a fresh worker running Waffle's process bootstrap with Bun's executor (`src/bun-executor.ts`, `createBunExecutor`, which has no
   import side effects): it instantiates the precompiled module, streams `fd_write` on fds 1/2 back
   as it happens, and uses the live filesystem service.
   Ctrl-C sends SIGINT: an ordinary program stops immediately with 130; a registered handler may

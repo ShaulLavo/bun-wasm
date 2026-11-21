@@ -50,7 +50,8 @@ context.onmessage = async (event: MessageEvent<RuntimeWorkerRequest & Partial<Ru
     ? observeEventLoopWait(probe, transport.waitWord, observedAtomics, options.idleWaitTimeoutMs) : () => {};
   try {
     if (event.data.engine === undefined) await import("waffle/browser/preview1-worker");
-    else await import("../src/worker");
+    // The Bun bootstrap behind the worker entry, which this harness's own message already replaced.
+    else (await import("../src/worker-main")).start(context, [], () => {});
     const run = context.onmessage;
     if (!run) throw new Error("production worker did not install its entry point");
     await run.call(context, event);

@@ -12,7 +12,8 @@ export function storageObservationSource(path: string, source: string): string |
   const imported = `import { observeProcess, observeEndpoint, qualifyEndpoint, checkEndpoint, bindRuntime, associateFilesystem, observePreview1Branch } from ${adapter};\n`;
   let output: string;
   if (/\/(?:sandbox|web)\/src\/main\.ts$/.test(path)) output = `import ${JSON.stringify(resolve(import.meta.dir, "storage-fs-page-prelude.ts"))};\n` + source;
-  else if (/\/web\/src\/(?:worker|preview1-worker)\.ts$/.test(path)) {
+  // Bun's worker entry (worker.ts) posts before it imports anything; its bootstrap is worker-main.ts.
+  else if (/\/web\/src\/(?:worker-main|preview1-worker)\.ts$/.test(path)) {
     output = replace(source, "const request = event.data;", 'const request = event.data; observeProcess(request, ' + JSON.stringify(path.endsWith("/preview1-worker.ts") ? "preview1" : "bun") + ');');
     if (path.endsWith("/preview1-worker.ts")) output = replace(output, "    : preview1Executor;", "    : preview1Executor;\n  observePreview1Branch(Boolean(interactive));");
     output = prelude + output;
@@ -42,7 +43,7 @@ export function storageObservationPlugin(runtimePath: () => string): Bun.BunPlug
     // The helper is private consumer code. Resolve its private type/implementation imports
     // through this app's exact installation, including Sandbox and shell builds.
     build.onResolve({ filter: /node_modules\/waffle\// }, ({ path }) => ({ path: Bun.resolveSync("./" + path.split("node_modules/waffle/")[1]!, runtimePath()) }));
-    build.onLoad({ filter: /(?:\/(?:web|sandbox)\/src\/(?:main|sandbox|sw|preview|worker|preview1-worker|fs-worker)|\/bash-web\/src\/runtime\/worker|\/waffle\/(?:runtime|browser\/(?:shared-fs|preview|service-worker|net\/(?:helper|runtime))|fs\/(?:client|service)))\.ts$/ }, ({ path }) => {
+    build.onLoad({ filter: /(?:\/(?:web|sandbox)\/src\/(?:main|sandbox|sw|preview|worker-main|preview1-worker|fs-worker)|\/bash-web\/src\/runtime\/worker|\/waffle\/(?:runtime|browser\/(?:shared-fs|preview|service-worker|net\/(?:helper|runtime))|fs\/(?:client|service)))\.ts$/ }, ({ path }) => {
       const contents = storageObservationSource(path, readFileSync(path, "utf8"));
       return contents === undefined ? undefined : { contents, loader: "ts" };
     });

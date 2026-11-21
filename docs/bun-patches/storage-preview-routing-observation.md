@@ -13,6 +13,12 @@ files are byte-identical in release `0.0.137`, revision
 `end` or `error`. The helper adapter's anchor and insertion are unchanged.
 Selected release `0.0.142`, revision `38c0b979ae958fd5acb1b1819135096df0832d9b`,
 keeps all four files byte-identical to `0.0.140` and `0.0.139`.
+In selected release `0.0.144`, revision `cf9cdd8693d2e5e92494709e4734c29d87da0efb`,
+only `browser/net/helper.ts` changes again: fetch reports Bun's redirect failures
+under `redirect: "error"` (Waffle PR 565). The helper adapter's anchor and
+insertion are unchanged. Selected release `0.0.145`, revision
+`21f5ad1f38dd3c3d3b346a7cfaf955e8139831ea`, keeps all four files
+byte-identical to `0.0.144`.
 The exact installed source hashes and unique insertion anchors reject drift or
 incomplete installations. No provider source is edited.
 

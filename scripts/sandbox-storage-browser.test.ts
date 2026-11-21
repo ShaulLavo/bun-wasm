@@ -1,7 +1,7 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { chromium, firefox, webkit, type Browser } from "playwright";
 import { resolve, join } from "node:path";
-import { preservationScenario, quotaRefusalScenario, storageReportPath } from "../sandbox/tests/storage-browser";
+import { preservationScenario, quotaRefusalScenario, startFreshScenario, storageReportPath } from "../sandbox/tests/storage-browser";
 import { verifySite } from "./browser-guest-site";
 import { session } from "../web/tests/playground.mjs";
 import { reportStorageFailure } from "./storage-failure-report";
@@ -64,6 +64,8 @@ for (const name of browsers) test(`${name}: sandbox keeps active tabs and restor
   try { await preservationScenario(browser, url, observer); }
   catch (error) { await reportStorageFailure(name, error); }
 }), 420_000);
+
+for (const name of browsers) test(`${name}: Start fresh recovers a stored workspace that cannot be opened`, () => siteCheck(name, startFreshScenario, "start-fresh"), 420_000);
 
 test("chromium: full-origin preservation failure keeps idle source and pending editor text", async () => {
   if (!requested.includes("chromium")) return;
