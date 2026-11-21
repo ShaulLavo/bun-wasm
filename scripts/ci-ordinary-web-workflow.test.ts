@@ -27,16 +27,18 @@ function named(id: string, name: string) {
   return value;
 }
 
-type Route = { full: boolean; native: boolean; outcome: string; consumer?: string; programs?: string; handoff?: string; browser?: boolean; event?: string; draft?: boolean; cancelled?: boolean };
+type Route = { full: boolean; native: boolean; outcome: string; consumer?: string; programs?: string; handoff?: string; handoffFailed?: boolean; browser?: boolean; event?: string; draft?: boolean; cancelled?: boolean };
 function admission(id: string, route: Route): boolean {
   const value = job(id);
   if (!Array.isArray(value.needs) || typeof value.if !== "string") throw new Error("Missing explicit dependencies/admission");
   const browser = route.browser ?? route.full;
   const full = route.full || route.event !== undefined && route.event !== "pull_request" && browser;
-  const outcomes: Record<string, string> = { rust: full ? "success" : "skipped", "browser-production": browser && !full ? "success" : "skipped", "ordinary-web-guests": route.consumer ?? (full ? route.outcome : "skipped"), "browser-guest": browser ? "success" : "skipped", "shared-sysroot": route.programs ?? "success", "shared-proof-inputs": route.handoff ?? "success" };
+  const outcomes: Record<string, string> = { rust: full ? "success" : "skipped", "browser-production": browser && !full ? "success" : "skipped", "ordinary-web-guests": route.consumer ?? (full ? route.outcome : "skipped"), "browser-guest": browser ? "success" : "skipped", "shared-sysroot": route.programs ?? "success" };
   const expression = value.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("github.event_name", JSON.stringify(route.event ?? "pull_request")).replaceAll("github.event.pull_request.draft", String(route.draft ?? false))
     .replace(/needs\.selection\.outputs\.([\w-]+)/g, (_all, flag: string) => JSON.stringify(String(flag === "rust" ? route.full : flag === "browser_guest" ? browser : flag === "shared-native" ? route.native : true)))
+    .replaceAll("needs.ordinary-web-guests.outputs.shared-proof-inputs-failed", JSON.stringify(String(route.handoffFailed ?? false)))
+    .replaceAll("needs.ordinary-web-guests.outputs.shared-proof-inputs", JSON.stringify(route.handoff ?? (route.native ? "success" : "skipped")))
     .replace(/needs\.([\w-]+)\.result/g, (_all, dependency: string) => JSON.stringify(outcomes[dependency] ?? "success"))
     .replaceAll("always()", "true").replaceAll("cancelled()", String(route.cancelled ?? false));
   const implicit = /always\(\)|cancelled\(\)|success\(\)|failure\(\)/.test(value.if) || value.needs.every(id => typeof id === "string" && (outcomes[id] ?? "success") === "success");
@@ -44,17 +46,17 @@ function admission(id: string, route: Route): boolean {
 }
 
 test("ordinary Web still gates shared qualification and ordinary consumers", () => {
-  for (const id of ["shared-proof-inputs", "shared-proof", "browser-guest", "browser-process", "ci-result", "update-status"]) expect(job(id).needs).toContain("ordinary-web-guests");
+  for (const id of ["shared-native", "shared-browser", "shared-proof", "browser-guest", "browser-process", "ci-result", "update-status"]) expect(job(id).needs).toContain("ordinary-web-guests");
   for (const outcome of ["failure", "cancelled", "skipped", "", "missing"]) {
-    for (const id of ["shared-proof-inputs", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome }), `${id}: ${outcome}`).toBe(false);
+    for (const id of ["shared-native", "shared-browser", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome }), `${id}: ${outcome}`).toBe(false);
     expect(admission("shared-sysroot", { full: true, native: true, outcome })).toBe(true);
   }
   for (const event of ["pull_request", "push", "workflow_dispatch"]) {
-    for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-proof-inputs", "shared-native", "shared-browser", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome: "success", event }), id).toBe(true);
+    for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-native", "shared-browser", "browser-guest", "browser-process"]) expect(admission(id, { full: true, native: true, outcome: "success", event }), id).toBe(true);
   }
   expect(admission("browser-process", { full: false, native: false, outcome: "skipped" })).toBe(true);
   expect(admission("shared-sysroot", { full: false, native: false, outcome: "skipped" })).toBe(true);
-  expect(admission("shared-proof-inputs", { full: false, native: false, outcome: "skipped" })).toBe(false);
+  expect(admission("shared-browser", { full: false, native: false, outcome: "skipped" })).toBe(false);
   expect(admission("ordinary-web-guests", { full: false, native: false, outcome: "skipped" })).toBe(false);
   expect(admission("browser-guest", { full: false, native: false, outcome: "skipped" })).toBe(false);
   for (const event of ["pull_request", "push", "workflow_dispatch"]) {
@@ -64,18 +66,28 @@ test("ordinary Web still gates shared qualification and ordinary consumers", () 
     const failures = event === "pull_request" ? [] : ["failure", "cancelled", "skipped", "", "unknown"];
     for (const outcome of failures) expect(admission("browser-process", { ...route, outcome })).toBe(false);
   }
-  for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-proof-inputs", "shared-native", "shared-browser", "browser-guest", "browser-process"]) {
+  for (const id of ["ordinary-web-guests", "shared-sysroot", "shared-native", "shared-browser", "browser-guest", "browser-process"]) {
     expect(admission(id, { full: true, native: true, outcome: "success", draft: true })).toBe(false);
     expect(admission(id, { full: true, native: true, outcome: "success", cancelled: true })).toBe(false);
   }
 });
 
-test("missing or failed production or assembly keeps both shared matrices closed", () => {
+test("ordinary checks still run when shared production fails, and shared tests require uploaded inputs", () => {
   const route = { full: true, native: true, outcome: "success" };
   for (const result of ["failure", "cancelled", "skipped", "", "missing"]) {
-    expect(admission("shared-proof-inputs", { ...route, programs: result })).toBe(false);
+    expect(admission("ordinary-web-guests", { ...route, programs: result })).toBe(true);
     expect(admission("shared-native", { ...route, handoff: result })).toBe(false);
     expect(admission("shared-browser", { ...route, handoff: result })).toBe(false);
+  }
+});
+
+test("only the ordinary browser route can proceed after an assembly failure", () => {
+  for (const outcome of ["failure", "cancelled", "skipped", "", "missing"]) {
+    const route = { full: true, native: true, outcome, handoffFailed: true, handoff: "failure" };
+    expect(admission("browser-guest", route)).toBe(outcome === "failure");
+    expect(admission("browser-process", route)).toBe(outcome === "failure");
+    expect(admission("shared-native", route)).toBe(false);
+    expect(admission("shared-browser", route)).toBe(false);
   }
 });
 
@@ -93,7 +105,7 @@ test("every provider join rejects an independent consumer outside its exact full
 function checkConsumerJoins(route: Route): void {
   const full = route.full || route.event !== "pull_request" && route.browser;
   const required = full ? "success" : "skipped";
-  const ids = ["browser-process"].concat(route.browser ? ["browser-guest"] : [], route.native ? ["shared-proof-inputs"] : []);
+  const ids = ["browser-process"].concat(route.browser ? ["browser-guest"] : [], route.native ? ["shared-native", "shared-browser"] : []);
   for (const consumer of ["success", "failure", "cancelled", "skipped", "", "missing", "unknown"]) {
     for (const id of ids) expect(admission(id, { ...route, consumer }), `${id}/${route.event}/${consumer}`).toBe(consumer === required);
   }
@@ -114,7 +126,7 @@ test("the launcher is produced once for JSC or shared native and consumer transf
   const upload = steps("rust").filter(step => record(step.with) && step.with.name === "native-profile-launcher");
   expect(upload).toHaveLength(1);
   expect(upload[0]?.if).toBe("needs.selection.outputs.jsc == 'true' || needs.selection.outputs.shared-native == 'true'");
-  const downloads = steps("ordinary-web-guests").filter(step => step.uses === "actions/download-artifact@v4");
+  const downloads = steps("ordinary-web-guests").filter(step => step.uses === "actions/download-artifact@v4" && !step.id);
   expect(downloads).toHaveLength(3);
   for (const download of downloads) {
     expect(download["timeout-minutes"]).toBe(5);

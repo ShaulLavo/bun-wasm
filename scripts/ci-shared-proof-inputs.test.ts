@@ -79,8 +79,8 @@ function seedDownloads(root: string): string {
 test.each(["matching inputs", "missing program", "different site source"])("workflow assembly handles %s", defect => {
   const workflow: unknown = Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
   if (!record(workflow) || !record(workflow.jobs)) throw new Error("Missing workflow jobs");
-  const job = workflow.jobs["shared-proof-inputs"];
-  if (!record(job) || !Array.isArray(job.steps)) throw new Error("Missing shared proof inputs job");
+  const job = workflow.jobs["ordinary-web-guests"];
+  if (!record(job) || !Array.isArray(job.steps)) throw new Error("Missing ordinary Web guest job");
   const step: unknown = job.steps.find(step => record(step) && step.name === "Prepare the same-source shared proof handoff");
   if (!record(step) || typeof step.run !== "string") throw new Error("Missing shared proof assembly command");
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-shared-downloads-"));

@@ -125,7 +125,7 @@ function checkProducerSelection(event: string): void {
 function results(rust: boolean, browser: boolean) {
   const native = new Set(["native-quality", "rust", "ordinary-web-guests"]);
   const backing = new Set(["jsc-identity", "jsc-prebuild", "browser-guest"]);
-  const shared = new Set(["shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-proof-inputs", "shared-native", "shared-browser", "shared-proof"]);
+  const shared = new Set(["shared-jsc-identity", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser", "shared-proof"]);
   const required = job("ci-result").needs;
   if (!Array.isArray(required) || required.some(id => typeof id !== "string")) throw new Error("Missing aggregate graph");
   return Object.fromEntries(required.map(id => {

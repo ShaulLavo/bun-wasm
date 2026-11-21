@@ -14,7 +14,7 @@ setDefaultTimeout(120_000);
 const workflow = expandedCiWorkflow();
 const producer = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-spidermonkey-prebuild:\n")[0]!;
 const smProducer = workflow.split("\n  shared-spidermonkey-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
-const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  shared-proof-inputs:\n")[0]!;
+const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  shared-native:\n")[0]!;
 
 test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
   expect(shared).toContain("needs: [selection, shared-prebuild, shared-spidermonkey-prebuild]");
@@ -216,7 +216,7 @@ test("shared production is fully cached before exporting the ready handoff", () 
   expect(saves).toHaveLength(3);
   expect(Math.min(...saves)).toBeGreaterThan(Math.max(...producers));
   expect(job).toHaveProperty("timeout-minutes", 30);
-  const handoff = workflow.split("\n  shared-proof-inputs:\n")[1]!.split("\n  shared-native:\n")[0]!;
+  const handoff = workflow.split("\n  ordinary-web-guests:\n")[1]!.split("\n  shared-jsc-identity:\n")[0]!;
   expect(handoff).toContain("needs.shared-sysroot.result == 'success'");
   expect(handoff).toContain("needs.selection.outputs.shared-native == 'true'");
   expect(handoff).not.toContain("continue-on-error");

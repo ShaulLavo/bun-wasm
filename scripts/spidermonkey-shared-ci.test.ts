@@ -11,7 +11,7 @@ import { discoverChecks, selectChecks } from './test-checks.ts';
 setDefaultTimeout(120_000);
 
 const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-const shared = workflow.split('\n  shared-sysroot:\n')[1]!.split('\n  shared-proof-inputs:\n')[0]!;
+const shared = workflow.split('\n  shared-sysroot:\n')[1]!.split('\n  shared-native:\n')[0]!;
 const libraryProducer = workflow.split('\n  shared-spidermonkey-prebuild:\n')[1]!.split('\n  shared-sysroot:\n')[0]!;
 
 function step(name: string): string {

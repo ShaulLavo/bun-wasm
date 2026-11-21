@@ -154,9 +154,9 @@ test("successful production writes the original core, side, receipts and source 
 test("native and Browser consumers use ready artifacts on separate runners and discover checks once per engine", () => {
   for (const id of ["shared-native", "shared-browser"]) {
     const job = record(jobs[id]);
-    expect(job.needs).toContain("shared-proof-inputs");
+    expect(job.needs).toContain("ordinary-web-guests");
     expect(job.if).toContain("!cancelled() && needs.selection.result == 'success'");
-    expect(job.if).toContain("needs.shared-proof-inputs.result == 'success'");
+    expect(job.if).toContain("needs.ordinary-web-guests.outputs.shared-proof-inputs == 'success'");
     expect(job.if).toContain(selection);
     expect(job["timeout-minutes"]).toBe(30);
     expect(record(job.strategy)).toEqual({ "fail-fast": false, matrix: { engine: ["quickjs", "jsc", "spidermonkey"] } });
@@ -180,10 +180,13 @@ test("native and Browser consumers use ready artifacts on separate runners and d
   expect(namedStep("Produce the shared JSC profile once").env).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });
 });
 
-test("only one job assembles the verified shared programs with the ordinary site", () => {
-  const job = record(jobs["shared-proof-inputs"]);
-  const assembly = steps(job);
-  expect(job.needs).toEqual(["selection", "ordinary-web-guests", "shared-sysroot"]);
+test("the ordinary Web job assembles shared inputs once after its existing checks", () => {
+  const job = record(jobs["ordinary-web-guests"]);
+  const entries = steps(job);
+  const start = entries.findIndex(step => step.id === "shared-playground-site");
+  expect(start).toBeGreaterThan(entries.findIndex(step => step.name === "Retain ordinary Web guest diagnostics"));
+  const assembly = entries.slice(start);
+  expect(job.needs).toEqual(["selection", "rust", "shared-sysroot"]);
   expect(assembly.filter(step => step.uses === "actions/download-artifact@v4").map(step => step.with)).toEqual([
     { name: "browser-guest-site", path: "${{ runner.temp }}/shared-playground-site" },
     { pattern: "shared-*-program", path: "${{ runner.temp }}/shared-program-downloads" },
@@ -195,6 +198,13 @@ test("only one job assembles the verified shared programs with the ordinary site
   const uploads = allSteps.filter(step => step.uses === "actions/upload-artifact@v4" && record(step.with).name === "shared-proof-inputs");
   expect(uploads).toEqual([output]);
   expect(output.with).toMatchObject({ "if-no-files-found": "error" });
+  const outputs = record(job.outputs);
+  expect(outputs["shared-proof-inputs"]).toBe("${{ steps.upload-shared-proof-inputs.outcome }}");
+  for (const step of assembly) {
+    expect(step.if).toBe("needs.selection.outputs.shared-native == 'true' && needs.shared-sysroot.result == 'success'");
+    expect(step["continue-on-error"]).toBeUndefined();
+    expect(outputs["shared-proof-inputs-failed"]).toContain(`steps.${step.id}.outcome == 'failure'`);
+  }
   expect(JSON.stringify(assembly)).not.toMatch(/cargo build|build-native-profile|test-checks|browser-guest-site\.ts build/);
   expect(JSON.stringify(sharedSteps)).not.toContain("browser-guest-site");
 });
@@ -228,7 +238,7 @@ test("the matching native launcher stays in its original source-verified artifac
 test("the protected proof requires every selected producer and consumer, including disabled skips", () => {
   const guard = record(jobs["shared-proof"]);
   expect(guard.name).toBe("Shared PIC sysroot proof");
-  expect(guard.needs).toEqual(["selection", "ordinary-web-guests", "quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-proof-inputs", "shared-native", "shared-browser"]);
+  expect(guard.needs).toEqual(["selection", "ordinary-web-guests", "quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-native", "shared-browser"]);
   expect(guard.if).toContain("always()");
   expect(guard["continue-on-error"]).toBeUndefined();
   const check = steps(guard)[0]!;
@@ -240,6 +250,7 @@ test("the protected proof requires every selected producer and consumer, includi
   expect(run(base)).toBe(0);
   const disabled = { ...base, SHARED_NATIVE: "false", FULL_SELECTED: "false", ORDINARY_WEB_RESULT: "skipped", RUST_RESULT: "skipped", SM_RESULT: "skipped", INPUTS_RESULT: "skipped", NATIVE_RESULT: "skipped", BROWSER_RESULT: "skipped" };
   expect(run(disabled)).toBe(0);
+  expect(run({ ...disabled, INPUTS_RESULT: "" })).toBe(0);
   for (const field of Object.keys(base).filter(field => field !== "SHARED_NATIVE" && field !== "FULL_SELECTED")) {
     for (const status of ["failure", "cancelled", "skipped", ""]) expect(run({ ...base, [field]: status })).not.toBe(0);
   }
