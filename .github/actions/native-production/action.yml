@@ -54,8 +54,9 @@ runs:
         path: |
           ${{ env.CARGO_TARGET_DIR }}/bash-web-source
           ${{ env.CARGO_TARGET_DIR }}/bash-web-shell
-        # Cargo does not see sysroot or C toolchain changes, so every build input is in the key.
-        key: bash-web-shell-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ hashFiles('scripts/build-bash-web-shell.sh', '.cargo/**', 'rust-toolchain.toml', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'bun.lock') }}
+        # Cargo does not see the verified sysroot or C toolchain. The Waffle env
+        # guest is staged from the current dependencies and is outside this cache.
+        key: bash-web-shell-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ hashFiles('scripts/build-bash-web-shell.sh', '.cargo/**', 'rust-toolchain.toml', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
     - name: Install the Web host dependencies
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile
