@@ -11,6 +11,7 @@
         "scripts/c1-controller.ts",
         "scripts/goals-matrix/run.ts",
         "scripts/iphone-smoke.ts",
+        "scripts/iphone-smoke-build-slot.ts",
         "scripts/goals-matrix/fleet.ts",
         "scripts/goals-matrix/view.ts",
         "scripts/goals-matrix/prepare.ts",
