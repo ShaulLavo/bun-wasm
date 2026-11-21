@@ -63,7 +63,6 @@
     "web/src/shared-objects/runtime.ts",
     "web/src/start-fresh.ts",
     "web/src/startup-cache.ts",
-    "web/src/storage-full.ts",
     "web/src/startup.ts",
     "web/src/subprocess-broker.ts",
     "web/src/terminal-copy.ts",

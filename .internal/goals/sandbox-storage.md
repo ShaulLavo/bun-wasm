@@ -77,6 +77,22 @@ preview ownership, including HTTP and socket routing, with two distinct apps on
 the same port and foreground/background permutations. This branch does not edit
 the preview protocol or claim to fix that routing bug.
 
+Old-format workspaces of other templates are never evicted (found in the PR 994
+review, Waffle 0.0.145). Waffle's `storedWorkspaces("fast")` (`fs/idle-database.ts`
+`storedNames()`) swallows a VfsError, so a workspace saved in a format this Waffle
+cannot read is not listed, and the sandbox's idle-install eviction never sees it. Only
+the current template's unreadable workspace gets Start fresh. Reproduce by seeding an
+IndexedDB database named `bun-wasm-sandbox-<template>` whose `metadata` store has
+`format = "waffle-indexeddb-v0"` (as `sandbox/tests/storage-browser.ts`
+`seedUnreadable` does), opening another template, and checking `storedWorkspaces`.
+A fix belongs in Waffle: list such names with their state, so the consumer can evict
+them. Until then they keep their space.
+
+Splitting the Bun worker entry (PR 994: `web/src/worker.ts` posts first, then loads
+`web/src/worker-main.ts`) adds one serial module fetch to every worker start. The
+bootstrap chunk is in the idle prefetch list and normally comes from the HTTP cache.
+Measure it with the startup profile before changing the split.
+
 
 ## Re-land the repeated-framework quota control
 

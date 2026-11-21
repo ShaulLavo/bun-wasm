@@ -3,13 +3,15 @@ import { deferred, method, models, turn } from "../web/tests/ui-model-helpers";
 
 const sources = { "package.json": JSON.stringify({ scripts: { dev: "vite", build: "vite build" } }), "src/App.tsx": "app" };
 
-/** A stored workspace this Waffle cannot read: the filesystem fails to open with INVALID_VFS_FORMAT. */
-async function unreadableSandbox(answer: "deleted" | "busy") {
+const formatError = () => Object.assign(new Error("Incompatible IndexedDB filesystem format identity"), { name: "VfsError", code: "INVALID_VFS_FORMAT", vfs: "indexeddb" });
+
+/** A sandbox whose filesystem failed to open with `error`; by default the stored format is unreadable. */
+async function unreadableSandbox(answer: "deleted" | "busy", error: Error = formatError()) {
   const page = await models(undefined, sources);
-  const error = Object.assign(new Error("Incompatible IndexedDB filesystem format identity"), { name: "VfsError", code: "INVALID_VFS_FORMAT", vfs: "indexeddb" });
   const fs = page.runtime.filesystem;
   Object.assign(fs, { state: { status: "failed", error }, mkdirp: async () => { throw error; } });
   page.boundary.deleteResult = answer;
+  page.boundary.openIdle = async () => { throw formatError(); };
   const sandbox = new page.Sandbox("?mode=fast");
   sandbox.start();
   await turn();
@@ -29,7 +31,34 @@ test("a workspace that cannot be opened offers Start fresh, which deletes only i
     expect(html).toContain(">Start fresh</button>");
     expect(html).not.toContain(">Reset template</button>");
     await sandbox.startFresh();
-    expect(page.storageEvents.slice(page.storageEvents.indexOf("dispose"))).toEqual(["dispose", `delete bun-wasm-sandbox-${sandbox.template}`]);
+    const name = `bun-wasm-sandbox-${sandbox.template}`;
+    expect(page.storageEvents.slice(page.storageEvents.indexOf("dispose"))).toEqual(["dispose", `open ${name}`, `delete ${name}`]);
+    expect(page.boundary.location.reloads).toBe(1);
+  } finally { await page.cleanup(); }
+});
+
+test("a filesystem that failed for a reason a retry can fix keeps the workspace and offers no Start fresh", async () => {
+  const { page, sandbox } = await unreadableSandbox("deleted", new Error("Failed to load worker script fs-worker.js"));
+  try {
+    expect(sandbox.failure).toBe("storage");
+    expect(sandbox.unreadable).toBe(false);
+    expect(sandbox.status.text).toContain("workspace was kept");
+    const html = await page.renderSandbox(sandbox);
+    expect(html).not.toContain("Start fresh");
+    expect(html).toContain(">Retry</button>");
+    await sandbox.startFresh();
+    expect(page.storageEvents.some(event => event.startsWith("delete"))).toBe(false);
+  } finally { await page.cleanup(); }
+});
+
+test("a stale Start fresh keeps a workspace another tab recovered and reloads onto it", async () => {
+  const { page, sandbox } = await unreadableSandbox("deleted");
+  try {
+    let closed = 0;
+    page.boundary.openIdle = async () => ({ close: async () => { closed++; } });
+    await sandbox.startFresh();
+    expect(closed).toBe(1);
+    expect(page.storageEvents.some(event => event.startsWith("delete"))).toBe(false);
     expect(page.boundary.location.reloads).toBe(1);
   } finally { await page.cleanup(); }
 });
