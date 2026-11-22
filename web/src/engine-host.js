@@ -453,6 +453,14 @@ class EngineHost {
     if (NativeMessageChannel) {
       this.channel = new NativeMessageChannel();
       this.channel.port1.onmessage = () => {
+        if (this.gcYield) {
+          this.gcYield = false;
+          nativeSetTimeout(() => {
+            this.immediate = false;
+            this.pump();
+          }, 0);
+          return;
+        }
         this.immediate = false;
         this.pump();
       };
@@ -640,10 +648,10 @@ class EngineHost {
         host.asyncContext = v;
       },
       gc() {
-        const collect = host.o.gc ?? nativeGc;
-        if (!collect) return;
-        collect();
-        host.gcYield = true;
+        const runGc = typeof host.o.gc === "function" ? host.o.gc : nativeGc;
+        if (!runGc) return;
+        runGc();
+        if (host.o.yieldAfterGc) host.gcYield = true;
       },
       memoryUsage() {
         const mem = typeof performance === "object" && performance.memory;
@@ -1176,14 +1184,15 @@ class EngineHost {
     if (ms <= 0) {
       if (this.immediate) return;
       this.immediate = true;
-      if (this.channel && !this.gcYield) this.channel.port2.postMessage(0);
-      else {
-        this.gcYield = false;
-        nativeSetTimeout(() => {
-          this.immediate = false;
-          this.pump();
-        }, 0);
+      if (this.channel && !this.gcYield) {
+        this.channel.port2.postMessage(0);
+        return;
       }
+      this.gcYield = false;
+      nativeSetTimeout(() => {
+        this.immediate = false;
+        this.pump();
+      }, 0);
       return;
     }
     // runTimers hands back fractional ms, and setTimeout drops the fraction: the

@@ -1596,8 +1596,21 @@
     clearMeasures(name) {
       removeEntries("measure", name);
     },
-    clearResourceTimings() {},
-    setResourceTimingBufferSize() {},
+    clearResourceTimings() {
+      if (this !== performance) {
+        throw Object.assign(new TypeError("Can only call Performance.clearResourceTimings on instances of Performance"), { code: "ERR_INVALID_THIS" });
+      }
+      removeEntries("resource");
+    },
+    setResourceTimingBufferSize(maxSize) {
+      if (this !== performance) {
+        throw Object.assign(new TypeError("Can only call Performance.setResourceTimingBufferSize on instances of Performance"), { code: "ERR_INVALID_THIS" });
+      }
+      if (arguments.length < 1) {
+        throw Object.assign(new TypeError("Not enough arguments"), { code: "ERR_MISSING_ARGS" });
+      }
+      return void (maxSize >>> 0);
+    },
     toJSON: () => ({ timeOrigin: performance.timeOrigin }),
     eventLoopUtilization: () => ({ idle: 0, active: 0, utilization: 0 }),
     timerify: (fn) => fn,

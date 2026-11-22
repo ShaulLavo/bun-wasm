@@ -104,4 +104,19 @@ try {
 }
 performance.clearResourceTimings();
 performance.setResourceTimingBufferSize(100);
-console.log("performance resource timing", typeof performance.clearResourceTimings, typeof performance.setResourceTimingBufferSize);
+const perfErr = (run: () => unknown) => {
+  try { run(); return "no throw"; }
+  catch (error) {
+    const err = error as Error & { code?: string };
+    return `${err.name} ${err.code ?? err.message}`;
+  }
+};
+console.log("performance resource timing",
+  performance.clearResourceTimings.length,
+  performance.setResourceTimingBufferSize.length,
+  perfErr(() => performance.clearResourceTimings.call({})),
+  perfErr(() => (performance.setResourceTimingBufferSize as unknown as () => void)()),
+  perfErr(() => performance.setResourceTimingBufferSize.call({}, 1)),
+  perfErr(() => performance.setResourceTimingBufferSize({ valueOf() { throw new Error("boom"); } } as unknown as number)),
+  perfErr(() => performance.setResourceTimingBufferSize(10n as unknown as number)).split(" ")[0],
+);
