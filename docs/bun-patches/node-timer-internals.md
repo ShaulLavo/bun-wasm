@@ -36,9 +36,9 @@ so the guest exposes them the way Node and Bun do:
   listener's `stopImmediatePropagation()` cannot leave the promise pending.
 - When an immediate callback throws and an `uncaughtException` listener claims
   the error, `runTimers()` continues running remaining immediates in the
-  current batch before yielding to microtasks, matching Bun's immediate
-  exception deferral (`timers-immediate-exception-fixture.js`).
-- `bun:jsc` also exports `jscDescribe` alongside `describe`.
+  current batch before yielding to microtasks (including when the rest of the
+  batch was cancelled), matching Bun's immediate exception deferral
+  (`timers-immediate-exception-fixture.js`).
 
 The timers phase change that the `_idleStart` pattern needs is recorded in
 [fair loop scheduling](fair-loop-scheduling.md).

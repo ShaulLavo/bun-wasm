@@ -713,8 +713,12 @@
   }
 
   function reportCallbackError(err) {
+    if (internal.exitStarted || native.isExecutionUnwind?.(err)) throw err;
     if (typeof internal.handleUncaught !== "function") throw err;
-    if (!internal.handleUncaught(err)) native.exit(1);
+    if (!internal.handleUncaught(err)) {
+      internal.exitStarted = true;
+      native.exit(1);
+    }
   }
 
   // Called by the Rust event loop. Runs at most one callback so microtasks
@@ -727,6 +731,7 @@
     // Immediates first: like Bun, setImmediate callbacks queued by the
     // main script run before even a due setTimeout(0).
     if (immediateBatchRemaining === null) immediateBatchRemaining = immediates?.length || 0;
+    let batchThrew = false;
     while (immediateBatchRemaining > 0 && immediates && immediates.length > 0) {
       immediateBatchRemaining--;
       const immediate = immediates.shift();
@@ -739,6 +744,7 @@
         runInContext(immediate._context, immediate._callback, immediate, immediate._args);
       } catch (err) {
         threw = true;
+        batchThrew = true;
         reportCallbackError(err);
       } finally {
         immediate._running = false;
@@ -750,6 +756,7 @@
       }
     }
     immediateBatchRemaining = null;
+    if (batchThrew) return 0;
     const now = native.now();
     if (timerQueue.length > 0 && timerQueue[0]._when <= now) {
       timerPhaseEnd = now;
@@ -818,7 +825,7 @@
       try {
         callback();
       } catch (err) {
-        if (!internal.handleUncaught(err)) native.exit(1);
+        reportCallbackError(err);
       }
     });
   }

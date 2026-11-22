@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import { RuntimeWorkerSignal } from "waffle/browser/worker";
 import { memoryViews } from "waffle/core";
 import { DefaultSignal } from "../src/default-signal.ts";
+import { createTickScheduler } from "../src/tick-scheduler.ts";
 
 // The released constructor is private. Use the same module as the installed bootstrap,
 // rather than inventing a lookalike or loading a second copy of Waffle's source.
@@ -142,4 +143,145 @@ test("failed unwind cleanup reports both errors without manufacturing an ordinar
   expect(result.error).toMatchObject({ errors: [control, cleanupError] });
   expect(f.exits).toEqual([]);
   expect(f.cleanup).toEqual(["startup", "shared", "tls", "dirs", "flush"]);
+});
+
+function bootstrapTimerHarness() {
+  const bootstrapSource = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/bootstrap.js", import.meta.url), "utf8");
+  const start = bootstrapSource.indexOf("  function reportCallbackError(err) {");
+  const end = bootstrapSource.indexOf("  internal.pendingIo = 0;", start);
+  if (start < 0 || end < 0) throw new Error("Expected runTimers block in bootstrap.js");
+  return bootstrapSource.slice(start, end);
+}
+
+function runImmediateUnwindFixture(
+  firstCallback: (ctx: {
+    internalObj: { exitStarted: boolean };
+    hostNative: { exit: (code: number) => never };
+  }) => void,
+) {
+  const f = fixture(() => {});
+  const ran: string[] = [];
+  const block = bootstrapTimerHarness();
+  let exitedCode: number | undefined;
+  const hostNative = {
+    now: () => 0,
+    exit(code: number): never {
+      exitedCode = code;
+      f.host.exit(code);
+      throw f.exitSignal();
+    },
+    isExecutionUnwind: (error: unknown) => f.options.isExecutionUnwind(error),
+  };
+  const immediates: Array<{ _active: boolean; _running: boolean; _context: unknown; _callback: () => void; _args: unknown[] }> = [];
+  const internalObj = {
+    exitStarted: false,
+    workerPump: null,
+    pendingIo: 0,
+    messagePortRefs: new Set(),
+    handleUncaught(error: unknown) { f.errors.push(error); return true; },
+    runTimers: () => -1,
+  };
+  runInNewContext(
+    `(function(internal, native, immediates) {
+      let timerPhaseEnd = null, immediateBatchRemaining = null, immediateRan = false, refedTimers = 0;
+      const timerQueue = [];
+      const runInContext = (_c, fn, self, args) => fn.apply(self, args);
+      const runDueTimer = () => false;
+      const runOneTimer = () => {};
+      const loopStopped = () => false;
+      ${block}
+    })`,
+  )(internalObj, hostNative, immediates);
+
+  immediates.push(
+    { _active: true, _running: false, _context: undefined, _callback: () => { ran.push("first"); firstCallback({ internalObj, hostNative }); }, _args: [] },
+    { _active: true, _running: false, _context: undefined, _callback: () => { ran.push("second"); }, _args: [] },
+  );
+  f.host.internal = { ...f.host.internal, ...internalObj, pumpSignals: () => false, ioPending: () => 0, pumpIo: () => false };
+  f.host.pump();
+  return { f, ran, exitedCode: () => exitedCode };
+}
+
+test("returning onExit host unwinds process.exit(7) from first immediate without uncaughtException or second immediate", async () => {
+  const { f, ran, exitedCode } = runImmediateUnwindFixture(({ internalObj, hostNative }) => {
+    internalObj.exitStarted = true;
+    hostNative.exit(7);
+  });
+  expect(await f.result).toEqual({ code: 7 });
+  expect(exitedCode()).toBe(7);
+  expect(ran).toEqual(["first"]);
+  expect(f.errors).toEqual([]);
+  expect(f.exits).toEqual([7]);
+});
+
+test("execution unwind inside an immediate skips uncaughtException and remaining immediates", async () => {
+  const control = new ProcessReplaced("process image replaced");
+  const { f, ran } = runImmediateUnwindFixture(() => { throw control; });
+  const result = await f.result;
+  expect("error" in result && result.error).toBe(control);
+  expect(ran).toEqual(["first"]);
+  expect(f.errors).toEqual([]);
+  expect(f.exits).toEqual([]);
+});
+
+test("tick scheduler drains sync ticks before native await and microtask ticks after five awaits before next turn", async () => {
+  const order: string[] = [];
+  const queuedTicks: Array<() => void> = [];
+  const channel = new MessageChannel();
+  let turnScheduled = false;
+  let nextTurnCallback: (() => void) | null = null;
+  const done = Promise.withResolvers<void>();
+  const scheduler = createTickScheduler(
+    () => {
+      while (queuedTicks.length > 0) queuedTicks.shift()!();
+    },
+    () => {
+      if (turnScheduled) return;
+      turnScheduled = true;
+      channel.port2.postMessage(0);
+    },
+    queueMicrotask,
+    () => false,
+  );
+  const enqueueTick = (fn: () => void) => {
+    queuedTicks.push(fn);
+    scheduler.schedule();
+  };
+  channel.port1.onmessage = () => {
+    turnScheduled = false;
+    if (scheduler.drainBeforeTurn()) {
+      if (nextTurnCallback) {
+        turnScheduled = true;
+        channel.port2.postMessage(0);
+      }
+      return;
+    }
+    const cb = nextTurnCallback;
+    nextTurnCallback = null;
+    if (cb) scheduler.runTask(cb);
+  };
+  scheduler.runTask(() => {
+    enqueueTick(() => order.push("sync-tick"));
+    Promise.resolve().then(() => {
+      enqueueTick(() => order.push("micro-tick"));
+      void (async () => {
+        await 0;
+        await 0;
+        await 0;
+        await 0;
+        await 0;
+        order.push("five-awaits");
+      })();
+    });
+    nextTurnCallback = () => {
+      order.push("next-immediate");
+      done.resolve();
+    };
+    turnScheduled = true;
+    channel.port2.postMessage(0);
+  });
+  await done.promise;
+  channel.port1.close();
+  channel.port2.close();
+  expect(order).toEqual(["sync-tick", "five-awaits", "micro-tick", "next-immediate"]);
 });
