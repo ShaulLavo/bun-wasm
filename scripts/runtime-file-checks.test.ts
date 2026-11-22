@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { dispatchRuntime, runRuntimeChecks, runtimeBatches, runtimeJobs, runtimePlan } from "./runtime-file-checks.ts";
+import { dispatchRuntime, runRuntimeChecks, runtimeBatches, runtimeJobs, runtimePlan, runtimeScratchPrefix, workerSlotTmpDir } from "./runtime-file-checks.ts";
 import { discoverChecks, parseCheck, selectChecks } from "./test-checks.ts";
 import { linuxProcess } from "./process-owner.mts";
 import { runSubreaperProbe } from "./test-subreaper-command.ts";
@@ -35,6 +35,14 @@ test("multi-worker runtime sharding preserves every file and keeps shared Spider
     batch.includes("scripts/spidermonkey-ordinary-fixtures.test.ts") || batch.includes("scripts/spidermonkey-suppressed-error.test.ts"));
   expect(shared).toEqual([["scripts/spidermonkey-ordinary-fixtures.test.ts", "scripts/spidermonkey-suppressed-error.test.ts"]]);
   for (const isolated of plan.isolated) expect(batches).toContainEqual([isolated]);
+});
+
+test("runtime slot TMPDIR keeps nested sccache Unix sockets within the Linux 108-byte path limit on GitHub runners", () => {
+  const runnerTemp = "/home/runner/work/_temp";
+  const scratch = join(runnerTemp, `${runtimeScratchPrefix}XXXXXX`);
+  const slotTmp = workerSlotTmpDir(scratch, 3);
+  const sccacheSocket = join(slotTmp, "bun-wasm-native-cache-XXXXXX", "sccache-XXXXXX", "server");
+  expect(Buffer.byteLength(sccacheSocket)).toBeLessThan(100);
 });
 
 test("runtime scheduling source changes select the real native producers", () => {

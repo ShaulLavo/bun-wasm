@@ -176,7 +176,7 @@ runs:
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh
-        BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=4 bash scripts/build-bun-browser.sh
+        BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=3 bash scripts/build-bun-browser.sh
 
     - name: Build the JSC Cargo guest
       if: inputs.jsc == 'true'

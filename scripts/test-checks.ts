@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
-import { availableParallelism } from "node:os";
+import { availableParallelism, constants } from "node:os";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "browser-guest", "native", "native-probe"] as const;
 type Owner = typeof owners[number];
@@ -266,8 +266,12 @@ function runBuffered(command: readonly string[], env: NodeJS.ProcessEnv): Promis
     child.stderr.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.on("error", reject);
     child.on("close", (status, signal) => {
-      if (signal) reject(new Error(`Check runner terminated by ${signal}`));
-      else resolvePromise({ status: status ?? 1, output: Buffer.concat(chunks) });
+      if (signal) {
+        chunks.push(Buffer.from(`\n[check runner terminated by ${signal}]\n`));
+        resolvePromise({ status: 128 + (constants.signals[signal] ?? 1), output: Buffer.concat(chunks) });
+        return;
+      }
+      resolvePromise({ status: status ?? 1, output: Buffer.concat(chunks) });
     });
   });
 }
@@ -297,8 +301,13 @@ const heavyTestFiles = [
 
 export function shardTestFiles(paths: readonly string[], jobs: number): string[][] {
   if (jobs <= 1 || paths.length <= 1) return [paths.slice()];
-  const heavySet = new Set(heavyTestFiles);
-  const ordered = heavyTestFiles.filter(path => paths.includes(path)).concat(paths.filter(path => !heavySet.has(path)));
+  const heavyRank = new Map(heavyTestFiles.map((path, index) => [path, index]));
+  const keyOf = (path: string) => isAbsolute(path) ? relative(root, path) : path;
+  const heavy = paths
+    .filter(path => heavyRank.has(keyOf(path)))
+    .toSorted((a, b) => heavyRank.get(keyOf(a))! - heavyRank.get(keyOf(b))!);
+  const rest = paths.filter(path => !heavyRank.has(keyOf(path)));
+  const ordered = heavy.concat(rest);
   const count = Math.min(jobs, ordered.length);
   const shards = Array.from({ length: count }, (): string[] => []);
   ordered.forEach((path, index) => shards[index % count]!.push(path));

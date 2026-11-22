@@ -69,10 +69,16 @@ function execute(command: readonly string[], env = process.env): Promise<number>
   });
 }
 
+export const runtimeScratchPrefix = "bw-rt-";
+
+export function workerSlotTmpDir(parent: string, slot: number): string {
+  return join(parent, `s${slot}`);
+}
+
 function workerEnv(base: NodeJS.ProcessEnv, slot: number): NodeJS.ProcessEnv {
   const parent = base.TMPDIR;
   if (!parent) return base;
-  const dir = join(parent, `slot-${slot}`);
+  const dir = workerSlotTmpDir(parent, slot);
   mkdirSync(dir, { recursive: true });
   return { ...base, TMPDIR: dir };
 }
@@ -108,7 +114,7 @@ export async function runRuntimeChecks(paths: readonly string[], env = process.e
   // Validate before creating scratch or starting the supervisor. New files default to serial.
   runtimePlan(paths);
   if (process.platform !== "linux") throw new Error("Bounded runtime checks require the Linux process supervisor");
-  const scratch = mkdtempSync(join(env.TMPDIR ?? tmpdir(), "bun-wasm-runtime-files-"));
+  const scratch = mkdtempSync(join(env.TMPDIR ?? tmpdir(), runtimeScratchPrefix));
   const state = join(scratch, "supervisor");
   mkdirSync(state);
   const supervisor = join(import.meta.dir, "run-with-timeout.mts");

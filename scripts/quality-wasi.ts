@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { run, runCargo } from "./quality-command";
+import { run, runCargoVerified } from "./quality-command";
 import { verifyWasiLint } from "./quality-wasi-probe";
 
 const sdk = process.env.WASI_SDK_PATH;
@@ -15,9 +15,11 @@ const packages = ["cli", "runtime", "build", "glue", "posix", "semver", "crypto-
 const command = ["cargo", "clippy", "--locked", "--target", "wasm32-wasip1"]
   .concat(packages.flatMap((name) => ["-p", `bunwasm-${name}`]), ["-j", jobs]);
 run(command.concat(["--no-deps", "--", "-D", "warnings"]), env);
-run(command.concat(["--no-default-features", "--features", "bunwasm-cli/engine-host,bunwasm-cli/bun-transpiler,bunwasm-cli/bun-build", "--no-deps", "--", "-D", "warnings"]), env);
-if (env.BUNWASM_TLS_CARGO_RECORD_DIR) {
-  await runCargo(["cargo", "clippy", "--locked", "--target", "wasm32-wasip1", "-p", "bunwasm-crypto-sys", "-j", jobs, "--no-deps", "--", "-D", "warnings"], "wasm32-wasip1", env);
-}
+await runCargoVerified(
+  command.concat(["--no-default-features", "--features", "bunwasm-cli/engine-host,bunwasm-cli/bun-transpiler,bunwasm-cli/bun-build", "--no-deps", "--", "-D", "warnings"]),
+  ["cargo", "clippy", "--locked", "--target", "wasm32-wasip1", "-p", "bunwasm-crypto-sys", "-j", jobs, "--no-deps", "--", "-D", "warnings"],
+  "wasm32-wasip1",
+  env,
+);
 
 await verifyWasiLint(["cargo", "clippy", "--locked", "--target", "wasm32-wasip1", "-p", "bunwasm-posix", "--no-deps", "--", "-D", "warnings"], env);

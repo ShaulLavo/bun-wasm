@@ -174,7 +174,7 @@ test("native fixture smoke selects the typed runtime behavior without another bu
 });
 
 test("runtime tarball checks consume the existing Browser program before native fixture discovery", () => {
-  const ready = rust.indexOf("BROWSER_CARGO_TARGET_DIR=\"$CARGO_TARGET_DIR\" JOBS=4 bash scripts/build-bun-browser.sh");
+  const ready = rust.indexOf("BROWSER_CARGO_TARGET_DIR=\"$CARGO_TARGET_DIR\" JOBS=3 bash scripts/build-bun-browser.sh");
   expect(ready).toBeGreaterThan(0);
   expect(ready).toBeLessThan(rust.indexOf("bun scripts/test-checks.ts native"));
   expect(rust).not.toContain("ln -s source-cache-browser");
@@ -205,12 +205,12 @@ test("every migrated selection retains one blocking owner and the original local
   expect(quality.match(/run: bun run quality --javascript/g)).toHaveLength(1);
 });
 
-test("Rust tests are compiled and run once, with Clippy covering test targets and TLS recording scoped to crypto-sys", () => {
+test("Rust tests are compiled and run once, with Clippy covering test targets and TLS recording verified against crypto-sys", () => {
   const script = readFileSync(new URL("./quality-rust.ts", import.meta.url), "utf8");
-  expect(script.match(/run\(\["cargo", "test"/g)).toHaveLength(1);
-  expect(script.match(/await runCargo\(\["cargo", "test", "--locked", "--release", "-p", "bunwasm-crypto-sys"/g)).toHaveLength(1);
+  expect(script.match(/await runCargoVerified\(/g)).toHaveLength(1);
   expect(script).toContain('"--all-targets", "--release", "--no-deps"');
   expect(script).toContain('["cargo", "test", "--locked", "--release"].concat(rustTestPackages(metadata)');
+  expect(script).toContain('["cargo", "test", "--locked", "--release", "-p", "bunwasm-crypto-sys", "-j", jobs]');
   expect(script).toContain('["metadata", "--locked", "--no-deps", "--format-version", "1"]');
 });
 
@@ -246,9 +246,10 @@ test("type projects have one successful CI owner", () => {
 
 test("both WASI feature graphs and the failing lint control stay blocking", () => {
   const wasi = readFileSync(new URL("./quality-wasi.ts", import.meta.url), "utf8");
-  expect(wasi.match(/\brun\(command\.concat/g)).toHaveLength(2);
-  expect(wasi.match(/await runCargo\(\["cargo", "clippy", "--locked", "--target", "wasm32-wasip1", "-p", "bunwasm-crypto-sys"/g)).toHaveLength(1);
-  expect(wasi).toContain('"wasm32-wasip1", env');
+  expect(wasi.match(/\brun\(command\.concat/g)).toHaveLength(1);
+  expect(wasi.match(/await runCargoVerified\(/g)).toHaveLength(1);
+  expect(wasi).toContain('["cargo", "clippy", "--locked", "--target", "wasm32-wasip1", "-p", "bunwasm-crypto-sys", "-j", jobs, "--no-deps", "--", "-D", "warnings"]');
+  expect(wasi).toContain('"wasm32-wasip1",');
   expect(wasi).toContain('"--no-default-features", "--features", "bunwasm-cli/engine-host,bunwasm-cli/bun-transpiler,bunwasm-cli/bun-build"');
   expect(wasi).toContain('await verifyWasiLint(["cargo", "clippy"');
 });
@@ -896,7 +897,7 @@ test("Binaryen remains pinned while runtime tool identity owns JSC reuse", () =>
 
 test("source cache runs in real browsers using one source-built host guest", () => {
   const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
-  expect(rust).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=4 bash scripts/build-bun-browser.sh');
+  expect(rust).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=3 bash scripts/build-bun-browser.sh');
   expect(rust).toContain("uses: actions/upload-artifact@v4");
   expect(processes).toContain("uses: actions/download-artifact@v4");
   expect(processes).toContain("needs: [selection, ordinary-web-guests, rust, browser-production, process-bundles, browser-guest]");

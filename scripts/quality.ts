@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { constants } from "node:os";
 import { run } from "./quality-command";
 
 const staticJavascript = ["lint", "types", "unused", "duplicates"] as const;
@@ -15,7 +16,7 @@ export function qualityGates(args: readonly string[]): string[] {
   throw new Error("Usage: quality [--javascript | --native]");
 }
 
-function runBuffered(command: readonly string[]): Promise<{ command: readonly string[]; status: number; output: Buffer }> {
+function runBuffered(command: readonly string[]): Promise<{ command: readonly string[]; status: number; signal: NodeJS.Signals | null; output: Buffer }> {
   const [executable, ...args] = command;
   if (!executable) throw new Error("Missing quality command");
   return new Promise((resolve, reject) => {
@@ -25,8 +26,12 @@ function runBuffered(command: readonly string[]): Promise<{ command: readonly st
     child.stderr.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.on("error", reject);
     child.on("close", (status, signal) => {
-      if (signal) reject(new Error(`${executable} failed: ${signal}`));
-      else resolve({ command, status: status ?? 1, output: Buffer.concat(chunks) });
+      if (signal) {
+        chunks.push(Buffer.from(`\n[${executable} terminated by ${signal}]\n`));
+        resolve({ command, status: 128 + (constants.signals[signal] ?? 1), signal, output: Buffer.concat(chunks) });
+        return;
+      }
+      resolve({ command, status: status ?? 1, signal: null, output: Buffer.concat(chunks) });
     });
   });
 }
@@ -38,7 +43,7 @@ async function runStaticJavascript(): Promise<void> {
     process.stdout.write(result.output);
   }
   const failure = results.find(result => result.status !== 0);
-  if (failure) throw new Error(`${failure.command[0]} failed: ${failure.status}`);
+  if (failure) throw new Error(`${failure.command[0]} failed: ${failure.signal ?? failure.status}`);
 }
 
 if (import.meta.main) {

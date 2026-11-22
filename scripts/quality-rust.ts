@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { run, runCargo } from "./quality-command";
+import { run, runCargoVerified } from "./quality-command";
 import { dormantRustPackages, rustTestPackages } from "./rust-test-packages";
 
 if (!process.argv.includes("--checks-only")) {
@@ -20,10 +20,12 @@ const jobs = process.env.QUALITY_RUST_JOBS ?? "1";
 run(["cargo", "clippy", "--locked", "--workspace"].concat(dormantRustPackages.flatMap(name => ["--exclude", name]), ["--all-targets", "--release", "--no-deps", "-j", jobs, "--", "-D", "warnings"]), env);
 // Every supported workspace member plus the path-patched crates, in one compile and run.
 const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--no-deps", "--format-version", "1"], { encoding: "utf8", env, maxBuffer: 64 * 1024 * 1024 }));
-// Keep RUSTC_WRAPPER (sccache) active for the workspace test compile; recordCargo clears
-// RUSTC_WRAPPER only for bunwasm-crypto-sys to bind the direct BoringSSL archive proof.
-run(["cargo", "test", "--locked", "--release"].concat(rustTestPackages(metadata), ["-j", jobs]), env);
-if (env.BUNWASM_TLS_CARGO_RECORD_DIR) {
-  await runCargo(["cargo", "test", "--locked", "--release", "-p", "bunwasm-crypto-sys", "-j", jobs], "host", env);
-}
+// Keep RUSTC_WRAPPER (sccache) active for the workspace test compile; verify that the
+// direct-rustc bunwasm-crypto-sys record binds the exact same out_dir and BoringSSL archives.
+await runCargoVerified(
+  ["cargo", "test", "--locked", "--release"].concat(rustTestPackages(metadata), ["-j", jobs]),
+  ["cargo", "test", "--locked", "--release", "-p", "bunwasm-crypto-sys", "-j", jobs],
+  "host",
+  env,
+);
 run(["cargo", "machete", "crates"], env);

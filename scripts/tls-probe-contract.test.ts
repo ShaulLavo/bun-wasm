@@ -4,6 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writ
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CargoTlsMessages, inspectCryptoOutput, recordCargo } from "./tls-probe-cargo.ts";
+import { verifyRecordedCryptoMatch } from "./quality-command.ts";
 import { sealTlsHandoff, verifyTlsHandoff } from "./tls-probe-handoff.ts";
 import { fileIdentity, tlsRepositoryIdentity, treeIdentity } from "./tls-probe-inputs.ts";
 import { tlsFixture, fixtureCrypto, fixtureHandoff, fixtureMessages, syntheticArchive, syntheticObject } from "./tls-probe-fixture.ts";
@@ -21,6 +22,14 @@ for (const abi of ["host", "wasm32-wasip1"] as const) test(`source fixture recor
     await recordCargo(args, abi, { ...process.env, GITHUB_WORKSPACE: f.context.workspace, BUNWASM_TLS_CARGO_RECORD_DIR: directory, FIXTURE_MESSAGES: fixtureMessages(build) }, async () => f.context);
     const record: unknown = JSON.parse(readFileSync(join(directory, `${abi}.json`), "utf8"));
     expect(record).toMatchObject({ context: f.context, output: { abi, build } });
+    const dir = join(build.outDir, "boringssl");
+    const matching = {
+      build,
+      archives: { ssl: await fileIdentity(join(dir, "libssl.a")), crypto: await fileIdentity(join(dir, "libcrypto.a")) },
+    };
+    verifyRecordedCryptoMatch(join(directory, `${abi}.json`), matching);
+    expect(() => verifyRecordedCryptoMatch(join(directory, `${abi}.json`), { ...matching, build: { ...build, outDir: join(f.root, "other") } })).toThrow("different bunwasm-crypto-sys out_dir");
+    expect(await Bun.file(join(directory, `${abi}.json`)).exists()).toBe(false);
   } finally { f.remove(); }
 });
 
