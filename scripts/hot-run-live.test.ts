@@ -1,6 +1,7 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { randomInt } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -12,13 +13,38 @@ setDefaultTimeout(120_000);
 const root = resolve(import.meta.dir, "..");
 const testTimeoutMs = 60_000;
 
-async function freePort(): Promise<number> {
+function nonEphemeralCeiling(): number {
+  try {
+    const [low] = readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8").trim().split(/\s+/).map(Number);
+    if (low && Number.isInteger(low) && low > 20_000) return Math.min(low, 32_000);
+  } catch { /* Non-Linux hosts fall back to the default below-ephemeral range. */ }
+  return 32_000;
+}
+
+async function tryListen(port: number): Promise<number | null> {
   const server = createServer();
-  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Expected loopback listener");
-  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  return address.port;
+  try {
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected loopback listener");
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    return address.port;
+  } catch {
+    server.close();
+    return null;
+  }
+}
+
+async function freePort(): Promise<number> {
+  const ceiling = nonEphemeralCeiling();
+  // Reserve a port outside Linux's ephemeral range so concurrent listen(0) fixtures cannot claim it.
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const port = await tryListen(randomInt(20_000, ceiling));
+    if (port !== null) return port;
+  }
+  const fallback = await tryListen(0);
+  if (fallback === null) throw new Error("Unable to allocate loopback port");
+  return fallback;
 }
 function application(port: number, specifier = "./page.html"): string {
   return `import text from ${JSON.stringify(specifier)} with { type: "text" };
@@ -35,12 +61,12 @@ test("real native hot run recovers its initially malformed entry, rejects stale/
   // Cold Wasmtime compilation shares the test budget with recovery. Leave time to stop the process group.
   const deadline = performance.now() + testTimeoutMs - 15_000;
   const scratch = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-hot-live-"));
-  const port = await freePort();
   const launcher = process.env.BUN_WASM_LAUNCHER ?? join(process.env.CARGO_TARGET_DIR ?? join(root, "target"), "release/bun-wasm");
   const guest = process.env.BUN_WASM_HOT_CORE ?? join(root, "dist/bun.wasm");
   writeFileSync(join(scratch, "entry.ts"), "const invalid = ;\n");
   writeFileSync(join(scratch, "page.html"), "before");
   let child: ReturnType<typeof spawn> | undefined;
+  let port = 0;
   let output = "";
   async function waitFor(phase: string, check: () => boolean | Promise<boolean>): Promise<void> {
     while (performance.now() < deadline) {
@@ -60,6 +86,7 @@ test("real native hot run recovers its initially malformed entry, rejects stale/
     if (spawnError) throw spawnError;
     expect(child.exitCode).toBeNull();
     expect(output.match(/SyntaxError:/g)).toHaveLength(1);
+    port = await freePort();
     writeFileSync(join(scratch, "entry.ts"), application(port));
     const address = `http://127.0.0.1:${port}/`;
     let pid = "";
