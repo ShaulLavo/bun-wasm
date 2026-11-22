@@ -566,10 +566,20 @@
   const process: BunWasm.NodeEmitter & { noDeprecation: boolean; pendingDeprecation?: boolean; exitCode?: unknown; reallyExit: unknown; pid: number; env: Record<PropertyKey, unknown>; execArgv: string[]; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
   delete process.stdin;
 
+  // A stream that is not made yet cannot be made once the global process is not an object
+  // (`process = null`): the failure goes to the uncaught exception handlers, as Bun reports it,
+  // and the read gives undefined. Streams already made are returned without the check.
+  function guardedStdio(): boolean {
+    const current: unknown = globalThis.process;
+    if (current !== null && typeof current === "object") return true;
+    internal.handleUncaught(new TypeError("process is not an object"));
+    return false;
+  }
+
   Object.defineProperties(process, {
-    stdout: { get: () => stdout || (stdout = makeWriter(1)), configurable: true, enumerable: true },
-    stderr: { get: () => stderr || (stderr = makeWriter(2)), configurable: true, enumerable: true },
-    stdin: { get: () => stdin || (stdin = makeReader()), configurable: true, enumerable: true },
+    stdout: { get: () => stdout || (guardedStdio() ? (stdout = makeWriter(1)) : undefined), configurable: true, enumerable: true },
+    stderr: { get: () => stderr || (guardedStdio() ? (stderr = makeWriter(2)) : undefined), configurable: true, enumerable: true },
+    stdin: { get: () => stdin || (guardedStdio() ? (stdin = makeReader()) : undefined), configurable: true, enumerable: true },
     mainModule: lazyData("mainModule", () => internal.getMainModule()),
     exitCode: { get: () => exitByte, set: setExitCode, configurable: true, enumerable: true },
     finalization: { get: () => finalization ??= createFinalization(), configurable: true, enumerable: false },
