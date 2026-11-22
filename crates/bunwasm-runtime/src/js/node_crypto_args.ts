@@ -90,6 +90,20 @@
     throw argType("key", "string or an instance of ArrayBuffer, Buffer, TypedArray, DataView, KeyObject, or CryptoKey", key);
   }
 
+  // crypto.hash(algorithm, input, outputEncoding): Node 22's checks, in its order, with Bun's
+  // acceptance of a raw ArrayBuffer input and its message for an unknown encoding. Returns the
+  // encoding to digest with.
+  function hashOutputEncoding(algorithm: unknown, input: unknown, outputEncoding: unknown): string {
+    validateString(algorithm, "algorithm");
+    if (typeof input !== "string" && !isBufferSource(input))
+      throw argType("input", "string or an instance of Buffer, TypedArray, or DataView", input);
+    validateString(outputEncoding, "outputEncoding");
+    if (outputEncoding.toLowerCase() === "buffer") return "buffer";
+    // Bun's code is Node's, but its message is "Unknown encoding: <name>".
+    if (!Buffer.isEncoding(outputEncoding)) throw coded(new TypeError(`Unknown encoding: ${outputEncoding}`), "ERR_INVALID_ARG_VALUE");
+    return outputEncoding;
+  }
+
   // BoringSSL's error text for errors Bun raises itself (ERR_put_error, then createCryptoError).
   function opensslError(packed: string, library: string, reason: string, code: string): Error {
     const error = new Error(`error:${packed}:${library}:OPENSSL_internal:${reason}`);
@@ -110,6 +124,7 @@
     bytes,
     encodeOut,
     secretKey,
+    hashOutputEncoding,
     opensslError,
     invalidState: (message: string) => coded(new Error(message), "ERR_CRYPTO_INVALID_STATE"),
     operationFailed: (message: string) => coded(new Error(message), "ERR_CRYPTO_OPERATION_FAILED"),

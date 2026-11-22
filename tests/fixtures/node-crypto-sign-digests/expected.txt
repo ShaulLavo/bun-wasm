@@ -64,4 +64,8 @@ generateKeySync hmac 20 2
 constructor names deprecated,deprecated,Sign,Verify
 new Hash ca978112
 Hash() true
+verify reads the signature at call time true,1
+verify ignores a shadowed buffer property true
+verify with a detached signature false
 randomInt callback undefined 7
+verify callback reads the signature at call time true

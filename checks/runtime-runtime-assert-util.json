@@ -1,5 +1,6 @@
 {
   "owner": "runtime",
+  "isolation": "process",
   "path": "scripts/runtime-assert-util.test.ts",
   "localRuntime": true
 }

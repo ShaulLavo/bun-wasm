@@ -1,4 +1,5 @@
 {
   "owner": "runtime",
+  "isolation": "process",
   "path": "scripts/spidermonkey-panic-process.test.ts"
 }

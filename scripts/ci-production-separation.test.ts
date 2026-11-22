@@ -178,7 +178,7 @@ test("both routes share effective tools, producer environment and one implementa
     expect(JSON.stringify(entries)).not.toContain("bash scripts/build-bun-browser.sh");
   }
   const producer = read(".github/actions/native-production/action.yml");
-  for (const command of ["BROWSER_CARGO_TARGET_DIR=\"$CARGO_TARGET_DIR\" JOBS=2 bash scripts/build-bun-browser.sh", "TOOLS_CARGO_TARGET_DIR=\"$CARGO_TARGET_DIR\" JOBS=2 bash scripts/build-bun-tools.sh", "CARGO_BUILD_JOBS=2 bash scripts/build.sh", "CARGO_BUILD_JOBS=2 bash scripts/build-bun-spidermonkey.sh"]) expect(producer.split(command)).toHaveLength(2);
+  for (const command of ["BROWSER_CARGO_TARGET_DIR=\"$CARGO_TARGET_DIR\" JOBS=3 bash scripts/build-bun-browser.sh", "TOOLS_CARGO_TARGET_DIR=\"$CARGO_TARGET_DIR\" JOBS=4 bash scripts/build-bun-tools.sh", "CARGO_BUILD_JOBS=3 bash scripts/build.sh", "CARGO_BUILD_JOBS=3 bash scripts/build-bun-spidermonkey.sh"]) expect(producer.split(command)).toHaveLength(2);
   const alternate = JSON.stringify(steps(job("browser-production", true)));
   for (const forbidden of ["quality-rust.ts", "quality:wasi", "ci-native-handoff.ts", "test-checks.ts native", "ordinary-spidermonkey-program", "ordinary-jsc-program", "native-profile-launcher"]) expect(alternate).not.toContain(forbidden);
   for (const needed of ["build.sh", "build-bun-core.sh", "build-bun-spidermonkey.sh", "build-bun-browser.sh", "build-bun-tools.sh", "build-bash-web-shell.sh", "browser-guest-site.ts build", "ci-browser-program.ts export"]) expect(alternate).toContain(needed);

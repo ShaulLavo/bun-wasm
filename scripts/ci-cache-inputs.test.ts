@@ -88,7 +88,7 @@ test("completed caches are saved before later validation can fail or time out", 
 test("split producers keep the common core target separate from the JSC side cache", () => {
   const native = string(field(named("Build native fixtures after the cache checkpoint"), "run"));
   expect(native).toContain('export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"');
-  expect(native.match(/CARGO_BUILD_JOBS=2 bash scripts\/build\.sh/g)).toHaveLength(1);
+  expect(native.match(/CARGO_BUILD_JOBS=3 bash scripts\/build\.sh/g)).toHaveLength(1);
   expect(native).not.toContain("build-bun-core.sh");
   const common = string(field(named("Build the common engine core once"), "run"));
   expect(common).toContain('export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"');

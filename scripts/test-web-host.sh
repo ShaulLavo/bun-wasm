@@ -13,15 +13,30 @@ if [[ "$phase" != --browser && "$phase" != --smoke ]]; then
   [[ "$phase" != --setup ]] || exit 0
   (
     cd "$root/web"
-    node_modules/.bin/tsc -p ../crates/bunwasm-runtime/tsconfig.json
+    node_modules/.bin/tsc -p ../crates/bunwasm-runtime/tsconfig.json &
+    pid_runtime_tsc=$!
+    bun run check &
+    pid_web_tsc=$!
+    node_modules/.bin/tsc -p tests/engine-interruption.tsconfig.json &
+    pid_interrupt_tsc=$!
+    (cd "$root/sandbox" && bun run check) &
+    pid_sandbox_tsc=$!
+    PYTHONDONTWRITEBYTECODE=1 python3 ../scripts/test-bun-suite.py ProvenanceTests &
+    pid_provenance=$!
+    (cd "$root" && bun scripts/runtime-size.ts) &
+    pid_size=$!
+    status=0
+    for pid in "$pid_runtime_tsc" "$pid_web_tsc" "$pid_interrupt_tsc" "$pid_sandbox_tsc" "$pid_provenance" "$pid_size"; do
+      wait "$pid" || status=1
+    done
+    ((status == 0)) || exit "$status"
     bun ../scripts/test-checks.ts web
-    bun run test
-    PYTHONDONTWRITEBYTECODE=1 python3 ../scripts/test-bun-suite.py ProvenanceTests
-    bun run check
-    node_modules/.bin/tsc -p tests/engine-interruption.tsconfig.json
+    if [[ "${BUN_WASM_TEST_JOBS:-1}" -gt 1 ]]; then
+      bun scripts/run-unit-tests.ts
+    else
+      bun run test
+    fi
   )
-  (cd "$root/sandbox" && bun run check)
-  (cd "$root" && bun scripts/runtime-size.ts)
 fi
 
 if [[ "$phase" != --unit ]]; then

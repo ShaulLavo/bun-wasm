@@ -328,7 +328,10 @@
       createHmac,
       KeyObject,
       createSecretKey,
-      hash: (algorithm, data, encoding = "hex") => createHash(algorithm).update(data).digest(encoding),
+      hash(algorithm, input, outputEncoding = "hex") {
+        const encoding = internal.require("node_crypto_args").hashOutputEncoding(algorithm, input, outputEncoding);
+        return createHash(algorithm).update(input).digest(encoding);
+      },
       randomBytes,
       pseudoRandomBytes: randomBytes,
       randomFillSync,

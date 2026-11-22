@@ -103,7 +103,7 @@ test("one maintained standard recipe feeds native, Web and source-cache/transfer
   const exporter = steps.find(step => step.name === "Export the validated standard Browser and tools guests");
   const upload = steps.find(step => record(step.with) && step.with.name === "browser-program");
   if (!build || !exporter || !upload) throw new Error("Missing Browser producer or exporter");
-  expect(build.run).toBe('source env.sh\nBROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh\n');
+  expect(build.run).toBe('source env.sh\nBROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=3 bash scripts/build-bun-browser.sh\n');
   expect((await Bun.file(new URL("../.github/actions/native-production/action.yml", import.meta.url)).text()).match(/bash scripts\/build-bun-browser\.sh/g)).toHaveLength(1);
   expect(text).not.toContain("source-cache-browser");
   const recipe = await Bun.file(new URL("./build-bun-browser.sh", import.meta.url)).text();
