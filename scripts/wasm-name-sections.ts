@@ -74,7 +74,7 @@ export const keepNamesRequested = (): boolean => process.env.BUN_WASM_KEEP_NAMES
 /** Fail unless `stripped` is name free and is exactly `named` without its name section. */
 export function assertNamedCopyMatches(named: Uint8Array, stripped: Uint8Array, label: string): void {
   assertNoNameSection(stripped, label);
-  if (!Buffer.from(stripNameSection(named)).equals(stripped)) throw new Error(`${label} is not its named copy without names; rebuild it in a fresh build directory`);
+  if (Buffer.compare(stripNameSection(named), stripped) !== 0) throw new Error(`${label} is not its named copy without names; rebuild it in a fresh build directory`);
 }
 
 function readNamedCopy(path: string): Uint8Array {

@@ -118,6 +118,9 @@ test("CI export and publication check every shipped module, sides included", () 
   expect(source("./ci-ordinary-jsc-program.ts")).toContain('assertShippedGuestHasNoNames("bun-jsc.wasm", core)');
   expect(source("./ci-ordinary-jsc-program.ts")).toContain('assertShippedGuestHasNoNames("jsc-engine.wasm", side)');
   expect(source("./guest-acceptance.ts")).toContain("assertShippedGuestHasNoNames(name, side)");
+  // Publication input verification (also C1 matrix admission) checks each guest and its sides.
+  expect(source("./guest-acceptance.ts")).toContain("assertShippedGuestHasNoNames(name, candidate)");
+  expect(source("./guest-acceptance.ts")).toContain("assertShippedGuestHasNoNames(companion.name,");
 });
 
 test("a change to the stripper selects the guest build and browser coverage", () => {

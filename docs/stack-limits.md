@@ -1261,7 +1261,8 @@ installed Ajv 8 and is not part of a default sweep:
 python3 scripts/measure-stack.py --engine jsc --budget-kib 192 getter computedgetter ajvnames proxy tostring
 python3 scripts/measure-stack.py --engine jsc --budget-kib 192 \
   --ajv-codegen <project>/node_modules/ajv/dist/compile/codegen ajv
-bun scripts/jsc-cloop-frame.ts check "$JSC_ENGINE_BUILD_DIR/engine.named.wasm"
+# The named JSC side; scripts/build-bun-jsc.sh writes it to $JSC_BUILD_DIR/engine by default.
+bun scripts/jsc-cloop-frame.ts check "${JSC_ENGINE_BUILD_DIR:-${JSC_BUILD_DIR:-/work/tmp/bun-wasm-jsc}/engine}/engine.named.wasm"
 scripts/test.sh --no-build --engine jsc getter-dispatch
 ```
 

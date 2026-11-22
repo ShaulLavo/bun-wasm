@@ -56,8 +56,10 @@ export async function verifyPublicationInputs(dist: string, descriptor: GuestDes
   for (const name of artifacts) {
     const candidate = await readFile(join(dist, name));
     const receipt: unknown = JSON.parse(await readFile(`${join(dist, name)}.build.json`, "utf8"));
+    assertShippedGuestHasNoNames(name, candidate);
     verifyGuestBuildReceipt(candidate, receipt);
     await verifyGuestCompanions(receipt, dist);
+    for (const companion of requiredGuestCompanions(receipt)) assertShippedGuestHasNoNames(companion.name, await readFile(join(dist, companion.name)));
     if (guestBuilds[receipt.sourceManifest.build].artifact !== name) throw new Error(`Guest publication engine mismatch: ${name}`);
     const described = describeGuest(candidate);
     if (described.sha256 === descriptor.core.sha256 && described.bytes === descriptor.core.bytes && matchesProgram(receipt, descriptor)) matched = true;
