@@ -10,6 +10,8 @@ import { stopProcessGroup } from "../web/tests/next-framework-process.ts";
 setDefaultTimeout(120_000);
 
 const root = resolve(import.meta.dir, "..");
+const testTimeoutMs = 60_000;
+
 async function freePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
@@ -18,17 +20,6 @@ async function freePort(): Promise<number> {
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   return address.port;
 }
-const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-
-async function until(check: () => boolean | Promise<boolean>, log: () => string): Promise<void> {
-  const end = Date.now() + 15000;
-  while (Date.now() < end) {
-    if (await check()) return;
-    await delay(10);
-  }
-  throw new Error(`Hot live control timed out\n${log()}`);
-}
-
 function application(port: number, specifier = "./page.html"): string {
   return `import text from ${JSON.stringify(specifier)} with { type: "text" };
 const state = globalThis.hotIdentity ??= { runs: 0, server: null };
@@ -41,6 +32,8 @@ state.server ??= server;
 }
 
 test("real native hot run recovers its initially malformed entry, rejects stale/deleted bytes, and releases its port", async () => {
+  // Cold Wasmtime compilation shares the test budget with recovery. Leave time to stop the process group.
+  const deadline = performance.now() + testTimeoutMs - 15_000;
   const scratch = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-hot-live-"));
   const port = await freePort();
   const launcher = process.env.BUN_WASM_LAUNCHER ?? join(process.env.CARGO_TARGET_DIR ?? join(root, "target"), "release/bun-wasm");
@@ -49,6 +42,13 @@ test("real native hot run recovers its initially malformed entry, rejects stale/
   writeFileSync(join(scratch, "page.html"), "before");
   let child: ReturnType<typeof spawn> | undefined;
   let output = "";
+  async function waitFor(phase: string, check: () => boolean | Promise<boolean>): Promise<void> {
+    while (performance.now() < deadline) {
+      if (await check()) return;
+      await Bun.sleep(10);
+    }
+    throw new Error(`Hot live control timed out waiting for ${phase}\n${output}`);
+  }
   try {
     child = spawn(launcher, ["--wasm", guest, "--dir", `${scratch}::/`, "--env", "PWD=/", "--", "--hot", "run", "/entry.ts"],
       { cwd: scratch, detached: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -56,7 +56,7 @@ test("real native hot run recovers its initially malformed entry, rejects stale/
     child.stderr?.on("data", bytes => { output += String(bytes); });
     let spawnError: Error | undefined;
     child.once("error", error => { spawnError = error; });
-    await until(() => Boolean(spawnError) || output.includes("SyntaxError:"), () => output);
+    await waitFor("initial syntax error", () => Boolean(spawnError) || output.includes("SyntaxError:"));
     if (spawnError) throw spawnError;
     expect(child.exitCode).toBeNull();
     expect(output.match(/SyntaxError:/g)).toHaveLength(1);
@@ -74,17 +74,17 @@ test("real native hot run recovers its initially malformed entry, rejects stale/
         return true;
       } catch { return false; }
     }
-    await until(() => response("before", "1"), () => output);
+    await waitFor("first served page", () => response("before", "1"));
     rmSync(join(scratch, "page.html"));
-    await until(() => (output.includes("ENOENT") || output.includes("Cannot find module './page.html'")), () => output);
+    await waitFor("deleted page error", () => output.includes("ENOENT") || output.includes("Cannot find module './page.html'"));
     expect(await response("before", "1")).toBe(true);
     writeFileSync(join(scratch, "page.html"), "after!");
-    await until(() => response("after!", "2"), () => output);
+    await waitFor("restored page", () => response("after!", "2"));
     writeFileSync(join(scratch, "entry.ts"), application(port, "./later"));
-    await until(() => output.includes("Cannot find module './later'"), () => output);
+    await waitFor("unresolved import error", () => output.includes("Cannot find module './later'"));
     expect(await response("after!", "2")).toBe(true);
     writeFileSync(join(scratch, "later.ts"), "extensionless");
-    await until(() => response("extensionless", "3"), () => output);
+    await waitFor("restored extensionless import", () => response("extensionless", "3"));
     expect(child.exitCode).toBeNull();
   } finally {
     if (child?.pid) await stopProcessGroup(child);
@@ -94,4 +94,4 @@ test("real native hot run recovers its initially malformed entry, rejects stale/
   try {
     await new Promise<void>((resolve, reject) => { reusable.once("error", reject); reusable.listen(port, "127.0.0.1", resolve); });
   } finally { await new Promise<void>(resolve => reusable.close(() => resolve())); }
-}, 60000);
+}, testTimeoutMs);
