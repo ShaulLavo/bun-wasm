@@ -102,7 +102,14 @@
   }
 
   // The binding's errname does not validate: a non-integer is just an unknown error.
+  // Node latches DEP0119 once per thread, and only under --pending-deprecation.
+  let errnameWarned = false;
   function errname(errno: unknown) {
+    const process = globalThis.process as { pendingDeprecation?: boolean; emitWarning(message: string, type: string, code: string): void };
+    if (process.pendingDeprecation && !errnameWarned) {
+      errnameWarned = true;
+      process.emitWarning("Directly calling process.binding('uv').errname(<val>) is being deprecated. Please make sure to use util.getSystemErrorName() instead.", "DeprecationWarning", "DEP0119");
+    }
     const entry = typeof errno === "number" ? byErrno.get(errno) : undefined;
     if (entry) return entry[1];
     return Number.isInteger(errno) ? `Unknown system error ${errno}` : "Unknown system error";

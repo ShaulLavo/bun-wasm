@@ -567,6 +567,12 @@ declare namespace BunWasm {
       getPriority(pid?: unknown): number;
       setPriority(pid?: unknown, priority?: unknown): void;
     };
+    require(name: "process_ids"): {
+      getuid(): number; geteuid(): number; getgid(): number; getegid(): number; getgroups(): number[];
+      setuid(id: unknown): number; seteuid(id: unknown): number; setgid(id: unknown): number; setegid(id: unknown): number;
+      setgroups(groups: unknown): number;
+      initgroups(user: unknown, extraGroup: unknown): void;
+    };
     require(name: "process_args"): {
       umask(mask: unknown): number;
       cpuUsage(usage: { user: number; system: number }, previous: unknown): { user: number; system: number };

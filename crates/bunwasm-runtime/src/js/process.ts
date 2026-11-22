@@ -33,6 +33,7 @@
   }
 
   let execveWarned = false;
+  let bindingWarned = false;
   let bindingConstants: object | undefined;
   let bindingLookup: ((name: unknown, own: Record<string, () => unknown>) => unknown) | undefined;
   const ownBindings: Record<string, () => unknown> = {
@@ -449,6 +450,14 @@
     _getActiveRequests: () => [],
     _getActiveHandles: () => [],
     _linkedBinding() {},
+    // util.format straight to fd 2, bypassing process.stderr. Node's last resort never throws,
+    // even when fd 2 is closed.
+    _rawDebug(...args: unknown[]) {
+      try {
+        const text = (internal.builtin("node:util") as { formatWithOptions(options: object, ...args: unknown[]): string }).formatWithOptions({}, ...args);
+        (internal.builtin("node:fs") as unknown as { writeSync(fd: number, text: string): number }).writeSync(2, text + "\n");
+      } catch {}
+    },
     _tickCallback() {},
     // Main thread only: worker_threads removes these from a worker's process.
     _debugEnd() {},
@@ -506,17 +515,27 @@
     cpuUsage: (previous?: unknown) => internal.require("process_args").cpuUsage({ user: Math.floor(native.now() * 1000), system: 0 }, previous),
     uptime: () => native.now() / 1000,
     umask: (mask?: unknown) => internal.require("process_args").umask(mask),
-    getuid: () => 0,
-    geteuid: () => 0,
-    getgid: () => 0,
-    getegid: () => 0,
-    getgroups: () => [],
-    setuid() {},
-    setgid() {},
+    // The credentials live in process_ids, which loads on first use.
+    getuid: () => internal.require("process_ids").getuid(),
+    geteuid: () => internal.require("process_ids").geteuid(),
+    getgid: () => internal.require("process_ids").getgid(),
+    getegid: () => internal.require("process_ids").getegid(),
+    getgroups: () => internal.require("process_ids").getgroups(),
+    setuid: (id: unknown) => internal.require("process_ids").setuid(id),
+    seteuid: (id: unknown) => internal.require("process_ids").seteuid(id),
+    setgid: (id: unknown) => internal.require("process_ids").setgid(id),
+    setegid: (id: unknown) => internal.require("process_ids").setegid(id),
+    setgroups: (groups: unknown) => internal.require("process_ids").setgroups(groups),
+    initgroups: (user: unknown, extraGroup: unknown) => internal.require("process_ids").initgroups(user, extraGroup),
     emitWarning(warning: unknown, ...options: unknown[]) {
       internal.require("process_warning").emitWarning(process, warning, options[0], options[1], options[2]);
     },
     binding(name: unknown) {
+      // Node latches DEP0111 once per thread.
+      if (process.pendingDeprecation && !bindingWarned) {
+        bindingWarned = true;
+        process.emitWarning("process.binding() is deprecated. Please use public APIs instead.", "DeprecationWarning", "DEP0111");
+      }
       return (bindingLookup ??= internal.require("process_binding"))(name, ownBindings);
     },
     dlopen() {
@@ -544,14 +563,20 @@
     availableMemory: () => 4294967296 - memoryUsage.rss(),
     stdin: undefined,
   };
-  const process: BunWasm.NodeEmitter & { noDeprecation: boolean; exitCode?: unknown; reallyExit: unknown; pid: number; env: Record<PropertyKey, unknown>; execArgv: string[]; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
+  const process: BunWasm.NodeEmitter & { noDeprecation: boolean; pendingDeprecation?: boolean; exitCode?: unknown; reallyExit: unknown; pid: number; env: Record<PropertyKey, unknown>; execArgv: string[]; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
   delete process.stdin;
 
   Object.defineProperties(process, {
     stdout: { get: () => stdout || (stdout = makeWriter(1)), configurable: true, enumerable: true },
     stderr: { get: () => stderr || (stderr = makeWriter(2)), configurable: true, enumerable: true },
     stdin: { get: () => stdin || (stdin = makeReader()), configurable: true, enumerable: true },
-    mainModule: { get: () => internal.getMainModule(), configurable: true, enumerable: false },
+    // Writable, like Bun's data property: a write replaces the main module for process only.
+    mainModule: {
+      get: () => internal.getMainModule(),
+      set: (value: unknown) => { Object.defineProperty(process, "mainModule", { value, writable: true, configurable: true, enumerable: false }); },
+      configurable: true,
+      enumerable: false,
+    },
     exitCode: { get: () => exitByte, set: setExitCode, configurable: true, enumerable: true },
     finalization: { get: () => finalization ??= createFinalization(), configurable: true, enumerable: false },
     allowedNodeEnvironmentFlags: lazyData("allowedNodeEnvironmentFlags", () => internal.require("process_allowed_flags")),
