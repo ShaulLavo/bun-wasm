@@ -54,7 +54,14 @@
       return fn(absolute(given), given);
     } catch (err) {
       if (err && typeof err.path === "string" && err.path !== given) {
-        err.message = err.message.replace(`'${err.path}'`, `'${given}'`);
+        if (err.message.includes(`'${err.path}'`)) {
+          err.message = err.message.replace(`'${err.path}'`, `'${given}'`);
+        } else if (err.message.endsWith(` ${err.path}`)) {
+          err.message = `${err.message.slice(0, -err.path.length)}${given}`;
+        }
+        if (err.info && typeof err.info === "object" && err.info.path === err.path) {
+          err.info.path = given;
+        }
         err.path = given;
       }
       throw err;
@@ -290,10 +297,9 @@
   function readFileSync(path, options) {
     if (typeof path !== "number" && typeof path !== "string") path = toPath(path);
     const encoding = encodingOf(options);
-    // Node validates the flag before opening; the read itself does not use it here.
-    // A null or undefined flag means the default, as in Bun.
-    flagsNumber((options && typeof options === "object" ? options.flag : undefined) ?? "r");
-    const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => native.readFile(abs));
+    // A null or undefined flag means the default ("r"), as in Bun.
+    const flags = flagsNumber((options && typeof options === "object" ? options.flag : undefined) ?? "r");
+    const bytes = typeof path === "number" ? readAllFd(path) : withPath(path, (abs) => (flags === 0 ? native.readFile(abs) : native.readFile(abs, flags)));
     const buf = asBuffer(bytes);
     return encoding && encoding !== "buffer" ? buf.toString(encoding) : buf;
   }
@@ -403,7 +409,19 @@
   }
 
   function copyFileSync(from, to, mode = 0) {
-    withPath(from, (abs) => native.copyFile(abs, absolute(toPath(to, "dest")), mode));
+    const dest = toPath(to, "dest");
+    const absDest = absolute(dest);
+    withPath(from, (abs) => {
+      try {
+        native.copyFile(abs, absDest, mode);
+      } catch (err) {
+        if (err && typeof err.dest === "string" && err.dest !== dest) {
+          err.message = err.message.replace(`-> '${err.dest}'`, `-> '${dest}'`);
+          err.dest = dest;
+        }
+        throw err;
+      }
+    });
   }
 
   function cpSync(from, to, options = {}) {
@@ -815,8 +833,14 @@
       validateFd(fd);
       native.futimes(fd, ...timeSpec(atime, "atime"), ...timeSpec(mtime, "mtime"));
     },
-    fsyncSync: () => {},
-    fdatasyncSync: () => {},
+    fsyncSync: (fd) => {
+      validateFd(fd);
+      native.fsync(fd);
+    },
+    fdatasyncSync: (fd) => {
+      validateFd(fd);
+      native.fdatasync(fd);
+    },
   };
 
   // Bun's truncate length: missing means 0, anything but a number is a TypeError.
@@ -1045,7 +1069,8 @@
   function fileHandles() {
     fileHandleModule ??= internal.require("fs_file_handle")({
       Buffer, closeSync, readFileSync, writeFileSync: writeHandleFile, appendFileSync, readSync, readvSync, writeSync, writevSync,
-      fstatSync: sync.fstatSync, ftruncateSync: sync.ftruncateSync, later, createReadStream, createWriteStream,
+      fstatSync: sync.fstatSync, ftruncateSync: sync.ftruncateSync, fsyncSync: sync.fsyncSync, fdatasyncSync: sync.fdatasyncSync,
+      later, createReadStream, createWriteStream,
     });
     return fileHandleModule;
   }

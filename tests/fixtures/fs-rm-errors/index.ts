@@ -35,9 +35,9 @@ function checkRemovals(root: string) {
   const child = join(directory, "child");
   fs.mkdirSync(directory);
   fs.writeFileSync(child, "keep until recursive");
-  assert.throws(() => fs.rmSync(directory, { force: true }));
+  assert.throws(() => fs.rmSync(directory, { force: true }), { code: "ERR_FS_EISDIR" });
   assert.equal(fs.readFileSync(child, "utf8"), "keep until recursive");
-  fs.rmSync(directory, { recursive: true, force: true });
+  fs.rmSync(`${directory}/`, { recursive: true, force: true });
   assert.equal(fs.existsSync(directory), false);
 }
 

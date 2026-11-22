@@ -95,16 +95,34 @@ fn directories_require_recursive_removal_even_with_force() {
     fs::create_dir(&directory).unwrap();
     fs::write(&child, b"keep until recursive").unwrap();
     for force in [false, true] {
-        assert_error(
-            fixture.rm(&directory, false, force).unwrap_err(),
-            "EISDIR",
-            -21,
-            &directory,
-        );
+        let error = fixture.rm(&directory, false, force).unwrap_err();
+        assert_error(error, "ERR_FS_EISDIR", 21, &directory);
         assert_eq!(fs::read(&child).unwrap(), b"keep until recursive");
     }
     assert_eq!(fixture.rm(&directory, true, true).unwrap(), Val::Undefined);
     assert!(!fs::exists(&directory).unwrap());
+}
+
+#[test]
+fn trailing_slash_removes_directory_and_rejects_file() {
+    let fixture = Fixture::new();
+    let directory = fixture.path("trailing-dir");
+    fs::create_dir_all(format!("{directory}/sub")).unwrap();
+    assert_eq!(
+        fixture.rm(&format!("{directory}/"), true, false).unwrap(),
+        Val::Undefined
+    );
+    assert!(!fs::exists(&directory).unwrap());
+
+    let file = fixture.path("trailing-file");
+    fs::write(&file, b"x").unwrap();
+    let with_slash = format!("{file}/");
+    assert_error(
+        fixture.rm(&with_slash, true, false).unwrap_err(),
+        "ENOTDIR",
+        -20,
+        &with_slash,
+    );
 }
 
 #[cfg(unix)]

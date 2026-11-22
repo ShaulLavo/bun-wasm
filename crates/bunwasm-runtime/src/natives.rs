@@ -140,6 +140,35 @@ pub fn io_error(err: io::Error, syscall: &str, path: Option<&str>) -> NativeErro
         .prop("code", code)
 }
 
+fn io_error_with_dest(err: io::Error, syscall: &str, path: &str, dest: &str) -> NativeError {
+    let (code, errno, desc) = errno_info(&err);
+    let message = format!("{code}: {desc}, {syscall} '{path}' -> '{dest}'");
+    NativeError::error(message)
+        .prop("path", path)
+        .prop("dest", dest)
+        .prop("syscall", syscall)
+        .prop("errno", errno)
+        .prop("code", code)
+}
+
+fn rm_eisdir_error(path: &str) -> NativeError {
+    let info = Record::new()
+        .set("code", "EISDIR")
+        .set("message", "is a directory")
+        .set("path", path)
+        .set("syscall", "rm")
+        .set("errno", 21);
+    NativeError::error(format!(
+        "Path is a directory: rm returned EISDIR (is a directory) {path}"
+    ))
+    .prop("name", "SystemError")
+    .prop("code", "ERR_FS_EISDIR")
+    .prop("errno", 21)
+    .prop("syscall", "rm")
+    .prop("path", path)
+    .prop("info", Val::from(info))
+}
+
 fn millis(time: io::Result<SystemTime>) -> f64 {
     time.ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -342,11 +371,14 @@ fn sync_mode(flags: i32) -> SyncMode {
     SyncMode::None
 }
 
-#[cfg(target_os = "wasi")]
+#[cfg(any(target_os = "wasi", unix))]
 fn sync_fd(fd: i32, mode: SyncMode) -> io::Result<()> {
     let status = match mode {
         SyncMode::None => return Ok(()),
+        #[cfg(any(target_os = "wasi", target_os = "linux"))]
         SyncMode::Data => unsafe { libc::fdatasync(fd) },
+        #[cfg(all(unix, not(target_os = "linux")))]
+        SyncMode::Data => unsafe { libc::fsync(fd) },
         SyncMode::All => unsafe { libc::fsync(fd) },
     };
     if status < 0 {
@@ -355,7 +387,7 @@ fn sync_fd(fd: i32, mode: SyncMode) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "wasi"))]
+#[cfg(not(any(target_os = "wasi", unix)))]
 fn sync_fd(_fd: i32, _mode: SyncMode) -> io::Result<()> {
     Ok(())
 }
@@ -366,9 +398,24 @@ fn sync_fd(_fd: i32, _mode: SyncMode) -> io::Result<()> {
 pub struct FdTable {
     files: HashMap<i32, File>,
     sync_modes: HashMap<i32, SyncMode>,
-    /// Standard descriptors the program closed. The host's own streams stay open; the guest sees
-    /// them as closed, so a later write fails with EBADF as it would after `close(2)`.
-    closed_stdio: [bool; 3],
+    detached_stdio: [bool; 3],
+}
+
+impl FdTable {
+    fn is_stdio_attached(&self, fd: i32) -> bool {
+        usize::try_from(fd)
+            .ok()
+            .and_then(|i| self.detached_stdio.get(i))
+            .is_some_and(|&detached| !detached)
+    }
+
+    fn detach_stdio(&mut self, fd: i32) {
+        if let Ok(index) = usize::try_from(fd)
+            && let Some(slot) = self.detached_stdio.get_mut(index)
+        {
+            *slot = true;
+        }
+    }
 }
 
 fn synchronize_descriptor(state: &State, fd: i32, written: usize) -> io::Result<()> {
@@ -708,9 +755,25 @@ fn mkdir_recursive(path: &str) -> io::Result<Option<String>> {
 fn install_fs(t: &mut Table) {
     t.add("readFile", |a| {
         let path = required_path(a.str(0)?, "open")?;
-        Ok(Val::Bytes(
-            fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?,
-        ))
+        let flags = a.opt_num(1).map(|n| n as i32).unwrap_or(0);
+        if flags == 0 {
+            return Ok(Val::Bytes(
+                fs::read(path).map_err(|e| io_error(e, "open", Some(path)))?,
+            ));
+        }
+        let mut file =
+            open_file(path, flags, 0o666).map_err(|e| io_error(e, "open", Some(path)))?;
+        if flags & 3 == 1 {
+            return Err(io_error(
+                io::Error::from_raw_os_error(libc::EBADF),
+                "read",
+                Some(path),
+            ));
+        }
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)
+            .map_err(|e| io_error(e, "read", Some(path)))?;
+        Ok(Val::Bytes(buf))
     });
     t.add("readFileUtf8", |a| {
         let path = required_path(a.str(0)?, "open")?;
@@ -779,15 +842,35 @@ fn install_fs(t: &mut Table) {
             return ok();
         }
         let path = required_path(path, "rm")?;
-        let meta = match fs::symlink_metadata(path) {
+        let has_trailing_slash = path.ends_with('/') && path.bytes().any(|b| b != b'/');
+        let target = if has_trailing_slash {
+            path.trim_end_matches('/')
+        } else {
+            path
+        };
+        let meta = match if has_trailing_slash {
+            fs::metadata(target)
+        } else {
+            fs::symlink_metadata(target)
+        } {
             Ok(m) => m,
             Err(e) if a.bool(2) && e.kind() == io::ErrorKind::NotFound => return ok(),
             Err(e) => return Err(io_error(e, "rm", Some(path))),
         };
-        let result = match (meta.is_dir(), a.bool(1)) {
-            (true, true) => fs::remove_dir_all(path),
-            (true, false) => Err(io::Error::from(io::ErrorKind::IsADirectory)),
-            _ => fs::remove_file(path),
+        if has_trailing_slash && !meta.is_dir() {
+            return Err(io_error(
+                io::Error::from(io::ErrorKind::NotADirectory),
+                "rm",
+                Some(path),
+            ));
+        }
+        if meta.is_dir() && !a.bool(1) {
+            return Err(rm_eisdir_error(path));
+        }
+        let result = if meta.is_dir() {
+            fs::remove_dir_all(target)
+        } else {
+            fs::remove_file(target)
         };
         result.map_err(|e| io_error(e, "rm", Some(path)))?;
         ok()
@@ -819,7 +902,7 @@ fn install_fs(t: &mut Table) {
         required_path(from, "copyfile")?;
         required_path(to, "copyfile")?;
         copy_file(from, to, a.opt_num(2).unwrap_or(0.0) as i32)
-            .map_err(|e| io_error(e, "copyfile", Some(from)))?;
+            .map_err(|e| io_error_with_dest(e, "copyfile", from, to))?;
         ok()
     });
     t.add("realpath", |a| {
@@ -962,8 +1045,17 @@ fn writev(state: &State, args: Args<'_>) -> NativeResult {
 }
 
 fn flush_descriptor_output(state: &State) -> io::Result<()> {
-    state.flush_stdout()?;
-    io::stderr().flush()
+    let fds = state.fds.borrow();
+    let flush_out = fds.is_stdio_attached(1);
+    let flush_err = fds.is_stdio_attached(2);
+    drop(fds);
+    if flush_out {
+        state.flush_stdout()?;
+    }
+    if flush_err {
+        io::stderr().flush()?;
+    }
+    Ok(())
 }
 
 fn retry_interrupted(mut operation: impl FnMut() -> io::Result<usize>) -> io::Result<usize> {
@@ -1030,20 +1122,13 @@ fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
             .map(|n| Val::Num(n as f64))
             .map_err(|e| io_error(e, "write", None));
     }
-    if (1..=2).contains(&fd) && state.fds.borrow().closed_stdio[fd as usize] {
-        return Err(io_error(
-            io::Error::from_raw_os_error(libc::EBADF),
-            "write",
-            None,
-        ));
-    }
-    if fd == 1 {
+    if fd == 1 && state.fds.borrow().is_stdio_attached(1) {
         state
             .write_stdout(bytes)
             .map_err(|e| io_error(e, "write", None))?;
         return Ok(Val::Num(bytes.len() as f64));
     }
-    if fd == 2 {
+    if fd == 2 && state.fds.borrow().is_stdio_attached(2) {
         state
             .write_stderr(bytes)
             .map_err(|e| io_error(e, "write", None))?;
@@ -1064,18 +1149,13 @@ fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
 
 fn close_descriptor(state: &State, args: Args<'_>) -> NativeResult {
     let fd = args.i32(0)?;
-    if (0..=2).contains(&fd) {
-        let mut fds = state.fds.borrow_mut();
-        if std::mem::replace(&mut fds.closed_stdio[fd as usize], true) {
-            return Err(io_error(
-                io::Error::from_raw_os_error(libc::EBADF),
-                "close",
-                None,
-            ));
-        }
-        return ok();
+    if fd == 1 && state.fds.borrow().is_stdio_attached(1) {
+        let _ = state.flush_stdout();
+    } else if fd == 2 && state.fds.borrow().is_stdio_attached(2) {
+        let _ = io::stderr().flush();
     }
     let mut fds = state.fds.borrow_mut();
+    fds.detach_stdio(fd);
     fds.sync_modes.remove(&fd);
     if fds.files.remove(&fd).is_some() {
         return ok();
@@ -1141,6 +1221,16 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         if result < 0 {
             return Err(io_error(io::Error::last_os_error(), "ftruncate", None));
         }
+        ok()
+    });
+    t.add("fsync", |a| {
+        let fd = a.i32(0)?;
+        sync_fd(fd, SyncMode::All).map_err(|e| io_error(e, "fsync", None))?;
+        ok()
+    });
+    t.add("fdatasync", |a| {
+        let fd = a.i32(0)?;
+        sync_fd(fd, SyncMode::Data).map_err(|e| io_error(e, "fdatasync", None).prop("fd", fd))?;
         ok()
     });
 }
