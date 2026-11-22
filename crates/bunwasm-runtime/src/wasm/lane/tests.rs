@@ -3,7 +3,7 @@
 //! and member-owned pins; group pins drop only when the last member is released; handles and
 //! pins never repeat; a released member's calls fail with EBADF.
 use super::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
@@ -394,6 +394,60 @@ fn phases(peer: &Peer) -> BTreeMap<u32, usize> {
         *count.entry(lanes.mem.get(at + CLAIM).kind).or_default() += 1;
     }
     count
+}
+
+/// Group memory that runs `hook` once, just before the first access `when` picks, so a test can
+/// put another member's stores at one exact point inside an algorithm, as a preempted thread
+/// would see them.
+struct Hooked<'a> {
+    inner: &'a Buffer,
+    when: When<'a>,
+    hook: RefCell<Option<Hook<'a>>>,
+}
+
+/// Picks the access the hook runs before, from the address and the memory as it is then.
+type When<'a> = Box<dyn Fn(&Buffer, u32) -> bool + 'a>;
+type Hook<'a> = Box<dyn FnOnce() + 'a>;
+
+impl<'a> Hooked<'a> {
+    fn new(
+        inner: &'a Buffer,
+        when: impl Fn(&Buffer, u32) -> bool + 'a,
+        hook: impl FnOnce() + 'a,
+    ) -> Hooked<'a> {
+        Hooked {
+            inner,
+            when: Box::new(when),
+            hook: RefCell::new(Some(Box::new(hook))),
+        }
+    }
+
+    fn lanes<'b>(&'b self, peer: &'b Peer) -> Lanes<'b, Hooked<'a>, Guest> {
+        Lanes {
+            mem: self,
+            host: &peer.guest,
+            ledger: peer.ledger,
+            tag: peer.tag,
+        }
+    }
+
+    fn fired(&self) -> bool {
+        self.hook.borrow().is_none()
+    }
+}
+
+impl Memory for Hooked<'_> {
+    fn size(&self) -> u64 {
+        self.inner.size()
+    }
+    fn raw(&self, at: u32, len: u32) -> *mut u8 {
+        let armed = self.hook.borrow().is_some();
+        if armed && (self.when)(self.inner, at) {
+            let hook = self.hook.borrow_mut().take();
+            hook.into_iter().for_each(|hook| hook());
+        }
+        self.inner.raw(at, len)
+    }
 }
 
 /// Nothing is claimed, staged, live or being cleaned; only pooled storage remains.
@@ -1299,6 +1353,189 @@ fn a_writer_and_reader_on_two_threads_agree_on_every_frame() {
     });
     root.lanes().sweep(Sweep::Full);
     assert_settled(&root);
+}
+
+/// Posts `text`, too big for the ring, from side 0 of a lane in ring mode: the segment it starts.
+fn spill(lanes: &Lanes<'_, Buffer, Guest>, lane: LaneRef, text: &[u8]) -> Segment {
+    let staged = lanes.reserve(lane, 0, text).unwrap();
+    let Staged::FirstSpill { segment, .. } = staged else {
+        panic!("a frame over the ring bound spills: {staged:?}");
+    };
+    lanes.commit(staged);
+    segment
+}
+
+#[test]
+fn frames_appended_while_the_reader_finds_a_segment_drained_are_read_before_its_link() {
+    let group = Group::new(64);
+    let root = Peer::root(&group);
+    let r = root.lanes();
+    let lane = r.create_lane().unwrap();
+    let first = frame(1, 20_000);
+    let segment = spill(&r, lane, &first);
+    let appended = frame(2, 20_000);
+    let linked = frame(3, 30_000);
+    let address = segment.address;
+    // The reader has loaded the segment's committed cursor and finds every frame below it read.
+    // Before it looks at its own read cursor, the writer appends a frame and links the next
+    // segment, as a writer on another thread does while the reader is preempted.
+    let mem = Hooked::new(
+        &group.mem,
+        |mem, at| {
+            let read = mem.load(address + S_READ);
+            at == address + S_READ && read != 0 && read == mem.load(address + S_COMMITTED)
+        },
+        || {
+            let staged = r.reserve(lane, 0, &appended).unwrap();
+            assert!(matches!(staged, Staged::Append { .. }), "{staged:?}");
+            r.commit(staged);
+            let staged = r.reserve(lane, 0, &linked).unwrap();
+            assert!(matches!(staged, Staged::Link { .. }), "{staged:?}");
+            r.commit(staged);
+        },
+    );
+    let frames = mem.lanes(&root).drain(lane, 1, 8).unwrap().frames;
+    assert!(mem.fired());
+    assert_eq!(frames.len(), 3, "no committed frame is skipped");
+    assert_eq!(frames, [first.clone(), appended.clone(), linked.clone()]);
+}
+
+#[test]
+fn a_slot_reused_while_its_releaser_counts_it_never_hides_pooled_bytes() {
+    let group = Group::new(64);
+    let root = Peer::root(&group);
+    let r = root.lanes();
+    let lane = r.create_lane().unwrap();
+    let first = frame(1, 20_000);
+    let segment = spill(&r, lane, &first);
+    assert_eq!(take(&r, lane, 1), [first]);
+    post(&r, lane, 0, b"back to the ring");
+    let slot = r.small_slot(segment.index);
+    let pool = r.ledger + H_POOL;
+    let again = frame(2, 20_000);
+    // The reader leaves the sealed segment and releases its slot. The writer, on another
+    // thread, takes the slot for its next spill as soon as it shows Released, while the
+    // releaser is still accounting for it.
+    let mem = Hooked::new(
+        &group.mem,
+        |mem, at| at == pool && mem.get(slot + CLAIM).kind == phase::RELEASED,
+        || {
+            let staged = r.reserve(lane, 0, &again).unwrap();
+            assert!(
+                matches!(staged, Staged::FirstSpill { segment: reused, .. } if reused.index == segment.index),
+                "the writer reuses the slot just released: {staged:?}"
+            );
+            r.commit(staged);
+        },
+    );
+    let frames = mem.lanes(&root).drain(lane, 1, 8).unwrap().frames;
+    assert!(mem.fired());
+    assert_eq!(frames, [b"back to the ring".to_vec(), again.clone()]);
+    assert_eq!(r.census().pooled_bytes, 0);
+    assert!(
+        r.mem.load(pool) >= r.census().pooled_bytes,
+        "a race may leave the estimate high, never low"
+    );
+    r.sweep(Sweep::Full);
+    assert_eq!(r.mem.load(pool), 0, "a trim restarts the estimate exactly");
+}
+
+/// Builds a group with `setup`, then runs `act` as a second member killed before each of its
+/// memory accesses in turn, until it completes. After every kill the member is released and the
+/// root's full sweep must leave the pool estimate equal to the bytes really pooled.
+fn assert_pool_survives_every_kill<T>(
+    setup: impl Fn(&Peer, &Peer) -> T,
+    act: impl Fn(&Lanes<'_, Killed<'_>, Guest>, T),
+) {
+    for stop in 0.. {
+        let group = Group::new(64);
+        let root = Peer::root(&group);
+        let member = root.child();
+        let state = setup(&root, &member);
+        let killed = Killed {
+            inner: &group.mem,
+            stop,
+            seen: Cell::new(0),
+        };
+        let dying = Lanes {
+            mem: &killed,
+            host: &member.guest,
+            ledger: root.ledger,
+            tag: member.tag,
+        };
+        let survived = catch_unwind(AssertUnwindSafe(|| act(&dying, state))).is_ok();
+        member.release();
+        let r = root.lanes();
+        r.sweep(Sweep::Full);
+        let pooled = r.census().pooled_bytes;
+        assert_eq!(r.mem.load(r.ledger + H_POOL), pooled, "stop {stop}");
+        assert!(pooled <= POOL_LIMIT, "stop {stop}");
+        if survived {
+            return;
+        }
+    }
+}
+
+/// A lane whose side 0 `member` owns, with nothing in flight.
+fn lane_for(root: &Peer, member: &Peer) -> LaneRef {
+    let r = root.lanes();
+    let lane = r.create_lane().unwrap();
+    let epoch = r.transfer_epoch(lane, 0).unwrap();
+    r.transfer(lane, 0, Custody::Tag(root.tag));
+    assert!(member.lanes().adopt(lane, 0, epoch, 1));
+    lane
+}
+
+/// A drained and sealed spill segment of `len` bytes of frame, now Released in the pool.
+fn pool_one_segment(root: &Peer, member: &Peer, lane: LaneRef, len: usize) {
+    let (w, r) = (member.lanes(), root.lanes());
+    post(&w, lane, 0, &frame(0, len));
+    assert_eq!(take(&r, lane, 1).len(), 1);
+    // The reader caught up, so this returns to the ring and seals the segment.
+    post(&w, lane, 0, b"seal");
+    assert_eq!(take(&r, lane, 1).len(), 1);
+    assert!(r.census().pooled_bytes > 0);
+}
+
+#[test]
+fn a_member_killed_while_it_aborts_a_spill_leaves_the_pool_estimate_recoverable() {
+    assert_pool_survives_every_kill(
+        |root, member| {
+            let lane = lane_for(root, member);
+            let staged = member.lanes().reserve(lane, 0, &frame(1, 20_000)).unwrap();
+            assert!(matches!(staged, Staged::FirstSpill { .. }), "{staged:?}");
+            staged
+        },
+        |dying, staged| dying.abort(staged),
+    );
+}
+
+#[test]
+fn a_member_killed_while_it_reuses_a_pooled_slot_leaves_the_pool_estimate_recoverable() {
+    assert_pool_survives_every_kill(
+        |root, member| {
+            let lane = lane_for(root, member);
+            pool_one_segment(root, member, lane, 20_000);
+            lane
+        },
+        |dying, lane| {
+            let staged = dying.reserve(lane, 0, &frame(1, 20_000)).unwrap();
+            dying.commit(staged);
+        },
+    );
+}
+
+#[test]
+fn a_member_killed_while_it_trims_leaves_the_pool_estimate_recoverable() {
+    assert_pool_survives_every_kill(
+        |root, member| {
+            let lane = lane_for(root, member);
+            pool_one_segment(root, member, lane, 2_000_000);
+        },
+        |dying, ()| {
+            dying.sweep(Sweep::Trim);
+        },
+    );
 }
 
 #[test]
