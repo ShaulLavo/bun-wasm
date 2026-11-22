@@ -6,7 +6,7 @@ import { join } from "node:path";
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
 
-function fixture(run: (f: { root: string; repository: string; vendor: string; base: string; first: string; final: string; git: (cwd: string, ...args: string[]) => string; sync: (args?: string[]) => ReturnType<typeof Bun.spawnSync> }) => void) {
+function fixture(run: (f: { root: string; repository: string; vendor: string; base: string; first: string; final: string; git: (cwd: string, ...args: string[]) => string; sync: (args?: string[], committerDate?: string) => ReturnType<typeof Bun.spawnSync> }) => void) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-source-test-"));
   try {
     const repository = join(root, "upstream"), vendor = join(root, "vendor", "bun");
@@ -42,8 +42,8 @@ function fixture(run: (f: { root: string; repository: string; vendor: string; ba
       .replace("https://github.com/oven-sh/bun.git", `file://${repository}`);
     writeFileSync(join(root, "scripts", "sync-bun.sh"), script);
     writeFileSync(join(root, "env.sh"), 'export TMPDIR="$BUN_WASM_TEST_TMP"\n');
-    const sync = (args: string[] = []) => Bun.spawnSync(["bash", join(root, "scripts", "sync-bun.sh"), "--source-only"].concat(args), {
-      env: { ...process.env, BUN_WASM_TEST_TMP: root },
+    const sync = (args: string[] = [], committerDate = process.env.GIT_COMMITTER_DATE) => Bun.spawnSync(["bash", join(root, "scripts", "sync-bun.sh"), "--source-only"].concat(args), {
+      env: { ...process.env, BUN_WASM_TEST_TMP: root, GIT_COMMITTER_DATE: committerDate },
     });
     run({ root, repository, vendor, base, first, final, git, sync });
   } finally {
@@ -70,6 +70,17 @@ test("source sync rebuilds a stale patched ref from checked-in patch bytes", () 
     expect(readFileSync(join(vendor, "source.txt"), "utf8")).toBe("second patch\n");
     expect(git(vendor, "rev-parse", "HEAD^{tree}")).toBe(git(repository, "rev-parse", "patch-source^{tree}"));
     expect(git(repository, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length).toBe(2);
+  });
+});
+
+test("reapplying the same patches produces the same commit for Bun codegen", () => {
+  fixture(({ repository, vendor, base, git, sync }) => {
+    git(repository, "branch", "-f", "wasm", base);
+    expect(sync([], "2026-10-01T00:00:00Z").exitCode).toBe(0);
+    const patched = git(vendor, "rev-parse", "HEAD");
+    git(vendor, "checkout", "--detach", base);
+    expect(sync([], "2026-11-01T00:00:00Z").exitCode).toBe(0);
+    expect(git(vendor, "rev-parse", "HEAD")).toBe(patched);
   });
 });
 
