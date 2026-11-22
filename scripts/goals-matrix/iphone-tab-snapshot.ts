@@ -37,9 +37,13 @@ export function hasOwnedTab(overview: Overview, title: string): boolean {
   return tabs(overview).some(node => node.label === title);
 }
 
+export function visibleOwnedTab(overview: Overview, titles: ReadonlySet<string>): string | undefined {
+  const cards = tabs(overview);
+  return cards.find(card => titles.has(card.label) && cards.filter(other => other.label === card.label).length === 1)?.label;
+}
+
 export function proveTabsUnchanged(before: Overview, after: Overview): void {
-  const labels = (value: Overview) => tabs(value).map(node => node.label).sort();
-  if (before.group !== "ordinary" || after.group !== "ordinary" || before.count !== after.count || JSON.stringify(labels(before)) !== JSON.stringify(labels(after))) throw new Error("Ordinary Safari tabs changed during Private cleanup");
+  if (before.group !== "ordinary" || after.group !== "ordinary" || before.count !== after.count || !sameLabels(tabs(before), tabs(after))) throw new Error("Ordinary Safari tabs changed during Private cleanup");
 }
 
 function button(node: Record<string, unknown>): Button {
@@ -52,6 +56,14 @@ function tabs(overview: Overview): Button[] {
   return overview.buttons.filter(node => node.identifier?.startsWith("TabOverviewItemView?"));
 }
 
+function complete(overview: Overview): boolean {
+  return overview.group === "ordinary" && tabs(overview).length === overview.count;
+}
+
+function sameLabels(before: Button[], after: Button[]): boolean {
+  return JSON.stringify(before.map(node => node.label).sort()) === JSON.stringify(after.map(node => node.label).sort());
+}
+
 export function ownedTabClose(overview: Overview, title: string): string {
   const matches = tabs(overview).filter(node => node.label === title);
   if (matches.length !== 1) throw new Error("Cannot identify the task's Safari tab for cleanup");
@@ -61,8 +73,12 @@ export function ownedTabClose(overview: Overview, title: string): string {
 }
 
 export function proveTabClosed(before: Overview, after: Overview, title: string): void {
-  const remaining = tabs(after).map(node => node.label).sort();
-  const expected = tabs(before).filter(node => node.label !== title).map(node => node.label).sort();
-  const countProved = before.group === "private" ? after.group === "private" : after.group === "ordinary" && after.count === before.count - 1;
-  if (tabs(before).filter(node => node.label === title).length !== 1 || !countProved || remaining.includes(title) || JSON.stringify(remaining) !== JSON.stringify(expected)) throw new Error("Task Safari tab closure is unproved");
+  const fail = () => new Error("Task Safari tab closure is unproved");
+  const original = tabs(before), remaining = tabs(after);
+  if (original.filter(node => node.label === title).length !== 1 || hasOwnedTab(after, title) || after.group !== before.group) throw fail();
+  if (before.group === "ordinary" && (after.group !== "ordinary" || after.count !== before.count - 1)) throw fail();
+  // Safari can show different cards after a close. The ordinary group counts every tab.
+  if (before.group === "private" || (complete(before) && complete(after))) {
+    if (!sameLabels(original.filter(node => node.label !== title), remaining)) throw fail();
+  }
 }

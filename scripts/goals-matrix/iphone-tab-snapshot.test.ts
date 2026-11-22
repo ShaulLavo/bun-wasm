@@ -25,6 +25,15 @@ test("cleanup refuses missing ownership, wrong tab removal and merely hidden tab
   expect(() => proveTabClosed(before, read(["Replacement"]), "Goals owned")).toThrow("unproved");
 });
 
+test("ordinary closure is proved when Safari exposes more cards from the same group", () => {
+  const before = read(["Goals owned", "One", "Two", "Three", "Four"], 25);
+  const after = ["One", "Two", "Three", "Four", "Five", "Six"];
+  expect(() => proveTabClosed(before, read(after, 24), "Goals owned")).not.toThrow();
+  expect(() => proveTabClosed(before, read(after, 25), "Goals owned")).toThrow("unproved");
+  expect(() => proveTabClosed(before, read(after.concat("Goals owned"), 24), "Goals owned")).toThrow("unproved");
+  expect(() => proveTabClosed(before, read(after, 23), "Goals owned")).toThrow("unproved");
+});
+
 test("cleanup rejects partial batches, foreign apps and truncated native snapshots", () => {
   expect(() => batchSnapshot(batch(overview(["Goals owned"])), ["snapshot"])).toThrow("Incomplete");
   expect(() => batchSnapshot(batch({ ...overview(["Goals owned"]), truncated: true }), ["press", "snapshot"])).toThrow("snapshot");

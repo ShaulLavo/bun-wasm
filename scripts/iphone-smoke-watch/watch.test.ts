@@ -675,6 +675,7 @@ test("dispatch requires atomic claim, stable exact-source build, FIFO and cleanu
   expect(message).toContain("Leave out dependency installs from copied scripts");
   expect(message).toContain("bun install --frozen-lockfile in the root and Web directories");
   expect(message).toContain("Stage prepared assets outside the build slot");
+  expect(message).toContain("A failed status probe pauses input, logs the error and retries");
   expect(message).not.toContain("iphone-smoke-job");
 });
 

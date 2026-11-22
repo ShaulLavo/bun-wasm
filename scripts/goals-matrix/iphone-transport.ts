@@ -12,7 +12,9 @@ import { prepareIphoneSafari } from "./iphone-setup";
 import { safariNodes } from "./iphone-tab-snapshot";
 import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates, saveIphoneEvidence } from "./iphone-click";
 
-type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; cleanupTimeoutMs?: number; saveNative?(text: string): Promise<void> };
+type TabJournal = { pending(): Promise<Set<string>>; record(title: string): Promise<void>; forget(title: string): Promise<void> };
+type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; cleanupTimeoutMs?: number;
+  saveNative?(text: string): Promise<void>; beforeNative?(signal: AbortSignal): Promise<unknown>; tabJournal?: TabJournal };
 export function validateIphoneControl(control: string, agent: string): void {
   const url = new URL(control);
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !/^\/__goals_iphone\/[a-f0-9]{64}$/.test(url.pathname) || url.search || url.hash || url.username || url.password) throw new Error("Expected forwarded loopback iPhone control URL");
@@ -193,7 +195,8 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
   }
   async function device(args: string[], timeoutMs: number, signal = lifetime.signal): Promise<string> {
     signal.throwIfAborted();
-    const action = ownedCommand([config.agent].concat(args), signal, timeoutMs);
+    const command = [config.agent].concat(args);
+    const action = config.beforeNative ? runAdmittedDevice(command, timeoutMs, signal, config.beforeNative) : ownedCommand(command, signal, timeoutMs);
     active.add(action);
     try {
       const output = await action;
@@ -205,6 +208,14 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       saveIphoneEvidence(config.saveNative, { command: [config.agent].concat(args), error: String(error) });
       throw new Error(`T3 device command failed: ${String(error)}`);
     } finally { active.delete(action); }
+  }
+  async function runAdmittedDevice(command: string[], timeoutMs: number, signal: AbortSignal, verify: NonNullable<Config["beforeNative"]>): Promise<string> {
+    if (deviceFailed) throw new Error("Previous native command failed");
+    const deadline = Date.now() + timeoutMs;
+    await verify(AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]));
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("iPhone device command deadline expired during Mac FIFO verification");
+    return ownedCommand(command, signal, remaining);
   }
   const lanes = { host: new IphoneLane(), preview: new IphoneLane() };
   async function settledRequest(selected: "host" | "preview", source: string, timeoutMs: number, observation: boolean, admission: Admission, trace?: { evidence: IphoneRenderEvidence; request: RenderRequest }): Promise<IphoneSettlement> {
@@ -252,6 +263,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     if (deviceFailed) throw new Error("T3 device command failed; stopping device interactions, task tab cleanup is unproved");
     if (!safariStarted) return;
     await closeIphoneTab(device, opened ? title : null, deadline);
+    if (opened) await config.tabJournal?.forget(title);
     opened = false;
   }
   return {
@@ -290,10 +302,18 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       const setup = within(admission, config.timeoutMs, new Error("iPhone ordinary tab-group setup deadline expired"));
       admit(setup);
       safariStarted = true;
-      await prepareIphoneSafari(device, { signal, deadline: setup.deadline, expiryReason: setup.expiryReason });
+      const journal = config.tabJournal;
+      const stale = journal && { titles: await journal.pending(), closed: (title: string) => journal.forget(title) };
+      await prepareIphoneSafari(device, { signal, deadline: setup.deadline, expiryReason: setup.expiryReason }, stale);
       admit(admission);
       const target = await request("host/configure", { url });
       if (typeof target !== "string") throw new Error("Missing iPhone navigation target");
+      if (journal) {
+        const identity = object(await request("host/state"));
+        if (identity.url !== target || typeof identity.nonce !== "string") throw new Error("Missing configured smoke tab identity");
+        title = "Goals " + identity.nonce;
+        await journal.record(title);
+      }
       admit(admission);
       await device(["open", "com.apple.mobilesafari", target], admit(admission), signal); opened = true;
       const state = await until(async () => { admit(admission); return object(await request("host/state") ?? {}); }, attached, config.timeoutMs);
@@ -301,6 +321,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       admit(admission);
       capabilities.userAgent = state.userAgent;
       if (typeof state.nonce !== "string") throw new Error("Missing task tab identity");
+      if (journal && title !== "Goals " + state.nonce) throw new Error("The attached smoke tab has a different identity");
       title = "Goals " + state.nonce;
   }
   // After `previewStallMs` without a preview document, also reads the owner's frame record and the

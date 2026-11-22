@@ -1,5 +1,5 @@
 import type { NativeCommand } from "./iphone-cleanup";
-import { safariNodes } from "./iphone-tab-snapshot";
+import { ordinarySnapshot, ownedTabClose, proveTabClosed, safariNodes, visibleOwnedTab } from "./iphone-tab-snapshot";
 import { object } from "./evidence";
 import { admit, type Admission } from "./scope";
 
@@ -99,7 +99,24 @@ export function iphoneSafari(command: NativeCommand, admission: Admission) {
   return { overview, ordinary, finish, privateGroup, snapshot };
 }
 
-export async function prepareIphoneSafari(command: NativeCommand, admission: Admission): Promise<void> {
+type StaleTabs = { titles: Set<string>; closed(title: string): Promise<void> };
+
+export async function prepareIphoneSafari(command: NativeCommand, admission: Admission, stale?: StaleTabs): Promise<void> {
   const safari = iphoneSafari(command, admission);
-  await safari.finish(await safari.ordinary(await safari.overview()));
+  let nodes = await safari.ordinary(await safari.overview());
+  if (stale?.titles.size) nodes = await closeVisibleStaleTabs(safari, nodes, stale);
+  await safari.finish(nodes);
+}
+
+async function closeVisibleStaleTabs(safari: ReturnType<typeof iphoneSafari>, nodes: Nodes, stale: StaleTabs): Promise<Nodes> {
+  let before = ordinarySnapshot(nodes);
+  for (let title = visibleOwnedTab(before, stale.titles); title !== undefined; title = visibleOwnedTab(before, stale.titles)) {
+    nodes = await safari.snapshot(ownedTabClose(before, title));
+    const after = ordinarySnapshot(nodes);
+    proveTabClosed(before, after, title);
+    await stale.closed(title);
+    stale.titles.delete(title);
+    before = after;
+  }
+  return nodes;
 }
