@@ -26,7 +26,7 @@ async function runFixture(page: Page, fixture: string): Promise<void> {
   const files = readdirSync(folder).filter(file => /\.(js|ts|json)$/.test(file));
   for (const file of files) await writeFile(page, `/home/user/${fixture}/${file}`, readFileSync(join(folder, file), "utf8"));
   const entry = files.includes("index.ts") ? "index.ts" : "index.js";
-  const result = await run(page, `cd ${fixture} && bun run ${entry}`, 120_000);
+  const result = await run(page, `cd /home/user/${fixture} && bun run ${entry}`, 120_000);
   expect(result.code, `${fixture}\n${result.output}`).toBe(0);
   const expected = readFileSync(join(folder, "expected.txt"), "utf8").trim();
   expect(result.output.trim(), fixture).toBe(expected);
