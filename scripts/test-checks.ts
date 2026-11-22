@@ -256,6 +256,11 @@ export function nativeEngineGroups(paths: readonly string[], options: { count: n
   });
 }
 
+function bufferedClose(chunks: Buffer[], status: number | null, signal: NodeJS.Signals | null): { status: number; output: Buffer } {
+  const output = signal ? Buffer.concat(chunks.concat([Buffer.from(`\n[check runner terminated by ${signal}]\n`)])) : Buffer.concat(chunks);
+  return { status: signal ? 128 + (constants.signals[signal] ?? 1) : (status ?? 1), output };
+}
+
 function runBuffered(command: readonly string[], env: NodeJS.ProcessEnv): Promise<{ status: number; output: Buffer }> {
   const [executable, ...args] = command;
   if (!executable) throw new Error("Missing check command");
@@ -265,14 +270,7 @@ function runBuffered(command: readonly string[], env: NodeJS.ProcessEnv): Promis
     child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.on("error", reject);
-    child.on("close", (status, signal) => {
-      if (signal) {
-        chunks.push(Buffer.from(`\n[check runner terminated by ${signal}]\n`));
-        resolvePromise({ status: 128 + (constants.signals[signal] ?? 1), output: Buffer.concat(chunks) });
-        return;
-      }
-      resolvePromise({ status: status ?? 1, output: Buffer.concat(chunks) });
-    });
+    child.on("close", (status, signal) => resolvePromise(bufferedClose(chunks, status, signal)));
   });
 }
 

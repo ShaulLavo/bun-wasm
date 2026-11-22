@@ -24,17 +24,18 @@ test("runtime concurrency is explicit and bounded", () => {
   for (const value of ["", "0", "5", "2.0", "Infinity", "-1"]) expect(() => runtimeJobs(value)).toThrow("Invalid BUN_WASM_RUNTIME_JOBS");
 });
 
-test("multi-worker runtime sharding preserves every file and keeps shared SpiderMonkey controls serial", () => {
+test("multi-worker runtime scheduling keeps all unclassified files in one serial batch and isolates audited manifests", () => {
   const checks = discoverChecks();
   const paths = selectChecks("runtime", checks);
   const plan = runtimePlan(paths, checks);
-  const batches = runtimeBatches(plan, 4);
+  const batches = runtimeBatches(plan);
+  expect(batches[0]).toEqual(plan.serial);
   expect(batches.flat().toSorted()).toEqual(paths.toSorted());
   expect(new Set(batches.flat()).size).toBe(paths.length);
-  const shared = batches.filter(batch =>
-    batch.includes("scripts/spidermonkey-ordinary-fixtures.test.ts") || batch.includes("scripts/spidermonkey-suppressed-error.test.ts"));
-  expect(shared).toEqual([["scripts/spidermonkey-ordinary-fixtures.test.ts", "scripts/spidermonkey-suppressed-error.test.ts"]]);
-  for (const isolated of plan.isolated) expect(batches).toContainEqual([isolated]);
+  for (const isolated of plan.isolated) expect(batches.slice(1)).toContainEqual([isolated]);
+  expect(plan.serial).toContain("scripts/spidermonkey-ordinary-fixtures.test.ts");
+  expect(plan.serial).toContain("scripts/spidermonkey-suppressed-error.test.ts");
+  expect(plan.serial).toContain("scripts/spidermonkey-loop-controls.test.ts");
 });
 
 test("runtime slot TMPDIR keeps nested sccache Unix sockets within the Linux 108-byte path limit on GitHub runners", () => {
@@ -58,8 +59,19 @@ test("only audited runtime files opt into process isolation", () => {
   const paths = selectChecks("runtime", checks);
   const plan = runtimePlan(paths, checks);
   expect(plan.isolated).toEqual([
+    "scripts/hot-run-live.test.ts",
+    "scripts/install-metadata.test.ts",
+    "scripts/install-selection.test.ts",
+    "scripts/install-tarballs.test.ts",
     "scripts/jsc-json-fast-controls.test.ts",
-    "scripts/spidermonkey-module-evaluation-info.test.ts", "scripts/wasm-tables.test.ts",
+    "scripts/legacy-cli-runtime.test.ts",
+    "scripts/package-port-typed.test.ts",
+    "scripts/runtime-assert-util.test.ts",
+    "scripts/rust-native-cache.test.ts",
+    "scripts/spidermonkey-module-evaluation-info.test.ts",
+    "scripts/spidermonkey-panic-process.test.ts",
+    "scripts/wasm-tables.test.ts",
+    "scripts/wasm-validation.test.ts",
   ]);
   expect(plan.serial).toContain("scripts/spidermonkey-ordinary-fixtures.test.ts");
   expect(plan.serial).toContain("scripts/spidermonkey-loop-controls.test.ts");

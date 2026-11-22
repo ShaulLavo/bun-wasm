@@ -16,6 +16,11 @@ export function qualityGates(args: readonly string[]): string[] {
   throw new Error("Usage: quality [--javascript | --native]");
 }
 
+function bufferedClose(command: readonly string[], chunks: Buffer[], status: number | null, signal: NodeJS.Signals | null) {
+  const output = signal ? Buffer.concat(chunks.concat([Buffer.from(`\n[${command[0]!} terminated by ${signal}]\n`)])) : Buffer.concat(chunks);
+  return { command, status: signal ? 128 + (constants.signals[signal] ?? 1) : (status ?? 1), signal, output };
+}
+
 function runBuffered(command: readonly string[]): Promise<{ command: readonly string[]; status: number; signal: NodeJS.Signals | null; output: Buffer }> {
   const [executable, ...args] = command;
   if (!executable) throw new Error("Missing quality command");
@@ -25,14 +30,7 @@ function runBuffered(command: readonly string[]): Promise<{ command: readonly st
     child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => chunks.push(chunk));
     child.on("error", reject);
-    child.on("close", (status, signal) => {
-      if (signal) {
-        chunks.push(Buffer.from(`\n[${executable} terminated by ${signal}]\n`));
-        resolve({ command, status: 128 + (constants.signals[signal] ?? 1), signal, output: Buffer.concat(chunks) });
-        return;
-      }
-      resolve({ command, status: status ?? 1, signal: null, output: Buffer.concat(chunks) });
-    });
+    child.on("close", (status, signal) => resolve(bufferedClose(command, chunks, status, signal)));
   });
 }
 

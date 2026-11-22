@@ -6,26 +6,20 @@ import { checkCommand, discoverChecks, selectChecks } from "./test-checks.ts";
 
 export type RuntimeJobs = 1 | 2 | 3 | 4;
 
-// Files that share target/spidermonkey-controls must stay in one serial batch.
-const sharedSpiderMonkeyControls = new Set([
-  "scripts/spidermonkey-ordinary-fixtures.test.ts",
-  "scripts/spidermonkey-suppressed-error.test.ts",
-]);
-
-// Spread the slowest non-isolated runtime files across distinct shards first.
-const heavyRuntimeFiles = [
-  "scripts/spidermonkey-loop-controls.test.ts",
-  "scripts/require-esm-ownership.test.ts",
+// Start the slowest manifest-isolated files first so long tails overlap the serial batch.
+const isolatedDispatchPriority = [
   "scripts/spidermonkey-panic-process.test.ts",
+  "scripts/wasm-tables.test.ts",
+  "scripts/runtime-assert-util.test.ts",
+  "scripts/rust-native-cache.test.ts",
+  "scripts/hot-run-live.test.ts",
+  "scripts/spidermonkey-module-evaluation-info.test.ts",
+  "scripts/package-port-typed.test.ts",
+  "scripts/install-tarballs.test.ts",
+  "scripts/install-metadata.test.ts",
   "scripts/legacy-cli-runtime.test.ts",
   "scripts/wasm-validation.test.ts",
-  "scripts/install-tarballs.test.ts",
-  "scripts/hot-run-live.test.ts",
-  "scripts/rust-native-cache.test.ts",
-  "scripts/spidermonkey-parser.test.ts",
-  "scripts/install-metadata.test.ts",
-  "scripts/runtime-assert-util.test.ts",
-  "scripts/spidermonkey-stack-quota.test.ts",
+  "scripts/install-selection.test.ts",
 ];
 
 export function runtimeJobs(value: string): RuntimeJobs {
@@ -41,22 +35,11 @@ export function runtimePlan(paths: readonly string[], checks = discoverChecks())
   return { serial: paths.filter(path => !independent.has(path)), isolated };
 }
 
-export function runtimeBatches(plan: ReturnType<typeof runtimePlan>, jobs: RuntimeJobs = 2): string[][] {
-  if (jobs <= 2) {
-    const serial = plan.serial.length ? [plan.serial] : [];
-    return serial.concat(plan.isolated.map(path => [path]));
-  }
-  const sharedControls = plan.serial.filter(path => sharedSpiderMonkeyControls.has(path));
-  const shardable = plan.serial.filter(path => !sharedSpiderMonkeyControls.has(path));
-  const heavySet = new Set(heavyRuntimeFiles);
-  const ordered = heavyRuntimeFiles.filter(path => shardable.includes(path)).concat(shardable.filter(path => !heavySet.has(path)));
-  const shardCount = Math.min(jobs, ordered.length);
-  const shards = Array.from({ length: shardCount }, (): string[] => []);
-  ordered.forEach((path, index) => shards[index % shardCount]!.push(path));
-  // Isolated files and the shared-controls group start first so long tails overlap.
-  const leading = plan.isolated.map(path => [path]);
-  if (sharedControls.length) leading.push(sharedControls);
-  return leading.concat(shards);
+export function runtimeBatches(plan: ReturnType<typeof runtimePlan>): string[][] {
+  const rank = new Map(isolatedDispatchPriority.map((path, index) => [path, index]));
+  const isolated = plan.isolated.toSorted((a, b) => (rank.get(a) ?? isolatedDispatchPriority.length) - (rank.get(b) ?? isolatedDispatchPriority.length));
+  const serial = plan.serial.length ? [plan.serial] : [];
+  return serial.concat(isolated.map(path => [path]));
 }
 
 function execute(command: readonly string[], env = process.env): Promise<number> {
@@ -89,7 +72,7 @@ export async function dispatchRuntime(
   run?: (paths: readonly string[]) => Promise<number>,
   jobs: RuntimeJobs = 2,
 ): Promise<number> {
-  const batches = runtimeBatches(plan, jobs);
+  const batches = runtimeBatches(plan);
   let next = 0;
   let failure = 0;
   async function worker(slot: number): Promise<void> {

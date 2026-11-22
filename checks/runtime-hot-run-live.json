@@ -1,4 +1,5 @@
 {
   "owner": "runtime",
+  "isolation": "process",
   "path": "scripts/hot-run-live.test.ts"
 }

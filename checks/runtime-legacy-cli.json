@@ -1,5 +1,6 @@
 {
   "owner": "runtime",
+  "isolation": "process",
   "path": "scripts/legacy-cli-runtime.test.ts",
   "localRuntime": true,
   "inputs": [
