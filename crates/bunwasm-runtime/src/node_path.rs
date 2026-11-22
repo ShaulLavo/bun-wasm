@@ -10,7 +10,7 @@ use bytemuck::cast_slice_mut;
 use crate::data::{Args, NativeError, NativeResult, Record, Val};
 use crate::natives::Table;
 
-use path::{CHAR_BACKWARD_SLASH, CHAR_FORWARD_SLASH};
+use path::CHAR_BACKWARD_SLASH;
 const CHAR_DOT: u8 = b'.';
 fn memmove<T: Copy>(destination: &mut [T], source: &[T]) {
     destination.copy_from_slice(source);
@@ -81,34 +81,25 @@ impl Encoding {
     }
 }
 
+// Windows path operations only. POSIX operations are lexical and run in
+// `src/js/path.ts` without crossing into Wasm.
 fn lexical(a: Args<'_>, encoding: Encoding) -> NativeResult {
-    let windows = a.bool(0);
-    let operation = a.str(1)?;
-    let input = encoding.read(&a, 2)?;
-    let suffix = if a.is_missing(3) {
+    let operation = a.str(0)?;
+    let input = encoding.read(&a, 1)?;
+    let suffix = if a.is_missing(2) {
         None
     } else {
-        Some(encoding.read(&a, 3)?)
+        Some(encoding.read(&a, 2)?)
     };
-    let value = match (operation, windows) {
-        ("basename", false) => path::basename_posix_t(&input, suffix.as_deref()),
-        ("basename", true) => path::basename_windows_t(&input, suffix.as_deref()),
-        ("dirname", false) => path::dirname_posix_t(&input),
-        ("dirname", true) => path::dirname_windows_t(&input),
-        ("extname", false) => path::extname_posix_t(&input),
-        ("extname", true) => path::extname_windows_t(&input),
-        ("isAbsolute", false) => return Ok(path::is_absolute_posix_t(&input).into()),
-        ("isAbsolute", true) => return Ok(path::is_absolute_windows_t(&input).into()),
-        ("parse", false) => return encoding.parsed(path::parse_posix_t(&input)),
-        ("parse", true) => return encoding.parsed(path::parse_windows_t(&input)),
-        ("normalize", _) => {
+    let value = match operation {
+        "basename" => path::basename_windows_t(&input, suffix.as_deref()),
+        "dirname" => path::dirname_windows_t(&input),
+        "extname" => path::extname_windows_t(&input),
+        "isAbsolute" => return Ok(path::is_absolute_windows_t(&input).into()),
+        "parse" => return encoding.parsed(path::parse_windows_t(&input)),
+        "normalize" => {
             let mut output = vec![0; path::normalize_buf_len(&input)];
-            let result = if windows {
-                path::normalize_windows_t(&input, &mut output)
-            } else {
-                path::normalize_posix_t(&input, &mut output)
-            };
-            return encoding.write(result);
+            return encoding.write(path::normalize_windows_t(&input, &mut output));
         }
         _ => return Err(NativeError::type_error("Unknown path operation")),
     };
@@ -146,55 +137,44 @@ fn join(a: Args<'_>, encoding: Encoding) -> NativeResult {
     if matches!(encoding, Encoding::String) {
         return join_string(a);
     }
-    let windows = a.bool(0);
-    let paths = path_slices(a, 1, encoding)?;
+    let paths = path_slices(a, 0, encoding)?;
     let slices: Vec<_> = paths.iter().map(Vec::as_slice).collect();
-    let size = path::join_buf_len(windows, &slices);
+    let size = path::join_buf_len(true, &slices);
     let mut output = vec![0; size];
     let mut scratch = vec![0; size];
-    let result = if windows {
-        path::join_windows_t(&slices, &mut output, &mut scratch)
-    } else {
-        path::join_posix_t(&slices, &mut output, &mut scratch)
-    };
-    encoding.write(result)
+    encoding.write(path::join_windows_t(&slices, &mut output, &mut scratch))
 }
 
 fn join_string(a: Args<'_>) -> NativeResult {
-    let windows = a.bool(0);
     let input = a
-        .array(1)
+        .array(0)
         .ok_or_else(|| NativeError::type_error("Expected path array"))?;
     let slices: Vec<_> = input
         .iter()
         .map(|value| Args(std::slice::from_ref(value)).str(0).map(str::as_bytes))
         .collect::<Result<_, _>>()?;
-    let size = path::join_buf_len(windows, &slices);
+    let size = path::join_buf_len(true, &slices);
     let mut output = vec![0; size];
     let mut scratch = vec![0; size];
-    let result = if windows {
-        path::join_windows_t(&slices, &mut output, &mut scratch)
-    } else {
-        path::join_posix_t(&slices, &mut output, &mut scratch)
-    };
+    let result = path::join_windows_t(&slices, &mut output, &mut scratch);
     std::str::from_utf8(result)
         .map(|value| Val::Str(value.to_owned()))
         .map_err(|_| NativeError::error("Path string result contains invalid UTF-8"))
 }
 
 fn relative(a: Args<'_>, encoding: Encoding) -> NativeResult {
-    let from = encoding.read(&a, 1)?;
-    let to = encoding.read(&a, 2)?;
+    let from = encoding.read(&a, 0)?;
+    let to = encoding.read(&a, 1)?;
     let size = path::relative_buf_len(&from, &to);
     let mut output = vec![0; size];
     let mut scratch = vec![0; size];
     output[..to.len()].copy_from_slice(&to);
-    let result = if a.bool(0) {
-        relative_windows_resolved(&from, &mut output, to.len(), &mut scratch)?
-    } else {
-        relative_posix_resolved(&from, &mut output, to.len(), &mut scratch)?
-    };
-    encoding.write(result)
+    encoding.write(relative_windows_resolved(
+        &from,
+        &mut output,
+        to.len(),
+        &mut scratch,
+    )?)
 }
 
 pub fn install(table: &mut Table) {

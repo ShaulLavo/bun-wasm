@@ -48,16 +48,17 @@ declare namespace BunWasm {
     utf8Encode(value: string): Uint8Array<ArrayBuffer>;
     nodePath: {
       resolveWindows(cwd: Uint8Array, paths: Uint8Array[]): Uint8Array;
-      lexicalString(windows: boolean, operation: "isAbsolute", path: string): boolean;
-      lexicalString(windows: boolean, operation: "parse", path: string): Record<"root" | "dir" | "base" | "ext" | "name", string>;
-      lexicalString(windows: boolean, operation: "basename" | "dirname" | "extname" | "normalize", path: string, suffix?: string): string;
-      lexicalUnits(windows: boolean, operation: "isAbsolute", path: Uint8Array): boolean;
-      lexicalUnits(windows: boolean, operation: "parse", path: Uint8Array): Record<"root" | "dir" | "base" | "ext" | "name", Uint8Array>;
-      lexicalUnits(windows: boolean, operation: "basename" | "dirname" | "extname" | "normalize", path: Uint8Array, suffix?: Uint8Array): Uint8Array;
-      joinString(windows: boolean, paths: readonly string[]): string;
-      joinUnits(windows: boolean, paths: readonly Uint8Array[]): Uint8Array;
-      relativeString(windows: boolean, from: string, to: string): string;
-      relativeUnits(windows: boolean, from: Uint8Array, to: Uint8Array): Uint8Array;
+      // Windows operations only; POSIX operations run in src/js/path.ts.
+      lexicalString(operation: "isAbsolute", path: string): boolean;
+      lexicalString(operation: "parse", path: string): Record<"root" | "dir" | "base" | "ext" | "name", string>;
+      lexicalString(operation: "basename" | "dirname" | "extname" | "normalize", path: string, suffix?: string): string;
+      lexicalUnits(operation: "isAbsolute", path: Uint8Array): boolean;
+      lexicalUnits(operation: "parse", path: Uint8Array): Record<"root" | "dir" | "base" | "ext" | "name", Uint8Array>;
+      lexicalUnits(operation: "basename" | "dirname" | "extname" | "normalize", path: Uint8Array, suffix?: Uint8Array): Uint8Array;
+      joinString(paths: readonly string[]): string;
+      joinUnits(paths: readonly Uint8Array[]): Uint8Array;
+      relativeString(from: string, to: string): string;
+      relativeUnits(from: Uint8Array, to: Uint8Array): Uint8Array;
     };
     hostCaps: Record<string, boolean>;
     hostLocalAddr(handle: number): string | number;
