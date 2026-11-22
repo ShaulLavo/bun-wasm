@@ -44,6 +44,8 @@ job's launcher and the matching engine's shared program through
 run in Chromium against the same group build through
 `bun scripts/test-checks.ts browser-guest --profile shared-group`. QuickJS and JSC
 each verify the handoff once and run both checks in separate steps on the same runner.
+Each check charges shared setup to its 30-minute hang cap. Actions with minute-only
+timeouts round down from the remaining budget.
 SpiderMonkey's checks have separate runners. The Shared PIC sysroot proof requires every
 selected check and fails on missing artifacts or capabilities. Processes keeps the split
 selection. Other paths

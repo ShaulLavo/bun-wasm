@@ -1486,28 +1486,56 @@ jobs:
       SHARED_CHECK_SECONDS: 1800
     steps:
       - name: Start the shared setup clock
+        timeout-minutes: 1
         working-directory: ${{ runner.temp }}
-        run: echo "SHARED_STARTED=$EPOCHSECONDS" >> "$GITHUB_ENV"
+        run: |
+          started=$EPOCHSECONDS
+          echo "SHARED_STARTED=$started" >> "$GITHUB_ENV"
+          echo "SHARED_CHECK_DEADLINE=$((started + SHARED_CHECK_SECONDS))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
+        timeout-minutes: 29
+      - name: Bound shared tool setup
+        id: shared-tools-budget
+        run: bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 30
       - uses: ./.github/actions/setup-tools
+        timeout-minutes: ${{ fromJSON(steps.shared-tools-budget.outputs.minutes) }}
         with:
           bun-version: 1.4.4
           node-version: ${{ env.CI_NODE_VERSION }}
+      - name: Bound shared dependency restore
+        id: shared-cache-budget
+        run: bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 30
       - uses: actions/cache/restore@v4
+        timeout-minutes: ${{ fromJSON(steps.shared-cache-budget.outputs.minutes) }}
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
+      - name: Install shared check dependencies
+        run: |
+          remaining=$((SHARED_CHECK_DEADLINE - EPOCHSECONDS))
+          if ((remaining <= 0)); then
+            echo "Shared input setup exhausted its budget" >&2
+            exit 124
+          fi
+          bun scripts/run-with-timeout.mts "$remaining" bun scripts/ci-install.ts --frozen-lockfile --ignore-scripts
+      - name: Bound shared handoff download
+        id: shared-download-budget
+        run: bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 5
       - uses: actions/download-artifact@v4
-        timeout-minutes: 5
+        timeout-minutes: ${{ fromJSON(steps.shared-download-budget.outputs.minutes) }}
         with:
           name: shared-proof-inputs
           path: ${{ runner.temp }}/shared-proof-inputs
       - name: Verify the ready shared inputs
         id: shared-inputs
         run: |
+          remaining=$((SHARED_CHECK_DEADLINE - EPOCHSECONDS))
+          if ((remaining <= 0)); then
+            echo "Shared input setup exhausted its budget" >&2
+            exit 124
+          fi
           source env.sh
-          bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"
+          bun scripts/run-with-timeout.mts "$remaining" bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"
           echo "BUN_WASM_PROFILE_PROGRAM=$RUNNER_TEMP/shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm" >> "$GITHUB_ENV"
           echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/shared-proof-inputs/browser" >> "$GITHUB_ENV"
           echo "BUN_WASM_PREPARED_SHARED_SITE=1" >> "$GITHUB_ENV"
@@ -1518,13 +1546,16 @@ jobs:
           fi
           echo "SHARED_SETUP_SECONDS=$setup_seconds" >> "$GITHUB_ENV"
       - name: Require the native launcher producer
+        id: shared-launcher-budget
         if: matrix.native
         env:
           PROFILE_LAUNCHER_RESULT: ${{ needs.rust.result }}
-        run: test "$PROFILE_LAUNCHER_RESULT" = success
+        run: |
+          test "$PROFILE_LAUNCHER_RESULT" = success
+          bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 5
       - uses: actions/download-artifact@v4
         if: matrix.native
-        timeout-minutes: 5
+        timeout-minutes: ${{ fromJSON(steps.shared-launcher-budget.outputs.minutes) }}
         with:
           name: native-profile-launcher
           path: ${{ runner.temp }}/native-profile-launcher
@@ -1571,7 +1602,7 @@ jobs:
             exit 124
           fi
           echo "SHARED_BROWSER_DEADLINE=$deadline" >> "$GITHUB_ENV"
-          echo "minutes=$(((remaining + 59) / 60))" >> "$GITHUB_OUTPUT"
+          bash scripts/ci-shared-check-budget.sh "$deadline" 30
       - uses: ./.github/actions/browser-deps
         id: system-deps
         if: ${{ !cancelled() && steps.web-deps.outcome == 'success' }}

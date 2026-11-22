@@ -172,9 +172,11 @@ test("four runners verify the ready inputs once per runner and cover all six sha
     { engine: "spidermonkey", native: false, browser: true },
   ] } });
   const body = steps(job);
-  expect(body.filter(step => step.with && record(step.with).name === "shared-proof-inputs")).toMatchObject([{ "timeout-minutes": 5 }]);
+  expect(body.filter(step => step.with && record(step.with).name === "shared-proof-inputs")).toMatchObject([
+    { "timeout-minutes": "${{ fromJSON(steps.shared-download-budget.outputs.minutes) }}" },
+  ]);
   const commands = body.map(step => String(step.run ?? "")).join("\n");
-  expect(commands).toContain('bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"');
+  expect(commands).toContain('run-with-timeout.mts "$remaining" bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"');
   expect(commands).toContain("shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm");
   expect(commands).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   expect(commands).not.toMatch(/build-native-profile|build-bun|build-jsc|buildSite|browser-guest-site.ts build/);
@@ -235,6 +237,62 @@ function runConsumerStep(name: string, env: NodeJS.ProcessEnv) {
   if (typeof run !== "string") throw new Error(`Missing shell body: ${name}`);
   return spawnSync("bash", ["-euo", "pipefail", "-c", run], { env: { ...process.env, ...env }, encoding: "utf8" });
 }
+
+test("shared setup and launcher downloads are bounded by the original deadline", () => {
+  const entries = steps(record(jobs["shared-consumers"]));
+  const actions = [
+    ["./.github/actions/setup-tools", "shared-tools-budget", 30],
+    ["actions/cache/restore@v4", "shared-cache-budget", 30],
+  ] as const;
+  expect(consumerStep("Start the shared setup clock")["timeout-minutes"]).toBe(1);
+  expect(entries.find(step => step.uses === "actions/checkout@v4")?.["timeout-minutes"]).toBe(29);
+  for (const [action, id, cap] of actions) {
+    expect(consumerStep(id).run).toContain(`ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" ${cap}`);
+    expect(entries.find(step => step.uses === action)?.["timeout-minutes"]).toBe(`\${{ fromJSON(steps.${id}.outputs.minutes) }}`);
+  }
+  for (const [artifact, id] of [["shared-proof-inputs", "shared-download-budget"], ["native-profile-launcher", "shared-launcher-budget"]] as const) {
+    const download = entries.find(step => step.with && record(step.with).name === artifact);
+    expect(consumerStep(id).run).toContain('ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 5');
+    expect(download?.["timeout-minutes"]).toBe(`\${{ fromJSON(steps.${id}.outputs.minutes) }}`);
+  }
+});
+
+test("expired shared setup cannot start the install or verifier", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-expired-shared-"));
+  try {
+    writeFileSync(join(directory, "bun"), '#!/bin/sh\necho launched\n', { mode: 0o755 });
+    const env = { PATH: `${directory}:${process.env.PATH}`, RUNNER_TEMP: directory, SHARED_CHECK_DEADLINE: "1" };
+    for (const step of ["shared-inputs", "Install shared check dependencies"]) {
+      const result = runConsumerStep(step, env);
+      expect(result.status, result.stderr).toBe(124);
+      expect(result.stdout).toBe("");
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("launcher admission caps the download and rejects less than one minute remaining", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-launcher-budget-"));
+  try {
+    const output = join(directory, "output");
+    const budget = (seconds: number) => {
+      writeFileSync(output, "");
+      const deadline = Math.floor(Date.now() / 1000) + seconds;
+      return runConsumerStep("shared-launcher-budget", {
+        PROFILE_LAUNCHER_RESULT: "success", SHARED_CHECK_DEADLINE: String(deadline), GITHUB_OUTPUT: output,
+      });
+    };
+    expect(budget(1000).status).toBe(0);
+    expect(readFileSync(output, "utf8")).toBe("minutes=5\n");
+    expect(budget(155).status).toBe(0);
+    expect(readFileSync(output, "utf8")).toBe("minutes=2\n");
+    expect(budget(25).status).toBe(124);
+    expect(readFileSync(output, "utf8")).toBe("");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("the real matrix verdict requires exact selected and skipped step outcomes", () => {
   const cases = [
