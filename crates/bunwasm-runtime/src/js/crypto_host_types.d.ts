@@ -44,11 +44,16 @@ declare namespace BunWasm {
     readonly out: { hash?: { name: string }; tagLength?: number; length?: number };
     readonly key: CryptoKey;
   }
+  /** Host work and the input it used, which a guest fallback computes from. */
+  interface HostOffload<T> {
+    readonly promise: Promise<T>;
+    readonly input: HostBytes;
+  }
   interface HostCompute {
-    digest(name: string, data: HostBytes): Promise<ArrayBuffer> | undefined;
-    crypt(plan: CryptoOperationPlan, data: HostBytes): Promise<ArrayBuffer> | undefined;
-    sign(plan: CryptoOperationPlan, data: HostBytes): Promise<ArrayBuffer> | undefined;
-    verify(plan: CryptoOperationPlan, signature: HostBytes, data: HostBytes): Promise<boolean> | undefined;
+    digest(name: string, data: HostBytes): HostOffload<ArrayBuffer> | undefined;
+    crypt(plan: CryptoOperationPlan, data: HostBytes): HostOffload<ArrayBuffer> | undefined;
+    sign(plan: CryptoOperationPlan, data: HostBytes): HostOffload<ArrayBuffer> | undefined;
+    verify(plan: CryptoOperationPlan, signature: HostBytes, data: HostBytes): HostOffload<boolean> | undefined;
   }
   type HostComputeFactory = (
     host: HostCrypto,

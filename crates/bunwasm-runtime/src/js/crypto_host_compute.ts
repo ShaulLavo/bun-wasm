@@ -2,19 +2,25 @@
 // The runtime's provider (crypto.js) normalizes arguments, checks keys and usages and owns
 // every message; this module only runs digests, AES encryption and signatures on the host
 // when it supports the algorithm and key, because the host's native code is far faster than
-// the guest's. An undefined result, or a rejected promise, means the guest computes instead,
-// so the guest also answers every failure with its own error.
+// the guest's. An undefined result means the guest computes now; a rejected host promise
+// means the guest computes from the same input, so the guest also answers every failure.
+//
+// The host snapshots its input when it is called, so a call made synchronously passes the
+// caller's bytes without a copy. Only the first use of a key, which waits for the host to
+// import it, copies the input first.
 (function (): BunWasm.HostComputeFactory {
   "use strict";
   type Plan = BunWasm.CryptoOperationPlan;
   type Material = BunWasm.CryptoHostImport;
+  type Bytes = BunWasm.HostBytes;
   const digests = new Set(["SHA-1", "SHA-256", "SHA-384", "SHA-512"]);
   const ciphers = new Set(["AES-GCM", "AES-CBC", "AES-CTR"]);
   const signatures = new Set(["HMAC", "RSASSA-PKCS1-v1_5", "RSA-PSS", "ECDSA"]);
   return function hostCompute(host, helpers) {
-    // One host key per guest key, imported on first use; null when the host refuses it
+    // The host key for each guest key: imported once, null when the host refuses it
     // (AES-192 on Chromium, for example).
-    const keys = new WeakMap<CryptoKey, Promise<CryptoKey | null>>();
+    const ready = new WeakMap<CryptoKey, CryptoKey | null>();
+    const importing = new WeakMap<CryptoKey, Promise<CryptoKey | null>>();
     function jwk(material: JsonWebKey): JsonWebKey {
       const out = { ...material, ext: true };
       delete out.alg;
@@ -43,23 +49,31 @@
         ? host.importKey("raw", m.data, m.algorithm, false, m.usages)
         : host.importKey("jwk", m.data, m.algorithm, false, m.usages);
     }
-    function hostKey(plan: Plan): Promise<CryptoKey> {
-      let pending = keys.get(plan.key);
-      if (!pending) {
-        const m = material(plan.r);
-        pending = m ? importHost(m).then(key => key, () => null) : Promise.resolve(null);
-        keys.set(plan.key, pending);
-      }
-      return pending.then(key => {
-        if (!key) throw new Error("host key unavailable");
-        return key;
+    function importKey(plan: Plan): Promise<CryptoKey | null> {
+      let pending = importing.get(plan.key);
+      if (pending) return pending;
+      const m = material(plan.r);
+      pending = (m ? importHost(m) : Promise.reject(new Error("no host key"))).then(key => key, () => null);
+      pending.then(key => ready.set(plan.key, key));
+      importing.set(plan.key, pending);
+      return pending;
+    }
+    function offload<T>(plan: Plan, data: Bytes, call: (key: CryptoKey, input: Bytes) => Promise<T>): BunWasm.HostOffload<T> | undefined {
+      const known = ready.get(plan.key);
+      if (known === null) return undefined;
+      if (known) return { promise: call(known, data), input: data };
+      const input = helpers.buffer(data);
+      const promise = importKey(plan).then(key => {
+        if (!key) throw new Error("host key refused");
+        return call(key, input);
       });
+      return { promise, input };
     }
     function cipherParams(plan: Plan) {
       const a = plan.a, name = a.name;
       if (name === "AES-CTR") return { name, counter: helpers.buffer(a.counter), length: plan.out.length };
       if (name === "AES-CBC") return { name, iv: helpers.buffer(a.iv) };
-      const params: { name: string; iv: Uint8Array<ArrayBuffer>; tagLength?: number; additionalData?: Uint8Array<ArrayBuffer> } =
+      const params: { name: string; iv: Bytes; tagLength?: number; additionalData?: Bytes } =
         { name, iv: helpers.buffer(a.iv), tagLength: plan.out.tagLength };
       if (a.additionalData !== undefined) params.additionalData = helpers.buffer(a.additionalData);
       return params;
@@ -72,23 +86,23 @@
     }
     return {
       digest(name, data) {
-        return digests.has(name) ? host.digest(name, data) : undefined;
+        return digests.has(name) ? { promise: host.digest(name, data), input: data } : undefined;
       },
       crypt(plan, data) {
         if (!ciphers.has(plan.a.name)) return undefined;
         const params = cipherParams(plan);
         const operation = plan.op === "decrypt" ? host.decrypt : host.encrypt;
-        return hostKey(plan).then(key => operation(params, key, data));
+        return offload(plan, data, (key, input) => operation(params, key, input));
       },
       sign(plan, data) {
         if (!signatures.has(plan.a.name)) return undefined;
         const params = signParams(plan);
-        return hostKey(plan).then(key => host.sign(params, key, data));
+        return offload(plan, data, (key, input) => host.sign(params, key, input));
       },
       verify(plan, signature, data) {
         if (!signatures.has(plan.a.name)) return undefined;
         const params = signParams(plan);
-        return hostKey(plan).then(key => host.verify(params, key, signature, data));
+        return offload(plan, data, (key, input) => host.verify(params, key, signature, input));
       },
     };
   };

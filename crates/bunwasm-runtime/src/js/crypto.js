@@ -128,11 +128,15 @@
     return out;
   };
   function buffer(data) {
+    return view(data).slice();
+  }
+  // The caller's bytes, checked but not copied: for a consumer that copies or reads them now.
+  function view(data) {
     if (!(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data))
       throw new TypeError("Expected an ArrayBuffer or ArrayBufferView");
     if (data.byteLength > 0x7fffffff)
       fail("OperationError", "Crypto input is too large");
-    return internal.toUint8(data).slice();
+    return internal.toUint8(data);
   }
   const encode = (data) => native.base64Encode(buffer(data), true);
   const decode = (data) => native.base64Decode(data);
@@ -717,8 +721,10 @@
       this.promise = promise.then(value => value, () => guest());
     }
   }
-  function offload(pending, guest) {
-    return pending ? new HostWork(pending, guest) : guest();
+  // `work` is the host's promise and the bytes it read; the guest computes from the same bytes
+  // when the host fails, or at once from the caller's bytes when the host takes no part.
+  function offload(work, data, guest) {
+    return work ? new HostWork(work.promise, () => guest(work.input)) : guest(data);
   }
   // Every SubtleCrypto method: a rejected promise for a bad receiver or argument. Bun runs
   // digests, encryption, signatures and derivation as background work, so those settle in a
@@ -739,20 +745,20 @@
   }
   function digest(a, data) {
     const name = algorithm(a, true).name;
-    const bytes = buffer(data);
-    return offload(hostCompute?.digest(name, bytes), () => native.hash(name, bytes).buffer);
+    const bytes = view(data);
+    return offload(hostCompute?.digest(name, bytes), bytes, input => native.hash(name, input).buffer);
   }
   function signVerify(op, a, key, data, signature) {
     const plan = signVerifyPlan(op, a, key);
-    const bytes = buffer(data);
-    if (op === "sign") return offload(hostCompute?.sign(plan, bytes), () => signVerifyRun(plan, bytes));
+    const bytes = view(data);
+    if (op === "sign") return offload(hostCompute?.sign(plan, bytes), bytes, input => signVerifyRun(plan, input));
     const sig = buffer(signature);
-    return offload(hostCompute?.verify(plan, sig, bytes), () => signVerifyRun(plan, bytes, sig));
+    return offload(hostCompute?.verify(plan, sig, bytes), bytes, input => signVerifyRun(plan, input, sig));
   }
   function cryptOperation(op, a, key, data) {
     const plan = cryptPlan(op, a, key);
-    const bytes = buffer(data);
-    return offload(hostCompute?.crypt(plan, bytes), () => cryptRun(plan, bytes));
+    const bytes = view(data);
+    return offload(hostCompute?.crypt(plan, bytes), bytes, input => cryptRun(plan, input));
   }
   function publicKey(key, usages) {
     usages = usageList(usages);
