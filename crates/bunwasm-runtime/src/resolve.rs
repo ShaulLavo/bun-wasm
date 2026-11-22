@@ -191,6 +191,7 @@ pub fn percent_decode(s: &str) -> String {
 
 pub struct Resolver {
     custom_conditions: Rc<[String]>,
+    experimental_stream_iter: bool,
     object_modules: RefCell<HashMap<String, String>>,
     next_object_module: Cell<u64>,
     /// package.json contents by directory (`None` = no package.json there).
@@ -217,12 +218,18 @@ impl Resolver {
     pub fn with_conditions(conditions: Vec<String>) -> Self {
         Self {
             custom_conditions: conditions.into(),
+            experimental_stream_iter: false,
             object_modules: RefCell::new(HashMap::new()),
             next_object_module: Cell::new(0),
             package_json: RefCell::new(HashMap::new()),
             package_errors: RefCell::new(HashMap::new()),
             notes: RefCell::new(Vec::new()),
         }
+    }
+
+    pub fn with_experimental_stream_iter(mut self, enabled: bool) -> Self {
+        self.experimental_stream_iter = enabled;
+        self
     }
 
     pub fn register_object_module(&self, name: &str) -> String {
@@ -244,6 +251,9 @@ impl Resolver {
         self.notes.borrow_mut().clear();
         if let Some(key) = self.object_modules.borrow().get(spec) {
             return Ok(Resolved::Builtin(key.clone()));
+        }
+        if self.experimental_stream_iter && (spec == "stream/iter" || spec == "node:stream/iter") {
+            return Ok(Resolved::Builtin("node:stream/iter".to_owned()));
         }
         if let Some(name) = builtin_name(spec) {
             return Ok(Resolved::Builtin(name));

@@ -170,8 +170,10 @@ impl State {
         exec_argv: Vec<String>,
         transpiler: Box<dyn Transpiler>,
     ) -> Self {
+        let experimental_stream_iter = exec_argv.iter().any(|a| a == "--experimental-stream-iter");
         State {
-            resolver: resolve::Resolver::with_conditions(conditions),
+            resolver: resolve::Resolver::with_conditions(conditions)
+                .with_experimental_stream_iter(experimental_stream_iter),
             import_requests: RefCell::new(import_requests::ImportRequests::default()),
             transpiler,
             main: RefCell::new(String::new()),

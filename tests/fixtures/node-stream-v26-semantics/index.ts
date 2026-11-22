@@ -1,6 +1,8 @@
 // Node 26 stream semantics Bun ships, from upstream test/js/node/stream/node-stream.test.js.
 import { createReadStream, writeFileSync } from "node:fs";
-import { Duplex, getDefaultHighWaterMark, PassThrough, Readable, Transform, Writable } from "node:stream";
+import { createRequire } from "node:module";
+import { Duplex, finished, getDefaultHighWaterMark, PassThrough, Readable, Transform, Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const errorCode = (run: () => unknown) => {
@@ -110,3 +112,64 @@ for (const size of [0x10, 0xffff, 0x10000, 0x20010]) {
   await closed;
   console.log("createReadStream readable", size, events.at(-1), events.filter(event => event === "null").length);
 }
+
+let objEncoding: unknown = "unset";
+const objWritable = new Writable({
+  objectMode: true,
+  write(_chunk, encoding, callback) {
+    objEncoding = encoding;
+    callback();
+  },
+});
+const objDone = new Promise<void>(resolve => objWritable.once("finish", resolve));
+objWritable.end(new Uint8Array([1, 2, 3]));
+await objDone;
+console.log("objectMode Uint8Array encoding", String(objEncoding));
+
+const finishedOutsideAls = new Readable({ read() {} });
+let finishedCalls = 0;
+const finishedDone = new Promise<void>(resolve => {
+  finished(finishedOutsideAls, () => {
+    finishedCalls++;
+    resolve();
+  });
+});
+finishedOutsideAls.push(null);
+finishedOutsideAls.resume();
+await finishedDone;
+console.log("finished outside ALS", finishedCalls);
+
+const abortCtrl = new AbortController();
+const destroyBoom = new Error("destroy boom");
+const srcAbort = new Readable({
+  read() {},
+  destroy(_err, cb) {
+    cb(destroyBoom);
+  },
+});
+const dstAbort = sink();
+const pipelinePromise = pipeline(srcAbort, dstAbort, { signal: abortCtrl.signal });
+abortCtrl.abort();
+const pipelineErr = await pipelinePromise.then(() => null, (err: Error) => err);
+console.log("pipeline destroy overrides abort", pipelineErr === destroyBoom, pipelineErr?.message);
+
+const composedAbortCtrl = new AbortController();
+const composedAbort = Readable.from(async function* () {
+  await new Promise(resolve => setTimeout(resolve, 100));
+  yield "x";
+}()).compose(new PassThrough());
+const composedAbortPromise = pipeline(composedAbort, sink(), { signal: composedAbortCtrl.signal });
+composedAbortCtrl.abort();
+const composedAbortErr = await composedAbortPromise.then(() => null, (err: Error) => err);
+console.log("pipeline compose abort kept", composedAbortErr?.name, (composedAbortErr as Error & { code?: string })?.code);
+
+const req = createRequire(import.meta.url);
+console.log("stream/iter gated", Array.isArray(req.resolve.paths("stream/iter")));
+const directStream = new ReadableStream({
+  type: "direct" as never,
+  pull(controller: { write(chunk: string): void; close(): void }) {
+    controller.write("direct-ok");
+    controller.close();
+  },
+} as never);
+console.log("direct stream", await new Response(directStream).text());

@@ -27,8 +27,15 @@
   // in scripts/bun-builtins.json so the generator does not bundle Bun's copy.
   const fetchInternal = (name: string) => () => internal.require("bun_provided_internals")[name];
   const runtimeProvided: Record<string, () => unknown> = {
+    "internal:errors": fetchInternal("internal:errors"),
+    "internal:streams/add-abort-signal": fetchInternal("internal:streams/add-abort-signal"),
+    "internal:streams/destroy": fetchInternal("internal:streams/destroy"),
     "internal:streams/duplex": () => internal.builtin("node:stream").Duplex,
+    "internal:streams/end-of-stream": fetchInternal("internal:streams/end-of-stream"),
+    "internal:streams/readable": fetchInternal("internal:streams/readable"),
+    "internal:streams/writable": fetchInternal("internal:streams/writable"),
     "internal:tls": fetchInternal("internal:tls"),
+    "internal:validators": fetchInternal("internal:validators"),
     "internal:webstreams_adapters": fetchInternal("internal:webstreams_adapters"),
   };
 
@@ -111,9 +118,18 @@
     makeTypeError: (message: string) => new TypeError(message),
     throwTypeError(message: string) { throw new TypeError(message); },
     throwRangeError(message: string) { throw new RangeError(message); },
-    makeErrorWithCode(id: number, ..._args: unknown[]) {
+    makeAbortError(message?: string, options?: ErrorOptions) {
+      return (internal.require("bun_provided_internals").makeAbortError as (m?: string, o?: ErrorOptions) => Error)(message, options);
+    },
+    makeErrorWithCode(id: number, ...args: unknown[]) {
       const code = native.bunBuiltinErrorCode(id);
       if (code === "ERR_INVALID_URI") return Object.assign(new URIError("URI malformed"), { code });
+      const prev = id > 0 ? native.bunBuiltinErrorCode(id - 1) : undefined;
+      const prev2 = id > 1 ? native.bunBuiltinErrorCode(id - 2) : undefined;
+      const make = internal.require("bun_provided_internals").makeErrorWithCode as
+        (c: string, p: string | undefined, p2: string | undefined, a: unknown[]) => Error | undefined;
+      const built = make(code, prev, prev2, args);
+      if (built) return built;
       throw unsupported(`error constructor ${code}`);
     },
   };

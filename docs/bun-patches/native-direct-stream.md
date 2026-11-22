@@ -51,3 +51,10 @@ read. The strategy forwarding, direct sentinel, controller algorithm and portabl
 `directSource` implementation are unchanged. This is the original dictionary
 adapter correction described in [Native browser stream completion](native-browser-stream-completion.md#lazy-readable-source-dictionaries),
 not a copied or patched WebKit implementation.
+
+On Node.js 24+ hosts (`web/scripts/node-host.ts`), `native-stream-state.ts` leaves
+the native `ReadableStream` constructor unwrapped so native stream reflection checks
+keep the original global constructor. In that case `stream_context.ts` delegates
+`new ReadableStream({ type: "direct", ... })` inside the guest wrapper to
+`direct_stream.constructNativeReadable`, which wraps `directSource` in the same
+lazy-dictionary constructor path exported from `web/src/native-direct-stream.ts`.

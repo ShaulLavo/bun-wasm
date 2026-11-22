@@ -885,6 +885,13 @@
     return Object.prototype.hasOwnProperty.call(internal.builtinFactories, id) || id.startsWith("node:") || id === "bun" || id.startsWith("bun:");
   }
 
+  function isRegisteredBuiltin(spec) {
+    if (typeof spec !== "string") return false;
+    const factories = internal.builtinFactories;
+    if (Object.prototype.hasOwnProperty.call(factories, spec)) return true;
+    return !spec.startsWith("node:") && Object.prototype.hasOwnProperty.call(factories, "node:" + spec);
+  }
+
   function loadModule(path, format) {
     const cached = moduleCache[path];
     if (cached) return cached;
@@ -1006,7 +1013,7 @@
       return resolved === "node:" + spec ? spec : resolved;
     };
     require.resolve.paths = function paths(spec) {
-      return isBuiltinId(spec) ? null : nodeModulePaths(dirname(fromPath));
+      return isRegisteredBuiltin(spec) ? null : nodeModulePaths(dirname(fromPath));
     };
     require.cache = moduleCache;
     require.main = mainModule;

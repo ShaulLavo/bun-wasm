@@ -10,16 +10,17 @@ Class **Port**. `node:stream` ships readable-stream 4.7.0 (`third_party/node-str
 | `readable.js` | `read()` without a size returns one buffered chunk when no decoder is set. | Node 26 `howMuchToRead()` |
 | `readable.js` | `maybeReadMore` is not scheduled while a `_read` is in flight. | nodejs/node#60454 |
 | `writable.js` | A string chunk written with the `'buffer'` encoding throws `ERR_UNKNOWN_ENCODING`. | Node 26 `_write()` |
+| `writable.js` | `Writable` in `objectMode` passes `undefined` as the `encoding` argument instead of defaulting to `'utf8'`. | Node 26 `writeOrBuffer()` |
 | `writable.js` | `Writable.prototype[Symbol.asyncDispose]` destroys an unfinished stream with `AbortError`, as `Readable` already did. | Node 26 `writable.js` |
 | `duplexify.js` | `Duplex.from({ readable, writable })` destroys the writable side, not the readable side again, when the readable side errors. | nodejs/node#62824 |
+| `end-of-stream.js` | `finished()` only wraps the callback in `AsyncResource.bind` when an async context is active; otherwise it falls back to `once(callback)`. | Bun `end-of-stream.ts` |
+| `pipeline.js` | A non-premature-close destroy error overrides an `AbortError` from an aborted signal in `finishImpl`, while keeping `AbortError` over readable-stream's `ERR_STREAM_PREMATURE_CLOSE` from `compose()`. | nodejs/node#62113 |
 | `operators.js` | `compose()` returns the composed Duplex directly, and the composed pipeline's own check reports `streams[1]` for a non-writable destination. | nodejs/node#60907 |
 | `operators.js` | Operator callbacks fail with the `validateFunction` message (`must be of type function`). | nodejs/node#59529 |
 
 `crates/bunwasm-runtime/src/js/node_stream_bindings.ts` also supplies Node's `normalizeEncoding` to the vendored Node 26 web stream adapters. readable-stream's util module has none, so `Writable.fromWeb` and `Duplex.fromWeb` called undefined for a string chunk in any encoding but UTF-8. This is an original adapter of Node's `lib/internal/util.js` encoding names.
 
 The generator's adapter binding list drops `ERR_INVALID_STATE` and `validateFunction`, which the adapters never use, so it reproduces the checked-in `node_stream_web.js` again.
-
-Not ported: Node 26's pipeline error ordering (nodejs/node#62113, a real destroy error replacing the AbortError of an aborted signal). Changing only `finishImpl`'s condition let the premature close from readable-stream's older `pipe()` replace the AbortError of an aborted `compose()`. It needs Node 26's `pipeline.js` as a whole.
 
 ## Classification
 

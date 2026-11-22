@@ -19,3 +19,9 @@ createReadStream readable 16 null 1
 createReadStream readable 65535 null 1
 createReadStream readable 65536 null 1
 createReadStream readable 131088 null 1
+objectMode Uint8Array encoding undefined
+finished outside ALS 1
+pipeline destroy overrides abort true destroy boom
+pipeline compose abort kept AbortError ABORT_ERR
+stream/iter gated true
+direct stream direct-ok

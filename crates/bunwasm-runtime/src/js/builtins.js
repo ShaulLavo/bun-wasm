@@ -651,6 +651,9 @@
     "node:stream/promises": () => internal.builtin("node:stream").promises,
     "node:stream/consumers": lazy("stream_consumers"),
     "node:stream/web": () => internal.require("stream_context"),
+    ...(native.execArgv?.()?.includes("--experimental-stream-iter")
+      ? { "node:stream/iter": () => internal.require("bun_builtins").require("node:stream/iter") }
+      : {}),
     "node:perf_hooks": () => ({
       performance: globalThis.performance,
       PerformanceObserver: class PerformanceObserver {
