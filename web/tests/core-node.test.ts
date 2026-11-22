@@ -72,4 +72,4 @@ test('unbundled headless hosts load with their installed runtime package', async
     expect(launch.stderr).toContain(missing);
     expect(launch.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
   } finally { await rm(dir, { recursive: true, force: true }); }
-});
+}, 120_000); // copies the installed package; the limit only catches a hang

@@ -21,6 +21,7 @@ export function nextBuildFilesystem() {
   const original = backend.execute.bind(backend);
   let replaceAfter: { path: string; operation: "resolve" | "stat" } | undefined;
   let lastName = "";
+  let stalledReads = 0;
   backend.execute = (operation, args, bytes) => {
     operations.push({ operation, args: args.slice(), at: Date.now() });
     if (operation === "read") reads.push({ ino: fs.nodeForHandle(args[0]).ino, length: args[1], offset: args[2] });
@@ -40,7 +41,10 @@ export function nextBuildFilesystem() {
     fs, operations, reads, symlink,
     replace(path: string, operation: "resolve" | "stat") { replaceAfter = { path, operation }; },
     write(files: Partial<Record<typeof nextBuildFiles[number]["path"], string>>) { for (const [path, text] of Object.entries(files)) original("writeFile", [path, false, false], new TextEncoder().encode(text)); },
-    stall() { serviceBackend.prepareDescriptorRead = () => new Promise(resolve => { releases.push(() => resolve(new Uint8Array())); }); },
+    stall() { serviceBackend.prepareDescriptorRead = () => new Promise(resolve => { stalledReads++; releases.push(() => resolve(new Uint8Array())); }); },
+    stalledReads: () => stalledReads,
+    /** True once this many file reads have started and every one of them has had its closing stat. */
+    readsFinished: (count: number) => operations.filter(row => row.operation === "read").length >= count && operations.every((row, index) => row.operation !== "read" || operations.slice(index + 1).some(later => later.operation === "stat" && later.args[0] === row.args[0])),
     disposed: () => connections.every(pair => isRevoked(pair.client)),
     outstanding: () => Array.from(held.values()).reduce((total, set) => total + set.size, 0),
     filesystem: { fork() {

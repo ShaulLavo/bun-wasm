@@ -84,22 +84,22 @@ beforeAll(async () => {
   await Bun.write(config, original.replace('"./dist"', JSON.stringify(assets)).replace('"worker.ts"', JSON.stringify(resolve(import.meta.dir, "../../site/worker.ts"))));
   const server = hosting(config, root);
   stops.push(server.close);
-  const timeout = setTimeout(() => { void server.close(); }, 20000);
+  const timeout = setTimeout(() => { void server.close(); }, 60000);
   try { publicOrigin = await server.ready; } finally { clearTimeout(timeout); }
   const nativeConfig = join(root, "native.jsonc");
   const native = (await Bun.file(config).text()).replace(/^.*"main":.*\n/m, "").replace(/^.*"binding":.*\n/m, "").replace(/^.*"run_worker_first":.*\n/m, "");
   await Bun.write(nativeConfig, native);
   const baseline = hosting(nativeConfig, root);
   stops.push(baseline.close);
-  const nativeTimeout = setTimeout(() => { void baseline.close(); }, 20000);
+  const nativeTimeout = setTimeout(() => { void baseline.close(); }, 60000);
   try { nativeOrigin = await baseline.ready; } finally { clearTimeout(nativeTimeout); }
   const build = await Bun.build({ entrypoints: [resolve(import.meta.dir, "../../site/worker.ts")], target: "browser", format: "esm", outdir: join(root, "bundle") });
   if (!build.success || !build.outputs[0]) throw new Error(`Worker fixture bundle failed: ${build.logs.join("\n")}`);
   const direct = hosting(config, root, build.outputs[0].path);
   stops.push(direct.close);
-  const directTimeout = setTimeout(() => { void direct.close(); }, 20000);
+  const directTimeout = setTimeout(() => { void direct.close(); }, 60000);
   try { origin = await direct.ready; } finally { clearTimeout(directTimeout); }
-}, 25000);
+}, 200000); // three Wrangler starts; the limits only catch a hang, a busy machine starts them slowly
 
 afterAll(async () => {
   for (const stop of stops.reverse()) await stop();
