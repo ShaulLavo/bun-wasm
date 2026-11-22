@@ -42,7 +42,9 @@ function fixture() {
     exists: host.existsSync,
     stat(file: string, link: boolean, bigint = false) { return metadata(link ? host.lstatSync(file, { bigint }) : host.statSync(file, { bigint })); },
     fstat(fd: number, bigint = false) { return metadata(host.fstatSync(fd, { bigint })); },
-    mkdir(file: string, recursive: boolean) { return host.mkdirSync(file, { recursive }); },
+    mkdir(file: string, recursive: boolean, mode?: number) { return host.mkdirSync(file, { recursive, mode }); },
+    chmod: host.chmodSync,
+    fchmod: host.fchmodSync,
     readdir(file: string) { return host.readdirSync(file, { withFileTypes: true }).map(entry => [entry.name, entry.isDirectory() ? "dir" : "file"]); },
     copyFile: host.copyFileSync,
     copyDir(from: string, to: string) { host.cpSync(from, to, { recursive: true }); },
@@ -313,4 +315,47 @@ test("an abstract socket name is not a filesystem path: unlink rejects its NUL b
   const unlink = Object.assign(() => { throw new Error("unlink reached the native filesystem"); });
   Object.assign(native, { unlink, rm: unlink });
   expect(() => fs.unlinkSync("\0nuxt-vite-node.sock")).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
+});
+
+test("cp preserves new directory modes (including read-only 0o555), keeps existing directory modes, and matches Bun conflict/filter rules", async () => {
+  const { fs, root } = fixture();
+  const src = path.join(root, "src-dir");
+  host.mkdirSync(src);
+  host.writeFileSync(path.join(src, "child.txt"), "hello");
+  host.chmodSync(path.join(src, "child.txt"), 0o600);
+  host.chmodSync(src, 0o555);
+  try {
+    const freshSync = path.join(root, "fresh-sync");
+    fs.cpSync(src, freshSync, { recursive: true });
+    expect(host.statSync(freshSync).mode & 0o777).toBe(0o555);
+    expect(host.statSync(path.join(freshSync, "child.txt")).mode & 0o777).toBe(0o600);
+    host.chmodSync(freshSync, 0o755);
+
+    const freshAsync = path.join(root, "fresh-async");
+    await fs.promises.cp(src, freshAsync, { recursive: true });
+    expect(host.statSync(freshAsync).mode & 0o777).toBe(0o555);
+    expect(host.statSync(path.join(freshAsync, "child.txt")).mode & 0o777).toBe(0o600);
+    host.chmodSync(freshAsync, 0o755);
+
+    const existing = path.join(root, "existing-dir");
+    host.mkdirSync(existing);
+    host.chmodSync(existing, 0o700);
+    fs.cpSync(src, existing, { recursive: true });
+    expect(host.statSync(existing).mode & 0o777).toBe(0o700);
+
+    expect(() => fs.cpSync(src, existing, { recursive: true, force: false, errorOnExist: true }))
+      .toThrow(expect.objectContaining({ code: "ERR_FS_CP_EEXIST", path: existing }));
+
+    const fileDst = path.join(root, "file-dst");
+    host.writeFileSync(fileDst, "keep");
+    expect(() => fs.cpSync(src, fileDst))
+      .toThrow(expect.objectContaining({ code: "ERR_FS_CP_DIR_TO_NON_DIR", path: fileDst }));
+
+    const f1 = path.join(root, "f1"), f2 = path.join(root, "f2");
+    host.writeFileSync(f1, "ok");
+    fs.cpSync(f1, f2, { filter: (() => 1) as unknown as () => boolean });
+    expect(host.readFileSync(f2, "utf8")).toBe("ok");
+  } finally {
+    host.chmodSync(src, 0o755);
+  }
 });

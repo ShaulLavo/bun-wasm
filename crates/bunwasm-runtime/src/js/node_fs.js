@@ -309,6 +309,10 @@
     return internal.concatBytes(chunks);
   }
 
+  function currentUmask() {
+    return typeof process !== "undefined" && typeof process.umask === "function" ? process.umask() : 0o022;
+  }
+
   function writeFileSync(path, data, options) {
     if (typeof path !== "number" && typeof path !== "string") path = toPath(path);
     const encoding = encodingOf(options);
@@ -318,7 +322,7 @@
       native.write(path, bytes, -1);
       return;
     }
-    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), parseFileMode(options && typeof options === "object" ? options.mode : undefined, "mode", 0o666)));
+    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), parseFileMode(options && typeof options === "object" ? options.mode : undefined, "mode", 0o666), currentUmask()));
   }
 
   function appendFileSync(path, data, options) {
@@ -360,9 +364,8 @@
       throw Object.assign(new TypeError(`The "recursive" property must be of type boolean, got ${kind}`), { code: "ERR_INVALID_ARG_TYPE" });
     }
     const recursive = given === true;
-    // Node validates the mode (a number or string argument, or options.mode); WASI applies none.
-    parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
-    const created = withPath(path, (abs) => native.mkdir(abs, recursive));
+    const mode = parseFileMode(options && typeof options === "object" ? options.mode : options, "mode", 0o777);
+    const created = withPath(path, (abs) => native.mkdir(abs, recursive, mode, currentUmask()));
     return recursive ? (created === null ? undefined : created) : undefined;
   }
 
@@ -460,7 +463,7 @@
       const suffix = Array.from(native.randomBytes(6), (b) => chars[b % chars.length]).join("");
       const path = given + suffix;
       try {
-        native.mkdir(absolute(path), false);
+        native.mkdir(absolute(path), false, 0o700, 0);
       } catch (err) {
         if (err && err.code === "EEXIST") continue;
         if (!err || typeof err.code !== "string") throw err;
@@ -471,7 +474,7 @@
   }
 
   function openSync(path, flags, mode) {
-    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), parseFileMode(mode, "mode", 0o666)));
+    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), parseFileMode(mode, "mode", 0o666), currentUmask()));
   }
 
   function closeSync(fd) {
@@ -798,14 +801,15 @@
     },
     symlinkSync: (target, path) => withPath(path, (abs) => native.symlink(toPath(target, "target"), abs)),
     linkSync: (from, to) => withPath(from, (abs) => native.link(abs, absolute(toPath(to, "newPath")))),
-    // WASI has no permission bits to set: the mode is validated as Node's parseFileMode does
-    // and the path must exist.
     chmodSync: (path, mode) => {
-      parseFileMode(mode, "mode");
-      void statSync(path);
+      const parsed = parseFileMode(mode, "mode");
+      withPath(path, (abs) => native.chmod(abs, parsed));
     },
     lchmodSync: (path, mode) => void parseFileMode(mode, "mode"),
-    fchmodSync: (fd, mode) => void parseFileMode(mode, "mode"),
+    fchmodSync: (fd, mode) => {
+      validateFd(fd);
+      native.fchmod(fd, parseFileMode(mode, "mode"));
+    },
     chownSync: (path) => void statSync(path),
     lchownSync: () => {},
     fchownSync: () => {},
