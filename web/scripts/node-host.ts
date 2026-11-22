@@ -176,7 +176,7 @@ async function run(data: GuestData) {
   let entered = false;
   try {
     processHost = createNodeProcess({
-      transport: data.transport, env, preopenCount: Object.keys(config.preopens).length,
+      transport: data.transport, env, preopenCount: Object.keys(config.preopens).length, preopens: config.preopens,
       registry: (data.transport.data as { registry?: PipePublicationRegistryHandle } | undefined)?.registry,
       isSignalPending: () => signals.pending(),
       postMessage: message => parentPort!.postMessage(message), finish,

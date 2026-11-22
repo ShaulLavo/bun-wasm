@@ -12,6 +12,7 @@ import type { PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import { HOST_CALL_FD, installHostSlotsViaImport, type SlotImpls } from "../src/net/trampoline.ts";
 import { writeStdio } from "./node-stdio.ts";
 import { createNodeSignalController } from "./node-signals.ts";
+import { installNodeLinks } from "./node-links.ts";
 import type { EngineNet } from "../src/net/host.ts";
 
 export type { NodeWasiImports } from "waffle/proc/node-wasi";
@@ -92,6 +93,8 @@ export interface NodeProcessOptions {
   transport: WorkerProcessTransport;
   env?: Record<string, string>;
   preopenCount?: number;
+  /** Node WASI's preopens (guest path to host directory), to resolve symlinks in the guest namespace. */
+  preopens?: Record<string, string>;
   registry?: PipePublicationRegistryHandle;
   isSignalPending?(): boolean;
   postMessage(message: WorkerProcessMessage): void;
@@ -167,6 +170,8 @@ export function createNodeProcess(options: NodeProcessOptions) {
       // Waffle captures fd_close for native release, then installs guest close itself.
       // Startup failure can dispose Bun's host before Node WASI binds guest memory.
       const wasi = imports.wasi_snapshot_preview1;
+      // Below Waffle's descriptor layer, on Node WASI's own descriptors.
+      if (options.preopens) installNodeLinks(wasi, memory, options.preopens);
       wasi.fd_close = allowUnstartedWasiClose(wasi.fd_close!);
       installNodeWasiDescriptors(imports, memory, descriptors, preopenCount, client, isSignalPending, guard);
       const original = imports.wasi_snapshot_preview1.sock_send!;
