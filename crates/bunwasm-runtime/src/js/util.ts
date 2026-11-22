@@ -463,7 +463,9 @@
   }
 
   const functionSource = Function.prototype.toString;
-  const nativeSource = /\[native code\]\s*\}$/;
+  // The whole placeholder an engine prints for a native function, not a source that merely ends
+  // with the same text in a comment.
+  const nativeSource = /^function\s*[\w$]*\s*\(\)\s*\{\s*\[native code\]\s*\}$/;
 
   // A bound function or a host function carries the async or generator prototype of its
   // target without being one, and Node answers false for it. Those print as native code.

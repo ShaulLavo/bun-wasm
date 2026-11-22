@@ -1,0 +1,5 @@
+{
+  "owner": "native",
+  "path": "tests/fixtures/console-group-dir",
+  "engines": ["quickjs", "jsc", "browser"]
+}

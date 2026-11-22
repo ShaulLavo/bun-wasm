@@ -1,0 +1,15 @@
+async async: true generator: false
+async generator async: true generator: true
+async arrow async: true generator: false
+async method async: true generator: false
+normal async: false generator: false
+generator async: false generator: true
+bound async: false generator: false
+bound async async: false generator: false
+bound generator async: false generator: false
+bound async generator async: false generator: false
+builtin async: false generator: false
+async with a comment async: true generator: false
+generator with a comment async: false generator: true
+async generator with a comment async: true generator: true
+not a function async: false generator: false

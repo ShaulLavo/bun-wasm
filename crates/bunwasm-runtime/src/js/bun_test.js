@@ -1285,18 +1285,8 @@
     return { body: `\n\n${prefix}${inspect(substring)}${times}\nReceived: ${inspect(received)}\n` };
   });
 
-  // JSValue::getLengthIfPropertyExistsInternal: the size of the collection types, otherwise `length`.
-  function lengthOf(received) {
-    if (received === null || received === undefined) return undefined;
-    if (received instanceof Headers) return received.count;
-    if (received instanceof Map || received instanceof Set || received instanceof URLSearchParams) return received.size;
-    if (received instanceof Blob) return received.size;
-    if (received instanceof FormData) return Array.from(received.keys()).length;
-    return received.length;
-  }
-
   defineMatcher("toHaveLength", "expected", (ctx, received, expected) => {
-    const length = lengthOf(received);
+    const length = matcherSupport.lengthOf(received);
     if (!failed(ctx, length === expected)) return null;
     if (ctx.not) return { body: `\n\nExpected length: not ${expected}\n` };
     return { body: `\n\nExpected length: ${expected}\nReceived length: ${length}\n` };

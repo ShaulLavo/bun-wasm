@@ -1,0 +1,25 @@
+resolves settled: undefined
+rejects settled: undefined
+not resolves settled: undefined
+awaited resolves: undefined
+awaited rejects: undefined
+awaited pending: undefined
+rejects of a resolved promise threw: expect(received).rejects.toBe(expected)
+resolves of a rejected promise threw: expect(received).resolves.toBe(expected)
+a failing settled match threw: expect(received).toBe(expected)
+map passes
+map with a shadowed size passes
+set passes
+set with a shadowed size passes
+headers passes
+form data with repeated names passes
+form data with a throwing keys passes
+search params passes
+blob passes
+blob with a throwing size passes
+typed array passes
+array buffer passes
+string passes
+own length passes
+wrong length fails
+not wrong length passes

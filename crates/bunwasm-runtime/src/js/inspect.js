@@ -488,6 +488,8 @@
       this.formatBufferAsText = false;
       this.remaining = [];
       this.visited = new Set();
+      // The deepest nesting reached, which tells an engine's stack overflow from an error thrown shallow.
+      this.deepest = 0;
       this.customFormatted = null;
     }
 
@@ -500,9 +502,20 @@
       return this.colors ? "\u001b[0m\u001b[" + color + "m" + text + "\u001b[0m" : text;
     }
 
-    // `<r>key<d>:<r> ` after every property key.
+    // `<cyan>text<r>`, which functions and classes use without the leading reset.
+    paintBare(color, text) {
+      return this.colors ? "\u001b[" + color + "m" + text + "\u001b[0m" : text;
+    }
+
+    // `<d>:<r> ` after every property key.
     keySuffix() {
-      return this.colors ? "\u001b[0m\u001b[2m:\u001b[0m " : ": ";
+      return this.colors ? "\u001b[2m:\u001b[0m " : ": ";
+    }
+
+    // A string value is followed by one more reset, as ConsoleObject.rs writes after it.
+    formatElement(tag, value) {
+      this.format(tag, value);
+      if (this.colors && tag.stringLike) this.write("\u001b[0m");
     }
 
     addForNewLine(n) {
@@ -564,6 +577,7 @@
       }
       if (this.visited.size >= MAX_NESTING) throw new RangeError(CALL_STACK_MESSAGE);
       this.visited.add(value);
+      if (this.visited.size > this.deepest) this.deepest = this.visited.size;
       try {
         this.dispatch(tag, value, info);
       } finally {
@@ -653,7 +667,7 @@
         this.write("[String: " + quoteJSON(str) + "]");
         return;
       }
-      this.write(str);
+      this.write(info.regexp ? this.paint("31", str) : str);
     }
 
     printNumber(value, info) {
@@ -662,11 +676,11 @@
         const num = String(Number.prototype.valueOf.call(value));
         if (name !== "Number") {
           this.addForNewLine(name.length + num.length + 11);
-          this.write("[Number (" + name + "): " + num + "]");
+          this.write(this.paint("33", "[Number (" + name + "): " + num + "]"));
           return;
         }
         this.addForNewLine(name.length + num.length + 4);
-        this.write("[" + name + ": " + num + "]");
+        this.write(this.paint("33", "[" + name + ": " + num + "]"));
         return;
       }
       const text = formatNumber(value);
@@ -686,11 +700,11 @@
         const text = String(Boolean.prototype.valueOf.call(value));
         if (name !== "Boolean") {
           this.addForNewLine(text.length + name.length + 14);
-          this.write("[Boolean (" + name + "): " + text + "]");
+          this.write(this.paint("33", "[Boolean (" + name + "): " + text + "]"));
           return;
         }
         this.addForNewLine(text.length + 11);
-        this.write("[Boolean: " + text + "]");
+        this.write(this.paint("33", "[Boolean: " + text + "]"));
         return;
       }
       this.addForNewLine(value ? 4 : 5);
@@ -757,17 +771,17 @@
       const protoName = protoIsClass ? functionName(proto) : "";
       this.addForNewLine(protoName.length);
       const base = printable === "" ? "(anonymous)" : printable;
-      this.write(this.paint("36", protoName === "" ? "[class " + base + "]" : "[class " + base + " extends " + protoName + "]"));
+      this.write(this.paintBare("36", protoName === "" ? "[class " + base + "]" : "[class " + base + " extends " + protoName + "]"));
     }
 
     printFunction(value) {
       const printable = functionName(value);
       const funcName = functionKindName(value);
       if (printable === "" || funcName === printable) {
-        this.write(this.paint("36", funcName === "" ? "[Function]" : "[" + funcName + "]"));
+        this.write(this.paintBare("36", funcName === "" ? "[Function]" : "[" + funcName + "]"));
         return;
       }
-      this.write(this.paint("36", "[" + (funcName === "" ? "Function" : funcName) + ": " + printable + "]"));
+      this.write(this.paintBare("36", "[" + (funcName === "" ? "Function" : funcName) + ": " + printable + "]"));
     }
 
     printGetterSetter(value) {
@@ -783,7 +797,7 @@
       }
       const state = internal.promiseState(value);
       const label = state === "pending" ? "<pending>" : state === "rejected" ? "<rejected>" : "<resolved>";
-      this.write("Promise { " + label + " }");
+      this.write("Promise { " + this.paint("36", label) + " }");
     }
 
     // ── arrays ──
@@ -848,7 +862,7 @@
         this.printComma();
         this.arraySeparator(state);
         const element = value[i];
-        this.format(tagOf(element, this.tagOpts()), element);
+        this.formatElement(tagOf(element, this.tagOpts()), element);
         i += 1;
       }
       if (emptyStart !== null) this.printEmptyRun(emptyStart, len - emptyStart, state);
@@ -870,7 +884,7 @@
         this.addForNewLine(2);
       }
       if (!present) return 0;
-      this.format(tag, element);
+      this.formatElement(tag, element);
       return null;
     }
 
@@ -1143,11 +1157,11 @@
       const suffix = view.isBigInt ? "n" : "";
       const MAX = 512;
       const shown = Math.min(view.length, MAX + 1);
-      this.write(formatTypedElement(view.elements[0]) + suffix);
+      this.write(this.paint("33", formatTypedElement(view.elements[0]) + suffix));
       for (let i = 1; i < shown; i++) {
         this.printComma();
         this.space();
-        this.write(formatTypedElement(view.elements[i]) + suffix);
+        this.write(this.paint("33", formatTypedElement(view.elements[i]) + suffix));
       }
       if (view.length > MAX + 1) this.write(suffix + ", ... " + (view.length - MAX - 1) + " more");
     }
@@ -1228,7 +1242,8 @@
       ctx.i += 1;
       if (before > 0) this.propertySeparator(ctx);
       this.writePropertyKey(key);
-      this.format(tag, value);
+      if (this.colors && tag.stringLike) this.write("\u001b[0m\u001b[32m");
+      this.formatElement(tag, value);
     }
 
     handleFirstProperty(ctx) {
@@ -1271,7 +1286,7 @@
       }
       if (!this.quoteKeys && IDENT_RE.test(key)) {
         this.addForNewLine(key.length + 1);
-        this.write(this.paint("0", key) + this.keySuffix());
+        this.write((this.colors ? "\u001b[0m" + key : key) + this.keySuffix());
         return;
       }
       this.addForNewLine(key.length + 2);
@@ -1875,9 +1890,9 @@
 
   function readInspectOptions(options, colors) {
     const result = { maxDepth: 8, quoteStrings: true, orderedProperties: false, singleLine: false, colors: false };
-    if (options === undefined || options === null) return result;
-    if (typeof options !== "object") {
-      applyDepth(result, options);
+    if (!isObjectLike(options)) {
+      // Not an options object: the second argument is the depth, the third the colors.
+      if (options !== undefined) applyDepth(result, options);
       if (colors !== undefined && colors !== null) result.colors = !!colors;
       return result;
     }
@@ -1905,11 +1920,13 @@
     try {
       f.format(tagOf(value), value);
     } catch (error) {
-      throw overflowAsRangeError(error);
+      throw f.deepest >= MIN_OVERFLOW_NESTING ? overflowAsRangeError(error) : error;
     }
     return f.out;
   }
 
+  // An engine overflows its stack only deep inside nested values.
+  const MIN_OVERFLOW_NESTING = 64;
   const CALL_STACK_MESSAGE = "Maximum call stack size exceeded.";
   // Nesting that overflows Bun's native stack long before this much output builds up.
   const MAX_NESTING = 8192;
@@ -1917,11 +1934,23 @@
   // An engine's own overflow error (QuickJS "stack overflow", V8 without the period) becomes
   // the RangeError JSC throws.
   function overflowAsRangeError(error) {
-    const message = isObjectLike(error) ? String(error.message) : "";
+    const message = ownMessage(error);
     if (message.startsWith("Maximum call stack size exceeded") || message === "stack overflow") {
       return new RangeError(CALL_STACK_MESSAGE);
     }
     return error;
+  }
+
+  // The message of an engine error, read without running any user accessor or proxy trap, so
+  // whatever a custom inspector threw reaches the caller untouched.
+  function ownMessage(error) {
+    if (!isObjectLike(error) || isProxy(error)) return "";
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(error, "message");
+      return descriptor !== undefined && typeof descriptor.value === "string" ? descriptor.value : "";
+    } catch {
+      return "";
+    }
   }
 
   /** console.log(...args) output without the trailing newline. */
