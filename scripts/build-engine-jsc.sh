@@ -62,7 +62,8 @@ fi
 # No side leaves this producer unless its interpreter keeps the measured guarded frame
 # (docs/stack-limits.md): every native reentry path's depth depends on it.
 check_interpreter_frame() {
-  bun "$root/scripts/wasm-name-sections.ts" check "$side"
+  # The frame check reads the named copy, so first prove it is the receipted side plus names.
+  bun "$root/scripts/wasm-name-sections.ts" matches "$named" "$side"
   bun "$root/scripts/jsc-cloop-frame.ts" check "$named"
 }
 if [[ -e "$side" || -e "$side.engine.json" ]]; then

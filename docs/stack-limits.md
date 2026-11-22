@@ -1261,7 +1261,7 @@ installed Ajv 8 and is not part of a default sweep:
 python3 scripts/measure-stack.py --engine jsc --budget-kib 192 getter computedgetter ajvnames proxy tostring
 python3 scripts/measure-stack.py --engine jsc --budget-kib 192 \
   --ajv-codegen <project>/node_modules/ajv/dist/compile/codegen ajv
-bun scripts/jsc-cloop-frame.ts check dist/jsc-engine.wasm
+bun scripts/jsc-cloop-frame.ts check "$JSC_ENGINE_BUILD_DIR/engine.named.wasm"
 scripts/test.sh --no-build --engine jsc getter-dispatch
 ```
 

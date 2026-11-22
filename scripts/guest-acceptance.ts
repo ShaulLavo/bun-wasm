@@ -88,6 +88,7 @@ export async function snapshotPublicationInputs(dist: string, descriptor: GuestD
   const companions = companionUnion(receipts);
   for (const [name, identity] of companions) {
     const side = await readFile(join(dist, name));
+    assertShippedGuestHasNoNames(name, side);
     const described = describeGuest(side);
     if (described.sha256 !== identity.artifactSha256 || described.bytes !== identity.artifactBytes) throw new Error(`Guest companion changed before snapshot: ${name}`);
     await writeFile(join(directory, name), side, { flag: "wx", mode: 0o400 });

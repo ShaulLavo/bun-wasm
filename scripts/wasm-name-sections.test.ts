@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { needsRust } from "./ci-changes.ts";
-import { assertNoNameSection, assertShippedGuestHasNoNames, hasNameSection, nameFreeGuests, stripNameSection } from "./wasm-name-sections.ts";
+import { needsJsc, needsRust, needsSharedNative } from "./ci-changes.ts";
+import { assertNamedCopyMatches, assertNoNameSection, assertShippedGuestHasNoNames, hasNameSection, nameFreeGuests, stripNameSection } from "./wasm-name-sections.ts";
 
 const header = [0, 97, 115, 109, 1, 0, 0, 0];
 const text = (value: string) => Array.from(new TextEncoder().encode(value));
@@ -105,7 +105,24 @@ test("the public site never sees the profiling override", () => {
   expect(built).toBeGreaterThan(dropped);
 });
 
+test("a named copy matches only the exact stripped module it came from", () => {
+  expect(() => assertNamedCopyMatches(named, stripNameSection(named), "side.wasm")).not.toThrow();
+  expect(() => assertNamedCopyMatches(named, named, "side.wasm")).toThrow("side.wasm carries a Wasm name section");
+  const other = Uint8Array.from(header.concat(code, custom("producers", [1])));
+  expect(() => assertNamedCopyMatches(named, other, "side.wasm")).toThrow("side.wasm is not its named copy without names");
+});
+
+test("CI export and publication check every shipped module, sides included", () => {
+  const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+  expect(source("./ci-browser-program.ts")).toContain('assertShippedGuestHasNoNames("quickjs.wasm", side)');
+  expect(source("./ci-ordinary-jsc-program.ts")).toContain('assertShippedGuestHasNoNames("bun-jsc.wasm", core)');
+  expect(source("./ci-ordinary-jsc-program.ts")).toContain('assertShippedGuestHasNoNames("jsc-engine.wasm", side)');
+  expect(source("./guest-acceptance.ts")).toContain("assertShippedGuestHasNoNames(name, side)");
+});
+
 test("a change to the stripper selects the guest build and browser coverage", () => {
   expect(needsRust(["scripts/wasm-name-sections.ts"])).toBe(true);
+  expect(needsJsc(["scripts/wasm-name-sections.ts"])).toBe(true);
+  expect(needsSharedNative(["scripts/wasm-name-sections.ts"])).toBe(true);
   expect(readFileSync(new URL("./browser-guest-selection.ts", import.meta.url), "utf8")).toContain('"scripts/wasm-name-sections.ts"');
 });
