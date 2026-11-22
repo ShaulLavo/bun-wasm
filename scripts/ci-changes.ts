@@ -10,7 +10,7 @@ const nativePreparationFiles = new Set([
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "scripts/fixtures/magic-string/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/wasm-validation/", "tests/install/", "tests/async-context-runtime/", "tests/async-context-rejection/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "scripts/ci-program-delivery.ts",
-  "scripts/ci-browser-program.ts", "scripts/build-bun-browser.sh",
+  "scripts/ci-browser-program.ts", "scripts/build-bun-browser.sh", "scripts/wasm-name-sections.ts",
   "scripts/ci-ordinary-jsc-program.ts",
   "scripts/ci-ordinary-web-inputs.ts",
   "scripts/ci-jsc-artifact.ts",

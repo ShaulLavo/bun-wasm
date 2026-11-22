@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { needsRust } from "./ci-changes.ts";
 import { assertNoNameSection, assertShippedGuestHasNoNames, hasNameSection, nameFreeGuests, stripNameSection } from "./wasm-name-sections.ts";
 
 const header = [0, 97, 115, 109, 1, 0, 0, 0];
@@ -41,6 +42,10 @@ test("a name that only starts like the section is not one", () => {
 test("malformed modules are rejected, not passed", () => {
   expect(() => hasNameSection(Uint8Array.from([1, 2, 3]))).toThrow("Wasm version 1");
   expect(() => hasNameSection(Uint8Array.from(header.concat([0, 50, 4])))).toThrow("Truncated");
+  // A custom section whose name is not UTF-8 is invalid Wasm, so it must not pass as name free.
+  expect(() => hasNameSection(Uint8Array.from(header.concat([0, 2, 1, 0xff])))).toThrow();
+  // A five byte length with bits above 32 set is invalid.
+  expect(() => hasNameSection(Uint8Array.from(header.concat([0, 0xff, 0xff, 0xff, 0xff, 0x1f])))).toThrow("Invalid Wasm integer");
 });
 
 test("the browser guest must be name free and other guests are not judged", () => {
@@ -62,7 +67,22 @@ test("the build recipe ships the stripped guest and the shipping paths check it"
   expect(strip).toBeGreaterThan(named);
   expect(check).toBeGreaterThan(strip);
   expect(receipt).toBeGreaterThan(check);
-  for (const path of ["../web/build.ts", "../sandbox/build.ts", "./guest-acceptance.ts", "./ci-browser-program.ts"]) {
+  for (const path of ["../web/build.ts", "../sandbox/build.ts", "./guest-acceptance.ts", "./ci-browser-program.ts", "./site-guest-preflight.ts"]) {
     expect(source(path)).toContain("assertShippedGuestHasNoNames(");
   }
+});
+
+test("the public site never sees the profiling override", () => {
+  const site = readFileSync(new URL("../site/build.ts", import.meta.url), "utf8");
+  const verified = site.indexOf("await verifySiteGuests(");
+  const dropped = site.indexOf("delete process.env.BUN_WASM_KEEP_NAMES");
+  const built = site.indexOf("await build(");
+  expect(verified).toBeGreaterThan(0);
+  expect(dropped).toBeGreaterThan(verified);
+  expect(built).toBeGreaterThan(dropped);
+});
+
+test("a change to the stripper selects the guest build and browser coverage", () => {
+  expect(needsRust(["scripts/wasm-name-sections.ts"])).toBe(true);
+  expect(readFileSync(new URL("./browser-guest-selection.ts", import.meta.url), "utf8")).toContain('"scripts/wasm-name-sections.ts"');
 });

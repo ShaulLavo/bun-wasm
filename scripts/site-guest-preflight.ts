@@ -7,6 +7,7 @@ import { guestBuilds, hash, type SourceManifest } from "./guest-source-manifest"
 import { programKind } from "../src/engine-kind";
 import { parseInputs, verifyPairReceipt } from "./spidermonkey-side-core-receipt";
 import { sideSourceSha256 } from "./spidermonkey-side-inputs";
+import { assertShippedGuestHasNoNames } from "./wasm-name-sections";
 
 const guests = [
   { build: "browser", variable: "BUN_BROWSER_WASM" },
@@ -99,7 +100,10 @@ async function verifySiteSpiderMonkey(repository: string, core: string, quickjs:
 
 async function verifySiteGuest(path: string, build: typeof guests[number]["build"], expected: Awaited<ReturnType<typeof runtimeInputs>>): Promise<void> {
   const receipt: unknown = JSON.parse(await readFile(`${path}.build.json`, "utf8"));
-  verifyGuestBuildReceipt(await readFile(path), receipt);
+  const bytes = await readFile(path);
+  // The public site never takes the profiling override (BUN_WASM_KEEP_NAMES).
+  assertShippedGuestHasNoNames(guestBuilds[build].artifact, bytes);
+  verifyGuestBuildReceipt(bytes, receipt);
   if (receipt.sourceManifest.build !== build) throw new Error(`Site guest engine mismatch: ${path}`);
   verifyRuntimeInputs(receipt.sourceManifest, expected, path);
   await verifyGuestCompanions(receipt, dirname(path));

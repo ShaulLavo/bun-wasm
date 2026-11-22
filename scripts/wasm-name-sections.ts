@@ -14,6 +14,7 @@ function readUnsigned(bytes: Uint8Array, at: number): { value: number; next: num
   for (let shift = 0; shift < 35; shift += 7) {
     const byte = bytes[at++];
     if (byte === undefined) throw new TypeError("Truncated Wasm integer");
+    if (shift === 28 && byte > 0x0f) throw new TypeError("Invalid Wasm integer");
     value += (byte & 0x7f) * 2 ** shift;
     if (byte < 0x80) return { value, next: at };
   }
@@ -35,7 +36,7 @@ function sections(bytes: Uint8Array): Section[] {
     if (id === 0) {
       const length = readUnsigned(bytes, size.next);
       if (length.next + length.value > end) throw new TypeError("Truncated Wasm custom section name");
-      name = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes.subarray(length.next, length.next + length.value));
+      name = new TextDecoder("utf-8", { ignoreBOM: true, fatal: true }).decode(bytes.subarray(length.next, length.next + length.value));
     }
     found.push({ id, start, end, name });
     at = end;
