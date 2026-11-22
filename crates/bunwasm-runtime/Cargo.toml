@@ -8,13 +8,13 @@ description = "Bun-compatible JS runtime for wasm32-wasip1 with a linked engine 
 [features]
 default = ["engine-split"]
 # The linked engine program supplies the VM; the core owns process and data services.
-engine-split = []
+engine-split = ["dep:bunwasm-nested", "dep:wasmi", "dep:wasmparser"]
 # The host's own JS engine (browser/Node): see docs/engine-browser.md.
 engine-host = []
 
 [dependencies]
-bunwasm-nested = { path = "../bunwasm-nested" }
-wasmparser = "=0.228.0"
+bunwasm-nested = { path = "../bunwasm-nested", optional = true }
+wasmparser = { version = "=0.228.0", optional = true }
 serde = { version = "1", features = ["derive"] }
 bunwasm-crypto-sys = { path = "../bunwasm-crypto-sys" }
 bun_dotenv = { path = "../../vendor/bun/src/dotenv" }
@@ -52,7 +52,7 @@ lol_html = { path = "../../vendor/bun/vendor/lolhtml" }
 
 tar = { version = "0.4", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-wasmi = { version = "0.46.0", default-features = false, features = ["std"] }
+wasmi = { version = "0.46.0", default-features = false, features = ["std"], optional = true }
 
 aes = "0.8"
 aes-kw = { version = "0.2", features = ["alloc"] }
