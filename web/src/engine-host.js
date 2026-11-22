@@ -530,6 +530,9 @@ class EngineHost {
     // The host decides the network capabilities. Everything else the wasm reports (such as its
     // runtime_proc process calls, imported directly) is the guest's own and stays as it is.
     native.hostCaps = Object.fromEntries(Object.entries(native.hostCaps || {}).map(([k, v]) => [k, NETWORK_CAPS.has(k) ? Boolean(net && net.caps[k]) : v]));
+    native.hostCaps.nativeDirectStream = Boolean(
+      globalThis.ReadableStream && Object.prototype.hasOwnProperty.call(globalThis.ReadableStream, Symbol.for("bunwasm.nativeDirectStreamAdapter")),
+    );
     if (net) {
       Object.assign(native, net.natives);
       if (native.hostLookup) native.hostLookup = trackLookup(native.hostLookup, promise => this.track(promise));

@@ -160,7 +160,6 @@
     previousPreviousCode: string | undefined,
     args: unknown[],
   ): Error | undefined {
-    if (code === "ERR_INVALID_URI") return Object.assign(new URIError("URI malformed"), { code });
     if (code === "ERR_INVALID_ARG_TYPE") {
       const [name, expected, actual] = args;
       const kind = String(name).includes(".") ? "property" : "argument";
@@ -190,9 +189,6 @@
     }
     if (code === "ERR_OPERATION_FAILED") return Object.assign(new Error(`Operation failed: ${args[0]}`), { code });
     if (code === "ERR_STREAM_WRITE_AFTER_END") return Object.assign(new Error("write after end"), { code });
-    if (code === "ERR_BROTLI_INVALID_PARAM") return Object.assign(new RangeError(`${args[0]} is not a valid Brotli parameter`), { code });
-    if (code === "ERR_ZSTD_INVALID_PARAM") return Object.assign(new RangeError(`${args[0]} is not a valid Zstd parameter`), { code });
-    if (code === "ERR_ZLIB_INITIALIZATION_FAILED") return Object.assign(new Error("Initialization failed"), { code });
     return undefined;
   }
 
@@ -217,11 +213,7 @@
     get "internal:streams/writable"() { return nodeStream().Writable; },
     get "internal:streams/end-of-stream"() { return streamCore().eos; },
     get "internal:streams/add-abort-signal"() { return { addAbortSignal: nodeStream().addAbortSignal }; },
-    "internal:streams/destroy": {
-      destroyer(stream: { destroy?: (err?: unknown) => void } | null | undefined, err?: unknown) {
-        if (stream && typeof stream.destroy === "function") stream.destroy(err);
-      },
-    },
+    get "internal:streams/destroy"() { return { destroyer: streamCore().Stream.destroy }; },
     makeAbortError,
     makeErrorWithCode,
   } as Record<string, unknown>;

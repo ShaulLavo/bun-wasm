@@ -34,9 +34,9 @@
   }
 
   const Stream = streams.ReadableStream;
-  // On browser hosts, native-stream-state.ts wraps ReadableStream in a Proxy that already
-  // adapts type: "direct". On Node hosts it leaves ReadableStream unwrapped, so adapt here.
-  const adaptHostDirect = internal.native.engine === "host" && !internal.native.isProxy(Stream);
+  // On browser hosts, native-stream-state.ts installs a marked ReadableStream wrapper that
+  // already adapts type: "direct". On Node hosts it leaves ReadableStream unwrapped, so adapt here.
+  const adaptHostDirect = internal.native.engine === "host" && !internal.native.hostCaps?.nativeDirectStream;
   const ReadableStream: typeof globalThis.ReadableStream = new Proxy(Stream, {
     construct(target, args: unknown[], newTarget: Function): object {
       const source = args[0];

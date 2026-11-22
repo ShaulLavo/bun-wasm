@@ -232,6 +232,13 @@ impl Resolver {
         self
     }
 
+    pub fn builtin_name(&self, spec: &str) -> Option<String> {
+        if self.experimental_stream_iter && (spec == "stream/iter" || spec == "node:stream/iter") {
+            return Some("node:stream/iter".to_owned());
+        }
+        builtin_name(spec)
+    }
+
     pub fn register_object_module(&self, name: &str) -> String {
         let mut modules = self.object_modules.borrow_mut();
         let next = self.next_object_module.get();
@@ -252,10 +259,7 @@ impl Resolver {
         if let Some(key) = self.object_modules.borrow().get(spec) {
             return Ok(Resolved::Builtin(key.clone()));
         }
-        if self.experimental_stream_iter && (spec == "stream/iter" || spec == "node:stream/iter") {
-            return Ok(Resolved::Builtin("node:stream/iter".to_owned()));
-        }
-        if let Some(name) = builtin_name(spec) {
+        if let Some(name) = self.builtin_name(spec) {
             return Ok(Resolved::Builtin(name));
         }
         if spec.starts_with("node:") {

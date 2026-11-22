@@ -1,1 +1,0 @@
-The Browser engine uses its host's ReadableStream, which has no type: "direct".

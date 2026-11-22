@@ -1,4 +1,5 @@
 use super::*;
+use crate::resolve;
 use std::fs;
 use std::path::PathBuf;
 
@@ -95,6 +96,7 @@ fn retains_conditions_and_exec_argv() {
             args: vec!["user-arg".to_owned()],
             conditions: vec!["split-custom".to_owned(), "second-custom".to_owned()],
             exec_argv: exec_argv.clone(),
+            experimental_stream_iter: false,
             transpiler: Box::new(crate::PassthroughTranspiler),
         }),
         0

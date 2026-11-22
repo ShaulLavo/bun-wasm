@@ -182,7 +182,11 @@ function forwardedReadableGetter(dictionary: object, wrapped: object, key: strin
     const value: unknown = Reflect.get(wrapped, key, wrapped);
     // Dispatch at native conversion, including repeated type reads.
     if (key === "type" && value === "direct") throw direct;
-    if (typeof value === "function" && key !== "type" && key !== "autoAllocateChunkSize") Object.defineProperty(dictionary, key, { configurable: true, enumerable: true, writable: true, value });
+    if (typeof value === "function" && key !== "type" && key !== "autoAllocateChunkSize") {
+      const bound = (...args: unknown[]) => Reflect.apply(value, wrapped, args);
+      Object.defineProperty(dictionary, key, { configurable: true, enumerable: true, writable: true, value: bound });
+      return bound;
+    }
     return value;
   };
 }

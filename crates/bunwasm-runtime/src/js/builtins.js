@@ -378,7 +378,7 @@
 
   function moduleModule() {
     const builtinModules = Object.keys(reg)
-      .filter((id) => id.startsWith("node:"))
+      .filter((id) => id.startsWith("node:") && id !== "node:stream/iter")
       .map((id) => id.slice(5));
     function createRequire(filename) {
       let path = filename instanceof URL || String(filename).startsWith("file:") ? internal.require("node_url").fileURLToPath(filename) : String(filename);
@@ -389,7 +389,10 @@
     Object.assign(Module, {
       builtinModules,
       createRequire,
-      isBuiltin: (name) => Object.prototype.hasOwnProperty.call(reg, name.startsWith("node:") ? name : "node:" + name) || name === "bun" || name.startsWith("bun:"),
+      isBuiltin: (name) => {
+        if (name === "stream/iter" || name === "node:stream/iter") return false;
+        return Object.prototype.hasOwnProperty.call(reg, name.startsWith("node:") ? name : "node:" + name) || name === "bun" || name.startsWith("bun:");
+      },
       _cache: internal.moduleCache,
       _extensions: { ".js": () => {}, ".json": () => {}, ".node": () => {} },
       _resolveFilename: (request, parent) => native.resolve(request, (parent && parent.filename) || native.cwd() + "/", true),
@@ -651,7 +654,7 @@
     "node:stream/promises": () => internal.builtin("node:stream").promises,
     "node:stream/consumers": lazy("stream_consumers"),
     "node:stream/web": () => internal.require("stream_context"),
-    ...(native.execArgv?.()?.includes("--experimental-stream-iter")
+    ...(native.experimentalStreamIter?.()
       ? { "node:stream/iter": () => internal.require("bun_builtins").require("node:stream/iter") }
       : {}),
     "node:perf_hooks": () => ({

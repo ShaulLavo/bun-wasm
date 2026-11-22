@@ -12,8 +12,6 @@ call directly, it now uses the async context Bun uses there, at revision
 
 ## Differences from native Bun 1.4.4
 
-- The Browser engine uses its host's `ReadableStream`, which has no `type: "direct"`; direct
-  sources therefore exist only on QuickJS and JSC.
 - Bun pulls a direct stream first when it is read, so a source that closes in its first pull
   gets `close` in the reader's context. The polyfill pulls once the stream has started, so that
   `close` runs in the context the stream was constructed in. This was so before this change.
@@ -27,8 +25,8 @@ call directly, it now uses the async context Bun uses there, at revision
 
 ## Tests
 
-The native fixtures `async-context-uncaught-store`, `async-context-uncaught-outermost` and
-`async-context-stream-source` (all three engines) and `async-context-direct-stream` (QuickJS and
-JSC) hold native Bun's output.
+The native fixtures `async-context-uncaught-store`, `async-context-uncaught-outermost`,
+`async-context-stream-source`, and `async-context-direct-stream` (all three engines) hold native
+Bun's output.
 
 [Ledger scope and pinned revisions](scope.md).

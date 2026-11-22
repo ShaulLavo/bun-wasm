@@ -1,4 +1,5 @@
 // Node 26 stream semantics Bun ships, from upstream test/js/node/stream/node-stream.test.js.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createReadStream, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { Duplex, finished, getDefaultHighWaterMark, PassThrough, Readable, Transform, Writable } from "node:stream";
@@ -126,18 +127,36 @@ objWritable.end(new Uint8Array([1, 2, 3]));
 await objDone;
 console.log("objectMode Uint8Array encoding", String(objEncoding));
 
+const als = new AsyncLocalStorage<string>();
 const finishedOutsideAls = new Readable({ read() {} });
-let finishedCalls = 0;
+let outsideObserved: string | undefined = "unset";
 const finishedDone = new Promise<void>(resolve => {
   finished(finishedOutsideAls, () => {
-    finishedCalls++;
+    outsideObserved = als.getStore();
     resolve();
   });
 });
-finishedOutsideAls.push(null);
-finishedOutsideAls.resume();
+als.run("emit-ctx", () => {
+  finishedOutsideAls.push(null);
+  finishedOutsideAls.resume();
+});
 await finishedDone;
-console.log("finished outside ALS", finishedCalls);
+const finishedInsideAls = new Readable({ read() {} });
+let insideObserved: string | undefined = "unset";
+const finishedInsideDone = new Promise<void>(resolve => {
+  als.run("reg-ctx", () => {
+    finished(finishedInsideAls, () => {
+      insideObserved = als.getStore();
+      resolve();
+    });
+  });
+});
+als.run("other-ctx", () => {
+  finishedInsideAls.push(null);
+  finishedInsideAls.resume();
+});
+await finishedInsideDone;
+console.log("finished ALS", outsideObserved, insideObserved);
 
 const abortCtrl = new AbortController();
 const destroyBoom = new Error("destroy boom");
@@ -165,6 +184,23 @@ console.log("pipeline compose abort kept", composedAbortErr?.name, (composedAbor
 
 const req = createRequire(import.meta.url);
 console.log("stream/iter gated", Array.isArray(req.resolve.paths("stream/iter")));
+console.log("resolve.paths(null)", errorCode(() => req.resolve.paths(null as never)));
+
+let startThisSame = false;
+let pullThisSame = false;
+const plainSource = {
+  start(controller: ReadableStreamDefaultController<string>) {
+    startThisSame = this === plainSource;
+    controller.enqueue("ok");
+  },
+  pull(controller: ReadableStreamDefaultController<string>) {
+    pullThisSame = this === plainSource;
+    controller.close();
+  },
+};
+const plainText = await new Response(new ReadableStream(plainSource)).text();
+console.log("ordinary ReadableStream this", plainText, startThisSame, pullThisSame);
+
 const directStream = new ReadableStream({
   type: "direct" as never,
   pull(controller: { write(chunk: string): void; close(): void }) {
@@ -173,3 +209,56 @@ const directStream = new ReadableStream({
   },
 } as never);
 console.log("direct stream", await new Response(directStream).text());
+
+const iterProbe = `${import.meta.dir}/stream-iter-probe.mjs`;
+writeFileSync(
+  iterProbe,
+  `import { createRequire, builtinModules, isBuiltin } from "node:module";
+import { Readable } from "node:stream";
+const req = createRequire(import.meta.url);
+const paths = req.resolve.paths("stream/iter");
+const nodePaths = req.resolve.paths("node:stream/iter");
+let reqOk = false;
+try { req("stream/iter"); reqOk = true; } catch {}
+let impOk = false;
+try { await import("stream/iter"); impOk = true; } catch {}
+console.log(JSON.stringify({
+  pathsNull: paths === null,
+  nodePathsNull: nodePaths === null,
+  isBuiltinBare: isBuiltin("stream/iter"),
+  isBuiltinNode: isBuiltin("node:stream/iter"),
+  inBuiltinModules: builtinModules.includes("stream/iter"),
+  reqOk,
+  impOk,
+}));
+`,
+);
+const iterStaticProbe = `${import.meta.dir}/stream-iter-static.mjs`;
+writeFileSync(
+  iterStaticProbe,
+  `import { fromReadable } from "node:stream/iter";
+import { Readable } from "node:stream";
+let destroyErr = null;
+const r = new Readable({
+  read() { this.push("chunk"); },
+  destroy(err, cb) { destroyErr = err; cb(null); },
+});
+for await (const _ of fromReadable(r)) {
+  break;
+}
+await new Promise(resolve => setImmediate(resolve));
+console.log(JSON.stringify({
+  name: destroyErr?.name ?? null,
+  code: destroyErr?.code ?? null,
+}));
+`,
+);
+const runChild = (args: string[]) => {
+  const out = Bun.spawnSync([process.execPath, ...args]);
+  if (out.exitCode !== 0) throw new Error(`child failed (${args.join(" ")}): ${out.stderr.toString()}`);
+  return out.stdout.toString().trim();
+};
+console.log("stream/iter enabled", runChild(["--experimental-stream-iter", iterProbe]));
+console.log("stream/iter static break", runChild(["--experimental-stream-iter", iterStaticProbe]));
+console.log("stream/iter condition value", runChild(["--conditions", "--experimental-stream-iter", iterProbe]));
+console.log("stream/iter script arg", runChild([iterProbe, "--experimental-stream-iter"]));

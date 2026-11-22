@@ -1,5 +1,5 @@
 {
   "owner": "native",
   "path": "tests/fixtures/async-context-direct-stream",
-  "engines": ["quickjs", "jsc"]
+  "engines": ["quickjs", "jsc", "browser"]
 }

@@ -43,6 +43,7 @@ declare namespace BunWasm {
     prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
     resolve(specifier: string, referrer: string, require: boolean): string;
     resolveImport(specifier: string, referrer: string, mode: "inferred" | "text"): string;
+    experimentalStreamIter?(): boolean;
     modulePath(name: string): string;
     importModule(path: string): Promise<unknown>;
     utf8Encode(value: string): Uint8Array<ArrayBuffer>;

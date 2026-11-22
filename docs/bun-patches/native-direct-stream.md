@@ -46,15 +46,20 @@ producer errors and the other stream types.
 The readable dispatch facade is an ordinary lazy own-property dictionary, not a
 Proxy passed into the native constructor. It still tests `type` only when native
 conversion requests it, after the native strategy reads, and preserves repeated
-reads and exceptional getters. Callable members become own data properties when
-read. The strategy forwarding, direct sentinel, controller algorithm and portable
-`directSource` implementation are unchanged. This is the original dictionary
-adapter correction described in [Native browser stream completion](native-browser-stream-completion.md#lazy-readable-source-dictionaries),
+reads and exceptional getters. Callable members (`start`, `pull`, `cancel`) are
+bound to the original wrapped source object when materialized as own data
+properties on the facade so ordinary stream callbacks still observe `this ===
+source`. The strategy forwarding, direct sentinel, controller algorithm and
+portable `directSource` implementation are unchanged. This is the original
+dictionary adapter correction described in [Native browser stream completion](native-browser-stream-completion.md#lazy-readable-source-dictionaries),
 not a copied or patched WebKit implementation.
 
 On Node.js 24+ hosts (`web/scripts/node-host.ts`), `native-stream-state.ts` leaves
 the native `ReadableStream` constructor unwrapped so native stream reflection checks
-keep the original global constructor. In that case `stream_context.ts` delegates
+keep the original global constructor, while browser hosts mark their installed
+`ReadableStream` adapter with `Symbol.for("bunwasm.nativeDirectStreamAdapter")`
+and publish `native.hostCaps.nativeDirectStream`. When that host capability is
+absent on a host engine, `stream_context.ts` delegates
 `new ReadableStream({ type: "direct", ... })` inside the guest wrapper to
 `direct_stream.constructNativeReadable`, which wraps `directSource` in the same
 lazy-dictionary constructor path exported from `web/src/native-direct-stream.ts`.

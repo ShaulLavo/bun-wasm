@@ -1013,6 +1013,11 @@
       return resolved === "node:" + spec ? spec : resolved;
     };
     require.resolve.paths = function paths(spec) {
+      if (typeof spec !== "string") {
+        const err = new TypeError(`The "request" argument must be of type string. Received ${internal.describe(spec)}`);
+        err.code = "ERR_INVALID_ARG_TYPE";
+        throw err;
+      }
       return isRegisteredBuiltin(spec) ? null : nodeModulePaths(dirname(fromPath));
     };
     require.cache = moduleCache;
