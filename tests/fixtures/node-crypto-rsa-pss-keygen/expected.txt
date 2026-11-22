@@ -32,5 +32,86 @@ check order throws RangeError ERR_OUT_OF_RANGE The value of "options.saltLength"
 warning throws throws Error undefined noDeprecation getter
   warnings 0
 mgf1 warning throws throws Error undefined noDeprecation getter
+  warnings 0
+hashAlgorithm md4 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+mgf1HashAlgorithm md4 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+hashAlgorithm sha512-224 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+mgf1HashAlgorithm sha512-224 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+hashAlgorithm SHA-512/224 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+mgf1HashAlgorithm SHA-512/224 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+hashAlgorithm sha3-256 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+mgf1HashAlgorithm sha3-256 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+hashAlgorithm ripemd160 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+mgf1HashAlgorithm ripemd160 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+hashAlgorithm md5-sha1 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+mgf1HashAlgorithm md5-sha1 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+hashAlgorithm dss1 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+mgf1HashAlgorithm dss1 throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+  warnings 0
+hashAlgorithm shake128 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: shake128
+  warnings 0
+mgf1HashAlgorithm shake128 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid MGF1 digest: shake128
+  warnings 0
+hashAlgorithm blake2b512 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: blake2b512
+  warnings 0
+mgf1HashAlgorithm blake2b512 throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid MGF1 digest: blake2b512
+  warnings 1
+replaced emitWarning throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+no options throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received undefined
+empty options throws TypeError ERR_INVALID_ARG_TYPE The "options.modulusLength" property must be of type number. Received undefined
+string options throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received type string ('x')
+null options throws TypeError ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received null
+modulus string throws TypeError ERR_INVALID_ARG_TYPE The "options.modulusLength" property must be of type number. Received type string ('512')
+modulus negative throws RangeError ERR_OUT_OF_RANGE The value of "options.modulusLength" is out of range. It must be >= 0 && <= 4294967295. Received -1
+modulus fraction throws RangeError ERR_OUT_OF_RANGE The value of "options.modulusLength" is out of range. It must be an integer. Received 1.5
+modulus 2^32 throws RangeError ERR_OUT_OF_RANGE The value of "options.modulusLength" is out of range. It must be >= 0 && <= 4294967295. Received 4294967296
+exponent string throws TypeError ERR_INVALID_ARG_TYPE The "options.publicExponent" property must be of type number. Received type string ('65537')
+exponent null throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+exponent fraction throws RangeError ERR_OUT_OF_RANGE The value of "options.publicExponent" is out of range. It must be an integer. Received 1.5
+exponent 2^32 throws RangeError ERR_OUT_OF_RANGE The value of "options.publicExponent" is out of range. It must be >= 0 && <= 4294967295. Received 4294967296
+rsa modulus string throws TypeError ERR_INVALID_ARG_TYPE The "options.modulusLength" property must be of type number. Received type string ('512')
+rsa exponent string throws TypeError ERR_INVALID_ARG_TYPE The "options.publicExponent" property must be of type number. Received type string ('3')
+type number throws TypeError ERR_INVALID_ARG_TYPE The "type" argument must be of type string. Received type number (1)
+type unknown throws TypeError ERR_INVALID_ARG_VALUE The argument 'type' must be a supported key type. Received 'nope'
+ec curve missing throws TypeError ERR_INVALID_ARG_TYPE The "options.namedCurve" property must be of type string. Received undefined
+ec curve unknown throws TypeError ERR_CRYPTO_INVALID_CURVE Invalid EC curve name
+p224 jwk, public format invalid throws TypeError ERR_INVALID_ARG_VALUE The property 'options.publicKeyEncoding.format' is invalid. Received 'invalid'
+p224 jwk, public pem without type throws TypeError ERR_INVALID_ARG_VALUE The property 'options.publicKeyEncoding.type' is invalid. Received undefined
+p224 jwk throws Error ERR_CRYPTO_JWK_UNSUPPORTED_CURVE Unsupported JWK EC curve: secp224r1.
+secp256k1 jwk throws Error ERR_OSSL_EC_UNKNOWN_GROUP error:0f00007b:elliptic curve routines:OPENSSL_internal:UNKNOWN_GROUP
+public format invalid throws TypeError ERR_INVALID_ARG_VALUE The property 'options.publicKeyEncoding.format' is invalid. Received 'invalid'
+public pkcs1 throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding pkcs1 can only be used for RSA keys.
+public string throws TypeError ERR_INVALID_ARG_VALUE The property 'options.publicKeyEncoding' is invalid. Received 'pem'
+private without type throws TypeError ERR_INVALID_ARG_VALUE The property 'options.privateKeyEncoding.type' is invalid. Received undefined
+cipher without passphrase throws TypeError ERR_INVALID_ARG_VALUE The property 'options.privateKeyEncoding.passphrase' is invalid. Received undefined
+passphrase without cipher throws TypeError ERR_INVALID_ARG_VALUE The property 'options.privateKeyEncoding.cipher' is invalid. Received undefined
+der pkcs1 cipher throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding pkcs1 does not support encryption.
+cipher number throws TypeError ERR_INVALID_ARG_VALUE The property 'options.privateKeyEncoding.cipher' is invalid. Received 1
+unknown cipher throws Error ERR_CRYPTO_UNKNOWN_CIPHER Unknown cipher
+rsa private sec1 throws Error ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS The selected key encoding sec1 can only be used for EC keys.
+modulus string, format invalid throws TypeError ERR_INVALID_ARG_VALUE The property 'options.publicKeyEncoding.format' is invalid. Received 'invalid'
+hash number, format invalid throws TypeError ERR_INVALID_ARG_VALUE The property 'options.publicKeyEncoding.format' is invalid. Received 'invalid'
+ec public pkcs8 throws TypeError ERR_INVALID_ARG_VALUE The property 'options.publicKeyEncoding.type' is invalid. Received 'pkcs8'
+ec private spki throws TypeError ERR_INVALID_ARG_VALUE The property 'options.privateKeyEncoding.type' is invalid. Received 'spki'
+ec private raw-public throws TypeError ERR_INVALID_ARG_VALUE The property 'options.privateKeyEncoding.format' is invalid. Received 'raw-public'
+async modulus string throws TypeError ERR_INVALID_ARG_TYPE The "options.modulusLength" property must be of type number. Received type string ('512')
+async bad digest throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: nope
+async curve unknown throws TypeError ERR_CRYPTO_INVALID_CURVE Invalid EC curve name
+async encoding invalid throws TypeError ERR_INVALID_ARG_VALUE The property 'options.publicKeyEncoding.format' is invalid. Received 'x'
+async callback missing throws TypeError ERR_INVALID_ARG_TYPE The "callback" argument must be of type function. Received undefined
+generateKeyPair returned
 rsa-pss callback Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM
 p224 jwk Error ERR_CRYPTO_JWK_UNSUPPORTED_CURVE Unsupported JWK EC curve: secp224r1.
