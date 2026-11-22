@@ -199,6 +199,8 @@ test("attempt job verification matches workflow matrix job names and rejects can
   expect(() => verifyAttemptMatrixJobs(cancelledShared, { browser: true, sharedNative: true }, matrix)).toThrow("completed/success");
   expect(() => verifyAttemptMatrixJobs(passing.concat([ok("Browser guest (firefox, extra)")]), { browser: true, sharedNative: true }, matrix)).toThrow("Unexpected matrix job");
   expect(() => verifyAttemptMatrixJobs(passing.concat([ok("Browser guest (chromium, storage)")]), { browser: true, sharedNative: true }, matrix)).toThrow("Duplicate matrix job");
+  const duplicateMatrix = JSON.stringify({ include: [{ browser: "chromium", batch: "storage" }, { browser: "chromium", batch: "storage" }] });
+  expect(() => verifyAttemptMatrixJobs([ok("Browser guest (chromium, storage)"), ok("Browser guest (chromium, storage)")], { browser: true, sharedNative: false }, duplicateMatrix)).toThrow("Duplicate expected matrix job");
   expect(() => verifyAttemptMatrixJobs([], { browser: false, sharedNative: false })).not.toThrow();
   expect(() => verifyAttemptMatrixJobs([ok("Browser guest (chromium, storage)")], { browser: false, sharedNative: false })).toThrow("Unexpected matrix job");
 });

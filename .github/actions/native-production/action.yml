@@ -213,6 +213,8 @@ runs:
         bun scripts/test-checks.ts native-probe --batch 02-jsc
     - name: Blocking producer-bound SpiderMonkey runtime checks
       if: inputs.full == 'true'
+      env:
+        BUN_WASM_RUNTIME_JOBS: "2"
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh

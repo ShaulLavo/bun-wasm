@@ -81,6 +81,7 @@ function verifyMatrixFamily(
     return;
   }
   const expectedSet = new Set(expectedNames);
+  if (expectedSet.size !== expectedNames.length) throw new Error(`Duplicate expected matrix job under ${prefix}`);
   const extra = matched.find(job => !expectedSet.has(String(job.name)));
   if (extra) throw new Error(`Unexpected matrix job: ${String(extra.name)}`);
   const byName = new Map(matched.map(job => [String(job.name), job]));
@@ -91,7 +92,7 @@ function verifyMatrixFamily(
       throw new Error(`Matrix job ${name} must be completed/success, got ${String(job.status)}/${String(job.conclusion)}`);
     }
   }
-  if (matched.length !== expectedNames.length) throw new Error(`Duplicate matrix job under ${prefix}`);
+  if (byName.size !== matched.length) throw new Error(`Duplicate matrix job under ${prefix}`);
 }
 
 export function verifyAttemptMatrixJobs(
