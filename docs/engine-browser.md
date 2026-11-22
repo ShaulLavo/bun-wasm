@@ -90,6 +90,25 @@ An error result is `{kind, message, name, props}`, which `nativeError()` turns b
 
 Before bootstrap replaces them, `engine-host.js` captures the host's own `setTimeout`, `MessageChannel`, `queueMicrotask`, `Blob`, `URL.createObjectURL`, `TextEncoder`/`TextDecoder`, `AbortController` and, in Node, `process`.
 
+### Early guest instance
+
+A process worker instantiates its guest on the start message, before it loads the bootstrap (`web/src/early-instance.ts`, called from `web/src/worker.ts`). The instance's imports forward to the real ones, which Waffle links later and the executor's `instantiate` hook connects.
+
+The reason is a WebKit behavior:
+
+- WebKit collects garbage synchronously inside `new WebAssembly.Instance` once the page holds eight fast Wasm memories. A Vite project with its bundler's threads passes that.
+- All workers of a page share a few marking helper threads. A worker that sleeps in `Atomics.wait`, or in the Wasm `memory.atomic.wait32` instruction, with a collection cycle open keeps them.
+- If a cycle is already open in the starting worker, its synchronous collection then waits for helpers that never come, and the process never starts. In CI this stalled about one WebKit storage run in seven, always in a late `/bin/node` child of Vite's bundler.
+
+On the start message the worker has allocated almost nothing, so no cycle is open and the collection finishes by itself. The entry starts loading the bootstrap only after it has handled its first message, so the instance always comes first. For a child process the broker posts the start message right after it creates the worker, so the load does not wait. For a root process the runner creates the worker before its start request is ready, so the bootstrap load no longer overlaps the runner's preparation and starts when the request arrives.
+
+The early path is taken only when it cannot change behavior:
+
+- The loader read the module's bytes and found no start function, and says so in the request (`startless`). A start function would run guest code before the process has been checked or linked. A module the caller compiled itself is never marked.
+- The guest is one module that imports only functions, has no link plan, is not a memory group member and is not a Preview 1 program.
+
+Anything else keeps the ordinary late instantiation, and so does an early instantiation that fails, which the late path then reports. A guest call that reaches an import before linking throws. Each import call goes through one forwarding function.
+
 ## Event loop: the host owns it
 
 The host engine owns the microtask queue and the worker's task loop, so the runtime cannot run a loop of its own. `engine-host.js` drives the polyfill timers:

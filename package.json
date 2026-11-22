@@ -61,6 +61,7 @@
     "src/notification-worker-entry.ts",
     "web/src/worker.ts",
     "web/src/worker-main.ts",
+    "web/src/early-instance.ts",
     "web/src/engine-host.js",
     "web/src/wasm-call-trap.ts",
     "web/src/script-evaluation.ts",
