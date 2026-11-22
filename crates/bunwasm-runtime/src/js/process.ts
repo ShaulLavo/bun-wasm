@@ -572,7 +572,12 @@
   function guardedStdio(): boolean {
     const current: unknown = globalThis.process;
     if (current !== null && typeof current === "object") return true;
-    internal.handleUncaught(new TypeError("process is not an object"));
+    const error = new TypeError("process is not an object");
+    if (!internal.dispatchUncaught(error, false)) {
+      // Nothing claimed it: the run goes on and ends with exit code 1.
+      exitByte = 1;
+      native.writeStderr(`error: ${error.message}\n`);
+    }
     return false;
   }
 
