@@ -4,6 +4,7 @@ import { artifactIdentity, verifyGuestBuildReceipt, verifyGuestCompanions } from
 import { git, guestBuilds } from "./guest-source-manifest.ts";
 import { parseProgramReceipt, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt.ts";
 import { writeProgramDelivery } from "./ci-program-delivery.ts";
+import { assertShippedGuestHasNoNames } from "./wasm-name-sections.ts";
 
 type Source = ProgramInputSnapshot["source"];
 export const browserProgramFiles = ["bun-browser.wasm", "bun-browser.wasm.build.json", "bun-tools.wasm", "bun-tools.wasm.build.json",
@@ -15,6 +16,7 @@ export async function verifyBrowserProgram(directory: string, source: Source) {
   for (const build of ["browser", "tools", "quickjs"] as const) {
     const name = guestBuilds[build].artifact;
     const bytes = await Bun.file(join(directory, name)).bytes();
+    assertShippedGuestHasNoNames(name, bytes);
     const receiptBytes = await Bun.file(join(directory, `${name}.build.json`)).bytes();
     const receipt: unknown = JSON.parse(new TextDecoder().decode(receiptBytes));
     verifyGuestBuildReceipt(bytes, receipt);

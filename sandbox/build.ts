@@ -9,6 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { templates } from "./src/template-catalog";
 import { templateFiles } from "./template-files";
 import { stageSharedPrograms } from "../scripts/stage-program-profiles";
+import { assertShippedGuestHasNoNames, keepNamesRequested } from "../scripts/wasm-name-sections";
 
 const here = import.meta.dir;
 const web = resolve(here, "../web");
@@ -38,6 +39,7 @@ async function copyWasm(source: string, name: string): Promise<boolean> {
   }
   // Only the .gz ships: the page decompresses it (hosts cap file sizes).
   const bytes = new Uint8Array(await Bun.file(source).arrayBuffer());
+  assertShippedGuestHasNoNames(name, bytes, keepNamesRequested());
   engineBuilds[name] = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
   await Bun.write(join(out, `${name}.gz`), Bun.gzipSync(bytes, { level: 9 }));
   console.log(`${name}: ${source} (${(statSync(source).size / 1024 / 1024).toFixed(1)} MB)`);
