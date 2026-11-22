@@ -41,6 +41,7 @@ function fixture(bytes = "abcdefgh", limit = Infinity, mode: number | null = 0o1
       if (name === "buffer") return { Buffer };
       if (name === "fs_watch") return () => ({});
       if (name === "fs_file_handle") return loadFileHandleModule();
+      if (name === "fs_buffer_pins") return { pin: () => () => {} };
       throw new Error(`Unexpected readv dependency ${name}`);
     },
     realTimers: { setImmediate: (fn: () => void) => immediate.push(fn) },

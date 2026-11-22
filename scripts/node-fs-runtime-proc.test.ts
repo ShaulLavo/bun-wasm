@@ -67,6 +67,7 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
       if (name === "io_pump") return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL("../crates/bunwasm-runtime/src/js/io_pump.ts", import.meta.url), "utf8")}`))(internal);
       if (name === "net") return net ??= load("net")(internal);
       if (name === "fs_file_handle") return loadFileHandleModule();
+      if (name === "fs_buffer_pins") return { pin: () => () => {} };
       throw new Error(`Unexpected module ${name}`);
     },
   };
