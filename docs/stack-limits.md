@@ -537,7 +537,8 @@ change of ours.
 
 `scripts/jsc-cloop-frame.ts check <engine.named.wasm>` reads that function from a linked
 side that keeps its name section (the shipped `jsc-engine.wasm` has none; the JSC side
-producer keeps `engine.named.wasm` beside it) and fails unless it holds at least 4,896 bytes at every call it makes, which is
+producer keeps `engine.named.wasm` beside `engine.wasm` in its build directory,
+`$JSC_ENGINE_BUILD_DIR`) and fails unless it holds at least 4,896 bytes at every call it makes, which is
 where every slow path and every reentry starts. It decodes every instruction and follows
 every path through the function's blocks, loops and branches, tracking how far the
 exported stack pointer is below its value at entry. It knows two writes: an allocation
