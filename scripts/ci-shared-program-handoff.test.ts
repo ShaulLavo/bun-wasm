@@ -241,19 +241,42 @@ function runConsumerStep(name: string, env: NodeJS.ProcessEnv) {
 test("shared setup and launcher downloads are bounded by the original deadline", () => {
   const entries = steps(record(jobs["shared-consumers"]));
   const actions = [
-    ["./.github/actions/setup-tools", "shared-tools-budget", 30],
-    ["actions/cache/restore@v4", "shared-cache-budget", 30],
+    ["./.github/actions/setup-tools", "shared-tools-budget", '"$SHARED_CHECK_DEADLINE"'],
+    ["actions/cache/restore@v4", "shared-cache-budget", '"$((SHARED_CHECK_DEADLINE - SHARED_HASHFILES_RESERVE_SECONDS))"'],
   ] as const;
   expect(consumerStep("Start the shared setup clock")["timeout-minutes"]).toBe(1);
   expect(entries.find(step => step.uses === "actions/checkout@v4")?.["timeout-minutes"]).toBe(29);
-  for (const [action, id, cap] of actions) {
-    expect(consumerStep(id).run).toContain(`ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" ${cap}`);
+  for (const [action, id, deadline] of actions) {
+    expect(consumerStep(id).run).toContain(`ci-shared-check-budget.sh ${deadline} 30`);
     expect(entries.find(step => step.uses === action)?.["timeout-minutes"]).toBe(`\${{ fromJSON(steps.${id}.outputs.minutes) }}`);
   }
   for (const [artifact, id] of [["shared-proof-inputs", "shared-download-budget"], ["native-profile-launcher", "shared-launcher-budget"]] as const) {
     const download = entries.find(step => step.with && record(step.with).name === artifact);
     expect(consumerStep(id).run).toContain('ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 5');
     expect(download?.["timeout-minutes"]).toBe(`\${{ fromJSON(steps.${id}.outputs.minutes) }}`);
+  }
+});
+
+test("cache actions reserve time for GitHub to evaluate and clean up hashFiles", () => {
+  const env = record(record(jobs["shared-consumers"]).env);
+  expect(env.SHARED_HASHFILES_RESERVE_SECONDS).toBe(135);
+  expect(consumerStep("web-deps").run).toContain('ci-shared-check-budget.sh "$((deadline - SHARED_HASHFILES_RESERVE_SECONDS))" 30');
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-cache-budget-"));
+  try {
+    const output = join(directory, "output");
+    const budget = (seconds: number) => {
+      writeFileSync(output, "");
+      const deadline = Math.floor(Date.now() / 1000) + seconds;
+      return runConsumerStep("shared-cache-budget", {
+        SHARED_CHECK_DEADLINE: String(deadline), SHARED_HASHFILES_RESERVE_SECONDS: "135", GITHUB_OUTPUT: output,
+      });
+    };
+    expect(budget(400).status).toBe(0);
+    expect(readFileSync(output, "utf8")).toBe("minutes=4\n");
+    expect(budget(150).status).toBe(124);
+    expect(readFileSync(output, "utf8")).toBe("");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

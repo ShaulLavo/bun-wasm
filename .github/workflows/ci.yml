@@ -1470,6 +1470,7 @@ jobs:
     needs: [selection, ordinary-web-guests, rust]
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success' && needs.ordinary-web-guests.outputs.shared-proof-inputs == 'success' && needs.selection.outputs.shared-native == 'true' }}
     runs-on: ubuntu-latest
+    # The per-check clocks start at the first step, after runner action preparation.
     timeout-minutes: ${{ matrix.native && matrix.browser && 60 || 30 }}
     strategy:
       fail-fast: false
@@ -1484,6 +1485,8 @@ jobs:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     env:
       SHARED_CHECK_SECONDS: 1800
+      # hashFiles has its own 120-second timer plus process termination and stream drain.
+      SHARED_HASHFILES_RESERVE_SECONDS: 135
     steps:
       - name: Start the shared setup clock
         timeout-minutes: 1
@@ -1504,7 +1507,7 @@ jobs:
           node-version: ${{ env.CI_NODE_VERSION }}
       - name: Bound shared dependency restore
         id: shared-cache-budget
-        run: bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 30
+        run: bash scripts/ci-shared-check-budget.sh "$((SHARED_CHECK_DEADLINE - SHARED_HASHFILES_RESERVE_SECONDS))" 30
       - uses: actions/cache/restore@v4
         timeout-minutes: ${{ fromJSON(steps.shared-cache-budget.outputs.minutes) }}
         with:
@@ -1602,7 +1605,7 @@ jobs:
             exit 124
           fi
           echo "SHARED_BROWSER_DEADLINE=$deadline" >> "$GITHUB_ENV"
-          bash scripts/ci-shared-check-budget.sh "$deadline" 30
+          bash scripts/ci-shared-check-budget.sh "$((deadline - SHARED_HASHFILES_RESERVE_SECONDS))" 30
       - uses: ./.github/actions/browser-deps
         id: system-deps
         if: ${{ !cancelled() && steps.web-deps.outcome == 'success' }}
