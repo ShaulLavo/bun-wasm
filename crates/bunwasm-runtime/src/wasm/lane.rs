@@ -687,15 +687,18 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     /// Returns a slot this member or the lane protocol owns to the reuse pool. A slot above the
     /// pool limit is flagged for the next sweep to return to the host.
     fn release_slot(&self, at: u32, claim: Word) -> bool {
+        // Count the bytes before the slot shows Released: another member may reuse or trim it
+        // the moment it does, and its saturating subtraction must find them already counted.
+        let length = self.mem.load(at + LENGTH);
+        self.mem.add(self.ledger + H_POOL, length);
         if !self.mem.swap_word(
             at + CLAIM,
             claim,
             Word::new(0, claim.count, phase::RELEASED),
         ) {
+            self.mem.subtract(self.ledger + H_POOL, length);
             return false;
         }
-        let length = self.mem.load(at + LENGTH);
-        self.mem.add(self.ledger + H_POOL, length);
         if length > POOL_LIMIT || self.mem.load(self.ledger + H_POOL) > POOL_LIMIT {
             self.mem.put(self.ledger + H_TRIM, 1);
         }
@@ -1806,28 +1809,31 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         self.leave_segment(view, segment)
     }
 
-    /// An exhausted segment. Copy where to go next, then release it; never touch it again.
+    /// A segment found drained. Copy where to go next, then release it; never touch it again.
     fn leave_segment(&self, view: &View, segment: Segment) -> Result<Step, Refusal> {
         let address = segment.address;
         let next = self.mem.load(address + S_NEXT);
+        let sealed = next == 0 && self.mem.load(address + S_SEALED) != 0;
+        let closed = next == 0
+            && !sealed
+            && self.mem.get(self.end_at(view.lane.slot, 1 - view.dir)).kind == end::CLOSED;
+        if next == 0 && !sealed && !closed {
+            return Ok(Step::Empty);
+        }
+        // The writer commits every append to this segment before it links the next one, seals
+        // it or closes, but the caller loaded the committed cursor before this saw any of those,
+        // and appends may have landed in between: look again. A closed writer's last commit may
+        // also be a link made after `next` was loaded.
+        if self.mem.load(address + S_COMMITTED) != self.mem.load(address + S_READ)
+            || closed && self.mem.load(address + S_NEXT) != 0
+        {
+            return Ok(Step::Moved);
+        }
         if next != 0 {
             let generation = self.mem.load(address + S_NEXT_GEN);
             self.mem.put(view.block + D_CURSOR_GEN, generation);
             self.mem.put(view.block + D_CURSOR, next);
             self.release_slot(self.small_slot(segment.index), segment.claim);
-            return Ok(Step::Moved);
-        }
-        let sealed = self.mem.load(address + S_SEALED) != 0;
-        let writer = self.mem.get(self.end_at(view.lane.slot, 1 - view.dir)).kind;
-        if !sealed && writer != end::CLOSED {
-            return Ok(Step::Empty);
-        }
-        // A final unsealed tail is terminal once its writer is closed and released. Look again
-        // after seeing that: the writer's last commit came before its close.
-        if !sealed
-            && (self.mem.load(address + S_COMMITTED) != self.mem.load(address + S_READ)
-                || self.mem.load(address + S_NEXT) != 0)
-        {
             return Ok(Step::Moved);
         }
         self.mem.put(view.block + D_CURSOR, 0);

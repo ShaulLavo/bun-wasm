@@ -335,6 +335,14 @@ Ending a guest is not catchable and follows the death rules.
   slot and address before use and closes the direction on corruption, never writing through an
   address that failed validation. The failure is reported once: later reads of a direction
   whose reader has stopped say the lane is over, and the port closes.
+- A reader leaves a drained segment only after it has seen the link, seal or writer close that
+  lets it, and has then loaded the segment's committed cursor again. The writer commits every
+  append to a segment before any of those, but the reader's first look at the cursor can come
+  before the last appends; a reader preempted there used to skip frames that were already
+  committed.
+- A released slot's bytes join the pool count before the slot shows Released, so a member
+  that reuses or trims it at once never subtracts bytes that are not counted yet. The count
+  used to drift upward when that happened.
 - A failed drain in an event-loop step does not stop the step or the loop. The other ports,
   the mailbox, the control channels and the housekeeping are still served, then the first
   failure is thrown as the thread's uncaught error. The loop drops a waiter whose step threw,
@@ -362,7 +370,8 @@ and one of two finalizers, before each of its memory accesses while another gues
 reuses the slot, and checks near-limit epochs. It kills a finalizer before each of its memory
 accesses and checks that a closed end has always changed the epoch sum and that the next full
 sweep leaves no lane behind. It covers a staged frame and a drained batch whose replies were
-lost. `ops/tests.rs` and `ops/memory_tests.rs` run a word call on a transport that can allocate
+lost. It stops a reader between its two cursor loads while the writer appends and links, and
+a releaser between its two pool-count steps while the writer reuses the slot. `ops/tests.rs` and `ops/memory_tests.rs` run a word call on a transport that can allocate
 nothing, beside a data call that fails there, and measure that it allocates nothing.
 `scripts/worker-group-lanes.test.ts` runs the real runtime JavaScript, `worker_lane.ts`
 included, over relay-mode Waffle pipes with a small model of the native contract, as a codec
