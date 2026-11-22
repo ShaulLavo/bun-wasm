@@ -35,11 +35,14 @@ so checking a file does not load its bytes or trust an own size shadow.
 Async asymmetric extension results and recursive deep equality are outside this
 adapter. No mock, spy, engine or host interface code changes.
 
-`toHaveLength` also reads the size of a Headers, Map, Set or Blob, as
-`JSC__JSValue__getLengthIfPropertyExistsInternal` in `bindings.cpp` does. `.resolves`
-and `.rejects` judge a promise that has already settled at once and return undefined,
-where Bun's `Expect::process_promise` waits for it on the event loop; a pending promise
-still gives a promise. Both are original adapters.
+`toHaveLength` also reads the size of a Headers, Map, Set, Blob, FormData, URLSearchParams,
+typed array or ArrayBuffer, as `JSC__JSValue__getLengthIfPropertyExistsInternal` in
+`bindings.cpp` does. `lengthOf` in `test_matchers.ts` reads the engine's own accessors
+(captured at load, with brand checks), so a member the object shadows does not change the
+answer. `.resolves` and `.rejects` judge a promise that has already settled at once and
+return undefined, where Bun's `Expect::process_promise` waits for it on the event loop; a
+pending promise still gives a promise. Both are original adapters, covered by
+`tests/fixtures/expect-settled-and-length`.
 
 `tests/fixtures/test-extended-contract` runs the same contract on the guest and
 through the source factory in `scripts/test-extensions.test.ts`.

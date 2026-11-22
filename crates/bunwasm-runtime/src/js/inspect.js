@@ -489,6 +489,7 @@
       this.remaining = [];
       this.visited = new Set();
       // The deepest nesting reached, which tells an engine's stack overflow from an error thrown shallow.
+      this.nesting = 0;
       this.deepest = 0;
       this.customFormatted = null;
     }
@@ -567,22 +568,26 @@
 
     printAs(tag, value, tagResult) {
       const info = tagResult || {};
-      if (!CIRCULAR_TAGS.has(tag)) {
-        this.dispatch(tag, value, info);
-        return;
-      }
-      if (this.visited.has(value)) {
+      const tracked = CIRCULAR_TAGS.has(tag);
+      if (tracked && this.visited.has(value)) {
         this.write(this.paint("36", "[Circular]"));
         return;
       }
-      if (this.visited.size >= MAX_NESTING) throw new RangeError(CALL_STACK_MESSAGE);
-      this.visited.add(value);
-      if (this.visited.size > this.deepest) this.deepest = this.visited.size;
+      this.enter();
+      if (tracked) this.visited.add(value);
       try {
         this.dispatch(tag, value, info);
       } finally {
-        this.visited.delete(value);
+        this.nesting -= 1;
+        if (tracked) this.visited.delete(value);
       }
+    }
+
+    // One more level of recursion: Bun's stack overflows long before this many.
+    enter() {
+      if (this.nesting >= MAX_NESTING) throw new RangeError(CALL_STACK_MESSAGE);
+      this.nesting += 1;
+      if (this.nesting > this.deepest) this.deepest = this.nesting;
     }
 
     dispatch(tag, value, info) {
@@ -1183,7 +1188,7 @@
     printObjectInner(value) {
       const alwaysNewline = !this.singleLine && (this.alwaysNewlineScope || this.goodTimeForANewLine());
       if (this.depth > this.maxDepth) {
-        this.printObjectDepthExceeded(value);
+        this.printObjectDepthExceeded();
         return;
       }
       const ctx = { i: 0, singleLine: this.singleLine, alwaysNewline, parent: value };
@@ -1196,7 +1201,7 @@
       this.printObjectTail(value, ctx);
     }
 
-    printObjectDepthExceeded(value) {
+    printObjectDepthExceeded() {
       if (this.singleLine) {
         this.write(" ");
       } else if (this.alwaysNewlineScope || this.goodTimeForANewLine()) {
@@ -1204,7 +1209,7 @@
         this.writeIndent();
         this.resetLine();
       }
-      this.write(this.paint("36", "[" + getClassName(value) + " ...]"));
+      this.write(this.paint("36", "[Object ...]"));
     }
 
     printObjectTail(value, ctx) {
@@ -1844,7 +1849,7 @@
         f.write("\n[Circular]");
         continue;
       }
-      if (f.visited.size >= MAX_NESTING) throw new RangeError(CALL_STACK_MESSAGE);
+      f.enter();
       f.visited.add(err);
       f.write("\n");
       const prevDepth = f.depth;
@@ -1858,6 +1863,7 @@
       } finally {
         f.depth = prevDepth;
         f.visited.delete(err);
+        f.nesting -= 1;
       }
     }
   }

@@ -31,7 +31,7 @@ DEP0170 warning for an invalid port is not emitted, and the hash and query are
 split before the host instead of after it, which gives the same fields. Format
 keeps `//` whenever `slashes` is set, so `http:///x` round-trips.
 
-`Url.prototype.resolveObject`, `resolve` and `format`, and `url.resolveObject`, are ported from the same file (`Url.prototype.resolveObject`, `urlResolveObject`). The protocol tables are sets that accept a protocol with or without its colon, so a protocol named `constructor` is unknown instead of inheriting from `Object.prototype`.
+`Url.prototype.resolveObject`, `resolve` and `format`, and `url.resolveObject`, are ported from the same file (`Url.prototype.resolveObject`, `urlResolveObject`). The protocol tables are sets that accept a protocol with or without its colon, so a protocol named `constructor` is unknown instead of inheriting from `Object.prototype`. The resolver is split into stage functions so each stays within three block levels. `url.parse` also follows the pinned `Url.prototype.parse` for the plain-path fast path (`simplePathPattern`: no `#` and no `@` before the first `?`), for `//user@host` starting a host even without `slashesDenoteHost` (decided on the whole string, query and fragment included), for hosts of non-slashed protocols such as `mailto:`, for hostless protocols, and for `search: null` and a null-prototype `query` when `parseQueryString` finds no query. `tests/fixtures/node-url-legacy-parse-resolve` compares these with native Bun.
 
 
 ## Classification
