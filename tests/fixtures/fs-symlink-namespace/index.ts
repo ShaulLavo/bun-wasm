@@ -17,6 +17,9 @@ fs.symlinkSync(join(base, "from/a.txt"), join(base, "from/abs"));
 fs.symlinkSync(join(base, "from/dir"), join(base, "from/dirlink"));
 fs.symlinkSync("../a.txt", join(base, "from/dir/rel"));
 console.log("readlink", show(fs.readlinkSync(join(base, "from/abs"))), fs.readlinkSync(join(base, "from/dir/rel")));
+const bytes = fs.readlinkSync(join(base, "from/dir/rel"), { encoding: "buffer" });
+console.log("readlink encodings", Buffer.isBuffer(bytes), bytes.toString(), fs.readlinkSync(join(base, "from/dir/rel"), "hex"),
+  Buffer.isBuffer(fs.realpathSync(join(base, "from/abs"), { encoding: "buffer" })));
 console.log("lstat", fs.lstatSync(join(base, "from/abs")).isSymbolicLink(), "stat", fs.statSync(join(base, "from/abs")).isFile());
 console.log("read", fs.readFileSync(join(base, "from/abs"), "utf8"), fs.readFileSync(join(base, "from/dirlink/c.txt"), "utf8"),
   fs.readFileSync(join(base, "from/dirlink/rel"), "utf8"));

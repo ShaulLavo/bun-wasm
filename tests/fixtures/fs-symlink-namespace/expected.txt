@@ -1,4 +1,5 @@
 readlink from/a.txt ../a.txt
+readlink encodings true ../a.txt 2e2e2f612e747874 true
 lstat true stat true
 read a c a
 realpath from/a.txt from/a.txt

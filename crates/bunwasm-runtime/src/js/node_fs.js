@@ -68,6 +68,13 @@
     throw Object.assign(new TypeError(`encoding '${String(encoding)}' is an invalid encoding`), { code: "ERR_INVALID_ARG_VALUE" });
   }
 
+  // A returned path in the caller's encoding: a Buffer of its UTF-8 bytes, or those bytes re-encoded.
+  function encodedPath(path, encoding) {
+    if (encoding === null || encoding === "utf8" || encoding === "utf-8") return path;
+    const bytes = Buffer.from(path);
+    return encoding === "buffer" ? bytes : bytes.toString(encoding);
+  }
+
   function toBytes(data, encoding) {
     // Bun writes a string given the "buffer" encoding as Latin-1 bytes.
     if (typeof data === "string" && encoding === "buffer") return Buffer.from(data, "latin1");
@@ -410,8 +417,8 @@
   }
 
   function realpathSync(path, options) {
-    encodingOf(options);
-    return withPath(path, (abs) => native.realpath(abs === "" ? absolute(".") : abs));
+    const encoding = encodingOf(options);
+    return encodedPath(withPath(path, (abs) => native.realpath(abs === "" ? absolute(".") : abs)), encoding);
   }
   realpathSync.native = realpathSync;
 
@@ -786,8 +793,8 @@
       withPath(path, (abs) => native.truncate(abs, length));
     },
     readlinkSync: (path, options) => {
-      encodingOf(options);
-      return withPath(path, (abs) => native.readlink(abs));
+      const encoding = encodingOf(options);
+      return encodedPath(withPath(path, (abs) => native.readlink(abs)), encoding);
     },
     symlinkSync: (target, path) => withPath(path, (abs) => native.symlink(toPath(target, "target"), abs)),
     linkSync: (from, to) => withPath(from, (abs) => native.link(abs, absolute(toPath(to, "newPath")))),
