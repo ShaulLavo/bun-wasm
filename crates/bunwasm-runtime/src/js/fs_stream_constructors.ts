@@ -100,6 +100,7 @@
     openSync(path: unknown, flags: Flags, mode?: number): number;
     closeSync(fd: number): void;
     writeSync(fd: number | null, bytes: Uint8Array, offset: number, length: number, position: number | undefined): number;
+    fsyncSync(fd: number): void;
     toPath(path: unknown): string;
     validateFd(fd: unknown): void;
     readRange(name: string, value: unknown): Error;
@@ -108,6 +109,7 @@
     inspect(value: unknown): string;
     loadStreams(): StreamModule;
     later(callback: () => void): void;
+    isHandle(value: unknown): boolean;
     /** A FileHandle passed as options.fd: the stream holds a reference and closes with the handle. */
     linkHandle(value: unknown, onClose: () => void): HandleLink | undefined;
   }
@@ -118,7 +120,7 @@
   }
 
   return function createFileStreams(deps: Dependencies) {
-    const { read, asBuffer, openSync, closeSync, writeSync, toPath, validateFd, readRange, invalidArg } = deps;
+    const { read, asBuffer, openSync, closeSync, writeSync, fsyncSync, toPath, validateFd, readRange, invalidArg } = deps;
     let fileStreams: StreamModule | undefined;
 
     function initializeFileStreams() {
@@ -151,68 +153,107 @@
 
     const handleLinks = new WeakMap<BaseFileStream, HandleLink>();
 
-    function streamFd(stream: BaseFileStream, fd: Options["fd"], onHandleClose: () => void) {
-      if (fd === undefined) return null;
-      const link = typeof fd === "object" ? deps.linkHandle(fd, onHandleClose) : undefined;
-      if (!link) {
-        validateFd(fd);
-        return fd as number;
-      }
-      handleLinks.set(stream, link);
-      return link.fd;
+    interface StreamSetup {
+      fd: Options["fd"];
+      isHandle: boolean;
+      hasFd: boolean;
+      path: unknown;
+      flags: Flags;
+      mode: number;
+      autoClose: boolean;
+      pos: number | undefined;
     }
 
-    function initializeFileStream(stream: BaseFileStream & { close(): void }, path: unknown, options: Options, flags: Flags) {
-      stream.fd = streamFd(stream, options.fd, () => stream.close());
-      stream.path = stream.fd === null ? toPath(path) : path;
-      stream.flags = options.flags === undefined ? flags : options.flags;
-      stream.mode = options.mode === undefined ? 0o666 : options.mode;
-      stream.autoClose = options.autoClose !== false;
+    function prepareStreamSetup(path: unknown, options: Options, flags: Flags): StreamSetup {
+      const fd = options.fd;
+      const hasFd = fd !== undefined;
+      const isHandle = hasFd && typeof fd === "object" && deps.isHandle(fd);
+      if (hasFd && !isHandle) validateFd(fd);
+      const streamPath = hasFd ? path : toPath(path);
+      const pos = options.start === undefined ? undefined : fileStreamPosition("start", options.start);
+      return {
+        fd,
+        isHandle,
+        hasFd,
+        path: streamPath,
+        flags: options.flags === undefined ? flags : options.flags,
+        mode: options.mode === undefined ? 0o666 : options.mode,
+        autoClose: options.autoClose !== false,
+        pos,
+      };
+    }
+
+    function attachStreamSetup(stream: BaseFileStream & { close(): void }, setup: StreamSetup) {
+      if (!setup.hasFd) {
+        stream.fd = null;
+      } else if (setup.isHandle) {
+        const link = deps.linkHandle(setup.fd, () => stream.close());
+        if (!link) {
+          validateFd(setup.fd);
+          stream.fd = setup.fd as number;
+        } else {
+          handleLinks.set(stream, link);
+          stream.fd = link.fd;
+        }
+      } else {
+        stream.fd = setup.fd as number;
+      }
+      stream.path = setup.path;
+      stream.flags = setup.flags;
+      stream.mode = setup.mode;
+      stream.autoClose = setup.autoClose;
       stream.pending = stream.fd === null;
-      stream.pos = options.start === undefined ? undefined : fileStreamPosition("start", options.start);
+      stream.pos = setup.pos;
     }
 
     const ReadStream = function (this: ReadFileStream | undefined, path: unknown, options?: string | Options | null): ReadFileStream {
       if (!(this instanceof ReadStream)) return new ReadStream(path, options);
       const streams = initializeFileStreams();
       const config = fileStreamOptions(options);
-      initializeFileStream(this, path, config, "r");
+      const setup = prepareStreamSetup(path, config, "r");
+      const end = config.end === undefined || config.end === Infinity ? Infinity : fileStreamPosition("end", config.end);
+      if (end < (setup.pos || 0)) throw readRange("start", setup.pos);
+      attachStreamSetup(this, setup);
       this.start = config.start;
-      this.end = config.end === undefined || config.end === Infinity ? Infinity : fileStreamPosition("end", config.end);
-      if (this.end < (this.pos || 0)) throw readRange("start", this.pos);
+      this.end = end;
       this.bytesRead = 0;
       streams.Readable.call(this, { ...config, highWaterMark: config.highWaterMark ?? 65536, autoDestroy: this.autoClose });
       return this;
     } as ReadStreamConstructor;
 
-    function validateCustomWriteFs(stream: WriteFileStream, customFs: CustomFs, flush: boolean) {
-      if (stream.fd === null && typeof customFs.open !== "function") throw invalidArg("options.fs.open", "of type function", customFs.open);
-      if (customFs.write !== undefined && typeof customFs.write !== "function") throw invalidArg("options.fs.write", "of type function", customFs.write);
-      if (customFs.writev !== undefined && typeof customFs.writev !== "function") throw invalidArg("options.fs.writev", "of type function", customFs.writev);
-      if (stream.autoClose && typeof customFs.close !== "function") throw invalidArg("options.fs.close", "of type function", customFs.close);
+    function validateCustomWriteFs(setup: StreamSetup, customFs: CustomFs, flush: boolean) {
+      if (!setup.hasFd && typeof customFs.open !== "function") throw invalidArg("options.fs.open", "of type function", customFs.open);
+      if (customFs.write != null && typeof customFs.write !== "function") throw invalidArg("options.fs.write", "of type function", customFs.write);
+      if (customFs.writev != null && typeof customFs.writev !== "function") throw invalidArg("options.fs.writev", "of type function", customFs.writev);
+      if (setup.autoClose && typeof customFs.close !== "function") throw invalidArg("options.fs.close", "of type function", customFs.close);
       if (flush && typeof customFs.fsync !== "function") throw invalidArg("options.fs.fsync", "of type function", customFs.fsync);
-      if (!customFs.write && !customFs.writev) throw invalidArg("options.fs.write", "of type function", customFs.write);
-      if (!customFs.write) stream._write = null;
-      if (!customFs.writev) stream._writev = null;
+      if (customFs.write == null && customFs.writev == null) throw invalidArg("options.fs.write", "of type function", customFs.write);
     }
 
     const WriteStream = function (this: WriteFileStream | undefined, path: unknown, options?: string | Options | null): WriteFileStream {
       if (!(this instanceof WriteStream)) return new WriteStream(path, options);
       const streams = initializeFileStreams();
       const config = fileStreamOptions(options);
-      initializeFileStream(this, path, config, "w");
+      const setup = prepareStreamSetup(path, config, "w");
       if (config.flush !== undefined && typeof config.flush !== "boolean") throw invalidArg("options.flush", "of type boolean", config.flush);
-      this.flush = Boolean(config.flush);
+      const flush = Boolean(config.flush);
+      const customFs = config.fs !== undefined && config.fs !== null ? config.fs : undefined;
+      if (customFs !== undefined) {
+        if (typeof customFs !== "object") throw invalidArg("options.fs", "of type object", customFs);
+        if (setup.isHandle) {
+          throw Object.assign(new Error("The FileHandle with fs method is not implemented"), { code: "ERR_METHOD_NOT_IMPLEMENTED" });
+        }
+        validateCustomWriteFs(setup, customFs, flush);
+      }
+      attachStreamSetup(this, setup);
+      this.flush = flush;
       this.start = config.start;
       this.bytesWritten = 0;
       this[kIsPerformingIO] = false;
-      if (config.fs !== undefined && config.fs !== null) {
-        if (typeof config.fs !== "object") throw invalidArg("options.fs", "of type object", config.fs);
-        if (handleLinks.has(this)) {
-          throw Object.assign(new Error("The FileHandle with fs method is not implemented"), { code: "ERR_METHOD_NOT_IMPLEMENTED" });
-        }
-        this[kFs] = config.fs;
-        validateCustomWriteFs(this, config.fs, this.flush);
+      if (customFs !== undefined) {
+        this[kFs] = customFs;
+        if (customFs.write == null) this._write = null;
+        if (customFs.writev == null) this._writev = null;
       } else {
         this._writev = undefined;
       }
@@ -247,32 +288,41 @@
       callback();
     }
 
+    function finishCustomClose(customFs: CustomFs, fd: number, error: unknown, callback: (error?: unknown) => void) {
+      if (!customFs.close) { callback(error); return; }
+      customFs.close(fd, (closeError) => callback(closeError || error));
+    }
+
+    function closeCustomStreamHandle(customFs: CustomFs, fd: number | null, flush: boolean | undefined, error: unknown, callback: (error?: unknown) => void) {
+      if (fd === null) { callback(error); return; }
+      if (!flush || !customFs.fsync) { finishCustomClose(customFs, fd, error, callback); return; }
+      customFs.fsync(fd, (syncError) => finishCustomClose(customFs, fd, error || syncError, callback));
+    }
+
+    function flushDefaultDescriptor(fd: number, error: unknown): unknown {
+      try { fsyncSync(fd); }
+      catch (syncError) { return error || syncError; }
+      return error;
+    }
+
     function closeStreamHandle(stream: BaseFileStream, error: unknown, callback: (error?: unknown) => void) {
       const fd = stream.fd;
       stream.fd = null;
       stream.pending = false;
       const customFs = stream[kFs];
-      if (customFs) {
-        if (fd === null) { callback(error); return; }
-        const closeFd = (syncError?: unknown) => {
-          const err = error || syncError;
-          if (!customFs.close) { callback(err); return; }
-          customFs.close(fd, (closeError) => callback(closeError || err));
-        };
-        if (stream.flush && customFs.fsync) customFs.fsync(fd, closeFd);
-        else closeFd();
-        return;
-      }
+      if (customFs) { closeCustomStreamHandle(customFs, fd, stream.flush, error, callback); return; }
+      let finalError = error;
+      if (stream.flush && fd !== null) finalError = flushDefaultDescriptor(fd, finalError);
       const link = handleLinks.get(stream);
       if (link) {
         handleLinks.delete(stream);
-        link.close().then(() => callback(error), (closeError: unknown) => callback(error || closeError));
+        link.close().then(() => callback(finalError), (closeError: unknown) => callback(finalError || closeError));
         return;
       }
-      if (fd === null) { callback(error); return; }
+      if (fd === null) { callback(finalError); return; }
       try { closeSync(fd); }
-      catch (closeError) { callback(error || closeError); return; }
-      callback(error);
+      catch (closeError) { callback(finalError || closeError); return; }
+      callback(finalError);
     }
 
     function destroyFileStream(this: BaseFileStream, error: unknown, callback: (error?: unknown) => void) {
