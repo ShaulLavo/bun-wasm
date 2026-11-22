@@ -31,42 +31,18 @@
   }
 
   // Node's normalizeString: resolves `.` and `..` segments and drops empty ones.
+  // Node walks code units and edits a result string; a segment stack gives the
+  // same result with native split and join, which interpreters run much faster.
+  // A `..` pops the previous segment unless that is itself a kept `..`.
   function normalizeSegments(path: string, allowAboveRoot: boolean): string {
-    let result = "";
-    let lastSegmentLength = 0;
-    let lastSlash = -1;
-    let dots = 0;
-    let code = 0;
-    for (let i = 0; i <= path.length; i++) {
-      if (i < path.length) code = path.charCodeAt(i);
-      else if (code === SLASH) break;
-      else code = SLASH;
-      if (code !== SLASH) {
-        dots = code === DOT && dots !== -1 ? dots + 1 : -1;
-        continue;
-      }
-      if (lastSlash === i - 1 || dots === 1) {
-        // An empty or `.` segment adds nothing.
-      } else if (dots === 2) {
-        const parent = lastSegmentLength === 2 && result.length >= 2
-          && result.charCodeAt(result.length - 1) === DOT && result.charCodeAt(result.length - 2) === DOT;
-        if (!parent && result.length > 0) {
-          const index = result.length > 2 ? result.lastIndexOf("/") : -1;
-          result = index === -1 ? "" : result.slice(0, index);
-          lastSegmentLength = index === -1 ? 0 : result.length - 1 - result.lastIndexOf("/");
-        } else if (allowAboveRoot) {
-          result += result.length > 0 ? "/.." : "..";
-          lastSegmentLength = 2;
-        }
-      } else {
-        const segment = path.slice(lastSlash + 1, i);
-        result += result.length > 0 ? "/" + segment : segment;
-        lastSegmentLength = segment.length;
-      }
-      lastSlash = i;
-      dots = 0;
+    const kept: string[] = [];
+    for (const segment of path.split("/")) {
+      if (segment === "" || segment === ".") continue;
+      if (segment !== "..") kept.push(segment);
+      else if (kept.length > 0 && kept[kept.length - 1] !== "..") kept.pop();
+      else if (allowAboveRoot) kept.push("..");
     }
-    return result;
+    return kept.join("/");
   }
 
   // Without `//`, a leading `.` or `/.`, no segment is empty, `.` or `..`, so
@@ -94,40 +70,29 @@
     return joined.length > 0 ? posixNormalize(joined) : ".";
   }
 
+  // Index of the last code unit that is not a trailing `/`, or -1.
+  function lastNonSlash(path: string): number {
+    let last = path.length - 1;
+    while (last >= 0 && path.charCodeAt(last) === SLASH) last--;
+    return last;
+  }
+
   function posixDirname(path: string): string {
     if (path.length === 0) return ".";
     const hasRoot = path.charCodeAt(0) === SLASH;
-    let matchedSlash = true;
-    let end = -1;
-    for (let i = path.length - 1; i >= 1; i--) {
-      if (path.charCodeAt(i) !== SLASH) {
-        matchedSlash = false;
-        continue;
-      }
-      if (!matchedSlash) {
-        end = i;
-        break;
-      }
-    }
-    if (end === -1) return hasRoot ? "/" : ".";
+    // Node scans down to index 1: the separator before the last component,
+    // without trimming repeated separators before it.
+    const last = lastNonSlash(path);
+    const end = last < 1 ? -1 : path.lastIndexOf("/", last);
+    if (end < 1) return hasRoot ? "/" : ".";
     return hasRoot && end === 1 ? "//" : path.slice(0, end);
   }
 
   function posixBasename(path: string, suffix?: string): string {
     if (suffix !== undefined && suffix.length > 0 && suffix.length <= path.length) return basenameWithSuffix(path, suffix);
-    let start = 0;
-    let end = -1;
-    for (let i = path.length - 1; i >= 0; i--) {
-      if (path.charCodeAt(i) !== SLASH) {
-        if (end === -1) end = i + 1;
-        continue;
-      }
-      if (end !== -1) {
-        start = i + 1;
-        break;
-      }
-    }
-    return end === -1 ? "" : path.slice(start, end);
+    const last = lastNonSlash(path);
+    if (last === -1) return "";
+    return path.slice(path.lastIndexOf("/", last) + 1, last + 1);
   }
 
   function basenameWithSuffix(path: string, suffix: string): string {
@@ -339,14 +304,19 @@
     parse: windowsParse,
   };
 
+  // Valid strings skip validateString so hot calls build no argument label.
+  function pathArgument(value: unknown, index: number): string {
+    return typeof value === "string" ? value : validateString(value, `paths[${index}]`);
+  }
+
   function strings(values: readonly unknown[]): string[] {
-    return values.map((value, index) => validateString(value, `paths[${index}]`));
+    return values.map(pathArgument);
   }
 
   function resolutionStrings(windows: boolean, values: readonly unknown[]): string[] {
     const paths: string[] = [];
     for (let i = values.length - 1; i >= 0; i--) {
-      const value = validateString(values[i], `paths[${i}]`);
+      const value = pathArgument(values[i], i);
       paths.push(value);
       if (!windows && value.startsWith("/")) break;
     }
