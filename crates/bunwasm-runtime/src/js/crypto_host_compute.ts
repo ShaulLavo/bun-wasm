@@ -2,12 +2,14 @@
 // The runtime's provider (crypto.js) normalizes arguments, checks keys and usages and owns
 // every message; this module only runs digests, AES encryption and signatures on the host
 // when it supports the algorithm and key, because the host's native code is far faster than
-// the guest's. An undefined result means the guest computes now; a rejected host promise
-// means the guest computes from the same input, so the guest also answers every failure.
+// the guest's. An undefined result means the guest computes now. Calls the host gets wrong or
+// refuses never reach it: a host key that failed to import, and AES-CTR whose counter wraps
+// (WebKit computes those blocks wrongly). A host promise that rejects with `refused` asks the
+// guest to compute from `input`; any other rejection is the operation's own failure.
 //
 // The host snapshots its input when it is called, so a call made synchronously passes the
 // caller's bytes without a copy. Only the first use of a key, which waits for the host to
-// import it, copies the input first.
+// import it, copies the input at call time; a refused import then computes from that copy.
 (function (): BunWasm.HostComputeFactory {
   "use strict";
   type Plan = BunWasm.CryptoOperationPlan;
@@ -16,6 +18,14 @@
   const digests = new Set(["SHA-1", "SHA-256", "SHA-384", "SHA-512"]);
   const ciphers = new Set(["AES-GCM", "AES-CBC", "AES-CTR"]);
   const signatures = new Set(["HMAC", "RSASSA-PKCS1-v1_5", "RSA-PSS", "ECDSA"]);
+  const refused = new Error("host key refused");
+  // Whether AES-CTR runs its `length`-bit counter field past its last value over `size` bytes.
+  function counterWraps(counter: Bytes, length: number, size: number) {
+    let value = 0n;
+    for (const byte of counter) value = (value << 8n) | BigInt(byte);
+    const space = 1n << BigInt(length);
+    return (value % space) + BigInt(Math.ceil(size / 16)) > space;
+  }
   return function hostCompute(host, helpers) {
     // The host key for each guest key: imported once, null when the host refuses it
     // (AES-192 on Chromium, for example).
@@ -64,7 +74,7 @@
       if (known) return { promise: call(known, data), input: data };
       const input = helpers.buffer(data);
       const promise = importKey(plan).then(key => {
-        if (!key) throw new Error("host key refused");
+        if (!key) throw refused;
         return call(key, input);
       });
       return { promise, input };
@@ -85,11 +95,13 @@
       return { name };
     }
     return {
+      refused,
       digest(name, data) {
         return digests.has(name) ? { promise: host.digest(name, data), input: data } : undefined;
       },
       crypt(plan, data) {
         if (!ciphers.has(plan.a.name)) return undefined;
+        if (plan.a.name === "AES-CTR" && counterWraps(helpers.buffer(plan.a.counter), plan.out.length ?? 0, data.length)) return undefined;
         const params = cipherParams(plan);
         const operation = plan.op === "decrypt" ? host.decrypt : host.encrypt;
         return offload(plan, data, (key, input) => operation(params, key, input));

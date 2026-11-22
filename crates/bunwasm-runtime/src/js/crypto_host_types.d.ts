@@ -50,6 +50,8 @@ declare namespace BunWasm {
     readonly input: HostBytes;
   }
   interface HostCompute {
+    /** The rejection of host work whose key the host refused: the guest computes from its input. */
+    readonly refused: Error;
     digest(name: string, data: HostBytes): HostOffload<ArrayBuffer> | undefined;
     crypt(plan: CryptoOperationPlan, data: HostBytes): HostOffload<ArrayBuffer> | undefined;
     sign(plan: CryptoOperationPlan, data: HostBytes): HostOffload<ArrayBuffer> | undefined;

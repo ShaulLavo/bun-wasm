@@ -608,6 +608,10 @@
     a = algorithm(a);
     const r = use(key, a, op);
     const out = operationAlgorithm(a, r);
+    // WebCrypto's EcdsaParams has no encoding member: its signatures are always IEEE P1363.
+    // `der` is the node:crypto adapter's own backend switch, which a caller's dictionary must
+    // not reach.
+    delete out.der;
     if (isAkp(a.name)) {
       // FIPS 204 caps the context at 255 bytes; Bun fails both sign and verify past it.
       if (a.context !== undefined && buffer(a.context).length > 255) fail("OperationError");
@@ -622,10 +626,6 @@
       ...(plan.op === "verify" ? { signature: encode(signature) } : {}),
     });
     return plan.op === "verify" ? result.verified : decode(result.data).buffer;
-  }
-  function crypt(op, a, key, data, usage = op) {
-    const plan = cryptPlan(op, a, key, usage);
-    return cryptRun(plan, buffer(data));
   }
   function cryptRun(plan, data) {
     return decode(backend(plan.op, plan.out, { key: plan.r.key, data: encode(data) }).data).buffer;
@@ -645,6 +645,8 @@
         fail("OperationError", "Invalid tagLength");
     }
     if (a.name === "AES-CTR") {
+      // Bun rejects a counter that is not one block before it starts the operation.
+      if (buffer(a.counter).length !== 16) fail("OperationError");
       out.counter = encode(a.counter);
       out.length = integer(a.length, 1, 128, "counter length");
     }
@@ -715,30 +717,50 @@
   const hostCompute = native.hostCrypto
     ? internal.require("crypto_host_compute")(native.hostCrypto, { buffer, decode })
     : undefined;
-  // Work the host runs; it falls back to the guest's own computation when the host fails.
-  class HostWork {
-    constructor(promise, guest) {
-      this.promise = promise.then(value => value, () => guest());
+  // A guest computation done now whose result or failure settles in a later task, after
+  // microtasks already queued: Bun runs digests, encryption, signatures, derivation and
+  // non-AES-KW wrapping as background work (the Web Crypto spec's "queue a task"). Argument
+  // errors are thrown before one is made, so they still reject at once.
+  class Later {
+    constructor(compute) {
+      this.failed = false;
+      try {
+        this.value = compute();
+      } catch (error) {
+        this.failed = true;
+        this.error = error;
+      }
     }
   }
-  // `work` is the host's promise and the bytes it read; the guest computes from the same bytes
-  // when the host fails, or at once from the caller's bytes when the host takes no part.
-  function offload(work, data, guest) {
-    return work ? new HostWork(work.promise, () => guest(work.input)) : guest(data);
+  // Host work, which settles in the host's own task. A key the host refused is computed by the
+  // guest from the call-time copy (`work.input`); any other host failure is the operation's own
+  // failure (a bad tag or padding), reported as the guest and Bun report it, without computing
+  // again.
+  class HostWork {
+    constructor(work, guest) {
+      this.promise = work.promise.then(value => value, error => {
+        if (error === hostCompute.refused) return guest(work.input);
+        return fail("OperationError");
+      });
+    }
   }
-  // Every SubtleCrypto method: a rejected promise for a bad receiver or argument. Bun runs
-  // digests, encryption, signatures and derivation as background work, so those settle in a
-  // later task, after microtasks already queued (the Web Crypto spec's "queue a task"); key
-  // management resolves at once, as in Bun.
-  const backgroundWork = new Set(["digest", "encrypt", "decrypt", "sign", "verify", "deriveBits", "deriveKey"]);
+  function offload(work, data, guest) {
+    return work ? new HostWork(work, guest) : new Later(() => guest(data));
+  }
+  function laterResult(later) {
+    return new Promise((resolve, reject) =>
+      internal.realTimers.setImmediate(() => (later.failed ? reject(later.error) : resolve(later.value))));
+  }
+  // Every SubtleCrypto method: a rejected promise for a bad receiver or argument. Key
+  // management, AES-KW wrapping and the ML-KEM methods resolve at once, as in Bun.
   function settle(receiver, method, run) {
     try {
       if (receiver !== subtleInstance)
         typeError(`Can only call SubtleCrypto.${method} on instances of SubtleCrypto`, "ERR_INVALID_THIS");
       const result = run();
       if (result instanceof HostWork) return result.promise;
-      if (!backgroundWork.has(method)) return Promise.resolve(result);
-      return new Promise(resolve => internal.realTimers.setImmediate(() => resolve(result)));
+      if (result instanceof Later) return laterResult(result);
+      return Promise.resolve(result);
     } catch (error) {
       return Promise.reject(error);
     }
@@ -826,10 +848,16 @@
     }
     // length is optional in WebIDL, so the method's length is 2.
     deriveBits(a, key, length = undefined) {
-      return settle(this, "deriveBits", () => deriveBits(a, key, length));
+      return settle(this, "deriveBits", () => {
+        const bits = deriveBits(a, key, length);
+        return new Later(() => bits);
+      });
     }
     deriveKey(a, key, derived, extractable, usages) {
-      return settle(this, "deriveKey", () => deriveSecretKey(a, key, derived, extractable, usages));
+      return settle(this, "deriveKey", () => {
+        const secret = deriveSecretKey(a, key, derived, extractable, usages);
+        return new Later(() => secret);
+      });
     }
     wrapKey(format, key, wrappingKey, a) {
       return settle(this, "wrapKey", () => wrapKey(format, key, wrappingKey, a));
@@ -858,6 +886,8 @@
       usages,
     );
   }
+  // Bun wraps and unwraps with AES-KW at once and runs the other algorithms as background
+  // work, whose results and failures settle in a later task.
   function wrapKey(format, key, wrappingKey, a) {
     format = keyFormat(format, "wrapKey");
     const data = exportKey(format, key, "wrapKey");
@@ -868,13 +898,21 @@
       padded.set(bytes);
       bytes = padded;
     }
-    return crypt("encrypt", a, wrappingKey, bytes, "wrapKey");
+    const plan = cryptPlan("encrypt", a, wrappingKey, "wrapKey");
+    const input = buffer(bytes);
+    const run = () => cryptRun(plan, input);
+    return plan.a.name === "AES-KW" ? run() : new Later(run);
   }
   function unwrapKey(format, wrapped, key, a, unwrapped, extractable, usages) {
     format = keyFormat(format, "unwrapKey");
     // Bun normalizes the unwrapped key's algorithm before it decrypts.
     unwrapped = algorithm(unwrapped);
-    const bytes = crypt("decrypt", a, key, wrapped, "unwrapKey");
+    const plan = cryptPlan("decrypt", a, key, "unwrapKey");
+    const input = buffer(wrapped);
+    const run = () => importUnwrapped(format, cryptRun(plan, input), unwrapped, extractable, usages);
+    return plan.a.name === "AES-KW" ? run() : new Later(run);
+  }
+  function importUnwrapped(format, bytes, unwrapped, extractable, usages) {
     if (format !== "jwk")
       return importKey(format, bytes, unwrapped, extractable, usages);
     let jwk;
