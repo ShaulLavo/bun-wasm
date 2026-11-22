@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { automaticChecks, checkCommand, checkId, discoverChecks, parseCheckId, selectChecks, runCheck, checkBatches, namedCheckBatches, selectCheckBatch, checkArguments, parseCheck, nativeEngineGroups, nativeProducerEngines } from "./test-checks";
+import { automaticChecks, checkCommand, checkId, discoverChecks, parseCheckId, selectChecks, runCheck, checkBatches, namedCheckBatches, selectCheckBatch, checkArguments, parseCheck, nativeEngineGroups, nativeProducerEngines, shardTestFiles, testJobs } from "./test-checks";
 import { migrationBase } from "./migrations/split-bun-patches";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { needsJsc, needsRust } from "./ci-changes";
@@ -146,10 +146,21 @@ test("capacity, process and large IO retain blocking coverage on three ordinary 
 test("CI declares its native fixture and installer engine domains separately", () => {
   const workflow = expandedCiWorkflow();
   const gate = workflow.split("name: Blocking native fixture checks")[1]!.split("\n      - name:")[0]!;
-  expect(gate).toContain('BUN_WASM_RUNTIME_JOBS: "2"');
+  expect(gate).toContain('BUN_WASM_RUNTIME_JOBS: "4"');
   expect(gate).toContain("INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
   expect(gate).toContain("BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}");
   expect(gate).toContain("          bun scripts/test-checks.ts native\n");
+});
+
+test("testJobs validates bounds and shardTestFiles distributes every path once", () => {
+  expect(testJobs(undefined)).toBe(1);
+  for (const value of ["1", "2", "3", "4"]) expect(testJobs(value)).toBe(Number(value));
+  for (const value of ["", "0", "5", "2.5", "-1", "abc"]) expect(() => testJobs(value)).toThrow("Invalid BUN_WASM_TEST_JOBS");
+  const files = selectChecks("quality");
+  const shards = shardTestFiles(files, 4);
+  expect(shards).toHaveLength(4);
+  expect(shards.flat().toSorted()).toEqual(files.toSorted());
+  expect(new Set(shards.flat()).size).toBe(files.length);
 });
 
 test("runtime declarations retain process isolation and source selection inputs together", () => {
@@ -194,6 +205,15 @@ printf '%s\\n' "$engine $*" >> "$RECORD"
   env.FAIL_ENGINE = "jsc";
   expect(run().status).toBe(1);
   expect(readFileSync(record, "utf8")).not.toContain("spidermonkey");
+  delete env.FAIL_ENGINE;
+  writeFileSync(record, "");
+  env.BUN_WASM_CHECK_JOBS = "2";
+  expect(run().status).toBe(0);
+  const parallelLines = readFileSync(record, "utf8").trim().split("\n");
+  expect(parallelLines.some(line => line.startsWith("quickjs ") && line.includes("plain"))).toBe(true);
+  expect(parallelLines.some(line => line.startsWith("quickjs ") && line.includes("matrix"))).toBe(true);
+  expect(parallelLines.some(line => line.startsWith("jsc ") && line.includes("matrix"))).toBe(true);
+  expect(parallelLines.some(line => line.startsWith("spidermonkey ") && line.includes("matrix"))).toBe(true);
 });
 
 test.each(["", "jsc,jsc", "unknown", "quickjs, jsc", ",browser"])("native producer selection rejects %s", value => {

@@ -105,11 +105,11 @@ test("the existing native producer owns each guest group once, after completed c
     const section = workflow.split(`\n  ${owner}:\n`)[1]!.split(/\n  [\w-]+:\n/)[0]!;
     expect(section.split(command)).toHaveLength(2);
   }
-  expect(rust).toContain('TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2');
-  expect(rust.split("CARGO_BUILD_JOBS=2 bash scripts/build.sh")).toHaveLength(2);
+  expect(rust).toContain('TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=4');
+  expect(rust.split("CARGO_BUILD_JOBS=3 bash scripts/build.sh")).toHaveLength(2);
   const wrapper = readFileSync(new URL("./build.sh", import.meta.url), "utf8");
   expect(wrapper).toContain('guest-build-receipt.ts" write "$root/dist/bun.wasm" "$guest_inputs"');
-  expect(rust).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
+  expect(rust).toContain('BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=4 bash scripts/build-bun-browser.sh');
   expect(rust).not.toContain("ln -s source-cache-browser");
   expect(rust).toContain("name: web-guest-fixture-receipts");
   expect(rust).toContain("if-no-files-found: error");

@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { dispatchRuntime, runRuntimeChecks, runtimeJobs, runtimePlan } from "./runtime-file-checks.ts";
+import { dispatchRuntime, runRuntimeChecks, runtimeBatches, runtimeJobs, runtimePlan } from "./runtime-file-checks.ts";
 import { discoverChecks, parseCheck, selectChecks } from "./test-checks.ts";
 import { linuxProcess } from "./process-owner.mts";
 import { runSubreaperProbe } from "./test-subreaper-command.ts";
@@ -19,7 +19,22 @@ afterEach(() => { for (const path of owned.splice(0)) rmSync(path, { recursive: 
 test("runtime concurrency is explicit and bounded", () => {
   expect(runtimeJobs("1")).toBe(1);
   expect(runtimeJobs("2")).toBe(2);
-  for (const value of ["", "0", "3", "2.0", "Infinity", "-1"]) expect(() => runtimeJobs(value)).toThrow("Invalid BUN_WASM_RUNTIME_JOBS");
+  expect(runtimeJobs("3")).toBe(3);
+  expect(runtimeJobs("4")).toBe(4);
+  for (const value of ["", "0", "5", "2.0", "Infinity", "-1"]) expect(() => runtimeJobs(value)).toThrow("Invalid BUN_WASM_RUNTIME_JOBS");
+});
+
+test("multi-worker runtime sharding preserves every file and keeps shared SpiderMonkey controls serial", () => {
+  const checks = discoverChecks();
+  const paths = selectChecks("runtime", checks);
+  const plan = runtimePlan(paths, checks);
+  const batches = runtimeBatches(plan, 4);
+  expect(batches.flat().toSorted()).toEqual(paths.toSorted());
+  expect(new Set(batches.flat()).size).toBe(paths.length);
+  const shared = batches.filter(batch =>
+    batch.includes("scripts/spidermonkey-ordinary-fixtures.test.ts") || batch.includes("scripts/spidermonkey-suppressed-error.test.ts"));
+  expect(shared).toEqual([["scripts/spidermonkey-ordinary-fixtures.test.ts", "scripts/spidermonkey-suppressed-error.test.ts"]]);
+  for (const isolated of plan.isolated) expect(batches).toContainEqual([isolated]);
 });
 
 test("runtime scheduling source changes select the real native producers", () => {
@@ -162,13 +177,13 @@ function start(root: string, extra: NodeJS.ProcessEnv = {}) {
 }
 
 test.skipIf(process.platform !== "linux")("real serial and bounded runs have equivalent outcomes, selection, mocks and file order", async () => {
-  for (const jobs of [undefined, "1", "2"]) {
+  for (const jobs of [undefined, "1", "2", "4"]) {
     const root = fixture();
-    const run = start(root, { BUN_WASM_RUNTIME_JOBS: jobs, PAIRS: jobs === "2" ? "1" : "0" });
+    const run = start(root, { BUN_WASM_RUNTIME_JOBS: jobs, PAIRS: jobs === "2" || jobs === "4" ? "1" : "0" });
     expect(await run.exited, run.output()).toBe(0);
     expect(readdirSync(join(root, "events")).filter(file => file.endsWith(".done")).sort()).toEqual(["a.done", "b.done", "c.done", "d.done", "serial.done"]);
     const pids = ["a", "b", "c", "d", "serial"].map(name => readFileSync(join(root, "events", `${name}.started`), "utf8"));
-    expect(new Set(pids).size).toBe(jobs === "2" ? 5 : 1);
+    expect(new Set(pids).size).toBe(jobs === "2" || jobs === "4" ? 5 : 1);
     expect(readdirSync(join(root, "tmp"))).toEqual([]);
   }
 }, 60000);

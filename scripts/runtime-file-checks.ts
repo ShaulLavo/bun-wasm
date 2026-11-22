@@ -4,10 +4,33 @@ import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkCommand, discoverChecks, selectChecks } from "./test-checks.ts";
 
-export function runtimeJobs(value: string): 1 | 2 {
-  if (value === "1") return 1;
-  if (value === "2") return 2;
-  throw new Error(`Invalid BUN_WASM_RUNTIME_JOBS: ${value}; expected 1 or 2`);
+export type RuntimeJobs = 1 | 2 | 3 | 4;
+
+// Files that share target/spidermonkey-controls must stay in one serial batch.
+const sharedSpiderMonkeyControls = new Set([
+  "scripts/spidermonkey-ordinary-fixtures.test.ts",
+  "scripts/spidermonkey-suppressed-error.test.ts",
+]);
+
+// Spread the slowest non-isolated runtime files across distinct shards first.
+const heavyRuntimeFiles = [
+  "scripts/spidermonkey-loop-controls.test.ts",
+  "scripts/require-esm-ownership.test.ts",
+  "scripts/spidermonkey-panic-process.test.ts",
+  "scripts/legacy-cli-runtime.test.ts",
+  "scripts/wasm-validation.test.ts",
+  "scripts/install-tarballs.test.ts",
+  "scripts/hot-run-live.test.ts",
+  "scripts/rust-native-cache.test.ts",
+  "scripts/spidermonkey-parser.test.ts",
+  "scripts/install-metadata.test.ts",
+  "scripts/runtime-assert-util.test.ts",
+  "scripts/spidermonkey-stack-quota.test.ts",
+];
+
+export function runtimeJobs(value: string): RuntimeJobs {
+  if (value === "1" || value === "2" || value === "3" || value === "4") return Number(value) as RuntimeJobs;
+  throw new Error(`Invalid BUN_WASM_RUNTIME_JOBS: ${value}; expected 1, 2, 3 or 4`);
 }
 
 export function runtimePlan(paths: readonly string[], checks = discoverChecks()) {
@@ -16,6 +39,24 @@ export function runtimePlan(paths: readonly string[], checks = discoverChecks())
   const isolated = paths.filter(path => runtime.get(path)?.isolation === "process");
   const independent = new Set(isolated);
   return { serial: paths.filter(path => !independent.has(path)), isolated };
+}
+
+export function runtimeBatches(plan: ReturnType<typeof runtimePlan>, jobs: RuntimeJobs = 2): string[][] {
+  if (jobs <= 2) {
+    const serial = plan.serial.length ? [plan.serial] : [];
+    return serial.concat(plan.isolated.map(path => [path]));
+  }
+  const sharedControls = plan.serial.filter(path => sharedSpiderMonkeyControls.has(path));
+  const shardable = plan.serial.filter(path => !sharedSpiderMonkeyControls.has(path));
+  const heavySet = new Set(heavyRuntimeFiles);
+  const ordered = heavyRuntimeFiles.filter(path => shardable.includes(path)).concat(shardable.filter(path => !heavySet.has(path)));
+  const shardCount = Math.min(jobs, ordered.length);
+  const shards = Array.from({ length: shardCount }, (): string[] => []);
+  ordered.forEach((path, index) => shards[index % shardCount]!.push(path));
+  // Isolated files and the shared-controls group start first so long tails overlap.
+  const leading = plan.isolated.map(path => [path]);
+  if (sharedControls.length) leading.push(sharedControls);
+  return leading.concat(shards);
 }
 
 function execute(command: readonly string[], env = process.env): Promise<number> {
@@ -28,21 +69,33 @@ function execute(command: readonly string[], env = process.env): Promise<number>
   });
 }
 
+function workerEnv(base: NodeJS.ProcessEnv, slot: number): NodeJS.ProcessEnv {
+  const parent = base.TMPDIR;
+  if (!parent) return base;
+  const dir = join(parent, `slot-${slot}`);
+  mkdirSync(dir, { recursive: true });
+  return { ...base, TMPDIR: dir };
+}
+
 // No process control here: the existing supervisor owns this worker and every descendant.
-export async function dispatchRuntime(plan: ReturnType<typeof runtimePlan>, run = (paths: readonly string[]) => execute(checkCommand("runtime", paths))): Promise<number> {
-  const serial = plan.serial.length ? [plan.serial] : [];
-  const batches = serial.concat(plan.isolated.map(path => [path]));
+export async function dispatchRuntime(
+  plan: ReturnType<typeof runtimePlan>,
+  run?: (paths: readonly string[]) => Promise<number>,
+  jobs: RuntimeJobs = 2,
+): Promise<number> {
+  const batches = runtimeBatches(plan, jobs);
   let next = 0;
   let failure = 0;
-  async function worker(): Promise<void> {
+  async function worker(slot: number): Promise<void> {
+    const slotEnv = run ? undefined : workerEnv(process.env, slot);
     while (failure === 0) {
       const paths = batches[next++];
       if (paths === undefined) return;
-      const status = await run(paths);
+      const status = run ? await run(paths) : await execute(checkCommand("runtime", paths), slotEnv);
       failure ||= status;
     }
   }
-  await Promise.all([worker(), worker()]);
+  await Promise.all(Array.from({ length: jobs }, (_, slot) => worker(slot)));
   return failure;
 }
 
@@ -51,7 +104,7 @@ function removeScratch(scratch: string, state: string, pid: number | undefined):
   rmSync(scratch, { recursive: true, force: true });
 }
 
-export async function runRuntimeChecks(paths: readonly string[], env = process.env): Promise<number> {
+export async function runRuntimeChecks(paths: readonly string[], env = process.env, jobs: RuntimeJobs = 2): Promise<number> {
   // Validate before creating scratch or starting the supervisor. New files default to serial.
   runtimePlan(paths);
   if (process.platform !== "linux") throw new Error("Bounded runtime checks require the Linux process supervisor");
@@ -59,7 +112,7 @@ export async function runRuntimeChecks(paths: readonly string[], env = process.e
   const state = join(scratch, "supervisor");
   mkdirSync(state);
   const supervisor = join(import.meta.dir, "run-with-timeout.mts");
-  const command = [supervisor, "--state", state, "--until-exit", process.execPath, import.meta.filename, "--worker"].concat(paths);
+  const command = [supervisor, "--state", state, "--until-exit", process.execPath, import.meta.filename, "--worker", "--jobs", String(jobs)].concat(paths);
   const child = spawn(process.execPath, command, {
     env: { ...env, TMPDIR: scratch, WASM_TABLE_TMP: scratch, RAYON_NUM_THREADS: "2" },
     stdio: "inherit",
@@ -86,8 +139,15 @@ export async function runRuntimeChecks(paths: readonly string[], env = process.e
 }
 
 if (import.meta.main) {
-  const [mode, ...paths] = process.argv.slice(2);
-  if (mode === "--worker") process.exitCode = await dispatchRuntime(runtimePlan(paths));
-  else if (mode === undefined) process.exitCode = await runRuntimeChecks(selectChecks("runtime"));
-  else throw new Error("Usage: runtime-file-checks.ts [--worker <runtime paths...>]");
+  const [mode, ...rest] = process.argv.slice(2);
+  if (mode === "--worker") {
+    const hasJobs = rest[0] === "--jobs";
+    const jobs = hasJobs ? runtimeJobs(rest[1] ?? "") : 2;
+    const paths = hasJobs ? rest.slice(2) : rest;
+    process.exitCode = await dispatchRuntime(runtimePlan(paths), undefined, jobs);
+  } else if (mode === undefined) {
+    process.exitCode = await runRuntimeChecks(selectChecks("runtime"));
+  } else {
+    throw new Error("Usage: runtime-file-checks.ts [--worker [--jobs N] <runtime paths...>]");
+  }
 }

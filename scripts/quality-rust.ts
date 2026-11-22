@@ -20,5 +20,10 @@ const jobs = process.env.QUALITY_RUST_JOBS ?? "1";
 run(["cargo", "clippy", "--locked", "--workspace"].concat(dormantRustPackages.flatMap(name => ["--exclude", name]), ["--all-targets", "--release", "--no-deps", "-j", jobs, "--", "-D", "warnings"]), env);
 // Every supported workspace member plus the path-patched crates, in one compile and run.
 const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--no-deps", "--format-version", "1"], { encoding: "utf8", env, maxBuffer: 64 * 1024 * 1024 }));
-await runCargo(["cargo", "test", "--locked", "--release"].concat(rustTestPackages(metadata), ["-j", jobs]), "host", env);
+// Keep RUSTC_WRAPPER (sccache) active for the workspace test compile; recordCargo clears
+// RUSTC_WRAPPER only for bunwasm-crypto-sys to bind the direct BoringSSL archive proof.
+run(["cargo", "test", "--locked", "--release"].concat(rustTestPackages(metadata), ["-j", jobs]), env);
+if (env.BUNWASM_TLS_CARGO_RECORD_DIR) {
+  await runCargo(["cargo", "test", "--locked", "--release", "-p", "bunwasm-crypto-sys", "-j", jobs], "host", env);
+}
 run(["cargo", "machete", "crates"], env);
