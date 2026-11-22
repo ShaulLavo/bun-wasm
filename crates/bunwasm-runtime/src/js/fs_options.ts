@@ -62,6 +62,8 @@
       ERR_FS_CP_EEXIST: (_from, to) => `Target already exists: cp returned EEXIST (${to} already exists) ${to}`,
       ERR_FS_CP_NON_DIR_TO_DIR: (from, to) =>
         `Cannot overwrite directory with non-directory: cp returned ENOTDIR (cannot overwrite directory ${to} with non-directory ${from}) ${to}`,
+      ERR_FS_CP_DIR_TO_NON_DIR: (from, to) =>
+        `Cannot overwrite non-directory with directory: cp returned EISDIR (cannot overwrite non-directory ${to} with directory ${from}) ${to}`,
     };
     function copyError(code: string, from: string, to: string): Error {
       const message = destinationErrors[code];
@@ -112,6 +114,34 @@
       native.unlink(dest);
       native.symlink(target, dest);
     }
+    // The destination's own type, never following a link there; 0 when it is absent.
+    function destinationKind(dest: string): number {
+      try {
+        return native.stat(dest, true).mode & 0o170000;
+      } catch (error) {
+        if (isCode(error, "ENOENT")) return 0;
+        throw error;
+      }
+    }
+    // As Bun 1.4.4 does, a directory is never copied into or through a non-directory (a link to a
+    // directory included), and an existing directory is ERR_FS_CP_EEXIST under errorOnExist.
+    function copyDirectory(from: string, to: string, dest: string, options: CopyOptions): void {
+      const existing = destinationKind(dest);
+      if (existing === 0) { native.mkdir(dest, true); return; }
+      if (existing !== 0o040000) throw copyError("ERR_FS_CP_DIR_TO_NON_DIR", from, to);
+      if (options.force === false && options.errorOnExist) throw copyError("ERR_FS_CP_EEXIST", from, to);
+    }
+    // A file never writes through a link at the destination: Bun replaces the link itself, or
+    // leaves it with `force: false`. Returns whether the copy should go on.
+    function clearLinkInTheWay(from: string, to: string, dest: string, options: CopyOptions): boolean {
+      if (destinationKind(dest) !== 0o120000) return true;
+      if (options.force === false) {
+        if (options.errorOnExist) throw copyError("ERR_FS_CP_EEXIST", from, to);
+        return false;
+      }
+      native.unlink(dest);
+      return true;
+    }
     function copyEntry(from: string, to: string, options: CopyOptions): boolean {
       const src = absolute(from), dest = absolute(to);
       const kind = native.stat(src, !options.dereference).mode & 0o170000;
@@ -120,8 +150,9 @@
       const directory = kind === 0o040000;
       if (directory && dest.startsWith(src.endsWith("/") ? src : `${src}/`)) throw copyError("ERR_FS_CP_EINVAL", from, to);
       if (directory && !options.recursive) throw copyError("ERR_FS_EISDIR", from, to);
-      if (directory) { native.mkdir(dest, true); return true; }
+      if (directory) { copyDirectory(from, to, dest, options); return true; }
       ensureParent(dest);
+      if (!clearLinkInTheWay(from, to, dest, options)) return false;
       try {
         native.copyFile(src, dest, options.force === false ? 1 : 0);
       } catch (error) {
