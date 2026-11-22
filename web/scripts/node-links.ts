@@ -14,7 +14,8 @@ import { lstatSync, readlinkSync, realpathSync, symlinkSync } from "node:fs";
 type Preview1 = Record<string, (...args: never[]) => number>;
 type Call = (...args: unknown[]) => number;
 
-const BADF = 8, FAULT = 21, ILSEQ = 25, LOOP = 32, NAMETOOLONG = 37, NOENT = 44, NOTDIR = 54, PERM = 63;
+const BADF = 8, EXIST = 20, FAULT = 21, ILSEQ = 25, LOOP = 32, NAMETOOLONG = 37, NOENT = 44, NOTDIR = 54, PERM = 63;
+const O_CREAT = 1, O_EXCL = 4;
 const MAX_LINKS = 40;
 const PATH_LIMIT = 32 << 10;
 const ERRNO: Record<string, number> = {
@@ -27,7 +28,11 @@ const ERRNO: Record<string, number> = {
  * bit 0 follows a final link. */
 interface PathArg { fd: number; ptr: number; len: number; flags?: number }
 /** Outputs are (pointer position, size) or, for a buffer, (pointer position, length position). */
-interface Op { paths: readonly PathArg[]; output?: readonly [at: number, size: number]; buffer?: readonly [at: number, len: number] }
+interface Op {
+  paths: readonly PathArg[]; output?: readonly [at: number, size: number]; buffer?: readonly [at: number, len: number];
+  /** path_open: its oflags sit at position 4, and a final link it doesn't follow is refused here. */
+  open?: true;
+}
 
 const one = (fd: number, ptr: number, len: number, flags?: number): PathArg => ({ fd, ptr, len, flags });
 const OPS: Record<string, Op> = {
@@ -35,7 +40,7 @@ const OPS: Record<string, Op> = {
   path_filestat_get: { paths: [one(0, 2, 3, 1)], output: [4, 64] },
   path_filestat_set_times: { paths: [one(0, 2, 3, 1)] },
   path_link: { paths: [one(0, 2, 3, 1), one(4, 5, 6)] },
-  path_open: { paths: [one(0, 2, 3, 1)], output: [8, 4] },
+  path_open: { paths: [one(0, 2, 3, 1)], output: [8, 4], open: true },
   path_readlink: { paths: [one(0, 1, 2)], output: [5, 4], buffer: [3, 4] },
   path_remove_directory: { paths: [one(0, 1, 2)] },
   path_rename: { paths: [one(0, 1, 2), one(3, 4, 5)] },
@@ -141,9 +146,10 @@ class GuestNamespace {
    * link in the parent chain, and no final link to follow. Another directory's recorded path
    * may be stale (another process can rename it), so its calls are always resolved here. */
   direct(fd: number, start: string, path: string, follow: boolean): boolean {
-    if (!this.mounts.some(mount => mount.fd === fd)) return false;
     if (path.startsWith("/") || parts(path).includes("..")) return false;
     const guest = joinGuest(start, path);
+    // Only when this preopen is the deepest one holding the path, so nested preopens agree.
+    if (this.mount(guest)?.mount.fd !== fd) return false;
     const parent = guest.slice(0, guest.lastIndexOf("/")) || "/";
     const host = this.host(parent);
     if (host === undefined) return false;
@@ -152,6 +158,17 @@ class GuestNamespace {
     const final = this.host(guest);
     if (final === undefined) return false;
     try { return !lstatSync(final, { throwIfNoEntry: false })?.isSymbolicLink(); } catch { return false; }
+  }
+
+  /** uvwasi's path_open never passes O_NOFOLLOW to the kernel, so a final link it isn't to follow
+   * is answered here: ELOOP, or EEXIST for O_CREAT|O_EXCL on anything already there. */
+  refuseFinal(guest: string, exclusive: boolean): number {
+    const host = this.host(guest);
+    if (host === undefined) return 0;
+    const stat = (() => { try { return lstatSync(host, { throwIfNoEntry: false }); } catch { return undefined; } })();
+    if (!stat) return 0;
+    if (exclusive) return EXIST;
+    return stat.isSymbolicLink() ? LOOP : 0;
   }
 }
 
@@ -230,18 +247,19 @@ function resolvedCall(namespace: GuestNamespace, guest: Memory, paths: Map<numbe
     if (typeof path === "number") return path;
     // An empty path names nothing (ENOENT); uvwasi answers it.
     if (start === undefined || !path) return { errno: call(...args) };
-    const follow = arg.flags !== undefined && ((args[arg.flags] as number) & 1) === 1 || path.endsWith("/");
+    // O_CREAT|O_EXCL never follows a final link, whatever the lookup flags say.
+    const exclusive = op.open === true && ((args[4] as number) & (O_CREAT | O_EXCL)) === (O_CREAT | O_EXCL);
+    const follow = !exclusive && (arg.flags !== undefined && ((args[arg.flags] as number) & 1) === 1 || path.endsWith("/"));
     if (arg.flags !== undefined && follow) next[arg.flags] = (args[arg.flags] as number) | 1;
-    if (namespace.direct(args[arg.fd] as number, start, path, follow)) {
-      guests.push(joinGuest(start, path));
-      texts.push("");
-      continue;
-    }
-    const resolved = namespace.resolve(start, path, follow);
+    const direct = namespace.direct(args[arg.fd] as number, start, path, follow);
+    const resolved = direct ? undefined : namespace.resolve(start, path, follow);
     if (typeof resolved === "number") return resolved;
-    guests.push(resolved.guest);
-    next[arg.fd] = resolved.mount.fd;
-    texts.push(resolved.relative);
+    const target = resolved?.guest ?? joinGuest(start, path);
+    const refused = op.open && !follow ? namespace.refuseFinal(target, exclusive) : 0;
+    if (refused) return refused;
+    guests.push(target);
+    texts.push(resolved?.relative ?? "");
+    if (resolved) next[arg.fd] = resolved.mount.fd;
   }
   if (texts.every(text => !text)) return { errno: call(...next), guests };
   const outputs: (readonly [number, number])[] = [];

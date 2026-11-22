@@ -19,7 +19,13 @@ try {
   const climb = "../".repeat(40) + parent.slice(1);
   symlinkSync(climb, join(root, "host-climb"));
 
-  const preopens = { "/": root };
+  // A nested preopen at /sub shadows root/sub, as the Browser engine nests /bin under /.
+  const sub = join(parent, "sub-mount");
+  mkdirSync(sub);
+  writeFileSync(join(sub, "x.txt"), "mounted");
+  mkdirSync(join(root, "sub"));
+  writeFileSync(join(root, "sub/x.txt"), "shadowed");
+  const preopens = { "/": root, "/sub": sub };
   const wasi = new WASI({ version: "preview1", args: [], env: {}, preopens, returnOnExit: true });
   // A module that only exports one page of memory.
   const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 5, 3, 1, 0, 1, 7, 10, 1, 6, 109, 101, 109, 111, 114, 121, 2, 0]);
@@ -88,6 +94,16 @@ try {
     symlinkSync(climb, join(root, `${name}-b/x`));
     results[`${name}Rename`] = [renamed, stat(moved, true, "x/outside.txt"), open(moved, true, "x/outside.txt"), calls.fd_close!(moved)];
   }
+  // A final link opened without following answers ELOOP and never reads the host's file.
+  results.guestHost = symlink(outside, "guest-host");
+  results.nofollow = ["guest-host", "host-absolute", "tmp/d/abs"].map(link => open(3, false, link));
+  // O_CREAT|O_EXCL on a dangling link answers EEXIST and creates nothing; O_CREAT alone follows.
+  results.exclusive = [symlink("/tmp/d/new.txt", "dangling"), open(3, true, "dangling", 1 | 4), existsSync(join(root, "tmp/d/new.txt"))];
+  const created = open(3, true, "dangling", 1);
+  results.created = [created > 0, created > 0 && calls.fd_close!(created), existsSync(join(root, "tmp/d/new.txt"))];
+  // Every route to /sub/x.txt reaches the nested preopen's file (7 bytes), not root/sub's (8).
+  const fileSize = (fd: number) => fd > 0 && calls.fd_filestat_get!(fd, 2048) === 0 ? Number(view().getBigUint64(2080, true)) : fd;
+  results.nested = [fileSize(open(3, true, "sub/x.txt")), (stat(3, false, "sub/x.txt") as number[])[1], (stat(3, false, "tmp/../sub/x.txt") as number[])[1]];
   results.loop = [symlink("/b", "a"), symlink("/a", "b"), stat(3, true, "a"), open(3, true, "a/x")];
   console.log(JSON.stringify(results));
 } finally {

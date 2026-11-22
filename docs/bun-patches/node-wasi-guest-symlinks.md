@@ -20,12 +20,20 @@ guest memory, NUL-terminated (Node reads a followed path up to a NUL, see the up
 and the bytes are restored after the call; the guest is one agent blocked in the call.
 `path_symlink` stores the target as written with `fs.symlinkSync` under the resolved parent.
 
+uvwasi's `path_open` never passes `O_NOFOLLOW` to the kernel, so an open that doesn't follow its
+final component checks it here: a final link answers ELOOP, and `O_CREAT|O_EXCL` (which never
+follows) answers EEXIST for anything already there, a dangling link included.
+
 Calls from a preopen whose path has no `..`, no link in its parent chain and no final link to
-follow pass to uvwasi unchanged. Calls from any other directory are always resolved from that
-directory's recorded guest path, because another process may have renamed it. Node has no
-`openat2(RESOLVE_BENEATH)`: a link swapped in by another process between this walk and uvwasi's
-call is the one gap left. `web/tests/node-links.test.ts` checks absolute, climbing, host-made and
-renamed-directory cases.
+follow pass to uvwasi unchanged, but only from the deepest preopen holding the path, so nested
+preopens (`/` and `/bin`) give one answer. Calls from any other directory are always resolved
+from that directory's recorded guest path. A rename by this process moves the recorded paths; a
+rename by the host or another process is not seen, so a call from a descriptor under it answers
+ENOENT (or resolves from whatever now sits at the old name) where Linux would follow the
+directory, never reaching outside the preopens. Node has no `openat2(RESOLVE_BENEATH)`: a link
+swapped in by another process between this walk and uvwasi's call is the one gap left.
+`web/tests/node-links.test.ts` checks absolute, climbing, host-made, renamed-directory, no-follow,
+exclusive-creation and nested-preopen cases.
 
 ## Classification
 
