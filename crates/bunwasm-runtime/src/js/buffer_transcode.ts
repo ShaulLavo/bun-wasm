@@ -8,6 +8,8 @@
     bytesToString(bytes: Uint8Array, encoding: Encoding): string;
     fromString(text: string, encoding: Encoding): Uint8Array;
     allocate(size: number): Uint8Array;
+    maxBufferLength?: number;
+    maxUtf16Units?: number;
   };
 
   return function createTranscode(bindings: Bindings) {
@@ -79,8 +81,8 @@
       return output;
     }
 
-    const MAX_BUFFER_LENGTH = 4294967296;
-    const MAX_UTF16_UNITS = 1073741824;
+    const MAX_BUFFER_LENGTH = bindings.maxBufferLength ?? 4294967296;
+    const MAX_UTF16_UNITS = bindings.maxUtf16Units ?? 1073741824;
 
     function checkLimits(length: number, from: Encoding, to: Encoding): void {
       if ((from === "latin1" || from === "ascii") && to === "utf16le") {

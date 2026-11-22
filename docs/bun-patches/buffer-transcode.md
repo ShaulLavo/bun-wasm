@@ -37,3 +37,6 @@ QuickJS, JSC, Browser, and SpiderMonkey using feature-owned check manifests.
 `checkLimits` rejects inputs whose output would exceed `constants.MAX_LENGTH`
 (`2 ** 32` bytes) or whose intermediate UTF-16 pivot would reach `2 ** 30` units
 with `RangeError("Out of memory")`, matching Bun's `NodeBufferModule.cpp`.
+`Bindings` accepts optional `maxBufferLength` and `maxUtf16Units` overrides so
+`scripts/buffer-api-contract.test.ts` tests the production limit guard at and
+just above each boundary without multi-gigabyte allocations.
