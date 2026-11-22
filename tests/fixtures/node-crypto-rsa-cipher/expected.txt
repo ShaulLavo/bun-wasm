@@ -6,6 +6,9 @@ publicDecrypt private RSA cipher fixture
 publicDecrypt pkcs1 der RSA cipher fixture
 publicDecrypt hex key RSA cipher fixture
 publicDecrypt DataView key RSA cipher fixture
+publicDecrypt certificate RSA cipher fixture
+publicEncrypt certificate RSA cipher fixture
+createPublicKey certificate true
 publicDecrypt tampered throws Error ERR_OSSL_RSA_BLOCK_TYPE_IS_NOT_01
 privateEncrypt too long throws Error ERR_OSSL_RSA_DIGEST_TOO_BIG_FOR_RSA_KEY
 privateEncrypt none 128 cb03365d579177e2

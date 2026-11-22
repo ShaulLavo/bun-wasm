@@ -34,6 +34,10 @@ show("publicDecrypt pkcs1 der", () => String(crypto.publicDecrypt({ key: publicD
 show("publicDecrypt hex key", () => String(crypto.publicDecrypt({ key: Buffer.from(publicPem).toString("hex"), encoding: "hex" } as never, signed)));
 const pemBytes = new TextEncoder().encode(publicPem);
 show("publicDecrypt DataView key", () => String(crypto.publicDecrypt(new DataView(pemBytes.buffer) as never, new DataView(signed.buffer, signed.byteOffset, signed.length) as never)));
+const certificate = readFileSync(new URL("cert.pem", import.meta.url), "utf8");
+show("publicDecrypt certificate", () => String(crypto.publicDecrypt(certificate, signed)));
+show("publicEncrypt certificate", () => String(crypto.privateDecrypt(privateKey, crypto.publicEncrypt(certificate, message))));
+show("createPublicKey certificate", () => crypto.createPublicKey(certificate).equals(publicKey));
 show("publicDecrypt tampered", () => crypto.publicDecrypt(publicKey, Buffer.from(signed).fill(1, 0, 8)));
 show("privateEncrypt too long", () => crypto.privateEncrypt(privateKey, Buffer.alloc(128, 1)));
 

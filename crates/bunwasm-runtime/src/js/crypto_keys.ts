@@ -495,10 +495,15 @@ declare namespace CryptoKeys {
         };
       }
       const match =
-        /-----BEGIN (RSA PRIVATE KEY|RSA PUBLIC KEY|EC PRIVATE KEY|PRIVATE KEY|PUBLIC KEY)-----([\s\S]*?)-----END \1-----/.exec(
+        /-----BEGIN (RSA PRIVATE KEY|RSA PUBLIC KEY|EC PRIVATE KEY|PRIVATE KEY|PUBLIC KEY|CERTIFICATE)-----([\s\S]*?)-----END \1-----/.exec(
           pem,
         );
       if (!match) throw error("Invalid PEM key");
+      // ncrypto's ParsePublicKeyPEM also takes a certificate's subject public key.
+      if (match[1] === "CERTIFICATE") {
+        const certificate = Buffer.from(match[2].replace(/\s/g, ""), "base64");
+        return { format: "spki", bytes: Buffer.from(internal.native.x509("publicKey", certificate)), private: false };
+      }
       const format =
         match[1] === "RSA PRIVATE KEY" || match[1] === "RSA PUBLIC KEY"
           ? "pkcs1"

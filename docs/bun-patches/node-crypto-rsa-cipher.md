@@ -16,6 +16,9 @@ revision `9510e74152073d850a18758ca41114d8f214ffa6`, measured against native Bun
   `ERR_OSSL_<LIB>_<REASON>` codes.
 - ncrypto's `IsRSAPrivateKey`: a PKCS#1 DER key passed where a public key is expected is
   read as a private key when its SEQUENCE opens with the one-byte version 0 or 1.
+- ncrypto's `ParsePublicKeyPEM`: a `CERTIFICATE` PEM block gives its subject public key,
+  read through the existing `x509` native. PEM key bytes may come in any view, including a
+  `DataView`.
 - `CryptoUtil.cpp` `getArrayBufferOrView2` for the label and data: a string in the given
   encoding, an ArrayBuffer or a view, otherwise `ERR_INVALID_ARG_TYPE`. A string key with
   `encoding` is decoded first, as in Node's `prepareAsymmetricKey`.
