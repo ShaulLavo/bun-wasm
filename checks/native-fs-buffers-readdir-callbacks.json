@@ -1,4 +1,5 @@
 {
   "owner": "native",
-  "path": "tests/fixtures/fs-buffers-readdir-callbacks"
+  "path": "tests/fixtures/fs-buffers-readdir-callbacks",
+  "engines": ["quickjs", "jsc", "browser"]
 }

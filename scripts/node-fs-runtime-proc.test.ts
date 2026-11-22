@@ -60,6 +60,7 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
     },
     require(name: string): unknown {
       if (name === "fs_options") return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL("../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url), "utf8")}`))({});
+      if (name === "fs_buffers_readdir") return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL("../crates/bunwasm-runtime/src/js/fs_buffers_readdir.ts", import.meta.url), "utf8")}`), { Uint8Array, ArrayBuffer, DataView })();
       if (name === "buffer") return { Buffer };
       if (name === "fs_watch") return () => ({});
       if (name === "http_common") return {};
@@ -67,8 +68,22 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
       if (name === "io_pump") return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL("../crates/bunwasm-runtime/src/js/io_pump.ts", import.meta.url), "utf8")}`))(internal);
       if (name === "net") return net ??= load("net")(internal);
       if (name === "fs_file_handle") return loadFileHandleModule();
-      if (name === "fs_buffer_pins") return { pin: () => () => {} };
+      if (name === "fs_buffer_pins") return pinModule;
       throw new Error(`Unexpected module ${name}`);
+    },
+  };
+  const pinCalls: { active: number; events: string[] } = { active: 0, events: [] };
+  const pinModule = {
+    pin(values: readonly unknown[]) {
+      pinCalls.active++;
+      pinCalls.events.push(`pin:${values.length}`);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        pinCalls.active--;
+        pinCalls.events.push("release");
+      };
     },
   };
   function load(name: string) {
@@ -81,7 +96,7 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
     while (immediate.length) immediate.shift()!();
   };
   return {
-    fs, reads, syncReads, polls, contexts, immediate,
+    fs, reads, syncReads, polls, contexts, immediate, pinCalls,
     networkReads: () => networkReads,
     setContext: (value: string) => { context = value; },
     pending: () => internal.ioPending?.() ?? 0,
@@ -415,4 +430,56 @@ test("regular-file stdin uses the sequential native-file path rather than the pi
   expect(results).toEqual([[null, 4, buffers]]);
   expect(runtime.reads).toEqual([]);
   expect(runtime.syncReads).toEqual([[0, 2, -1], [0, 2, -1]]);
+});
+
+test("pending stdin fs.read and fs.readv keep destination buffers pinned until callback delivery on success and error", () => {
+  for (const outcome of [Buffer.from("abcd"), -8] as const) {
+    const runtime = fixture([-6, outcome]);
+    const buf = Buffer.alloc(4, ".");
+    let activeInCallback = -1;
+    const results: Completion[] = [];
+    runtime.fs.read(0, buf, 0, 4, null, (err: unknown, count: number, b: Uint8Array) => {
+      activeInCallback = runtime.pinCalls.active;
+      results.push([err, count, b]);
+    });
+    expect(runtime.pinCalls.active).toBe(1);
+    expect(runtime.pump()).toBe(false);
+    expect(runtime.pinCalls.active).toBe(1);
+    expect(runtime.pump()).toBe(true);
+    expect(runtime.pinCalls.active).toBe(1);
+    runtime.flush();
+    expect(activeInCallback).toBe(0);
+    expect(runtime.pinCalls.active).toBe(0);
+    if (outcome === -8) {
+      expect(results[0]![0]).toMatchObject({ code: "EBADF" });
+    } else {
+      expect(results).toEqual([[null, 4, buf]]);
+      expect(buf.toString()).toBe("abcd");
+    }
+  }
+
+  for (const outcome of [Buffer.from("wxyz"), -8] as const) {
+    const runtime = fixture([-6, outcome]);
+    const v1 = Buffer.alloc(2, ".");
+    const v2 = Buffer.alloc(2, ".");
+    let activeInCallback = -1;
+    const results: unknown[] = [];
+    runtime.fs.readv(0, [v1, v2], (err: unknown, count: number, b: unknown) => {
+      activeInCallback = runtime.pinCalls.active;
+      results.push([err, count, b]);
+    });
+    expect(runtime.pinCalls.active).toBeGreaterThanOrEqual(1);
+    expect(runtime.pump()).toBe(false);
+    expect(runtime.pinCalls.active).toBeGreaterThanOrEqual(1);
+    expect(runtime.pump()).toBe(true);
+    runtime.flush();
+    expect(activeInCallback).toBe(0);
+    expect(runtime.pinCalls.active).toBe(0);
+    if (outcome === -8) {
+      expect((results[0] as unknown[])[0]).toMatchObject({ code: "EBADF" });
+    } else {
+      expect((results[0] as unknown[])[1]).toBe(4);
+      expect(v1.toString() + v2.toString()).toBe("wxyz");
+    }
+  }
 });
