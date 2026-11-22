@@ -33,6 +33,9 @@ export interface RunRequest extends RuntimeWorkerRequest {
   memoryTelemetry?: MemoryTelemetryTransport;
   linkPlan?: SharedLinkPlan;
   memoryLimitBytes?: number | null;
+  /** The loader read the module's bytes and found no start function, so the worker entry may
+   * instantiate it before the process is linked (early-instance.ts). */
+  startless?: boolean;
   adapter?: "bun" | "preview1";
   trace: boolean;
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */

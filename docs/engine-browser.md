@@ -100,9 +100,14 @@ The reason is a WebKit behavior:
 - All workers of a page share a few marking helper threads. A worker that sleeps in `Atomics.wait`, or in the Wasm `memory.atomic.wait32` instruction, with a collection cycle open keeps them.
 - If a cycle is already open in the starting worker, its synchronous collection then waits for helpers that never come, and the process never starts. In CI this stalled about one WebKit storage run in seven, always in a late `/bin/node` child of Vite's bundler.
 
-On the start message the worker has allocated almost nothing, so no cycle is open and the collection finishes by itself.
+On the start message the worker has allocated almost nothing, so no cycle is open and the collection finishes by itself. The entry starts loading the bootstrap only after it has handled its first message, so the instance always comes first. The broker posts the start message right after it creates the worker, so the load does not wait.
 
-The early path is taken only when it cannot change behavior: the guest is one module that imports only functions, has no link plan, is not a memory group member and is not a Preview 1 program (which may run a start function). A guest call that reaches an import before linking throws, and an instantiation that fails falls back to the ordinary late path, which reports it. Each import call goes through one forwarding function.
+The early path is taken only when it cannot change behavior:
+
+- The loader read the module's bytes and found no start function, and says so in the request (`startless`). A start function would run guest code before the process has been checked or linked. A module the caller compiled itself is never marked.
+- The guest is one module that imports only functions, has no link plan, is not a memory group member and is not a Preview 1 program.
+
+Anything else keeps the ordinary late instantiation, and so does an early instantiation that fails, which the late path then reports. A guest call that reaches an import before linking throws. Each import call goes through one forwarding function.
 
 ## Event loop: the host owns it
 

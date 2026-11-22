@@ -6,19 +6,23 @@ import { earlyInstance, type EarlyInstance } from "./early-instance.js";
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 ctx.postMessage({ type: "worker-script" });
-// Messages that arrive while worker-main.ts loads (the broker's one start message) are kept and
-// dispatched again once it has installed its handler. The guest is instantiated on the start
-// message itself, while this worker's heap is still almost empty (early-instance.ts).
+// The bootstrap loads once the first message has arrived, so the guest is instantiated on the
+// start message while this worker's heap is still almost empty (early-instance.ts). The broker
+// posts that message right after it creates the worker, so nothing waits. Messages that arrive
+// while worker-main.ts loads are kept and dispatched again once it has installed its handler.
 const early: MessageEvent[] = [];
 let instance: EarlyInstance | undefined;
+let loading = false;
 const keep = (event: MessageEvent) => {
   early.push(event);
   instance ??= earlyInstance(event.data);
+  if (loading) return;
+  loading = true;
+  import("./worker-main.js").then(main => main.start(ctx, early, () => ctx.removeEventListener("message", keep), instance), (error: unknown) => {
+    // Rethrown outside the promise, a failed load reaches the page as the worker's error event.
+    setTimeout(() => { throw error; });
+  });
 };
 ctx.addEventListener("message", keep);
-import("./worker-main.js").then(main => main.start(ctx, early, () => ctx.removeEventListener("message", keep), instance), (error: unknown) => {
-  // Rethrown outside the promise, a failed load reaches the page as the worker's error event.
-  setTimeout(() => { throw error; });
-});
 
 export type { Engine, RunRequest, SleepMode, WorkerMessage } from "./bun-executor.js";

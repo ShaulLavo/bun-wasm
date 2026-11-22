@@ -1,4 +1,4 @@
-import { recordProgramMemory } from "./program-memory.ts";
+import { programIsStartless, recordProgramMemory } from "./program-memory.ts";
 import { prepareLinkPlan, type SharedLinkPlan } from "waffle/link";
 import { engineLinkPlan } from "./quickjs-program.ts";
 import { memoryMaximumBytes, parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.ts";
@@ -171,10 +171,13 @@ async function readLimited(stream: ReadableStream<Uint8Array<ArrayBuffer>>, limi
 export interface ProgramMetadata {
   readonly linkPlan: SharedLinkPlan | undefined;
   readonly memoryLimitBytes: number | null;
+  /** The module's bytes were read here and declare no start function (web/src/early-instance.ts). */
+  readonly startless: boolean;
 }
 
-const programs = new WeakMap<WebAssembly.Module, ProgramMetadata>();
-const ordinaryProgram: ProgramMetadata = Object.freeze({ linkPlan: undefined, memoryLimitBytes: null });
+type PreparedProgram = Omit<ProgramMetadata, "startless">;
+const programs = new WeakMap<WebAssembly.Module, PreparedProgram>();
+const ordinaryProgram: PreparedProgram = Object.freeze({ linkPlan: undefined, memoryLimitBytes: null });
 
 /** Match Waffle's public format errno without eagerly loading its process service. */
 function isExecutableFormatFailure(error: unknown): error is Error {
@@ -215,7 +218,7 @@ export function programMetadata(module: WebAssembly.Module): ProgramMetadata {
   if (!metadata && programKind(module) !== "single") {
     throw new BunWasmAssetError("Paired core requires its matching prepared side module");
   }
-  return metadata ?? ordinaryProgram;
+  return { ...(metadata ?? ordinaryProgram), startless: programIsStartless(module) };
 }
 
 export async function loadBunWasm(options: LoadBunWasmOptions = {}): Promise<WebAssembly.Module> {

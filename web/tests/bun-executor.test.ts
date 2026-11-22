@@ -79,7 +79,7 @@ async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slo
   };
   // What the worker entry does on the start message, before the bootstrap loads. "other" stands
   // for an instance of a module this request does not run.
-  const early = options.early ? earlyInstance(options.early === "request" ? request : { module: guest(1) }) : undefined;
+  const early = options.early ? earlyInstance({ module: options.early === "request" ? request.module : guest(1), startless: true }) : undefined;
   try {
     await bootstrapBun(request, host, true, early);
     return { messages, fetched, signals: workerProcessState(runtimeProcess).signals, request, early };

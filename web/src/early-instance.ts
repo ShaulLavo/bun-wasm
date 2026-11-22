@@ -21,13 +21,16 @@ const Instance = WebAssembly.Instance;
 
 type GuestFunction = (...args: unknown[]) => unknown;
 
-/** The start requests whose guest is one Bun-built module with no start function. */
+/** The start requests whose guest is one module that the loader found to have no start function. */
 function eligibleModule(request: unknown): WebAssembly.Module | undefined {
   if (typeof request !== "object" || request === null) return undefined;
-  const { module, linkPlan, memoryGroup, adapter } = request as Record<string, unknown>;
+  const { module, linkPlan, memoryGroup, adapter, startless } = request as Record<string, unknown>;
   if (!(module instanceof WebAssembly.Module)) return undefined;
+  // Instantiating runs a start function, and nothing has checked the process yet. Only the
+  // loader, which read the module's bytes, can say there is none.
+  if (startless !== true) return undefined;
   // A link plan instantiates several modules itself, a group member imports its memory, and a
-  // Preview 1 program is arbitrary user code that may run a start function.
+  // Preview 1 program is arbitrary user code.
   if (linkPlan || memoryGroup || adapter === "preview1") return undefined;
   return module;
 }
