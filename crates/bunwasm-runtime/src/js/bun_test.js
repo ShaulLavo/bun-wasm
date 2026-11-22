@@ -1289,8 +1289,9 @@
   function lengthOf(received) {
     if (received === null || received === undefined) return undefined;
     if (received instanceof Headers) return received.count;
-    if (received instanceof Map || received instanceof Set) return received.size;
+    if (received instanceof Map || received instanceof Set || received instanceof URLSearchParams) return received.size;
     if (received instanceof Blob) return received.size;
+    if (received instanceof FormData) return Array.from(received.keys()).length;
     return received.length;
   }
 

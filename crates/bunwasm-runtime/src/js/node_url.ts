@@ -396,7 +396,9 @@
       rest = rest.slice(proto[1].length);
     }
     const hasSlashes = rest.startsWith("//");
-    if (hasSlashes && (result.protocol === null ? slashesDenoteHost : true)) {
+    // Without a protocol, `//` starts a host only when asked to, or when it is followed by `user@host`.
+    const denotesHost = slashesDenoteHost || /^\/\/[^@/]+@[^@/]+/.test(rest);
+    if (hasSlashes && (result.protocol === null ? denotesHost : true)) {
       result.slashes = true;
       rest = parseAuthority(result, rest.slice(2), input);
     }

@@ -158,6 +158,15 @@
 
   // ───────────────────────────── tags ─────────────────────────────
 
+  // `instanceof` asks a revoked proxy for its prototype, which throws.
+  function isAccessor(value) {
+    try {
+      return value instanceof Accessor;
+    } catch {
+      return false;
+    }
+  }
+
   // A tag result: { tag, stringLike, custom }.
   function tagOf(value, opts) {
     const disableCustom = !!(opts && opts.disableCustom);
@@ -176,7 +185,7 @@
       case "bigint":
         return { tag: "BigInt" };
     }
-    if (value instanceof Accessor) return { tag: "GetterSetter" };
+    if (isAccessor(value)) return { tag: "GetterSetter" };
     if (value === globalThis && hideGlobal) return { tag: "GlobalObject" };
     if (isProxy(value) && value !== globalThis) return proxyTag(value);
     if (!disableCustom) {
@@ -1703,7 +1712,8 @@
     const name = stringProp(err, "name");
     const message = stringProp(err, "message");
     const code = errorCode(err);
-    const lines = sourceExcerpt(top);
+    // console.warn shows an error without its source lines.
+    const lines = f.errorLabel === "warn" ? null : sourceExcerpt(top);
     if (lines !== null) writeExcerpt(f, lines, top);
     f.write(errorNameAndMessage(name, message, code, f.errorLabel));
 
