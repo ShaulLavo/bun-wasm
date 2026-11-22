@@ -137,7 +137,8 @@ test("child launch revocation during activation allocates no session", async () 
 
 test("child helper lives until physical cleanup, not its logical outcome or adapter lifetime", async () => {
   const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
-  const context = { identity: { pid: 1, parentPid: 0, host: null }, module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), outcome: outcomeWord(), registerRevocation: () => () => {}, request: { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
+  const revocations: (() => void)[] = [];
+  const context = { identity: { pid: 1, parentPid: 0, host: null }, module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), outcome: outcomeWord(), registerRevocation(hook: () => void) { revocations.push(hook); return () => {}; }, request: { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
   const stopped: number[] = [];
   let helper: RuntimeNetworkHelper | undefined;
   const options: BunNetworkOptions = { listening(_port, owner) { helper = owner; }, stopped: port => stopped.push(port) };
@@ -151,6 +152,9 @@ test("child helper lives until physical cleanup, not its logical outcome or adap
     const listener = host.listen("localhost", 31892);
     expect(listener).toBeGreaterThan(0);
     claimOutcome(context.outcome, { kind: "exited", code: 0 });
+    // Waffle revokes an exited process too; only a signal death releases the session early.
+    for (const hook of revocations) hook();
+    expect(revocations).toHaveLength(1);
     expect(stopped).toEqual([]);
     expect(helper?.listenerFor(31892)).toBeGreaterThan(0);
     launch.cleanup?.(); launch.cleanup?.();

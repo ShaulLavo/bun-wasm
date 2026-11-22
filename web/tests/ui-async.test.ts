@@ -589,6 +589,29 @@ test("sandbox Restart starts the new server only after every stopped run has end
   expect(sandbox.serverState.state).toBe("starting");
 });
 
+test("sandbox reset during a Restart wait still waits for the stopped server", async () => {
+  const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  page.runs[0]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs[1]!.args).toEqual(["run", "dev"]);
+  const events: string[] = [];
+  page.boundary.fetch = async () => { events.push("template"); return new Response(JSON.stringify({ files: { "index.html": "template", "package.json": projectPackage } })); };
+  page.boundary.location.reload = () => { events.push("reload"); };
+  sandbox.restart();
+  const resetting = sandbox.reset();
+  await turn();
+  expect(page.runs[1]!.kills).toEqual([9]);
+  expect(events).toEqual([]);
+  page.runs[1]!.done.resolve({ code: 137 });
+  await resetting;
+  expect(events).toEqual(["template", "reload"]);
+  expect(page.runs).toHaveLength(2);
+});
+
 test("sandbox Restart starts anyway, with a terminal note, when a stopped run never ends", async () => {
   const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
   const sandbox = new page.Sandbox("");
@@ -609,6 +632,9 @@ test("sandbox Restart starts anyway, with a terminal note, when a stopped run ne
     }) as typeof setTimeout);
     const written: string[] = [];
     const write = spyOn(sandbox.term!, "write").mockImplementation((data: string | Uint8Array) => { written.push(String(data)); });
+    const notes = () => written.join("").split("did not stop within 30 s").length - 1;
+    // The first click is superseded by the second; only the second starts and reports.
+    sandbox.restart();
     sandbox.restart();
     await turn();
     expect(page.runs).toHaveLength(2);
@@ -617,7 +643,19 @@ test("sandbox Restart starts anyway, with a terminal note, when a stopped run ne
     await turn();
     expect(page.runs).toHaveLength(3);
     expect(page.runs[2]!.args).toEqual(["install"]);
-    expect(written.join("")).toContain("did not stop within 30 s");
+    expect(notes()).toBe(1);
+    // The hung run used up its one deadline; a later Restart waits only for its own stopped run.
+    page.runs[2]!.done.resolve({ code: 0 });
+    await turn();
+    expect(page.runs[3]!.args).toEqual(["run", "dev"]);
+    sandbox.restart();
+    await turn();
+    expect(page.runs).toHaveLength(4);
+    page.runs[3]!.done.resolve({ code: 137 });
+    await turn();
+    expect(page.runs).toHaveLength(5);
+    expect(page.runs[4]!.args).toEqual(["install"]);
+    expect(notes()).toBe(1);
     write.mockRestore();
   } finally { timers.mockRestore(); }
 });
