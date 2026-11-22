@@ -8,7 +8,7 @@ import waffleRelease from "../waffle-release-inputs.json";
 import {
   DELIVERY_RECORDS, EXECUTABLE_ROLES, HANDOFF_ROLES, ContractError, RELAY_DECISION, draftEntries, parseConfig, parseDelivery, parseHandoff, parseInputManifest, parseIntake, type ConsumerHandoff,
 } from "./contract.ts";
-import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, fixtureArchives, fixtureInputManifest, writeContractFixture, writeSealedFixture } from "./contract-fixture.ts";
+import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, fixtureArchives, fixtureInputManifest, writeContractFixture, writeFixtureDelivery, writeSealedFixture } from "./contract-fixture.ts";
 import { admitIntake, buildHandoff, readSealedDelivery, requireSealedArtifacts, sealDelivery } from "./delivery.ts";
 import { admitReplayHandoffFile, parseReplay, parseReplayHandoff, requireReplayHandoff } from "./replay.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
@@ -184,8 +184,15 @@ test("a manifest that claims a different mode than the registry refuses", () => 
 });
 
 test("DELIVERY.json is written exactly once", () => {
-  const root = sealedFixture();
-  expect(() => sealDelivery(root, { source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, configSha256: sha256("c"), inputsSha256: sha256("i") })).toThrow();
+  const root = fresh();
+  const tuple = { runtime: waffleRelease.version, relay: waffleRelease.relay.version, programs: waffleRelease.programs.tag,
+    programManifestSchema: waffleRelease.programs.schema, hostInterface: waffleRelease.hostInterface };
+  const facts = { source: FIXTURE_SOURCE, tuple, configSha256: sha256("config"), inputsSha256: sha256("inputs") };
+  writeFixtureDelivery(root, handoffMemberPaths());
+  const manifest = sealDelivery(root, facts);
+  const original = readFileSync(manifest.path);
+  expect(() => sealDelivery(root, { ...facts, configSha256: sha256("other config") })).toThrow(expect.objectContaining({ code: "EEXIST" }));
+  expect(readFileSync(manifest.path)).toEqual(original);
 });
 
 test("consumers start only from an intake of this exact delivery", () => {
