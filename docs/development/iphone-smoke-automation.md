@@ -85,7 +85,9 @@ The slot runs frozen dependency installs in the scheduled checkout's root and
 `web/` before starting the preparation script. Bun reads the settings in each
 project. The npm Waffle pin uses the isolated linker so the runtime and its
 alias resolve to the same installed package. Leave install commands out of the
-attempt script when copying an older build.
+attempt script when copying an older build. The slot keeps the lock until
+the installer and its subprocesses stop, and Bun's diagnostics go to the
+build log.
 
 In the preparation script, use the current checkout and the supplied
 `CARGO_TARGET_DIR`, `BROWSER_CARGO_TARGET_DIR`, `TOOLS_CARGO_TARGET_DIR` and

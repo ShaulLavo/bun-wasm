@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 const interruptionExitCodes = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
@@ -22,10 +22,16 @@ function registeredCheckout(checkout: string): boolean {
   return entries.split("\0").includes(`worktree ${checkout}`);
 }
 
+function installerStopped(state: string | undefined): boolean {
+  // The supervisor writes its identity before spawning and status after draining.
+  return state === undefined || !existsSync(join(state, "identity.json")) || existsSync(join(state, "status"));
+}
+
 async function build(checkout: string, revision: string, command: string[]): Promise<number> {
   if (lstatSync(checkout, { throwIfNoEntry: false }) || registeredCheckout(checkout)) {
     throw new Error(`Smoke build checkout already exists: ${checkout}`);
   }
+  let installState: string | undefined;
   try {
     const added = await Bun.spawn(["git", "worktree", "add", "--quiet", "--detach", checkout, revision], {
       stdin: "inherit", stdout: "inherit", stderr: "inherit",
@@ -52,12 +58,20 @@ async function build(checkout: string, revision: string, command: string[]): Pro
       stdout: "inherit",
       stderr: "inherit",
     }).exited;
-    const install = [process.execPath, "install", "--frozen-lockfile", "--silent"];
-    for (const directory of [checkout, join(checkout, "web")]) {
+    const supervisor = join(import.meta.dir, "run-with-timeout.mts");
+    for (const [project, directory] of [["root", checkout], ["web", join(checkout, "web")]] as const) {
       if (!statSync(join(directory, "package.json"), { throwIfNoEntry: false })?.isFile()
         || !statSync(join(directory, "bun.lock"), { throwIfNoEntry: false })?.isFile())
         throw new Error(`Smoke dependency install requires package.json and bun.lock in ${directory}`);
-      const status = await run(install, directory);
+      installState = join(work, `install-${project}`);
+      mkdirSync(installState);
+      installStop = join(installState, "stop");
+      const status = await run([process.execPath, supervisor, "--state", installState, "--until-exit",
+        process.execPath, "install", "--frozen-lockfile"], directory);
+      installStop = undefined;
+      if (!installerStopped(installState))
+        throw new Error(`Smoke installer drain was not confirmed. Preserving checkout at ${checkout}`);
+      installState = undefined;
       if (interrupted !== undefined) return interrupted;
       if (status !== 0) {
         console.error(`Smoke dependency install failed in ${directory} with exit code ${status}`);
@@ -66,7 +80,8 @@ async function build(checkout: string, revision: string, command: string[]): Pro
     }
     return await run(command, checkout);
   } finally {
-    if (registeredCheckout(checkout)) {
+    installStop = undefined;
+    if (installerStopped(installState) && registeredCheckout(checkout)) {
       runProtectedGit("worktree", "remove", "--force", checkout);
     }
   }
@@ -90,8 +105,12 @@ async function main(args: string[]): Promise<number> {
 // The heavy runner signals the full build scope. Keep the lock and wait for
 // the build command to finish its own teardown before removing the checkout.
 let interrupted: number | undefined;
+let installStop: string | undefined;
 for (const [signal, code] of Object.entries(interruptionExitCodes)) {
-  process.on(signal, () => { interrupted ??= code; });
+  process.on(signal, () => {
+    interrupted ??= code;
+    if (installStop) writeFileSync(installStop, "stop\n");
+  });
 }
 const status = await main(Bun.argv.slice(2));
 process.exitCode = interrupted ?? status;
