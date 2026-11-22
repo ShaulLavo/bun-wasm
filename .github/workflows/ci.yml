@@ -1465,56 +1465,111 @@ jobs:
           key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
-  shared-native:
-    name: Shared native (${{ matrix.engine }})
+  shared-consumers:
+    name: Shared ${{ matrix.native && (matrix.browser && 'native and Browser' || 'native') || 'Browser' }} (${{ matrix.engine }})
     needs: [selection, ordinary-web-guests, rust]
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success' && needs.ordinary-web-guests.outputs.shared-proof-inputs == 'success' && needs.selection.outputs.shared-native == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The per-check clocks start at the first step, after runner action preparation.
+    timeout-minutes: ${{ matrix.native && matrix.browser && 60 || 30 }}
     strategy:
       fail-fast: false
       matrix:
-        engine: [quickjs, jsc, spidermonkey]
+        include:
+          - { engine: quickjs, native: true, browser: true }
+          - { engine: jsc, native: true, browser: true }
+          - { engine: spidermonkey, native: true, browser: false }
+          - { engine: spidermonkey, native: false, browser: true }
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+    env:
+      SHARED_CHECK_SECONDS: 1800
+      # hashFiles has its own 120-second timer plus process termination and stream drain.
+      SHARED_HASHFILES_RESERVE_SECONDS: 135
     steps:
+      - name: Start the shared setup clock
+        timeout-minutes: 1
+        working-directory: ${{ runner.temp }}
+        run: |
+          started=$EPOCHSECONDS
+          echo "SHARED_STARTED=$started" >> "$GITHUB_ENV"
+          echo "SHARED_CHECK_DEADLINE=$((started + SHARED_CHECK_SECONDS))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
+        timeout-minutes: 29
+      - name: Bound shared tool setup
+        id: shared-tools-budget
+        run: bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 30
       - uses: ./.github/actions/setup-tools
+        timeout-minutes: ${{ fromJSON(steps.shared-tools-budget.outputs.minutes) }}
         with:
           bun-version: 1.4.4
           node-version: ${{ env.CI_NODE_VERSION }}
+      - name: Bound shared dependency restore
+        id: shared-cache-budget
+        run: bash scripts/ci-shared-check-budget.sh "$((SHARED_CHECK_DEADLINE - SHARED_HASHFILES_RESERVE_SECONDS))" 30
       - uses: actions/cache/restore@v4
+        timeout-minutes: ${{ fromJSON(steps.shared-cache-budget.outputs.minutes) }}
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
+      - name: Install shared check dependencies
+        run: |
+          remaining=$((SHARED_CHECK_DEADLINE - EPOCHSECONDS))
+          if ((remaining <= 0)); then
+            echo "Shared input setup exhausted its budget" >&2
+            exit 124
+          fi
+          bun scripts/run-with-timeout.mts "$remaining" bun scripts/ci-install.ts --frozen-lockfile --ignore-scripts
+      - name: Bound shared handoff download
+        id: shared-download-budget
+        run: bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 5
       - uses: actions/download-artifact@v4
-        timeout-minutes: 5
+        timeout-minutes: ${{ fromJSON(steps.shared-download-budget.outputs.minutes) }}
         with:
           name: shared-proof-inputs
           path: ${{ runner.temp }}/shared-proof-inputs
       - name: Verify the ready shared inputs
+        id: shared-inputs
         run: |
+          remaining=$((SHARED_CHECK_DEADLINE - EPOCHSECONDS))
+          if ((remaining <= 0)); then
+            echo "Shared input setup exhausted its budget" >&2
+            exit 124
+          fi
           source env.sh
-          bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"
+          bun scripts/run-with-timeout.mts "$remaining" bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"
           echo "BUN_WASM_PROFILE_PROGRAM=$RUNNER_TEMP/shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm" >> "$GITHUB_ENV"
           echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/shared-proof-inputs/browser" >> "$GITHUB_ENV"
           echo "BUN_WASM_PREPARED_SHARED_SITE=1" >> "$GITHUB_ENV"
+          setup_seconds=$((EPOCHSECONDS - SHARED_STARTED))
+          if ((setup_seconds < 0 || setup_seconds >= SHARED_CHECK_SECONDS)); then
+            echo "Shared input setup exhausted its budget" >&2
+            exit 124
+          fi
+          echo "SHARED_SETUP_SECONDS=$setup_seconds" >> "$GITHUB_ENV"
       - name: Require the native launcher producer
+        id: shared-launcher-budget
+        if: matrix.native
         env:
           PROFILE_LAUNCHER_RESULT: ${{ needs.rust.result }}
-        run: test "$PROFILE_LAUNCHER_RESULT" = success
+        run: |
+          test "$PROFILE_LAUNCHER_RESULT" = success
+          bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 5
       - uses: actions/download-artifact@v4
-        timeout-minutes: 5
+        if: matrix.native
+        timeout-minutes: ${{ fromJSON(steps.shared-launcher-budget.outputs.minutes) }}
         with:
           name: native-profile-launcher
           path: ${{ runner.temp }}/native-profile-launcher
       - name: Verify the native launcher source
+        if: matrix.native
         run: |
           test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"
           chmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
       - name: Consume the discovered shared native checks sequentially
+        id: native-checks
+        if: matrix.native
         env:
           TMPDIR: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
@@ -1523,71 +1578,90 @@ jobs:
           source env.sh
           export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
           export BUN_WASM_TRACE=1
-          bun scripts/test-checks.ts native --profile shared-group
-
-  shared-browser:
-    name: Shared Browser (${{ matrix.engine }})
-    needs: [selection, ordinary-web-guests]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.ordinary-web-guests.result == 'success' && needs.ordinary-web-guests.outputs.shared-proof-inputs == 'success' && needs.selection.outputs.shared-native == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        engine: [quickjs, jsc, spidermonkey]
-    defaults:
-      run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-tools
-        with:
-          bun-version: 1.4.4
-          node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
-        with:
-          path: .ci-bun-cache
-          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: shared-proof-inputs
-          path: ${{ runner.temp }}/shared-proof-inputs
-      - name: Verify the ready shared inputs
-        run: |
-          source env.sh
-          bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"
-          echo "BUN_WASM_PROFILE_PROGRAM=$RUNNER_TEMP/shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm" >> "$GITHUB_ENV"
-          echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/shared-proof-inputs/browser" >> "$GITHUB_ENV"
-          echo "BUN_WASM_PREPARED_SHARED_SITE=1" >> "$GITHUB_ENV"
+          remaining=$((SHARED_CHECK_SECONDS - (EPOCHSECONDS - SHARED_STARTED)))
+          if ((remaining <= 0)); then
+            echo "Shared native setup exhausted its budget" >&2
+            exit 124
+          fi
+          state="$RUNNER_TEMP/shared-native-run"
+          mkdir "$state"
+          bun scripts/run-with-timeout.mts --state "$state" "$remaining" bun scripts/test-checks.ts native --profile shared-group
       - name: Install Web browser test dependencies
-        run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
+        id: web-deps
+        if: ${{ !cancelled() && matrix.browser && steps.shared-inputs.outcome == 'success' }}
+        run: |
+          state="$RUNNER_TEMP/shared-native-run"
+          if [[ -d "$state" && ! -f "$state/status" ]]; then
+            echo "Shared native process cleanup could not be confirmed" >&2
+            exit 1
+          fi
+          # Charge shared setup once to each check's original budget.
+          remaining=$((SHARED_CHECK_SECONDS - SHARED_SETUP_SECONDS))
+          deadline=$((EPOCHSECONDS + remaining))
+          bun scripts/run-with-timeout.mts "$remaining" bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
+          remaining=$((deadline - EPOCHSECONDS))
+          if ((remaining <= 0)); then
+            echo "Shared Browser setup exhausted its budget" >&2
+            exit 124
+          fi
+          echo "SHARED_BROWSER_DEADLINE=$deadline" >> "$GITHUB_ENV"
+          bash scripts/ci-shared-check-budget.sh "$((deadline - SHARED_HASHFILES_RESERVE_SECONDS))" 30
       - uses: ./.github/actions/browser-deps
+        id: system-deps
+        if: ${{ !cancelled() && steps.web-deps.outcome == 'success' }}
+        timeout-minutes: ${{ fromJSON(steps.web-deps.outputs.minutes) }}
         with:
           browsers: chromium
       - name: Install Chromium
+        id: chromium
+        if: ${{ !cancelled() && steps.system-deps.outcome == 'success' }}
         working-directory: web
-        run: bunx playwright install chromium
-      - name: Consume the discovered shared Browser checks sequentially
-        env:
-          TMPDIR: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-          TEMP: ${{ runner.temp }}
         run: |
+          remaining=$((SHARED_BROWSER_DEADLINE - EPOCHSECONDS))
+          if ((remaining <= 0)); then
+            echo "Shared Browser setup exhausted its budget" >&2
+            exit 124
+          fi
+          bun ../scripts/run-with-timeout.mts "$remaining" bunx playwright install chromium
+      - name: Consume the discovered shared Browser checks sequentially
+        id: browser-checks
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        env:
+          TMPDIR: ${{ runner.temp }}/shared-web
+          TMP: ${{ runner.temp }}/shared-web
+          TEMP: ${{ runner.temp }}/shared-web
+          BROWSER_CHECK_SECONDS: ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }}
+        run: |
+          mkdir "$TMPDIR"
           source env.sh
-          bun scripts/run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }} bun scripts/test-checks.ts browser-guest --profile shared-group
+          remaining=$((SHARED_BROWSER_DEADLINE - EPOCHSECONDS))
+          if ((remaining <= 0)); then
+            echo "Shared Browser setup exhausted its budget" >&2
+            exit 124
+          fi
+          limit=$((remaining < BROWSER_CHECK_SECONDS ? remaining : BROWSER_CHECK_SECONDS))
+          bun scripts/run-with-timeout.mts "$limit" bun scripts/test-checks.ts browser-guest --profile shared-group
       # Chromium's renderer has crashed here with only "Target crashed" in the log. The kernel
       # log tells a memory kill from a renderer fault.
       - name: Show kernel memory kills and faults after a failure
-        if: failure()
+        if: failure() && matrix.browser && steps.browser-checks.outcome != 'success'
         run: |
           free -m
           sudo dmesg --ctime | grep -iE 'out of memory|oom|killed process|segfault|traps:' | tail -n 50 || true
+      - name: Require the selected shared checks
+        if: ${{ !cancelled() }}
+        env:
+          NATIVE_SELECTED: ${{ matrix.native }}
+          BROWSER_SELECTED: ${{ matrix.browser }}
+          NATIVE_RESULT: ${{ steps.native-checks.outcome }}
+          BROWSER_RESULT: ${{ steps.browser-checks.outcome }}
+        run: |
+          case "$NATIVE_SELECTED/$NATIVE_RESULT" in true/success|false/skipped) ;; *) exit 1 ;; esac
+          case "$BROWSER_SELECTED/$BROWSER_RESULT" in true/success|false/skipped) ;; *) exit 1 ;; esac
 
   shared-proof:
     name: Shared PIC sysroot proof
-    needs: [selection, ordinary-web-guests, quality, rust, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser]
+    needs: [selection, ordinary-web-guests, quality, rust, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-consumers]
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1604,8 +1678,7 @@ jobs:
           RUST_RESULT: ${{ needs.rust.result }}
           SM_RESULT: ${{ needs.shared-spidermonkey-prebuild.result }}
           INPUTS_RESULT: ${{ needs.ordinary-web-guests.outputs.shared-proof-inputs }}
-          NATIVE_RESULT: ${{ needs.shared-native.result }}
-          BROWSER_RESULT: ${{ needs.shared-browser.result }}
+          CONSUMER_RESULT: ${{ needs.shared-consumers.result }}
         run: |
           test "$SELECTION_RESULT" = success
           test "$QUALITY_RESULT" = success
@@ -1622,8 +1695,7 @@ jobs:
             *) exit 1 ;;
           esac
           test "$SM_RESULT" = "$expected"
-          test "$NATIVE_RESULT" = "$expected"
-          test "$BROWSER_RESULT" = "$expected"
+          test "$CONSUMER_RESULT" = "$expected"
 
   web:
     needs: [selection, web-unit, web-browser]
@@ -1986,7 +2058,7 @@ jobs:
 
   ci-result:
     name: Code quality
-    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, browser-production, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
+    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, browser-production, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-consumers, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2003,7 +2075,7 @@ jobs:
 
   update-status:
     name: Report automated update statuses
-    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, browser-production, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-native, shared-browser, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process, ci-result]
+    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, browser-production, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-consumers, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process, ci-result]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
