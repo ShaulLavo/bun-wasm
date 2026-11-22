@@ -4,6 +4,9 @@
     readdir(path: string): [string, string][];
     mkdir(path: string, recursive: boolean): unknown;
     copyFile(from: string, to: string, mode: number): void;
+    readlink(path: string): string;
+    symlink(target: string, path: string): void;
+    unlink(path: string): void;
   }, absolute: (path: string) => string, inspect: (value: unknown) => string = String) {
     const stringFlags: Record<string, number> = {
       r: 0, "r+": 2, rs: 1052672, sr: 1052672, "rs+": 1052674, "sr+": 1052674,
@@ -51,18 +54,15 @@
     const { Stats, BigIntStats, makeStats } = createStats();
 
     type CopyOptions = { recursive?: boolean; force?: boolean; errorOnExist?: boolean; filter?: (from: string, to: string) => boolean | Promise<boolean> };
+    // Bun names the destination as the path of an existing-target error, the source otherwise.
     function copyError(code: string, from: string, to: string): Error {
-      return Object.assign(new Error(`${code}: cannot copy '${from}' to '${to}'`), { code, path: from, dest: to, syscall: "cp" });
+      const path = code === "ERR_FS_CP_EEXIST" ? to : from;
+      return Object.assign(new Error(`${code}: cannot copy '${from}' to '${to}'`), { code, path, dest: to, syscall: "cp" });
     }
     function isCode(error: unknown, code: string): boolean {
       return error !== null && typeof error === "object" && "code" in error && error.code === code;
     }
-    function copyEntry(from: string, to: string, options: CopyOptions): boolean {
-      const src = absolute(from), dest = absolute(to);
-      const directory = (native.stat(src, false).mode & 0o170000) === 0o040000;
-      if (src === dest || (directory && dest.startsWith(src.endsWith("/") ? src : `${src}/`))) throw copyError("ERR_FS_CP_EINVAL", from, to);
-      if (directory && !options.recursive) throw copyError("ERR_FS_EISDIR", from, to);
-      if (directory) { native.mkdir(dest, true); return true; }
+    function ensureParent(dest: string): void {
       const parent = dest.replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/";
       try {
         native.stat(parent, false);
@@ -70,6 +70,46 @@
         if (!isCode(error, "ENOENT")) throw error;
         native.mkdir(parent, true);
       }
+    }
+    // A relative link target resolved against the source link's directory, as Bun writes it.
+    function linkTarget(src: string): string {
+      const target = native.readlink(src);
+      if (target.startsWith("/")) return target;
+      const parts: string[] = [];
+      for (const part of `${src.replace(/\/[^/]*$/, "")}/${target}`.split("/")) {
+        if (part === "..") parts.pop();
+        else if (part && part !== ".") parts.push(part);
+      }
+      return `/${parts.join("/")}`;
+    }
+    // Bun and Node copy a symlink as a symlink (cp's `dereference` is false by default).
+    function copyLink(from: string, to: string, src: string, dest: string, options: CopyOptions): void {
+      const target = linkTarget(src);
+      ensureParent(dest);
+      try {
+        native.symlink(target, dest);
+        return;
+      } catch (error) {
+        if (!isCode(error, "EEXIST")) throw error;
+      }
+      if (options.force === false) {
+        if (options.errorOnExist) throw copyError("ERR_FS_CP_EEXIST", from, to);
+        return;
+      }
+      if ((native.stat(dest, true).mode & 0o170000) === 0o040000) throw copyError("ERR_FS_CP_NON_DIR_TO_DIR", from, to);
+      native.unlink(dest);
+      native.symlink(target, dest);
+    }
+    function copyEntry(from: string, to: string, options: CopyOptions): boolean {
+      const src = absolute(from), dest = absolute(to);
+      const kind = native.stat(src, true).mode & 0o170000;
+      if (src === dest) throw copyError("ERR_FS_CP_EINVAL", from, to);
+      if (kind === 0o120000) { copyLink(from, to, src, dest, options); return false; }
+      const directory = kind === 0o040000;
+      if (directory && dest.startsWith(src.endsWith("/") ? src : `${src}/`)) throw copyError("ERR_FS_CP_EINVAL", from, to);
+      if (directory && !options.recursive) throw copyError("ERR_FS_EISDIR", from, to);
+      if (directory) { native.mkdir(dest, true); return true; }
+      ensureParent(dest);
       try {
         native.copyFile(src, dest, options.force === false ? 1 : 0);
       } catch (error) {

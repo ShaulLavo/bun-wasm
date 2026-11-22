@@ -47,6 +47,8 @@ function fixture() {
     copyFile: host.copyFileSync,
     copyDir(from: string, to: string) { host.cpSync(from, to, { recursive: true }); },
     symlink: host.symlinkSync,
+    readlink(file: string) { return host.readlinkSync(file, "utf8"); },
+    unlink: host.unlinkSync,
     utf8Decode(bytes: Uint8Array) { return Buffer.from(bytes).toString(); },
   };
   const factory = runInNewContext(source, { Uint8Array, ArrayBuffer, URL, Date, FinalizationRegistry });
@@ -209,9 +211,18 @@ test("file copies retain source and destination symlink behavior", async () => {
   host.symlinkSync(from, sourceLink);
   host.writeFileSync(target, "old");
   host.symlinkSync(target, destinationLink);
+  // Like Bun and Node, a symlink is copied as a symlink with its target resolved.
   fs.cpSync(sourceLink, path.join(root, "copied-link"));
-  expect(host.lstatSync(path.join(root, "copied-link")).isSymbolicLink()).toBe(false);
+  expect(host.lstatSync(path.join(root, "copied-link")).isSymbolicLink()).toBe(true);
+  expect(host.readlinkSync(path.join(root, "copied-link"))).toBe(from);
   expect(host.readFileSync(path.join(root, "copied-link"), "utf8")).toBe("asset");
+  host.symlinkSync("source", path.join(root, "relative-link"));
+  fs.cpSync(path.join(root, "relative-link"), path.join(root, "copied-relative"));
+  expect(host.readlinkSync(path.join(root, "copied-relative"))).toBe(from);
+  // An existing destination is replaced unless force is false.
+  fs.cpSync(sourceLink, path.join(root, "copied-relative"));
+  expect(host.readlinkSync(path.join(root, "copied-relative"))).toBe(from);
+  expect(() => fs.cpSync(sourceLink, path.join(root, "copied-link"), { force: false, errorOnExist: true })).toThrow(expect.objectContaining({ code: "ERR_FS_CP_EEXIST", path: path.join(root, "copied-link") }));
   await fs.promises.cp(from, destinationLink);
   expect(host.lstatSync(destinationLink).isSymbolicLink()).toBe(true);
   expect(host.readFileSync(target, "utf8")).toBe("asset");
