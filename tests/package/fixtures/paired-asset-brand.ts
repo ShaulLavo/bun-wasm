@@ -17,6 +17,8 @@ const asset = { kind: "quickjs", core: describe("https://example.test/core", cor
 const fetch = async (url: string) => new Response(url === asset.core.url ? core : side);
 
 assert.equal(typeof root.installBunAdapters, "function");
+assert.equal(root.BunWasmExecutableConflictError.name, "BunWasmExecutableConflictError");
+assert.equal(new root.BunWasmAssetError("failure").name, "BunWasmAssetError");
 assert.equal(root.BunWasmAssetError, assets.BunWasmAssetError);
 for (const api of [root, assets]) {
   await assert.rejects(api.loadBunWasm({ asset, fetch }), error => error instanceof root.BunWasmAssetError && /export quickjs_initialize_memory/.test(error.message));
