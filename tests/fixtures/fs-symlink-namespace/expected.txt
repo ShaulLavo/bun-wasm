@@ -1,0 +1,13 @@
+readlink from/a.txt ../a.txt
+lstat true stat true
+read a c a
+realpath from/a.txt from/a.txt
+readdir a.txt:file abs:link dir:dir dirlink:link
+through link c.txt rel
+copied abs true from/a.txt
+copied dirlink true from/dir
+copied dir/rel true from/a.txt
+single true a
+climb ENOENT
+loop ELOOP
+removed false
