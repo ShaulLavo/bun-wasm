@@ -28,7 +28,7 @@ raw="$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
 mkdir -p "$root/dist"
 # -g keeps the name section (function names for profilers and symbolizers). It goes to the
 # unshipped dist/bun-browser.named.wasm; the shipped dist/bun-browser.wasm is the same module
-# without the name section (about 2.2 MB raw, 8% of the gzipped guest that users download).
+# without the name section (about 2.2 MB raw, 320 KB gzipped, 275 KB Brotli).
 wasm-opt -O2 -g --strip-dwarf --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
   --enable-mutable-globals "$raw" -o "$root/dist/bun-browser.named.wasm"
 bun "$root/scripts/wasm-name-sections.ts" strip "$root/dist/bun-browser.named.wasm" "$root/dist/bun-browser.wasm"
