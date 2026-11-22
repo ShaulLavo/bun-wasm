@@ -13,8 +13,9 @@ const root = resolve(import.meta.dir, "..");
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-console-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const originals: Record<string, string> = {
-  // Re-pinned for console.trace dropping the stack header (docs/bun-patches/error-stack-header.md).
-  console: "ea264a567b6ee497161763587e50074dad401878cedecfe3f54601fdf94f5c6c",
+  // Re-pinned for console.trace dropping the stack header (docs/bun-patches/error-stack-header.md), and
+  // for group indentation, the warn level and console.dir's depth rule (docs/bun-patches/bun-console-formatter.md).
+  console: "5466759c107e020a798f90c200e8564817da61dcb8e10196b47852156612e487",
   console_constructor: "d70e5d7de10633d8dc36e2a623d3f6253c9bcc7f785db581152bcf345beebbbf",
 };
 
@@ -130,7 +131,8 @@ test("global console keeps formatter inputs, duration state and byte writes", ()
   instance.timeEnd("timer");
   instance.timeEnd("timer");
   instance.write("raw", new DataView(Uint8Array.of(1, 2, 3).buffer, 1, 1));
-  expect(writes.slice(0, 5)).toEqual(["outer\n", "  a\n  b\n", "Assertion failed: reason 7\n", "[1.00s] timer extra\n", "[1.00s] timer\n"]);
+  // A group indents the first line of a message; the formatter indents the lines it breaks itself.
+  expect(writes.slice(0, 5)).toEqual(["outer\n", "  a\nb\n", "Assertion failed: reason 7\n", "[1.00s] timer extra\n", "[1.00s] timer\n"]);
   expect(formatted.at(-2)).toEqual(["[1.00s] timer", "extra"]);
   expect(writes[5]).toBe("raw");
   expect(Array.from(writes[6] instanceof Uint8Array ? writes[6] : [])).toEqual([2]);

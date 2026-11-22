@@ -17,7 +17,8 @@ const runtime = join(root, "crates/bunwasm-runtime/src/js");
 // Original migration AST, excluding the separately tested Bun comparison changes.
 const originals = {
   assert: "381972f164ac6fd3b776919ccde896d8dd8c20e4758b29d2d500234ee5b291db",
-  util: "c10043bce9a1eb5b5c505d3a86f8551c15902ef98d64d9882943b8e21e45554c",
+  // Re-pinned for isFunctionWithTag asking function_brands for the native placeholder (docs/bun-patches/node-utility-fragments.md).
+  util: "833fc61e80e5cb4e469b2c9f902bbd25a16a258a3c1c4442d6cd48d89e3e0c3e",
 };
 
 function restoreCallTrackerDelta(text: string): string {
