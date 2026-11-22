@@ -467,6 +467,7 @@
       this.maxDepth = options.maxDepth;
       this.outerMaxDepth = undefined;
       this.quoteStrings = !!options.quoteStrings;
+      this.colors = !!options.colors;
       this.quoteKeys = false;
       this.estimatedLineLength = 0;
       this.alwaysNewlineScope = false;
@@ -481,6 +482,16 @@
 
     write(s) {
       this.out += s;
+    }
+
+    // ConsoleObject.rs's `<r><color>text<r>`; plain text without `colors: true`.
+    paint(color, text) {
+      return this.colors ? "\u001b[0m\u001b[" + color + "m" + text + "\u001b[0m" : text;
+    }
+
+    // `<r>key<d>:<r> ` after every property key.
+    keySuffix() {
+      return this.colors ? "\u001b[0m\u001b[2m:\u001b[0m " : ": ";
     }
 
     addForNewLine(n) {
@@ -500,7 +511,7 @@
     }
 
     printComma() {
-      this.write(",");
+      this.write(this.paint("2", ","));
       this.estimatedLineLength += 1;
     }
 
@@ -537,9 +548,10 @@
         return;
       }
       if (this.visited.has(value)) {
-        this.write("[Circular]");
+        this.write(this.paint("36", "[Circular]"));
         return;
       }
+      if (this.visited.size >= MAX_NESTING) throw new RangeError(CALL_STACK_MESSAGE);
       this.visited.add(value);
       try {
         this.dispatch(tag, value, info);
@@ -561,10 +573,10 @@
           return this.printBigInt(value);
         case "Undefined":
           this.addForNewLine(9);
-          return this.write("undefined");
+          return this.write(this.paint("2", "undefined"));
         case "Null":
           this.addForNewLine(4);
-          return this.write("null");
+          return this.write(this.paint("33", "null"));
         case "Boolean":
           return this.printBoolean(value, info);
         case "Symbol":
@@ -623,7 +635,7 @@
       const str = typeof value === "symbol" ? value.toString() : String(value);
       this.addForNewLine(str.length);
       if (this.quoteStrings && !info.regexp) {
-        this.write(str.length === 0 ? '""' : quoteJSON(str));
+        this.write(this.paint("32", str.length === 0 ? '""' : quoteJSON(str)));
         return;
       }
       if (info.boxed) {
@@ -648,13 +660,13 @@
       }
       const text = formatNumber(value);
       this.addForNewLine(text.length);
-      this.write(text);
+      this.write(this.paint("33", text));
     }
 
     printBigInt(value) {
       const text = value.toString();
       this.addForNewLine(text.length);
-      this.write(text + "n");
+      this.write(this.paint("33", text + "n"));
     }
 
     printBoolean(value, info) {
@@ -671,7 +683,7 @@
         return;
       }
       this.addForNewLine(value ? 4 : 5);
-      this.write(value ? "true" : "false");
+      this.write(this.paint("33", value ? "true" : "false"));
     }
 
     printSymbol(value) {
@@ -679,10 +691,10 @@
       this.addForNewLine(6);
       if (description) {
         this.addForNewLine(description.length + 2);
-        this.write("Symbol(" + description + ")");
+        this.write(this.paint("34", "Symbol(" + description + ")"));
         return;
       }
-      this.write("Symbol()");
+      this.write(this.paint("34", "Symbol()"));
     }
 
     printDate(value) {
@@ -693,7 +705,7 @@
         text = "null";
       }
       this.addForNewLine(text.length);
-      this.write(text === "null" ? "Invalid Date" : text.slice(1, -1));
+      this.write(this.paint("35", text === "null" ? "Invalid Date" : text.slice(1, -1)));
     }
 
     // ── custom inspect / proxy ──
@@ -701,8 +713,13 @@
     printCustomFormatted() {
       const { fn, self } = this.customFormatted;
       const depthArg = Math.max(0, this.maxDepth - this.depth);
-      const options = { depth: this.maxDepth, colors: false, showHidden: false, stylize: (s) => String(s) };
-      const result = fn.call(self, depthArg, options, nodeInspectForCustom);
+      const options = {
+        depth: this.maxDepth,
+        colors: this.colors,
+        showHidden: false,
+        stylize: this.colors ? stylizeForCustom : (s) => String(s),
+      };
+      const result = fn.call(self, depthArg, options, publicInspect());
       if (typeof result === "string") {
         this.write(result);
         return;
@@ -729,17 +746,17 @@
       const protoName = protoIsClass ? functionName(proto) : "";
       this.addForNewLine(protoName.length);
       const base = printable === "" ? "(anonymous)" : printable;
-      this.write(protoName === "" ? "[class " + base + "]" : "[class " + base + " extends " + protoName + "]");
+      this.write(this.paint("36", protoName === "" ? "[class " + base + "]" : "[class " + base + " extends " + protoName + "]"));
     }
 
     printFunction(value) {
       const printable = functionName(value);
       const funcName = functionKindName(value);
       if (printable === "" || funcName === printable) {
-        this.write(funcName === "" ? "[Function]" : "[" + funcName + "]");
+        this.write(this.paint("36", funcName === "" ? "[Function]" : "[" + funcName + "]"));
         return;
       }
-      this.write("[" + (funcName === "" ? "Function" : funcName) + ": " + printable + "]");
+      this.write(this.paint("36", "[" + (funcName === "" ? "Function" : funcName) + ": " + printable + "]"));
     }
 
     printGetterSetter(value) {
@@ -1224,17 +1241,21 @@
       if (typeof key === "symbol") {
         const desc = key.description || "";
         this.addForNewLine(12 + desc.length);
+        if (this.colors) {
+          this.write("\u001b[0m\u001b[2m[\u001b[0m\u001b[34mSymbol(" + desc + ")\u001b[0m\u001b[2m]:\u001b[0m ");
+          return;
+        }
         this.write("[Symbol(" + desc + ")]: ");
         return;
       }
       if (!this.quoteKeys && IDENT_RE.test(key)) {
         this.addForNewLine(key.length + 1);
-        this.write(key + ": ");
+        this.write(this.paint("0", key) + this.keySuffix());
         return;
       }
       this.addForNewLine(key.length + 2);
       // Bun writes 16-bit keys between quotes without escaping them.
-      this.write(hasWideChars(key) ? '"' + key + '": ' : quoteJSON(key) + ": ");
+      this.write(this.paint("32", hasWideChars(key) ? '"' + key + '"' : quoteJSON(key)) + this.keySuffix());
     }
 
     // ── printf-style formatting ──
@@ -1827,21 +1848,23 @@
 
   // ───────────────────────────── public API ─────────────────────────────
 
-  function readInspectOptions(options) {
-    const result = { maxDepth: 8, quoteStrings: true, orderedProperties: false, singleLine: false };
+  function readInspectOptions(options, colors) {
+    const result = { maxDepth: 8, quoteStrings: true, orderedProperties: false, singleLine: false, colors: false };
     if (options === undefined || options === null) return result;
     if (typeof options !== "object") {
       applyDepth(result, options);
+      if (colors !== undefined && colors !== null) result.colors = !!colors;
       return result;
     }
     if (options.depth !== undefined) applyDepth(result, options.depth);
+    if (options.colors !== undefined) result.colors = !!options.colors;
     if (options.sorted !== undefined) result.orderedProperties = !!options.sorted;
     if (options.compact !== undefined) result.singleLine = !!options.compact;
     return result;
   }
 
   function applyDepth(result, depth) {
-    if (typeof depth !== "number" || Number.isNaN(depth)) return;
+    if (typeof depth !== "number") return;
     if (!Number.isFinite(depth)) {
       result.maxDepth = 65535;
       return;
@@ -1852,10 +1875,28 @@
   }
 
   /** Bun.inspect(value, options?) */
-  function bunInspect(value, options) {
-    const f = new Formatter(readInspectOptions(options));
-    f.format(tagOf(value), value);
+  function bunInspect(value, options, colors) {
+    const f = new Formatter(readInspectOptions(options, colors));
+    try {
+      f.format(tagOf(value), value);
+    } catch (error) {
+      throw overflowAsRangeError(error);
+    }
     return f.out;
+  }
+
+  const CALL_STACK_MESSAGE = "Maximum call stack size exceeded.";
+  // Nesting that overflows Bun's native stack long before this much output builds up.
+  const MAX_NESTING = 8192;
+
+  // An engine's own overflow error (QuickJS "stack overflow", V8 without the period) becomes
+  // the RangeError JSC throws.
+  function overflowAsRangeError(error) {
+    const message = isObjectLike(error) ? String(error.message) : "";
+    if (message.startsWith("Maximum call stack size exceeded") || message === "stack overflow") {
+      return new RangeError(CALL_STACK_MESSAGE);
+    }
+    return error;
   }
 
   /** console.log(...args) output without the trailing newline. */
@@ -2858,6 +2899,12 @@ function createNodeInspect(internal) {
     return formatRaw(ctx, value, recurseTimes, typedArray);
   }
 
+  // The `inspect` custom inspectors receive is `require("util").inspect`, not this inner function.
+  function utilInspect() {
+    const util = internal.require("util");
+    return util && typeof util.inspect === "function" ? util.inspect : inspect;
+  }
+
   // Runs a user `[util.inspect.custom]` method (or the Buffer formatter).
   // Returns undefined when the value has no custom representation.
   function formatCustom(ctx, value, recurseTimes, proxied) {
@@ -2872,7 +2919,7 @@ function createNodeInspect(internal) {
 
     const depth = ctx.depth === null ? null : ctx.depth - recurseTimes;
     const isCrossContext = proxied || !(value instanceof Object);
-    const ret = maybeCustom.call(value, depth, getUserOptions(ctx, isCrossContext), inspect);
+    const ret = maybeCustom.call(value, depth, getUserOptions(ctx, isCrossContext), utilInspect());
     // A custom inspector returning `this` falls back to the default output.
     if (ret === value) return undefined;
     if (typeof ret !== "string") return formatValue(ctx, ret, recurseTimes);
@@ -4055,8 +4102,19 @@ function createNodeInspect(internal) {
     return { nodeInspect: inspect, nodeFormat: format, nodeFormatWithOptions: formatWithOptions };
   }
 
-  function nodeInspectForCustom(value, options) {
-    return nodeInspect(value, options);
+  // `require("util").inspect`, which custom inspectors receive as their third argument.
+  function publicInspect() {
+    const util = internal.require("util");
+    return util && typeof util.inspect === "function" ? util.inspect : nodeInspect;
+  }
+
+  // Node's stylizeWithColor, for the options Bun.inspect passes to a custom inspector.
+  function stylizeForCustom(str, styleType) {
+    const style = nodeInspect.styles[styleType];
+    if (style === undefined) return str;
+    if (typeof style === "function") return style(str);
+    const color = nodeInspect.colors[style];
+    return color === undefined ? str : "\u001b[" + color[0] + "m" + str + "\u001b[" + color[1] + "m";
   }
 
   bunInspect.custom = INSPECT_CUSTOM;

@@ -416,8 +416,8 @@
   }
   peek.status = (promise) => (promise instanceof Promise ? native.promiseState(promise) : "fulfilled");
 
-  function inspect(value, options) {
-    return internal.require("inspect").bunInspect(value, options);
+  function inspect(value, options, colors) {
+    return internal.require("inspect").bunInspect(value, options, colors);
   }
   inspect.custom = Symbol.for("nodejs.util.inspect.custom");
   inspect.table = (data, columns) => {

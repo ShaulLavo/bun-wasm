@@ -839,9 +839,14 @@
         throw error;
       }
       if (name.endsWith("Snapshot")) context.snapshot = reserveSnapshot(origin, name, args);
-      const result = this.flags.promise
-        ? matcherSupport.settle(matchPromise(this, name, impl, args, context), () => undefined)
-        : matchImmediate(this, name, impl, args, context);
+      // Bun spins its event loop until the promise settles, so a promise that has already settled
+      // is judged on the spot and the matcher returns undefined, not a promise.
+      const settledNow = this.flags.promise ? settledPromise(this.received) : null;
+      const result = settledNow
+        ? matcherSupport.settle(judgeSettled(this, name, impl, args, context, settledNow), () => undefined)
+        : this.flags.promise
+          ? matcherSupport.settle(matchPromise(this, name, impl, args, context), () => undefined)
+          : matchImmediate(this, name, impl, args, context);
       return origin.invocation ? origin.invocation.track(result) : result;
     };
   }
@@ -860,29 +865,49 @@
     });
   }
 
-  async function matchPromise(expectation, name, impl, args, context) {
-    const { flags, received } = expectation;
+  // The outcome of a real promise that is no longer pending, or null.
+  function settledPromise(received) {
+    if (!(received instanceof Promise)) return null;
+    const state = native.promiseState(received);
+    if (state === "pending") return null;
+    // Bun marks the promise handled, so a rejection is not reported as unhandled.
+    if (state !== "fulfilled") native.promiseThen(received, () => undefined, () => undefined);
+    return { ok: state === "fulfilled", value: native.promiseResult(received) };
+  }
+
+  function judgeSettled(expectation, name, impl, args, context, settled) {
+    const { flags } = expectation;
     const { error } = context;
     const fail = (body) => {
       error.message = (context.label || signature(name, matcherParams[name], flags.not, flags.promise)) + body;
       throw error;
     };
-    if (!isThenable(received)) return fail(`\n\nExpected promise\nReceived: ${inspect(received)}\n`);
-    let settled;
-    try {
-      settled = { ok: true, value: await received };
-    } catch (err) {
-      settled = { ok: false, value: err };
-    }
     if (flags.promise === "rejects" && settled.ok) {
       return fail("\n\nExpected promise that rejects\nReceived promise that resolved: Promise { <resolved> }\n");
     }
     if (flags.promise === "resolves" && !settled.ok) {
       return fail("\n\nExpected promise that resolves\nReceived promise that rejected: Promise { <rejected> }\n");
     }
-    if (context.origin.invocation?.settled) return;
+    if (context.origin.invocation?.settled) return undefined;
     countExpectation(context.origin.test);
-    await applyMatcher(context, settled.value, name, impl, args);
+    return applyMatcher(context, settled.value, name, impl, args);
+  }
+
+  async function matchPromise(expectation, name, impl, args, context) {
+    const { flags, received } = expectation;
+    const { error } = context;
+    if (!isThenable(received)) {
+      error.message = (context.label || signature(name, matcherParams[name], flags.not, flags.promise)) +
+        `\n\nExpected promise\nReceived: ${inspect(received)}\n`;
+      throw error;
+    }
+    let settled;
+    try {
+      settled = { ok: true, value: await received };
+    } catch (err) {
+      settled = { ok: false, value: err };
+    }
+    await judgeSettled(expectation, name, impl, args, context, settled);
     return undefined;
   }
 
@@ -1260,8 +1285,17 @@
     return { body: `\n\n${prefix}${inspect(substring)}${times}\nReceived: ${inspect(received)}\n` };
   });
 
+  // JSValue::getLengthIfPropertyExistsInternal: the size of the collection types, otherwise `length`.
+  function lengthOf(received) {
+    if (received === null || received === undefined) return undefined;
+    if (received instanceof Headers) return received.count;
+    if (received instanceof Map || received instanceof Set) return received.size;
+    if (received instanceof Blob) return received.size;
+    return received.length;
+  }
+
   defineMatcher("toHaveLength", "expected", (ctx, received, expected) => {
-    const length = received === null || received === undefined ? undefined : received.length;
+    const length = lengthOf(received);
     if (!failed(ctx, length === expected)) return null;
     if (ctx.not) return { body: `\n\nExpected length: not ${expected}\n` };
     return { body: `\n\nExpected length: ${expected}\nReceived length: ${length}\n` };

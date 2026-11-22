@@ -31,6 +31,8 @@ DEP0170 warning for an invalid port is not emitted, and the hash and query are
 split before the host instead of after it, which gives the same fields. Format
 keeps `//` whenever `slashes` is set, so `http:///x` round-trips.
 
+`Url.prototype.resolveObject`, `resolve` and `format`, and `url.resolveObject`, are ported from the same file (`Url.prototype.resolveObject`, `urlResolveObject`). The protocol tables are sets that accept a protocol with or without its colon, so a protocol named `constructor` is unknown instead of inheriting from `Object.prototype`.
+
 
 ## Classification
 
