@@ -24,6 +24,14 @@ The native launcher keeps Wasmtime as the first try for every path call
 - `path_readlink` and `path_symlink` read and store the target as written, through cap-std
   directories opened on the preopens (`read_link_contents`, `symlink_contents`).
 
+A retry starts from the guest path each descriptor was opened with. A rename by the guest moves
+the recorded paths of descriptors open on or under the renamed directory, as Linux keeps them on
+the moved directory. A rename by the host (or another program) is not seen: a retry from such a
+descriptor answers ENOENT, or resolves from whatever now sits at the old name, never outside the
+preopens. With nested preopens, a call Wasmtime answers itself (no EPERM) keeps Wasmtime's
+behavior, so `sub/x.txt` from `/` reads the outer preopen's copy when `/sub` is also a preopen;
+the launcher preopens one directory today.
+
 Every lookup runs through cap-std handles on the preopens, so neither a link nor `..` reaches a
 host path outside them (`crates/bunwasm-host/src/slots/tests/links.rs` checks absolute,
 climbing and host-made links).

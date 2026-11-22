@@ -63,6 +63,9 @@ const fn path(fd: usize, ptr: usize, len: usize, flags: Option<usize>) -> PathAr
     }
 }
 
+const RENAME: &str = "path_rename";
+const RENAME_PATHS: &[PathArg] = &[path(0, 1, 2, None), path(3, 4, 5, None)];
+
 pub(super) static OPEN: Op = Op {
     name: "path_open",
     paths: &[path(0, 2, 3, Some(1))],
@@ -96,8 +99,8 @@ static OPS: [Op; 7] = [
         output: None,
     },
     Op {
-        name: "path_rename",
-        paths: &[path(0, 1, 2, None), path(3, 4, 5, None)],
+        name: RENAME,
+        paths: RENAME_PATHS,
         output: None,
     },
     Op {
@@ -126,6 +129,8 @@ enum Kind {
     Directory,
     Other,
     Link(String),
+    /// A lookup failure other than a missing entry (EACCES and the like), as a WASI errno.
+    Failed(i32),
 }
 
 impl Roots {
@@ -184,8 +189,10 @@ impl Roots {
         let Some(dir) = self.dir(index) else {
             return Kind::Missing;
         };
-        let Ok(metadata) = dir.symlink_metadata(&rest) else {
-            return Kind::Missing;
+        let metadata = match dir.symlink_metadata(&rest) {
+            Ok(metadata) => metadata,
+            Err(error) if matches!(wasi_errno(&error), NOENT | NOTDIR) => return Kind::Missing,
+            Err(error) => return Kind::Failed(wasi_errno(&error)),
         };
         if metadata.is_dir() {
             return Kind::Directory;
@@ -237,6 +244,7 @@ impl Roots {
                 }
                 Kind::Missing if !last => return Err(NOENT),
                 Kind::Other if !last => return Err(NOTDIR),
+                Kind::Failed(errno) if !last => return Err(errno),
                 _ => {}
             }
         }
@@ -360,7 +368,8 @@ fn resolve_arg(
 }
 
 /// Repeat a call Wasmtime refused with EPERM, its paths resolved in the guest namespace and
-/// written to private scratch memory. Returns the errno and the first path's guest form.
+/// written to private scratch memory. Returns the errno and, on success, the guest form of
+/// each path argument.
 pub(super) fn retry(
     namespace: &mut Namespace,
     caller: &mut Caller<'_, Host>,
@@ -368,34 +377,34 @@ pub(super) fn retry(
     scratch: Memory,
     op: &Op,
     args: &[Val],
-) -> Result<(i32, Option<String>)> {
+) -> Result<(i32, Vec<String>)> {
     let mut call = args.to_vec();
-    let mut first = None;
+    let mut guests = Vec::new();
     for (slot, arg) in op.paths.iter().enumerate() {
         let follow = arg.flags.is_some_and(|at| args[at].unwrap_i32() & 1 != 0);
         let location = (args[arg.ptr].unwrap_i32(), args[arg.len].unwrap_i32());
         let fd = args[arg.fd].unwrap_i32();
         let resolved = match resolve_arg(namespace, caller, fd, location, follow)? {
             Ok(resolved) => resolved,
-            Err(errno) => return Ok((errno, None)),
+            Err(errno) => return Ok((errno, Vec::new())),
         };
         let Some(actual) = namespace.root_fd(resolved.root) else {
-            return Ok((PERM, None));
+            return Ok((PERM, Vec::new()));
         };
         if resolved.relative.len() > SLOT {
-            return Ok((NAMETOOLONG, None));
+            return Ok((NAMETOOLONG, Vec::new()));
         }
         scratch.write(&mut *caller, slot * SLOT, resolved.relative.as_bytes())?;
         call[arg.fd] = Val::I32(actual);
         call[arg.ptr] = Val::I32((slot * SLOT) as i32);
         call[arg.len] = Val::I32(resolved.relative.len() as i32);
-        first.get_or_insert(resolved.guest);
+        guests.push(resolved.guest);
     }
     let memory = memory(caller)?;
     let output = match op.output {
         Some((at, size)) => {
             let Some(range) = span(memory.len(&*caller), args[at].unwrap_i32(), size) else {
-                return Ok((FAULT, None));
+                return Ok((FAULT, Vec::new()));
             };
             call[at] = Val::I32(OUTPUT as i32);
             Some(range)
@@ -404,7 +413,7 @@ pub(super) fn retry(
     };
     let result = call_values_in(delegate, caller, &call, Some(scratch))?;
     if result != 0 {
-        return Ok((result, None));
+        return Ok((result, Vec::new()));
     }
     if let Some(range) = output {
         let bytes = scratch.data(&*caller)[OUTPUT..OUTPUT + range.len()].to_vec();
@@ -412,7 +421,87 @@ pub(super) fn retry(
             .write(&mut *caller, range.start, &bytes)
             .ok_or_else(|| anyhow::anyhow!("validated call output"))?;
     }
-    Ok((0, first))
+    Ok((0, guests))
+}
+
+/// A path with `.` and `..` folded lexically, for comparing recorded descriptor paths.
+fn normalize(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => drop(parts.pop()),
+            part => parts.push(part),
+        }
+    }
+    format!("/{}", parts.join("/"))
+}
+
+/// After a successful rename, descriptors open on or under the old guest path record the new
+/// one, as Linux keeps them on the moved directory.
+fn record_rename(
+    namespace: &mut Namespace,
+    caller: &mut Caller<'_, Host>,
+    args: &[Val],
+    mut guests: Vec<String>,
+) -> Result<()> {
+    if guests.len() != 2 {
+        guests.clear();
+        for arg in RENAME_PATHS {
+            let Some(base) = namespace.paths.get(&args[arg.fd].unwrap_i32()).cloned() else {
+                return Ok(());
+            };
+            let Ok(path) = read_path(
+                caller,
+                args[arg.ptr].unwrap_i32(),
+                args[arg.len].unwrap_i32(),
+            )?
+            else {
+                return Ok(());
+            };
+            guests.push(join(&base, &path));
+        }
+    }
+    let (from, to) = (normalize(&guests[0]), normalize(&guests[1]));
+    for path in namespace.paths.values_mut() {
+        let current = normalize(path);
+        let Some(rest) = current.strip_prefix(&from) else {
+            continue;
+        };
+        if rest.is_empty() || rest.starts_with('/') {
+            *path = format!("{to}{rest}");
+        }
+    }
+    Ok(())
+}
+
+/// One wrapped path call: Wasmtime first, then a guest-namespace retry of its EPERM.
+#[allow(clippy::too_many_arguments)]
+fn path_call(
+    namespace: &mut Namespace,
+    caller: &mut Caller<'_, Host>,
+    delegate: &Delegated,
+    again: &Delegated,
+    scratch: Memory,
+    op: &Op,
+    positions: &[usize],
+    args: &[Val],
+) -> Result<i32> {
+    let mut args = args.to_vec();
+    follow_trailing_slash(caller, op, &mut args)?;
+    let call = match translate(namespace, &args, positions) {
+        Ok(call) => call,
+        Err(errno) => return Ok(errno),
+    };
+    let mut result = call_values(delegate, caller, &call)?;
+    let mut guests = Vec::new();
+    if result == PERM {
+        (result, guests) = retry(namespace, caller, again, scratch, op, &args)?;
+    }
+    if result == 0 && op.name == RENAME {
+        record_rename(namespace, caller, &args, guests)?;
+    }
+    Ok(result)
 }
 
 /// A trailing `/` names a directory, so Linux follows a final link there even for `lstat` and
@@ -482,20 +571,16 @@ pub(super) fn install(
             move |mut caller, args, results| {
                 let mut state = state.lock().unwrap();
                 state.initialize(&mut caller)?;
-                let mut args = args.to_vec();
-                follow_trailing_slash(&mut caller, op, &mut args)?;
-                let args = args.as_slice();
-                let call = match translate(&state, args, &positions) {
-                    Ok(call) => call,
-                    Err(errno) => {
-                        results[0] = Val::I32(errno);
-                        return Ok(());
-                    }
-                };
-                let mut result = call_values(&delegate, &mut caller, &call)?;
-                if result == PERM {
-                    result = retry(&mut state, &mut caller, &again, scratch, op, args)?.0;
-                }
+                let result = path_call(
+                    &mut state,
+                    &mut caller,
+                    &delegate,
+                    &again,
+                    scratch,
+                    op,
+                    &positions,
+                    args,
+                )?;
                 results[0] = Val::I32(result);
                 Ok(())
             },

@@ -842,7 +842,8 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
             let mut guest = None;
             if result == links::PERM {
                 args[0] = Val::I32(fd);
-                (result, guest) = links::retry(
+                let guests;
+                (result, guests) = links::retry(
                     &mut state,
                     &mut caller,
                     &open_again,
@@ -850,6 +851,7 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
                     &links::OPEN,
                     &args,
                 )?;
+                guest = guests.into_iter().next();
             }
             if result != 0 {
                 return Ok(result);

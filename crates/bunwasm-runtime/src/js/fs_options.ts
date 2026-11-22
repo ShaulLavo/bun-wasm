@@ -53,11 +53,20 @@
 
     const { Stats, BigIntStats, makeStats } = createStats();
 
-    type CopyOptions = { recursive?: boolean; force?: boolean; errorOnExist?: boolean; filter?: (from: string, to: string) => boolean | Promise<boolean> };
-    // Bun names the destination as the path of an existing-target error, the source otherwise.
+    type CopyOptions = {
+      recursive?: boolean; force?: boolean; errorOnExist?: boolean; dereference?: boolean; verbatimSymlinks?: boolean;
+      filter?: (from: string, to: string) => boolean | Promise<boolean>;
+    };
+    // Bun 1.4.4's messages and paths for a destination that is in the way: its path is the destination.
+    const destinationErrors: Record<string, (from: string, to: string) => string> = {
+      ERR_FS_CP_EEXIST: (_from, to) => `Target already exists: cp returned EEXIST (${to} already exists) ${to}`,
+      ERR_FS_CP_NON_DIR_TO_DIR: (from, to) =>
+        `Cannot overwrite directory with non-directory: cp returned ENOTDIR (cannot overwrite directory ${to} with non-directory ${from}) ${to}`,
+    };
     function copyError(code: string, from: string, to: string): Error {
-      const path = code === "ERR_FS_CP_EEXIST" ? to : from;
-      return Object.assign(new Error(`${code}: cannot copy '${from}' to '${to}'`), { code, path, dest: to, syscall: "cp" });
+      const message = destinationErrors[code];
+      if (message) return Object.assign(new Error(message(from, to)), { code, path: to, syscall: "cp" });
+      return Object.assign(new Error(`${code}: cannot copy '${from}' to '${to}'`), { code, path: from, dest: to, syscall: "cp" });
     }
     function isCode(error: unknown, code: string): boolean {
       return error !== null && typeof error === "object" && "code" in error && error.code === code;
@@ -71,10 +80,11 @@
         native.mkdir(parent, true);
       }
     }
-    // A relative link target resolved against the source link's directory, as Bun writes it.
-    function linkTarget(src: string): string {
+    // A relative link target resolved against the source link's directory, as Bun writes it,
+    // or kept as written with `verbatimSymlinks`.
+    function linkTarget(src: string, verbatim: boolean): string {
       const target = native.readlink(src);
-      if (target.startsWith("/")) return target;
+      if (verbatim || target.startsWith("/")) return target;
       const parts: string[] = [];
       for (const part of `${src.replace(/\/[^/]*$/, "")}/${target}`.split("/")) {
         if (part === "..") parts.pop();
@@ -82,27 +92,29 @@
       }
       return `/${parts.join("/")}`;
     }
-    // Bun and Node copy a symlink as a symlink (cp's `dereference` is false by default).
+    // Bun copies a symlink as a symlink unless `dereference` is set. As Bun 1.4.4 does, whatever
+    // `force` says: a link in the way is replaced, a directory is NON_DIR_TO_DIR, and anything else
+    // keeps the symlink call's EEXIST.
     function copyLink(from: string, to: string, src: string, dest: string, options: CopyOptions): void {
-      const target = linkTarget(src);
+      const target = linkTarget(src, Boolean(options.verbatimSymlinks));
       ensureParent(dest);
       try {
         native.symlink(target, dest);
         return;
       } catch (error) {
         if (!isCode(error, "EEXIST")) throw error;
+        const existing = native.stat(dest, true).mode & 0o170000;
+        if (existing === 0o040000) throw copyError("ERR_FS_CP_NON_DIR_TO_DIR", from, to);
+        if (existing !== 0o120000) throw error;
       }
-      if (options.force === false) {
-        if (options.errorOnExist) throw copyError("ERR_FS_CP_EEXIST", from, to);
-        return;
-      }
-      if ((native.stat(dest, true).mode & 0o170000) === 0o040000) throw copyError("ERR_FS_CP_NON_DIR_TO_DIR", from, to);
+      // Bun stats a link in the way, so a dangling one is ENOENT.
+      native.stat(dest, false);
       native.unlink(dest);
       native.symlink(target, dest);
     }
     function copyEntry(from: string, to: string, options: CopyOptions): boolean {
       const src = absolute(from), dest = absolute(to);
-      const kind = native.stat(src, true).mode & 0o170000;
+      const kind = native.stat(src, !options.dereference).mode & 0o170000;
       if (src === dest) throw copyError("ERR_FS_CP_EINVAL", from, to);
       if (kind === 0o120000) { copyLink(from, to, src, dest, options); return false; }
       const directory = kind === 0o040000;
@@ -113,8 +125,9 @@
       try {
         native.copyFile(src, dest, options.force === false ? 1 : 0);
       } catch (error) {
-        if (options.force !== false || !isCode(error, "EEXIST")) throw error;
+        if (!isCode(error, "EEXIST") && !isCode(error, "EISDIR")) throw error;
         if ((native.stat(dest, false).mode & 0o170000) === 0o040000) throw copyError("ERR_FS_CP_NON_DIR_TO_DIR", from, to);
+        if (options.force !== false || !isCode(error, "EEXIST")) throw error;
         if (options.errorOnExist) throw copyError("ERR_FS_CP_EEXIST", from, to);
       }
       return false;

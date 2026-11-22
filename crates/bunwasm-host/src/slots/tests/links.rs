@@ -212,3 +212,64 @@ fn absolute_link_cycles_stop_with_eloop() {
         assert_eq!(path_call(&mut f, "path_unlink_file", 3, "b"), 0);
     }
 }
+
+fn rename(f: &mut Fixture, from: &str, to: &str) -> i32 {
+    let (from, from_length) = put(f, 1024, from);
+    let (to, to_length) = put(f, 1536, to);
+    f.call(
+        PREVIEW1,
+        "path_rename",
+        (3, from, from_length, 3, to, to_length),
+    )
+}
+
+#[test]
+fn a_directory_renamed_by_the_guest_keeps_its_descriptors_on_the_moved_directory() {
+    let (_scratch, root) = scratch("rename");
+    for (index, mut f) in fixtures(&root).into_iter().enumerate() {
+        let (old, new) = (format!("old{index}"), format!("new{index}"));
+        fs::create_dir(root.join(&old)).unwrap();
+        std::os::unix::fs::symlink("/tmp/d/a.txt", root.join(&old).join("link")).unwrap();
+        let directory = open(&mut f, 3, false, &old, 2).unwrap();
+        assert_eq!(rename(&mut f, &old, &new), 0);
+        // A new directory at the old name must not be what the held descriptor resolves from.
+        fs::create_dir(root.join(&old)).unwrap();
+        std::os::unix::fs::symlink("/tmp/d", root.join(&old).join("link")).unwrap();
+        assert_eq!(stat(&mut f, directory, true, "link"), Ok((REGULAR, 6)));
+        let file = open(&mut f, directory, true, "link", 0).unwrap();
+        assert_eq!(f.call(PREVIEW1, "fd_close", file), 0);
+        assert_eq!(f.call(PREVIEW1, "fd_close", directory), 0);
+    }
+}
+
+#[test]
+fn nofollow_and_exclusive_creation_never_follow_a_final_link() {
+    let (scratch, root) = scratch("nofollow");
+    let outside = scratch.0.join("outside.txt");
+    std::os::unix::fs::symlink(&outside, root.join("host-absolute")).unwrap();
+    for (index, mut f) in fixtures(&root).into_iter().enumerate() {
+        let guest_host = format!("guest-host{index}");
+        let dangling = format!("dangling{index}");
+        assert_eq!(
+            symlink(&mut f, outside.to_str().unwrap(), 3, &guest_host),
+            0
+        );
+        assert_eq!(symlink(&mut f, "/tmp/d/a.txt", 3, "tmp/d/abs"), 0);
+        for link in ["host-absolute", guest_host.as_str(), "tmp/d/abs"] {
+            assert_eq!(open(&mut f, 3, false, link, 0), Err(LOOP), "{link}");
+        }
+        assert_eq!(
+            symlink(&mut f, &format!("/tmp/d/{dangling}-target"), 3, &dangling),
+            0
+        );
+        // O_CREAT|O_EXCL (oflags 1 | 4) answers EEXIST for a final link and creates nothing.
+        assert_eq!(open(&mut f, 3, true, &dangling, 5), Err(20));
+        assert!(!root.join(format!("tmp/d/{dangling}-target")).exists());
+        // O_CREAT alone follows the dangling link and creates its target, as Linux does.
+        let created = open(&mut f, 3, true, &dangling, 1).unwrap();
+        assert_eq!(f.call(PREVIEW1, "fd_close", created), 0);
+        assert!(root.join(format!("tmp/d/{dangling}-target")).is_file());
+        assert_eq!(path_call(&mut f, "path_unlink_file", 3, "tmp/d/abs"), 0);
+    }
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "outside");
+}
