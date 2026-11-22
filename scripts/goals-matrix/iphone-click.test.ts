@@ -13,7 +13,7 @@ import { Scope } from "./scope";
 const arm = { ready: true, before: "0", label: "Increment", url: "http://127.0.0.1:1234/task", timeOrigin: 10, nonce: "task-nonce" };
 const good = { trusted: true, sameTarget: true, url: arm.url, timeOrigin: arm.timeOrigin, nonce: arm.nonce, after: "1" };
 
-async function control(observation: Record<string, unknown> | "pending", save?: (text: string) => Promise<void>, arms = [arm], holdSnapshot = false) {
+async function control(observation: Record<string, unknown> | "pending", save?: (text: string) => Promise<void>, arms = [arm], holdSnapshot = false, beforeNative?: (signal: AbortSignal) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-click-"));
   const agent = join(root, "agent-device");
   const release = Promise.withResolvers<void>();
@@ -23,7 +23,8 @@ async function control(observation: Record<string, unknown> | "pending", save?: 
   let arming = 0;
   const commands: string[][] = [];
   const closed = join(root, "closed");
-  await writeFile(agent, tabAgentScript({ closed, title: "Goals task-nonce", unrelated: "fixture owner" }));
+  const deviceLog = join(root, "device.jsonl");
+  await writeFile(agent, tabAgentScript({ closed, title: "Goals task-nonce", unrelated: "fixture owner", log: deviceLog }));
   await chmod(agent, 0o755);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const path = new URL(request.url).pathname;
@@ -40,12 +41,12 @@ async function control(observation: Record<string, unknown> | "pending", save?: 
     return Response.json({ settled: true, ok: true, value: observation === "pending" ? good : observation });
   } });
   if (holdSnapshot) await writeFile(agent, `#!${process.execPath}\nif(process.argv[2]==='snapshot')await fetch(${JSON.stringify(server.url.origin + "/snapshot")},{method:'POST',body:String(process.pid)});console.log('@e1 [button] "Increment"');\n`);
-  const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "a".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 1000,
+  const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "a".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 1000, beforeNative,
     saveNative: save ?? (async text => { const row = JSON.parse(text); if (row.command) commands.push(row.command.slice(1)); else rows.push(row); }),
   });
   // Native input is only accepted for a preview that opened: loaded, then focused.
   await withScoped(transport, page => page.openPreview(arm.url));
-  return { transport, rows, sources, commands, closed, snapshotStarted: snapshotStarted.promise, async close() {
+  return { transport, rows, sources, commands, closed, deviceLog, snapshotStarted: snapshotStarted.promise, async close() {
     release.resolve();
     try { await transport.close(); }
     finally { await server.stop(true); await rm(root, { recursive: true, force: true }); }
@@ -64,6 +65,37 @@ test("snapshot in flight at scope cancellation remains owned and is reaped witho
     expect(() => process.kill(pid, 0)).toThrow();
     expect(fixture.commands).toEqual([["snapshot", "-i"]]);
   } finally { scope.close(); await fixture.close().catch(() => {}); }
+});
+
+test("cancelling a click during its FIFO probe never dispatches the press", async () => {
+  const verifyingPress = Promise.withResolvers<void>();
+  const verified = Promise.withResolvers<void>();
+  const attemptedPress = Promise.withResolvers<void>();
+  let probes = 0;
+  let clickingStarted = false;
+  const fixture = await control(good, async text => {
+    if (JSON.parse(text).command?.[1] === "press") attemptedPress.resolve();
+  }, [arm], false, async () => {
+    if (!clickingStarted || ++probes !== 2) return;
+    verifyingPress.resolve();
+    await verified.promise;
+  });
+  const scope = Scope.open(2000);
+  try {
+    await fixture.transport.navigate(arm.url, scope);
+    clickingStarted = true;
+    const clicking = fixture.transport.nativeClick!("button", "output", scope);
+    await verifyingPress.promise;
+    scope.close(new Error("click was cancelled"));
+    await expect(clicking).rejects.toThrow("click was cancelled");
+    verified.resolve();
+    await attemptedPress.promise;
+    const dispatched = (await readFile(fixture.deviceLog, "utf8")).trim().split("\n").map(line => JSON.parse(line).args);
+    expect(dispatched.at(-1)).toEqual(["snapshot", "-i"]);
+    expect(dispatched.some(args => args[0] === "press")).toBe(false);
+    expect(await fixture.transport.cleanup?.(10_000)).toMatchObject({ browserClosed: true });
+    expect(await readFile(fixture.closed, "utf8")).toBe("closed");
+  } finally { scope.close(); verified.resolve(); await fixture.close().catch(() => {}); }
 });
 
 test("native input waits for hydration before arming and presses exactly once", async () => {

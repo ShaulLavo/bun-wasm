@@ -2,6 +2,7 @@ import { appendFile, mkdir, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { frameworks, type Box, type Framework } from "../goals-matrix/catalog";
 import { executeAttempt, type Execution } from "../goals-matrix/execute";
+import { cleanupTimeoutMs } from "../goals-matrix/deadlines";
 import { playgroundURL } from "../goals-matrix/run";
 import { preflight } from "../goals-matrix/preparation";
 import { createIphoneTransport } from "../goals-matrix/iphone-transport";
@@ -10,6 +11,7 @@ import { object } from "../goals-matrix/evidence";
 import { profileEngineFiles } from "../goals-matrix/engines";
 import { templateProfile, type PlaygroundProfile } from "../../web/src/playground/program-profile";
 import { verifyMacAdmission } from "./admission";
+import { safariTabJournal } from "./tab-journal";
 import { deviceUDID, phaseTimeoutMs, installTimeoutMs, type SmokeOptions } from "./options";
 import { StepFailure, completedCase, pendingCase, unsafeToContinue, type SmokeCase, type SmokeReport } from "./model";
 import { smokeCases } from "./cases";
@@ -23,7 +25,7 @@ interface SmokeIO {
   fetch: LiveFetch;
   qualify(config: SmokeOptions, programs: readonly Selection[], get: LiveFetch): Promise<void>;
   admission: typeof verifyMacAdmission;
-  transport(config: SmokeOptions, box: Box): ReturnType<Execution["createTransport"]>;
+  transport(config: SmokeOptions, box: Box, beforeNative: (signal: AbortSignal) => Promise<unknown>): ReturnType<Execution["createTransport"]>;
   verify(config: SmokeOptions, programs: readonly Selection[], source: Source, get: LiveFetch): Promise<void>;
   /** Live mode: what the Mac proxy received from the live origin during the run. */
   served(config: SmokeOptions): Promise<unknown>;
@@ -88,8 +90,8 @@ const defaultIO: SmokeIO = {
     if (!response.ok) throw new StepFailure("live-origin", `Live origin check: the observer answered ${response.status} for its served responses`);
     return response.json();
   },
-  transport: async (config, box) => createIphoneTransport({ control: config.control, agent: config.agent, deviceUDID,
-    timeoutMs: phaseTimeoutMs, cleanupTimeoutMs: 20_000,
+  transport: async (config, box, beforeNative) => createIphoneTransport({ control: config.control, agent: config.agent, deviceUDID,
+    timeoutMs: phaseTimeoutMs, cleanupTimeoutMs, beforeNative, tabJournal: safariTabJournal(),
     saveNative: text => appendFile(join(config.matrix.output, "logs", `${box.framework}-${box.engine}.native.jsonl`), text) }),
 };
 async function save(report: SmokeReport): Promise<void> {
@@ -116,7 +118,9 @@ export async function runSmoke(config: SmokeOptions, overrides: Partial<SmokeIO>
     const programs = uniquePrograms(selections);
     if (config.target.mode === "live") requireLiveCases(selections);
     await io.qualify(config, programs, io.fetch);
-    const ticket = await io.admission(config.thread, undefined, signal);
+    const ticket = await io.admission(config.thread, undefined, signal).catch(error => {
+      throw new StepFailure("mac-admission", error instanceof Error ? error.message : String(error));
+    });
     await cases(config, report, io, ticket, selections, signal);
     signal?.throwIfAborted();
     await io.verify(config, programs, source, io.fetch);
@@ -161,10 +165,10 @@ function blocked(result: SmokeCase, error: string, phase = "prerequisite"): Smok
 async function runCase(config: SmokeOptions, selection: Selection, source: SmokeCase["source"], io: SmokeIO, ticket: string, signal?: AbortSignal): Promise<SmokeCase> {
   const { box, framework, profile } = selection;
   try { await io.admission(config.thread, ticket, signal); }
-  catch (error) { return blocked(pendingCase(box, source), String(error)); }
+  catch (error) { return blocked(pendingCase(box, source), String(error), "mac-admission"); }
   const attempt = await executeAttempt({ box, framework, profile, url: playgroundURL(pageBase(config), framework, box.engine, profile),
     timeoutMs: phaseTimeoutMs, installTimeoutMs, signal,
-    createTransport: () => io.transport(config, box),
+    createTransport: () => io.transport(config, box, nativeSignal => io.admission(config.thread, ticket, nativeSignal)),
     saveLog: text => Bun.write(join(config.matrix.output, "logs", `${box.framework}-${box.engine}.log`), text).then(() => {}),
   }, "click");
   return completedCase(box, source, attempt);
