@@ -503,9 +503,9 @@
     memoryUsage,
     // maxRSS is kilobytes. Linear memory never shrinks, so its current size is the peak.
     resourceUsage: () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: memoryUsage.rss() / 1024 }),
-    cpuUsage: () => ({ user: Math.floor(native.now() * 1000), system: 0 }),
+    cpuUsage: (previous?: unknown) => internal.require("process_args").cpuUsage({ user: Math.floor(native.now() * 1000), system: 0 }, previous),
     uptime: () => native.now() / 1000,
-    umask: () => 0o22,
+    umask: (mask?: unknown) => internal.require("process_args").umask(mask),
     getuid: () => 0,
     geteuid: () => 0,
     getgid: () => 0,

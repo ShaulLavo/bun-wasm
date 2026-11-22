@@ -563,6 +563,10 @@ declare namespace BunWasm {
     require(name: "process_binding"): (name: unknown, own: Record<string, () => unknown>) => unknown;
     require(name: "process_allowed_flags"): ReadonlySet<string>;
     require(name: "process_report"): (process: object) => object;
+    require(name: "process_args"): {
+      umask(mask: unknown): number;
+      cpuUsage(usage: { user: number; system: number }, previous: unknown): { user: number; system: number };
+    };
     require(name: "uv_errors"): {
       binding(): Record<string, unknown>;
       message(name: string): string | undefined;
