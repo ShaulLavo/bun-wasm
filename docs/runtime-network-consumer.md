@@ -13,6 +13,8 @@ network override, Bun keeps its existing installer download cache policy.
 The playground's `RunOptions.network` uses one page-lifetime observation object
 for roots and children. A root's result does not own a child's preview. A session
 ends when its own Worker physically stops, after the filesystem admission fence.
+A child killed by a signal ends its session, and frees its ports, as soon as the
+kill is decided, because its Worker may stop much later or, in WebKit, never.
 Disposing an adapter installation only unregisters future launches. Only the
 caller may dispose the Runtime and its whole network. Preview1 remains
 network-free. Network ownership never crosses worker messages.
