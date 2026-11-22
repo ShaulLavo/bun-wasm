@@ -924,11 +924,13 @@ fn parse_command_with_flags(
                     mode,
                 );
             }
-            // Flags native Bun accepts that change nothing here; it lists them in process.execArgv.
-            "--bun" | "-b" | "--smol" | "--no-install" => {
+            // `--bun` changes nothing here, and Bun lists it in process.execArgv.
+            "--bun" | "-b" => {
                 exec_argv.push(arg);
                 continue;
             }
+            // Flags native Bun accepts that change nothing here.
+            "--smol" | "--no-install" => continue,
             // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
             // are accepted and kept in process.execArgv, so forked children receive them too.
             // `bun run --silent` reaches package scripts this way and hides their `$ command` lines.
