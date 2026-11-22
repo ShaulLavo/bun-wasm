@@ -116,7 +116,8 @@ use separate file processes, retaining their internal order, mocks, assertions,
 profile settings and hang caps. No test or compilation is added to the plan.
 
 Without this variable, or with `1`, the runtime command is unchanged. Other values
-fail before starting checks. The bounded mode sets `RAYON_NUM_THREADS=2` and owns
+fail before starting checks. The bounded mode sets `RAYON_NUM_THREADS=2` for 2 workers
+and `RAYON_NUM_THREADS=1` for 3–4 workers, and owns
 a temporary root for `TMPDIR` and `WASM_TABLE_TMP`. It uses the existing command
 supervisor with `--until-exit`, preserving each file's existing deadlines rather
 than adding an aggregate deadline. Failure stops pending files and waits for

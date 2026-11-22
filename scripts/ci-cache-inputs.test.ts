@@ -5,7 +5,6 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
-import { nativePipeline } from "./ci-native-pipeline";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -26,11 +25,10 @@ function jobSteps(job: string): unknown[] {
   if (!Array.isArray(steps)) throw new Error("Expected workflow steps");
   return steps;
 }
-const pipeline: unknown = Bun.YAML.parse(`jobs:\n  rust:\n${nativePipeline(expandedCiWorkflow()).ordered}`);
-const orderedSteps = field(field(field(pipeline, "jobs"), "rust"), "steps");
-if (!Array.isArray(orderedSteps)) throw new Error("Expected ordered native steps");
-const stepList = orderedSteps;
-const producerSteps = jobSteps("jsc-prebuild");
+const producerSteps = jobSteps("ordinary-build");
+const checkpointSteps = jobSteps("native-quality");
+const runtimeSteps = jobSteps("rust");
+const stepList = producerSteps;
 function step(key: string, value: string, list: readonly unknown[] = stepList): unknown {
   const found = list.filter(item => typeof item === "object" && item !== null && key in item && Reflect.get(item, key) === value);
   expect(found).toHaveLength(1);
@@ -41,7 +39,7 @@ const named = (name: string, list: readonly unknown[] = stepList) => step("name"
 const position = (name: string, list: readonly unknown[] = stepList) => list.indexOf(named(name, list));
 
 test("sysroot and prebuild restores use effective inputs and have bounded compatible fallbacks", () => {
-  for (const [id, list] of [["sysroot-cache", producerSteps], ["jsc-prebuild-cache", producerSteps], ["jsc-cargo-cache", stepList]] satisfies [string, readonly unknown[]][]) {
+  for (const [id, list] of [["sysroot-cache", producerSteps], ["jsc-prebuild-cache", producerSteps], ["jsc-cargo-cache", producerSteps]] satisfies [string, readonly unknown[]][]) {
     const restore = field(byId(id, list), "with");
     const prefix = string(field(restore, "restore-keys")).trim();
     expect(prefix).not.toContain("'bun.lock'");
@@ -56,31 +54,31 @@ test("native-only selections provision the tools JSC prerequisite without enabli
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
   }
-  expect(field(field(field(workflow, "jobs"), "jsc-prebuild"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true')) }}");
-  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true'))) }}");
+  expect(field(field(field(workflow, "jobs"), "ordinary-build"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true') }}");
+  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true')) }}");
   for (const prerequisite of [named("Configure private JSC build paths", producerSteps), byId("jsc-inputs", producerSteps), byId("jsc-prebuild-cache", producerSteps), byId("jsc-producer", producerSteps)]) {
     expect(prerequisite).not.toHaveProperty("if");
   }
-  expect(field(byId("jsc-artifact", producerSteps), "if")).toBe("inputs.transfer == 'true'");
-  for (const prerequisite of [named("Require the JSC prebuild job's output"), named("Configure private JSC build paths"), named("Import the verified JSC prebuild and sysroot"), byId("jsc-inputs")]) {
-    expect(prerequisite).not.toHaveProperty("if");
-  }
-  const tools = named("Build the single tools fixture in the existing native target");
+  const tools = named("Build the single tools fixture in the existing native target", producerSteps);
   expect(tools).not.toHaveProperty("if");
-  expect(position("Import the verified JSC prebuild and sysroot")).toBeLessThan(stepList.indexOf(tools));
-  expect(position("Import the verified JSC prebuild and sysroot")).toBeLessThan(position("Blocking native quality checks"));
-  for (const engine of [byId("jsc-cargo-cache"), named("Build the JSC Cargo guest"), named("Blocking JSC embedding and allocation checks"), named("Blocking Web guest case (JSC)")]) {
-    expect(field(engine, "if")).toBe("needs.selection.outputs.jsc == 'true'");
+  expect(position("Build or verify the JSC prebuild", producerSteps)).toBeLessThan(producerSteps.indexOf(tools));
+  for (const [engine, list] of [
+    [byId("jsc-cargo-cache", producerSteps), producerSteps],
+    [named("Build the JSC Cargo guest", producerSteps), producerSteps],
+    [named("Blocking JSC embedding and allocation checks", runtimeSteps), runtimeSteps],
+    [named("Blocking Web guest case (JSC)", runtimeSteps), runtimeSteps],
+  ] as const) {
+    expect(field(engine, "if"), String(list.length)).toBe("needs.selection.outputs.jsc == 'true'");
   }
 });
 
 test("completed caches are saved before later validation can fail or time out", () => {
   expect(position("Save the verified sysroot cache", producerSteps)).toBeGreaterThan(position("Build patched WASI sysroot", producerSteps));
   expect(position("Save the verified sysroot cache", producerSteps)).toBeLessThan(position("Build or verify the JSC prebuild", producerSteps));
-  expect(position("Save the JSC prebuild cache once per input revision", producerSteps)).toBeLessThan(position("Package the verified prebuild and sysroot", producerSteps));
-  expect(position("Save the JSC Cargo cache once per input revision")).toBeLessThan(position("Blocking JSC embedding and allocation checks"));
-  expect(position("Save the native quality checkpoint")).toBeLessThan(position("Build native fixtures after the cache checkpoint"));
-  expect(position("Save the refined native Cargo cache once per input revision")).toBeLessThan(position("Blocking Web guest cases (QuickJS and host engine)"));
+  expect(position("Save the JSC prebuild cache once per input revision", producerSteps)).toBeLessThan(position("Build the common engine core once", producerSteps));
+  expect(position("Save the JSC Cargo cache once per input revision", producerSteps)).toBeLessThan(position("Verify JSC embedding source and native backing", producerSteps));
+  expect(position("Save the native quality checkpoint", checkpointSteps)).toBeGreaterThan(position("Blocking native quality checks", checkpointSteps));
+  expect(position("Save the refined native Cargo cache once per input revision", producerSteps)).toBeGreaterThan(position("Build the single tools fixture in the existing native target", producerSteps));
   expect(field(named("Save the JSC prebuild cache once per input revision", producerSteps), "if")).toContain("!cancelled()");
   expect(field(named("Save the JSC prebuild cache once per input revision", producerSteps), "if")).toContain("outputs.jsc-ready == 'true'");
 });
@@ -104,8 +102,8 @@ test("split producers keep the common core target separate from the JSC side cac
 
 test("each setup cache has one immediate save after its successful producer", () => {
   for (const [id, producer, list] of [
-    ["rustup-cache", "dtolnay/rust-toolchain@nightly", stepList], ["sdk", "Install pinned WASI SDK", stepList],
-    ["binaryen-cache", "Install pinned Binaryen", stepList], ["wasmtime-cache", "Install pinned Wasmtime", stepList], ["sources-cache", "Prepare pinned upstream sources", stepList],
+    ["rustup-cache", "dtolnay/rust-toolchain@nightly", checkpointSteps], ["sdk", "Install pinned WASI SDK", checkpointSteps],
+    ["binaryen-cache", "Install pinned Binaryen", checkpointSteps], ["wasmtime-cache", "Install pinned Wasmtime", checkpointSteps], ["sources-cache", "Prepare pinned upstream sources", checkpointSteps],
     ["sdk", "Install pinned WASI SDK", producerSteps], ["binaryen-cache", "Install pinned Binaryen", producerSteps],
   ] satisfies [string, string, readonly unknown[]][]) {
     const restore = byId(id, list);
@@ -127,13 +125,10 @@ function shellFixture(run: (root: string) => void) {
 
 test("ordered producers advertise completion only after successful commands", () => {
   shellFixture(root => {
-    for (const [name, functionName, outputName, list] of [
-      ["Build or verify the JSC prebuild", "run_jsc_prebuild", "jsc-ready", producerSteps],
-      ["Blocking native quality checks", "run_native_checks", "native-ready", stepList],
-    ] satisfies [string, string, string, readonly unknown[]][]) {
-      assertProducerCompletion(root, name, functionName, outputName, list);
-    }
+    assertProducerCompletion(root, "Build or verify the JSC prebuild", "run_jsc_prebuild", "jsc-ready", producerSteps);
   });
+  const qualityScript = string(field(named("Blocking native quality checks", checkpointSteps), "run"));
+  expect(qualityScript.trimEnd().endsWith('echo "native-ready=true" >> "$GITHUB_OUTPUT"')).toBe(true);
 });
 
 function assertProducerCompletion(root: string, name: string, functionName: string, outputName: string, list: readonly unknown[]) {
@@ -236,26 +231,16 @@ test("extracted native input shell rejects failed probes and keys effective flag
 const producerBoundaries = [
   ["Build or verify the JSC prebuild", "run_jsc_prebuild"],
   ["Save the JSC prebuild cache once per input revision", "jsc"],
-  ["Package the verified prebuild and sysroot", ""],
-] satisfies [string, string][];
-
-const checkpointBoundaries = [
-  ["Import the verified JSC prebuild and sysroot", ""],
-  ["Blocking native quality checks", "run_native_checks"],
-  ["Save the native quality checkpoint", "native"],
   ["Start the JSC Cargo guest build", ""],
   ["Build native fixtures after the cache checkpoint", ""],
   ["Build the JSC Cargo guest", ""],
   ["Save the JSC Cargo cache once per input revision", "jsc-cargo"],
   ["Verify JSC embedding source and native backing", ""],
-  ["Blocking native fixture checks", ""],
   ["Build the single tools fixture in the existing native target", ""],
   ["Save the refined native Cargo cache once per input revision", "native-final"],
-  ["Blocking JSC embedding and allocation checks", ""],
-  ["Blocking Web guest cases (QuickJS and host engine)", ""],
 ] satisfies [string, string][];
 
-function boundaryCommands(failure: string, cancelled: boolean, controller = true, boundaries: readonly (readonly [string, string])[] = checkpointBoundaries, list: readonly unknown[] = stepList): string {
+function boundaryCommands(failure: string, cancelled: boolean, controller = true, boundaries: readonly (readonly [string, string])[] = producerBoundaries, list: readonly unknown[] = producerSteps): string {
   const ordered = boundaries.toSorted((left, right) => position(left[0], list) - position(right[0], list));
   expect<readonly (readonly [string, string])[]>(ordered).toEqual(boundaries);
   return ordered.map(([name, marker]) => {
@@ -274,30 +259,17 @@ function boundaryCommands(failure: string, cancelled: boolean, controller = true
 
 for (const [failure, expected] of [
   ["Build or verify the JSC prebuild", []],
-  ["Package the verified prebuild and sysroot", ["jsc"]],
+  ["Build native fixtures after the cache checkpoint", ["jsc"]],
+  ["Build the JSC Cargo guest", ["jsc"]],
+  ["Verify JSC embedding source and native backing", ["jsc", "jsc-cargo"]],
+  ["Build the single tools fixture in the existing native target", ["jsc", "jsc-cargo"]],
 ] satisfies [string, string[]][]) {
-  test(`extracted prebuild job retains earlier checkpoint records when ${failure} fails or is cancelled`, () => {
+  test(`extracted producer job retains earlier checkpoint records when ${failure} fails or is cancelled`, () => {
     shellFixture(root => assertCheckpointRecords(root, failure, expected, producerBoundaries, producerSteps));
   });
 }
 
-for (const [failure, expected] of [
-  ["Import the verified JSC prebuild and sysroot", []],
-  ["Blocking native quality checks", []],
-  ["Build native fixtures after the cache checkpoint", ["native"]],
-  ["Build the JSC Cargo guest", ["native"]],
-  ["Verify JSC embedding source and native backing", ["native", "jsc-cargo"]],
-  ["Blocking JSC embedding and allocation checks", ["native", "jsc-cargo", "native-final"]],
-  ["Blocking native fixture checks", ["native", "jsc-cargo"]],
-  ["Build the single tools fixture in the existing native target", ["native", "jsc-cargo"]],
-  ["Blocking Web guest cases (QuickJS and host engine)", ["native", "jsc-cargo", "native-final"]],
-] satisfies [string, string[]][]) {
-  test(`extracted workflow retains earlier checkpoint records when ${failure} fails or is cancelled`, () => {
-    shellFixture(root => assertCheckpointRecords(root, failure, expected));
-  });
-}
-
-function assertCheckpointRecords(root: string, failure: string, expected: readonly string[], boundaries: readonly (readonly [string, string])[] = checkpointBoundaries, list: readonly unknown[] = stepList) {
+function assertCheckpointRecords(root: string, failure: string, expected: readonly string[], boundaries: readonly (readonly [string, string])[] = producerBoundaries, list: readonly unknown[] = producerSteps) {
   for (const cancelled of [false, true]) {
     const records = join(root, "checkpoint-records");
     writeFileSync(records, "");

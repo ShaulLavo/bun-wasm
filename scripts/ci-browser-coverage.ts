@@ -20,7 +20,7 @@ export function selectCiBrowserCoverage(base: string, head: string, options: { p
     snapshots: [browserCoverageSnapshot(base, "base"), browserCoverageSnapshot(head, "head"), browserCoverageSnapshot(ancestor, "merge-ancestor")] });
 }
 
-function shardForBatch(name: string): string {
+function groupForBatch(name: string): string {
   switch (name) {
     case "10-storage": return "storage";
     case "21-subprocess-aliases":
@@ -35,14 +35,24 @@ function shardForBatch(name: string): string {
   }
 }
 
+function shardForBatch(name: string): string {
+  const group = groupForBatch(name);
+  return group === "runtime" || group === "playground" ? "suite" : group;
+}
+
 function batchBudget(name: string) {
-  return name.startsWith("2") ? { name, jobSeconds: 3600, commandSeconds: 3240 } : { name, jobSeconds: 600, commandSeconds: 900 };
+  const group = groupForBatch(name);
+  return name.startsWith("2")
+    ? { name, group, jobSeconds: 3600, commandSeconds: 3240 }
+    : { name, group, jobSeconds: 600, commandSeconds: 900 };
 }
 
 function browserGuestMatrix(names: readonly string[]) {
   const shards = Map.groupBy(names.map(batchBudget), batch => shardForBatch(batch.name));
   const include = Array.from(shards, ([shard, batches]) => {
-    const timeoutMinutes = batches.reduce((sum, batch) => sum + batch.jobSeconds, 0) / 60;
+    const groups = Map.groupBy(batches, batch => batch.group);
+    const timeoutSeconds = Math.max(...Array.from(groups.values(), group => group.reduce((sum, batch) => sum + batch.jobSeconds, 0)));
+    const timeoutMinutes = Math.min(360, Math.max(20, Math.ceil(timeoutSeconds / 60)));
     return ["chromium", "webkit"].map(browser => ({ browser, batch: shard, batches, timeoutMinutes }));
   }).flat();
   return { include };

@@ -42,36 +42,42 @@ const ciJobs = record(ci.jobs);
 const warmJobs = record(warm.jobs);
 
 test("main warms effective JSC generations outside the full push queue without claiming its protected check", () => {
-  expect(warm.on).toEqual({ push: { branches: ["main"] } });
+  const push = record(record(warm.on).push);
+  expect(push.branches).toEqual(["main"]);
+  expect(Array.isArray(push.paths)).toBe(true);
+  expect(push.paths).toContain("jsc/**");
+  expect(push.paths).toContain("scripts/build-jsc.sh");
+  expect(record(warm.on)).toHaveProperty("workflow_dispatch");
   expect(warm.concurrency).toBeUndefined();
   expect(warm.permissions).toEqual({ contents: "read" });
   expect(record(warmJobs.identity).needs).toBeUndefined();
   expect(record(warmJobs["jsc-prebuild"]).name).toBe("Warm verified JSC cache");
-  expect(record(ciJobs["jsc-prebuild"]).name).toBe("JSC C/C++ prebuild");
-  expect(record(ciJobs["jsc-identity"]).if).toBe(record(ciJobs["jsc-prebuild"]).if);
-  expect(record(ciJobs["jsc-identity"]).needs).toBe("selection");
-  expect(record(ciJobs["jsc-prebuild"]).needs).toEqual(["selection", "jsc-identity"]);
+  const ordinaryBuild = record(ciJobs["ordinary-build"]);
+  expect(ordinaryBuild.name).toBe("Ordinary guest production");
+  expect(ordinaryBuild.needs).toBe("selection");
+  expect(step(ordinaryBuild, "id", "native-setup").uses).toBe("./.github/actions/native-setup");
+  expect(record(step(ordinaryBuild, "id", "native-setup").with).jsc).toBe("true");
 });
 
-for (const [jobs, identity, transfer] of [[ciJobs, "jsc-identity", "true"], [warmJobs, "identity", "false"]] as const) {
-  test(`${transfer === "true" ? "full CI" : "independent producer"} locks the same existing effective cache identity before restore`, () => {
-    const producer = record(jobs["jsc-prebuild"]);
-    expect(producer.concurrency).toEqual({ group: `\${{ needs.${identity}.outputs.key }}`, "cancel-in-progress": false, queue: "max" });
-    const outputs: Record<string, string> = { key: "${{ steps.setup.outputs.key }}", "sysroot-sha256": "${{ steps.sysroot.outputs.sha256 }}" };
-    if (transfer === "false") outputs["cache-hit"] = "${{ steps.published.outputs.cache-hit }}";
-    expect(record(jobs[identity]).outputs).toEqual(outputs);
-    for (const job of [record(jobs[identity]), producer]) expect(step(job, "id", "setup").uses).toBe("./.github/actions/jsc-setup");
-    expect(step(producer, "id", "setup").with).toEqual({ sysroot: `\${{ needs.${identity}.outputs.sysroot-sha256 }}` });
-    expect(step(producer, "uses", "actions/download-artifact@v8").with).toEqual({ name: "jsc-identity-sysroot.tar.zst", path: "${{ runner.temp }}" });
-    expect(step(producer, "id", "prebuild")).toMatchObject({
-      uses: "./.github/actions/jsc-prebuild",
-      with: { key: "${{ steps.setup.outputs.key }}", prefix: "${{ steps.setup.outputs.prefix }}", "expected-key": `\${{ needs.${identity}.outputs.key }}`, transfer },
-    });
-    expect(producer["timeout-minutes"]).toBe(45);
-    expect(step(build, "id", "jsc-prebuild-cache").with).toEqual({ path: "${{ runner.temp }}/jsc/prebuild", key: "${{ inputs.key }}", "restore-keys": "${{ inputs.prefix }}\n" });
-    expect(steps(build)[0]?.name).toBe("Require the identity used to serialize producers");
+test("independent producer locks the same existing effective cache identity before restore", () => {
+  const producer = record(warmJobs["jsc-prebuild"]);
+  expect(producer.concurrency).toEqual({ group: "${{ needs.identity.outputs.key }}", "cancel-in-progress": false, queue: "max" });
+  expect(record(warmJobs.identity).outputs).toEqual({
+    key: "${{ steps.setup.outputs.key }}",
+    "cache-hit": "${{ steps.published.outputs.cache-hit }}",
+    "sysroot-sha256": "${{ steps.sysroot.outputs.sha256 }}",
   });
-}
+  for (const job of [record(warmJobs.identity), producer]) expect(step(job, "id", "setup").uses).toBe("./.github/actions/jsc-setup");
+  expect(step(producer, "id", "setup").with).toEqual({ sysroot: "${{ needs.identity.outputs.sysroot-sha256 }}" });
+  expect(step(producer, "uses", "actions/download-artifact@v8").with).toEqual({ name: "jsc-identity-sysroot.tar.zst", path: "${{ runner.temp }}" });
+  expect(step(producer, "id", "prebuild")).toMatchObject({
+    uses: "./.github/actions/jsc-prebuild",
+    with: { key: "${{ steps.setup.outputs.key }}", prefix: "${{ steps.setup.outputs.prefix }}", "expected-key": "${{ needs.identity.outputs.key }}", transfer: "false" },
+  });
+  expect(producer["timeout-minutes"]).toBe(45);
+  expect(step(build, "id", "jsc-prebuild-cache").with).toEqual({ path: "${{ runner.temp }}/jsc/prebuild", key: "${{ inputs.key }}", "restore-keys": "${{ inputs.prefix }}\n" });
+  expect(steps(build)[0]?.name).toBe("Require the identity used to serialize producers");
+});
 
 test("the ordinary identity looks up the exact published cache without downloading or saving it", () => {
   const identity = record(warmJobs.identity);
@@ -86,9 +92,9 @@ test("the ordinary identity looks up the exact published cache without downloadi
   const identitySteps = steps(identity);
   expect(identitySteps.findIndex(item => item.id === "published")).toBeGreaterThan(identitySteps.findIndex(item => item.id === "setup"));
   expect(steps(identity).some(item => item.uses === "actions/cache/save@v4")).toBe(false);
-  expect(record(ciJobs["jsc-identity"]).outputs).not.toHaveProperty("cache-hit");
-  expect(JSON.stringify(ciJobs)).not.toContain("needs.jsc-identity.outputs.cache-hit");
   expect(step(build, "id", "jsc-prebuild-cache").with).not.toHaveProperty("lookup-only");
+  const nativeSetup = record(document(".github/actions/native-setup/action.yml").runs);
+  expect(step(nativeSetup, "id", "jsc-prebuild-cache").with).not.toHaveProperty("lookup-only");
 });
 
 test.each([
@@ -107,18 +113,23 @@ test.each([
   expect(producer.needs).toBe("identity");
 });
 
-test("the existing key, compatible prefix and run-bound handoff stay intact", () => {
+test("the existing key, compatible prefix and inline prebuild cache stay intact", () => {
   const identity = record(step(setup, "id", "identity").env);
   const prefix = "jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-";
   expect(identity.CACHE_PREFIX).toBe(prefix);
   expect(identity.CACHE_KEY).toBe(prefix + "${{ hashFiles('scripts/build-wasi-sysroot.ts') }}");
+  const nativeSetup = record(document(".github/actions/native-setup/action.yml").runs);
+  expect(step(nativeSetup, "id", "jsc-prebuild-cache").with).toEqual({
+    path: "${{ runner.temp }}/jsc/prebuild",
+    key: prefix + "${{ hashFiles('scripts/build-wasi-sysroot.ts') }}",
+    "restore-keys": prefix + "\n",
+  });
   expect(step(build, "id", "jsc-artifact").if).toBe("inputs.transfer == 'true'");
-  const upload = step(record(ciJobs["jsc-prebuild"]), "uses", "actions/upload-artifact@v7");
-  expect(upload["timeout-minutes"]).toBe(5);
-  expect(record(upload.with).path).toBe("${{ runner.temp }}/jsc-prebuild.tar");
   expect(script(step(build, "id", "jsc-artifact"))).toContain('"$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"');
   const save = step(build, "name", "Save the JSC prebuild cache once per input revision");
   expect(save.if).toBe("${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}");
+  const inlineSave = step(nativeSetup, "name", "Save the JSC prebuild cache once per input revision");
+  expect(inlineSave.if).toBe("${{ !cancelled() && inputs.jsc == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}");
 });
 
 test("JSC composite steps use runner-supported metadata", () => {
@@ -153,7 +164,7 @@ function preparedSysroot(root: string) {
   writeFileSync(join(root, "env.sh"), "set -euo pipefail\n");
   const output = join(root, "output");
   const env = { ...process.env, RUNNER_TEMP: root, WASM_TOOLS: tools, BUN_WASM_SYSROOT: sysroot, GITHUB_OUTPUT: output };
-  const packaged = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script(step(record(ciJobs["jsc-identity"]), "id", "sysroot"))], { cwd: root, env, encoding: "utf8" });
+  const packaged = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script(step(record(warmJobs.identity), "id", "sysroot"))], { cwd: root, env, encoding: "utf8" });
   expect(packaged.status, packaged.stderr).toBe(0);
   const digest = readFileSync(output, "utf8").trim().slice("sha256=".length);
   rmSync(sysroot, { recursive: true });

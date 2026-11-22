@@ -72,7 +72,7 @@ test("PRs can still restore all shared caches, including compiler objects and to
     expect(String(step.if ?? "")).not.toContain("github.event_name");
     expect(String(step.if ?? "")).not.toContain("github.ref");
   }
-  for (const job of ["native-quality", "rust"]) {
+  for (const job of ["native-quality", "ordinary-build", "rust"]) {
     const entries = jobSteps(job);
     const restore = entries.find(step => step.uses === "./.github/actions/rust-build-cache");
     expect(restore).toBeDefined();
@@ -98,7 +98,7 @@ test("Rust objects restore compatible generations and save only changed inventor
   expect(String(key?.run)).toContain("rust-objects-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.scope }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}");
   expect(group?.steps.findIndex(step => String(step.run).includes("ci-sccache-cache.ts\" capture"))).toBeGreaterThan(group?.steps.findIndex(step => step.id === "objects") ?? -1);
   expect(group?.steps.some(step => String(step.run).includes('echo "SCCACHE_CACHE_SIZE=512M" >> "$GITHUB_ENV"'))).toBe(true);
-  for (const job of ["native-quality", "rust", "shared-sysroot"]) {
+  for (const job of ["native-quality", "ordinary-build", "shared-sysroot"]) {
     const entries = jobSteps(job);
     const setup = entries.findIndex(step => step.uses === "./.github/actions/rust-build-cache");
     expect(entries[setup]?.id).toBe("rust-objects");
@@ -131,7 +131,7 @@ test("compiler-object rotation is main-only and waits for a successful changed s
   expect(allows({ ...cleanup, if: String(cleanup.if).replaceAll("steps.publish.outcome", "'failure'") }, "push", "refs/heads/main")).toBe(false);
   const jobs = record(record(Bun.YAML.parse(readFileSync(resolve(github, "workflows/ci.yml"), "utf8"))).jobs);
   const writers = Object.entries(jobs).filter(([, value]) => record(record(value).permissions ?? {}).actions === "write");
-  expect(writers.map(([id]) => id).sort()).toEqual(["native-quality", "rust", "shared-sysroot"]);
+  expect(writers.map(([id]) => id).sort()).toEqual(["native-quality", "ordinary-build", "shared-sysroot"]);
   for (const [, job] of writers) expect(record(record(job).permissions).contents).toBe("read");
 });
 

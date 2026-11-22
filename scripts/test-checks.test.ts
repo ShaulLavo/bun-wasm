@@ -145,11 +145,19 @@ test("capacity, process and large IO retain blocking coverage on three ordinary 
 
 test("CI declares its native fixture and installer engine domains separately", () => {
   const workflow = expandedCiWorkflow();
-  const gate = workflow.split("name: Blocking native fixture checks")[1]!.split("\n      - name:")[0]!;
-  expect(gate).toContain('BUN_WASM_RUNTIME_JOBS: "3"');
-  expect(gate).toContain("INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
-  expect(gate).toContain("BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}");
-  expect(gate).toContain("          bun scripts/test-checks.ts native\n");
+  const runtimeGate = workflow.split("name: Blocking native runtime checks")[1]!.split("\n      - name:")[0]!;
+  expect(runtimeGate).toContain('BUN_WASM_RUNTIME_JOBS: "3"');
+  expect(runtimeGate).toContain("INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
+  expect(runtimeGate).toContain("BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}");
+  expect(runtimeGate).toContain("          bun scripts/test-checks.ts native --only runtime");
+  const fixtureGate = workflow.split("name: Blocking native fixture and install checks")[1]!.split("\n  browser-guest:")[0]!;
+  expect(fixtureGate).toContain("INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
+  expect(fixtureGate).toContain("BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}");
+  expect(fixtureGate).toContain("          bun scripts/test-checks.ts native --only fixtures");
+  expect(checkArguments(["native", "--only", "runtime"])).toMatchObject({ owner: "native", only: "runtime" });
+  expect(checkArguments(["native", "--only", "fixtures"])).toMatchObject({ owner: "native", only: "fixtures" });
+  expect(() => checkArguments(["native", "--only", "invalid"])).toThrow("Invalid native phase");
+  expect(() => checkArguments(["quality", "--only", "runtime"])).toThrow("native");
 });
 
 test("testJobs validates bounds and shardTestFiles distributes every path once and spreads heavy files for relative and absolute paths", () => {
@@ -420,14 +428,16 @@ test("selected tests cannot import hidden test barrels that give a fixture a sec
 
 test("each discovery group retains one command owner and browser deadlines stay outside discovery", () => {
   const workflow = expandedCiWorkflow();
-  for (const owner of ["native", "package-extra", "cmake"]) expect(workflow.match(new RegExp(`bun scripts/test-checks\\.ts ${owner}\\n`, "g"))).toHaveLength(1);
+  for (const owner of ["package-extra", "cmake"]) expect(workflow.match(new RegExp(`bun scripts/test-checks\\.ts ${owner}\\n`, "g"))).toHaveLength(1);
+  expect(workflow.match(/bun scripts\/test-checks\.ts native --only runtime\n/g)).toHaveLength(1);
+  expect(workflow.match(/bun scripts\/test-checks\.ts native --only fixtures\n/g)).toHaveLength(1);
   const web = readFileSync(join(root, "scripts/test-web-host.sh"), "utf8");
   expect(web.match(/bun \.\.\/scripts\/test-checks.ts web\n/g)).toHaveLength(1);
   expect(web).toContain("browser_test bun ../scripts/test-checks.ts web-browser");
-  // The rust job bundles one verified site. Browser legs and the shared-profile consumer reuse it.
-  expect(workflow.match(/bun \.\.\/scripts\/test-checks\.ts browser-guest --batch/g)).toHaveLength(1);
+  // ordinary-build bundles one verified site. Browser legs and shared consumers reuse it.
+  expect(readFileSync(join(root, "scripts/ci-browser-guest-run.ts"), "utf8")).toContain('"browser-guest", "--batch", batch.name');
   expect(readFileSync(join(root, ".github/actions/native-production/action.yml"), "utf8").match(/bun scripts\/browser-guest-site\.ts build "\$RUNNER_TEMP\/browser-guest-site"\n/g)).toHaveLength(1);
-  expect(workflow.match(/name: browser-guest-site\n/g)).toHaveLength(4);
+  expect(workflow.match(/name: browser-guest-site\n/g)).toHaveLength(3);
   expect(workflow).toContain("BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site");
   expect(workflow).not.toContain("web/build.ts");
   expect(workflow).toContain("bun scripts/ci-install.ts --cwd sandbox --frozen-lockfile --ignore-scripts");
@@ -508,22 +518,20 @@ test("Browser guest matrix discovers each profile batch and runs every check exa
   }
 });
 
-test("required Processes gates reject failed or cancelled guest batches and allow only producer-disabled skips", () => {
+test("browser-guest and web-browser keep process checks blocking and fail-closed under ci-result", () => {
   const workflow = expandedCiWorkflow();
   const guest = workflow.split("\n  browser-guest:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
   expect(guest).toContain("matrix: ${{ fromJSON(needs.selection.outputs.browser-guest-matrix) }}");
   expect(guest).toContain("fail-fast: false");
   expect(guest).toContain("timeout-minutes: ${{ matrix.timeoutMinutes }}");
   expect(guest).not.toContain("browser-guest-site.ts build");
-  const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
-  expect(processes).toContain("needs: [selection, ordinary-web-guests, rust, browser-production, process-bundles, browser-guest]");
-  expect(processes).toContain("always() && !cancelled()");
-  const guard = processes.match(/run: \|\n([\s\S]*?)      - uses:/)?.[1];
-  if (!guard) throw new Error("Missing required guest-result guard");
-  for (const selected of ["true", "false", "", "invalid"]) {
-    for (const guest of ["success", "skipped", "failure", "cancelled"]) {
-      const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", guard], { env: { ...process.env, BROWSER_GUEST: selected, GUEST_RESULT: guest } });
-      expect(result.status === 0, `${selected}/${guest}`).toBe(selected === "true" && guest === "success" || selected === "false" && guest === "skipped");
-    }
+  expect(guest).toContain("needs: [selection, ordinary-build, web-browser]");
+  expect(guest).toContain('bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts "$b"');
+  expect(guest).toContain('bun ../scripts/run-with-timeout.mts 120 bun tests/browser-wasm-transfer.ts "$b"');
+  const webBrowser = workflow.split("\n  web-browser:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
+  expect(webBrowser).toContain("bun ../scripts/ci-web-browser-run.ts");
+  const webRunner = readFileSync(join(root, "scripts/ci-web-browser-run.ts"), "utf8");
+  for (const script of ["tests/browser-process.ts", "tests/browser-interrupt.ts", "tests/browser-runtime-proc.ts"]) {
+    expect(webRunner).toContain(script);
   }
 });

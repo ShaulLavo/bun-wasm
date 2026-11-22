@@ -42,35 +42,41 @@ const ciJobs = record(ci.jobs);
 const warmJobs = record(warm.jobs);
 
 test("shared warming bypasses full CI admission and keeps main-only publication and existing protected names", () => {
-  expect(warm.on).toEqual({ push: { branches: ["main"] } });
+  const push = record(record(warm.on).push);
+  expect(push.branches).toEqual(["main"]);
+  expect(Array.isArray(push.paths)).toBe(true);
+  expect(push.paths).toContain("patches/wasi-libc/**");
+  expect(record(warm.on)).toHaveProperty("workflow_dispatch");
   expect(warm.concurrency).toBeUndefined();
   expect(warm.permissions).toEqual({ contents: "read" });
   expect(record(warmJobs["shared-identity"]).needs).toBeUndefined();
   expect(record(warmJobs["shared-prebuild"]).name).toBe("Warm verified shared JSC cache");
-  expect(record(ciJobs["shared-prebuild"]).name).toBe("Shared PIC sysroot and JSC prebuild");
-  expect(record(ciJobs["shared-jsc-identity"]).if).toBe(record(ciJobs["shared-prebuild"]).if);
-  expect(record(ciJobs["shared-jsc-identity"]).needs).toBe("selection");
-  expect(record(ciJobs["shared-prebuild"]).needs).toEqual(["selection", "shared-jsc-identity"]);
+  expect(record(warmJobs["shared-prebuild"]).if).toBe("needs.shared-identity.outputs.cache-hit != 'true'");
+  const sharedSysroot = record(ciJobs["shared-sysroot"]);
+  expect(sharedSysroot.name).toBe("Shared PIC program producer");
+  expect(sharedSysroot.needs).toBe("selection");
   expect(record(warm.env).CI_NODE_VERSION).toBe(record(ci.env).CI_NODE_VERSION);
   expect(discoverChecks().filter(check => check.path === "scripts/ci-shared-jsc-cache.test.ts").map(check => check.owner)).toEqual(["quality"]);
 });
 
-for (const [label, jobs, identity] of [["full CI", ciJobs, "shared-jsc-identity"], ["early warmer", warmJobs, "shared-identity"]] as const) {
-  test(`${label} resolves and rechecks the same effective identity under the shared lock`, () => {
-    const producer = record(jobs["shared-prebuild"]);
-    expect(producer.concurrency).toEqual({ group: `\${{ needs.${identity}.outputs.key }}`, "cancel-in-progress": false, queue: "max" });
-    expect(producer["timeout-minutes"]).toBe(45);
-    expect(record(jobs[identity]).outputs).toEqual({ key: "${{ steps.setup.outputs.key }}", "sysroot-sha256": "${{ steps.sysroot.outputs.sha256 }}" });
-    for (const job of [record(jobs[identity]), producer]) {
-      expect(step(job, "id", "setup").uses).toBe("./.github/actions/shared-jsc-setup");
-      expect(record(job.env).WASI_LIBC_JOBS).toBe("2");
-    }
-    expect(record(step(producer, "id", "setup").with).sysroot).toBe(`\${{ needs.${identity}.outputs.sysroot-sha256 }}`);
-    expect(step(producer, "uses", "actions/download-artifact@v8").with).toEqual({ name: "shared-jsc-identity-sysroot.tar.zst", path: "${{ runner.temp }}" });
-    expect(step(producer, "uses", "./.github/actions/shared-jsc-prebuild").with).toEqual({ key: "${{ steps.setup.outputs.key }}", "expected-key": `\${{ needs.${identity}.outputs.key }}` });
-    expect(steps(build)[0]?.name).toBe("Require the identity used to serialize shared producers");
+test("early warmer resolves and rechecks the same effective identity under the shared lock", () => {
+  const producer = record(warmJobs["shared-prebuild"]);
+  expect(producer.concurrency).toEqual({ group: "${{ needs.shared-identity.outputs.key }}", "cancel-in-progress": false, queue: "max" });
+  expect(producer["timeout-minutes"]).toBe(45);
+  expect(record(warmJobs["shared-identity"]).outputs).toEqual({
+    key: "${{ steps.setup.outputs.key }}",
+    "cache-hit": "${{ steps.published.outputs.cache-hit }}",
+    "sysroot-sha256": "${{ steps.sysroot.outputs.sha256 }}",
   });
-}
+  for (const job of [record(warmJobs["shared-identity"]), producer]) {
+    expect(step(job, "id", "setup").uses).toBe("./.github/actions/shared-jsc-setup");
+    expect(record(job.env).WASI_LIBC_JOBS).toBe("2");
+  }
+  expect(record(step(producer, "id", "setup").with).sysroot).toBe("${{ needs.shared-identity.outputs.sysroot-sha256 }}");
+  expect(step(producer, "uses", "actions/download-artifact@v8").with).toEqual({ name: "shared-jsc-identity-sysroot.tar.zst", path: "${{ runner.temp }}" });
+  expect(step(producer, "uses", "./.github/actions/shared-jsc-prebuild").with).toEqual({ key: "${{ steps.setup.outputs.key }}", "expected-key": "${{ needs.shared-identity.outputs.key }}" });
+  expect(steps(build)[0]?.name).toBe("Require the identity used to serialize shared producers");
+});
 
 test("the existing exact JSC key follows effective inputs and preserves sysroot-only selection", () => {
   expect(record(step(setup, "id", "identity").env).JSC_KEY).toBe("shared-jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-jsc-inputs.outputs.hash }}");
@@ -78,7 +84,12 @@ test("the existing exact JSC key follows effective inputs and preserves sysroot-
   expect(step(setup, "id", "shared-jsc-inputs").env).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });
   expect(script(step(setup, "id", "shared-jsc-inputs"))).toContain("inputs=$(jsc_inputs_hash)");
   expect(step(setup, "id", "shared-jsc-inputs").if).toBe("inputs.shared-native == 'true'");
-  expect(step(record(ciJobs["shared-prebuild"]), "uses", "./.github/actions/shared-jsc-prebuild").if).toBe("needs.selection.outputs.shared-native == 'true'");
+  const sharedSysroot = record(ciJobs["shared-sysroot"]);
+  expect(step(sharedSysroot, "id", "shared-jsc-cache").with).toEqual({
+    path: "${{ runner.temp }}/jsc/shared",
+    key: "shared-jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-jsc-inputs.outputs.hash }}",
+  });
+  expect(step(sharedSysroot, "id", "shared-jsc-prebuild").if).toBe("needs.selection.outputs.shared-native == 'true'");
   for (const path of [".github/actions/shared-jsc-setup/action.yml", ".github/actions/shared-jsc-prebuild/action.yml"]) {
     expect(needsSharedNative([path])).toBe(true);
     expect(needsSharedSysroot([path])).toBe(true);
@@ -116,7 +127,7 @@ function preparedSysroot(root: string) {
   writeFileSync(join(root, "env.sh"), "set -euo pipefail\n");
   const output = join(root, "output");
   const env = { ...process.env, RUNNER_TEMP: root, BUN_WASM_SYSROOT: sysroot, GITHUB_OUTPUT: output };
-  const packaged = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script(step(record(ciJobs["shared-jsc-identity"]), "id", "sysroot"))], { cwd: root, env, encoding: "utf8" });
+  const packaged = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script(step(record(warmJobs["shared-identity"]), "id", "sysroot"))], { cwd: root, env, encoding: "utf8" });
   expect(packaged.status, packaged.stderr).toBe(0);
   const digest = readFileSync(output, "utf8").trim().slice("sha256=".length);
   rmSync(sysroot, { recursive: true });

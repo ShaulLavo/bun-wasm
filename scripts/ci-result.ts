@@ -27,11 +27,17 @@ export function requireCiSuccess(value: unknown, event = "pull_request"): void {
   if (!rust && sharedNative) throw new Error("Native consumers require the native route");
   const shared = selected(outputs, "shared") || sharedNative;
   const expected = {
-    selection: true, quality: true, "jsc-identity": browser, "jsc-prebuild": browser, "native-quality": native, rust: native,
-    "browser-production": browser && !native, "ordinary-web-guests": native,
-    package: true, "shared-jsc-identity": shared, "shared-prebuild": shared, "shared-spidermonkey-prebuild": sharedNative,
-    "shared-sysroot": shared, "shared-consumers": sharedNative, "shared-proof": shared,
-    web: true, "web-unit": true, "web-browser": true, "process-bundles": true, "browser-guest": browser, "browser-process": true,
+    selection: true,
+    quality: true,
+    "web-unit": true,
+    "web-browser": true,
+    "native-quality": native,
+    "ordinary-build": browser,
+    rust: native,
+    "rust-fixtures": native,
+    "shared-sysroot": shared,
+    "browser-guest": browser,
+    "shared-consumers": sharedNative,
   };
   for (const [name, required] of Object.entries(expected)) {
     const result = object(results[name]).result;

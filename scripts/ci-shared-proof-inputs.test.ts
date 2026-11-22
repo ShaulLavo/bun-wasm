@@ -79,16 +79,19 @@ function seedDownloads(root: string): string {
 test.each(["matching inputs", "missing program", "different site source"])("workflow assembly handles %s", defect => {
   const workflow: unknown = Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
   if (!record(workflow) || !record(workflow.jobs)) throw new Error("Missing workflow jobs");
-  const job = workflow.jobs["ordinary-web-guests"];
-  if (!record(job) || !Array.isArray(job.steps)) throw new Error("Missing ordinary Web guest job");
-  const step: unknown = job.steps.find(step => record(step) && step.name === "Prepare the same-source shared proof handoff");
+  const job = workflow.jobs["shared-consumers"];
+  if (!record(job) || !Array.isArray(job.steps)) throw new Error("Missing shared-consumers job");
+  const step: unknown = job.steps.find(step => record(step) && step.name === "Prepare and verify same-source shared proof inputs");
   if (!record(step) || typeof step.run !== "string") throw new Error("Missing shared proof assembly command");
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-shared-downloads-"));
   try {
     const spiderMonkey = seedDownloads(root);
     if (defect === "missing program") rmSync(spiderMonkey, { recursive: true });
     seedSite(join(root, "shared-playground-site"), defect === "different site source" ? { head: "a".repeat(40), tree: "b".repeat(40) } : source);
-    const result = spawnSync("bash", ["-euo", "pipefail", "-c", step.run], { env: { ...process.env, RUNNER_TEMP: root }, encoding: "utf8" });
+    mkdirSync(join(root, "native-profile-launcher"), { recursive: true });
+    writeFileSync(join(root, "native-profile-launcher/source.txt"), source.head + "\n");
+    writeFileSync(join(root, "native-profile-launcher/bun-wasm"), "launcher\n");
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", step.run], { env: { ...process.env, RUNNER_TEMP: root, GITHUB_SHA: source.head }, encoding: "utf8" });
     const out = join(root, "shared-proof-inputs");
     if (defect === "matching inputs") {
       expect(result.status, result.stderr).toBe(0);

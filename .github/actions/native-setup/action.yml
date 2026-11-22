@@ -1,15 +1,15 @@
 name: Native production setup
-description: Shared pinned tools and verified JSC backing, with clean checkpoint or source preparation
+description: Shared pinned tools, verified sysroot, and optional verified JSC prebuild
 inputs:
   mode:
-    description: native runs native setup checks, seed prepares cold sources, checkpoint leaves handoff destinations empty
+    description: native runs formatting and EncodedSlice checks; seed prepares build sources
     required: true
   node-version:
     description: Exact host Node version
     required: true
-  jsc-manifest:
-    description: Authenticated same-run JSC manifest digest
-    required: true
+  jsc:
+    description: Restore or build and verify the ordinary JSC prebuild
+    default: 'false'
   cache-scope:
     description: Existing reader namespace, retaining each original writer identity
     default: ${{ github.job }}
@@ -20,6 +20,9 @@ outputs:
   native-inputs:
     description: Effective native toolchain and verified sysroot
     value: ${{ steps.native-inputs.outputs.hash }}
+  jsc-inputs:
+    description: Effective JSC prebuild inputs
+    value: ${{ steps.jsc-inputs.outputs.hash }}
   object-key:
     description: Existing compiler object writer key
     value: ${{ steps.rust-objects.outputs.cache-primary-key }}
@@ -233,21 +236,19 @@ runs:
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     - uses: actions/cache/restore@v4
       id: sources-cache
-      if: inputs.mode != 'checkpoint'
       with:
         path: |
           vendor/bun
           vendor/boringssl
         key: native-sources-${{ runner.os }}-${{ hashFiles('scripts/sync-*.sh', 'patches/**') }}
     - name: Prepare pinned upstream sources
-      if: inputs.mode != 'checkpoint'
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh
         bash scripts/sync-bun.sh
         bash scripts/sync-crypto.sh
     - name: Save completed sources-cache setup
-      if: inputs.mode != 'checkpoint' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sources-cache.outputs.cache-hit != 'true'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sources-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: |
@@ -260,50 +261,113 @@ runs:
       run: |
         source env.sh
         bun scripts/check-encoded-slice.ts
-    - name: Configure private JSC build paths
+    - name: Identify sysroot build inputs
+      id: sysroot-inputs
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
-        echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
-        echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
-    - name: Import the verified JSC prebuild and sysroot
-      env:
-        JOBS: "2"
-        CAGE: ""
-        JSC_PREBUILD_MANIFEST_SHA256: ${{ inputs.jsc-manifest }}
-      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-      run: |
-        set -euo pipefail
         source env.sh
-        # Members stream from the downloaded transfer straight into the final trees; no second unpacked copy.
-        transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
-        manifest="$RUNNER_TEMP/jsc-prebuild-manifest"
-        # Only the manifest this run's prebuild job reported, for this commit and these paths.
-        [[ "$JSC_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-        [[ "$(tar --posix -tf "$transfer")" == $'prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest' ]]
-        [[ ! -e "$manifest" ]]
-        tar --posix -xOf "$transfer" manifest > "$manifest"
-        echo "$JSC_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
-        expected=$(printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT")
-        [[ "$(head -n 4 "$manifest")" == "$expected" ]]
-        [[ "$(tail -n +5 "$manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
-        prebuild_digest=$(tail -n +5 "$manifest" | awk '$2 == "prebuild.tar.zst" { print $1 }')
-        sysroot_digest=$(tail -n +5 "$manifest" | awk '$2 == "sysroot.tar.zst" { print $1 }')
-        [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]
-        [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]
-        # Never overlay another tree.
-        [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]
-        mkdir -p "$(dirname "$JSC_BUILD_DIR")" "$(dirname "$BUN_WASM_SYSROOT")"
-        tar --posix -xOf "$transfer" prebuild.tar.zst | zstd -dc | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
-        tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
-        tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"
-        rm -r -- "$manifest" "$RUNNER_TEMP/jsc-prebuild-transfer"
-        source jsc/common.sh
-        check_jsc_inputs_stamp
+        inputs=$(bun scripts/build-wasi-sysroot.ts --inputs)
+        echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: sysroot-cache
+      with:
+        path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
+        key: wasi-sysroot-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.sysroot-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts') }}
+        restore-keys: |
+          wasi-sysroot-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.sysroot-inputs.outputs.hash }}-
     - name: Build patched WASI sysroot
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         source env.sh
         time bun scripts/build-wasi-sysroot.ts
+    - name: Save the verified sysroot cache
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sysroot-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
+        key: ${{ steps.sysroot-cache.outputs.cache-primary-key }}
+    - name: Configure private JSC build paths
+      if: inputs.jsc == 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
+        echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
+    - name: Identify JSC prebuild inputs
+      id: jsc-inputs
+      if: inputs.jsc == 'true'
+      env:
+        JOBS: "2"
+        CAGE: ""
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source jsc/common.sh
+        copy_jsc_config_inputs
+        inputs=$(jsc_inputs_hash)
+        echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: jsc-prebuild-cache
+      if: inputs.jsc == 'true'
+      with:
+        path: ${{ runner.temp }}/jsc/prebuild
+        key: jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts') }}
+        restore-keys: |
+          jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-
+    - name: Build or verify the JSC prebuild
+      id: jsc-producer
+      if: inputs.jsc == 'true'
+      env:
+        CI_JSC_PREBUILD_HIT: ${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        run_jsc_prebuild() {
+          source env.sh
+          export JOBS=4 CAGE=
+          if [[ "$CI_JSC_PREBUILD_HIT" != 'true' ]]; then
+            bash scripts/build-jsc.sh
+          fi
+          source jsc/common.sh
+          check_jsc_inputs_stamp
+        }
+        jsc_pid=
+        jsc_completion=
+        jsc_log="$RUNNER_TEMP/jsc-prebuild.log"
+        cleanup() {
+          status=$?
+          trap - EXIT INT TERM
+          # $! also covers a signal between the fork and PID assignment.
+          jsc_pid=${jsc_pid:-${!:-}}
+          if [[ -n "$jsc_pid" ]]; then
+            kill -TERM -- "-$jsc_pid" 2>/dev/null || true
+            kill -KILL -- "-$jsc_pid" 2>/dev/null || true
+            wait "$jsc_pid" 2>/dev/null || true
+          fi
+          if [[ -n "$jsc_completion" ]]; then rm -f -- "$jsc_completion" || true; fi
+          if [[ -f "$jsc_log" ]]; then cat "$jsc_log" || true; fi
+          exit "$status"
+        }
+        trap cleanup EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        jsc_completion=$(mktemp "$RUNNER_TEMP/jsc-completion-XXXXXX")
+        # Only this child owns a process group; its descendants inherit it.
+        set -m
+        (
+          set +m
+          trap - EXIT INT TERM
+          run_jsc_prebuild
+          printf 'verified\n' > "$jsc_completion"
+        ) > "$jsc_log" 2>&1 &
+        jsc_pid=$!
+        set +m
+        wait "$jsc_pid"
+        [[ "$(cat "$jsc_completion")" == verified ]]
+        echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
+    - name: Save the JSC prebuild cache once per input revision
+      if: ${{ !cancelled() && inputs.jsc == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/jsc/prebuild
+        key: ${{ steps.jsc-prebuild-cache.outputs.cache-primary-key }}
     - name: Identify effective native build environment
       id: native-inputs
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
