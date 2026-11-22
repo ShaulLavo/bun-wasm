@@ -208,15 +208,16 @@
     #drain() {
       const { operation, callback } = this.#operations[0];
       this.#active = operation === "read" && this.#index === this.#entries.length;
-      const { error, result } = this.#run(operation);
-      this.#operations.shift();
-      if (this.#operations.length !== 0) later(() => this.#drain());
+      let outcome;
       try {
-        if (operation === "close") callback(error);
-        else callback(error, result);
+        outcome = this.#run(operation);
       } finally {
         this.#active = false;
       }
+      this.#operations.shift();
+      if (this.#operations.length !== 0) later(() => this.#drain());
+      if (operation === "close") callback(outcome.error);
+      else callback(outcome.error, outcome.result);
     }
     readSync() {
       this.#checkSync();
@@ -371,11 +372,21 @@
     });
   }
 
+  function collectSymlinkDir(abs, given, rel, withFileTypes, out) {
+    try {
+      collectDir(abs, given, rel, true, withFileTypes, out);
+    } catch (err) {
+      if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") throw err;
+    }
+  }
+
   function collectDir(abs, given, prefix, recursive, withFileTypes, out) {
     for (const [name, kind] of native.readdir(abs)) {
       const rel = prefix ? `${prefix}/${name}` : name;
       out.push(withFileTypes ? new Dirent(name, kind, prefix ? `${given}/${prefix}` : given) : rel);
-      if (recursive && kind === "dir") collectDir(`${abs}/${name}`, given, rel, recursive, withFileTypes, out);
+      if (!recursive) continue;
+      if (kind === "dir") collectDir(`${abs}/${name}`, given, rel, recursive, withFileTypes, out);
+      else if (kind === "symlink") collectSymlinkDir(`${abs}/${name}`, given, rel, withFileTypes, out);
     }
   }
 
@@ -632,9 +643,13 @@
     const length = boundedVectorLength(views);
     // One bounded stdin read: after progress, never wait for another vector to fill.
     if (fd === 0 && native.hostCaps.proc_spawn && length > 0 && readvPosition(position) < 0 && !isRegularReadFd(fd)) return readvStdin(views, buffers, length, callback);
+    const release = pinArguments(1, [fd, views]);
     let count = 0, error = null;
     try { count = readVectorViews(fd, views, readvPosition(position)); } catch (err) { error = err; }
-    later(() => callback(error, count, buffers));
+    later(() => {
+      if (release !== null) release();
+      callback(error, count, buffers);
+    });
   }
 
   // Node's GetOffset (src/node_file.cc): only a non-negative safe integer is a file
@@ -680,34 +695,39 @@
     throw error;
   }
 
-  function validateWritev(buffers) {
+  function snapshotWritev(buffers) {
     if (!Array.isArray(buffers)) throw invalidArg("buffers", "an array", buffers);
-    for (const buffer of buffers) {
+    const items = [];
+    for (let i = 0; i < buffers.length; i++) {
+      const buffer = buffers[i];
       if (!ArrayBuffer.isView(buffer)) throw invalidArg("buffers", "an array of ArrayBufferView instances", buffers);
+      items.push(buffer);
     }
+    return items;
   }
 
-  function writeBuffers(fd, buffers, position) {
-    if (buffers.length === 0) return 0;
-    return native.writev(fd, buffers.map(internal.toUint8), filePosition(position));
+  function writeBuffers(fd, items, position) {
+    if (items.length === 0) return 0;
+    const views = items.map((buffer) => (buffer.buffer.detached || buffer.byteLength === 0 ? new Uint8Array(0) : internal.toUint8(buffer)));
+    return native.writev(fd, views, filePosition(position));
   }
 
   function writevSync(fd, buffers, position) {
-    validateWritev(buffers);
-    if (buffers.length === 0) return 0;
+    const items = snapshotWritev(buffers);
+    if (items.length === 0) return 0;
     validateFd(fd);
-    return writeBuffers(fd, buffers, position);
+    return writeBuffers(fd, items, position);
   }
 
   function writev(fd, buffers, position, callback) {
     if (typeof position === "function") { callback = position; position = null; }
     validateFd(fd);
-    validateWritev(buffers);
+    const items = snapshotWritev(buffers);
     if (typeof callback !== "function") throw invalidArg("cb", "of type function", callback);
-    const release = pinArguments(1, [fd, buffers]);
+    const release = pinArguments(1, [fd, items]);
     let written = 0;
     let error = null;
-    try { written = writeBuffers(fd, buffers, position); } catch (err) { error = err; }
+    try { written = writeBuffers(fd, items, position); } catch (err) { error = err; }
     later(() => {
       if (release !== null) release();
       callback(error, written, buffers);
@@ -829,7 +849,7 @@
   // Bun keeps a Buffer path and the data a write reads attached until the call completes
   // (fs_buffer_pins.ts). The module loads on the first call that has bytes to pin.
   let bufferPins;
-  const dataArguments = { write: 1, writev: 1, writeFile: 1, appendFile: 1 };
+  const dataArguments = { read: 1, readv: 1, write: 1, writev: 1, writeFile: 1, appendFile: 1 };
   const holdsBytes = (value) => typeof value === "object" && value !== null && (ArrayBuffer.isView(value) || value instanceof ArrayBuffer || Array.isArray(value));
   // The release function, or null (allocating nothing) when neither the path nor the
   // data holds bytes, which is nearly every call.
@@ -910,6 +930,14 @@
     validateFd(fd);
     later(() => closeSync(fd));
   };
+  // Node does not validate the 4-argument symlink overload's callback; a non-callable
+  // callback stays an ignored promise handler, matching Bun's src/js/node/fs.ts.
+  const symlinkCallback = callbackApi.symlink;
+  callbackApi.symlink = function symlink(target, path, type, callback) {
+    if (callback === undefined) return symlinkCallback(target, path, type);
+    if (typeof callback === "function") return symlinkCallback(target, path, type, callback);
+    promises.symlink(target, path, type).then(callback, callback);
+  };
   callbackApi.cp = cp;
   callbackApi.glob = glob;
   callbackApi.opendir = opendir;
@@ -972,26 +1000,36 @@
 
   // --- promises ---------------------------------------------------------------
 
+  function attachAsyncStack(error) {
+    if (!error || typeof error !== "object" || typeof error.stack !== "string") return;
+    const captured = new Error().stack;
+    const idx = typeof captured === "string" ? captured.indexOf("\n    at async ") : -1;
+    if (idx === -1) return;
+    const nl = error.stack.indexOf("\n");
+    const header = nl === -1 ? error.stack : error.stack.slice(0, nl);
+    error.stack = header + captured.slice(idx);
+  }
+
   function promisifySync(fn, name) {
     const dataIndex = dataArguments[name] ?? 0;
-    return named(name, function (...args) {
-      return new Promise((resolve, reject) => {
-        const release = pinArguments(dataIndex, args);
-        let result;
-        try {
-          result = fn.apply(undefined, args);
-        } catch (err) {
-          later(release === null ? () => reject(err) : () => {
-            release();
-            reject(err);
-          });
-          return;
-        }
-        later(release === null ? () => resolve(result) : () => {
-          release();
-          resolve(result);
-        });
-      });
+    return named(name, async function (...args) {
+      const release = pinArguments(dataIndex, args);
+      let result;
+      let failed = false;
+      let error;
+      try {
+        result = fn.apply(undefined, args);
+      } catch (err) {
+        failed = true;
+        error = err;
+      }
+      await new Promise((resolve) => later(resolve));
+      if (release !== null) release();
+      if (failed) {
+        attachAsyncStack(error);
+        throw error;
+      }
+      return result;
     });
   }
 
