@@ -1,11 +1,11 @@
 // The Wasm `name` custom section holds debug names for functions and locals. It is useful to
 // profilers and symbolizers and useless to users, who download it: about 2.2 MB raw, 8% of the
-// gzipped guest. The shipped browser guest drops it; `build-bun-browser.sh` keeps a named copy
-// for tools. CLI: `strip IN OUT` and `check FILE...`.
+// gzipped guest. Every shipped guest, core and engine side drops it; each producer keeps a named
+// copy (`*.named.wasm`) for tools. CLI: `strip IN OUT` and `check FILE...`.
 import { readFileSync, writeFileSync } from "node:fs";
 
-/** Guests that ship to browsers and must stay free of debug names. */
-export const nameFreeGuests: readonly string[] = ["bun-browser.wasm"];
+/** Guests, cores and engine sides that ship to users and must stay free of debug names. */
+export const nameFreeGuests: readonly string[] = ["bun-browser.wasm", "bun.wasm", "quickjs.wasm", "bun-jsc.wasm", "jsc-engine.wasm", "bun-tools.wasm"];
 
 interface Section { readonly id: number; readonly start: number; readonly end: number; readonly name: string | undefined }
 

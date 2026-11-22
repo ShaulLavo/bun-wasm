@@ -31,6 +31,7 @@ case "$tool" in
       guest-core-receipt.ts:write) echo fixture > "$1.core.json" ;;
       guest-engine-receipt.ts:write) echo fixture > "$1.engine.json" ;;
       guest-core-receipt.ts:tag) cp "$1" "$3" ;;
+      wasm-name-sections.ts:strip) cp "$1" "$2" ;;
       guest-engine-receipt.ts:environment)
         printf 'export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS=%q CFLAGS_wasm32_wasip1=%q\\n' '-C relocation-model=pic -C panic=abort -C link-self-contained=no' "--sysroot=$BUN_WASM_SYSROOT -fPIC"
         if [[ $1 == jsc ]]; then printf 'export CXXFLAGS_wasm32_wasip1=%q\\n' "--sysroot=$BUN_WASM_SYSROOT -fPIC -fno-exceptions"; fi ;;

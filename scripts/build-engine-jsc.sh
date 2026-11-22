@@ -42,6 +42,9 @@ trap 'if [[ -n "$inputs" ]]; then rm -f -- "$inputs"; fi' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 side="$out/engine.wasm"
+# The shipped side drops the name section (about 4 MB raw); engine.named.wasm keeps it for
+# profilers and for the interpreter frame check, which finds the interpreter by name.
+named="$out/engine.named.wasm"
 # JSC_TRANSFER_FAULT=1: a validation side (scripts/src/transfer-fault.sh). Never a release: it
 # gets no receipt and is not made in a directory that holds a release side.
 # shellcheck source=scripts/src/transfer-fault.sh
@@ -59,7 +62,8 @@ fi
 # No side leaves this producer unless its interpreter keeps the measured guarded frame
 # (docs/stack-limits.md): every native reentry path's depth depends on it.
 check_interpreter_frame() {
-  bun "$root/scripts/jsc-cloop-frame.ts" check "$side"
+  bun "$root/scripts/wasm-name-sections.ts" check "$side"
+  bun "$root/scripts/jsc-cloop-frame.ts" check "$named"
 }
 if [[ -e "$side" || -e "$side.engine.json" ]]; then
   bun "$root/scripts/guest-engine-receipt.ts" verify "$side" "$inputs"
@@ -92,7 +96,8 @@ fi
   --export=jsc_memory_telemetry --export=jsc_memory_telemetry_refresh --export=jsc_allocation_boundary -Map="$out/engine-link.map" \
   -o "$out/engine.implicit.wasm" "$out/engine-init.o" "${group_objects[@]}" "$CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_engine_jsc.a"
 "$root/jsc/finalize.sh" "$out/engine.implicit.wasm" "$out/engine.spilled.wasm"
-node "$root/scripts/src/engine-explicit-init.ts" jsc "$out/engine.spilled.wasm" "$side" "${explicit_profile[@]}"
+node "$root/scripts/src/engine-explicit-init.ts" jsc "$out/engine.spilled.wasm" "$named" "${explicit_profile[@]}"
+bun "$root/scripts/wasm-name-sections.ts" strip "$named" "$side"
 wasm-tools validate "$side"
 check_interpreter_frame
 if [[ -n "$inputs" ]]; then
