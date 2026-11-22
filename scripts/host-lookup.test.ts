@@ -87,12 +87,14 @@ test("whole bootstrap with real factories keeps missing lookup capability absent
   expect(state.evaluate("runtime.ioPending()")).toBe(0);
 });
 
-test("whole bootstrap installs native lookup after its real factory dependencies", async () => {
+test("whole bootstrap installs native lookup and loads networking on the first lookup", async () => {
   const state = bootstrapFixture();
-  expect(state.loaded).toContain("net");
-  expect(state.loaded).toContain("websocket");
+  expect(state.loaded).toContain("host_lookup");
+  expect(state.loaded).not.toContain("net");
+  expect(state.loaded).not.toContain("websocket");
   const pending = state.evaluate("runtime.builtin('node:dns/promises').lookup('localhost', { all: true })");
   await Promise.resolve();
+  expect(state.loaded).toContain("net");
   expect(state.started).toEqual([["localhost", 0, 0]]);
   expect(state.evaluate("runtime.ioPending()")).toBe(1);
   expect(state.evaluate("runtime.pumpIo()")).toBe(false);

@@ -122,8 +122,7 @@
       throw unsupported(`error constructor ${code}`);
     },
   };
-  // Descriptors, not values: Buffer stays a getter, so loading a builtin does not load buffer.js.
-  Object.defineProperties(hooks, Object.getOwnPropertyDescriptors(internal.bunBuiltinGlobals));
+  Object.assign(hooks, internal.bunBuiltinGlobals);
   const intrinsics = new Proxy(hooks, {
     get(target, name) {
       if (Object.hasOwn(target, name)) return target[name];
