@@ -24,6 +24,13 @@ and `fetch-redirect.test.ts`), checked against native Bun 1.4.4.
 Bun's per-request `proxy` option is not implemented; the resolver test's proxy case
 still fails for that reason.
 
+- **Request header bytes.** A request header value goes out as a byte string: each
+  character up to U+00FF is one byte (U+00E9 is `0xE9`, not UTF-8). `Headers` in
+  `web.js` rejects NUL, CR, LF and characters above U+00FF with
+  `Header '<name>' has invalid value`, spelling well-known names as WebCore does and
+  never quoting the value (original adapter of `FetchHeaders.cpp` `canWriteHeader` and
+  `HTTPParsers.cpp` `isValidHTTPHeaderValue`), and trims only tab, LF, CR and space.
+
 The `fetch-header-bytes-and-redirect-urls` fixture and the
 `net::tests::fetch_sends_no_fragment_and_reads_header_bytes_as_latin1` launcher test
 compare this with native Bun.

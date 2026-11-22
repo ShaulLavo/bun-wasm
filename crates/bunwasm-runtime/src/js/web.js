@@ -1064,6 +1064,29 @@
     "x-content-type-options x-dns-prefetch-control x-frame-options x-sourcemap x-xss-protection x-temp-tablet " +
     "icy-metaint icy-metadata").split(" "));
 
+  // The spelling WebCore gives a well-known name in errors; other names keep the caller's spelling.
+  const headerNameSpellings = new Map([
+    ["dnt", "DNT"], ["etag", "ETag"], ["last-event-id", "Last-Event-ID"], ["sourcemap", "SourceMap"], ["te", "TE"],
+    ["x-dns-prefetch-control", "X-DNS-Prefetch-Control"], ["x-sourcemap", "X-SourceMap"],
+    ["x-xss-protection", "X-XSS-Protection"], ["icy-metaint", "Icy-MetaInt"], ["icy-metadata", "Icy-Metadata"],
+    ["sec-websocket-accept", "Sec-WebSocket-Accept"], ["sec-websocket-extensions", "Sec-WebSocket-Extensions"],
+    ["sec-websocket-key", "Sec-WebSocket-Key"], ["sec-websocket-protocol", "Sec-WebSocket-Protocol"],
+    ["sec-websocket-version", "Sec-WebSocket-Version"],
+  ]);
+  function headerNameSpelling(key, name) {
+    if (key !== "set-cookie" && !commonHeaderNames.has(key)) return String(name);
+    return headerNameSpellings.get(key) ?? key.replace(/(^|-)([a-z])/g, (_, dash, letter) => dash + letter.toUpperCase());
+  }
+
+  // A header value is a byte string without NUL, CR or LF; the surrounding HTTP whitespace
+  // (tab, LF, CR, space) is cut off. The error names the header and never quotes the value,
+  // which is often a credential.
+  function normalizeHeaderValue(key, name, value) {
+    const v = String(value).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+    if (/[\0\n\rĀ-￿]/.test(v)) throw new TypeError(`Header '${headerNameSpelling(key, name)}' has invalid value`);
+    return v;
+  }
+
   class Headers {
     #map = new Map();
     #cookies = [];
@@ -1085,7 +1108,7 @@
     }
     append(name, value) {
       const key = normalizeHeaderName(name);
-      const v = String(value).trim();
+      const v = normalizeHeaderValue(key, name, value);
       if (key === "set-cookie") {
         this.#cookies.push(v);
         return;
@@ -1095,11 +1118,12 @@
     }
     set(name, value) {
       const key = normalizeHeaderName(name);
+      const v = normalizeHeaderValue(key, name, value);
       if (key === "set-cookie") {
-        this.#cookies = [String(value).trim()];
+        this.#cookies = [v];
         return;
       }
-      this.#map.set(key, String(value).trim());
+      this.#map.set(key, v);
     }
     get(name) {
       const key = normalizeHeaderName(name);
