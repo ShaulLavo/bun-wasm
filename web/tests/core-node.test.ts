@@ -1,5 +1,8 @@
-import { expect, test } from 'bun:test';
+import { expect, setDefaultTimeout, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+
+// Every test here starts a Node process or copies a package. The limit only catches a hang, and a busy machine needs seconds.
+setDefaultTimeout(120_000);
 
 test('plain Node can consume the JS memory helper through the existing host adapters', () => {
   const source = `await import(${JSON.stringify(new URL('../scripts/node-process.ts', import.meta.url).href)});`;
