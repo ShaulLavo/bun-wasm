@@ -751,18 +751,27 @@
       if (value.length === 0) throw invalidArgValue("value", value);
       return value;
     }
-    if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    if (ArrayBuffer.isView(value)) {
+      if (value.byteLength === 0) throw invalidArgValue("value", value);
+      return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    }
     return undefined;
   }
 
   function fillImpl(buf, value, offset, end, encoding) {
-    let { start, stop, encoding: enc } = internal.require("buffer_fill_args")(fillEncoding, value, buf.length, offset, end, encoding);
+    const limit = buf.length;
+    let { start, stop, encoding: enc } = internal.require("buffer_fill_args")(fillEncoding, value, limit, offset, end, encoding);
     start = start === undefined ? 0 : rangeArg(start, "offset", 0, kMaxLength, " &&");
-    stop = stop === undefined ? buf.length : rangeArg(stop, "end", buf.length, buf.length, " &&");
+    stop = stop === undefined ? limit : rangeArg(stop, "end", limit, limit, " &&");
     if (stop <= start) return buf;
     const bytes = encodeFillValue(value, enc);
+    const fillByte = bytes === undefined ? (typeof value === "boolean" ? Number(value) : value) & 255 : 0;
+    const postLimit = buf.length;
+    if (start > postLimit) start = postLimit;
+    if (stop > postLimit) stop = postLimit;
+    if (stop <= start) return buf;
     if (bytes === undefined) {
-      Uint8Array.prototype.fill.call(buf, (typeof value === "boolean" ? Number(value) : value) & 255, start, stop);
+      Uint8Array.prototype.fill.call(buf, fillByte, start, stop);
       return buf;
     }
     if (bytes.length === 1) {
@@ -830,24 +839,30 @@
     let offset = byteOffset;
     if (typeof offset === "string") {
       enc = offset;
-      offset = undefined;
-    } else if (offset > 0x7fffffff) {
-      offset = 0x7fffffff;
-    } else if (offset < -0x80000000) {
-      offset = -0x80000000;
+      offset = NaN;
+    } else {
+      offset = +offset;
+      if (offset > 0x7fffffff) offset = 0x7fffffff;
+      else if (offset < -0x80000000) offset = -0x80000000;
     }
-    offset = +offset;
     if (offset !== offset) offset = forward ? 0 : buf.length;
     offset = Math.trunc(offset) || 0;
 
-    if (typeof val === "number") return searchBytes(buf, [val >>> 0 & 255], offset, forward);
+    if (typeof val === "number") {
+      const byte = val >>> 0 & 255;
+      if (isUint8Array(buf) && typedArrayBuffer.call(buf).detached) return -1;
+      return searchBytes(buf, [byte], offset, forward);
+    }
     if (typeof val === "string") {
       const normalized = enc === undefined ? "utf8" : getEncoding(enc);
-      return searchBytes(buf, stringToBytes(val, normalized), offset, forward, normalized === "utf16le" ? 2 : 1, true);
+      const needle = stringToBytes(val, normalized);
+      if (isUint8Array(buf) && typedArrayBuffer.call(buf).detached) return -1;
+      return searchBytes(buf, needle, offset, forward, normalized === "utf16le" ? 2 : 1, true);
     }
     if (isUint8Array(val)) {
-      const unitSize = typeof enc === "string" && normalizeEncoding(enc) === "utf16le" ? 2 : 1;
-      return searchBytes(buf, val, offset, forward, unitSize);
+      const normalized = enc === undefined ? "utf8" : normalizeEncoding(String(enc));
+      if (isUint8Array(buf) && typedArrayBuffer.call(buf).detached) return -1;
+      return searchBytes(buf, val, offset, forward, normalized === "utf16le" ? 2 : 1);
     }
     throw invalidArgType("value", ["number", "string", "Buffer", "Uint8Array"], val);
   }

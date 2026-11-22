@@ -124,6 +124,17 @@ does not alter that upstream expectation or pretend it passes.
 QuickJS, JSC, Browser and SpiderMonkey, using one 64 MiB input repeated by
 reference for the oversized concatenation.
 
+`fillImpl` captures the pre-coercion byte length for `end` validation and
+re-reads the live length after encoding and value coercion so a detaching or
+shrinking `valueOf` or `toString` callback clamps the write range instead of
+throwing on a detached `Uint8Array` or rejecting an originally valid `end`.
+`bidirectionalIndexOf` coerces non-string `encoding` arguments on `Uint8Array`
+needles (matching Bun's `JSBuffer.cpp`), checks whether coercion detached the
+haystack, and validates `byteOffset` once. Both are original adapter corrections
+against Bun `test/js/node/buffer-copy-fill-detach.test.ts` and
+`test/js/node/buffer-indexOf-detach.test.ts`, covered in
+`tests/fixtures/buffer-residual-semantics`.
+
 ## Classification
 
 | Patch or source | Class | Change |

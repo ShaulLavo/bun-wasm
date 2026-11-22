@@ -92,6 +92,40 @@ export function residualChecks(factory: typeof Buffer) {
       assert.doesNotThrow(() => buffer.writeUInt8(0));
       assert.doesNotThrow(() => buffer.writeBigInt64LE(0n));
     } },
+    { name: "fill clamps and survives detach or resize during value and encoding coercion", run() {
+      const detachedByValueOf = factory.alloc(16, 0xcc);
+      assert.equal(detachedByValueOf.fill({ valueOf() { detachedByValueOf.buffer.transfer(0); return 0x42; } } as unknown as number), detachedByValueOf);
+      assert.equal(detachedByValueOf.byteLength, 0);
+
+      const detachedByToString = factory.alloc(16, 0xcc);
+      assert.equal(detachedByToString.fill({ toString() { detachedByToString.buffer.transfer(0); return "42"; } } as unknown as number), detachedByToString);
+      assert.equal(detachedByToString.byteLength, 0);
+
+      const detachedByEnc = factory.alloc(16, 0xcc);
+      assert.equal(detachedByEnc.fill("A", 0, 16, { toString() { detachedByEnc.buffer.transfer(0); return "utf8"; } } as unknown as BufferEncoding), detachedByEnc);
+      assert.equal(detachedByEnc.byteLength, 0);
+
+      const rab = new ArrayBuffer(64, { maxByteLength: 64 });
+      const resized = factory.from(rab);
+      resized.fill(0x00);
+      resized.fill("A", 0, 64, { toString() { rab.resize(8); return "utf8"; } } as unknown as BufferEncoding);
+      assert.equal(resized.length, 8);
+      assert.equal(resized.toString("ascii"), "AAAAAAAA");
+    } },
+    { name: "indexOf coerces encoding on Buffer needles and handles detached haystack or needle", run() {
+      const ab = new ArrayBuffer(16);
+      const haystack = factory.from(ab);
+      haystack.fill(0x42);
+      const needle = factory.from([0x42]);
+      assert.equal(haystack.indexOf(needle, 0, { toString() { ab.transfer(32); return "utf8"; } } as unknown as BufferEncoding), -1);
+
+      const buf = factory.from("abcdef");
+      const needleAb = new ArrayBuffer(3);
+      const detachedNeedle = factory.from(needleAb);
+      detachedNeedle.set([0x62, 0x63, 0x64]);
+      assert.equal(buf.indexOf(detachedNeedle, 0, { toString() { needleAb.transfer(32); return "utf8"; } } as unknown as BufferEncoding), 0);
+      assert.equal(factory.from("ello hello hello").lastIndexOf("hello", "utf8"), 11);
+    } },
   ];
 }
 
