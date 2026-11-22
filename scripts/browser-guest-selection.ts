@@ -18,6 +18,7 @@ const commonInputs = [
   "scripts/ci-binaryen.ts",
   "scripts/ci-build-tools.ts",
   "scripts/test-checks.ts",
+  "scripts/stage-guest-wasm.ts",
   "bun.lock",
   "package.json",
   "sandbox/build.ts",
@@ -288,7 +289,7 @@ const engineRoots: Record<CoverageEngine, readonly string[]> = {
 const engineFiles: Record<CoverageEngine, readonly string[]> = {
   quickjs: ["scripts/build.sh", "scripts/build-engine-quickjs.sh", "scripts/quickjs-core-exports.txt", "crates/bunwasm-runtime/src/engine_quickjs.rs"],
   jsc: ["scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-jsc.sh", "crates/bunwasm-runtime/src/engine_jsc.rs"],
-  browser: ["scripts/build-bun-browser.sh", "crates/bunwasm-runtime/src/engine_host.rs"],
+  browser: ["scripts/build-bun-browser.sh", "scripts/wasm-name-sections.ts", "crates/bunwasm-runtime/src/engine_host.rs"],
 };
 const commonProducerFiles = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "scripts/build-bun-core.sh", "scripts/build-wasi-sysroot.ts",
   ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", "scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts",
