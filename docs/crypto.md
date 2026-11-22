@@ -114,9 +114,10 @@ Asymmetric keys import and export JWK, PEM and DER. RSA also supports PKCS#1; EC
 SEC1. EC, Ed25519 and X25519 keys also take Node's `raw-public` (EC points compressed or
 not) and `raw-private` formats. Signing accepts OpenSSL's digest names and their
 signature aliases, such as `RSA-SHA256`, `sha256WithRSAEncryption` and `RSA-MD5`. Private-key encryption uses BoringSSL for PEM PKCS#8/PKCS#1/SEC1 and DER PKCS#8,
-with byte-preserving passphrases. RSA-OAEP is also available through publicEncrypt and
-privateDecrypt. Other classic RSA encryption padding and privateEncrypt/publicDecrypt
-remain unsupported.
+with byte-preserving passphrases. publicEncrypt, privateDecrypt, privateEncrypt and
+publicDecrypt take OAEP, PKCS#1 v1.5 and raw (`RSA_NO_PADDING`) padding through BoringSSL,
+with Bun's defaults and errors; like Bun, privateDecrypt refuses PKCS#1 v1.5
+([the source ledger](bun-patches/node-crypto-rsa-cipher.md)).
 
 KeyObject.from and KeyObject.toCryptoKey share key material with WebCrypto. The Node key
 family reflects the material: converting an RSA-PSS CryptoKey produces an RSA KeyObject,

@@ -232,6 +232,11 @@ impl RsaKey {
         Ok(out)
     }
 }
+/// The PKCS#1 DER of an RSA JWK's private or public half.
+pub(crate) fn rsa_pkcs1_der(jwk: &str, private: bool) -> Result<Vec<u8>> {
+    let k: J = data(serde_json::from_str(jwk))?;
+    RsaKey::from_jwk(&k)?.der(private)
+}
 fn rsa_format(format: &str, bytes: &[u8]) -> Result<(RsaKey, bool)> {
     if format == "jwk" {
         let k: J = data(serde_json::from_slice(bytes))?;
@@ -604,11 +609,9 @@ fn ec_sign(a: &J, k: &J, input: &[u8], sig: &[u8], verify: bool) -> Result<J> {
     Ok(json!({"verified": crypto_ec::verify(curve, &parts, &digest, sig, der)?}))
 }
 
-fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J> {
-    let private = op == 0 || op == 3;
-    let key = RsaKey::from_jwk(k)?;
-    let der = key.der(private)?;
-    let hash = match text(a, "hash")? {
+/// The C adapter's digest number for a WebCrypto hash name (rsa.c `digest`).
+pub(crate) fn rsa_digest(name: &str) -> Option<i32> {
+    Some(match name {
         // Only Node's signing names reach MD5; WebCrypto has no MD5 hash.
         "MD5" => 5,
         "SHA-1" => 1,
@@ -619,8 +622,15 @@ fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J
         "SHA3-256" => 3256,
         "SHA3-384" => 3384,
         "SHA3-512" => 3512,
-        _ => return Err("NotSupportedError"),
-    };
+        _ => return None,
+    })
+}
+
+fn rsa_native(op: i32, a: &J, k: &J, input: &[u8], signature: &[u8]) -> Result<J> {
+    let private = op == 0 || op == 3;
+    let key = RsaKey::from_jwk(k)?;
+    let der = key.der(private)?;
+    let hash = rsa_digest(text(a, "hash")?).ok_or("NotSupportedError")?;
     let pss = text(a, "name")? == "RSA-PSS";
     let salt = if pss {
         i32::try_from(a["saltLength"].as_i64().ok_or("OperationError")?)

@@ -42,6 +42,19 @@ unsafe extern "C" {
         output: *mut u8,
         output_len: *mut usize,
     ) -> i32;
+    pub fn bunwasm_rsa_cipher(
+        op: i32,
+        der: *const u8,
+        der_len: usize,
+        padding: i32,
+        hash: i32,
+        label: *const u8,
+        label_len: usize,
+        input: *const u8,
+        input_len: usize,
+        output: *mut u8,
+        output_len: *mut usize,
+    ) -> i32;
 }
 
 unsafe extern "C" {

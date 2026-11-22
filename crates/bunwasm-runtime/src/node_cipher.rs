@@ -578,6 +578,7 @@ pub fn install(t: &mut Table) {
     t.add("nodeCrypto.cipherInfo", |a| cipher_info(&a));
     install_cipher_state(t, &Shared::default());
     crate::node_dh::install(t);
+    crate::node_rsa::install(t);
 }
 
 #[cfg(test)]

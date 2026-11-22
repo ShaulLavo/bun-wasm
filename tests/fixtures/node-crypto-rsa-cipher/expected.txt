@@ -1,0 +1,27 @@
+privateEncrypt default 128 8ba4018bdb5440cd
+privateEncrypt pkcs1 pem 128 8ba4018bdb5440cd
+publicDecrypt public RSA cipher fixture
+publicDecrypt public pem RSA cipher fixture
+publicDecrypt private RSA cipher fixture
+publicDecrypt pkcs1 der RSA cipher fixture
+publicDecrypt hex key RSA cipher fixture
+publicDecrypt DataView key RSA cipher fixture
+publicDecrypt tampered throws Error ERR_OSSL_RSA_BLOCK_TYPE_IS_NOT_01
+privateEncrypt too long throws Error ERR_OSSL_RSA_DIGEST_TOO_BIG_FOR_RSA_KEY
+privateEncrypt none 128 cb03365d579177e2
+publicDecrypt none true
+publicEncrypt none 128 2867a8097ab084f7
+privateDecrypt none true
+publicEncrypt none short throws Error ERR_OSSL_RSA_DATA_TOO_SMALL
+publicEncrypt pkcs1 length 128
+privateDecrypt pkcs1 throws TypeError ERR_INVALID_ARG_VALUE
+oaep default RSA cipher fixture
+oaep sha256 label RSA cipher fixture
+oaep hash mismatch throws Error ERR_OSSL_RSA_OAEP_DECODING_ERROR
+oaep bad hash throws Error ERR_OSSL_EVP_INVALID_DIGEST
+oaep hash type throws TypeError ERR_INVALID_ARG_TYPE
+oaep label type throws TypeError ERR_INVALID_ARG_TYPE
+data type throws TypeError ERR_INVALID_ARG_TYPE
+publicEncrypt pkcs1 der public RSA cipher fixture
+publicEncrypt pkcs1 der private RSA cipher fixture
+read order padding oaepHash oaepLabel
