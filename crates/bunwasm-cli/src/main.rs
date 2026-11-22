@@ -724,12 +724,13 @@ fn direct_file(file: &str) -> String {
 }
 
 fn parse_command(args: Vec<String>, run_file: bool) -> Command {
-    parse_command_with_flags(args, run_file, Vec::new(), Vec::new(), RunMode::Once)
+    parse_command_with_flags(args, run_file, false, Vec::new(), Vec::new(), RunMode::Once)
 }
 
 fn parse_command_with_flags(
     args: Vec<String>,
     run_file: bool,
+    after_run: bool,
     conditions: Vec<String>,
     exec_argv: Vec<String>,
     mode: RunMode,
@@ -811,8 +812,17 @@ fn parse_command_with_flags(
                 print!("{HELP}");
                 return Command::Exit(0);
             }
-            // After `run`, a flag that takes a value is kept in process.execArgv, as Bun does.
-            "-e" | "--eval" | "-p" | "--print" if run_file => {
+            // After `run`, these flags and their values are kept in process.execArgv, as Bun does,
+            // when an entry file follows (`bun run -e CODE -b entry.ts`). With nothing after them
+            // they still evaluate CODE.
+            "-e" | "--eval" | "-p" | "--print"
+                if after_run
+                    && rest
+                        .as_slice()
+                        .iter()
+                        .skip(1)
+                        .any(|next| next == "-" || !next.starts_with('-')) =>
+            {
                 let Some(value) = rest.next() else {
                     return usage_error(&format!("{arg} requires a value"));
                 };
@@ -893,7 +903,14 @@ fn parse_command_with_flags(
                 return Command::Exit(1);
             }
             "run" => {
-                return parse_command_with_flags(rest.collect(), true, conditions, exec_argv, mode);
+                return parse_command_with_flags(
+                    rest.collect(),
+                    true,
+                    true,
+                    conditions,
+                    exec_argv,
+                    mode,
+                );
             }
             "--" => {
                 let Some(file) = rest.next() else {
