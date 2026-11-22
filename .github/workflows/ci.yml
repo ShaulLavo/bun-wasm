@@ -135,6 +135,7 @@ jobs:
         run: bun scripts/ci-native-control-compilers.ts
       - name: Blocking quality gates
         env:
+          BUN_WASM_TEST_JOBS: "3"
           JSCPD_BASE_REF: ${{ needs.selection.outputs.base }}
           TMPDIR: ${{ runner.temp }}
         run: bun run quality --javascript
@@ -241,7 +242,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
-      QUALITY_RUST_JOBS: "2"
+      QUALITY_RUST_JOBS: "4"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       GIT_AUTHOR_NAME: bun-wasm CI
@@ -341,7 +342,7 @@ jobs:
             # The WASI lint probe rewrites a source file; restore its time before the next build.
             bun scripts/quality-input-times.ts
             source env.sh
-            cargo test --locked --release -j 2 -p bunwasm-runtime --no-default-features --features engine-host --lib modules::tests::host_
+            cargo test --locked --release -j 4 -p bunwasm-runtime --no-default-features --features engine-host --lib modules::tests::host_
           }
           run_native_checks
           echo "native-ready=true" >> "$GITHUB_OUTPUT"
@@ -423,7 +424,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
-      QUALITY_RUST_JOBS: "2"
+      QUALITY_RUST_JOBS: "4"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       GIT_AUTHOR_NAME: bun-wasm CI
@@ -576,7 +577,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
-      QUALITY_RUST_JOBS: "2"
+      QUALITY_RUST_JOBS: "4"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       GIT_AUTHOR_NAME: bun-wasm CI
@@ -919,7 +920,7 @@ jobs:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
     timeout-minutes: 30
     env:
-      CARGO_BUILD_JOBS: "2"
+      CARGO_BUILD_JOBS: "4"
       CARGO_INCREMENTAL: "0"
     outputs:
       manifest-sha256: ${{ steps.shared-sm-artifact.outputs.manifest-sha256 }}
@@ -1140,7 +1141,7 @@ jobs:
     timeout-minutes: 30
     env:
       WASI_LIBC_JOBS: "2"
-      CARGO_BUILD_JOBS: "2"
+      CARGO_BUILD_JOBS: "4"
       CARGO_INCREMENTAL: "0"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
     steps:
@@ -1784,6 +1785,7 @@ jobs:
           key: ${{ steps.web-rustup-cache.outputs.cache-primary-key }}
       - name: Web host unit, CLI shim, type and bundle gates
         env:
+          BUN_WASM_TEST_JOBS: "4"
           C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures
         run: bash ../scripts/test-web-host.sh --unit
       - name: Retain first C1 WebKit admission failure

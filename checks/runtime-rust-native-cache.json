@@ -1,5 +1,6 @@
 {
   "owner": "runtime",
+  "isolation": "process",
   "path": "scripts/rust-native-cache.test.ts",
   "localRuntime": true
 }

@@ -7,4 +7,4 @@ links = "bunwasm_crypto"
 description = "Shared BoringSSL linkage and RSA FFI for the runtime and standalone Bun tools"
 
 [build-dependencies]
-cc = "1"
+cc = { version = "1", features = ["parallel"] }

@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { dispatchRuntime, runRuntimeChecks, runtimeJobs, runtimePlan } from "./runtime-file-checks.ts";
+import { dispatchRuntime, runRuntimeChecks, runtimeBatches, runtimeJobs, runtimePlan, runtimeScratchPrefix, workerSlotTmpDir } from "./runtime-file-checks.ts";
 import { discoverChecks, parseCheck, selectChecks } from "./test-checks.ts";
 import { linuxProcess } from "./process-owner.mts";
 import { runSubreaperProbe } from "./test-subreaper-command.ts";
@@ -19,7 +19,31 @@ afterEach(() => { for (const path of owned.splice(0)) rmSync(path, { recursive: 
 test("runtime concurrency is explicit and bounded", () => {
   expect(runtimeJobs("1")).toBe(1);
   expect(runtimeJobs("2")).toBe(2);
-  for (const value of ["", "0", "3", "2.0", "Infinity", "-1"]) expect(() => runtimeJobs(value)).toThrow("Invalid BUN_WASM_RUNTIME_JOBS");
+  expect(runtimeJobs("3")).toBe(3);
+  expect(runtimeJobs("4")).toBe(4);
+  for (const value of ["", "0", "5", "2.0", "Infinity", "-1"]) expect(() => runtimeJobs(value)).toThrow("Invalid BUN_WASM_RUNTIME_JOBS");
+});
+
+test("multi-worker runtime scheduling keeps all unclassified files in one serial batch and isolates audited manifests", () => {
+  const checks = discoverChecks();
+  const paths = selectChecks("runtime", checks);
+  const plan = runtimePlan(paths, checks);
+  const batches = runtimeBatches(plan);
+  expect(batches[0]).toEqual(plan.serial);
+  expect(batches.flat().toSorted()).toEqual(paths.toSorted());
+  expect(new Set(batches.flat()).size).toBe(paths.length);
+  for (const isolated of plan.isolated) expect(batches.slice(1)).toContainEqual([isolated]);
+  expect(plan.serial).toContain("scripts/spidermonkey-ordinary-fixtures.test.ts");
+  expect(plan.serial).toContain("scripts/spidermonkey-suppressed-error.test.ts");
+  expect(plan.serial).toContain("scripts/spidermonkey-loop-controls.test.ts");
+});
+
+test("runtime slot TMPDIR keeps nested sccache Unix sockets within the Linux 108-byte path limit on GitHub runners", () => {
+  const runnerTemp = "/home/runner/work/_temp";
+  const scratch = join(runnerTemp, `${runtimeScratchPrefix}XXXXXX`);
+  const slotTmp = workerSlotTmpDir(scratch, 3);
+  const sccacheSocket = join(slotTmp, "bun-wasm-native-cache-XXXXXX", "sccache-XXXXXX", "server");
+  expect(Buffer.byteLength(sccacheSocket)).toBeLessThan(100);
 });
 
 test("runtime scheduling source changes select the real native producers", () => {
@@ -35,8 +59,19 @@ test("only audited runtime files opt into process isolation", () => {
   const paths = selectChecks("runtime", checks);
   const plan = runtimePlan(paths, checks);
   expect(plan.isolated).toEqual([
+    "scripts/hot-run-live.test.ts",
+    "scripts/install-metadata.test.ts",
+    "scripts/install-selection.test.ts",
+    "scripts/install-tarballs.test.ts",
     "scripts/jsc-json-fast-controls.test.ts",
-    "scripts/spidermonkey-module-evaluation-info.test.ts", "scripts/wasm-tables.test.ts",
+    "scripts/legacy-cli-runtime.test.ts",
+    "scripts/package-port-typed.test.ts",
+    "scripts/runtime-assert-util.test.ts",
+    "scripts/rust-native-cache.test.ts",
+    "scripts/spidermonkey-module-evaluation-info.test.ts",
+    "scripts/spidermonkey-panic-process.test.ts",
+    "scripts/wasm-tables.test.ts",
+    "scripts/wasm-validation.test.ts",
   ]);
   expect(plan.serial).toContain("scripts/spidermonkey-ordinary-fixtures.test.ts");
   expect(plan.serial).toContain("scripts/spidermonkey-loop-controls.test.ts");
@@ -162,13 +197,13 @@ function start(root: string, extra: NodeJS.ProcessEnv = {}) {
 }
 
 test.skipIf(process.platform !== "linux")("real serial and bounded runs have equivalent outcomes, selection, mocks and file order", async () => {
-  for (const jobs of [undefined, "1", "2"]) {
+  for (const jobs of [undefined, "1", "2", "4"]) {
     const root = fixture();
-    const run = start(root, { BUN_WASM_RUNTIME_JOBS: jobs, PAIRS: jobs === "2" ? "1" : "0" });
+    const run = start(root, { BUN_WASM_RUNTIME_JOBS: jobs, PAIRS: jobs === "2" || jobs === "4" ? "1" : "0" });
     expect(await run.exited, run.output()).toBe(0);
     expect(readdirSync(join(root, "events")).filter(file => file.endsWith(".done")).sort()).toEqual(["a.done", "b.done", "c.done", "d.done", "serial.done"]);
     const pids = ["a", "b", "c", "d", "serial"].map(name => readFileSync(join(root, "events", `${name}.started`), "utf8"));
-    expect(new Set(pids).size).toBe(jobs === "2" ? 5 : 1);
+    expect(new Set(pids).size).toBe(jobs === "2" || jobs === "4" ? 5 : 1);
     expect(readdirSync(join(root, "tmp"))).toEqual([]);
   }
 }, 60000);

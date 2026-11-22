@@ -17,7 +17,7 @@ test("CI uses one standard Browser recipe while C1 retains its distinct source-c
   expect(needsRust(["scripts/guest-source-manifest.ts"])).toBe(true);
   expect(guestBuilds["source-cache-browser"]).toEqual({ artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-build"], optimizer: "unused" });
   expect(guestBuilds.browser.features).toEqual(["engine-host", "bun-transpiler", "bun-build"]);
-  expect(producer).toContain('source env.sh\n          BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-browser.sh');
+  expect(producer).toContain('source env.sh\n          BROWSER_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=3 bash scripts/build-bun-browser.sh');
   expect(workflow).not.toContain("source-cache-browser-guest");
   expect(workflow).not.toContain("dist/source-cache-browser");
   expect(native.match(/bash scripts\/build-bun-browser\.sh/g)).toHaveLength(1);

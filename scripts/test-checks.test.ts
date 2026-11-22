@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { automaticChecks, checkCommand, checkId, discoverChecks, parseCheckId, selectChecks, runCheck, checkBatches, namedCheckBatches, selectCheckBatch, checkArguments, parseCheck, nativeEngineGroups, nativeProducerEngines } from "./test-checks";
+import { automaticChecks, checkCommand, checkId, discoverChecks, parseCheckId, selectChecks, runCheck, checkBatches, namedCheckBatches, selectCheckBatch, checkArguments, parseCheck, nativeEngineGroups, nativeProducerEngines, shardTestFiles, testJobs } from "./test-checks";
 import { migrationBase } from "./migrations/split-bun-patches";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { needsJsc, needsRust } from "./ci-changes";
@@ -146,10 +146,44 @@ test("capacity, process and large IO retain blocking coverage on three ordinary 
 test("CI declares its native fixture and installer engine domains separately", () => {
   const workflow = expandedCiWorkflow();
   const gate = workflow.split("name: Blocking native fixture checks")[1]!.split("\n      - name:")[0]!;
-  expect(gate).toContain('BUN_WASM_RUNTIME_JOBS: "2"');
+  expect(gate).toContain('BUN_WASM_RUNTIME_JOBS: "3"');
   expect(gate).toContain("INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
   expect(gate).toContain("BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}");
   expect(gate).toContain("          bun scripts/test-checks.ts native\n");
+});
+
+test("testJobs validates bounds and shardTestFiles distributes every path once and spreads heavy files for relative and absolute paths", () => {
+  expect(testJobs(undefined)).toBe(1);
+  for (const value of ["1", "2", "3", "4"]) expect(testJobs(value)).toBe(Number(value));
+  for (const value of ["", "0", "5", "2.5", "-1", "abc"]) expect(() => testJobs(value)).toThrow("Invalid BUN_WASM_TEST_JOBS");
+  const files = selectChecks("quality");
+  const relativeShards = shardTestFiles(files, 4);
+  const absoluteFiles = files.map(path => join(root, path));
+  const absoluteShards = shardTestFiles(absoluteFiles, 4);
+  for (const [shards, expected] of [[relativeShards, files], [absoluteShards, absoluteFiles]] as const) {
+    expect(shards).toHaveLength(4);
+    expect(shards.flat().toSorted()).toEqual(expected.toSorted());
+    expect(new Set(shards.flat()).size).toBe(expected.length);
+  }
+  const heavyPrefix = ["scripts/ci-changes.test.ts", "scripts/ci-check-inputs.test.ts", "scripts/goals-matrix/playground.test.ts", "scripts/quality-probes.test.ts"];
+  heavyPrefix.forEach((file, index) => {
+    expect(relativeShards[index]?.[0]).toBe(file);
+    expect(absoluteShards[index]?.[0]).toBe(join(root, file));
+  });
+});
+
+test("runShardedFiles preserves sibling and signaled child diagnostics instead of discarding buffered output", () => {
+  const directory = fixture();
+  writeFileSync(join(directory, "ok.test.ts"), 'import { test } from "bun:test"; test("ok", () => { console.log("SIBLING_DIAGNOSTIC_OK"); });\n');
+  writeFileSync(join(directory, "killed.test.ts"), 'import { test } from "bun:test"; test("killed", () => { console.log("SIGNALED_DIAGNOSTIC_BEFORE_KILL"); process.kill(process.pid, "SIGTERM"); });\n');
+  const script = `import { runShardedFiles } from ${JSON.stringify(join(root, "scripts/test-checks.ts"))};
+process.exitCode = await runShardedFiles([${JSON.stringify(join(directory, "ok.test.ts"))}, ${JSON.stringify(join(directory, "killed.test.ts"))}], 2);
+`;
+  const result = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 30_000 });
+  expect(result.status).not.toBe(0);
+  expect(result.stdout).toContain("SIBLING_DIAGNOSTIC_OK");
+  expect(result.stdout).toContain("SIGNALED_DIAGNOSTIC_BEFORE_KILL");
+  expect(result.stdout).toContain("terminated by SIGTERM");
 });
 
 test("runtime declarations retain process isolation and source selection inputs together", () => {
@@ -194,6 +228,15 @@ printf '%s\\n' "$engine $*" >> "$RECORD"
   env.FAIL_ENGINE = "jsc";
   expect(run().status).toBe(1);
   expect(readFileSync(record, "utf8")).not.toContain("spidermonkey");
+  delete env.FAIL_ENGINE;
+  writeFileSync(record, "");
+  env.BUN_WASM_CHECK_JOBS = "2";
+  expect(run().status).toBe(0);
+  const parallelLines = readFileSync(record, "utf8").trim().split("\n");
+  expect(parallelLines.some(line => line.startsWith("quickjs ") && line.includes("plain"))).toBe(true);
+  expect(parallelLines.some(line => line.startsWith("quickjs ") && line.includes("matrix"))).toBe(true);
+  expect(parallelLines.some(line => line.startsWith("jsc ") && line.includes("matrix"))).toBe(true);
+  expect(parallelLines.some(line => line.startsWith("spidermonkey ") && line.includes("matrix"))).toBe(true);
 });
 
 test.each(["", "jsc,jsc", "unknown", "quickjs, jsc", ",browser"])("native producer selection rejects %s", value => {
