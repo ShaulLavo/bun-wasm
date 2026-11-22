@@ -127,7 +127,7 @@ test("native job budgets and names stay unchanged beside the lightweight update 
     "shared-proof": 5, web: 10, "web-unit": 10,
     "web-browser": "${{ matrix.pairedBatch != '' && 15 || 10 }}",
     "process-bundles": 10,
-    "browser-guest": "${{ startsWith(matrix.batch, '2') && 60 || 10 }}",
+    "browser-guest": "${{ matrix.timeoutMinutes }}",
     "browser-process": 10, "ci-result": 5, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));

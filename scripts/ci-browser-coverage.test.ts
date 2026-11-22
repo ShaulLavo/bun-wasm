@@ -66,12 +66,56 @@ test("Git snapshots reject symlink manifests and directories", () => {
   expect(() => browserCoverageSnapshot(git("rev-parse", "HEAD"), "head", directory)).toThrow("Unsafe check directory");
 });
 test("selected batches keep existing Storage/default cells and narrower engines", () => {
-  expect(browserCoverageOutputs([])).toContain('batches=["10-storage","default"]');
-  const quickjs = browserCoverageOutputs([{ owner: "installer-links", engines: ["quickjs"] }]);
-  expect(quickjs).toContain('batches=["10-storage","20-installer-links","default"]');
-  expect(quickjs).toContain("needed=true\njsc=false");
+  const verify = (selection: Parameters<typeof browserCoverageOutputs>[0], batches: string[], count: number) => {
+    const [matrix, ...outputs] = browserCoverageOutputs(selection).split("\n");
+    if (!matrix?.startsWith("matrix=")) throw new Error("Missing browser guest matrix");
+    const { include } = JSON.parse(matrix.slice("matrix=".length));
+    expect(include).toHaveLength(count);
+    for (const browser of ["chromium", "webkit"]) {
+      const names = include.filter((job: { browser: string }) => job.browser === browser)
+        .flatMap((job: { batches: { name: string }[] }) => job.batches.map(batch => batch.name));
+      expect(names.toSorted()).toEqual(batches);
+    }
+    return outputs.join("\n");
+  };
+  verify([], ["10-storage", "default"], 4);
+  expect(verify([{ owner: "installer-links", engines: ["quickjs"] }], ["10-storage", "20-installer-links", "default"], 4)).toContain("needed=true\njsc=false");
   expect(browserCoverageOutputs([{ owner: "installer-links", engines: ["jsc"] }])).toContain("jsc=true");
-  expect(JSON.parse(browserCoverageOutputs(fullBrowserGuestSelection).split("\n")[0]!.slice(8))).toHaveLength(9);
+  verify(fullBrowserGuestSelection, ["10-storage", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"], 6);
+});
+
+test.each([0, 1, 124])("the actual CI batch step keeps independent results when the first command exits %s", firstStatus => {
+  const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const step = workflow.split("name: Run Browser guest batches on the verified site\n")[1]?.split("\n      - name:")[0]?.split("        run: |\n")[1];
+  if (!step) throw new Error("Missing Browser guest batch step");
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-shard-"));
+  cleanup.add(directory);
+  mkdirSync(join(directory, "web"));
+  writeFileSync(join(directory, "env.sh"), "unset EPOCHSECONDS\nEPOCHSECONDS=1000\n");
+  writeFileSync(join(directory, "bun"), `#!/bin/bash
+    if [[ "$1" == *ci-install.ts ]]; then exit 0; fi
+    read -r _ && exit 99
+    printf '%s %s\\n' "$2" "$7" >> ../commands
+    test "$BUN_WASM_BROWSER_REPORT_DIR" = "$BUN_WASM_BROWSER_COVERAGE_REPORTS" || exit 98
+    printf '%s\\n' "$7" > "$BUN_WASM_BROWSER_REPORT_DIR/check.txt"
+    if [[ "$7" == 21-subprocess-aliases ]]; then exit "\${FIRST_STATUS}"; fi
+  `, { mode: 0o755 });
+  const reports = join(directory, "reports");
+  const summary = join(directory, "summary");
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step], {
+    cwd: join(directory, "web"), encoding: "utf8", env: { ...process.env, FIRST_STATUS: String(firstStatus),
+      PATH: `${directory}:${process.env.PATH}`, GITHUB_WORKSPACE: directory, GITHUB_STEP_SUMMARY: summary,
+      BUN_WASM_BROWSER_REPORT_DIR: reports, BUN_WASM_TEST_BROWSERS: "chromium", BROWSER_GUEST_SETUP_STARTED: "880",
+      BROWSER_GUEST_BATCHES: JSON.stringify([{ name: "21-subprocess-aliases", jobSeconds: 3600, commandSeconds: 3240 },
+        { name: "default", jobSeconds: 600, commandSeconds: 900 }]),
+    },
+  });
+  expect(result.status, result.stderr).toBe(firstStatus === 0 ? 0 : 1);
+  expect(readFileSync(join(directory, "commands"), "utf8")).toBe("3240 21-subprocess-aliases\n480 default\n");
+  expect(readFileSync(join(reports, "21-subprocess-aliases/check.txt"), "utf8")).toBe("21-subprocess-aliases\n");
+  expect(readFileSync(join(reports, "default/check.txt"), "utf8")).toBe("default\n");
+  expect(readFileSync(summary, "utf8")).toContain(`21-subprocess-aliases | ${firstStatus}\n`);
+  expect(readFileSync(summary, "utf8")).toContain("default | 0\n");
 });
 test("CI passes selected cells to same-run site consumers and builds interruption once", () => {
   const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -84,7 +128,10 @@ test("CI passes selected cells to same-run site consumers and builds interruptio
   const consumer = workflow.split("\n  browser-guest:\n")[1]!.split("\n  browser-process:\n")[0]!;
   expect(consumer).toContain("BUN_WASM_BROWSER_COVERAGE_SELECTION");
   expect(consumer).toContain("BUN_WASM_BROWSER_COVERAGE_REPORTS");
-  expect(consumer).toContain("startsWith(matrix.batch, '2') && 3240 || 900");
+  expect(consumer).toContain('run-with-timeout.mts "$deadline" bun ../scripts/test-checks.ts browser-guest --batch "$batch"');
+  expect(consumer.match(/name: browser-guest-site\n/g)).toHaveLength(1);
+  expect(consumer).toContain('working-directory: ${{ runner.temp }}\n        run: echo "BROWSER_GUEST_SETUP_STARTED=');
+  expect(consumer).toContain("name: Retain Browser guest diagnostics\n        if: ${{ always() }}");
   expect(consumer).not.toMatch(/build\.sh|test-web\.sh|coverage\.json|browser-guest-site.ts build/);
 });
 

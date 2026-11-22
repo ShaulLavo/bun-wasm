@@ -36,7 +36,7 @@ jobs:
       jsc: ${{ steps.changes.outputs.jsc == 'true' || steps.browser-guest-batches.outputs.jsc == 'true' }}
       shared: ${{ steps.changes.outputs.shared }}
       shared-native: ${{ steps.changes.outputs.shared_native }}
-      browser-guest-batches: ${{ steps.browser-guest-batches.outputs.batches }}
+      browser-guest-matrix: ${{ steps.browser-guest-batches.outputs.matrix }}
       browser-coverage-selection: ${{ steps.browser-guest-batches.outputs.selection }}
       web-browser-shards: ${{ steps.web-browser-shards.outputs.matrix }}
     steps:
@@ -1881,17 +1881,18 @@ jobs:
     if: ${{ !cancelled() && needs.selection.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (((needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true')) && needs.selection.outputs.browser_guest == 'true' && needs.rust.result == 'success' && (needs.ordinary-web-guests.result == 'success' || (needs.ordinary-web-guests.result == 'failure' && needs.ordinary-web-guests.outputs.shared-proof-inputs-failed == 'true')) && needs.browser-production.result == 'skipped') || (github.event_name == 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true' && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped' && needs.browser-production.result == 'success')) }}
     name: Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ startsWith(matrix.batch, '2') && 60 || 10 }}
+    timeout-minutes: ${{ matrix.timeoutMinutes }}
     strategy:
       fail-fast: false
-      matrix:
-        browser: [chromium, webkit]
-        batch: ${{ fromJSON(needs.selection.outputs.browser-guest-batches) }}
+      matrix: ${{ fromJSON(needs.selection.outputs.browser-guest-matrix) }}
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
         working-directory: web
     steps:
+      - name: Start the shared setup clock
+        working-directory: ${{ runner.temp }}
+        run: echo "BROWSER_GUEST_SETUP_STARTED=$EPOCHSECONDS" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: ./.github/actions/release-downloads
       - uses: ./.github/actions/setup-tools
@@ -1912,10 +1913,10 @@ jobs:
         with:
           name: browser-guest-site
           path: ${{ runner.temp }}/browser-guest-site
-      - name: Browser-guest checks on the verified site
+      - name: Run Browser guest batches on the verified site
         env:
+          BROWSER_GUEST_BATCHES: ${{ toJSON(matrix.batches) }}
           BUN_WASM_BROWSER_COVERAGE_SELECTION: ${{ needs.selection.outputs.browser-coverage-selection }}
-          BUN_WASM_BROWSER_COVERAGE_REPORTS: ${{ runner.temp }}/browser-guest-diagnostics
           BUN_WASM_BROWSER_SITE: ${{ runner.temp }}/browser-guest-site
           BUN_WASM_BROWSER_REPORT_DIR: ${{ runner.temp }}/browser-guest-diagnostics
           BUN_WASM_TEST_BROWSERS: ${{ matrix.browser }}
@@ -1924,10 +1925,35 @@ jobs:
           BUN_WASM_INTERRUPTION_SPIDERMONKEY: required
           TMPDIR: ${{ runner.temp }}
         run: |
-          mkdir -p "$BUN_WASM_BROWSER_REPORT_DIR"
           bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd .. --frozen-lockfile --ignore-scripts
           source ../env.sh
-          bun ../scripts/run-with-timeout.mts ${{ startsWith(matrix.batch, '2') && 3240 || 900 }} bun ../scripts/test-checks.ts browser-guest --batch "${{ matrix.batch }}"
+          setup_seconds=$((EPOCHSECONDS - BROWSER_GUEST_SETUP_STARTED))
+          batches=$(jq -er '.[] | [.name, .jobSeconds, .commandSeconds] | @tsv' <<< "$BROWSER_GUEST_BATCHES")
+          printf 'Browser guest (%s)\n\nBatch | Exit status\n--- | ---\n' "$BUN_WASM_TEST_BROWSERS" >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          while IFS=$'\t' read -r batch job_seconds command_seconds; do
+            printf '::group::Browser guest (%s, %s)\n' "$BUN_WASM_TEST_BROWSERS" "$batch"
+            # Charge shared setup to each batch's original job budget.
+            remaining=$((job_seconds - setup_seconds))
+            deadline=$((remaining < command_seconds ? remaining : command_seconds))
+            reports="$BUN_WASM_BROWSER_REPORT_DIR/$batch"
+            mkdir -p "$reports"
+            status=0
+            if ((deadline <= 0)); then
+              echo "Shared setup exhausted the $job_seconds second batch budget"
+              status=124
+            else
+              BUN_WASM_BROWSER_REPORT_DIR="$reports" BUN_WASM_BROWSER_COVERAGE_REPORTS="$reports" \
+                bun ../scripts/run-with-timeout.mts "$deadline" bun ../scripts/test-checks.ts browser-guest --batch "$batch" </dev/null || status=$?
+            fi
+            echo '::endgroup::'
+            printf '%s | %s\n' "$batch" "$status" >> "$GITHUB_STEP_SUMMARY"
+            if ((status != 0)); then
+              printf '::error title=Browser guest (%s, %s)::Batch exited with status %s\n' "$BUN_WASM_TEST_BROWSERS" "$batch" "$status"
+              failed=1
+            fi
+          done <<< "$batches"
+          exit "$failed"
       - name: Retain Browser guest diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@v4

@@ -7,7 +7,7 @@ import { createIphoneTransport } from "./iphone-transport";
 import { Scope } from "./scope";
 import { prepareIphoneSafari } from "./iphone-setup";
 import { closeIphoneTab } from "./iphone-cleanup";
-import { cleanupGroups, tabBatch, tabMoreMenu, tabPage } from "./iphone-tab-fixture";
+import { cleanupGroups, tabBatch, tabClosePress, tabMoreMenu, tabOverview, tabPage } from "./iphone-tab-fixture";
 import { batchSnapshot } from "./iphone-tab-snapshot";
 import privateOverview from "./fixtures/iphone-private-overview.json";
 import axOverview from "./fixtures/iphone-group-ax.json";
@@ -23,7 +23,7 @@ test("the captured Private overview still fails the strict cleanup tab-count gua
   expect(() => batchSnapshot(tabBatch(privateOverview), ["press", "snapshot"])).toThrow("Cannot identify Safari tab count");
 });
 
-async function fixture(initial: Snapshot, selected = ordinaryOverview(), afterExit: Snapshot = tabPage()) {
+async function fixture(initial: Snapshot, selected = ordinaryOverview(), afterExit: Snapshot = tabPage(), native: Pick<Parameters<typeof createIphoneTransport>[0], "beforeNative" | "tabJournal"> = {}) {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-iphone-setup-"));
   const agent = join(root, "agent-device"), log = join(root, "commands.jsonl"), switched = join(root, "ordinary");
   const exited = join(root, "overview-exited");
@@ -34,7 +34,7 @@ async function fixture(initial: Snapshot, selected = ordinaryOverview(), afterEx
       configured++;
       return Response.json("http://fixture/task");
     }
-    return Response.json({ nonce: "owned", timeOrigin: 1, visible: true, userAgent: "iPhone Safari" });
+    return Response.json({ url: "http://fixture/task", nonce: "owned", timeOrigin: 1, visible: true, userAgent: "iPhone Safari" });
   } });
   const close = async () => { await server.stop(true); await rm(root, { recursive: true, force: true }); };
   try {
@@ -52,7 +52,7 @@ if(args[0]==='batch') {
 }
 `);
     await chmod(agent, 0o700);
-    const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "a".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 5000 });
+    const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "a".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 5000, ...native });
     return { transport, configured: () => configured, commands: async (): Promise<string[][]> => (await readFile(log, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line)), close };
   } catch (error) { await close(); throw error; }
 }
@@ -95,6 +95,60 @@ test("an already selected ordinary group needs no group press", async () => {
     expect(commands[2]?.[2]).toContain('"ref":"@e20"');
     expect(commands[2]?.[2]).toContain('"settle":true');
   } finally { scope.close(); await f.close(); }
+});
+
+test("the native transport checks admission again before cleanup input", async () => {
+  let held = true;
+  const selected = ordinaryOverview();
+  const f = await fixture(selected, selected, tabPage(), { async beforeNative() {
+    if (!held) throw new Error("Mac FIFO holder changed");
+  } });
+  const scope = Scope.open(10_000);
+  try {
+    await f.transport.navigate("http://fixture/task", scope);
+    const before = await f.commands();
+    held = false;
+    await expect(f.transport.cleanup?.(5000)).rejects.toThrow("Mac FIFO holder changed");
+    expect(await f.commands()).toEqual(before);
+  } finally { scope.close(); await f.close(); }
+});
+
+test("a refused Safari navigation leaves no tab or journal entry", async () => {
+  const selected = ordinaryOverview(), titles = new Set<string>();
+  let probes = 0;
+  const f = await fixture(selected, selected, tabPage(), {
+    async beforeNative() { if (++probes === 4) throw new Error("Mac FIFO verification failed before launch"); },
+    tabJournal: { pending: async () => titles, record: async title => { titles.add(title); }, forget: async title => { titles.delete(title); } },
+  });
+  const scope = Scope.open(10_000);
+  try {
+    await expect(f.transport.navigate("http://fixture/task", scope)).rejects.toThrow("before launch");
+    expect(f.configured()).toBe(1);
+    expect(titles.size).toBe(0);
+    expect((await f.commands()).map(args => args[0])).toEqual(["open", "batch", "batch"]);
+  } finally { scope.close(); await f.close(); }
+});
+
+test("Safari setup closes only exact, unambiguous journal entries and uses a new snapshot for each close", async () => {
+  const labels = ["First owned", "Unknown smoke-looking tab", "Duplicate", "Duplicate"];
+  const more = labels.slice(1).concat("Second owned");
+  const snapshots = [tabOverview(labels, 25), tabOverview(more, 24), tabOverview(more.slice(0, -1), 23), tabPage()];
+  const presses = [undefined, tabClosePress("First owned", 0), tabClosePress("Second owned", 3)];
+  const targets: (string | undefined)[] = [];
+  const titles = new Set(["First owned", "Second owned", "Duplicate", "Offscreen"]);
+  const closed: string[] = [];
+  const scope = Scope.open(10_000);
+  try {
+    await prepareIphoneSafari(async args => {
+      if (args[0] !== "batch") return "Opened";
+      const steps: { command: string; input: { target?: { ref: string } } }[] = JSON.parse(args[2]!);
+      targets.push(steps[0]?.input.target?.ref);
+      return tabBatch(snapshots.shift(), steps.map(step => step.command), presses.shift());
+    }, scope, { titles, closed: async title => { closed.push(title); } });
+    expect(targets).toEqual([undefined, "@e2", "@e8", "@e100"]);
+    expect(closed).toEqual(["First owned", "Second owned"]);
+    expect(titles).toEqual(new Set(["Duplicate", "Offscreen"]));
+  } finally { scope.close(); }
 });
 
 test("captured AX duplicate wrappers locate one physical ordinary target and require selected tree proof", async () => {

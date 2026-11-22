@@ -85,7 +85,7 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "scripts/with-build-cache.sh", "scripts/rustc-cache.sh", ".github/actions/rust-build-cache/action.yml", ".github/actions/save-rust-build-cache/action.yml", "scripts/ci-sccache-cache.ts",
   // The shared Browser consumer's entry points, group-sensitive host and build/dependency inputs.
   "web/src/bun-executor.ts", "web/src/bun-launcher.ts", "src/quickjs-program.ts",
-  "web/src/runner.ts", "web/src/worker.ts", "web/src/worker-main.ts", "web/src/subprocess-broker.ts", "web/src/memory-telemetry.ts",
+  "web/src/runner.ts", "web/src/worker.ts", "web/src/worker-main.ts", "web/src/early-instance.ts", "web/src/subprocess-broker.ts", "web/src/memory-telemetry.ts",
   "web/src/net/trampoline.ts", "web/src/engine-loader.ts", "web/src/preview1-worker.ts",
   "web/src/program-profile.ts", "web/src/playground/playground.ts", "sandbox/src/sandbox.ts",
   "scripts/stage-program-profiles.ts", "web/tests/explicit-profile-browser.ts", "web/build.ts", "sandbox/build.ts",
