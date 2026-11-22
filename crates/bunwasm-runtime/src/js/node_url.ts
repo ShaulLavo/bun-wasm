@@ -395,21 +395,26 @@
       result.protocol = proto[1].toLowerCase();
       rest = rest.slice(proto[1].length);
     }
-    const hasSlashes = rest.startsWith("//");
+    const hostless = UNSAFE_PROTOCOLS.has(result.protocol);
+    let slashes = false;
     // Without a protocol, `//` starts a host only when asked to, or when it is followed by `user@host`.
-    const denotesHost = slashesDenoteHost || /^\/\/[^@/]+@[^@/]+/.test(rest);
-    if (hasSlashes && (result.protocol === null ? denotesHost : true)) {
-      result.slashes = true;
-      rest = parseAuthority(result, rest.slice(2), input);
+    if (slashesDenoteHost || result.protocol !== null || /^\/\/[^@/]+@[^@/]+/.test(rest)) {
+      slashes = rest.startsWith("//");
+      if (slashes && !hostless) {
+        rest = rest.slice(2);
+        result.slashes = true;
+      }
     }
-    if (!UNSAFE_PROTOCOLS.has(result.protocol)) {
+    // A protocol outside the slashed ones (mailto:, for one) has its host before the path too.
+    if (!hostless && (slashes || (result.protocol !== null && !isSlashedProtocol(result.protocol)))) {
+      rest = parseAuthority(result, rest, input);
+    }
+    if (!hostless) {
       rest = autoEscape(rest);
       escapeParts(result);
     }
-    if (rest || result.host) {
-      result.pathname = rest || (SLASHED_PROTOCOLS.has(result.protocol) ? "/" : rest);
-    }
-    if (result.pathname === "" && !result.host) result.pathname = null;
+    if (rest) result.pathname = rest;
+    if (isSlashedProtocol(result.protocol) && result.hostname && !result.pathname) result.pathname = "/";
     const search = result.search || "";
     result.path = result.pathname === null && !search ? null : (result.pathname || "") + search;
     result.href = format(result);

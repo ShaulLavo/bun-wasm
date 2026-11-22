@@ -788,6 +788,12 @@
 
     // ── arrays ──
 
+    // print_depth_exceeded_marker: `[Array ...]` for a collection past the depth limit.
+    printDepthExceededMarker(name) {
+      this.addForNewLine(name.length + 6);
+      this.write(this.paint("36", "[" + name + " ...]"));
+    }
+
     printArray(value, info) {
       const len = Number(value.length) || 0;
       if (len === 0) {
@@ -795,6 +801,7 @@
         this.addForNewLine(2);
         return;
       }
+      if (this.depth > this.maxDepth) return this.printDepthExceededMarker("Array");
       const state = { wasGoodTime: this.alwaysNewlineScope || len > 10 };
       this.indent += 1;
       this.depth += 1;
@@ -924,6 +931,7 @@
         this.write(name + " {}");
         return;
       }
+      if (this.depth > this.maxDepth) return this.printDepthExceededMarker(name);
       const prevQuote = this.quoteStrings;
       this.quoteStrings = true;
       this.write(this.singleLine ? name + "(" + length + ") { " : name + "(" + length + ") {\n");
@@ -1034,6 +1042,7 @@
         this.write(name + " {}");
         return;
       }
+      if (this.depth > this.maxDepth) return this.printDepthExceededMarker(name);
       const prevQuote = this.quoteStrings;
       this.quoteStrings = true;
       this.write(this.singleLine ? name + "(" + length + ") { " : name + "(" + length + ") {\n");
@@ -1069,6 +1078,7 @@
     }
 
     printIterator(value, label) {
+      if (this.depth > this.maxDepth) return this.printDepthExceededMarker(label);
       const prevQuote = this.quoteStrings;
       this.quoteStrings = true;
       this.write(label + " { ");
@@ -1159,7 +1169,7 @@
     printObjectInner(value) {
       const alwaysNewline = !this.singleLine && (this.alwaysNewlineScope || this.goodTimeForANewLine());
       if (this.depth > this.maxDepth) {
-        this.printObjectDepthExceeded();
+        this.printObjectDepthExceeded(value);
         return;
       }
       const ctx = { i: 0, singleLine: this.singleLine, alwaysNewline, parent: value };
@@ -1172,7 +1182,7 @@
       this.printObjectTail(value, ctx);
     }
 
-    printObjectDepthExceeded() {
+    printObjectDepthExceeded(value) {
       if (this.singleLine) {
         this.write(" ");
       } else if (this.alwaysNewlineScope || this.goodTimeForANewLine()) {
@@ -1180,7 +1190,7 @@
         this.writeIndent();
         this.resetLine();
       }
-      this.write("[Object ...]");
+      this.write(this.paint("36", "[" + getClassName(value) + " ...]"));
     }
 
     printObjectTail(value, ctx) {
@@ -1338,7 +1348,8 @@
       } else {
         converted = toNumberLoose(value);
       }
-      const text = formatNumber(converted);
+      // `%f` prints negative zero as 0.
+      const text = formatNumber(Object.is(converted, -0) ? 0 : converted);
       this.addForNewLine(text.length);
       this.write(text);
     }
