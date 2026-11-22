@@ -1,5 +1,6 @@
 #include <string.h>
 #include <limits.h>
+#include <stdint.h>
 #include <openssl/bio.h>
 #include <openssl/bytestring.h>
 #include <openssl/err.h>
@@ -53,21 +54,18 @@ static int cipher_run(EVP_PKEY_CTX *ctx, int op, const unsigned char *input, siz
   }
 }
 
-// Node's publicEncrypt (op 0), privateDecrypt (1), privateEncrypt (2) and publicDecrypt (3),
-// as ncrypto's Cipher::encrypt, decrypt, sign and recover run them. `der` is a PKCS#1
-// private key for ops 1 and 2 and a PKCS#1 public key otherwise. `hash` 0 keeps the default
-// OAEP digest (SHA-1); `output` holds at least the modulus size. Failures leave BoringSSL's
-// error queue for the caller.
-int bunwasm_rsa_cipher(int op, const unsigned char *der, size_t der_len, int padding, int hash,
-                       const unsigned char *label, size_t label_len,
-                       const unsigned char *input, size_t input_len,
-                       unsigned char *output, size_t *output_len) {
+// ncrypto's Cipher::encrypt, decrypt, sign and recover: the padding first, then any OAEP
+// digest and nonempty label exactly as given, so BoringSSL refuses them under another padding
+// as it does in Bun. `md` NULL keeps the default OAEP digest (SHA-1).
+static int rsa_cipher(int op, const unsigned char *der, size_t der_len, int padding,
+                      const EVP_MD *md, const unsigned char *label, size_t label_len,
+                      const unsigned char *input, size_t input_len,
+                      unsigned char *output, size_t *output_len) {
   EVP_PKEY *key = rsa_key(der, der_len, op == 1 || op == 2);
   EVP_PKEY_CTX *ctx = key ? EVP_PKEY_CTX_new(key, NULL) : NULL;
   int ok = ctx && cipher_init(ctx, op) && EVP_PKEY_CTX_set_rsa_padding(ctx, padding);
-  if (ok && hash && padding == RSA_PKCS1_OAEP_PADDING)
-    ok = digest(hash) && EVP_PKEY_CTX_set_rsa_oaep_md(ctx, digest(hash));
-  if (ok && label_len && padding == RSA_PKCS1_OAEP_PADDING) {
+  if (ok && md) ok = EVP_PKEY_CTX_set_rsa_oaep_md(ctx, md);
+  if (ok && label_len) {
     unsigned char *owned = OPENSSL_memdup(label, label_len);
     ok = owned && EVP_PKEY_CTX_set0_rsa_oaep_label(ctx, owned, label_len);
     if (!ok) OPENSSL_free(owned);
@@ -78,14 +76,28 @@ int bunwasm_rsa_cipher(int op, const unsigned char *der, size_t der_len, int pad
   return ok;
 }
 
+// Node's publicEncrypt (op 0), privateDecrypt (1), privateEncrypt (2) and publicDecrypt (3).
+// `der` is a PKCS#1 private key for ops 1 and 2 and a PKCS#1 public key otherwise. `hash` is
+// a BoringSSL digest name (EVP_get_digestbyname) or NULL; `output` holds at least the modulus
+// size. Failures leave BoringSSL's error queue for the caller.
+int bunwasm_rsa_cipher(int op, const unsigned char *der, size_t der_len, int padding,
+                       const char *hash, const unsigned char *label, size_t label_len,
+                       const unsigned char *input, size_t input_len,
+                       unsigned char *output, size_t *output_len) {
+  const EVP_MD *md = hash ? EVP_get_digestbyname(hash) : NULL;
+  if (hash && !md) return 0;
+  return rsa_cipher(op, der, der_len, padding, md, label, label_len, input, input_len,
+                    output, output_len);
+}
+
 int bunwasm_rsa(int op, const unsigned char *der, size_t der_len, int hash,
                 int pss, int salt, const unsigned char *label, size_t label_len,
                 const unsigned char *input, size_t input_len,
                 unsigned char *output, size_t *output_len) {
   if (op >= 2) {
     if (!digest(hash)) return -1;
-    return bunwasm_rsa_cipher(op == 2 ? 0 : 1, der, der_len, RSA_PKCS1_OAEP_PADDING, hash,
-                              label, label_len, input, input_len, output, output_len);
+    return rsa_cipher(op == 2 ? 0 : 1, der, der_len, RSA_PKCS1_OAEP_PADDING, digest(hash),
+                      label, label_len, input, input_len, output, output_len);
   }
   EVP_PKEY *key = digest(hash) ? rsa_key(der, der_len, op == 0) : NULL;
   if (!key) return -1;
@@ -175,7 +187,7 @@ static int key_password(char *out, int capacity, int writing, void *context) {
 size_t bunwasm_key_encoding(int op, const unsigned char *input, size_t input_len,
                            const unsigned char *password, size_t password_len,
                            const char *cipher_name, unsigned char *output,
-                           size_t capacity) {
+                           size_t capacity, uint32_t *error) {
   struct key_password pass = {password, password_len};
   BIO *source = NULL, *dest = NULL;
   EVP_PKEY *key = NULL;
@@ -226,6 +238,9 @@ done:
   EVP_PKEY_free(key);
   BIO_free(source);
   BIO_free(dest);
+  // The oldest queued error, which Bun reports for a failed key read (for example
+  // BAD_DECRYPT for a wrong passphrase), or 0.
+  *error = ok ? 0 : (uint32_t)ERR_peek_error();
   ERR_clear_error();
   return ok ? size : 0;
 }

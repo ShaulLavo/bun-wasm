@@ -28,3 +28,64 @@ data type throws TypeError ERR_INVALID_ARG_TYPE
 publicEncrypt pkcs1 der public RSA cipher fixture
 publicEncrypt pkcs1 der private RSA cipher fixture
 read order padding oaepHash oaepLabel
+privateEncrypt oaepHash throws Error ERR_OSSL_EVP_INVALID_OPERATION error:06000072:public key routines:OPENSSL_internal:INVALID_OPERATION
+publicDecrypt oaepHash throws Error ERR_OSSL_EVP_INVALID_OPERATION error:06000072:public key routines:OPENSSL_internal:INVALID_OPERATION
+privateEncrypt oaepLabel throws Error ERR_OSSL_EVP_INVALID_OPERATION error:06000072:public key routines:OPENSSL_internal:INVALID_OPERATION
+publicEncrypt none label throws Error ERR_OSSL_EVP_INVALID_PADDING_MODE error:06000073:public key routines:OPENSSL_internal:INVALID_PADDING_MODE
+publicEncrypt none empty label 128
+publicEncrypt pkcs1 oaepHash throws Error ERR_OSSL_EVP_INVALID_PADDING_MODE error:06000073:public key routines:OPENSSL_internal:INVALID_PADDING_MODE
+padding 999 throws Error ERR_OSSL_EVP_ILLEGAL_OR_UNSUPPORTED_PADDING_MODE error:0600006d:public key routines:OPENSSL_internal:ILLEGAL_OR_UNSUPPORTED_PADDING_MODE
+padding string 128
+padding object 128
+padding fraction 128
+padding bigint throws TypeError undefined
+padding symbol throws TypeError undefined
+oaepHash sha512-224 RSA cipher fixture
+oaepHash sha512-256 RSA cipher fixture
+oaepHash md4 RSA cipher fixture
+oaepHash MD5 RSA cipher fixture
+oaepHash SHA256 RSA cipher fixture
+oaepHash sha-256 RSA cipher fixture
+oaepHash RSA-SHA256 RSA cipher fixture
+oaepHash sha3-256 RSA cipher fixture
+oaepHash md5-sha1 RSA cipher fixture
+oaepHash ripemd160 RSA cipher fixture
+oaepHash sha256WithRSAEncryption RSA cipher fixture
+oaepHash sha128 RSA cipher fixture
+oaepHash dss1 RSA cipher fixture
+oaepHash SHA-512/224 RSA cipher fixture
+oaepHash shake128 throws Error ERR_OSSL_EVP_INVALID_DIGEST Invalid digest used
+oaepHash blake2b512 throws Error ERR_OSSL_EVP_INVALID_DIGEST Invalid digest used
+publicEncrypt certificate A, public B B
+publicEncrypt public B, certificate A B
+publicEncrypt private A, public B B
+publicEncrypt private B, certificate A A
+publicEncrypt certificate A, private B A
+publicEncrypt encrypted A, public B B
+publicEncrypt encrypted PKCS#8 A, public B B
+createPublicKey certificate A, public B true
+createPrivateKey certificate A, private B true
+createPrivateKey public B, private A true
+privateDecrypt certificate A, private B RSA cipher fixture
+privateDecrypt public B throws Error ERR_OSSL_PEM_NO_START_LINE error:0900006e:PEM routines:OPENSSL_internal:NO_START_LINE
+createPrivateKey certificate throws Error ERR_OSSL_PEM_NO_START_LINE error:0900006e:PEM routines:OPENSSL_internal:NO_START_LINE
+createPublicKey not PEM throws Error ERR_OSSL_PEM_NO_START_LINE error:0900006e:PEM routines:OPENSSL_internal:NO_START_LINE
+publicEncrypt not PEM throws Error ERR_OSSL_PEM_NO_START_LINE error:0900006e:PEM routines:OPENSSL_internal:NO_START_LINE
+PEM no passphrase throws TypeError ERR_MISSING_PASSPHRASE Passphrase required for encrypted key
+PEM wrong passphrase throws Error ERR_OSSL_BAD_DECRYPT error:1e000065:Cipher functions:OPENSSL_internal:BAD_DECRYPT
+PEM passphrase A
+PEM createPrivateKey wrong passphrase throws Error ERR_OSSL_BAD_DECRYPT error:1e000065:Cipher functions:OPENSSL_internal:BAD_DECRYPT
+PKCS#8 no passphrase throws TypeError ERR_MISSING_PASSPHRASE Passphrase required for encrypted key
+PKCS#8 wrong passphrase throws Error ERR_OSSL_BAD_DECRYPT error:1e000065:Cipher functions:OPENSSL_internal:BAD_DECRYPT
+PKCS#8 passphrase A
+PKCS#8 createPrivateKey wrong passphrase throws Error ERR_OSSL_BAD_DECRYPT error:1e000065:Cipher functions:OPENSSL_internal:BAD_DECRYPT
+publicEncrypt encrypted no passphrase throws TypeError ERR_MISSING_PASSPHRASE Passphrase required for encrypted key
+privateEncrypt public KeyObject throws TypeError ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE Invalid key object type public, expected private.
+privateDecrypt public KeyObject throws TypeError ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE Invalid key object type public, expected private.
+publicEncrypt secret KeyObject throws TypeError ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE Invalid key object type secret, expected private or public.
+privateEncrypt secret KeyObject throws TypeError ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE Invalid key object type secret, expected private.
+createPublicKey secret KeyObject throws TypeError ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE Invalid key object type secret, expected private.
+sign public KeyObject throws TypeError ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE Invalid key object type public, expected private.
+verify secret KeyObject throws TypeError ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE Invalid key object type secret, expected private or public.
+publicEncrypt EC throws Error ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE error:0600007d:public key routines:OPENSSL_internal:OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE
+privateEncrypt EC throws Error ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE error:0600007d:public key routines:OPENSSL_internal:OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE

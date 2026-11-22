@@ -79,3 +79,91 @@ for (const name of ["oaepLabel", "oaepHash", "padding"]) {
   Object.defineProperty(watched, name, { get: () => void reads.push(name) });
 }
 show("read order", () => (crypto.publicEncrypt(watched as never, message), reads.join(" ")));
+
+// The same with the error's message, which Bun takes from BoringSSL or its own checks.
+const detail = (label: string, run: () => unknown) => {
+  try {
+    console.log(label, String(run()));
+  } catch (error) {
+    const failure = error as Error & { code?: string };
+    console.log(label, "throws", failure.name, failure.code, failure.message);
+  }
+};
+
+// OAEP options apply as given: under another padding, BoringSSL refuses them.
+detail("privateEncrypt oaepHash", () => crypto.privateEncrypt({ key: privateKey, oaepHash: "sha256" } as never, message).length);
+detail("publicDecrypt oaepHash", () => crypto.publicDecrypt({ key: publicKey, oaepHash: "sha256" } as never, signed).length);
+detail("privateEncrypt oaepLabel", () => crypto.privateEncrypt({ key: privateKey, oaepLabel: Buffer.from("a") } as never, message).length);
+detail("publicEncrypt none label", () => crypto.publicEncrypt({ key: publicKey, padding: constants.RSA_NO_PADDING, oaepLabel: Buffer.from("a") }, block).length);
+detail("publicEncrypt none empty label", () => crypto.publicEncrypt({ key: publicKey, padding: constants.RSA_NO_PADDING, oaepLabel: Buffer.alloc(0) }, block).length);
+detail("publicEncrypt pkcs1 oaepHash", () => crypto.publicEncrypt({ key: publicKey, padding: constants.RSA_PKCS1_PADDING, oaepHash: "sha1" }, message).length);
+detail("padding 999", () => crypto.publicEncrypt({ key: publicKey, padding: 999 }, message).length);
+
+// The padding is converted as JSValue::toInt32 does: ToNumber, then int32.
+for (const [label, padding] of [["string", "3"], ["object", { valueOf: () => 3 }], ["fraction", 3.9], ["bigint", 3n], ["symbol", Symbol("padding")]] as const) {
+  show(`padding ${label}`, () => crypto.publicEncrypt({ key: publicKey, padding } as never, block).length);
+}
+
+// OAEP digests use Bun's digest names (ncrypto's Digest::FromName).
+for (const name of ["sha512-224", "sha512-256", "md4", "MD5", "SHA256", "sha-256", "RSA-SHA256", "sha3-256", "md5-sha1", "ripemd160", "sha256WithRSAEncryption", "sha128", "dss1", "SHA-512/224", "shake128", "blake2b512"]) {
+  detail(`oaepHash ${name}`, () => {
+    const sealed = crypto.publicEncrypt({ key: publicKey, oaepHash: name }, message);
+    return String(crypto.privateDecrypt({ key: privateKey, oaepHash: name }, sealed));
+  });
+}
+
+// PEM input with several blocks: a public operation takes a public key, then PKCS#1 public,
+// then a certificate, then a private key; a private operation takes the first private key.
+const pemB = readFileSync(new URL("keyB.pem", import.meta.url), "utf8");
+const publicPemB = crypto.createPublicKey(pemB).export({ format: "pem", type: "spki" }) as string;
+const encryptedA = readFileSync(new URL("encA.pem", import.meta.url), "utf8");
+const encryptedA8 = readFileSync(new URL("encA8.pem", import.meta.url), "utf8");
+const owner = (sealed: Buffer) => {
+  for (const [name, key] of [["A", pem], ["B", pemB]]) {
+    try {
+      crypto.privateDecrypt(key, sealed);
+      return name;
+    } catch {}
+  }
+  return "neither";
+};
+const mixed = {
+  "certificate A, public B": certificate + publicPemB,
+  "public B, certificate A": publicPemB + certificate,
+  "private A, public B": pem + publicPemB,
+  "private B, certificate A": pemB + certificate,
+  "certificate A, private B": certificate + pemB,
+  "encrypted A, public B": encryptedA + publicPemB,
+  "encrypted PKCS#8 A, public B": encryptedA8 + publicPemB,
+};
+for (const [label, input] of Object.entries(mixed)) detail(`publicEncrypt ${label}`, () => owner(crypto.publicEncrypt(input, message)));
+detail("createPublicKey certificate A, public B", () => crypto.createPublicKey(mixed["certificate A, public B"]).equals(crypto.createPublicKey(publicPemB)));
+detail("createPrivateKey certificate A, private B", () => crypto.createPrivateKey(certificate + pemB).equals(crypto.createPrivateKey(pemB)));
+detail("createPrivateKey public B, private A", () => crypto.createPrivateKey(publicPemB + pem).equals(privateKey));
+detail("privateDecrypt certificate A, private B", () => String(crypto.privateDecrypt(certificate + pemB, crypto.publicEncrypt(publicPemB, message))));
+detail("privateDecrypt public B", () => crypto.privateDecrypt(publicPemB, message));
+detail("createPrivateKey certificate", () => crypto.createPrivateKey(certificate));
+detail("createPublicKey not PEM", () => crypto.createPublicKey("not a key"));
+detail("publicEncrypt not PEM", () => crypto.publicEncrypt("not a key", message));
+
+// Encrypted private keys.
+for (const [label, input] of [["PEM", encryptedA], ["PKCS#8", encryptedA8]] as const) {
+  detail(`${label} no passphrase`, () => crypto.privateDecrypt(input, message));
+  detail(`${label} wrong passphrase`, () => crypto.privateDecrypt({ key: input, passphrase: "wrong" }, message));
+  detail(`${label} passphrase`, () => owner(crypto.publicEncrypt({ key: input, passphrase: "secret" }, message)));
+  detail(`${label} createPrivateKey wrong passphrase`, () => crypto.createPrivateKey({ key: input, passphrase: Buffer.from("wrong") }));
+}
+detail("publicEncrypt encrypted no passphrase", () => crypto.publicEncrypt(encryptedA, message));
+
+// Key objects of the wrong type.
+const secret = crypto.createSecretKey(Buffer.alloc(16));
+const ec = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+detail("privateEncrypt public KeyObject", () => crypto.privateEncrypt(publicKey, message));
+detail("privateDecrypt public KeyObject", () => crypto.privateDecrypt(publicKey, message));
+detail("publicEncrypt secret KeyObject", () => crypto.publicEncrypt(secret, message));
+detail("privateEncrypt secret KeyObject", () => crypto.privateEncrypt(secret, message));
+detail("createPublicKey secret KeyObject", () => crypto.createPublicKey(secret as never));
+detail("sign public KeyObject", () => crypto.sign("sha256", message, publicKey));
+detail("verify secret KeyObject", () => crypto.verify("sha256", message, secret, Buffer.alloc(1)));
+detail("publicEncrypt EC", () => crypto.publicEncrypt(ec.publicKey, message));
+detail("privateEncrypt EC", () => crypto.privateEncrypt(ec.privateKey, message));

@@ -47,7 +47,7 @@ unsafe extern "C" {
         der: *const u8,
         der_len: usize,
         padding: i32,
-        hash: i32,
+        hash: *const std::ffi::c_char,
         label: *const u8,
         label_len: usize,
         input: *const u8,
@@ -67,6 +67,7 @@ unsafe extern "C" {
         cipher: *const std::ffi::c_char,
         out: *mut u8,
         capacity: usize,
+        error: *mut u32,
     ) -> usize;
 }
 
