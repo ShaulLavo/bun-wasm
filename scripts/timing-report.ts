@@ -8,7 +8,7 @@ import { TIMING_PREFIX, timingWorkloads, type TimingSample } from "./timing-obse
 const repository = "ShaulLavo/bun-wasm";
 const api = `https://api.github.com/repos/${repository}`;
 const metrics = Object.keys(timingWorkloads);
-const jobs = ["Web host unit and types", "Web browser (20-preview)"];
+const jobs = ["Web host unit and types", "Web browser"];
 const maxLogBytes = 8 * 1024 * 1024;
 const maxJsonBytes = 512 * 1024;
 const maxSamples = 8;

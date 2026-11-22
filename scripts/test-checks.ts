@@ -5,7 +5,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "browser-guest", "native", "native-probe"] as const;
 type Owner = typeof owners[number];
-const batchOwners = new Set<Owner>(["web", "browser-guest", "web-browser"]);
+const batchOwners = new Set<Owner>(["web", "browser-guest", "web-browser", "native-probe", "runtime"]);
 export type NativeProfile = "split" | "shared-group";
 const nativeEngines = ["quickjs", "jsc", "browser", "spidermonkey"] as const;
 export type NativeEngine = typeof nativeEngines[number];
@@ -321,6 +321,8 @@ export async function runShardedFiles(files: readonly string[], jobs: number, en
 }
 
 function warmWasmtimeCache(producers: readonly NativeEngine[], env: NodeJS.ProcessEnv): void {
+  const cacheDir = env.BUN_WASM_CACHE_DIR;
+  if (cacheDir === "off" || cacheDir === "0") return;
   const launcher = env.BUN_WASM_LAUNCHER;
   if (!launcher || !existsSync(launcher)) return;
   const cores: string[] = [];
@@ -330,11 +332,16 @@ function warmWasmtimeCache(producers: readonly NativeEngine[], env: NodeJS.Proce
   const warmEnv = { ...env, RAYON_NUM_THREADS: String(Math.max(2, Math.min(4, availableParallelism()))) };
   for (const core of cores) {
     if (!existsSync(core)) continue;
-    spawnSync(launcher, ["--wasm", core, "--", "-e", ""], { env: warmEnv, stdio: "ignore", timeout: 120_000 });
+    const result = spawnSync(launcher, ["--wasm", core, "--", "-e", ""], { env: warmEnv, stdio: "ignore", timeout: 120_000 });
+    if (result.error || result.status !== 0) {
+      console.error(`Wasmtime cache warm-up for ${core} exited with ${result.error ? result.error.message : String(result.status ?? result.signal)}`);
+    }
   }
 }
 
-async function runNative(paths: readonly string[], profile: NativeProfile): Promise<number> {
+export type NativePhase = "runtime" | "fixtures";
+
+async function runNative(paths: readonly string[], profile: NativeProfile, only?: NativePhase): Promise<number> {
   if (profile === "shared-group") return runCheck(checkCommand("native", paths.slice(), profile));
   const count = Number(process.env.BUN_WASM_CHECK_JOBS ?? availableParallelism());
   if (!Number.isInteger(count) || count < 1) throw new Error(`Invalid BUN_WASM_CHECK_JOBS: ${String(count)}`);
@@ -342,9 +349,11 @@ async function runNative(paths: readonly string[], profile: NativeProfile): Prom
   const env = { ...process.env, BUN_WASM_CI_CHECKS: "1" };
   // Populate Wasmtime's module cache once at full core width before parallel runtime/fixture workers start.
   if (count > 1) warmWasmtimeCache(producers, env);
-  // Each test.sh would otherwise run the whole runtime suite again, in parallel.
-  const runtime = runCheck(["bash", join(root, "scripts/check-runtime.sh")], env);
-  if (runtime !== 0) return runtime;
+  if (only !== "fixtures") {
+    // Each test.sh would otherwise run the whole runtime suite again, in parallel.
+    const runtime = runCheck(["bash", join(root, "scripts/check-runtime.sh")], env);
+    if (runtime !== 0 || only === "runtime") return runtime;
+  }
   const grouped = { ...env, BUN_WASM_RUNTIME_CHECKED: "1" };
   const groups = nativeEngineGroups(paths, { count, producers, env: grouped, chunked: count > 1 });
   const tasks = groups.flatMap(group => group.commands.map(command => ({ engine: group.engine, command })));
@@ -374,7 +383,7 @@ async function runNative(paths: readonly string[], profile: NativeProfile): Prom
   return failure;
 }
 
-async function runOwner(owner: string, profile: NativeProfile, selectedBatch?: string): Promise<void> {
+async function runOwner(owner: string, profile: NativeProfile, selectedBatch?: string, only?: NativePhase): Promise<void> {
   if (owner === "runtime" && process.env.BUN_WASM_RUNTIME_JOBS !== undefined) {
     const { runtimeJobs, runRuntimeChecks } = await import("./runtime-file-checks.ts");
     const jobs = runtimeJobs(process.env.BUN_WASM_RUNTIME_JOBS);
@@ -389,7 +398,7 @@ async function runOwner(owner: string, profile: NativeProfile, selectedBatch?: s
   const batches = selectedBatch === undefined ? checkBatches(owner, undefined, profile) : [selectCheckBatch(owner, selectedBatch, undefined, profile)];
   for (const batch of batches) {
     const status = owner === "native"
-      ? await runNative(batch, profile)
+      ? await runNative(batch, profile, only)
       : shardable && jobs > 1
         ? await runShardedFiles(batch.map(path => join(root, path)), jobs, process.env)
         : runCheck(checkCommand(owner, batch), process.env);
@@ -397,6 +406,11 @@ async function runOwner(owner: string, profile: NativeProfile, selectedBatch?: s
     process.exitCode = status;
     return;
   }
+}
+
+function nativePhase(value: unknown): NativePhase {
+  if (value === "runtime" || value === "fixtures") return value;
+  throw new Error(`Invalid native phase: ${String(value)}`);
 }
 
 export function checkArguments(args: readonly string[]) {
@@ -410,15 +424,20 @@ export function checkArguments(args: readonly string[]) {
   const batchAt = remaining.indexOf("--batch");
   const batch = batchAt < 0 ? undefined : remaining[batchAt + 1];
   if (batchAt >= 0 && (!batch || batch.startsWith("--"))) throw new Error("Missing check batch");
-  const rest = batchAt < 0 ? remaining : remaining.slice(0, batchAt).concat(remaining.slice(batchAt + 2));
+  const afterBatch = batchAt < 0 ? remaining : remaining.slice(0, batchAt).concat(remaining.slice(batchAt + 2));
+  const onlyAt = afterBatch.indexOf("--only");
+  const only = onlyAt < 0 ? undefined : nativePhase(afterBatch[onlyAt + 1]);
+  if (onlyAt >= 0 && (owner !== "native" || profile !== "split")) throw new Error("Only split native checks select --only");
+  const rest = onlyAt < 0 ? afterBatch : afterBatch.slice(0, onlyAt).concat(afterBatch.slice(onlyAt + 2));
   if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--list" && rest[0] !== "--batches")) throw new Error("Unexpected check arguments");
   if (batch !== undefined && rest[0] === "--batches") throw new Error("Cannot list batches while selecting one");
-  return { owner, profile, batch, list: rest[0] === "--list", batches: rest[0] === "--batches" };
+  if (only !== undefined && (rest[0] === "--list" || rest[0] === "--batches")) throw new Error("Cannot combine --only with --list or --batches");
+  return { owner, profile, batch, ...(only === undefined ? {} : { only }), list: rest[0] === "--list", batches: rest[0] === "--batches" };
 }
 
 if (import.meta.main) {
-  const { owner, profile, batch, list, batches } = checkArguments(process.argv.slice(2));
+  const { owner, profile, batch, only, list, batches } = checkArguments(process.argv.slice(2));
   if (batches) console.log(JSON.stringify(namedCheckBatches(owner, undefined, profile).map(batch => batch.name)));
   else if (list) console.log((batch === undefined ? selectChecks(owner, undefined, profile) : selectCheckBatch(owner, batch, undefined, profile)).join("\n"));
-  else await runOwner(owner, profile, batch);
+  else await runOwner(owner, profile, batch, only);
 }

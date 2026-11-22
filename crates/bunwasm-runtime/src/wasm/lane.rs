@@ -53,7 +53,11 @@ const H_VERSION: u32 = 4;
 const H_PIN: u32 = 8;
 /// Bumped by every death declaration, so every guest runs a full sweep after one.
 const H_DEATHS: u32 = 16;
-/// Bytes in Released slots, which a sweep trims to `POOL_LIMIT`.
+/// An estimate of the bytes in Released slots, used only to ask for a trim past `POOL_LIMIT`.
+/// Every release adds its slot after the slot shows Released and nothing subtracts, so racing
+/// members can only push it above the true total; every trim restarts it from what it measured.
+/// No pair of stores to two words survives a member dying between them, so a death may leave it
+/// off, and the full sweep the death causes trims and restarts it.
 const H_POOL: u32 = 20;
 const H_TRIM: u32 = 24;
 
@@ -217,10 +221,8 @@ trait Words: Memory {
     fn put64(&self, at: u32, value: u64) {
         self.double(at).store(value, SeqCst);
     }
-    fn subtract(&self, at: u32, delta: u32) {
-        let _ = self
-            .word(at)
-            .try_update(SeqCst, SeqCst, |value| Some(value.saturating_sub(delta)));
+    fn take(&self, at: u32) -> u32 {
+        self.word(at).swap(0, SeqCst)
     }
     fn get(&self, at: u32) -> Word {
         Word::unpack(self.double(at).load(SeqCst))
@@ -602,13 +604,11 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     /// their own size again. A lost race looks again.
     fn reuse(&self, lanes: bool, len: u32) -> Option<(u32, Word)> {
         for _ in 0..8 {
-            let (at, claim, length) = self.best_fit(lanes, len)?;
+            let (at, claim, _) = self.best_fit(lanes, len)?;
             let mine = Word::new(self.tag, claim.count + 1, phase::REUSE);
-            if !self.mem.swap_word(at + CLAIM, claim, mine) {
-                continue;
+            if self.mem.swap_word(at + CLAIM, claim, mine) {
+                return Some((at, mine));
             }
-            self.mem.subtract(self.ledger + H_POOL, length);
-            return Some((at, mine));
         }
         None
     }
@@ -694,6 +694,8 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         ) {
             return false;
         }
+        // Counted after the swap, so the estimate never runs below the slots a trim could
+        // find; see `H_POOL`.
         let length = self.mem.load(at + LENGTH);
         self.mem.add(self.ledger + H_POOL, length);
         if length > POOL_LIMIT || self.mem.load(self.ledger + H_POOL) > POOL_LIMIT {
@@ -1292,9 +1294,12 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         }
     }
 
-    /// Returns Released storage above the pool limit to the host, largest first.
+    /// Returns Released storage above the pool limit to the host, largest first, and restarts
+    /// the pool estimate from what it kept. A release after the restart adds itself again, so
+    /// racing releases can only leave the estimate high.
     fn trim(&self) {
         self.mem.put(self.ledger + H_TRIM, 0);
+        self.mem.take(self.ledger + H_POOL);
         let mut released: Vec<(u32, u32, Word)> = self
             .slots(true)
             .chain(self.slots(false))
@@ -1310,13 +1315,14 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
             if keep {
                 continue;
             }
-            let Some(mine) = self.take_for_cleaning(at, claim) else {
-                continue;
-            };
-            self.mem.subtract(self.ledger + H_POOL, length);
+            // Taken or not, the slot leaves this trim's total: if the take failed, another
+            // member reused or cleaned it since the scan.
             pool -= length;
-            self.finish_cleaning(at, mine);
+            if let Some(mine) = self.take_for_cleaning(at, claim) {
+                self.finish_cleaning(at, mine);
+            }
         }
+        self.mem.add(self.ledger + H_POOL, pool);
     }
 
     // ---- Sending ----
@@ -1806,28 +1812,31 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         self.leave_segment(view, segment)
     }
 
-    /// An exhausted segment. Copy where to go next, then release it; never touch it again.
+    /// A segment found drained. Copy where to go next, then release it; never touch it again.
     fn leave_segment(&self, view: &View, segment: Segment) -> Result<Step, Refusal> {
         let address = segment.address;
         let next = self.mem.load(address + S_NEXT);
+        let sealed = next == 0 && self.mem.load(address + S_SEALED) != 0;
+        let closed = next == 0
+            && !sealed
+            && self.mem.get(self.end_at(view.lane.slot, 1 - view.dir)).kind == end::CLOSED;
+        if next == 0 && !sealed && !closed {
+            return Ok(Step::Empty);
+        }
+        // The writer commits every append to this segment before it links the next one, seals
+        // it or closes, but the caller loaded the committed cursor before this saw any of those,
+        // and appends may have landed in between: look again. A closed writer's last commit may
+        // also be a link made after `next` was loaded.
+        if self.mem.load(address + S_COMMITTED) != self.mem.load(address + S_READ)
+            || closed && self.mem.load(address + S_NEXT) != 0
+        {
+            return Ok(Step::Moved);
+        }
         if next != 0 {
             let generation = self.mem.load(address + S_NEXT_GEN);
             self.mem.put(view.block + D_CURSOR_GEN, generation);
             self.mem.put(view.block + D_CURSOR, next);
             self.release_slot(self.small_slot(segment.index), segment.claim);
-            return Ok(Step::Moved);
-        }
-        let sealed = self.mem.load(address + S_SEALED) != 0;
-        let writer = self.mem.get(self.end_at(view.lane.slot, 1 - view.dir)).kind;
-        if !sealed && writer != end::CLOSED {
-            return Ok(Step::Empty);
-        }
-        // A final unsealed tail is terminal once its writer is closed and released. Look again
-        // after seeing that: the writer's last commit came before its close.
-        if !sealed
-            && (self.mem.load(address + S_COMMITTED) != self.mem.load(address + S_READ)
-                || self.mem.load(address + S_NEXT) != 0)
-        {
             return Ok(Step::Moved);
         }
         self.mem.put(view.block + D_CURSOR, 0);

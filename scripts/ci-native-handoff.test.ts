@@ -8,13 +8,16 @@ function record(value: unknown): Record<string, unknown> {
 }
 const source = expandedCiWorkflow();
 const jobs = record(record(Bun.YAML.parse(source)).jobs);
-const boatShell = "setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}";
 
-test("native quality has a bounded checkpoint before the unchanged final native gate", () => {
-  expect(record(jobs["native-quality"])["timeout-minutes"]).toBe(45);
-  expect(record(jobs.rust)["timeout-minutes"]).toBe(60);
-  expect(record(jobs["jsc-prebuild"])["timeout-minutes"]).toBe(45);
-  expect(record(jobs.rust).needs).toEqual(["selection", "jsc-prebuild", "native-quality"]);
+test("native quality, ordinary-build, rust and rust-fixtures preserve bounded parallel stages", () => {
+  expect(record(jobs["native-quality"])["timeout-minutes"]).toBe(35);
+  expect(record(jobs["ordinary-build"])["timeout-minutes"]).toBe(60);
+  expect(record(jobs.rust)["timeout-minutes"]).toBe(30);
+  expect(record(jobs["rust-fixtures"])["timeout-minutes"]).toBe(25);
+  expect(record(jobs["native-quality"]).needs).toBe("selection");
+  expect(record(jobs["ordinary-build"]).needs).toBe("selection");
+  expect(record(jobs.rust).needs).toEqual(["selection", "ordinary-build"]);
+  expect(record(jobs["rust-fixtures"]).needs).toEqual(["selection", "ordinary-build"]);
 });
 
 import { createHash } from "node:crypto";
@@ -33,97 +36,41 @@ function steps(id: string): Record<string, unknown>[] {
   if (!Array.isArray(value)) throw new Error("Expected job steps");
   return value.map(record);
 }
-function step(id: string, name: string): Record<string, unknown> {
-  const found = steps(id).filter(step => step.name === name);
-  expect(found).toHaveLength(1);
-  return found[0]!;
-}
-function script(id: string, name: string): string {
-  const value = step(id, name).run;
-  if (typeof value !== "string") throw new Error("Missing run command");
-  return value;
-}
-const packName = "Package the verified native quality checkpoint";
-const unpackName = "Import the verified native quality checkpoint";
-const guardName = "Require the JSC prebuild job's output";
+const packName = "pack";
+const unpackName = "unpack";
 const producer = record(jobs["native-quality"]);
-const consumer = record(jobs.rust);
+const builder = record(jobs["ordinary-build"]);
+const runtime = record(jobs.rust);
+const fixtures = record(jobs["rust-fixtures"]);
 const commands = ["bun scripts/quality-rust.ts --checks-only", "bun run quality:wasi", "bun test tests/memory-telemetry.test.ts", "--lib modules::tests::host_"];
 
-test("quality owns one native Cargo restore and every quality command, not a second guest producer", () => {
+test("quality runs checks and TLS probe inline while ordinary-build produces guests in parallel", () => {
   for (const command of commands) {
     expect(JSON.stringify(producer).split(command)).toHaveLength(2);
-    expect(JSON.stringify(consumer)).not.toContain(command);
+    expect(JSON.stringify(builder)).not.toContain(command);
   }
   for (const id of ["native-cargo-cache", "native-cache"]) {
-    const restore = steps("native-quality").find(step => step.id === id)!;
-    expect(restore.uses).toBe("actions/cache/restore@v4");
+    expect(steps("native-quality").find(step => step.id === id)?.uses).toBe("actions/cache/restore@v4");
+    expect(steps("ordinary-build").find(step => step.id === id)?.uses).toBe("actions/cache/restore@v4");
     expect(steps("rust").find(step => step.id === id)?.uses).toBeUndefined();
   }
   for (const command of ["bash scripts/build-bun-core.sh", "bash scripts/build-bun-jsc.sh", "bash scripts/build.sh", "bash scripts/build-bun-tools.sh"]) {
-    expect(JSON.stringify(consumer).split(command)).toHaveLength(2);
+    expect(JSON.stringify(builder).split(command)).toHaveLength(2);
     expect(JSON.stringify(producer)).not.toContain(command);
   }
-  expect(JSON.stringify(consumer)).toContain("bun scripts/test-checks.ts native");
+  expect(JSON.stringify(producer)).toContain("bun scripts/tls-probe-ci.ts link");
+  expect(JSON.stringify(producer)).toContain("bun scripts/test-checks.ts native-probe");
+  expect(source).not.toContain("ci-native-handoff.ts");
+  expect(JSON.stringify(runtime)).toContain("bun scripts/test-checks.ts native --only runtime");
+  expect(JSON.stringify(fixtures)).toContain("bun scripts/test-checks.ts native --only fixtures");
   expect(readFileSync(new URL("./check-runtime.sh", import.meta.url), "utf8")).toContain('bun "$root/scripts/test-checks.ts" runtime');
   expect(needsRust(["scripts/ci-native-handoff.ts"])).toBe(true);
   expect(needsJsc(["scripts/ci-native-handoff.ts"])).toBe(true);
 });
 
-test("producer attempt and manifest admission come from that producer, not the consumer attempt", () => {
-  expect(record(producer.outputs)["producer-attempt"]).toBe("${{ steps.native-artifact.outputs.producer-attempt }}");
-  expect(record(step("native-quality", packName).env).NATIVE_QUALITY_PRODUCER_ATTEMPT).toBe("${{ github.run_attempt }}");
-  expect(record(step("rust", unpackName).env).NATIVE_QUALITY_PRODUCER_ATTEMPT).toBe("${{ needs.native-quality.outputs.producer-attempt }}");
-  const download = steps("rust").find(step => step.with && record(step.with).name === "native-quality-${{ needs.native-quality.outputs.producer-attempt }}");
-  expect(download?.uses).toBe("actions/download-artifact@v8");
-  expect(record(download!.with)["digest-mismatch"]).toBe("error");
-  for (const [job, name] of [["native-quality", packName], ["rust", unpackName]]) expect(step(job!, name!).shell).toBe(boatShell);
-  expect(script("rust", unpackName)).not.toContain("github.run_attempt");
-});
-
-type Need = { result: string; outputs?: Record<string, string> };
-function runs(job: Record<string, unknown>, needs: Record<string, Need>, cancelled: boolean): boolean {
-  const declared = typeof job.needs === "string" ? [job.needs] : job.needs;
-  expect(Object.keys(needs).sort()).toEqual(Array.isArray(declared) ? declared.toSorted() : []);
-  if (typeof job.if !== "string") throw new Error("Expected explicit native selection");
-  const expression = job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "").replaceAll("!cancelled()", String(!cancelled))
-    .replaceAll("github.event_name", JSON.stringify("pull_request"))
-    .replaceAll("github.event.pull_request.draft", "false")
-    .replace(/needs\.([\w-]+)\.(result|outputs\.([\w-]+))/g, (_whole, id: string, _field: string, key: string | undefined) => JSON.stringify(key ? needs[id]?.outputs?.[key] : needs[id]?.result));
-  const result: unknown = new Function(`return (${expression})`)();
-  if (typeof result !== "boolean") throw new Error("Non-boolean condition");
-  const implicit = job.if.includes("cancelled()") || Object.values(needs).every(need => need.result === "success");
-  return !cancelled && implicit && result;
-}
-
-test("full selection/result matrix never skips a needed failed, cancelled or skipped producer", () => {
-  for (const selection of ["success", "failure", "cancelled", "skipped"]) checkSelection(selection);
-});
-function checkSelection(selection: string): void {
-  for (const selected of ["true", "false"]) for (const jsc of ["true", "false"]) checkResults({ result: selection, outputs: { rust: selected, jsc } });
-}
-function checkResults(selection: Need): void {
-  for (const prebuild of ["success", "failure", "cancelled", "skipped"]) for (const checkpoint of ["success", "failure", "cancelled", "skipped"]) checkCancellation(selection, prebuild, checkpoint);
-}
-function checkCancellation(selection: Need, prebuild: string, checkpoint: string): void {
-  for (const cancelled of [false, true]) {
-    const selected = selection.result === "success" && selection.outputs?.rust === "true" && !cancelled;
-    expect(runs(producer, { selection, "jsc-prebuild": { result: prebuild } }, cancelled)).toBe(selected);
-    expect(runs(consumer, { selection, "jsc-prebuild": { result: prebuild }, "native-quality": { result: checkpoint } }, cancelled)).toBe(selected);
-  }
-}
-
-test("both real guard scripts fail before setup on every unsuccessful prerequisite", () => {
-  for (const prebuild of ["success", "failure", "cancelled", "skipped", ""]) checkGuard(prebuild);
-});
-function checkGuard(prebuild: string): void {
-  const quality = spawnSync("bash", ["-e", "-c", script("native-quality", guardName)], { env: { ...process.env, JSC_PREBUILD_RESULT: prebuild } });
-  expect(quality.status).toBe(prebuild === "success" ? 0 : 1);
-  for (const checkpoint of ["success", "failure", "cancelled", "skipped", ""]) {
-    const native = spawnSync("bash", ["-e", "-c", script("rust", guardName)], { env: { ...process.env, JSC_PREBUILD_RESULT: prebuild, NATIVE_QUALITY_RESULT: checkpoint } });
-    expect(native.status).toBe(prebuild === "success" && checkpoint === "success" ? 0 : 1);
-  }
-}
+const handoffScript = (action: string) => action === "unpack"
+  ? 'source env.sh\nexport NATIVE_SYSROOT_SHA256=$(sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" | cut -d\' \' -f1)\nbun scripts/ci-native-handoff.ts unpack "$RUNNER_TEMP/native-quality-artifact"\nrm -rf "$RUNNER_TEMP/native-quality-artifact"'
+  : 'source env.sh\nexport NATIVE_SYSROOT_SHA256=$(sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" | cut -d\' \' -f1)\nbun scripts/ci-native-handoff.ts pack "$RUNNER_TEMP/native-quality-artifact"';
 
 function git(directory: string, ...args: string[]): string {
   return execFileSync("git", ["-C", directory].concat(args), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -194,7 +141,7 @@ function runFixture(root: string, run: Parameters<typeof fixture>[0]): void {
   const env = { ...process.env, GITHUB_WORKSPACE: workspace, RUNNER_TEMP: temp, CARGO_HOME: cargo, CARGO_TARGET_DIR: join(workspace, "target"),
     TMPDIR: temp, GITHUB_SHA: git(workspace, "rev-parse", "HEAD"), GITHUB_RUN_ID: "1234", GITHUB_RUN_ATTEMPT: "7", NATIVE_QUALITY_PRODUCER_ATTEMPT: "7",
     NATIVE_HOST_TOOLS_HASH: "a".repeat(64), NATIVE_INPUTS_HASH: "b".repeat(64), JSC_PREBUILD_MANIFEST_SHA256: "c".repeat(64), GITHUB_OUTPUT: join(temp, "outputs") };
-  const invoke = (job: string, name: string, changes: Record<string, string> = {}) => spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script(job, name)], { cwd: workspace, env: { ...env, ...changes }, encoding: "utf8", timeout: 10000 });
+  const invoke = (_job: string, name: string, changes: Record<string, string> = {}) => spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", handoffScript(name)], { cwd: workspace, env: { ...env, ...changes }, encoding: "utf8", timeout: 10000 });
   run(root, env, invoke);
 }
 function prepareImport(root: string, env: Record<string, string>, invoke: Parameters<Parameters<typeof fixture>[0]>[2]): Record<string, string> {
@@ -480,20 +427,3 @@ for (const tool of ["tar", "zstd"]) test(`real package cannot advertise a checkp
     expect(existsSync(env.GITHUB_OUTPUT!)).toBe(false);
   });
 });
-
-test("cache handoff preserves exact, prefix and missing restore results without restoring again", () => {
-  for (const hit of ["true", "false", ""]) for (const matched of ["", "saved-exact", "saved-prefix"]) checkCacheBridge(hit, matched);
-});
-function checkCacheBridge(hit: string, matched: string): void {
-  const root = mkdtempSync(join(tmpdir(), "bun-wasm-native-cache-bridge-"));
-  try {
-    const output = join(root, "outputs");
-    const result = spawnSync("bash", ["-e", "-c", script("rust", "Carry the original native cache restore result")], { env: { ...process.env, GITHUB_OUTPUT: output, CACHE_HIT: hit, CACHE_MATCHED: matched } });
-    expect(result.status).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe(`cache-hit=${hit}\ncache-matched-key=${matched}\n`);
-    writeFileSync(output, "");
-    const legacy = spawnSync("bash", ["-e", "-c", script("rust", "Carry the original legacy cache restore result")], { env: { ...process.env, GITHUB_OUTPUT: output, CACHE_HIT: hit } });
-    expect(legacy.status).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe(`cache-hit=${hit}\n`);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-}

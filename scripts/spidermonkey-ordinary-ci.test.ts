@@ -81,18 +81,21 @@ test("ordinary invocation passes explicit inputs once on either tier", () => {
   expect(() => ordinaryFixtureCommand(root, { ...env, SPIDERMONKEY_WASM: join(root, "missing") }, "pbl")).toThrow();
 });
 
-test("workflow caches only native work and Cargo objects and exports after its single live gate", () => {
+test("workflow caches only native work and Cargo objects and gates the exported pair in runtime and fixture stages", () => {
   const workflow = expandedCiWorkflow();
-  const rust = workflow.slice(workflow.indexOf("  rust:\n"), workflow.indexOf("\n  browser-production:", workflow.indexOf("  rust:\n")));
-  expect(rust.match(/bash scripts\/build-bun-core.sh/g)).toHaveLength(1);
-  expect(rust.match(/bash scripts\/build-bun-spidermonkey.sh/g)).toHaveLength(1);
-  expect(rust.match(/bun scripts\/test-checks.ts native\n/g)).toHaveLength(1);
-  expect(rust.indexOf("Export the live-gated ordinary SpiderMonkey pair")).toBeGreaterThan(rust.indexOf("bun scripts/test-checks.ts native\n"));
-  expect(rust).toContain("path: ${{ runner.temp }}/ordinary-spidermonkey-program/");
-  expect(rust).toContain("Production SpiderMonkey adapter contains control symbols");
-  const cacheKey = rust.split("\n").find(line => line.includes("key: spidermonkey-ordinary-v1-"));
+  const build = workflow.slice(workflow.indexOf("  ordinary-build:\n"), workflow.indexOf("\n  shared-sysroot:", workflow.indexOf("  ordinary-build:\n")));
+  const rust = workflow.slice(workflow.indexOf("  rust:\n"), workflow.indexOf("\n  rust-fixtures:", workflow.indexOf("  rust:\n")));
+  const fixtures = workflow.slice(workflow.indexOf("  rust-fixtures:\n"), workflow.indexOf("\n  browser-guest:", workflow.indexOf("  rust-fixtures:\n")));
+  expect(build.match(/bash scripts\/build-bun-core.sh/g)).toHaveLength(1);
+  expect(build.match(/bash scripts\/build-bun-spidermonkey.sh/g)).toHaveLength(1);
+  expect(build).toContain("Export the live-gated ordinary SpiderMonkey pair");
+  expect(build).toContain("path: ${{ runner.temp }}/ordinary-spidermonkey-program/");
+  expect(build).toContain("Production SpiderMonkey adapter contains control symbols");
+  const cacheKey = build.split("\n").find(line => line.includes("key: spidermonkey-ordinary-v1-"));
   expect(cacheKey).toContain("steps.ordinary-spidermonkey-inputs.outputs.hash");
   expect(cacheKey).not.toContain("crates/**");
-  expect(rust).not.toContain("path: ${{ runner.temp }}/ordinary-pair");
-  expect(rust).not.toContain("path: ${{ runner.temp }}/ordinary-side\n");
+  expect(build).not.toContain("path: ${{ runner.temp }}/ordinary-pair");
+  expect(build).not.toContain("path: ${{ runner.temp }}/ordinary-side\n");
+  expect(rust.match(/bun scripts\/test-checks.ts native --only runtime\n/g)).toHaveLength(1);
+  expect(fixtures.match(/bun scripts\/test-checks.ts native --only fixtures\n/g)).toHaveLength(1);
 });

@@ -47,6 +47,8 @@ function fixture() {
     copyFile: host.copyFileSync,
     copyDir(from: string, to: string) { host.cpSync(from, to, { recursive: true }); },
     symlink: host.symlinkSync,
+    readlink(file: string) { return host.readlinkSync(file, "utf8"); },
+    unlink: host.unlinkSync,
     utf8Decode(bytes: Uint8Array) { return Buffer.from(bytes).toString(); },
   };
   const factory = runInNewContext(source, { Uint8Array, ArrayBuffer, URL, Date, FinalizationRegistry });
@@ -209,12 +211,92 @@ test("file copies retain source and destination symlink behavior", async () => {
   host.symlinkSync(from, sourceLink);
   host.writeFileSync(target, "old");
   host.symlinkSync(target, destinationLink);
+  // A symlink is copied as a symlink with its target resolved, as Bun does.
   fs.cpSync(sourceLink, path.join(root, "copied-link"));
-  expect(host.lstatSync(path.join(root, "copied-link")).isSymbolicLink()).toBe(false);
+  expect(host.lstatSync(path.join(root, "copied-link")).isSymbolicLink()).toBe(true);
+  expect(host.readlinkSync(path.join(root, "copied-link"))).toBe(from);
   expect(host.readFileSync(path.join(root, "copied-link"), "utf8")).toBe("asset");
+  // A link at the destination is replaced, never written through, as Bun does.
   await fs.promises.cp(from, destinationLink);
-  expect(host.lstatSync(destinationLink).isSymbolicLink()).toBe(true);
-  expect(host.readFileSync(target, "utf8")).toBe("asset");
+  expect(host.lstatSync(destinationLink).isSymbolicLink()).toBe(false);
+  expect(host.readFileSync(destinationLink, "utf8")).toBe("asset");
+  expect(host.readFileSync(target, "utf8")).toBe("old");
+});
+
+// Each case runs through the runtime's cp and through the host's (Bun 1.4.4), on fresh trees.
+type CopyCase = {
+  name: string; from: string; to: string; options?: Record<string, unknown>;
+  setup?: (at: (name: string) => string) => void;
+  /** Paths whose state is compared after the copy; the destination when absent. */
+  watch?: string[];
+};
+const linkTo = (target: string, link: string) => (at: (name: string) => string) => host.symlinkSync(at(target), at(link));
+// A link at the destination: a file copy replaces the link (or keeps it with force: false) and
+// never writes its target; a directory copy refuses it.
+const destinationLinkCases: CopyCase[] = [{}, { force: true }, { force: false }, { force: false, errorOnExist: true }].flatMap(options => [
+  { name: `file over a link to a file ${JSON.stringify(options)}`, from: "file", to: "link-in-way", options,
+    setup: linkTo("target", "link-in-way"), watch: ["link-in-way", "target"] },
+  { name: `file over a dangling link ${JSON.stringify(options)}`, from: "file", to: "link-in-way", options,
+    setup: linkTo("missing", "link-in-way"), watch: ["link-in-way", "missing"] },
+  { name: `directory over a link to a directory ${JSON.stringify(options)}`, from: "dir", to: "link-in-way", options: { ...options, recursive: true },
+    setup: linkTo("target-dir", "link-in-way"), watch: ["link-in-way", "target-dir"] },
+  { name: `tree into a directory holding a link ${JSON.stringify(options)}`, from: "tree", to: "out", options: { ...options, recursive: true },
+    setup: (at: (name: string) => string) => { host.mkdirSync(at("out")); host.symlinkSync(at("target-dir"), at("out/sub")); }, watch: ["out/sub", "target-dir"] },
+]);
+const copyCases: CopyCase[] = [
+  ...destinationLinkCases,
+  { name: "absolute link", from: "abs-link", to: "out" },
+  { name: "relative link", from: "rel-link", to: "out" },
+  { name: "verbatim relative link", from: "rel-link", to: "out", options: { verbatimSymlinks: true } },
+  { name: "dereferenced link", from: "abs-link", to: "out", options: { dereference: true } },
+  { name: "dereferenced directory link", from: "dir-link", to: "out", options: { dereference: true, recursive: true } },
+  ...[{}, { force: false }, { force: false, errorOnExist: true }].flatMap(options => [
+    { name: `link over a link ${JSON.stringify(options)}`, from: "abs-link", to: "in-way", options, setup: (at: (name: string) => string) => host.symlinkSync("dir", at("in-way")) },
+    { name: `link over a dangling link ${JSON.stringify(options)}`, from: "abs-link", to: "in-way", options, setup: (at: (name: string) => string) => host.symlinkSync("missing", at("in-way")) },
+    { name: `link over a file ${JSON.stringify(options)}`, from: "abs-link", to: "in-way", options, setup: (at: (name: string) => string) => host.writeFileSync(at("in-way"), "old") },
+    { name: `link over a directory ${JSON.stringify(options)}`, from: "abs-link", to: "in-way", options, setup: (at: (name: string) => string) => host.mkdirSync(at("in-way")) },
+    { name: `file over a directory ${JSON.stringify(options)}`, from: "file", to: "in-way", options, setup: (at: (name: string) => string) => host.mkdirSync(at("in-way")) },
+    { name: `file over a file ${JSON.stringify(options)}`, from: "file", to: "in-way", options, setup: (at: (name: string) => string) => host.writeFileSync(at("in-way"), "old") },
+  ]),
+];
+function describePath(root: string, file: string): string {
+  const stat = host.lstatSync(file, { throwIfNoEntry: false });
+  if (!stat) return "missing";
+  if (stat.isSymbolicLink()) return `link ${host.readlinkSync(file).replace(root, "R")}`;
+  if (stat.isDirectory()) return `dir ${host.readdirSync(file).sort().join(",")}`;
+  return `file ${host.readFileSync(file, "utf8")}`;
+}
+function copyOutcome(api: typeof host, root: string, entry: CopyCase): string {
+  const at = (name: string) => path.join(root, name);
+  host.writeFileSync(at("file"), "asset");
+  host.mkdirSync(at("dir"));
+  host.writeFileSync(at("dir/c.txt"), "c");
+  host.symlinkSync(at("file"), at("abs-link"));
+  host.symlinkSync("file", at("rel-link"));
+  host.symlinkSync(at("dir"), at("dir-link"));
+  host.writeFileSync(at("target"), "old");
+  host.mkdirSync(at("target-dir"));
+  host.mkdirSync(at("tree/sub"), { recursive: true });
+  host.writeFileSync(at("tree/sub/f.txt"), "f");
+  entry.setup?.(at);
+  let result = "ok";
+  try {
+    api.cpSync(at(entry.from), at(entry.to), entry.options);
+  } catch (error) {
+    const { code, path: errorPath } = error as NodeJS.ErrnoException;
+    result = `throws ${code} ${String(errorPath).replace(root, "R")}`;
+  }
+  const watched = (entry.watch ?? [entry.to]).map(name => `${name}=${describePath(root, at(name))}`);
+  return [result].concat(watched).join(" ");
+}
+test("symlink copies match Bun for dereference, verbatimSymlinks and every destination in the way", () => {
+  const { fs, root } = fixture();
+  for (const entry of copyCases) {
+    const runtimeRoot = host.mkdtempSync(path.join(root, "runtime-"));
+    const bunRoot = host.mkdtempSync(path.join(root, "bun-"));
+    const outcome = copyOutcome(fs, runtimeRoot, entry);
+    expect(`${entry.name}: ${outcome}`).toBe(`${entry.name}: ${copyOutcome(host, bunRoot, entry)}`);
+  }
 });
 
 test("a trailing destination slash does not create the file path as a directory", async () => {

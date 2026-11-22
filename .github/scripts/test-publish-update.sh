@@ -34,7 +34,7 @@ case "$1 $2" in
     head=$(git --git-dir="$TEST_ROOT/remote.git" rev-parse refs/heads/automation/test)
     [[ $4 == "repos/ShaulLavo/fixture/statuses/$head" ]]
     case "$6" in
-      'context=Code quality'|'context=JSC C/C++ prebuild'|'context=Native quality checkpoint'|'context=Rust workspace tests (QuickJS host)'|'context=Browser adapter package'|'context=Shared PIC sysroot proof'|'context=Web host'|'context=Shared process browser bundles'|'context=Processes (chromium)'|'context=Processes (firefox)'|'context=Processes (webkit)') ;;
+      'context=Code quality') ;;
       *) exit 1 ;;
     esac
     [[ ${*:7} == '-f state=pending -f description=Waiting for dispatched CI' ]]
@@ -77,7 +77,7 @@ test "$(grep -c '^pr create ' "$scratch/gh-calls")" = 1
 test "$(grep -c '^pr edit ' "$scratch/gh-calls")" = 2
 test "$(grep -c '^workflow run ' "$scratch/gh-calls")" = 2
 test "$(grep -c '^pr merge 123 ' "$scratch/gh-calls")" = 3
-test "$(grep -c '^api --method POST ' "$scratch/gh-calls")" = 22
+test "$(grep -c '^api --method POST ' "$scratch/gh-calls")" = 2
 
 # A failed handoff must not reach auto-merge, even when the branch already exists.
 rm "$scratch/ci-head"

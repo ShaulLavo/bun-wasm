@@ -55,6 +55,7 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 
 export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "scripts/ci-shared-check-budget.sh",
+  "scripts/ci-shared-consumer-run.ts",
   "scripts/ci-shared-proof-inputs.ts", "scripts/ci-shared-proof-inputs.test.ts", "checks/quality-ci-shared-proof-inputs.json",
   "scripts/ci-build-tools.ts", "scripts/ci-binaryen.ts",
   "web/src/dev-html-client.ts", "scripts/generate-dev-html-client.ts",

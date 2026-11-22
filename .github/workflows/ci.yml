@@ -38,7 +38,6 @@ jobs:
       shared-native: ${{ steps.changes.outputs.shared_native }}
       browser-guest-matrix: ${{ steps.browser-guest-batches.outputs.matrix }}
       browser-coverage-selection: ${{ steps.browser-guest-batches.outputs.selection }}
-      web-browser-shards: ${{ steps.web-browser-shards.outputs.matrix }}
     steps:
       - name: Require a ready PR
         if: github.event_name == 'pull_request' && github.event.pull_request.draft
@@ -85,11 +84,6 @@ jobs:
           BROWSER_COVERAGE_SELECTION: ${{ steps.main-coverage.outputs.browser-selection }}
           BROWSER_COVERAGE_FULL: ${{ steps.main-coverage.outputs.browser-full }}
         run: bun scripts/ci-browser-coverage.ts "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
-      - name: Discover Web browser shards from feature manifests
-        id: web-browser-shards
-        run: |
-          matrix=$(bun scripts/ci-web-browser-shards.ts)
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
       - name: Feature PRs preserve current package and workspace versions
         if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'release') && !contains(github.event.pull_request.labels.*.name, 'consumer-pin')
         env:
@@ -102,7 +96,7 @@ jobs:
     name: Source quality
     needs: selection
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -149,88 +143,131 @@ jobs:
         env:
           TMPDIR: ${{ runner.temp }}
         run: bun scripts/test-checks.ts cmake
-
+      - name: Build and verify Browser adapter package
+        if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+        env:
+          BUN_WASM_TEST_JOBS: "3"
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          bun run prepare
+          bun run check
+          bun scripts/run-package-tests.ts
+          bun scripts/test-checks.ts package-extra
       - uses: ./.github/actions/save-release-downloads
 
-  # The JSC C/C++ prebuild has its own job and budget. Every native selection runs it,
-  # because the tools fixture links JSC even when the JSC engine gates are off. It owns
-  # the run's one sysroot and one prebuild (built, or restored and verified), their
-  # caches and the hand-off artifact.
-
-  jsc-identity:
-    name: Resolve effective JSC inputs
+  web-unit:
     needs: selection
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true')) }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    name: Web host unit and types
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-downloads
+        with:
+          scope: web
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+          node-version: ${{ env.CI_NODE_VERSION }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Configure Web compiler toolchain
+        run: |
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+          echo "RUSTUP_TOOLCHAIN=nightly-2026-09-15" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v4
+        id: web-rustup-cache
+        with:
+          path: ${{ env.RUSTUP_HOME }}
+          key: rust-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-09-15
+          components: rust-src, rustfmt, clippy
+          targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
+      - name: Save completed Web compiler setup
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.web-rustup-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.RUSTUP_HOME }}
+          key: ${{ steps.web-rustup-cache.outputs.cache-primary-key }}
+      - name: Web host unit, CLI shim, type and bundle gates
+        env:
+          BUN_WASM_TEST_JOBS: "3"
+          C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures
+        run: bash ../scripts/test-web-host.sh --unit
+      - name: Retain first C1 WebKit admission failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: c1-webkit-failures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/c1-webkit-failures
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: ./.github/actions/save-release-downloads
+
+  web-browser:
+    needs: selection
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    name: Web browser
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    outputs:
-      key: ${{ steps.setup.outputs.key }}
-      sysroot-sha256: ${{ steps.sysroot.outputs.sha256 }}
+    defaults:
+      run:
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+        working-directory: web
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/jsc-setup
-        id: setup
-      - name: Package this run's prepared sysroot
-        id: sysroot
-        shell: bash
+      - uses: ./.github/actions/release-downloads
+        with:
+          scope: web
+      - uses: ./.github/actions/setup-tools
+        with:
+          bun-version: 1.4.4
+          node-version: ${{ env.CI_NODE_VERSION }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ci-bun-cache
+          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Build each process fixture once from isolated web install
         run: |
-          source env.sh
-          transfer="$RUNNER_TEMP/jsc-identity-sysroot.tar.zst"
-          tar --posix -C "$WASM_TOOLS" -cf - bun-wasm-sysroot-patched | zstd -T0 -q -o "$transfer"
-          echo "sha256=$(sha256sum "$transfer" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v7
+          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --linker=isolated
+          bun scripts/ci-process-bundles.ts "$RUNNER_TEMP/process-bundles"
+      - uses: actions/upload-artifact@v4
         timeout-minutes: 5
+        if: needs.selection.outputs.browser_guest == 'true'
         with:
-          path: ${{ runner.temp }}/jsc-identity-sysroot.tar.zst
-          if-no-files-found: error
+          name: process-bundles
+          path: ${{ runner.temp }}/process-bundles
           retention-days: 1
-          archive: false
-      - uses: ./.github/actions/save-release-downloads
-
-  jsc-prebuild:
-    name: JSC C/C++ prebuild
-    needs: [selection, jsc-identity]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true')) }}
-    runs-on: ubuntu-latest
-    concurrency:
-      group: ${{ needs.jsc-identity.outputs.key }}
-      cancel-in-progress: false
-      queue: max
-    timeout-minutes: 45
-    outputs:
-      manifest-sha256: ${{ steps.prebuild.outputs.manifest-sha256 }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v8
-        timeout-minutes: 5
-        with:
-          name: jsc-identity-sysroot.tar.zst
-          path: ${{ runner.temp }}
-      - uses: ./.github/actions/jsc-setup
-        id: setup
-        with:
-          sysroot: ${{ needs.jsc-identity.outputs.sysroot-sha256 }}
-      - uses: ./.github/actions/jsc-prebuild
-        id: prebuild
-        with:
-          key: ${{ steps.setup.outputs.key }}
-          prefix: ${{ steps.setup.outputs.prefix }}
-          expected-key: ${{ needs.jsc-identity.outputs.key }}
-          transfer: 'true'
-      - uses: actions/upload-artifact@v7
-        timeout-minutes: 5
-        with:
-          path: ${{ runner.temp }}/jsc-prebuild.tar
           if-no-files-found: error
-          retention-days: 1
-          archive: false
+      - name: Install Web host browser test dependencies
+        run: bash ../scripts/test-web-host.sh --setup
+      - uses: ./.github/actions/browser-deps
+        with:
+          browsers: chromium firefox webkit
+      - name: Install Chromium, Firefox and WebKit
+        run: bunx playwright install chromium firefox webkit
+      - name: Run Web browser batches, smoke and non-guest process gates
+        env:
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
+          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
+        run: bun ../scripts/ci-web-browser-run.ts
       - uses: ./.github/actions/save-release-downloads
 
   native-quality:
     name: Native quality checkpoint
-    needs: [selection, jsc-prebuild]
-    # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true'))) }}
+    needs: selection
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -238,7 +275,7 @@ jobs:
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-    timeout-minutes: 45
+    timeout-minutes: 35
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
@@ -249,38 +286,14 @@ jobs:
       GIT_AUTHOR_EMAIL: ci@localhost
       GIT_COMMITTER_NAME: bun-wasm CI
       GIT_COMMITTER_EMAIL: ci@localhost
-    outputs:
-      manifest-sha256: ${{ steps.native-artifact.outputs.manifest-sha256 }}
-      producer-attempt: ${{ steps.native-artifact.outputs.producer-attempt }}
-      tls-sha256: ${{ steps.tls-artifact.outputs.tls-sha256 }}
-      cargo-hit: ${{ steps.native-seed.outputs.cargo-hit }}
-      cargo-matched: ${{ steps.native-seed.outputs.cargo-matched }}
-      legacy-hit: ${{ steps.native-seed.outputs.legacy-hit }}
     steps:
-      - name: Require the JSC prebuild job's output
-        env:
-          JSC_PREBUILD_RESULT: ${{ needs.jsc-prebuild.result }}
-        run: |
-          if [[ "$JSC_PREBUILD_RESULT" != success ]]; then
-            echo "error: the JSC prebuild job finished as '$JSC_PREBUILD_RESULT'; native checks need its verified output." >&2
-            exit 1
-          fi
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v8
-        timeout-minutes: 5
-        with:
-          name: jsc-prebuild.tar
-          path: ${{ runner.temp }}/jsc-prebuild-transfer
       - uses: ./.github/actions/native-setup
         id: native-setup
         with:
           mode: native
           node-version: ${{ env.CI_NODE_VERSION }}
-          jsc-manifest: ${{ needs.jsc-prebuild.outputs.manifest-sha256 }}
-      # Root bun.lock is intentionally absent from native identities: native consumption is
-      # guarded by the sysroot/JSC receipts, effective tools, and native source hashes below.
-      # These three audited Cargo sources change exact keys, not dependency compatibility.
-      # All other native inputs remain hard guards; the new partition needs one cold seed.
+          jsc: 'false'
       - uses: ./.github/actions/native-seed
         id: native-seed
         with:
@@ -307,16 +320,6 @@ jobs:
           key: ${{ steps.machete-cache.outputs.cache-primary-key }}
       - name: Preserve unchanged build-script input timestamps
         run: bun scripts/quality-input-times.ts
-      - name: Identify JSC prebuild inputs
-        id: jsc-inputs
-        env:
-          JOBS: "2"
-          CAGE: ""
-        run: |
-          source jsc/common.sh
-          copy_jsc_config_inputs
-          inputs=$(jsc_inputs_hash)
-          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
       - name: Prepare exact TLS Cargo output recording
         env:
           TLS_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
@@ -333,18 +336,15 @@ jobs:
           NATIVE_INPUTS_HASH: ${{ steps.native-setup.outputs.native-inputs }}
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
-          run_native_checks() {
-            source env.sh
-            export BUNWASM_TLS_CARGO_RECORD_DIR="$CARGO_TARGET_DIR/tls-probe/cargo"
-            bun scripts/quality-rust.ts --checks-only
-            bun run quality:wasi
-            bun test tests/memory-telemetry.test.ts
-            # The WASI lint probe rewrites a source file; restore its time before the next build.
-            bun scripts/quality-input-times.ts
-            source env.sh
-            cargo test --locked --release -j 4 -p bunwasm-runtime --no-default-features --features engine-host --lib modules::tests::host_
-          }
-          run_native_checks
+          source env.sh
+          export BUNWASM_TLS_CARGO_RECORD_DIR="$CARGO_TARGET_DIR/tls-probe/cargo"
+          bun scripts/quality-rust.ts --checks-only
+          bun run quality:wasi
+          bun test tests/memory-telemetry.test.ts
+          # The WASI lint probe rewrites a source file; restore its time before the next build.
+          bun scripts/quality-input-times.ts
+          source env.sh
+          cargo test --locked --release -j 4 -p bunwasm-runtime --no-default-features --features engine-host --lib modules::tests::host_
           echo "native-ready=true" >> "$GITHUB_OUTPUT"
       - name: Link and authenticate the TLS probe from recorded Cargo archives
         id: tls-artifact
@@ -372,6 +372,16 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+      - name: Run the blocking TLS native probe
+        env:
+          TLS_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
+          BUNWASM_TLS_PROBE_SHA256: ${{ steps.tls-artifact.outputs.tls-sha256 }}
+          NATIVE_HOST_TOOLS_HASH: ${{ steps.native-setup.outputs.host-tools }}
+          NATIVE_INPUTS_HASH: ${{ steps.native-setup.outputs.native-inputs }}
+        run: |
+          source env.sh
+          export BUNWASM_TLS_PROBE_OUTPUT="$CARGO_TARGET_DIR/tls-probe/output"
+          bun scripts/test-checks.ts native-probe --batch default
       - name: Save the native quality checkpoint
         if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.tls-artifact.outputs.tls-sha256 != '' && steps.native-seed.outputs.cargo-matched == '' && steps.native-seed.outputs.legacy-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -382,37 +392,15 @@ jobs:
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
           key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-setup.outputs.host-tools }}-${{ steps.native-setup.outputs.native-inputs }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/bun/**', 'third_party/**', 'env.sh', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/tls-probe*.ts', 'checks/native-probe-*.json', 'tests/native/tls-probe.cpp') }}-${{ hashFiles('scripts/build-bun-tools.sh', 'scripts/build-bun-browser.sh', 'scripts/src/program-profile.ts', '.github/workflows/ci.yml', '.github/actions/native-*/action.yml', 'scripts/build-wasi-sysroot.ts') }}
-      - name: Package the verified native quality checkpoint
-        id: native-artifact
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-        env:
-          NATIVE_QUALITY_PRODUCER_ATTEMPT: ${{ github.run_attempt }}
-          NATIVE_HOST_TOOLS_HASH: ${{ steps.native-setup.outputs.host-tools }}
-          NATIVE_INPUTS_HASH: ${{ steps.native-setup.outputs.native-inputs }}
-          JSC_PREBUILD_MANIFEST_SHA256: ${{ needs.jsc-prebuild.outputs.manifest-sha256 }}
-        run: |
-          source env.sh
-          native_sysroot_sha256=$(sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" | cut -d' ' -f1)
-          export NATIVE_SYSROOT_SHA256="$native_sysroot_sha256"
-          bun scripts/ci-native-handoff.ts pack "$RUNNER_TEMP/native-quality-artifact"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: native-quality-${{ steps.native-artifact.outputs.producer-attempt }}
-          path: ${{ runner.temp }}/native-quality-artifact/
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
       - uses: ./.github/actions/save-rust-build-cache
         with:
           key: ${{ steps.native-setup.outputs.object-key }}
       - uses: ./.github/actions/save-release-downloads
 
-  rust:
-    name: Rust workspace tests (QuickJS host)
-    needs: [selection, jsc-prebuild, native-quality]
-    # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true'))) }}
+  ordinary-build:
+    name: Ordinary guest production
+    needs: selection
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -432,176 +420,14 @@ jobs:
       GIT_COMMITTER_NAME: bun-wasm CI
       GIT_COMMITTER_EMAIL: ci@localhost
     steps:
-      - name: Require the JSC prebuild job's output
-        env:
-          JSC_PREBUILD_RESULT: ${{ needs.jsc-prebuild.result }}
-          NATIVE_QUALITY_RESULT: ${{ needs.native-quality.result }}
-        run: |
-          if [[ "$JSC_PREBUILD_RESULT" != success || "$NATIVE_QUALITY_RESULT" != success ]]; then
-            echo "error: native checks require successful JSC and native quality producers." >&2
-            exit 1
-          fi
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v8
-        timeout-minutes: 5
-        with:
-          name: jsc-prebuild.tar
-          path: ${{ runner.temp }}/jsc-prebuild-transfer
-      - uses: ./.github/actions/native-setup
-        id: native-setup
-        with:
-          mode: checkpoint
-          node-version: ${{ env.CI_NODE_VERSION }}
-          jsc-manifest: ${{ needs.jsc-prebuild.outputs.manifest-sha256 }}
-      - uses: actions/download-artifact@v8
-        timeout-minutes: 5
-        with:
-          name: native-quality-${{ needs.native-quality.outputs.producer-attempt }}
-          path: ${{ runner.temp }}/native-quality-artifact
-          digest-mismatch: error
-      - name: Import the verified native quality checkpoint
-        id: native-import
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-        env:
-          NATIVE_QUALITY_MANIFEST_SHA256: ${{ needs.native-quality.outputs.manifest-sha256 }}
-          NATIVE_QUALITY_PRODUCER_ATTEMPT: ${{ needs.native-quality.outputs.producer-attempt }}
-          NATIVE_HOST_TOOLS_HASH: ${{ steps.native-setup.outputs.host-tools }}
-          NATIVE_INPUTS_HASH: ${{ steps.native-setup.outputs.native-inputs }}
-          JSC_PREBUILD_MANIFEST_SHA256: ${{ needs.jsc-prebuild.outputs.manifest-sha256 }}
-        run: |
-          source env.sh
-          native_sysroot_sha256=$(sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" | cut -d' ' -f1)
-          export NATIVE_SYSROOT_SHA256="$native_sysroot_sha256"
-          bun scripts/ci-native-handoff.ts unpack "$RUNNER_TEMP/native-quality-artifact"
-          rm -r -- "$RUNNER_TEMP/native-quality-artifact"
-      - name: Run the blocking TLS native probe from the authenticated checkpoint
-        env:
-          TLS_PRODUCER_ATTEMPT: ${{ needs.native-quality.outputs.producer-attempt }}
-          BUNWASM_TLS_PROBE_SHA256: ${{ needs.native-quality.outputs.tls-sha256 }}
-          NATIVE_HOST_TOOLS_HASH: ${{ steps.native-setup.outputs.host-tools }}
-          NATIVE_INPUTS_HASH: ${{ steps.native-setup.outputs.native-inputs }}
-        run: |
-          source env.sh
-          export BUNWASM_TLS_PROBE_OUTPUT="$CARGO_TARGET_DIR/tls-probe/output"
-          bun scripts/test-checks.ts native-probe
-      - name: Carry the original native cache restore result
-        id: native-cargo-cache
-        env:
-          CACHE_HIT: ${{ needs.native-quality.outputs.cargo-hit }}
-          CACHE_MATCHED: ${{ needs.native-quality.outputs.cargo-matched }}
-        run: printf 'cache-hit=%s\ncache-matched-key=%s\n' "$CACHE_HIT" "$CACHE_MATCHED" >> "$GITHUB_OUTPUT"
-      - name: Carry the original legacy cache restore result
-        id: native-cache
-        env:
-          CACHE_HIT: ${{ needs.native-quality.outputs.legacy-hit }}
-        run: printf 'cache-hit=%s\n' "$CACHE_HIT" >> "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/native-production
-        env:
-          BUN_WASM_BROWSER_COVERAGE_SELECTION: ${{ needs.selection.outputs.browser-coverage-selection }}
-        with:
-          full: 'true'
-          jsc: ${{ needs.selection.outputs.jsc }}
-          shared-native: ${{ needs.selection.outputs.shared-native }}
-          host-tools: ${{ steps.native-setup.outputs.host-tools }}
-          native-inputs: ${{ steps.native-setup.outputs.native-inputs }}
-          object-key: ${{ steps.native-setup.outputs.object-key }}
-          cargo-matched: ${{ steps.native-cargo-cache.outputs.cache-matched-key }}
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        if: needs.selection.outputs.jsc == 'true' || needs.selection.outputs.shared-native == 'true'
-        with:
-          name: native-profile-launcher
-          path: ${{ runner.temp }}/native-profile-launcher/
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
-          compression-level: 0
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        if: needs.selection.outputs.jsc == 'true'
-        with:
-          name: ordinary-jsc-program
-          path: ${{ runner.temp }}/ordinary-jsc-program/
-          if-no-files-found: error
-          retention-days: 1
-
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: ordinary-spidermonkey-program
-          path: ${{ runner.temp }}/ordinary-spidermonkey-program/
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 7
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: browser-guest-site
-          path: ${{ runner.temp }}/browser-guest-site
-          if-no-files-found: error
-          retention-days: 1
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: browser-program
-          path: ${{ runner.temp }}/browser-program/
-          if-no-files-found: error
-          retention-days: 1
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        if: always()
-        with:
-          name: web-guest-fixture-receipts
-          path: |
-            dist/*.wasm.build.json
-            dist/*.wasm.engine.json
-            dist/*.wasm.embedding.json
-            dist/web-guests-*.log
-            ${{ runner.temp }}/jsc-prebuild.log
-            ${{ runner.temp }}/jsc/engine/engine-link.map
-          if-no-files-found: error
-          retention-days: 1
-
-  browser-production:
-    name: Browser guest production
-    needs: [selection, jsc-prebuild]
-    # Not skipped when the prebuild job fails or is skipped: the guard step fails instead.
-    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft && !cancelled() && needs.selection.result == 'success' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true' && needs.selection.outputs.shared-native == 'false' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    defaults:
-      run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-    timeout-minutes: 60
-    env:
-      CARGO_INCREMENTAL: "0"
-      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
-      QUALITY_RUST_JOBS: "4"
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_PROFILE_TEST_DEBUG: "0"
-      GIT_AUTHOR_NAME: bun-wasm CI
-      GIT_AUTHOR_EMAIL: ci@localhost
-      GIT_COMMITTER_NAME: bun-wasm CI
-      GIT_COMMITTER_EMAIL: ci@localhost
-    steps:
-      - uses: actions/checkout@v4
-      - name: Require the JSC prebuild job's output
-        env:
-          JSC_PREBUILD_RESULT: ${{ needs.jsc-prebuild.result }}
-        run: test "$JSC_PREBUILD_RESULT" = success
-      - uses: actions/download-artifact@v8
-        timeout-minutes: 5
-        with:
-          name: jsc-prebuild.tar
-          path: ${{ runner.temp }}/jsc-prebuild-transfer
       - uses: ./.github/actions/native-setup
         id: native-setup
         with:
           mode: seed
           cache-scope: rust
           node-version: ${{ env.CI_NODE_VERSION }}
-          jsc-manifest: ${{ needs.jsc-prebuild.outputs.manifest-sha256 }}
+          jsc: 'true'
       - uses: ./.github/actions/native-seed
         id: native-seed
         with:
@@ -611,13 +437,49 @@ jobs:
         env:
           BUN_WASM_BROWSER_COVERAGE_SELECTION: ${{ needs.selection.outputs.browser-coverage-selection }}
         with:
-          full: 'false'
+          full: ${{ (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')) && 'true' || 'false' }}
           jsc: ${{ needs.selection.outputs.jsc }}
-          shared-native: 'false'
           host-tools: ${{ steps.native-setup.outputs.host-tools }}
           native-inputs: ${{ steps.native-setup.outputs.native-inputs }}
+          jsc-inputs: ${{ steps.native-setup.outputs.jsc-inputs }}
           object-key: ${{ steps.native-setup.outputs.object-key }}
           cargo-matched: ${{ steps.native-seed.outputs.cargo-matched }}
+      - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        if: needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')
+        with:
+          name: native-profile-launcher
+          path: ${{ runner.temp }}/native-profile-launcher/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        if: (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')) && needs.selection.outputs.jsc == 'true'
+        with:
+          name: ordinary-jsc-program
+          path: ${{ runner.temp }}/ordinary-jsc-program/
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        if: needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')
+        with:
+          name: ordinary-spidermonkey-program
+          path: ${{ runner.temp }}/ordinary-spidermonkey-program/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        if: needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')
+        with:
+          name: ordinary-native-bundle
+          path: ${{ runner.temp }}/ordinary-native-bundle/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
       - uses: actions/upload-artifact@v4
         timeout-minutes: 5
         with:
@@ -647,490 +509,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  package:
-    needs: selection
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Browser adapter package
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/release-downloads
-      - uses: ./.github/actions/setup-tools
-        with:
-          bun-version: 1.4.4
-          node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
-        with:
-          path: .ci-bun-cache
-          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile
-      - run: bun run check
-      - run: bun run test
-        env:
-          TMPDIR: ${{ runner.temp }}
-      - name: Test vectored reads and browser dependency resolution
-        run: bun scripts/test-checks.ts package-extra
-      - uses: ./.github/actions/save-release-downloads
-
-  ordinary-web-guests:
-    name: Ordinary Web guest checks
-    needs: [selection, rust, shared-sysroot]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.selection.result == 'success' && (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')) && needs.rust.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    outputs:
-      shared-proof-inputs: ${{ steps.upload-shared-proof-inputs.outcome }}
-      # Let ordinary browser checks run when only shared input preparation fails.
-      shared-proof-inputs-failed: ${{ steps.shared-playground-site.outcome == 'failure' || steps.shared-program-downloads.outcome == 'failure' || steps.prepare-shared-proof-inputs.outcome == 'failure' || steps.upload-shared-proof-inputs.outcome == 'failure' }}
-    defaults:
-      run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-    steps:
-      - name: Require the selected full producer
-        env:
-          FULL_SELECTED: ${{ (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')) }}
-          RUST_SELECTED: ${{ needs.selection.outputs.rust }}
-          BROWSER_SELECTED: ${{ needs.selection.outputs.browser_guest }}
-          JSC_SELECTED: ${{ needs.selection.outputs.jsc }}
-          RUST_RESULT: ${{ needs.rust.result }}
-        run: |
-          case "$GITHUB_EVENT_NAME" in pull_request|push|workflow_dispatch) ;; *) exit 1 ;; esac
-          case "$RUST_SELECTED/$BROWSER_SELECTED" in true/true|false/true) ;; *) exit 1 ;; esac
-          test "$FULL_SELECTED" = true
-          test "$RUST_RESULT" = success
-          case "$JSC_SELECTED" in true|false) ;; *) exit 1 ;; esac
-      - uses: actions/checkout@v4
-      - name: Configure consumer scratch
-        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-      - uses: ./.github/actions/release-downloads
-      - uses: ./.github/actions/setup-tools
-        with:
-          bun-version: 1.4.4
-          node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
-        with:
-          path: .ci-bun-cache
-          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun scripts/ci-install.ts --frozen-lockfile --ignore-scripts
-      - run: bun scripts/ci-install.ts --cwd web --frozen-lockfile
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: browser-program
-          path: ${{ runner.temp }}/ordinary-browser-program
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        if: needs.selection.outputs.jsc == 'true'
-        with:
-          name: ordinary-jsc-program
-          path: ${{ runner.temp }}/ordinary-jsc-program
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        if: needs.selection.outputs.jsc == 'true'
-        with:
-          name: native-profile-launcher
-          path: ${{ runner.temp }}/ordinary-native-launcher
-      - name: Verify and stage the original ordinary deliveries
-        env:
-          JSC_SELECTED: ${{ needs.selection.outputs.jsc }}
-        run: |
-          case "$JSC_SELECTED" in
-            true)
-              bun scripts/ci-ordinary-web-inputs.ts "$RUNNER_TEMP/ordinary-browser-program" true "$RUNNER_TEMP/ordinary-jsc-program" "$RUNNER_TEMP/ordinary-native-launcher"
-              echo "BUN_WASM_LAUNCHER=$RUNNER_TEMP/ordinary-native-launcher/bun-wasm" >> "$GITHUB_ENV"
-              ;;
-            false) bun scripts/ci-ordinary-web-inputs.ts "$RUNNER_TEMP/ordinary-browser-program" false ;;
-            *) exit 1 ;;
-          esac
-      - name: Blocking JSC embedding and allocation checks
-        if: needs.selection.outputs.jsc == 'true'
-        run: |
-          source env.sh
-          bun scripts/jsc-embedding.ts fixtures dist/bun-jsc.wasm 2>&1 | tee dist/jsc-embedding-fixtures.log
-      - name: Blocking Web guest cases (QuickJS and host engine)
-        run: |
-          source env.sh
-          bun scripts/test-web-guests.ts quickjs browser 2>&1 | tee dist/web-guests-quickjs-browser.log
-      - name: Blocking Web guest case (JSC)
-        if: needs.selection.outputs.jsc == 'true'
-        run: |
-          source env.sh
-          bun scripts/test-web-guests.ts jsc 2>&1 | tee dist/web-guests-jsc.log
-      - name: Retain ordinary Web guest diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: ordinary-web-guest-diagnostics
-          path: dist/*.log
-          if-no-files-found: ignore
-          retention-days: 1
-
-      - name: Reuse the production playground for shared profile checks
-        id: shared-playground-site
-        if: needs.selection.outputs.shared-native == 'true' && needs.shared-sysroot.result == 'success'
-        uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: browser-guest-site
-          path: ${{ runner.temp }}/shared-playground-site
-      - name: Reuse the three retained shared programs
-        id: shared-program-downloads
-        if: needs.selection.outputs.shared-native == 'true' && needs.shared-sysroot.result == 'success'
-        uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        with:
-          pattern: shared-*-program
-          path: ${{ runner.temp }}/shared-program-downloads
-      - name: Prepare the same-source shared proof handoff
-        id: prepare-shared-proof-inputs
-        if: needs.selection.outputs.shared-native == 'true' && needs.shared-sysroot.result == 'success'
-        run: |
-          downloads="$RUNNER_TEMP/shared-program-downloads"
-          programs="$RUNNER_TEMP/shared-programs"
-          # SpiderMonkey's upload preserves its path alongside the native diagnostics.
-          shopt -s globstar nullglob
-          spidermonkey=("$downloads/shared-spidermonkey-program"/**/shared-native/program-spidermonkey)
-          [[ ${#spidermonkey[@]} == 1 ]]
-          mkdir "$programs"
-          mv "$downloads/shared-quickjs-program" "$programs/program"
-          mv "$downloads/shared-jsc-program" "$programs/program-jsc"
-          mv "${spidermonkey[0]}" "$programs/program-spidermonkey"
-          bun scripts/ci-shared-proof-inputs.ts prepare "$RUNNER_TEMP/shared-proof-inputs" "$programs" "$RUNNER_TEMP/shared-playground-site"
-      - name: Export ready shared proof inputs
-        id: upload-shared-proof-inputs
-        if: needs.selection.outputs.shared-native == 'true' && needs.shared-sysroot.result == 'success'
-        uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: shared-proof-inputs
-          path: ${{ runner.temp }}/shared-proof-inputs/
-          if-no-files-found: error
-          retention-days: 1
-
-  shared-jsc-identity:
-    name: Resolve effective shared JSC inputs
-    needs: selection
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      WASI_LIBC_JOBS: "2"
-    outputs:
-      key: ${{ steps.setup.outputs.key }}
-      sysroot-sha256: ${{ steps.sysroot.outputs.sha256 }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/shared-jsc-setup
-        id: setup
-        with:
-          shared-native: ${{ needs.selection.outputs.shared-native }}
-      - name: Package this run's prepared shared sysroot
-        id: sysroot
-        shell: bash
-        run: |
-          source env.sh
-          transfer="$RUNNER_TEMP/shared-jsc-identity-sysroot.tar.zst"
-          tar --posix -C "$RUNNER_TEMP" -cf - bun-wasm-shared-sysroot | zstd -T0 -q -o "$transfer"
-          echo "sha256=$(sha256sum "$transfer" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v7
-        timeout-minutes: 5
-        with:
-          path: ${{ runner.temp }}/shared-jsc-identity-sysroot.tar.zst
-          if-no-files-found: error
-          retention-days: 1
-          archive: false
-      - uses: ./.github/actions/save-release-downloads
-
-  shared-prebuild:
-    name: Shared PIC sysroot and JSC prebuild
-    needs: [selection, shared-jsc-identity]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
-    runs-on: ubuntu-latest
-    concurrency:
-      group: ${{ needs.shared-jsc-identity.outputs.key }}
-      cancel-in-progress: false
-      queue: max
-    defaults:
-      run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-    # The ordinary JSC producer budgets 45 minutes for cold C++ and its hand-off.
-    timeout-minutes: 45
-    env:
-      WASI_LIBC_JOBS: "2"
-    outputs:
-      manifest-sha256: ${{ steps.shared-artifact.outputs.manifest-sha256 }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v8
-        timeout-minutes: 5
-        with:
-          name: shared-jsc-identity-sysroot.tar.zst
-          path: ${{ runner.temp }}
-      - uses: ./.github/actions/shared-jsc-setup
-        id: setup
-        with:
-          shared-native: ${{ needs.selection.outputs.shared-native }}
-          sysroot: ${{ needs.shared-jsc-identity.outputs.sysroot-sha256 }}
-      - uses: ./.github/actions/shared-jsc-prebuild
-        if: needs.selection.outputs.shared-native == 'true'
-        with:
-          key: ${{ steps.setup.outputs.key }}
-          expected-key: ${{ needs.shared-jsc-identity.outputs.key }}
-      - name: Package the verified shared prebuild and sysroot
-        id: shared-artifact
-        env:
-          SHARED_NATIVE: ${{ needs.selection.outputs.shared-native }}
-        run: |
-          source env.sh
-          bundle="$RUNNER_TEMP/shared-prebuild-artifact"
-          mkdir "$bundle"
-          members=(sysroot.tar.zst)
-          tar --posix -C "$(dirname "$BUN_WASM_SYSROOT")" -cf - "$(basename "$BUN_WASM_SYSROOT")" | zstd -T0 -q -o "$bundle/sysroot.tar.zst"
-          if [[ "$SHARED_NATIVE" == true ]]; then
-            bun scripts/ci-jsc-artifact.ts "$JSC_BUILD_DIR" shared-group "$bundle/prebuild.tar.zst"
-            members+=(prebuild.tar.zst)
-          fi
-          {
-            printf 'run=%s\nsha=%s\nshared-native=%s\nsysroot=%s\njsc-build-dir=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$SHARED_NATIVE" "$BUN_WASM_SYSROOT" "$RUNNER_TEMP/jsc/shared"
-            (cd "$bundle" && sha256sum "${members[@]}")
-          } > "$bundle/manifest"
-          tar --posix -C "$bundle" -cf "$RUNNER_TEMP/shared-prebuild.tar" "${members[@]}" manifest
-          echo "manifest-sha256=$(sha256sum "$bundle/manifest" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v7
-        timeout-minutes: 5
-        with:
-          path: ${{ runner.temp }}/shared-prebuild.tar
-          if-no-files-found: error
-          retention-days: 1
-          archive: false
-      - uses: ./.github/actions/save-release-downloads
-
-  shared-spidermonkey-prebuild:
-    name: Shared SpiderMonkey library prebuild
-    needs: [selection, shared-prebuild]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.selection.outputs.shared-native == 'true' }}
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-    timeout-minutes: 30
-    env:
-      CARGO_BUILD_JOBS: "4"
-      CARGO_INCREMENTAL: "0"
-    outputs:
-      manifest-sha256: ${{ steps.shared-sm-artifact.outputs.manifest-sha256 }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure private shared sysroot paths
-        run: |
-          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
-          echo "BUN_WASM_SHARED_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
-          echo "BUN_WASM_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
-          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-          echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
-          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
-      - uses: ./.github/actions/release-downloads
-      - uses: ./.github/actions/setup-tools
-        with:
-          bun-version: 1.4.4
-          node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
-        with:
-          path: .ci-bun-cache
-          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
-      - name: Install pinned shared build tools
-        run: bun scripts/ci-build-tools.ts
-      - uses: actions/cache/restore@v4
-        id: shared-sdk
-        with:
-          path: ${{ env.WASM_TOOLS }}/wasi-sdk
-          key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
-      - name: Install pinned WASI SDK
-        if: steps.shared-sdk.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
-          trap 'rm -f -- "$archive"' EXIT
-          bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
-            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz "$archive"
-          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
-          mkdir -p "$WASM_TOOLS/wasi-sdk"
-          tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
-      - name: Save completed shared-sdk setup
-        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sdk.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.WASM_TOOLS }}/wasi-sdk
-          key: ${{ steps.shared-sdk.outputs.cache-primary-key }}
-      - uses: actions/cache/restore@v4
-        if: needs.selection.outputs.shared-native == 'true'
-        id: shared-rustup-cache
-        with:
-          path: ${{ env.RUSTUP_HOME }}
-          key: rust-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          toolchain: nightly-2026-09-15
-          components: rust-src, rustfmt, clippy
-          targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
-      - name: Configure private shared JSC build path
-        run: echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
-      - uses: actions/download-artifact@v8
-        timeout-minutes: 5
-        with:
-          name: shared-prebuild.tar
-          path: ${{ runner.temp }}/shared-prebuild-transfer
-      - name: Import only the verified shared sysroot for SpiderMonkey
-        env:
-          SHARED_NATIVE: ${{ needs.selection.outputs.shared-native }}
-          SHARED_PREBUILD_MANIFEST_SHA256: ${{ needs.shared-prebuild.outputs.manifest-sha256 }}
-          JSC_PROFILE: shared-group
-          JOBS: "2"
-          CAGE: ""
-        run: |
-          source env.sh
-          transfer="$RUNNER_TEMP/shared-prebuild-transfer/shared-prebuild.tar"
-          manifest="$RUNNER_TEMP/shared-prebuild-manifest"
-          members=(sysroot.tar.zst)
-          if [[ "$SHARED_NATIVE" == true ]]; then members+=(prebuild.tar.zst); fi
-          [[ "$SHARED_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$(tar --posix -tf "$transfer")" == "$(printf '%s\n' "${members[@]}" manifest)" ]]
-          [[ ! -e "$manifest" ]]
-          tar --posix -xOf "$transfer" manifest > "$manifest"
-          echo "$SHARED_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
-          expected=$(printf 'run=%s\nsha=%s\nshared-native=%s\nsysroot=%s\njsc-build-dir=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$SHARED_NATIVE" "$BUN_WASM_SYSROOT" "$JSC_BUILD_DIR")
-          [[ "$(head -n 5 "$manifest")" == "$expected" ]]
-          [[ "$(tail -n +6 "$manifest" | cut -d' ' -f3)" == "$(printf '%s\n' "${members[@]}")" ]]
-          for member in "${members[@]}"; do
-            digest=$(tail -n +6 "$manifest" | awk -v member="$member" '$2 == member { print $1 }')
-            [[ "$(tar --posix -xOf "$transfer" "$member" | sha256sum | cut -d' ' -f1)" == "$digest" ]]
-          done
-          [[ ! -e "$BUN_WASM_SYSROOT" ]]
-          mkdir -p "$(dirname "$BUN_WASM_SYSROOT")" "$(dirname "$JSC_BUILD_DIR")"
-          tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
-          test -s "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json"
-          test -s "$BUN_WASM_SYSROOT/lib/wasm32-wasip1/libc.a"
-          bun scripts/build-wasi-sysroot.ts --shared-pic
-          rm -r -- "$manifest" "$RUNNER_TEMP/shared-prebuild-transfer"
-      - name: Install the SpiderMonkey producer tools
-        if: needs.selection.outputs.shared-native == 'true'
-        run: |
-          sudo bash .github/scripts/apt-main-archive.sh
-          sudo apt-get update
-          sudo apt-get install -y clang llvm autoconf2.13 pkg-config python3-dev python3-venv python3-packaging python3-setuptools libffi-dev zlib1g-dev
-      - uses: actions/cache/restore@v4
-        if: needs.selection.outputs.shared-native == 'true'
-        id: shared-cbindgen-cache
-        with:
-          path: ${{ env.CARGO_HOME }}/bin/cbindgen
-          key: cbindgen-0.29.4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
-      - name: Prepare pinned cbindgen
-        if: needs.selection.outputs.shared-native == 'true'
-        env:
-          CBINDGEN_CACHE_HIT: ${{ steps.shared-cbindgen-cache.outputs.cache-hit }}
-        run: |
-          source env.sh
-          if [[ "$CBINDGEN_CACHE_HIT" != true ]]; then
-            CARGO_TARGET_DIR="$CARGO_TARGET_DIR/shared-native/cbindgen-target" cargo install --locked --version 0.29.4 cbindgen
-          fi
-          "$CARGO_HOME/bin/cbindgen" --version | grep -Fx 'cbindgen 0.29.4'
-      - name: Save pinned cbindgen
-        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-cbindgen-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.CARGO_HOME }}/bin/cbindgen
-          key: ${{ steps.shared-cbindgen-cache.outputs.cache-primary-key }}
-      - name: Identify shared SpiderMonkey native inputs
-        if: needs.selection.outputs.shared-native == 'true'
-        id: shared-spidermonkey-inputs
-        run: |
-          source env.sh
-          echo "SPIDERMONKEY_BUILD_DIR=$RUNNER_TEMP/spidermonkey/shared" >> "$GITHUB_ENV"
-          echo "SPIDERMONKEY_NATIVE_DIR=$RUNNER_TEMP/spidermonkey/shared/native" >> "$GITHUB_ENV"
-          inputs=$({
-            printf 'profile=shared-group\n'
-            sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" "$BUN_WASM_SYSROOT/lib/wasm32-wasip1/libc.a" "$WASI_SDK_PATH/bin/clang++" "$CARGO_HOME/bin/cbindgen" /usr/bin/clang /usr/bin/clang++
-            for tool in rustc cargo clang clang++ llvm-readobj python3 autoconf2.13 make perl; do
-              sha256sum "$(command -v "$tool")"
-            done
-            dpkg-query -W
-            /usr/bin/clang --version
-            /usr/bin/clang++ --version
-            rustc -vV
-            llvm-readobj --version
-            python3 --version
-            autoconf2.13 --version
-          } | sha256sum | cut -d' ' -f1)
-          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
-          echo "recipes=$(bun scripts/ci-spidermonkey-prebuild.ts recipes)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        if: needs.selection.outputs.shared-native == 'true'
-        id: shared-spidermonkey-cache
-        with:
-          path: ${{ runner.temp }}/spidermonkey/shared
-          key: spidermonkey-shared-group-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-spidermonkey-inputs.outputs.hash }}-${{ steps.shared-spidermonkey-inputs.outputs.recipes }}
-      - name: Produce or verify the shared SpiderMonkey library once
-        if: needs.selection.outputs.shared-native == 'true'
-        env:
-          JOBS: "2"
-          CAGE: ""
-        run: |
-          source env.sh
-          source_tree="$SPIDERMONKEY_BUILD_DIR/firefox"
-          if [[ ! -d "$source_tree/.git" ]]; then
-            git init -q "$source_tree"
-            git -C "$source_tree" remote add origin https://github.com/mozilla-firefox/firefox.git
-          fi
-          # Fetch's sparse closure needs lazy blobs on a fresh runner, not only a retained tree.
-          git -C "$source_tree" config remote.origin.promisor true
-          git -C "$source_tree" config remote.origin.partialclonefilter blob:none
-          # The recipe stages fresh headers; only its incremental objects and patched source persist.
-          rm -rf -- "$SPIDERMONKEY_BUILD_DIR/native"
-          # Mach checks vendored packages against its invoking Python's packages.
-          # Exclude runner tools and any packages left by a restored environment.
-          python3 -m venv --clear --without-pip "$RUNNER_TEMP/spidermonkey-python"
-          export PATH="$RUNNER_TEMP/spidermonkey-python/bin:$PATH"
-          bash spidermonkey/build-shared-group.sh
-      - name: Bind the verified SpiderMonkey transfer to this run and source
-        id: shared-sm-artifact
-        env:
-          SM_NATIVE_INPUTS: ${{ steps.shared-spidermonkey-inputs.outputs.hash }}
-        run: |
-          source env.sh
-          manifest=$(bun scripts/ci-spidermonkey-prebuild.ts write "$SPIDERMONKEY_BUILD_DIR" "$SM_NATIVE_INPUTS")
-          echo "manifest-sha256=$manifest" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
-        timeout-minutes: 5
-        with:
-          name: shared-spidermonkey-prebuild
-          path: |
-            ${{ env.SPIDERMONKEY_BUILD_DIR }}/native/
-            ${{ env.SPIDERMONKEY_BUILD_DIR }}/receipt/
-            ${{ env.SPIDERMONKEY_BUILD_DIR }}/prebuild.json
-          if-no-files-found: error
-          retention-days: 1
-      - name: Save the verified shared SpiderMonkey source and native work
-        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-spidermonkey-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/spidermonkey/shared
-          key: ${{ steps.shared-spidermonkey-cache.outputs.cache-primary-key }}
-      - name: Shared SpiderMonkey cache result
-        if: needs.selection.outputs.shared-native == 'true'
-        run: echo "shared SpiderMonkey exact cache hit=${{ steps.shared-spidermonkey-cache.outputs.cache-hit }}; matched=${{ steps.shared-spidermonkey-cache.outputs.cache-matched-key }}"
-      - uses: ./.github/actions/save-release-downloads
-
   shared-sysroot:
     name: Shared PIC program producer
-    needs: [selection, shared-prebuild, shared-spidermonkey-prebuild]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
+    needs: selection
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1138,7 +520,7 @@ jobs:
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-    timeout-minutes: 30
+    timeout-minutes: 55
     env:
       WASI_LIBC_JOBS: "2"
       CARGO_BUILD_JOBS: "4"
@@ -1147,17 +529,8 @@ jobs:
     steps:
       - name: Reserve time for shared producer diagnostics
         if: needs.selection.outputs.shared-native == 'true'
-        run: echo "SHARED_PRODUCER_DEADLINE_MS=$(( $(date +%s) * 1000 + 27 * 60 * 1000 ))" >> "$GITHUB_ENV"
+        run: echo "SHARED_PRODUCER_DEADLINE_MS=$(( $(date +%s) * 1000 + 52 * 60 * 1000 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
-      - name: Require the shared prebuild producer
-        env:
-          SHARED_PREBUILD_RESULT: ${{ needs.shared-prebuild.result }}
-        run: test "$SHARED_PREBUILD_RESULT" = success
-      - name: Require the shared SpiderMonkey library producer
-        if: needs.selection.outputs.shared-native == 'true'
-        env:
-          SM_PREBUILD_RESULT: ${{ needs.shared-spidermonkey-prebuild.result }}
-        run: test "$SM_PREBUILD_RESULT" = success
       - name: Configure private shared sysroot paths
         run: |
           echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
@@ -1268,6 +641,31 @@ jobs:
           inputs=$(bun scripts/build-wasi-sysroot.ts --shared-pic --inputs)
           echo "hash=$inputs" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
+        id: shared-sysroot-cache
+        with:
+          path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
+          key: wasi-shared-pic-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'scripts/build-shared-wasi-libc.sh', 'patches/wasi-libc/group-grow.patch', 'patches/wasi-libc/.gitattributes') }}
+      - name: Build or verify shared profile
+        run: |
+          source env.sh
+          bun scripts/build-wasi-sysroot.ts --shared-pic
+      - name: Save shared profile cache
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sysroot-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
+          key: ${{ steps.shared-sysroot-cache.outputs.cache-primary-key }}
+      - name: Run two-member real-libc proof
+        run: |
+          source env.sh
+          bash scripts/test-shared-sysroot.sh "$RUNNER_TEMP/shared-sysroot-proof"
+      - name: Install the shared JSC and SpiderMonkey producer tools
+        if: needs.selection.outputs.shared-native == 'true'
+        run: |
+          sudo bash .github/scripts/apt-main-archive.sh
+          sudo apt-get update
+          sudo apt-get install -y ruby gperf bison clang llvm autoconf2.13 pkg-config python3-dev python3-venv python3-packaging python3-setuptools libffi-dev zlib1g-dev
+      - uses: actions/cache/restore@v4
         if: needs.selection.outputs.shared-native == 'true'
         id: shared-binaryen
         with:
@@ -1276,55 +674,48 @@ jobs:
       - name: Prepare shared-profile Binaryen
         if: needs.selection.outputs.shared-native == 'true'
         run: bun scripts/ci-binaryen.ts
-      - name: Configure private shared JSC build path
-        run: echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
-      - uses: actions/download-artifact@v8
-        timeout-minutes: 5
-        with:
-          name: shared-prebuild.tar
-          path: ${{ runner.temp }}/shared-prebuild-transfer
-      - name: Import the verified shared prebuild and sysroot
+      - name: Identify the shared JSC prebuild inputs
+        if: needs.selection.outputs.shared-native == 'true'
+        id: shared-jsc-inputs
         env:
-          SHARED_NATIVE: ${{ needs.selection.outputs.shared-native }}
-          SHARED_PREBUILD_MANIFEST_SHA256: ${{ needs.shared-prebuild.outputs.manifest-sha256 }}
           JSC_PROFILE: shared-group
           JOBS: "2"
           CAGE: ""
         run: |
-          source env.sh
-          transfer="$RUNNER_TEMP/shared-prebuild-transfer/shared-prebuild.tar"
-          manifest="$RUNNER_TEMP/shared-prebuild-manifest"
-          members=(sysroot.tar.zst)
-          if [[ "$SHARED_NATIVE" == true ]]; then members+=(prebuild.tar.zst); fi
-          [[ "$SHARED_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$(tar --posix -tf "$transfer")" == "$(printf '%s\n' "${members[@]}" manifest)" ]]
-          [[ ! -e "$manifest" ]]
-          tar --posix -xOf "$transfer" manifest > "$manifest"
-          echo "$SHARED_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
-          expected=$(printf 'run=%s\nsha=%s\nshared-native=%s\nsysroot=%s\njsc-build-dir=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$SHARED_NATIVE" "$BUN_WASM_SYSROOT" "$JSC_BUILD_DIR")
-          [[ "$(head -n 5 "$manifest")" == "$expected" ]]
-          [[ "$(tail -n +6 "$manifest" | cut -d' ' -f3)" == "$(printf '%s\n' "${members[@]}")" ]]
-          for member in "${members[@]}"; do
-            digest=$(tail -n +6 "$manifest" | awk -v member="$member" '$2 == member { print $1 }')
-            [[ "$(tar --posix -xOf "$transfer" "$member" | sha256sum | cut -d' ' -f1)" == "$digest" ]]
-          done
-          [[ ! -e "$BUN_WASM_SYSROOT" && ! -e "$JSC_BUILD_DIR" ]]
-          mkdir -p "$(dirname "$BUN_WASM_SYSROOT")" "$(dirname "$JSC_BUILD_DIR")"
-          tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
-          test -s "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json"
-          test -s "$BUN_WASM_SYSROOT/lib/wasm32-wasip1/libc.a"
-          bun scripts/build-wasi-sysroot.ts --shared-pic
-          if [[ "$SHARED_NATIVE" == true ]]; then
-            tar --posix -xOf "$transfer" prebuild.tar.zst | zstd -dc | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
-            source jsc/common.sh
-            check_jsc_inputs_stamp
-          fi
-          rm -r -- "$manifest" "$RUNNER_TEMP/shared-prebuild-transfer"
-      - name: Run two-member real-libc proof
+          echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/shared" >> "$GITHUB_ENV"
+          export JSC_BUILD_DIR="$RUNNER_TEMP/jsc/shared"
+          source jsc/common.sh
+          copy_jsc_config_inputs
+          inputs=$(jsc_inputs_hash)
+          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        if: needs.selection.outputs.shared-native == 'true'
+        id: shared-jsc-cache
+        with:
+          path: ${{ runner.temp }}/jsc/shared
+          key: shared-jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-jsc-inputs.outputs.hash }}
+      - name: Build or verify the shared JSC prebuild
+        id: shared-jsc-prebuild
+        if: needs.selection.outputs.shared-native == 'true'
+        env:
+          JSC_PROFILE: shared-group
+          JOBS: "4"
+          CAGE: ""
+          CI_SHARED_JSC_HIT: ${{ steps.shared-jsc-cache.outputs.cache-hit }}
         run: |
           source env.sh
-          bash scripts/test-shared-sysroot.sh "$RUNNER_TEMP/shared-sysroot-proof"
-
+          if [[ "$CI_SHARED_JSC_HIT" != true ]]; then
+            JSC_PROFILE=shared-group bash scripts/build-jsc.sh
+          fi
+          source jsc/common.sh
+          check_jsc_inputs_stamp
+          echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
+      - name: Save the shared JSC prebuild
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-jsc-prebuild.outputs.jsc-ready == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/jsc/shared
+          key: ${{ steps.shared-jsc-cache.outputs.cache-primary-key }}
       - uses: actions/cache/restore@v4
         if: needs.selection.outputs.shared-native == 'true'
         id: shared-rustup-cache
@@ -1337,6 +728,92 @@ jobs:
           toolchain: nightly-2026-09-15
           components: rust-src, rustfmt, clippy
           targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
+      - uses: actions/cache/restore@v4
+        if: needs.selection.outputs.shared-native == 'true'
+        id: shared-cbindgen-cache
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cbindgen
+          key: cbindgen-0.29.4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Prepare pinned cbindgen
+        if: needs.selection.outputs.shared-native == 'true'
+        env:
+          CBINDGEN_CACHE_HIT: ${{ steps.shared-cbindgen-cache.outputs.cache-hit }}
+        run: |
+          source env.sh
+          if [[ "$CBINDGEN_CACHE_HIT" != true ]]; then
+            CARGO_TARGET_DIR="$CARGO_TARGET_DIR/shared-native/cbindgen-target" cargo install --locked --version 0.29.4 cbindgen
+          fi
+          "$CARGO_HOME/bin/cbindgen" --version | grep -Fx 'cbindgen 0.29.4'
+      - name: Save pinned cbindgen
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-cbindgen-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CARGO_HOME }}/bin/cbindgen
+          key: ${{ steps.shared-cbindgen-cache.outputs.cache-primary-key }}
+      - name: Identify shared SpiderMonkey native inputs
+        if: needs.selection.outputs.shared-native == 'true'
+        id: shared-spidermonkey-inputs
+        run: |
+          source env.sh
+          echo "SPIDERMONKEY_BUILD_DIR=$RUNNER_TEMP/spidermonkey/shared" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_NATIVE_DIR=$RUNNER_TEMP/spidermonkey/shared/native" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_LIBCXX_DIR=$JSC_BUILD_DIR/libcxx/lib" >> "$GITHUB_ENV"
+          inputs=$({
+            printf 'profile=shared-group\n'
+            sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" "$BUN_WASM_SYSROOT/lib/wasm32-wasip1/libc.a" "$WASI_SDK_PATH/bin/clang++" "$CARGO_HOME/bin/cbindgen" /usr/bin/clang /usr/bin/clang++
+            for tool in rustc cargo clang clang++ llvm-readobj python3 autoconf2.13 make perl; do
+              sha256sum "$(command -v "$tool")"
+            done
+            /usr/bin/clang --version
+            /usr/bin/clang++ --version
+            rustc -vV
+            llvm-readobj --version
+            python3 --version
+            autoconf2.13 --version
+          } | sha256sum | cut -d' ' -f1)
+          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+          echo "recipes=$(bun scripts/ci-spidermonkey-prebuild.ts recipes)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        if: needs.selection.outputs.shared-native == 'true'
+        id: shared-spidermonkey-cache
+        with:
+          path: ${{ runner.temp }}/spidermonkey/shared
+          key: spidermonkey-shared-group-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-spidermonkey-inputs.outputs.hash }}-${{ steps.shared-spidermonkey-inputs.outputs.recipes }}
+      - name: Produce or verify the shared SpiderMonkey library once
+        if: needs.selection.outputs.shared-native == 'true'
+        env:
+          JOBS: "4"
+          CAGE: ""
+        run: |
+          source env.sh
+          source_tree="$SPIDERMONKEY_BUILD_DIR/firefox"
+          if [[ ! -d "$source_tree/.git" ]]; then
+            git init -q "$source_tree"
+            git -C "$source_tree" remote add origin https://github.com/mozilla-firefox/firefox.git
+          fi
+          # Fetch's sparse closure needs lazy blobs on a fresh runner, not only a retained tree.
+          git -C "$source_tree" config remote.origin.promisor true
+          git -C "$source_tree" config remote.origin.partialclonefilter blob:none
+          # The recipe stages fresh headers; only its incremental objects and patched source persist.
+          rm -rf -- "$SPIDERMONKEY_BUILD_DIR/native"
+          python3 -m venv --clear --without-pip "$RUNNER_TEMP/spidermonkey-python"
+          export PATH="$RUNNER_TEMP/spidermonkey-python/bin:$PATH"
+          bash spidermonkey/build-shared-group.sh
+      - name: Verify the shared SpiderMonkey library receipt
+        id: shared-sm-artifact
+        if: needs.selection.outputs.shared-native == 'true'
+        env:
+          SM_NATIVE_INPUTS: ${{ steps.shared-spidermonkey-inputs.outputs.hash }}
+        run: |
+          source env.sh
+          manifest=$(bun scripts/ci-spidermonkey-prebuild.ts write "$SPIDERMONKEY_BUILD_DIR" "$SM_NATIVE_INPUTS")
+          bun scripts/ci-spidermonkey-prebuild.ts verify "$SPIDERMONKEY_BUILD_DIR" "$manifest"
+      - name: Save the verified shared SpiderMonkey source and native work
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-spidermonkey-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/spidermonkey/shared
+          key: ${{ steps.shared-spidermonkey-cache.outputs.cache-primary-key }}
       - uses: ./.github/actions/rust-build-cache
         id: rust-objects
         if: needs.selection.outputs.shared-native == 'true'
@@ -1403,25 +880,6 @@ jobs:
           path: ${{ env.CARGO_TARGET_DIR }}/shared-native/program-jsc/
           if-no-files-found: error
           retention-days: 1
-      - name: Configure the shared SpiderMonkey consumer inputs
-        if: needs.selection.outputs.shared-native == 'true'
-        run: |
-          echo "SPIDERMONKEY_BUILD_DIR=$RUNNER_TEMP/spidermonkey/shared" >> "$GITHUB_ENV"
-          echo "SPIDERMONKEY_NATIVE_DIR=$RUNNER_TEMP/spidermonkey/shared/native" >> "$GITHUB_ENV"
-          echo "SPIDERMONKEY_LIBCXX_DIR=$JSC_BUILD_DIR/libcxx/lib" >> "$GITHUB_ENV"
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        if: needs.selection.outputs.shared-native == 'true'
-        with:
-          name: shared-spidermonkey-prebuild
-          path: ${{ runner.temp }}/spidermonkey/shared
-      - name: Verify the shared SpiderMonkey producer transfer
-        if: needs.selection.outputs.shared-native == 'true'
-        env:
-          SM_PREBUILD_MANIFEST_SHA256: ${{ needs.shared-spidermonkey-prebuild.outputs.manifest-sha256 }}
-        run: |
-          source env.sh
-          bun scripts/ci-spidermonkey-prebuild.ts verify "$SPIDERMONKEY_BUILD_DIR" "$SM_PREBUILD_MANIFEST_SHA256"
       - name: Produce the shared SpiderMonkey profile once
         id: shared-spidermonkey-producer
         if: needs.selection.outputs.shared-native == 'true'
@@ -1466,357 +924,151 @@ jobs:
           key: ${{ steps.rust-objects.outputs.cache-primary-key }}
       - uses: ./.github/actions/save-release-downloads
 
-  shared-consumers:
-    name: Shared ${{ matrix.native && (matrix.browser && 'native and Browser' || 'native') || 'Browser' }} (${{ matrix.engine }})
-    needs: [selection, ordinary-web-guests, rust]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success' && needs.ordinary-web-guests.outputs.shared-proof-inputs == 'success' && needs.selection.outputs.shared-native == 'true' }}
+  rust:
+    name: Rust runtime and Web guest tests
+    needs: [selection, ordinary-build]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true')) }}
     runs-on: ubuntu-latest
-    # The per-check clocks start at the first step, after runner action preparation.
-    timeout-minutes: ${{ matrix.native && matrix.browser && 60 || 30 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { engine: quickjs, native: true, browser: true }
-          - { engine: jsc, native: true, browser: true }
-          - { engine: spidermonkey, native: true, browser: false }
-          - { engine: spidermonkey, native: false, browser: true }
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+    timeout-minutes: 30
     env:
-      SHARED_CHECK_SECONDS: 1800
-      # hashFiles has its own 120-second timer plus process termination and stream drain.
-      SHARED_HASHFILES_RESERVE_SECONDS: 135
+      CARGO_INCREMENTAL: "0"
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
-      - name: Start the shared setup clock
-        timeout-minutes: 1
-        working-directory: ${{ runner.temp }}
-        run: |
-          started=$EPOCHSECONDS
-          echo "SHARED_STARTED=$started" >> "$GITHUB_ENV"
-          echo "SHARED_CHECK_DEADLINE=$((started + SHARED_CHECK_SECONDS))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
-        timeout-minutes: 29
-      - name: Bound shared tool setup
-        id: shared-tools-budget
-        run: bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 30
-      - uses: ./.github/actions/setup-tools
-        timeout-minutes: ${{ fromJSON(steps.shared-tools-budget.outputs.minutes) }}
+      - uses: ./.github/actions/native-setup
+        id: native-setup
         with:
-          bun-version: 1.4.4
+          mode: seed
+          cache-scope: rust
           node-version: ${{ env.CI_NODE_VERSION }}
-      - name: Bound shared dependency restore
-        id: shared-cache-budget
-        run: bash scripts/ci-shared-check-budget.sh "$((SHARED_CHECK_DEADLINE - SHARED_HASHFILES_RESERVE_SECONDS))" 30
-      - uses: actions/cache/restore@v4
-        timeout-minutes: ${{ fromJSON(steps.shared-cache-budget.outputs.minutes) }}
-        with:
-          path: .ci-bun-cache
-          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - name: Install shared check dependencies
+          jsc: 'false'
+      - run: bun scripts/ci-install.ts --cwd web --frozen-lockfile
+      - name: Fetch offline Cargo dependencies for runtime probes
         run: |
-          remaining=$((SHARED_CHECK_DEADLINE - EPOCHSECONDS))
-          if ((remaining <= 0)); then
-            echo "Shared input setup exhausted its budget" >&2
-            exit 124
-          fi
-          bun scripts/run-with-timeout.mts "$remaining" bun scripts/ci-install.ts --frozen-lockfile --ignore-scripts
-      - name: Bound shared handoff download
-        id: shared-download-budget
-        run: bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 5
-      - uses: actions/download-artifact@v4
-        timeout-minutes: ${{ fromJSON(steps.shared-download-budget.outputs.minutes) }}
-        with:
-          name: shared-proof-inputs
-          path: ${{ runner.temp }}/shared-proof-inputs
-      - name: Verify the ready shared inputs
-        id: shared-inputs
-        run: |
-          remaining=$((SHARED_CHECK_DEADLINE - EPOCHSECONDS))
-          if ((remaining <= 0)); then
-            echo "Shared input setup exhausted its budget" >&2
-            exit 124
-          fi
           source env.sh
-          bun scripts/run-with-timeout.mts "$remaining" bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"
-          echo "BUN_WASM_PROFILE_PROGRAM=$RUNNER_TEMP/shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm" >> "$GITHUB_ENV"
-          echo "BUN_WASM_BROWSER_SITE=$RUNNER_TEMP/shared-proof-inputs/browser" >> "$GITHUB_ENV"
-          echo "BUN_WASM_PREPARED_SHARED_SITE=1" >> "$GITHUB_ENV"
-          setup_seconds=$((EPOCHSECONDS - SHARED_STARTED))
-          if ((setup_seconds < 0 || setup_seconds >= SHARED_CHECK_SECONDS)); then
-            echo "Shared input setup exhausted its budget" >&2
-            exit 124
-          fi
-          echo "SHARED_SETUP_SECONDS=$setup_seconds" >> "$GITHUB_ENV"
-      - name: Require the native launcher producer
-        id: shared-launcher-budget
-        if: matrix.native
-        env:
-          PROFILE_LAUNCHER_RESULT: ${{ needs.rust.result }}
-        run: |
-          test "$PROFILE_LAUNCHER_RESULT" = success
-          bash scripts/ci-shared-check-budget.sh "$SHARED_CHECK_DEADLINE" 5
+          cargo fetch --locked
+          guest_environment=$(bun scripts/guest-build-receipt.ts environment)
+          eval "$guest_environment"
+          sysroot=$("$RUSTC" --print sysroot)
+          "$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
       - uses: actions/download-artifact@v4
-        if: matrix.native
-        timeout-minutes: ${{ fromJSON(steps.shared-launcher-budget.outputs.minutes) }}
+        timeout-minutes: 5
+        with:
+          name: browser-program
+          path: ${{ runner.temp }}/ordinary-browser-program
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        if: needs.selection.outputs.jsc == 'true'
+        with:
+          name: ordinary-jsc-program
+          path: ${{ runner.temp }}/ordinary-jsc-program
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: ordinary-spidermonkey-program
+          path: ${{ runner.temp }}/ordinary-spidermonkey-program
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
         with:
           name: native-profile-launcher
-          path: ${{ runner.temp }}/native-profile-launcher
-      - name: Verify the native launcher source
-        if: matrix.native
-        run: |
-          test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"
-          chmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
-      - name: Consume the discovered shared native checks sequentially
-        id: native-checks
-        if: matrix.native
+          path: ${{ runner.temp }}/ordinary-native-launcher
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: ordinary-native-bundle
+          path: ${{ runner.temp }}/ordinary-native-bundle
+      - name: Verify and stage the ordinary runtime deliveries
         env:
-          TMPDIR: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-          TEMP: ${{ runner.temp }}
+          JSC_SELECTED: ${{ needs.selection.outputs.jsc }}
         run: |
           source env.sh
-          export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"
-          export BUN_WASM_TRACE=1
-          remaining=$((SHARED_CHECK_SECONDS - (EPOCHSECONDS - SHARED_STARTED)))
-          if ((remaining <= 0)); then
-            echo "Shared native setup exhausted its budget" >&2
-            exit 124
-          fi
-          state="$RUNNER_TEMP/shared-native-run"
-          mkdir "$state"
-          bun scripts/run-with-timeout.mts --state "$state" "$remaining" bun scripts/test-checks.ts native --profile shared-group
-      - name: Install Web browser test dependencies
-        id: web-deps
-        if: ${{ !cancelled() && matrix.browser && steps.shared-inputs.outcome == 'success' }}
-        run: |
-          state="$RUNNER_TEMP/shared-native-run"
-          if [[ -d "$state" && ! -f "$state/status" ]]; then
-            echo "Shared native process cleanup could not be confirmed" >&2
-            exit 1
-          fi
-          # Charge shared setup once to each check's original budget.
-          remaining=$((SHARED_CHECK_SECONDS - SHARED_SETUP_SECONDS))
-          deadline=$((EPOCHSECONDS + remaining))
-          bun scripts/run-with-timeout.mts "$remaining" bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --ignore-scripts
-          remaining=$((deadline - EPOCHSECONDS))
-          if ((remaining <= 0)); then
-            echo "Shared Browser setup exhausted its budget" >&2
-            exit 124
-          fi
-          echo "SHARED_BROWSER_DEADLINE=$deadline" >> "$GITHUB_ENV"
-          bash scripts/ci-shared-check-budget.sh "$((deadline - SHARED_HASHFILES_RESERVE_SECONDS))" 30
-      - uses: ./.github/actions/browser-deps
-        id: system-deps
-        if: ${{ !cancelled() && steps.web-deps.outcome == 'success' }}
-        timeout-minutes: ${{ fromJSON(steps.web-deps.outputs.minutes) }}
-        with:
-          browsers: chromium
-      - name: Install Chromium
-        id: chromium
-        if: ${{ !cancelled() && steps.system-deps.outcome == 'success' }}
-        working-directory: web
-        run: |
-          remaining=$((SHARED_BROWSER_DEADLINE - EPOCHSECONDS))
-          if ((remaining <= 0)); then
-            echo "Shared Browser setup exhausted its budget" >&2
-            exit 124
-          fi
-          bun ../scripts/run-with-timeout.mts "$remaining" bunx playwright install chromium
-      - name: Consume the discovered shared Browser checks sequentially
-        id: browser-checks
-        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+          case "$JSC_SELECTED" in
+            true) bun scripts/ci-ordinary-web-inputs.ts "$RUNNER_TEMP/ordinary-browser-program" true "$RUNNER_TEMP/ordinary-jsc-program" "$RUNNER_TEMP/ordinary-native-launcher" ;;
+            false)
+              bun scripts/ci-ordinary-web-inputs.ts "$RUNNER_TEMP/ordinary-browser-program" false
+              test "$(cat "$RUNNER_TEMP/ordinary-native-launcher/source.txt")" = "$GITHUB_SHA"
+              chmod +x "$RUNNER_TEMP/ordinary-native-launcher/bun-wasm"
+              ;;
+            *) exit 1 ;;
+          esac
+          bundle_dir="$RUNNER_TEMP/ordinary-native-unpacked"
+          mkdir -p "$bundle_dir"
+          zstd -dc "$RUNNER_TEMP/ordinary-native-bundle/bundle.tar.zst" | tar --posix -C "$bundle_dir" -xf -
+          test "$(cat "$bundle_dir/source.txt")" = "$GITHUB_SHA"
+          cp "$bundle_dir/dist/bash-web-shell.wasm" "$bundle_dir/dist/bash-web-env.wasm" "$bundle_dir/dist/bash-web-guests.json" dist/
+          sm_pair="$RUNNER_TEMP/ordinary-spidermonkey-program"
+          bun scripts/spidermonkey-side-core-receipt.ts verify-pair \
+            "$sm_pair/bun-spidermonkey.wasm" "$sm_pair/spidermonkey-engine.wasm" \
+            "$sm_pair/bun-spidermonkey.wasm.spidermonkey.json" "$sm_pair/inputs.json"
+          sm_build="$RUNNER_TEMP/spidermonkey/ordinary"
+          mkdir -p "$sm_build/obj/js/src" "$sm_build/obj/dist"
+          ln -s "$bundle_dir/spidermonkey-native/libspidermonkey_bunwasm.a" "$sm_build/libspidermonkey_bunwasm.a"
+          ln -s "$bundle_dir/spidermonkey-native/js-confdefs.h" "$sm_build/obj/js/src/js-confdefs.h"
+          ln -s "$bundle_dir/spidermonkey-native/include" "$sm_build/obj/dist/include"
+          echo "BUN_WASM_LAUNCHER=$RUNNER_TEMP/ordinary-native-launcher/bun-wasm" >> "$GITHUB_ENV"
+          echo "BUN_WASM_SHELL=$GITHUB_WORKSPACE/dist/bash-web-shell.wasm" >> "$GITHUB_ENV"
+          echo "BUN_WASM_ENV_UTILITY=$GITHUB_WORKSPACE/dist/bash-web-env.wasm" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_WASM=$sm_pair/bun-spidermonkey.wasm" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_NATIVE_DIR=$bundle_dir/spidermonkey-native" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_BUILD_DIR=$sm_build" >> "$GITHUB_ENV"
+      - name: Blocking native runtime checks
         env:
-          TMPDIR: ${{ runner.temp }}/shared-web
-          TMP: ${{ runner.temp }}/shared-web
-          TEMP: ${{ runner.temp }}/shared-web
-          BROWSER_CHECK_SECONDS: ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }}
+          BUN_WASM_RUNTIME_JOBS: "3"
+          BUN_WASM_RUNTIME_BATCH: default
+          INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}
+          BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}
+        shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
         run: |
-          mkdir "$TMPDIR"
           source env.sh
-          remaining=$((SHARED_BROWSER_DEADLINE - EPOCHSECONDS))
-          if ((remaining <= 0)); then
-            echo "Shared Browser setup exhausted its budget" >&2
-            exit 124
-          fi
-          limit=$((remaining < BROWSER_CHECK_SECONDS ? remaining : BROWSER_CHECK_SECONDS))
-          bun scripts/run-with-timeout.mts "$limit" bun scripts/test-checks.ts browser-guest --profile shared-group
-      # Chromium's renderer has crashed here with only "Target crashed" in the log. The kernel
-      # log tells a memory kill from a renderer fault.
-      - name: Show kernel memory kills and faults after a failure
-        if: failure() && matrix.browser && steps.browser-checks.outcome != 'success'
+          export WASI_SDK="$WASI_SDK_PATH"
+          bun scripts/test-checks.ts native --only runtime
+      - name: Blocking JSC embedding and allocation checks
+        if: needs.selection.outputs.jsc == 'true'
         run: |
-          free -m
-          sudo dmesg --ctime | grep -iE 'out of memory|oom|killed process|segfault|traps:' | tail -n 50 || true
-      - name: Require the selected shared checks
-        if: ${{ !cancelled() }}
-        env:
-          NATIVE_SELECTED: ${{ matrix.native }}
-          BROWSER_SELECTED: ${{ matrix.browser }}
-          NATIVE_RESULT: ${{ steps.native-checks.outcome }}
-          BROWSER_RESULT: ${{ steps.browser-checks.outcome }}
+          source env.sh
+          bun scripts/jsc-embedding.ts fixtures dist/bun-jsc.wasm 2>&1 | tee dist/jsc-embedding-fixtures.log
+      - name: Blocking Web guest cases (QuickJS and host engine)
         run: |
-          case "$NATIVE_SELECTED/$NATIVE_RESULT" in true/success|false/skipped) ;; *) exit 1 ;; esac
-          case "$BROWSER_SELECTED/$BROWSER_RESULT" in true/success|false/skipped) ;; *) exit 1 ;; esac
-
-  shared-proof:
-    name: Shared PIC sysroot proof
-    needs: [selection, ordinary-web-guests, quality, rust, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-consumers]
-    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Require every selected shared producer and consumer
-        env:
-          SELECTION_RESULT: ${{ needs.selection.result }}
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          SHARED_PREBUILD_RESULT: ${{ needs.shared-prebuild.result }}
-          SHARED_PRODUCER_RESULT: ${{ needs.shared-sysroot.result }}
-          SHARED_NATIVE: ${{ needs.selection.outputs.shared-native }}
-          FULL_SELECTED: ${{ (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')) }}
-          ORDINARY_WEB_RESULT: ${{ needs.ordinary-web-guests.result }}
-          RUST_RESULT: ${{ needs.rust.result }}
-          SM_RESULT: ${{ needs.shared-spidermonkey-prebuild.result }}
-          INPUTS_RESULT: ${{ needs.ordinary-web-guests.outputs.shared-proof-inputs }}
-          CONSUMER_RESULT: ${{ needs.shared-consumers.result }}
+          source env.sh
+          bun scripts/test-web-guests.ts quickjs browser 2>&1 | tee dist/web-guests-quickjs-browser.log
+      - name: Blocking Web guest case (JSC)
+        if: needs.selection.outputs.jsc == 'true'
         run: |
-          test "$SELECTION_RESULT" = success
-          test "$QUALITY_RESULT" = success
-          test "$SHARED_PREBUILD_RESULT" = success
-          test "$SHARED_PRODUCER_RESULT" = success
-          case "$FULL_SELECTED" in
-            true) test "$RUST_RESULT" = success; test "$ORDINARY_WEB_RESULT" = success ;;
-            false) test "$RUST_RESULT" = skipped; test "$ORDINARY_WEB_RESULT" = skipped ;;
-            *) exit 1 ;;
-          esac
-          case "$SHARED_NATIVE" in
-            true) test "$RUST_RESULT" = success; test "$INPUTS_RESULT" = success; expected=success ;;
-            false) test -z "$INPUTS_RESULT" || test "$INPUTS_RESULT" = skipped; expected=skipped ;;
-            *) exit 1 ;;
-          esac
-          test "$SM_RESULT" = "$expected"
-          test "$CONSUMER_RESULT" = "$expected"
-
-  web:
-    needs: [selection, web-unit, web-browser]
-    if: ${{ always() && needs.selection.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Web host
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - name: Require all Web host unit and browser gates
-        env:
-          WEB_UNIT_RESULT: ${{ needs.web-unit.result }}
-          WEB_BROWSER_RESULT: ${{ needs.web-browser.result }}
-        run: test "$WEB_UNIT_RESULT" = success && test "$WEB_BROWSER_RESULT" = success
-      - uses: ./.github/actions/release-downloads
-        with:
-          scope: web
-      - uses: ./.github/actions/setup-tools
-        with:
-          bun-version: 1.4.4
-          node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
-        with:
-          path: .ci-bun-cache
-          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - name: Install Web host browser test dependencies
-        run: bash ../scripts/test-web-host.sh --setup
-      - uses: ./.github/actions/browser-deps
-        with:
-          browsers: chromium firefox webkit
-      - name: Install Chromium, Firefox and WebKit
-        run: bunx playwright install chromium firefox webkit
-      - name: Web host browser gates
-        env:
-          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
-        run: bash ../scripts/test-web-host.sh --smoke
-      - uses: ./.github/actions/save-release-downloads
-
-  web-unit:
-    needs: selection
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Web host unit and types
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/release-downloads
-        with:
-          scope: web
-      - uses: ./.github/actions/setup-tools
-        with:
-          bun-version: 1.4.4
-          node-version: ${{ env.CI_NODE_VERSION }}
-      - uses: actions/cache/restore@v4
-        with:
-          path: .ci-bun-cache
-          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - name: Configure Web compiler toolchain
-        run: |
-          echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
-          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
-          echo "RUSTUP_TOOLCHAIN=nightly-2026-09-15" >> "$GITHUB_ENV"
-      - uses: actions/cache/restore@v4
-        id: web-rustup-cache
-        with:
-          path: ${{ env.RUSTUP_HOME }}
-          key: rust-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          toolchain: nightly-2026-09-15
-          components: rust-src, rustfmt, clippy
-          targets: wasm32-wasip1, wasm32-wasip1-threads, wasm32-unknown-unknown
-      - name: Save completed Web compiler setup
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.web-rustup-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.RUSTUP_HOME }}
-          key: ${{ steps.web-rustup-cache.outputs.cache-primary-key }}
-      - name: Web host unit, CLI shim, type and bundle gates
-        env:
-          BUN_WASM_TEST_JOBS: "4"
-          C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures
-        run: bash ../scripts/test-web-host.sh --unit
-      - name: Retain first C1 WebKit admission failure
-        if: failure()
+          source env.sh
+          bun scripts/test-web-guests.ts jsc 2>&1 | tee dist/web-guests-jsc.log
+      - name: Retain ordinary Web guest diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         timeout-minutes: 5
         with:
-          name: c1-webkit-failures-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/c1-webkit-failures
+          name: ordinary-web-guest-diagnostics
+          path: dist/*.log
           if-no-files-found: ignore
-          retention-days: 7
-      - uses: ./.github/actions/save-release-downloads
+          retention-days: 1
 
-  web-browser:
-    needs: selection
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Web browser (${{ matrix.batch }})
+  rust-fixtures:
+    name: Native fixture and install tests
+    needs: [selection, ordinary-build]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.pairedBatch != '' && 15 || 10 }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.selection.outputs.web-browser-shards) }}
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-        working-directory: web
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Configure fixture paths
+        run: |
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
       - uses: ./.github/actions/release-downloads
         with:
-          scope: web
+          scope: rust
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
@@ -1825,62 +1077,103 @@ jobs:
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - name: Install Web host browser test dependencies
-        run: bash ../scripts/test-web-host.sh --setup
-      - uses: ./.github/actions/browser-deps
-        with:
-          browsers: chromium firefox webkit
-      - name: Install Chromium, Firefox and WebKit
-        run: bunx playwright install chromium firefox webkit
-      - name: Run Web browser batch (${{ matrix.batch }})
-        id: web-browser-batch
-        env:
-          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
-          WEB_BROWSER_BATCH: ${{ matrix.batch }}
-          WEB_BROWSER_TIMEOUT_SECONDS: ${{ matrix.timeoutSeconds }}
-        run: bun ../scripts/run-with-timeout.mts "$WEB_BROWSER_TIMEOUT_SECONDS" bun ../scripts/test-checks.ts web-browser --batch "$WEB_BROWSER_BATCH"
-      - name: Run Web browser batch (${{ matrix.pairedBatch }})
-        if: ${{ !cancelled() && matrix.pairedBatch != '' && (steps.web-browser-batch.outcome == 'success' || steps.web-browser-batch.outcome == 'failure') }}
-        env:
-          EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
-          WEB_BROWSER_BATCH: ${{ matrix.pairedBatch }}
-          WEB_BROWSER_TIMEOUT_SECONDS: ${{ matrix.timeoutSeconds }}
-        run: bun ../scripts/run-with-timeout.mts "$WEB_BROWSER_TIMEOUT_SECONDS" bun ../scripts/test-checks.ts web-browser --batch "$WEB_BROWSER_BATCH"
-      - uses: ./.github/actions/save-release-downloads
-
-  process-bundles:
-    needs: selection
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Shared process browser bundles
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/release-downloads
-        with:
-          scope: browser-guest
-      - uses: ./.github/actions/setup-tools
-        with:
-          bun-version: 1.4.4
+      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts
       - uses: actions/cache/restore@v4
+        id: wasmtime-cache
         with:
-          path: .ci-bun-cache
-          key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile --linker=isolated
-      - name: Build each process fixture once for all browsers
-        run: bun web/scripts/ci-process-bundles.ts "$RUNNER_TEMP/process-bundles"
-      - uses: actions/upload-artifact@v4
+          path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
+          key: wasmtime-49.0.3-${{ runner.os }}-${{ runner.arch }}
+      - name: Install pinned Wasmtime
+        run: |
+          mkdir -p "$WASM_TOOLS"
+          archive="$WASM_TOOLS/wasmtime-v49.0.3-x86_64-linux.tar.xz"
+          stage=$(mktemp -d "$WASM_TOOLS/.wasmtime-XXXXXX")
+          trap 'rm -rf -- "$stage"' EXIT
+          input="$archive"
+          if [[ ! -f "$input" ]]; then
+            input="$stage/archive.tar.xz"
+            bun "$GITHUB_WORKSPACE/scripts/ci-release-download.ts" \
+              https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz "$input"
+          fi
+          echo "4001225413f208345b980525f31c4080e1873808b38d0ddc7918497340667fbb  $input" | sha256sum --check
+          if [[ "$input" != "$archive" ]]; then mv "$input" "$archive"; fi
+          tar -xJf "$archive" --strip-components=1 -C "$stage"
+          test "$("$stage/wasmtime" --version)" = "wasmtime 49.0.3 (f96eabaa1 2026-10-14)"
+          mkdir -p "$WASM_TOOLS/wasmtime"
+          mv "$stage/wasmtime" "$WASM_TOOLS/wasmtime/wasmtime"
+          echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v4
         timeout-minutes: 5
         with:
-          name: process-bundles
-          path: ${{ runner.temp }}/process-bundles
-          retention-days: 1
-          if-no-files-found: error
-      - uses: ./.github/actions/save-release-downloads
+          name: browser-program
+          path: ${{ runner.temp }}/ordinary-browser-program
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        if: needs.selection.outputs.jsc == 'true'
+        with:
+          name: ordinary-jsc-program
+          path: ${{ runner.temp }}/ordinary-jsc-program
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: ordinary-spidermonkey-program
+          path: ${{ runner.temp }}/ordinary-spidermonkey-program
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: native-profile-launcher
+          path: ${{ runner.temp }}/ordinary-native-launcher
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: ordinary-native-bundle
+          path: ${{ runner.temp }}/ordinary-native-bundle
+      - name: Verify and stage fixture binaries
+        env:
+          JSC_SELECTED: ${{ needs.selection.outputs.jsc }}
+        run: |
+          source env.sh
+          bun scripts/ci-browser-program.ts verify "$RUNNER_TEMP/ordinary-browser-program"
+          mkdir -p dist
+          cp "$RUNNER_TEMP/ordinary-browser-program"/*.wasm "$RUNNER_TEMP/ordinary-browser-program"/*.json dist/
+          if [[ "$JSC_SELECTED" == true ]]; then
+            bun scripts/ci-ordinary-jsc-program.ts verify "$RUNNER_TEMP/ordinary-jsc-program"
+            cp "$RUNNER_TEMP/ordinary-jsc-program"/*.wasm "$RUNNER_TEMP/ordinary-jsc-program"/*.json dist/
+          fi
+          test "$(cat "$RUNNER_TEMP/ordinary-native-launcher/source.txt")" = "$GITHUB_SHA"
+          chmod +x "$RUNNER_TEMP/ordinary-native-launcher/bun-wasm"
+          bundle_dir="$RUNNER_TEMP/ordinary-native-unpacked"
+          mkdir -p "$bundle_dir"
+          zstd -dc "$RUNNER_TEMP/ordinary-native-bundle/bundle.tar.zst" | tar --posix -C "$bundle_dir" -xf -
+          test "$(cat "$bundle_dir/source.txt")" = "$GITHUB_SHA"
+          cp "$bundle_dir/dist/bash-web-shell.wasm" "$bundle_dir/dist/bash-web-env.wasm" "$bundle_dir/dist/bash-web-guests.json" dist/
+          sm_pair="$RUNNER_TEMP/ordinary-spidermonkey-program"
+          bun scripts/spidermonkey-side-core-receipt.ts verify-pair \
+            "$sm_pair/bun-spidermonkey.wasm" "$sm_pair/spidermonkey-engine.wasm" \
+            "$sm_pair/bun-spidermonkey.wasm.spidermonkey.json" "$sm_pair/inputs.json"
+          echo "BUN_WASM_LAUNCHER=$RUNNER_TEMP/ordinary-native-launcher/bun-wasm" >> "$GITHUB_ENV"
+          echo "BUN_WASM_SHELL=$GITHUB_WORKSPACE/dist/bash-web-shell.wasm" >> "$GITHUB_ENV"
+          echo "BUN_WASM_ENV_UTILITY=$GITHUB_WORKSPACE/dist/bash-web-env.wasm" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_WASM=$sm_pair/bun-spidermonkey.wasm" >> "$GITHUB_ENV"
+      - name: Blocking native fixture and install checks
+        env:
+          INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}
+          BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}
+        run: |
+          source env.sh
+          bun scripts/test-checks.ts native --only fixtures
+          bun tests/install/package-options.ts &
+          pid_options=$!
+          bun tests/install/root-overrides.ts &
+          pid_overrides=$!
+          status=0
+          wait "$pid_options" || status=$?
+          wait "$pid_overrides" || status=$?
+          exit "$status"
 
   browser-guest:
-    needs: [selection, ordinary-web-guests, rust, browser-production]
-    if: ${{ !cancelled() && needs.selection.result == 'success' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (((needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true')) && needs.selection.outputs.browser_guest == 'true' && needs.rust.result == 'success' && (needs.ordinary-web-guests.result == 'success' || (needs.ordinary-web-guests.result == 'failure' && needs.ordinary-web-guests.outputs.shared-proof-inputs-failed == 'true')) && needs.browser-production.result == 'skipped') || (github.event_name == 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true' && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped' && needs.browser-production.result == 'success')) }}
+    needs: [selection, ordinary-build, web-browser]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.selection.outputs.browser_guest == 'true' }}
     name: Browser guest (${{ matrix.browser }}, ${{ matrix.batch }})
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeoutMinutes }}
@@ -1929,33 +1222,37 @@ jobs:
         run: |
           bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd .. --frozen-lockfile --ignore-scripts
           source ../env.sh
-          setup_seconds=$((EPOCHSECONDS - BROWSER_GUEST_SETUP_STARTED))
-          batches=$(jq -er '.[] | [.name, .jobSeconds, .commandSeconds] | @tsv' <<< "$BROWSER_GUEST_BATCHES")
-          printf 'Browser guest (%s)\n\nBatch | Exit status\n--- | ---\n' "$BUN_WASM_TEST_BROWSERS" >> "$GITHUB_STEP_SUMMARY"
-          failed=0
-          while IFS=$'\t' read -r batch job_seconds command_seconds; do
-            printf '::group::Browser guest (%s, %s)\n' "$BUN_WASM_TEST_BROWSERS" "$batch"
-            # Charge shared setup to each batch's original job budget.
-            remaining=$((job_seconds - setup_seconds))
-            deadline=$((remaining < command_seconds ? remaining : command_seconds))
-            reports="$BUN_WASM_BROWSER_REPORT_DIR/$batch"
-            mkdir -p "$reports"
-            status=0
-            if ((deadline <= 0)); then
-              echo "Shared setup exhausted the $job_seconds second batch budget"
-              status=124
-            else
-              BUN_WASM_BROWSER_REPORT_DIR="$reports" BUN_WASM_BROWSER_COVERAGE_REPORTS="$reports" \
-                bun ../scripts/run-with-timeout.mts "$deadline" bun ../scripts/test-checks.ts browser-guest --batch "$batch" </dev/null || status=$?
-            fi
-            echo '::endgroup::'
-            printf '%s | %s\n' "$batch" "$status" >> "$GITHUB_STEP_SUMMARY"
-            if ((status != 0)); then
-              printf '::error title=Browser guest (%s, %s)::Batch exited with status %s\n' "$BUN_WASM_TEST_BROWSERS" "$batch" "$status"
-              failed=1
-            fi
-          done <<< "$batches"
-          exit "$failed"
+          bun ../scripts/ci-browser-guest-run.ts
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        if: matrix.batch == 'storage'
+        with:
+          name: process-bundles
+          path: ${{ runner.temp }}/process-bundles
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        if: matrix.batch == 'storage'
+        with:
+          name: browser-program
+          path: dist/browser-program
+      - name: Real Bun source cache and worker transfer checks
+        if: matrix.batch == 'storage'
+        env:
+          BUN_WASM_RUNTIME_PROC_ARTIFACT: ${{ github.workspace }}/dist/browser-program/bun-browser.wasm
+          BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
+          BUN_WASM_RUNTIME_PROC_PORT: "4187"
+          BUN_WASM_TRANSFER_ARTIFACT: ${{ github.workspace }}/dist/browser-program/bun-browser.wasm
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          source ../env.sh
+          bun ../scripts/ci-browser-program.ts verify ../dist/browser-program
+          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd ../tests/fixtures/worker-wasm --frozen-lockfile --ignore-scripts
+          browsers=(${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }})
+          for b in "${browsers[@]}"; do
+            bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts "$b"
+            bun ../scripts/run-with-timeout.mts 120 bun tests/browser-wasm-transfer.ts "$b"
+          done
       - name: Retain Browser guest diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -1967,102 +1264,100 @@ jobs:
           retention-days: 1
       - uses: ./.github/actions/save-release-downloads
 
-  browser-process:
-    needs: [selection, ordinary-web-guests, rust, browser-production, process-bundles, browser-guest]
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (always() && !cancelled() && needs.selection.result == 'success' && needs.process-bundles.result == 'success' && ((((needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true')) && needs.selection.outputs.browser_guest == 'true' && needs.rust.result == 'success' && (needs.ordinary-web-guests.result == 'success' || (needs.ordinary-web-guests.result == 'failure' && needs.ordinary-web-guests.outputs.shared-proof-inputs-failed == 'true')) && needs.browser-production.result == 'skipped') || (github.event_name == 'pull_request' && needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'true' && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped' && needs.browser-production.result == 'success')) || (needs.selection.outputs.rust == 'false' && needs.selection.outputs.browser_guest == 'false' && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped' && needs.browser-production.result == 'skipped'))) }}
-    name: Processes (${{ matrix.browser }})
+  shared-consumers:
+    name: Shared native and Browser (${{ matrix.group }})
+    needs: [selection, ordinary-build, shared-sysroot]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.selection.outputs.shared-native == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        browser: [chromium, firefox, webkit]
+        group: [quickjs-jsc, spidermonkey]
     defaults:
       run:
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
-        working-directory: web
+    env:
+      SHARED_CHECK_SECONDS: 1800
     steps:
+      - name: Start the shared setup clock
+        timeout-minutes: 1
+        working-directory: ${{ runner.temp }}
+        run: echo "SHARED_STARTED=$EPOCHSECONDS" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
-      - name: Require every selected Browser guest batch
-        env:
-          BROWSER_GUEST: ${{ needs.selection.outputs.browser_guest }}
-          GUEST_RESULT: ${{ needs.browser-guest.result }}
-        run: |
-          case "$BROWSER_GUEST" in
-            true) test "$GUEST_RESULT" = success ;;
-            false) test "$GUEST_RESULT" = skipped ;;
-            *) exit 1 ;;
-          esac
-      - uses: ./.github/actions/release-downloads
       - uses: ./.github/actions/setup-tools
         with:
           bun-version: 1.4.4
+          node-version: ${{ env.CI_NODE_VERSION }}
       - uses: actions/cache/restore@v4
         with:
           path: .ci-bun-cache
           key: bun-v2-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - name: Install shared check dependencies
+        run: |
+          bun scripts/ci-install.ts --frozen-lockfile --ignore-scripts
+          bun scripts/ci-install.ts --cwd web --frozen-lockfile --ignore-scripts
       - uses: actions/download-artifact@v4
         timeout-minutes: 5
         with:
-          name: process-bundles
-          path: ${{ runner.temp }}/process-bundles
-      - run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --linker=isolated
+          name: browser-guest-site
+          path: ${{ runner.temp }}/shared-playground-site
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          pattern: shared-*-program
+          path: ${{ runner.temp }}/shared-program-downloads
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: native-profile-launcher
+          path: ${{ runner.temp }}/native-profile-launcher
+      - name: Prepare and verify same-source shared proof inputs
+        run: |
+          source env.sh
+          test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"
+          chmod +x "$RUNNER_TEMP/native-profile-launcher/bun-wasm"
+          downloads="$RUNNER_TEMP/shared-program-downloads"
+          programs="$RUNNER_TEMP/shared-programs"
+          shopt -s globstar nullglob
+          spidermonkey=("$downloads/shared-spidermonkey-program"/**/shared-native/program-spidermonkey)
+          [[ ${#spidermonkey[@]} == 1 ]]
+          mkdir "$programs"
+          mv "$downloads/shared-quickjs-program" "$programs/program"
+          mv "$downloads/shared-jsc-program" "$programs/program-jsc"
+          mv "${spidermonkey[0]}" "$programs/program-spidermonkey"
+          bun scripts/ci-shared-proof-inputs.ts prepare "$RUNNER_TEMP/shared-proof-inputs" "$programs" "$RUNNER_TEMP/shared-playground-site"
+          bun scripts/ci-shared-proof-inputs.ts verify "$RUNNER_TEMP/shared-proof-inputs"
       - uses: ./.github/actions/browser-deps
         with:
-          browsers: ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}
-      - name: Install browser
-        run: bunx playwright install ${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}
-      - name: Process supervisor, generic preview1 and interrupt gate (no Rust or dist artifacts)
+          browsers: chromium
+      - name: Install Chromium
+        working-directory: web
+        run: bunx playwright install chromium
+      - name: Consume the discovered shared native and Browser checks
+        id: shared-checks
         env:
-          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
-          PROCESS_SMOKE_PORT: "4186"
-          TMPDIR: ${{ runner.temp }}
-        run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-process.ts ${{ matrix.browser }}
-      - name: Injected third-party interrupt checks (no Rust or dist artifacts)
-        env:
-          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
-          INTERRUPT_SCRATCH_ROOT: ${{ runner.temp }}
-        run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-interrupt.ts ${{ matrix.browser }}
-      - name: Process pipes, CLI ABI and foreground stop (isolated install, no Rust or dist artifacts)
-        env:
-          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
-          TMPDIR: ${{ runner.temp }}
-          BUN_WASM_RUNTIME_PROC_BUNDLE: ${{ runner.temp }}/process-bundles/runtime-proc
-        run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-runtime-proc.ts ${{ matrix.browser }}
-
-      - uses: actions/download-artifact@v4
-        timeout-minutes: 5
-        if: needs.selection.outputs.browser_guest == 'true'
-        with:
-          name: browser-program
-          path: dist/browser-program
-      - name: Real Bun source cache in one Waffle browser runtime
-        if: needs.selection.outputs.browser_guest == 'true'
-        env:
-          BUN_WASM_RUNTIME_PROC_ARTIFACT: ${{ github.workspace }}/dist/browser-program/bun-browser.wasm
-          BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache
-          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
-          BUN_WASM_RUNTIME_PROC_PORT: "4187"
-          TMPDIR: ${{ runner.temp }}
+          SHARED_PROOF_INPUTS_DIR: ${{ runner.temp }}/shared-proof-inputs
+          BUN_WASM_LAUNCHER: ${{ runner.temp }}/native-profile-launcher/bun-wasm
         run: |
-          source ../env.sh
-          bun ../scripts/ci-browser-program.ts verify ../dist/browser-program
-          bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}
-      - name: Native Wasm module and shared-memory worker transfer
-        if: needs.selection.outputs.browser_guest == 'true'
-        env:
-          BUN_WASM_TRANSFER_ARTIFACT: ${{ github.workspace }}/dist/browser-program/bun-browser.wasm
-          TMPDIR: ${{ runner.temp }}
+          source env.sh
+          bun scripts/ci-shared-consumer-run.ts "${{ matrix.group }}"
+      # Chromium's renderer has crashed here with only "Target crashed" in the log. The kernel
+      # log tells a memory kill from a renderer fault.
+      - name: Show kernel memory kills and faults after a failure
+        if: failure() && steps.shared-checks.outcome != 'success'
         run: |
-          bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd ../tests/fixtures/worker-wasm --frozen-lockfile --ignore-scripts
-          bun ../scripts/run-with-timeout.mts 120 bun tests/browser-wasm-transfer.ts ${{ matrix.browser }}
-      - uses: ./.github/actions/save-release-downloads
+          free -m
+          sudo dmesg --ctime | grep -iE 'out of memory|oom|killed process|segfault|traps:' | tail -n 50 || true
 
   ci-result:
     name: Code quality
-    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, browser-production, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-consumers, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process]
+    needs: [selection, quality, web-unit, web-browser, native-quality, ordinary-build, rust, rust-fixtures, shared-sysroot, browser-guest, shared-consumers]
     if: ${{ always() }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -2073,11 +1368,16 @@ jobs:
       - name: Require every selected CI job to pass
         env:
           CI_RESULTS: ${{ toJSON(needs) }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          BROWSER_GUEST_MATRIX: ${{ needs.selection.outputs.browser-guest-matrix }}
         run: bun scripts/ci-result.ts
 
   update-status:
     name: Report automated update statuses
-    needs: [selection, ordinary-web-guests, quality, jsc-identity, jsc-prebuild, native-quality, rust, browser-production, package, shared-jsc-identity, shared-prebuild, shared-spidermonkey-prebuild, shared-sysroot, shared-consumers, shared-proof, web, web-unit, web-browser, process-bundles, browser-guest, browser-process, ci-result]
+    needs: [selection, quality, web-unit, web-browser, native-quality, ordinary-build, rust, rust-fixtures, shared-sysroot, browser-guest, shared-consumers, ci-result]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/owned-dependency-updates' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2097,7 +1397,6 @@ jobs:
             result=$(jq -er --arg job "$job" '.[$job].result' <<< "$RESULTS")
             state=failure
             if [[ "$result" == success ]]; then state=success; fi
-            # A classifier-disabled job is an intentional skip, just as in PR CI.
             if [[ "$result" == skipped && -n "$selection" ]] &&
               jq -e --arg selection "$selection" '.selection.result == "success" and .selection.outputs[$selection] == "false" and ($selection != "rust" or .selection.outputs.browser_guest == "false")' <<< "$RESULTS" >/dev/null; then
               state=success
@@ -2107,14 +1406,4 @@ jobs:
               -f description="Dispatched CI: $result"
           done <<'STATUSES'
           Code quality|ci-result|
-          JSC C/C++ prebuild|jsc-prebuild|rust
-          Native quality checkpoint|native-quality|rust
-          Rust workspace tests (QuickJS host)|rust|rust
-          Browser adapter package|package|
-          Shared PIC sysroot proof|shared-proof|shared
-          Web host|web|
-          Shared process browser bundles|process-bundles|
-          Processes (chromium)|browser-process|
-          Processes (firefox)|browser-process|
-          Processes (webkit)|browser-process|
           STATUSES

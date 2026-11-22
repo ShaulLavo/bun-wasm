@@ -94,7 +94,8 @@ test("non-release downloads and local non-CI use do not receive the job token", 
 
 test("CI callers use the downloader and source quality publishes completed dependencies", async () => {
   const workflow = expandedCiWorkflow();
-  for (const name of ["package", "web-unit", "process-bundles"]) expect(workflow).toContain(`  ${name}:\n    needs: selection`);
+  for (const name of ["web-unit", "web-browser"]) expect(workflow).toContain(`  ${name}:\n    needs: selection`);
+  expect(workflow).toContain("  quality:\n    name: Source quality\n    needs: selection");
   expect(workflow).toContain("Publish the completed dependency cache");
   expect(workflow).toContain("key: ${{ steps.bun-dependencies.outputs.cache-primary-key }}");
   expect(workflow).toContain("GITHUB_TOKEN: ${{ github.token }}");
@@ -126,7 +127,7 @@ test("the supported Bun cache uses a workspace-relative archive path on both run
   const workflow = expandedCiWorkflow();
   expect(workflow).toContain("BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.ci-bun-cache");
   expect(workflow).not.toContain("path: ~/.bun/install/cache");
-  expect(workflow.match(/path: \.ci-bun-cache/g)).toHaveLength(20);
+  expect(workflow.match(/path: \.ci-bun-cache/g)).toHaveLength(11);
 });
 
 

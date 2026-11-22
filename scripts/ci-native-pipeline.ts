@@ -1,15 +1,25 @@
-// Existing build/cache controls inspect the ordered work across both native jobs.
-// Job-specific admission and setup duplication are checked against the real DAG.
+// Existing build/cache controls inspect the ordered work across the native pipeline jobs.
 export function nativePipeline(source: string) {
-  const prebuild = source.split("\n  jsc-prebuild:\n")[1]!.split("\n  native-quality:\n")[0]!;
-  const checkpoint = source.split("\n  native-quality:\n")[1]!.split("\n  rust:\n")[0]!;
-  const consumer = source.split("\n  rust:\n")[1]!.split("\n  browser-production:\n")[0]!;
-  const web = source.split("\n  ordinary-web-guests:\n")[1]!.split("\n  shared-jsc-identity:\n")[0]!;
-  const prefix = checkpoint.split("      - name: Package the verified native quality checkpoint\n")[0]!;
-  const sideRestore = consumer.match(/      - uses: actions\/cache\/restore@v4\n        if: needs\.selection\.outputs\.jsc == 'true'\n        id: jsc-cargo-cache\n[^]*?(?=      - name: Restore the bash-web shell guest build\n)/)?.[0];
-  const tail = consumer.slice(consumer.indexOf("      - name: Restore the bash-web shell guest build\n"));
-  if (!sideRestore || !tail || prefix === checkpoint) throw new Error("Missing native checkpoint boundary");
-  const webSteps = web.slice(web.indexOf("    steps:\n") + "    steps:\n".length);
-  if (!webSteps.startsWith("      - name: Require the selected full producer")) throw new Error("Missing ordinary Web consumer boundary");
-  return { prebuild, checkpoint, consumer, web, ordered: prefix + sideRestore + tail + webSteps };
+  const checkpoint = source.split("\n  native-quality:\n")[1]!.split("\n  ordinary-build:\n")[0]!;
+  const producer = source.split("\n  ordinary-build:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
+  const runtime = source.split("\n  rust:\n")[1]!.split("\n  rust-fixtures:\n")[0]!;
+  const fixtures = source.split("\n  rust-fixtures:\n")[1]!.split("\n  browser-guest:\n")[0]!;
+  const body = (job: string) => {
+    const start = job.indexOf("    steps:\n");
+    if (start < 0) throw new Error("Missing steps boundary");
+    return job.slice(start + "    steps:\n".length);
+  };
+  const prefix = checkpoint;
+  const producerSteps = body(producer);
+  const runtimeSteps = body(runtime);
+  const fixtureSteps = body(fixtures);
+  return {
+    prebuild: producer,
+    checkpoint,
+    consumer: producer,
+    runtime,
+    fixtures,
+    web: runtime,
+    ordered: prefix + producerSteps + runtimeSteps + fixtureSteps,
+  };
 }

@@ -66,6 +66,7 @@ test("only audited runtime files opt into process isolation", () => {
     "scripts/jsc-json-fast-controls.test.ts",
     "scripts/legacy-cli-runtime.test.ts",
     "scripts/package-port-typed.test.ts",
+    "scripts/require-esm-ownership.test.ts",
     "scripts/runtime-assert-util.test.ts",
     "scripts/rust-native-cache.test.ts",
     "scripts/spidermonkey-module-evaluation-info.test.ts",

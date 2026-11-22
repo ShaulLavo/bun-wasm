@@ -81,19 +81,14 @@ test("selected batches keep existing Storage/default cells and narrower engines"
   verify([], ["10-storage", "default"], 4);
   expect(verify([{ owner: "installer-links", engines: ["quickjs"] }], ["10-storage", "20-installer-links", "default"], 4)).toContain("needed=true\njsc=false");
   expect(browserCoverageOutputs([{ owner: "installer-links", engines: ["jsc"] }])).toContain("jsc=true");
-  verify(fullBrowserGuestSelection, ["10-storage", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"], 6);
+  verify(fullBrowserGuestSelection, ["10-storage", "20-installer-links", "21-subprocess-aliases", "22-preview-websocket-headers", "23-engine-interruption", "24-worker-modules", "25-terminal-stdin", "26-tools-integrity", "default"], 4);
 });
 
-test.each([0, 1, 124])("the actual CI batch step keeps independent results when the first command exits %s", firstStatus => {
-  const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const step = workflow.split("name: Run Browser guest batches on the verified site\n")[1]?.split("\n      - name:")[0]?.split("        run: |\n")[1];
-  if (!step) throw new Error("Missing Browser guest batch step");
+test.each([0, 1, 124])("the actual CI batch runner keeps independent results when the first command exits %s", firstStatus => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-shard-"));
   cleanup.add(directory);
   mkdirSync(join(directory, "web"));
-  writeFileSync(join(directory, "env.sh"), "unset EPOCHSECONDS\nEPOCHSECONDS=1000\n");
   writeFileSync(join(directory, "bun"), `#!/bin/bash
-    if [[ "$1" == *ci-install.ts ]]; then exit 0; fi
     read -r _ && exit 99
     printf '%s %s\\n' "$2" "$7" >> ../commands
     test "$BUN_WASM_BROWSER_REPORT_DIR" = "$BUN_WASM_BROWSER_COVERAGE_REPORTS" || exit 98
@@ -102,16 +97,20 @@ test.each([0, 1, 124])("the actual CI batch step keeps independent results when 
   `, { mode: 0o755 });
   const reports = join(directory, "reports");
   const summary = join(directory, "summary");
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step], {
+  const started = String(Math.floor(Date.now() / 1000) - 120);
+  const result = spawnSync(process.execPath, [new URL("./ci-browser-guest-run.ts", import.meta.url).pathname], {
     cwd: join(directory, "web"), encoding: "utf8", env: { ...process.env, FIRST_STATUS: String(firstStatus),
       PATH: `${directory}:${process.env.PATH}`, GITHUB_WORKSPACE: directory, GITHUB_STEP_SUMMARY: summary,
-      BUN_WASM_BROWSER_REPORT_DIR: reports, BUN_WASM_TEST_BROWSERS: "chromium", BROWSER_GUEST_SETUP_STARTED: "880",
-      BROWSER_GUEST_BATCHES: JSON.stringify([{ name: "21-subprocess-aliases", jobSeconds: 3600, commandSeconds: 3240 },
-        { name: "default", jobSeconds: 600, commandSeconds: 900 }]),
+      BUN_WASM_BROWSER_REPORT_DIR: reports, BUN_WASM_TEST_BROWSERS: "chromium", BROWSER_GUEST_SETUP_STARTED: started,
+      BROWSER_GUEST_BATCHES: JSON.stringify([{ name: "21-subprocess-aliases", group: "suite", jobSeconds: 3600, commandSeconds: 3240 },
+        { name: "default", group: "suite", jobSeconds: 600, commandSeconds: 900 }]),
     },
   });
   expect(result.status, result.stderr).toBe(firstStatus === 0 ? 0 : 1);
-  expect(readFileSync(join(directory, "commands"), "utf8")).toBe("3240 21-subprocess-aliases\n480 default\n");
+  const lines = readFileSync(join(directory, "commands"), "utf8").trim().split("\n");
+  expect(lines).toHaveLength(2);
+  expect(lines[0]).toBe("3240 21-subprocess-aliases");
+  expect(lines[1]).toMatch(/^4(?:7[89]|80) default$/);
   expect(readFileSync(join(reports, "21-subprocess-aliases/check.txt"), "utf8")).toBe("21-subprocess-aliases\n");
   expect(readFileSync(join(reports, "default/check.txt"), "utf8")).toBe("default\n");
   expect(readFileSync(summary, "utf8")).toContain(`21-subprocess-aliases | ${firstStatus}\n`);
@@ -123,12 +122,14 @@ test("CI passes selected cells to same-run site consumers and builds interruptio
   expect(producer.match(/browser-guest-site.ts build/g)).toHaveLength(1);
   expect(producer.match(/browser-guest-coverage.ts/g)).toHaveLength(1);
   expect(producer).toContain('bun scripts/browser-guest-coverage.ts "$RUNNER_TEMP/browser-guest-site" "$BUN_WASM_BROWSER_COVERAGE_SELECTION"');
-  expect(workflow.match(/BUN_WASM_BROWSER_COVERAGE_SELECTION: \$\{\{ needs.selection.outputs.browser-coverage-selection \}\}/g)).toHaveLength(3);
+  expect(workflow.match(/BUN_WASM_BROWSER_COVERAGE_SELECTION: \$\{\{ needs.selection.outputs.browser-coverage-selection \}\}/g)).toHaveLength(2);
   expect(workflow).not.toContain("browser-guest-coverage.ts");
-  const consumer = workflow.split("\n  browser-guest:\n")[1]!.split("\n  browser-process:\n")[0]!;
+  const consumer = workflow.split("\n  browser-guest:\n")[1]!.split("\n  shared-consumers:\n")[0]!;
+  const runner = readFileSync(new URL("./ci-browser-guest-run.ts", import.meta.url), "utf8");
   expect(consumer).toContain("BUN_WASM_BROWSER_COVERAGE_SELECTION");
-  expect(consumer).toContain("BUN_WASM_BROWSER_COVERAGE_REPORTS");
-  expect(consumer).toContain('run-with-timeout.mts "$deadline" bun ../scripts/test-checks.ts browser-guest --batch "$batch"');
+  expect(consumer).toContain("bun ../scripts/ci-browser-guest-run.ts");
+  expect(runner).toContain("BUN_WASM_BROWSER_COVERAGE_REPORTS");
+  expect(runner).toContain('"browser-guest", "--batch", batch.name');
   expect(consumer.match(/name: browser-guest-site\n/g)).toHaveLength(1);
   expect(consumer).toContain('working-directory: ${{ runner.temp }}\n        run: echo "BROWSER_GUEST_SETUP_STARTED=');
   expect(consumer).toContain("name: Retain Browser guest diagnostics\n        if: ${{ always() }}");

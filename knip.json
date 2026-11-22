@@ -92,6 +92,8 @@
         "scripts/stream-polyfill-node-hooks.ts",
         "scripts/http-suite-report.ts",
         "scripts/ci-report.ts",
+        "scripts/ci-browser-guest-run.ts",
+        "scripts/ci-web-browser-run.ts",
         "tests/shell-consumer/{main,worker,fs-worker,notification-worker,sw}.ts",
         "scripts/storage-fs-observation.ts",
         "scripts/storage-routing-collector.ts",

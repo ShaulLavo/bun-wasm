@@ -1456,6 +1456,7 @@ dependencies = [
  "async-trait",
  "brotli-decompressor",
  "bytes",
+ "cap-std",
  "flate2",
  "hyper",
  "libc",

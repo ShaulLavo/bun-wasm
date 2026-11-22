@@ -16,9 +16,13 @@ function object(value: unknown): Record<string, unknown> {
 
 const workflow = object(Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")));
 const jobs = object(workflow.jobs);
-const browser = object(jobs.web);
-const shards = object(jobs["web-browser"]);
+const browser = object(jobs["web-browser"]);
 const unit = object(jobs["web-unit"]);
+
+function steps(job: Record<string, unknown>) {
+  assert(Array.isArray(job.steps));
+  return job.steps.map(object);
+}
 
 test("a package exact-exec fixture-only edit retains its blocking Web unit owner", () => {
   const fixture = "tests/package/fixtures/engine-host-exec.ts";
@@ -36,24 +40,17 @@ test("a package exact-exec fixture-only edit retains its blocking Web unit owner
   expect(readFileSync(new URL("../web/tests/bun-executor.test.ts", import.meta.url), "utf8")).toContain('import("../../tests/package/fixtures/engine-host-exec.ts")');
 });
 
-function steps(job: Record<string, unknown>) {
-  assert(Array.isArray(job.steps));
-  return job.steps.map(object);
-}
-
-test("unit, discovered browser shards and smoke checks retain separate blocking jobs", () => {
-  expect(browser.name).toBe("Web host");
-  expect(browser.needs).toEqual(["selection", "web-unit", "web-browser"]);
-  expect(shards.needs).toBe("selection");
+test("unit and consolidated browser jobs remain blocking without Playwright in unit checks", () => {
+  expect(browser.name).toBe("Web browser");
+  expect(browser.needs).toBe("selection");
   expect(unit.needs).toBe("selection");
   const all = Object.values(jobs).flatMap(job => steps(object(job)));
-  for (const phase of ["unit", "smoke"]) {
-    expect(all.filter(step => step.run === `bash ../scripts/test-web-host.sh --${phase}`)).toHaveLength(1);
-  }
-  expect(all.filter(step => step.run === "bash ../scripts/test-web-host.sh --setup")).toHaveLength(2);
-  expect(all.filter(step => step.run === "bash ../scripts/test-web-host.sh --browser")).toHaveLength(0);
-  for (const job of [unit, browser]) expect(job["timeout-minutes"]).toBe(10);
-  for (const job of [unit, browser, shards]) {
+  expect(all.filter(step => step.run === "bash ../scripts/test-web-host.sh --unit")).toHaveLength(1);
+  expect(all.filter(step => step.run === "bash ../scripts/test-web-host.sh --setup")).toHaveLength(1);
+  expect(all.filter(step => step.run === "bun ../scripts/ci-web-browser-run.ts")).toHaveLength(1);
+  expect(unit["timeout-minutes"]).toBe(10);
+  expect(browser["timeout-minutes"]).toBe(15);
+  for (const job of [unit, browser]) {
     expect(job["runs-on"]).toBe("ubuntu-latest");
     expect(job).not.toHaveProperty("continue-on-error");
   }
@@ -61,53 +58,24 @@ test("unit, discovered browser shards and smoke checks retain separate blocking 
   expect(JSON.stringify(browser)).not.toContain("rust-toolchain@");
 });
 
-test.each(["web-unit", "web-browser"])("required Web host gate rejects every non-successful %s result", id => {
-  assert(typeof browser.if === "string");
-  expect(browser.if).toContain("always()");
-  const condition = browser.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
-    .replaceAll("always()", "true")
-    .replaceAll("needs.selection.result", JSON.stringify("success"))
-    .replaceAll("github.event_name", JSON.stringify("pull_request"))
-    .replaceAll("github.event.pull_request.draft", "false");
-  expect(new Function(`return (${condition})`)()).toBe(true);
-  const entries = steps(browser);
-  const guard = entries.find(step => step.name === "Require all Web host unit and browser gates");
-  assert(guard && typeof guard.run === "string");
-  expect(object(guard.env).WEB_UNIT_RESULT).toBe("${{ needs.web-unit.result }}");
-  expect(object(guard.env).WEB_BROWSER_RESULT).toBe("${{ needs.web-browser.result }}");
-  expect(guard).not.toHaveProperty("if");
-  expect(guard).not.toHaveProperty("continue-on-error");
-  for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
-    const env = { ...process.env, WEB_UNIT_RESULT: "success", WEB_BROWSER_RESULT: "success" };
-    if (id === "web-unit") env.WEB_UNIT_RESULT = result;
-    else env.WEB_BROWSER_RESULT = result;
-    const execution = spawnSync("bash", ["-euc", guard.run], { env });
-    expect(execution.error).toBeUndefined();
-    expect(execution.status).toBe(result === "success" ? 0 : 1);
-  }
-  expect(entries.indexOf(guard)).toBeLessThan(entries.findIndex(step => step.uses === "./.github/actions/release-downloads"));
-});
-
 test("Web jobs reuse the existing release namespace and browser setup is isolated", () => {
-  for (const job of [unit, browser, shards]) {
+  for (const job of [unit, browser]) {
     const restore = steps(job).find(step => step.uses === "./.github/actions/release-downloads");
     expect(object(restore?.with).scope).toBe("web");
     expect(steps(job).filter(step => step.uses === "./.github/actions/save-release-downloads")).toHaveLength(1);
   }
-  for (const job of [browser, shards]) {
-    const entries = steps(job);
-    const setup = entries.findIndex(step => step.run === "bash ../scripts/test-web-host.sh --setup");
-    const packages = entries.findIndex(step => step.uses === "./.github/actions/browser-deps");
-    const engines = entries.findIndex(step => step.run === "bunx playwright install chromium firefox webkit");
-    const tests = entries.findIndex(step => step.id === "web-browser-batch" || step.run === "bash ../scripts/test-web-host.sh --smoke");
-    expect(setup).toBeGreaterThan(0);
-    expect(packages).toBeGreaterThan(setup);
-    expect(engines).toBeGreaterThan(packages);
-    expect(tests).toBeGreaterThan(engines);
-  }
+  const entries = steps(browser);
+  const setup = entries.findIndex(step => step.run === "bash ../scripts/test-web-host.sh --setup");
+  const packages = entries.findIndex(step => step.uses === "./.github/actions/browser-deps");
+  const engines = entries.findIndex(step => step.run === "bunx playwright install chromium firefox webkit");
+  const tests = entries.findIndex(step => step.run === "bun ../scripts/ci-web-browser-run.ts");
+  expect(setup).toBeGreaterThan(0);
+  expect(packages).toBeGreaterThan(setup);
+  expect(engines).toBeGreaterThan(packages);
+  expect(tests).toBeGreaterThan(engines);
 });
 
-test("two browser runners preserve all four batches and the preview timing job", () => {
+test("browser shards cover all four batches and the consolidated runner executes smoke and process gates", () => {
   const selected = namedCheckBatches("web-browser");
   const matrix = webBrowserShards(selected);
   expect(matrix).toContainEqual({ batch: "10-interface", pairedBatch: "21-preview-navigation", timeoutSeconds: 300 });
@@ -117,45 +85,18 @@ test("two browser runners preserve all four batches and the preview timing job",
   const paths = names.flatMap(name => selectCheckBatch("web-browser", name));
   expect(paths.toSorted()).toEqual(selectChecks("web-browser"));
   expect(new Set(paths).size).toBe(paths.length);
-  expect(shards.name).toBe("Web browser (${{ matrix.batch }})");
-  expect(shards["timeout-minutes"]).toBe("${{ matrix.pairedBatch != '' && 15 || 10 }}");
-  expect(object(shards.strategy)).toEqual({ "fail-fast": false, matrix: "${{ fromJSON(needs.selection.outputs.web-browser-shards) }}" });
-  const discovery = steps(object(jobs.selection)).find(step => step.id === "web-browser-shards");
-  assert(discovery && typeof discovery.run === "string");
-  expect(discovery.run).toContain("bun scripts/ci-web-browser-shards.ts");
+  const runner = readFileSync(new URL("./ci-web-browser-run.ts", import.meta.url), "utf8");
+  expect(runner).toContain("webBrowserShards()");
+  expect(runner).toContain("--smoke");
+  expect(runner).toContain("tests/browser-process.ts");
+  expect(runner).toContain("tests/browser-interrupt.ts");
+  expect(runner).toContain("tests/browser-runtime-proc.ts");
   const execution = spawnSync("bun", [new URL("./ci-web-browser-shards.ts", import.meta.url).pathname], { encoding: "utf8" });
   expect(execution.status, execution.stderr).toBe(0);
   expect(JSON.parse(execution.stdout)).toEqual({ include: matrix });
 });
 
-test("a paired browser batch has its own blocking step and runs after a failed first batch", () => {
-  const [first, second] = steps(shards).filter(step => typeof step.name === "string" && step.name.startsWith("Run Web browser batch"));
-  assert(first && second && typeof second.if === "string");
-  expect(first.id).toBe("web-browser-batch");
-  expect(first).not.toHaveProperty("if");
-  for (const [step, field] of [[first, "batch"], [second, "pairedBatch"]] as const) {
-    const expression = "${{ matrix." + field + " }}";
-    expect(step.name).toBe(`Run Web browser batch (${expression})`);
-    expect(step).not.toHaveProperty("continue-on-error");
-    expect(step.run).toBe('bun ../scripts/run-with-timeout.mts "$WEB_BROWSER_TIMEOUT_SECONDS" bun ../scripts/test-checks.ts web-browser --batch "$WEB_BROWSER_BATCH"');
-    expect(step.env).toEqual({
-      EDITOR_SCRATCH_ROOT: "${{ runner.temp }}",
-      WEB_BROWSER_BATCH: expression,
-      WEB_BROWSER_TIMEOUT_SECONDS: "${{ matrix.timeoutSeconds }}",
-    });
-  }
-  const condition = second.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
-    .replaceAll("cancelled()", "cancelled")
-    .replaceAll("matrix.pairedBatch", "pair")
-    .replaceAll("steps.web-browser-batch.outcome", "outcome");
-  const runs = new Function("cancelled", "pair", "outcome", `return (${condition})`);
-  for (const outcome of ["success", "failure"]) expect(runs(false, "30-lifecycle", outcome)).toBe(true);
-  for (const outcome of ["skipped", "cancelled", ""]) expect(runs(false, "30-lifecycle", outcome)).toBe(false);
-  expect(runs(true, "30-lifecycle", "failure")).toBe(false);
-  expect(runs(false, "", "success")).toBe(false);
-});
-
-test("new, default and unpaired browser batches still get their own runner", () => {
+test("new, default and unpaired browser batches still get scheduled by webBrowserShards", () => {
   const checks = discoverChecks().concat([
     parseCheck({ owner: "web-browser", path: "scripts/new-browser.test.ts", batch: "40-new" }, "web-browser-new.json"),
     parseCheck({ owner: "web-browser", path: "scripts/default-browser.test.ts" }, "web-browser-default.json"),

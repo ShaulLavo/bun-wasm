@@ -16,22 +16,24 @@ const root = resolve(import.meta.dir, "..");
 const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
 const wrapper = join(root, "scripts/shared-wasm-memory-browser.test.ts");
 
-function browserStep(): string {
-  const step = workflow.split("      - name: Consume the discovered shared Browser checks sequentially\n")[1]?.split(/\n(?:      - |  [\w-]+:\n)/)[0];
+function consumerStep(): string {
+  const step = workflow.split("      - name: Consume the discovered shared native and Browser checks\n")[1]?.split(/\n(?:      - |  [\w-]+:\n)/)[0];
   assert(step, "missing blocking SpiderMonkey Browser consumer");
   return step;
 }
 
 test("the selected native producer feeds the discovered Browser group consumer once", () => {
-  const step = browserStep();
+  const step = consumerStep();
+  const runner = readFileSync(join(root, "scripts/ci-shared-consumer-run.ts"), "utf8");
   expect(workflow.split("\n  shared-consumers:\n")[1]!).toContain("needs.selection.outputs.shared-native == 'true'");
-  expect(workflow).toContain("shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm");
-  expect(step).toContain("BROWSER_CHECK_SECONDS: ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }}");
-  expect(step).toContain('bun scripts/run-with-timeout.mts "$limit" bun scripts/test-checks.ts browser-guest --profile shared-group');
-  expect(step).not.toMatch(/continue-on-error|build-native|build-bun|build-engine|native --profile|BUN_WASM_SPIDERMONKEY_TIER/);
-  expect(workflow.match(/name: Consume the discovered shared Browser checks sequentially/g)).toHaveLength(1);
-  expect(workflow.indexOf("name: Produce the shared JSC profile once")).toBeLessThan(workflow.indexOf("name: Consume the discovered shared Browser checks sequentially"));
-  expect(workflow.indexOf("name: Produce the shared SpiderMonkey profile once")).toBeLessThan(workflow.indexOf("name: Consume the discovered shared Browser checks sequentially"));
+  expect(step).toContain('bun scripts/ci-shared-consumer-run.ts "${{ matrix.group }}"');
+  expect(step).not.toMatch(/continue-on-error|build-native|build-bun|build-engine|BUN_WASM_SPIDERMONKEY_TIER/);
+  expect(runner).toContain("program-${engine}");
+  expect(runner).toContain('engine === "spidermonkey" ? 1320 : 420');
+  expect(runner).toContain('"browser-guest", "--profile", "shared-group"');
+  expect(workflow.match(/name: Consume the discovered shared native and Browser checks/g)).toHaveLength(1);
+  expect(workflow.indexOf("name: Produce the shared JSC profile once")).toBeLessThan(workflow.indexOf("name: Consume the discovered shared native and Browser checks"));
+  expect(workflow.indexOf("name: Produce the shared SpiderMonkey profile once")).toBeLessThan(workflow.indexOf("name: Consume the discovered shared native and Browser checks"));
   expect(selectChecks("browser-guest", undefined, "shared-group")).toContain("scripts/shared-wasm-memory-browser.test.ts");
   expect(selectChecks("browser-guest")).not.toContain("scripts/shared-wasm-memory-browser.test.ts");
   expect(selectChecks("quality")).toContain("scripts/spidermonkey-browser-ci.test.ts");

@@ -1,5 +1,6 @@
 {
   "owner": "native-probe",
+  "batch": "02-jsc",
   "path": "scripts/jsc-resizable-native.test.ts",
   "inputs": [
     "scripts/jsc-resizable-native.ts",

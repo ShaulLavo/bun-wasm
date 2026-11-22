@@ -11,7 +11,8 @@ import { storageEvidence, type StorageLifetime, type StorageObservation } from "
 setDefaultTimeout(120_000);
 
 const requested = (process.env.BUN_WASM_TEST_BROWSERS ?? "chromium,webkit").split(",");
-const browsers = Array.from(new Set(requested.flatMap(name => name === "chromium" ? ["chromium", "firefox"] : [name])));
+const exactBrowsers = process.env.BUN_WASM_STORAGE_EXACT_BROWSERS === "1";
+const browsers = Array.from(new Set(requested.flatMap(name => !exactBrowsers && name === "chromium" ? ["chromium", "firefox"] : [name])));
 const lifetimes: StorageLifetime[] = [];
 
 afterEach(async () => {
