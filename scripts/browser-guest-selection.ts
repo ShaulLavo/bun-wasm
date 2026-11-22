@@ -17,6 +17,7 @@ const commonInputs = [
   "scripts/ci-binaryen.ts",
   "scripts/ci-build-tools.ts",
   "scripts/test-checks.ts",
+  "scripts/stage-guest-wasm.ts",
   "bun.lock",
   "package.json",
   "sandbox/build.ts",
