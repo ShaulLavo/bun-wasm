@@ -105,3 +105,21 @@ process.noDeprecation = true;
 show("constructor names", () => [crypto.Hash.name, crypto.Hmac.name, crypto.Sign.name, crypto.Verify.name].join());
 show("new Hash", () => new (crypto.Hash as unknown as new (algorithm: string) => crypto.Hash)("sha256").update("a").digest("hex").slice(0, 8));
 show("Hash()", () => (crypto.Hash as unknown as (algorithm: string) => crypto.Hash)("sha256") instanceof crypto.Hash);
+
+// crypto.verify reads the signature's bytes when it is called, before the key's option getters run.
+{
+  const pair = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const data = Buffer.from("data to sign");
+  const signature = crypto.sign("sha256", data, pair.privateKey);
+  let reads = 0;
+  const key = {
+    key: pair.publicKey.export({ type: "spki", format: "pem" }),
+    format: "pem",
+    get passphrase() {
+      reads++;
+      signature.fill(0);
+      return undefined;
+    },
+  };
+  show("verify reads the signature at call time", () => [crypto.verify("sha256", data, key as crypto.VerifyPublicKeyInput, signature), reads].join());
+}

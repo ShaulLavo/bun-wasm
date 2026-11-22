@@ -69,3 +69,16 @@ console.log("MD5 twice", attempt(() => md5.digest("hex")));
 console.log("MD5 update after", attempt(() => md5.update("a")));
 console.log("MD5 small target", attempt(() => new Bun.MD5().digest(new Uint8Array(4))));
 console.log("MD5 call", attempt(() => (Bun.MD5 as unknown as () => unknown)()));
+
+// crypto.hash checks every argument before hashing, as Node's does.
+const hashCode = (...args: unknown[]) => {
+  try {
+    return String((crypto.hash as (...values: unknown[]) => unknown)(...args));
+  } catch (error) {
+    return (error as { code?: string }).code;
+  }
+};
+console.log("hash algorithm", [undefined, null, true, 1, {}].map(value => hashCode(value, "test")).join());
+console.log("hash input", [undefined, null, true, 1, {}].map(value => hashCode("sha1", value)).join());
+console.log("hash encoding", [null, true, 1, {}, "not an encoding"].map(value => hashCode("sha1", "test", value)).join());
+console.log("hash outputs", hashCode("sha1", "test"), hashCode("sha1", "test", "base64"), (crypto.hash("sha1", "test", "buffer") as unknown as Buffer).length);

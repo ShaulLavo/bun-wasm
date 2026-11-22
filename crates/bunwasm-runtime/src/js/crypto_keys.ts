@@ -857,6 +857,8 @@ declare namespace CryptoKeys {
       // Node's one-shot verify takes the signature only as a view, checked before the key.
       if (!ArrayBuffer.isView(signature))
         throw args().argType("signature", "an instance of Buffer, TypedArray, or DataView", signature);
+      // The signature's bytes are read at call time, before the key's options (and their getters).
+      signature = new Uint8Array(signature.buffer, signature.byteOffset, signature.byteLength).slice();
       if (typeof callback !== "function")
         return signVerify(true, algorithm, data, key, signature);
       internal.realTimers.setImmediate(() => {
