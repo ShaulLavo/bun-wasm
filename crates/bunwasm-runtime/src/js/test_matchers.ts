@@ -24,9 +24,15 @@
 
   const mapSize = Object.getOwnPropertyDescriptor(Map.prototype, "size")?.get;
   const setSize = Object.getOwnPropertyDescriptor(Set.prototype, "size")?.get;
-  const searchParamsSize = Object.getOwnPropertyDescriptor(URLSearchParams.prototype, "size")?.get;
-  const headersCount = Object.getOwnPropertyDescriptor(Headers.prototype, "count")?.get;
-  const formDataKeys = FormData.prototype.keys;
+  // The web classes are absent from a bare script context.
+  const webPrototype = (name: "URLSearchParams" | "Headers" | "FormData"): any => {
+    const constructor = (globalThis as Record<string, any>)[name];
+    return typeof constructor === "function" ? constructor.prototype : undefined;
+  };
+  const searchParamsSize = Object.getOwnPropertyDescriptor(webPrototype("URLSearchParams") ?? {}, "size")?.get;
+  const headersCount = Object.getOwnPropertyDescriptor(webPrototype("Headers") ?? {}, "count")?.get;
+  const formDataPrototype: object | undefined = webPrototype("FormData");
+  const formDataKeys = formDataPrototype === undefined ? undefined : (formDataPrototype as FormData).keys;
   const typedArrayLength = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "length")?.get;
 
   // A captured native getter's number for `value`, or undefined when `value` lacks its brand.
@@ -48,7 +54,7 @@
   }
 
   function formDataLength(value: object): number | undefined {
-    if (!apply(isPrototypeOf, FormData.prototype, [value])) return undefined;
+    if (formDataPrototype === undefined || typeof formDataKeys !== "function" || !apply(isPrototypeOf, formDataPrototype, [value])) return undefined;
     let count = 0;
     for (const _name of apply(formDataKeys, value, noArgs) as Iterable<string>) count++;
     return count;

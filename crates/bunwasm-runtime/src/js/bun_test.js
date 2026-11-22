@@ -867,7 +867,8 @@
 
   // The outcome of a real promise that is no longer pending, or null.
   function settledPromise(received) {
-    if (!(received instanceof Promise)) return null;
+    // Without the engine's state hook a promise is awaited as usual.
+    if (!(received instanceof Promise) || typeof native.promiseState !== "function") return null;
     const state = native.promiseState(received);
     if (state === "pending") return null;
     // Bun marks the promise handled, so a rejection is not reported as unhandled.
