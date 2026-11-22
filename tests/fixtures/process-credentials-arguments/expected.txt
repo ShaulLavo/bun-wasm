@@ -1,0 +1,22 @@
+umask bigint TypeError ERR_INVALID_ARG_TYPE
+umask string TypeError ERR_INVALID_ARG_VALUE
+umask negative RangeError ERR_OUT_OF_RANGE
+umask fraction RangeError ERR_OUT_OF_RANGE
+umask set true true true
+cpuUsage negative RangeError ERR_INVALID_ARG_VALUE
+cpuUsage empty TypeError ERR_INVALID_ARG_TYPE
+cpuUsage string TypeError ERR_INVALID_ARG_TYPE
+cpuUsage diff number number
+priority 5 5
+priority short form 8
+priority range RangeError ERR_OUT_OF_RANGE
+priority esrch SystemError ERR_SYSTEM_ERROR ESRCH uv_os_getpriority -3
+setPriority esrch SystemError ERR_SYSTEM_ERROR
+setuid unknown name Error ERR_UNKNOWN_CREDENTIAL
+setgid unknown name Error ERR_UNKNOWN_CREDENTIAL
+setuid type TypeError ERR_INVALID_ARG_TYPE
+setgroups type TypeError ERR_INVALID_ARG_TYPE
+initgroups unknown uid Error ERR_UNKNOWN_CREDENTIAL
+initgroups type TypeError ERR_INVALID_ARG_TYPE
+mainModule true
+mainModule written 123 true
