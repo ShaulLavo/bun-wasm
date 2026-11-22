@@ -97,11 +97,9 @@ for (const output of exports) {
   });
 }
 
-test("QuickJS is retained before its consumers or the later JSC producer can fail", () => {
+test("QuickJS is retained before the later JSC producer can fail", () => {
   const upload = sharedSteps.indexOf(uploadFor("quickjs"));
-  for (const name of ["Prepare the same-source shared proof handoff", "Produce the shared JSC profile once"]) {
-    expect(upload).toBeLessThan(sharedSteps.indexOf(namedStep(name)));
-  }
+  expect(upload).toBeLessThan(sharedSteps.indexOf(namedStep("Produce the shared JSC profile once")));
 });
 
 test("exports use exactly the selected engine producers and never add a receipt writer", () => {
@@ -156,8 +154,9 @@ test("successful production writes the original core, side, receipts and source 
 test("native and Browser consumers use ready artifacts on separate runners and discover checks once per engine", () => {
   for (const id of ["shared-native", "shared-browser"]) {
     const job = record(jobs[id]);
-    expect(job.needs).toContain("shared-sysroot");
+    expect(job.needs).toContain("ordinary-web-guests");
     expect(job.if).toContain("!cancelled() && needs.selection.result == 'success'");
+    expect(job.if).toContain("needs.ordinary-web-guests.outputs.shared-proof-inputs == 'success'");
     expect(job.if).toContain(selection);
     expect(job["timeout-minutes"]).toBe(30);
     expect(record(job.strategy)).toEqual({ "fail-fast": false, matrix: { engine: ["quickjs", "jsc", "spidermonkey"] } });
@@ -173,12 +172,41 @@ test("native and Browser consumers use ready artifacts on separate runners and d
     if (id === "shared-browser") expect(commands).toContain("run-with-timeout.mts ${{ matrix.engine == 'spidermonkey' && 1320 || 420 }} bun scripts/test-checks.ts");
     else expect(commands).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
   }
-  expect(shared.needs).toEqual(["selection", "ordinary-web-guests", "rust", "shared-prebuild", "shared-spidermonkey-prebuild"]);
-  expect(shared.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && !cancelled() && needs.selection.result == 'success' && (((needs.selection.outputs.rust == 'true' || (github.event_name != 'pull_request' && needs.selection.outputs.browser_guest == 'true')) && needs.rust.result == 'success' && needs.ordinary-web-guests.result == 'success') || ((needs.selection.outputs.rust == 'false' && (github.event_name == 'pull_request' || needs.selection.outputs.browser_guest == 'false')) && needs.rust.result == 'skipped' && needs.ordinary-web-guests.result == 'skipped')) && (needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true') }}");
+  expect(shared.needs).toEqual(["selection", "shared-prebuild", "shared-spidermonkey-prebuild"]);
+  expect(shared.if).toContain("needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true'");
   expect(shared["timeout-minutes"]).toBe(30);
   expect(shared.name).toBe("Shared PIC program producer");
   expect(sharedSteps.some(step => String(step.run).includes("test-checks.ts"))).toBe(false);
   expect(namedStep("Produce the shared JSC profile once").env).toEqual({ JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "" });
+});
+
+test("the ordinary Web job assembles shared inputs once after its existing checks", () => {
+  const job = record(jobs["ordinary-web-guests"]);
+  const entries = steps(job);
+  const start = entries.findIndex(step => step.id === "shared-playground-site");
+  expect(start).toBeGreaterThan(entries.findIndex(step => step.name === "Retain ordinary Web guest diagnostics"));
+  const assembly = entries.slice(start);
+  expect(job.needs).toEqual(["selection", "rust", "shared-sysroot"]);
+  expect(assembly.filter(step => step.uses === "actions/download-artifact@v4").map(step => step.with)).toEqual([
+    { name: "browser-guest-site", path: "${{ runner.temp }}/shared-playground-site" },
+    { pattern: "shared-*-program", path: "${{ runner.temp }}/shared-program-downloads" },
+  ]);
+  const prepare = assembly.find(step => step.name === "Prepare the same-source shared proof handoff");
+  const output = assembly.at(-1);
+  if (!prepare || !output) throw new Error("Missing shared handoff steps");
+  expect(allSteps.filter(step => String(step.run).includes("ci-shared-proof-inputs.ts prepare"))).toEqual([prepare]);
+  const uploads = allSteps.filter(step => step.uses === "actions/upload-artifact@v4" && record(step.with).name === "shared-proof-inputs");
+  expect(uploads).toEqual([output]);
+  expect(output.with).toMatchObject({ "if-no-files-found": "error" });
+  const outputs = record(job.outputs);
+  expect(outputs["shared-proof-inputs"]).toBe("${{ steps.upload-shared-proof-inputs.outcome }}");
+  for (const step of assembly) {
+    expect(step.if).toBe("needs.selection.outputs.shared-native == 'true' && needs.shared-sysroot.result == 'success'");
+    expect(step["continue-on-error"]).toBeUndefined();
+    expect(outputs["shared-proof-inputs-failed"]).toContain(`steps.${step.id}.outcome == 'failure'`);
+  }
+  expect(JSON.stringify(assembly)).not.toMatch(/cargo build|build-native-profile|test-checks|browser-guest-site\.ts build/);
+  expect(JSON.stringify(sharedSteps)).not.toContain("browser-guest-site");
 });
 
 test("consumer scratch remains on the runner after sourcing workstation defaults", () => {
@@ -217,15 +245,16 @@ test("the protected proof requires every selected producer and consumer, includi
   expect(check.if).toBeUndefined();
   expect(check["continue-on-error"]).toBeUndefined();
   if (typeof check.run !== "string") throw new Error("Missing final proof guard");
-  const base = { SELECTION_RESULT: "success", QUALITY_RESULT: "success", SHARED_PREBUILD_RESULT: "success", SHARED_PRODUCER_RESULT: "success", SHARED_NATIVE: "true", FULL_SELECTED: "true", ORDINARY_WEB_RESULT: "success", RUST_RESULT: "success", SM_RESULT: "success", NATIVE_RESULT: "success", BROWSER_RESULT: "success" };
+  const base = { SELECTION_RESULT: "success", QUALITY_RESULT: "success", SHARED_PREBUILD_RESULT: "success", SHARED_PRODUCER_RESULT: "success", SHARED_NATIVE: "true", FULL_SELECTED: "true", ORDINARY_WEB_RESULT: "success", RUST_RESULT: "success", SM_RESULT: "success", INPUTS_RESULT: "success", NATIVE_RESULT: "success", BROWSER_RESULT: "success" };
   const run = (env: Record<string, string>) => spawnSync("bash", ["-euo", "pipefail", "-c", String(check.run)], { env: { ...process.env, ...env } }).status;
   expect(run(base)).toBe(0);
-  const disabled = { ...base, SHARED_NATIVE: "false", FULL_SELECTED: "false", ORDINARY_WEB_RESULT: "skipped", RUST_RESULT: "skipped", SM_RESULT: "skipped", NATIVE_RESULT: "skipped", BROWSER_RESULT: "skipped" };
+  const disabled = { ...base, SHARED_NATIVE: "false", FULL_SELECTED: "false", ORDINARY_WEB_RESULT: "skipped", RUST_RESULT: "skipped", SM_RESULT: "skipped", INPUTS_RESULT: "skipped", NATIVE_RESULT: "skipped", BROWSER_RESULT: "skipped" };
   expect(run(disabled)).toBe(0);
+  expect(run({ ...disabled, INPUTS_RESULT: "" })).toBe(0);
   for (const field of Object.keys(base).filter(field => field !== "SHARED_NATIVE" && field !== "FULL_SELECTED")) {
     for (const status of ["failure", "cancelled", "skipped", ""]) expect(run({ ...base, [field]: status })).not.toBe(0);
   }
-  for (const field of ["SM_RESULT", "NATIVE_RESULT", "BROWSER_RESULT"]) expect(run({ ...disabled, [field]: "success" })).not.toBe(0);
+  for (const field of ["SM_RESULT", "INPUTS_RESULT", "NATIVE_RESULT", "BROWSER_RESULT"]) expect(run({ ...disabled, [field]: "success" })).not.toBe(0);
   expect(run({ ...base, SHARED_NATIVE: "" })).not.toBe(0);
 });
 

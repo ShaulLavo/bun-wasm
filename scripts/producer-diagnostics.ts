@@ -87,6 +87,8 @@ if (import.meta.main) {
   const [mode, value, ...args] = process.argv.slice(2);
   if (mode === 'run' && value && args[0]) {
     process.exitCode = await supervise(value, Number(args[0]), args.slice(1));
+  } else if (mode === 'event' && value && args.length === 1 && args[0]) {
+    producerEvent(value, args[0]);
   } else if (mode === 'phase' && value && args[0]) {
     let status = 1;
     await producerPhase(value, () => {
@@ -96,6 +98,6 @@ if (import.meta.main) {
       if (status !== 0) throw new Error(`${value} failed with status ${status}`);
     }).catch(error => { console.error(error.message); process.exitCode = status; });
   } else {
-    throw new Error('Usage: producer-diagnostics.ts run DIRECTORY DEADLINE_MS COMMAND [ARGS...] | phase NAME COMMAND [ARGS...]');
+    throw new Error('Usage: producer-diagnostics.ts run DIRECTORY DEADLINE_MS COMMAND [ARGS...] | phase NAME COMMAND [ARGS...] | event NAME MESSAGE');
   }
 }

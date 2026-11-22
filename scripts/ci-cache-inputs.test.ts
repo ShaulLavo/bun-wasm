@@ -151,14 +151,38 @@ function assertProducerCompletion(root: string, name: string, functionName: stri
   }
 }
 
-function nativeFingerprint(root: string, environment: Record<string, string> = {}) {
+function nativeFingerprint(root: string, environment: Record<string, string> = {}, id = "native-inputs") {
   const output = join(root, "inputs");
   writeFileSync(output, "");
-  const result = spawnSync("bash", ["-eo", "pipefail", "-c", string(field(byId("native-inputs"), "run"))], {
+  const result = spawnSync("bash", ["-eo", "pipefail", "-c", string(field(byId(id), "run"))], {
     cwd: root, env: { ...process.env, ...environment, GITHUB_OUTPUT: output, PATH: `${root}/bin:${process.env.PATH}` }, encoding: "utf8", timeout: 3000,
   });
   return { status: result.status, output: readFileSync(output, "utf8") };
 }
+
+test("the shell cache fingerprint changes when its WASI link inputs change", () => {
+  shellFixture(root => {
+    const inputs = ["sdk/bin/wasm-ld", "sdk/bin/clang.cfg", "sdk/lib/libclang_rt.builtins.a", "sysroot/lib/wasm32-wasip1/crt1-command.o", "sysroot/include/stdio.h"];
+    for (const directory of ["sdk/bin", "sdk/lib", "sysroot/lib/wasm32-wasip1", "sysroot/include"]) mkdirSync(join(root, directory), { recursive: true });
+    for (const file of inputs) writeFileSync(join(root, file), "original");
+    writeFileSync(join(root, "env.sh"), `export WASI_SDK_PATH=${root}/sdk BUN_WASM_SYSROOT=${root}/sysroot\n`);
+    writeFileSync(join(root, "sdk/bin/clang"), `#!/bin/bash\ncase "\${@: -1}" in\n  --print-prog-name=wasm-ld) echo "$WASI_SDK_PATH/bin/wasm-ld" ;;\n  --print-libgcc-file-name) echo "$WASI_SDK_PATH/lib/libclang_rt.builtins.a" ;;\n  *) exit 1 ;;\nesac\n`, { mode: 0o755 });
+    const fingerprint = () => nativeFingerprint(root, {}, "shell-wasi-inputs");
+    const initial = fingerprint();
+    expect(initial.status).toBe(0);
+    expect(initial.output).toMatch(/^hash=[a-f0-9]{64}\n$/);
+    for (const file of inputs) {
+      writeFileSync(join(root, file), "changed");
+      const updated = fingerprint();
+      expect(updated.status).toBe(0);
+      expect(updated.output).not.toBe(initial.output);
+      writeFileSync(join(root, file), "original");
+      expect(fingerprint()).toEqual(initial);
+    }
+    rmSync(join(root, "sdk/bin/wasm-ld"));
+    expect(fingerprint()).toEqual({ status: 1, output: "" });
+  });
+});
 
 function nativeRestorePrefixes(output: string): string[] {
   const hash = /^hash=([a-f0-9]{64})\n$/.exec(output)?.[1];

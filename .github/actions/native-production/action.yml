@@ -47,15 +47,28 @@ runs:
         key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts', '.github/actions/native-*/action.yml') }}
         restore-keys: |
           jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
+    - name: Identify the shell's WASI link inputs
+      id: shell-wasi-inputs
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        clang=("$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 "--sysroot=$BUN_WASM_SYSROOT")
+        linker=$("${clang[@]}" --print-prog-name=wasm-ld)
+        builtins=$("${clang[@]}" --print-libgcc-file-name)
+        inputs=$({
+          sha256sum "$linker" "$builtins" "$WASI_SDK_PATH/bin/clang.cfg" || exit 1
+          cd "$BUN_WASM_SYSROOT" || exit 1
+          find -L include lib/wasm32-wasip1 -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum --
+        } | sha256sum | cut -d' ' -f1)
+        echo "hash=$inputs" >> "$GITHUB_OUTPUT"
     - name: Restore the bash-web shell guest build
       uses: actions/cache/restore@v4
       id: shell-cache
       with:
-        path: |
-          ${{ env.CARGO_TARGET_DIR }}/bash-web-source
-          ${{ env.CARGO_TARGET_DIR }}/bash-web-shell
-        # Cargo does not see sysroot or C toolchain changes, so every build input is in the key.
-        key: bash-web-shell-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ hashFiles('scripts/build-bash-web-shell.sh', '.cargo/**', 'rust-toolchain.toml', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'bun.lock') }}
+        path: ${{ runner.temp }}/bash-web-shell-build
+        # Cargo does not see the verified sysroot or C toolchain. The Waffle env
+        # guest is staged from the current dependencies and is outside this cache.
+        key: bash-web-shell-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-tools }}-${{ inputs.native-inputs }}-${{ steps.shell-wasi-inputs.outputs.hash }}-${{ hashFiles('scripts/build-bash-web-shell.sh', '.cargo/**', 'rust-toolchain.toml', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts') }}
     - name: Install the Web host dependencies
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --cwd web --frozen-lockfile
@@ -198,7 +211,7 @@ runs:
         export WASI_SDK="$WASI_SDK_PATH"
         guest_environment=$(bun scripts/guest-build-receipt.ts environment)
         eval "$guest_environment"
-        JOBS=2 bash scripts/build-bash-web-shell.sh
+        CARGO_TARGET_DIR="$RUNNER_TEMP/bash-web-shell-build" JOBS=2 bash scripts/build-bash-web-shell.sh
         export BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm"
         export BUN_WASM_SHELL="$GITHUB_WORKSPACE/dist/bash-web-shell.wasm"
         export BUN_WASM_ENV_UTILITY="$GITHUB_WORKSPACE/dist/bash-web-env.wasm"
@@ -214,7 +227,7 @@ runs:
         export WASI_SDK="$WASI_SDK_PATH"
         guest_environment=$(bun scripts/guest-build-receipt.ts environment)
         eval "$guest_environment"
-        JOBS=2 bash scripts/build-bash-web-shell.sh
+        CARGO_TARGET_DIR="$RUNNER_TEMP/bash-web-shell-build" JOBS=2 bash scripts/build-bash-web-shell.sh
     - name: Export the validated ordinary JSC pair
       if: inputs.full == 'true' && inputs.jsc == 'true'
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
@@ -254,9 +267,7 @@ runs:
       if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shell-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
-        path: |
-          ${{ env.CARGO_TARGET_DIR }}/bash-web-source
-          ${{ env.CARGO_TARGET_DIR }}/bash-web-shell
+        path: ${{ runner.temp }}/bash-web-shell-build
         key: ${{ steps.shell-cache.outputs.cache-primary-key }}
     - name: Build the single tools fixture in the existing native target
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}

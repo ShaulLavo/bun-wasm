@@ -49,20 +49,27 @@ test("only audited runtime files opt into process isolation", () => {
   expect(runtimePlan([path], [parseCheck({ owner: "runtime", path }, "runtime-example.json")])).toEqual({ serial: [path], isolated: [] });
 });
 
-test("dispatch runs the serial barrier and every isolated file once, at most two at a time", async () => {
+test("dispatch overlaps the serial batch with isolated files, at most two commands at a time", async () => {
   const calls: string[][] = [];
   let active = 0;
   let peak = 0;
+  let serialActive = false;
+  let overlapped = false;
   const plan = { serial: ["serial-a", "serial-b"], isolated: ["a", "b", "c", "d"] };
   expect(await dispatchRuntime(plan, async paths => {
     calls.push(paths.slice());
+    const serial = paths[0] === "serial-a";
+    if (serial) serialActive = true;
+    else overlapped ||= serialActive;
     peak = Math.max(peak, ++active);
     await delay(0);
     active--;
+    if (serial) serialActive = false;
     return 0;
   })).toBe(0);
   expect(calls[0]).toEqual(plan.serial);
   expect(calls.flat()).toEqual(plan.serial.concat(plan.isolated));
+  expect(overlapped).toBe(true);
   expect(peak).toBe(2);
 });
 
@@ -85,8 +92,11 @@ test("failure stops pending dispatch, preserves status and waits for the active 
   expect(await result).toBe(7);
   expect(drained).toBe(true);
   const serialCalls: string[][] = [];
-  expect(await dispatchRuntime({ serial: ["failure"], isolated: ["pending"] }, async paths => { serialCalls.push(paths.slice()); return 9; })).toBe(9);
-  expect(serialCalls).toEqual([["failure"]]);
+  expect(await dispatchRuntime({ serial: ["failure"], isolated: ["active", "pending"] }, async paths => {
+    serialCalls.push(paths.slice());
+    return paths[0] === "failure" ? 9 : 0;
+  })).toBe(9);
+  expect(serialCalls).toEqual([["failure"], ["active"]]);
 });
 
 test.skipIf(process.platform !== "linux")("the actual serial lifecycle controls reap adopted descendants beneath runtime supervision", async () => {
@@ -121,10 +131,9 @@ test("first test retains file-local state and module mock", async () => {
   expect(++step).toBe(1);
   expect((await import("./value.ts")).value).toBe(name);
   if (process.env.FAIL_FILE === name) process.exit(7);
-  if (process.env.PAIRS === "1" && name !== "serial") expect(existsSync(join(events, "serial.done"))).toBe(true);
   writeFileSync(join(events, name + ".started"), String(process.pid), { flag: "wx" });
-  if (process.env.PAIRS === "1" && name !== "serial") {
-    const peer = { a: "b", b: "a", c: "d", d: "c" }[name];
+  const peer = { serial: "a", a: "serial" }[name];
+  if (process.env.PAIRS === "1" && peer) {
     while (!existsSync(join(events, peer + ".started"))) await delay(10);
   }
   if (process.env.CANCEL === "1" && name !== "serial") {
@@ -169,7 +178,6 @@ test.skipIf(process.platform !== "linux")("real runtime failure retains its orig
     const root = fixture();
     const run = start(root, { BUN_WASM_RUNTIME_JOBS: "2", FAIL_FILE: failure });
     expect(await run.exited, run.output()).toBe(7);
-    if (failure === "serial") expect(readdirSync(join(root, "events"))).toEqual([]);
     const events = readdirSync(join(root, "events"));
     const started = events.filter(file => file.endsWith(".started")).map(file => file.replace(".started", ""));
     const done = events.filter(file => file.endsWith(".done")).map(file => file.replace(".done", ""));

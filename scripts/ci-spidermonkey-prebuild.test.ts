@@ -34,7 +34,7 @@ test('one bounded SM library prebuild feeds the original blocking owner and all 
   expect(producer).toContain("needs.selection.outputs.shared-native == 'true'");
   expect(producer).toContain('timeout-minutes: 30');
   expect(producer).not.toMatch(/build-native-profile|build-bun-core|build-engine|test-checks|build-libcxx/);
-  expect(consumer).toContain('needs: [selection, ordinary-web-guests, rust, shared-prebuild, shared-spidermonkey-prebuild]');
+  expect(consumer).toContain('needs: [selection, shared-prebuild, shared-spidermonkey-prebuild]');
   expect(consumer).toContain('!cancelled() && needs.selection.result');
   expect(consumer).toContain('timeout-minutes: 30');
   expect(consumer).not.toContain('spidermonkey/build-shared-group.sh');

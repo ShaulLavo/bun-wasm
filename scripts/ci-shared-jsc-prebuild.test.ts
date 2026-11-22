@@ -24,7 +24,7 @@ test("shared C++ production starts independently of Rust and has one owner outsi
   expect(producer).toContain("needs: [selection, shared-jsc-identity]");
   expect(producer).not.toContain("needs.rust");
   expect(producer).toContain("timeout-minutes: 45");
-  expect(consumer).toContain("needs: [selection, ordinary-web-guests, rust, shared-prebuild, shared-spidermonkey-prebuild]");
+  expect(consumer).toContain("needs: [selection, shared-prebuild, shared-spidermonkey-prebuild]");
   expect(consumer).toContain("timeout-minutes: 30");
   expect(producer).toContain("JSC_PROFILE=shared-group bash scripts/build-jsc.sh");
   expect(consumer).not.toContain("bash scripts/build-jsc.sh");
@@ -312,9 +312,6 @@ function admitted(id: string, state: GraphState): boolean {
     .replaceAll("github.event.pull_request.draft", "false")
     .replaceAll("!cancelled()", String(!state.cancelled))
     .replaceAll("needs.selection.result", JSON.stringify(state.quality))
-    .replaceAll("needs.selection.outputs.rust", JSON.stringify(String(state.rust !== "skipped")))
-    .replaceAll("needs.rust.result", JSON.stringify(state.rust))
-    .replaceAll("needs.ordinary-web-guests.result", JSON.stringify(state.rust === "skipped" ? "skipped" : "success"))
     .replaceAll("needs.selection.outputs.shared-native", JSON.stringify(String(state.sharedNative)))
     .replaceAll("needs.selection.outputs.shared", JSON.stringify(String(state.shared)));
   const result: unknown = new Function(`return (${expression})`)();
@@ -322,7 +319,7 @@ function admitted(id: string, state: GraphState): boolean {
   return implicit && result;
 }
 
-test("selection and failure paths keep the shared checks blocking even when Rust is skipped or fails", () => {
+test("the producer runs independently of Rust and reports its own prebuild failures", () => {
   const base = { quality: "success", rust: "success", prebuild: "success", cancelled: false };
   for (const [shared, sharedNative] of [[false, false], [true, false], [false, true], [true, true]] satisfies [boolean, boolean][]) {
     const state = { ...base, shared, sharedNative };
@@ -332,7 +329,7 @@ test("selection and failure paths keep the shared checks blocking even when Rust
   const selected = { ...base, shared: true, sharedNative: false };
   for (const result of ["failure", "cancelled", "skipped"]) {
     expect(admitted("shared-prebuild", { ...selected, rust: result })).toBe(true);
-    expect(admitted("shared-sysroot", { ...selected, rust: result, prebuild: result })).toBe(result === "skipped");
+    expect(admitted("shared-sysroot", { ...selected, rust: result, prebuild: result })).toBe(true);
   }
   for (const id of ["shared-prebuild", "shared-sysroot"]) {
     expect(admitted(id, { ...selected, quality: "failure" })).toBe(false);

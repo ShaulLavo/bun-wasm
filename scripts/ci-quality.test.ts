@@ -121,7 +121,14 @@ test("native job budgets and names stay unchanged beside the lightweight update 
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    selection: 5, quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, "browser-production": 60, "ordinary-web-guests": 20, package: 10, "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, "shared-native": 30, "shared-browser": 30, "shared-proof": 5, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": "${{ matrix.timeoutMinutes }}", "browser-process": 10, "ci-result": 5, "update-status": 5,
+    selection: 5, quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, "browser-production": 60, "ordinary-web-guests": 20, package: 10,
+    "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30,
+    "shared-native": 30, "shared-browser": 30,
+    "shared-proof": 5, web: 10, "web-unit": 10,
+    "web-browser": "${{ matrix.pairedBatch != '' && 15 || 10 }}",
+    "process-bundles": 10,
+    "browser-guest": "${{ matrix.timeoutMinutes }}",
+    "browser-process": 10, "ci-result": 5, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
@@ -781,7 +788,8 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
   expect(prebuild.match(/steps\.host-tools\.outputs\.hash/g)).toHaveLength(8);
   // Cargo does not see sysroot or C toolchain changes, so the shell guest's key carries them.
   const shellKey = rust.split("\n").find(line => line.includes("key: bash-web-shell-"))!;
-  for (const input of ["runner.arch", "steps.host-tools.outputs.hash", "'scripts/build-wasi-sysroot.ts'", "'bun.lock'"]) expect(shellKey).toContain(input);
+  for (const input of ["runner.arch", "steps.host-tools.outputs.hash", "steps.shell-wasi-inputs.outputs.hash", "'scripts/build-wasi-sysroot.ts'"]) expect(shellKey).toContain(input);
+  expect(shellKey).not.toContain("'bun.lock'");
 });
 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {

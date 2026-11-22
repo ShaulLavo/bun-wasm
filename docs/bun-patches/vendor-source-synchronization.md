@@ -11,6 +11,9 @@ An isolated Git index derives the desired tree from every checked-in patch;
 matching shared `wasm` history can be reused, while a stale ref is reconstructed
 in an owned disposable worktree without resetting another checkout's branch.
 That temporary worktree and index are removed on both success and failure.
+Patch imports use each patch's author date as the committer date. Reapplying
+the same patches to the pinned upstream commit then reproduces the commit SHA
+that Bun embeds in its generated Rust build options.
 `--source-only` verifies source without downloading dependencies or running
 codegen, and `--bun-dir` supports an explicit source checkout. Regression tests
 cover an old detached worktree, a stale shared ref, repeat sync, cleanup, and
