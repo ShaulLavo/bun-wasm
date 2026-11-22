@@ -24,13 +24,12 @@ pub fn embed(manifest: &Path, out: &Path) {
     let override_dir = std::env::var_os("BUNWASM_JS_OVERRIDE_DIR").map(std::path::PathBuf::from);
     // Debugging aid: keep every token at its source line and column (types erased only).
     println!("cargo:rerun-if-env-changed=BUNWASM_JS_PRESERVE_POSITIONS");
-    let compact_enabled = std::env::var_os("BUNWASM_JS_PRESERVE_POSITIONS").is_none();
-    fs::create_dir_all(out.join("runtime-strip")).expect("create runtime strip directory");
+    let minify = std::env::var_os("BUNWASM_JS_PRESERVE_POSITIONS").is_none();
     fs::create_dir_all(out.join("runtime-js")).expect("create transpiled runtime directory");
-    let mut strip = Vec::new();
+    // Files whose whitespace and comments are removed, and TypeScript files that only lose their types.
     let mut compact = Vec::new();
-    // (module name, path of the plain JavaScript the table embeds)
-    let mut modules: Vec<(String, PathBuf)> = Vec::new();
+    let mut strip = Vec::new();
+    let mut table = String::from("pub static POLYFILLS: &[(&str, &str)] = &[\n");
     for name in &names {
         let path = override_dir
             .as_ref()
@@ -43,21 +42,13 @@ pub fn embed(manifest: &Path, out: &Path) {
             stems.insert(stem),
             "duplicate runtime module {stem} (.js and .ts)"
         );
-        let path = if name.ends_with(".ts") {
-            let destination = out.join("runtime-strip").join(format!("{stem}.js"));
-            strip.push((path, destination.clone()));
-            destination
-        } else {
-            path
-        };
-        modules.push((stem.to_owned(), path));
-    }
-    transpile_batch(&strip, &transpiler, false);
-    let mut table = String::from("pub static POLYFILLS: &[(&str, &str)] = &[\n");
-    for (stem, path) in modules {
-        let path = if compact_enabled && !matches!(stem.as_str(), "intl" | "tz_data") {
-            let destination = out.join("runtime-js").join(format!("{stem}.js"));
+        let destination = out.join("runtime-js").join(format!("{stem}.js"));
+        // The Intl data modules are another lane's and stay as written.
+        let path = if minify && !matches!(stem, "intl" | "tz_data") {
             compact.push((path, destination.clone()));
+            destination
+        } else if name.ends_with(".ts") {
+            strip.push((path, destination.clone()));
             destination
         } else {
             path
@@ -86,7 +77,7 @@ pub fn embed(manifest: &Path, out: &Path) {
     ];
     for (name, generator, input) in generated {
         let source = generate(name, &manifest.join("../../scripts").join(generator), &input, out);
-        let path = if compact_enabled {
+        let path = if minify {
             let destination = out.join("runtime-js").join(format!("{name}.js"));
             compact.push((source, destination.clone()));
             destination
@@ -98,6 +89,7 @@ pub fn embed(manifest: &Path, out: &Path) {
             path.display().to_string()
         ));
     }
+    transpile_batch(&strip, &transpiler, false);
     transpile_batch(&compact, &transpiler, true);
     table.push_str("];\n");
     fs::write(out.join("polyfills.rs"), table).unwrap();

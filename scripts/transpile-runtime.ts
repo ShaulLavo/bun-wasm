@@ -1,8 +1,11 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 // Two modes. The default (Node.js 24+) erases TypeScript types and keeps every token's line and column.
-// `--minify-whitespace` (Bun) takes plain JavaScript, usually that erased output, and removes whitespace
-// and comments only: identifiers, function names and syntax stay, so `Function.prototype.name`, error
-// messages and `toString()` still show the real names.
+// `--minify-whitespace` (Bun) erases types the same way, then removes whitespace and comments only:
+// identifiers, function names and syntax stay, so `Function.prototype.name`, error messages and
+// `toString()` still show the real names. Line and column positions do not survive minifying.
 const args = process.argv.slice(2);
 const compact = args.includes("--minify-whitespace");
 const paths = args.filter(arg => arg !== "--minify-whitespace");
@@ -53,13 +56,9 @@ function minify(input: string): string {
   return text.length < input.length ? text : input;
 }
 
-function transform(source: string, destination: string): void {
-  const input = readFileSync(source, "utf8");
-  if (compact) {
-    writeFileSync(destination, minify(input));
-    return;
-  }
+function strip(source: string, destination: string): void {
   if (!stripTypeScriptTypes) throw new Error("Missing runtime type stripper");
+  const input = readFileSync(source, "utf8");
   // Erasure replaces types with spaces so every token keeps its line and column. A line that held
   // only types becomes all spaces; empty it so the embedded runtime does not carry that padding.
   // Template text is never erased, so such a line cannot be inside a template literal.
@@ -70,13 +69,40 @@ function transform(source: string, destination: string): void {
   writeFileSync(destination, emitted.map((line, index) => blank(line, index) ? "" : line).join("\n"));
 }
 
-for (let index = 0; index < paths.length; index += 2) {
-  const source = paths[index], destination = paths[index + 1];
-  if (!source || !destination) throw new Error("Missing runtime source or destination");
-  if (batch) console.error(`runtime-js phase=${compact ? "compact" : "strip"} source=${source}`);
+/** Erases the types of every `.ts` source with one Node.js process; returns the plain JavaScript paths. */
+function eraseTypes(sources: string[], scratch: string): string[] {
+  const typed: string[] = [];
+  const inputs = sources.map((source, index) => {
+    if (!source.endsWith(".ts")) return source;
+    const destination = join(scratch, `${index}.js`);
+    typed.push(source, destination);
+    return destination;
+  });
+  if (typed.length === 0) return inputs;
+  const result = spawnSync("node", [import.meta.path, "--batch"].concat(typed), { stdio: ["ignore", "inherit", "inherit"] });
+  if (result.status !== 0) throw new Error("runtime-js phase=strip failed");
+  return inputs;
+}
+
+function run(): void {
+  const sources = paths.filter((_, index) => index % 2 === 0);
+  const scratch = compact ? mkdtempSync(join(tmpdir(), "bun-wasm-runtime-strip-")) : undefined;
   try {
-    transform(source, destination);
-  } catch (error) {
-    throw new Error(`runtime-js phase=${compact ? "compact" : "strip"} source=${source}`, { cause: error });
+    const inputs = scratch ? eraseTypes(sources, scratch) : sources;
+    sources.forEach((source, index) => {
+      const destination = paths[index * 2 + 1], input = inputs[index];
+      if (!source || !destination || !input) throw new Error("Missing runtime source or destination");
+      if (batch) console.error(`runtime-js phase=${compact ? "compact" : "strip"} source=${source}`);
+      try {
+        if (compact) writeFileSync(destination, minify(readFileSync(input, "utf8")));
+        else strip(source, destination);
+      } catch (error) {
+        throw new Error(`runtime-js phase=${compact ? "compact" : "strip"} source=${source}`, { cause: error });
+      }
+    });
+  } finally {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
   }
 }
+
+run();

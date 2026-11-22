@@ -97,7 +97,7 @@ test("converted Glob preserves replacement error classes and their stacks", asyn
   }
 });
 
-test("embedded source positions and fixture locations agree with TypeScript", () => {
+test("type erasure keeps every source position", () => {
   const path = join(root, "crates/bunwasm-runtime/src/js/glob.ts");
   const text = readFileSync(path, "utf8");
   const generated = emit(path);
@@ -110,20 +110,63 @@ test("embedded source positions and fixture locations agree with TypeScript", ()
       cursor = text.indexOf(token, cursor + token.length);
     }
   }
-  const locations = JSON.parse(readFileSync(join(root, "tests/fixtures/runtime-typescript/locations.json"), "utf8"));
-  const messages = {
-    constructor: "Glob.constructor: expected 1 arguments, got 0",
-    match: "Glob.matchString: expected 1 arguments, got 0",
-    scan: "Expected options to be an object",
-  };
-  const lines = text.split("\n");
-  for (const [key, message] of Object.entries(messages)) {
-    const line = lines.findIndex(value => value.includes(message));
-    const sourceLine = lines[line];
-    if (sourceLine === undefined) throw new Error(`Missing source throw for ${key}`);
-    const start = sourceLine.indexOf("new TypeError(");
-    expect(locations[key]).toEqual({ line: line + 1, columns: [start + 1, start + 5, start + 14] });
-  }
+});
+
+function compact(text: string) {
+  const input = join(source, "compact-input.js");
+  const output = join(source, "compact-output.js");
+  writeFileSync(input, text);
+  const result = Bun.spawnSync(["bun", join(root, "scripts/transpile-runtime.ts"), "--minify-whitespace", input, output], { stdout: "pipe", stderr: "pipe" });
+  return { exitCode: result.exitCode, output: result.exitCode === 0 ? readFileSync(output, "utf8") : "" };
+}
+
+test("minifying drops whitespace and comments but keeps names, directives and the factory form", () => {
+  const { exitCode, output } = compact([
+    "// Leading comment.",
+    "(function (internal) {",
+    '  "use strict";',
+    "  /* Block comment. */",
+    "  function namedHelper(value) {",
+    '    "use strict";',
+    "    return value + internal.offset;",
+    "  }",
+    '  const text = "keeps  spacing // and use strict text";',
+    "  return { namedHelper, text };",
+    "})",
+    "",
+  ].join("\n"));
+  expect(exitCode).toBe(0);
+  expect(output).toBe('(function(internal){"use strict";function namedHelper(value){"use strict";return value+internal.offset}const text="keeps  spacing // and use strict text";return{namedHelper,text}})\n');
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  const { namedHelper, text } = (0, eval)(output)({ offset: 2 });
+  expect(namedHelper.name).toBe("namedHelper");
+  expect(namedHelper(1)).toBe(3);
+  expect(text).toBe("keeps  spacing // and use strict text");
+});
+
+test("minifying keeps a module that is not strict, and strict mode where it is declared", () => {
+  const { output } = compact("(function () { function sloppy() { return this; } function strict() { 'use strict'; return this; } return [sloppy, strict]; })\n");
+  // oxlint-disable-next-line no-eval -- Exercise the emitted classic-script factory.
+  const [sloppy, strict] = (0, eval)(output)();
+  expect(sloppy()).toBe(globalThis);
+  expect(strict()).toBeUndefined();
+});
+
+test("minifying skips erased declarations and keeps license comments", () => {
+  const { exitCode, output } = compact([
+    "/* Not a license. */",
+    ";",
+    "/*! Copyright (c) Example. Keep this notice. */",
+    "(function () { return 1; })",
+    "",
+  ].join("\n"));
+  expect(exitCode).toBe(0);
+  expect(output).toBe("/*! Copyright (c) Example. Keep this notice. */\n(function(){return 1})\n");
+});
+
+test("minifying rejects a module that does not start with its factory", () => {
+  expect(compact("const first = 1;\n(function () { return first; })\n").exitCode).not.toBe(0);
+  expect(compact("(function () { return 1; })\n;trailing();\n").exitCode).not.toBe(0);
 });
 
 test("builtin helper prepares runnable globals from the TypeScript factory", async () => {

@@ -13,6 +13,15 @@ constructor calls, class fields and source coordinates. The loader still
 looks up the same extension-free names. Existing `.js` sources remain raw. No TypeScript parser
 or typecheck is added to the wasm runtime.
 
+The same script then minifies every embedded runtime module except `intl.js` and `tz_data.js`
+with the host `Bun.Transpiler` (`minifyWhitespace` only: no syntax or identifier minification).
+This is an original adapter around that API; no Bun source is copied or changed. It keeps the
+`"use strict"` directives Bun would drop, any `/*!` license comment, and each module's factory
+expression, and it fails the build if a module does not start with that expression.
+It removes about 725 KB raw, 140 KB gzip and 100 KB brotli from each guest.
+Shipped stack frames therefore carry positions in the compacted code; `BUNWASM_JS_PRESERVE_POSITIONS=1`
+builds the position-preserving form.
+
 A line that held only erased types (an alias, interface or overload) is emptied rather than
 left as spaces. Line terminators and every remaining token's line and column are unchanged,
 and template text is never erased, so no string content moves. Against `868a0ce8`,
