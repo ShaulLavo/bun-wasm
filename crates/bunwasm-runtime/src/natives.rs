@@ -366,6 +366,9 @@ fn sync_fd(_fd: i32, _mode: SyncMode) -> io::Result<()> {
 pub struct FdTable {
     files: HashMap<i32, File>,
     sync_modes: HashMap<i32, SyncMode>,
+    /// Standard descriptors the program closed. The host's own streams stay open; the guest sees
+    /// them as closed, so a later write fails with EBADF as it would after `close(2)`.
+    closed_stdio: [bool; 3],
 }
 
 fn synchronize_descriptor(state: &State, fd: i32, written: usize) -> io::Result<()> {
@@ -1027,6 +1030,13 @@ fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
             .map(|n| Val::Num(n as f64))
             .map_err(|e| io_error(e, "write", None));
     }
+    if (1..=2).contains(&fd) && state.fds.borrow().closed_stdio[fd as usize] {
+        return Err(io_error(
+            io::Error::from_raw_os_error(libc::EBADF),
+            "write",
+            None,
+        ));
+    }
     if fd == 1 {
         state
             .write_stdout(bytes)
@@ -1055,6 +1065,14 @@ fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
 fn close_descriptor(state: &State, args: Args<'_>) -> NativeResult {
     let fd = args.i32(0)?;
     if (0..=2).contains(&fd) {
+        let mut fds = state.fds.borrow_mut();
+        if std::mem::replace(&mut fds.closed_stdio[fd as usize], true) {
+            return Err(io_error(
+                io::Error::from_raw_os_error(libc::EBADF),
+                "close",
+                None,
+            ));
+        }
         return ok();
     }
     let mut fds = state.fds.borrow_mut();

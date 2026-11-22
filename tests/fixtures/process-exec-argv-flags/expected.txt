@@ -1,0 +1,1 @@
+{"execArgv":["--bun"],"argv":["foo","-a"]}
