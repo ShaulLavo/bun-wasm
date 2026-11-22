@@ -1557,6 +1557,17 @@
         return withZoneName(this, Reflect.apply(nativeToTimeString, this, []));
       },
     });
+    // Date() called as a function prints the same string, which QuickJS builds natively. The
+    // proxy traps only calls: `new Date` reaches the engine's constructor without running JS.
+    const NativeDate = Date;
+    const CallableDate = new Proxy(NativeDate, {
+      apply() {
+        const now = new NativeDate();
+        return withZoneName(now, Reflect.apply(nativeToString, now, []));
+      },
+    });
+    defineHidden(NativeDate.prototype, { constructor: CallableDate });
+    defineGlobal("Date", CallableDate);
   }
 
   // Temporal probes Date's native locale methods during initialization. Install
