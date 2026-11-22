@@ -19,10 +19,14 @@ for these two edits and redundant expression parentheses.
 Host engines retain their own text constructors. Portable engines retain native
 numeric handles, controller flow, private-field brands, finalizer registration,
 release ordering and error identities. `TextDecoderStream` converts chunks through
-`decodeBytes` so detached `ArrayBuffer` and `ArrayBufferView` inputs decode as empty
-chunks rather than throwing on view construction, and `codecTransformer` attaches
-`ERR_ENCODING_INVALID_ENCODED_DATA` to fatal `TypeError`s from `native.push` to
-match `TextDecoder` and Bun's `TextDecoderStream`. Type erasure preserves the final
+the shared intrinsic BufferSource reader (`crates/bunwasm-runtime/src/js/buffer_source.ts`,
+also used by `text_decoder.ts` and `string_decoder.ts`) so shadowed `byteLength` /
+`buffer` / `byteOffset` properties are ignored and detached or out-of-bounds
+`ArrayBuffer` and `ArrayBufferView` inputs decode as empty chunks without copying
+ordinary nonempty `Uint8Array`s. Fatal decoding errors in `crates/bunwasm-runtime/src/streams.rs`
+and `utf8Decode` in `natives.rs` attach `ERR_ENCODING_INVALID_ENCODED_DATA` and
+Bun/Node's exact `"The encoded data was not valid for encoding <encoding>"`
+message directly at the malformed-input site. Type erasure preserves the final
 TypeScript token positions, not every original JavaScript column. The wrapper
 suite in `web/tests/runtime-streams.test.ts` is discovered by the existing web
 unit command. The native fixture smoke selects `runtime-ts-streams` once.

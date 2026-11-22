@@ -58,9 +58,16 @@ fatal and dictionary controls adapt cases from that revision's
 local runtime preflight. `checks/native-text-decoder.json` owns the guest fixture.
 The source controls use native Bun as the codec oracle. The guest fixture checks
 the complete Rust binding on the existing native CI engines. `bun:internal-for-testing`
-exposes `jscInternals.isLatin1String` and `jscInternals.isUTF16String` by scanning code
-units (`<= 0xff` vs `> 0xff`) so upstream `TextDecoder` tests checking string width
-work across all engines; worker subprocess `SharedArrayBuffer` tests remain host-dependent.
+exposes `jscInternals.isLatin1String` and `jscInternals.isUTF16String` through
+`crates/bunwasm-runtime/src/js/jsc_internals.ts` and `Engine::string_is_8bit`
+(adapted from Bun's `src/jsc/bindings/JSCTestingHelpers.cpp` at
+`9510e74152073d850a18758ca41114d8f214ffa6`): on JSC, `bunjsc_string_is_8bit` in
+`crates/bunwasm-jsc/cpp/helpers.cpp` reads the real `WTF::String::is8Bit()`
+physical representation and throws `TypeError("Expected a string")` on non-string
+values; on engines without physical string-width introspection (QuickJS,
+Browser/V8), both helpers throw `ERR_UNSUPPORTED` rather than approximating
+storage width from character values. Worker subprocess `SharedArrayBuffer` tests
+remain host-dependent.
 
 Resizable-input assertions remain in the source regression and a separate
 QuickJS/Browser guest fixture. JSC's WASI patch explicitly rejects resizable

@@ -6,9 +6,10 @@
       internal.require("compression_streams").create(globalThis.TransformStream, globalThis.ReadableStream, globalThis.WritableStream));
   }
   const streams = internal.require("streams_polyfill");
+  const bufferSource = internal.require("buffer_source");
   const native = internal.native.streams;
   const finalizers = new FinalizationRegistry<number>(id => native.release(id));
-  const empty = new Uint8Array(0);
+  const empty = bufferSource.empty;
 
   function domString(value: unknown): string {
     if (typeof value === "symbol") throw new TypeError("Cannot convert a Symbol value to a string");
@@ -21,17 +22,7 @@
     return value;
   }
 
-  function decodeBytes(value: unknown): Uint8Array {
-    if (value instanceof ArrayBuffer) return value.byteLength === 0 ? empty : new Uint8Array(value);
-    if (ArrayBuffer.isView(value)) {
-      let length = 0;
-      try { length = value.byteLength; } catch { return empty; }
-      return length === 0 ? empty : internal.toUint8(value);
-    }
-    return internal.toUint8(value);
-  }
-
-  function codecTransformer(id: number, convert: (value: unknown) => Uint8Array = internal.toUint8) {
+  function codecTransformer(id: number, convert: (value: unknown) => Uint8Array) {
     const token = {};
     finalizers.register(token, id, token);
     function release() {
@@ -44,7 +35,6 @@
         if (output.length) controller.enqueue(output);
       } catch (error) {
         release();
-        if (error instanceof TypeError) Object.assign(error, { code: "ERR_ENCODING_INVALID_ENCODED_DATA" });
         throw error;
       }
     }
@@ -100,7 +90,7 @@
       this.#ignoreBOM = Boolean(convertedOptions.ignoreBOM);
       const decoder = native.decoder(convertedLabel.toWellFormed(), this.#fatal, this.#ignoreBOM);
       this.#encoding = decoder.encoding;
-      this.#stream = new streams.TransformStream<unknown, string>(codecTransformer(decoder.id, decodeBytes));
+      this.#stream = new streams.TransformStream<unknown, string>(codecTransformer(decoder.id, bufferSource.readBufferSource));
     }
     get encoding() { return this.#encoding; }
     get fatal() { return this.#fatal; }

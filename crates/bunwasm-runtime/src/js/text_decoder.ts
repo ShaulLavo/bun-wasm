@@ -2,62 +2,7 @@
   "use strict";
   const native = internal.native.streams;
   const finalizers = new FinalizationRegistry<number>(id => native.release(id));
-  const empty = new Uint8Array(0);
-  const typedReaders = viewReaders(Object.getPrototypeOf(Uint8Array.prototype));
-  const typedTag = getter<string | undefined>(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag);
-  const dataReaders = viewReaders(DataView.prototype);
-  const bufferLength = getter<number>(ArrayBuffer.prototype, "byteLength");
-  const sharedLength = typeof SharedArrayBuffer === "undefined" ? undefined : getter<number>(SharedArrayBuffer.prototype, "byteLength");
-
-  function getter<T>(prototype: object, name: PropertyKey): (this: unknown) => T {
-    const read = Object.getOwnPropertyDescriptor(prototype, name)?.get;
-    if (typeof read !== "function") throw new TypeError(`Missing ${String(name)} getter`);
-    return read;
-  }
-
-  function viewReaders(prototype: object) {
-    return {
-      buffer: getter<ArrayBufferLike>(prototype, "buffer"),
-      length: getter<number>(prototype, "byteLength"),
-      offset: getter<number>(prototype, "byteOffset"),
-    };
-  }
-
-  function viewBytes(view: ArrayBufferView): Uint8Array {
-    let readers = typedReaders;
-    let buffer: ArrayBufferLike;
-    try { buffer = readers.buffer.call(view); } catch {
-      readers = dataReaders;
-      buffer = readers.buffer.call(view);
-    }
-    let length: number, offset: number;
-    try {
-      length = readers.length.call(view);
-      offset = readers.offset.call(view);
-    } catch { return empty; }
-    return length === 0 ? empty : new Uint8Array(buffer, offset, length);
-  }
-
-  function inputBytes(input: ArrayBufferLike | ArrayBufferView): Uint8Array {
-    if (isUint8Array(input)) return typedReaders.length.call(input) === 0 ? empty : input;
-    if (ArrayBuffer.isView(input)) return viewBytes(input);
-    return bufferSize(input) === 0 ? empty : new Uint8Array(input);
-  }
-
-  function isUint8Array(input: unknown): input is Uint8Array {
-    return input instanceof Uint8Array && typedTag.call(input) === "Uint8Array";
-  }
-
-  function bufferSize(input: unknown): number {
-    try { return bufferLength.call(input); } catch (error) {
-      if (!sharedLength) throw error;
-      return sharedLength.call(input);
-    }
-  }
-
-  function isBuffer(input: unknown): input is ArrayBufferLike {
-    try { bufferSize(input); return true; } catch { return false; }
-  }
+  const { empty, isBuffer, inputBytes } = internal.require("buffer_source");
 
   function dictionary(value: unknown): { fatal?: unknown; ignoreBOM?: unknown; stream?: unknown } {
     if (value == null) return {};

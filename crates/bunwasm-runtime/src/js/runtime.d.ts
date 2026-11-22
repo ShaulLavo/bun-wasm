@@ -83,6 +83,7 @@ declare namespace BunWasm {
     getAsyncContext(): unknown;
     setAsyncContext(context: unknown): void;
     runMicrotasks(): void;
+    stringIs8Bit?(value: unknown): boolean | undefined;
     exit(code?: number): never;
   }
 
@@ -90,6 +91,18 @@ declare namespace BunWasm {
 
   interface Internal {
     defineGlobal(name: string, value: unknown): void;
+    stringDecoderMaxLength?: number;
+    require(name: "buffer_source"): {
+      empty: Uint8Array;
+      isBuffer(input: unknown): input is ArrayBufferLike;
+      viewBytes(view: ArrayBufferView): Uint8Array;
+      inputBytes(input: ArrayBufferLike | ArrayBufferView): Uint8Array;
+      readBufferSource(input: unknown): Uint8Array;
+    };
+    require(name: "jsc_internals"): {
+      isLatin1String(value: unknown): boolean;
+      isUTF16String(value: unknown): boolean;
+    };
     require(name: "builtins"): { "bun:jsc": () => { callerSourceOrigin(): string | null } };
     require(name: "node_url"): { fileURLToPath(url: string | URL): string };
     /** QuickJS's process.env.TZ: the zone ID now in use, or null for an unknown zone. */

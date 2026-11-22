@@ -1429,7 +1429,8 @@ fn install_encoding(t: &mut Table) {
             Ok(s) => Ok(s.into()),
             Err(_) if a.bool(1) => Err(NativeError::type_error(
                 "The encoded data was not valid for encoding utf-8",
-            )),
+            )
+            .prop("code", "ERR_ENCODING_INVALID_ENCODED_DATA")),
             Err(_) => Ok(String::from_utf8_lossy(bytes).into_owned().into()),
         }
     });

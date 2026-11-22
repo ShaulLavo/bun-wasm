@@ -49,9 +49,11 @@
     return `type ${typeof value} (${String(value)})`;
   }
 
-  function toBytes(buf: unknown) {
-    if (buf instanceof Uint8Array) return buf;
-    if (ArrayBuffer.isView(buf)) return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  const { viewBytes } = internal.require("buffer_source");
+  const MAX_STRING_LENGTH = internal.stringDecoderMaxLength ?? 0x7fffffff;
+
+  function assertView(buf: unknown): ArrayBufferView {
+    if (ArrayBuffer.isView(buf)) return buf;
     throw makeError(
       TypeError,
       "ERR_INVALID_ARG_TYPE",
@@ -59,25 +61,27 @@
     );
   }
 
+  function toBytes(buf: unknown) {
+    return viewBytes(assertView(buf));
+  }
+
   // Port of Node's native decoder (src/string_decoder.cc), which Bun matches:
   // `missing` bytes still needed to finish the buffered character and
   // `buffered` bytes of it held in `lastChar`.
 
-  const MAX_STRING_LENGTH = 0x7fffffff;
-
-  function checkStringLength(byteLength: number, encoding: Encoding) {
+  function checkStringLength(byteLength: number, encoding: Encoding, prependLength = 0) {
     let maxChars = byteLength;
     if (encoding === "hex") maxChars = byteLength * 2;
     else if (encoding === "base64" || encoding === "base64url") maxChars = Math.ceil(byteLength / 3) * 4;
     else if (encoding === "utf16le") maxChars = Math.floor(byteLength / 2);
-    if (maxChars > MAX_STRING_LENGTH) {
+    if (prependLength + maxChars > MAX_STRING_LENGTH) {
       throw makeError(Error, "ERR_STRING_TOO_LONG", `Cannot create a string longer than 0x${MAX_STRING_LENGTH.toString(16)} characters`);
     }
   }
 
-  function makeString(bytes: Uint8Array, encoding: Encoding) {
+  function makeString(bytes: Uint8Array, encoding: Encoding, prependLength = 0) {
     if (bytes.length === 0) return "";
-    checkStringLength(bytes.length, encoding);
+    checkStringLength(bytes.length, encoding, prependLength);
     return getBuffer().from(bytes.buffer, bytes.byteOffset, bytes.length).toString(encoding);
   }
 
@@ -156,7 +160,6 @@
   }
 
   function decodeChunk(self: Decoder, input: Uint8Array) {
-    checkStringLength(input.length, self.encoding);
     let data = input;
     let prepend = "";
     if (kBufferedEncodings.includes(self.encoding) && self._missing > 0) {
@@ -168,7 +171,7 @@
     const tail = tailLength(self, data);
     self._buffered = tail;
     if (tail > 0) self.lastChar.set(data.subarray(data.length - tail), 0);
-    return prepend + makeString(data.subarray(0, data.length - tail), self.encoding);
+    return prepend + makeString(data.subarray(0, data.length - tail), self.encoding, prepend.length);
   }
 
   function flush(self: Decoder) {
@@ -209,15 +212,15 @@
     }
 
     text(input: unknown, offset?: number) {
-      this._missing = 0;
-      this._buffered = 0;
-      const bytes = toBytes(input);
+      const view = assertView(input);
       if (offset !== undefined) {
         const start = offset | 0;
-        if (start < 0 || start >= bytes.length) return "";
+        if (start < 0) return "";
+        const bytes = viewBytes(view);
+        if (start >= bytes.length) return "";
         return this.write(bytes.subarray(start));
       }
-      return this.write(bytes);
+      return this.write(viewBytes(view));
     }
   }
 

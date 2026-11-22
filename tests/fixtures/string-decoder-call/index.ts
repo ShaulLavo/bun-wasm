@@ -68,7 +68,7 @@ for (const make of [() => Decoder("bogus"), () => new Decoder("bogus"), () => ne
   }
 }
 
-const textDecoder = new StringDecoder("utf8") as StringDecoder & { text(buf: Uint8Array, offset?: number): string };
+const textDecoder = new StringDecoder("utf8") as StringDecoder & { text(buf: ArrayBufferView, offset?: unknown): string };
 console.log(
   "text offsets",
   JSON.stringify(textDecoder.text(Buffer.from("hello world"), 6)),
@@ -76,3 +76,17 @@ console.log(
   JSON.stringify(textDecoder.text(Buffer.from("hello world"), -2147483648)),
   JSON.stringify(textDecoder.text(Buffer.from("hello world"), 99)),
 );
+
+const pendingText = new StringDecoder("utf8") as StringDecoder & { text(buf: ArrayBufferView, offset?: unknown): string };
+pendingText.write(Buffer.from([0xe2]));
+const joinedEuro = pendingText.text(Buffer.from([0x82, 0xac]), 0);
+pendingText.write(Buffer.from([0xe2]));
+const negRet = pendingText.text(Buffer.from([0x82, 0xac]), -1);
+const afterNeg = pendingText.write(Buffer.from([0x82, 0xac]));
+console.log("text preserves pending", JSON.stringify(joinedEuro), JSON.stringify(negRet), JSON.stringify(afterNeg));
+
+const resizeAb = new ArrayBuffer(4, { maxByteLength: 8 });
+new Uint8Array(resizeAb).set([0x41, 0x42, 0x43, 0x44]);
+const resizeDv = new DataView(resizeAb);
+const resizedOut = textDecoder.text(resizeDv, { valueOf() { resizeAb.resize(2); return 0; } });
+console.log("text DataView shrink", JSON.stringify(resizedOut));
