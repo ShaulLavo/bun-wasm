@@ -38,12 +38,19 @@ three supported engines.
 Changed targeted fixtures and manifests select JSC from the verified base, head
 and merge ancestor, including removals. Missing selected inputs fail the gate.
 Native manifests may select `"profile": "shared-group"`; omission
-keeps the ordinary split producer and selection. The shared PIC job consumes the
-Rust job's launcher and one matching group core/QuickJS pair through
-`bun scripts/test-checks.ts native --profile shared-group`. A `browser-guest` manifest may
-select the same profile; the same job runs it in Chromium against that group build through
-`bun scripts/test-checks.ts browser-guest --profile shared-group`, and the Processes legs keep
-the split selection. Missing artifacts or capability fail this blocking gate. Other paths
+keeps the ordinary split producer and selection. Shared native checks consume the Rust
+job's launcher and the matching engine's shared program through
+`bun scripts/test-checks.ts native --profile shared-group`. Shared `browser-guest` checks
+run in Chromium against the same group build through
+`bun scripts/test-checks.ts browser-guest --profile shared-group`. QuickJS and JSC
+each verify the handoff once and run both checks in separate steps on the same runner.
+Each check charges shared setup from the first workflow step to its 30-minute hang
+cap. The paired runner has a 60-minute outer cap, including GitHub's action
+preparation before the first step. Action timeouts round down, and cache actions
+reserve time for GitHub's separate file hashing and cleanup.
+SpiderMonkey's checks have separate runners. The Shared PIC sysroot proof requires every
+selected check and fails on missing artifacts or capabilities. Processes keeps the split
+selection. Other paths
 name one script test, not a glob or command. The prefix must match the owner.
 The runner rejects unknown fields, absent files, symlinks, unsafe paths and duplicate
 owners. It sorts by repository path before invoking argv directly, without a shell.

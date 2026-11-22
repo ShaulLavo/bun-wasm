@@ -79,6 +79,10 @@ test("no job runs on Boat runners", () => {
 });
 
 test("artifact transport failures release the runner within five minutes and stay blocking", () => {
+  const sharedDownloadBudgets = new Map([
+    ["shared-proof-inputs", "${{ fromJSON(steps.shared-download-budget.outputs.minutes) }}"],
+    ["native-profile-launcher", "${{ fromJSON(steps.shared-launcher-budget.outputs.minutes) }}"],
+  ]);
   let transfers = 0;
   for (const [jobId, value] of Object.entries(jobs)) {
     const steps = record(value).steps;
@@ -88,7 +92,8 @@ test("artifact transport failures release the runner within five minutes and sta
       if (!/^actions\/(?:upload|download)-artifact@/.test(String(step.uses))) continue;
       const artifact = record(step.with);
       const producerDiagnostics = jobId === "shared-sysroot" && artifact.name === "shared-spidermonkey-producer-diagnostics";
-      expect(step["timeout-minutes"]).toBe(producerDiagnostics ? 2 : 5);
+      const budget = jobId === "shared-consumers" ? sharedDownloadBudgets.get(String(artifact.name)) : undefined;
+      expect(step["timeout-minutes"]).toBe(budget ?? (producerDiagnostics ? 2 : 5));
       expect(step["continue-on-error"]).toBeUndefined();
       const retainWeek = (jobId === "web-unit" && step.name === "Retain first C1 WebKit admission failure")
         || (jobId === "rust" && artifact.name === "ordinary-spidermonkey-program");
