@@ -1,5 +1,8 @@
-import { expect, test } from 'bun:test';
+import { expect, setDefaultTimeout, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+
+// Every test here starts a Node process or copies a package. The limit only catches a hang, and a busy machine needs seconds.
+setDefaultTimeout(120_000);
 
 test('plain Node can consume the JS memory helper through the existing host adapters', () => {
   const source = `await import(${JSON.stringify(new URL('../scripts/node-process.ts', import.meta.url).href)});`;
@@ -72,4 +75,4 @@ test('unbundled headless hosts load with their installed runtime package', async
     expect(launch.stderr).toContain(missing);
     expect(launch.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
   } finally { await rm(dir, { recursive: true, force: true }); }
-}, 120_000); // copies the installed package; the limit only catches a hang
+});

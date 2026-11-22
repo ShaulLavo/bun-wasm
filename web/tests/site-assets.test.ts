@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
 
+// Requests go through a real Wrangler. The per-test limit only catches a hang and must outlast the 30 s request cap.
+setDefaultTimeout(35_000);
 const wasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
 const brotli = brotliCompressSync(wasm);
 const gzip = gzipSync(wasm);
@@ -117,7 +119,8 @@ function get(path: string, encoding: string | undefined, options: { method?: str
       response.on("end", () => resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks), chunks: chunks.length }));
     });
     req.on("error", reject);
-    req.setTimeout(3000, () => req.destroy(new Error("Worker request timed out")));
+    // Hang cap only: a busy machine can take several seconds to answer through Wrangler.
+    req.setTimeout(30_000, () => req.destroy(new Error("Worker request timed out")));
     req.end();
   });
 }

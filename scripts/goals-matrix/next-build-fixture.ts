@@ -22,6 +22,9 @@ export function nextBuildFilesystem() {
   let replaceAfter: { path: string; operation: "resolve" | "stat" } | undefined;
   let lastName = "";
   let stalledReads = 0;
+  // Requests the page's client has sent and not yet seen answered, and whether it handled a reply this turn.
+  const awaiting = new Set<string>();
+  let delivering = false;
   backend.execute = (operation, args, bytes) => {
     operations.push({ operation, args: args.slice(), at: Date.now() });
     if (operation === "read") reads.push({ ino: fs.nodeForHandle(args[0]).ino, length: args[1], offset: args[2] });
@@ -43,8 +46,13 @@ export function nextBuildFilesystem() {
     write(files: Partial<Record<typeof nextBuildFiles[number]["path"], string>>) { for (const [path, text] of Object.entries(files)) original("writeFile", [path, false, false], new TextEncoder().encode(text)); },
     stall() { serviceBackend.prepareDescriptorRead = () => new Promise(resolve => { stalledReads++; releases.push(() => resolve(new Uint8Array())); }); },
     stalledReads: () => stalledReads,
-    /** True once this many file reads have started and every one of them has had its closing stat. */
-    readsFinished: (count: number) => operations.filter(row => row.operation === "read").length >= count && operations.every((row, index) => row.operation !== "read" || operations.slice(index + 1).some(later => later.operation === "stat" && later.args[0] === row.args[0])),
+    /**
+     * True once this many file reads have started and the page's client has handled the reply to
+     * every request it sent, and a turn of the event loop has run the code those replies wake (a
+     * read's next request, or its result). The backend finishing is not enough: a reply can still
+     * be on its way to the page.
+     */
+    readsSettled: (count: number) => operations.filter(row => row.operation === "read").length >= count && awaiting.size === 0 && !delivering,
     disposed: () => connections.every(pair => isRevoked(pair.client)),
     outstanding: () => Array.from(held.values()).reduce((total, set) => total + set.size, 0),
     filesystem: { fork() {
@@ -53,11 +61,18 @@ export function nextBuildFilesystem() {
       const pending = new Set<number>();
       held.set(connections.length, pending);
       const send = pair.client.port.postMessage.bind(pair.client.port);
+      const connection = connections.length;
       pair.client.port.postMessage = (message: unknown, transfer?: StructuredSerializeOptions | Transferable[]) => {
         track(message, pending);
+        if (message && typeof message === "object" && "id" in message) awaiting.add(`${connection}:${String(message.id)}`);
         if (Array.isArray(transfer)) send(message, transfer);
         else send(message, transfer);
       };
+      observeReplies(pair.client.port, reply => {
+        awaiting.delete(`${connection}:${String(reply)}`);
+        delivering = true;
+        setTimeout(() => { delivering = false; }, 0);
+      });
       service.connect(pair.server);
       return pair.client;
     } },
@@ -68,6 +83,21 @@ export function nextBuildFilesystem() {
       owner.client.port.close(); owner.server.port.close();
     },
   };
+}
+/** Calls `replied` with a reply's request id after the port's own message handler has run. */
+function observeReplies(port: MessagePort, replied: (id: unknown) => void): void {
+  let prototype: object | null = Object.getPrototypeOf(port);
+  let descriptor: PropertyDescriptor | undefined;
+  while (prototype && !descriptor?.set) { descriptor = Object.getOwnPropertyDescriptor(prototype, "onmessage"); prototype = Object.getPrototypeOf(prototype); }
+  const accessor = descriptor;
+  if (!accessor?.get || !accessor.set) throw new Error("Cannot observe filesystem replies");
+  Object.defineProperty(port, "onmessage", { configurable: true,
+    get: () => accessor.get?.call(port),
+    set: (listener: ((event: MessageEvent) => void) | null) => accessor.set?.call(port, typeof listener !== "function" ? listener : (event: MessageEvent) => {
+      try { listener.call(port, event); }
+      finally { if (event.data && typeof event.data === "object" && "completed" in event.data) replied(event.data.completed); }
+    }),
+  });
 }
 function track(message: unknown, pending: Set<number>): void {
   if (!message || typeof message !== "object") return;
