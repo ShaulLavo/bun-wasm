@@ -29,7 +29,13 @@ test("async asymmetric comparisons through the actual util and expect factories"
   const available = { ...modules, util, test_extensions: extensions };
   const diagnostics: string[] = [];
   const { exports } = factory("bun_test.js")({
-    native: { writeStderr: (text: string) => diagnostics.push(text) }, fakeTimers: { api: {} }, require: (name: keyof typeof available) => available[name],
+    native: {
+      writeStderr: (text: string) => diagnostics.push(text),
+      promiseState: (promise: Promise<unknown>) => Bun.peek.status(promise),
+      promiseResult: (promise: Promise<unknown>) => Bun.peek(promise),
+      promiseThen: (promise: Promise<unknown>, fulfilled: (value: unknown) => unknown, rejected?: (value: unknown) => unknown) =>
+        Promise.prototype.then.call(promise, fulfilled, rejected),
+    }, fakeTimers: { api: {} }, require: (name: keyof typeof available) => available[name],
   });
   const source = readFileSync(new URL("index.ts", fixture), "utf8").replace(/^import[^\n]+\n/, "");
   const run = expression(`(async (expect, mock, Bun, console) => {${source}\n})`);
