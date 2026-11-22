@@ -19,40 +19,72 @@ require_interface() {
     exit 1
   fi
 }
-runtime_url=$(jq -r '.devDependencies.waffle' package.json)
-version=$(printf '%s' "$runtime_url" | sed -E 's|.*/waffle-v([0-9.]+)/.*|\1|')
-[[ "$runtime_url" == "https://github.com/ShaulLavo/waffle/releases/download/waffle-v${version}/waffle-${version}.tgz" ]] || { echo 'Runtime pin is not a canonical Waffle release' >&2; exit 1; }
-revision=$(git ls-remote https://github.com/ShaulLavo/waffle.git "refs/tags/waffle-v${version}^{}" "refs/tags/waffle-v${version}" | tail -n 1 | cut -f1)
-[[ "$revision" =~ ^[0-9a-f]{40}$ ]]
-bun scripts/ci-release-download.ts "$runtime_url" "$scratch/runtime.tgz" 120000
+registry=https://registry.npmjs.org
+read_npm_release() {
+  local kind=$1 version=$2 name tag revision tags url integrity
+  name="@waffle-os/$kind"
+  tag="refs/tags/$name@$version"
+  url="$registry/$name/-/$kind-$version.tgz"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Expected an exact npm version for $name" >&2; return 1; }
+  curl -fsSL --max-time 120 "$registry/@waffle-os%2f$kind/$version" -o "$scratch/$kind-npm.json" || return 1
+  tags=$(git ls-remote https://github.com/ShaulLavo/waffle.git "$tag" "$tag^{}") || return 1
+  revision=$(awk -v tag="$tag" '$2 == tag { plain = $1 } $2 == tag "^{}" { peeled = $1 } END { print (peeled ? peeled : plain) }' <<< "$tags")
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "Missing source tag for $name@$version" >&2; return 1; }
+  if ! integrity=$(jq -er --arg name "$name" --arg version "$version" --arg revision "$revision" --arg url "$url" '
+    select(.name == $name and .version == $version and .gitHead == $revision and .dist.tarball == $url)
+    | .dist.integrity | select(test("^sha512-[A-Za-z0-9+/]+==$"))
+  ' "$scratch/$kind-npm.json"); then
+    echo "Registry metadata does not match the release tag for $name@$version" >&2
+    return 1
+  fi
+  curl -fsSL --max-time 120 "$url" -o "$scratch/$kind.tgz" || return 1
+  if [[ "$(openssl dgst -sha512 -binary "$scratch/$kind.tgz" | openssl base64 -A)" != "${integrity#sha512-}" ]]; then
+    echo "Registry integrity mismatch for $name@$version" >&2
+    return 1
+  fi
+  printf '%s %s\n' "$url" "$revision"
+}
+version=$(jq -er '.devDependencies["@waffle-os/runtime"]' package.json)
+if ! jq -e --arg version "$version" '.devDependencies.waffle == ("npm:@waffle-os/runtime@" + $version)' package.json > /dev/null; then
+  echo 'Runtime alias must match the exact npm runtime pin' >&2
+  exit 1
+fi
+runtime=$(read_npm_release runtime "$version")
+read -r runtime_url revision <<< "$runtime"
 tar -xOf "$scratch/runtime.tgz" package/package.json > "$scratch/runtime-package.json"
 require_interface "$scratch/runtime-package.json" Runtime
-jq -e --arg version "$version" '.name == "waffle" and .version == $version' "$scratch/runtime-package.json" > /dev/null
+jq -e --arg version "$version" '.name == "@waffle-os/runtime" and .version == $version' "$scratch/runtime-package.json" > /dev/null
 jq --arg url "$runtime_url" --arg version "$version" --arg revision "$revision" \
   --arg sha256 "$(sha256sum "$scratch/runtime.tgz" | cut -d ' ' -f1)" \
   --argjson bytes "$(wc -c < "$scratch/runtime.tgz")" --argjson interface "$host_interface" \
-  '.hostInterface = $interface | .url = $url | .sha256 = $sha256 | .bytes = $bytes | .version = $version | .sourceCommit = $revision' \
+  --arg manifestHash "$(sha256sum "$scratch/runtime-package.json" | cut -d ' ' -f1)" \
+  '.hostInterface = $interface | .url = $url | .sha256 = $sha256 | .bytes = $bytes | .version = $version | .sourceCommit = $revision | .packageManifestSha256 = $manifestHash' \
   "$record" > "$scratch/record.json"
 for file in package.json scripts/build-wasi-libc.sh patches/wasi-libc/preopen-scan.patch; do
   curl -fsSL --max-time 120 "https://raw.githubusercontent.com/ShaulLavo/waffle/${revision}/packages/waffle/${file}" -o "$scratch/input"
-  tar -xOf "$scratch/runtime.tgz" "package/$file" > "$scratch/packaged-input"
-  if ! cmp -s "$scratch/input" "$scratch/packaged-input"; then
-    echo "Runtime archive differs from its tagged source: $file" >&2
-    exit 1
+  if [[ "$file" == package.json ]]; then
+    require_interface "$scratch/input" "Runtime source"
+    jq -e --arg version "$version" '.name == "@waffle-os/runtime" and .version == $version' "$scratch/input" > /dev/null
+  else
+    tar -xOf "$scratch/runtime.tgz" "package/$file" > "$scratch/packaged-input"
+    if ! cmp -s "$scratch/input" "$scratch/packaged-input"; then
+      echo "Runtime archive differs from its tagged source: $file" >&2
+      exit 1
+    fi
   fi
   jq --arg path "$file" --arg hash "$(sha256sum "$scratch/input" | cut -d ' ' -f1)" \
     '.files[$path] = $hash' "$scratch/record.json" > "$scratch/next.json"
   mv "$scratch/next.json" "$scratch/record.json"
 done
-relay_url=$(jq -er '.peerDependencies["waffle-relay"]' package.json)
-relay_version=$(printf '%s' "$relay_url" | sed -E 's|.*/waffle-v([0-9.]+)/.*|\1|')
-[[ "$relay_url" == "https://github.com/ShaulLavo/waffle/releases/download/waffle-v${relay_version}/waffle-relay-${relay_version}.tgz" ]]
-relay_revision=$(git ls-remote https://github.com/ShaulLavo/waffle.git "refs/tags/waffle-v${relay_version}^{}" "refs/tags/waffle-v${relay_version}" | tail -n 1 | cut -f1)
-[[ "$relay_revision" =~ ^[0-9a-f]{40}$ ]]
-bun scripts/ci-release-download.ts "$relay_url" "$scratch/relay.tgz" 120000
+relay_version=$(jq -er '.peerDependencies["@waffle-os/relay"]' package.json)
+relay=$(read_npm_release relay "$relay_version")
+read -r relay_url relay_revision <<< "$relay"
 tar -xOf "$scratch/relay.tgz" package/package.json > "$scratch/relay-package.json"
 require_interface "$scratch/relay-package.json" Relay
-jq -e --arg version "$relay_version" '.name == "waffle-relay" and .version == $version and .peerDependencies.waffle == "*" and .dependencies.waffle == null' "$scratch/relay-package.json" > /dev/null
+jq -e --arg version "$relay_version" '
+  .name == "@waffle-os/relay" and .version == $version and .peerDependencies["@waffle-os/runtime"] == "*"
+  and .dependencies["@waffle-os/runtime"] == null and .dependencies.waffle == null and .peerDependencies.waffle == null
+' "$scratch/relay-package.json" > /dev/null
 jq --arg url "$relay_url" --arg version "$relay_version" --arg revision "$relay_revision" \
   --arg hash "$(sha256sum "$scratch/relay.tgz" | cut -d ' ' -f1)" \
   --argjson bytes "$(wc -c < "$scratch/relay.tgz")" --argjson interface "$host_interface" \

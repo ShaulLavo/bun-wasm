@@ -4,23 +4,26 @@ Register Bun as a program on a [Waffle](https://github.com/ShaulLavo/waffle) `Ru
 
 bun-wasm is not on npm. You install it as a Git dependency.
 
-> **Early API.** The embedding API and Waffle's public API are still changing, and not every path works yet. The snippets below follow the package's code and its package tests, but this guide has not been run as a complete page, so expect to adjust them. Pin exact commits and re-check this guide when you update either one.
+> **Early API.** The embedding API and Waffle's public API are still changing. The snippets follow the package tests. Recheck them when you update either pin.
 
 ## Install the package
 
-Pin both repositories to exact commits. The Waffle commit must be the one in bun-wasm's own `peerDependencies`. At this revision that is `c1cb67c300439af24335d0b2ec481bfb52f79a01`.
+Pin bun-wasm to an exact commit. Use that checkout's `waffle` development pin
+for the app's runtime.
 
 ```json
 {
 	"dependencies": {
 		"bun-wasm": "github:ShaulLavo/bun-wasm#<commit>",
-		"waffle": "github:ShaulLavo/waffle#c1cb67c300439af24335d0b2ec481bfb52f79a01"
+		"waffle": "npm:@waffle-os/runtime@0.0.146"
 	},
-	"trustedDependencies": ["bun-wasm", "waffle"]
+	"trustedDependencies": ["bun-wasm"]
 }
 ```
 
-Run `bun install`. Both packages generate their Node entry points in a Bun-only `prepare` script, which is why both must be in `trustedDependencies`. The package ships no `.wasm` file. The guest downloads at run time.
+Run `bun install`. The bun-wasm Git dependency generates its Node entry points
+during `prepare`. The npm runtime ships its Node entry points. The guest
+downloads at run time.
 
 ## Bundle the worker
 

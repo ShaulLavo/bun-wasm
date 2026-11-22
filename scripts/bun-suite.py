@@ -166,7 +166,7 @@ def runtime_package_provenance():
         metadata = package / "package.json"
         if metadata.is_file():
             data = json.loads(metadata.read_text())
-            if data.get("name") == "waffle":
+            if data.get("name") == "@waffle-os/runtime":
                 break
     else:
         raise RuntimeError("Cannot locate installed waffle metadata")

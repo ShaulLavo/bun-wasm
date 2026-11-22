@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import release from "./waffle-release-inputs.json";
-import { assertExactHostInterface, packageHostInterface, parseHostInterface } from "./waffle-release-inputs";
+import { waffleRuntimePin, assertExactHostInterface, packageHostInterface, parseHostInterface } from "./waffle-release-inputs";
 import { writeInstalledWaffleFixture } from "./fixtures/waffle-host-interface";
 import { assertInstalledWaffle, waffleCommits } from "../tests/shell-product/waffle-stage";
 import { bundleConsumer, installConsumer } from "../web/tests/shell-consumer-install";
@@ -13,7 +13,7 @@ const required = parseHostInterface(release.hostInterface, "fixture inputs");
 const incompatible = [1, release.hostInterface + 1].filter(value => value !== release.hostInterface);
 const historical = "git+https://github.com/ShaulLavo/waffle.git#c1cb67c300439af24335d0b2ec481bfb52f79a01";
 
-async function withInstallation(run: (root: string, fixture: Awaited<ReturnType<typeof writeInstalledWaffleFixture>>) => Promise<void>, selected = release.url) {
+async function withInstallation(run: (root: string, fixture: Awaited<ReturnType<typeof writeInstalledWaffleFixture>>) => Promise<void>, selected = waffleRuntimePin) {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-host-interface-"));
   try { await run(root, await writeInstalledWaffleFixture(root, selected)); }
   finally { await rm(root, { recursive: true, force: true }); }
@@ -41,13 +41,13 @@ test("wildcard placement retains one physical runtime, one lock entry, and uncha
     const shell = join(root, "node_modules/bash-web");
     await mkdir(join(shell, "node_modules"));
     await symlink("../../waffle", join(shell, "node_modules/waffle"));
-    expect(await assertInstalledWaffle(root, release.url)).toBe(required);
+    expect(await assertInstalledWaffle(root, waffleRuntimePin)).toBe(required);
     const manifest = join(source, "package.json");
     const metadata = await Bun.file(manifest).json();
-    await Bun.write(manifest, JSON.stringify({ ...metadata, peerDependencies: { waffle: release.url } }));
-    expect(await assertInstalledWaffle(root, release.url)).toBe(required);
+    await Bun.write(manifest, JSON.stringify({ ...metadata, peerDependencies: { waffle: waffleRuntimePin } }));
+    expect(await assertInstalledWaffle(root, waffleRuntimePin)).toBe(required);
     await Bun.write(manifest, JSON.stringify(metadata));
-    expect(await assertInstalledWaffle(root, release.url)).toBe(required);
+    expect(await assertInstalledWaffle(root, waffleRuntimePin)).toBe(required);
     expect(await Promise.all(files.map(path => readFile(path)))).toEqual(before);
   });
 });
@@ -71,7 +71,7 @@ test("a nested duplicate fails physical resolution even if its metadata matches"
   await withInstallation(async root => {
     const nested = join(root, "node_modules/waffle-base/node_modules/waffle/package.json");
     await Bun.write(nested, await Bun.file(join(root, "node_modules/waffle/package.json")).bytes());
-    await expect(assertInstalledWaffle(root, release.url)).rejects.toThrow("One physical runtime peer");
+    await expect(assertInstalledWaffle(root, waffleRuntimePin)).rejects.toThrow("One physical runtime peer");
   });
 });
 
@@ -79,7 +79,7 @@ test("a second runtime lock entry fails even with no second installed directory"
   await withInstallation(async (root, fixture) => {
     fixture.packages["waffle-base/waffle"] = fixture.packages.waffle;
     await Bun.write(join(root, "bun.lock"), JSON.stringify(fixture.lock));
-    await expect(assertInstalledWaffle(root, release.url)).rejects.toThrow("One runtime lock entry");
+    await expect(assertInstalledWaffle(root, waffleRuntimePin)).rejects.toThrow("One runtime lock entry");
   });
 });
 
@@ -94,7 +94,7 @@ test("historical exact Git peers need metadata and preserve their exact peer edg
     await Bun.write(path, JSON.stringify({ ...metadata, peerDependencies: { waffle: historical.slice(0, -40) + "d".repeat(40) } }));
     await expect(assertInstalledWaffle(root, historical)).rejects.toThrow("exact selected runtime");
   }, historical);
-  expect(waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: "a".repeat(40) }, "*").wafflePeer).toBe(release.url);
+  expect(waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: "a".repeat(40) }, "*").wafflePeer).toBe(waffleRuntimePin);
   expect(() => waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: "a".repeat(40), SHELL_PRODUCT_WAFFLE_COMMIT: "b".repeat(40) }, "*")).toThrow("must match");
 });
 
@@ -102,8 +102,8 @@ test("published runtime dependencies remain forbidden rather than treated as wil
   await withInstallation(async root => {
     const path = join(root, "node_modules/waffle-base/package.json");
     const metadata = await Bun.file(path).json();
-    await Bun.write(path, JSON.stringify({ ...metadata, dependencies: { waffle: release.url } }));
-    await expect(assertInstalledWaffle(root, release.url)).rejects.toThrow("published runtime dependency");
+    await Bun.write(path, JSON.stringify({ ...metadata, dependencies: { waffle: waffleRuntimePin } }));
+    await expect(assertInstalledWaffle(root, waffleRuntimePin)).rejects.toThrow("published runtime dependency");
   });
 });
 

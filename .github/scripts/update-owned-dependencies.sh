@@ -28,15 +28,22 @@ update_release_pins() {
         "$file"
       continue
     fi
-    # The runtime and its relay ship in the same waffle-v release, so they move together.
-    if [[ "$release_prefix" == 'waffle-v' ]]; then
-      sed -E -i \
-        "s|waffle-v[0-9]+\.[0-9]+\.[0-9]+/waffle-(relay-)?[0-9]+\.[0-9]+\.[0-9]+\.tgz|${tag}/waffle-\1${version}.tgz|g" \
-        "$file"
-      continue
-    fi
     sed -E -i \
       "s|programs-v[0-9]+\.[0-9]+\.[0-9]+/waffle-([[:alnum:]-]+)-[0-9]+\.[0-9]+\.[0-9]+\.tgz|${tag}/waffle-\1-${version}.tgz|g" \
+      "$file"
+  done
+}
+
+update_waffle_npm_pins() {
+  local runtime relay file
+  runtime=$(npm view --registry=https://registry.npmjs.org/ @waffle-os/runtime dist-tags.latest)
+  relay=$(npm view --registry=https://registry.npmjs.org/ @waffle-os/relay dist-tags.latest)
+  [[ "$runtime" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$relay" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+  for file in "${files[@]}"; do
+    sed -E -i \
+      -e "s|(\"@waffle-os/runtime\": \")[0-9]+\.[0-9]+\.[0-9]+\"|\1${runtime}\"|g" \
+      -e "s|(\"waffle\": \"npm:@waffle-os/runtime@)[0-9]+\.[0-9]+\.[0-9]+\"|\1${runtime}\"|g" \
+      -e "s|(\"@waffle-os/relay\": \")[0-9]+\.[0-9]+\.[0-9]+\"|\1${relay}\"|g" \
       "$file"
   done
 }
@@ -55,7 +62,7 @@ if [[ ! "$bash_revision" =~ ^[0-9a-f]{40}$ ]]; then
   exit 1
 fi
 sed -E -i "s/^commit=[0-9a-f]{40}$/commit=${bash_revision}/" scripts/build-bash-web-shell.sh
-update_release_pins ShaulLavo/waffle waffle-v
+update_waffle_npm_pins
 update_release_pins ShaulLavo/waffle programs-v
 
 bash .github/scripts/update-waffle-records.sh

@@ -34,7 +34,7 @@ test("browser build uses consumer exports through a dotted Git cache, not siblin
     const result = await Bun.build(config);
     expect(result.success).toBe(true);
     expect(await result.outputs[0]!.text()).toContain("consumer-installed-git");
-    await writeFile(entry, 'import { makeError } from "waffle/core"; import { RuntimeError } from "waffle/errors"; globalThis.sameErrorClass = makeError() instanceof RuntimeError;');
+    await writeFile(entry, 'import { makeError } from "waffle/core"; import { RuntimeError } from "@waffle-os/runtime/errors"; globalThis.sameErrorClass = makeError() instanceof RuntimeError;');
     const identityBuild = await Bun.build({ ...config, format: "iife", splitting: false });
     expect(identityBuild.success).toBe(true);
     const context = { sameErrorClass: false };

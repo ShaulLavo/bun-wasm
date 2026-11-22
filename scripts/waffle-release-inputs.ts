@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import release from "./waffle-release-inputs.json";
 import { releaseDownload } from "./ci-release-download";
@@ -6,6 +6,8 @@ import { releaseDownload } from "./ci-release-download";
 type Release = typeof release;
 type Download = (url: string) => Promise<Response>;
 const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+export const waffleRuntimeName = "@waffle-os/runtime";
+export const waffleRuntimePin = `npm:${waffleRuntimeName}@${release.version}`;
 
 type HostInterface = number & { readonly __brand: "WaffleHostInterface" };
 
@@ -26,10 +28,15 @@ export function assertExactHostInterface(required: HostInterface, provided: Host
     throw new Error(`${source}: waffleHostInterface ${required} does not match runtime ${provided}`);
 }
 
-function archiveHostInterface(archive: string): HostInterface {
+function verifyArchiveManifest(archive: string, selected: Release) {
   const result = Bun.spawnSync(["tar", "-xOf", archive, "package/package.json"], { stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) throw new Error(`Missing Waffle archive package metadata: ${archive}`);
-  return packageHostInterface(JSON.parse(result.stdout.toString()), archive);
+  const metadata = JSON.parse(result.stdout.toString());
+  assertExactHostInterface(parseHostInterface(selected.hostInterface, "Waffle release inputs"), packageHostInterface(metadata, archive), archive);
+  if (metadata.name !== waffleRuntimeName || metadata.version !== selected.version)
+    throw new Error(`Waffle archive identity does not match the pinned release: ${archive}`);
+  if (hash(result.stdout) !== selected.packageManifestSha256)
+    throw new Error(`Waffle archive manifest checksum mismatch: ${archive}`);
 }
 
 export function waffleNativeDirectory(): string {
@@ -62,10 +69,10 @@ export async function prepareWaffleReleaseArchive(
   download: Download = releaseDownload,
   selected: Release = release,
 ): Promise<string> {
-  if (peer !== selected.url) throw new Error("Waffle release pin does not match its checked source inputs");
+  if (peer !== `npm:${waffleRuntimeName}@${selected.version}`) throw new Error("Waffle release pin does not match its checked source inputs");
   await pinnedFile(archive, selected.url, selected.sha256, download);
   if (Bun.file(archive).size !== selected.bytes) throw new Error("Waffle release archive size mismatch");
-  assertExactHostInterface(parseHostInterface(selected.hostInterface, "Waffle release inputs"), archiveHostInterface(archive), archive);
+  verifyArchiveManifest(archive, selected);
   return archive;
 }
 
@@ -76,13 +83,19 @@ export async function prepareWaffleNativeInputs(
   selected: Release = release,
 ): Promise<string> {
   const manifest = await Bun.file(join(repository, "package.json")).json();
-  if (manifest.devDependencies?.waffle !== selected.url) throw new Error("Waffle release pin does not match its checked source inputs");
-  const installed = dirname(Bun.resolveSync("waffle/package.json", repository));
-  const metadata = await Bun.file(join(installed, "package.json")).json();
-  if (metadata.name !== "waffle" || metadata.version !== selected.version) throw new Error("Installed Waffle identity does not match the pinned release");
+  if (manifest.devDependencies?.[waffleRuntimeName] !== selected.version ||
+    manifest.devDependencies?.waffle !== `npm:${waffleRuntimeName}@${selected.version}`)
+    throw new Error("Waffle release pin does not match its checked source inputs");
+  const installed = dirname(Bun.resolveSync(`${waffleRuntimeName}/package.json`, repository));
+  if (await realpath(join(installed, "package.json")) !== await realpath(Bun.resolveSync("waffle/package.json", repository)))
+    throw new Error("Waffle runtime and its npm alias must resolve to one physical package");
+  const installedManifest = await Bun.file(join(installed, "package.json")).bytes();
+  const metadata = JSON.parse(new TextDecoder().decode(installedManifest));
+  if (metadata.name !== waffleRuntimeName || metadata.version !== selected.version) throw new Error("Installed Waffle identity does not match the pinned release");
   const required = parseHostInterface(selected.hostInterface, "Waffle release inputs");
   assertExactHostInterface(packageHostInterface(manifest, "Bun package"), required, "Bun package");
   assertExactHostInterface(packageHostInterface(metadata, "Installed Waffle"), required, "Installed Waffle");
+  if (hash(installedManifest) !== selected.packageManifestSha256) throw new Error("Installed Waffle manifest differs from the npm archive");
   const archive = join(dirname(directory), "runtime.tgz");
   await prepareWaffleReleaseArchive(manifest.devDependencies.waffle, archive, download, selected);
   if (hash(await Bun.file(join(installed, "scripts/build-wasi-libc.sh")).bytes()) !== selected.files["scripts/build-wasi-libc.sh"])

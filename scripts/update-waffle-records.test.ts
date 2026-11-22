@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { releaseCacheKey } from "./ci-release-download";
 import record from "./waffle-release-inputs.json";
+import { waffleRuntimePin } from "./waffle-release-inputs";
 // The published programs-v0.0.15 manifest, keeping only the waffle-base package and no install receipt.
 import published from "./fixtures/program-release-v0.0.15.trimmed.json";
 
@@ -37,7 +38,7 @@ cp "$source" "$out"
 const fakeGit = `#!/usr/bin/env bash
 set -euo pipefail
 [[ "$1" == ls-remote ]] || { echo "unexpected git $*" >&2; exit 2; }
-tag=\${4#refs/tags/}
+tag=\${3#refs/tags/}
 revision=$(awk -F '\\t' -v tag="$tag" '$1 == tag { print $2 }' "$FIXTURE_ROOT/tags")
 [[ -n "$revision" ]] || { echo "unknown tag $tag" >&2; exit 2; }
 printf '%s\\trefs/tags/%s\\n' "$revision" "$tag"
@@ -45,7 +46,7 @@ printf '%s\\trefs/tags/%s\\n' "$revision" "$tag"
 
 type Release = { version: string; sourceCommit: string };
 const relayUrl = (version: string) =>
-  `https://github.com/ShaulLavo/waffle/releases/download/waffle-v${version}/waffle-relay-${version}.tgz`;
+  `https://registry.npmjs.org/@waffle-os/relay/-/relay-${version}.tgz`;
 const pinnedRelay: Release = { version: record.relay.version, sourceCommit: record.relay.sourceCommit };
 
 function baseUrl(manifest: Manifest): string {
@@ -60,6 +61,13 @@ async function serve(root: string, routes: string[], url: string, bytes: Uint8Ar
   if (url.includes("/releases/download/")) await writeFile(join(root, "assets", releaseCacheKey(url)), bytes);
   routes.push(`${url}\t${path}`);
   return path;
+}
+
+async function serveNpmRelease(root: string, routes: string[], kind: string, release: Release, url: string, bytes: Uint8Array) {
+  const integrity = "sha512-" + new Bun.CryptoHasher("sha512").update(bytes).digest("base64");
+  const metadata = { name: "@waffle-os/" + kind, version: release.version, gitHead: release.sourceCommit, dist: { tarball: url, integrity } };
+  await serve(root, routes, url, bytes);
+  return serve(root, routes, "https://registry.npmjs.org/@waffle-os%2f" + kind + "/" + release.version, encode(JSON.stringify(metadata)));
 }
 
 async function packFixture(root: string, name: string, files: Readonly<Record<string, Uint8Array>>) {
@@ -92,16 +100,19 @@ async function fixture(manifest: Manifest, interfaces: Record<keyof typeof match
   };
   const manifestBytes = encode(JSON.stringify(tagged));
   const routes: string[] = [];
+  const runtimeMetadata = { name: "@waffle-os/runtime", version: record.version, waffleHostInterface: interfaces.runtime };
   const runtimeContents = {
-    "package.json": encode(JSON.stringify({ name: "waffle", version: record.version, waffleHostInterface: interfaces.runtime })),
+    "package.json": encode(JSON.stringify(runtimeMetadata, null, 2)),
     "scripts/build-wasi-libc.sh": encode("exact released builder"),
     "patches/wasi-libc/preopen-scan.patch": encode("exact reviewed source patch"),
   };
-  await serve(root, routes, record.url, await packFixture(root, "runtime", runtimeContents));
-  const relayMetadata = { name: "waffle-relay", version: relayRelease.version, waffleHostInterface: interfaces.relay, peerDependencies: { waffle: "*" } };
+  const runtimeManifest = encode(JSON.stringify(runtimeMetadata));
+  const runtime = await packFixture(root, "runtime", { ...runtimeContents, "package.json": runtimeManifest });
+  const npmMetadata = await serveNpmRelease(root, routes, "runtime", record, record.url, runtime);
+  const relayMetadata = { name: "@waffle-os/relay", version: relayRelease.version, waffleHostInterface: interfaces.relay, peerDependencies: { "@waffle-os/runtime": "*" } };
   const relay = await packFixture(root, "relay", { "package.json": encode(JSON.stringify(relayMetadata)) });
-  await serve(root, routes, relayUrl(relayRelease.version), relay);
-  const tags = new Map([[`waffle-v${record.version}`, record.sourceCommit], [`waffle-v${relayRelease.version}`, relayRelease.sourceCommit]]);
+  await serveNpmRelease(root, routes, "relay", relayRelease, relayUrl(relayRelease.version), relay);
+  const tags = new Map([[`@waffle-os/runtime@${record.version}`, record.sourceCommit], [`@waffle-os/relay@${relayRelease.version}`, relayRelease.sourceCommit]]);
   await writeFile(join(root, "tags"), Array.from(tags, ([tag, revision]) => `${tag}\t${revision}\n`).join(""));
   await serve(root, routes, baseUrl(tagged), base);
   const manifestUrl = baseUrl(tagged).replace(/\/[^/]+$/, "/program-release.json");
@@ -116,14 +127,14 @@ async function fixture(manifest: Manifest, interfaces: Record<keyof typeof match
   await chmod(join(root, "bin/git"), 0o755);
   await writeFile(join(repository, "package.json"), JSON.stringify({
     waffleHostInterface: record.hostInterface,
-    devDependencies: { waffle: record.url },
-    peerDependencies: { "waffle-base": baseUrl(tagged), "waffle-relay": relayUrl(relayRelease.version) },
+    devDependencies: { waffle: waffleRuntimePin, "@waffle-os/runtime": record.version },
+    peerDependencies: { "waffle-base": baseUrl(tagged), "@waffle-os/relay": relayRelease.version },
   }));
   const before = JSON.stringify(record, null, 2);
   await writeFile(join(repository, "scripts/waffle-release-inputs.json"), before);
   const basePin = { url: baseUrl(tagged), bytes: base.length, sha256: digest(base),
     sourceDirectory: originalBase.sourceDirectory, sourceTree: originalBase.sourceTree, version: originalBase.version };
-  return { root, repository, before, manifestBytes, manifestUrl, base, basePin, relay, sourcePaths };
+  return { root, repository, before, manifestBytes, manifestUrl, base, basePin, runtimeManifest, npmMetadata, relay, sourcePaths };
 }
 
 function runUpdater(root: string, repository: string) {
@@ -202,6 +213,11 @@ test("the updater binds relay bytes and source to its exact-interface release", 
     expect(runUpdater(f.root, f.repository).exitCode).toBe(0);
     const updated = await readRecord(f.repository);
     expect(updated.sourceCommit).toBe(record.sourceCommit);
+    const sourceManifest = f.sourcePaths.get("package.json");
+    if (!sourceManifest) throw new Error("Missing fixture source manifest");
+    expect(updated.files["package.json"]).toBe(digest(await Bun.file(sourceManifest).bytes()));
+    expect(updated.packageManifestSha256).toBe(digest(f.runtimeManifest));
+    expect(updated.packageManifestSha256).not.toBe(updated.files["package.json"]);
     expect(updated.relay).toEqual({ url: relayUrl(relayRelease.version), ...relayRelease,
       sha256: digest(f.relay), bytes: f.relay.length, hostInterface: record.hostInterface });
   } finally { await rm(f.root, { recursive: true, force: true }); }
@@ -235,16 +251,14 @@ test("the updater rejects a native source file that differs from the runtime arc
 });
 
 
-test("the updater refuses a same-version runtime URL outside its release before writing", async () => {
+test("the updater refuses an npm runtime archive URL outside the canonical registry", async () => {
   const f = await fixture(published);
   try {
-    const path = join(f.repository, "package.json");
-    await writeFile(path, JSON.stringify({ waffleHostInterface: record.hostInterface,
-      devDependencies: { waffle: record.url.replace("github.com", "example.invalid") },
-      peerDependencies: { "waffle-base": f.basePin.url, "waffle-relay": record.relay.url } }));
+    const original = await readFile(f.npmMetadata, "utf8");
+    await writeFile(f.npmMetadata, original.replace("registry.npmjs.org", "example.invalid"));
     const result = runUpdater(f.root, f.repository);
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr.toString()).toContain("canonical Waffle release");
+    expect(result.stderr.toString()).toContain("Registry metadata does not match");
     expect(await readFile(join(f.repository, "scripts/waffle-release-inputs.json"), "utf8")).toBe(f.before);
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });

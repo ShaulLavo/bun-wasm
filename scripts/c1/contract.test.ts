@@ -8,8 +8,8 @@ import waffleRelease from "../waffle-release-inputs.json";
 import {
   DELIVERY_RECORDS, EXECUTABLE_ROLES, HANDOFF_ROLES, ContractError, RELAY_DECISION, draftEntries, parseConfig, parseDelivery, parseHandoff, parseInputManifest, parseIntake, type ConsumerHandoff,
 } from "./contract.ts";
-import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, fixtureInputManifest, writeContractFixture, writeSealedFixture } from "./contract-fixture.ts";
-import { admitIntake, readSealedDelivery, requireSealedArtifacts, sealDelivery } from "./delivery.ts";
+import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, fixtureArchives, fixtureInputManifest, writeContractFixture, writeFixtureDelivery, writeSealedFixture } from "./contract-fixture.ts";
+import { admitIntake, buildHandoff, readSealedDelivery, requireSealedArtifacts, sealDelivery } from "./delivery.ts";
 import { admitReplayHandoffFile, parseReplay, parseReplayHandoff, requireReplayHandoff } from "./replay.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
 import { admitReleases } from "./inputs.ts";
@@ -51,7 +51,7 @@ function replaceJson(root: string, member: string, change: (value: Record<string
 test("the executable fixture writes every contract file and each parses strictly", () => {
   const fixture = writeContractFixture(fresh());
   const delivery = parseDelivery(json(join(fixture.delivery, "DELIVERY.json")));
-  expect(delivery.files.map(member => member.path).sort()).toEqual(completePublicationArtifactPaths().concat(["split/web/worker.js"]).sort());
+  expect(delivery.files.map(member => member.path).sort()).toEqual(completePublicationArtifactPaths(fixtureArchives(FIXTURE_TUPLE)).concat(["split/web/worker.js"]).sort());
   expect(parseIntake(json(fixture.intake)).members).toBe(delivery.files.length);
   const replay = parseReplayHandoff(json(fixture.handoff));
   const handoff = replay.product;
@@ -184,8 +184,15 @@ test("a manifest that claims a different mode than the registry refuses", () => 
 });
 
 test("DELIVERY.json is written exactly once", () => {
-  const root = sealedFixture();
-  expect(() => sealDelivery(root, { source: FIXTURE_SOURCE, tuple: FIXTURE_TUPLE, configSha256: sha256("c"), inputsSha256: sha256("i") })).toThrow();
+  const root = fresh();
+  const tuple = { runtime: waffleRelease.version, relay: waffleRelease.relay.version, programs: waffleRelease.programs.tag,
+    programManifestSchema: waffleRelease.programs.schema, hostInterface: waffleRelease.hostInterface };
+  const facts = { source: FIXTURE_SOURCE, tuple, configSha256: sha256("config"), inputsSha256: sha256("inputs") };
+  writeFixtureDelivery(root, handoffMemberPaths());
+  const manifest = sealDelivery(root, facts);
+  const original = readFileSync(manifest.path);
+  expect(() => sealDelivery(root, { ...facts, configSha256: sha256("other config") })).toThrow(expect.objectContaining({ code: "EEXIST" }));
+  expect(readFileSync(manifest.path)).toEqual(original);
 });
 
 test("consumers start only from an intake of this exact delivery", () => {
@@ -221,14 +228,26 @@ test("parsers reject unknown fields, unauthenticated verified labels and a Relay
 
 test("the delivery keeps the runtime and relay archives this source pins, not a historical name", () => {
   const archives = selectedReleaseArchives();
-  expect(archives.runtime).toEqual({ version: waffleRelease.version, url: waffleRelease.url, path: `runtime/waffle-${waffleRelease.version}.tgz` });
+  expect(archives.runtime).toEqual({ version: waffleRelease.version, url: waffleRelease.url, path: `runtime/runtime-${waffleRelease.version}.tgz` });
   expect(archives.relay).toEqual({ version: waffleRelease.relay.version, url: waffleRelease.relay.url,
-    path: `relay/waffle-relay-${waffleRelease.relay.version}.tgz` });
+    path: `relay/relay-${waffleRelease.relay.version}.tgz` });
   const registry = completePublicationArtifactPaths();
   expect(registry).toContain(archives.runtime.path);
   expect(registry).toContain(archives.relay.path);
   expect(registry.some(path => path.includes("runtime107"))).toBe(false);
   expect(new Set(registry).size).toBe(registry.length);
+});
+
+test.each(["GitHub", "npm"] as const)("a sealed replay resolves its own %s Waffle archive names", registry => {
+  const tuple = registry === "npm" ? { ...FIXTURE_TUPLE, runtime: "0.0.145", relay: "0.0.144" } : FIXTURE_TUPLE;
+  const { deliveryRoot: root } = writeSealedFixture(fresh(), undefined, tuple, registry);
+  const { runtime, relay } = tuple;
+  const runtimePath = registry === "npm" ? `runtime/runtime-${runtime}.tgz` : `runtime/waffle-${runtime}.tgz`;
+  const relayPath = registry === "npm" ? `relay/relay-${relay}.tgz` : `relay/waffle-relay-${relay}.tgz`;
+  const delivery = readSealedDelivery(root);
+  const handoff = buildHandoff(delivery, delivery.identity, delivery.inputs.consumers, delivery.config.fixtures, root, root);
+  expect(handoff.artifacts.runtimeArchive.path).toBe(join(root, runtimePath));
+  expect(handoff.artifacts.relayArchive.path).toBe(join(root, relayPath));
 });
 
 
@@ -238,11 +257,14 @@ function releaseAdmissionFixture() {
     programs: waffleRelease.programs.tag, programManifestSchema: waffleRelease.programs.schema,
     hostInterface: waffleRelease.hostInterface };
   const input = fixtureInputManifest(root, tuple);
+  const relayPath = join(root, `relay-${tuple.relay}.tgz`);
+  writeFileSync(relayPath, readFileSync(input.relay.archive.path));
+  const relay = { ...input.relay, archive: fileIdentity(relayPath) };
   const archives = input.programs.archives.map(file => ({ name: "waffle-base", filename: file.path.split("/").at(-1), sha256: file.sha256, bytes: file.bytes }));
   writeFileSync(input.programs.manifest.path, JSON.stringify({ schema: tuple.programManifestSchema, tag: tuple.programs,
     sourceCommit: waffleRelease.programs.sourceCommit, runtime: { waffleHostInterface: tuple.hostInterface }, packages: archives }));
   writeFileSync(input.programs.checksums.path, archives.map(file => `${file.sha256}  ${file.filename}\n`).join(""));
-  const manifest = { ...input, programs: { ...input.programs, manifest: fileIdentity(input.programs.manifest.path), checksums: fileIdentity(input.programs.checksums.path) } };
+  const manifest = { ...input, relay, programs: { ...input.programs, manifest: fileIdentity(input.programs.manifest.path), checksums: fileIdentity(input.programs.checksums.path) } };
   const pin = { ...waffleRelease, sha256: input.runtime.archive.sha256, bytes: input.runtime.archive.bytes,
     relay: { ...waffleRelease.relay, sha256: input.relay.archive.sha256, bytes: input.relay.archive.bytes },
     programs: { ...waffleRelease.programs, manifest: { ...waffleRelease.programs.manifest,
