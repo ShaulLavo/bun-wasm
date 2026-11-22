@@ -1829,6 +1829,7 @@
         f.write("\n[Circular]");
         continue;
       }
+      if (f.visited.size >= MAX_NESTING) throw new RangeError(CALL_STACK_MESSAGE);
       f.visited.add(err);
       f.write("\n");
       const prevDepth = f.depth;
