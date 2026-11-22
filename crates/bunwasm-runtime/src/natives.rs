@@ -140,6 +140,13 @@ pub fn io_error(err: io::Error, syscall: &str, path: Option<&str>) -> NativeErro
         .prop("code", code)
 }
 
+fn millis(time: io::Result<SystemTime>) -> f64 {
+    time.ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
+}
+
 fn io_error_with_dest(err: io::Error, syscall: &str, path: &str, dest: &str) -> NativeError {
     let (code, errno, desc) = errno_info(&err);
     let message = format!("{code}: {desc}, {syscall} '{path}' -> '{dest}'");
@@ -167,13 +174,6 @@ fn rm_eisdir_error(path: &str) -> NativeError {
     .prop("syscall", "rm")
     .prop("path", path)
     .prop("info", Val::from(info))
-}
-
-fn millis(time: io::Result<SystemTime>) -> f64 {
-    time.ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs_f64() * 1000.0)
-        .unwrap_or(0.0)
 }
 
 #[cfg(any(unix, test))]
