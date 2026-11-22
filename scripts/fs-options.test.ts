@@ -314,3 +314,67 @@ test("an abstract socket name is not a filesystem path: unlink rejects its NUL b
   Object.assign(native, { unlink, rm: unlink });
   expect(() => fs.unlinkSync("\0nuxt-vite-node.sock")).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
 });
+
+test("fd APIs validate integer bounds before reaching native syscalls and report EBADF for fchown/fchmod", () => {
+  const { fs, native } = fixture();
+  const calls: string[] = [];
+  const baseClose = native.close;
+  const baseWrite = native.write;
+  Object.assign(native, {
+    close(fd: number) { calls.push(`close:${fd}`); return baseClose(fd); },
+    write(fd: number, bytes: string | Uint8Array) { calls.push(`write:${fd}`); return baseWrite(fd, bytes); },
+    ftruncate(fd: number) { calls.push(`ftruncate:${fd}`); },
+    read(fd: number) { calls.push(`read:${fd}`); return new Uint8Array(0); },
+  });
+
+  const noop = () => {};
+  for (const badFd of [3.5, -1, 2147483648, Number.NaN]) {
+    for (const fn of [
+      () => fs.closeSync(badFd),
+      () => fs.close(badFd, noop),
+      () => fs.writeSync(badFd, "x"),
+      () => fs.write(badFd, "x", noop),
+      () => fs.writeSync(badFd, Buffer.from("x")),
+      () => fs.ftruncateSync(badFd),
+      () => fs.ftruncate(badFd, noop),
+      () => fs.fchownSync(badFd, 0, 0),
+      () => fs.fchown(badFd, 0, 0, noop),
+      () => fs.fchmodSync(badFd, 0o644),
+      () => fs.fchmod(badFd, 0o644, noop),
+      () => fs.readFileSync(badFd),
+      () => fs.readFile(badFd, noop),
+      () => fs.writeFileSync(badFd, "x"),
+      () => fs.writeFile(badFd, "x", noop),
+    ]) {
+      expect(fn).toThrow(expect.objectContaining({ code: "ERR_OUT_OF_RANGE" }));
+    }
+  }
+  for (const fn of [
+    () => fs.closeSync("1" as unknown as number),
+    () => fs.writeSync("1" as unknown as number, "x"),
+    () => fs.ftruncateSync("1" as unknown as number),
+    () => fs.fchownSync("1" as unknown as number, 0, 0),
+    () => fs.fchmodSync("1" as unknown as number, 0o644),
+  ]) {
+    expect(fn).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }));
+  }
+  expect(calls).toEqual([]);
+
+  expect(() => fs.fchownSync(99999, 0, 0)).toThrow(expect.objectContaining({ code: "EBADF", syscall: "fchown" }));
+  expect(() => fs.fchmodSync(99999, 0o644)).toThrow(expect.objectContaining({ code: "EBADF", syscall: "fchmod" }));
+});
+
+test("rmSync and rmdirSync preserve trailing slashes on relative paths", () => {
+  const { fs, native } = fixture();
+  const seen: string[] = [];
+  Object.assign(native, {
+    rm(target: string) { seen.push(`rm:${target}`); },
+    rmdir(target: string) { seen.push(`rmdir:${target}`); },
+  });
+  fs.rmSync("rel-link/", { recursive: true });
+  fs.rmdirSync("rel-link/", { recursive: true });
+  fs.rmSync("rel-plain", { recursive: true });
+  expect(seen[0]?.endsWith("/rel-link/")).toBe(true);
+  expect(seen[1]?.endsWith("/rel-link/")).toBe(true);
+  expect(seen[2]?.endsWith("/rel-plain")).toBe(true);
+});

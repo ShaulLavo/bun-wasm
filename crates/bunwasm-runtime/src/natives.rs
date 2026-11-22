@@ -328,11 +328,39 @@ fn path_metadata(path: &str, lstat: bool) -> io::Result<StatMetadata> {
     Ok(unsafe { stat.assume_init() })
 }
 
+#[cfg(unix)]
+fn same_file(from: &str, to: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let (Ok(src), Ok(dst)) = (path_metadata(from, false), path_metadata(to, false)) else {
+        return false;
+    };
+    !src.is_dir() && !dst.is_dir() && src.dev() == dst.dev() && src.ino() == dst.ino()
+}
+
+#[cfg(target_os = "wasi")]
+fn same_file(from: &str, to: &str) -> bool {
+    let (Ok(src), Ok(dst)) = (path_metadata(from, false), path_metadata(to, false)) else {
+        return false;
+    };
+    (src.st_mode & 0o170000) != 0o040000
+        && (dst.st_mode & 0o170000) != 0o040000
+        && src.st_dev == dst.st_dev
+        && src.st_ino == dst.st_ino
+}
+
+#[cfg(not(any(unix, target_os = "wasi")))]
+fn same_file(_from: &str, _to: &str) -> bool {
+    false
+}
+
 fn copy_file(from: &str, to: &str, flags: i32) -> io::Result<()> {
     if flags & !3 != 0 {
         return Err(io::ErrorKind::Unsupported.into());
     }
     if flags & 1 == 0 {
+        if same_file(from, to) {
+            return Ok(());
+        }
         fs::copy(from, to)?;
         return Ok(());
     }
@@ -390,6 +418,29 @@ fn sync_fd(fd: i32, mode: SyncMode) -> io::Result<()> {
 #[cfg(not(any(target_os = "wasi", unix)))]
 fn sync_fd(_fd: i32, _mode: SyncMode) -> io::Result<()> {
     Ok(())
+}
+
+fn sync_explicit_fd(state: &State, fd: i32, mode: SyncMode) -> io::Result<()> {
+    if state.fds.borrow().is_stdio_attached(fd) {
+        let stat = descriptor_metadata(fd)?;
+        #[cfg(target_os = "wasi")]
+        let non_file = matches!(stat.st_mode & 0o170000, 0o010000 | 0o020000 | 0o140000);
+        #[cfg(unix)]
+        let non_file = !stat.is_file();
+        if non_file {
+            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+        }
+        return flush_descriptor_output(state);
+    }
+    // On WASI, wasi-libc omits RIGHT_FD_DATASYNC on read-only opens, which Waffle
+    // enforces with EBADF while host Bun allows fdatasync on read-only fds. Using fsync
+    // provides a stronger barrier and succeeds on both read-only and writable descriptors.
+    #[cfg(target_os = "wasi")]
+    let mode = match mode {
+        SyncMode::Data => SyncMode::All,
+        other => other,
+    };
+    sync_fd(fd, mode)
 }
 
 /// Own files opened by this runtime, indexed by their real process descriptor.
@@ -752,6 +803,64 @@ fn mkdir_recursive(path: &str) -> io::Result<Option<String>> {
     Ok(first.map(|path| path.to_string_lossy().into_owned()))
 }
 
+fn split_trailing_slash(path: &str) -> (&str, bool) {
+    let has_trailing_slash = path.ends_with('/') && path.bytes().any(|b| b != b'/');
+    let target = if has_trailing_slash {
+        path.trim_end_matches('/')
+    } else {
+        path
+    };
+    (target, has_trailing_slash)
+}
+
+fn remove_path(path: &str, recursive: bool, force: bool, syscall: &str) -> NativeResult {
+    let (target, has_trailing_slash) = split_trailing_slash(path);
+    let meta = match fs::symlink_metadata(target) {
+        Ok(m) => m,
+        Err(e) if force && e.kind() == io::ErrorKind::NotFound => return ok(),
+        Err(e) => return Err(io_error(e, syscall, Some(path))),
+    };
+    if has_trailing_slash && (meta.file_type().is_symlink() || !meta.is_dir()) {
+        if !recursive
+            && meta.file_type().is_symlink()
+            && fs::metadata(target).is_ok_and(|resolved| resolved.is_dir())
+        {
+            return Err(rm_eisdir_error(path));
+        }
+        return Err(io_error(
+            io::Error::from(io::ErrorKind::NotADirectory),
+            syscall,
+            Some(path),
+        ));
+    }
+    if meta.is_dir() && !recursive {
+        return Err(rm_eisdir_error(path));
+    }
+    let result = if meta.is_dir() {
+        fs::remove_dir_all(target)
+    } else {
+        fs::remove_file(target)
+    };
+    result.map_err(|e| io_error(e, syscall, Some(path)))?;
+    ok()
+}
+
+fn remove_dir_non_recursive(path: &str) -> NativeResult {
+    let (target, has_trailing_slash) = split_trailing_slash(path);
+    if has_trailing_slash {
+        let meta = fs::symlink_metadata(target).map_err(|e| io_error(e, "rmdir", Some(path)))?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(io_error(
+                io::Error::from(io::ErrorKind::NotADirectory),
+                "rmdir",
+                Some(path),
+            ));
+        }
+    }
+    fs::remove_dir(target).map_err(|e| io_error(e, "rmdir", Some(path)))?;
+    ok()
+}
+
 fn install_fs(t: &mut Table) {
     t.add("readFile", |a| {
         let path = required_path(a.str(0)?, "open")?;
@@ -767,7 +876,7 @@ fn install_fs(t: &mut Table) {
             return Err(io_error(
                 io::Error::from_raw_os_error(libc::EBADF),
                 "read",
-                Some(path),
+                None,
             ));
         }
         let mut buf = Vec::new();
@@ -842,48 +951,14 @@ fn install_fs(t: &mut Table) {
             return ok();
         }
         let path = required_path(path, "rm")?;
-        let has_trailing_slash = path.ends_with('/') && path.bytes().any(|b| b != b'/');
-        let target = if has_trailing_slash {
-            path.trim_end_matches('/')
-        } else {
-            path
-        };
-        let meta = match if has_trailing_slash {
-            fs::metadata(target)
-        } else {
-            fs::symlink_metadata(target)
-        } {
-            Ok(m) => m,
-            Err(e) if a.bool(2) && e.kind() == io::ErrorKind::NotFound => return ok(),
-            Err(e) => return Err(io_error(e, "rm", Some(path))),
-        };
-        if has_trailing_slash && !meta.is_dir() {
-            return Err(io_error(
-                io::Error::from(io::ErrorKind::NotADirectory),
-                "rm",
-                Some(path),
-            ));
-        }
-        if meta.is_dir() && !a.bool(1) {
-            return Err(rm_eisdir_error(path));
-        }
-        let result = if meta.is_dir() {
-            fs::remove_dir_all(target)
-        } else {
-            fs::remove_file(target)
-        };
-        result.map_err(|e| io_error(e, "rm", Some(path)))?;
-        ok()
+        remove_path(path, a.bool(1), a.bool(2), "rm")
     });
     t.add("rmdir", |a| {
         let path = required_path(a.str(0)?, "rmdir")?;
-        let result = if a.bool(1) {
-            fs::remove_dir_all(path)
-        } else {
-            fs::remove_dir(path)
-        };
-        result.map_err(|e| io_error(e, "rmdir", Some(path)))?;
-        ok()
+        if a.bool(1) {
+            return remove_path(path, true, false, "rm");
+        }
+        remove_dir_non_recursive(path)
     });
     t.add("unlink", |a| {
         let path = required_path(a.str(0)?, "unlink")?;
@@ -1223,14 +1298,17 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
         }
         ok()
     });
-    t.add("fsync", |a| {
+    let st = state.clone();
+    t.add("fsync", move |a| {
         let fd = a.i32(0)?;
-        sync_fd(fd, SyncMode::All).map_err(|e| io_error(e, "fsync", None))?;
+        sync_explicit_fd(&st, fd, SyncMode::All).map_err(|e| io_error(e, "fsync", None))?;
         ok()
     });
-    t.add("fdatasync", |a| {
+    let st = state.clone();
+    t.add("fdatasync", move |a| {
         let fd = a.i32(0)?;
-        sync_fd(fd, SyncMode::Data).map_err(|e| io_error(e, "fdatasync", None).prop("fd", fd))?;
+        sync_explicit_fd(&st, fd, SyncMode::Data)
+            .map_err(|e| io_error(e, "fdatasync", None).prop("fd", fd))?;
         ok()
     });
 }

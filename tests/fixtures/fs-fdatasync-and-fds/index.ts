@@ -15,7 +15,7 @@ try {
   assert.equal(badErr?.fd, 50000);
   assert.throws(() => fs.fsyncSync(50000), { code: "EBADF", syscall: "fsync" });
 
-  // Valid writable fd succeeds for both fsync and fdatasync.
+  // Valid writable and read-only fds succeed for both fsync and fdatasync (including FileHandle).
   const syncPath = join(root, "sync.txt");
   const syncFd = fs.openSync(syncPath, "w+");
   try {
@@ -25,14 +25,94 @@ try {
   } finally {
     fs.closeSync(syncFd);
   }
+  const roFd = fs.openSync(syncPath, "r");
+  try {
+    fs.fdatasyncSync(roFd);
+    fs.fsyncSync(roFd);
+  } finally {
+    fs.closeSync(roFd);
+  }
+  const roHandle = await fs.promises.open(syncPath, "r");
+  try {
+    await roHandle.datasync();
+    await roHandle.sync();
+  } finally {
+    await roHandle.close();
+  }
 
-  // readFileSync honors flags.
+  // Stdio fsync/fdatasync never throw EBADF: file-backed streams succeed and pipes throw EINVAL.
+  for (const [label, fn] of [
+    ["fsync(1)", () => fs.fsyncSync(1)],
+    ["fdatasync(2)", () => fs.fdatasyncSync(2)],
+  ] as const) {
+    try {
+      fn();
+    } catch (err) {
+      assert.equal((err as NodeJS.ErrnoException).code, "EINVAL", `${label} should succeed or throw EINVAL`);
+    }
+  }
+  const stdioScript = join(root, "stdio-sync.mjs");
+  fs.writeFileSync(
+    stdioScript,
+    `
+      import fs from "node:fs";
+      const out = [];
+      for (const [name, fn] of [["fsync1", () => fs.fsyncSync(1)], ["fdatasync2", () => fs.fdatasyncSync(2)]]) {
+        try { fn(); out.push(name + ":OK"); }
+        catch (e) { out.push(name + ":" + e.code + ":" + e.syscall + ":" + String(e.fd)); }
+      }
+      process.stdout.write(out.join(","));
+    `,
+  );
+  const stdioProc = Bun.spawn({
+    cmd: [process.execPath, stdioScript],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdioOut, stdioExit] = await Promise.all([
+    new Response(stdioProc.stdout).text(),
+    stdioProc.exited,
+  ]);
+  assert.equal(stdioExit, 0);
+  assert.equal(stdioOut, "fsync1:EINVAL:fsync:undefined,fdatasync2:EINVAL:fdatasync:2");
+
+  // Non-integer and out-of-range fds throw ERR_OUT_OF_RANGE before any syscall (preserving fd 3).
+  for (const fn of [
+    () => fs.closeSync(3.5),
+    () => fs.closeSync(-1),
+    () => fs.writeSync(3.5, "x"),
+    () => fs.ftruncateSync(3.5),
+    () => fs.fchownSync(3.5, 0, 0),
+    () => fs.fchmodSync(3.5, 0o644),
+    () => fs.readFileSync(3.5),
+    () => fs.writeFileSync(3.5, "x"),
+  ]) {
+    assert.throws(fn, { code: "ERR_OUT_OF_RANGE" });
+  }
+  assert.throws(() => fs.fchownSync(50000, 0, 0), { code: "EBADF", syscall: "fchown" });
+  assert.throws(() => fs.fchmodSync(50000, 0o644), { code: "EBADF", syscall: "fchmod" });
+  const afterBadClose = join(root, "after-bad-close.txt");
+  fs.writeFileSync(afterBadClose, "alive");
+  assert.equal(fs.readFileSync(afterBadClose, "utf8"), "alive");
+
+  // readFileSync honors flags and write-only EBADF has no path.
   for (const flag of ["a+", "as+", "w+", "wx+"]) {
     const file = join(root, `${flag.replace("+", "_plus")}.txt`);
     assert.equal(fs.readFileSync(file, { encoding: "utf8", flag }), "");
     assert.equal(fs.readFileSync(file, "utf8"), "");
   }
-  assert.throws(() => fs.readFileSync(join(root, "w_only.txt"), { encoding: "utf8", flag: "w" }), { code: "EBADF" });
+  assert.throws(
+    () => fs.readFileSync(join(root, "w_only.txt"), { encoding: "utf8", flag: "w" }),
+    (err: NodeJS.ErrnoException) => err.code === "EBADF" && err.path === undefined,
+  );
+
+  // copyFileSync on the same file preserves contents; COPYFILE_EXCL still fails with EEXIST.
+  fs.copyFileSync(syncPath, syncPath);
+  assert.equal(fs.readFileSync(syncPath, "utf8"), "ok");
+  await fs.promises.copyFile(syncPath, syncPath);
+  assert.equal(fs.readFileSync(syncPath, "utf8"), "ok");
+  assert.throws(() => fs.copyFileSync(syncPath, syncPath, fs.constants.COPYFILE_EXCL), { code: "EEXIST" });
+  assert.equal(fs.readFileSync(syncPath, "utf8"), "ok");
 
   // copyFileSync and promises.copyFile errors include path and dest.
   const missingDest = join(root, "missing-dir", "out.txt");

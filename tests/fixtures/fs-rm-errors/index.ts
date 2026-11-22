@@ -37,11 +37,17 @@ function checkRemovals(root: string) {
   fs.writeFileSync(child, "keep until recursive");
   assert.throws(() => fs.rmSync(directory, { force: true }), { code: "ERR_FS_EISDIR" });
   assert.equal(fs.readFileSync(child, "utf8"), "keep until recursive");
-  fs.rmSync(`${directory}/`, { recursive: true, force: true });
+  fs.rmSync(directory, { recursive: true, force: true });
   assert.equal(fs.existsSync(directory), false);
+
+  const trailingDir = join(root, "trailing-directory");
+  fs.mkdirSync(trailingDir);
+  fs.writeFileSync(join(trailingDir, "child"), "remove with slash");
+  fs.rmSync(`${trailingDir}/`, { recursive: true, force: true });
+  assert.equal(fs.existsSync(trailingDir), false);
 }
 
-function checkFinalSymlinks(root: string) {
+async function checkFinalSymlinks(root: string) {
   const referent = join(root, "referent");
   fs.mkdirSync(referent);
   fs.writeFileSync(join(referent, "child"), "keep");
@@ -52,13 +58,56 @@ function checkFinalSymlinks(root: string) {
     assert.throws(() => fs.lstatSync(link), { code: "ENOENT" });
     assert.equal(fs.readFileSync(join(referent, "child"), "utf8"), "keep");
   }
+
+  // Trailing slash on symlinks (live or dangling) rejects without deleting link or referent.
+  fs.symlinkSync("referent", link);
+  const linkSlash = `${link}/`;
+  for (const options of [{ recursive: true }, { recursive: true, force: true }]) {
+    assert.throws(() => fs.rmSync(linkSlash, options), { code: "ENOTDIR" });
+    await assert.rejects(removeWithCallback(linkSlash, options), { code: "ENOTDIR" });
+    await assert.rejects(fs.promises.rm(linkSlash, options), { code: "ENOTDIR" });
+  }
+  assert.throws(() => fs.rmSync(linkSlash, { force: true }), { code: "ERR_FS_EISDIR" });
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(join(referent, "child"), "utf8"), "keep");
+
+  const dangling = join(root, "dangling");
+  fs.symlinkSync("does-not-exist", dangling);
+  for (const options of [{ recursive: true }, { recursive: true, force: true }]) {
+    assert.throws(() => fs.rmSync(`${dangling}/`, options), { code: "ENOTDIR" });
+  }
+  assert.throws(() => fs.rmSync(`${dangling}/`, { force: true }));
+  assert.equal(fs.lstatSync(dangling).isSymbolicLink(), true);
+
+  // rmdir trailing slashes, symlinks, and recursive file removal match Bun.
+  assert.throws(() => fs.rmdirSync(linkSlash, { recursive: true }), { code: "ENOTDIR" });
+  assert.throws(() => fs.rmdirSync(linkSlash), { code: "ENOTDIR" });
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(join(referent, "child"), "utf8"), "keep");
+
+  const empty = join(root, "empty-rmdir");
+  fs.mkdirSync(empty);
+  fs.rmdirSync(`${empty}/`);
+  assert.equal(fs.existsSync(empty), false);
+
+  const nonempty = join(root, "nonempty-rmdir");
+  fs.mkdirSync(nonempty);
+  fs.writeFileSync(join(nonempty, "a"), "a");
+  assert.throws(() => fs.rmdirSync(`${nonempty}/`), { code: "ENOTEMPTY" });
+  fs.rmdirSync(`${nonempty}/`, { recursive: true });
+  assert.equal(fs.existsSync(nonempty), false);
+
+  const plainFile = join(root, "rmdir-file");
+  fs.writeFileSync(plainFile, "bye");
+  fs.rmdirSync(plainFile, { recursive: true });
+  assert.equal(fs.existsSync(plainFile), false);
 }
 
 const root = fs.mkdtempSync("fs-rm-errors-");
 try {
   await checkErrors(root);
   checkRemovals(root);
-  checkFinalSymlinks(root);
+  await checkFinalSymlinks(root);
   console.log("filesystem removal errors ok");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
