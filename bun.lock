@@ -7,6 +7,8 @@
       "devDependencies": {
         "@builder.io/qwik": "1.17.2",
         "@types/bun": "^1.4.3",
+        "@waffle-os/relay": "0.0.146",
+        "@waffle-os/runtime": "0.0.146",
         "esbuild": "0.28.2",
         "jscpd": "5.4.1",
         "knip": "6.41.0",
@@ -16,14 +18,17 @@
         "typescript": "7.0.2",
         "typescript-api": "npm:typescript@6.0.2",
         "vite": "8.3.4",
-        "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.145/waffle-0.0.145.tgz",
+        "waffle": "npm:@waffle-os/runtime@0.0.146",
         "wrangler": "4.151.0",
       },
       "peerDependencies": {
+        "@waffle-os/relay": "0.0.146",
         "waffle": "*",
         "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz",
-        "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.145/waffle-relay-0.0.145.tgz",
       },
+      "optionalPeers": [
+        "@waffle-os/relay",
+      ],
     },
   },
   "packages": {
@@ -423,6 +428,10 @@
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
+    "@waffle-os/relay": ["@waffle-os/relay@0.0.146", "", { "dependencies": { "ws": "8.22.1" }, "peerDependencies": { "@fails-components/webtransport": "1.6.11", "@fails-components/webtransport-transport-http3-quiche": "1.6.11", "@waffle-os/runtime": "*" }, "optionalPeers": ["@fails-components/webtransport", "@fails-components/webtransport-transport-http3-quiche"], "bin": { "waffle-relay": "dist/cli.js" } }, "sha512-3hVScUyHYONalCXGusBkVpWk8x7QwQk8tJSIUm5F0Pbxvl2yXU5i0gwCc5T0UwP0pBb2HZ3k7c4AQXh+2hS4MQ=="],
+
+    "@waffle-os/runtime": ["@waffle-os/runtime@0.0.146", "", {}, "sha512-P6GHT5mQTkSHIqB4X0Hkn5JdCjN1kMHGnfeU+hNBJpU9r42avUp5gkZBtGTfkuJMHuDFeIx6+26LVqiZPdUymA=="],
+
     "blake3-wasm": ["blake3-wasm@2.1.5", "", {}, "sha512-F1+K8EbfOZE49dtoPtmxUQrpXaBIl3ICvasLh+nJta0xkz+9kF/7uet9fLnwKqhDrmj6g+6K3Tw9yQPUg2ka5g=="],
 
     "bun-types": ["bun-types@1.4.3", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-tinRJNGOmUN+tEAsn2y2e942n9JHRHR42iUYzDH75NmhJqVBokGSQkkfSFdNWwsANIdrK6ACH9t01M452YyTwg=="],
@@ -561,7 +570,7 @@
 
     "vite": ["vite@8.3.4", "", { "dependencies": { "lightningcss": "^1.33.0", "picomatch": "^4.0.7", "postcss": "^8.5.29", "rolldown": "~1.2.12", "tinyglobby": "^0.2.17" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^20.19.0 || >=22.12.0", "@vitejs/devtools": "^0.7.1", "esbuild": "^0.27.0 || ^0.28.0", "jiti": ">=1.21.0", "less": "^4.0.0", "sass": "^1.70.0", "sass-embedded": "^1.70.0", "stylus": ">=0.54.8", "sugarss": "^5.0.0", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "@vitejs/devtools", "esbuild", "jiti", "less", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-IftLE8phJhdNRIGNEV4JCCvfNScoZQVfcXaN8TQropWGJtOHcu+iAB9pHcuGvmEb/kddw0LBe/jS8ztdC6xdiQ=="],
 
-    "waffle": ["waffle@https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.145/waffle-0.0.145.tgz", { "hasInstallScript": true }, "sha512-5TsawiWM3EskzH6NtV+OdT5YxWMPuY/6JQEod69fd41xbD9iC0vIAUEiVrYZ2I2lTmamI1FBXyPTm0j7aEynQw=="],
+    "waffle": ["@waffle-os/runtime@0.0.146", "", {}, "sha512-P6GHT5mQTkSHIqB4X0Hkn5JdCjN1kMHGnfeU+hNBJpU9r42avUp5gkZBtGTfkuJMHuDFeIx6+26LVqiZPdUymA=="],
 
     "waffle-base": ["waffle-base@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-base-0.0.23.tgz", { "dependencies": { "waffle-coreutils": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-coreutils-0.0.23.tgz", "waffle-findutils": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-findutils-0.0.23.tgz", "waffle-grep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-grep-0.0.23.tgz", "waffle-ripgrep": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-ripgrep-0.0.23.tgz", "waffle-sed": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-sed-0.0.23.tgz" }, "peerDependencies": { "waffle": "*" } }, "sha512-eF2Wlxo8ulWkqPAoS6NFSpim2GW85Dg2cekKJGrgGHRa84z0N/F25tGHUG+Wcz6aogGAPyBOoAG/k6C9E8Enjw=="],
 
@@ -570,8 +579,6 @@
     "waffle-findutils": ["waffle-findutils@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-findutils-0.0.23.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-QrJXA/+vpqvCeNKtWz2LKThYvpOlOH5lnXh/MoUhwQPYf/v7J2l8GGokEn7GlmYlXli+GdpW77JjVV/WoZfZcg=="],
 
     "waffle-grep": ["waffle-grep@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-grep-0.0.23.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-gynvYTCMXN4VZEP6t30km7NyentLI+T2PWyNlIHMZJ51jp4NOLUruRhpHvRR51wxIflQ2v0Rs7kmKPIjuy8z7w=="],
-
-    "waffle-relay": ["waffle-relay@https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.145/waffle-relay-0.0.145.tgz", { "dependencies": { "ws": "8.22.1" }, "peerDependencies": { "@fails-components/webtransport": "1.6.11", "@fails-components/webtransport-transport-http3-quiche": "1.6.11", "waffle": "*" }, "optionalPeers": ["@fails-components/webtransport", "@fails-components/webtransport-transport-http3-quiche"], "bin": { "waffle-relay": "./dist/cli.js" } }, "sha512-qv0uJajNzV7HtoDH6byPZPmzKxF5A1fVShoIrZngOE5aod0I2sL1GN6BMQ0Qa3u0/Wj1SAQXBDfwAWlfDrFWUQ=="],
 
     "waffle-ripgrep": ["waffle-ripgrep@https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.23/waffle-ripgrep-0.0.23.tgz", { "peerDependencies": { "waffle": "*" } }, "sha512-uZUiuA9BYHgeaObqRbtLStnq6D2CxLvZPBcrxs4pzPU3j78PmNtv/SZzKy3GYDbOvocx9KB5ley73y1TDIrbIA=="],
 
@@ -583,7 +590,7 @@
 
     "wrangler": ["wrangler@4.151.0", "", { "dependencies": { "@cloudflare/kv-asset-handler": "0.5.0", "@cloudflare/unenv-preset": "2.16.2", "blake3-wasm": "2.1.5", "esbuild": "0.28.2", "miniflare": "5.20261012.0-beta", "path-to-regexp": "6.3.0", "unenv": "2.0.0-rc.24", "workerd": "1.20261012.1" }, "optionalDependencies": { "fsevents": "2.3.3" }, "peerDependencies": { "@cloudflare/workers-types": "^5.20261006.1" }, "optionalPeers": ["@cloudflare/workers-types"], "bin": { "wrangler": "bin/wrangler.js", "wrangler2": "bin/wrangler.js", "cf-wrangler": "bin/cf-wrangler.js" } }, "sha512-ra8MpzSR+ClkbGofu9S+AmAKjytS60MqSuayXKpa1CAYIzP+NIc8q6EiF55Gz5PS3lxT4qcvMuPHihCNhTPpDg=="],
 
-    "ws": ["ws@8.21.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g=="],
+    "ws": ["ws@8.22.1", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g=="],
 
     "yaml": ["yaml@2.9.1", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw=="],
 
@@ -597,8 +604,8 @@
 
     "@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
 
-    "rolldown/@oxc-project/types": ["@oxc-project/types@0.154.0", "", {}, "sha512-KYOUGQFlLWR+s4QMV2Q9ko38TZm7EdO87Qm7rvZLqk/webse/cDjtyxKhg/47l0byCbs/k46LT8qc4PKjAikzA=="],
+    "miniflare/ws": ["ws@8.21.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g=="],
 
-    "waffle-relay/ws": ["ws@8.22.1", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g=="],
+    "rolldown/@oxc-project/types": ["@oxc-project/types@0.154.0", "", {}, "sha512-KYOUGQFlLWR+s4QMV2Q9ko38TZm7EdO87Qm7rvZLqk/webse/cDjtyxKhg/47l0byCbs/k46LT8qc4PKjAikzA=="],
   }
 }

@@ -93,9 +93,9 @@ function archiveName(url: string, label: string): string {
  */
 export function selectedReleaseArchives(): { readonly runtime: SelectedArchive; readonly relay: SelectedArchive } {
   const relayUrl = waffleRelease.relay.url;
-  if (webPackage.dependencies["waffle-relay"] !== relayUrl) throw new Error("Web relay pin differs from its checked release inputs");
-  const relayVersion = /\/waffle-v([0-9][^/]*)\/waffle-relay-\1\.tgz$/.exec(relayUrl)?.[1];
-  if (relayVersion !== waffleRelease.relay.version) throw new Error(`Relay release tuple does not match its URL: ${relayUrl}`);
+  const relayVersion = waffleRelease.relay.version;
+  if (webPackage.dependencies["@waffle-os/relay"] !== relayVersion) throw new Error("Web relay pin differs from its checked release inputs");
+  if (relayUrl !== `https://registry.npmjs.org/@waffle-os/relay/-/relay-${relayVersion}.tgz`) throw new Error(`Relay release tuple does not match its URL: ${relayUrl}`);
   return {
     runtime: { version: waffleRelease.version, url: waffleRelease.url, path: `runtime/${archiveName(waffleRelease.url, "Runtime")}` },
     relay: { version: relayVersion, url: relayUrl, path: `relay/${archiveName(relayUrl, "Relay")}` },
@@ -115,8 +115,10 @@ export const tlsPagePaths: {
   workers: ["tls/page/worker.js", "tls/page/fs-worker.js", "tls/page/notification-worker.js"],
 };
 
+type ReleaseArchiveMembers = Readonly<Pick<Record<HandoffRole, string>, "runtimeArchive" | "relayArchive">>;
+
 /** Delivery members behind every consumer handoff role. */
-export function handoffMemberPaths(): Readonly<Record<HandoffRole, string>> {
+export function handoffMemberPaths(releaseMembers?: ReleaseArchiveMembers): Readonly<Record<HandoffRole, string>> {
   const quickjs = programProfile("quickjs");
   const jsc = programProfile("jsc");
   const archives = selectedReleaseArchives();
@@ -131,7 +133,7 @@ export function handoffMemberPaths(): Readonly<Record<HandoffRole, string>> {
     sourceCacheBrowserGuest: publicationGuestPaths["source-cache-browser"], sourceCacheBrowserGuestReceipt: `${publicationGuestPaths["source-cache-browser"]}.build.json`,
     toolsGuest: publicationGuestPaths.tools, toolsGuestReceipt: `${publicationGuestPaths.tools}.build.json`,
     webIndex: "split/web/index.html", engineBuilds: "split/web/engine-builds.json", producerManifest: "split/manifest.json",
-    sourceArchive: "source.tar.gz", runtimeArchive: archives.runtime.path, relayArchive: archives.relay.path,
+    sourceArchive: "source.tar.gz", runtimeArchive: releaseMembers?.runtimeArchive ?? archives.runtime.path, relayArchive: releaseMembers?.relayArchive ?? archives.relay.path,
     programManifest: "inputs/programs-release/program-release.json", programChecksums: "inputs/programs-release/SHA256SUMS",
     fd3Artifact: "inputs/network/preview1-relay.fd3.wasm", fd3Receipt: "inputs/network/RECEIPT.json",
     config: DELIVERY_RECORDS.config, inputs: DELIVERY_RECORDS.inputs, environment: DELIVERY_RECORDS.environment, stages: DELIVERY_RECORDS.stages,
@@ -146,12 +148,12 @@ export function executableMemberPaths(): readonly string[] {
 }
 
 /** Required outer delivery files. Existing byte, actor, matrix and custody validators still apply. */
-export function completePublicationArtifactPaths(): string[] {
+export function completePublicationArtifactPaths(releaseMembers?: ReleaseArchiveMembers): string[] {
   const guests = Object.values(publicationGuestPaths).flatMap(path => [path, `${path}.build.json`]);
   const custody = ["before", "after", "preseal"].flatMap(phase => [
     `inputs/${phase}.json`, `inputs/vendor-custody-${phase}.json`, `inputs/native-custody-${phase}.json`,
   ]);
-  const handoff = Object.values(handoffMemberPaths());
+  const handoff = Object.values(handoffMemberPaths(releaseMembers));
   return Array.from(new Set(producerArtifactPaths("split").map(path => `split/${path}`).concat(guests, custody, handoff, tlsPagePaths.workers,
     [
       "inputs/publication-matrix.json", "split/hook-cleanup.json", "inputs/NATIVE-CANDIDATE-ADMISSION.json", "inputs/browser-consumer.json",
@@ -162,11 +164,11 @@ export function completePublicationArtifactPaths(): string[] {
     ])));
 }
 
-export function requireCompletePublicationFiles(files: readonly { readonly path: string }[]): void {
+export function requireCompletePublicationFiles(files: readonly { readonly path: string }[], releaseMembers?: ReleaseArchiveMembers): void {
   for (const file of files) rejectWithdrawnPublicationPath(file.path);
   const paths = new Set(files.map(file => file.path));
   if (paths.size !== files.length) throw new Error("Repeated publication manifest path");
-  for (const path of completePublicationArtifactPaths()) if (!paths.has(path)) throw new Error(`Missing complete publication artifact: ${path}`);
+  for (const path of completePublicationArtifactPaths(releaseMembers)) if (!paths.has(path)) throw new Error(`Missing complete publication artifact: ${path}`);
 }
 
 /** JSC and the shared sysroot retain their existing original-input admission checks. */

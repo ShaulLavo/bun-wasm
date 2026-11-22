@@ -1,10 +1,12 @@
 # Browser package (Git dependency)
 
 The repository root is the `bun-wasm` package. It borrows an existing [Waffle](https://github.com/ShaulLavo/waffle)
-Runtime; it never creates or disposes the page's Runtime. Install **the same pinned Waffle revision**
-in the application and keep both Git dependencies in Bun's `trustedDependencies` so their Bun-only
-`prepare` scripts can generate the Node-conditioned output. Browser and Bun exports use TypeScript
-source; Node uses the generated `dist/package/` entrypoints. No guest `.wasm` file is included in the package.
+Runtime. Install the exact `@waffle-os/runtime` version from this checkout's
+`package.json` under the `waffle` npm alias. If your app also uses the scoped relay,
+pin the scoped runtime to the same version and use Bun's isolated linker so both
+names resolve to one runtime. Trust the bun-wasm Git dependency so its `prepare`
+script can generate the Node entry points. Browser and Bun exports use TypeScript
+source. The guest `.wasm` file downloads at run time.
 
 Exports are explicit:
 

@@ -46,7 +46,7 @@ class ProvenanceTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
         (self.package / "package.json").write_text(json.dumps({
-            "name": "waffle", "version": "0.0.19", "type": "module",
+            "name": "@waffle-os/runtime", "version": "0.0.19", "type": "module",
             "exports": {"./core": {"bun": "./core/index.ts", "import": "./dist/core/index.js", "default": "./dist/fallback.js"}},
         }))
         installed = self.root / "web/node_modules/waffle"
@@ -74,7 +74,7 @@ class ProvenanceTests(unittest.TestCase):
     def test_browser_provenance_hashes_installed_source_and_node_generated_modules(self):
         meta = self.provenance()
         runtime = meta["runtime_package"]
-        self.assertEqual(runtime["name"], "waffle")
+        self.assertEqual(runtime["name"], "@waffle-os/runtime")
         self.assertEqual(runtime["version"], "0.0.19")
         self.assertEqual(runtime["node_entry"], "dist/core/index.js")
         self.assertEqual(runtime["package_sha256"], suite.digest(self.package / "package.json"))

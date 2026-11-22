@@ -33,19 +33,27 @@ esac
 `;
 
 const release = (tag_name: string, draft = false) => ({ tag_name, draft, prerelease: false });
+const fakeNpm = `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1 $2 $4" == "view --registry=https://registry.npmjs.org/ dist-tags.latest" ]]
+case "$3" in
+  @waffle-os/runtime) echo 0.0.146 ;;
+  @waffle-os/relay) echo 0.0.145 ;;
+  *) exit 2 ;;
+esac
+`;
+
 const releases = {
-  "waffle.json": [release("waffle-v0.0.150", true), release("waffle-v0.0.143"), release("programs-v0.0.23"),
-    release("waffle-v0.0.99"), release("programs-v0.0.22")],
+  "waffle.json": [release("waffle-v0.0.150"), release("programs-v0.0.23"), release("programs-v0.0.22")],
   "bash-web.json": [release("bash-web-v0.0.2"), release("bash-web-v0.0.1")],
 };
 
-function manifests(runtime: string, programs: string, bash: string) {
-  const waffle = `${download}/waffle-v${runtime}/waffle-${runtime}.tgz`;
-  const relay = `${download}/waffle-v${runtime}/waffle-relay-${runtime}.tgz`;
+function manifests(runtime: string, relay: string, programs: string, bash: string) {
+  const waffle = `npm:@waffle-os/runtime@${runtime}`;
   const base = `${download}/programs-v${programs}/waffle-base-${programs}.tgz`;
   return {
-    "package.json": { devDependencies: { waffle }, peerDependencies: { "waffle-base": base, "waffle-relay": relay } },
-    "web/package.json": { dependencies: { waffle, "waffle-base": base, "waffle-relay": relay },
+    "package.json": { devDependencies: { "@waffle-os/runtime": runtime, waffle, "@waffle-os/relay": relay }, peerDependencies: { "waffle-base": base, "@waffle-os/relay": relay } },
+    "web/package.json": { dependencies: { "@waffle-os/runtime": runtime, waffle, "waffle-base": base, "@waffle-os/relay": relay },
       devDependencies: { "bash-web": `${bashDownload}/bash-web-v${bash}/bash-web-${bash}.tgz` } },
     "sandbox/package.json": { dependencies: { waffle } },
   };
@@ -61,18 +69,19 @@ async function writeTree(root: string, files: Readonly<Record<string, string>>) 
 const json = (files: Readonly<Record<string, unknown>>) =>
   Object.fromEntries(Object.entries(files).map(([file, value]) => [file, `${JSON.stringify(value, null, 2)}\n`]));
 
-test("the owned dependency update moves the Waffle runtime, relay and program family together", async () => {
+test("the owned dependency update reads independent npm runtime and relay pins", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-owned-update-"));
   try {
     const repository = join(root, "repository");
     await writeTree(repository, {
-      ...json(manifests("0.0.142", "0.0.22", "0.0.1")),
+      ...json(manifests("0.0.144", "0.0.144", "0.0.22", "0.0.1")),
       "scripts/build-bash-web-shell.sh": `commit=${oldBashRevision}\n`,
       ".github/scripts/update-waffle-records.sh": "exit 0\n",
       "scripts/ci-update-lock.ts": "export {};\n",
     });
-    await writeTree(root, { "bin/gh": fakeGh, ...json(releases) });
+    await writeTree(root, { "bin/gh": fakeGh, "bin/npm": fakeNpm, ...json(releases) });
     await chmod(join(root, "bin/gh"), 0o755);
+    await chmod(join(root, "bin/npm"), 0o755);
     const result = Bun.spawnSync(["bash", updater], {
       cwd: repository,
       env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, FIXTURE_ROOT: root },
@@ -81,7 +90,7 @@ test("the owned dependency update moves the Waffle runtime, relay and program fa
     });
     expect(result.stderr.toString()).toBe("");
     expect(result.exitCode).toBe(0);
-    for (const [file, text] of Object.entries(json(manifests("0.0.143", "0.0.23", "0.0.2"))))
+    for (const [file, text] of Object.entries(json(manifests("0.0.146", "0.0.145", "0.0.23", "0.0.2"))))
       expect(await readFile(join(repository, file), "utf8")).toBe(text);
     expect(await readFile(join(repository, "scripts/build-bash-web-shell.sh"), "utf8")).toBe(`commit=${newBashRevision}\n`);
   } finally { await rm(root, { recursive: true, force: true }); }

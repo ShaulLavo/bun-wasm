@@ -115,6 +115,22 @@ function requestedGitRevision(name: string, before: string, after: unknown, root
   return false;
 }
 
+function requestedWaffleVersion(name: string, after: unknown, root: Record<string, unknown>, manifest: Record<string, unknown>): boolean {
+  if (name !== "@waffle-os/relay" && name !== "@waffle-os/runtime" && name !== "waffle") return false;
+  if (!Array.isArray(after)) return false;
+  for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
+    const previous = object(root[field] ?? {})[name];
+    const pin = object(manifest[field] ?? {})[name];
+    if (pin === previous || typeof pin !== "string") continue;
+    const prefix = name === "waffle" ? "npm:@waffle-os/runtime@" : "";
+    const version = pin.slice(prefix.length);
+    if (!pin.startsWith(prefix) || !/^\d+\.\d+\.\d+$/.test(version)) continue;
+    const packageName = name === "waffle" ? "@waffle-os/runtime" : name;
+    if (after[0] === `${packageName}@${version}`) return true;
+  }
+  return false;
+}
+
 function verifyUnrelatedPackages(original: string, updated: string, locations: ReadonlyMap<string, string>, inputs: ReadonlyMap<string, ResolverInput>, manifest: Record<string, unknown>): void {
   const lock = object(Bun.JSONC.parse(original));
   const root = object(object(lock.workspaces)[""]);
@@ -125,6 +141,7 @@ function verifyUnrelatedPackages(original: string, updated: string, locations: R
     const spec = entry[0].slice(entry[0].indexOf("@", 1) + 1);
     if (locations.has(spec) && !gitPattern.test(spec)) continue;
     if (requestedGitRevision(name, spec, after[name], root, manifest, inputs)) continue;
+    if (requestedWaffleVersion(name, after[name], root, manifest)) continue;
     if (!isDeepStrictEqual(entry, after[name])) throw new Error(`Lock update changed an unrelated package: ${name}`);
   }
 }

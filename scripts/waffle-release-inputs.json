@@ -1,13 +1,13 @@
 {
   "hostInterface": 3,
-  "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.145/waffle-0.0.145.tgz",
-  "sha256": "0a9f5861982969e31d4590236e1b4e819802de3c34764592cffd7f240ddb0b11",
-  "bytes": 4198820,
-  "version": "0.0.145",
-  "sourceCommit": "21f5ad1f38dd3c3d3b346a7cfaf955e8139831ea",
+  "url": "https://registry.npmjs.org/@waffle-os/runtime/-/runtime-0.0.146.tgz",
+  "sha256": "47cac28bd9007a964311d1d271349aad711b34816afbfc38b3e83d6e080865cc",
+  "bytes": 4303140,
+  "version": "0.0.146",
+  "sourceCommit": "3230c056cde1ff65b3392c39ba04ba8515fa7a10",
   "packagePath": "packages/waffle",
   "files": {
-    "package.json": "cfc13fd2d6d1c19a525f7be02c9d8fa1f43d2b4210427865a4fb96393165663c",
+    "package.json": "614ecb6886a4652a8ed4e4cab811afc2a0778798076a551d504f6ca7fec552ae",
     "scripts/build-wasi-libc.sh": "b24092a79e1f0d22b12b8eb5615be7229f0331d3b0da2d472aa385984f550e0e",
     "patches/wasi-libc/preopen-scan.patch": "856730a158d7fdaa08a787c572883a57baaf09a4d967b366c9d198a9c98de302"
   },
@@ -31,11 +31,12 @@
     "toolCommit": "1a2e4b3d5b4c8ae77863f60b88b33c9e9af2082b"
   },
   "relay": {
-    "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.145/waffle-relay-0.0.145.tgz",
-    "version": "0.0.145",
-    "sourceCommit": "21f5ad1f38dd3c3d3b346a7cfaf955e8139831ea",
-    "sha256": "edb5a9b2108ad52a0324260757db0f7fd7bb28bf32f951d7141411f4a214f3ad",
-    "bytes": 110376,
+    "url": "https://registry.npmjs.org/@waffle-os/relay/-/relay-0.0.146.tgz",
+    "version": "0.0.146",
+    "sourceCommit": "3230c056cde1ff65b3392c39ba04ba8515fa7a10",
+    "sha256": "3ce76f02372cffaeb43aefa6f3bc99f0715f2a7f13a8ad9ec07893be40e971b7",
+    "bytes": 110714,
     "hostInterface": 3
-  }
+  },
+  "packageManifestSha256": "614ecb6886a4652a8ed4e4cab811afc2a0778798076a551d504f6ca7fec552ae"
 }

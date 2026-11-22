@@ -16,6 +16,11 @@ package, even if Bun visits it before the first bare package import. The target
 must still resolve within the selected installed package. Public export checks
 and package-escape refusals remain unchanged.
 
+The scoped npm relay imports `@waffle-os/runtime`. Bash and the current program
+packages import its `waffle` alias. The resolver routes both names through the
+consuming app's installation, including when sandbox workers use Web sources.
+The class-identity test builds imports under both names.
+
 Without that normalization, the persistence fixture's existing conformance-only
 selector and the runtime read different module-local symbols. Its OPFS-labeled
 page then silently uses the default IndexedDB takeover behavior. Two synthetic

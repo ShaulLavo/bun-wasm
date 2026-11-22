@@ -1,10 +1,14 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
+import { createRelayConnect } from "@waffle-os/relay";
+import { createRuntime as scopedRuntime } from "@waffle-os/runtime";
+import { createRuntime as aliasedRuntime } from "waffle";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { browserBuildConfig, resolveRuntimePackage } from "./browser-build";
 import { stageReleasePackages, verifyStagedResolutions } from "./ci-stage-release-packages";
 import release from "./waffle-release-inputs.json";
+import { waffleRuntimeName } from "./waffle-release-inputs";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -57,6 +61,11 @@ function cleanup(): Promise<void> {
 }
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 
+test("the root install shares a runtime between the relay and the legacy peer", () => {
+  expect(scopedRuntime).toBe(aliasedRuntime);
+  expect(typeof createRelayConnect).toBe("function");
+});
+
 test("a clean consumer installs prepared Waffle Node exports without lifecycle scripts", async () => {
   const root = resolve(import.meta.dir, "..");
   const source = join(root, "web");
@@ -71,7 +80,7 @@ test("a clean consumer installs prepared Waffle Node exports without lifecycle s
     mkdirSync(global, { recursive: true });
     mkdirSync(config, { recursive: true });
     mkdirSync(consumer, { recursive: true });
-    for (const file of ["package.json", "bun.lock"]) writeFileSync(join(consumer, file), readFileSync(join(source, file)));
+    for (const file of ["package.json", "bun.lock", "bunfig.toml"]) writeFileSync(join(consumer, file), readFileSync(join(source, file)));
     if (process.env.CI_RELEASE_CACHE) {
       const locations = await stageReleasePackages(source, consumer);
       verifyStagedResolutions(readFileSync(join(source, "bun.lock"), "utf8"), readFileSync(join(consumer, "bun.lock"), "utf8"), locations);
@@ -89,9 +98,11 @@ test("a clean consumer installs prepared Waffle Node exports without lifecycle s
       waffleHostInterface: number;
       exports: Record<string, { node?: string }>;
     };
+    expect(metadata.name).toBe(waffleRuntimeName);
     expect(metadata.version).toBe(release.version);
     expect(metadata.waffleHostInterface).toBe(release.hostInterface);
-    for (const [path, sha256] of Object.entries(release.files)) {
+    const publishedFiles = { ...release.files, "package.json": release.packageManifestSha256 };
+    for (const [path, sha256] of Object.entries(publishedFiles)) {
       const bytes = readFileSync(join(consumer, "node_modules/waffle", path));
       expect(new Bun.CryptoHasher("sha256").update(bytes).digest("hex")).toBe(sha256);
     }
@@ -104,6 +115,18 @@ test("a clean consumer installs prepared Waffle Node exports without lifecycle s
     expect(browserOnlySpecifiers.length).toBeGreaterThan(0);
     const script = `
       import assert from "node:assert/strict";
+      import { realpathSync } from "node:fs";
+      import { createRequire } from "node:module";
+      const require = createRequire(import.meta.url);
+      const runtime = realpathSync("node_modules/waffle/package.json");
+      assert.equal(realpathSync("node_modules/@waffle-os/runtime/package.json"), runtime);
+      const alias = await import("waffle");
+      const scoped = await import("@waffle-os/runtime");
+      assert.equal(alias.createRuntime, scoped.createRuntime);
+      const relay = createRequire(require.resolve("@waffle-os/relay"));
+      const shell = createRequire(require.resolve("bash-web"));
+      assert.equal(relay.resolve("@waffle-os/runtime"), shell.resolve("waffle"));
+      assert.equal(typeof (await import("@waffle-os/relay")).createRelayConnect, "function");
       for (const specifier of ${JSON.stringify(specifiers)}) await import(specifier);
       for (const specifier of ${JSON.stringify(browserOnlySpecifiers)}) {
         await assert.rejects(import(specifier), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
@@ -138,7 +161,8 @@ test("browser builds resolve Waffle through the installed consumer package", asy
   try {
     const entry = join(root, "web/src/main.ts");
     const installed = resolveRuntimePackage(entry);
-    expect(installed.metadata.name).toBe("waffle");
+    expect(installed.metadata.name).toBe(waffleRuntimeName);
+    expect(installed.source("@waffle-os/runtime/core")).toBe(installed.source("waffle/core"));
     expect(installed.relativeInput(installed.source("waffle/core"))).toBe("core/index.ts");
     const { outdir: _outdir, ...config } = browserBuildConfig([entry], join(scratch, "dist"), { runtimeWorker: true });
     const result = await Bun.build(config);

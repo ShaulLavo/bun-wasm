@@ -79,12 +79,17 @@ printf 'console.log("hello from bun-wasm");\n' > index.ts
 
 ## Update the Waffle release closure
 
-Update the runtime, relay, and base-family pins in the root, Web, and sandbox
-manifests together. Set the root `waffleHostInterface` to the released interface.
+Update the exact `@waffle-os/runtime` and `@waffle-os/relay` npm pins in the
+manifests that install them. Set the root `waffleHostInterface` to their shared
+interface. Keep the `waffle` npm alias on the same runtime version for Bash and
+program packages that declare that peer. Root and Web use Bun's isolated linker
+so both names resolve to one physical runtime.
 Run `.github/scripts/update-waffle-records.sh` to refresh archive hashes, sizes,
 tagged source revisions, native source files, and program provenance.
-The updater refuses mixed interfaces or native files that differ from the runtime
-archive. It validates the original program commit and base source identity formats.
+The updater checks npm integrity against the two release tags and rejects mixed
+interfaces or changes to packaged native files. It records the packaged runtime
+manifest and the tagged source manifest separately and checks the original
+program commit and base source identity.
 Validation or staging failures keep `scripts/waffle-release-inputs.json` unchanged.
 The completed record replaces the old file through an atomic sibling rename.
 

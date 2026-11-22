@@ -59,8 +59,8 @@ Filesystem visibility does not depend on timestamp comparisons or host I/O
 polling: the shared service owns namespace changes and the allocator, and shared
 file locks and epochs protect direct reads and writes. The original `wasiPipe`
 adapter only transports bytes; it has no filesystem synchronization hooks.
-The applications select hoisted native Bun installs to avoid the recorded build
-plugin path-validation bug; no upstream loader or global package state changes.
+The browser build plugin passes consumer-relative package paths to Bun. Web uses
+the isolated linker so the two Waffle peer names resolve to the same package.
 
 
 ## Classification
