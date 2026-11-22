@@ -23,6 +23,8 @@ export interface EngineHostOptions {
   terminal?: { setRawMode(raw: boolean): string | undefined };
   /** The fetch exposed to user code (without it, fetch rejects). */
   fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  /** Optional host garbage collector callback (e.g. V8's exposed `gc()` in the Node fixture host). */
+  gc?: () => void;
   /**
    * Networking: the bun_wasm host ABI (docs/host-abi.md) as the functions the runtime's net.js
    * calls (hostListen, hostRead, …), which slots they cover, and a way to wake the event loop.

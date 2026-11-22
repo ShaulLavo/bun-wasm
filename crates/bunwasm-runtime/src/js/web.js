@@ -740,7 +740,7 @@
     static any(signals) {
       const sources = new Set();
       for (const source of signals) {
-        if (!isSignal(source)) throw new TypeError("Expected an AbortSignal");
+        if (!isSignal(source)) throw Object.assign(new TypeError("Expected an AbortSignal"), { code: "ERR_INVALID_ARG_TYPE" });
         sources.add(source);
       }
       const signal = new AbortSignal(internal);
@@ -1596,6 +1596,8 @@
     clearMeasures(name) {
       removeEntries("measure", name);
     },
+    clearResourceTimings() {},
+    setResourceTimingBufferSize() {},
     toJSON: () => ({ timeOrigin: performance.timeOrigin }),
     eventLoopUtilization: () => ({ idle: 0, active: 0, utilization: 0 }),
     timerify: (fn) => fn,

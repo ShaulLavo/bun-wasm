@@ -23,3 +23,5 @@ callback readFile AbortError ABORT_ERR "The operation was aborted" DOMException=
 callback writeFile AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
 callback appendFile AbortError ABORT_ERR "The operation was aborted" DOMException=false cause=true
 callback readFile live signal null hello
+AbortSignal.any bad TypeError ERR_INVALID_ARG_TYPE
+performance resource timing function function

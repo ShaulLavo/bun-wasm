@@ -6,6 +6,8 @@ import * as https from "node:https";
 import * as net from "node:net";
 import * as zlib from "node:zlib";
 import { posix, resolve } from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { WASI } from "node:wasi";
 import { isMainThread, parentPort, workerData, type ResourceLimits, type Worker } from "node:worker_threads";
 import { workerProcessState, wakeWorkerProcess, type WorkerProcessTransport } from "waffle/proc/worker-client";
@@ -204,6 +206,8 @@ async function run(data: GuestData) {
     // Force undici's lazy initialization before guest polyfills replace its input globals.
     await globalThis.fetch("data:,").catch(() => {});
     const nodeFetch = globalThis.fetch.bind(globalThis);
+    setFlagsFromString("--expose_gc");
+    const nodeGc = runInNewContext("gc") as (() => void) | undefined;
     const prefix = "bunwasm:/m/", sources = new Map<string, string>();
     const { registerHooks } = await import("node:module");
     registerHooks({
@@ -214,6 +218,7 @@ async function run(data: GuestData) {
     const { createNodeNet } = await import("./node-net.mjs");
     const { startEngineHost } = await import("../src/engine-host.js");
     await startEngineHost({ instance, moduleUrls: "data", modules: config.modules === "store" ? modules : undefined, fetch: nodeFetch,
+      gc: nodeGc,
       asyncContext: config.context === "native" ? createNodeAsyncContext() : undefined,
       net: processHost.engineNet(config.withNet ? createNodeNet({ net, http, https, zlib }) : undefined),
       processWake: processHost.client.wake,
