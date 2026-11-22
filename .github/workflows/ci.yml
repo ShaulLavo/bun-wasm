@@ -201,7 +201,7 @@ jobs:
           key: ${{ steps.web-rustup-cache.outputs.cache-primary-key }}
       - name: Web host unit, CLI shim, type and bundle gates
         env:
-          BUN_WASM_TEST_JOBS: "4"
+          BUN_WASM_TEST_JOBS: "3"
           C1_WEBKIT_FAILURE_DIRECTORY: ${{ runner.temp }}/c1-webkit-failures
         run: bash ../scripts/test-web-host.sh --unit
       - name: Retain first C1 WebKit admission failure
@@ -293,7 +293,7 @@ jobs:
         with:
           mode: native
           node-version: ${{ env.CI_NODE_VERSION }}
-          jsc: 'true'
+          jsc: 'false'
       - uses: ./.github/actions/native-seed
         id: native-seed
         with:
@@ -381,7 +381,7 @@ jobs:
         run: |
           source env.sh
           export BUNWASM_TLS_PROBE_OUTPUT="$CARGO_TARGET_DIR/tls-probe/output"
-          bun scripts/test-checks.ts native-probe
+          bun scripts/test-checks.ts native-probe --batch default
       - name: Save the native quality checkpoint
         if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.tls-artifact.outputs.tls-sha256 != '' && steps.native-seed.outputs.cargo-matched == '' && steps.native-seed.outputs.legacy-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -1001,12 +1001,6 @@ jobs:
           zstd -dc "$RUNNER_TEMP/ordinary-native-bundle/bundle.tar.zst" | tar --posix -C "$bundle_dir" -xf -
           test "$(cat "$bundle_dir/source.txt")" = "$GITHUB_SHA"
           cp "$bundle_dir/dist/bash-web-shell.wasm" "$bundle_dir/dist/bash-web-env.wasm" "$bundle_dir/dist/bash-web-guests.json" dist/
-          sm_release="$RUNNER_TEMP/$(cat "$bundle_dir/spidermonkey-panic/relpath.txt")"
-          mkdir -p "$sm_release"
-          cp "$bundle_dir/spidermonkey-panic/libbunwasm_engine_spidermonkey.a" "$sm_release/"
-          cp -a "$bundle_dir/spidermonkey-panic/build" "$sm_release/"
-          sm_archive=$(grep -oE '[^[:space:](]*libbunwasm_engine_spidermonkey\.a\(' "$bundle_dir/ordinary-side/engine-link.map" | head -n 1 | sed 's/($//' || true)
-          test -n "$sm_archive" && test -f "$sm_archive"
           sm_pair="$RUNNER_TEMP/ordinary-spidermonkey-program"
           bun scripts/spidermonkey-side-core-receipt.ts verify-pair \
             "$sm_pair/bun-spidermonkey.wasm" "$sm_pair/spidermonkey-engine.wasm" \
@@ -1022,10 +1016,10 @@ jobs:
           echo "SPIDERMONKEY_WASM=$sm_pair/bun-spidermonkey.wasm" >> "$GITHUB_ENV"
           echo "SPIDERMONKEY_NATIVE_DIR=$bundle_dir/spidermonkey-native" >> "$GITHUB_ENV"
           echo "SPIDERMONKEY_BUILD_DIR=$sm_build" >> "$GITHUB_ENV"
-          echo "SPIDERMONKEY_ENGINE_BUILD_DIR=$bundle_dir/ordinary-side" >> "$GITHUB_ENV"
       - name: Blocking native runtime checks
         env:
           BUN_WASM_RUNTIME_JOBS: "3"
+          BUN_WASM_RUNTIME_BATCH: default
           INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}
           BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}
         shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}

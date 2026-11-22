@@ -5,7 +5,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "browser-guest", "native", "native-probe"] as const;
 type Owner = typeof owners[number];
-const batchOwners = new Set<Owner>(["web", "browser-guest", "web-browser"]);
+const batchOwners = new Set<Owner>(["web", "browser-guest", "web-browser", "native-probe", "runtime"]);
 export type NativeProfile = "split" | "shared-group";
 const nativeEngines = ["quickjs", "jsc", "browser", "spidermonkey"] as const;
 export type NativeEngine = typeof nativeEngines[number];

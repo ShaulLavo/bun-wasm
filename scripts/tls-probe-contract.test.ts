@@ -130,8 +130,10 @@ test("live owner is discovered once after producers and checkpoint verification"
   const native = workflow.split("\n  native-quality:\n")[1]!.split("\n  ordinary-build:\n")[0]!;
   expect(native.indexOf("bun scripts/tls-probe-ci.ts prepare")).toBeLessThan(native.indexOf("bun scripts/quality-rust.ts --checks-only"));
   expect(native.indexOf("bun run quality:wasi")).toBeLessThan(native.indexOf("bun scripts/tls-probe-ci.ts link"));
-  expect(native.indexOf("bun scripts/tls-probe-ci.ts link")).toBeLessThan(native.indexOf("bun scripts/test-checks.ts native-probe"));
-  expect(workflow.match(/bun scripts\/test-checks\.ts native-probe\n/g)).toHaveLength(1);
+  expect(native.indexOf("bun scripts/tls-probe-ci.ts link")).toBeLessThan(native.indexOf("bun scripts/test-checks.ts native-probe --batch default"));
+  expect(workflow.match(/bun scripts\/test-checks\.ts native-probe --batch default\n/g)).toHaveLength(1);
+  const production = readFileSync(new URL("../.github/actions/native-production/action.yml", import.meta.url), "utf8");
+  expect(production.match(/bun scripts\/test-checks\.ts native-probe --batch 02-jsc\n/g)).toHaveLength(1);
   expect(native).toContain("BUNWASM_TLS_PROBE_SHA256: ${{ steps.tls-artifact.outputs.tls-sha256 }}");
   expect(native).toContain("if: ${{ failure() && steps.tls-artifact.outcome == 'failure' }}");
   expect(native).toContain("name: tls-link-failure-${{ github.run_attempt }}");

@@ -80,6 +80,9 @@ function verifyMatrixFamily(
     if (unexpected) throw new Error(`Unexpected matrix job ${String(unexpected.name)}: ${String(unexpected.conclusion)}`);
     return;
   }
+  const expectedSet = new Set(expectedNames);
+  const extra = matched.find(job => !expectedSet.has(String(job.name)));
+  if (extra) throw new Error(`Unexpected matrix job: ${String(extra.name)}`);
   const byName = new Map(matched.map(job => [String(job.name), job]));
   for (const name of expectedNames) {
     const job = byName.get(name);
@@ -88,8 +91,7 @@ function verifyMatrixFamily(
       throw new Error(`Matrix job ${name} must be completed/success, got ${String(job.status)}/${String(job.conclusion)}`);
     }
   }
-  const failed = matched.find(job => job.status !== "completed" || job.conclusion !== "success");
-  if (failed) throw new Error(`Matrix job ${String(failed.name)} did not pass: ${String(failed.status)}/${String(failed.conclusion)}`);
+  if (matched.length !== expectedNames.length) throw new Error(`Duplicate matrix job under ${prefix}`);
 }
 
 export function verifyAttemptMatrixJobs(

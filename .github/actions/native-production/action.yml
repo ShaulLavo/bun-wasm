@@ -205,6 +205,20 @@ runs:
       run: |
         source env.sh
         bun scripts/spidermonkey-ordinary-ci.ts export "$RUNNER_TEMP/ordinary-spidermonkey-program"
+    - name: Blocking JSC native probe
+      if: inputs.full == 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        bun scripts/test-checks.ts native-probe --batch 02-jsc
+    - name: Blocking producer-bound SpiderMonkey runtime checks
+      if: inputs.full == 'true'
+      shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
+      run: |
+        source env.sh
+        export WASI_SDK="$WASI_SDK_PATH"
+        export BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm"
+        bun scripts/test-checks.ts runtime --batch 02-producer
     - name: Build the single tools fixture in the existing native target
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash scripts/with-build-cache.sh bash --noprofile --norc -e -o pipefail {0}
       run: |
@@ -215,16 +229,9 @@ runs:
       shell: setpriv --inh-caps=-all --ambient-caps=-all bash --noprofile --norc -e -o pipefail {0}
       run: |
         stage="$RUNNER_TEMP/ordinary-native-bundle-stage"
-        mkdir -p "$stage/dist" "$stage/spidermonkey-native" "$stage/ordinary-side" "$stage/spidermonkey-panic"
+        mkdir -p "$stage/dist" "$stage/spidermonkey-native"
         cp dist/bash-web-shell.wasm dist/bash-web-env.wasm dist/bash-web-guests.json "$stage/dist/"
         cp -a "$SPIDERMONKEY_NATIVE_DIR"/. "$stage/spidermonkey-native/"
-        cp "$SPIDERMONKEY_ENGINE_BUILD_DIR/engine.wasm" "$SPIDERMONKEY_ENGINE_BUILD_DIR/engine-init.o" "$SPIDERMONKEY_ENGINE_BUILD_DIR/engine-link.map" "$stage/ordinary-side/"
-        sm_rel="ordinary-side-cargo/${{ steps.ordinary-spidermonkey-native.outputs.generation }}/wasm32-wasip1/release"
-        sm_release="$RUNNER_TEMP/$sm_rel"
-        printf '%s\n' "$sm_rel" > "$stage/spidermonkey-panic/relpath.txt"
-        cp "$sm_release/libbunwasm_engine_spidermonkey.a" "$stage/spidermonkey-panic/libbunwasm_engine_spidermonkey.a"
-        (cd "$sm_release" && find build -type f \( -name '*.rmeta' -o -name '*.rlib' \) -print0 | tar --posix --null -T - -cf - | tar --posix -C "$stage/spidermonkey-panic" -xf -)
-        find "$stage/spidermonkey-panic/build" -type f -name 'libstd-*.rmeta' | grep -q .
         git rev-parse HEAD > "$stage/source.txt"
         mkdir -p "$RUNNER_TEMP/ordinary-native-bundle"
         tar --posix -C "$stage" -cf - . | zstd -T0 -q -o "$RUNNER_TEMP/ordinary-native-bundle/bundle.tar.zst"

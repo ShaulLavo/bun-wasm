@@ -17,12 +17,12 @@ const root = resolve(import.meta.dir, "..");
 
 test("named batches retain their allowed owners and reject malformed names", () => {
   const path = "scripts/example.test.ts";
-  for (const owner of ["web", "browser-guest", "web-browser"]) {
-    expect(parseCheck({ owner, path, batch: "10-interface" }, `${owner}-example.json`).batch).toBe("10-interface");
+  for (const owner of ["web", "browser-guest", "web-browser", "native-probe", "runtime"]) {
+    expect(parseCheck({ owner, path, batch: "10-interface", ...(owner === "native-probe" ? { inputs: [path] } : {}) }, `${owner}-example.json`).batch).toBe("10-interface");
   }
-  for (const owner of ["runtime", "quality", "package-extra", "cmake", "native", "native-probe"]) {
+  for (const owner of ["quality", "package-extra", "cmake", "native"]) {
     const input = owner === "native" ? "tests/fixtures/example" : path;
-    expect(() => parseCheck({ owner, path: input, batch: "10-interface", inputs: [path] }, `${owner}-example.json`)).toThrow("Invalid check batch");
+    expect(() => parseCheck({ owner, path: input, batch: "10-interface" }, `${owner}-example.json`)).toThrow("Invalid check batch");
   }
   for (const batch of [null, 1, [], {}, "", "interface", "10-", "10-Interface"]) {
     expect(() => parseCheck({ owner: "web-browser", path, batch }, "web-browser-example.json")).toThrow("Invalid check batch");
@@ -307,7 +307,7 @@ test.each([
   { owner: "unknown", path: "scripts/example.test.ts" },
   { owner: "runtime", path: "scripts/example.test.ts", localRuntime: "true" },
   { path: "scripts/example.test.ts" },
-  { owner: "runtime", path: "scripts/example.test.ts", batch: "10-web" },
+  { owner: "quality", path: "scripts/example.test.ts", batch: "10-web" },
 ])("unsafe or malformed manifest is rejected: %j", fields => {
   const directory = fixture();
   manifest(directory, fields);
