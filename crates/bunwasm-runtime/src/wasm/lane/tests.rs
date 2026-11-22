@@ -1355,6 +1355,16 @@ fn a_writer_and_reader_on_two_threads_agree_on_every_frame() {
     assert_settled(&root);
 }
 
+/// Posts `text`, too big for the ring, from side 0 of a lane in ring mode: the segment it starts.
+fn spill(lanes: &Lanes<'_, Buffer, Guest>, lane: LaneRef, text: &[u8]) -> Segment {
+    let staged = lanes.reserve(lane, 0, text).unwrap();
+    let Staged::FirstSpill { segment, .. } = staged else {
+        panic!("a frame over the ring bound spills: {staged:?}");
+    };
+    lanes.commit(staged);
+    segment
+}
+
 #[test]
 fn frames_appended_while_the_reader_finds_a_segment_drained_are_read_before_its_link() {
     let group = Group::new(64);
@@ -1362,11 +1372,7 @@ fn frames_appended_while_the_reader_finds_a_segment_drained_are_read_before_its_
     let r = root.lanes();
     let lane = r.create_lane().unwrap();
     let first = frame(1, 20_000);
-    let staged = r.reserve(lane, 0, &first).unwrap();
-    let Staged::FirstSpill { segment, .. } = staged else {
-        panic!("a frame over the ring bound spills: {staged:?}");
-    };
-    r.commit(staged);
+    let segment = spill(&r, lane, &first);
     let appended = frame(2, 20_000);
     let linked = frame(3, 30_000);
     let address = segment.address;
@@ -1401,11 +1407,7 @@ fn a_slot_reused_while_its_releaser_counts_it_never_hides_pooled_bytes() {
     let r = root.lanes();
     let lane = r.create_lane().unwrap();
     let first = frame(1, 20_000);
-    let staged = r.reserve(lane, 0, &first).unwrap();
-    let Staged::FirstSpill { segment, .. } = staged else {
-        panic!("a frame over the ring bound spills: {staged:?}");
-    };
-    r.commit(staged);
+    let segment = spill(&r, lane, &first);
     assert_eq!(take(&r, lane, 1), [first]);
     post(&r, lane, 0, b"back to the ring");
     let slot = r.small_slot(segment.index);
