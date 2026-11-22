@@ -138,15 +138,3 @@ for (const probe of [
     expect(result.stdout.toString()).toContain("error TS");
   });
 }
-
-test("existing native-provider runtime fixture passes through the emitted factory", () => {
-  const result = Bun.spawnSync(["node", "--no-warnings", join(root, "web/tests/crypto-key-adapter-probe.mjs")], {
-    env: { ...process.env, NODE_CRYPTO_KEYS_SOURCE: converted },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  expect(result.stderr.toString()).toBe("");
-  expect(result.exitCode).toBe(0);
-  expect(result.stdout.toString().match(/^PASS /gm)).toHaveLength(21);
-  expect(result.stdout.toString()).toContain("failures 0");
-});

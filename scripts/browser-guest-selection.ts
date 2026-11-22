@@ -56,8 +56,6 @@ const commonInputs = [
   "web/src/bun-launcher.ts",
   "web/src/compile-observer.ts",
   "web/src/content-modules.ts",
-  "web/src/crypto-host.js",
-  "web/src/crypto-inputs.js",
   "web/src/default-signal.ts",
   "web/src/engine-host.js",
   "web/src/engine-loader.ts",

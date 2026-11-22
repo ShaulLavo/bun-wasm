@@ -239,7 +239,7 @@
   const exponentIn = (a) => (typeof a.publicExponent === "string" ? { ...a, publicExponent: decode(a.publicExponent) } : { ...a });
   function serializeKey(value) {
     const r = material.get(value);
-    if (!r || r.nativeKey) return undefined;
+    if (!r) return undefined;
     return JSON.stringify({
       algorithm: exponentOut(r.algorithm),
       displayAlgorithm: exponentOut(r.displayAlgorithm),
@@ -804,7 +804,7 @@
     }
   }
   const cryptoObject = globalThis.crypto;
-  const subtleInstance = native.subtleCrypto || Object.create(SubtleCrypto.prototype);
+  const subtleInstance = Object.create(SubtleCrypto.prototype);
   class Crypto {
     constructor() {
       throw new TypeError("Illegal constructor");
@@ -819,29 +819,15 @@
     }
   }
   internal.crypto = {
-    supportsAlgorithm: name => names.some(item => item.toUpperCase() === name.toUpperCase()),
     isKey: (value) => material.has(value),
-    isWasmKey: (value) => material.has(value) && !material.get(value).nativeKey,
-    rememberKey(key, jwk) {
-      const data = { ...jwk };
-      for (const field of ["alg", "ext", "key_ops", "use"]) delete data[field];
-      material.set(key, {
-        algorithm: copy(key.algorithm), displayAlgorithm: key.algorithm,
-        type: key.type, extractable: key.extractable, usages: Array.from(key.usages),
-        key: data, nativeKey: key,
-      });
-    },
     record,
-    // Keys the wasm provider owns; the browser engine's native keys clone natively.
-    cloneKey: (value) => (material.has(value) && !material.get(value).nativeKey ? cloneKey(value) : undefined),
+    cloneKey: (value) => (material.has(value) ? cloneKey(value) : undefined),
     serializeKey,
     deserializeKey,
     makeKey,
     generate,
     importKey,
     exportKey,
-    signVerify,
-    crypt,
     deriveBits,
     backend,
     algorithm,
@@ -850,14 +836,10 @@
     decode,
     keyAlgorithm,
   };
-  if (native.subtleCrypto) {
-    Object.setPrototypeOf(CryptoKey.prototype, native.CryptoKey.prototype);
-    internal.require("crypto_host_keys");
-  }
   return (defineGlobal) => {
     defineGlobal("Crypto", Crypto);
     Object.setPrototypeOf(globalThis.crypto, Crypto.prototype);
-    defineGlobal("CryptoKey", native.subtleCrypto ? native.CryptoKey : CryptoKey);
-    defineGlobal("SubtleCrypto", native.subtleCrypto ? native.SubtleCrypto : SubtleCrypto);
+    defineGlobal("CryptoKey", CryptoKey);
+    defineGlobal("SubtleCrypto", SubtleCrypto);
   };
 });

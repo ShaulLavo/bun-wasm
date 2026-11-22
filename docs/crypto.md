@@ -1,17 +1,11 @@
 # Crypto APIs
 
-The browser engine uses the host's native SubtleCrypto provider when it is available.
-A valid-key capability probe identifies native AES-192 gaps. Only those operations use the
-shared RustCrypto backend; native-supported algorithms and key operations stay native.
-A separate probe fills native AES-KW JWK alignment gaps by passing aligned bytes to native
-raw wrapping. It also works with non-extractable wrapping keys.
-The host captures that provider and its CryptoKey constructors before installing runtime
-globals. Keys created before bootstrap remain usable. The host tracks native crypto
-promises so pending operations keep the runtime alive and unhandled rejections remain fatal.
-It preserves the native DOMException constructor so native errors retain their global brand.
-The existing 2 GiB input bound also applies before native copies. In an insecure context without
-SubtleCrypto, the browser engine uses the wasm provider shared with QuickJS and wasm JSC.
-The WASI host also captures its entropy function before globals change.
+All three engines use the same WebCrypto provider: the runtime's JS adapter over the wasm
+RustCrypto/BoringSSL backend. The browser engine does not use the host browser's SubtleCrypto,
+because its algorithms, argument checks and messages differ from Bun's (Chromium has no
+ChaCha20-Poly1305, ML-KEM, ML-DSA or AES-192), so a program behaves the same on every engine
+and in every browser. The host's DOMException constructor stays the global one, so errors keep
+their brand. The WASI host captures its entropy function before globals change.
 
 | Algorithms | Operations | Key formats |
 | --- | --- | --- |
@@ -38,8 +32,8 @@ labels are byte strings, including non-UTF-8 data.
 
 CryptoKey records enforce algorithm, usage and extractability checks. Public metadata is
 separate from the operation's internal algorithm record. Assigning `crypto.subtle` is ignored,
-as in native Bun. SubtleCrypto returns promises. Operations on the wasm provider run
-synchronously inside those promises; native provider scheduling stays with the host.
+as in native Bun. SubtleCrypto returns promises. Operations run synchronously inside those
+promises.
 
 ## Backend
 
@@ -75,9 +69,9 @@ all GCM tag sizes, AES-192, non-96-bit GCM IVs, CTR field wrap and binary OAEP l
 `scripts/generate-crypto-vectors.mjs` regenerates those vectors with native Node.
 `scripts/check-crypto-review.sh <report-dir>` replays the SHA-1 JWK, P-384/SHA-1 and
 required-HMAC-hash generation/derivation regressions in every engine and verifies the runtime outputs in both
-native Node and Bun. The replay also disables host SubtleCrypto to exercise the browser
-engine's wasm fallback. `web/tests/browser-crypto.mjs` saves the provider and a native key
-before boot, then tests provider identity and native key operations in Chromium and WebKit.
+native Node and Bun. `web/tests/browser-crypto.mjs` runs those fixtures, AES-192,
+ChaCha20-Poly1305, ML-KEM, ML-DSA and Bun's error messages on the browser engine in
+Chromium and WebKit.
 
 Measured against main `6f1e576` on 2026-10-16, all 24 selected upstream crypto files run
 without timeouts. Observed passing tests rise from 165 to 185 on QuickJS and browser, and
@@ -138,18 +132,9 @@ An offline Next 15.5.6 browser-engine/native-host replay passes installation. Bu
 operation and stops at `TypeError: _promises.default.opendir is not a function`. Dev has no
 useful diagnostic; start is blocked by build. The replay is not a passing Next application.
 
-### Host key interop
+### KeyObject conversion
 
-The browser engine keeps the original native SubtleCrypto object. Its key bridge retains
-private key records at asynchronous creation boundaries for Node's synchronous KeyObject
-operations. Generated non-extractable keys return as non-extractable native keys; the
-private records support the same KeyObject conversion as the wasm provider. Converting a
-native key back with the same algorithm, extractability and usages returns its native key.
-Keys created synchronously by Node APIs enter the native provider when a SubtleCrypto
-operation consumes them. This fills the native provider's inability to import a wasm key
-synchronously. The provider performs the cryptographic operation.
-
-Secret KeyObject conversion imports raw bytes, including HKDF and PBKDF2 material. RSA
+KeyObject and CryptoKey share the provider's key records on every engine. Secret KeyObject conversion imports raw bytes, including HKDF and PBKDF2 material. RSA
 signature padding accepts the default, PKCS#1 v1.5 and PSS modes. Other values throw before
 the backend runs. Native Bun also throws on streamed verification; Node 26 returns false
 there, while its one-shot verification throws. The runtime follows the requested throwing

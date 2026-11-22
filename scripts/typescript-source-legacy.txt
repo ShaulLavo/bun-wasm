@@ -51,8 +51,6 @@ third_party/node-streams/end-of-stream.js
 web/scripts/live-check.mjs
 web/scripts/node-host.mjs
 web/scripts/node-net.mjs
-web/src/crypto-host.js
-web/src/crypto-inputs.js
 web/src/engine-host.js
 web/tests/bench-engines.mjs
 web/tests/bench-memory.mjs
@@ -65,18 +63,7 @@ web/tests/browser-smoke.mjs
 web/tests/browser-splitting.mjs
 web/tests/browser-stack.mjs
 web/tests/compare-memory.mjs
-web/tests/crypto-aes192-gap.mjs
 web/tests/crypto-hash-validation.test.js
-web/tests/crypto-inputs-probe.mjs
-web/tests/crypto-inputs.test.js
-web/tests/crypto-key-adapter-probe.mjs
-web/tests/crypto-key-adapter.test.js
-web/tests/crypto-kw-jwk-probe.mjs
-web/tests/crypto-kw-jwk.test.js
-web/tests/crypto-lifetime-probe.mjs
-web/tests/crypto-lifetime.test.js
-web/tests/crypto-no-provider.mjs
-web/tests/crypto-provider-preload.mjs
 web/tests/first-visit.mjs
 web/tests/memory-views-fallback.test.js
 web/tests/memory-views.test.js

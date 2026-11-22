@@ -7,7 +7,6 @@
 | `web/src/engine-host.js`, `Reader` and `wasmCaller` | Host feature | Bound native result decoding to the exported result length. |
 | `scripts/engine-host-result-bounds.test.ts` | Test fixture | Exercise the production decoder and bridge with controlled exports and real WebAssembly memory. |
 | `scripts/engine-host-wire.test.ts` | Test fixture | Supply the logical end when testing the production reader. |
-| `web/tests/crypto-lifetime-probe.mjs` | Test fixture | Publish the encoded result length alongside its pointer. |
 | `scripts/app-matrix/product-browser.test.ts` | Test fixture | Resolve the Page type through the declared Playwright package. |
 
 These are original bun-wasm adapters and fixtures, not copied or adapted upstream

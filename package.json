@@ -66,8 +66,6 @@
     "web/src/script-evaluation.ts",
     "web/src/stack-programs.ts",
     "web/src/engine-host.d.ts",
-    "web/src/crypto-host.js",
-    "web/src/crypto-inputs.js",
     "web/src/default-signal.ts",
     "web/src/bun-terminal.ts",
     "web/src/promise-reactions.ts",
