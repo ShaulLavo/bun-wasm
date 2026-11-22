@@ -15,6 +15,12 @@ Node build selects these objects in `crates/bunwasm-crypto-sys/build.rs` and com
 from the same pin into its own Cargo output directory. The shared prebuilt archive remains
 read-only. These are dependency build selections, not copied or patched implementations.
 
+One-shot `crypto.verify` reads the signature's bytes when it is called, before it parses
+the key and runs its option getters (a `passphrase` getter, for example), as Node and
+Bun 1.4.4 do: the bytes come from the view's own storage, so a shadowing `buffer`
+property is not consulted and a detached view verifies as an empty signature. The callback
+form takes the same snapshot. The `node-crypto-sign-digests` fixture covers these cases.
+
 
 ## Classification
 

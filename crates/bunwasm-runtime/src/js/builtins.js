@@ -322,26 +322,16 @@
       internal.realTimers.setImmediate(() => callback(null, buf));
     }
 
-    // Node's crypto.hash(algorithm, input, outputEncoding = "hex"): every argument is checked before hashing.
-    function oneShotHash(algorithm, input, outputEncoding = "hex") {
-      if (typeof algorithm !== "string") throw argTypeError("algorithm", "string", algorithm);
-      if (typeof input !== "string" && !ArrayBuffer.isView(input))
-        throw argTypeError("input", "string or an instance of Buffer, TypedArray, or DataView", input);
-      if (outputEncoding !== "buffer") {
-        if (typeof outputEncoding !== "string") throw argTypeError("outputEncoding", "string", outputEncoding);
-        if (!Buffer.isEncoding(outputEncoding))
-          throw Object.assign(new TypeError(`The argument 'outputEncoding' is invalid. Received ${internal.describe(outputEncoding)}`), { code: "ERR_INVALID_ARG_VALUE" });
-      }
-      return createHash(algorithm).update(input).digest(outputEncoding);
-    }
-
     const unsupportedCrypto = ["scrypt", "scryptSync", "privateEncrypt", "publicDecrypt"];
     return unsupportedModule("crypto", "this Node crypto operation is not implemented", unsupportedCrypto, {
       createHash,
       createHmac,
       KeyObject,
       createSecretKey,
-      hash: oneShotHash,
+      hash(algorithm, input, outputEncoding = "hex") {
+        const encoding = internal.require("node_crypto_args").hashOutputEncoding(algorithm, input, outputEncoding);
+        return createHash(algorithm).update(input).digest(encoding);
+      },
       randomBytes,
       pseudoRandomBytes: randomBytes,
       randomFillSync,

@@ -487,4 +487,7 @@ MD5 call throws TypeError ERR_ILLEGAL_CONSTRUCTOR MD5 constructor cannot be invo
 hash algorithm ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE
 hash input ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE
 hash encoding ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_VALUE
-hash outputs a94a8fe5ccb19ba61c4c0873d391e987982fbbd3 qUqP5cyxm6YcTAhz05Hph5gvu9M= 20
+hash outputs a94a8fe5ccb19ba61c4c0873d391e987982fbbd3 qUqP5cyxm6YcTAhz05Hph5gvu9M= a94a8fe5ccb19ba61c4c0873d391e987982fbbd3
+hash buffer output Buffer(20),Buffer(20),Buffer(20)
+hash ArrayBuffer input da39a3ee5e6b4b0d3255bfef95601890afd80709 hash
+hash encoding message Unknown encoding: not an encoding

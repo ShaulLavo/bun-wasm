@@ -76,3 +76,12 @@ work. The `node-crypto-hash-stream` fixture compares these uses with native Bun.
 The `node-crypto-digests` fixture compares about 150 names across the three
 lookups, long HMAC keys, every hasher HMAC, output lengths, `copy()`, and the eight
 classes with native Bun.
+
+The one-shot `crypto.hash(algorithm, input, outputEncoding = "hex")` checks its
+arguments in `node_crypto_args.ts` (`hashOutputEncoding`) before hashing, following
+Node 22's `lib/internal/crypto/hash.js` order (algorithm, input, output encoding)
+as measured against native Bun 1.4.4: wrong types throw `ERR_INVALID_ARG_TYPE`;
+an unknown encoding throws `ERR_INVALID_ARG_VALUE` with Bun's message
+`Unknown encoding: <name>` (Node's says `The argument 'outputEncoding' is invalid`);
+`buffer` is recognized in any case; and a raw `ArrayBuffer` input is hashed, as Bun
+does (Node rejects it). The fixture covers each case.

@@ -122,4 +122,23 @@ show("Hash()", () => (crypto.Hash as unknown as (algorithm: string) => crypto.Ha
     },
   };
   show("verify reads the signature at call time", () => [crypto.verify("sha256", data, key as crypto.VerifyPublicKeyInput, signature), reads].join());
+
+  // The bytes come from the view's own storage: a shadowing `buffer` property is not read,
+  // and a detached view verifies as an empty signature.
+  const fresh = crypto.sign("sha256", data, pair.privateKey);
+  const shadowed = Uint8Array.from(fresh);
+  Object.defineProperty(shadowed, "buffer", { get: () => new ArrayBuffer(shadowed.length) });
+  show("verify ignores a shadowed buffer property", () => crypto.verify("sha256", data, pair.publicKey, shadowed));
+  const detached = Uint8Array.from(fresh);
+  structuredClone(detached.buffer, { transfer: [detached.buffer] });
+  show("verify with a detached signature", () => crypto.verify("sha256", data, pair.publicKey, detached));
+
+  // The callback form takes its snapshot at call time too.
+  const later = Uint8Array.from(fresh);
+  let callbackResult = "pending";
+  crypto.verify("sha256", data, pair.publicKey, later, (error, ok) => {
+    callbackResult = error ? `error ${error.message}` : String(ok);
+  });
+  later.fill(0);
+  process.on("exit", () => console.log("verify callback reads the signature at call time", callbackResult));
 }

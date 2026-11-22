@@ -81,4 +81,15 @@ const hashCode = (...args: unknown[]) => {
 console.log("hash algorithm", [undefined, null, true, 1, {}].map(value => hashCode(value, "test")).join());
 console.log("hash input", [undefined, null, true, 1, {}].map(value => hashCode("sha1", value)).join());
 console.log("hash encoding", [null, true, 1, {}, "not an encoding"].map(value => hashCode("sha1", "test", value)).join());
-console.log("hash outputs", hashCode("sha1", "test"), hashCode("sha1", "test", "base64"), (crypto.hash("sha1", "test", "buffer") as unknown as Buffer).length);
+console.log("hash outputs", hashCode("sha1", "test"), hashCode("sha1", "test", "base64"), hashCode("sha1", "test", "HEX"));
+const bufferOutput = (encoding: string) => {
+  const value = (crypto.hash as (...values: unknown[]) => unknown)("sha1", "test", encoding);
+  return Buffer.isBuffer(value) ? `Buffer(${value.length})` : String(value);
+};
+console.log("hash buffer output", ["buffer", "BUFFER", "BuFfEr"].map(bufferOutput).join());
+console.log("hash ArrayBuffer input", hashCode("sha1", new ArrayBuffer(0)), crypto.hash.name);
+try {
+  crypto.hash("sha1", "test", "not an encoding" as BufferEncoding);
+} catch (error) {
+  console.log("hash encoding message", (error as Error).message);
+}
