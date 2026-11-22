@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeGuest, prepareGuest, verifyGuest, type GuestArtifact, type GuestDescriptor } from "./guest-artifact.ts";
 import { guestBuilds } from "./guest-source-manifest.ts";
+import { assertShippedGuestHasNoNames } from "./wasm-name-sections.ts";
 import { requiredGuestCompanions, verifyGuestBuildReceipt, verifyGuestCompanions, type GuestBuildReceipt, type ArtifactIdentity } from "./guest-build-receipt.ts";
 
 const artifacts = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"] as const;
@@ -72,6 +73,7 @@ export async function snapshotPublicationInputs(dist: string, descriptor: GuestD
   for (const name of artifacts) {
     const path = join(dist, name);
     const bytes = await readFile(path);
+    assertShippedGuestHasNoNames(name, bytes);
     const receipt = JSON.parse(await readFile(`${path}.build.json`, "utf8"));
     verifyGuestBuildReceipt(bytes, receipt);
     if (guestBuilds[receipt.sourceManifest.build].artifact !== name) throw new Error(`Guest publication engine mismatch: ${name}`);

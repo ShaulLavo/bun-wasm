@@ -53,6 +53,8 @@ scripts/build-bun-tools.sh                   # dist/bun-tools.wasm, lint and fmt
 cargo build -j 4 --release -p bunwasm-host   # the native launcher, $CARGO_TARGET_DIR/release/bun-wasm
 ```
 
+The shipped `dist/bun-browser.wasm` has no Wasm `name` section: users would download about 2.2 MB of debug names for nothing. The same build also writes `dist/bun-browser.named.wasm`, which keeps the names for profilers and symbolizers and is never shipped. To profile it in a local playground or sandbox build, point `BUN_BROWSER_WASM` at it and set `BUN_WASM_KEEP_NAMES=1`; without that variable the site builds, CI export and publication reject a browser guest that carries names (`scripts/wasm-name-sections.ts`).
+
 You do not need all of them. `dist/bun.wasm` plus the launcher runs programs from a terminal. The playground needs the guests you want in its engine picker. Every build writes a `.build.json` receipt next to the artifact ([Guest build receipts](guest-build-receipts.md)).
 
 Run a program with the launcher. Use it, not plain `wasmtime run`, because it supplies the `runtime_proc` imports:
