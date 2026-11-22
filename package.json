@@ -123,6 +123,7 @@
   "devDependencies": {
     "@builder.io/qwik": "1.17.2",
     "@types/bun": "^1.4.3",
+    "@types/node": "26.6.5",
     "@waffle-os/relay": "0.0.146",
     "@waffle-os/runtime": "0.0.146",
     "esbuild": "0.28.2",
