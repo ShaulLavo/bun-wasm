@@ -19,10 +19,39 @@ export function selectCiBrowserCoverage(base: string, head: string, options: { p
   return selectBrowserGuestCoverage({ changedPaths: changedPaths(base, head, options.pullRequest), full: options.full,
     snapshots: [browserCoverageSnapshot(base, "base"), browserCoverageSnapshot(head, "head"), browserCoverageSnapshot(ancestor, "merge-ancestor")] });
 }
+
+function shardForBatch(name: string): string {
+  switch (name) {
+    case "10-storage": return "storage";
+    case "21-subprocess-aliases":
+    case "23-engine-interruption": return "runtime";
+    case "20-installer-links":
+    case "22-preview-websocket-headers":
+    case "24-worker-modules":
+    case "25-terminal-stdin":
+    case "26-tools-integrity":
+    case "default": return "playground";
+    default: return name;
+  }
+}
+
+function batchBudget(name: string) {
+  return name.startsWith("2") ? { name, jobSeconds: 3600, commandSeconds: 3240 } : { name, jobSeconds: 600, commandSeconds: 900 };
+}
+
+function browserGuestMatrix(names: readonly string[]) {
+  const shards = Map.groupBy(names.map(batchBudget), batch => shardForBatch(batch.name));
+  const include = Array.from(shards, ([shard, batches]) => {
+    const timeoutMinutes = batches.reduce((sum, batch) => sum + batch.jobSeconds, 0) / 60;
+    return ["chromium", "webkit"].map(browser => ({ browser, batch: shard, batches, timeoutMinutes }));
+  }).flat();
+  return { include };
+}
+
 export function browserCoverageOutputs(selection: BrowserGuestSelection): string {
   const selected = new Set<string>(selection.map(item => coverageBatches[item.owner]));
   const batches = namedCheckBatches("browser-guest").filter(batch => !Object.values(coverageBatches).some(name => name === batch.name) || selected.has(batch.name));
-  return [`batches=${JSON.stringify(batches.map(batch => batch.name))}`, `selection=${JSON.stringify(selection)}`,
+  return [`matrix=${JSON.stringify(browserGuestMatrix(batches.map(batch => batch.name)))}`, `selection=${JSON.stringify(selection)}`,
     `needed=${selection.length > 0}`, `jsc=${selection.some(item => item.engines.includes("jsc"))}`].join("\n");
 }
 if (import.meta.main) {

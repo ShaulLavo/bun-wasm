@@ -14,7 +14,7 @@ Owners are `runtime`, `web`, `quality`, `package-extra`, `cmake`, `web-browser`,
 `browser-guest` and `native`. `browser-guest` checks serve the playground site built from
 the same commit's browser guest (`scripts/browser-guest-site.ts`). CI's selected Rust or PR-only Browser producer builds that
 site once from its receipt-verified guest and uploads it with its identities
-(`browser-guest-site`). Browser guest batch jobs in Chromium and WebKit download it and pass it
+(`browser-guest-site`). Each Chromium and WebKit shard downloads it once and passes it
 in `BUN_WASM_BROWSER_SITE`; each check verifies the site's closed inventory, guest and
 receipt against the checkout before and after the browsers run, and never bundles it again.
 A local run without that variable builds a site in scratch from `dist/bun-browser.wasm`.
@@ -56,11 +56,15 @@ The runner rejects unknown fields, absent files, symlinks, unsafe paths and dupl
 owners. It sorts by repository path before invoking argv directly, without a shell.
 Web manifests retain the three original subprocess batches with ordered `batch`
 labels. A failed batch stops a local runner before later batches. Browser guest
-manifests also accept these labels. CI discovers them with `--batches` and gives
-each browser and batch its own runner, selecting it with `--batch NAME`. The
-existing required Processes gates wait for every batch and reject failures,
-cancellations and unexpected skips. A producer-disabled run skips the guest jobs.
-All jobs keep their existing ten-minute budget, and the site is still built once.
+manifests also accept these labels. CI puts the selected batches in up to three
+measured shards per browser. A newly introduced batch gets its own shard until
+grouped. Each shard runs its batches in separate subprocesses with `--batch NAME`.
+The command deadline and original job budget still apply to each batch, with
+shared setup charged to each budget. A failed or timed-out batch leaves a log and
+exit status and the shard runs the remaining batches before failing. CI retains
+diagnostic files by batch. The required Processes gates wait for every shard and
+reject failures, cancellations and unexpected skips. A producer-disabled run skips
+the guest jobs.
 
 `web-browser` manifests select `batch` labels. CI uses
 `scripts/ci-web-browser-shards.ts` to discover every batch. Interface shares a

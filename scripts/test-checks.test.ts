@@ -468,9 +468,9 @@ test("Browser guest matrix discovers each profile batch and runs every check exa
 test("required Processes gates reject failed or cancelled guest batches and allow only producer-disabled skips", () => {
   const workflow = expandedCiWorkflow();
   const guest = workflow.split("\n  browser-guest:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
-  expect(guest).toContain("batch: ${{ fromJSON(needs.selection.outputs.browser-guest-batches) }}");
+  expect(guest).toContain("matrix: ${{ fromJSON(needs.selection.outputs.browser-guest-matrix) }}");
   expect(guest).toContain("fail-fast: false");
-  expect(guest).toContain("timeout-minutes: ${{ startsWith(matrix.batch, '2') && 60 || 10 }}");
+  expect(guest).toContain("timeout-minutes: ${{ matrix.timeoutMinutes }}");
   expect(guest).not.toContain("browser-guest-site.ts build");
   const processes = workflow.split("\n  browser-process:\n")[1]!.split(/\n  [\w-]+:\n/, 1)[0]!;
   expect(processes).toContain("needs: [selection, ordinary-web-guests, rust, browser-production, process-bundles, browser-guest]");
