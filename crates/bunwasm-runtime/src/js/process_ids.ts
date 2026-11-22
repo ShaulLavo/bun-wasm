@@ -64,27 +64,33 @@
     };
   }
 
+  // Bun reads each index up to the length it captured first, so a hole or a getter is seen as
+  // the value it gives, and the list changes only when every item is valid.
   function setgroups(groups: unknown): number {
     if (!Array.isArray(groups)) {
       throw fail(new TypeError(`The "groups" argument must be an instance of Array. Received ${received(groups)}`), "ERR_INVALID_ARG_TYPE");
     }
-    if (groups.length > 64) {
-      throw fail(new RangeError(`The value of "groups.length" is out of range. It must be >= 0 && <= 64. Received ${groups.length}`), "ERR_OUT_OF_RANGE");
+    const count = groups.length;
+    if (count > 64) {
+      throw fail(new RangeError(`The value of "groups.length" is out of range. It must be >= 0 && <= 64. Received ${count}`), "ERR_OUT_OF_RANGE");
     }
     const table = groupFile();
-    const ids = groups.map((item: unknown, index: number) => {
+    const ids: number[] = [];
+    for (let index = 0; index < count; index++) {
+      const item: unknown = groups[index];
       const name = `groups[${index}]`;
-      if (typeof item === "number") return validateUint32(item, name);
-      if (typeof item === "string") return lookup(table, "Group", item, 2);
-      throw idTypeError(name, item);
-    });
+      if (typeof item === "number") ids.push(validateUint32(item, name));
+      else if (typeof item === "string") ids.push(lookup(table, "Group", item, 2));
+      else throw idTypeError(name, item);
+    }
     state.groups = ids;
     return 0;
   }
 
   // Node's initgroups takes a name or an id for the user and the extra group. Bun validates both
   // as ids, resolves the group first, and resolves only a numeric user through passwd: a name is
-  // handed to initgroups(3) as it is.
+  // handed to initgroups(3) as it is. The result is the extra group followed by the groups of
+  // /etc/group that list the user.
   function initgroups(user: unknown, extraGroup: unknown): void {
     const typeError = (name: string, value: unknown) =>
       fail(new TypeError(`The "${name}" argument must be one of type number or string. Received ${received(value)}`), "ERR_INVALID_ARG_TYPE");
@@ -92,11 +98,18 @@
     if (typeof user === "number") validateUint32(user, "user");
     if (typeof extraGroup !== "number" && typeof extraGroup !== "string") throw typeError("extraGroup", extraGroup);
     if (typeof extraGroup === "number") validateUint32(extraGroup, "extraGroup");
-    const gid = lookup(groupFile(), "Group", extraGroup, 2);
-    if (typeof user === "number" && !passwd().some(entry => Number(entry[2]) === user)) {
-      throw fail(new Error(`User identifier does not exist: ${user}`), "ERR_UNKNOWN_CREDENTIAL");
+    const table = groupFile();
+    const gid = lookup(table, "Group", extraGroup, 2);
+    let name: string;
+    if (typeof user === "number") {
+      const entry = passwd().find(row => Number(row[2]) === user);
+      if (entry === undefined) throw fail(new Error(`User identifier does not exist: ${user}`), "ERR_UNKNOWN_CREDENTIAL");
+      name = entry[0];
+    } else {
+      name = user;
     }
-    state.groups = [gid];
+    const member = table.filter(row => (row[3] ?? "").split(",").includes(name)).map(row => Number(row[2]));
+    state.groups = [gid].concat(member.filter(id => id !== gid));
   }
 
   return {

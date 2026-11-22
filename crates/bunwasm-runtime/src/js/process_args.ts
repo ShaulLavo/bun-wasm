@@ -28,25 +28,31 @@
     return value;
   }
 
+  // The process keeps the low nine permission bits, as the kernel does.
   let mask = 0o22;
   function umask(value: unknown): number {
     const previous = mask;
     if (value === undefined) return previous;
+    let next: number;
     if (typeof value === "string") {
-      if (!/^[0-7]+$/.test(value)) {
+      // Bun's WTF::parseInteger<mode_t>(string, 8): ASCII whitespace around an optional "+" and
+      // octal digits that fit in 32 bits.
+      const digits = /^[\t\n\v\f\r ]*\+?([0-7]+)[\t\n\v\f\r ]*$/.exec(value)?.[1];
+      next = digits === undefined ? Number.NaN : Number.parseInt(digits, 8);
+      if (!(next <= 4294967295)) {
         throw fail(new TypeError(`The argument 'mask' must be a 32-bit unsigned integer or an octal string. Received '${value}'`), "ERR_INVALID_ARG_VALUE");
       }
-      mask = Number.parseInt(value, 8);
-      return previous;
+    } else {
+      next = validateUint32(value, "mask");
     }
-    mask = validateUint32(value, "mask");
+    mask = next & 0o777;
     return previous;
   }
 
   // The comparison value of process.cpuUsage(prevValue): both fields must be numbers in 0..2^53-1.
   function cpuUsage(usage: { user: number; system: number }, previous: unknown) {
     if (previous === undefined) return usage;
-    if (previous === null || typeof previous !== "object") {
+    if (previous === null || (typeof previous !== "object" && typeof previous !== "function")) {
       throw fail(new TypeError(`The "prevValue" argument must be of type object. Received ${received(previous)}`), "ERR_INVALID_ARG_TYPE");
     }
     const from = previous as { user?: unknown; system?: unknown };

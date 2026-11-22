@@ -1209,10 +1209,22 @@
       return execFile(argv[0], argv.slice(1), options, callback);
     }
 
+    function inheritedExecArgv(flags: string[]): string[] {
+      const kept: string[] = [];
+      for (let index = 0; index < flags.length; index++) {
+        const flag = flags[index];
+        if (flag === "-e" || flag === "--eval" || flag === "-p" || flag === "--print") index++;
+        else kept.push(flag);
+      }
+      return kept;
+    }
+
     function fork(modulePath: string, args?: Loose, options?: Loose) {
       if (!Array.isArray(args)) { options = args || {}; args = []; }
       options = options || {};
-      const execArgs = options.execArgv || (process as unknown as BunWasm.GuestProcess).execArgv;
+      // The parent's flags, less the code `bun run -e CODE entry` kept there: replayed in a child, it
+      // would run instead of the child's entry.
+      const execArgs = options.execArgv || inheritedExecArgv((process as unknown as BunWasm.GuestProcess).execArgv);
       const mode = options.stdio || (options.silent ? "pipe" : "inherit");
       const stdio = Array.isArray(mode) ? mode : [mode, mode, mode, "ipc"];
       if (!stdio.includes("ipc")) throw Object.assign(new Error("Fork requires an IPC channel"), { code: "ERR_CHILD_PROCESS_IPC_REQUIRED" });

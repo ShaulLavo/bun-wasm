@@ -29,7 +29,8 @@
   }
 
   let nice = 0;
-  const isSelf = (pid: number) => pid === 0 || pid === globalThis.process.pid;
+  const ownPid = (internal.require("process") as unknown as { pid: number }).pid;
+  const isSelf = (pid: number) => pid === 0 || pid === ownPid;
 
   function getPriority(pid?: unknown): number {
     const target = pid === undefined ? 0 : validateInt32(pid, "pid");

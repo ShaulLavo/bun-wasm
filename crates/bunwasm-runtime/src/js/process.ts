@@ -38,7 +38,7 @@
   let bindingLookup: ((name: unknown, own: Record<string, () => unknown>) => unknown) | undefined;
   const ownBindings: Record<string, () => unknown> = {
     constants: () => constantsBinding(),
-    uv: () => internal.require("uv_errors").binding(),
+    uv: () => internal.require("uv_errors").binding(process),
   };
 
   // Bun's constructProcessConfigObject for Linux, with the guest's architecture. Frozen, as in Bun.
@@ -570,13 +570,7 @@
     stdout: { get: () => stdout || (stdout = makeWriter(1)), configurable: true, enumerable: true },
     stderr: { get: () => stderr || (stderr = makeWriter(2)), configurable: true, enumerable: true },
     stdin: { get: () => stdin || (stdin = makeReader()), configurable: true, enumerable: true },
-    // Writable, like Bun's data property: a write replaces the main module for process only.
-    mainModule: {
-      get: () => internal.getMainModule(),
-      set: (value: unknown) => { Object.defineProperty(process, "mainModule", { value, writable: true, configurable: true, enumerable: false }); },
-      configurable: true,
-      enumerable: false,
-    },
+    mainModule: lazyData("mainModule", () => internal.getMainModule()),
     exitCode: { get: () => exitByte, set: setExitCode, configurable: true, enumerable: true },
     finalization: { get: () => finalization ??= createFinalization(), configurable: true, enumerable: false },
     allowedNodeEnvironmentFlags: lazyData("allowedNodeEnvironmentFlags", () => internal.require("process_allowed_flags")),

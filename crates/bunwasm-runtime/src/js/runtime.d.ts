@@ -578,7 +578,7 @@ declare namespace BunWasm {
       cpuUsage(usage: { user: number; system: number }, previous: unknown): { user: number; system: number };
     };
     require(name: "uv_errors"): {
-      binding(): Record<string, unknown>;
+      binding(process: { pendingDeprecation?: boolean; emitWarning(message: string, type: string, code: string): void }): Record<string, unknown>;
       message(name: string): string | undefined;
     };
     /** The byte helper accepts arbitrary input and throws for unsupported shapes. */

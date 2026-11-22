@@ -103,20 +103,23 @@
 
   // The binding's errname does not validate: a non-integer is just an unknown error.
   // Node latches DEP0119 once per thread, and only under --pending-deprecation.
+  // The process object is the one the binding was made for: a program may replace the global later.
+  type Warner = { pendingDeprecation?: boolean; emitWarning(message: string, type: string, code: string): void };
+  let owner: Warner | undefined;
   let errnameWarned = false;
   function errname(errno: unknown) {
-    const process = globalThis.process as { pendingDeprecation?: boolean; emitWarning(message: string, type: string, code: string): void };
-    if (process.pendingDeprecation && !errnameWarned) {
+    if (owner?.pendingDeprecation && !errnameWarned) {
       errnameWarned = true;
-      process.emitWarning("Directly calling process.binding('uv').errname(<val>) is being deprecated. Please make sure to use util.getSystemErrorName() instead.", "DeprecationWarning", "DEP0119");
+      owner.emitWarning("Directly calling process.binding('uv').errname(<val>) is being deprecated. Please make sure to use util.getSystemErrorName() instead.", "DeprecationWarning", "DEP0119");
     }
     const entry = typeof errno === "number" ? byErrno.get(errno) : undefined;
     if (entry) return entry[1];
     return Number.isInteger(errno) ? `Unknown system error ${errno}` : "Unknown system error";
   }
 
-  function uvBinding() {
+  function uvBinding(process: Warner) {
     if (binding) return binding;
+    owner = process;
     const constants: Record<string, unknown> = { errname };
     for (const [errno, name] of table) constants[`UV_${name}`] = errno;
     constants.getErrorMap = errorMap;

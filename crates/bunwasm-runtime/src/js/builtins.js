@@ -65,7 +65,7 @@
       availableParallelism: () => 1,
       cpus: () => [cpu],
       networkInterfaces: () => ({}),
-      userInfo: () => ({ uid: 0, gid: 0, username: env.USER || "user", homedir: env.HOME || "/", shell: env.SHELL || "unknown" }),
+      userInfo: () => ({ uid: internal.require("process_ids").getuid(), gid: internal.require("process_ids").getgid(), username: env.USER || "user", homedir: env.HOME || "/", shell: env.SHELL || "unknown" }),
       getPriority: (pid) => internal.require("os_priority").getPriority(pid),
       setPriority: (pid, priority) => internal.require("os_priority").setPriority(pid, priority),
       constants: { signals, errno: {}, priority: {}, dlopen: {}, UV_UDP_REUSEADDR: 4 },

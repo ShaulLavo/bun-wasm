@@ -1,4 +1,4 @@
 --bun
-/index.js
+./index.ts
 foo
 -a
