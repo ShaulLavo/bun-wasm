@@ -462,12 +462,14 @@
   class Formatter {
     constructor(options) {
       this.out = "";
-      this.indent = 0;
+      // A console group starts the formatter at its own indentation level.
+      this.indent = options.indent || 0;
       this.depth = 0;
       this.maxDepth = options.maxDepth;
       this.outerMaxDepth = undefined;
       this.quoteStrings = !!options.quoteStrings;
       this.colors = !!options.colors;
+      this.errorLabel = options.errorLabel || "error";
       this.quoteKeys = false;
       this.estimatedLineLength = 0;
       this.alwaysNewlineScope = false;
@@ -1620,16 +1622,17 @@
     return true;
   }
 
-  function errorNameAndMessage(name, message, code) {
+  // `label` is the display level: "error", or "warn" for console.warn.
+  function errorNameAndMessage(name, message, code, label = "error") {
     if (name !== "" && message !== "") {
       if (name !== "Error") return name + ": " + message + "\n";
       const prefixed = code !== undefined && message.length > code.length + 3 && message.startsWith(code + ": ");
       if (prefixed) return code + ": " + message.slice(code.length + 2) + "\n";
-      return "error: " + message + "\n";
+      return label + ": " + message + "\n";
     }
     if (name !== "") return name + ": \n";
-    if (message !== "") return "error: " + message + "\n";
-    return "error\n";
+    if (message !== "") return label + ": " + message + "\n";
+    return label + "\n";
   }
 
   function stringProp(err, key) {
@@ -1702,7 +1705,7 @@
     const code = errorCode(err);
     const lines = sourceExcerpt(top);
     if (lines !== null) writeExcerpt(f, lines, top);
-    f.write(errorNameAndMessage(name, message, code));
+    f.write(errorNameAndMessage(name, message, code, f.errorLabel));
 
     const toAppend = printErrorProperties(f, err, code, prevHadErrors);
     for (const frame of frames) f.write(formatFrame(frame));
@@ -1835,7 +1838,7 @@
 
   // Non-Error thrown values (`throw "str"`, `throw {a: 1}`, ...).
   function formatThrownValue(f, value) {
-    f.write(errorNameAndMessage("", thrownMessage(value), undefined));
+    f.write(errorNameAndMessage("", thrownMessage(value), undefined, f.errorLabel));
     f.format(tagOf(value, { hideGlobal: true, disableCustom: true }), value);
     f.write("\n");
   }
@@ -1865,7 +1868,7 @@
 
   function applyDepth(result, depth) {
     if (typeof depth !== "number") return;
-    if (!Number.isFinite(depth)) {
+    if (depth === Infinity || depth === -Infinity) {
       result.maxDepth = 65535;
       return;
     }
@@ -1907,6 +1910,9 @@
       quoteStrings: false,
       singleLine: false,
       orderedProperties: false,
+      indent: opts.indent,
+      colors: opts.colors,
+      errorLabel: opts.level === "warn" ? "warn" : "error",
     });
     if (args.length === 0) return "";
     f.remaining = Array.prototype.slice.call(args, 1);
