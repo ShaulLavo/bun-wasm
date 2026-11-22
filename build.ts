@@ -19,7 +19,7 @@ const result = await Bun.build({
   external: ["waffle", "waffle/*", "@waffle-os/relay"],
   splitting: true,
   naming: { entry: "[name].js", chunk: "chunks/[name]-[hash].js" },
-  sourcemap: "external",
+  minify: { whitespace: true, syntax: true, identifiers: false },
 });
 if (!result.success) throw new AggregateError(result.logs, "bun-wasm package build failed");
 for (const output of result.outputs) console.log(`${output.path.slice(out.length + 1)} ${(output.size / 1024).toFixed(0)} KB`);
