@@ -1081,9 +1081,22 @@
   // A header value is a byte string without NUL, CR or LF; the surrounding HTTP whitespace
   // (tab, LF, CR, space) is cut off. The error names the header and never quotes the value,
   // which is often a credential.
+  const invalidHeaderValue = /[\0\n\rĀ-￿]/;
+
+  // Tab, LF, CR and space.
+  function isHttpSpace(code) {
+    return code === 9 || code === 10 || code === 13 || code === 32;
+  }
+
+  // `name` is the name as the caller wrote it, already coerced to a string once.
   function normalizeHeaderValue(key, name, value) {
-    const v = String(value).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
-    if (/[\0\n\rĀ-￿]/.test(v)) throw new TypeError(`Header '${headerNameSpelling(key, name)}' has invalid value`);
+    let v = typeof value === "string" ? value : String(value);
+    let start = 0;
+    let end = v.length;
+    while (start < end && isHttpSpace(v.charCodeAt(start))) start++;
+    while (end > start && isHttpSpace(v.charCodeAt(end - 1))) end--;
+    if (start !== 0 || end !== v.length) v = v.slice(start, end);
+    if (invalidHeaderValue.test(v)) throw new TypeError(`Header '${headerNameSpelling(key, name)}' has invalid value`);
     return v;
   }
 
@@ -1107,8 +1120,9 @@
       for (const key of Object.keys(init)) this.append(key, init[key]);
     }
     append(name, value) {
-      const key = normalizeHeaderName(name);
-      const v = normalizeHeaderValue(key, name, value);
+      const text = String(name);
+      const key = normalizeHeaderName(text);
+      const v = normalizeHeaderValue(key, text, value);
       if (key === "set-cookie") {
         this.#cookies.push(v);
         return;
@@ -1117,8 +1131,9 @@
       this.#map.set(key, prev === undefined ? v : `${prev}, ${v}`);
     }
     set(name, value) {
-      const key = normalizeHeaderName(name);
-      const v = normalizeHeaderValue(key, name, value);
+      const text = String(name);
+      const key = normalizeHeaderName(text);
+      const v = normalizeHeaderValue(key, text, value);
       if (key === "set-cookie") {
         this.#cookies = [v];
         return;
@@ -1132,7 +1147,9 @@
       return v === undefined ? null : v;
     }
     getAll(name) {
-      return normalizeHeaderName(name) === "set-cookie" ? this.#cookies.slice() : [this.get(name)].filter((v) => v !== null);
+      const key = normalizeHeaderName(name);
+      if (key === "set-cookie") return this.#cookies.slice();
+      return this.#map.has(key) ? [this.#map.get(key)] : [];
     }
     getSetCookie() {
       return this.#cookies.slice();

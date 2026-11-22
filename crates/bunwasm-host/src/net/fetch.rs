@@ -750,11 +750,14 @@ fn is_redirect_status(status: StatusCode) -> bool {
 /// A request header value is a byte string: each character up to U+00FF goes out as that one
 /// byte (so U+00E9 is 0xE9, not UTF-8), and anything above is not a header value.
 fn latin1_header_value(value: &str) -> Option<HeaderValue> {
-    let bytes = value
-        .chars()
-        .map(|c| u8::try_from(u32::from(c)).ok())
-        .collect::<Option<Vec<u8>>>()?;
-    HeaderValue::from_bytes(&bytes).ok()
+    if value.is_ascii() {
+        return HeaderValue::from_str(value).ok();
+    }
+    let mut bytes = Vec::with_capacity(value.len());
+    for c in value.chars() {
+        bytes.push(u8::try_from(u32::from(c)).ok()?);
+    }
+    HeaderValue::from_maybe_shared(bytes::Bytes::from(bytes)).ok()
 }
 
 fn redirect_headers(headers: &mut HeaderMap, current: &Url, next: &Url) {

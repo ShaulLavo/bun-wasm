@@ -3,3 +3,19 @@ long fragments: 200 ok true ORIGIN/hop/3#<98304 bytes> /hop/0 /hop/1 /hop/2 /hop
 no redirect: 200 false ORIGIN/hop/3#<4 bytes>
 direct: {"name":"TypeError","code":"ENOTFOUND","syscall":"getaddrinfo","hostname":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com","message":"getaddrinfo ENOTFOUND aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com"}
 after a redirect: {"name":"TypeError","code":"ENOTFOUND","syscall":"getaddrinfo","hostname":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.com","message":"getaddrinfo ENOTFOUND cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.com"}
+wire x-latin 20 61 e9 80 ff 7a
+wire x-ascii 20 61 6c 70 68 61 20 62 65 74 61
+wire x-inner 20 61 09 62 20 20 63
+wire x-padded 20 74 72 69 6d 6d 65 64
+wire x-nbsp 20 61 a0 62
+invalid value append NUL TypeError Header 'Authorization' has invalid value
+invalid value append CRLF TypeError Header 'x-api-key' has invalid value
+invalid value set above U+00FF TypeError Header 'X-Test' has invalid value
+invalid value constructor TypeError Header 'Location' has invalid value
+invalid value Request TypeError Header 'Cookie' has invalid value
+invalid value fetch TypeError Header 'X-Test' has invalid value
+invalid value set-cookie TypeError Header 'Set-Cookie' has invalid value
+kept "é  "
+append name converted 1 time: Header 'X-Input' has invalid value
+set name converted 1 time: Header 'X-Input' has invalid value
+long interior whitespace 262146
