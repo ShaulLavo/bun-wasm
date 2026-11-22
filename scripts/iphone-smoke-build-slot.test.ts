@@ -6,6 +6,17 @@ import { join } from "node:path";
 
 const cli = join(import.meta.dir, "iphone-smoke-build-slot.ts");
 
+function fixtureProject(directory: string, linker: "isolated" | "hoisted"): void {
+  const dependency = join(directory, "dependency");
+  mkdirSync(dependency, { recursive: true });
+  writeFileSync(join(directory, "package.json"), JSON.stringify({
+    name: "fixture-project", private: true, dependencies: { "slot-fixture": "file:./dependency" },
+  }));
+  writeFileSync(join(dependency, "package.json"), JSON.stringify({ name: "slot-fixture", version: "1.0.0" }));
+  writeFileSync(join(directory, "bunfig.toml"), `[install]\nlinker = "${linker}"\n`);
+  execFileSync(process.execPath, ["install", "--lockfile-only", "--ignore-scripts", "--silent"], { cwd: directory });
+}
+
 async function fixture(run: (input: { repository: string; checkout: string; revision: string }) => Promise<void> | void) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "bun-wasm-iphone-build-test-")));
   try {
@@ -13,7 +24,10 @@ async function fixture(run: (input: { repository: string; checkout: string; revi
     mkdirSync(repository);
     const git = (...args: string[]) => execFileSync("git", args, { cwd: repository, encoding: "utf8" });
     git("init", "--quiet");
-    git("-c", "user.name=Smoke", "-c", "user.email=smoke@example.invalid", "commit", "--allow-empty", "--quiet", "-m", "Fixture");
+    fixtureProject(repository, "isolated");
+    fixtureProject(join(repository, "web"), "hoisted");
+    git("add", ".");
+    git("-c", "user.name=Smoke", "-c", "user.email=smoke@example.invalid", "commit", "--quiet", "-m", "Fixture");
     const checkout = join(root, "checkout");
     await run({ repository, checkout, revision: git("rev-parse", "HEAD").trim() });
     expect(git("worktree", "list", "--porcelain")).not.toContain(`worktree ${checkout}\n`);
@@ -25,6 +39,36 @@ async function fixture(run: (input: { repository: string; checkout: string; revi
 function invocation(checkout: string, revision: string, script: string): string[] {
   return [process.execPath, cli, checkout, revision, "--", "bash", "-eu", "-c", script];
 }
+
+test("the exact build checkout supplies the linker for each frozen install", async () => {
+  await fixture(({ repository, checkout, revision }) => {
+    writeFileSync(join(repository, "bunfig.toml"), '[install]\nlinker = "hoisted"\n');
+    writeFileSync(join(repository, "web", "bunfig.toml"), '[install]\nlinker = "isolated"\n');
+    const result = Bun.spawnSync(invocation(checkout, revision, `
+      test -L node_modules/slot-fixture
+      test -f web/node_modules/slot-fixture/package.json
+      test ! -L web/node_modules/slot-fixture
+      git diff --exit-code
+    `), { cwd: repository });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(existsSync(checkout)).toBe(false);
+  });
+});
+
+test("a missing Web lockfile skips preparation and releases the slot", async () => {
+  await fixture(({ repository, checkout, revision }) => {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repository, encoding: "utf8" });
+    git("rm", "web/bun.lock");
+    git("-c", "user.name=Smoke", "-c", "user.email=smoke@example.invalid", "commit", "--quiet", "-m", "Missing web lock");
+    const broken = git("rev-parse", "HEAD").trim();
+    const failed = Bun.spawnSync(invocation(checkout, broken, "exit 93"), { cwd: repository });
+    expect(failed.exitCode).toBe(1);
+    expect(failed.stderr.toString()).toContain(`requires package.json and bun.lock in ${join(checkout, "web")}`);
+    expect(existsSync(checkout)).toBe(false);
+    const next = Bun.spawnSync(invocation(checkout, revision, "true"), { cwd: repository });
+    expect(next.exitCode, next.stderr.toString()).toBe(0);
+  });
+});
 
 function stopFixtureGroup(pid: number): void {
   try { process.kill(-pid, "SIGTERM"); }

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 const interruptionExitCodes = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
@@ -36,23 +36,35 @@ async function build(checkout: string, revision: string, command: string[]): Pro
     const work = join(checkout, "target", "iphone-smoke");
     const tmp = join(work, "tmp");
     mkdirSync(tmp, { recursive: true });
-    const child = Bun.spawn(command, {
-      cwd: checkout,
-      env: {
-        ...process.env,
-        IPHONE_SMOKE_BUILD_DIR: work,
-        CARGO_TARGET_DIR: join(work, "cargo"),
-        BROWSER_CARGO_TARGET_DIR: join(work, "browser"),
-        TOOLS_CARGO_TARGET_DIR: join(work, "tools"),
-        TMPDIR: tmp,
-        TMP: tmp,
-        TEMP: tmp,
-      },
+    const env = {
+      ...process.env,
+      IPHONE_SMOKE_BUILD_DIR: work,
+      CARGO_TARGET_DIR: join(work, "cargo"),
+      BROWSER_CARGO_TARGET_DIR: join(work, "browser"),
+      TOOLS_CARGO_TARGET_DIR: join(work, "tools"),
+      TMPDIR: tmp,
+      TMP: tmp,
+      TEMP: tmp,
+    };
+    const run = (argv: string[], cwd: string) => Bun.spawn(argv, {
+      cwd, env,
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
-    });
-    return await child.exited;
+    }).exited;
+    const install = [process.execPath, "install", "--frozen-lockfile", "--silent"];
+    for (const directory of [checkout, join(checkout, "web")]) {
+      if (!statSync(join(directory, "package.json"), { throwIfNoEntry: false })?.isFile()
+        || !statSync(join(directory, "bun.lock"), { throwIfNoEntry: false })?.isFile())
+        throw new Error(`Smoke dependency install requires package.json and bun.lock in ${directory}`);
+      const status = await run(install, directory);
+      if (interrupted !== undefined) return interrupted;
+      if (status !== 0) {
+        console.error(`Smoke dependency install failed in ${directory} with exit code ${status}`);
+        return status;
+      }
+    }
+    return await run(command, checkout);
   } finally {
     if (registeredCheckout(checkout)) {
       runProtectedGit("worktree", "remove", "--force", checkout);

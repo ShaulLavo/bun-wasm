@@ -81,6 +81,12 @@ bun /work/heavy-runner/current/run.js --host local --class build "iphone-smoke-$
   bash scripts/with-build-cache.sh bash "$attempt_build"
 ```
 
+The slot runs frozen dependency installs in the scheduled checkout's root and
+`web/` before starting the preparation script. Bun reads the settings in each
+project. The npm Waffle pin uses the isolated linker so the runtime and its
+alias resolve to the same installed package. Leave install commands out of the
+attempt script when copying an older build.
+
 In the preparation script, use the current checkout and the supplied
 `CARGO_TARGET_DIR`, `BROWSER_CARGO_TARGET_DIR`, `TOOLS_CARGO_TARGET_DIR` and
 `TMPDIR`. Put the generated shared sysroot and QuickJS group under
@@ -89,7 +95,10 @@ before exiting. The cache wrapper starts and stops its own sccache server and
 prints its statistics in the build log.
 
 The device controller uses a separate checkout of the scheduled commit for its
-runtime source checks. If a build is killed and leaves its checkout behind,
+runtime source checks. Run `bun install --frozen-lockfile` in that checkout's
+root and in `web/`. Let each project supply its own linker settings.
+
+If a build is killed and leaves its checkout behind,
 audit the stopped build before removing that checkout with `git worktree remove`.
 
 ## Queue and reports
