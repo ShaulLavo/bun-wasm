@@ -45,6 +45,8 @@ declare namespace CryptoKeys {
     invalidArgValue(name: string, value: unknown, reason?: string): TypeError;
     operationFailed(message: string): Error;
     opensslError(packed: string, library: string, reason: string, code: string): Error;
+    validateInt32(value: unknown, name: string, min?: number, max?: number): number;
+    validateString(value: unknown, name: string): void;
   };
   type ExportType = "pkcs8" | "spki" | "pkcs1" | "sec1";
   type ExportOptions = {
@@ -75,11 +77,15 @@ declare namespace CryptoKeys {
     encoding?: string;
   };
   type KeyInput = KeyOptions | Input | KeyObject | CryptoKey;
-  type GeneratePairType = "rsa" | "ec" | "ed25519" | "x25519";
+  type GeneratePairType = "rsa" | "rsa-pss" | "ec" | "ed25519" | "x25519";
   type GeneratePairOptions = {
     modulusLength?: number;
     publicExponent?: number;
     hashAlgorithm?: string;
+    mgf1HashAlgorithm?: unknown;
+    hash?: unknown;
+    mgf1Hash?: unknown;
+    saltLength?: unknown;
     namedCurve?: string;
     privateKeyEncoding?: ExportOptions;
     publicKeyEncoding?: ExportOptions;
@@ -660,6 +666,38 @@ declare namespace CryptoKeys {
       if (!isPublic && (encoding!.cipher !== undefined || encoding!.passphrase !== undefined))
         throw incompatible("The selected key encoding raw format does not support encryption.");
     }
+    // Bun's RsaKeyPairJobCtx::fromJS for "rsa-pss" (CryptoGenRsaKeyPair.cpp): it reads every
+    // option, then checks them; each deprecated name warns (DEP0154) before its own check, so
+    // an error thrown while warning propagates, and then wins over the new name. Bun's
+    // conflict check compares the wrong views and never fires. Bun's BoringSSL then refuses
+    // to generate the key (EVP_PKEY_RSA_PSS), and so does this one.
+    function rsaPssKeyPair(options: CryptoKeys.GeneratePairOptions): Error {
+      const { hash: oldHash, mgf1Hash: oldMgf1Hash, hashAlgorithm, mgf1HashAlgorithm, saltLength } = options;
+      if (saltLength !== undefined) args().validateInt32(saltLength, "options.saltLength", 0);
+      if (hashAlgorithm !== undefined) args().validateString(hashAlgorithm, "options.hashAlgorithm");
+      if (mgf1HashAlgorithm !== undefined) args().validateString(mgf1HashAlgorithm, "options.mgf1HashAlgorithm");
+      const deprecated = (name: string, value: unknown, current: unknown): unknown => {
+        if (value === undefined) return current;
+        process.emitWarning?.(`"options.${name}" is deprecated, use "options.${name}Algorithm" instead.`, "DeprecationWarning", "DEP0154");
+        args().validateString(value, `options.${name}`);
+        return value;
+      };
+      const md = deprecated("hash", oldHash, hashAlgorithm);
+      const mgf1Md = deprecated("mgf1Hash", oldMgf1Hash, mgf1HashAlgorithm);
+      if (md !== undefined) hash(md, true);
+      if (mgf1Md !== undefined && digestName(String(mgf1Md)) === undefined)
+        throw Object.assign(new TypeError(`Invalid MGF1 digest: ${String(mgf1Md)}`), { code: "ERR_CRYPTO_INVALID_DIGEST" });
+      return args().opensslError("06000080", "public key routines", "UNSUPPORTED_ALGORITHM", "ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM");
+    }
+    // A curve Bun builds keys on that BoringSSL here lacks (P-224, secp256k1). Bun generates
+    // the key and then fails a JWK export of a P-224 key, so that error comes first.
+    function unbuiltCurve(named: string, options: CryptoKeys.GeneratePairOptions): Error {
+      if (!knownCurve(named)) return invalidCurve();
+      const jwk = options.publicKeyEncoding?.format === "jwk" || options.privateKeyEncoding?.format === "jwk";
+      if (jwk && (named === "P-224" || named === "secp224r1"))
+        return Object.assign(new Error("Unsupported JWK EC curve: secp224r1."), { code: "ERR_CRYPTO_JWK_UNSUPPORTED_CURVE" });
+      return args().opensslError("0f00007b", "elliptic curve routines", "UNKNOWN_GROUP", "ERR_OSSL_EC_UNKNOWN_GROUP");
+    }
     function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options?: CryptoKeys.GeneratePairOptions & { privateKeyEncoding?: undefined; publicKeyEncoding?: undefined }): CryptoKeys.KeyPair<KeyObject>;
     function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options?: CryptoKeys.GeneratePairOptions): CryptoKeys.KeyPair;
     function generateKeyPairSync(type: CryptoKeys.GeneratePairType, options: CryptoKeys.GeneratePairOptions = {}): CryptoKeys.KeyPair {
@@ -668,15 +706,16 @@ declare namespace CryptoKeys {
       let a: BunWasm.CryptoParameters;
       const exponent = options.publicExponent ?? 65537;
       if (
-        type === "rsa" &&
+        (type === "rsa" || type === "rsa-pss") &&
         (!Number.isInteger(exponent) ||
           exponent < 3 ||
           exponent > 0xffffffff ||
           exponent % 2 === 0)
       )
-        throw Object.assign(new RangeError("Invalid publicExponent"), {
+        throw Object.assign(new RangeError("publicExponent is invalid"), {
           code: "ERR_OUT_OF_RANGE",
         });
+      if (type === "rsa-pss") throw rsaPssKeyPair(options);
       if (type === "rsa")
         a = {
           name: "RSASSA-PKCS1-v1_5",
@@ -692,10 +731,7 @@ declare namespace CryptoKeys {
       else if (type === "ec") {
         const named = options.namedCurve;
         const curve = typeof named === "string" ? webCurve(named) : undefined;
-        if (typeof named === "string" && curve === undefined)
-          throw knownCurve(named)
-            ? args().opensslError("0f00007b", "elliptic curve routines", "UNKNOWN_GROUP", "ERR_OSSL_EC_UNKNOWN_GROUP")
-            : invalidCurve();
+        if (typeof named === "string" && curve === undefined) throw unbuiltCurve(named, options);
         a = { name: "ECDSA", namedCurve: curve ?? named };
       }
       else if (type === "ed25519" || type === "x25519")

@@ -7,6 +7,16 @@ BoringSSL. EC keys, including SEC1, and the ECDSA signature encodings (DER and I
 are in `src/crypto_ec.rs` over BoringSSL ([its record](node-crypto-ec-raw-keys.md)). Bun's Node crypto builtin requires a native binding, so loading its generated
 JavaScript alone cannot supply this behavior. The new fixture is original test code.
 
+`generateKeyPair("rsa-pss")` follows Bun's `RsaKeyPairJobCtx::fromJS`
+(`src/jsc/bindings/node/crypto/CryptoGenRsaKeyPair.cpp` at the pinned revision): the option
+reads and checks in its order, the DEP0154 warnings for `hash` and `mgf1Hash` (an error
+thrown while warning propagates), and then `ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM`, because
+Bun's BoringSSL generates no RSA-PSS keys either. Like Bun, a `hash` that differs from
+`hashAlgorithm` is not reported. A P-224 key pair with a JWK encoding reports Bun's
+`ERR_CRYPTO_JWK_UNSUPPORTED_CURVE`; Bun generates the key and then fails the export, and the
+backend here has no P-224 keys. The `node-crypto-rsa-pss-keygen` fixture is original test code
+with native Bun 1.4.4's output.
+
 `scripts/generate-node-key-vectors.mjs` generates six native Node encrypted-key and signature
 vectors for the original Node key fixture. Its synthetic keys and passphrase are test data.
 

@@ -1,0 +1,16 @@
+rsa-pss throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+rsa-pss options throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+exponent throws RangeError ERR_OUT_OF_RANGE publicExponent is invalid
+hash throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+hash type throws TypeError ERR_INVALID_ARG_TYPE The "options.hash" property must be of type string. Received type number (1)
+hash mismatch throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+mgf1Hash mismatch throws Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM error:06000080:public key routines:OPENSSL_internal:UNSUPPORTED_ALGORITHM
+hashAlgorithm type throws TypeError ERR_INVALID_ARG_TYPE The "options.hashAlgorithm" property must be of type string. Received type number (1)
+bad digest throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid digest: nope
+bad mgf1 digest throws TypeError ERR_CRYPTO_INVALID_DIGEST Invalid MGF1 digest: nope
+salt range throws RangeError ERR_OUT_OF_RANGE The value of "options.saltLength" is out of range. It must be >= 0 && <= 2147483647. Received -1
+salt type throws TypeError ERR_INVALID_ARG_TYPE The "options.saltLength" property must be of type number. Received type string ('1')
+check order throws RangeError ERR_OUT_OF_RANGE The value of "options.saltLength" is out of range. It must be >= 0 && <= 2147483647. Received -1
+rsa-pss callback Error ERR_OSSL_EVP_UNSUPPORTED_ALGORITHM
+p224 jwk Error ERR_CRYPTO_JWK_UNSUPPORTED_CURVE Unsupported JWK EC curve: secp224r1.
+warnings DEP0154 "options.hash" is deprecated, use "options.hashAlgorithm" instead. | DEP0154 "options.hash" is deprecated, use "options.hashAlgorithm" instead. | DEP0154 "options.hash" is deprecated, use "options.hashAlgorithm" instead. | DEP0154 "options.mgf1Hash" is deprecated, use "options.mgf1HashAlgorithm" instead.
