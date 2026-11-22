@@ -298,7 +298,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       workspace.editor.discard();
       this.stopDevServer();
       // Includes runs a Restart already stopped: none may write while the template is replaced.
-      await Promise.all(Array.from(this.stopping, (run) => run.done));
+      // The same per-run deadline applies, so a run that never ends cannot lock the page.
+      await Promise.all(Array.from(this.stopping, (run) => run.ended));
       await workspace.editor.waitForSaves();
       const replace = () => loadTemplate(workspace.fs, APP, this.project.file, true).then(() => {});
       if (this.storage) await this.storage.reset(replace);
@@ -566,18 +567,17 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 }
 
 interface StoppingRun {
-  readonly done: Promise<unknown>;
   /** True once the run ends; false if it is still running `ms` after its stop was requested. */
   readonly ended: Promise<boolean>;
 }
 
-/** One deadline per stopped run, from its kill: later Restarts only inherit what remains of it. */
+/** One deadline per stopped run, from its kill: later waits only inherit what remains of it. */
 function stoppingRun(done: Promise<unknown>, ms: number): StoppingRun {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<boolean>((resolve) => { timer = setTimeout(resolve, ms, false); });
   const settled = done.then(() => true, () => true);
   void settled.then(() => clearTimeout(timer));
-  return { done, ended: Promise.race([settled, expired]) };
+  return { ended: Promise.race([settled, expired]) };
 }
 
 const rel = (path: string) => path.slice(APP.length + 1);

@@ -563,9 +563,8 @@ test("sandbox Restart cancels a pending install without launching its stale dev 
   expect(sandbox.failure).toBeUndefined();
 });
 
-// The old Vite can keep its port until its run ends; a replacement started earlier fails with
-// "Dev server stopped before it was ready".
-test("sandbox Restart starts the new server only after every stopped run has ended", async () => {
+/** A sandbox whose install finished and whose dev server, `runs[1]`, is running. */
+async function runningSandbox() {
   const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
   const sandbox = new page.Sandbox("");
   sandbox.start();
@@ -574,6 +573,34 @@ test("sandbox Restart starts the new server only after every stopped run has end
   page.runs[0]!.done.resolve({ code: 0 });
   await turn();
   expect(page.runs[1]!.args).toEqual(["run", "dev"]);
+  return { page, sandbox };
+}
+
+/** Records the template fetch and page reload that end a Reset. */
+function resetEvents(page: Awaited<ReturnType<typeof pageFixture>>): string[] {
+  const events: string[] = [];
+  page.boundary.fetch = async () => { events.push("template"); return new Response(JSON.stringify({ files: { "index.html": "template", "package.json": projectPackage } })); };
+  page.boundary.location.reload = () => { events.push("reload"); };
+  return events;
+}
+
+/** Takes over only the 30 s stop deadline; every other timer runs as usual. */
+function stopDeadlines() {
+  const capped: (() => void)[] = [];
+  const realSetTimeout = globalThis.setTimeout;
+  const timers = spyOn(globalThis, "setTimeout");
+  timers.mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+    if (ms !== 30_000) return realSetTimeout(callback, ms, ...args);
+    capped.push(() => callback(...args));
+    return 0;
+  }) as typeof setTimeout);
+  return { capped, restore: () => timers.mockRestore() };
+}
+
+// The old Vite can keep its port until its run ends; a replacement started earlier fails with
+// "Dev server stopped before it was ready".
+test("sandbox Restart starts the new server only after every stopped run has ended", async () => {
+  const { page, sandbox } = await runningSandbox();
   sandbox.restart();
   sandbox.restart();
   await turn();
@@ -590,17 +617,8 @@ test("sandbox Restart starts the new server only after every stopped run has end
 });
 
 test("sandbox reset during a Restart wait still waits for the stopped server", async () => {
-  const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
-  const sandbox = new page.Sandbox("");
-  sandbox.start();
-  method<() => void>(sandbox, "terminalOpened")();
-  await turn();
-  page.runs[0]!.done.resolve({ code: 0 });
-  await turn();
-  expect(page.runs[1]!.args).toEqual(["run", "dev"]);
-  const events: string[] = [];
-  page.boundary.fetch = async () => { events.push("template"); return new Response(JSON.stringify({ files: { "index.html": "template", "package.json": projectPackage } })); };
-  page.boundary.location.reload = () => { events.push("reload"); };
+  const { page, sandbox } = await runningSandbox();
+  const events = resetEvents(page);
   sandbox.restart();
   const resetting = sandbox.reset();
   await turn();
@@ -612,24 +630,26 @@ test("sandbox reset during a Restart wait still waits for the stopped server", a
   expect(page.runs).toHaveLength(2);
 });
 
-test("sandbox Restart starts anyway, with a terminal note, when a stopped run never ends", async () => {
-  const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
-  const sandbox = new page.Sandbox("");
-  sandbox.start();
-  method<() => void>(sandbox, "terminalOpened")();
-  await turn();
-  page.runs[0]!.done.resolve({ code: 0 });
-  await turn();
-  // Only the 30 s hang cap is taken over; every other timer runs as usual.
-  const capped: (() => void)[] = [];
-  const realSetTimeout = globalThis.setTimeout;
-  const timers = spyOn(globalThis, "setTimeout");
+test("sandbox reset after Restart proceeds once a stopped run that never ends passes its deadline", async () => {
+  const { page, sandbox } = await runningSandbox();
+  const events = resetEvents(page);
+  const { capped, restore } = stopDeadlines();
   try {
-    timers.mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-      if (ms !== 30_000) return realSetTimeout(callback, ms, ...args);
-      capped.push(() => callback(...args));
-      return 0;
-    }) as typeof setTimeout);
+    sandbox.restart();
+    const resetting = sandbox.reset();
+    await turn();
+    expect(events).toEqual([]);
+    expect(capped).toHaveLength(1);
+    capped[0]!();
+    await resetting;
+    expect(events).toEqual(["template", "reload"]);
+  } finally { restore(); }
+});
+
+test("sandbox Restart starts anyway, with a terminal note, when a stopped run never ends", async () => {
+  const { page, sandbox } = await runningSandbox();
+  const { capped, restore } = stopDeadlines();
+  try {
     const written: string[] = [];
     const write = spyOn(sandbox.term!, "write").mockImplementation((data: string | Uint8Array) => { written.push(String(data)); });
     const notes = () => written.join("").split("did not stop within 30 s").length - 1;
@@ -657,7 +677,7 @@ test("sandbox Restart starts anyway, with a terminal note, when a stopped run ne
     expect(page.runs[4]!.args).toEqual(["install"]);
     expect(notes()).toBe(1);
     write.mockRestore();
-  } finally { timers.mockRestore(); }
+  } finally { restore(); }
 });
 
 test("playground reports storage waiting, locks after takeover, and offers the saved-workspace reload", async () => {
