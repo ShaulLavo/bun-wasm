@@ -21,6 +21,7 @@ import { exportSharedObjects, type SharedObjectService } from "./shared-objects/
 import type { BunSharedConnection, BunSharedNativeHost } from "./shared-objects/protocol.js";
 import type { BunTerminal } from "./bun-terminal.js";
 import { packageBinding } from "../../src/package-continuation-binding.js";
+import type { EarlyInstance } from "./early-instance.js";
 
 import type { Engine } from "../../src/engine-kind.js";
 export type { Engine } from "../../src/engine-kind.js";
@@ -97,7 +98,7 @@ function stackEnvironment(req: RunRequest, stack: string, userAgent: string): Re
   return withDefault(budgeted, "BUN_WASM_JSC_PARSER_RESERVE", jscParserReserve(stack, userAgent, req.stackHost));
 }
 
-export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost, terminalModule: TerminalModule = undefined, nestedModule: NestedModule = undefined): WorkerExecutor<RunRequest> {
+export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost, terminalModule: TerminalModule = undefined, nestedModule: NestedModule = undefined, early: EarlyInstance | undefined = undefined): WorkerExecutor<RunRequest> {
   let nested: import("./nested/host.js").NestedHost | undefined;
   let groupMemory: WebAssembly.Memory | undefined;
   let netHost: NetHost | null = null;
@@ -120,6 +121,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   });
   return {
     ...linked,
+    ...earlyExecutor(req, early),
     hostCallFd: HOST_CALL_FD,
     namespaces(context): WebAssembly.Imports {
       const imports = packages.namespaces(context);
@@ -210,6 +212,19 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
         sharedObjects, net, terminal, processWake: runtimeState?.wake, onExit: code => finish({ code }),
       });
+    },
+  };
+}
+
+// The worker entry instantiated this request's guest on its start message (early-instance.ts).
+// The process uses that instance, and its imports reach the ones Waffle linked here.
+function earlyExecutor(req: RunRequest, early: EarlyInstance | undefined): Pick<WorkerExecutor<RunRequest>, "instantiate"> {
+  if (!early || req.linkPlan || early.module !== req.module) return {};
+  return {
+    instantiate(imports, context) {
+      context.checkActive();
+      early.link(imports);
+      return early.instance;
     },
   };
 }

@@ -10,6 +10,7 @@ import { createRing } from "waffle/browser/net/ring";
 import { createNotificationBridge } from "waffle/browser/notification-relay";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
+import { earlyInstance, type EarlyInstance } from "../src/early-instance";
 import { engineStackBudgetKey, qualifiedParserReserves, spiderMonkeyWebKitStackKib, type StackHost, type QualifiedParserReserves } from "../src/engine-stack-budget";
 import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/executor-guest";
 import { createSharedObjectBroker } from "../src/shared-objects/broker";
@@ -60,7 +61,7 @@ const { createBunExecutor } = await import("../src/bun-executor");
 // Module mocks are process-wide in `bun test`: leave the real engine host for the other files.
 afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); mock.module("waffle/proc/control", () => actualControl); mock.module("waffle/link", () => actualLink); });
 
-async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net" | "memoryTelemetry">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
+async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net" | "memoryTelemetry">> & { ready?: number; fetched?: string[]; onFetch?(): void; early?: "request" | "other" } = {}) {
   const connection = createFilesystemConnection();
   const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
   const messages: WorkerMessage[] = [];
@@ -76,17 +77,20 @@ async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slo
     args: ["bun"], env: options.env ?? {}, filesystem: connection.client, runtimeProcess,
     trace: false, net: options.net ?? null, slots: options.slots, memoryTelemetry: options.memoryTelemetry,
   };
+  // What the worker entry does on the start message, before the bootstrap loads. "other" stands
+  // for an instance of a module this request does not run.
+  const early = options.early ? earlyInstance(options.early === "request" ? request : { module: guest(1) }) : undefined;
   try {
-    await bootstrapBun(request, host);
-    return { messages, fetched, signals: workerProcessState(runtimeProcess).signals, request };
+    await bootstrapBun(request, host, true, early);
+    return { messages, fetched, signals: workerProcessState(runtimeProcess).signals, request, early };
   } finally { connection.client.port.close(); connection.server.port.close(); }
 }
 /** The real bootstrap with its filesystem calls kept local, so no service must share this thread. */
 /** A launcher passes one notification helper with every networked Bun process; so does this. */
-async function bootstrapBun(request: RunRequest, host: BunExecutorHost & RuntimeWorkerHost, notifications = true): Promise<void> {
+async function bootstrapBun(request: RunRequest, host: BunExecutorHost & RuntimeWorkerHost, notifications = true, early?: EarlyInstance): Promise<void> {
   const bridge = request.net && notifications ? createNotificationBridge(new URL("../src/notification-worker.ts", import.meta.url).href) : undefined;
   const launched = bridge ? { ...request, notifications: bridge.connection } : request;
-  const executor = createBunExecutor(launched, host);
+  const executor = createBunExecutor(launched, host, undefined, undefined, early);
   try {
     control.attach(request.runtimeProcess);
     await bootstrap(launched, { ...executor, setup(context) {
@@ -144,6 +148,27 @@ test("a ready browser guest exits with the status its engine host reports", cont
   const { messages } = await run();
   expect(startEngineHost).toHaveBeenCalledTimes(1);
   expect(exits(messages)).toEqual([{ type: "exit", code: 5, signal: undefined, sleep: "atomics" }]);
+}));
+
+test("a guest instantiated on its start message is the instance the process runs", controlled(async () => {
+  startEngineHost.mockClear();
+  let ran: unknown;
+  startEngineHost.mockImplementationOnce(async options => { ran = options.instance; (options.onExit as (code: number) => void)(7); return 0; });
+  const { messages, early } = await run({ early: "request" });
+  expect(early).toBeDefined();
+  expect(ran).toBe(early?.instance);
+  expect(exits(messages)).toEqual([{ type: "exit", code: 7, signal: undefined, sleep: "atomics" }]);
+}));
+
+test("an early instance of another module is ignored", controlled(async () => {
+  startEngineHost.mockClear();
+  let ran: unknown;
+  startEngineHost.mockImplementationOnce(async options => { ran = options.instance; (options.onExit as (code: number) => void)(0); return 0; });
+  const { messages, early: other } = await run({ early: "other" });
+  expect(other).toBeDefined();
+  expect(ran).toBeInstanceOf(WebAssembly.Instance);
+  expect(ran).not.toBe(other?.instance);
+  expect(exits(messages)).toEqual([{ type: "exit", code: 0, signal: undefined, sleep: "atomics" }]);
 }));
 
 test("the browser host transfers only executor-owned controls to the real bootstrap", controlled(async () => {

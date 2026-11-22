@@ -119,6 +119,7 @@
     "web/src/wasm-call-trap.ts",
     "web/src/worker-main.ts",
     "web/src/worker.ts",
+    "web/src/early-instance.ts",
     "scripts/accept-encoding.ts",
     "web/navigation-server-log.ts",
     "web/preview-origin-host.ts",
