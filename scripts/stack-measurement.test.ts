@@ -25,8 +25,10 @@ function command(kind: "browser" | "python", scenario: string, options: {
   if (leaf) writeFileSync(join(directory, "leaf.cjs"), "module.exports = 42;\n");
   if (options.ajvCodegen === "installed") writeFileSync(join(directory, "index.js"), "module.exports = {};\n");
   const browser = ["node", "--import", provider, "web/tests/browser-stack.mjs", "--measure"].concat(cold ? ["--cold"] : [], ["chromium"]);
-  const shortenTimeout = "import runpy, subprocess; original = subprocess.run; subprocess.run = lambda *a, **kw: original(*a, **dict(kw, timeout=0.2)); runpy.run_path('scripts/measure-stack.py', run_name='__main__')";
-  const python = ["python3"].concat(["hang", "hidden-timeout"].includes(scenario) ? ["-c", shortenTimeout] : ["scripts/measure-stack.py"],
+  // The hanging scenarios go through a wrapper that reports a hung fixture launcher as timed out
+  // once it has started hanging, so no clock decides which attempts time out.
+  const hangingFixtures = ["hang", "hidden-timeout"].includes(scenario);
+  const python = ["python3"].concat([hangingFixtures ? "scripts/fixtures/stack-measurement-timeout.py" : "scripts/measure-stack.py"],
     ["--launcher", provider, "--max", String(maximum ?? (output === undefined ? 8 : 1))],
     leaf ? ["--leaf-root", directory, "--leaf", "leaf.cjs"] : [], options.ajvCodegen ? ["--ajv-codegen", directory] : [], [mode], repeat ? [mode] : []);
   const result = Bun.spawnSync(kind === "browser" ? browser : python, {
@@ -73,13 +75,17 @@ for (const scenario of ["timeout", "throw"]) {
 }
 
 
+function expectLaunchersGone(directory: string) {
+  const pids = readFileSync(join(directory, "launcher.pid"), "utf8").trim().split("\n");
+  expect(pids.length).toBeGreaterThan(0);
+  for (const pid of pids) expect(() => process.kill(Number(pid), 0)).toThrow("No such process");
+}
+
 test("Python timeout kills and reaps every attempted launcher before returning failure", () => {
   const run = command("python", "hang");
   expect(run.result.exitCode).toBe(1);
   expect(run.stdout).toContain('"outcome": "timeout"');
-  const pids = readFileSync(join(run.directory, "launcher.pid"), "utf8").trim().split("\n");
-  expect(pids.length).toBeGreaterThan(0);
-  for (const pid of pids) expect(() => process.kill(Number(pid), 0)).toThrow("No such process");
+  expectLaunchersGone(run.directory);
 });
 
 test("Python keeps every attempt's status and stderr, and a trap hidden inside the search fails it", () => {
@@ -103,6 +109,7 @@ test("Python records a timeout hidden inside the search and fails it", () => {
   expect(row.failures).toEqual([{ depth: 4, outcome: "timeout" }]);
   expect(row.attempts).toContainEqual({ depth: 4, outcome: "timeout", status: null, timed_out: true, stderr: "" });
   expect(row.attempts.every((attempt: { timed_out: boolean; status: number | null }) => attempt.timed_out === (attempt.status === null))).toBe(true);
+  expectLaunchersGone(run.directory);
 });
 
 test("the Ajv mode needs its installed package, and the package option needs the mode", () => {
