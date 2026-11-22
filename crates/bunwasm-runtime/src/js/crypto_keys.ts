@@ -16,9 +16,8 @@ declare namespace CryptoKeys {
     algorithm: Algorithm;
     key: KeyMaterial;
     type: KeyType;
-    nativeKey?: ManagedCryptoKey;
   };
-  type Record = Pick<NativeRecord, "algorithm" | "key" | "type" | "nativeKey">;
+  type Record = Pick<NativeRecord, "algorithm" | "key" | "type">;
   type BackendResult = { key?: KeyMaterial; data?: string; verified?: boolean };
   interface Crypto extends BunWasm.CryptoHostBridge {
     record(key: CryptoKey): NativeRecord;
@@ -323,22 +322,13 @@ declare namespace CryptoKeys {
       }
       toCryptoKey(algorithm: BunWasm.CryptoAlgorithm, extractable: boolean, keyUsages: KeyUsage[]): CryptoKey {
         const r = nodeRecord(this);
-        const converted = c.importKey(
+        return c.importKey(
           r.type === "secret" ? "raw" : "jwk",
           r.type === "secret" ? c.decode(r.key.k) : { ...r.key },
           algorithm,
           extractable,
           keyUsages,
         );
-        if (!r.nativeKey) return converted;
-        const requested = c.record(converted), original = r.nativeKey;
-        const a = requested.algorithm, b = original.algorithm;
-        const sameAlgorithm = (["name", "namedCurve", "length", "modulusLength"] satisfies (keyof CryptoKeys.Algorithm)[])
-          .every(field => a[field] === b[field]) && a.hash?.name === b.hash?.name;
-        const samePolicy = requested.extractable === original.extractable &&
-          requested.usages.length === original.usages.length &&
-          requested.usages.every(usage => original.usages.includes(usage));
-        return sameAlgorithm && samePolicy ? original : converted;
       }
       get [Symbol.toStringTag]() {
         return "KeyObject";

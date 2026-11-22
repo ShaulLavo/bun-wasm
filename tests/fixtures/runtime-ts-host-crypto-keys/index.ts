@@ -2,19 +2,18 @@ import assert from "node:assert/strict";
 import { createSecretKey, KeyObject } from "node:crypto";
 
 const subtle = crypto.subtle;
-if (process.env.BUNWASM_TEST === "1") {
-  assert.equal(Object.hasOwn(subtle, "sign"), process.env.BUNWASM_TEST_HOST === "node");
-}
+// Every engine, the Browser engine included, uses the runtime's own provider.
+assert.equal(Object.hasOwn(subtle, "sign"), false);
 const bytes = Uint8Array.of(1, 2, 3);
 const key = await subtle.importKey("raw", new Uint8Array(32).fill(3), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 assert.equal(key.extractable, false);
 const roundTrip = KeyObject.from(key).toCryptoKey({ name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
-if (Object.hasOwn(subtle, "sign")) assert.equal(roundTrip, key);
-else assert.notEqual(roundTrip, key);
+assert.notEqual(roundTrip, key);
+assert(await subtle.verify("HMAC", roundTrip, await subtle.sign("HMAC", key, bytes), bytes));
 const signature = await subtle.sign("HMAC", key, bytes);
 assert(await subtle.verify("HMAC", key, signature, bytes));
 await assert.rejects(subtle.exportKey("raw", key), { name: "InvalidAccessError" });
-console.log("import, native identity, sign, verify, export rejection");
+console.log("import, key conversion, sign, verify, export rejection");
 
 const portable = createSecretKey(new Uint8Array(32).fill(4)).toCryptoKey({ name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 const [first, second] = await Promise.all([subtle.sign("HMAC", portable, bytes), subtle.sign("HMAC", portable, bytes)]);

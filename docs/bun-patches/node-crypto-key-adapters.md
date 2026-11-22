@@ -26,6 +26,6 @@ form takes the same snapshot. The `node-crypto-sign-digests` fixture covers thes
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`crates/bunwasm-runtime/src/js/crypto_keys.ts` and `crypto_host_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
+| [`crates/bunwasm-runtime/src/js/crypto_keys.ts`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
 
 [Ledger scope and pinned revisions](scope.md).

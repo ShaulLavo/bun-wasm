@@ -1,0 +1,13 @@
+{
+  "owner": "browser-guest",
+  "path": "scripts/webcrypto-browser.test.ts",
+  "inputs": [
+    ".github/actions/native-setup/action.yml",
+    ".github/actions/native-seed/action.yml",
+    ".github/actions/native-production/action.yml",
+    "crates/bunwasm-runtime/src/js/crypto.js",
+    "crates/bunwasm-runtime/src/js/crypto_host_compute.ts",
+    "web/src/engine-host.js",
+    "web/src/host-crypto.ts"
+  ]
+}
