@@ -173,10 +173,15 @@
       return Console;
     },
   });
-  for (const name of ["stdout", "stderr"]) {
-    Object.defineProperty(console, "_" + name, {
-      value: globalThis.process[name as "stdout" | "stderr"], writable: true, configurable: true,
-    });
+  // Made on first use, as in Bun: reading process.stdout at startup would build both streams
+  // for programs that never write through them.
+  for (const name of ["stdout", "stderr"] as const) {
+    const key = "_" + name;
+    const settle = (value: unknown) => {
+      Object.defineProperty(console, key, { value, writable: true, configurable: true });
+      return value;
+    };
+    Object.defineProperty(console, key, { get: () => settle(globalThis.process[name]), set: settle, configurable: true });
   }
   Object.defineProperty(console, Symbol.toStringTag, { value: "console", configurable: true });
   return console;
