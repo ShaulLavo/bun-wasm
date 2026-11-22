@@ -25,8 +25,10 @@ function command(kind: "browser" | "python", scenario: string, options: {
   if (leaf) writeFileSync(join(directory, "leaf.cjs"), "module.exports = 42;\n");
   if (options.ajvCodegen === "installed") writeFileSync(join(directory, "index.js"), "module.exports = {};\n");
   const browser = ["node", "--import", provider, "web/tests/browser-stack.mjs", "--measure"].concat(cold ? ["--cold"] : [], ["chromium"]);
-  const shortenTimeout = "import runpy, subprocess; original = subprocess.run; subprocess.run = lambda *a, **kw: original(*a, **dict(kw, timeout=0.2)); runpy.run_path('scripts/measure-stack.py', run_name='__main__')";
-  const python = ["python3"].concat(["hang", "hidden-timeout"].includes(scenario) ? ["-c", shortenTimeout] : ["scripts/measure-stack.py"],
+  // The hanging scenarios go through a wrapper that reports a hung fixture launcher as timed out
+  // once it has started hanging, so no clock decides which attempts time out.
+  const hangingFixtures = ["hang", "hidden-timeout"].includes(scenario);
+  const python = ["python3"].concat([hangingFixtures ? "scripts/fixtures/stack-measurement-timeout.py" : "scripts/measure-stack.py"],
     ["--launcher", provider, "--max", String(maximum ?? (output === undefined ? 8 : 1))],
     leaf ? ["--leaf-root", directory, "--leaf", "leaf.cjs"] : [], options.ajvCodegen ? ["--ajv-codegen", directory] : [], [mode], repeat ? [mode] : []);
   const result = Bun.spawnSync(kind === "browser" ? browser : python, {
