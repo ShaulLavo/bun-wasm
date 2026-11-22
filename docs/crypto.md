@@ -1,11 +1,22 @@
 # Crypto APIs
 
 All three engines use the same WebCrypto provider: the runtime's JS adapter over the wasm
-RustCrypto/BoringSSL backend. The browser engine does not use the host browser's SubtleCrypto,
-because its algorithms, argument checks and messages differ from Bun's (Chromium has no
-ChaCha20-Poly1305, ML-KEM, ML-DSA or AES-192), so a program behaves the same on every engine
-and in every browser. The host's DOMException constructor stays the global one, so errors keep
+RustCrypto/BoringSSL backend. It owns every argument check, key object and message, so a
+program behaves the same on every engine and in every browser, including algorithms the host
+browser lacks (Chromium has no ChaCha20-Poly1305, ML-KEM, ML-DSA or AES-192).
+
+On the browser engine, the bulk computation of a validated call runs on the host's own Web
+Crypto when it supports the algorithm and key: SHA-1 and SHA-2 digests, AES-GCM, AES-CBC and
+AES-CTR encryption, and HMAC, RSASSA-PKCS1-v1_5, RSA-PSS and ECDSA signatures. The runtime
+passes the key's material to the host once, keeps the host key with its own, and takes only
+the result from the host. When the host refuses a key or an operation fails there, the guest
+computes it instead and answers with its own result or error. Pending host work keeps the
+program alive. The host's DOMException constructor stays the global one, so errors keep
 their brand. The WASI host captures its entropy function before globals change.
+
+SubtleCrypto methods reject a receiver that is not the `crypto.subtle` object, as Bun does.
+Digests, encryption, signatures and derivation settle in a later task, after microtasks
+already queued; key generation, import, export and wrapping resolve at once, as in Bun.
 
 | Algorithms | Operations | Key formats |
 | --- | --- | --- |
@@ -32,8 +43,8 @@ labels are byte strings, including non-UTF-8 data.
 
 CryptoKey records enforce algorithm, usage and extractability checks. Public metadata is
 separate from the operation's internal algorithm record. Assigning `crypto.subtle` is ignored,
-as in native Bun. SubtleCrypto returns promises. Operations run synchronously inside those
-promises.
+as in native Bun. SubtleCrypto returns promises. The guest computes synchronously before
+settling; host work runs asynchronously on the host.
 
 ## Backend
 
@@ -69,9 +80,11 @@ all GCM tag sizes, AES-192, non-96-bit GCM IVs, CTR field wrap and binary OAEP l
 `scripts/generate-crypto-vectors.mjs` regenerates those vectors with native Node.
 `scripts/check-crypto-review.sh <report-dir>` replays the SHA-1 JWK, P-384/SHA-1 and
 required-HMAC-hash generation/derivation regressions in every engine and verifies the runtime outputs in both
-native Node and Bun. `web/tests/browser-crypto.mjs` runs those fixtures, AES-192,
-ChaCha20-Poly1305, ML-KEM, ML-DSA and Bun's error messages on the browser engine in
-Chromium and WebKit.
+native Node and Bun. `scripts/webcrypto-browser.test.ts` (a `browser-guest` check) runs
+those fixtures, AES-192, ChaCha20-Poly1305, ML-KEM, ML-DSA, Bun's error messages, keys sent
+to a page Worker and settlement order on the browser engine in Chromium and WebKit.
+[webcrypto-settlement](../tests/fixtures/webcrypto-settlement) checks the receiver and
+settlement order on every engine.
 
 Measured against main `6f1e576` on 2026-10-16, all 24 selected upstream crypto files run
 without timeouts. Observed passing tests rise from 165 to 185 on QuickJS and browser, and

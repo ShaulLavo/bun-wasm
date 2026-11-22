@@ -1,5 +1,5 @@
 {
   "owner": "native",
   "path": "tests/fixtures/webcrypto-get-public-key",
-  "engines": ["quickjs", "jsc", "spidermonkey"]
+  "engines": ["quickjs", "jsc", "spidermonkey", "browser"]
 }

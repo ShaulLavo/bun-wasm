@@ -157,7 +157,7 @@ const webGuestFiles = new Set([
   "tests/fixtures/runtime-proc-spawn-requests.json", "web/guest-tests/compose.ts", "web/guest-tests/jsc.test.ts",
   "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
   "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",
-  "web/src/promise-reactions.ts",
+  "web/src/host-crypto.ts", "web/src/promise-reactions.ts",
   "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/native-readable-iterator.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
   "web/src/module-records.ts",
 ]);

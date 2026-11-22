@@ -10,6 +10,7 @@ import { createModuleRecords } from "./module-records.ts";
 import { SLOT_NAMES } from "./net/trampoline.ts";
 import { trackLookup } from "./net/lookup.ts";
 import { bindSharedObjectHost } from "./shared-objects/host.ts";
+import { hostCrypto } from "./host-crypto.ts";
 import { reportWasmCallTrap } from "./wasm-call-trap.ts";
 import { installSharedBufferRealm } from "./shared-objects/realm.ts";
 
@@ -453,6 +454,8 @@ class EngineHost {
     const d = this.wasm.describe();
     this.entry = d.entry;
     const native = this.buildNative(d);
+    // Bulk crypto on the host's own Web Crypto; the runtime validates every call first.
+    native.hostCrypto = hostCrypto(promise => this.track(promise));
     this.native = native;
     // Before any module is read: the wasm then prepares every module for its record.
     if (!this.o.modules) native.hostUseModuleRecords();

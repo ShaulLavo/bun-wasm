@@ -45,7 +45,7 @@ BROWSER_HOST_SOURCES = (
     "web/scripts/node-spawn.ts", "web/scripts/node-net.mjs", "web/scripts/node-install-net.ts",
     "web/scripts/node-stdio.ts", "web/src/net/trampoline.ts", "web/src/engine-host.js",
     "web/src/promise-reactions.ts", "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts",
-    "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
+    "web/src/host-crypto.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
     "web/src/net/package-fetch.ts",
 )
 

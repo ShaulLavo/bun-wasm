@@ -70,8 +70,6 @@ Differences from native Bun, all deliberate:
 
 - PKCS#8 import of ML-DSA and ML-KEM takes the seed form Bun exports; the expanded-key
   and "both" forms report "Invalid keyData".
-- On the Browser engine WebCrypto belongs to the host page, so keys cross workers by the
-  browser's own structured clone; the `crypto-key` node covers the runtime's provider.
 - `publicEncrypt` copies the options object while parsing the key, which calls a
   `passphrase` getter that Bun does not call when the key is a `KeyObject`.
 

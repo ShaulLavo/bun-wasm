@@ -54,7 +54,6 @@ web/scripts/node-net.mjs
 web/src/engine-host.js
 web/tests/bench-engines.mjs
 web/tests/bench-memory.mjs
-web/tests/browser-crypto.mjs
 web/tests/browser-engine.mjs
 web/tests/browser-install.mjs
 web/tests/browser-memory.mjs
