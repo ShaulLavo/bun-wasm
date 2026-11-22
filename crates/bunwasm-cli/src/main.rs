@@ -811,6 +811,15 @@ fn parse_command_with_flags(
                 print!("{HELP}");
                 return Command::Exit(0);
             }
+            // After `run`, a flag that takes a value is kept in process.execArgv, as Bun does.
+            "-e" | "--eval" | "-p" | "--print" if run_file => {
+                let Some(value) = rest.next() else {
+                    return usage_error(&format!("{arg} requires a value"));
+                };
+                exec_argv.push(arg);
+                exec_argv.push(value);
+                continue;
+            }
             "-e" | "--eval" => {
                 let Some(code) = rest.next() else {
                     return usage_error("--eval requires code");
@@ -898,8 +907,11 @@ fn parse_command_with_flags(
                     mode,
                 );
             }
-            // Flags native Bun accepts that change nothing here.
-            "--bun" | "--smol" | "--no-install" => continue,
+            // Flags native Bun accepts that change nothing here; it lists them in process.execArgv.
+            "--bun" | "-b" | "--smol" | "--no-install" => {
+                exec_argv.push(arg);
+                continue;
+            }
             // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
             // are accepted and kept in process.execArgv, so forked children receive them too.
             // `bun run --silent` reaches package scripts this way and hides their `$ command` lines.
