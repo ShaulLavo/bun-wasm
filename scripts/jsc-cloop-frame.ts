@@ -1,7 +1,10 @@
 // A fail-closed floor under the guarded stack frame of JSC's C-loop interpreter function in a
 // linked JSC side (docs/stack-limits.md, "The interpreter frame floor").
 //
-//   bun scripts/jsc-cloop-frame.ts check <jsc-engine.wasm>...
+//   bun scripts/jsc-cloop-frame.ts check <engine.named.wasm>...
+//
+// It finds the interpreter by name, so give it the named side the JSC producer keeps, not the
+// shipped jsc-engine.wasm (which has no name section).
 //
 // JSC's native recursion guard counts shadow-stack bytes. Every reentry path (Proxy traps,
 // `toString`, numeric-index getters) starts a new `CLoop::execute`, and the bytes that function holds
@@ -285,7 +288,7 @@ async function checkFile(path: string): Promise<boolean> {
 if (import.meta.main) {
   const [command, ...files] = process.argv.slice(2);
   if (command !== "check" || files.length === 0) {
-    console.error("Usage: jsc-cloop-frame.ts check <jsc-engine.wasm>...");
+    console.error("Usage: jsc-cloop-frame.ts check <engine.named.wasm>... (a JSC side with its name section)");
     process.exit(2);
   }
   let passed = true;
