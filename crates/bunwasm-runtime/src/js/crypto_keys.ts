@@ -751,8 +751,9 @@ declare namespace CryptoKeys {
       });
     }
     function signVerify(verify: false, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature?: undefined): CryptoKeys.Buffer;
-    function signVerify(verify: true, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature: CryptoKeys.Input): boolean;
-    function signVerify(verify: boolean, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature?: CryptoKeys.Input): CryptoKeys.Buffer | boolean {
+    function signVerify(verify: true, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature: string): boolean;
+    // A signature arrives already encoded: verify() reads its bytes before the key's options.
+    function signVerify(verify: boolean, digest: string | null | undefined, data: CryptoKeys.Input, input: CryptoKeys.KeyInput, signature?: string): CryptoKeys.Buffer | boolean {
       const options = parseInput(input);
       // Node's getIntOption: an int32 or undefined.
       for (const name of ["padding", "saltLength"] as const) {
@@ -803,7 +804,7 @@ declare namespace CryptoKeys {
       const result = c.backend(verify ? "verify" : "sign", a, {
         key: r.key,
         data: c.encode(inputBytes(data)),
-        ...(verify ? { signature: c.encode(inputBytes(signature!)) } : {}),
+        ...(verify ? { signature } : {}),
       });
       return verify ? result.verified! : Buffer.from(c.decode(result.data));
     }
@@ -857,12 +858,14 @@ declare namespace CryptoKeys {
       // Node's one-shot verify takes the signature only as a view, checked before the key.
       if (!ArrayBuffer.isView(signature))
         throw args().argType("signature", "an instance of Buffer, TypedArray, or DataView", signature);
+      // The signature's bytes are read at call time, before the key's options (and their getters).
+      const encoded = c.encode(inputBytes(signature));
       if (typeof callback !== "function")
-        return signVerify(true, algorithm, data, key, signature);
+        return signVerify(true, algorithm, data, key, encoded);
       internal.realTimers.setImmediate(() => {
         let value: boolean;
         try {
-          value = signVerify(true, algorithm, data, key, signature);
+          value = signVerify(true, algorithm, data, key, encoded);
         } catch (e) {
           (callback as (error: Error) => unknown)(e as Error);
           return;
