@@ -712,6 +712,11 @@
     return true;
   }
 
+  function reportCallbackError(err) {
+    if (typeof internal.handleUncaught !== "function") throw err;
+    if (!internal.handleUncaught(err)) native.exit(1);
+  }
+
   // Called by the Rust event loop. Runs at most one callback so microtasks
   // drain between callbacks. Returns 0 when another turn is ready, the delay in ms
   // until the next timer, -1 when nothing keeps the process alive, or -2 (LOOP_STOPPED)
@@ -729,12 +734,20 @@
       immediate._active = false;
       immediateRan = true;
       immediate._running = true;
+      let threw = false;
       try {
         runInContext(immediate._context, immediate._callback, immediate, immediate._args);
+      } catch (err) {
+        threw = true;
+        reportCallbackError(err);
       } finally {
         immediate._running = false;
       }
-      return 0;
+      if (!threw) return 0;
+      if (immediateBatchRemaining === 0 || !immediates || immediates.length === 0) {
+        immediateBatchRemaining = null;
+        return 0;
+      }
     }
     immediateBatchRemaining = null;
     const now = native.now();
@@ -772,21 +785,28 @@
   // --- process.nextTick -------------------------------------------------------
 
   const tickQueue = [];
+  let drainingTicks = false;
 
   internal.nextTick = function nextTick(callback, ...args) {
     checkCallback(callback);
-    if (tickQueue.length === 0) native.scheduleTick();
+    if (tickQueue.length === 0 && !drainingTicks) native.scheduleTick();
     tickQueue.push([callback, args, native.getAsyncContext()]);
   };
 
   // Named after Bun's tick pass, whose frame error.stack shows (see hiddenCallSites).
   internal.runTicks = function processTicksAndRejections() {
+    drainingTicks = true;
     try {
       while (tickQueue.length > 0) {
         const [callback, args, context] = tickQueue.shift();
-        runInContext(context, callback, undefined, args);
+        try {
+          runInContext(context, callback, undefined, args);
+        } catch (err) {
+          reportCallbackError(err);
+        }
       }
     } finally {
+      drainingTicks = false;
       if (tickQueue.length > 0) native.scheduleTick();
     }
   };

@@ -423,6 +423,10 @@ class EngineHost {
     this.timer = null;
     this.timerAt = Infinity;
     this.immediate = false;
+    this.tickQueued = false;
+    this.inMicrotaskPhase = false;
+    this.checkpointQueued = false;
+    this.microtaskSeq = 0;
     // Module graph: key (path or builtin) -> URL; URL -> path for stack traces.
     this.urls = new Map();
     // promise -> {state, value}, for console.log and Bun.peek.
@@ -566,6 +570,13 @@ class EngineHost {
       scheduleTick() {
         if (host.tickQueued) return;
         host.tickQueued = true;
+        if (host.inMicrotaskPhase) {
+          if (!host.checkpointQueued) {
+            host.checkpointQueued = true;
+            host.pollMicrotaskEnd(host.microtaskSeq || 0, false);
+          }
+          return;
+        }
         nativeQueueMicrotask(() => host.drainTicks());
       },
       runMicrotasks() {
@@ -917,7 +928,35 @@ class EngineHost {
     Object.defineProperty(globalThis, "fetch", { value: fetch, configurable: true, writable: true, enumerable: false });
   }
 
+  markMicrotask() {
+    this.inMicrotaskPhase = true;
+    const seq = (this.microtaskSeq || 0) + 1;
+    this.microtaskSeq = seq;
+    if (!this.checkpointQueued) {
+      this.checkpointQueued = true;
+      this.pollMicrotaskEnd(seq, false);
+    }
+  }
+
+  pollMicrotaskEnd(seen, settled) {
+    nativeQueueMicrotask(() => {
+      if (this.exited) {
+        this.checkpointQueued = false;
+        this.inMicrotaskPhase = false;
+        return;
+      }
+      if (!settled || this.microtaskSeq !== seen) {
+        this.pollMicrotaskEnd(this.microtaskSeq, true);
+        return;
+      }
+      this.checkpointQueued = false;
+      this.inMicrotaskPhase = false;
+      if (this.tickQueued) this.drainTicks();
+    });
+  }
+
   drainTicks() {
+    if (!this.tickQueued) return;
     this.tickQueued = false;
     this.guard(() => this.internal.runTicks());
   }
@@ -949,7 +988,8 @@ class EngineHost {
       const context = host.asyncContext;
       const nativeContext = host.o.asyncContext;
       return (value) => {
-        if (host.tickQueued) host.drainTicks();
+        if (host.tickQueued && !host.inMicrotaskPhase) host.drainTicks();
+        host.markMicrotask();
         const previous = host.asyncContext;
         if (!nativeContext) host.asyncContext = context;
         try {
@@ -1090,6 +1130,7 @@ class EngineHost {
   }
 
   runEntry() {
+    this.enterRoot();
     const { entry, internal } = this;
     let started;
     try {
@@ -1210,6 +1251,7 @@ class EngineHost {
   // stores.
   enterRoot() {
     if (!this.o.asyncContext) this.asyncContext = undefined;
+    this.inMicrotaskPhase = false;
   }
 
   // Pipe and child changes publish on the process wake word: run the loop for them rather than

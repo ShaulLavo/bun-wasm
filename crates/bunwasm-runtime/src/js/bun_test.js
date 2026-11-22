@@ -2530,7 +2530,10 @@
     let result = beforeEach.length ? await runHooks(beforeEach, slot) : { ok: true };
     if (result.ok) {
       const timeout = test.timeout === undefined ? options.timeout : test.timeout;
-      result = await invoke(test.fn, [], test.usesDone, timeout, slot, test.context);
+      const runBody = () => invoke(test.fn, [], test.usesDone, timeout, slot, test.context);
+      result = concurrentGroups === 0 && internal.realTimers?.setImmediate
+        ? await new Promise((resolve) => internal.realTimers.setImmediate(() => resolve(runBody())))
+        : await runBody();
       if (result.timeout) result.timeoutMs = timeout;
     }
     const after = await runHooks(cleanupHooks(record, chain.reverse().flatMap((s) => s.afterEach)), slot);

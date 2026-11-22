@@ -524,7 +524,11 @@ impl Engine for QuickJs {
     }
 
     fn run_jobs(&self) -> bool {
-        self.ctx().execute_pending_job()
+        let mut ran = false;
+        while self.ctx().execute_pending_job() {
+            ran = true;
+        }
+        ran
     }
 
     fn promise_state(&self, v: &V) -> Option<PromiseState> {

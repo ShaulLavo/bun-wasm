@@ -731,6 +731,7 @@
         return { current, peak: current, currentCommit: current, peakCommit: current, pageFaults: 0 };
       },
       describe: (v) => String(v),
+      jscDescribe: (v) => String(v),
       serialize: thrower("bun:jsc.serialize", "JavaScriptCore is not available"),
       deserialize: thrower("bun:jsc.deserialize", "JavaScriptCore is not available"),
     }),

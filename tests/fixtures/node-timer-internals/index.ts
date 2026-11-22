@@ -225,6 +225,77 @@ async function abortResistsStopPropagation() {
   }
 }
 
+async function immediateExceptionDefersMicrotasks() {
+  const order: string[] = [];
+  const onUncaught = (err: Error) => { order.push(`uncaught:${err.message}`); };
+  process.on("uncaughtException", onUncaught);
+  await new Promise<void>(resolve => {
+    setImmediate(() => {
+      order.push("imm1");
+      queueMicrotask(() => order.push("micro1"));
+      throw new Error("boom");
+    });
+    setImmediate(() => {
+      order.push("imm2");
+      queueMicrotask(() => {
+        order.push("micro2");
+        resolve();
+      });
+    });
+  });
+  process.off("uncaughtException", onUncaught);
+  console.log("immediate exception order", order.join(","));
+}
+
+async function nextTickMicrotaskOrdering() {
+  const fromMicrotask: string[] = [];
+  await new Promise<void>(resolve => {
+    process.nextTick(() => {
+      setImmediate(() => {
+        setImmediate(() => {
+          Promise.resolve().then(() => {
+            fromMicrotask.push("microtask");
+            process.nextTick(() => fromMicrotask.push("tick"));
+            Promise.resolve().then(() => fromMicrotask.push("microtask2"));
+          });
+        });
+        setImmediate(() => {
+          fromMicrotask.push("next-immediate");
+          resolve();
+        });
+      });
+    });
+  });
+  console.log("nextTick from microtask", fromMicrotask.join(","));
+
+  const fromCallback: string[] = [];
+  await new Promise<void>(resolve => {
+    process.nextTick(() => {
+      setImmediate(() => {
+        setImmediate(() => {
+          process.nextTick(() => fromCallback.push("tick"));
+          Promise.resolve().then(() => fromCallback.push("microtask"));
+        });
+        setImmediate(() => {
+          fromCallback.push("next-immediate");
+          resolve();
+        });
+      });
+    });
+  });
+  console.log("nextTick from callback", fromCallback.join(","));
+
+  const thrown: string[] = [];
+  const onErr = (err: Error) => { thrown.push(err.message); };
+  process.on("uncaughtException", onErr);
+  await new Promise<void>(resolve => {
+    process.nextTick(() => { throw new Error("tick-err"); });
+    process.nextTick(() => { thrown.push("tick-after"); resolve(); });
+  });
+  process.off("uncaughtException", onErr);
+  console.log("nextTick throwing continues", thrown.join(","));
+}
+
 await destroyed();
 await refresh();
 await stringIds();
@@ -233,4 +304,6 @@ await intervalWritesInCallback();
 await dueTimersBeforeImmediates();
 await promisified();
 await abortResistsStopPropagation();
+await immediateExceptionDefersMicrotasks();
+await nextTickMicrotaskOrdering();
 console.log("done");
