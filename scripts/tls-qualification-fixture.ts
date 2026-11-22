@@ -4,8 +4,8 @@ import { basename, dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { handoffMemberPaths, publicationAssets } from "./producer-closure.ts";
 import { DELIVERY_RECORDS, type C1Config, type ConsumerHandoff, type InputManifest, type ParentIntake, type ReleaseTuple, type SourceIdentity } from "./c1/contract.ts";
-import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE, fixtureDependencies, fixtureInputManifest, writeFixtureDelivery, writeReplayFixture } from "./c1/contract-fixture.ts";
-import { buildHandoff, readSealedDelivery, sealDelivery } from "./c1/delivery.ts";
+import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE, fixtureArchives, fixtureDependencies, fixtureInputManifest, sealFixtureDelivery, writeFixtureDelivery, writeReplayFixture } from "./c1/contract-fixture.ts";
+import { buildHandoff, readSealedDelivery } from "./c1/delivery.ts";
 import { fileIdentity, sha256, treeIdentity } from "./c1/identity.ts";
 import { TLS_PAGE_ENTRY, TLS_PAGE_WORKERS, TLS_PG_CLIENT, prepareTlsPage, type PageBuilder } from "./c1/tls-page.ts";
 import { TLS_STAGE, type TlsEvidence } from "./tls-qualification-inputs.ts";
@@ -18,6 +18,7 @@ import { TLS_STAGE, type TlsEvidence } from "./tls-qualification-inputs.ts";
  */
 export interface FixtureOverrides {
   readonly tuple?: ReleaseTuple;
+  readonly archiveRegistry?: "GitHub" | "npm";
   readonly deliverySource?: SourceIdentity;
   readonly inputs?: (inputs: InputManifest) => InputManifest;
   readonly config?: (config: C1Config) => C1Config;
@@ -73,8 +74,8 @@ function pgProject(root: string) {
 }
 
 /** Payload replacements so the sealed delivery agrees with its records and retained inputs. */
-function consistentMembers(inputs: InputManifest, configBytes: string, inputsBytes: string): Record<string, string> {
-  const paths = handoffMemberPaths();
+function consistentMembers(inputs: InputManifest, configBytes: string, inputsBytes: string, archives: ReturnType<typeof fixtureArchives>): Record<string, string> {
+  const paths = handoffMemberPaths(archives);
   const custody = ["", "native-custody-", "vendor-custody-"].flatMap(family => ["before", "after", "preseal"].map(phase => [`inputs/${family}${phase}.json`, json({ synthetic: family || "source" })]));
   return Object.fromEntries(custody.concat([
     [DELIVERY_RECORDS.config, configBytes], [DELIVERY_RECORDS.inputs, inputsBytes],
@@ -117,12 +118,14 @@ async function prepare(root: string, overrides: FixtureOverrides, tuple: Release
     fixtures: { tls: { status: "resolved", value: FIXTURE_TLS_OPTIONS } } });
   const configBytes = json(config);
   const deliveryRoot = join(roots.run.artifact, "delivery");
-  writeFixtureDelivery(deliveryRoot);
+  const deliveryTuple = overrides.tuple ?? tuple;
+  const archives = fixtureArchives(deliveryTuple, overrides.archiveRegistry);
+  writeFixtureDelivery(deliveryRoot, archives);
   // The page is the controller's own pre-seal output for this source; the generic filler is replaced by it.
   rmSync(join(deliveryRoot, "tls"), { recursive: true });
   await prepareTlsPage(host, overrides.deliverySource ?? source, join(deliveryRoot, "tls"), syntheticPageBuilder);
-  for (const [path, content] of Object.entries({ ...consistentMembers(inputs, configBytes, inputsBytes), ...overrides.members })) put(join(deliveryRoot, path), content);
-  const manifestIdentity = sealDelivery(deliveryRoot, { source: overrides.deliverySource ?? source, tuple: overrides.tuple ?? tuple, configSha256: sha256(configBytes), inputsSha256: sha256(inputsBytes) });
+  for (const [path, content] of Object.entries({ ...consistentMembers(inputs, configBytes, inputsBytes, archives), ...overrides.members })) put(join(deliveryRoot, path), content);
+  const manifestIdentity = sealFixtureDelivery(deliveryRoot, { source: overrides.deliverySource ?? source, tuple: deliveryTuple, configSha256: sha256(configBytes), inputsSha256: sha256(inputsBytes) });
   const delivery = readSealedDelivery(deliveryRoot);
   const intake: ParentIntake = { schema: "bun-wasm.c1-intake/1", kind: "independent-parent-byte-admission", owner: "synthetic TLS fixture parent", at: "2026-11-05T00:00:00.000Z",
     deliveryRoot, delivery: manifestIdentity, source: delivery.manifest.source, tuple: delivery.manifest.tuple, members: delivery.manifest.files.length, admitted: true };

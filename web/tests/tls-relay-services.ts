@@ -96,6 +96,7 @@ interface LeaseCleanupTiming { readonly exitMs: number; readonly graceMs: number
 type FixtureTool = "mesh" | "flock" | "sh" | "cat";
 interface FixtureHost {
   readonly hostSource: string;
+  readonly relayPackage: "waffle-relay" | "@waffle-os/relay";
   readonly tool: (name: FixtureTool) => string;
   readonly recheck: () => Promise<void>;
 }
@@ -199,7 +200,7 @@ async function database(owner: TlsCleanup, options: ServiceOptions, signal: Abor
   };
 }
 export async function startTlsServices(intake: TlsIntake, owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, secrets: RunSecrets) {
-  return startTlsFixtureServices({ hostSource: intake.hostSource, tool: name => hostToolPath(intake.hostTools, name), recheck: () => recheckDependencies(intake) }, owner, options, signal, record, secrets);
+  return startTlsFixtureServices({ hostSource: intake.hostSource, relayPackage: "waffle-relay", tool: name => hostToolPath(intake.hostTools, name), recheck: () => recheckDependencies(intake) }, owner, options, signal, record, secrets);
 }
 /** Ordinary development uses the same private fixture owners without a release handoff. */
 export async function startTlsFixtureServices(host: FixtureHost, owner: TlsCleanup, options: ServiceOptions, signal: AbortSignal, record: (resource: object) => Promise<void>, secrets: RunSecrets) {
@@ -231,19 +232,20 @@ export async function startTlsFixtureServices(host: FixtureHost, owner: TlsClean
   const secret = randomBytes(32);
   secrets.add(secret);
   owner.add(() => { secret.fill(0); });
-  const entry = pathToFileURL(Bun.resolveSync("waffle-relay/node", join(host.hostSource, "web"))).href;
+  const web = join(host.hostSource, "web");
+  const entry = pathToFileURL(Bun.resolveSync(`${host.relayPackage}/node`, web)).href;
   signal.throwIfAborted();
   await host.recheck();
   signal.throwIfAborted();
   const adapter: unknown = await import(entry);
   const module = object(adapter, "released relay module");
-  if (typeof module.createNodeRelayServer !== "function") throw new Error("Missing reviewed relay109 raw TCP entry");
+  if (typeof module.createNodeRelayServer !== "function") throw new Error("Missing relay raw TCP entry");
   const createRelay = module.createNodeRelayServer;
   const destinations = ["pg.tls.test", "wrong.tls.test", "reject.tls.test"].map(host => ({ host, port: 5432, connect: { host: "127.0.0.1", port: proxyPort } }));
   const credential = randomBytes(32).toString("hex");
   secrets.add(credential);
   const relay = object(await acquireOwned(owner, signal, () => createRelay({ credential, allowedOrigins: [`http://127.0.0.1:${options.pagePort}`], tcp: { tokenSecret: secret, destinations, log() {} } }), async value => { const row = object(value, "relay owner"); if (typeof row.close !== "function") throw new Error("Missing reviewed relay close operation"); await row.close(); }), "relay owner");
-  if (!(relay.server instanceof HttpServer) || typeof relay.close !== "function") throw new Error("Invalid relay109 lifecycle");
+  if (!(relay.server instanceof HttpServer) || typeof relay.close !== "function") throw new Error("Invalid relay lifecycle");
   const server = relay.server;
   const close = relay.close.bind(relay);
   owner.add(async () => { await close(); secret.fill(0); if (server.listening || object(relay.tcp, "relay TCP").active !== 0) throw new Error("TLS relay cleanup unconfirmed"); });
@@ -252,7 +254,7 @@ export async function startTlsFixtureServices(host: FixtureHost, owner: TlsClean
   await record({ kind: "relay", port: options.relayPort, destinationPort: proxyPort });
   await listen(server, options.relayPort, signal);
   signal.throwIfAborted();
-  const tokenModule = object(await import(pathToFileURL(Bun.resolveSync("waffle-relay/token", join(host.hostSource, "web"))).href), "relay token module");
+  const tokenModule = object(await import(pathToFileURL(Bun.resolveSync(`${host.relayPackage}/token`, web)).href), "relay token module");
   if (typeof tokenModule.mintRelayToken !== "function") throw new Error("Missing relay token signer");
   const mint = tokenModule.mintRelayToken;
   return {

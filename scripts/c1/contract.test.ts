@@ -1,6 +1,6 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, copyFileSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { completePublicationArtifactPaths, executableMemberPaths, handoffMemberPaths, selectedReleaseArchives } from "../producer-closure.ts";
@@ -8,7 +8,7 @@ import waffleRelease from "../waffle-release-inputs.json";
 import {
   DELIVERY_RECORDS, EXECUTABLE_ROLES, HANDOFF_ROLES, ContractError, RELAY_DECISION, draftEntries, parseConfig, parseDelivery, parseHandoff, parseInputManifest, parseIntake, type ConsumerHandoff,
 } from "./contract.ts";
-import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, fixtureInputManifest, writeContractFixture, writeSealedFixture } from "./contract-fixture.ts";
+import { FIXTURE_LAUNCHER_OUTPUT, FIXTURE_SOURCE, FIXTURE_TUPLE, fixtureArchives, fixtureInputManifest, writeContractFixture, writeSealedFixture } from "./contract-fixture.ts";
 import { admitIntake, buildHandoff, readSealedDelivery, requireSealedArtifacts, sealDelivery } from "./delivery.ts";
 import { admitReplayHandoffFile, parseReplay, parseReplayHandoff, requireReplayHandoff } from "./replay.ts";
 import { fileIdentity, sha256 } from "./identity.ts";
@@ -51,7 +51,7 @@ function replaceJson(root: string, member: string, change: (value: Record<string
 test("the executable fixture writes every contract file and each parses strictly", () => {
   const fixture = writeContractFixture(fresh());
   const delivery = parseDelivery(json(join(fixture.delivery, "DELIVERY.json")));
-  expect(delivery.files.map(member => member.path).sort()).toEqual(completePublicationArtifactPaths().concat(["split/web/worker.js"]).sort());
+  expect(delivery.files.map(member => member.path).sort()).toEqual(completePublicationArtifactPaths(fixtureArchives(FIXTURE_TUPLE)).concat(["split/web/worker.js"]).sort());
   expect(parseIntake(json(fixture.intake)).members).toBe(delivery.files.length);
   const replay = parseReplayHandoff(json(fixture.handoff));
   const handoff = replay.product;
@@ -231,22 +231,12 @@ test("the delivery keeps the runtime and relay archives this source pins, not a 
   expect(new Set(registry).size).toBe(registry.length);
 });
 
-test("a sealed replay still resolves the original GitHub Waffle archive names", () => {
-  const root = sealedFixture();
-  const original = readSealedDelivery(root);
-  const { runtime, relay } = original.manifest.tuple;
-  const paths = handoffMemberPaths();
-  const runtimePath = `runtime/waffle-${runtime}.tgz`;
-  const relayPath = `relay/waffle-relay-${relay}.tgz`;
-  const renamed = new Map([[paths.runtimeArchive, runtimePath], [paths.relayArchive, relayPath]]);
-  for (const [before, after] of renamed)
-    tamper(root, before, path => renameSync(path, join(root, after)));
-  const files = original.manifest.files.map(file => ({ ...file, path: renamed.get(file.path) ?? file.path }));
-  tamper(root, "DELIVERY.json", path => {
-    chmodSync(path, 0o600);
-    writeFileSync(path, JSON.stringify({ ...original.manifest, files }));
-    chmodSync(path, 0o444);
-  });
+test.each(["GitHub", "npm"] as const)("a sealed replay resolves its own %s Waffle archive names", registry => {
+  const tuple = registry === "npm" ? { ...FIXTURE_TUPLE, runtime: "0.0.145", relay: "0.0.144" } : FIXTURE_TUPLE;
+  const { deliveryRoot: root } = writeSealedFixture(fresh(), undefined, tuple, registry);
+  const { runtime, relay } = tuple;
+  const runtimePath = registry === "npm" ? `runtime/runtime-${runtime}.tgz` : `runtime/waffle-${runtime}.tgz`;
+  const relayPath = registry === "npm" ? `relay/relay-${relay}.tgz` : `relay/waffle-relay-${relay}.tgz`;
   const delivery = readSealedDelivery(root);
   const handoff = buildHandoff(delivery, delivery.identity, delivery.inputs.consumers, delivery.config.fixtures, root, root);
   expect(handoff.artifacts.runtimeArchive.path).toBe(join(root, runtimePath));

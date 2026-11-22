@@ -100,14 +100,12 @@ function sealedRecord(root: string, path: string, expectedSha256: string, label:
 }
 
 function archivedWaffleMembers({ tuple, files }: DeliveryManifest) {
-  const current = handoffMemberPaths();
-  if (files.some(file => file.path === current.runtimeArchive || file.path === current.relayArchive)) return;
   const { runtime, relay } = tuple;
-  if (!/^\d+\.\d+\.\d+$/.test(runtime) || !/^\d+\.\d+\.\d+$/.test(relay)) return;
-  const runtimeArchive = `runtime/waffle-${runtime}.tgz`;
-  const relayArchive = `relay/waffle-relay-${relay}.tgz`;
-  if (files.some(file => file.path === runtimeArchive) && files.some(file => file.path === relayArchive))
-    return { runtimeArchive, relayArchive };
+  if (!/^\d+\.\d+\.\d+$/.test(runtime) || !/^\d+\.\d+\.\d+$/.test(relay)) throw new DeliveryError("Invalid sealed Waffle versions");
+  const npm = { runtimeArchive: `runtime/runtime-${runtime}.tgz`, relayArchive: `relay/relay-${relay}.tgz` };
+  const github = { runtimeArchive: `runtime/waffle-${runtime}.tgz`, relayArchive: `relay/waffle-relay-${relay}.tgz` };
+  const paths = new Set(files.map(file => file.path));
+  return [npm, github].find(pair => paths.has(pair.runtimeArchive) && paths.has(pair.relayArchive)) ?? npm;
 }
 /**
  * A complete, closed, unchanged sealed delivery with exactly the registry's

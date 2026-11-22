@@ -134,7 +134,7 @@ async function tlsDevelopment(args: readonly string[]): Promise<void> {
     const fixtures = { databaseMachine: "pi", ...ports,
       databaseAddress: execFileSync(tool("mesh"), ["ssh", "pi", "--", "tailscale", "ip", "-4"], { encoding: "utf8", timeout: 15_000 }).trim(),
       relayAddress: execFileSync(tool("tailscale"), ["ip", "-4"], { encoding: "utf8", timeout: 5000 }).trim() };
-    const services = await startTlsFixtureServices({ hostSource, tool, recheck: async () => { abort.signal.throwIfAborted(); } }, owner, fixtures, abort.signal, record, secrets);
+    const services = await startTlsFixtureServices({ hostSource, relayPackage: "@waffle-os/relay", tool, recheck: async () => { abort.signal.throwIfAborted(); } }, owner, fixtures, abort.signal, record, secrets);
     lifecycle = services.lifecycle;
     result = await exercise(inputs, options, services, owner, abort.signal, secrets, record);
   } catch (error) { failure = error; failed = true; } finally {
