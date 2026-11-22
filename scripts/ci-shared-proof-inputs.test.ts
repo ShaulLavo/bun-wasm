@@ -1,6 +1,6 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializationPair } from "../tests/package/engine-initialization-fixture";
@@ -47,7 +47,7 @@ function seedProgram(root: string, engine: PairedEngine): void {
     inputs: { source, core: identity(pair.untaggedCore), coreReceipt: core, native: { receipt: identity(text), library: library.library, headers: library.headers } } }));
 }
 
-function seedSite(root: string): void {
+function seedSite(root: string, siteSource = source): void {
   const site = join(root, "site");
   mkdirSync(join(site, "sandbox"), { recursive: true });
   const gzip = Bun.gzipSync(wasm);
@@ -58,10 +58,47 @@ function seedSite(root: string): void {
   writeFileSync(join(site, "index.html"), "<script>globalThis.__bunwasmBuilds={};</script>");
   writeFileSync(join(site, "shell.wasm.gz"), "ordinary shell fixture bytes");
   const original = fixtureReceipt(wasm, "browser");
-  const sourceManifest = { ...original.sourceManifest, source };
+  const sourceManifest = { ...original.sourceManifest, source: siteSource };
   const guest = { ...original, sourceManifest, sourceManifestSha256: hash(JSON.stringify(sourceManifest)) };
-  writeFileSync(join(root, "site.json"), JSON.stringify({ source, receipt: guest, guest: { sha256: hash(wasm), bytes: wasm.byteLength, gzipSha256: hash(gzip) }, files: siteInventory(site) }));
+  writeFileSync(join(root, "site.json"), JSON.stringify({ source: siteSource, receipt: guest, guest: { sha256: hash(wasm), bytes: wasm.byteLength, gzipSha256: hash(gzip) }, files: siteInventory(site) }));
 }
+
+function seedDownloads(root: string): string {
+  const programs = join(root, "producer");
+  const downloads = join(root, "shared-program-downloads");
+  const spiderMonkey = join(downloads, "shared-spidermonkey-program", "bun-wasm/bun-wasm/target/shared-native");
+  mkdirSync(spiderMonkey, { recursive: true });
+  for (const engine of ["quickjs", "jsc", "spidermonkey"] as const) seedProgram(programs, engine);
+  renameSync(join(programs, "program"), join(downloads, "shared-quickjs-program"));
+  renameSync(join(programs, "program-jsc"), join(downloads, "shared-jsc-program"));
+  const destination = join(spiderMonkey, "program-spidermonkey");
+  renameSync(join(programs, "program-spidermonkey"), destination);
+  return destination;
+}
+
+test.each(["matching inputs", "missing program", "different site source"])("workflow assembly handles %s", defect => {
+  const workflow: unknown = Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+  if (!record(workflow) || !record(workflow.jobs)) throw new Error("Missing workflow jobs");
+  const job = workflow.jobs["ordinary-web-guests"];
+  if (!record(job) || !Array.isArray(job.steps)) throw new Error("Missing ordinary Web guest job");
+  const step: unknown = job.steps.find(step => record(step) && step.name === "Prepare the same-source shared proof handoff");
+  if (!record(step) || typeof step.run !== "string") throw new Error("Missing shared proof assembly command");
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-shared-downloads-"));
+  try {
+    const spiderMonkey = seedDownloads(root);
+    if (defect === "missing program") rmSync(spiderMonkey, { recursive: true });
+    seedSite(join(root, "shared-playground-site"), defect === "different site source" ? { head: "a".repeat(40), tree: "b".repeat(40) } : source);
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", step.run], { env: { ...process.env, RUNNER_TEMP: root }, encoding: "utf8" });
+    const out = join(root, "shared-proof-inputs");
+    if (defect === "matching inputs") {
+      expect(result.status, result.stderr).toBe(0);
+      expect(() => verifySharedProofInputs(out)).not.toThrow();
+      return;
+    }
+    expect(result.status).toBe(1);
+    expect(existsSync(out)).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("ready shared handoff preserves programs, original receipts and normal shell assets without any build", async () => {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-shared-handoff-"));

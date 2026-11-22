@@ -17,6 +17,7 @@ function admitted(job: Record<string, unknown>, event: string, draft: boolean, r
     .replaceAll("!cancelled()", "true")
     .replaceAll("always()", "true")
     .replaceAll("github.ref", JSON.stringify(ref))
+    .replaceAll("needs.ordinary-web-guests.outputs.shared-proof-inputs == 'success'", "true")
     .replace(/needs\.[\w-]+\.outputs\.[\w-]+/g, '"true"')
     .replaceAll("needs.browser-production.result", '"skipped"')
     .replace(/needs\.[\w-]+\.result/g, '"success"');
