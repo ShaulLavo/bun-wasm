@@ -135,7 +135,7 @@ jobs:
         run: bun scripts/ci-native-control-compilers.ts
       - name: Blocking quality gates
         env:
-          BUN_WASM_TEST_JOBS: "4"
+          BUN_WASM_TEST_JOBS: "3"
           JSCPD_BASE_REF: ${{ needs.selection.outputs.base }}
           TMPDIR: ${{ runner.temp }}
         run: bun run quality --javascript

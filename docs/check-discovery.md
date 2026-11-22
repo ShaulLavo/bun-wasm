@@ -104,7 +104,7 @@ owns the runtime type project. The native fixture runner sets `BUN_WASM_CI_CHECK
 so `test.sh` runs only Rust-owned probes, without repeating those Web checks.
 Local fixture commands still run their original complete runtime preflight.
 
-The Linux native CI step explicitly sets `BUN_WASM_RUNTIME_JOBS=4`. The runtime owner
+The Linux native CI step explicitly sets `BUN_WASM_RUNTIME_JOBS=3`. The runtime owner
 keeps unclassified files in their original single Bun process. At the same time,
 it starts files marked `"isolation": "process"` in separate processes across the
 bounded worker slots, taking another isolated file as each slot becomes free. That opt-in

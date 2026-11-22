@@ -103,7 +103,7 @@ export async function runRuntimeChecks(paths: readonly string[], env = process.e
   const supervisor = join(import.meta.dir, "run-with-timeout.mts");
   const command = [supervisor, "--state", state, "--until-exit", process.execPath, import.meta.filename, "--worker", "--jobs", String(jobs)].concat(paths);
   const child = spawn(process.execPath, command, {
-    env: { ...env, TMPDIR: scratch, WASM_TABLE_TMP: scratch, RAYON_NUM_THREADS: "2" },
+    env: { ...env, TMPDIR: scratch, WASM_TABLE_TMP: scratch, RAYON_NUM_THREADS: jobs >= 3 ? "1" : "2" },
     stdio: "inherit",
   });
   let interrupted = 0;

@@ -13,12 +13,15 @@ setDefaultTimeout(120_000);
 const root = resolve(import.meta.dir, "..");
 const testTimeoutMs = 60_000;
 
-function nonEphemeralCeiling(): number {
+function nonEphemeralBounds(): [number, number] {
   try {
     const [low] = readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8").trim().split(/\s+/).map(Number);
-    if (low && Number.isInteger(low) && low > 20_000) return Math.min(low, 32_000);
+    if (low && Number.isInteger(low) && low > 1024) {
+      const ceiling = Math.min(low, 32_000);
+      return [Math.max(1024, ceiling - 12_000), ceiling];
+    }
   } catch { /* Non-Linux hosts fall back to the default below-ephemeral range. */ }
-  return 32_000;
+  return [20_000, 32_000];
 }
 
 async function tryListen(port: number): Promise<number | null> {
@@ -36,10 +39,10 @@ async function tryListen(port: number): Promise<number | null> {
 }
 
 async function freePort(): Promise<number> {
-  const ceiling = nonEphemeralCeiling();
+  const [floor, ceiling] = nonEphemeralBounds();
   // Reserve a port outside Linux's ephemeral range so concurrent listen(0) fixtures cannot claim it.
   for (let attempt = 0; attempt < 64; attempt++) {
-    const port = await tryListen(randomInt(20_000, ceiling));
+    const port = await tryListen(randomInt(floor, ceiling));
     if (port !== null) return port;
   }
   const fallback = await tryListen(0);

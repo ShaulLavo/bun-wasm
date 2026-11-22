@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { availableParallelism, constants } from "node:os";
-import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "browser-guest", "native", "native-probe"] as const;
@@ -320,12 +320,28 @@ export async function runShardedFiles(files: readonly string[], jobs: number, en
   return results.find(result => result.status !== 0)?.status ?? 0;
 }
 
+function warmWasmtimeCache(producers: readonly NativeEngine[], env: NodeJS.ProcessEnv): void {
+  const launcher = env.BUN_WASM_LAUNCHER;
+  if (!launcher || !existsSync(launcher)) return;
+  const cores: string[] = [];
+  if (producers.includes("quickjs")) cores.push(join(root, "dist/bun.wasm"));
+  if (producers.includes("jsc")) cores.push(join(root, "dist/bun-jsc.wasm"));
+  if (producers.includes("spidermonkey") && env.SPIDERMONKEY_WASM) cores.push(env.SPIDERMONKEY_WASM);
+  const warmEnv = { ...env, RAYON_NUM_THREADS: String(Math.max(2, Math.min(4, availableParallelism()))) };
+  for (const core of cores) {
+    if (!existsSync(core)) continue;
+    spawnSync(launcher, ["--wasm", core, "--", "-e", ""], { env: warmEnv, stdio: "ignore", timeout: 120_000 });
+  }
+}
+
 async function runNative(paths: readonly string[], profile: NativeProfile): Promise<number> {
   if (profile === "shared-group") return runCheck(checkCommand("native", paths.slice(), profile));
   const count = Number(process.env.BUN_WASM_CHECK_JOBS ?? availableParallelism());
   if (!Number.isInteger(count) || count < 1) throw new Error(`Invalid BUN_WASM_CHECK_JOBS: ${String(count)}`);
   const producers = nativeProducerEngines();
   const env = { ...process.env, BUN_WASM_CI_CHECKS: "1" };
+  // Populate Wasmtime's module cache once at full core width before parallel runtime/fixture workers start.
+  if (count > 1) warmWasmtimeCache(producers, env);
   // Each test.sh would otherwise run the whole runtime suite again, in parallel.
   const runtime = runCheck(["bash", join(root, "scripts/check-runtime.sh")], env);
   if (runtime !== 0) return runtime;

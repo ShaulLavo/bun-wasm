@@ -146,7 +146,7 @@ test("capacity, process and large IO retain blocking coverage on three ordinary 
 test("CI declares its native fixture and installer engine domains separately", () => {
   const workflow = expandedCiWorkflow();
   const gate = workflow.split("name: Blocking native fixture checks")[1]!.split("\n      - name:")[0]!;
-  expect(gate).toContain('BUN_WASM_RUNTIME_JOBS: "4"');
+  expect(gate).toContain('BUN_WASM_RUNTIME_JOBS: "3"');
   expect(gate).toContain("INSTALL_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser' || 'quickjs,browser' }}");
   expect(gate).toContain("BUN_WASM_CHECK_ENGINES: ${{ needs.selection.outputs.jsc == 'true' && 'quickjs,jsc,browser,spidermonkey' || 'quickjs,browser,spidermonkey' }}");
   expect(gate).toContain("          bun scripts/test-checks.ts native\n");
