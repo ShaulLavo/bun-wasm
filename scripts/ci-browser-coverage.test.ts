@@ -48,7 +48,7 @@ test("real manifest snapshots retain removed shared, QuickJS, generator and prev
     ["crates/bunwasm-engine-quickjs/src/transport.rs", 20], ["third_party/rquickjs-sys/src/lib.rs", 11],
     ["web/src/preview-websocket-client.ts", 4], ["scripts/generate-node-path.ts", 44],
     ["scripts/generate-dev-html-client.ts", 44], ["web/src/dev-html-client.ts", 44],
-    ["scripts/wasm-name-sections.ts", 24], ["scripts/stage-guest-wasm.ts", 44],
+    ["scripts/wasm-name-sections.ts", 44], ["scripts/stage-guest-wasm.ts", 44],
     ["scripts/src/engine-init.c", 20], ["scripts/src/engine-explicit-init.ts", 20], ["scripts/build-bash-web-shell.sh", 44],
   ] as const) {
     const selection = selectBrowserGuestCoverage({ changedPaths: [path], snapshots, full: false });

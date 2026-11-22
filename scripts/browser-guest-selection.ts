@@ -289,14 +289,14 @@ const engineRoots: Record<CoverageEngine, readonly string[]> = {
 const engineFiles: Record<CoverageEngine, readonly string[]> = {
   quickjs: ["scripts/build.sh", "scripts/build-engine-quickjs.sh", "scripts/quickjs-core-exports.txt", "crates/bunwasm-runtime/src/engine_quickjs.rs"],
   jsc: ["scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-jsc.sh", "crates/bunwasm-runtime/src/engine_jsc.rs"],
-  browser: ["scripts/build-bun-browser.sh", "scripts/wasm-name-sections.ts", "crates/bunwasm-runtime/src/engine_host.rs"],
+  browser: ["scripts/build-bun-browser.sh", "crates/bunwasm-runtime/src/engine_host.rs"],
 };
 const commonProducerFiles = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "scripts/build-bun-core.sh", "scripts/build-wasi-sysroot.ts",
   ".github/actions/jsc-setup/action.yml", ".github/actions/jsc-prebuild/action.yml", "scripts/ci-binaryen.ts", "scripts/ci-build-tools.ts",
   "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json",
   "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts",
   "scripts/src/program-profile.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-direct-stream.ts", "scripts/generate-node-path.ts", "scripts/generate-dev-html-client.ts",
-  "web/src/dev-html-client.ts", "scripts/build-bash-web-shell.sh"];
+  "web/src/dev-html-client.ts", "scripts/build-bash-web-shell.sh", "scripts/wasm-name-sections.ts"];
 const commonProducerRoots = ["crates/", "patches/", "vendor/", "third_party/", ".cargo/"];
 const spiderMonkeyRoots = ["spidermonkey/"];
 const spiderMonkeyFiles = ["scripts/build-bun-spidermonkey.sh", "scripts/build-engine-spidermonkey.sh"];

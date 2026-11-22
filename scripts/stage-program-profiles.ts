@@ -6,6 +6,7 @@ import { BUN_MEMORY_GROUP_POLICY, programProfile, tagProgramCore, type PairedEng
 import { verifySharedProgramMemory, type BackingPolicy } from "./shared-program-memory";
 import { profileAsset, verifyMemoryProfile } from "../web/src/program-profile";
 import { inputProfile, parseProgramReceipt, record, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt";
+import { assertShippedGuestHasNoNames, keepNamesRequested } from "./wasm-name-sections";
 
 export function sharedProgramReceipts(engine: PairedEngine): string[] {
   return ["bun-core.wasm.core.json", "source.txt"].concat(engine === "spidermonkey"
@@ -109,6 +110,7 @@ async function stageProgram(engine: PairedEngine, source: string, out: string, b
     await Bun.write(join(receipts, file.name), file.text);
   }
   for (const file of [{ name: names.core, bytes: core }, { name: names.side, bytes: side }]) {
+    assertShippedGuestHasNoNames(file.name, file.bytes, keepNamesRequested());
     const name = profileAsset(file.name, "shared-group");
     builds[name] = new Bun.CryptoHasher("sha256").update(file.bytes).digest("hex");
     await Bun.write(join(out, `${name}.gz`), Bun.gzipSync(file.bytes, { level: 9 }));

@@ -255,7 +255,6 @@ test("explicit active compiler is accepted and a Node dispatcher retarget is det
 async function browserProducerFixture(fixture: Parameters<typeof receiptCli>[0]) {
   const root = fixture.root;
   await copyFile(new URL("../../scripts/build-bun-browser.sh", import.meta.url), join(root, "scripts/build-bun-browser.sh"));
-  await copyFile(new URL("../../scripts/wasm-name-sections.ts", import.meta.url), join(root, "scripts/wasm-name-sections.ts"));
   await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), "export {};\n");
   await executable(join(root, "scripts/sync-crypto.sh"), "exit 0");
   await writeFile(join(root, "env.sh"), `export TMPDIR=${JSON.stringify(join(root, "private"))}\n`);

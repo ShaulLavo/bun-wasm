@@ -9,6 +9,7 @@ import { inputProfile, parseProgramReceipt, record, verifyProgramReceipt, type P
 import { git, hash } from "./guest-source-manifest.ts";
 import { jscEmbeddingArchives, verifyEmbeddingReceipt } from "./jsc-embedding.ts";
 import { writeProgramDelivery } from "./ci-program-delivery.ts";
+import { assertShippedGuestHasNoNames } from "./wasm-name-sections.ts";
 
 type Source = ProgramInputSnapshot["source"];
 export const ordinaryJscFiles = ["bun-jsc.wasm", "jsc-engine.wasm", "bun-core.wasm.core.json", "jsc-engine.wasm.engine.json", "bun-jsc.wasm.build.json", "bun-jsc.wasm.embedding.json"] as const;
@@ -31,6 +32,8 @@ export async function verifyOrdinaryJscProgram(directory: string, coreReceipt: s
   const files = await Promise.all(paths.map(path => Bun.file(path).bytes()));
   const [core, side, coreText, sideText, buildText, embeddingText] = files;
   assert(core && side && coreText && sideText && buildText && embeddingText, "Incomplete ordinary JSC program");
+  assertShippedGuestHasNoNames("bun-jsc.wasm", core);
+  assertShippedGuestHasNoNames("jsc-engine.wasm", side);
   const build: unknown = JSON.parse(new TextDecoder().decode(buildText));
   verifyGuestBuildReceipt(core, build);
   assert.equal(build.sourceManifest.build, "jsc", "Ordinary JSC build required");
