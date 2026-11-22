@@ -573,7 +573,8 @@
     const current: unknown = globalThis.process;
     if (current !== null && (current === undefined || typeof current === "object" || typeof current === "function")) return true;
     const error = new TypeError("process is not an object");
-    if (!internal.dispatchUncaught(error, false)) {
+    // Through this process object: the global no longer reaches it.
+    if (!process.emit("uncaughtException", error, "uncaughtException")) {
       // Nothing claimed it: the run goes on and ends with exit code 1.
       exitByte = 1;
       native.writeStderr(`error: ${error.message}\n`);
