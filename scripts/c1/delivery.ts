@@ -98,6 +98,15 @@ function sealedRecord(root: string, path: string, expectedSha256: string, label:
   if (sha256(bytes) !== expectedSha256) throw new DeliveryError(`sealed ${label} record differs from the digest DELIVERY.json binds`);
   return { value: JSON.parse(bytes.toString("utf8")), identity: { path: join(root, path), bytes: bytes.byteLength, sha256: expectedSha256 } };
 }
+
+function archivedWaffleMembers({ tuple, files }: DeliveryManifest) {
+  const { runtime, relay } = tuple;
+  if (!/^\d+\.\d+\.\d+$/.test(runtime) || !/^\d+\.\d+\.\d+$/.test(relay)) throw new DeliveryError("Invalid sealed Waffle versions");
+  const npm = { runtimeArchive: `runtime/runtime-${runtime}.tgz`, relayArchive: `relay/relay-${relay}.tgz` };
+  const github = { runtimeArchive: `runtime/waffle-${runtime}.tgz`, relayArchive: `relay/waffle-relay-${relay}.tgz` };
+  const paths = new Set(files.map(file => file.path));
+  return [npm, github].find(pair => paths.has(pair.runtimeArchive) && paths.has(pair.relayArchive)) ?? npm;
+}
 /**
  * A complete, closed, unchanged sealed delivery with exactly the registry's
  * modes, whose sealed CONFIG and INPUTS records are the ones its manifest
@@ -107,7 +116,7 @@ export function readSealedDelivery(root: string): SealedDelivery {
   const identity = fileIdentity(join(root, MANIFEST));
   const manifest = parseDelivery(JSON.parse(readFileSync(identity.path, "utf8")));
   if (octal(lstatSync(identity.path).mode) !== SEALED_FILE_MODE) throw new DeliveryError("DELIVERY.json is not sealed 0444");
-  requireCompletePublicationFiles(manifest.files);
+  requireCompletePublicationFiles(manifest.files, archivedWaffleMembers(manifest));
   const actual = walk(root).filter(path => path !== MANIFEST).sort();
   const listed = manifest.files.map(file => file.path).sort();
   if (actual.join("\0") !== listed.join("\0")) throw new DeliveryError("delivery has missing or extra files");
@@ -141,7 +150,7 @@ export function admitIntake(path: string, expectedSha256: string, delivery: Seal
 
 /** The read-only consumer view of an admitted delivery. Executables are used from their sealed paths. */
 export function buildHandoff(delivery: SealedDelivery, intake: FileIdentity, dependencies: ConsumerDependencies, fixtures: ConsumerFixtures, outputRoot: string, browserTmp: string): ConsumerHandoff {
-  const paths = handoffMemberPaths();
+  const paths = handoffMemberPaths(archivedWaffleMembers(delivery.manifest));
   const members = new Map(delivery.manifest.files.map(file => [file.path, file]));
   const artifact = (role: HandoffRole): FileIdentity => {
     const member = members.get(paths[role]);

@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests";
 
 const runtimeName = "waffle";
+const scopedRuntimeName = "@waffle-os/runtime";
 
 /** Resolve only the consuming installation, without assuming checkout/cache directory names. */
 export function resolveRuntimePackage(consumerEntry: string) {
@@ -33,8 +34,9 @@ export function resolveRuntimePackage(consumerEntry: string) {
   return {
     path, physical, metadata,
     source(specifier: string): string {
-      if (specifier !== runtimeName && !specifier.startsWith(runtimeName + "/")) throw new Error(`Not a runtime import: ${specifier}`);
-      const key = specifier === runtimeName ? "." : "." + specifier.slice(runtimeName.length);
+      const name = specifier.startsWith(scopedRuntimeName) ? scopedRuntimeName : runtimeName;
+      if (specifier !== name && !specifier.startsWith(name + "/")) throw new Error(`Not a runtime import: ${specifier}`);
+      const key = "." + specifier.slice(name.length);
       const target = select(metadata.exports?.[key]);
       if (!target) throw new Error(`${specifier} is not exported for the browser`);
       const output = resolve(path, target);
@@ -104,7 +106,7 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
       setup(build) {
         // Shared web sources still use the app's installation. Explicit package
         // exports enforce the boundary; dotted Git-cache names are opaque paths.
-        build.onResolve({ filter: /^waffle(?:\/|$)/ }, ({ path }) => {
+        build.onResolve({ filter: /^(?:waffle|@waffle-os\/runtime)(?:\/|$)/ }, ({ path }) => {
           runtimePackage ??= resolveRuntimePackage(main);
           return { path: runtimePackage.source(path) };
         });

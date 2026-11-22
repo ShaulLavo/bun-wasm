@@ -2,6 +2,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { waffleRuntimeName, waffleRuntimePin } from "./waffle-release-inputs";
 import release from "./waffle-release-inputs.json";
 import bashRelease from "./bash-web-release-inputs.json";
 import { browserBuildConfig, resolveRuntimePackage } from "./browser-build";
@@ -22,7 +23,7 @@ test("the ordinary Shell producer, public product selection and both apps pin th
   expect(commit).toBe(bashRelease.sourceCommit);
   expect(/^commit=([a-f0-9]{40})$/m.exec(producer)?.[1]).toBe(commit);
   expect(pinnedBashWeb(join(root, "sandbox"))).toBe(commit);
-  expect(waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: commit }, release.url).shellCommit).toBe(commit);
+  expect(waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: commit }, waffleRuntimePin).shellCommit).toBe(commit);
   for (const consumer of ["web", "sandbox"]) {
     const lock = await readFile(join(root, consumer, "bun.lock"), "utf8");
     expect(lock).toContain(`"bash-web": "${bashRelease.url}"`);
@@ -85,11 +86,11 @@ test("Shell receipt validation rejects stale, partial and changed unit guest fix
 });
 
 test("the checked archive peer retains source identity without requiring a Git install pin", () => {
-  const selected = waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: shellCommit }, release.url);
-  expect(selected).toEqual({ shellCommit, wafflePeer: release.url, wafflePeerCommit: release.sourceCommit, waffleHostCommit: release.sourceCommit });
-  expect(waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: shellCommit, SHELL_PRODUCT_WAFFLE_COMMIT: release.sourceCommit }, release.url)).toEqual(selected);
-  expect(() => waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: shellCommit, SHELL_PRODUCT_WAFFLE_COMMIT: "b".repeat(40) }, release.url)).toThrow("must match");
-  for (const peer of ["waffle", "^0.0.91", release.url + "#ignored", release.url.replace("github.com", "example.com"), gitPeer("main"), "file:../waffle"])
+  const selected = waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: shellCommit }, waffleRuntimePin);
+  expect(selected).toEqual({ shellCommit, wafflePeer: waffleRuntimePin, wafflePeerCommit: release.sourceCommit, waffleHostCommit: release.sourceCommit });
+  expect(waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: shellCommit, SHELL_PRODUCT_WAFFLE_COMMIT: release.sourceCommit }, waffleRuntimePin)).toEqual(selected);
+  expect(() => waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: shellCommit, SHELL_PRODUCT_WAFFLE_COMMIT: "b".repeat(40) }, waffleRuntimePin)).toThrow("must match");
+  for (const peer of ["waffle", "^0.0.91", waffleRuntimePin + "#ignored", waffleRuntimePin.replace("@waffle-os", "@example"), gitPeer("main"), "file:../waffle"])
     expect(() => waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: shellCommit }, peer)).toThrow("Waffle peer");
 });
 
@@ -104,7 +105,7 @@ async function sourceFixture(root: string, child: boolean) {
   const packageRoot = child ? join(repository, "packages/waffle") : repository;
   await mkdir(join(packageRoot, "tooling"), { recursive: true });
   await Bun.write(join(repository, "package.json"), JSON.stringify({ name: "waffle-monorepo", private: true, workspaces: ["packages/*"] }));
-  await Bun.write(join(packageRoot, "package.json"), JSON.stringify({ name: "waffle", version: release.version, waffleHostInterface: release.hostInterface, private: child }));
+  await Bun.write(join(packageRoot, "package.json"), JSON.stringify({ name: child ? waffleRuntimeName : "waffle", version: release.version, waffleHostInterface: release.hostInterface, private: child }));
   await Bun.write(join(packageRoot, "scripts/build-wasi-libc.sh"), "selected child builder");
   await Bun.write(join(packageRoot, "patches/wasi-libc/preopen-scan.patch"), "selected child patch");
   await Bun.write(join(packageRoot, "prepare.ts"), 'await Bun.write("prepared.txt", "canonical package root");');
@@ -125,7 +126,7 @@ async function checkSourceVariant(root: string, child: boolean, prepared: string
   await stageWaffle(flow, { repository: f.repository, commit: f.commit, archive: join(root, "source # archive.tar"), destination, prepared, env: process.env });
   expect(await readFile(join(destination, "prepared.txt"), "utf8")).toBe("canonical package root");
   expect(await Bun.file(join(destination, "packages/waffle/package.json")).exists()).toBe(false);
-  expect(await Bun.file(join(destination, "package.json")).json()).toEqual({ name: "waffle", version: release.version, waffleHostInterface: release.hostInterface, private: child });
+  expect(await Bun.file(join(destination, "package.json")).json()).toEqual({ name: child ? waffleRuntimeName : "waffle", version: release.version, waffleHostInterface: release.hostInterface, private: child });
   expect(await readFile(join(destination, "scripts/build-wasi-libc.sh"), "utf8")).toBe("selected child builder");
   expect(await readFile(join(destination, "patches/wasi-libc/preopen-scan.patch"), "utf8")).toBe("selected child patch");
   await Bun.write(join(f.packageRoot, "package.json"), JSON.stringify({ name: "wrong-package" }));
@@ -241,7 +242,7 @@ for (const child of [false, true]) {
     const root = await mkdtemp(join(tmpdir(), "bun-wasm-source-interface-"));
     try {
       const f = await sourceFixture(root, child);
-      await Bun.write(join(f.packageRoot, "package.json"), JSON.stringify({ name: "waffle", version: release.version, private: child }));
+      await Bun.write(join(f.packageRoot, "package.json"), JSON.stringify({ name: child ? waffleRuntimeName : "waffle", version: release.version, private: child }));
       git(f.repository, "add", ".");
       git(f.repository, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "missing metadata");
       expect(() => waffleSourceRoot(f.repository, git(f.repository, "rev-parse", "HEAD"), !child)).toThrow("waffleHostInterface");

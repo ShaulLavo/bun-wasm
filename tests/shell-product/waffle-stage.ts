@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { cp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import release from "../../scripts/waffle-release-inputs.json";
-import { assertExactHostInterface, packageHostInterface, parseHostInterface, prepareWaffleReleaseArchive } from "../../scripts/waffle-release-inputs";
+import { assertExactHostInterface, packageHostInterface, parseHostInterface, prepareWaffleReleaseArchive, waffleRuntimeName, waffleRuntimePin } from "../../scripts/waffle-release-inputs";
 import { resolveRuntimePackage } from "../../scripts/browser-build";
 import { restorePackedBun } from "./prepare-flow";
 import type { PreparationFlow } from "./prepare-flow";
@@ -40,14 +40,14 @@ async function installedNetworkHash(installation: string) {
 }
 function wafflePeer(value: unknown): string {
   assert.ok(typeof value === "string", "Set exact Waffle peer");
-  assert.ok(value === release.url || /^git\+https:\/\/github\.com\/ShaulLavo\/waffle\.git#[a-f0-9]{40}$/.test(value), "Waffle peer must be the checked release or an exact historical Git package");
+  assert.ok(value === waffleRuntimePin || /^git\+https:\/\/github\.com\/ShaulLavo\/waffle\.git#[a-f0-9]{40}$/.test(value), "Waffle peer must be the checked release or an exact historical Git package");
   return value;
 }
 export function waffleCommits(environment: NodeJS.ProcessEnv, peer?: string): WaffleCommits {
   const shellCommit = fullCommit(environment.SHELL_PRODUCT_SHELL_COMMIT, "SHELL_PRODUCT_SHELL_COMMIT");
   const requested = environment.SHELL_PRODUCT_WAFFLE_COMMIT === undefined ? undefined : fullCommit(environment.SHELL_PRODUCT_WAFFLE_COMMIT, "SHELL_PRODUCT_WAFFLE_COMMIT");
-  const selectedPeer = wafflePeer((peer === "*" ? release.url : peer) ?? (requested ? `git+https://github.com/ShaulLavo/waffle.git#${requested}` : release.url));
-  const wafflePeerCommit = selectedPeer === release.url ? release.sourceCommit : selectedPeer.slice(selectedPeer.lastIndexOf("#") + 1);
+  const selectedPeer = wafflePeer((peer === "*" ? waffleRuntimePin : peer) ?? (requested ? `git+https://github.com/ShaulLavo/waffle.git#${requested}` : waffleRuntimePin));
+  const wafflePeerCommit = selectedPeer === waffleRuntimePin ? release.sourceCommit : selectedPeer.slice(selectedPeer.lastIndexOf("#") + 1);
   if (requested) assert.equal(requested, wafflePeerCommit, "Requested Waffle commit must match the exact package peer source");
   const waffleHostCommit = fullCommit(environment.SHELL_PRODUCT_WAFFLE_HOST_COMMIT ?? wafflePeerCommit, "SHELL_PRODUCT_WAFFLE_HOST_COMMIT");
   return { wafflePeer: selectedPeer, shellCommit, wafflePeerCommit, waffleHostCommit };
@@ -67,7 +67,7 @@ export function waffleSourceRoot(repository: string, commit: string, gitPeer = f
   }
   assert.ok(!gitPeer, "A monorepo Git root is not an installable Waffle peer; use the published release archive");
   const child = gitMetadata(repository, `${commit}:packages/waffle/package.json`);
-  assert.ok(isRecord(child) && child.name === "waffle" && child.workspaces === undefined, "Invalid Waffle source package");
+  assert.ok(isRecord(child) && child.name === waffleRuntimeName && child.workspaces === undefined, "Invalid Waffle source package");
   assertSelectedHostInterface(child, `${commit}:packages/waffle/package.json`);
   return "packages/waffle";
 }
@@ -106,15 +106,16 @@ function installedWaffleEntries(lock: unknown, specifier: string): [string, stri
   assert.ok(Array.isArray(runtime) && typeof runtime[0] === "string", "Missing runtime lock entry");
   const git = /^waffle@github:ShaulLavo\/waffle#([a-f0-9]{7,40})$/.exec(runtime[0]);
   const exactGit = specifier.startsWith("git+") && git?.[1] && specifier.slice(-40).startsWith(git[1]);
-  assert.ok(runtime[0] === `waffle@${specifier}` || exactGit, "Runtime lock identity must match its exact selected edge");
+  const exactNpm = specifier === waffleRuntimePin && runtime[0] === `${waffleRuntimeName}@${release.version}`;
+  assert.ok(exactNpm || exactGit || (specifier.startsWith("git+") && runtime[0] === `waffle@${specifier}`), "Runtime lock identity must match its exact selected edge");
   const selected: [string, string][] = [];
   for (const [key, entry] of Object.entries(lock.packages)) {
     assert.ok(Array.isArray(entry) && typeof entry[0] === "string", `Invalid installed lock entry ${key}`);
-    const name = /^(waffle(?:-[a-z0-9-]+)?|@waffle\/[a-z0-9-]+)@/.exec(entry[0])?.[1];
+    const name = /^(waffle(?:-[a-z0-9-]+)?|@waffle\/[a-z0-9-]+|@waffle-os\/runtime)@/.exec(entry[0])?.[1];
     if (name) selected.push([key, name]);
     else assert.ok(!/(?:^|\/)waffle$/.test(key), "Invalid runtime lock identity");
   }
-  assert.deepEqual(selected.filter(([, name]) => name === "waffle").map(([key]) => key), ["waffle"], "One runtime lock entry");
+  assert.deepEqual(selected.filter(([, name]) => name === "waffle" || name === waffleRuntimeName).map(([key]) => key), ["waffle"], "One runtime lock entry");
   return selected;
 }
 
@@ -132,12 +133,12 @@ export async function assertInstalledWaffle(installation: string, selected: stri
   const runtime = join(installation, "node_modules/waffle/package.json");
   const metadata: unknown = await Bun.file(runtime).json();
   const provided = assertSelectedHostInterface(metadata, "Installed Waffle");
-  assert.ok(isRecord(metadata) && metadata.name === "waffle", "Installed Waffle identity");
-  if (selected === release.url) assert.equal(metadata.version, release.version, "Selected Waffle release version");
+  assert.ok(isRecord(metadata) && metadata.name === (selected === waffleRuntimePin ? waffleRuntimeName : "waffle"), "Installed Waffle identity");
+  if (selected === waffleRuntimePin) assert.equal(metadata.version, release.version, "Selected Waffle release version");
   const packages = installedWaffleEntries(Bun.JSONC.parse(await readFile(join(installation, "bun.lock"), "utf8")), selected);
   const physical = await realpath(runtime);
   for (const [key, name] of packages.concat([["bash-web", "bash-web"], ["bun-wasm", "bun-wasm"]])) {
-    if (name === "waffle") continue;
+    if (name === "waffle" || name === waffleRuntimeName) continue;
     await assertInstalledPackage(lockPackageDirectory(installation, key), name, selected, physical, provided);
   }
   return provided;
@@ -149,7 +150,7 @@ export async function stageReleasedWaffle(flow: PreparationFlow, options: { peer
   flow.check();
   await restorePackedBun(flow, options);
   const metadata: unknown = await Bun.file(join(options.destination, "package.json")).json();
-  assert.ok(isRecord(metadata) && metadata.name === "waffle" && metadata.version === release.version, "Invalid released Waffle package");
+  assert.ok(isRecord(metadata) && metadata.name === waffleRuntimeName && metadata.version === release.version, "Invalid released Waffle package");
   assertSelectedHostInterface(metadata, options.destination);
 }
 export async function writeWaffleSelection(installation: string, commits: WaffleCommits) {

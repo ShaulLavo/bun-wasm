@@ -15,7 +15,7 @@ import { qualificationCases, assertCaseContext, assertPgResult } from "./tls-qua
 import { qualificationFixture, type FixtureOverrides, type TlsFixture } from "./tls-qualification-fixture.ts";
 import { handoffMemberPaths, tlsPagePaths } from "./producer-closure.ts";
 import { DELIVERY_RECORDS, type InputManifest } from "./c1/contract.ts";
-import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE } from "./c1/contract-fixture.ts";
+import { FIXTURE_TLS_OPTIONS, FIXTURE_TUPLE, fixtureArchives } from "./c1/contract-fixture.ts";
 import { fileIdentity } from "./c1/identity.ts";
 import { UNRESOLVED_RELAY } from "./c1/tls-page.ts";
 import { PgWireAudit, piLane, stderrTail } from "../web/tests/tls-relay-services.ts";
@@ -77,7 +77,7 @@ function withTls(change: (value: Extract<InputManifest["consumers"]["tls"], { st
     return { ...inputs, consumers: { ...inputs.consumers, tls: { status: "resolved", value: { ...tls.value, ...change(tls.value, dirname(tls.value.pgTarball.path)) } } } };
   };
 }
-const paths = handoffMemberPaths();
+const paths = handoffMemberPaths(fixtureArchives(tlsReleaseTuple));
 const other = { head: "c".repeat(40), tree: "d".repeat(40) };
 
 describe("strict controller intake before setup", () => {

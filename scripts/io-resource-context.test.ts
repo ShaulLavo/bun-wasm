@@ -236,14 +236,14 @@ afterEach(() => {
 function syntheticHandoff() {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-iorc-schema-"));
   schemaRoots.push(root);
-  const files = writeContractFixture(join(root, "records"), fixtureTuple);
+  const files = writeContractFixture(join(root, "records"), fixtureTuple, "npm");
   const pinned = readFiveOwnerHandoff(files.handoff, fileIdentity(files.handoff).sha256);
   return { ...files, pinned, root };
 }
 
 // The shared consumer fixture supplies consistent config/input copies and a clean synthetic Git tree.
 async function syntheticSource() {
-  const f = await qualificationFixture({}, fixtureTuple);
+  const f = await qualificationFixture({ archiveRegistry: "npm" }, fixtureTuple);
   schemaRoots.push(f.root);
   return { ...f, pinned: readFiveOwnerHandoff(f.handoff, fileIdentity(f.handoff).sha256) };
 }

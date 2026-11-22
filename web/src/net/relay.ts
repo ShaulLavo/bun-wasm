@@ -49,7 +49,7 @@ async function createRuntimeRelay(
       stop: () => close(),
     });
     const { onCarrier, ...clientOptions } = options;
-    const { createRelayConnect } = await import("waffle-relay");
+    const { createRelayConnect } = await import("@waffle-os/relay");
     if (closed || runtime.disposed) throw new Error("Runtime relay is disposed");
     const connected = createRelayConnect(clientOptions);
     client = {

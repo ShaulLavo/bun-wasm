@@ -3,11 +3,11 @@ import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 
 import { dirname, join, resolve } from "node:path";
 import { completePublicationArtifactPaths, executableMemberPaths } from "../producer-closure.ts";
 import {
-  DELIVERY_RECORDS, DONOR_NAMES, TOOL_NAMES, parseDelivery, type C1Config, type ConsumerDependencies, type ConsumerHandoff, type FileIdentity, type InputManifest, type ParentIntake,
+  DELIVERY_RECORDS, DELIVERY_STATUS, DONOR_NAMES, TOOL_NAMES, parseDelivery, type C1Config, type ConsumerDependencies, type ConsumerHandoff, type DeliveryManifest, type FileIdentity, type InputManifest, type ParentIntake,
   type ReleaseTuple, type SourceIdentity, type TlsFixtureOptions, type TreeIdentity,
 } from "./contract.ts";
 import type { LoadedObservation } from "./loaded.ts";
-import { admitIntake, buildHandoff, readSealedDelivery, sealDelivery } from "./delivery.ts";
+import { admitIntake, buildHandoff, deliveryMembers, readSealedDelivery, sealTree, type SealFacts } from "./delivery.ts";
 import { fileIdentity, sha256, treeIdentity } from "./identity.ts";
 import { HARNESS_TARGET_BRANCH, HOST_TOOL_NAMES, NOT_RERUN, type HostTool, type HostToolName, type HostTools, type HarnessIdentity, type ReplayContract, type ReplayRoots } from "./replay.ts";
 
@@ -34,8 +34,17 @@ function payload(path: string): string | Uint8Array {
   if (path.endsWith(".gz")) return Bun.gzipSync(new TextEncoder().encode(`fixture ${path.slice(0, -3)}\n`));
   return path.endsWith(".json") ? `${JSON.stringify({ fixture: path })}\n` : `fixture ${path}\n`;
 }
-export function writeFixtureDelivery(root: string): void {
-  for (const path of completePublicationArtifactPaths().concat(["split/web/worker.js"])) write(join(root, path), payload(path));
+export function fixtureArchives({ runtime, relay }: ReleaseTuple, registry: "GitHub" | "npm" = "GitHub") {
+  if (registry === "npm") return { runtimeArchive: `runtime/runtime-${runtime}.tgz`, relayArchive: `relay/relay-${relay}.tgz` };
+  return { runtimeArchive: `runtime/waffle-${runtime}.tgz`, relayArchive: `relay/waffle-relay-${relay}.tgz` };
+}
+export function writeFixtureDelivery(root: string, archives: ReturnType<typeof fixtureArchives>): void {
+  for (const path of completePublicationArtifactPaths(archives).concat(["split/web/worker.js"])) write(join(root, path), payload(path));
+}
+export function sealFixtureDelivery(root: string, facts: SealFacts): FileIdentity {
+  const files = deliveryMembers(root);
+  const manifest: DeliveryManifest = { schema: "bun-wasm.c1-delivery/1", status: DELIVERY_STATUS, ...facts, files, parentByteIntake: null, consumerAcceptance: null, deployment: null };
+  return sealTree(root, "DELIVERY.json", manifest, files);
 }
 function fixtureFile(root: string, name: string): FileIdentity {
   write(join(root, name), `fixture input ${name}\n`);
@@ -182,7 +191,7 @@ export interface SealedFixture { readonly inputsPath: string; readonly configPat
  * config names, under `root` (which must not exist). `beforeSeal` may change
  * payload files before the single seal.
  */
-export function writeSealedFixture(root: string, beforeSeal: (deliveryRoot: string) => void = () => {}, tuple: ReleaseTuple = FIXTURE_TUPLE): SealedFixture {
+export function writeSealedFixture(root: string, beforeSeal: (deliveryRoot: string) => void = () => {}, tuple: ReleaseTuple = FIXTURE_TUPLE, registry: "GitHub" | "npm" = "GitHub"): SealedFixture {
   mkdirSync(root, { mode: 0o700 });
   const inputsPath = join(root, "inputs.json");
   const inputsBytes = JSON.stringify(fixtureInputManifest(join(root, "input-files"), tuple), null, 2) + "\n";
@@ -192,15 +201,15 @@ export function writeSealedFixture(root: string, beforeSeal: (deliveryRoot: stri
   const configBytes = JSON.stringify(config, null, 2) + "\n";
   write(configPath, configBytes);
   const deliveryRoot = join(config.roots.run.artifact, "delivery");
-  writeFixtureDelivery(deliveryRoot);
+  writeFixtureDelivery(deliveryRoot, fixtureArchives(tuple, registry));
   const records = writeFixtureRecords(deliveryRoot, configBytes, inputsBytes);
   beforeSeal(deliveryRoot);
-  const identity = sealDelivery(deliveryRoot, { source: FIXTURE_SOURCE, tuple, ...records });
+  const identity = sealFixtureDelivery(deliveryRoot, { source: FIXTURE_SOURCE, tuple, ...records });
   return { inputsPath, configPath, config, deliveryRoot, identity };
 }
 /** Build every contract file under `root`, which must not exist yet. */
-export function writeContractFixture(root: string, tuple: ReleaseTuple = FIXTURE_TUPLE): ContractFixture {
-  const { inputsPath, configPath, config, deliveryRoot, identity } = writeSealedFixture(root, undefined, tuple);
+export function writeContractFixture(root: string, tuple: ReleaseTuple = FIXTURE_TUPLE, registry: "GitHub" | "npm" = "GitHub"): ContractFixture {
+  const { inputsPath, configPath, config, deliveryRoot, identity } = writeSealedFixture(root, undefined, tuple, registry);
   const delivery = readSealedDelivery(deliveryRoot);
   const intake: ParentIntake = { schema: "bun-wasm.c1-intake/1", kind: "independent-parent-byte-admission", owner: "fixture parent", at: "2026-11-05T00:00:00.000Z",
     deliveryRoot, delivery: identity, source: FIXTURE_SOURCE, tuple, members: delivery.manifest.files.length, admitted: true };

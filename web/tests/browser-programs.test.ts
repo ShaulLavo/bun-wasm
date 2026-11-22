@@ -9,8 +9,7 @@ import { createWorkerProcessTransport, WorkerProcessClient, type WorkerProcessMe
 import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
 import { createWorkerPipeCodec } from "waffle/proc/worker-pipes";
 import { BrowserPrograms } from "../src/browser-programs";
-import release from "../../scripts/waffle-release-inputs.json";
-import { assertExactHostInterface, packageHostInterface } from "../../scripts/waffle-release-inputs";
+import { assertExactHostInterface, packageHostInterface, waffleRuntimeName, waffleRuntimePin } from "../../scripts/waffle-release-inputs";
 import { assertWafflePeer } from "../../tests/shell-product/waffle-stage";
 
 const urls = {
@@ -29,9 +28,9 @@ async function packageRoot(entry: string): Promise<string> {
   return directory;
 }
 
-async function physicalRuntime(name: string, scope = import.meta.dir): Promise<string> {
+async function physicalRuntime(name: string, scope = import.meta.dir, runtimeName = "waffle"): Promise<string> {
   const root = await packageRoot(Bun.resolveSync(name, scope));
-  return realpath(Bun.resolveSync("waffle/package.json", join(root, "package.json")));
+  return realpath(Bun.resolveSync(`${runtimeName}/package.json`, join(root, "package.json")));
 }
 
 async function consumerRoot(runtime: Runtime) {
@@ -173,8 +172,8 @@ test("closing during installation removes its markers and refuses a late ready r
   });
 });
 
-test("base families and Bun resolve one physical Waffle package", async () => {
-  const expected = release.url;
+test("base families, Bash, Bun and relay resolve one physical Waffle package", async () => {
+  const expected = waffleRuntimePin;
   const physical = await physicalRuntime("waffle");
   const baseEntry = Bun.resolveSync("waffle-base", import.meta.dir);
   const baseRoot = await packageRoot(baseEntry);
@@ -182,6 +181,7 @@ test("base families and Bun resolve one physical Waffle package", async () => {
   for (const name of ["waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed"])
     await assertPackageRuntime(name, join(baseRoot, "package.json"), physical, expected);
   await assertPackageRuntime("bash-web", import.meta.dir, physical, expected);
+  expect(await physicalRuntime("@waffle-os/relay", import.meta.dir, waffleRuntimeName)).toBe(physical);
 });
 
 async function assertPackageRuntime(name: string, scope: string, physical: string, expectedPeer: string) {
