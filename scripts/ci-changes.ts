@@ -88,7 +88,7 @@ export const sharedNativeFiles: ReadonlySet<string> = new Set([
   "web/src/runner.ts", "web/src/worker.ts", "web/src/worker-main.ts", "web/src/early-instance.ts", "web/src/subprocess-broker.ts", "web/src/memory-telemetry.ts",
   "web/src/net/trampoline.ts", "web/src/engine-loader.ts", "web/src/preview1-worker.ts",
   "web/src/program-profile.ts", "web/src/playground/playground.ts", "sandbox/src/sandbox.ts",
-  "scripts/stage-program-profiles.ts", "web/tests/explicit-profile-browser.ts", "web/build.ts", "sandbox/build.ts",
+  "scripts/stage-program-profiles.ts", "scripts/stage-guest-wasm.ts", "web/tests/explicit-profile-browser.ts", "web/build.ts", "sandbox/build.ts",
   "web/src/fs-worker.ts", "web/src/notification-worker.ts", "src/assets.ts", "src/program-memory.ts",
   "src/bun-adapter.ts", "src/process-runtime.ts", "src/executable-paths.ts", "src/guest-asset.generated.ts", "src/shared-objects.ts",
   "scripts/browser-build.ts", "scripts/base-program-build.ts", "scripts/bash-web-guests.ts", "scripts/bash-web-release-inputs.json", "web/package.json", "web/bun.lock",

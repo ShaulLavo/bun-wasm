@@ -67,9 +67,10 @@ test("the build recipe ships the stripped guest and the shipping paths check it"
   expect(strip).toBeGreaterThan(named);
   expect(check).toBeGreaterThan(strip);
   expect(receipt).toBeGreaterThan(check);
-  for (const path of ["../web/build.ts", "../sandbox/build.ts", "./guest-acceptance.ts", "./ci-browser-program.ts", "./site-guest-preflight.ts"]) {
+  for (const path of ["./stage-guest-wasm.ts", "./guest-acceptance.ts", "./ci-browser-program.ts", "./site-guest-preflight.ts"]) {
     expect(source(path)).toContain("assertShippedGuestHasNoNames(");
   }
+  for (const path of ["../web/build.ts", "../sandbox/build.ts"]) expect(source(path)).toContain("stageGuestWasm(");
 });
 
 test("the public site never sees the profiling override", () => {
