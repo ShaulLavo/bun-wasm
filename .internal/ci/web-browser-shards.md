@@ -6,8 +6,9 @@ below was retired on November 14 under the owner's outcome-first test rule.
 ## Current hang policy
 
 Every discovered batch receives the same five-minute command hang cap, including
-new batches and the default batch. The ten-minute job still includes setup and
-cleanup. `scripts/ci-web-browser-shards.ts` contains no measured-limit mapping.
+new batches and the default batch. Jobs have ten minutes for a single batch or
+fifteen minutes for two batches, including setup and cleanup.
+`scripts/ci-web-browser-shards.ts` lists the pairs.
 Bun's normal reporter records durations, and the existing command supervisor
 preserves nonzero outcomes, process-tree diagnostics, interruption and descendant
 cleanup. Individual test and hook caps are separate and remain unchanged here.
@@ -127,7 +128,7 @@ test deadlines, allocation or the aggregate guard.
 Source `env.sh`, then run each name from
 `bun scripts/test-checks.ts web-browser --batches` through
 `bun scripts/run-with-timeout.mts 300 bun scripts/test-checks.ts web-browser --batch NAME`.
-Use `bun scripts/ci-web-browser-shards.ts` for the current CI matrix and hang caps.
+Use `bun scripts/ci-web-browser-shards.ts` for the current matrix and command hang cap.
 Run browser commands through the heavy runner on the PC. Use a fresh short
 `/work/tmp/bws-*` directory for `TMPDIR`, with an EXIT trap that removes it after
 the owned command and browser processes stop.

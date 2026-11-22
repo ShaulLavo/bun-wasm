@@ -316,7 +316,7 @@ test("cumulative admission preserves the blocking job graph, browser matrix and 
     "shared-proof": { needs: ["selection", "ordinary-web-guests", "quality", "rust", "shared-prebuild", "shared-spidermonkey-prebuild", "shared-sysroot", "shared-consumers"], minutes: 5 },
     web: { needs: ["selection", "web-unit", "web-browser"], minutes: 10 },
     "web-unit": { needs: "selection", minutes: 10 },
-    "web-browser": { needs: "selection", minutes: 10 },
+    "web-browser": { needs: "selection", minutes: "${{ matrix.pairedBatch != '' && 15 || 10 }}" },
     "process-bundles": { needs: "selection", minutes: 10 },
     "browser-guest": { needs: ["selection", "ordinary-web-guests", "rust", "browser-production"], minutes: "${{ startsWith(matrix.batch, '2') && 60 || 10 }}" },
     "browser-process": { needs: ["selection", "ordinary-web-guests", "rust", "browser-production", "process-bundles", "browser-guest"], minutes: 10 },

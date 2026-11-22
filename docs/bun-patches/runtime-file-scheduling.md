@@ -3,9 +3,10 @@
 Classification: original adapter. There is no copied or adapted upstream implementation.
 
 `scripts/runtime-file-checks.ts` extends the manifest runner with an explicit
-two-process runtime option. It keeps unclassified files together, then dispatches
-only files whose runtime manifest opts into process isolation. This permits private
-native controls to overlap without sharing writable Cargo targets or engine outputs.
+two-process runtime option. One queue entry holds the unclassified files in their
+original order. Each runtime manifest that opts into process isolation gets its own
+entry. The first two entries start together, so private native controls can run
+beside the serial group without sharing writable Cargo targets or engine outputs.
 
 JSC JSON reads the launcher and guest and writes a fresh directory per invocation.
 Wasm tables owns its source crate, Cargo target, WAT outputs, FIFOs and bridge process

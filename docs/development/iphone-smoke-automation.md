@@ -61,6 +61,37 @@ failure or cancellation. Native-command failure, deadline or lost ownership stop
 all further input and leaves cleanup unproved. The Mac server-only wrapper cannot
 restore Safari through SSH or simctl. Its receipt covers server teardown only.
 
+## Prepare the build on the PC
+
+Use the same build checkout path for every scheduled attempt. The pinned
+sccache hashes the Rust compiler's working directory and Cargo target paths,
+so changing either path prevents reuse. The build slot creates a fresh
+checkout of the scheduled commit and removes it after the preparation command
+exits. A lock prevents concurrent attempts from using the same slot.
+The adjacent `.lock` file stays in place between builds.
+
+From a checkout containing the build slot script, run the attempt's preparation
+script in the slot. Set `revision` to the full scheduled commit and
+`attempt_build` to the absolute path of that script.
+
+```sh
+bun /work/heavy-runner/current/run.js --host local --class build "iphone-smoke-$revision" -- \
+  env -u BUN_WASM_SYSROOT -u BUN_WASM_SHARED_SYSROOT \
+  bun scripts/iphone-smoke-build-slot.ts /work/worktrees/bun-wasm/iphone-smoke-build "$revision" -- \
+  bash scripts/with-build-cache.sh bash "$attempt_build"
+```
+
+In the preparation script, use the current checkout and the supplied
+`CARGO_TARGET_DIR`, `BROWSER_CARGO_TARGET_DIR`, `TOOLS_CARGO_TARGET_DIR` and
+`TMPDIR`. Put the generated shared sysroot and QuickJS group under
+`IPHONE_SMOKE_BUILD_DIR`. Stage the prepared root and logs outside the slot
+before exiting. The cache wrapper starts and stops its own sccache server and
+prints its statistics in the build log.
+
+The device controller uses a separate checkout of the scheduled commit for its
+runtime source checks. If a build is killed and leaves its checkout behind,
+audit the stopped build before removing that checkout with `git worktree remove`.
+
 ## Queue and reports
 
 The default report directory is `/work/reports/goals/iphone-smoke`. Every command

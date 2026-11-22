@@ -121,7 +121,14 @@ test("native job budgets and names stay unchanged beside the lightweight update 
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    selection: 5, quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, "browser-production": 60, "ordinary-web-guests": 20, package: 10, "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30, "shared-consumers": "${{ matrix.native && matrix.browser && 60 || 30 }}", "shared-proof": 5, web: 10, "web-unit": 10, "web-browser": 10, "process-bundles": 10, "browser-guest": "${{ startsWith(matrix.batch, '2') && 60 || 10 }}", "browser-process": 10, "ci-result": 5, "update-status": 5,
+    selection: 5, quality: 10, "jsc-identity": 15, "jsc-prebuild": 45, "native-quality": 45, rust: 60, "browser-production": 60, "ordinary-web-guests": 20, package: 10,
+    "shared-jsc-identity": 15, "shared-prebuild": 45, "shared-spidermonkey-prebuild": 30, "shared-sysroot": 30,
+    "shared-consumers": "${{ matrix.native && matrix.browser && 60 || 30 }}",
+    "shared-proof": 5, web: 10, "web-unit": 10,
+    "web-browser": "${{ matrix.pairedBatch != '' && 15 || 10 }}",
+    "process-bundles": 10,
+    "browser-guest": "${{ startsWith(matrix.batch, '2') && 60 || 10 }}",
+    "browser-process": 10, "ci-result": 5, "update-status": 5,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({

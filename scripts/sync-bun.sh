@@ -57,7 +57,9 @@ patches=("$root"/patches/bun/*.patch)
 # Importing a patch needs a committer even in a clean CI checkout. Keep the
 # identity local to this command; git am still reads each patch's author.
 apply_source_patches() {
-  git -C "$1" -c user.name="bun-wasm source sync" -c user.email="source-sync@bun-wasm.invalid" am "${patches[@]}"
+  # Bun's codegen embeds HEAD in Rust source, so the patch commits must repeat.
+  git -C "$1" -c user.name="bun-wasm source sync" -c user.email="source-sync@bun-wasm.invalid" \
+    am --committer-date-is-author-date "${patches[@]}"
 }
 if [[ "$new_checkout" == 1 && ${#patches[@]} -gt 0 ]]; then
   apply_source_patches "$bun_dir"

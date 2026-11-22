@@ -30,14 +30,14 @@ function execute(command: readonly string[], env = process.env): Promise<number>
 
 // No process control here: the existing supervisor owns this worker and every descendant.
 export async function dispatchRuntime(plan: ReturnType<typeof runtimePlan>, run = (paths: readonly string[]) => execute(checkCommand("runtime", paths))): Promise<number> {
-  const serial = plan.serial.length ? await run(plan.serial) : 0;
-  if (serial !== 0) return serial;
+  const serial = plan.serial.length ? [plan.serial] : [];
+  const batches = serial.concat(plan.isolated.map(path => [path]));
   let next = 0;
   let failure = 0;
   async function worker(): Promise<void> {
-    while (failure === 0 && next < plan.isolated.length) {
-      const paths = plan.isolated.slice(next, next + 1);
-      next++;
+    while (failure === 0) {
+      const paths = batches[next++];
+      if (paths === undefined) return;
       const status = await run(paths);
       failure ||= status;
     }
