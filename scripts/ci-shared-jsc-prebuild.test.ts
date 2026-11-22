@@ -1,11 +1,11 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { excludedJscSentinels, excludedSharedSentinels, seedJscArtifact } from "./fixtures/jsc-artifact";
+import { seedJscArtifact } from "./fixtures/jsc-artifact";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -18,18 +18,14 @@ function job(id: string): string {
   return body.split(/\n  [\w-]+:\n/)[0]!;
 }
 
-test("shared C++ production starts independently of Rust and has one owner outside the bounded consumer", () => {
-  const producer = job("shared-prebuild");
-  const consumer = job("shared-sysroot");
-  expect(producer).toContain("needs: [selection, shared-jsc-identity]");
+test("shared C++ production starts independently of Rust inside the single bounded shared-sysroot producer", () => {
+  const producer = job("shared-sysroot");
+  expect(producer).toContain("needs: selection");
   expect(producer).not.toContain("needs.rust");
-  expect(producer).toContain("timeout-minutes: 45");
-  expect(consumer).toContain("needs: [selection, shared-prebuild, shared-spidermonkey-prebuild]");
-  expect(consumer).toContain("timeout-minutes: 30");
+  expect(producer).toContain("timeout-minutes: 55");
   expect(producer).toContain("JSC_PROFILE=shared-group bash scripts/build-jsc.sh");
-  expect(consumer).not.toContain("bash scripts/build-jsc.sh");
-  expect(consumer).not.toContain("id: shared-sysroot-cache");
-  expect(consumer).not.toContain("id: shared-jsc-cache");
+  expect(producer).toContain("id: shared-sysroot-cache");
+  expect(producer).toContain("id: shared-jsc-cache");
   expect(workflow.match(/JSC_PROFILE=shared-group bash scripts\/build-jsc.sh/g)).toHaveLength(1);
 });
 
@@ -49,11 +45,9 @@ function command(id: string, name: string): string {
 }
 
 const buildName = "Build or verify the shared JSC prebuild";
-const packageName = "Package the verified shared prebuild and sysroot";
-const importName = "Import the verified shared prebuild and sysroot";
 
-test("the producer keeps the old exact cache identity and validates warm bytes before saving", () => {
-  const producer = steps("shared-prebuild");
+test("the producer keeps the exact cache identity and validates warm bytes before saving", () => {
+  const producer = steps("shared-sysroot");
   const cache = producer.find(item => item.id === "shared-jsc-cache");
   expect(cache?.with).toEqual({
     path: "${{ runner.temp }}/jsc/shared",
@@ -62,44 +56,41 @@ test("the producer keeps the old exact cache identity and validates warm bytes b
   const verify = producer.findIndex(item => item.name === buildName);
   const save = producer.findIndex(item => item.name === "Save the shared JSC prebuild");
   expect(save).toBeGreaterThan(verify);
-  expect(producer.findIndex(item => item.name === packageName)).toBeGreaterThan(save);
-  expect(producer[save]?.if).toBe("${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-jsc-producer.outputs.jsc-ready == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}");
-  expect(command("shared-prebuild", buildName)).toContain("check_jsc_inputs_stamp");
-  expect(job("shared-prebuild")).not.toMatch(/test-checks|test-shared-sysroot|build-native-profile|rust-toolchain/);
+  expect(producer[save]?.if).toBe("${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.selection.outputs.shared-native == 'true' && steps.shared-jsc-prebuild.outputs.jsc-ready == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}");
+  expect(command("shared-sysroot", buildName)).toContain("check_jsc_inputs_stamp");
+  expect(producer.find(item => item.id === "shared-binaryen")?.with).toEqual({
+    path: "${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz",
+    key: "binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}",
+  });
 });
 
 type Fixture = ReturnType<typeof fixture>;
 
-function fixture(sharedNative: "true" | "false") {
+function fixture() {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-shared-handoff-"));
   const repo = join(root, "repo");
   const temp = join(root, "temp");
   const prebuild = join(temp, "jsc/shared");
   const sysroot = join(temp, "bun-wasm-shared-sysroot");
-  const bin = join(root, "bin");
   mkdirSync(join(repo, "jsc"), { recursive: true });
   mkdirSync(join(repo, "scripts"));
-  mkdirSync(bin);
   mkdirSync(temp);
   copyFileSync(new URL("../env.sh", import.meta.url), join(repo, "env.sh"));
-  copyFileSync(new URL("./ci-jsc-artifact.ts", import.meta.url), join(repo, "scripts/ci-jsc-artifact.ts"));
-  // Only expensive build/input verification is substituted. Transport runs the workflow's real shell.
   writeFileSync(join(repo, "jsc/common.sh"), [
-    'check_jsc_inputs_stamp() {',
+    "check_jsc_inputs_stamp() {",
     '  echo verify >> "$CALLS"',
     '  test "$(cat "$JSC_BUILD_DIR/inputs-stamp")" = "$EXPECTED_INPUTS"',
     '  (cd "$JSC_BUILD_DIR" && sha256sum --check --strict artifacts)',
-    '}', "",
+    "}", "",
   ].join("\n"));
   writeFileSync(join(repo, "scripts/build-jsc.sh"), 'echo compile >> "$CALLS"\nprintf expected > "$JSC_BUILD_DIR/inputs-stamp"\n');
-  writeFileSync(join(bin, "bun"), `#!/bin/bash\nset -euo pipefail\nif [[ "$1" == scripts/ci-jsc-artifact.ts ]]; then exec '${process.execPath}' "$@"; fi\ntest "$*" = "scripts/build-wasi-sysroot.ts --shared-pic"\necho sysroot-verify >> "$CALLS"\ntest "$(cat "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json")" = "$EXPECTED_SYSROOT"\n`, { mode: 0o755 });
   const env = {
-    ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: root,
+    ...process.env, HOME: root,
     RUNNER_TEMP: temp, WASM_TOOLS: join(temp, "wasm-tools"), TMPDIR: temp,
     BUN_WASM_SHARED_SYSROOT: sysroot, BUN_WASM_SYSROOT: sysroot, JSC_BUILD_DIR: prebuild,
-    GITHUB_RUN_ID: "4200", GITHUB_SHA: "a".repeat(40), GITHUB_OUTPUT: join(root, "outputs"),
-    SHARED_NATIVE: sharedNative, JSC_PROFILE: "shared-group", JOBS: "2", CAGE: "",
-    EXPECTED_INPUTS: "expected", EXPECTED_SYSROOT: "expected-sysroot", CALLS: join(root, "calls"),
+    GITHUB_OUTPUT: join(root, "outputs"),
+    JSC_PROFILE: "shared-group", JOBS: "4", CAGE: "",
+    EXPECTED_INPUTS: "expected", CALLS: join(root, "calls"),
   };
   return { root, repo, temp, prebuild, sysroot, env };
 }
@@ -108,10 +99,6 @@ function seed(h: Fixture) {
   mkdirSync(join(h.sysroot, "lib/wasm32-wasip1"), { recursive: true });
   writeFileSync(join(h.sysroot, "lib/wasm32-wasip1/libc.a"), "libc");
   writeFileSync(join(h.sysroot, "bun-wasm-sysroot.json"), "expected-sysroot");
-  mkdirSync(join(h.sysroot, "include"));
-  symlinkSync(h.env.WASM_TOOLS, join(h.sysroot, "include/absolute-sdk-link"));
-  symlinkSync("../lib", join(h.sysroot, "include/sdk-link"));
-  if (h.env.SHARED_NATIVE !== "true") return;
   mkdirSync(h.prebuild, { recursive: true });
   seedJscArtifact(h.prebuild, true);
   writeFileSync(join(h.prebuild, "libJavaScriptCore.a"), "archive\0bytes", { mode: 0o640 });
@@ -128,190 +115,42 @@ function bash(h: Fixture, script: string, env: Record<string, string> = {}) {
   });
 }
 
-function withFixture(sharedNative: "true" | "false", body: (h: Fixture) => void) {
-  const h = fixture(sharedNative);
+function withFixture(body: (h: Fixture) => void) {
+  const h = fixture();
   try { body(h); }
   finally { rmSync(h.root, { recursive: true, force: true }); }
 }
 
-function pack(h: Fixture): string {
-  const result = bash(h, command("shared-prebuild", packageName));
-  expect(result.status, result.stderr).toBe(0);
-  const digest = readFileSync(h.env.GITHUB_OUTPUT, "utf8").trim().split("=")[1];
-  assert(digest);
-  const transfer = join(h.temp, "shared-prebuild-transfer");
-  mkdirSync(transfer);
-  renameSync(join(h.temp, "shared-prebuild.tar"), join(transfer, "shared-prebuild.tar"));
-  rmSync(join(h.temp, "shared-prebuild-artifact"), { recursive: true });
-  rmSync(h.sysroot, { recursive: true });
-  rmSync(h.prebuild, { recursive: true, force: true });
-  return digest;
-}
-
-function consume(h: Fixture, digest: string, env: Record<string, string> = {}) {
-  return bash(h, command("shared-sysroot", importName), { SHARED_PREBUILD_MANIFEST_SHA256: digest, ...env });
-}
-
-function consumeSpiderMonkeySysroot(h: Fixture, digest: string, env: Record<string, string> = {}) {
-  return bash(h, command("shared-spidermonkey-prebuild", "Import only the verified shared sysroot for SpiderMonkey"),
-    { SHARED_PREBUILD_MANIFEST_SHA256: digest, ...env });
-}
-
-test("the SM library imports the same verified sysroot without unpacking or building JSC", () => withFixture("true", h => {
-  seed(h);
-  const digest = pack(h);
-  const result = consumeSpiderMonkeySysroot(h, digest);
-  expect(result.status, result.stderr).toBe(0);
-  expect(readFileSync(join(h.sysroot, "lib/wasm32-wasip1/libc.a"), "utf8")).toBe("libc");
-  expect(readlinkSync(join(h.sysroot, "include/absolute-sdk-link"))).toBe(h.env.WASM_TOOLS);
-  expect(existsSync(h.prebuild)).toBe(false);
-  expect(readFileSync(h.env.CALLS, "utf8")).toBe("sysroot-verify\n");
-}));
-
-const smWrongSourceCases: Record<string, string>[] = [
-  { GITHUB_RUN_ID: "other" }, { GITHUB_SHA: "b".repeat(40) }, { SHARED_PREBUILD_MANIFEST_SHA256: "" },
-];
-for (const env of smWrongSourceCases) {
-  test(`the SM sysroot import rejects ${Object.keys(env)[0]} mismatch before extracting`, () => withFixture("true", h => {
-    seed(h);
-    const digest = pack(h);
-    expect(consumeSpiderMonkeySysroot(h, digest, env).status).not.toBe(0);
-    expect(existsSync(h.sysroot)).toBe(false);
-    expect(existsSync(h.prebuild)).toBe(false);
-  }));
-}
-
 for (const hit of ["false", "true"]) {
-  test(`cache hit=${hit} runs the producer verifier and compiles only on a miss`, () => withFixture("true", h => {
+  test(`cache hit=${hit} runs the producer verifier and compiles only on a miss`, () => withFixture(h => {
     seed(h);
     if (hit === "false") rmSync(join(h.prebuild, "inputs-stamp"));
-    const result = bash(h, command("shared-prebuild", buildName), { CI_SHARED_JSC_HIT: hit });
+    const result = bash(h, command("shared-sysroot", buildName), { CI_SHARED_JSC_HIT: hit });
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(h.env.CALLS, "utf8")).toBe(hit === "true" ? "verify\n" : "compile\nverify\n");
-  }));
-}
-
-for (const sharedNative of ["true", "false"] satisfies ("true" | "false")[]) {
-  test(`same-run shared-native=${sharedNative} hand-off preserves bytes, symlinks and mtimes without compiling`, () => withFixture(sharedNative, h => {
-    seed(h);
-    const digest = pack(h);
-    const result = consume(h, digest);
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(join(h.sysroot, "lib/wasm32-wasip1/libc.a"), "utf8")).toBe("libc");
-    expect(readlinkSync(join(h.sysroot, "include/sdk-link"))).toBe("../lib");
-    expect(readlinkSync(join(h.sysroot, "include/absolute-sdk-link"))).toBe(h.env.WASM_TOOLS);
-    expect(readFileSync(h.env.CALLS, "utf8")).toBe(sharedNative === "true" ? "sysroot-verify\nverify\n" : "sysroot-verify\n");
-    if (sharedNative === "false") return;
-    const archive = join(h.prebuild, "libJavaScriptCore.a");
-    expect(readFileSync(archive).toString()).toBe("archive\0bytes");
-    expect(lstatSync(archive).mode & 0o777).toBe(0o640);
-    expect(lstatSync(archive).mtimeMs).toBe(1_700_000_000_000);
-    expect(readlinkSync(join(h.prebuild, "archive-link"))).toBe("libJavaScriptCore.a");
-    for (const path of excludedJscSentinels.concat(excludedSharedSentinels)) expect(existsSync(join(h.prebuild, path))).toBe(false);
-    for (const path of ["build/jsc/headers.hmap", "build/jsc/Source/JSCBuiltins.cpp.obj", "webkit/.git/index", "icu/prefix/include/unicode/utypes.h", "libcxx/include/__config_site", "libcxx/.bunwasm-archives"]) expect(readFileSync(join(h.prebuild, path), "utf8")).toBe(`synthetic fixture ${path}\n`);
+    expect(readFileSync(h.env.GITHUB_OUTPUT, "utf8")).toBe("jsc-ready=true\n");
   }));
 }
 
 for (const file of ["inputs-stamp", "libJavaScriptCore.a"]) {
-  test(`an exact cache hit with stale ${file} fails verification without a hidden rebuild`, () => withFixture("true", h => {
+  test(`an exact cache hit with stale ${file} fails verification without a hidden rebuild`, () => withFixture(h => {
     seed(h);
     writeFileSync(join(h.prebuild, file), "stale");
-    expect(bash(h, command("shared-prebuild", buildName), { CI_SHARED_JSC_HIT: "true" }).status).not.toBe(0);
+    expect(bash(h, command("shared-sysroot", buildName), { CI_SHARED_JSC_HIT: "true" }).status).not.toBe(0);
     expect(readFileSync(h.env.CALLS, "utf8")).toBe("verify\n");
   }));
 }
 
-const wrongSourceCases: Record<string, string>[] = [
-  { GITHUB_RUN_ID: "other" }, { GITHUB_SHA: "b".repeat(40) }, { SHARED_NATIVE: "false" },
-  { SHARED_PREBUILD_MANIFEST_SHA256: "" }, { SHARED_PREBUILD_MANIFEST_SHA256: "0".repeat(64) },
-];
-for (const env of wrongSourceCases) {
-  test(`import rejects ${Object.keys(env)[0]} mismatch before extracting`, () => withFixture("true", h => {
-    seed(h);
-    const digest = pack(h);
-    expect(consume(h, digest, env).status).not.toBe(0);
-    expect(existsSync(h.sysroot)).toBe(false);
-    expect(existsSync(h.prebuild)).toBe(false);
-    expect(existsSync(h.env.CALLS)).toBe(false);
-  }));
-}
-
-function alterTransfer(h: Fixture, mutate: (bundle: string) => void) {
-  const bundle = join(h.root, "rewrite");
-  mkdirSync(bundle);
-  const archive = join(h.temp, "shared-prebuild-transfer/shared-prebuild.tar");
-  execFileSync("tar", ["-xf", archive, "-C", bundle]);
-  mutate(bundle);
-  execFileSync("tar", ["--posix", "-C", bundle, "-cf", archive, "sysroot.tar.zst", "prebuild.tar.zst", "manifest"]);
-}
-
-for (const member of ["sysroot.tar.zst", "prebuild.tar.zst"]) {
-  test(`import rejects corrupt ${member} bytes before extracting`, () => withFixture("true", h => {
-    seed(h);
-    const digest = pack(h);
-    alterTransfer(h, bundle => writeFileSync(join(bundle, member), "corrupt"));
-    expect(consume(h, digest).status).not.toBe(0);
-    expect(existsSync(h.sysroot)).toBe(false);
-    expect(existsSync(h.prebuild)).toBe(false);
-  }));
-}
-
-test("import rejects a missing receipt instead of running a hidden sysroot build", () => withFixture("true", h => {
-  seed(h);
-  rmSync(join(h.sysroot, "bun-wasm-sysroot.json"));
-  const digest = pack(h);
-  expect(consume(h, digest).status).not.toBe(0);
-  expect(existsSync(h.env.CALLS)).toBe(false);
-}));
-
-test("a failed prebuild keeps the selected consumer blocking", () => {
-  const condition = steps("shared-sysroot");
-  expect(job("shared-sysroot")).toContain("!cancelled() && needs.selection.result == 'success'");
-  const guardIndex = condition.findIndex(step => step.name === "Require the shared prebuild producer");
-  expect(guardIndex).toBeGreaterThanOrEqual(0);
-  expect(guardIndex).toBeLessThan(condition.findIndex(step => step.uses === "actions/download-artifact@v4"));
-  const guard = command("shared-sysroot", "Require the shared prebuild producer");
-  for (const result of ["failure", "cancelled", "skipped", ""]) {
-    expect(spawnSync("bash", ["-euo", "pipefail", "-c", guard], { env: { ...process.env, SHARED_PREBUILD_RESULT: result } }).status).toBe(1);
-  }
-});
-
-for (const field of ["EXPECTED_INPUTS", "EXPECTED_SYSROOT"]) {
-  test(`consumer revalidates ${field} against its own environment`, () => withFixture("true", h => {
-    seed(h);
-    const digest = pack(h);
-    expect(consume(h, digest, { [field]: "different" }).status).not.toBe(0);
-    expect(readFileSync(h.env.CALLS, "utf8")).not.toContain("compile");
-  }));
-}
-
-test("consumer never overlays an existing prebuild or sysroot", () => withFixture("true", h => {
-  seed(h);
-  const digest = pack(h);
-  mkdirSync(h.prebuild, { recursive: true });
-  writeFileSync(join(h.prebuild, "owner-file"), "keep");
-  expect(consume(h, digest).status).not.toBe(0);
-  expect(existsSync(h.sysroot)).toBe(false);
-  expect(readFileSync(join(h.prebuild, "owner-file"), "utf8")).toBe("keep");
-}));
-
-type GraphState = {
-  quality: string; rust: string; prebuild: string;
-  shared: boolean; sharedNative: boolean; cancelled: boolean;
-};
+type GraphState = { selection: string; shared: boolean; sharedNative: boolean; cancelled: boolean };
 
 function admitted(id: string, state: GraphState): boolean {
   const parsed: unknown = Bun.YAML.parse(job(id));
   assert(parsed && typeof parsed === "object" && "if" in parsed && typeof parsed.if === "string");
   const condition = parsed.if;
-  const explicit = /\b(?:success|failure|always|cancelled)\(\)/.test(condition);
-  const outcomes = id === "shared-prebuild" ? [state.quality] : [state.quality, state.rust, state.prebuild];
-  const implicit = explicit || (!state.cancelled && outcomes.every(result => result === "success"));
+  const implicit = !state.cancelled && state.selection === "success";
   const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("github.event_name", '"pull_request"')
     .replaceAll("github.event.pull_request.draft", "false")
-    .replaceAll("!cancelled()", String(!state.cancelled))
-    .replaceAll("needs.selection.result", JSON.stringify(state.quality))
     .replaceAll("needs.selection.outputs.shared-native", JSON.stringify(String(state.sharedNative)))
     .replaceAll("needs.selection.outputs.shared", JSON.stringify(String(state.shared)));
   const result: unknown = new Function(`return (${expression})`)();
@@ -319,35 +158,11 @@ function admitted(id: string, state: GraphState): boolean {
   return implicit && result;
 }
 
-test("the producer runs independently of Rust and reports its own prebuild failures", () => {
-  const base = { quality: "success", rust: "success", prebuild: "success", cancelled: false };
+test("shared-sysroot runs independently of Rust whenever shared or shared-native is selected", () => {
+  const base = { selection: "success", cancelled: false };
   for (const [shared, sharedNative] of [[false, false], [true, false], [false, true], [true, true]] satisfies [boolean, boolean][]) {
-    const state = { ...base, shared, sharedNative };
-    expect(admitted("shared-prebuild", state)).toBe(shared || sharedNative);
-    expect(admitted("shared-sysroot", state)).toBe(shared || sharedNative);
+    expect(admitted("shared-sysroot", { ...base, shared, sharedNative })).toBe(shared || sharedNative);
   }
-  const selected = { ...base, shared: true, sharedNative: false };
-  for (const result of ["failure", "cancelled", "skipped"]) {
-    expect(admitted("shared-prebuild", { ...selected, rust: result })).toBe(true);
-    expect(admitted("shared-sysroot", { ...selected, rust: result, prebuild: result })).toBe(true);
-  }
-  for (const id of ["shared-prebuild", "shared-sysroot"]) {
-    expect(admitted(id, { ...selected, quality: "failure" })).toBe(false);
-    expect(admitted(id, { ...selected, cancelled: true })).toBe(false);
-  }
-});
-
-test("producer and consumer use identical pinned sysroot tools and the ordinary verified Binaryen archive cache", () => {
-  const producer = steps("shared-prebuild");
-  const consumer = steps("shared-sysroot");
-  for (const name of ["Configure private shared sysroot paths", "Install pinned shared build tools", "Install pinned WASI SDK", "Prepare shared-profile Binaryen"]) {
-    expect(command("shared-prebuild", name)).toBe(command("shared-sysroot", name));
-  }
-  for (const id of ["shared-sdk", "shared-binaryen"]) {
-    expect(producer.find(item => item.id === id)?.with).toEqual(consumer.find(item => item.id === id)?.with);
-  }
-  expect(producer.find(item => item.id === "shared-binaryen")?.with).toEqual({
-    path: "${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz",
-    key: "binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}",
-  });
+  expect(admitted("shared-sysroot", { ...base, shared: true, sharedNative: false, selection: "failure" })).toBe(false);
+  expect(admitted("shared-sysroot", { ...base, shared: true, sharedNative: false, cancelled: true })).toBe(false);
 });

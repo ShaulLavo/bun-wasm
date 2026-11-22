@@ -8,7 +8,7 @@ function record(value: unknown): Record<string, unknown> {
 
 const source = expandedCiWorkflow();
 const workflow = record(Bun.YAML.parse(source));
-const steps = Object.entries(record(workflow.jobs)).filter(([id]) => id !== "browser-production").flatMap(([_id, job]) => {
+const steps = Object.entries(record(workflow.jobs)).flatMap(([_id, job]) => {
   const value = record(job).steps;
   if (!Array.isArray(value)) return [];
   return value.map(record);
@@ -58,7 +58,7 @@ test("all heavy cache actions explicitly separate restoring from saving", () => 
     if (typeof step.uses !== "string") throw new Error("Missing cache action");
     expect(["actions/cache/restore@v4", "actions/cache/save@v4"]).toContain(step.uses);
   }
-  expect(saves).toHaveLength(6);
+  expect(saves).toHaveLength(8);
 });
 
 test.each(saves)("$name reserves heavy writes for main pushes", step => {
@@ -76,9 +76,10 @@ test("PRs retain all heavy restore paths and native/JSC checks remain blocking",
     expect(String(step.if ?? "")).not.toContain("github.event_name");
     expect(String(step.if ?? "")).not.toContain("github.ref");
   }
-  expect(source).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true')) }}");
+  expect(source).toContain("if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true') }}");
   expect(source).toContain("name: Blocking native quality checks");
-  expect(source).toContain("name: Blocking native fixture checks");
+  expect(source).toContain("name: Blocking native runtime checks");
+  expect(source).toContain("name: Blocking native fixture and install checks");
   expect(source).toContain("name: Blocking JSC embedding and allocation checks\n        if: needs.selection.outputs.jsc == 'true'");
   expect(source).not.toContain("continue-on-error:");
 });
@@ -90,24 +91,22 @@ test("native checkpoint cache cannot publish without the TLS producer output", (
   expect(allows(checkpoint, { ...healthy, "steps.tls-artifact.outputs.tls-sha256": "" })).toBe(false);
 });
 
-test("both Bash shell cache routes key on the verified native inputs independently of the lockfile", () => {
-  for (const id of ["rust", "browser-production"]) {
-    const job = record(record(workflow.jobs)[id]);
-    if (!Array.isArray(job.steps)) throw new Error(`Missing steps for ${id}`);
-    const jobSteps = job.steps.map(record);
-    const restore = jobSteps.find(step => step.id === "shell-cache");
-    if (!restore) throw new Error(`Missing shell cache for ${id}`);
-    const key = cacheKey(restore);
-    expect(key).toContain("${{ steps.native-inputs.outputs.hash }}");
-    expect(key).toContain("${{ steps.shell-wasi-inputs.outputs.hash }}");
-    expect(key).toContain("'scripts/build-bash-web-shell.sh'");
-    expect(key).not.toContain("'bun.lock'");
-    expect(record(restore.with)).not.toHaveProperty("restore-keys");
-    const path = "${{ runner.temp }}/bash-web-shell-build";
-    expect(record(restore.with).path).toBe(path);
-    const save = jobSteps.find(step => step.name === "Save the completed bash-web shell guest build");
-    expect(record(save?.with).path).toBe(path);
-    const build = jobSteps.find(step => typeof step.run === "string" && step.run.includes("bash scripts/build-bash-web-shell.sh"));
-    expect(build?.run).toContain('CARGO_TARGET_DIR="$RUNNER_TEMP/bash-web-shell-build" JOBS=2 bash scripts/build-bash-web-shell.sh');
-  }
+test("the Bash shell cache route keys on verified native inputs independently of the lockfile", () => {
+  const job = record(record(workflow.jobs)["ordinary-build"]);
+  if (!Array.isArray(job.steps)) throw new Error("Missing steps for ordinary-build");
+  const jobSteps = job.steps.map(record);
+  const restore = jobSteps.find(step => step.id === "shell-cache");
+  if (!restore) throw new Error("Missing shell cache for ordinary-build");
+  const key = cacheKey(restore);
+  expect(key).toContain("${{ steps.native-inputs.outputs.hash }}");
+  expect(key).toContain("${{ steps.shell-wasi-inputs.outputs.hash }}");
+  expect(key).toContain("'scripts/build-bash-web-shell.sh'");
+  expect(key).not.toContain("'bun.lock'");
+  expect(record(restore.with)).not.toHaveProperty("restore-keys");
+  const path = "${{ runner.temp }}/bash-web-shell-build";
+  expect(record(restore.with).path).toBe(path);
+  const save = jobSteps.find(step => step.name === "Save the completed bash-web shell guest build");
+  expect(record(save?.with).path).toBe(path);
+  const build = jobSteps.find(step => typeof step.run === "string" && step.run.includes("bash scripts/build-bash-web-shell.sh"));
+  expect(build?.run).toContain('CARGO_TARGET_DIR="$RUNNER_TEMP/bash-web-shell-build" JOBS=2 bash scripts/build-bash-web-shell.sh');
 });

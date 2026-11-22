@@ -83,7 +83,7 @@ runs:
         [[ "$(cat "$jsc_completion")" == verified ]]
         echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
     - name: Save the JSC prebuild cache once per input revision
-      if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}
+      if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/jsc/prebuild

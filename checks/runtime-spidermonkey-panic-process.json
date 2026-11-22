@@ -1,5 +1,6 @@
 {
   "owner": "runtime",
+  "batch": "02-producer",
   "isolation": "process",
   "path": "scripts/spidermonkey-panic-process.test.ts"
 }

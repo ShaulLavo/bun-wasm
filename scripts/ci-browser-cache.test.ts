@@ -32,7 +32,7 @@ function fixture(run: (directory: string) => void): void {
 
 test("Web host and every Processes leg use one browser dependency cache owner", () => {
   const jobs = record(record(Bun.YAML.parse(workflow)).jobs);
-  for (const id of ["web", "web-browser", "browser-process", "browser-guest"]) {
+  for (const id of ["web-browser", "browser-guest"]) {
     const job = record(jobs[id]);
     expect(job["runs-on"]).toBe("ubuntu-latest");
     expect(JSON.stringify(job)).not.toContain("browser-apt-v2");
@@ -44,7 +44,7 @@ test("Web host and every Processes leg use one browser dependency cache owner", 
     expect(installing).toBeGreaterThan(entries.findIndex(step => step.uses === "./.github/actions/browser-deps"));
     expect(JSON.stringify(entries)).not.toContain("playwright install --with-deps");
     expect(setup).toHaveLength(1);
-    const expected = id === "web" || id === "web-browser" ? "chromium firefox webkit" : "${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}";
+    const expected = id === "web-browser" ? "chromium firefox webkit" : "${{ matrix.browser == 'chromium' && 'chromium firefox' || matrix.browser }}";
     expect(record(setup[0]?.with).browsers).toBe(expected);
   }
 });

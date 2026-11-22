@@ -12,12 +12,10 @@ import { discoverChecks } from "./test-checks";
 setDefaultTimeout(120_000);
 
 const workflow = expandedCiWorkflow();
-const producer = workflow.split("\n  shared-prebuild:\n")[1]!.split("\n  shared-spidermonkey-prebuild:\n")[0]!;
-const smProducer = workflow.split("\n  shared-spidermonkey-prebuild:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
-const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  shared-consumers:\n")[0]!;
+const shared = workflow.split("\n  shared-sysroot:\n")[1]!.split("\n  rust:\n")[0]!;
 
-test("the shared libc proof stays blocking beside the explicit native profile consumer", () => {
-  expect(shared).toContain("needs: [selection, shared-prebuild, shared-spidermonkey-prebuild]");
+test("the shared libc proof stays blocking beside the explicit native profile producer", () => {
+  expect(shared).toContain("needs: selection");
   expect(shared).toContain("needs.selection.outputs.shared == 'true' || needs.selection.outputs.shared-native == 'true'");
   expect(shared).toContain("node-version: ${{ env.CI_NODE_VERSION }}");
   expect(shared).toContain('echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"');
@@ -25,12 +23,12 @@ test("the shared libc proof stays blocking beside the explicit native profile co
   expect(shared).toContain("bun scripts/build-wasi-sysroot.ts --shared-pic\n");
   expect(shared).toContain('bash scripts/test-shared-sysroot.sh "$RUNNER_TEMP/shared-sysroot-proof"');
   expect(shared).not.toContain("continue-on-error");
-  expect(shared.split("      - name: Require the shared SpiderMonkey library producer")[0]).not.toMatch(/cargo |build-engine|build-bun|sync-bun/);
+  expect(shared.split("      - name: Install the shared JSC and SpiderMonkey producer tools")[0]).not.toMatch(/cargo |build-engine|build-bun|sync-bun/);
   expect(shared).toContain("v1.262.0/wasm-tools");
   expect(shared).toContain("v49.0.3/wasmtime");
   expect(shared).toContain("key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}");
-  expect(producer).toContain("key: wasi-shared-pic-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-inputs.outputs.hash }}");
-  expect(producer).toContain('path: ${{ env.BUN_WASM_SHARED_SYSROOT }}');
+  expect(shared).toContain("key: wasi-shared-pic-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-inputs.outputs.hash }}");
+  expect(shared).toContain('path: ${{ env.BUN_WASM_SHARED_SYSROOT }}');
   expect(shared).not.toContain("bun-wasm-sysroot-patched");
 });
 
@@ -136,7 +134,7 @@ function sharedCacheSaves(source: string): { name: string; condition: string }[]
 function sharedSaveAllowed(condition: string, state: SharedSaveContext): boolean {
   const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
     .replaceAll("inputs.sysroot", JSON.stringify("build"))
-    .replaceAll("steps.shared-jsc-producer.outputs.jsc-ready", JSON.stringify("true"))
+    .replaceAll("steps.shared-jsc-prebuild.outputs.jsc-ready", JSON.stringify("true"))
     .replace(/needs\.selection\.outputs\.shared-native/g, JSON.stringify("true"))
     .replace(/success\(\)/g, String(state.success))
     .replace(/cancelled\(\)/g, String(state.cancelled))
@@ -149,17 +147,15 @@ function sharedSaveAllowed(condition: string, state: SharedSaveContext): boolean
 }
 
 test("all shared saves require a successful uncancelled main push and an actual miss", () => {
-  const saves = sharedCacheSaves(producer).concat(sharedCacheSaves(smProducer), sharedCacheSaves(shared));
+  const saves = sharedCacheSaves(shared);
   expect(saves.map(step => step.name)).toEqual([
-    "Save completed shared-sdk setup",
-    "Save shared profile cache",
-    "Save the shared JSC prebuild",
-    "Save completed shared-sdk setup",
-    "Save pinned cbindgen",
-    "Save the verified shared SpiderMonkey source and native work",
     "Save completed shared-sdk setup",
     "Save completed shared-wasm-tools setup",
     "Save completed shared-wasmtime setup",
+    "Save shared profile cache",
+    "Save the shared JSC prebuild",
+    "Save pinned cbindgen",
+    "Save the verified shared SpiderMonkey source and native work",
     "Save the completed shared native profile",
   ]);
   const main = { event: "push", ref: "refs/heads/main", hit: "false", success: true, cancelled: false };
@@ -181,24 +177,25 @@ test("all shared saves require a successful uncancelled main push and an actual 
 });
 
 test("shared native checks consume one matching launcher and one produced group pair", () => {
-  const rust = workflow.split("\n  rust:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
-  expect(rust).toContain('cp "$CARGO_TARGET_DIR/release/bun-wasm" "$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
-  expect(rust).toContain("name: native-profile-launcher");
-  const native = workflow.split("\n  shared-consumers:\n")[1]!.split("\n  shared-proof:\n")[0]!;
+  const ordinaryBuild = workflow.split("\n  ordinary-build:\n")[1]!.split("\n  shared-sysroot:\n")[0]!;
+  expect(ordinaryBuild).toContain('cp "$CARGO_TARGET_DIR/release/bun-wasm" "$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
+  expect(ordinaryBuild).toContain("name: native-profile-launcher");
+  const native = workflow.split("\n  shared-consumers:\n")[1]!.split("\n  ci-result:\n")[0]!;
   expect(native).toContain("name: native-profile-launcher");
   expect(native).toContain('test "$(cat "$RUNNER_TEMP/native-profile-launcher/source.txt")" = "$GITHUB_SHA"');
-  expect(native).toContain('test "$PROFILE_LAUNCHER_RESULT" = success');
+  expect(native).toContain('bun scripts/ci-shared-consumer-run.ts "${{ matrix.group }}"');
+  expect(native).toContain("BUN_WASM_LAUNCHER: ${{ runner.temp }}/native-profile-launcher/bun-wasm");
   expect(shared).toContain('"$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1');
   expect(shared.indexOf('"$GUEST_CARGO" fetch --locked')).toBeLessThan(shared.indexOf("      - name: Produce the shared native profile once"));
   expect(shared.match(/bun scripts\/build-native-profile.ts shared-group "\$CARGO_TARGET_DIR\/shared-native"$/gm)).toHaveLength(1);
   expect(shared.match(/bun scripts\/build-native-profile.ts shared-group "\$CARGO_TARGET_DIR\/shared-native" jsc$/gm)).toHaveLength(1);
-  expect(native).toContain("bun scripts/test-checks.ts native --profile shared-group");
-  expect(native).toContain("shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm");
-  expect(native).toContain('export BUN_WASM_LAUNCHER="$RUNNER_TEMP/native-profile-launcher/bun-wasm"');
+  const runner = readFileSync(new URL("./ci-shared-consumer-run.ts", import.meta.url), "utf8");
+  expect(runner).toContain('"native", "--profile", "shared-group"');
+  expect(runner).toContain("program-${engine}");
   expect(shared).not.toContain("shared-wasm-memory");
 });
 
-test("shared production is fully cached before exporting the ready handoff", () => {
+test("shared production is fully cached before consumers verify the handoff", () => {
   const job: unknown = Bun.YAML.parse(shared);
   assert(job && typeof job === "object" && "steps" in job && Array.isArray(job.steps));
   const steps = job.steps.map((step: unknown) => {
@@ -207,7 +204,7 @@ test("shared production is fully cached before exporting the ready handoff", () 
   });
   const producers = steps.flatMap((step, index) => "id" in step && /^shared-(?:quickjs|jsc|spidermonkey)-producer$/.test(String(step.id)) ? [index] : []);
   expect(producers).toHaveLength(3);
-  expect(shared).not.toContain("Prepare the same-source shared proof handoff");
+  expect(shared).not.toContain("Prepare and verify same-source shared proof inputs");
   const saves = steps.flatMap((step, index) => {
     if ("name" in step && step.name === "Save the completed shared native profile") return [index];
     if ("uses" in step && ["./.github/actions/save-rust-build-cache", "./.github/actions/save-release-downloads"].includes(String(step.uses))) return [index];
@@ -215,9 +212,9 @@ test("shared production is fully cached before exporting the ready handoff", () 
   });
   expect(saves).toHaveLength(3);
   expect(Math.min(...saves)).toBeGreaterThan(Math.max(...producers));
-  expect(job).toHaveProperty("timeout-minutes", 30);
-  const handoff = workflow.split("\n  ordinary-web-guests:\n")[1]!.split("\n  shared-jsc-identity:\n")[0]!;
-  expect(handoff).toContain("needs.shared-sysroot.result == 'success'");
-  expect(handoff).toContain("needs.selection.outputs.shared-native == 'true'");
-  expect(handoff).not.toContain("continue-on-error");
+  expect(job).toHaveProperty("timeout-minutes", 55);
+  const consumers = workflow.split("\n  shared-consumers:\n")[1]!.split("\n  ci-result:\n")[0]!;
+  expect(consumers).toContain("needs: [selection, ordinary-build, shared-sysroot]");
+  expect(consumers).toContain("needs.selection.outputs.shared-native == 'true'");
+  expect(consumers).not.toContain("continue-on-error");
 });

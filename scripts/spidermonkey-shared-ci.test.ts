@@ -11,8 +11,8 @@ import { discoverChecks, selectChecks } from './test-checks.ts';
 setDefaultTimeout(120_000);
 
 const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-const shared = workflow.split('\n  shared-sysroot:\n')[1]!.split('\n  shared-consumers:\n')[0]!;
-const libraryProducer = workflow.split('\n  shared-spidermonkey-prebuild:\n')[1]!.split('\n  shared-sysroot:\n')[0]!;
+const shared = workflow.split('\n  shared-sysroot:\n')[1]!.split('\n  rust:\n')[0]!;
+const libraryProducer = shared;
 
 function step(name: string): string {
   const result = workflow.split(`      - name: ${name}\n`)[1]?.split(/\n(?:      - |  [\w-]+:\n)/)[0];
@@ -38,14 +38,16 @@ test('SM uses the existing discovered fixture and blocking owner, not a Browser 
   expect(selectChecks('native', undefined, 'shared-group')).toContain('tests/fixtures/shared-wasm-memory');
   expect(discoverChecks().filter(check => check.path === 'scripts/build-native-profile.test.ts')).toHaveLength(1);
   expect(discoverChecks().filter(check => check.path === 'scripts/spidermonkey-shared-ci.test.ts')).toHaveLength(1);
-  const consumer = step('Consume the discovered shared native checks sequentially');
+  const consumer = step('Consume the discovered shared native and Browser checks');
+  const runner = readFileSync(new URL('./ci-shared-consumer-run.ts', import.meta.url), 'utf8');
   expect(workflow.split("\n  shared-consumers:\n")[1]!).toContain("needs.selection.outputs.shared-native == 'true'");
-  expect(consumer).toContain('bun scripts/test-checks.ts native --profile shared-group');
-  expect(workflow).toContain('shared-proof-inputs/program-${{ matrix.engine }}/bun.wasm');
+  expect(consumer).toContain('bun scripts/ci-shared-consumer-run.ts "${{ matrix.group }}"');
   expect(consumer).toContain('native-profile-launcher/bun-wasm');
-  expect(consumer).not.toMatch(/browser-guest|continue-on-error|BUN_WASM_SPIDERMONKEY_TIER|test -[ef]/);
+  expect(consumer).not.toMatch(/continue-on-error|BUN_WASM_SPIDERMONKEY_TIER|test -[ef]/);
+  expect(runner).toContain('"native", "--profile", "shared-group"');
+  expect(runner).toContain('program-${engine}');
   expect(shared).not.toContain('shared-wasm-memory');
-  expect(shared).toContain('timeout-minutes: 30');
+  expect(shared).toContain('timeout-minutes: 55');
 });
 
 test('SM has one library producer and one side consumer and never builds another common core', () => {
@@ -66,7 +68,7 @@ test('SM has one library producer and one side consumer and never builds another
 test('SM caches exact source and native work and replays patch and library verification on a hit', () => {
   const cache = libraryProducer.split('        id: shared-spidermonkey-cache\n')[1]!.split('\n      - ')[0]!;
   expect(cache).toContain('path: ${{ runner.temp }}/spidermonkey/shared');
-  expect(cache).toContain('spidermonkey-shared-group-v2-');
+  expect(cache).toContain('spidermonkey-shared-group-v3-');
   for (const input of ['steps.shared-spidermonkey-inputs.outputs.hash', 'steps.shared-spidermonkey-inputs.outputs.recipes']) expect(cache).toContain(input);
   expect(cache).not.toContain('restore-keys:');
   const producer = step('Produce or verify the shared SpiderMonkey library once');
@@ -128,16 +130,16 @@ test('real workflow steps wire the library, existing core, side and discovered c
       SPIDERMONKEY_NATIVE_DIR: join(root, 'sm/native'), SPIDERMONKEY_LIBCXX_DIR: join(root, 'jsc/libcxx/lib'), CARGO_TARGET_DIR: join(root, 'target'), RUNNER_TEMP: root,
       SHARED_PRODUCER_DEADLINE_MS: String(Date.now() + 60000), SHARED_CHECK_SECONDS: '1800' };
     const producers = ['Produce or verify the shared SpiderMonkey library once', 'Produce the shared SpiderMonkey profile once'].map(command);
-    const commands = producers.concat('SHARED_STARTED=$EPOCHSECONDS', command('Consume the discovered shared native checks sequentially'));
-    const result = spawnSync('/bin/bash', ['-euo', 'pipefail', '-c', commands.join('\n')], { cwd: root, env, encoding: 'utf8' });
+    const result = spawnSync('/bin/bash', ['-euo', 'pipefail', '-c', producers.join('\n')], { cwd: root, env, encoding: 'utf8' });
     expect(result.status, result.stderr).toBe(0);
     const calls = readFileSync(env.RECORD, 'utf8').trim().split('\n');
     expect(calls.filter(line => line.startsWith('bash '))).toEqual(['bash <spidermonkey/build-shared-group.sh>']);
     expect(calls.filter(line => line.startsWith('bun '))).toEqual([
       `bun <scripts/producer-diagnostics.ts> <run> <${root}/shared-spidermonkey-producer> <${env.SHARED_PRODUCER_DEADLINE_MS}> <bash> <scripts/with-build-cache.sh> <bun> <scripts/build-native-profile.ts> <shared-group> <${env.CARGO_TARGET_DIR}/shared-native> <spidermonkey>`,
-      expect.stringMatching(/^bun <scripts\/run-with-timeout\.mts> <--state> <[^>]+\/shared-native-run> <[1-9]\d*> <bun> <scripts\/test-checks\.ts> <native> <--profile> <shared-group>$/),
     ]);
     expect(calls.filter(line => line.includes('remote.origin.promisor'))).toHaveLength(1);
+    const runner = readFileSync(new URL('./ci-shared-consumer-run.ts', import.meta.url), 'utf8');
+    expect(runner).toContain('"--state", statePath, String(remaining), "bun", join(root, "scripts/test-checks.ts"), "native", "--profile", "shared-group"');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

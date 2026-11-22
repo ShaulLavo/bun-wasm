@@ -12,6 +12,7 @@ const commonInputs = [
   ".github/actions/jsc-prebuild/action.yml",
   "scripts/ci-main-coverage.ts",
   "scripts/ci-browser-coverage.ts",
+  "scripts/ci-browser-guest-run.ts",
   "scripts/ci-changes.ts",
   "scripts/ci-check-inputs.ts",
   "scripts/ci-binaryen.ts",

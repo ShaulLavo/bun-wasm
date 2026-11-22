@@ -1,7 +1,7 @@
 import { expandedCiWorkflow } from "./fixtures/ci-jsc-workflow";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
@@ -10,11 +10,7 @@ import { excludedJscRoots, excludedJscSentinels, seedJscArtifact } from "./fixtu
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
 
-// The JSC C/C++ prebuild runs in its own job and hands one verified archive to the
-// native job. These tests pin the job graph, the shared setup and the hand-off.
-
 type Job = Readonly<Record<string, unknown>>;
-type Need = { readonly result: string; readonly outputs?: Readonly<Record<string, string>> };
 
 function record(value: unknown): Job {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected workflow object");
@@ -23,9 +19,10 @@ function record(value: unknown): Job {
 
 const source = expandedCiWorkflow();
 const jobs = record(record(Bun.YAML.parse(source)).jobs);
-const producer = record(jobs["jsc-prebuild"]);
-const native = record(jobs.rust);
+const producer = record(jobs["ordinary-build"]);
 const checkpoint = record(jobs["native-quality"]);
+const runtime = record(jobs.rust);
+const jscPrebuildAction = record(record(Bun.YAML.parse(readFileSync(new URL("../.github/actions/jsc-prebuild/action.yml", import.meta.url), "utf8"))).runs);
 
 function steps(job: Job): Job[] {
   if (!Array.isArray(job.steps)) throw new Error("Expected job steps");
@@ -45,140 +42,40 @@ function run(job: Job, name: string): string {
 }
 
 const packageName = "Package the verified prebuild and sysroot";
-const importName = "Import the verified JSC prebuild and sysroot";
-const guardName = "Require the JSC prebuild job's output";
 
-// GitHub job conditions: without a status function the condition is implicitly
-// `success() && ...`, so a failed or skipped need skips the job.
-
-function jobRuns(job: Job, needs: Readonly<Record<string, Need>>, cancelled: boolean): boolean {
-  const declared = typeof job.needs === "string" ? [job.needs] : Array.isArray(job.needs) ? job.needs : [];
-  expect(Object.keys(needs).toSorted()).toEqual(declared.toSorted());
-  const condition = typeof job.if === "string" ? job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "") : "";
-  const explicit = /\b(?:success|failure|always|cancelled)\(\)/.test(condition);
-  const implicit = explicit || (!cancelled && Object.values(needs).every(need => need.result === "success"));
-  const expression = condition.replaceAll("!cancelled()", String(!cancelled))
-    .replaceAll("github.event_name", JSON.stringify("pull_request"))
-    .replaceAll("github.event.pull_request.draft", "false")
-    .replace(/needs\.([\w-]+)\.(result|outputs\.([\w-]+))/g, (_whole, id: string, _field: string, key: string | undefined) => JSON.stringify(key ? needs[id]?.outputs?.[key] : needs[id]?.result));
-  const result: unknown = new Function(`return (${expression})`)();
-  if (typeof result !== "boolean") throw new Error("Non-boolean condition");
-  return implicit && result;
-}
-
-function guard(result: string): number | null {
-  return spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", run(native, guardName)], {
-    env: { ...process.env, JSC_PREBUILD_RESULT: result, NATIVE_QUALITY_RESULT: "success" }, encoding: "utf8", timeout: 3000,
-  }).status;
-}
-
-test("the prebuild job runs for every native selection, independent of the JSC engine gates", () => {
-  expect(producer.needs).toEqual(["selection", "jsc-identity"]);
-  expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && ((needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true')) }}");
-  expect(JSON.stringify(producer)).not.toContain("needs.selection.outputs.jsc");
-  expect(native.needs).toEqual(["selection", "jsc-prebuild", "native-quality"]);
+test("ordinary-build provisions the JSC prebuild inline for every native or browser selection without cross-job transfer", () => {
+  expect(producer.needs).toBe("selection");
+  expect(producer.if).toBe("${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.selection.outputs.rust == 'true' || needs.selection.outputs.browser_guest == 'true') }}");
+  expect(runtime.needs).toEqual(["selection", "ordinary-build"]);
+  expect(checkpoint.needs).toBe("selection");
   // A native-only change still builds the tools fixture, which links the prebuild.
   for (const [path, jsc] of [["crates/bunwasm-runtime/src/engine_quickjs.rs", false], ["jsc/configure.sh", true], ["scripts/build-jsc.sh", true]] satisfies [string, boolean][]) {
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(jsc);
   }
   expect(needsRust(["docs/code-quality.md"])).toBe(false);
+  expect(source).not.toContain("jsc-prebuild.tar");
+  expect(source).not.toContain("Import the verified JSC prebuild and sysroot");
 });
 
-type GraphCase = { selection: string; rust: string; jsc: string; outcome: string; cancelled: boolean };
-
-const graphCases: GraphCase[] = ["success", "failure"].flatMap(selection => ["true", "false"].flatMap(rust => ["true", "false"].flatMap(jsc =>
-  ["success", "failure", "cancelled"].flatMap(outcome => [false, true].map(cancelled => ({ selection, rust, jsc, outcome, cancelled }))))));
-
-function checkGraph({ selection, rust, jsc, outcome, cancelled }: GraphCase) {
-  const selectionNeed = { result: selection, outputs: { rust, jsc, shared: "false" } };
-  const prebuildRuns = jobRuns(producer, { selection: selectionNeed, "jsc-identity": { result: selection === "success" && rust === "true" ? "success" : "skipped" } }, cancelled);
-  const prebuild = { result: prebuildRuns ? outcome : "skipped" };
-  const nativeRuns = jobRuns(native, { selection: selectionNeed, "jsc-prebuild": prebuild, "native-quality": { result: prebuild.result } }, cancelled);
-  const selected = selection === "success" && rust === "true" && !cancelled;
-  expect(prebuildRuns).toBe(selected);
-  // Skipping is reserved for the change filter, a failed selection job or a cancelled run.
-  expect(nativeRuns).toBe(selected);
-  if (!nativeRuns) return;
-  expect(guard(prebuild.result)).toBe(outcome === "success" ? 0 : 1);
-  if (outcome === "success") return;
-
-}
-
-test("the native check fails, never skips, when its selected prebuild did not succeed", () => {
-  expect(steps(native)[0]?.name).toBe(guardName);
-  expect(graphCases).toHaveLength(48);
-  for (const graphCase of graphCases) checkGraph(graphCase);
-  for (const result of ["failure", "cancelled", "skipped", ""]) expect(guard(result)).toBe(1);
-});
-
-test("both jobs run byte-identical setup, so the native job can re-verify in the same environment", () => {
-  const shared = (job: Job) => steps(job).filter(item => {
-    const name = String(item.name ?? "");
-    const uses = String(item.uses ?? "");
-    const id = String(item.id ?? "");
-    return ["Configure portable quality toolchain homes", "Install native build tools", "Identify host build tools", "Install pinned WASI SDK",
-      "Save completed sdk setup", "Install pinned Binaryen", "Save completed binaryen-cache setup", "Identify JSC prebuild inputs"].includes(name)
-      || ["sdk", "binaryen-cache"].includes(id) || uses === "./.github/actions/setup-tools" || uses === "actions/checkout@v4"
-      || item.run === 'bun "$GITHUB_WORKSPACE/scripts/ci-install.ts" --frozen-lockfile --ignore-scripts'
-      || (uses === "actions/cache/restore@v4" && JSON.stringify(item.with).includes(".ci-bun-cache"));
-  });
-  const bunSetup = (items: Job[]) => items.map(item => Object.fromEntries(Object.entries(item).filter(([key]) => key !== "shell"))).map(item => item.uses === "./.github/actions/setup-tools"
-    ? { ...item, with: { "bun-version": record(item.with)["bun-version"] } } : item);
-  const producerShared = bunSetup(shared(producer));
-  expect(producerShared).toHaveLength(14);
-  expect(producerShared).toEqual(bunSetup(shared(native)));
-  expect(producerShared).toEqual(bunSetup(shared(checkpoint)));
-  const nativePaths = run(native, "Configure private JSC build paths");
-  expect(run(producer, "Configure private JSC build paths")).toBe(nativePaths.slice(0, nativePaths.indexOf("\n")));
-  expect(run(native, "Configure private JSC build paths")).toContain('JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"\n');
-  // The producer compiles no Rust and needs no upstream Bun sources.
-  expect(JSON.stringify(producer)).not.toContain("rust-toolchain");
-  expect(JSON.stringify(producer)).not.toContain("sync-bun.sh");
-});
-
-test("one job owns the sysroot and prebuild builds and caches; the native job only imports and verifies", () => {
-  const ownedIds = ["sysroot-inputs", "sysroot-cache", "jsc-prebuild-cache", "jsc-producer", "jsc-artifact"];
-  for (const id of ownedIds) {
+test("ordinary-build owns the sysroot and JSC prebuild cache inline and verifies before building tools or JSC", () => {
+  for (const id of ["sysroot-inputs", "sysroot-cache", "jsc-inputs", "jsc-prebuild-cache", "jsc-producer"]) {
     expect(steps(producer).filter(item => item.id === id)).toHaveLength(1);
-    expect(steps(native).filter(item => item.id === id)).toHaveLength(0);
   }
-  for (const name of ["Save the verified sysroot cache", "Build or verify the JSC prebuild", "Save the JSC prebuild cache once per input revision"]) {
-    expect(steps(native).filter(item => item.name === name)).toHaveLength(0);
+  for (const id of ["jsc-prebuild-cache", "jsc-producer"]) {
+    expect(steps(checkpoint).filter(item => item.id === id)).toHaveLength(0);
+    expect(steps(runtime).filter(item => item.id === id)).toHaveLength(0);
   }
   expect(source.match(/^\s+bash scripts\/build-jsc\.sh$/gm)).toHaveLength(1);
   expect(step(producer, "name", "Save the JSC prebuild cache once per input revision").if)
     .toBe("${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}");
   expect(step(producer, "id", "jsc-producer").env).toEqual({ CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}" });
-  const names = steps(native).map(item => String(item.name ?? item.uses ?? ""));
-  const download = steps(native).findIndex(item => item.uses === "actions/download-artifact@v8" && record(item.with).name === "jsc-prebuild.tar");
-  expect(download).toBeLessThan(names.indexOf(importName));
-  expect(record(steps(native)[download]!.with).path).toBe("${{ runner.temp }}/jsc-prebuild-transfer");
-  expect(names.indexOf("Configure private JSC build paths")).toBeLessThan(names.indexOf(importName));
-  for (const later of ["Build patched WASI sysroot", "Identify effective native build environment", "Identify JSC prebuild inputs", "Build the single tools fixture in the existing native target"]) {
-    expect(names.indexOf(later)).toBeGreaterThan(names.indexOf(importName));
-  }
-  expect(run(native, "Build patched WASI sysroot")).toContain("bun scripts/build-wasi-sysroot.ts");
-  const importScript = run(native, importName);
-  expect(run(producer, packageName)).toContain('tar --posix -C "$bundle" -cf "$transfer" prebuild.tar.zst sysroot.tar.zst jsc-prebuild.log manifest');
-  expect(importScript).toContain('tar --posix -xOf "$transfer" prebuild.tar.zst');
-  expect(importScript).toContain('prebuild_digest=$(tail -n +5 "$manifest" | awk');
-  expect(importScript).toContain('sysroot_digest=$(tail -n +5 "$manifest" | awk');
-  expect(importScript).toContain('== "$prebuild_digest"');
-  expect(importScript).toContain('== "$sysroot_digest"');
-  const uploads = steps(producer).filter(item => item.uses === "actions/upload-artifact@v7");
-  expect(uploads).toHaveLength(1);
-  const upload = uploads[0]!;
-  expect(upload.uses).toBe("actions/upload-artifact@v7");
-  expect(upload.with).toEqual({ path: "${{ runner.temp }}/jsc-prebuild.tar", "if-no-files-found": "error", "retention-days": 1, archive: false });
-  const uploadIndex = steps(producer).findIndex(item => item.uses === "actions/upload-artifact@v7");
-  expect(steps(producer)[uploadIndex - 1]?.name).toBe(packageName);
-  expect(producer.outputs).toEqual({ "manifest-sha256": "${{ steps.jsc-artifact.outputs.manifest-sha256 }}" });
-  expect(step(native, "name", importName).env).toEqual({ JOBS: "2", CAGE: "", JSC_PREBUILD_MANIFEST_SHA256: "${{ needs.jsc-prebuild.outputs.manifest-sha256 }}" });
-  // No background work or bare PIDs cross a step boundary in the hand-off.
-  for (const script of [run(producer, packageName), run(native, importName), run(native, guardName)]) {
-    expect(script).not.toMatch(/setsid|&\s*$|\$!|kill /m);
-  }
+  const names = steps(producer).map(item => String(item.name ?? item.uses ?? ""));
+  const prebuildIndex = names.indexOf("Build or verify the JSC prebuild");
+  expect(prebuildIndex).toBeGreaterThan(names.indexOf("Build patched WASI sysroot"));
+  expect(prebuildIndex).toBeGreaterThan(names.indexOf("Configure private JSC build paths"));
+  expect(prebuildIndex).toBeLessThan(names.indexOf("Save the JSC prebuild cache once per input revision"));
+  expect(prebuildIndex).toBeLessThan(names.indexOf("Build the single tools fixture in the existing native target"));
 });
 
 type Harness = { root: string; repo: string; temp: string; env: Record<string, string> };
@@ -190,16 +87,6 @@ function harness(temp = "temp"): Harness {
   copyFileSync(new URL("../env.sh", import.meta.url), join(repo, "env.sh"));
   mkdirSync(join(repo, "scripts"));
   copyFileSync(new URL("./ci-jsc-artifact.ts", import.meta.url), join(repo, "scripts/ci-jsc-artifact.ts"));
-  // The real stamp check needs the WebKit toolchain; the stub records each call and
-  // rejects a missing or wrong stamp, so the hand-off's own checks stay real.
-  writeFileSync(join(repo, "jsc/common.sh"), [
-    "source env.sh",
-    "check_jsc_inputs_stamp() {",
-    '  printf "stamp\\n" >> "$STAMP_CALLS"',
-    '  [[ "$(cat "$JSC_BUILD_DIR/build/jsc/.bunwasm-inputs" 2>/dev/null)" == "${EXPECTED_STAMP:-expected-inputs}" ]]',
-    "}",
-    "",
-  ].join("\n"));
   return { root, repo, temp: join(root, temp), env: environment(root, temp) };
 }
 
@@ -209,7 +96,7 @@ function environment(root: string, temp: string): Record<string, string> {
     PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root, RUNNER_TEMP: runnerTemp, TMPDIR: runnerTemp,
     WASM_TOOLS: join(runnerTemp, "wasm-tools"), BUN_WASM_SYSROOT: join(runnerTemp, "wasm-tools/bun-wasm-sysroot-patched"), JSC_BUILD_DIR: join(runnerTemp, "jsc/prebuild"),
     GITHUB_RUN_ID: "4100", GITHUB_SHA: "433aca4ea0d761c23fc1661aa8c636e75dfdd6b3",
-    GITHUB_OUTPUT: join(root, "outputs"), STAMP_CALLS: join(root, "stamp-calls"),
+    GITHUB_OUTPUT: join(root, "outputs"),
   };
 }
 
@@ -229,12 +116,10 @@ function seedProducerTrees(h: Harness) {
   symlinkSync("lib/libJavaScriptCore.a", join(prebuild, "build/jsc/libJavaScriptCore.link"));
   writeFileSync(join(sysroot, "lib/wasm32-wasip1/libc.a"), "libc");
   writeFileSync(join(sysroot, "bun-wasm-sysroot.json"), '{"receipt":true}');
-  // Absolute SDK overlays only resolve at the same absolute paths.
   symlinkSync(sdk, join(sysroot, "include/c++"), "dir");
   utimesSync(join(prebuild, "build/jsc/lib/libJavaScriptCore.a"), 1_700_000_000, 1_700_000_000);
   writeFileSync(join(h.temp, "jsc-prebuild.log"), "prebuild log\n");
   writeFileSync(h.env.GITHUB_OUTPUT!, "");
-  writeFileSync(h.env.STAMP_CALLS!, "");
 }
 
 function snapshot(directory: string): string[] {
@@ -253,36 +138,7 @@ function snapshot(directory: string): string[] {
 }
 
 function bash(h: Harness, script: string, env: Record<string, string> = {}) {
-  // Actions runs `run:` scripts with `bash -e`; each hand-off script adds pipefail itself.
   return spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", script], { cwd: h.repo, env: { ...h.env, ...env }, encoding: "utf8", timeout: 20000 });
-}
-
-function produceTransfer(h: Harness): { digest: string; prebuild: string[]; sysroot: string[] } {
-  seedProducerTrees(h);
-  const sysrootPath = join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched");
-  const producerSnapshot = snapshot(h.env.JSC_BUILD_DIR!);
-  const before = { prebuild: producerSnapshot.filter(line => !excludedJscRoots.some(path => line.startsWith(`${path} `) || line.startsWith(`${path}/`))), sysroot: snapshot(sysrootPath) };
-  const result = bash(h, run(producer, packageName));
-  expect(result.stderr).toBe("");
-  expect(result.status).toBe(0);
-  expect(snapshot(h.env.JSC_BUILD_DIR!)).toEqual(producerSnapshot);
-  expect(result.stdout).toContain('"excluded_regular_file_bytes":');
-  expect(result.stdout).toContain('"jsc_artifact_compressed_bytes":');
-  expect(readdirSync(bundle(h)).some(name => name.startsWith("jsc-inventory-"))).toBe(false);
-  const digest = /^manifest-sha256=([0-9a-f]{64})\n$/.exec(readFileSync(h.env.GITHUB_OUTPUT!, "utf8"))?.[1];
-  if (!digest) throw new Error("Package step did not report a manifest digest");
-  // A fresh runner: only the direct downloaded transfer exists before unpacking.
-  rmSync(h.env.JSC_BUILD_DIR!, { recursive: true });
-  rmSync(sysrootPath, { recursive: true });
-  const transferDirectory = join(h.temp, "jsc-prebuild-transfer");
-  mkdirSync(transferDirectory);
-  renameSync(join(h.temp, "jsc-prebuild.tar"), join(transferDirectory, "jsc-prebuild.tar"));
-  rmSync(bundle(h), { recursive: true, force: true });
-  return { digest, ...before };
-}
-
-function consume(h: Harness, digest: string, env: Record<string, string> = {}) {
-  return bash(h, run(native, importName), { JSC_PREBUILD_MANIFEST_SHA256: digest, ...env });
 }
 
 function withHarness(body: (h: Harness) => void) {
@@ -293,229 +149,40 @@ function withHarness(body: (h: Harness) => void) {
 
 const bundle = (h: Harness) => join(h.temp, "jsc-prebuild-artifact");
 
-for (const [label, job] of [["native quality", checkpoint], ["Rust", native]] satisfies [string, Job][]) {
-  test(`${label} imports the downloaded transfer with the actual workflow step`, () => withHarness(h => {
-    const produced = produceTransfer(h);
-    expect(existsSync(bundle(h))).toBe(false);
-    const imported = bash(h, run(job, importName), { JSC_PREBUILD_MANIFEST_SHA256: produced.digest });
-    expect(imported.status).toBe(0);
-    expect(snapshot(h.env.JSC_BUILD_DIR!)).toEqual(produced.prebuild);
-    expect(snapshot(join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched"))).toEqual(produced.sysroot);
-  }));
-
-  test(`${label} rejects a missing transfer before import`, () => withHarness(h => {
-    produceTransfer(h);
-    rmSync(join(h.temp, "jsc-prebuild-transfer/jsc-prebuild.tar"));
-    expectRejectedBeforeExtraction(h, bash(h, run(job, importName)));
-  }));
-
-  test(`${label} rejects a truncated transfer before import`, () => withHarness(h => {
-    produceTransfer(h);
-    truncateSync(join(h.temp, "jsc-prebuild-transfer/jsc-prebuild.tar"), 512);
-    expectRejectedBeforeExtraction(h, bash(h, run(job, importName)));
-  }));
-
-  test(`${label} refuses to import over an existing prebuild`, () => withHarness(h => {
-    produceTransfer(h);
-    mkdirSync(join(h.env.JSC_BUILD_DIR!, "build"), { recursive: true });
-    writeFileSync(join(h.env.JSC_BUILD_DIR!, "build/owner-file"), "untouched");
-    const result = bash(h, run(job, importName), { JSC_PREBUILD_MANIFEST_SHA256: "0".repeat(64) });
-    expect(result.status).not.toBe(0);
-    expect(readFileSync(join(h.env.JSC_BUILD_DIR!, "build/owner-file"), "utf8")).toBe("untouched");
-    expect(existsSync(join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched"))).toBe(false);
-    expect(readFileSync(h.env.STAMP_CALLS!, "utf8")).toBe("");
-  }));
-}
-
-test("the imported compact prebuild preserves qualified trees at the same absolute paths", () => withHarness(h => {
-  const produced = produceTransfer(h);
-  expect(execFileSync("tar", ["--posix", "-tf", transfer(h)], { encoding: "utf8" })).toBe("prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest\n");
-  expect(execFileSync("tar", ["--posix", "-xOf", transfer(h), "manifest"], { encoding: "utf8" }).split("\n").slice(0, 4)).toEqual([
-    "run=4100", "sha=433aca4ea0d761c23fc1661aa8c636e75dfdd6b3", `jsc-build-dir=${h.env.JSC_BUILD_DIR}`, `sysroot=${h.env.WASM_TOOLS}/bun-wasm-sysroot-patched`,
-  ]);
-  const result = consume(h, produced.digest);
+test("standalone jsc-prebuild packaging excludes build scratch and preserves qualified trees", () => withHarness(h => {
+  seedProducerTrees(h);
+  const producerSnapshot = snapshot(h.env.JSC_BUILD_DIR!);
+  const expected = producerSnapshot.filter(line => !excludedJscRoots.some(path => line.startsWith(`${path} `) || line.startsWith(`${path}/`)));
+  const result = bash(h, run(jscPrebuildAction, packageName));
   expect(result.stderr).toBe("");
   expect(result.status).toBe(0);
-  expect(snapshot(h.env.JSC_BUILD_DIR!)).toEqual(produced.prebuild);
-  for (const path of excludedJscSentinels) expect(existsSync(join(h.env.JSC_BUILD_DIR!, path))).toBe(false);
-  expect(snapshot(join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched"))).toEqual(produced.sysroot);
-  expect(readFileSync(join(h.temp, "jsc-prebuild.log"), "utf8")).toBe("prebuild log\n");
-  expect(existsSync(bundle(h))).toBe(false);
-  expect(existsSync(join(h.temp, "jsc-prebuild-transfer"))).toBe(false);
-  expect(readFileSync(h.env.STAMP_CALLS!, "utf8")).toBe("stamp\n");
-}));
-
-test("import streams members from the downloaded transfer into the final trees without an unpacked copy", () => withHarness(h => {
-  const produced = produceTransfer(h);
-  const bin = join(h.root, "bin");
-  const seen = join(h.root, "zstd-seen");
-  mkdirSync(bin);
-  writeFileSync(join(bin, "zstd"), `#!/bin/bash\nls -A "$RUNNER_TEMP" >> "${seen}"\necho -- >> "${seen}"\nexec ${Bun.which("zstd")} "$@"\n`, { mode: 0o755 });
-  const before = readdirSync(h.temp);
-  expect(before).toContain("jsc-prebuild-transfer");
-  const result = consume(h, produced.digest, { PATH: `${bin}:${h.env.PATH}` });
-  expect(result.status, result.stderr).toBe(0);
-  // While each member decompresses, only the transfer, its verified manifest and the final trees are added.
-  const during = Array.from(new Set(before.concat(["jsc", "jsc-prebuild-manifest"]))).toSorted().join("\n");
-  expect(readFileSync(seen, "utf8")).toBe(`${during}\n--\n${during}\n--\n`);
-  expect(readdirSync(h.temp).toSorted()).toEqual(Array.from(new Set(before.concat(["jsc"]))).filter(name => name !== "jsc-prebuild-transfer").toSorted());
-}));
-
-test("import rejects reordered or extra transfer members before extracting anything", () => withHarness(h => {
-  const { digest } = produceTransfer(h);
-  const directory = mkdtempSync(join(h.root, "reorder-transfer-"));
-  execFileSync("tar", ["--posix", "-xf", transfer(h), "-C", directory]);
-  execFileSync("tar", ["--posix", "-C", directory, "-cf", transfer(h), "sysroot.tar.zst", "prebuild.tar.zst", "jsc-prebuild.log", "manifest"]);
-  expectRejectedBeforeExtraction(h, consume(h, digest));
-  rewriteTransfer(h, extra => writeFileSync(join(extra, "foreign"), "unexpected"));
-  expectRejectedBeforeExtraction(h, consume(h, digest));
-}));
-
-test("import refuses an existing manifest scratch file before extracting anything", () => withHarness(h => {
-  const { digest } = produceTransfer(h);
-  writeFileSync(join(h.temp, "jsc-prebuild-manifest"), "owner data");
-  expectRejectedBeforeExtraction(h, consume(h, digest));
-  expect(readFileSync(join(h.temp, "jsc-prebuild-manifest"), "utf8")).toBe("owner data");
-}));
-
-function expectRejectedBeforeExtraction(h: Harness, result: ReturnType<typeof consume>) {
-  expect(result.status).not.toBe(0);
-  expect(existsSync(h.env.JSC_BUILD_DIR!)).toBe(false);
-  expect(existsSync(join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched"))).toBe(false);
-  expect(readFileSync(h.env.STAMP_CALLS!, "utf8")).toBe("");
-}
-
-for (const [label, digest] of [
-  ["no reported digest (prebuild output missing)", ""],
-  ["a malformed digest", "not-a-digest"],
-  ["another manifest's digest", "0".repeat(64)],
-] satisfies [string, string][]) {
-  test(`import rejects ${label} before extracting anything`, () => withHarness(h => {
-    produceTransfer(h);
-    expectRejectedBeforeExtraction(h, consume(h, digest));
-  }));
-}
-
-test("import rejects an artifact from another run or commit even with that artifact's own digest", () => withHarness(h => {
-  const { digest } = produceTransfer(h);
-  expectRejectedBeforeExtraction(h, consume(h, digest, { GITHUB_RUN_ID: "4101" }));
-  expectRejectedBeforeExtraction(h, consume(h, digest, { GITHUB_SHA: "0".repeat(40) }));
-}));
-
-test("import rejects a relocated consumer before extracting anything", () => withHarness(h => {
-  const { digest } = produceTransfer(h);
-  const moved = environment(h.root, "elsewhere");
-  mkdirSync(moved.RUNNER_TEMP!, { recursive: true });
-  renameSync(join(h.temp, "jsc-prebuild-transfer"), join(moved.RUNNER_TEMP!, "jsc-prebuild-transfer"));
-  const result = bash(h, run(native, importName), { ...moved, JSC_PREBUILD_MANIFEST_SHA256: digest });
-  expect(result.status).not.toBe(0);
-  expect(existsSync(moved.JSC_BUILD_DIR!)).toBe(false);
-  expect(existsSync(join(moved.WASM_TOOLS!, "bun-wasm-sysroot-patched"))).toBe(false);
-}));
-
-function transfer(h: Harness): string {
-  return join(h.temp, "jsc-prebuild-transfer/jsc-prebuild.tar");
-}
-function rewriteTransfer(h: Harness, mutate: (directory: string) => void): void {
-  const directory = mkdtempSync(join(h.root, "rewrite-transfer-"));
-  try {
-    execFileSync("tar", ["--posix", "-xf", transfer(h), "-C", directory]);
-    mutate(directory);
-    const names = ["prebuild.tar.zst", "sysroot.tar.zst", "jsc-prebuild.log", "manifest"];
-    const extra = readdirSync(directory).filter(name => !names.includes(name)).toSorted();
-    execFileSync("tar", ["--posix", "-C", directory, "-cf", transfer(h)].concat(names.concat(extra).filter(name => existsSync(join(directory, name)))));
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-}
-
-function checkNoopTransfer(h: Harness, job: Job): void {
-  const produced = produceTransfer(h);
-  rewriteTransfer(h, () => {});
-  const imported = bash(h, run(job, importName), { JSC_PREBUILD_MANIFEST_SHA256: produced.digest });
-  expect(imported.status, imported.stderr).toBe(0);
-  expect(snapshot(h.env.JSC_BUILD_DIR!)).toEqual(produced.prebuild);
-  expect(snapshot(join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched"))).toEqual(produced.sysroot);
-}
-
-function checkMemberDigest(h: Harness, job: Job, archive: string): void {
-  const produced = produceTransfer(h);
-  const emptyFrame = execFileSync("zstd", ["-q", "-c"], { input: Buffer.alloc(0) });
-  rewriteTransfer(h, directory => {
-    const path = join(directory, archive);
-    const original = readFileSync(path);
-    const changed = Buffer.concat([original, emptyFrame]);
-    expect(execFileSync("zstd", ["-dc"], { input: changed })).toEqual(execFileSync("zstd", ["-dc"], { input: original }));
-    writeFileSync(path, changed);
-  });
-  expectRejectedBeforeExtraction(h, bash(h, run(job, importName), { JSC_PREBUILD_MANIFEST_SHA256: produced.digest }));
-}
-
-const digestConsumers: readonly [string, Job][] = [["native quality", checkpoint], ["Rust", native]];
-for (const [label, job] of digestConsumers) {
-  test(`${label} accepts a canonical no-op transfer rewrite`, () => withHarness(h => checkNoopTransfer(h, job)));
-}
-const digestCases = digestConsumers.flatMap(([label, job]) => ["prebuild.tar.zst", "sysroot.tar.zst"].map(archive => ({ label, job, archive })));
-for (const { label, job, archive } of digestCases) {
-  test(`${label} rejects changed ${archive} bytes with identical valid decompressed content`, () => withHarness(h => checkMemberDigest(h, job, archive)));
-}
-
-for (const archive of ["prebuild.tar.zst", "sysroot.tar.zst"]) {
-  test(`import rejects a corrupted or missing ${archive} before extracting anything`, () => withHarness(h => {
-    const { digest } = produceTransfer(h);
-    rewriteTransfer(h, directory => {
-      const path = join(directory, archive);
-      const bytes = readFileSync(path);
-      writeFileSync(path, bytes.map((byte, index) => index === bytes.length - 1 ? byte ^ 1 : byte));
-    });
-    expectRejectedBeforeExtraction(h, consume(h, digest));
-    rewriteTransfer(h, directory => rmSync(join(directory, archive)));
-    expectRejectedBeforeExtraction(h, consume(h, digest));
-  }));
-}
-
-test("import rejects a manifest that lists other archives, even with its own digest", () => withHarness(h => {
-  produceTransfer(h);
-  rewriteTransfer(h, directory => {
-    const manifest = join(directory, "manifest");
-    const lines = readFileSync(manifest, "utf8").trimEnd().split("\n");
-    writeFileSync(manifest, lines.slice(0, 5).join("\n") + "\n");
-  });
-  const manifest = execFileSync("tar", ["--posix", "-xOf", transfer(h), "manifest"]);
-  const digest = new Bun.CryptoHasher("sha256").update(manifest).digest("hex");
-  expectRejectedBeforeExtraction(h, consume(h, digest));
-}));
-
-test("import never overlays an existing tree", () => withHarness(h => {
-  const { digest } = produceTransfer(h);
-  mkdirSync(join(h.env.JSC_BUILD_DIR!, "build"), { recursive: true });
-  writeFileSync(join(h.env.JSC_BUILD_DIR!, "build/stale"), "stale");
-  const result = consume(h, digest);
-  expect(result.status).not.toBe(0);
-  expect(readdirSync(h.env.JSC_BUILD_DIR!, { recursive: true })).toEqual(["build", "build/stale"]);
-  expect(existsSync(join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched"))).toBe(false);
-}));
-
-test("import fails when the extracted prebuild does not verify in the consumer's environment", () => withHarness(h => {
-  const { digest } = produceTransfer(h);
-  const result = consume(h, digest, { EXPECTED_STAMP: "consumer-inputs" });
-  expect(result.status).toBe(1);
-  expect(readFileSync(h.env.STAMP_CALLS!, "utf8")).toBe("stamp\n");
+  expect(snapshot(h.env.JSC_BUILD_DIR!)).toEqual(producerSnapshot);
+  expect(result.stdout).toContain('"excluded_regular_file_bytes":');
+  expect(result.stdout).toContain('"jsc_artifact_compressed_bytes":');
+  expect(readdirSync(bundle(h)).some(name => name.startsWith("jsc-inventory-"))).toBe(false);
+  const digest = /^manifest-sha256=([0-9a-f]{64})\n$/.exec(readFileSync(h.env.GITHUB_OUTPUT!, "utf8"))?.[1];
+  expect(digest).toMatch(/^[0-9a-f]{64}$/);
+  const transfer = join(h.temp, "jsc-prebuild.tar");
+  expect(execFileSync("tar", ["--posix", "-tf", transfer], { encoding: "utf8" })).toBe("prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest\n");
+  const unpacked = join(h.root, "unpacked");
+  mkdirSync(unpacked);
+  execFileSync("bash", ["-euo", "pipefail", "-c", `tar --posix -xOf "$1" prebuild.tar.zst | zstd -dc | tar --posix -C "$2" -xf -`, "_", transfer, unpacked]);
+  expect(snapshot(join(unpacked, "prebuild"))).toEqual(expected);
+  for (const path of excludedJscSentinels) expect(existsSync(join(unpacked, "prebuild", path))).toBe(false);
 }));
 
 test("packaging fails and reports no digest when a tree is missing or the archiver fails", () => withHarness(h => {
   seedProducerTrees(h);
   rmSync(join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched"), { recursive: true });
-  const missing = bash(h, run(producer, packageName));
+  const missing = bash(h, run(jscPrebuildAction, packageName));
   expect(missing.status).not.toBe(0);
   expect(readFileSync(h.env.GITHUB_OUTPUT!, "utf8")).toBe("");
-  for (const path of [bundle(h), join(h.temp, "jsc-prebuild-transfer"), h.env.JSC_BUILD_DIR!, h.env.WASM_TOOLS!]) rmSync(path, { recursive: true, force: true });
+  for (const path of [bundle(h), h.env.JSC_BUILD_DIR!, h.env.WASM_TOOLS!]) rmSync(path, { recursive: true, force: true });
   seedProducerTrees(h);
-  // tar's own failure must not be hidden by the compressor that ends the pipeline.
   const bin = join(h.root, "bin");
   mkdirSync(bin);
   writeFileSync(join(bin, "tar"), "#!/bin/sh\nexit 2\n", { mode: 0o755 });
-  const failed = bash(h, run(producer, packageName), { PATH: `${bin}:${h.env.PATH}` });
+  const failed = bash(h, run(jscPrebuildAction, packageName), { PATH: `${bin}:${h.env.PATH}` });
   expect(failed.status).not.toBe(0);
   expect(readFileSync(h.env.GITHUB_OUTPUT!, "utf8")).toBe("");
   expect(readdirSync(bundle(h)).some(name => name.startsWith("jsc-inventory-"))).toBe(false);

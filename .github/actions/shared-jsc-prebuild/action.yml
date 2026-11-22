@@ -38,7 +38,7 @@ runs:
         check_jsc_inputs_stamp
         echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
     - name: Save the shared JSC prebuild
-      if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-jsc-producer.outputs.jsc-ready == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}
+      if: ${{ success() && !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && steps.shared-jsc-producer.outputs.jsc-ready == 'true' && steps.shared-jsc-cache.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/jsc/shared

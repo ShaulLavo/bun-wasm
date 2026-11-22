@@ -22,51 +22,20 @@ export PATH="$scratch/bin:$PATH" GH_TOKEN=fixture GH_REPO=ShaulLavo/fixture HEAD
 run_report() {
   : > "$STATUS_LOG"
   bash -euo pipefail "$scratch/report.sh"
-  test "$(grep -c '^api --method POST repos/ShaulLavo/fixture/statuses/tested-head ' "$STATUS_LOG")" = 11
+  test "$(grep -c '^api --method POST repos/ShaulLavo/fixture/statuses/tested-head ' "$STATUS_LOG")" = 1
 }
 baseline=$(cat <<'JSON'
-{"selection":{"result":"success","outputs":{"rust":"true","browser_guest":"true","shared":"true"}},"ordinary-web-guests":{"result":"success"},"quality":{"result":"success"},"ci-result":{"result":"success"},"jsc-prebuild":{"result":"success"},"native-quality":{"result":"success"},"rust":{"result":"success"},"package":{"result":"success"},"shared-proof":{"result":"success"},"web":{"result":"success"},"process-bundles":{"result":"success"},"browser-process":{"result":"success"}}
+{"selection":{"result":"success","outputs":{"rust":"true","browser_guest":"true","shared":"true"}},"quality":{"result":"success"},"web-unit":{"result":"success"},"web-browser":{"result":"success"},"native-quality":{"result":"success"},"ordinary-build":{"result":"success"},"rust":{"result":"success"},"rust-fixtures":{"result":"success"},"shared-sysroot":{"result":"success"},"browser-guest":{"result":"success"},"shared-consumers":{"result":"success"},"ci-result":{"result":"success"}}
 JSON
 )
 export RESULTS="$baseline"
 run_report
-test "$(grep -c -- '-f state=success ' "$STATUS_LOG")" = 11
-while IFS='|' read -r context job selection; do
-  for result in failure cancelled skipped; do
-    export RESULTS
-    RESULTS=$(jq --arg job "$job" --arg result "$result" '.[$job].result = $result' <<< "$baseline")
-    run_report
-    grep -Fq -- "-f context=$context -f state=failure " "$STATUS_LOG"
-  done
-  [[ -n "$selection" ]] || continue
-  RESULTS=$(jq --arg job "$job" --arg selection "$selection" '.[$job].result = "skipped" | .selection.outputs[$selection] = "false" | if $selection == "rust" then .selection.outputs.browser_guest = "false" else . end' <<< "$baseline")
-  run_report
-  test "$(grep -c -- '-f state=success ' "$STATUS_LOG")" = 11
-  RESULTS=$(jq '.selection.result = "failure"' <<< "$RESULTS")
-  run_report
-  grep -Fq -- "-f context=$context -f state=failure " "$STATUS_LOG"
-done <<'CASES'
-Code quality|ci-result|
-JSC C/C++ prebuild|jsc-prebuild|rust
-Native quality checkpoint|native-quality|rust
-Rust workspace tests (QuickJS host)|rust|rust
-Browser adapter package|package|
-Shared PIC sysroot proof|shared-proof|shared
-Web host|web|
-Shared process browser bundles|process-bundles|
-Processes (chromium)|browser-process|
-Processes (firefox)|browser-process|
-Processes (webkit)|browser-process|
-CASES
-for job in jsc-prebuild native-quality rust; do
-  RESULTS=$(jq --arg job "$job" '.selection.outputs.rust = "false" | .[$job].result = "skipped"' <<< "$baseline")
-  run_report
-  test "$(grep -c -- '-f state=failure ' "$STATUS_LOG")" = 1
-done
+test "$(grep -c -- '-f state=success ' "$STATUS_LOG")" = 1
 for result in failure cancelled skipped; do
-  RESULTS=$(jq --arg result "$result" '."ordinary-web-guests".result = $result | ."ci-result".result = "failure"' <<< "$baseline")
+  export RESULTS
+  RESULTS=$(jq --arg result "$result" '."ci-result".result = $result' <<< "$baseline")
   run_report
-  grep -Fq -- '-f context=Code quality -f state=failure ' "$STATUS_LOG"
+  grep -Fq -- "-f context=Code quality -f state=failure " "$STATUS_LOG"
 done
 RESULTS=$(jq 'del(."ci-result")' <<< "$baseline")
 if bash -euo pipefail "$scratch/report.sh"; then
