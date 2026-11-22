@@ -293,7 +293,7 @@ jobs:
         with:
           mode: native
           node-version: ${{ env.CI_NODE_VERSION }}
-          jsc: 'false'
+          jsc: 'true'
       - uses: ./.github/actions/native-seed
         id: native-seed
         with:
@@ -1000,7 +1000,13 @@ jobs:
           mkdir -p "$bundle_dir"
           zstd -dc "$RUNNER_TEMP/ordinary-native-bundle/bundle.tar.zst" | tar --posix -C "$bundle_dir" -xf -
           test "$(cat "$bundle_dir/source.txt")" = "$GITHUB_SHA"
-          cp "$bundle_dir/dist/bash-web-shell.wasm" "$bundle_dir/dist/bash-web-env.wasm" dist/
+          cp "$bundle_dir/dist/bash-web-shell.wasm" "$bundle_dir/dist/bash-web-env.wasm" "$bundle_dir/dist/bash-web-guests.json" dist/
+          sm_release="$RUNNER_TEMP/$(cat "$bundle_dir/spidermonkey-panic/relpath.txt")"
+          mkdir -p "$sm_release"
+          cp "$bundle_dir/spidermonkey-panic/libbunwasm_engine_spidermonkey.a" "$sm_release/"
+          cp -a "$bundle_dir/spidermonkey-panic/build" "$sm_release/"
+          sm_archive=$(grep -oE '[^[:space:](]*libbunwasm_engine_spidermonkey\.a\(' "$bundle_dir/ordinary-side/engine-link.map" | head -n 1 | sed 's/($//' || true)
+          test -n "$sm_archive" && test -f "$sm_archive"
           sm_pair="$RUNNER_TEMP/ordinary-spidermonkey-program"
           bun scripts/spidermonkey-side-core-receipt.ts verify-pair \
             "$sm_pair/bun-spidermonkey.wasm" "$sm_pair/spidermonkey-engine.wasm" \
@@ -1016,6 +1022,7 @@ jobs:
           echo "SPIDERMONKEY_WASM=$sm_pair/bun-spidermonkey.wasm" >> "$GITHUB_ENV"
           echo "SPIDERMONKEY_NATIVE_DIR=$bundle_dir/spidermonkey-native" >> "$GITHUB_ENV"
           echo "SPIDERMONKEY_BUILD_DIR=$sm_build" >> "$GITHUB_ENV"
+          echo "SPIDERMONKEY_ENGINE_BUILD_DIR=$bundle_dir/ordinary-side" >> "$GITHUB_ENV"
       - name: Blocking native runtime checks
         env:
           BUN_WASM_RUNTIME_JOBS: "3"
@@ -1145,7 +1152,7 @@ jobs:
           mkdir -p "$bundle_dir"
           zstd -dc "$RUNNER_TEMP/ordinary-native-bundle/bundle.tar.zst" | tar --posix -C "$bundle_dir" -xf -
           test "$(cat "$bundle_dir/source.txt")" = "$GITHUB_SHA"
-          cp "$bundle_dir/dist/bash-web-shell.wasm" "$bundle_dir/dist/bash-web-env.wasm" dist/
+          cp "$bundle_dir/dist/bash-web-shell.wasm" "$bundle_dir/dist/bash-web-env.wasm" "$bundle_dir/dist/bash-web-guests.json" dist/
           sm_pair="$RUNNER_TEMP/ordinary-spidermonkey-program"
           bun scripts/spidermonkey-side-core-receipt.ts verify-pair \
             "$sm_pair/bun-spidermonkey.wasm" "$sm_pair/spidermonkey-engine.wasm" \
@@ -1354,6 +1361,9 @@ jobs:
     needs: [selection, quality, web-unit, web-browser, native-quality, ordinary-build, rust, rust-fixtures, shared-sysroot, browser-guest, shared-consumers]
     if: ${{ always() }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -1364,6 +1374,11 @@ jobs:
       - name: Require every selected CI job to pass
         env:
           CI_RESULTS: ${{ toJSON(needs) }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          BROWSER_GUEST_MATRIX: ${{ needs.selection.outputs.browser-guest-matrix }}
         run: bun scripts/ci-result.ts
 
   update-status:

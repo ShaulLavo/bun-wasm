@@ -285,8 +285,11 @@ test("only selection gets read-only Actions access and main marker wiring preser
   expect(steps.find(step => step.id === "changes")?.env).toEqual({ BASE: "${{ steps.refs.outputs.base }}", HEAD: "${{ steps.refs.outputs.head }}", MAIN_SELECTION: "${{ steps.main-coverage.outputs.selection }}" });
   expect(steps.find(step => step.id === "changes")?.run).toContain('bun scripts/ci-changes.ts "$BASE" "$HEAD"');
   for (const [id, value] of Object.entries(jobs)) {
-    if (id === "selection") continue;
-    expect(object(object(value).permissions ?? {}).actions).toBe(["native-quality", "ordinary-build", "shared-sysroot"].includes(id) ? "write" : undefined);
+    if (id === "selection" || id === "ci-result") {
+      expect(object(object(value).permissions ?? {}).actions, id).toBe("read");
+      continue;
+    }
+    expect(object(object(value).permissions ?? {}).actions, id).toBe(["native-quality", "ordinary-build", "shared-sysroot"].includes(id) ? "write" : undefined);
   }
 });
 

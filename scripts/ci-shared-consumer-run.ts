@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 type StepResult = { label: string; kind: "native" | "browser"; status: number; output: Buffer };
+type NativeStepResult = StepResult & { cleanupConfirmed: boolean };
 
 const root = resolve(import.meta.dir, "..");
 
@@ -36,7 +37,7 @@ function engineEnv(engine: string, kind: "native" | "browser", baseTemp: string,
   };
 }
 
-function nativeCommand(engine: string, deadlineEpoch: number, statePath: string): { args: string[]; expired: boolean } {
+function nativeCommand(deadlineEpoch: number, statePath: string): { args: string[]; expired: boolean } {
   const remaining = deadlineEpoch - Math.floor(Date.now() / 1000);
   if (remaining <= 0) return { args: [], expired: true };
   return {
@@ -56,11 +57,19 @@ function browserCommand(engine: string, deadlineEpoch: number): { args: string[]
   };
 }
 
-async function runNativeFor(engine: string, deadlineEpoch: number, temp: string, inputsDir: string, launcher: string): Promise<StepResult> {
+async function runNativeFor(engine: string, deadlineEpoch: number, temp: string, inputsDir: string, launcher: string): Promise<NativeStepResult> {
   const statePath = join(temp, `shared-native-run-${engine}`);
-  const cmd = nativeCommand(engine, deadlineEpoch, statePath);
-  if (cmd.expired) return { label: `${engine} native`, kind: "native", status: 124, output: Buffer.from("Shared native setup exhausted its budget\n") };
-  return runStep(`${engine} native`, "native", cmd.args, engineEnv(engine, "native", temp, inputsDir, launcher));
+  rmSync(statePath, { recursive: true, force: true });
+  mkdirSync(statePath, { recursive: true });
+  const cmd = nativeCommand(deadlineEpoch, statePath);
+  if (cmd.expired) {
+    rmSync(statePath, { recursive: true, force: true });
+    return { label: `${engine} native`, kind: "native", status: 124, output: Buffer.from("Shared native setup exhausted its budget\n"), cleanupConfirmed: false };
+  }
+  const result = await runStep(`${engine} native`, "native", cmd.args, engineEnv(engine, "native", temp, inputsDir, launcher));
+  const cleanupConfirmed = existsSync(join(statePath, "status"));
+  rmSync(statePath, { recursive: true, force: true });
+  return { ...result, cleanupConfirmed };
 }
 
 async function runBrowserFor(engine: string, deadlineEpoch: number, temp: string, inputsDir: string, launcher: string): Promise<StepResult> {
@@ -71,12 +80,20 @@ async function runBrowserFor(engine: string, deadlineEpoch: number, temp: string
 
 async function runEngineSequential(engine: string, nativeDeadline: number, browserDeadline: number, temp: string, inputsDir: string, launcher: string): Promise<StepResult[]> {
   const nativeResult = await runNativeFor(engine, nativeDeadline, temp, inputsDir, launcher);
-  const statePath = join(temp, `shared-native-run-${engine}`);
-  if (existsSync(statePath)) {
+  if (!nativeResult.cleanupConfirmed) {
     return [nativeResult, { label: `${engine} browser`, kind: "browser", status: 1, output: Buffer.from("Shared native process cleanup could not be confirmed\n") }];
   }
   const browserResult = await runBrowserFor(engine, browserDeadline, temp, inputsDir, launcher);
   return [nativeResult, browserResult];
+}
+
+async function runSpiderMonkeyConcurrent(deadline: number, temp: string, inputsDir: string, launcher: string): Promise<StepResult[]> {
+  const [nativeResult, browserResult] = await Promise.all([
+    runNativeFor("spidermonkey", deadline, temp, inputsDir, launcher),
+    runBrowserFor("spidermonkey", deadline, temp, inputsDir, launcher),
+  ]);
+  if (nativeResult.cleanupConfirmed) return [nativeResult, browserResult];
+  return [nativeResult, browserResult, { label: "spidermonkey native cleanup", kind: "native", status: 1, output: Buffer.from("Shared native process cleanup could not be confirmed\n") }];
 }
 
 async function main(): Promise<void> {
@@ -98,10 +115,7 @@ async function main(): Promise<void> {
     ]);
     results = qjs.concat(jsc);
   } else if (group === "spidermonkey") {
-    results = await Promise.all([
-      runNativeFor("spidermonkey", deadline, temp, inputsDir, launcher),
-      runBrowserFor("spidermonkey", deadline, temp, inputsDir, launcher),
-    ]);
+    results = await runSpiderMonkeyConcurrent(deadline, temp, inputsDir, launcher);
   } else {
     throw new Error(`Unknown shared consumer group: ${group}`);
   }

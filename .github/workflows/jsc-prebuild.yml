@@ -1,21 +1,6 @@
 name: JSC cache producer
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'jsc/**'
-      - 'patches/wasi-libc/**'
-      - 'scripts/build-jsc.sh'
-      - 'scripts/build-wasi-sysroot.ts'
-      - 'scripts/build-shared-wasi-libc.sh'
-      - 'scripts/ci-binaryen.ts'
-      - 'scripts/ci-build-tools.ts'
-      - 'scripts/ci-jsc-artifact.ts'
-      - 'scripts/waffle-release-inputs.*'
-      - '.github/actions/jsc-*/**'
-      - '.github/actions/shared-jsc-*/**'
-      - '.github/workflows/jsc-prebuild.yml'
   workflow_dispatch:
 
 permissions:

@@ -1330,8 +1330,8 @@ test("ordered producers keep every blocking native command and save JSC before b
   for (const prerequisite of ["Build patched WASI sysroot", "Save the verified sysroot cache", "Configure private JSC build paths", "id: jsc-inputs", "id: jsc-prebuild-cache"]) {
     expect(before).toContain(prerequisite);
   }
-  expect(checkpoint).not.toContain(`name: ${prebuildStepName}`);
-  expect(workflow.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(2);
+  expect(checkpoint).toContain(`name: ${prebuildStepName}`);
+  expect(workflow.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(3);
   const groupPrebuild = nativeWorkflowStep("name", "Build or verify the shared JSC prebuild", "shared-sysroot");
   const groupScript = workflowString(workflowField(groupPrebuild, "run"));
   expect(groupScript.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);

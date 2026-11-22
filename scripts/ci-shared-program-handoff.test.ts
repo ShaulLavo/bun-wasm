@@ -215,24 +215,44 @@ test("shared consumer runner enforces per-engine Browser caps and cleanup receip
   try {
     const bin = join(root, "bin");
     mkdirSync(bin);
-    writeFileSync(join(bin, "bun"), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$RECORD"\n', { mode: 0o755 });
+    const mockBun = [
+      "#!/bin/bash",
+      'printf "%s\\n" "$*" >> "$RECORD"',
+      'if [[ "${REAL_SUPERVISOR:-0}" == 1 && "$1" == */run-with-timeout.mts ]]; then',
+      '  if [[ "$2" == --state ]]; then',
+      '    exec "$REAL_BUN" "$1" --state "$3" "$4" true',
+      "  fi",
+      '  exec "$REAL_BUN" "$1" "$2" true',
+      "fi",
+      'if [[ "${WRITE_STATUS:-1}" == 1 && "$2" == --state ]]; then',
+      '  printf "0\\n" > "$3/status"',
+      "fi",
+    ].join("\n") + "\n";
+    writeFileSync(join(bin, "bun"), mockBun, { mode: 0o755 });
     const recordPath = join(root, "record");
     const now = Math.floor(Date.now() / 1000);
     const run = (group: string, extra: Record<string, string> = {}) => spawnSync(process.execPath, [new URL("./ci-shared-consumer-run.ts", import.meta.url).pathname, group], {
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: root, SHARED_PROOF_INPUTS_DIR: join(root, "inputs"), BUN_WASM_LAUNCHER: join(root, "bun-wasm"), SHARED_STARTED: String(now), SHARED_CHECK_SECONDS: "1800", RECORD: recordPath, ...extra },
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, REAL_BUN: process.execPath, RUNNER_TEMP: root, SHARED_PROOF_INPUTS_DIR: join(root, "inputs"), BUN_WASM_LAUNCHER: join(root, "bun-wasm"), SHARED_STARTED: String(now), SHARED_CHECK_SECONDS: "1800", RECORD: recordPath, ...extra },
       encoding: "utf8",
     });
-    const sm = run("spidermonkey");
-    expect(sm.status, sm.stderr).toBe(0);
+    // Exercise the real Linux run-with-timeout.mts --state receipt handoff end-to-end.
+    const realQjsJsc = run("quickjs-jsc", { REAL_SUPERVISOR: "1" });
+    expect(realQjsJsc.status, realQjsJsc.stdout + realQjsJsc.stderr).toBe(0);
+    const qjsLines = readFileSync(recordPath, "utf8").trim().split("\n");
+    expect(qjsLines.filter(line => line.includes("native --profile shared-group"))).toHaveLength(2);
+    expect(qjsLines.filter(line => line.includes("420 bun") && line.includes("browser-guest --profile shared-group"))).toHaveLength(2);
+    writeFileSync(recordPath, "");
+    const sm = run("spidermonkey", { REAL_SUPERVISOR: "1" });
+    expect(sm.status, sm.stdout + sm.stderr).toBe(0);
     const smLines = readFileSync(recordPath, "utf8").trim().split("\n");
     expect(smLines.some(line => line.includes("native --profile shared-group"))).toBe(true);
     expect(smLines.some(line => line.includes("1320 bun") && line.includes("browser-guest --profile shared-group"))).toBe(true);
-    // If the native state marker survives, Browser phase fails closed without starting.
-    mkdirSync(join(root, "shared-native-run-quickjs"));
+    // If the native supervisor fails to write its cleanup status receipt, Browser fails closed without starting.
     writeFileSync(recordPath, "");
-    const leaked = run("quickjs-jsc");
-    expect(leaked.status).toBe(1);
-    expect(leaked.stdout).toContain("Shared native process cleanup could not be confirmed");
+    const unconfirmed = run("quickjs-jsc", { WRITE_STATUS: "0" });
+    expect(unconfirmed.status).toBe(1);
+    expect(unconfirmed.stdout).toContain("Shared native process cleanup could not be confirmed");
+    expect(readFileSync(recordPath, "utf8")).not.toContain("browser-guest --profile shared-group");
     const expired = run("spidermonkey", { SHARED_STARTED: String(now - 2000) });
     expect(expired.status).toBe(1);
     expect(expired.stdout).toContain("exhausted its budget");

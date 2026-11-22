@@ -57,13 +57,15 @@ test("cache audit includes every local workflow and composite writer", () => {
   expect(writers.length).toBeGreaterThan(20);
 });
 
-test.each(writers)("$file $job $label saves only reusable main caches", ({ step }) => {
+test.each(writers)("$file $job $label saves only reusable main caches", ({ file, step }) => {
   expect(step.uses).toBe("actions/cache/save@v4");
   expect(allows(step, "push", "refs/heads/main")).toBe(true);
   expect(allows(step, "pull_request", "refs/pull/598/merge")).toBe(false);
   expect(allows(step, "pull_request_target", "refs/heads/main")).toBe(false);
   expect(allows(step, "push", "refs/heads/feature")).toBe(false);
-  expect(allows(step, "workflow_dispatch", "refs/heads/main")).toBe(false);
+  expect(allows(step, "workflow_dispatch", "refs/heads/feature")).toBe(false);
+  const manualMainWarmer = file === "actions/jsc-prebuild/action.yml" || file === "actions/shared-jsc-prebuild/action.yml";
+  expect(allows(step, "workflow_dispatch", "refs/heads/main")).toBe(manualMainWarmer);
   if (/cache-hit|legacy-hit/.test(String(step.if))) expect(allows(step, "push", "refs/heads/main", "true")).toBe(false);
 });
 

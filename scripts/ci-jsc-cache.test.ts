@@ -41,12 +41,8 @@ const build = record(document(".github/actions/jsc-prebuild/action.yml").runs);
 const ciJobs = record(ci.jobs);
 const warmJobs = record(warm.jobs);
 
-test("main warms effective JSC generations outside the full push queue without claiming its protected check", () => {
-  const push = record(record(warm.on).push);
-  expect(push.branches).toEqual(["main"]);
-  expect(Array.isArray(push.paths)).toBe(true);
-  expect(push.paths).toContain("jsc/**");
-  expect(push.paths).toContain("scripts/build-jsc.sh");
+test("manual JSC warming runs outside full CI without racing main pushes or claiming protected checks", () => {
+  expect(record(warm.on).push).toBeUndefined();
   expect(record(warm.on)).toHaveProperty("workflow_dispatch");
   expect(warm.concurrency).toBeUndefined();
   expect(warm.permissions).toEqual({ contents: "read" });
@@ -127,7 +123,7 @@ test("the existing key, compatible prefix and inline prebuild cache stay intact"
   expect(step(build, "id", "jsc-artifact").if).toBe("inputs.transfer == 'true'");
   expect(script(step(build, "id", "jsc-artifact"))).toContain('"$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"');
   const save = step(build, "name", "Save the JSC prebuild cache once per input revision");
-  expect(save.if).toBe("${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}");
+  expect(save.if).toBe("${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}");
   const inlineSave = step(nativeSetup, "name", "Save the JSC prebuild cache once per input revision");
   expect(inlineSave.if).toBe("${{ !cancelled() && inputs.jsc == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}");
 });

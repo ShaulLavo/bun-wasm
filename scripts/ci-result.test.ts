@@ -1,7 +1,7 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { requireCiSuccess as validateCiSuccess } from "./ci-result";
+import { browserGuestJobPrefix, expectedSharedConsumerNames, requireCiSuccess as validateCiSuccess, sharedConsumerJobPrefix, verifyAttemptMatrixJobs } from "./ci-result";
 
 // Tests here start real processes or browsers. The limit only catches a hang.
 setDefaultTimeout(120_000);
@@ -146,7 +146,18 @@ test("existing required Code quality name is a final non-skippable gate over eve
   if (!Array.isArray(gate.steps)) throw new Error("Missing aggregate steps");
   const gateSteps = gate.steps.map(object);
   const check = gateSteps.find(step => step.name === "Require every selected CI job to pass");
-  expect(check).toMatchObject({ env: { CI_RESULTS: "${{ toJSON(needs) }}" }, run: "bun scripts/ci-result.ts" });
+  expect(gate.permissions).toEqual({ contents: "read", actions: "read" });
+  expect(check).toMatchObject({
+    env: {
+      CI_RESULTS: "${{ toJSON(needs) }}",
+      GITHUB_TOKEN: "${{ github.token }}",
+      GITHUB_REPOSITORY: "${{ github.repository }}",
+      GITHUB_RUN_ID: "${{ github.run_id }}",
+      GITHUB_RUN_ATTEMPT: "${{ github.run_attempt }}",
+      BROWSER_GUEST_MATRIX: "${{ needs.selection.outputs.browser-guest-matrix }}",
+    },
+    run: "bun scripts/ci-result.ts",
+  });
   expect(check).not.toHaveProperty("if");
   expect(check).not.toHaveProperty("continue-on-error");
   const reporter = object(jobs["update-status"]);
@@ -154,4 +165,38 @@ test("existing required Code quality name is a final non-skippable gate over eve
   const report = reporter.steps.map(object).find(step => step.name === "Report each required result on the tested commit");
   expect(report?.run).toContain("Code quality|ci-result|");
   expect(report?.run).not.toContain("Code quality|quality|");
+});
+
+test("attempt job verification matches workflow matrix job names and rejects cancelled, missing or unexpected legs", () => {
+  expect(object(jobs["browser-guest"]).name).toBe(`${browserGuestJobPrefix}\${{ matrix.browser }}, \${{ matrix.batch }})`);
+  expect(object(jobs["shared-consumers"]).name).toBe(`${sharedConsumerJobPrefix}\${{ matrix.group }})`);
+  const sharedGroups = object(object(jobs["shared-consumers"]).strategy).matrix;
+  const groupList = object(sharedGroups).group;
+  expect(Array.isArray(groupList) ? groupList.map(group => `${sharedConsumerJobPrefix}${String(group)})`) : [])
+    .toEqual(Array.from(expectedSharedConsumerNames));
+  const matrix = JSON.stringify({
+    include: [
+      { browser: "chromium", batch: "storage" },
+      { browser: "chromium", batch: "suite" },
+      { browser: "webkit", batch: "storage" },
+      { browser: "webkit", batch: "suite" },
+    ],
+  });
+  const ok = (name: string) => ({ name, status: "completed", conclusion: "success" });
+  const passing = [
+    ok("Browser guest (chromium, storage)"),
+    ok("Browser guest (chromium, suite)"),
+    ok("Browser guest (webkit, storage)"),
+    ok("Browser guest (webkit, suite)"),
+    ok("Shared native and Browser (quickjs-jsc)"),
+    ok("Shared native and Browser (spidermonkey)"),
+  ];
+  expect(() => verifyAttemptMatrixJobs(passing, { browser: true, sharedNative: true }, matrix)).not.toThrow();
+  const cancelledBrowser = passing.map(job => job.name === "Browser guest (webkit, suite)" ? { ...job, conclusion: "cancelled" } : job);
+  expect(() => verifyAttemptMatrixJobs(cancelledBrowser, { browser: true, sharedNative: true }, matrix)).toThrow("completed/success");
+  expect(() => verifyAttemptMatrixJobs(passing.filter(job => job.name !== "Browser guest (chromium, suite)"), { browser: true, sharedNative: true }, matrix)).toThrow("Missing matrix job");
+  const cancelledShared = passing.map(job => job.name === "Shared native and Browser (spidermonkey)" ? { ...job, conclusion: "cancelled" } : job);
+  expect(() => verifyAttemptMatrixJobs(cancelledShared, { browser: true, sharedNative: true }, matrix)).toThrow("completed/success");
+  expect(() => verifyAttemptMatrixJobs([], { browser: false, sharedNative: false })).not.toThrow();
+  expect(() => verifyAttemptMatrixJobs([ok("Browser guest (chromium, storage)")], { browser: false, sharedNative: false })).toThrow("Unexpected matrix job");
 });

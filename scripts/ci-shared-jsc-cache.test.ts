@@ -41,11 +41,8 @@ const build = record(document(".github/actions/shared-jsc-prebuild/action.yml").
 const ciJobs = record(ci.jobs);
 const warmJobs = record(warm.jobs);
 
-test("shared warming bypasses full CI admission and keeps main-only publication and existing protected names", () => {
-  const push = record(record(warm.on).push);
-  expect(push.branches).toEqual(["main"]);
-  expect(Array.isArray(push.paths)).toBe(true);
-  expect(push.paths).toContain("patches/wasi-libc/**");
+test("manual shared warming runs outside full CI without racing main pushes and keeps existing protected names", () => {
+  expect(record(warm.on).push).toBeUndefined();
   expect(record(warm.on)).toHaveProperty("workflow_dispatch");
   expect(warm.concurrency).toBeUndefined();
   expect(warm.permissions).toEqual({ contents: "read" });
