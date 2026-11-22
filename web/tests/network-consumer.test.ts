@@ -158,6 +158,37 @@ test("child helper lives until physical cleanup, not its logical outcome or adap
   } finally { launch?.cleanup?.(); await runtime.dispose(); }
 });
 
+// Restart kills the old dev server and starts a new one on the same port. The old Worker may never
+// physically stop (WebKit cannot terminate one parked in a Wasm wait), so its cleanup never runs.
+test("a killed child frees its port when the kill is decided, before its Worker stops", async () => {
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const stopped: number[] = [];
+  const network: BunNetworkOptions = { stopped: port => stopped.push(port) };
+  const launches: Parameters<ProcessService["launchWorker"]>[1][] = [];
+  const service = { networkPathScope: networkPathScopeFixture, launchWorker(_context: unknown, value: Parameters<ProcessService["launchWorker"]>[1]) { launches.push(value); return { terminate() {} }; } } as unknown as ProcessService;
+  const launch = async (pid: number) => {
+    const revocations: (() => void)[] = [];
+    const context = { identity: { pid, parentPid: 0, host: null }, module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), outcome: outcomeWord(), registerRevocation(hook: () => void) { revocations.push(hook); return () => {}; }, request: { executable: "/bin/node", argv: ["node", "vite"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
+    await bunLauncher("browser", { runtime, workerUrl: "https://example.test/worker.js", notificationWorkerUrl: "./notification-worker.js", network })(context, service);
+    const launched = launches.at(-1)!;
+    const host = new NetHost((launched.request as RunRequest).net!, req => launched.onMessage?.({ type: "net", req }, context), undefined, { shared: true });
+    return { context, host, revoke: () => { for (const hook of revocations) hook(); } };
+  };
+  try {
+    const old = await launch(4);
+    expect(old.host.listen("127.0.0.1", 31893)).toBeGreaterThan(0);
+    // Waffle selects the SIGKILL outcome, then runs revocation hooks; no physical cleanup follows.
+    claimOutcome(old.context.outcome, { kind: "signaled", code: 9 });
+    old.revoke();
+    expect(stopped).toEqual([31893]);
+    const replacement = await launch(8);
+    expect(replacement.host.listen("127.0.0.1", 31893)).toBeGreaterThan(0);
+  } finally {
+    for (const launched of launches) launched.cleanup?.();
+    await runtime.dispose();
+  }
+});
+
 for (const phase of ["before launch", "during tools load"] as const) test(`revoked child never activates networking ${phase}`, async () => {
   const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   const capability = await runtime.network();

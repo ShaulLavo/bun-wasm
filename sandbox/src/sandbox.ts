@@ -37,6 +37,8 @@ const HOME = "/home/user";
 const APP = `${HOME}/app`;
 const PORT = 5173;
 const DEFAULT_ENGINE: Engine = "browser";
+/** Hang cap for a stopped server's run: its outcome normally settles within milliseconds. */
+const STOP_WAIT_MS = 30_000;
 
 /** What exists once the page's runtime is built; construction can fail before it does. */
 interface Workspace {
@@ -95,6 +97,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private engineLoading?: Promise<void>;
   private firstStart = true;
   private run: Run | null = null;
+  /** Every run stopped by Restart that may still be ending; null once they all have. */
+  private stopping: Promise<unknown> | null = null;
   private server: Server | null = null;
   private preview: PreviewNavigation | null = null;
   private serverRevision = 0;
@@ -411,6 +415,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const { wasm, workspace } = this;
     if (!wasm || !workspace) return;
     const { runtime, fs, browserPrograms, editor, term } = workspace;
+    // The old server must be gone before its replacement asks for the same port.
+    if (this.stopping && !await settlesWithin(this.stopping, STOP_WAIT_MS)) {
+      term.write(`\x1b[33mThe previous dev server did not stop within ${STOP_WAIT_MS / 1000} s; starting anyway.\x1b[0m\r\n`);
+    }
+    if (revision !== this.serverRevision) return;
     await editor.flushAll();
     if (revision !== this.serverRevision) return;
     const visibleStart = this.firstStart ? 0 : performance.now();
@@ -496,8 +505,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     const current = this.run;
     this.run = null;
     this.server = null;
+    if (!current) return;
     // Restart discards this Run handle, so request the force-stop action explicitly.
-    current?.kill(9);
+    current.kill(9);
+    const stopping = this.stopping = Promise.all([this.stopping, current.done]);
+    void stopping.then(() => { if (this.stopping === stopping) this.stopping = null; });
   }
 
   private async showPreview(target: Server, visibleStart: number): Promise<void> {
@@ -548,6 +560,17 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     }
   }
 
+}
+
+/** Whether `pending` settles within `ms`; the timer never outlives the wait. */
+async function settlesWithin(pending: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<false>((resolve) => { timer = setTimeout(resolve, ms, false); });
+  try {
+    return await Promise.race([pending.then(() => true, () => true), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const rel = (path: string) => path.slice(APP.length + 1);

@@ -549,17 +549,77 @@ test("sandbox Restart cancels a pending install without launching its stale dev 
   expect(markup.match(/<button[^>]*id="restart"[^>]*>/)?.[0]).not.toContain("disabled");
   sandbox.restart();
   await turn();
-  expect(page.runs).toHaveLength(2);
+  expect(page.runs).toHaveLength(1);
   expect(page.runs[0]!.kills).toEqual([9]);
   expect(page.runs[0]!.args).toEqual(["install"]);
   page.runs[0]!.done.resolve({ code: 0 });
   await turn();
   expect(page.runs).toHaveLength(2);
+  expect(page.runs[1]!.args).toEqual(["install"]);
   page.runs[1]!.done.resolve({ code: 0 });
   await turn();
   expect(page.runs[2]!.args).toEqual(["run", "dev"]);
   expect(page.boundary.location.reloads).toBe(0);
   expect(sandbox.failure).toBeUndefined();
+});
+
+// The old Vite can keep its port until its run ends; a replacement started earlier fails with
+// "Dev server stopped before it was ready".
+test("sandbox Restart starts the new server only after every stopped run has ended", async () => {
+  const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  page.runs[0]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs[1]!.args).toEqual(["run", "dev"]);
+  sandbox.restart();
+  sandbox.restart();
+  await turn();
+  expect(page.runs[1]!.kills).toEqual([9]);
+  expect(page.runs).toHaveLength(2);
+  page.runs[1]!.done.resolve({ code: 137 });
+  await turn();
+  expect(page.runs).toHaveLength(3);
+  expect(page.runs[2]!.args).toEqual(["install"]);
+  page.runs[2]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs[3]!.args).toEqual(["run", "dev"]);
+  expect(sandbox.serverState.state).toBe("starting");
+});
+
+test("sandbox Restart starts anyway, with a terminal note, when a stopped run never ends", async () => {
+  const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  page.runs[0]!.done.resolve({ code: 0 });
+  await turn();
+  // Only the 30 s hang cap is taken over; every other timer runs as usual.
+  const capped: (() => void)[] = [];
+  const realSetTimeout = globalThis.setTimeout;
+  const timers = spyOn(globalThis, "setTimeout");
+  try {
+    timers.mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+      if (ms !== 30_000) return realSetTimeout(callback, ms, ...args);
+      capped.push(() => callback(...args));
+      return 0;
+    }) as typeof setTimeout);
+    const written: string[] = [];
+    const write = spyOn(sandbox.term!, "write").mockImplementation((data: string | Uint8Array) => { written.push(String(data)); });
+    sandbox.restart();
+    await turn();
+    expect(page.runs).toHaveLength(2);
+    expect(capped).toHaveLength(1);
+    capped[0]!();
+    await turn();
+    expect(page.runs).toHaveLength(3);
+    expect(page.runs[2]!.args).toEqual(["install"]);
+    expect(written.join("")).toContain("did not stop within 30 s");
+    write.mockRestore();
+  } finally { timers.mockRestore(); }
 });
 
 test("playground reports storage waiting, locks after takeover, and offers the saved-workspace reload", async () => {

@@ -5,7 +5,9 @@
 original TypeScript adapters, not copied upstream implementations. They consume
 Waffle's reviewed `fc58a532f0d7a617e631ea4b7580a190915d4ed6` contract. The caller's
 Runtime owns one namespace. Each Bun process borrows a distinct ring and helper;
-only physical worker cleanup releases that session and its module cache. Parent
+only physical worker cleanup releases that session and its module cache, except
+that a child killed by a signal releases its session, and so its ports, when the
+kill is decided. Parent
 exit and adapter uninstall leave admitted children alive. The existing installer
 fetch cache remains the default policy; injected network fetch stays separate from
 asset-download fetch. Preview1 receives no network session.
