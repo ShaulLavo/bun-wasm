@@ -23,7 +23,7 @@ test("the captured Private overview still fails the strict cleanup tab-count gua
   expect(() => batchSnapshot(tabBatch(privateOverview), ["press", "snapshot"])).toThrow("Cannot identify Safari tab count");
 });
 
-async function fixture(initial: Snapshot, selected = ordinaryOverview(), afterExit: Snapshot = tabPage(), beforeNative?: (signal: AbortSignal) => Promise<void>) {
+async function fixture(initial: Snapshot, selected = ordinaryOverview(), afterExit: Snapshot = tabPage(), native: Pick<Parameters<typeof createIphoneTransport>[0], "beforeNative" | "tabJournal"> = {}) {
   const root = await mkdtemp(join(tmpdir(), "bun-wasm-iphone-setup-"));
   const agent = join(root, "agent-device"), log = join(root, "commands.jsonl"), switched = join(root, "ordinary");
   const exited = join(root, "overview-exited");
@@ -34,7 +34,7 @@ async function fixture(initial: Snapshot, selected = ordinaryOverview(), afterEx
       configured++;
       return Response.json("http://fixture/task");
     }
-    return Response.json({ nonce: "owned", timeOrigin: 1, visible: true, userAgent: "iPhone Safari" });
+    return Response.json({ url: "http://fixture/task", nonce: "owned", timeOrigin: 1, visible: true, userAgent: "iPhone Safari" });
   } });
   const close = async () => { await server.stop(true); await rm(root, { recursive: true, force: true }); };
   try {
@@ -52,7 +52,7 @@ if(args[0]==='batch') {
 }
 `);
     await chmod(agent, 0o700);
-    const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "a".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 5000, beforeNative });
+    const transport = await createIphoneTransport({ control: server.url.origin + "/__goals_iphone/" + "a".repeat(64), agent, deviceUDID: "fixture", timeoutMs: 5000, ...native });
     return { transport, configured: () => configured, commands: async (): Promise<string[][]> => (await readFile(log, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line)), close };
   } catch (error) { await close(); throw error; }
 }
@@ -100,9 +100,9 @@ test("an already selected ordinary group needs no group press", async () => {
 test("the native transport checks admission again before cleanup input", async () => {
   let held = true;
   const selected = ordinaryOverview();
-  const f = await fixture(selected, selected, tabPage(), async () => {
+  const f = await fixture(selected, selected, tabPage(), { async beforeNative() {
     if (!held) throw new Error("Mac FIFO holder changed");
-  });
+  } });
   const scope = Scope.open(10_000);
   try {
     await f.transport.navigate("http://fixture/task", scope);
@@ -110,6 +110,22 @@ test("the native transport checks admission again before cleanup input", async (
     held = false;
     await expect(f.transport.cleanup?.(5000)).rejects.toThrow("Mac FIFO holder changed");
     expect(await f.commands()).toEqual(before);
+  } finally { scope.close(); await f.close(); }
+});
+
+test("a refused Safari navigation leaves no tab or journal entry", async () => {
+  const selected = ordinaryOverview(), titles = new Set<string>();
+  let probes = 0;
+  const f = await fixture(selected, selected, tabPage(), {
+    async beforeNative() { if (++probes === 4) throw new Error("Mac FIFO verification failed before launch"); },
+    tabJournal: { pending: async () => titles, record: async title => { titles.add(title); }, forget: async title => { titles.delete(title); } },
+  });
+  const scope = Scope.open(10_000);
+  try {
+    await expect(f.transport.navigate("http://fixture/task", scope)).rejects.toThrow("before launch");
+    expect(f.configured()).toBe(1);
+    expect(titles.size).toBe(0);
+    expect((await f.commands()).map(args => args[0])).toEqual(["open", "batch", "batch"]);
   } finally { scope.close(); await f.close(); }
 });
 

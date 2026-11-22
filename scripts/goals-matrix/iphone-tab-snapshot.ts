@@ -64,6 +64,17 @@ function sameLabels(before: Button[], after: Button[]): boolean {
   return JSON.stringify(before.map(node => node.label).sort()) === JSON.stringify(after.map(node => node.label).sort());
 }
 
+function includesLabels(cards: Button[], expected: Button[]): boolean {
+  const available = new Map<string, number>();
+  for (const { label } of cards) available.set(label, (available.get(label) ?? 0) + 1);
+  for (const { label } of expected) {
+    const count = available.get(label) ?? 0;
+    if (count === 0) return false;
+    available.set(label, count - 1);
+  }
+  return true;
+}
+
 export function ownedTabClose(overview: Overview, title: string): string {
   const matches = tabs(overview).filter(node => node.label === title);
   if (matches.length !== 1) throw new Error("Cannot identify the task's Safari tab for cleanup");
@@ -77,8 +88,9 @@ export function proveTabClosed(before: Overview, after: Overview, title: string)
   const original = tabs(before), remaining = tabs(after);
   if (original.filter(node => node.label === title).length !== 1 || hasOwnedTab(after, title) || after.group !== before.group) throw fail();
   if (before.group === "ordinary" && (after.group !== "ordinary" || after.count !== before.count - 1)) throw fail();
-  // Safari can show different cards after a close. The ordinary group counts every tab.
-  if (before.group === "private" || (complete(before) && complete(after))) {
-    if (!sameLabels(original.filter(node => node.label !== title), remaining)) throw fail();
-  }
+  const expected = original.filter(node => node.label !== title);
+  // New cards may scroll into view. Previously visible neighbors still need to be accounted for.
+  const preserved = before.group === "private" || (complete(before) && complete(after))
+    ? sameLabels(expected, remaining) : includesLabels(remaining, expected);
+  if (!preserved) throw fail();
 }

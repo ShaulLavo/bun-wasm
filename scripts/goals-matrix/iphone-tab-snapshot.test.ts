@@ -32,6 +32,9 @@ test("ordinary closure is proved when Safari exposes more cards from the same gr
   expect(() => proveTabClosed(before, read(after, 25), "Goals owned")).toThrow("unproved");
   expect(() => proveTabClosed(before, read(after.concat("Goals owned"), 24), "Goals owned")).toThrow("unproved");
   expect(() => proveTabClosed(before, read(after, 23), "Goals owned")).toThrow("unproved");
+  expect(() => proveTabClosed(before, read(after.slice(1), 24), "Goals owned")).toThrow("unproved");
+  const duplicate = read(["Goals owned", "One", "One", "Two"], 25);
+  expect(() => proveTabClosed(duplicate, read(after, 24), "Goals owned")).toThrow("unproved");
 });
 
 test("cleanup rejects partial batches, foreign apps and truncated native snapshots", () => {

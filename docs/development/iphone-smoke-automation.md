@@ -69,7 +69,8 @@ Install its finalizer before setup. Cleanup selects ordinary tabs before countin
 closes only its exact owned card in either group, restores ordinary selection and
 proves Done/overview exit before `device_close`, wrapper stop and FIFO release.
 Ordinary closure requires the exact card to disappear and the group count to
-drop by one. Safari can expose a different set of cards after a close.
+drop by one. Previously visible neighbors must remain accounted for. Safari can
+expose additional cards after a close.
 Private closure uses ownership and before/after card contents, never a fabricated
 count. Keep the live binding and admission through finalization, including after
 failure or cancellation. Native-command failure, deadline or lost ownership stops

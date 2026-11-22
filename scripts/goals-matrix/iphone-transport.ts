@@ -193,10 +193,10 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     if (!response.ok) throw new Error(`iPhone observer: ${JSON.stringify(answer)}`);
     return answer;
   }
-  async function device(args: string[], timeoutMs: number, signal = lifetime.signal): Promise<string> {
+  async function device(args: string[], timeoutMs: number, signal = lifetime.signal, tabTitle?: string): Promise<string> {
     signal.throwIfAborted();
     const command = [config.agent].concat(args);
-    const action = config.beforeNative ? runAdmittedDevice(command, timeoutMs, signal, config.beforeNative) : ownedCommand(command, signal, timeoutMs);
+    const action = config.beforeNative || tabTitle !== undefined ? runAdmittedDevice(command, timeoutMs, signal, tabTitle) : ownedCommand(command, signal, timeoutMs);
     active.add(action);
     try {
       const output = await action;
@@ -209,12 +209,19 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       throw new Error(`T3 device command failed: ${String(error)}`);
     } finally { active.delete(action); }
   }
-  async function runAdmittedDevice(command: string[], timeoutMs: number, signal: AbortSignal, verify: NonNullable<Config["beforeNative"]>): Promise<string> {
+  async function runAdmittedDevice(command: string[], timeoutMs: number, signal: AbortSignal, tabTitle?: string): Promise<string> {
     if (deviceFailed) throw new Error("Previous native command failed");
     const deadline = Date.now() + timeoutMs;
-    await verify(AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]));
+    const guard = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+    await config.beforeNative?.(guard);
+    guard.throwIfAborted();
+    if (tabTitle !== undefined) await config.tabJournal?.record(tabTitle);
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error("iPhone device command deadline expired during Mac FIFO verification");
+    if (signal.aborted || remaining <= 0) {
+      if (tabTitle !== undefined) await config.tabJournal?.forget(tabTitle);
+      signal.throwIfAborted();
+      throw new Error("iPhone device command deadline expired before dispatch");
+    }
     return ownedCommand(command, signal, remaining);
   }
   const lanes = { host: new IphoneLane(), preview: new IphoneLane() };
@@ -292,7 +299,9 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     async nativeClick(button, clicked, admission) {
       admit(admission);
       if (!focused) throw new Error("iPhone preview is not focused after load; refusing native input");
-      return awaitWithin(nativeClick({ button, clicked, admission, evaluate, device, saveNative: config.saveNative, signal: lifetime.signal }), admission);
+      const signal = AbortSignal.any([admission.signal, lifetime.signal]);
+      const input = (args: string[], timeoutMs: number) => device(args, timeoutMs, signal);
+      return awaitWithin(nativeClick({ button, clicked, admission, evaluate, device: input, saveNative: config.saveNative, signal: lifetime.signal }), admission);
     },
     close(_interruptPending = false, timeoutMs = 10_000) { return closing ??= close(timeoutMs); },
   };
@@ -312,10 +321,9 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
         const identity = object(await request("host/state"));
         if (identity.url !== target || typeof identity.nonce !== "string") throw new Error("Missing configured smoke tab identity");
         title = "Goals " + identity.nonce;
-        await journal.record(title);
       }
       admit(admission);
-      await device(["open", "com.apple.mobilesafari", target], admit(admission), signal); opened = true;
+      await device(["open", "com.apple.mobilesafari", target], admit(admission), signal, journal ? title : undefined); opened = true;
       const state = await until(async () => { admit(admission); return object(await request("host/state") ?? {}); }, attached, config.timeoutMs);
       if (typeof state.userAgent !== "string" || !/iPhone.*Safari/.test(state.userAgent)) throw new Error("Observer did not identify iPhone Safari");
       admit(admission);
