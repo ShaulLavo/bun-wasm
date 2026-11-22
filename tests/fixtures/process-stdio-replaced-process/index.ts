@@ -9,4 +9,8 @@ p.on("uncaughtException", error => {
 console.log("cached streams", p.stdout === warm[0], p.stderr === warm[1]);
 const cold = p.stdin;
 console.log("cold read", cold);
-setImmediate(() => console.log("reports", reported));
+setImmediate(() => {
+  console.log("reports", reported);
+  // The runtime's own exit handling reads the global.
+  (globalThis as { process: unknown }).process = p;
+});
