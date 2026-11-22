@@ -1,9 +1,13 @@
 import { object } from "./evidence";
 
-type Button = { index: number; parentIndex: number | null; label: string; ref: string; identifier: string | null; selected: boolean };
+type Button = { index: number; parentIndex: number | null; label: string; ref: string; identifier: string | null; selected: boolean; rect: unknown };
 type Overview = { buttons: Button[] } & ({ group: "ordinary"; count: number } | { group: "private" });
 
 export function safariNodes(output: string, commands: readonly string[]): Record<string, unknown>[] {
+  return safariBatch(output, commands).nodes;
+}
+
+export function safariBatch(output: string, commands: readonly string[]) {
   const answer = object(JSON.parse(output));
   const data = object(answer.data);
   if (answer.success !== true || data.total !== commands.length || data.executed !== commands.length || !Array.isArray(data.results)) throw new Error("Incomplete native cleanup batch");
@@ -11,7 +15,7 @@ export function safariNodes(output: string, commands: readonly string[]): Record
   if (results.length !== commands.length || results.some((row, index) => row.ok !== true || row.command !== commands[index] || row.step !== index + 1)) throw new Error("Unexpected native cleanup batch results");
   const snapshot = object(results.at(-1)?.data);
   if (snapshot.appBundleId !== "com.apple.mobilesafari" || snapshot.truncated !== false || !Array.isArray(snapshot.nodes)) throw new Error("Missing Safari cleanup snapshot");
-  return snapshot.nodes.map(object);
+  return { nodes: snapshot.nodes.map(object), press: commands[0] === "press" ? results[0]?.data : undefined };
 }
 
 export function batchSnapshot(output: string, commands: readonly string[]): Overview {
@@ -48,7 +52,7 @@ export function proveTabsUnchanged(before: Overview, after: Overview): void {
 
 function button(node: Record<string, unknown>): Button {
   if (typeof node.index !== "number" || !Number.isSafeInteger(node.index) || typeof node.label !== "string" || typeof node.ref !== "string" || !/^e\d+(?:~s\d+)?$/.test(node.ref)) throw new Error("Malformed Safari cleanup button");
-  return { index: node.index, parentIndex: typeof node.parentIndex === "number" ? node.parentIndex : null, label: node.label, ref: "@" + node.ref,
+  return { index: node.index, parentIndex: typeof node.parentIndex === "number" ? node.parentIndex : null, label: node.label, ref: "@" + node.ref, rect: node.rect,
     identifier: typeof node.identifier === "string" ? node.identifier : null, selected: node.selected === true };
 }
 
@@ -75,22 +79,48 @@ function includesLabels(cards: Button[], expected: Button[]): boolean {
   return true;
 }
 
-export function ownedTabClose(overview: Overview, title: string): string {
+function ownedButtons(overview: Overview, title: string) {
   const matches = tabs(overview).filter(node => node.label === title);
   if (matches.length !== 1) throw new Error("Cannot identify the task's Safari tab for cleanup");
   const closes = overview.buttons.filter(node => node.label === "Close" && node.parentIndex === matches[0]!.index);
   if (closes.length !== 1) throw new Error("Cannot identify the task's Safari Close button");
-  return closes[0]!.ref;
+  return { card: matches[0]!, close: closes[0]! };
 }
 
-export function proveTabClosed(before: Overview, after: Overview, title: string): void {
+export function ownedTabClose(overview: Overview, title: string): string {
+  return ownedButtons(overview, title).close.ref;
+}
+
+export function proveTabClosed(before: Overview, after: Overview, title: string, press?: unknown): void {
   const fail = () => new Error("Task Safari tab closure is unproved");
   const original = tabs(before), remaining = tabs(after);
   if (original.filter(node => node.label === title).length !== 1 || hasOwnedTab(after, title) || after.group !== before.group) throw fail();
   if (before.group === "ordinary" && (after.group !== "ordinary" || after.count !== before.count - 1)) throw fail();
   const expected = original.filter(node => node.label !== title);
-  // New cards may scroll into view. Previously visible neighbors still need to be accounted for.
-  const preserved = before.group === "private" || (complete(before) && complete(after))
-    ? sameLabels(expected, remaining) : includesLabels(remaining, expected);
-  if (!preserved) throw fail();
+  if (before.group === "private" || (complete(before) && complete(after))) {
+    if (!sameLabels(expected, remaining)) throw fail();
+    return;
+  }
+  // Offscreen cards cannot prove the result of the press. Verify the actual close hit and its settled removal.
+  if (!includesLabels(remaining, expected) || !pressedOwnedClose(ownedButtons(before, title), press)) throw fail();
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? object(value) : {};
+}
+
+function pressedOwnedClose({ card, close }: ReturnType<typeof ownedButtons>, value: unknown): boolean {
+  const press = record(value), resolution = record(press.resolution), settle = record(press.settle);
+  if (press.targetKind !== "ref" || press.ref !== close.ref.slice(1) || press.refLabel !== "Close") return false;
+  if (resolution.source !== "ref" || resolution.phase !== "pre-action" || resolution.kind !== "exact" || settle.settled !== true) return false;
+  const bounds = record(close.rect);
+  if (!inside(press.x, bounds.x, bounds.width) || !inside(press.y, bounds.y, bounds.height)) return false;
+  const lines = record(settle.diff).lines;
+  const expected = `${card.ref} [button] ${JSON.stringify(card.label)}`;
+  return Array.isArray(lines) && lines.some(line => { const row = record(line); return row.kind === "removed" && row.text === expected; });
+}
+
+function inside(point: unknown, origin: unknown, length: unknown): boolean {
+  return typeof point === "number" && typeof origin === "number" && typeof length === "number"
+    && Number.isFinite(length) && length > 0 && point >= origin && point < origin + length;
 }

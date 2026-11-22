@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { batchSnapshot, ownedTabClose, privateSnapshot, proveTabClosed, proveTabsUnchanged } from "./iphone-tab-snapshot";
-import { tabOverview as overview, tabBatch as batch } from "./iphone-tab-fixture";
+import { tabOverview as overview, tabBatch as batch, tabClosePress } from "./iphone-tab-fixture";
 
 function read(labels: string[], count?: number) {
   return batchSnapshot(batch(overview(labels, count)), ["press", "snapshot"]);
@@ -28,13 +28,24 @@ test("cleanup refuses missing ownership, wrong tab removal and merely hidden tab
 test("ordinary closure is proved when Safari exposes more cards from the same group", () => {
   const before = read(["Goals owned", "One", "Two", "Three", "Four"], 25);
   const after = ["One", "Two", "Three", "Four", "Five", "Six"];
-  expect(() => proveTabClosed(before, read(after, 24), "Goals owned")).not.toThrow();
-  expect(() => proveTabClosed(before, read(after, 25), "Goals owned")).toThrow("unproved");
-  expect(() => proveTabClosed(before, read(after.concat("Goals owned"), 24), "Goals owned")).toThrow("unproved");
-  expect(() => proveTabClosed(before, read(after, 23), "Goals owned")).toThrow("unproved");
-  expect(() => proveTabClosed(before, read(after.slice(1), 24), "Goals owned")).toThrow("unproved");
+  const press = tabClosePress("Goals owned", 0);
+  expect(() => proveTabClosed(before, read(after, 24), "Goals owned", press)).not.toThrow();
+  expect(() => proveTabClosed(before, read(after, 25), "Goals owned", press)).toThrow("unproved");
+  expect(() => proveTabClosed(before, read(after.concat("Goals owned"), 24), "Goals owned", press)).toThrow("unproved");
+  expect(() => proveTabClosed(before, read(after, 23), "Goals owned", press)).toThrow("unproved");
+  expect(() => proveTabClosed(before, read(after.slice(1), 24), "Goals owned", press)).toThrow("unproved");
   const duplicate = read(["Goals owned", "One", "One", "Two"], 25);
-  expect(() => proveTabClosed(duplicate, read(after, 24), "Goals owned")).toThrow("unproved");
+  expect(() => proveTabClosed(duplicate, read(after, 24), "Goals owned", press)).toThrow("unproved");
+});
+
+test("a virtualized overview cannot prove closure without a settled press on the owned Close child", () => {
+  const before = read(["Goals owned", "Other"], 25), after = read(["Other", "New"], 24);
+  const press = tabClosePress("Goals owned", 0);
+  expect(() => proveTabClosed(before, after, "Goals owned")).toThrow("unproved");
+  expect(() => proveTabClosed(before, after, "Goals owned", { ...press, ref: "e99" })).toThrow("unproved");
+  expect(() => proveTabClosed(before, after, "Goals owned", { ...press, x: 52 })).toThrow("unproved");
+  expect(() => proveTabClosed(before, after, "Goals owned", { ...press, settle: { settled: false } })).toThrow("unproved");
+  expect(() => proveTabClosed(before, after, "Goals owned", tabClosePress("Different tab", 0))).toThrow("unproved");
 });
 
 test("cleanup rejects partial batches, foreign apps and truncated native snapshots", () => {

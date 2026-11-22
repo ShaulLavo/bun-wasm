@@ -72,15 +72,18 @@ test("cancelling a click during its FIFO probe never dispatches the press", asyn
   const verified = Promise.withResolvers<void>();
   const attemptedPress = Promise.withResolvers<void>();
   let probes = 0;
+  let clickingStarted = false;
   const fixture = await control(good, async text => {
     if (JSON.parse(text).command?.[1] === "press") attemptedPress.resolve();
   }, [arm], false, async () => {
-    if (++probes !== 2) return;
+    if (!clickingStarted || ++probes !== 2) return;
     verifyingPress.resolve();
     await verified.promise;
   });
   const scope = Scope.open(2000);
   try {
+    await fixture.transport.navigate(arm.url, scope);
+    clickingStarted = true;
     const clicking = fixture.transport.nativeClick!("button", "output", scope);
     await verifyingPress.promise;
     scope.close(new Error("click was cancelled"));
@@ -88,7 +91,10 @@ test("cancelling a click during its FIFO probe never dispatches the press", asyn
     verified.resolve();
     await attemptedPress.promise;
     const dispatched = (await readFile(fixture.deviceLog, "utf8")).trim().split("\n").map(line => JSON.parse(line).args);
-    expect(dispatched).toEqual([["snapshot", "-i"]]);
+    expect(dispatched.at(-1)).toEqual(["snapshot", "-i"]);
+    expect(dispatched.some(args => args[0] === "press")).toBe(false);
+    expect(await fixture.transport.cleanup?.(10_000)).toMatchObject({ browserClosed: true });
+    expect(await readFile(fixture.closed, "utf8")).toBe("closed");
   } finally { scope.close(); verified.resolve(); await fixture.close().catch(() => {}); }
 });
 

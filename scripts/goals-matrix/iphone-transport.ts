@@ -15,6 +15,9 @@ import { IphoneClickTrace, iphoneClickExpression, iphoneClickPredicates, saveIph
 type TabJournal = { pending(): Promise<Set<string>>; record(title: string): Promise<void>; forget(title: string): Promise<void> };
 type Config = { control: string; agent: string; deviceUDID: string; timeoutMs: number; cleanupTimeoutMs?: number;
   saveNative?(text: string): Promise<void>; beforeNative?(signal: AbortSignal): Promise<unknown>; tabJournal?: TabJournal };
+class NativeDispatchCancelled extends Error {
+  constructor(reason: unknown) { super(String(reason), { cause: reason }); }
+}
 export function validateIphoneControl(control: string, agent: string): void {
   const url = new URL(control);
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !/^\/__goals_iphone\/[a-f0-9]{64}$/.test(url.pathname) || url.search || url.hash || url.username || url.password) throw new Error("Expected forwarded loopback iPhone control URL");
@@ -204,7 +207,7 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
       if (args[0] === "batch") safariNodes(output, JSON.parse(args[2]!).map((step: { command: string }) => step.command));
       return output;
     } catch (error) {
-      deviceFailed = true;
+      if (!(error instanceof NativeDispatchCancelled)) deviceFailed = true;
       saveIphoneEvidence(config.saveNative, { command: [config.agent].concat(args), error: String(error) });
       throw new Error(`T3 device command failed: ${String(error)}`);
     } finally { active.delete(action); }
@@ -213,13 +216,18 @@ export async function createIphoneTransport(config: Config): Promise<Transport> 
     if (deviceFailed) throw new Error("Previous native command failed");
     const deadline = Date.now() + timeoutMs;
     const guard = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
-    await config.beforeNative?.(guard);
+    try { await config.beforeNative?.(guard); }
+    catch (error) {
+      if (signal.aborted) throw new NativeDispatchCancelled(signal.reason);
+      throw error;
+    }
+    if (signal.aborted) throw new NativeDispatchCancelled(signal.reason);
     guard.throwIfAborted();
     if (tabTitle !== undefined) await config.tabJournal?.record(tabTitle);
     const remaining = deadline - Date.now();
     if (signal.aborted || remaining <= 0) {
       if (tabTitle !== undefined) await config.tabJournal?.forget(tabTitle);
-      signal.throwIfAborted();
+      if (signal.aborted) throw new NativeDispatchCancelled(signal.reason);
       throw new Error("iPhone device command deadline expired before dispatch");
     }
     return ownedCommand(command, signal, remaining);

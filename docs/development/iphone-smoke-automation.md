@@ -71,6 +71,9 @@ proves Done/overview exit before `device_close`, wrapper stop and FIFO release.
 Ordinary closure requires the exact card to disappear and the group count to
 drop by one. Previously visible neighbors must remain accounted for. Safari can
 expose additional cards after a close.
+When the overview exposes only part of the group, the runner also checks the
+settled press receipt. The press must land on the exact card's Close child, and
+Safari must report that card's removal.
 Private closure uses ownership and before/after card contents, never a fabricated
 count. Keep the live binding and admission through finalization, including after
 failure or cancellation. Native-command failure, deadline or lost ownership stops

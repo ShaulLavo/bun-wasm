@@ -7,7 +7,7 @@ import { createIphoneTransport } from "./iphone-transport";
 import { Scope } from "./scope";
 import { prepareIphoneSafari } from "./iphone-setup";
 import { closeIphoneTab } from "./iphone-cleanup";
-import { cleanupGroups, tabBatch, tabMoreMenu, tabOverview, tabPage } from "./iphone-tab-fixture";
+import { cleanupGroups, tabBatch, tabClosePress, tabMoreMenu, tabOverview, tabPage } from "./iphone-tab-fixture";
 import { batchSnapshot } from "./iphone-tab-snapshot";
 import privateOverview from "./fixtures/iphone-private-overview.json";
 import axOverview from "./fixtures/iphone-group-ax.json";
@@ -133,6 +133,7 @@ test("Safari setup closes only exact, unambiguous journal entries and uses a new
   const labels = ["First owned", "Unknown smoke-looking tab", "Duplicate", "Duplicate"];
   const more = labels.slice(1).concat("Second owned");
   const snapshots = [tabOverview(labels, 25), tabOverview(more, 24), tabOverview(more.slice(0, -1), 23), tabPage()];
+  const presses = [undefined, tabClosePress("First owned", 0), tabClosePress("Second owned", 3)];
   const targets: (string | undefined)[] = [];
   const titles = new Set(["First owned", "Second owned", "Duplicate", "Offscreen"]);
   const closed: string[] = [];
@@ -142,7 +143,7 @@ test("Safari setup closes only exact, unambiguous journal entries and uses a new
       if (args[0] !== "batch") return "Opened";
       const steps: { command: string; input: { target?: { ref: string } } }[] = JSON.parse(args[2]!);
       targets.push(steps[0]?.input.target?.ref);
-      return tabBatch(snapshots.shift(), steps.map(step => step.command));
+      return tabBatch(snapshots.shift(), steps.map(step => step.command), presses.shift());
     }, scope, { titles, closed: async title => { closed.push(title); } });
     expect(targets).toEqual([undefined, "@e2", "@e8", "@e100"]);
     expect(closed).toEqual(["First owned", "Second owned"]);
