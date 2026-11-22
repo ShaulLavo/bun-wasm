@@ -1395,7 +1395,7 @@ fn frames_appended_while_the_reader_finds_a_segment_drained_are_read_before_its_
 }
 
 #[test]
-fn a_slot_reused_while_its_releaser_counts_it_keeps_the_pool_count_exact() {
+fn a_slot_reused_while_its_releaser_counts_it_never_hides_pooled_bytes() {
     let group = Group::new(64);
     let root = Peer::root(&group);
     let r = root.lanes();
@@ -1430,10 +1430,109 @@ fn a_slot_reused_while_its_releaser_counts_it_keeps_the_pool_count_exact() {
     assert!(mem.fired());
     assert_eq!(frames, [b"back to the ring".to_vec(), again.clone()]);
     assert_eq!(r.census().pooled_bytes, 0);
-    assert_eq!(
-        r.mem.load(pool),
-        0,
-        "the pool counter matches the pooled slots"
+    assert!(
+        r.mem.load(pool) >= r.census().pooled_bytes,
+        "a race may leave the estimate high, never low"
+    );
+    r.sweep(Sweep::Full);
+    assert_eq!(r.mem.load(pool), 0, "a trim restarts the estimate exactly");
+}
+
+/// Builds a group with `setup`, then runs `act` as a second member killed before each of its
+/// memory accesses in turn, until it completes. After every kill the member is released and the
+/// root's full sweep must leave the pool estimate equal to the bytes really pooled.
+fn assert_pool_survives_every_kill<T>(
+    setup: impl Fn(&Peer, &Peer) -> T,
+    act: impl Fn(&Lanes<'_, Killed<'_>, Guest>, T),
+) {
+    for stop in 0.. {
+        let group = Group::new(64);
+        let root = Peer::root(&group);
+        let member = root.child();
+        let state = setup(&root, &member);
+        let killed = Killed {
+            inner: &group.mem,
+            stop,
+            seen: Cell::new(0),
+        };
+        let dying = Lanes {
+            mem: &killed,
+            host: &member.guest,
+            ledger: root.ledger,
+            tag: member.tag,
+        };
+        let survived = catch_unwind(AssertUnwindSafe(|| act(&dying, state))).is_ok();
+        member.release();
+        let r = root.lanes();
+        r.sweep(Sweep::Full);
+        let pooled = r.census().pooled_bytes;
+        assert_eq!(r.mem.load(r.ledger + H_POOL), pooled, "stop {stop}");
+        assert!(pooled <= POOL_LIMIT, "stop {stop}");
+        if survived {
+            return;
+        }
+    }
+}
+
+/// A lane whose side 0 `member` owns, with nothing in flight.
+fn lane_for(root: &Peer, member: &Peer) -> LaneRef {
+    let r = root.lanes();
+    let lane = r.create_lane().unwrap();
+    let epoch = r.transfer_epoch(lane, 0).unwrap();
+    r.transfer(lane, 0, Custody::Tag(root.tag));
+    assert!(member.lanes().adopt(lane, 0, epoch, 1));
+    lane
+}
+
+/// A drained and sealed spill segment of `len` bytes of frame, now Released in the pool.
+fn pool_one_segment(root: &Peer, member: &Peer, lane: LaneRef, len: usize) {
+    let (w, r) = (member.lanes(), root.lanes());
+    post(&w, lane, 0, &frame(0, len));
+    assert_eq!(take(&r, lane, 1).len(), 1);
+    // The reader caught up, so this returns to the ring and seals the segment.
+    post(&w, lane, 0, b"seal");
+    assert_eq!(take(&r, lane, 1).len(), 1);
+    assert!(r.census().pooled_bytes > 0);
+}
+
+#[test]
+fn a_member_killed_while_it_aborts_a_spill_leaves_the_pool_estimate_recoverable() {
+    assert_pool_survives_every_kill(
+        |root, member| {
+            let lane = lane_for(root, member);
+            let staged = member.lanes().reserve(lane, 0, &frame(1, 20_000)).unwrap();
+            assert!(matches!(staged, Staged::FirstSpill { .. }), "{staged:?}");
+            staged
+        },
+        |dying, staged| dying.abort(staged),
+    );
+}
+
+#[test]
+fn a_member_killed_while_it_reuses_a_pooled_slot_leaves_the_pool_estimate_recoverable() {
+    assert_pool_survives_every_kill(
+        |root, member| {
+            let lane = lane_for(root, member);
+            pool_one_segment(root, member, lane, 20_000);
+            lane
+        },
+        |dying, lane| {
+            let staged = dying.reserve(lane, 0, &frame(1, 20_000)).unwrap();
+            dying.commit(staged);
+        },
+    );
+}
+
+#[test]
+fn a_member_killed_while_it_trims_leaves_the_pool_estimate_recoverable() {
+    assert_pool_survives_every_kill(
+        |root, member| {
+            let lane = lane_for(root, member);
+            pool_one_segment(root, member, lane, 2_000_000);
+        },
+        |dying, ()| {
+            dying.sweep(Sweep::Trim);
+        },
     );
 }
 

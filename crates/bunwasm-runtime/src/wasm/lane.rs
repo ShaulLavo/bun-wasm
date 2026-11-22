@@ -53,7 +53,11 @@ const H_VERSION: u32 = 4;
 const H_PIN: u32 = 8;
 /// Bumped by every death declaration, so every guest runs a full sweep after one.
 const H_DEATHS: u32 = 16;
-/// Bytes in Released slots, which a sweep trims to `POOL_LIMIT`.
+/// An estimate of the bytes in Released slots, used only to ask for a trim past `POOL_LIMIT`.
+/// Every release adds its slot after the slot shows Released and nothing subtracts, so racing
+/// members can only push it above the true total; every trim restarts it from what it measured.
+/// No pair of stores to two words survives a member dying between them, so a death may leave it
+/// off, and the full sweep the death causes trims and restarts it.
 const H_POOL: u32 = 20;
 const H_TRIM: u32 = 24;
 
@@ -217,10 +221,8 @@ trait Words: Memory {
     fn put64(&self, at: u32, value: u64) {
         self.double(at).store(value, SeqCst);
     }
-    fn subtract(&self, at: u32, delta: u32) {
-        let _ = self
-            .word(at)
-            .try_update(SeqCst, SeqCst, |value| Some(value.saturating_sub(delta)));
+    fn take(&self, at: u32) -> u32 {
+        self.word(at).swap(0, SeqCst)
     }
     fn get(&self, at: u32) -> Word {
         Word::unpack(self.double(at).load(SeqCst))
@@ -602,13 +604,11 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     /// their own size again. A lost race looks again.
     fn reuse(&self, lanes: bool, len: u32) -> Option<(u32, Word)> {
         for _ in 0..8 {
-            let (at, claim, length) = self.best_fit(lanes, len)?;
+            let (at, claim, _) = self.best_fit(lanes, len)?;
             let mine = Word::new(self.tag, claim.count + 1, phase::REUSE);
-            if !self.mem.swap_word(at + CLAIM, claim, mine) {
-                continue;
+            if self.mem.swap_word(at + CLAIM, claim, mine) {
+                return Some((at, mine));
             }
-            self.mem.subtract(self.ledger + H_POOL, length);
-            return Some((at, mine));
         }
         None
     }
@@ -687,18 +687,17 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
     /// Returns a slot this member or the lane protocol owns to the reuse pool. A slot above the
     /// pool limit is flagged for the next sweep to return to the host.
     fn release_slot(&self, at: u32, claim: Word) -> bool {
-        // Count the bytes before the slot shows Released: another member may reuse or trim it
-        // the moment it does, and its saturating subtraction must find them already counted.
-        let length = self.mem.load(at + LENGTH);
-        self.mem.add(self.ledger + H_POOL, length);
         if !self.mem.swap_word(
             at + CLAIM,
             claim,
             Word::new(0, claim.count, phase::RELEASED),
         ) {
-            self.mem.subtract(self.ledger + H_POOL, length);
             return false;
         }
+        // Counted after the swap, so the estimate never runs below the slots a trim could
+        // find; see `H_POOL`.
+        let length = self.mem.load(at + LENGTH);
+        self.mem.add(self.ledger + H_POOL, length);
         if length > POOL_LIMIT || self.mem.load(self.ledger + H_POOL) > POOL_LIMIT {
             self.mem.put(self.ledger + H_TRIM, 1);
         }
@@ -1295,9 +1294,12 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
         }
     }
 
-    /// Returns Released storage above the pool limit to the host, largest first.
+    /// Returns Released storage above the pool limit to the host, largest first, and restarts
+    /// the pool estimate from what it kept. A release after the restart adds itself again, so
+    /// racing releases can only leave the estimate high.
     fn trim(&self) {
         self.mem.put(self.ledger + H_TRIM, 0);
+        self.mem.take(self.ledger + H_POOL);
         let mut released: Vec<(u32, u32, Word)> = self
             .slots(true)
             .chain(self.slots(false))
@@ -1313,13 +1315,14 @@ impl<M: Memory + ?Sized, H: Host + ?Sized> Lanes<'_, M, H> {
             if keep {
                 continue;
             }
-            let Some(mine) = self.take_for_cleaning(at, claim) else {
-                continue;
-            };
-            self.mem.subtract(self.ledger + H_POOL, length);
+            // Taken or not, the slot leaves this trim's total: if the take failed, another
+            // member reused or cleaned it since the scan.
             pool -= length;
-            self.finish_cleaning(at, mine);
+            if let Some(mine) = self.take_for_cleaning(at, claim) {
+                self.finish_cleaning(at, mine);
+            }
         }
+        self.mem.add(self.ledger + H_POOL, pool);
     }
 
     // ---- Sending ----

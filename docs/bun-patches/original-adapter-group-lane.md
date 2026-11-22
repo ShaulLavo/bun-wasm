@@ -340,9 +340,13 @@ Ending a guest is not catchable and follows the death rules.
   append to a segment before any of those, but the reader's first look at the cursor can come
   before the last appends; a reader preempted there used to skip frames that were already
   committed.
-- A released slot's bytes join the pool count before the slot shows Released, so a member
-  that reuses or trims it at once never subtracts bytes that are not counted yet. The count
-  used to drift upward when that happened.
+- The ledger's pool count is an estimate used only to ask for a trim. A release adds its slot
+  after the slot shows Released, nothing subtracts, and every trim restarts the count from the
+  Released slots it measured. Racing members can only leave it high, which asks for one more
+  trim. A member that dies between two stores can leave it wrong either way, and the full sweep
+  its death causes trims and restarts it. The count used to be kept exact by adds and
+  saturating subtractions, which drifted upward when a reuse raced a release and when a member
+  died between a claim swap and its count update.
 - A failed drain in an event-loop step does not stop the step or the loop. The other ports,
   the mailbox, the control channels and the housekeeping are still served, then the first
   failure is thrown as the thread's uncaught error. The loop drops a waiter whose step threw,
@@ -371,7 +375,9 @@ reuses the slot, and checks near-limit epochs. It kills a finalizer before each 
 accesses and checks that a closed end has always changed the epoch sum and that the next full
 sweep leaves no lane behind. It covers a staged frame and a drained batch whose replies were
 lost. It stops a reader between its two cursor loads while the writer appends and links, and
-a releaser between its two pool-count steps while the writer reuses the slot. `ops/tests.rs` and `ops/memory_tests.rs` run a word call on a transport that can allocate
+a releaser at its first pool access after the slot shows Released while the writer reuses the
+slot. It kills a member before each memory access of an abort, a reuse and a trim, and checks
+that the next full sweep leaves the pool count equal to the pooled bytes. `ops/tests.rs` and `ops/memory_tests.rs` run a word call on a transport that can allocate
 nothing, beside a data call that fails there, and measure that it allocates nothing.
 `scripts/worker-group-lanes.test.ts` runs the real runtime JavaScript, `worker_lane.ts`
 included, over relay-mode Waffle pipes with a small model of the native contract, as a codec
