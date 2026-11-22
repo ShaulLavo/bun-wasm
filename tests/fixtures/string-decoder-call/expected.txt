@@ -12,3 +12,4 @@ revoked throws TypeError
 bogus throws TypeError ERR_UNKNOWN_ENCODING Unknown encoding: bogus
 bogus throws TypeError ERR_UNKNOWN_ENCODING Unknown encoding: bogus
 bogus throws TypeError ERR_UNKNOWN_ENCODING Unknown encoding: bogus
+text offsets "world" "" "" ""

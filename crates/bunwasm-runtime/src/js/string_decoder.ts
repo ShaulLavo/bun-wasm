@@ -63,8 +63,21 @@
   // `missing` bytes still needed to finish the buffered character and
   // `buffered` bytes of it held in `lastChar`.
 
+  const MAX_STRING_LENGTH = 0x7fffffff;
+
+  function checkStringLength(byteLength: number, encoding: Encoding) {
+    let maxChars = byteLength;
+    if (encoding === "hex") maxChars = byteLength * 2;
+    else if (encoding === "base64" || encoding === "base64url") maxChars = Math.ceil(byteLength / 3) * 4;
+    else if (encoding === "utf16le") maxChars = Math.floor(byteLength / 2);
+    if (maxChars > MAX_STRING_LENGTH) {
+      throw makeError(Error, "ERR_STRING_TOO_LONG", `Cannot create a string longer than 0x${MAX_STRING_LENGTH.toString(16)} characters`);
+    }
+  }
+
   function makeString(bytes: Uint8Array, encoding: Encoding) {
     if (bytes.length === 0) return "";
+    checkStringLength(bytes.length, encoding);
     return getBuffer().from(bytes.buffer, bytes.byteOffset, bytes.length).toString(encoding);
   }
 
@@ -143,6 +156,7 @@
   }
 
   function decodeChunk(self: Decoder, input: Uint8Array) {
+    checkStringLength(input.length, self.encoding);
     let data = input;
     let prepend = "";
     if (kBufferedEncodings.includes(self.encoding) && self._missing > 0) {
@@ -197,7 +211,13 @@
     text(input: unknown, offset?: number) {
       this._missing = 0;
       this._buffered = 0;
-      return this.write(toBytes(input).subarray(offset));
+      const bytes = toBytes(input);
+      if (offset !== undefined) {
+        const start = offset | 0;
+        if (start < 0 || start >= bytes.length) return "";
+        return this.write(bytes.subarray(start));
+      }
+      return this.write(bytes);
     }
   }
 

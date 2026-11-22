@@ -746,6 +746,18 @@
         "internal/freelist": internal.require("bun_builtins").require("internal:freelist"),
         "internal/fixed_queue": internal.require("bun_builtins").require("internal:fixed_queue").FixedQueue,
       },
+      jscInternals: {
+        isLatin1String(value) {
+          if (typeof value !== "string") return false;
+          for (let i = 0; i < value.length; i++) if (value.charCodeAt(i) > 0xff) return false;
+          return true;
+        },
+        isUTF16String(value) {
+          if (typeof value !== "string") return false;
+          for (let i = 0; i < value.length; i++) if (value.charCodeAt(i) > 0xff) return true;
+          return false;
+        },
+      },
     }),
     "node:test": () => internal.require("node_test"),
     "bun:test": () => internal.require("bun_test").exports,

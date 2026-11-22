@@ -57,8 +57,10 @@ fatal and dictionary controls adapt cases from that revision's
 `checks/web-text-decoder.json` owns the source-factory regression, including the
 local runtime preflight. `checks/native-text-decoder.json` owns the guest fixture.
 The source controls use native Bun as the codec oracle. The guest fixture checks
-the complete Rust binding on the existing native CI engines. Private JSC string
-storage hooks and worker subprocess behavior are outside this correction.
+the complete Rust binding on the existing native CI engines. `bun:internal-for-testing`
+exposes `jscInternals.isLatin1String` and `jscInternals.isUTF16String` by scanning code
+units (`<= 0xff` vs `> 0xff`) so upstream `TextDecoder` tests checking string width
+work across all engines; worker subprocess `SharedArrayBuffer` tests remain host-dependent.
 
 Resizable-input assertions remain in the source regression and a separate
 QuickJS/Browser guest fixture. JSC's WASI patch explicitly rejects resizable

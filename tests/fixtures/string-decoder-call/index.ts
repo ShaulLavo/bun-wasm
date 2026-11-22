@@ -67,3 +67,12 @@ for (const make of [() => Decoder("bogus"), () => new Decoder("bogus"), () => ne
     console.log("bogus throws", failure.name, failure.code, failure.message);
   }
 }
+
+const textDecoder = new StringDecoder("utf8") as StringDecoder & { text(buf: Uint8Array, offset?: number): string };
+console.log(
+  "text offsets",
+  JSON.stringify(textDecoder.text(Buffer.from("hello world"), 6)),
+  JSON.stringify(textDecoder.text(Buffer.from("hello world"), -1)),
+  JSON.stringify(textDecoder.text(Buffer.from("hello world"), -2147483648)),
+  JSON.stringify(textDecoder.text(Buffer.from("hello world"), 99)),
+);

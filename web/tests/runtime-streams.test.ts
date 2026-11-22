@@ -32,7 +32,14 @@ const originalSyntaxAtPR140 = "d7a30a96ca47cdac8fc9e4bf52f3e83e237e45c75d6589d4a
 
 test("streams changes only approved normalization and the own-descriptor invariant", () => {
   const emitted = emit("streams");
+  const decodeBytesBlock = /  function decodeBytes\(value\s*\)\s*\{\n[\s\S]*?\n  \}\n\n/;
+  expect(emitted.match(decodeBytesBlock)).toHaveLength(1);
+  const fatalCode = '        if (error instanceof TypeError) Object.assign(error, { code: "ERR_ENCODING_INVALID_ENCODED_DATA" });\n';
+  expect(emitted.split(fatalCode)).toHaveLength(2);
   const original = emitted
+    .replace(decodeBytesBlock, "")
+    .replace(fatalCode, "")
+    .replace("codecTransformer(decoder.id, decodeBytes)", "codecTransformer(decoder.id)")
     .replace("const convertedLabel = domString(label);", "label = domString(label);")
     .replace("const convertedOptions = dictionary(options);", "options = dictionary(options);")
     .replaceAll("convertedOptions.fatal", "options.fatal")
@@ -216,4 +223,31 @@ test("host wrapper returns the host text constructors and calls only the compres
   })`, Object.assign({}, host, { record(...args: unknown[]) { calls.push(args); } }));
   expect(output).toMatchObject(host);
   expect(calls).toEqual([["compression_streams"], [TransformStream, ReadableStream, WritableStream]]);
+});
+
+test("portable TextDecoderStream ignores detached buffers and tags fatal TypeErrors", async () => {
+  const result = await portable(`(async () => {
+const detached = new ArrayBuffer(3);
+const view = new Uint8Array(detached, 1, 1);
+view[0] = 65;
+detached.transfer();
+const stream = new adapters.TextDecoderStream();
+const reader = stream.readable.getReader();
+const writer = stream.writable.getWriter();
+const out = [];
+const drain = (async () => { while (true) { const r = await reader.read(); if (r.done) break; out.push(r.value); } })();
+await writer.write(detached);
+await writer.write(view);
+await writer.close();
+await drain;
+
+const fatalStream = new adapters.TextDecoderStream("utf-8", { fatal: true });
+const fatalWriter = fatalStream.writable.getWriter();
+const fatalReader = fatalStream.readable.getReader();
+const fatalRead = fatalReader.read().catch(error => error);
+const fatalWrite = fatalWriter.write(new Uint8Array([0xff])).catch(error => error);
+const [wErr, rErr] = await Promise.all([fatalWrite, fatalRead]);
+return [out, wErr instanceof TypeError, wErr.code, rErr === wErr];
+})()`);
+  expect(result).toEqual([[], true, "ERR_ENCODING_INVALID_ENCODED_DATA", true]);
 });
